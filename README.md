@@ -35,15 +35,17 @@ Unlike a faceless agent dashboard, Nolune has a voice, personality, mood, and an
 
 ### 1. Give Nolune a home
 
-Install the Nolune server on an always-on macOS or Linux machine. It keeps your companion running, stores its memory, and coordinates its work.
+Install the Nolune server on an always-on macOS or Linux machine. It keeps your companion running, stores its memory, and coordinates its work. Either use the desktop app's **Install on this computer** button, or run the one-liner:
 
 ```bash
 curl -fsSL https://nolune.dev/install.sh | bash
 ```
 
-Open `http://localhost:26559`. The first browser has to be paired: run `nolune pair` on the machine you just installed on and enter the eight-digit code it prints. Then follow the onboarding.
+The installer downloads the server, prepares `~/.nolune`, starts the server in the foreground so you can watch its logs, and opens `http://localhost:26559`. The first browser has to be paired: run `nolune pair` on the machine you just installed on and enter the eight-digit code it prints. Then follow the onboarding.
 
 Paired browsers stay signed in. Review or revoke them, or mint a code for another device, under **Settings → Connections**. The installer adds `~/.nolune/bin` to your `PATH`; until you open a new shell, use `~/.nolune/bin/nolune pair`.
+
+Press Ctrl-C to stop the server and `nolune gateway` to start it again. To keep it running without a terminal, opt in to the background service with `nolune gateway install` (see [Install](#install)).
 
 ### 2. Connect your computers
 
@@ -109,21 +111,42 @@ Our [design system](docs/design-system.md) documents the visual language, reusab
 
 ## Install
 
-### Server
-
-The one-line installer sets up the native Nolune server and service on macOS or Linux:
-
-```bash
-curl -fsSL https://nolune.dev/install.sh | bash
-```
-
-When installation finishes, open `http://localhost:26559` and complete onboarding.
+There are two ways to get a server. Both end the same way: the `nolune` binary in `~/.nolune/bin`, a workspace in `~/.nolune`, and the server running in the foreground. No background service is created unless you ask for one.
 
 ### Desktop app
 
 Download the desktop app from [GitHub Releases](https://github.com/triangle-int/nolune/releases). Builds are available for macOS, Windows, and Linux.
 
-Connect it to your self-hosted Nolune server to use the companion interface and enable computer use on that machine.
+On first run, choose **Install on this computer**. The app downloads the server for your platform, prepares the workspace, starts the server, and opens your companion. Nothing to paste and no terminal required. **Show logs** reveals the server output if you want it, and **Use nightly builds** sits behind an advanced toggle. The server runs while the app is open and starts again with it; **Settings → Run in background** hands it to a user-level service so it keeps running after you quit.
+
+If you already run a server elsewhere, choose **Connect to an existing server** instead and enter its URL and auth token. That is how a laptop reaches the companion living on a Mac mini at home.
+
+### One-line installer
+
+The script does the same on macOS or Linux and leaves the server running in the foreground:
+
+```bash
+curl -fsSL https://nolune.dev/install.sh | bash
+```
+
+It is a thin wrapper: it downloads the binary and hands over to `nolune onboard` and `nolune gateway`. Set `NOLUNE_CHANNEL=nightly` for nightly builds or `NOLUNE_DIR` for a custom directory.
+
+### The `nolune` command
+
+Everything the installers do, you can do yourself:
+
+| Command | What it does |
+|---------|--------------|
+| `nolune onboard` | Prepares `~/.nolune` and `config.toml` with a generated auth token. Safe to rerun. `--json` prints the result for scripts |
+| `nolune gateway` | Runs the server in the foreground and prints `nolune: ready <url>` once it listens |
+| `nolune gateway install` | Registers a user-level launchd agent (macOS) or systemd user unit (Linux) that runs the gateway, and starts it |
+| `nolune gateway uninstall` | Stops and removes that service; data is untouched |
+| `nolune gateway start` / `stop` / `restart` / `nolune gateway status` / `nolune gateway logs` | Manage the service once installed |
+| `nolune pair` | Prints a one-time code so a browser can sign in |
+| `nolune uninstall --keep-data` | Removes the service, binary, and log but keeps `~/.nolune` |
+| `nolune uninstall --yes` | Removes everything, including your data |
+
+Service registration is per user and needs no elevated privileges. It is not available on Windows yet; run `nolune gateway` there.
 
 The release workflow runs on `v*` tags; manual runs must select a `v*` tag. It publishes server binaries and macOS, Windows, and Linux desktop artifacts. Nothing in this workflow provisions or updates running servers. To exercise the pipeline from any branch without creating a release, run it manually with `dry_run` enabled; the binaries are attached to the workflow run as artifacts instead.
 
@@ -187,11 +210,13 @@ Most settings are available through the interface. Advanced configuration lives 
 
 ## Updates
 
-For one-line installations, Nolune checks for updates automatically. Apply an update through Settings or run:
+Nolune checks for updates automatically. Apply an update through Settings or run:
 
 ```bash
 ~/.nolune/bin/update
 ```
+
+Then restart the server: `nolune gateway restart` if it runs as a background service, otherwise stop it with Ctrl-C and run `nolune gateway` again (or reopen the desktop app, which restarts the server it manages). The desktop app's own updater only updates the app.
 
 ### Uninstall
 
@@ -204,6 +229,8 @@ Keep your data while removing the server:
 ```bash
 KEEP_DATA=1 curl -fsSL https://nolune.dev/uninstall.sh | bash
 ```
+
+The script delegates to `nolune uninstall --keep-data` or `nolune uninstall --yes`, which you can also run directly. Without a terminal the script defaults to keeping your data.
 
 <br>
 
