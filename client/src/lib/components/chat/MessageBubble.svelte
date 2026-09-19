@@ -2,6 +2,7 @@
 	import { resourceMedia, resourceProse, prepareResourceHtml } from "$lib/api/resource-media.js";
 	import type { ChatMessage } from "$lib/api/types.js";
 	import { uploadFileUrl } from "$lib/api/client.js";
+	import { linkFileName } from "$lib/api/file-names.js";
 	import { openFile } from "$lib/stores/fileviewer.svelte.js";
 	import Message from "$lib/components/ai-elements/message/core/message.svelte";
 	import MessageContent from "$lib/components/ai-elements/message/core/message-content.svelte";
@@ -29,8 +30,7 @@
 			const isMedia = MEDIA_EXTS.test(anchor.href);
 			if (isUpload || isMedia) {
 				e.preventDefault();
-				const name = anchor.textContent?.trim() || anchor.href.split("/").pop()?.split("?")[0] || "file";
-				openFile(anchor.href, name);
+				openFile(anchor.href, linkFileName(anchor.textContent, anchor.href));
 			}
 		}
 	}

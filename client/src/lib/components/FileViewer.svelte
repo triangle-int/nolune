@@ -1,31 +1,34 @@
 <script lang="ts">
 	import { Dialog } from "bits-ui";
 	import { getViewerFile, closeFile, refreshViewerResource, reissueViewerResource } from "$lib/stores/fileviewer.svelte.js";
+	import { filenameFromContentDisposition } from "$lib/api/file-names.js";
 
 	const file = $derived(getViewerFile());
 	let downloadError = $state("");
 
 	async function download() {
 		if (!file) return;
-		async function fetchBlob(url: string) {
+		async function fetchDownload(url: string) {
 			const res = await fetch(url);
 			if (!res.ok) throw new Error("Download failed");
-			return res.blob();
+			// The server names the file after the original upload; prefer that over the link label.
+			const name = filenameFromContentDisposition(res.headers.get("content-disposition"));
+			return { blob: await res.blob(), name };
 		}
 		try {
 			downloadError = "";
-			let blob: Blob;
+			let result: { blob: Blob; name: string | null };
 			try {
-				blob = await fetchBlob(file.url);
+				result = await fetchDownload(file.url);
 			} catch {
 				const fresh = await reissueViewerResource();
 				if (!fresh) throw new Error("Download failed");
-				blob = await fetchBlob(fresh);
+				result = await fetchDownload(fresh);
 			}
-			const blobUrl = URL.createObjectURL(blob);
+			const blobUrl = URL.createObjectURL(result.blob);
 			const a = document.createElement("a");
 			a.href = blobUrl;
-			a.download = file.name;
+			a.download = result.name ?? file.name;
 			document.body.appendChild(a);
 			a.click();
 			document.body.removeChild(a);
