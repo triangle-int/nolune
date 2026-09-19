@@ -111,12 +111,6 @@
 		margin-top: 2.5rem;
 		margin-bottom: 0.75rem;
 	}
-		color: oklch(0.78 0.02 280);
-		font-size: 0.95rem;
-		font-weight: 600;
-		margin-top: 1.5rem;
-		margin-bottom: 0.5rem;
-	}
 	.prose p {
 		font-size: 0.875rem;
 		margin-bottom: 1rem;
