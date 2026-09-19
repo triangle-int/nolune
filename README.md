@@ -67,7 +67,7 @@ Nolune is designed around one persistent character rather than a collection of d
 
 ### One mind across multiple computers
 
-The server holds Nolune's identity and memory. Connected desktop apps give it eyes and hands on other machines. You can keep the server somewhere reliable and interact with the same companion from wherever you work.
+The server holds Nolune's identity and memory: one companion per server. Connected desktop apps give it eyes and hands on other machines. Computers, chats, and the people it talks to are contexts of that one identity, never separate companions, so what it learns in one place it knows everywhere. You can keep the server somewhere reliable and interact with the same companion from wherever you work.
 
 ### Memory you can inspect
 
@@ -157,7 +157,7 @@ Everything important is stored as files under `~/.nolune`:
 ├── config.toml
 ├── browser_sessions.json    paired browsers (hashes only)
 └── instances/
-    └── {slug}/
+    └── companion/               the one companion this server hosts
         ├── soul.md              personality definition
         ├── heartbeat.md         proactive behavior
         ├── mood.json            emotional state

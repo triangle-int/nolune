@@ -167,7 +167,7 @@
 							{#if selectedSkill?.id === skill.id}
 								<div class="skill-details">
 									<p class="skill-install-hint">
-										Install from the <strong>Skills</strong> tab in your Nolune instance, or browse the source:
+										Install it under <strong>Settings › Capabilities</strong> in Nolune, or browse the source:
 									</p>
 									<a
 										href="https://github.com/{skill.repo}{skill.path ? `/tree/${skill.git_ref}/${skill.path}` : ''}"

@@ -10,7 +10,7 @@
 	<header class="legal-header">
 		<div class="legal-header-inner">
 			<a href="/" class="legal-brand">
-				<div class="legal-logo">b</div>
+				<div class="legal-logo" aria-hidden="true">n</div>
 				<span class="legal-brand-name">nolune</span>
 			</a>
 		</div>
@@ -18,77 +18,70 @@
 
 	<div class="legal-content">
 		<h1 class="legal-title">Privacy Policy</h1>
-		<p class="legal-date">Last updated: March 13, 2026</p>
+		<p class="legal-date">Last updated: September 20, 2026</p>
 
 		<div class="prose">
 			<h2>1. Who we are</h2>
 			<p>
-				Nolune is operated by Triangle Interactive ("we", "us", "our"). We provide an AI companion
-				platform that runs on dedicated server instances. This policy explains how we collect, use,
-				and protect your information.
+				Nolune is open-source, self-hosted software published by Triangle Interactive ("we", "us", "our").
+				You run the Nolune server on your own hardware. We do not host it for you, and we do not operate
+				accounts, sign-ups, or hosted companions. This policy explains what this website and the software do
+				with information.
 			</p>
 
-			<h2>2. Information we collect</h2>
-
-			<h3>Account information</h3>
-			<p>When you create an account, we collect your email address and a hashed password. If you subscribe to a paid plan, Stripe processes your payment — we do not store credit card numbers.</p>
-
-			<h3>Companion data</h3>
+			<h2>2. This website</h2>
 			<p>
-				Your companion instance runs on a dedicated server with its own persistent storage. Conversations, memories, files, and any content you share with your companion are stored on that instance. We do not access, read, or analyze your companion data except when required to provide technical support you explicitly request, or when required by law.
+				nolune.dev is a static site. It has no accounts, forms, analytics trackers, or third-party tracking
+				scripts. Our hosting provider keeps ordinary server logs (such as request paths, IP addresses, and
+				user agents) for a limited time to operate and secure the site. The install script is downloaded from
+				this site and runs on your machine; it sends nothing back to us.
 			</p>
 
-			<h3>Optional Google Workspace access</h3>
+			<h2>3. The software</h2>
 			<p>
-				Nolune does not provide a central Google OAuth service and does not copy or store Google OAuth credentials. If you install the optional official <code>gog</code> skill, the external gog CLI owns its credentials locally through gog's configured keyring or credential backend. Google content is requested only when you invoke the skill or CLI and remains subject to your Google account permissions.
+				Nolune keeps one companion per server. Its identity, memory, conversations, uploads, and settings are
+				stored as files on the computer where you run the server. Connected computers, chats, and relationship
+				scopes are contexts of that one companion, not separate copies with separate data. We have no access
+				to any of it. Nolune does not send usage metrics, telemetry, or crash reports to us.
 			</p>
-
-			<h3>Usage data</h3>
-			<p>We collect basic usage metrics: message counts and token usage per instance for rate limiting and billing. We use server logs for debugging and security. We do not use analytics trackers or third-party tracking scripts.</p>
-
-			<h2>3. How we use your information</h2>
+			<p>
+				The software makes outbound requests only to services you configure or invoke:
+			</p>
 			<ul>
-				<li>To provide and maintain your companion instance</li>
-				<li>To process payments via Stripe</li>
-				<li>To enforce rate limits and prevent abuse</li>
-				<li>To send transactional emails (password resets, billing notifications)</li>
-			</ul>
-			<p>We do not sell your data. We do not use your data to train AI models. We do not share your data with third parties except as described below.</p>
-
-			<h2>4. Third-party services</h2>
-			<ul>
-				<li><strong>Fly.io</strong> — hosts your companion instances</li>
-				<li><strong>Neon</strong> — hosts our account database</li>
-				<li><strong>Stripe</strong> — processes payments</li>
-				<li><strong>Cloudflare</strong> — DNS and TLS for your subdomain</li>
-				<li><strong>OpenRouter / OpenAI / Anthropic</strong> — LLM providers that process your companion's conversations (subject to their respective privacy policies)</li>
-				<li><strong>Google APIs</strong> — used directly by the optional, locally configured gog CLI when you choose to install and authorize it (subject to <a href="https://policies.google.com/privacy" target="_blank">Google's Privacy Policy</a>)</li>
+				<li><strong>Your model provider</strong> (Anthropic or OpenAI, with your own API key) receives the conversation and memory context needed to answer each request, subject to that provider's privacy policy.</li>
+				<li><strong>Update checks</strong> fetch release metadata from GitHub so Nolune can tell you a newer version exists.</li>
+				<li><strong>Skills, extensions, email, and GitHub integrations</strong> talk to the third parties you connect them to, with credentials you provide and can remove at any time.</li>
 			</ul>
 
-			<h2>5. Data retention</h2>
+			<h2>4. Optional Google Workspace access</h2>
 			<p>
-				Your account data is retained as long as your account is active. Your companion data is stored on your dedicated instance volume. If you cancel your subscription, your instance is stopped and data is retained for 30 days before deletion. You can request immediate deletion by contacting us.
-			</p>
-			<p>For optional gog access, use gog's authorization commands and your Google account security settings to inspect or revoke access. Nolune has no copy of those credentials to delete.</p>
-
-			<h2>6. Data security</h2>
-			<p>
-				All connections are encrypted via TLS. Passwords are hashed. API keys and tokens are stored encrypted at rest. Each companion keeps its data in a separate local workspace. We follow industry-standard security practices, but no system is perfectly secure.
+				Nolune does not provide a central Google OAuth service and does not copy or store Google OAuth
+				credentials. If you install the optional official gog skill, the external gog CLI owns its credentials
+				locally through gog's configured keyring or credential backend. Google content is requested only when
+				you invoke the skill or CLI and remains subject to your Google account permissions.
 			</p>
 
-			<h2>7. Your rights</h2>
-			<p>You can:</p>
-			<ul>
-				<li>Access, export, or delete your companion data at any time via the companion's tools</li>
-				<li>Revoke optional gog access through gog and your Google account settings</li>
-				<li>Delete your account by contacting us</li>
-				<li>Request a copy of your personal data</li>
-			</ul>
+			<h2>5. Retention and deletion</h2>
+			<p>
+				Everything Nolune stores lives under the data directory on your server (by default <code>~/.nolune</code>).
+				You can inspect, export, correct, or forget memories from the Memory page, export the whole companion as
+				one archive from Settings, and delete everything by uninstalling with data removal. Nothing is retained
+				anywhere else because nothing is sent anywhere else.
+			</p>
 
-			<h2>8. Changes</h2>
-			<p>We may update this policy. Material changes will be communicated via email or a notice on the dashboard.</p>
+			<h2>6. Security</h2>
+			<p>
+				Connections to your server use the address and API token you configure; browsers pair for a revocable
+				session. Keep your token and provider API keys private, connect only computers you control, and review
+				the operating-system permissions you grant the desktop app. See our
+				<a href="https://github.com/triangle-int/nolune/blob/main/SECURITY.md">security policy</a> to report a
+				vulnerability.
+			</p>
 
-			<h2>9. Contact</h2>
+			<h2>7. Changes</h2>
+			<p>This policy may change as the software does. The current version is always published on this page and in the repository.</p>
+
+			<h2>8. Contact</h2>
 			<p>Questions? Email <a href="mailto:support@nolune.dev">support@nolune.dev</a>.</p>
 		</div>
 	</div>
@@ -117,13 +110,6 @@
 		font-weight: 600;
 		margin-top: 2.5rem;
 		margin-bottom: 0.75rem;
-	}
-	.prose h3 {
-		color: oklch(0.78 0.02 280);
-		font-size: 0.95rem;
-		font-weight: 600;
-		margin-top: 1.5rem;
-		margin-bottom: 0.5rem;
 	}
 	.prose p {
 		font-size: 0.875rem;
