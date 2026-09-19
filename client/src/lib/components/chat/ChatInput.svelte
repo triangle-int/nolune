@@ -1,26 +1,39 @@
 <script lang="ts">
  import { play } from '$lib/sounds.js';
  import { hapticLight, hapticMedium } from '$lib/haptics.js';
- import { fetchConfigStatus, updateModelMode } from '$lib/api/client.js';
+ import { fetchChatPreset, fetchModelPresets, updateChatPreset, type ModelPreset } from '$lib/api/client.js';
+ import { effectivePresetId } from '$lib/models/presets.js';
  import PromptComposer from './PromptComposer.svelte';
- let { onSend, onStop, disabled = false, agentRunning = false, mood = 'calm', uploadProgress = null }:
- { onSend: (content: string, files?: File[]) => void | boolean | Promise<void | boolean>; onStop: () => void; disabled?: boolean; agentRunning?: boolean; mood?: string; uploadProgress?: { fileIndex: number; fileCount: number; loaded: number; total: number } | null } = $props();
- let modelMode = $state('auto');
+ let { slug, chatId, onSend, onStop, disabled = false, agentRunning = false, mood = 'calm', uploadProgress = null }:
+ { slug: string; chatId: string; onSend: (content: string, files?: File[]) => void | boolean | Promise<void | boolean>; onStop: () => void; disabled?: boolean; agentRunning?: boolean; mood?: string; uploadProgress?: { fileIndex: number; fileCount: number; loaded: number; total: number } | null } = $props();
+ // Per-conversation model preset (#156): the pin when set, else the Chat slot.
+ let presets = $state<ModelPreset[]>([]);
+ let presetId = $state<string | null>(null);
  let modelError = $state('');
- let changingMode = false;
- $effect(() => { fetchConfigStatus().then(s => { if (s.model_mode) modelMode = s.model_mode; }).catch(() => {}); });
- async function changeMode(mode: string) {
-  if (changingMode) return;
-  changingMode = true;
+ let changingPreset = false;
+ $effect(() => {
+  const currentSlug = slug;
+  const currentChat = chatId;
+  Promise.all([fetchModelPresets(), fetchChatPreset(currentSlug, currentChat)])
+   .then(([models, pin]) => {
+    if (currentSlug !== slug || currentChat !== chatId) return;
+    presets = models.presets;
+    presetId = effectivePresetId(pin.preset, { chat_preset: pin.default_preset, background_preset: models.background_preset }, models.presets);
+   })
+   .catch(() => {});
+ });
+ async function changePreset(id: string) {
+  if (changingPreset || id === presetId) return;
+  changingPreset = true;
   modelError = '';
-  try { await updateModelMode(mode); modelMode = mode; hapticLight(); }
-  catch { modelError = 'Could not change model mode. Please try again.'; }
-  finally { changingMode = false; }
+  try { const pin = await updateChatPreset(slug, chatId, id); presetId = pin.effective_preset; hapticLight(); }
+  catch { modelError = 'Could not switch the model for this conversation. Please try again.'; }
+  finally { changingPreset = false; }
  }
  async function send(content: string, files?: File[]) { play('message_send'); hapticLight(); return await onSend(content, files); }
 </script>
 <div class="chat-composer" data-mood={mood}>
- <PromptComposer onSend={send} {onStop} {disabled} {agentRunning} {modelMode} onModelChange={changeMode} onFileAdd={() => { play('attachment_added'); hapticMedium(); }}>
+ <PromptComposer onSend={send} {onStop} {disabled} {agentRunning} {presets} {presetId} onPresetChange={changePreset} onFileAdd={() => { play('attachment_added'); hapticMedium(); }}>
   {#snippet footer()}
    {#if uploadProgress}
     {@const pct = uploadProgress.total > 0 ? Math.min(100, uploadProgress.loaded / uploadProgress.total * 100) : 0}

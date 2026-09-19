@@ -12,7 +12,11 @@
  ]);
  let generating = $state(false);
  let failNext = $state(false);
- let modelMode = $state('auto');
+ const presets = [
+  { id: 'sonnet', name: 'Claude Sonnet', model: 'claude-sonnet-4-6' },
+  { id: 'opus', name: 'Claude Opus', model: 'claude-opus-4-6' },
+ ];
+ let presetId = $state('sonnet');
  let status = $state('Sample conversation. Messages and files stay in this page and disappear on reload.');
  let timer: ReturnType<typeof setInterval> | undefined;
  function stop() { clearInterval(timer); generating = false; status = 'Example response stopped.'; }
@@ -46,7 +50,7 @@
    {/each}
   </ConversationContent>
  </Conversation>
- <div class="input"><PromptComposer onSend={send} onStop={stop} agentRunning={generating} disabled={generating} {modelMode} onModelChange={mode => modelMode = mode} /></div>
+ <div class="input"><PromptComposer onSend={send} onStop={stop} agentRunning={generating} disabled={generating} {presets} {presetId} onPresetChange={id => presetId = id} /></div>
  <p role="status">{status}</p>
 </div>
 <style>

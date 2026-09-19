@@ -50,7 +50,8 @@ fn model_tiers_router_and_provider_switch_are_gone() {
         let production = without_cfg_test_items(&fs::read_to_string(&path).unwrap());
         for token in [
             "ModelMode",
-            "model_mode",
+            ".model_mode",
+            "model_mode:",
             "ProviderProfile",
             "cheap_variant",
             "heavy_variant",

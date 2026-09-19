@@ -16,7 +16,7 @@
 /** @type {readonly Section[]} */
 export const SETTINGS_SECTIONS = Object.freeze([
 	{ id: "companion", label: "Companion", description: "Presence, rhythm, initiative, and time." },
-	{ id: "connections", label: "Connections", description: "The AI provider, your computers, and paired browsers." },
+	{ id: "connections", label: "Connections", description: "Model presets, API keys, your computers, and paired browsers." },
 	{ id: "capabilities", label: "Capabilities", description: "Skills and reviewed extensions it may use." },
 	{ id: "data", label: "Data", description: "What Nolune keeps, and how to take it with you." },
 	{ id: "advanced", label: "Advanced", description: "Server, updates, and integration details for self-hosters." },
@@ -30,7 +30,7 @@ export const SETTINGS = Object.freeze([
 	{ key: "timezone", label: "Timezone", section: "companion", scope: "companion" },
 	{ key: "scheduled", label: "Scheduled messages", section: "companion", scope: "companion" },
 
-	{ key: "provider", label: "AI provider", section: "connections", scope: "server" },
+	{ key: "models", label: "Model presets", section: "connections", scope: "server" },
 	{ key: "api-keys", label: "API keys", section: "connections", scope: "server" },
 	{ key: "computers", label: "Connected computers", section: "connections", scope: "server" },
 	{ key: "paired-browsers", label: "Paired browsers", section: "connections", scope: "server" },
@@ -44,7 +44,6 @@ export const SETTINGS = Object.freeze([
 	{ key: "server.port", label: "Port", section: "advanced", scope: "server", raw: true },
 	{ key: "server.auth-token", label: "API token", section: "advanced", scope: "server", raw: true },
 	{ key: "updates", label: "Updates", section: "advanced", scope: "server", raw: true },
-	{ key: "model-mode", label: "Model routing", section: "advanced", scope: "server", raw: true },
 	{ key: "voice-id", label: "Voice ID", section: "advanced", scope: "companion", raw: true },
 	{ key: "email", label: "Email (SMTP/IMAP)", section: "advanced", scope: "companion", raw: true },
 	{ key: "github", label: "GitHub token", section: "advanced", scope: "server", raw: true },

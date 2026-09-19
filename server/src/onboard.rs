@@ -94,7 +94,22 @@ port = {DEFAULT_PORT}
 auth_token = "{token}"
 
 [llm]
-model_mode = "auto"
+# Model presets (#156): name the models you want, then pick which preset
+# handles conversations and which does background work.
+chat_preset = "sonnet"
+background_preset = "haiku"
+
+[[llm.presets]]
+id = "sonnet"
+name = "Claude Sonnet"
+provider = "anthropic"
+model = "claude-sonnet-4-6"
+
+[[llm.presets]]
+id = "haiku"
+name = "Claude Haiku"
+provider = "anthropic"
+model = "claude-haiku-4-5-20251001"
 
 [llm.tokens]
 ANTHROPIC = ""       # Required — get a key at https://console.anthropic.com
@@ -242,7 +257,7 @@ mod tests {
         let config = tmp.path().join("config.toml");
         fs::write(
             &config,
-            "host = \"127.0.0.1\"\nport = 4242\nauth_token = \"\"\npublic_url = \"https://nolune.example\"\n\n[llm]\nmodel_mode = \"fast\"\n",
+            "host = \"127.0.0.1\"\nport = 4242\nauth_token = \"\"\npublic_url = \"https://nolune.example\"\n\n[llm]\nchat_preset = \"opus\"\n",
         )
         .unwrap();
 
@@ -256,14 +271,14 @@ mod tests {
         assert_eq!(parsed.host, "127.0.0.1");
         assert_eq!(parsed.port, 4242);
         assert_eq!(parsed.public_url, "https://nolune.example");
-        assert!(read(&config).contains("model_mode = \"fast\""));
+        assert!(read(&config).contains("chat_preset = \"opus\""));
     }
 
     #[test]
     fn backfills_missing_token_line() {
         let tmp = tempfile::tempdir().unwrap();
         let config = tmp.path().join("config.toml");
-        fs::write(&config, "port = 26559\n\n[llm]\nmodel_mode = \"auto\"\n").unwrap();
+        fs::write(&config, "port = 26559\n\n[llm]\nchat_preset = \"sonnet\"\n").unwrap();
 
         let out = onboard(tmp.path()).unwrap();
 
@@ -271,7 +286,7 @@ mod tests {
         let parsed = parsed(&config);
         assert_eq!(parsed.auth_token, out.token);
         assert_eq!(parsed.port, 26559);
-        assert!(read(&config).contains("model_mode = \"auto\""));
+        assert!(read(&config).contains("chat_preset = \"sonnet\""));
     }
 
     #[test]

@@ -204,10 +204,14 @@ mod tests {
 
     fn backend(provider: LlmProvider, url: &str) -> LlmBackend {
         let mut config = Config::default();
-        config.llm.provider = provider;
+        config.llm.seed_presets(provider);
         config.llm.tokens.anthropic = "test".into();
         config.llm.tokens.open_ai = "test".into();
-        let mut backend = LlmBackend::from_config(&config).unwrap();
+        let preset = match provider {
+            LlmProvider::Anthropic => "sonnet",
+            LlmProvider::Openai => "gpt",
+        };
+        let mut backend = LlmBackend::for_preset(&config, reqwest::Client::new(), preset).unwrap();
         backend.base_url = url.into();
         backend
     }
@@ -729,26 +733,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[tokio::test]
-    async fn codex_runtime_returns_typed_setup_required() {
-        let mut config = Config::default();
-        config.llm.provider = LlmProvider::Codex;
-        let backend = LlmBackend::from_config(&config).unwrap();
-        let error = backend.chat("system", "hello", vec![]).await.unwrap_err();
-        assert!(matches!(
-            error.downcast_ref::<LlmError>(),
-            Some(LlmError::SetupRequired(_))
-        ));
-        let error = backend
-            .chat_with_tools_traced("system", "hello", vec![], vec![])
-            .await
-            .unwrap_err();
-        assert!(matches!(
-            error.downcast_ref::<LlmError>(),
-            Some(LlmError::SetupRequired(_))
-        ));
     }
 
     #[test]

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { modelShortLabel } from "$lib/models/presets.js";
 	import { resourceMedia, resourceProse, prepareResourceHtml } from "$lib/api/resource-media.js";
 	import type { ChatMessage } from "$lib/api/types.js";
 	import { uploadFileUrl } from "$lib/api/client.js";
@@ -126,17 +127,8 @@
 		speaking ? Math.ceil(revealProgress * words.filter(w => w.trim()).length) : words.length
 	);
 
-	const modelLabel = $derived.by(() => {
-		if (!message.model) return "";
-		const m = message.model.toLowerCase();
-		if (m.includes("haiku")) return "fast";
-		if (m.includes("sonnet")) return "";
-		if (m.includes("opus")) return "heavy";
-		if (m.includes("mini")) return "fast";
-		if (m.includes("gpt-5.2")) return "fast";
-		if (m.includes("flash")) return "fast";
-		return "";
-	});
+	/** Short model name under an assistant message (#156). */
+	const modelLabel = $derived(modelShortLabel(message.model));
 </script>
 <div class="msg" class:consecutive={isConsecutive()} data-mood={mood} data-active={active}>
  <Message from={isUser ? 'user' : 'assistant'} class={isUser ? "max-w-full items-end gap-1" : "max-w-full gap-1"}>

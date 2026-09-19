@@ -34,15 +34,37 @@ one section and one scope:
 | Section | Route | Owns | Scope |
 |---------|-------|------|-------|
 | Companion | `settings/companion` | Little Moon presence, Learn my rhythm, Initiative (check-in, quiet hours, daily budget, reflection), Timezone, Scheduled messages | companion |
-| Connections | `settings/connections` | AI provider, API keys, Connected computers, Paired browsers | server |
+| Connections | `settings/connections` | Model presets and slots (#156), API keys, Connected computers, Paired browsers | server |
 | Capabilities | `settings/capabilities` | Skills (registry), Extensions (curated MCP catalog, per-tool grants, custom servers behind the #97 acknowledgement) | server |
 | Data | `settings/data` | What the companion keeps, Export, Import | companion |
-| Advanced | `settings/advanced` | Server port and API token, Updates and release channel, Model routing, ElevenLabs voice ID, Email (SMTP/IMAP), GitHub token | mixed; each control carries an owner badge |
+| Advanced | `settings/advanced` | Server port and API token, Updates and release channel, ElevenLabs voice ID, Email (SMTP/IMAP), GitHub token | mixed; each control carries an owner badge |
+
+## Model presets (#156)
+
+There is no cheap, fast, or heavy tier and no per-message classifier. Users
+name the models Nolune may call as **presets** (`[[llm.presets]]` in
+`config.toml`: `id`, `name`, `provider`, `model`), and two slots say which
+preset does which job:
+
+- **Chat** (`chat_preset`): conversations, unless a chat pins its own preset
+  from the composer picker (`GET/PUT /api/chat/{slug}/{chat_id}/preset`,
+  stored in that chat's `meta.json`). A pinned preset that was deleted falls
+  back to the Chat slot.
+- **Background** (`background_preset`): memory extraction, chat titles,
+  check-ins, and reflection. It never falls back to the chat preset; if it is
+  unavailable, background work is skipped and logged.
+
+Presets carry their own provider, so Anthropic and OpenAI presets coexist;
+API keys stay per provider. `GET/PUT /api/config/models` reads and replaces
+presets plus slots atomically (validated: unique ids, known provider, non-empty
+model, slots pointing at presets whose provider has a key), and
+`POST /api/config/models/seed` adds a provider's defaults, which onboarding
+calls after saving the first key.
 
 ## Raw fields stay on Advanced
 
 Settings flagged `raw` in `sections.js` are server or protocol wiring: ports,
-tokens, hosts, model routing, voice IDs, SMTP/IMAP and GitHub credentials.
+tokens, hosts, voice IDs, SMTP/IMAP and GitHub credentials.
 They appear only on the Advanced page, so common companion setup (pick a
 provider, add a key, set a timezone, tune initiative) never shows them.
 `server/tests/navigation_settings_split.rs` scans the four consumer pages for

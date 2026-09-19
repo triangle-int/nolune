@@ -304,9 +304,9 @@ pub(crate) async fn on_machine_connected(
         log::error!("[machine-connect] failed to save system message: {e}");
     }
 
-    let llm_guard = state.llm.read().await;
+    let llm_guard = state.background_llm.read().await;
     let Some(llm) = llm_guard.as_ref() else {
-        handle.fail("LLM not configured", true);
+        handle.fail("background model preset not configured", true);
         return;
     };
     let task = format!(
