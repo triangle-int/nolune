@@ -28,7 +28,7 @@
 		<p class="settings-lead">{section.description}</p>
 	</header>
 
-	<div class="settings-grid">
+	<div class="settings-panel">
 		{@render children()}
 	</div>
 </div>
