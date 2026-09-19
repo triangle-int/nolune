@@ -4,7 +4,9 @@ mod config;
 mod domain;
 mod onboard;
 mod routes;
+mod service;
 mod services;
+mod uninstall;
 
 use std::{net::SocketAddr, time::Duration};
 
@@ -17,7 +19,7 @@ async fn main() {
 
     // Everything except the server itself is a synchronous subcommand.
     match args.command {
-        None | Some(cli::CliCommand::Gateway) => {}
+        None | Some(cli::CliCommand::Gateway { action: None }) => {}
         Some(cmd) => {
             let code = cli::run(cmd);
             std::process::exit(code);
