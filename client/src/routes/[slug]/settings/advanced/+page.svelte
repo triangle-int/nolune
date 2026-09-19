@@ -1,9 +1,4 @@
 <script lang="ts">
-	import Brain from "@lucide/svelte/icons/brain";
-	import AudioLines from "@lucide/svelte/icons/audio-lines";
-	import Mail from "@lucide/svelte/icons/mail";
-	import Github from "@lucide/svelte/icons/github";
-	import Server from "@lucide/svelte/icons/server";
 	import * as Select from "$lib/components/ui/select/index.js";
 	import { page } from "$app/state";
 	import {
@@ -314,56 +309,57 @@
 <!-- Server -->
 <section class="settings-section">
 	<div class="section-header">
-		<div class="section-icon" aria-hidden="true"><Server size={20} strokeWidth={1.75} /></div>
 		<div>
 			<h3 class="section-label">Server <span class="owner-badge">This server</span></h3>
 			<p class="section-desc">Network and API token. More lives in <code>config.toml</code>.</p>
 		</div>
 	</div>
+	<div class="section-body">
 
-	{#if serverLoading}
-		<p class="dim-text">Loading...</p>
-	{:else}
-		<div class="setting-row">
-			<label class="setting-label" for="server-port">Port</label>
-			<div class="setting-input-row">
-				<input class="setting-input" id="server-port" type="number" min="1" max="65535" bind:value={serverPortInput} />
-				{#if String(serverPort) !== serverPortInput}
-					<button class="setting-btn" onclick={saveServerPort} disabled={serverSaving}>
-						{serverSaving ? "..." : "Save"}
-					</button>
-				{/if}
-			</div>
-			{#if serverNeedsRestart}
-				<p class="setting-hint setting-warning">Restart nolune to apply port change</p>
-			{/if}
-		</div>
-
-		<div class="setting-row">
-			<span class="setting-label">Auth token</span>
-			{#if serverAuthSet}
+		{#if serverLoading}
+			<p class="dim-text">Loading...</p>
+		{:else}
+			<div class="setting-row">
+				<label class="setting-label" for="server-port">Port</label>
 				<div class="setting-input-row">
-					<span class="dim-text">Configured</span>
-					<button class="setting-btn setting-btn-danger" onclick={clearServerAuth} disabled={serverSaving}>Remove</button>
-				</div>
-			{:else}
-				<div class="setting-input-row">
-					<input class="setting-input" type="password" placeholder="optional — protects your API" aria-label="Auth token" bind:value={serverAuthInput} />
-					{#if serverAuthInput.trim()}
-						<button class="setting-btn" onclick={saveServerAuth} disabled={serverSaving}>
-							{serverSaving ? "..." : "Set"}
+					<input class="setting-input" id="server-port" type="number" min="1" max="65535" bind:value={serverPortInput} />
+					{#if String(serverPort) !== serverPortInput}
+						<button class="setting-btn" onclick={saveServerPort} disabled={serverSaving}>
+							{serverSaving ? "..." : "Save"}
 						</button>
 					{/if}
 				</div>
-			{/if}
-			<p class="setting-hint">API token for automation, the CLI and the desktop app. Browsers pair for a session instead (see <a class="settings-link" href={`/${slug}/settings/connections`}>Connections</a>) and keep working when it changes. Leave empty for no authentication.</p>
-		</div>
+				{#if serverNeedsRestart}
+					<p class="setting-hint setting-warning">Restart nolune to apply port change</p>
+				{/if}
+			</div>
 
-		<div class="setting-row">
-			<span class="setting-label">Host</span>
-			<span class="dim-text">{serverHost}</span>
-		</div>
-	{/if}
+			<div class="setting-row">
+				<span class="setting-label">Auth token</span>
+				{#if serverAuthSet}
+					<div class="setting-input-row">
+						<span class="dim-text">Configured</span>
+						<button class="setting-btn setting-btn-danger" onclick={clearServerAuth} disabled={serverSaving}>Remove</button>
+					</div>
+				{:else}
+					<div class="setting-input-row">
+						<input class="setting-input" type="password" placeholder="optional — protects your API" aria-label="Auth token" bind:value={serverAuthInput} />
+						{#if serverAuthInput.trim()}
+							<button class="setting-btn" onclick={saveServerAuth} disabled={serverSaving}>
+								{serverSaving ? "..." : "Set"}
+							</button>
+						{/if}
+					</div>
+				{/if}
+				<p class="setting-hint">API token for automation, the CLI and the desktop app. Browsers pair for a session instead (see <a class="settings-link" href={`/${slug}/settings/connections`}>Connections</a>) and keep working when it changes. Leave empty for no authentication.</p>
+			</div>
+
+			<div class="setting-row">
+				<span class="setting-label">Host</span>
+				<span class="dim-text">{serverHost}</span>
+			</div>
+		{/if}
+	</div>
 </section>
 
 <!-- Updates -->
@@ -374,10 +370,11 @@
 			<p class="section-desc">Version, release channel, and what changed.</p>
 		</div>
 	</div>
+	<div class="section-body">
 
-	<div class="setting-row">
-		<span class="setting-label">Version</span>
-		<span class="dim-text">{version ? `v${version}` : "…"}{commit && commit !== "dev" ? ` · ${commit.slice(0, 7)}` : ""}</span>
+		<div class="setting-row">
+			<span class="setting-label">Version</span>
+			<span class="dim-text">{version ? `v${version}` : "…"}{commit && commit !== "dev" ? ` · ${commit.slice(0, 7)}` : ""}</span>
 	</div>
 
 	<div class="setting-row">
@@ -405,166 +402,171 @@
 			{/if}
 		</div>
 	{/if}
+	</div>
 </section>
 
 <!-- Model routing -->
 <section class="settings-section">
 	<div class="section-header">
-		<div class="section-icon" aria-hidden="true"><Brain size={20} strokeWidth={1.75} /></div>
 		<div>
 			<h3 class="section-label">Model routing <span class="owner-badge">This server</span></h3>
 			<p class="section-desc">How the AI model is picked for each message. Auto is right for almost everyone.</p>
 		</div>
 	</div>
-	<div class="model-mode-options" class:disabled={modelModeSaving}>
-		<button class="mode-option" class:mode-active={modelMode === "auto"} onclick={() => setModelMode("auto")} disabled={modelModeSaving}>
-			<span class="mode-name">Auto</span>
-			<span class="mode-desc">Smart routing — cheap for casual, powerful when needed</span>
-		</button>
-		<button class="mode-option" class:mode-active={modelMode === "fast"} onclick={() => setModelMode("fast")} disabled={modelModeSaving}>
-			<span class="mode-name">Fast</span>
-			<span class="mode-desc">Always use the lightweight model — saves budget</span>
-		</button>
-		<button class="mode-option" class:mode-active={modelMode === "heavy"} onclick={() => setModelMode("heavy")} disabled={modelModeSaving}>
-			<span class="mode-name">Heavy</span>
-			<span class="mode-desc">Always use the powerful model — uses 10x more budget</span>
-		</button>
+	<div class="section-body">
+		<div class="model-mode-options" class:disabled={modelModeSaving}>
+			<button class="mode-option" class:mode-active={modelMode === "auto"} onclick={() => setModelMode("auto")} disabled={modelModeSaving}>
+				<span class="mode-name">Auto</span>
+				<span class="mode-desc">Smart routing — cheap for casual, powerful when needed</span>
+			</button>
+			<button class="mode-option" class:mode-active={modelMode === "fast"} onclick={() => setModelMode("fast")} disabled={modelModeSaving}>
+				<span class="mode-name">Fast</span>
+				<span class="mode-desc">Always use the lightweight model — saves budget</span>
+			</button>
+			<button class="mode-option" class:mode-active={modelMode === "heavy"} onclick={() => setModelMode("heavy")} disabled={modelModeSaving}>
+				<span class="mode-name">Heavy</span>
+				<span class="mode-desc">Always use the powerful model — uses 10x more budget</span>
+			</button>
+	</div>
 	</div>
 </section>
 
 <!-- Voice -->
 <section class="settings-section">
 	<div class="section-header">
-		<div class="section-icon" aria-hidden="true"><AudioLines size={20} strokeWidth={1.75} /></div>
 		<div>
 			<h3 class="section-label">Voice <span class="owner-badge">Your companion</span></h3>
 			<p class="section-desc">ElevenLabs voice ID for text-to-speech. Leave empty to use the default voice.</p>
 		</div>
 	</div>
+	<div class="section-body">
 
-	{#if voiceLoading}
-		<div class="ext-loading"><div class="loading-dot"></div></div>
-	{:else}
-		<div class="gh-token-form">
-			<label for="voice-id" class="setting-label">ElevenLabs voice ID</label>
-			<input class="ext-input" type="text" id="voice-id" placeholder="e.g. TWutjvRaJqAX89preB4e" bind:value={voiceInput} onkeydown={(e) => e.key === "Enter" && saveVoice()} />
-			<div class="ext-form-actions">
-				<button class="ext-form-btn ext-form-add" disabled={voiceSaving || voiceInput.trim() === voiceId} onclick={saveVoice}>
-					{voiceSaving ? "Saving..." : "Save"}
-				</button>
-				{#if voiceId}
-					<button class="ext-form-btn ext-form-cancel" disabled={voiceSaving} onclick={clearVoice}>reset to default</button>
-				{/if}
+		{#if voiceLoading}
+			<div class="ext-loading"><div class="loading-dot"></div></div>
+		{:else}
+			<div class="gh-token-form">
+				<label for="voice-id" class="setting-label">ElevenLabs voice ID</label>
+				<input class="ext-input" type="text" id="voice-id" placeholder="e.g. TWutjvRaJqAX89preB4e" bind:value={voiceInput} onkeydown={(e) => e.key === "Enter" && saveVoice()} />
+				<div class="ext-form-actions">
+					<button class="ext-form-btn ext-form-add" disabled={voiceSaving || voiceInput.trim() === voiceId} onclick={saveVoice}>
+						{voiceSaving ? "Saving..." : "Save"}
+					</button>
+					{#if voiceId}
+						<button class="ext-form-btn ext-form-cancel" disabled={voiceSaving} onclick={clearVoice}>reset to default</button>
+					{/if}
+				</div>
 			</div>
-		</div>
-	{/if}
+		{/if}
+	</div>
 </section>
 
 <!-- Email (SMTP/IMAP) -->
 <section class="settings-section">
 	<div class="section-header">
-		<div class="section-icon" aria-hidden="true"><Mail size={20} strokeWidth={1.75} /></div>
 		<div>
 			<h3 class="section-label">Email <span class="owner-badge">Your companion</span></h3>
 			<p class="section-desc">Connect any email via SMTP/IMAP (iCloud, Outlook, Yahoo, etc.) to enable send and read email tools.</p>
 		</div>
 	</div>
+	<div class="section-body">
 
-	{#if emailLoading}
-		<div class="ext-loading"><div class="loading-dot"></div></div>
-	{:else}
-		{#if emailAccounts.length > 0}
-			<div class="accounts-list">
-				{#each emailAccounts as acct, i (acct.smtp_from ?? acct.smtp_user ?? acct.imap_user ?? i)}
-					<div class="account-row">
-						<span class="account-email">{acct.smtp_from || acct.smtp_user || acct.imap_user || "account"}</span>
-						<button class="ext-remove-btn" disabled={emailSaving} onclick={() => removeEmailAccount(i)}>
-							{emailSaving ? "..." : "Remove"}
-						</button>
-					</div>
-				{/each}
-			</div>
-		{/if}
-
-		{#if emailAdding}
-			<div class="email-form">
-				<div class="email-form-group">
-					<span class="email-form-label">Outgoing (SMTP)</span>
-					<label class="integration-field">SMTP host<input class="ext-input" type="text" placeholder="smtp host (e.g. smtp.mail.me.com)" bind:value={emailForm.smtp_host} /></label>
-					<div class="email-form-row">
-						<label class="integration-field">Port<input class="ext-input" type="number" placeholder="port" bind:value={emailForm.smtp_port} style="width: 5rem;" /></label>
-						<label class="integration-field">Username or email<input class="ext-input" style="flex:1" type="text" placeholder="username / email" bind:value={emailForm.smtp_user} /></label>
-					</div>
-					<label class="integration-field">Password or app password<input class="ext-input" type="password" placeholder="password / app-specific password" bind:value={emailForm.smtp_password} /></label>
-					<label class="integration-field">From address<input class="ext-input" type="email" placeholder="from address (e.g. user@icloud.com)" bind:value={emailForm.smtp_from} /></label>
-				</div>
-
-				<div class="email-form-group">
-					<span class="email-form-label">Incoming (IMAP)</span>
-					<label class="integration-field">IMAP host<input class="ext-input" type="text" placeholder="imap host (e.g. imap.mail.me.com)" bind:value={emailForm.imap_host} /></label>
-					<div class="email-form-row">
-						<label class="integration-field">Port<input class="ext-input" type="number" placeholder="port" bind:value={emailForm.imap_port} style="width: 5rem;" /></label>
-						<label class="integration-field">Username or email<input class="ext-input" style="flex:1" type="text" placeholder="username / email" bind:value={emailForm.imap_user} /></label>
-					</div>
-					<label class="integration-field">Password or app password<input class="ext-input" type="password" placeholder="password / app-specific password" bind:value={emailForm.imap_password} /></label>
-				</div>
-
-				<div class="ext-form-actions">
-					<button class="ext-form-btn ext-form-add" disabled={emailSaving || (!emailForm.smtp_host && !emailForm.imap_host)} onclick={saveNewEmail}>
-						{emailSaving ? "Saving..." : "Add account"}
-					</button>
-					<button class="ext-form-btn ext-form-cancel" onclick={() => { emailAdding = false; emailError = ""; emailForm = emptyEmailForm(); }}>Cancel</button>
-				</div>
-			</div>
+		{#if emailLoading}
+			<div class="ext-loading"><div class="loading-dot"></div></div>
 		{:else}
-			<button class="ext-form-btn ext-form-add" onclick={() => (emailAdding = true)}>+ add email account</button>
-		{/if}
-	{/if}
+			{#if emailAccounts.length > 0}
+				<div class="accounts-list">
+					{#each emailAccounts as acct, i (acct.smtp_from ?? acct.smtp_user ?? acct.imap_user ?? i)}
+						<div class="account-row">
+							<span class="account-email">{acct.smtp_from || acct.smtp_user || acct.imap_user || "account"}</span>
+							<button class="ext-remove-btn" disabled={emailSaving} onclick={() => removeEmailAccount(i)}>
+								{emailSaving ? "..." : "Remove"}
+							</button>
+						</div>
+					{/each}
+				</div>
+			{/if}
 
-	{#if emailError}
-		<p class="error-msg" role="alert">{emailError}</p>
-	{/if}
+			{#if emailAdding}
+				<div class="email-form">
+					<div class="email-form-group">
+						<span class="email-form-label">Outgoing (SMTP)</span>
+						<label class="integration-field">SMTP host<input class="ext-input" type="text" placeholder="smtp host (e.g. smtp.mail.me.com)" bind:value={emailForm.smtp_host} /></label>
+						<div class="email-form-row">
+							<label class="integration-field">Port<input class="ext-input" type="number" placeholder="port" bind:value={emailForm.smtp_port} style="width: 5rem;" /></label>
+							<label class="integration-field">Username or email<input class="ext-input" style="flex:1" type="text" placeholder="username / email" bind:value={emailForm.smtp_user} /></label>
+						</div>
+						<label class="integration-field">Password or app password<input class="ext-input" type="password" placeholder="password / app-specific password" bind:value={emailForm.smtp_password} /></label>
+						<label class="integration-field">From address<input class="ext-input" type="email" placeholder="from address (e.g. user@icloud.com)" bind:value={emailForm.smtp_from} /></label>
+					</div>
+
+					<div class="email-form-group">
+						<span class="email-form-label">Incoming (IMAP)</span>
+						<label class="integration-field">IMAP host<input class="ext-input" type="text" placeholder="imap host (e.g. imap.mail.me.com)" bind:value={emailForm.imap_host} /></label>
+						<div class="email-form-row">
+							<label class="integration-field">Port<input class="ext-input" type="number" placeholder="port" bind:value={emailForm.imap_port} style="width: 5rem;" /></label>
+							<label class="integration-field">Username or email<input class="ext-input" style="flex:1" type="text" placeholder="username / email" bind:value={emailForm.imap_user} /></label>
+						</div>
+						<label class="integration-field">Password or app password<input class="ext-input" type="password" placeholder="password / app-specific password" bind:value={emailForm.imap_password} /></label>
+					</div>
+
+					<div class="ext-form-actions">
+						<button class="ext-form-btn ext-form-add" disabled={emailSaving || (!emailForm.smtp_host && !emailForm.imap_host)} onclick={saveNewEmail}>
+							{emailSaving ? "Saving..." : "Add account"}
+						</button>
+						<button class="ext-form-btn ext-form-cancel" onclick={() => { emailAdding = false; emailError = ""; emailForm = emptyEmailForm(); }}>Cancel</button>
+					</div>
+				</div>
+			{:else}
+				<button class="ext-form-btn ext-form-add" onclick={() => (emailAdding = true)}>+ add email account</button>
+			{/if}
+		{/if}
+
+		{#if emailError}
+			<p class="error-msg" role="alert">{emailError}</p>
+		{/if}
+	</div>
 </section>
 
 <!-- GitHub -->
 <section class="settings-section">
 	<div class="section-header">
-		<div class="section-icon" aria-hidden="true"><Github size={20} strokeWidth={1.75} /></div>
 		<div>
 			<h3 class="section-label">GitHub <span class="owner-badge">This server</span></h3>
 			<p class="section-desc">Connect GitHub to enable cloning repos, creating branches, PRs, and managing issues.</p>
 		</div>
 	</div>
+	<div class="section-body">
 
-	{#if ghLoading}
-		<div class="ext-loading"><div class="loading-dot"></div></div>
-	{:else if ghConfigured && !ghEditing}
-		<div class="gh-status">
-			<div class="gh-status-info">
-				<span class="gh-status-dot"></span>
-				<span class="gh-status-text">Token configured</span>
+		{#if ghLoading}
+			<div class="ext-loading"><div class="loading-dot"></div></div>
+		{:else if ghConfigured && !ghEditing}
+			<div class="gh-status">
+				<div class="gh-status-info">
+					<span class="gh-status-dot"></span>
+					<span class="gh-status-text">Token configured</span>
+				</div>
+				<div class="gh-status-actions">
+					<button class="ext-form-btn ext-form-cancel" onclick={() => (ghEditing = true)}>Change</button>
+					<button class="ext-remove-btn" disabled={ghSaving} onclick={disconnectGithub}>{ghSaving ? "..." : "Remove"}</button>
+				</div>
 			</div>
-			<div class="gh-status-actions">
-				<button class="ext-form-btn ext-form-cancel" onclick={() => (ghEditing = true)}>Change</button>
-				<button class="ext-remove-btn" disabled={ghSaving} onclick={disconnectGithub}>{ghSaving ? "..." : "Remove"}</button>
+		{:else}
+			<div class="gh-token-form">
+				<label for="github-token" class="setting-label">GitHub access token</label>
+				<input class="ext-input" type="password" id="github-token" placeholder="ghp_... or github_pat_..." bind:value={ghToken} onkeydown={(e) => e.key === "Enter" && saveGithubToken()} />
+				<div class="ext-form-actions">
+					<button class="ext-form-btn ext-form-add" disabled={ghSaving || !ghToken.trim()} onclick={saveGithubToken}>
+						{ghSaving ? "Saving..." : "Save token"}
+					</button>
+					{#if ghEditing}
+						<button class="ext-form-btn ext-form-cancel" onclick={() => { ghEditing = false; ghToken = ""; ghError = ""; }}>Cancel</button>
+					{/if}
+				</div>
 			</div>
-		</div>
-	{:else}
-		<div class="gh-token-form">
-			<label for="github-token" class="setting-label">GitHub access token</label>
-			<input class="ext-input" type="password" id="github-token" placeholder="ghp_... or github_pat_..." bind:value={ghToken} onkeydown={(e) => e.key === "Enter" && saveGithubToken()} />
-			<div class="ext-form-actions">
-				<button class="ext-form-btn ext-form-add" disabled={ghSaving || !ghToken.trim()} onclick={saveGithubToken}>
-					{ghSaving ? "Saving..." : "Save token"}
-				</button>
-				{#if ghEditing}
-					<button class="ext-form-btn ext-form-cancel" onclick={() => { ghEditing = false; ghToken = ""; ghError = ""; }}>Cancel</button>
-				{/if}
-			</div>
-		</div>
-	{/if}
+		{/if}
 
-	{#if ghError}
-		<p class="error-msg" role="alert">{ghError}</p>
-	{/if}
+		{#if ghError}
+			<p class="error-msg" role="alert">{ghError}</p>
+		{/if}
+	</div>
 </section>

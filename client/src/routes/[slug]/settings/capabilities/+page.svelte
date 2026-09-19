@@ -1,6 +1,4 @@
 <script lang="ts">
-	import Puzzle from "@lucide/svelte/icons/puzzle";
-	import Sparkles from "@lucide/svelte/icons/sparkles";
 	import {
 		fetchMcpServers,
 		addMcpServer,
@@ -142,130 +140,132 @@
 </script>
 
 <!-- Skills -->
-<section class="settings-section settings-wide">
+<section class="settings-section">
 	<div class="section-header">
-		<div class="section-icon" aria-hidden="true"><Sparkles size={20} strokeWidth={1.75} /></div>
 		<div>
 			<h3 class="section-label">Skills</h3>
 			<p class="section-desc">Reviewed bundles from the registry that teach your companion how to do specific things.</p>
 		</div>
 	</div>
-	<SkillsView embedded />
+	<div class="section-body">
+		<SkillsView embedded />
+	</div>
 </section>
 
 <!-- Extensions (MCP servers) -->
-<section class="settings-section settings-wide">
+<section class="settings-section">
 	<div class="section-header">
-		<div class="section-icon" aria-hidden="true"><Puzzle size={20} strokeWidth={1.75} /></div>
 		<div>
 			<h3 class="section-label">Extensions</h3>
 			<p class="section-desc">Reviewed integrations your companion can use. Each one lists exactly which tools are allowed in chat.</p>
 		</div>
 	</div>
+	<div class="section-body">
 
-	{#if mcpLoading}
-		<div class="ext-loading"><div class="loading-dot"></div></div>
-	{:else}
-		<!-- Suggested servers -->
-		{#if suggestedMcp.length > 0}
-			<div class="keys-list">
-				{#each suggestedMcp as entry (entry.name)}
-					{@const installed = isInstalled(entry.name)}
-					{@const connected = isConnected(entry.name)}
-					{@const busy = mcpBusy === entry.name}
-					<div class="key-row">
-						<div class="key-info">
-							<span class="key-name">{entry.name}</span>
-							<span class="key-hint">{entry.description}</span>
+		{#if mcpLoading}
+			<div class="ext-loading"><div class="loading-dot"></div></div>
+		{:else}
+			<!-- Suggested servers -->
+			{#if suggestedMcp.length > 0}
+				<div class="keys-list">
+					{#each suggestedMcp as entry (entry.name)}
+						{@const installed = isInstalled(entry.name)}
+						{@const connected = isConnected(entry.name)}
+						{@const busy = mcpBusy === entry.name}
+						<div class="key-row">
+							<div class="key-info">
+								<span class="key-name">{entry.name}</span>
+								<span class="key-hint">{entry.description}</span>
+							</div>
+							<div class="key-action">
+								{#if installed && connected}
+									<span class="key-badge key-badge-ok">Connected</span>
+									<button class="key-change" disabled={busy} onclick={() => handleRemoveCustom(entry.name)}>
+										{busy ? "..." : "Remove"}
+									</button>
+								{:else if installed}
+									<span class="key-badge" style="background: color-mix(in srgb, var(--primary) 12%, transparent); color: var(--primary);">Reconnecting</span>
+								{:else}
+									<button class="key-change key-change-add" disabled={busy} onclick={() => addSuggested(entry)}>
+										{busy ? "Connecting..." : "Add"}
+									</button>
+								{/if}
+							</div>
 						</div>
-						<div class="key-action">
-							{#if installed && connected}
-								<span class="key-badge key-badge-ok">Connected</span>
-								<button class="key-change" disabled={busy} onclick={() => handleRemoveCustom(entry.name)}>
-									{busy ? "..." : "Remove"}
-								</button>
-							{:else if installed}
-								<span class="key-badge" style="background: color-mix(in srgb, var(--primary) 12%, transparent); color: var(--primary);">Reconnecting</span>
-							{:else}
-								<button class="key-change key-change-add" disabled={busy} onclick={() => addSuggested(entry)}>
-									{busy ? "Connecting..." : "Add"}
-								</button>
-							{/if}
-						</div>
+					{/each}
+				</div>
+			{/if}
+
+			<!-- Tool grants: exactly which tools each connected server may offer in chat -->
+			{#each mcpServers as server (server.name)}
+				<div class="ext-grants" aria-label={`Tools allowed for ${server.name}`}>
+					<div class="ext-grants-head">
+						<span class="key-name">{server.name}</span>
+						<span class="key-badge" class:key-badge-ok={server.trust === "curated"}>{trustLabel(server)}</span>
+						<span class="key-hint">{grantSummary(server)}</span>
 					</div>
-				{/each}
-			</div>
+					{#if server.connected && server.tools.length > 0}
+						<ul class="ext-tool-list">
+							{#each server.tools as tool (tool.name)}
+								<li>
+									<label class="ext-tool">
+										<input type="checkbox" checked={tool.enabled} disabled={grantBusy === `${server.name}/${tool.name}`} onchange={(e) => toggleGrant(server, tool.name, (e.currentTarget as HTMLInputElement).checked)} />
+										<span class="ext-tool-name">{tool.name}</span>
+										{#if tool.description}<span class="key-hint">{tool.description}</span>{/if}
+									</label>
+								</li>
+							{/each}
+						</ul>
+					{:else if !server.connected}
+						<p class="key-hint">Not connected. Tools can be allowed once it connects.</p>
+					{/if}
+				</div>
+			{/each}
+
+			<!-- Custom/user-added servers -->
+			{#if customServers.length > 0}
+				<div class="keys-list" style="margin-top: 12px;">
+					{#each customServers as server (server.name)}
+						<div class="key-row">
+							<div class="key-info">
+								<span class="key-name">{server.name}</span>
+								<span class="key-hint">{server.url ?? "local process"} · {trustLabel(server)}</span>
+							</div>
+							<div class="key-action">
+								<span class="key-badge" class:key-badge-ok={server.connected} style={server.connected ? "" : "background: var(--accent); color: var(--destructive);"}>
+									{server.connected ? "Connected" : "Disconnected"}
+								</span>
+								<button class="key-change" disabled={mcpBusy === server.name} onclick={() => handleRemoveCustom(server.name)}>
+									{mcpBusy === server.name ? "..." : "Remove"}
+								</button>
+							</div>
+						</div>
+					{/each}
+				</div>
+			{/if}
+
+			<!-- Advanced: unreviewed servers need an explicit acknowledgement (#97) -->
+			<details class="ext-advanced" style="margin-top: 12px;" bind:open={showCustomForm}>
+				<summary class="ext-advanced-toggle">Advanced: connect a custom MCP server</summary>
+				<div class="ext-custom-form">
+					<p class="key-hint">Custom servers are not reviewed by Nolune. Their tools can read what you send them and act on your behalf. After connecting, no tool is allowed in chat until you enable it above. Local command servers are configured in <code>config.toml</code>.</p>
+					<label class="integration-field">Server name<input class="ext-input" type="text" placeholder="name" bind:value={mcpNewName} /></label>
+					<label class="integration-field">Server URL<input class="ext-input" type="url" placeholder="https://…/mcp" bind:value={mcpNewUrl} /></label>
+					<label class="ext-ack"><input type="checkbox" bind:checked={acknowledgeUntrusted} /> I understand this server is not reviewed and I have checked where it comes from.</label>
+					<div class="ext-form-actions">
+						<button class="ext-form-btn ext-form-add" disabled={mcpBusy !== null || !acknowledgeUntrusted} onclick={handleAddCustom}>
+							{mcpBusy ? "Connecting..." : "Add"}
+						</button>
+						<button class="ext-form-btn ext-form-cancel" onclick={() => { showCustomForm = false; mcpError = ""; }}>
+							Cancel
+						</button>
+					</div>
+				</div>
+			</details>
 		{/if}
 
-		<!-- Tool grants: exactly which tools each connected server may offer in chat -->
-		{#each mcpServers as server (server.name)}
-			<div class="ext-grants" aria-label={`Tools allowed for ${server.name}`}>
-				<div class="ext-grants-head">
-					<span class="key-name">{server.name}</span>
-					<span class="key-badge" class:key-badge-ok={server.trust === "curated"}>{trustLabel(server)}</span>
-					<span class="key-hint">{grantSummary(server)}</span>
-				</div>
-				{#if server.connected && server.tools.length > 0}
-					<ul class="ext-tool-list">
-						{#each server.tools as tool (tool.name)}
-							<li>
-								<label class="ext-tool">
-									<input type="checkbox" checked={tool.enabled} disabled={grantBusy === `${server.name}/${tool.name}`} onchange={(e) => toggleGrant(server, tool.name, (e.currentTarget as HTMLInputElement).checked)} />
-									<span class="ext-tool-name">{tool.name}</span>
-									{#if tool.description}<span class="key-hint">{tool.description}</span>{/if}
-								</label>
-							</li>
-						{/each}
-					</ul>
-				{:else if !server.connected}
-					<p class="key-hint">Not connected. Tools can be allowed once it connects.</p>
-				{/if}
-			</div>
-		{/each}
-
-		<!-- Custom/user-added servers -->
-		{#if customServers.length > 0}
-			<div class="keys-list" style="margin-top: 12px;">
-				{#each customServers as server (server.name)}
-					<div class="key-row">
-						<div class="key-info">
-							<span class="key-name">{server.name}</span>
-							<span class="key-hint">{server.url ?? "local process"} · {trustLabel(server)}</span>
-						</div>
-						<div class="key-action">
-							<span class="key-badge" class:key-badge-ok={server.connected} style={server.connected ? "" : "background: var(--accent); color: var(--destructive);"}>
-								{server.connected ? "Connected" : "Disconnected"}
-							</span>
-							<button class="key-change" disabled={mcpBusy === server.name} onclick={() => handleRemoveCustom(server.name)}>
-								{mcpBusy === server.name ? "..." : "Remove"}
-							</button>
-						</div>
-					</div>
-				{/each}
-			</div>
+		{#if mcpError}
+			<p class="key-error" role="alert">{mcpError}</p>
 		{/if}
-
-		<!-- Advanced: unreviewed servers need an explicit acknowledgement (#97) -->
-		<details class="ext-advanced" style="margin-top: 12px;" bind:open={showCustomForm}>
-			<summary class="ext-advanced-toggle">Advanced: connect a custom MCP server</summary>
-			<div class="ext-custom-form">
-				<p class="key-hint">Custom servers are not reviewed by Nolune. Their tools can read what you send them and act on your behalf. After connecting, no tool is allowed in chat until you enable it above. Local command servers are configured in <code>config.toml</code>.</p>
-				<label class="integration-field">Server name<input class="ext-input" type="text" placeholder="name" bind:value={mcpNewName} /></label>
-				<label class="integration-field">Server URL<input class="ext-input" type="url" placeholder="https://…/mcp" bind:value={mcpNewUrl} /></label>
-				<label class="ext-ack"><input type="checkbox" bind:checked={acknowledgeUntrusted} /> I understand this server is not reviewed and I have checked where it comes from.</label>
-				<div class="ext-form-actions">
-					<button class="ext-form-btn ext-form-add" disabled={mcpBusy !== null || !acknowledgeUntrusted} onclick={handleAddCustom}>
-						{mcpBusy ? "Connecting..." : "Add"}
-					</button>
-					<button class="ext-form-btn ext-form-cancel" onclick={() => { showCustomForm = false; mcpError = ""; }}>
-						Cancel
-					</button>
-				</div>
-			</div>
-		</details>
-	{/if}
-
-	{#if mcpError}
-		<p class="key-error" role="alert">{mcpError}</p>
-	{/if}
+	</div>
 </section>
