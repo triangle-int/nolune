@@ -5,7 +5,7 @@ panel (#97). Two kinds of extension exist, and both are bounded.
 
 ## Skills
 
-Skills are reviewed, installable bundles from the registry (Settings → Skills →
+Skills are reviewed, installable bundles from the registry (Settings → Capabilities → Skills →
 Browse). The consumer UI no longer offers a "New skill" prompt-authoring
 flow, and the built-in "Skill Creator" is gone. Developers author skills by
 placing a folder under `~/.nolune/skills/<id>/` with a `SKILL.md`; the server
@@ -29,7 +29,7 @@ Authorization = "Bearer …"        # this server's secret only
 | Trust | How it gets there | Default grant |
 | --- | --- | --- |
 | `curated` | one-click install from the reviewed catalog (`GET /api/config/mcp/suggested`); name **and** URL must match the catalog exactly | every discovered tool is enabled |
-| `custom` | Settings → Extensions → **Advanced** → *Connect a custom server*, or editing `config.toml` (the only way to configure stdio/command servers) | **no tools** until the user enables them one by one |
+| `custom` | Settings → Capabilities → Extensions → **Advanced** → *Connect a custom server*, or editing `config.toml` (the only way to configure stdio/command servers) | **no tools** until the user enables them one by one |
 
 `POST /api/config/mcp` refuses a non-catalog server unless the body carries
 `"acknowledge_untrusted": true`; the Advanced form sends it only after the

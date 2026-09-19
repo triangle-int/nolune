@@ -100,8 +100,10 @@ fn raw_skill_authoring_and_unsandboxed_extension_surfaces_are_absent() {
         );
     }
     let client_api = fs::read_to_string(repo.join("client/src/lib/api/client.ts")).unwrap();
-    let settings =
-        fs::read_to_string(repo.join("client/src/routes/[slug]/settings/+page.svelte")).unwrap();
+    let settings = fs::read_to_string(
+        repo.join("client/src/routes/[slug]/settings/capabilities/+page.svelte"),
+    )
+    .unwrap();
     if !client_api.contains("acknowledge_untrusted") || !settings.contains("acknowledgeUntrusted") {
         violations
             .push("Settings must send an explicit acknowledgement for custom MCP servers".into());

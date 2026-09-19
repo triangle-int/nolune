@@ -24,6 +24,21 @@ pub fn router() -> Router<AppState> {
             "/api/instances/{instance_slug}/machine-bye",
             post(machine_bye),
         )
+        .route(
+            "/api/instances/{instance_slug}/machines",
+            get(list_machines),
+        )
+}
+
+/// Connected computers (#98): the desktops currently attached to the one
+/// companion, for the Computers page and Settings › Connections.
+async fn list_machines(
+    State(state): State<AppState>,
+    Path(_instance_slug): Path<String>,
+) -> axum::Json<serde_json::Value> {
+    let mut machines = state.machine_registry.list().await;
+    machines.sort_by_key(|machine| std::cmp::Reverse(machine.last_seen));
+    axum::Json(serde_json::json!({ "machines": machines }))
 }
 
 /// the companion that a desktop is connected (if any machines are online).

@@ -97,11 +97,12 @@ The `/design-system` conversation example explicitly simulates streaming, stop, 
 
 ## Application surfaces
 
-The same tokens apply to settings, onboarding, authentication, agent management, skills, drops, thoughts, memory, statistics, file previews, and notification surfaces. Keep collection errors distinct from empty results; zero-activity statistics must not invent a peak hour or day.
+The same tokens apply to settings, onboarding, authentication, skills, drops, activity, memory, computers, file previews, and notification surfaces. Keep collection errors distinct from empty results.
 
 - Shared shadcn Button, Input, and Select triggers default to at least 44px targets. Inputs keep 16px type on phones.
 - Destructive companion confirmation uses shadcn AlertDialog. File previews and secret entry use Bits UI Dialog; keep focus trapping, Escape, and focus restoration intact. New-skill entry uses native dialog semantics.
-- Navigation has `aria-current`, horizontal scrolling on phones, and a lavender active indicator.
+- Navigation has `aria-current`, horizontal scrolling on phones, and a lavender active indicator. Primary tabs are Chat, Activity, Memory, Computers, Settings (`lib/companion/navigation.js`).
+- Settings is five section pages under one layout (`routes/[slug]/settings/+layout.svelte`) that reuses the tab pattern as a secondary nav. Section cards share `lib/settings/settings.css`; raw server fields stay on Advanced and carry an owner badge. See [settings.md](settings.md).
 - The working moon is centered within its scene element and capped at 200px on phones so it does not clip or compete with the composer.
 - Conversation history failures remain visible with Retry and Settings actions. Provider setup is required for live chat; the design-system example stays explicitly local and simulated.
 

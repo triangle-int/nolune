@@ -3,6 +3,7 @@
 	import { page } from "$app/state";
 	import { machineHello, machineBye } from "$lib/api/client.js";
 	import { needsOnboarding, redirectForStaleSlug } from "$lib/companion/context.js";
+	import { PRIMARY_TABS, activeTab as resolveTab, tabHref } from "$lib/companion/navigation.js";
 	import { getCompanion } from "$lib/stores/companion.svelte.js";
 	import { getPresentationState } from "$lib/stores/presentation.svelte.js";
 	import { getSceneStore } from "$lib/stores/scene.svelte.js";
@@ -46,10 +47,8 @@
 		}
 	});
 
-	const tabs = ["chat", "activity", "drops", "memory", "skills", "settings"] as const;
-	const activeTab = $derived(
-		tabs.find((t) => page.url.pathname.includes(`/${slug}/${t}`)) ?? "chat"
-	);
+	// Five destinations (#98); drops fold into Activity, skills live under Settings.
+	const activeTab = $derived(resolveTab(page.url.pathname, slug));
 
 	function handleOnboardingComplete() {
 		companion.refresh().catch(() => {});
@@ -72,14 +71,15 @@
 	<div class="instance-view">
 		{#if !presentation.active && (scene.mode === "chat" || activeTab !== "chat")}
 		<nav class="instance-tabs" aria-label="Companion navigation">
-			{#each tabs as tab}
+			{#each PRIMARY_TABS as tab (tab.id)}
 				<a
-					href="/{slug}/{tab}"
+					href={tabHref(slug, tab.id)}
 					class="instance-tab"
-					class:instance-tab-active={activeTab === tab}
-					aria-current={activeTab === tab ? "page" : undefined}
+					class:instance-tab-active={activeTab === tab.id}
+					aria-current={activeTab === tab.id ? "page" : undefined}
+					title={tab.description}
 				>
-					{tab}
+					{tab.label}
 				</a>
 			{/each}
 		</nav>
@@ -96,7 +96,7 @@
 .connection-state{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;height:100%;padding:24px;text-align:center}.connection-state h1{font-size:28px}.connection-state p{color:var(--text-muted)}
 .instance-outer,.instance-view{display:flex;flex-direction:column;min-height:0;max-width:100%;overflow:hidden}.instance-outer{height:100%}.instance-view{flex:1}
 .instance-tabs{display:flex;gap:4px;padding:8px 24px 0;border-bottom:1px solid var(--border);flex-shrink:0;z-index:10;overflow-x:auto;background:var(--background);scrollbar-width:thin}
-.instance-tab{display:flex;align-items:center;justify-content:center;min-height:44px;min-width:44px;padding:10px 12px;border-radius:8px 8px 0 0;flex-shrink:0;position:relative;white-space:nowrap;font:500 14px var(--font-body);text-transform:capitalize;color:var(--text-muted);text-decoration:none;cursor:pointer}
+.instance-tab{display:flex;align-items:center;justify-content:center;min-height:44px;min-width:44px;padding:10px 12px;border-radius:8px 8px 0 0;flex-shrink:0;position:relative;white-space:nowrap;font:500 14px var(--font-body);color:var(--text-muted);text-decoration:none;cursor:pointer}
 .instance-tab:hover{background:var(--card);color:var(--foreground)}.instance-tab-active{background:var(--accent);color:var(--accent-foreground)}.instance-tab-active::after{content:"";position:absolute;bottom:0;left:12px;right:12px;height:2px;background:var(--primary)}.instance-content{position:relative;flex:1;min-width:0;min-height:0;overflow:hidden}.instance-content-backdrop{background:var(--background)}
 @media(max-width:720px){.instance-tabs{padding:8px 12px 0}}
 </style>

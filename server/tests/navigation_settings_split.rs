@@ -70,7 +70,9 @@ fn primary_navigation_is_five_companion_destinations() {
         "Connected computers needs its own route"
     );
     assert!(
-        !repo.join("client/src/routes/[slug]/skills/+page.svelte").exists(),
+        !repo
+            .join("client/src/routes/[slug]/skills/+page.svelte")
+            .exists(),
         "Skills is a capability under Settings, not a primary tab"
     );
 
@@ -79,7 +81,13 @@ fn primary_navigation_is_five_companion_destinations() {
         layout.contains("navigation.js"),
         "the companion layout must render tabs from lib/companion/navigation.js"
     );
-    for stale in ["\"drops\"", "\"skills\"", "\"agents\"", "\"thoughts\"", "\"stats\""] {
+    for stale in [
+        "\"drops\"",
+        "\"skills\"",
+        "\"agents\"",
+        "\"thoughts\"",
+        "\"stats\"",
+    ] {
         assert!(
             !layout.contains(stale),
             "the layout still hard-codes a {stale} tab"
@@ -94,7 +102,7 @@ fn primary_navigation_is_five_companion_destinations() {
             .to_string_lossy()
             .into_owned();
         let source = fs::read_to_string(&path).unwrap();
-        for token in ["/skills\"", "/skills`", "`/${slug}/skills", "/${slug}/skills"] {
+        for token in ["/{slug}/skills", "${slug}/skills"] {
             if source.contains(token) {
                 violations.push(format!("{relative} links to the retired skills tab"));
             }
@@ -108,7 +116,8 @@ fn settings_is_split_by_owner_and_common_setup_hides_raw_fields() {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
 
     assert!(
-        !repo.join("client/src/routes/[slug]/settings/+page.svelte")
+        !repo
+            .join("client/src/routes/[slug]/settings/+page.svelte")
             .exists(),
         "the monolithic Settings page still exists"
     );
@@ -138,7 +147,10 @@ fn settings_is_split_by_owner_and_common_setup_hides_raw_fields() {
             violations.push(format!("{page} is not a small page any more"));
         }
     }
-    let advanced = read(repo, "client/src/routes/[slug]/settings/advanced/+page.svelte");
+    let advanced = read(
+        repo,
+        "client/src/routes/[slug]/settings/advanced/+page.svelte",
+    );
     for token in RAW_FIELD_TOKENS {
         if !advanced.contains(token) {
             violations.push(format!(
@@ -203,6 +215,9 @@ fn connected_computers_have_a_read_route_and_the_split_is_documented() {
         "config.toml",
         "Computers",
     ] {
-        assert!(doc.contains(required), "docs/settings.md is missing {required:?}");
+        assert!(
+            doc.contains(required),
+            "docs/settings.md is missing {required:?}"
+        );
     }
 }
