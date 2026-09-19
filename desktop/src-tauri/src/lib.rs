@@ -2,6 +2,7 @@ mod companion_relay;
 mod computer_use;
 mod computer_use_bridge;
 mod credentials;
+mod local_server;
 mod overlay;
 mod permissions;
 
@@ -125,7 +126,7 @@ async fn clear_legacy_browser_auth(app: tauri::AppHandle) -> Result<(), String> 
     browser.and(http)
 }
 
-fn connection_url(input: &str) -> Result<url::Url, String> {
+pub(crate) fn connection_url(input: &str) -> Result<url::Url, String> {
     let parsed = url::Url::parse(input).map_err(|_| "Invalid server URL")?;
     if !matches!(parsed.scheme(), "http" | "https")
         || parsed.host_str().is_none()
@@ -144,7 +145,7 @@ fn connection_url(input: &str) -> Result<url::Url, String> {
 // finish after a newer disconnect.
 static CONNECTION_LIFECYCLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-async fn validate_connection(url: &str, token: &str) -> Result<(), String> {
+pub(crate) async fn validate_connection(url: &str, token: &str) -> Result<(), String> {
     let mut target = connection_url(url)?;
     if token.trim().is_empty() || token.contains(['\r', '\n']) {
         return Err("Invalid auth token".into());
@@ -473,9 +474,14 @@ pub fn run() {
             computer_use_bridge::set_instance_slug,
             permissions::check_permissions,
             permissions::open_permission_settings,
+            local_server::local_server_status,
+            local_server::install_local_server,
+            local_server::start_local_gateway,
+            local_server::stop_local_gateway,
         ])
         .setup(|app| {
             app.manage(CompanionRelay(Mutex::new(None)));
+            app.manage(local_server::LocalGateway(Mutex::new(None)));
 
             // Single instance must be registered first in setup
             #[cfg(desktop)]
@@ -564,6 +570,12 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // The app-managed gateway (#128) must not outlive the app.
+            if let tauri::RunEvent::Exit = event {
+                local_server::shutdown(app);
+            }
+        });
 }

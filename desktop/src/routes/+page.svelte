@@ -3,6 +3,7 @@
   import Moon from "$lib/components/Moon.svelte";
   import { auth, init, saveConnection, testConnection, openConnection, disconnect } from "$lib/auth.svelte";
   import { updater, checkForUpdates, installUpdate, dismissUpdate } from "$lib/updater.svelte";
+  import { local, canInstall, refreshLocalStatus, subscribeLocalEvents, installLocal, startLocalGateway, toggleLogs } from "$lib/local.svelte";
 
   let splash = $state(true);
   let splashFading = $state(false);
@@ -12,8 +13,9 @@
   let splashAudio = $state<HTMLAudioElement | null>(null);
 
   onMount(() => {
-    init();
+    init().then(resumeLocalGateway);
     checkForUpdates();
+    subscribeLocalEvents().catch(() => {});
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     // The chime strikes as the moon lands and opens its eyes (see the moon-born and eyes-awake keyframes).
     const chime = setTimeout(() => {
@@ -27,6 +29,30 @@
       clearTimeout(timer);
     };
   });
+
+  // A local install from an earlier session: the gateway died with the app, so bring it
+  // back before the user clicks Open. A running service or foreground gateway is left alone.
+  async function resumeLocalGateway() {
+    const status = await refreshLocalStatus();
+    if (!status?.binary_installed || !status.config_exists || status.gateway_running || status.port_in_use) return;
+    await startLocalGateway();
+  }
+
+  async function installHere() {
+    if (!(await installLocal())) return;
+    // The native side saved the connection; refresh it and open the companion.
+    await init();
+    await openConnection();
+  }
+
+  const installBusy = $derived(local.step === "downloading" || local.step === "preparing" || local.step === "starting");
+  const installLabel = $derived(
+    local.step === "downloading" ? `Downloading Nolune${local.progress > 0 ? ` · ${Math.round(local.progress * 100)}%` : ""}…`
+    : local.step === "preparing" ? "Preparing your workspace…"
+    : local.step === "starting" ? "Starting Nolune…"
+    : local.step === "ready" ? `Nolune is running${local.version ? ` (${local.version})` : ""}.`
+    : "",
+  );
 
   function endSplash() {
     if (splashFading) return;
@@ -123,6 +149,45 @@
 
         {#if auth.error}<p class="form-error" role="alert">{auth.error}</p>{/if}
         {#if auth.message}<p class="form-message" role="status">{auth.message}</p>{/if}
+
+        {#if !auth.connection && !editing && local.status?.supported !== false}
+          <div class="install" aria-labelledby="install-title">
+            <h3 id="install-title" class="install-title">Install Nolune on this computer</h3>
+            <p class="connect-desc">
+              The server downloads into your home folder and runs while this app is open. Nothing else to set up.
+            </p>
+            {#if local.error}<p class="form-error" role="alert">{local.error}</p>{/if}
+            {#if installBusy || local.step === "ready"}
+              <p class="pending" role="status">
+                {#if installBusy}<span class="spinner" aria-hidden="true"></span>{/if}{installLabel}
+              </p>
+              {#if local.step === "downloading"}
+                <div class="update-progress-track" aria-hidden="true">
+                  <div class="update-progress-bar" style:width="{Math.round(local.progress * 100)}%"></div>
+                </div>
+              {/if}
+            {:else}
+              <div class="actions">
+                <button class="nl-button" type="button" onclick={installHere} disabled={!canInstall() || auth.loading}>
+                  {local.step === "error" ? "Retry install" : "Install on this computer"}
+                </button>
+              </div>
+              <label class="nightly">
+                <input type="checkbox" bind:checked={local.nightly} disabled={installBusy} />
+                <span>Use nightly builds (advanced)</span>
+              </label>
+            {/if}
+            {#if local.logs.length > 0 || local.step !== "idle"}
+              <button class="nl-button-secondary logs-toggle" type="button" onclick={toggleLogs} aria-expanded={local.showLogs} aria-controls="install-logs">
+                {local.showLogs ? "Hide logs" : "Show logs"}
+              </button>
+              {#if local.showLogs}
+                <pre id="install-logs" class="logs" aria-live="polite">{local.logs.length ? local.logs.join("\n") : "No output yet."}</pre>
+              {/if}
+            {/if}
+          </div>
+          <p class="divider" role="separator"><span>or connect to an existing server</span></p>
+        {/if}
 
         {#if auth.connection && !editing}
           <p class="connect-desc">Your companion is saved on this computer. Open it to keep talking.</p>
@@ -428,6 +493,69 @@
 
   @keyframes spin {
     to { transform: rotate(360deg); }
+  }
+
+  /* ─── Local install ─────────────────────────────────────────── */
+  .install {
+    margin: 0 0 8px;
+  }
+
+  .install-title {
+    font: 500 18px/1.3 var(--font-body);
+    color: var(--foreground);
+    margin: 0 0 8px;
+  }
+
+  .nightly {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+    font-size: 13px;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+
+  .nightly input {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--primary);
+  }
+
+  .logs-toggle {
+    margin-top: 12px;
+  }
+
+  .logs {
+    margin: 12px 0 0;
+    padding: 12px 14px;
+    max-height: 200px;
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-control);
+    background: var(--popover);
+    font: 400 12px/1.5 var(--font-mono);
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    word-break: break-word;
+    user-select: text;
+  }
+
+  .divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 24px 0;
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+
+  .divider::before,
+  .divider::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--border);
   }
 
   @media (max-width: 560px) {
