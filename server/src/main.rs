@@ -2,10 +2,11 @@ mod app;
 mod cli;
 mod config;
 mod domain;
+mod onboard;
 mod routes;
 mod services;
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, time::Duration};
 
 use clap::Parser;
 use log::info;
@@ -14,13 +15,16 @@ use log::info;
 async fn main() {
     let args = cli::Cli::parse();
 
-    // Handle subcommands (start/stop/restart/status/logs/version)
-    if let Some(cmd) = args.command {
-        let code = cli::run(cmd);
-        std::process::exit(code);
+    // Everything except the server itself is a synchronous subcommand.
+    match args.command {
+        None | Some(cli::CliCommand::Gateway) => {}
+        Some(cmd) => {
+            let code = cli::run(cmd);
+            std::process::exit(code);
+        }
     }
 
-    // No subcommand → run the server
+    // `nolune` and `nolune gateway` run the server in the foreground.
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .filter_module("tracing::span", log::LevelFilter::Warn)
         .format(app::logging::format_record)
@@ -188,10 +192,63 @@ async fn main() {
 
     info!("Starting server on http://{addr}");
 
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .expect("failed to bind tcp listener");
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(listener) => listener,
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+            eprintln!(
+                "port {port} is already in use on {host}. Another Nolune gateway or service is \
+                 probably running; stop it, or change `port` in {}.",
+                config::config_path().display()
+            );
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("failed to listen on {addr}: {error}");
+            std::process::exit(1);
+        }
+    };
+
+    // Installers and the desktop app wait for this exact stdout line (#124).
+    println!("nolune: ready http://localhost:{port}");
+
     axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .expect("server exited unexpectedly");
+    info!("gateway stopped");
+}
+
+/// How long open connections may linger after a shutdown signal before the process exits anyway.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+
+/// Resolve on Ctrl-C or SIGTERM. Long-lived streams would otherwise keep graceful shutdown
+/// waiting forever, so a bounded timer force-exits once the grace period passes.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c().await.ok();
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(error) => {
+                log::warn!("cannot listen for SIGTERM: {error}");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
+    info!("shutdown signal received; stopping gateway");
+    tokio::spawn(async {
+        tokio::time::sleep(SHUTDOWN_GRACE).await;
+        log::warn!("connections still open after {SHUTDOWN_GRACE:?}; exiting");
+        std::process::exit(0);
+    });
 }
