@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Sandboxed installer behavior tests: no network, services, or user files.
+#
+# The installer is a thin wrapper (#127): it downloads the binary, runs
+# `nolune onboard`, starts `nolune gateway` in the foreground, and opens the
+# browser. Config, tokens, and services are the binary's job, so the mock
+# "download" is a fake nolune that records how it was called.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
 tmp=$(mktemp -d)
-spawned_pids=()
-cleanup() {
-  for pid in "${spawned_pids[@]}"; do kill -9 "$pid" 2>/dev/null || true; done
-  rm -rf "$tmp"
-}
+cleanup() { rm -rf "$tmp"; }
 trap cleanup EXIT
 mock_bin="$tmp/mock-bin"
 mkdir -p "$mock_bin"
@@ -34,9 +35,34 @@ case "$*" in
       shift
     done
     [[ -n "$out" ]]
+    # The "downloaded binary": a fake nolune that behaves like the real CLI contract.
     cat > "$out" <<'BIN'
 #!/usr/bin/env bash
-printf 'direct binary start\n' >> "${MOCK_CALLS:?}"
+set -eu
+home="${NOLUNE_HOME:-<unset>}"
+case "${1:-}" in
+  onboard)
+    existed=no
+    [[ -f "$home/config.toml" ]] && existed=yes
+    printf 'nolune onboard NOLUNE_HOME=%s (config existed: %s)\n' "$home" "$existed" >> "${MOCK_CALLS:?}"
+    mkdir -p "$home/bin"
+    if [[ "$existed" = no ]]; then
+      printf 'auth_token = "mocktokenmocktokenmocktokenmock1"\n# written by mock onboard\n' > "$home/config.toml"
+    fi
+    printf 'workspace ready at %s\n' "$home"
+    ;;
+  gateway)
+    printf 'nolune gateway NOLUNE_HOME=%s\n' "$home" >> "${MOCK_CALLS:?}"
+    if [[ "${MOCK_HEALTHY:-1}" = 1 ]]; then
+      printf 'nolune: ready http://localhost:26559\n'
+      # A real gateway blocks; the mock returns as if the user stopped it.
+      exit 0
+    fi
+    printf 'port 26559 is already in use\n' >&2
+    exit 1
+    ;;
+  *) printf 'nolune %s\n' "$*" >> "${MOCK_CALLS:?}" ;;
+esac
 BIN
     ;;
   *'-fsSIL '*)
@@ -46,57 +72,15 @@ BIN
     printf 'HTTP/2 200 \r\n'
     ;;
   *'/healthz'*) [[ "${MOCK_HEALTHY:-1}" = 1 ]] ;;
-  *'/api/health'*) exit 42 ;;
   *) ;;
 esac
 MOCK
 
-cat > "$mock_bin/launchctl" <<'MOCK'
-#!/usr/bin/env bash
-printf 'launchctl %s\n' "$*" >> "$MOCK_CALLS"
-exit 0
-MOCK
-
-cat > "$mock_bin/systemctl" <<'MOCK'
-#!/usr/bin/env bash
-printf 'systemctl %s\n' "$*" >> "$MOCK_CALLS"
-exit 0
-MOCK
-
-cat > "$mock_bin/id" <<'MOCK'
-#!/usr/bin/env bash
-if [[ "${1:-}" = -u ]]; then printf '%s\n' "${MOCK_UID:-501}"; else /usr/bin/id "$@"; fi
-MOCK
-
-cat > "$mock_bin/pgrep" <<'MOCK'
-#!/usr/bin/env bash
-printf 'pgrep %s\n' "$*" >> "$MOCK_CALLS"
-if [[ -n "${MOCK_OLD_PID:-}" ]]; then
-  # A decoy first exposes unsafe "first pgrep match" implementations.
-  printf '999998\n%s\n' "$MOCK_OLD_PID"
-else
-  exit 1
-fi
-MOCK
-
-cat > "$mock_bin/ps" <<'MOCK'
-#!/usr/bin/env bash
-printf 'ps %s\n' "$*" >> "$MOCK_CALLS"
-printf '999997 /usr/bin/helper %s\n' "${NOLUNE_DIR:?}/bin/nolune"
-printf '999996 %s --helper\n' "${NOLUNE_DIR:?}/bin/nolune"
-if [[ -n "${MOCK_OLD_PID:-}" ]] && kill -0 "$MOCK_OLD_PID" 2>/dev/null; then
-  state=$(/bin/ps -p "$MOCK_OLD_PID" -o stat= 2>/dev/null || true)
-  if [[ "$state" != *Z* ]]; then
-    printf '%s %s\n' "$MOCK_OLD_PID" "${NOLUNE_DIR:?}/bin/nolune"
-  fi
-fi
-MOCK
-
-for cmd in kill open xdg-open; do
+# Service managers must never be touched by the installer any more.
+for cmd in launchctl systemctl open xdg-open; do
   cat > "$mock_bin/$cmd" <<'MOCK'
 #!/usr/bin/env bash
 printf '%s %s\n' "$(basename "$0")" "$*" >> "$MOCK_CALLS"
-[[ "$(basename "$0")" != pgrep ]]
 MOCK
 done
 
@@ -105,19 +89,11 @@ cat > "$mock_bin/sleep" <<'MOCK'
 exit 0
 MOCK
 chmod +x "$mock_bin"/*
-mock_bin_no_systemd="$tmp/mock-bin-no-systemd"
-mkdir -p "$mock_bin_no_systemd"
-for mock in "$mock_bin"/*; do
-  [[ $(basename "$mock") = systemctl ]] || ln -s "$mock" "$mock_bin_no_systemd/$(basename "$mock")"
-done
-for cmd in bash basename cat chmod grep head mkdir mv rm sed seq tail tr whoami; do
-  [[ -e "$mock_bin_no_systemd/$cmd" ]] || ln -s "$(command -v "$cmd")" "$mock_bin_no_systemd/$cmd"
-done
 
 assert_contains() {
   local file=$1 expected=$2
   if ! grep -Fq -- "$expected" "$file"; then
-    printf 'FAIL: missing call: %s\n--- calls ---\n' "$expected" >&2
+    printf 'FAIL: missing: %s\n--- %s ---\n' "$expected" "$file" >&2
     cat "$file" >&2
     exit 1
   fi
@@ -132,21 +108,10 @@ assert_exact_call() {
   fi
 }
 
-wait_for_call() {
-  local file=$1 expected=$2
-  for _ in $(seq 1 100); do
-    grep -Fq -- "$expected" "$file" && return 0
-    /bin/sleep 0.02
-  done
-  printf 'FAIL: timed out waiting for call: %s\n--- calls ---\n' "$expected" >&2
-  cat "$file" >&2
-  exit 1
-}
-
 assert_absent() {
   local file=$1 unexpected=$2
   if grep -Fq -- "$unexpected" "$file"; then
-    printf 'FAIL: unexpected call: %s\n--- calls ---\n' "$unexpected" >&2
+    printf 'FAIL: unexpected: %s\n--- %s ---\n' "$unexpected" "$file" >&2
     cat "$file" >&2
     exit 1
   fi
@@ -162,166 +127,107 @@ assert_status() {
   fi
 }
 
-assert_generated_token_private() {
-  local name=$1 token config
-  config="$tmp/$name/data/config.toml"
-  token=$(grep -E '^auth_token\s*=' "$config" | head -1 | sed 's/[^=]*=\s*//' | tr -d ' "')
-  if [[ -z "$token" ]]; then
-    printf 'FAIL: %s did not generate an auth token\n' "$name" >&2
-    exit 1
-  fi
+# The binary owns config and token. The script must not write config.toml itself,
+# and must never echo the token.
+assert_binary_owns_config() {
+  local name=$1
+  local data="$tmp/$name/data"
+  assert_contains "$tmp/$name/calls" "nolune onboard NOLUNE_HOME=$data (config existed: no)"
+  assert_contains "$data/config.toml" '# written by mock onboard'
   for file in "$tmp/$name/output" "$tmp/$name/calls"; do
-    if grep -Fq -- "$token" "$file"; then
-      printf 'FAIL: %s exposed its generated auth token in %s\n' "$name" "$file" >&2
-      cat "$file" >&2
-      exit 1
-    fi
+    assert_absent "$file" 'mocktokenmocktokenmocktokenmock1'
   done
 }
 
+assert_no_service_management() {
+  local name=$1
+  for verb in launchctl systemctl; do
+    assert_absent "$tmp/$name/calls" "$verb "
+  done
+  assert_absent "$tmp/$name/output" 'setting up service'
+  [[ ! -e "$tmp/$name/home/Library/LaunchAgents" ]]
+  [[ ! -e "$tmp/$name/home/.config/systemd" ]]
+}
+
 run_installer() {
-  local name=$1 os=$2 arch=$3 healthy=$4 old_pid=${5:-} uid=${6:-501} with_systemd=${7:-1}
+  local name=$1 os=$2 arch=$3 healthy=${4:-1}
   local home="$tmp/$name/home" data="$tmp/$name/data" calls="$tmp/$name/calls"
-  if [[ "$old_pid" = spawn ]]; then
-    old_pid=$(python3 -c 'import subprocess; print(subprocess.Popen(["/bin/sleep", "300"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True).pid)')
-    spawned_pids+=("$old_pid")
-    printf '%s\n' "$old_pid" > "$tmp/$name-old-pid"
-  elif [[ "$old_pid" = stubborn ]]; then
-    old_pid=$(python3 -c 'import subprocess; print(subprocess.Popen(["python3", "-c", "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(300)"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True).pid)')
-    spawned_pids+=("$old_pid")
-    printf '%s\n' "$old_pid" > "$tmp/$name-old-pid"
-    /bin/sleep 0.1
-  fi
-  local selected_path="$mock_bin:/usr/bin:/bin:/usr/sbin:/sbin"
-  if [[ "$with_systemd" != 1 ]]; then
-    selected_path=$mock_bin_no_systemd
-  fi
   mkdir -p "$home"
   : > "$calls"
   set +e
   HOME="$home" NOLUNE_DIR="$data" SHELL=/bin/bash \
-    MOCK_OS="$os" MOCK_ARCH="$arch" MOCK_HEALTHY="$healthy" MOCK_OLD_PID="$old_pid" MOCK_UID="$uid" MOCK_CALLS="$calls" \
-    NOLUNE_SYSTEMD_SYSTEM_DIR="$tmp/$name/systemd-system" \
-    PATH="$selected_path" \
-    bash "$root/scripts/install.sh" > "$tmp/$name/output" 2>&1
+    MOCK_OS="$os" MOCK_ARCH="$arch" MOCK_HEALTHY="$healthy" MOCK_CALLS="$calls" \
+    PATH="$mock_bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    bash "$root/scripts/install.sh" > "$tmp/$name/output" 2>&1 < /dev/null
   status=$?
   set -e
   printf '%s\n' "$status" > "$tmp/$name/status"
 }
 
-# macOS: native service manager owns startup; health uses the public endpoint.
-run_installer macos Darwin arm64 1 spawn
+# macOS: download, onboard, foreground gateway, browser. No service.
+run_installer macos Darwin arm64
 assert_status macos 0
-assert_generated_token_private macos
-assert_contains "$tmp/macos/calls" 'launchctl bootstrap gui/501 '
-assert_contains "$tmp/macos/calls" 'launchctl kickstart -k gui/501/dev.nolune.nolune'
-assert_contains "$tmp/macos/calls" 'launchctl print gui/501/dev.nolune.nolune'
-old_pid=$(cat "$tmp/macos-old-pid")
-old_state=$(/bin/ps -p "$old_pid" -o stat= 2>/dev/null || true)
-if kill -0 "$old_pid" 2>/dev/null && [[ "$old_state" != *Z* ]]; then
-  echo 'FAIL: installer left the exact old Nolune process running' >&2
-  exit 1
-fi
-if ! grep -Fq "stopping unmanaged nolune process (PID: $old_pid)" "$tmp/macos/output"; then
-  echo 'FAIL: installer did not stop the unmanaged prior process' >&2
-  exit 1
-fi
-assert_contains "$tmp/macos/calls" 'ps -axo pid=,command='
+assert_binary_owns_config macos
+assert_no_service_management macos
+assert_contains "$tmp/macos/calls" "nolune gateway NOLUNE_HOME=$tmp/macos/data"
 assert_contains "$tmp/macos/calls" '/healthz'
-assert_absent "$tmp/macos/calls" '/api/health'
-assert_absent "$tmp/macos/calls" 'direct binary start'
 assert_exact_call "$tmp/macos/calls" 'open http://localhost:26559'
-if grep -Eq 'auth token:|/auth\?token=' "$tmp/macos/output"; then
-  echo 'FAIL: installer printed the auth token' >&2
-  exit 1
-fi
+assert_contains "$tmp/macos/output" 'nolune gateway install'
+assert_contains "$tmp/macos/output" 'http://localhost:26559'
 
 # Fresh installs and their generated updater use the Nolune distribution contract.
 assert_contains "$tmp/macos/calls" 'https://github.com/triangle-int/nolune/releases/latest/download/nolune-server-aarch64-apple-darwin'
-assert_contains "$tmp/macos/home/Library/LaunchAgents/dev.nolune.nolune.plist" '<key>NOLUNE_HOME</key>'
 assert_contains "$tmp/macos/data/bin/update" 'nolune-server-'
 if [[ "$(cat "$tmp/macos/data/bin/.version")" != v0.33.0 ]]; then
   printf 'FAIL: recorded version is %q, expected v0.33.0\n' "$(cat "$tmp/macos/data/bin/.version")" >&2
   exit 1
 fi
-# The tag is printed in bold, so match through the escape sequence.
 if ! grep -Fq $'downloaded \033[1mv0.33.0\033[0m' "$tmp/macos/output"; then
   echo 'FAIL: installer did not report the resolved release tag' >&2
   exit 1
 fi
-# Network calls must fail fast and retry instead of hanging on an unreachable github.com.
 assert_contains "$tmp/macos/calls" '--connect-timeout 15 --retry 3'
 bash -n "$tmp/macos/data/bin/update"
 MOCK_CALLS="$tmp/macos/calls" PATH="$mock_bin:$PATH" bash "$tmp/macos/data/bin/update" > "$tmp/macos/update-output"
 assert_contains "$tmp/macos/update-output" 'already at v0.33.0'
 
-# Re-running the macOS installer against the same home/data remains idempotent.
-run_installer macos Darwin arm64 1
+# Re-running keeps the existing config: onboard sees it and the script does not rewrite it.
+run_installer macos Darwin arm64
 assert_status macos 0
-assert_generated_token_private macos
-assert_contains "$tmp/macos/calls" 'launchctl bootstrap gui/501 '
-assert_contains "$tmp/macos/calls" '/healthz'
+assert_contains "$tmp/macos/calls" "nolune onboard NOLUNE_HOME=$tmp/macos/data (config existed: yes)"
+assert_contains "$tmp/macos/data/config.toml" '# written by mock onboard'
+assert_no_service_management macos
 
-# Root Linux uses and verifies the system service without touching real /etc.
-run_installer linux-root Linux x86_64 1 '' 0
-assert_status linux-root 0
-assert_generated_token_private linux-root
-assert_contains "$tmp/linux-root/calls" 'systemctl daemon-reload'
-assert_contains "$tmp/linux-root/calls" 'systemctl enable nolune'
-assert_contains "$tmp/linux-root/calls" 'systemctl restart nolune'
-assert_contains "$tmp/linux-root/calls" 'systemctl is-active --quiet nolune'
-[[ -f "$tmp/linux-root/systemd-system/nolune.service" ]]
-
-# Non-root Linux uses and verifies the user systemd service.
-run_installer linux Linux x86_64 1
+# Linux: same flow, xdg-open, no systemd.
+run_installer linux Linux x86_64
 assert_status linux 0
-assert_generated_token_private linux
-assert_contains "$tmp/linux/calls" 'systemctl --user daemon-reload'
-assert_contains "$tmp/linux/calls" 'systemctl --user enable nolune'
-assert_contains "$tmp/linux/calls" 'systemctl --user restart nolune'
-assert_contains "$tmp/linux/calls" 'systemctl --user is-active --quiet nolune'
-assert_contains "$tmp/linux/calls" '/healthz'
-assert_absent "$tmp/linux/calls" 'direct binary start'
-
-# Re-running Linux against the same home/data remains idempotent.
-run_installer linux Linux x86_64 1
-assert_status linux 0
-assert_generated_token_private linux
-assert_contains "$tmp/linux/calls" 'systemctl --user enable nolune'
-
-# Linux without systemd uses the explicit direct-process fallback.
-run_installer linux-fallback Linux x86_64 1 '' 501 0
-assert_status linux-fallback 0
-assert_generated_token_private linux-fallback
-wait_for_call "$tmp/linux-fallback/calls" 'direct binary start'
-assert_exact_call "$tmp/linux-fallback/calls" 'xdg-open http://localhost:26559'
-
-# A process that ignores SIGTERM blocks service startup and fails closed.
-run_installer stubborn Darwin arm64 1 stubborn
-assert_generated_token_private stubborn
-[[ $(cat "$tmp/stubborn/status") -ne 0 ]]
-assert_absent "$tmp/stubborn/calls" 'launchctl bootstrap gui/501 '
-if ! grep -Fq 'could not stop the existing Nolune process' "$tmp/stubborn/output"; then
-  echo 'FAIL: stubborn prior process did not produce a clear failure' >&2
-  exit 1
-fi
+assert_binary_owns_config linux
+assert_no_service_management linux
+assert_contains "$tmp/linux/calls" "nolune gateway NOLUNE_HOME=$tmp/linux/data"
+assert_exact_call "$tmp/linux/calls" 'xdg-open http://localhost:26559'
 
 # Every platform the release workflow publishes resolves to its own asset.
-run_installer macos-intel Darwin x86_64 1
+run_installer macos-intel Darwin x86_64
 assert_status macos-intel 0
 assert_contains "$tmp/macos-intel/calls" 'https://github.com/triangle-int/nolune/releases/latest/download/nolune-server-x86_64-apple-darwin'
-run_installer linux-arm Linux aarch64 1
+run_installer linux-arm Linux aarch64
 assert_status linux-arm 0
 assert_contains "$tmp/linux-arm/calls" 'https://github.com/triangle-int/nolune/releases/latest/download/nolune-server-aarch64-unknown-linux-gnu'
 
-# A service that never becomes healthy makes installation fail honestly.
+# A gateway that never becomes ready fails honestly and does not open a browser.
 run_installer unhealthy Darwin arm64 0
-assert_generated_token_private unhealthy
 [[ $(cat "$tmp/unhealthy/status") -ne 0 ]]
-assert_contains "$tmp/unhealthy/calls" '/healthz'
-if grep -Fq 'installation complete' "$tmp/unhealthy/output"; then
-  echo 'FAIL: unhealthy installation claimed completion' >&2
-  exit 1
-fi
+assert_contains "$tmp/unhealthy/calls" 'nolune gateway'
+assert_absent "$tmp/unhealthy/calls" 'open http'
+assert_contains "$tmp/unhealthy/output" 'did not become ready'
+assert_absent "$tmp/unhealthy/output" 'nolune is ready'
+
+# The script contains no config or service logic of its own.
+for forbidden in 'auth_token' 'LaunchAgents' 'systemd/user' '<plist' '[Service]' 'launchctl' 'systemctl'; do
+  if grep -Fq -- "$forbidden" "$root/scripts/install.sh"; then
+    printf 'FAIL: install.sh still contains %q; that belongs to the binary\n' "$forbidden" >&2
+    exit 1
+  fi
+done
 
 printf 'All installer shell tests passed.\n'

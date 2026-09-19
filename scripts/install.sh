@@ -226,37 +226,6 @@ echo "$TAG" > "$BIN_DIR/.version"
 
 log "downloaded ${BOLD}$TAG${NC}"
 
-# ─── Config file ──────────────────────────────────────────────────────────────
-if [ ! -f "$NOLUNE_DIR/config.toml" ]; then
-    step "creating config"
-    # Generate a secure random auth token (32 chars, a-z0-9)
-    AUTH_TOKEN=$(head -c 256 /dev/urandom | LC_ALL=C tr -dc 'a-z0-9' | head -c 32)
-    cat > "$NOLUNE_DIR/config.toml" <<CONF
-host = "0.0.0.0"
-port = 26559
-auth_token = "$AUTH_TOKEN"
-
-[llm]
-model_mode = "auto"
-
-[llm.tokens]
-ANTHROPIC = ""       # Required — get key at https://console.anthropic.com
-ELEVENLABS = ""      # Optional — text-to-speech
-CONF
-    log "created $NOLUNE_DIR/config.toml"
-    info "authentication token saved in $NOLUNE_DIR/config.toml"
-else
-    log "config already exists, skipping"
-    # Backfill auth_token if empty (upgrade from older install)
-    EXISTING_TOKEN=$(grep -E '^auth_token\s*=' "$NOLUNE_DIR/config.toml" | head -1 | sed 's/[^=]*=\s*//' | tr -d ' "')
-    if [ -z "$EXISTING_TOKEN" ]; then
-        AUTH_TOKEN=$(head -c 256 /dev/urandom | LC_ALL=C tr -dc 'a-z0-9' | head -c 32)
-        sed -i.bak "s/^auth_token\s*=.*/auth_token = \"$AUTH_TOKEN\"/" "$NOLUNE_DIR/config.toml"
-        rm -f "$NOLUNE_DIR/config.toml.bak"
-        log "generated auth token for existing install"
-    fi
-fi
-
 # ─── Update script ────────────────────────────────────────────────────────────
 cat > "$BIN_DIR/update" <<UPDATESCRIPT
 #!/bin/bash
@@ -293,112 +262,6 @@ echo "updated to \$TAG — restart nolune to apply"
 UPDATESCRIPT
 chmod +x "$BIN_DIR/update"
 
-# ─── Platform-specific service ────────────────────────────────────────────────
-step "setting up service"
-SERVICE_KIND="none"
-
-if [ "$PLATFORM" = "linux" ]; then
-    # ── systemd ──
-    if command -v systemctl &>/dev/null && [ "$(id -u)" -eq 0 ]; then
-        SYSTEMD_SYSTEM_DIR="${NOLUNE_SYSTEMD_SYSTEM_DIR:-/etc/systemd/system}"
-        mkdir -p "$SYSTEMD_SYSTEM_DIR"
-        SERVICE_FILE="$SYSTEMD_SYSTEM_DIR/nolune.service"
-        cat > "$SERVICE_FILE" <<EOF
-[Unit]
-Description=Nolune AI Companion
-After=network.target
-
-[Service]
-Type=simple
-User=$(whoami)
-WorkingDirectory=$NOLUNE_DIR
-Environment=NOLUNE_HOME=$NOLUNE_DIR
-Environment=RUST_LOG=info
-ExecStart=$BIN
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-EOF
-        systemctl daemon-reload
-        SERVICE_KIND="systemd-system"
-        log "systemd service created"
-        info "start:   sudo systemctl start nolune"
-        info "logs:    sudo journalctl -u nolune -f"
-    elif command -v systemctl &>/dev/null; then
-        # User-level systemd (no root)
-        SYSTEMD_DIR="$HOME/.config/systemd/user"
-        mkdir -p "$SYSTEMD_DIR"
-        cat > "$SYSTEMD_DIR/nolune.service" <<EOF
-[Unit]
-Description=Nolune AI Companion
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory=$NOLUNE_DIR
-Environment=NOLUNE_HOME=$NOLUNE_DIR
-Environment=RUST_LOG=info
-ExecStart=$BIN
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=default.target
-EOF
-        systemctl --user daemon-reload
-        SERVICE_KIND="systemd-user"
-        log "user systemd service created"
-        info "start:   systemctl --user start nolune"
-        info "logs:    journalctl --user -u nolune -f"
-    else
-        log "no systemd found — run manually: $BIN"
-    fi
-
-elif [ "$PLATFORM" = "macos" ]; then
-    # ── launchd ──
-    PLIST_DIR="$HOME/Library/LaunchAgents"
-    PLIST="$PLIST_DIR/dev.nolune.nolune.plist"
-    mkdir -p "$PLIST_DIR"
-    cat > "$PLIST" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>dev.nolune.nolune</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>$BIN</string>
-    </array>
-    <key>WorkingDirectory</key>
-    <string>$NOLUNE_DIR</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>NOLUNE_HOME</key>
-        <string>$NOLUNE_DIR</string>
-        <key>RUST_LOG</key>
-        <string>info</string>
-    </dict>
-    <key>KeepAlive</key>
-    <true/>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>$NOLUNE_DIR/nolune.log</string>
-    <key>StandardErrorPath</key>
-    <string>$NOLUNE_DIR/nolune.log</string>
-</dict>
-</plist>
-EOF
-    SERVICE_KIND="launchd"
-    log "launchd service created"
-    info "start:   launchctl bootstrap gui/$(id -u) $PLIST"
-    info "stop:    launchctl bootout gui/$(id -u)/dev.nolune.nolune"
-    info "logs:    tail -f $NOLUNE_DIR/nolune.log"
-fi
-
 # ─── Add to PATH ──────────────────────────────────────────────────────────────
 SHELL_NAME=$(basename "$SHELL" 2>/dev/null || echo "bash")
 RC_FILE="$HOME/.${SHELL_NAME}rc"
@@ -415,10 +278,15 @@ if ! echo "$PATH" | grep -q "$BIN_DIR"; then
     fi
 fi
 
-# ─── Doctor: stop old instance, fix config, restart ──────────────────────────
-step "starting nolune"
+# ─── Prepare workspace ───────────────────────────────────────────────────────
+# Everything after the download is the binary's job (#127): config, token,
+# and the optional background service all live in `nolune` itself.
+step "preparing workspace"
 
+export NOLUNE_HOME="$NOLUNE_DIR"
 export PATH="$BIN_DIR:$PATH"
+
+"$BIN" onboard || fail "nolune onboard failed"
 
 # Read port from config (default 26559)
 NOLUNE_PORT=26559
@@ -430,95 +298,61 @@ if [ -f "$NOLUNE_DIR/config.toml" ]; then
 fi
 NOLUNE_URL="http://localhost:$NOLUNE_PORT"
 
-find_exact_nolune_pids() {
-    ps -axo pid=,command= | while read -r pid command; do
-        if [ "$command" = "$BIN" ]; then
-            printf '%s\n' "$pid"
-        fi
-    done
-}
+# ─── Start the gateway in the foreground ─────────────────────────────────────
+step "starting nolune"
 
-stop_stray_nolune() {
-    local pids remaining pid
-    pids=$(find_exact_nolune_pids)
-    [ -z "$pids" ] && return 0
+"$BIN" gateway &
+GATEWAY_PID=$!
+stop_gateway() { kill "$GATEWAY_PID" 2>/dev/null || true; }
+trap 'stop_gateway; exit 130' INT TERM
 
-    for pid in $pids; do
-        info "stopping unmanaged nolune process (PID: $pid)..."
-        kill "$pid" 2>/dev/null || true
-    done
-
-    for _ in $(seq 1 20); do
-        remaining=$(find_exact_nolune_pids)
-        [ -z "$remaining" ] && return 0
-        sleep 0.1
-    done
-
-    fail "could not stop the existing Nolune process (PID: $remaining)"
-}
-
-# Start through the native service manager so the installed service is the
-# process we verify. Fall back to a direct process only without a service manager.
-case "$SERVICE_KIND" in
-    launchd)
-        LAUNCH_DOMAIN="gui/$(id -u)"
-        LAUNCH_SERVICE="$LAUNCH_DOMAIN/dev.nolune.nolune"
-        launchctl bootout "$LAUNCH_SERVICE" >/dev/null 2>&1 || true
-        stop_stray_nolune
-        launchctl bootstrap "$LAUNCH_DOMAIN" "$PLIST"
-        launchctl kickstart -k "$LAUNCH_SERVICE"
-        launchctl print "$LAUNCH_SERVICE" >/dev/null
-        ;;
-    systemd-system)
-        systemctl stop nolune >/dev/null 2>&1 || true
-        stop_stray_nolune
-        systemctl enable nolune >/dev/null
-        systemctl restart nolune
-        systemctl is-active --quiet nolune
-        ;;
-    systemd-user)
-        systemctl --user stop nolune >/dev/null 2>&1 || true
-        stop_stray_nolune
-        systemctl --user enable nolune >/dev/null
-        systemctl --user restart nolune
-        systemctl --user is-active --quiet nolune
-        ;;
-    none)
-        stop_stray_nolune
-        "$BIN" &>/dev/null &
-        ;;
-esac
-
-info "waiting for nolune to start..."
-for _ in $(seq 1 30); do
+info "waiting for nolune to become ready..."
+READY=0
+for _ in $(seq 1 60); do
     if curl -sf "$NOLUNE_URL/healthz" >/dev/null 2>&1; then
+        READY=1
+        break
+    fi
+    if ! kill -0 "$GATEWAY_PID" 2>/dev/null; then
         break
     fi
     sleep 0.5
 done
 
-if curl -sf "$NOLUNE_URL/healthz" >/dev/null 2>&1; then
-    log "nolune is running on port $NOLUNE_PORT"
-
-    # Open the plain URL. Authentication is entered explicitly in the client;
-    # long-lived credentials must never be placed in browser navigation.
-    if [ "$PLATFORM" = "macos" ]; then
-        open "$NOLUNE_URL" 2>/dev/null
-    elif command -v xdg-open &>/dev/null; then
-        xdg-open "$NOLUNE_URL" 2>/dev/null
-    fi
-
-    echo ""
-    echo -e "${BOLD}  ┌─────────────────────────────┐${NC}"
-    echo -e "${BOLD}  │${NC}  ${GREEN}nolune is ready!${NC}           ${BOLD}│${NC}"
-    echo -e "${BOLD}  └─────────────────────────────┘${NC}"
-    echo ""
-    echo -e "  ${CYAN}${NOLUNE_URL}${NC}"
-    echo ""
-    echo -e "  Browsers must be paired before they can open Nolune. Run"
-    echo -e "    ${BOLD}$BIN pair${NC}"
-    echo -e "  and enter the one-time code it prints in the browser."
-    echo ""
-else
-    fail "nolune service did not become healthy — check $NOLUNE_DIR/nolune.log"
+if [ "$READY" != 1 ]; then
+    stop_gateway
+    fail "nolune did not become ready at $NOLUNE_URL — run '$BIN gateway' to see why"
 fi
+
+log "nolune is running on port $NOLUNE_PORT"
+
+# Open the plain URL. Authentication is entered explicitly in the client;
+# long-lived credentials must never be placed in browser navigation.
+if [ "$PLATFORM" = "macos" ]; then
+    open "$NOLUNE_URL" 2>/dev/null
+elif command -v xdg-open &>/dev/null; then
+    xdg-open "$NOLUNE_URL" 2>/dev/null
+fi
+
+echo ""
+echo -e "${BOLD}  ┌─────────────────────────────┐${NC}"
+echo -e "${BOLD}  │${NC}  ${GREEN}nolune is ready!${NC}           ${BOLD}│${NC}"
+echo -e "${BOLD}  └─────────────────────────────┘${NC}"
+echo ""
+echo -e "  ${CYAN}${NOLUNE_URL}${NC}"
+echo ""
+echo -e "  Browsers must be paired before they can open Nolune. Run"
+echo -e "    ${BOLD}nolune pair${NC}"
+echo -e "  and enter the one-time code it prints in the browser."
+echo ""
+echo -e "  Nolune is running in this terminal. Press ${BOLD}Ctrl-C${NC} to stop it;"
+echo -e "  start it again with ${BOLD}nolune gateway${NC}."
+echo -e "  To keep it running in the background instead:"
+echo -e "    ${BOLD}nolune gateway install${NC}"
+echo ""
+echo -e "  ${DIM}(new terminals pick up 'nolune' from your PATH; in this one run:"
+echo -e "   export PATH=\"$BIN_DIR:\$PATH\")${NC}"
+echo ""
+
+# Hand the terminal to the gateway until the user stops it.
+wait "$GATEWAY_PID"

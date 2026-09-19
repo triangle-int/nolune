@@ -55,7 +55,7 @@ fi
 if [ -z "$KEEP_DATA" ] && [ -t 1 ] && [ -e /dev/tty ]; then
     # Terminal available — ask user (read from /dev/tty so it works with curl | bash)
     echo ""
-    echo -e "  Your data is at ${BOLD}$NOLUNE_DIR/data/${NC}"
+    echo -e "  Your data is at ${BOLD}$NOLUNE_DIR${NC}"
     echo -e "  This includes config, memories, chats, and uploads."
     echo ""
     echo -e "  ${BOLD}1)${NC} Remove everything (binary + data)"
@@ -72,75 +72,30 @@ elif [ -z "$KEEP_DATA" ]; then
     KEEP_DATA=1
 fi
 
-# ─── Stop running service ────────────────────────────────────────────────────
-step "stopping nolune"
+# ─── Uninstall through the binary ────────────────────────────────────────────
+# The binary owns service teardown and file removal (#126). The script only keeps
+# the parts that are shell-specific: the prompt above and the PATH cleanup below.
+step "uninstalling nolune"
 
-if [ "$PLATFORM" = "macos" ]; then
-    PLIST="$HOME/Library/LaunchAgents/dev.nolune.nolune.plist"
-    if [ -f "$PLIST" ]; then
-        launchctl unload "$PLIST" 2>/dev/null || true
-        log "launchd service unloaded"
-    fi
-elif [ "$PLATFORM" = "linux" ]; then
-    if command -v systemctl &>/dev/null; then
-        if [ "$(id -u)" -eq 0 ] && [ -f "/etc/systemd/system/nolune.service" ]; then
-            systemctl stop nolune 2>/dev/null || true
-            systemctl disable nolune 2>/dev/null || true
-            log "systemd service stopped"
-        elif [ -f "$HOME/.config/systemd/user/nolune.service" ]; then
-            systemctl --user stop nolune 2>/dev/null || true
-            systemctl --user disable nolune 2>/dev/null || true
-            log "user systemd service stopped"
-        fi
-    fi
-fi
+export NOLUNE_HOME="$NOLUNE_DIR"
 
-# Kill any remaining nolune process
-OLD_PID=$(pgrep -f "$BIN_DIR/nolune" 2>/dev/null | head -1)
-if [ -n "$OLD_PID" ]; then
-    kill "$OLD_PID" 2>/dev/null || true
-    sleep 1
-    kill -9 "$OLD_PID" 2>/dev/null || true
-    log "stopped running process (PID: $OLD_PID)"
-fi
-
-# ─── Remove service files ────────────────────────────────────────────────────
-step "removing service files"
-
-if [ "$PLATFORM" = "macos" ]; then
-    PLIST="$HOME/Library/LaunchAgents/dev.nolune.nolune.plist"
-    if [ -f "$PLIST" ]; then
-        rm -f "$PLIST"
-        log "removed $PLIST"
+if [ -x "$BIN" ] && "$BIN" uninstall --help >/dev/null 2>&1; then
+    if [ "$KEEP_DATA" = "1" ]; then
+        "$BIN" uninstall --keep-data --yes || fail "nolune uninstall failed"
     else
-        info "no launchd plist found"
+        "$BIN" uninstall --yes || fail "nolune uninstall failed"
     fi
-elif [ "$PLATFORM" = "linux" ]; then
-    if [ "$(id -u)" -eq 0 ] && [ -f "/etc/systemd/system/nolune.service" ]; then
-        rm -f "/etc/systemd/system/nolune.service"
-        systemctl daemon-reload 2>/dev/null || true
-        log "removed /etc/systemd/system/nolune.service"
-    elif [ -f "$HOME/.config/systemd/user/nolune.service" ]; then
-        rm -f "$HOME/.config/systemd/user/nolune.service"
-        systemctl --user daemon-reload 2>/dev/null || true
-        log "removed user systemd service"
-    else
-        info "no systemd service found"
-    fi
-fi
-
-# ─── Remove files ────────────────────────────────────────────────────────────
-step "removing files"
-
-if [ "$KEEP_DATA" = "1" ]; then
-    # Only remove binary and bin directory
-    rm -rf "$BIN_DIR"
-    rm -f "$NOLUNE_DIR/nolune.log"
-    log "removed binary and logs"
-    info "kept user data at $NOLUNE_DIR/data/"
 else
-    rm -rf "$NOLUNE_DIR"
-    log "removed $NOLUNE_DIR"
+    # Installs that predate `nolune uninstall`: nothing to delegate to.
+    warn "no usable nolune binary at $BIN; removing files directly"
+    if [ "$KEEP_DATA" = "1" ]; then
+        rm -rf "$BIN_DIR" "$NOLUNE_DIR/nolune.log"
+        log "removed binary and logs"
+        info "kept user data at $NOLUNE_DIR"
+    else
+        rm -rf "$NOLUNE_DIR"
+        log "removed $NOLUNE_DIR"
+    fi
 fi
 
 # ─── Clean PATH from shell rc ────────────────────────────────────────────────
@@ -166,7 +121,7 @@ echo -e "${BOLD}  │${NC}  ${GREEN}nolune uninstalled${NC}         ${BOLD}│${
 echo -e "${BOLD}  └─────────────────────────────┘${NC}"
 echo ""
 if [ "$KEEP_DATA" = "1" ]; then
-    echo -e "  ${DIM}your data is still at ${BOLD}$NOLUNE_DIR/data/${NC}"
+    echo -e "  ${DIM}your data is still at ${BOLD}$NOLUNE_DIR${NC}"
     echo -e "  ${DIM}to remove it: ${BOLD}rm -rf $NOLUNE_DIR${NC}"
 fi
 echo ""
