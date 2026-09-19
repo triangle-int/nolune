@@ -1,11 +1,15 @@
-/* Settings surface (#98): shared by every section page under /[slug]/settings.
- * Global on purpose (pages are separate components); every rule is scoped
- * under .settings-page. Uses Little Moon tokens only. */
+/* Settings surface (#98, #153): shared by every section page under
+ * /[slug]/settings. Global on purpose (pages are separate components); every
+ * rule is scoped under .settings-page. Uses Little Moon tokens only.
+ *
+ * Each page is one panel divided into sections. A section is a two-column
+ * row: title and description on the left, controls on the right. There is no
+ * card grid, so sections of different heights never leave gaps. */
 
 .settings-page {
 		padding: 2rem 2.5rem;
 		padding-bottom: calc(2rem + env(safe-area-inset-bottom, 0px));
-		max-width: 1200px;
+		max-width: 1000px;
 		margin: 0 auto;
 		height: 100%;
 		overflow-y: auto;
@@ -23,17 +27,14 @@
 		margin-bottom: 0.5rem;
 	}
 
-	.settings-page .settings-grid {
-		display: grid;
-		grid-template-columns: repeat(2, 1fr);
-		gap: 1rem;
-		align-items: start;
-	}
-
-	@media (max-width: 900px) {
-		.settings-page .settings-grid {
-			grid-template-columns: 1fr;
-		}
+	/* One panel per page; sections are rows divided by a border. */
+	.settings-page .settings-panel {
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+		background: var(--card);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-panel, 16px);
 	}
 
 	@media (max-width: 768px) {
@@ -43,33 +44,59 @@
 	}
 
 	.settings-page .settings-section {
-		position: relative;
-		padding: 1.25rem;
-		border-radius: 1rem;
-		border: 1px solid var(--border);
-		border-top-color: var(--border);
-		background: var(--card);
-		backdrop-filter: none;
-		backdrop-filter: none;
+		display: grid;
+		grid-template-columns: minmax(200px, 260px) minmax(0, 1fr);
+		column-gap: 32px;
+		row-gap: 12px;
+		align-items: start;
+		min-width: 0;
+		padding: 24px;
+		background: transparent;
+		border: 0;
+		border-radius: 0;
 		box-shadow: none;
-		overflow: hidden;
 	}
-	.settings-page .settings-section::before {
-		content: "";
-		position: absolute;
-		top: 0;
-		left: 10%;
-		right: 10%;
-		height: 1px;
-		background: var(--card);
-		pointer-events: none;
+	.settings-page .settings-section + .settings-section {
+		border-top: 1px solid var(--border);
+	}
+	.settings-page .settings-section > .section-header {
+		grid-column: 1;
+		grid-row: 1;
+	}
+	.settings-page .settings-section > .section-body,
+	.settings-page .settings-section > :not(.section-header) {
+		grid-column: 2;
+		grid-row: 1;
+		min-width: 0;
+	}
+	.settings-page .section-body {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+	}
+	.settings-page .section-body > .setting-row + .setting-row {
+		margin-top: -12px;
+	}
+	.settings-page .section-body > .setting-row:first-child {
+		padding-top: 0;
+	}
+	@media (max-width: 768px) {
+		.settings-page .settings-section {
+			grid-template-columns: minmax(0, 1fr);
+			row-gap: 16px;
+		}
+		.settings-page .settings-section > .section-body,
+		.settings-page .settings-section > :not(.section-header) {
+			grid-column: 1;
+			grid-row: 2;
+		}
 	}
 
 	.settings-page .section-header {
 		display: flex;
 		align-items: flex-start;
 		gap: 0.75rem;
-		margin-bottom: 1rem;
+		margin-bottom: 0;
 	}
 
 	.settings-page .tz-picker {
@@ -86,17 +113,17 @@
 	}
 
 	.settings-page .section-label {
-		font-family: var(--font-body);
-		font-size: 0.8rem;
+		font: 400 1.375rem/1.2 var(--font-display);
 		color: var(--foreground);
-		letter-spacing: 0.02em;
-		margin-bottom: 0.2rem;
+		letter-spacing: 0;
+		margin: 0 0 4px;
 	}
 
 	.settings-page .section-desc {
 		font-family: var(--font-body);
-		font-size: 0.8125rem;
-		color: var(--foreground);
+		font-size: 0.875rem;
+		color: var(--text-secondary);
+		margin: 0;
 	}
 
 	
@@ -488,9 +515,6 @@
 	.settings-page .dim-text { font-size: 0.8125rem; color: var(--text-secondary); font-family: var(--font-body); }
 
     .settings-page .settings-title { font-size: 2rem; color: var(--foreground); }
-    .settings-page .settings-section { padding: 24px; border-color: var(--border); min-width: 0; }
-    .settings-page .settings-section::before { display: none; }
-    .settings-page .section-label { font-size: 1.125rem; font-weight: 500; }
     .settings-page .section-desc, .settings-page .mode-desc, .settings-page .data-hint { color: var(--text-secondary); line-height: 1.6; }
     .settings-page .section-header > div, .settings-page .key-info { min-width: 0; overflow-wrap: anywhere; }
     .settings-page .ext-input, .settings-page .key-input, .settings-page .setting-input { min-height: 44px; min-width: 0; font-size: 1rem; background: var(--background); border-color: var(--input); }
@@ -514,14 +538,13 @@
     .settings-page .setting-input { max-width: none; }
     @media (max-width: 600px) {
         .settings-page { padding: 24px 20px; }
-        .settings-page .settings-section { padding: 16px; }
+        .settings-page .settings-section { padding: 20px 16px; }
         .settings-page .key-row { padding: 12px; gap: 8px; }
     }
 
     .settings-page .integration-field { display: flex; flex: 1 1 120px; min-width: 0; flex-direction: column; gap: 8px; color: var(--text-secondary); font-size: 14px; }
     .settings-page .integration-field input { width: 100%; }
     .settings-page .data-btn { display: inline-flex; align-items: center; justify-content: center; }
-    .settings-page .section-icon { display: flex; width: 40px; height: 40px; flex: 0 0 40px; align-items: center; justify-content: center; color: var(--primary); background: var(--accent); border: 1px solid var(--border); border-radius: 8px; }
 	.settings-page .changelog-list { display: flex; flex-direction: column; gap: 16px; margin-top: 12px; }
 	.settings-page .changelog-entry { padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); }
 	.settings-page .changelog-version { font: 500 13px var(--font-mono); color: var(--primary); margin-bottom: 8px; }
@@ -536,16 +559,15 @@
 	.settings-page .ext-advanced summary { list-style: none; cursor: pointer; }
 	.settings-page .ext-ack { display: flex; align-items: flex-start; gap: 10px; margin: 8px 0; font: 400 13px/1.5 var(--font-body); color: var(--text-secondary); }
 
-/* --- section navigation (#98) --- */
-.settings-page .settings-head { display: flex; flex-direction: column; gap: 12px; }
+/* --- section navigation (#98, #153): a segmented control --- */
+.settings-page .settings-head { display: flex; flex-direction: column; align-items: stretch; gap: 16px; padding: 0; border: 0; }
 .settings-page .settings-title { margin-bottom: 0; }
 .settings-page .settings-lead { font: 400 14px/1.6 var(--font-body); color: var(--text-secondary); margin: 0; }
-.settings-page .settings-nav { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: thin; border-bottom: 1px solid var(--border); padding-bottom: 0; }
-.settings-page .settings-nav-link { display: flex; align-items: center; min-height: 44px; min-width: 44px; padding: 10px 12px; border-radius: 8px 8px 0 0; flex-shrink: 0; position: relative; white-space: nowrap; font: 500 14px var(--font-body); color: var(--text-muted); text-decoration: none; }
-.settings-page .settings-nav-link:hover { background: var(--card); color: var(--foreground); }
-.settings-page .settings-nav-active { background: var(--accent); color: var(--accent-foreground); }
-.settings-page .settings-nav-active::after { content: ""; position: absolute; bottom: 0; left: 12px; right: 12px; height: 2px; background: var(--primary); }
-.settings-page .settings-wide { grid-column: 1 / -1; }
+.settings-page .settings-nav { display: flex; align-self: flex-start; max-width: 100%; gap: 4px; padding: 4px; overflow-x: auto; scrollbar-width: thin; background: var(--card); border: 1px solid var(--border); border-radius: 999px; }
+.settings-page .settings-nav-link { display: flex; align-items: center; justify-content: center; min-height: 44px; min-width: 44px; padding: 10px 18px; border-radius: 999px; flex-shrink: 0; white-space: nowrap; font: 500 14px var(--font-body); color: var(--text-secondary); text-decoration: none; transition: background-color 160ms ease, color 160ms ease; }
+.settings-page .settings-nav-link:hover { background: var(--accent); color: var(--foreground); }
+.settings-page .settings-nav-active, .settings-page .settings-nav-active:hover { background: var(--primary); color: var(--primary-foreground); }
+.settings-page .settings-nav-link:focus-visible { outline-offset: 0; }
 .settings-page .settings-link { color: var(--primary); text-decoration: underline; text-underline-offset: 3px; }
 .settings-page .settings-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .settings-page .owner-badge { display: inline-block; font-size: 0.6875rem; letter-spacing: 0.04em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; background: var(--accent); color: var(--primary); margin-left: 8px; vertical-align: middle; }
