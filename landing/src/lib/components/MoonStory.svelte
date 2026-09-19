@@ -14,6 +14,7 @@
   { q: 'Where does Nolune run?', a: 'The server runs on macOS or Linux. Desktop apps for macOS, Windows, and Linux connect to that server, so you can work with the same companion across your computers. You can also access its web interface from your phone’s browser when your Nolune server is reachable.' },
   { q: 'Is Nolune free?', a: 'Nolune is MIT-licensed open-source software. Bring your own model provider API key; that provider’s pricing and usage limits apply.' },
   { q: 'Can Nolune use my computer?', a: 'Yes. On connected computers, Nolune can see the screen, use apps, work with files, and run commands. You choose which computers to connect and grant the operating-system permissions they need.' },
+  { q: 'Is it one Nolune, or one per computer?', a: 'One. The server keeps a single companion with a single memory. Every connected computer, every chat, and everyone it talks to is a context of that same companion, so what it learns in one place it knows everywhere.' },
   { q: 'Where is my data stored?', a: 'Identity, memories, and conversation history live on the hardware where you run the Nolune server. When you use an external model or integration, the data needed for that request is sent to that provider.' }
  ];
 </script>

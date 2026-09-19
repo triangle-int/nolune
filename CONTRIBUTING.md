@@ -8,7 +8,6 @@ Thanks for your interest in contributing! Here's how to get started.
 
 - **Rust** (latest stable)
 - **Node.js** (LTS) + **pnpm**
-- **PostgreSQL** (for landing page, via Neon or local)
 
 ### Server
 
