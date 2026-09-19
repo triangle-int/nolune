@@ -478,6 +478,8 @@ pub fn run() {
             local_server::install_local_server,
             local_server::start_local_gateway,
             local_server::stop_local_gateway,
+            local_server::background_service_status,
+            local_server::set_background_service,
         ])
         .setup(|app| {
             app.manage(CompanionRelay(Mutex::new(None)));

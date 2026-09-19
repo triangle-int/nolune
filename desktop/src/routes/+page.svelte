@@ -3,7 +3,7 @@
   import Moon from "$lib/components/Moon.svelte";
   import { auth, init, saveConnection, testConnection, openConnection, disconnect } from "$lib/auth.svelte";
   import { updater, checkForUpdates, installUpdate, dismissUpdate } from "$lib/updater.svelte";
-  import { local, canInstall, refreshLocalStatus, subscribeLocalEvents, installLocal, startLocalGateway, toggleLogs } from "$lib/local.svelte";
+  import { local, background, canInstall, refreshLocalStatus, refreshBackgroundStatus, subscribeLocalEvents, installLocal, startLocalGateway, toggleLogs } from "$lib/local.svelte";
 
   let splash = $state(true);
   let splashFading = $state(false);
@@ -34,9 +34,17 @@
   // back before the user clicks Open. A running service or foreground gateway is left alone.
   async function resumeLocalGateway() {
     const status = await refreshLocalStatus();
-    if (!status?.binary_installed || !status.config_exists || status.gateway_running || status.port_in_use) return;
+    if (status?.binary_installed) await refreshBackgroundStatus();
+    // A service owns the gateway in background mode (#129); never race it for the port.
+    if (!status?.binary_installed || !status.config_exists || status.gateway_running || status.port_in_use || status.service_installed) return;
     await startLocalGateway();
   }
+
+  const localMode = $derived(
+    !local.status?.binary_installed ? null
+    : background.status?.installed ? "Runs in the background, even when this app is closed."
+    : "Runs with this app and stops when you quit it. Change this in Settings.",
+  );
 
   async function installHere() {
     if (!(await installLocal())) return;
@@ -194,6 +202,7 @@
           <div class="server">
             <span class="nl-label">Server</span>
             <code class="server-url">{auth.connection.url}</code>
+            {#if localMode}<p class="server-mode">{localMode}</p>{/if}
           </div>
           <div class="actions">
             <button class="nl-button" onclick={openConnection} disabled={auth.loading}>Open companion</button>
@@ -454,6 +463,13 @@
     overflow-x: auto;
     white-space: nowrap;
     user-select: text;
+  }
+
+  .server-mode {
+    margin: 8px 0 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-muted);
   }
 
   .form {

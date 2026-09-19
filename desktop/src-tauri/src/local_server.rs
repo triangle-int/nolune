@@ -35,6 +35,7 @@ pub struct LocalStatus {
     pub config_exists: bool,
     pub gateway_running: bool,
     pub port_in_use: bool,
+    pub service_installed: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -491,6 +492,7 @@ pub async fn local_server_status(app: tauri::AppHandle) -> Result<LocalStatus, S
         config_exists: home.join("config.toml").exists(),
         gateway_running: gateway_running(&app),
         port_in_use: port_is_listening(port),
+        service_installed: service_installed(),
     })
 }
 
@@ -596,6 +598,127 @@ pub async fn stop_local_gateway(app: tauri::AppHandle) -> Result<(), String> {
         Some(gateway) => gateway.stop(SHUTDOWN_GRACE),
         None => Ok(()),
     }
+}
+
+// ── Background service (#129) ───────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BackgroundStatus {
+    pub supported: bool,
+    pub installed: bool,
+    pub running: bool,
+    pub managed_by_app: bool,
+}
+
+/// Where the server's `nolune gateway install` writes its definition. This mirrors
+/// `server/src/service.rs`; the app only ever reads it to know which mode is active.
+pub fn service_definition_path(home_dir: &Path) -> Option<PathBuf> {
+    if cfg!(target_os = "macos") {
+        Some(home_dir.join("Library/LaunchAgents/dev.nolune.nolune.plist"))
+    } else if cfg!(target_os = "linux") {
+        Some(home_dir.join(".config/systemd/user/nolune.service"))
+    } else {
+        None
+    }
+}
+
+pub fn service_installed() -> bool {
+    dirs::home_dir()
+        .and_then(|home| service_definition_path(&home))
+        .is_some_and(|path| path.exists())
+}
+
+/// Run `nolune gateway <action>` for `home` and return its stdout. Failure carries stderr.
+pub fn run_gateway_service(binary: &Path, home: &Path, action: &str) -> Result<String, String> {
+    let output = Command::new(binary)
+        .args(["gateway", action])
+        .env("NOLUNE_HOME", home)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| io_err(&format!("cannot run nolune gateway {action}"), error))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = if stderr.trim().is_empty() {
+            stdout.trim()
+        } else {
+            stderr.trim()
+        };
+        return Err(format!(
+            "nolune gateway {action} failed ({}): {detail}",
+            output.status
+        ));
+    }
+    Ok(stdout)
+}
+
+fn background_status(app: &tauri::AppHandle) -> BackgroundStatus {
+    let home = nolune_home();
+    BackgroundStatus {
+        supported: service_definition_path(Path::new("/")).is_some(),
+        installed: service_installed(),
+        running: port_is_listening(configured_port(&home)),
+        managed_by_app: gateway_running(app),
+    }
+}
+
+/// Poll until nothing listens on `port` or `timeout` passes.
+fn wait_port_free(port: u16, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while port_is_listening(port) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(250));
+    }
+}
+
+#[tauri::command]
+pub async fn background_service_status(app: tauri::AppHandle) -> Result<BackgroundStatus, String> {
+    Ok(background_status(&app))
+}
+
+/// Hand the gateway to the user-level service (`nolune gateway install`) or take it back
+/// (`nolune gateway uninstall`, then an app-managed child again). Both are user-level; no
+/// elevated privileges are involved.
+#[tauri::command]
+pub async fn set_background_service(
+    app: tauri::AppHandle,
+    enabled: bool,
+) -> Result<BackgroundStatus, String> {
+    if service_definition_path(Path::new("/")).is_none() {
+        return Err("Running in the background is not available on this platform yet.".into());
+    }
+    let home = nolune_home();
+    let binary = binary_path(&home);
+    if !binary.exists() || !home.join("config.toml").exists() {
+        return Err("Nolune is not installed on this computer.".into());
+    }
+    let port = configured_port(&home);
+    let run = |action: &'static str| {
+        let (binary, home) = (binary.clone(), home.clone());
+        async move {
+            tokio::task::spawn_blocking(move || run_gateway_service(&binary, &home, action))
+                .await
+                .map_err(|error| format!("gateway {action} task failed: {error}"))?
+        }
+    };
+    if enabled {
+        // The service cannot bind the port while our child holds it.
+        if let Some(previous) = take_gateway(&app)? {
+            let _ = previous.stop(SHUTDOWN_GRACE);
+        }
+        if let Err(error) = run("install").await {
+            // Do not leave the user without a server: resume the app-managed gateway.
+            let _ = start_gateway(&app, binary, home, port).await;
+            return Err(error);
+        }
+    } else {
+        run("uninstall").await?;
+        let free_port = port;
+        tokio::task::spawn_blocking(move || wait_port_free(free_port, Duration::from_secs(10)))
+            .await
+            .map_err(|error| format!("wait task failed: {error}"))?;
+        start_gateway(&app, binary, home, port).await?;
+    }
+    Ok(background_status(&app))
 }
 
 #[cfg(test)]
@@ -870,5 +993,47 @@ while true; do sleep 0.1; done"#,
         // The process must be gone after the kill fallback.
         let alive = unsafe { libc::kill(pid as i32, 0) } == 0;
         assert!(!alive, "process {pid} still alive after stop");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn service_definition_is_the_launch_agent() {
+        assert_eq!(
+            service_definition_path(Path::new("/Users/me")),
+            Some(PathBuf::from(
+                "/Users/me/Library/LaunchAgents/dev.nolune.nolune.plist"
+            ))
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn service_definition_is_the_user_unit() {
+        assert_eq!(
+            service_definition_path(Path::new("/home/me")),
+            Some(PathBuf::from(
+                "/home/me/.config/systemd/user/nolune.service"
+            ))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gateway_service_actions_run_the_binary_with_home() {
+        let tmp = tempfile::tempdir().unwrap();
+        let binary = fake_binary(
+            tmp.path(),
+            r#"[[ "$1" = gateway ]] || exit 9
+echo "gateway $2 home=$NOLUNE_HOME"
+if [[ "$2" = uninstall ]]; then echo "launchctl bootout failed" >&2; exit 1; fi"#,
+        );
+        let home = tmp.path().join("home");
+        let out = run_gateway_service(&binary, &home, "install").unwrap();
+        assert!(
+            out.contains(&format!("gateway install home={}", home.display())),
+            "{out}"
+        );
+        let err = run_gateway_service(&binary, &home, "uninstall").unwrap_err();
+        assert!(err.contains("launchctl bootout failed"), "{err}");
     }
 }

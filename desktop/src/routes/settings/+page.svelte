@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { local, background, canToggleBackground, refreshLocalStatus, refreshBackgroundStatus, setBackgroundService } from "$lib/local.svelte";
 
   type Permissions = {
     screen_recording: boolean;
@@ -13,7 +14,21 @@
 
   onMount(async () => {
     refresh();
+    refreshServer();
   });
+
+  async function refreshServer() {
+    await refreshLocalStatus();
+    if (local.status?.binary_installed) await refreshBackgroundStatus();
+  }
+
+  const serverInstalled = $derived(!!local.status?.binary_installed && !!local.status?.config_exists);
+  const inBackground = $derived(background.status?.installed === true);
+  const backgroundLabel = $derived(
+    background.busy ? (inBackground ? "Turning off…" : "Turning on…")
+    : inBackground ? "Turn off"
+    : "Turn on",
+  );
 
   async function refresh() {
     checking = true;
@@ -55,6 +70,59 @@
   </header>
 
   <main class="content">
+    <section class="section" aria-labelledby="server-title">
+      <p class="nl-eyebrow">This computer</p>
+      <h2 id="server-title" class="section-title">Server</h2>
+      <p class="section-desc">
+        When Nolune is installed on this computer, its server normally runs only while this app is open.
+      </p>
+
+      {#if background.error}
+        <p class="section-error" role="alert">{background.error}</p>
+      {/if}
+
+      {#if !local.status}
+        <p class="loading" role="status"><span class="spinner" aria-hidden="true"></span>Checking the server…</p>
+      {:else if !serverInstalled}
+        <p class="section-desc">Nolune is not installed on this computer. Use <strong>Install on this computer</strong> in the main window first.</p>
+      {:else}
+        <ul class="perm-list">
+          <li class="perm-row">
+            <div class="perm-icon" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="4" width="18" height="6" rx="1.5" /><rect x="3" y="14" width="18" height="6" rx="1.5" /><path d="M7 7h.01M7 17h.01" />
+              </svg>
+            </div>
+            <div class="perm-info">
+              <span class="perm-name">Run in background</span>
+              <span class="perm-desc">
+                {#if background.status?.supported === false}
+                  Not available on this platform yet. Start <code>nolune gateway</code> yourself to keep it running.
+                {:else if inBackground}
+                  Keeps running when this app is closed, and starts when you log in.
+                {:else}
+                  Keep the server running after you quit this app.
+                {/if}
+              </span>
+            </div>
+            <div class="perm-status">
+              {#if background.status?.supported === false}
+                <span class="badge badge-off">Unavailable</span>
+              {:else}
+                <span class="badge" class:badge-off={!inBackground}>{inBackground ? "On" : "Off"}</span>
+                <button class="nl-button perm-grant" onclick={() => setBackgroundService(!inBackground)} disabled={!canToggleBackground()} aria-pressed={inBackground}>
+                  {backgroundLabel}
+                </button>
+              {/if}
+            </div>
+          </li>
+        </ul>
+        <p class="section-hint">
+          Server updates: run <code>~/.nolune/bin/update</code>, then restart the server (<code>nolune gateway restart</code> in background mode, or reopen this app otherwise). The app's own updater only updates this app.
+        </p>
+      {/if}
+    </section>
+
     <section class="section" aria-labelledby="permissions-title">
       <p class="nl-eyebrow">macOS</p>
       <h2 id="permissions-title" class="section-title">Permissions</h2>
@@ -241,6 +309,34 @@
   .perm-grant {
     min-height: 36px;
     padding: 6px 14px;
+  }
+
+  .perm-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .badge-off {
+    background: var(--card);
+    color: var(--text-muted);
+  }
+
+  .badge-off::before {
+    background: var(--border);
+  }
+
+  .section-hint {
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-muted);
+    margin: 0 0 32px;
+  }
+
+  .section-hint code,
+  .perm-desc code {
+    font: 400 12px/1.5 var(--font-mono);
+    color: var(--text-secondary);
   }
 
   .refresh {
