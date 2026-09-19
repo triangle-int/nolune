@@ -1772,8 +1772,9 @@ fn load_autonomy_prompt(workspace_dir: &Path, instance_slug: &str) -> String {
          YOU need to examine an image. markdown image syntax is all you need to display images.\n\n\
          ## sharing files\n\
          to share any file with the user (video, audio, documents, etc.), use share_file \
-         with the local file path. it returns a public URL you can include in your message. \
-         works with files up to 500MB — no need for base64.\n\n\
+         with the local file path. it returns a markdown link like [name](url) — paste that \
+         link into your message exactly as returned so the user sees the file name, and never \
+         paste the bare URL. works with files up to 500MB — no need for base64.\n\n\
          ## workspace\n\
          your workspace is `{ws}/instances/{slug}/`. all your files \
          (soul.md, heartbeat.md, memory/, drops/, uploads/, etc) live there. \

@@ -505,7 +505,52 @@ impl Tool for UploadFileTool {
             &self.resources,
         );
 
-        let size_mb = bytes.len() as f64 / 1024.0 / 1024.0;
-        Ok(format!("{url}\n\nuploaded: {name} ({size_mb:.1} MB)"))
+        Ok(share_file_result(&name, &url, bytes.len()))
+    }
+}
+
+/// Tool result for `share_file`: a ready-to-paste markdown link so the chat
+/// shows the file name instead of a bare capability URL.
+fn share_file_result(name: &str, url: &str, size: usize) -> String {
+    let label = name
+        .replace('\\', "\\\\")
+        .replace('[', "\\[")
+        .replace(']', "\\]");
+    let size_mb = size as f64 / 1024.0 / 1024.0;
+    format!(
+        "[{label}]({url})\n\nuploaded: {name} ({size_mb:.1} MB)\n\
+         to share it with the user, paste the markdown link above exactly as written; \
+         never paste the bare URL."
+    )
+}
+
+#[cfg(test)]
+mod share_file_tests {
+    use super::share_file_result;
+
+    #[test]
+    fn share_file_returns_a_named_markdown_link_first() {
+        let url =
+            "http://localhost:26559/resources/model-provider/files/moon/upload_1.md?cap=v1.abc";
+        let out = share_file_result("sample.md", url, 2 * 1024 * 1024);
+        assert!(
+            out.starts_with("[sample.md](http://localhost:26559/resources/model-provider/files/moon/upload_1.md?cap=v1.abc)"),
+            "{out}"
+        );
+        assert!(out.contains("uploaded: sample.md (2.0 MB)"), "{out}");
+        assert!(out.contains("paste the markdown link above"), "{out}");
+        assert!(
+            !out.contains("\nhttp://"),
+            "bare URL line must not appear: {out}"
+        );
+    }
+
+    #[test]
+    fn share_file_escapes_brackets_in_names() {
+        let out = share_file_result("a]b[c.txt", "https://self.test/f?cap=x", 10);
+        assert!(
+            out.starts_with("[a\\]b\\[c.txt](https://self.test/f?cap=x)"),
+            "{out}"
+        );
     }
 }
