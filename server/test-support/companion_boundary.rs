@@ -717,6 +717,57 @@ async fn proactive_activity_api_lists_cancels_retries_and_exposes_policy() {
 }
 
 #[tokio::test]
+async fn connected_computers_are_listed_for_the_one_companion_only() {
+    let h = harness().await;
+    companion::ensure_identity(h.workspace.path()).unwrap();
+
+    let (status, body) = h
+        .json(Method::GET, "/api/instances/companion/machines", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["machines"], serde_json::json!([]));
+
+    let (sender, _receiver) = tokio::sync::mpsc::unbounded_channel();
+    h.state
+        .machine_registry
+        .register(
+            MachineInfo {
+                machine_id: "mac-mini".into(),
+                os: "macos".into(),
+                hostname: "studio".into(),
+                screen_width: 2560,
+                screen_height: 1440,
+                last_seen: 1_700_000_000,
+                instance_slug: None,
+            },
+            sender,
+        )
+        .await;
+
+    let (status, body) = h
+        .json(Method::GET, "/api/instances/companion/machines", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let machines = body["machines"].as_array().unwrap();
+    assert_eq!(machines.len(), 1);
+    assert_eq!(machines[0]["machine_id"], "mac-mini");
+    assert_eq!(machines[0]["hostname"], "studio");
+    assert_eq!(machines[0]["os"], "macos");
+    assert_eq!(machines[0]["last_seen"], 1_700_000_000);
+    assert_eq!(
+        machines[0]["instance_slug"], CANONICAL_SLUG,
+        "every computer is a context of the one companion"
+    );
+
+    // Foreign slugs fail closed like every other companion route.
+    let (status, body) = h
+        .json(Method::GET, "/api/instances/alice/machines", None)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "unknown_companion");
+}
+
+#[tokio::test]
 async fn scheduled_tasks_and_machine_connects_route_through_the_proactive_loop() {
     use crate::domain::proactive::{RunStatus, SkipReason, Trigger};
 

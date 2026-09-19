@@ -78,6 +78,7 @@
 	<header class="activity-header">
 		<h2>Activity</h2>
 		<p>What your companion did on its own, why, and what it was allowed to do. Nothing here is private reasoning.</p>
+		<a class="nl-button-secondary activity-drops-link" href={`/${slug}/drops`}>Things it made · Drops</a>
 	</header>
 
 	{#if loading}
@@ -137,6 +138,7 @@
 	.activity-header { max-width: 720px; margin: 0 auto 24px; }
 	.activity-header h2 { font: 400 28px/1.2 var(--font-display); letter-spacing: -0.02em; color: var(--foreground); margin: 0 0 8px; }
 	.activity-header p { font: 400 14px/1.6 var(--font-body); color: var(--text-secondary); margin: 0; }
+	.activity-drops-link { display: inline-flex; margin-top: 12px; }
 	.activity-center { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: 220px; text-align: center; color: var(--text-secondary); font: 400 16px/1.6 var(--font-body); }
 	.empty-text { color: var(--foreground); }
 	.empty-sub { font-size: 14px; }

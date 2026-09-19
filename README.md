@@ -43,7 +43,7 @@ curl -fsSL https://nolune.dev/install.sh | bash
 
 Open `http://localhost:26559`. The first browser has to be paired: run `nolune pair` on the machine you just installed on and enter the eight-digit code it prints. Then follow the onboarding.
 
-Paired browsers stay signed in. Review or revoke them, or mint a code for another device, under **Settings → Server**. The installer adds `~/.nolune/bin` to your `PATH`; until you open a new shell, use `~/.nolune/bin/nolune pair`.
+Paired browsers stay signed in. Review or revoke them, or mint a code for another device, under **Settings → Connections**. The installer adds `~/.nolune/bin` to your `PATH`; until you open a new shell, use `~/.nolune/bin/nolune pair`.
 
 ### 2. Connect your computers
 

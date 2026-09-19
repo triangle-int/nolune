@@ -530,6 +530,22 @@ export function updateProactivePolicy(slug: string, policy: ProactivePolicy): Pr
 }
 
 
+/** A desktop connected to the companion through the Nolune desktop app (#98). */
+export interface MachineInfo {
+	machine_id: string;
+	os: string;
+	hostname: string;
+	screen_width: number;
+	screen_height: number;
+	/** Unix seconds of the last heartbeat. */
+	last_seen: number;
+	instance_slug: string | null;
+}
+
+export function fetchMachines(slug: string): Promise<{ machines: MachineInfo[] }> {
+	return json(`/api/instances/${encodeURIComponent(slug)}/machines`);
+}
+
 export function machineHello(slug: string): Promise<void> {
 	return authedFetch(`/api/instances/${encodeURIComponent(slug)}/machine-hello`, { method: "POST" }).then(() => {});
 }

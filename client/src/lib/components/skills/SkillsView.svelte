@@ -10,6 +10,9 @@
 	import SkillCard from "./SkillCard.svelte";
 	import RegistryCard from "./RegistryCard.svelte";
 
+	// Embedded under Settings › Capabilities (#98): the page owns padding and scroll.
+	let { embedded = false }: { embedded?: boolean } = $props();
+
 	const toast = getToasts();
 
 	let skills = $state<Skill[]>([]);
@@ -89,7 +92,7 @@
 	}
 </script>
 
-<div class="skills-container">
+<div class="skills-container" class:skills-embedded={embedded}>
 	{#if loading}
 		<span class="sr-only" role="status">Loading skills…</span>
 		<div class="skills-loading">
@@ -187,6 +190,11 @@
 		height: 100%;
 		overflow-y: auto;
 		padding: 2rem 1.5rem;
+	}
+	.skills-embedded {
+		height: auto;
+		overflow: visible;
+		padding: 0;
 	}
 
 	.skills-loading {
