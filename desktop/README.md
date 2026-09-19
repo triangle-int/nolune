@@ -14,7 +14,7 @@ it and offers **Retry install**. **Use nightly builds (advanced)** downloads the
 
 The app-managed gateway stops when the app exits and is started again on the
 next launch when a local install exists and nothing else holds the configured
-port. **Settings → Run in background** hands it over: the app stops its child
+port. The app's **Run in background** setting hands it over: the app stops its child
 and runs `nolune gateway install`, which registers a user-level launchd agent
 (macOS) or systemd user unit (Linux). Turning it off runs `nolune gateway
 uninstall` and the app manages the gateway again. The connection screen says

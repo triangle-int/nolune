@@ -117,7 +117,7 @@ There are two ways to get a server. Both end the same way: the `nolune` binary i
 
 Download the desktop app from [GitHub Releases](https://github.com/triangle-int/nolune/releases). Builds are available for macOS, Windows, and Linux.
 
-On first run, choose **Install on this computer**. The app downloads the server for your platform, prepares the workspace, starts the server, and opens your companion. Nothing to paste and no terminal required. **Show logs** reveals the server output if you want it, and **Use nightly builds** sits behind an advanced toggle. The server runs while the app is open and starts again with it; **Settings → Run in background** hands it to a user-level service so it keeps running after you quit.
+On first run, choose **Install on this computer**. The app downloads the server for your platform, prepares the workspace, starts the server, and opens your companion. Nothing to paste and no terminal required. **Show logs** reveals the server output if you want it, and **Use nightly builds** sits behind an advanced toggle. The server runs while the app is open and starts again with it; the desktop app's **Run in background** setting hands it to a user-level service so it keeps running after you quit.
 
 If you already run a server elsewhere, choose **Connect to an existing server** instead and enter its URL and auth token. That is how a laptop reaches the companion living on a Mac mini at home.
 
