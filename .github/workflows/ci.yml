@@ -134,6 +134,8 @@ jobs:
           done
       - name: Test installer
         run: bash scripts/tests/install.sh
+      - name: Test uninstaller
+        run: bash scripts/tests/uninstall.sh
       - name: Test release workflow
         run: bash scripts/tests/release-workflow.sh
       - name: Enforce no passive screen recording
