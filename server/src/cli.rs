@@ -33,6 +33,14 @@ pub enum CliCommand {
     Version,
     /// Create a one-time code so a browser can sign in to this server
     Pair,
+    /// Prepare ~/.nolune (config, data directories, auth token) without starting anything
+    Onboard {
+        /// Print the outcome as one JSON line instead of human-readable progress
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run the server in the foreground, logging to stderr
+    Gateway,
 }
 
 pub fn run(cmd: CliCommand) -> i32 {
@@ -50,7 +58,48 @@ pub fn run(cmd: CliCommand) -> i32 {
             0
         }
         CliCommand::Pair => pair(),
+        CliCommand::Onboard { json } => onboard_cmd(json),
+        // main runs the server for this variant before ever reaching here.
+        CliCommand::Gateway => unreachable!("gateway is run by main"),
     }
+}
+
+fn onboard_cmd(json: bool) -> i32 {
+    let dir = config::workspace_root();
+    let outcome = match crate::onboard::onboard(&dir) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            eprintln!("onboard failed: {error:#}");
+            return 1;
+        }
+    };
+    if json {
+        // One machine-readable line; the token appears here and nowhere else.
+        return match serde_json::to_string(&outcome) {
+            Ok(line) => {
+                println!("{line}");
+                0
+            }
+            Err(error) => {
+                eprintln!("cannot encode onboard outcome: {error}");
+                1
+            }
+        };
+    }
+    println!("workspace ready at {}", outcome.dir.display());
+    if outcome.created_config {
+        println!("created {}", outcome.config_path.display());
+    } else {
+        println!("kept existing {}", outcome.config_path.display());
+    }
+    if outcome.generated_token {
+        println!("generated an authentication token (saved in config.toml)");
+    }
+    println!(
+        "next: run `nolune gateway` to start the server, then open {}",
+        outcome.url
+    );
+    0
 }
 
 // ── Browser pairing ─────────────────────────────────────────────────────
