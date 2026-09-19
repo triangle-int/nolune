@@ -12,6 +12,14 @@ export type LocalStatus = {
   config_exists: boolean;
   gateway_running: boolean;
   port_in_use: boolean;
+  service_installed: boolean;
+};
+
+export type BackgroundStatus = {
+  supported: boolean;
+  installed: boolean;
+  running: boolean;
+  managed_by_app: boolean;
 };
 
 export type Step = "idle" | "downloading" | "preparing" | "starting" | "ready" | "error";
@@ -134,4 +142,45 @@ export async function startLocalGateway(): Promise<boolean> {
 
 export function toggleLogs(): void {
   local.showLogs = !local.showLogs;
+}
+
+// ── Background service (#129) ───────────────────────────────────────────────
+
+export const background = $state({
+  status: null as BackgroundStatus | null,
+  busy: false,
+  error: null as string | null,
+});
+
+/** The toggle is usable once the native side has reported a supported platform. */
+export function canToggleBackground(): boolean {
+  return !background.busy && background.status?.supported === true;
+}
+
+export async function refreshBackgroundStatus(): Promise<BackgroundStatus | null> {
+  try {
+    const status = await invoke<BackgroundStatus>("background_service_status");
+    background.status = status;
+    return status;
+  } catch {
+    background.status = null;
+    background.error = "Could not check how the Nolune server is running.";
+    return null;
+  }
+}
+
+/** Hand the gateway to the background service, or take it back. */
+export async function setBackgroundService(enabled: boolean): Promise<boolean> {
+  if (!canToggleBackground()) return false;
+  background.busy = true;
+  background.error = null;
+  try {
+    background.status = await invoke<BackgroundStatus>("set_background_service", { enabled });
+    return true;
+  } catch (error) {
+    background.error = installMessage(error);
+    return false;
+  } finally {
+    background.busy = false;
+  }
 }
