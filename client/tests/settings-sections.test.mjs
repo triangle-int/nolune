@@ -38,7 +38,7 @@ test('every retained setting has exactly one section and one owner', () => {
 
 test('raw server and protocol fields are owned by Advanced only', () => {
 	const raw = SETTINGS.filter((s) => s.raw);
-	assert.ok(raw.length >= 6, 'server, updates, model routing, voice id, email, github are raw');
+	assert.ok(raw.length >= 5, 'server, updates, voice id, email, github are raw');
 	for (const setting of raw) {
 		assert.equal(setting.section, 'advanced', `${setting.key} is raw and must live under Advanced`);
 	}
@@ -48,8 +48,10 @@ test('raw server and protocol fields are owned by Advanced only', () => {
 	assert.equal(byKey['initiative'].scope, 'companion');
 	assert.equal(byKey['initiative'].section, 'companion');
 	assert.equal(byKey['timezone'].section, 'companion');
-	assert.equal(byKey['provider'].section, 'connections');
-	assert.equal(byKey['provider'].scope, 'server');
+	assert.equal(byKey['models'].section, 'connections');
+	assert.equal(byKey['models'].scope, 'server');
+	assert.equal(byKey['provider'], undefined, 'the global provider switch is gone (#156)');
+	assert.equal(byKey['model-mode'], undefined, 'model routing is gone (#156)');
 	assert.equal(byKey['computers'].section, 'connections');
 	assert.equal(byKey['paired-browsers'].section, 'connections');
 	assert.equal(byKey['skills'].section, 'capabilities');
@@ -58,7 +60,6 @@ test('raw server and protocol fields are owned by Advanced only', () => {
 	assert.equal(byKey['export'].scope, 'companion');
 	assert.equal(byKey['email'].section, 'advanced');
 	assert.equal(byKey['github'].section, 'advanced');
-	assert.equal(byKey['model-mode'].section, 'advanced');
 	assert.equal(byKey['voice-id'].section, 'advanced');
 });
 

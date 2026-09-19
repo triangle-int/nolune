@@ -42,7 +42,6 @@ const RAW_FIELD_TOKENS: &[&str] = &[
     "server-port",
     "Auth token",
     "update-channel",
-    "setModelMode",
     "voice-id",
     "smtp_host",
     "imap_host",
@@ -165,7 +164,7 @@ fn settings_is_split_by_owner_and_common_setup_hides_raw_fields() {
         ),
         (
             "client/src/routes/[slug]/settings/connections/+page.svelte",
-            &["setProvider", "apiKeyDefs", "Paired browsers", "computers"][..],
+            &["presets", "apiKeyDefs", "Paired browsers", "computers"][..],
         ),
         (
             "client/src/routes/[slug]/settings/capabilities/+page.svelte",
