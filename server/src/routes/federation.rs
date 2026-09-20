@@ -13,6 +13,8 @@
 //! * `GET /api/federation/policy` lists the owner's federation policy and
 //!   the defaults that apply where it says nothing (#109).
 //! * `GET /api/federation/receipts` lists the audit receipts, newest first.
+//! * `POST /api/federation/peers/{companion_id}/ping` pings a paired peer
+//!   through its policy and records the answer on this side.
 //!
 //! Peer side, public, verified by signature only. Every verified envelope
 //! is judged by the owner's policy and recorded before it is dispatched
@@ -73,6 +75,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/federation/rotate", post(rotate_identity))
         .route("/api/federation/policy", get(show_policy))
         .route("/api/federation/receipts", get(list_receipts))
+        .route("/api/federation/peers/{companion_id}/ping", post(ping_peer))
 }
 
 /// Mounted outside the auth middleware: a peer has no owner credential and
@@ -304,6 +307,20 @@ async fn show_policy(State(state): State<AppState>) -> Result<Response, ApiError
 
 async fn list_receipts(State(state): State<AppState>) -> Result<Response, ApiError> {
     Ok(Json(json!({ "receipts": state.federation_gate.receipts()? })).into_response())
+}
+
+/// The peer's decision comes back as `200 { decision }` whether it allowed
+/// the ping or refused it by policy; only an unreachable peer or a refusal
+/// that was not a decision is an error.
+async fn ping_peer(
+    State(state): State<AppState>,
+    Path(companion_id): Path<String>,
+) -> Result<Response, ApiError> {
+    let decision = state
+        .federation_gate
+        .send_ping(&state.federation, &companion_id)
+        .await?;
+    Ok(Json(json!({ "decision": decision })).into_response())
 }
 
 async fn pair(State(state): State<AppState>, request: Request) -> Result<Response, ApiError> {

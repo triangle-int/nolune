@@ -153,14 +153,32 @@ async fn a_ping_over_the_public_route_is_judged_and_recorded_on_both_sides() {
     );
     assert!(receipts(&a).await.is_empty());
 
-    // B pings A through the wire: A judges and answers, both sides record.
-    let decision = b
-        .state
-        .federation_gate
-        .send_ping(&b.state.federation, &a_id)
-        .await
-        .unwrap();
-    assert_eq!(decision.verdict, Verdict::Allow);
+    // B's owner pings A through the wire: A judges and answers, both sides
+    // record, and the owner sees A's decision.
+    let (status, body) = b
+        .owner(
+            Method::POST,
+            &format!("/api/federation/peers/{a_id}/ping"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["decision"]["verdict"], "allow");
+    assert_eq!(body["decision"]["reason"], "default");
+    let (status, body) = b
+        .owner(Method::POST, "/api/federation/peers/nobody/ping", None)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "unknown_peer");
+    let (status, _) = b
+        .anonymous(
+            Method::POST,
+            &format!("/api/federation/peers/{a_id}/ping"),
+            None,
+            &[],
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
     let on_a = receipts(&a).await;
     let on_b = receipts(&b).await;
     assert_eq!(on_a.len(), 1, "{on_a:?}");
@@ -264,16 +282,22 @@ async fn policy_refusals_are_typed_over_the_wire_and_never_echo_the_body() {
     assert_eq!(on_a[0].decision.reason, DecisionReason::RateLimited);
     assert_eq!(on_a[0].requester, b_id);
 
-    // The requesting side records the same refusal.
-    let decision = b
-        .state
-        .federation_gate
-        .send_ping(&b.state.federation, &a_id)
-        .await
-        .unwrap();
-    assert_eq!(decision.verdict, Verdict::Deny);
-    assert_eq!(decision.reason, DecisionReason::RateLimited);
-    assert_eq!(receipts(&b).await[0].decision, decision);
+    // The requesting side records the same refusal and reports it to its
+    // owner as the peer's decision, not as an error.
+    let (status, body) = b
+        .owner(
+            Method::POST,
+            &format!("/api/federation/peers/{a_id}/ping"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["decision"]["verdict"], "deny");
+    assert_eq!(body["decision"]["reason"], "rate_limited");
+    let mine = &receipts(&b).await[0];
+    assert_eq!(mine.decision.verdict, Verdict::Deny);
+    assert_eq!(mine.decision.reason, DecisionReason::RateLimited);
+    assert_eq!(mine.side, ReceiptSide::Requesting);
 
     // The owner denies pings from B outright: 403 with the decision.
     now.store(T0 + 60, Ordering::SeqCst);
@@ -340,6 +364,7 @@ async fn policy_refusals_are_typed_over_the_wire_and_never_echo_the_body() {
 
     // Judging a content intent records who asked for what and the verdict,
     // and the listing never carries what was said.
+    now.store(T0 + 120, Ordering::SeqCst);
     let refused = a
         .state
         .federation_gate

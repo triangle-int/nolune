@@ -16,13 +16,14 @@
 //! without its receipt, nothing is admitted until the owner looks.
 
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::Mutex,
 };
 
 use super::{identity, peers::Clock};
 use crate::domain::federation::FederationError;
-use crate::domain::federation_policy::AuditReceipt;
+use crate::domain::federation_policy::{AuditReceipt, RECEIPT_VERSION as RECEIPT_FORMAT_VERSION};
 
 /// The audit log, under the keystore directory.
 pub const AUDIT_FILE: &str = "audit.jsonl";
@@ -69,16 +70,145 @@ impl AuditLog {
     /// Appends `receipt` and enforces retention. Fails closed over a log
     /// this build could not load or write.
     pub fn record(&self, receipt: AuditReceipt) -> Result<(), FederationError> {
-        todo!("append a receipt")
+        let now = (self.clock)();
+        let mut inner = self.inner.lock().unwrap();
+        self.ensure_loaded(&mut inner);
+        self.refuse_if_unloadable(&inner)?;
+        let mut receipts = inner.receipts.clone();
+        receipts.push(receipt.clone());
+        if enforce_retention(&mut receipts, now) {
+            // Something was dropped: rewrite the whole file.
+            self.rewrite(&receipts)?;
+        } else {
+            self.append(&receipt)?;
+        }
+        inner.receipts = receipts;
+        Ok(())
     }
 
     /// Every kept receipt, newest first.
     pub fn list(&self) -> Result<Vec<AuditReceipt>, FederationError> {
-        todo!("list receipts")
+        let mut inner = self.inner.lock().unwrap();
+        self.ensure_loaded(&mut inner);
+        self.refuse_if_unloadable(&inner)?;
+        let mut receipts = inner.receipts.clone();
+        receipts.reverse();
+        Ok(receipts)
     }
 
+    /// Reads the log once and applies retention to what it holds. A file
+    /// that cannot be read, is too large, or has a line that is not a
+    /// receipt of this version leaves the log marked unloadable: reported,
+    /// never repaired, never overwritten.
     fn ensure_loaded(&self, inner: &mut Inner) {
-        todo!("load the log once")
+        if inner.loaded {
+            return;
+        }
+        inner.loaded = true;
+        let path = self.path();
+        let contents = match std::fs::metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => {
+                return self.mark_unloadable(inner, format!("cannot be read ({error})"));
+            }
+            Ok(metadata) if metadata.len() > MAX_AUDIT_FILE_BYTES => {
+                return self
+                    .mark_unloadable(inner, "is larger than an audit log can be".to_owned());
+            }
+            Ok(_) => match std::fs::read_to_string(&path) {
+                Ok(contents) => contents,
+                Err(error) => {
+                    return self.mark_unloadable(inner, format!("cannot be read ({error})"));
+                }
+            },
+        };
+        let mut receipts = Vec::new();
+        for (index, line) in contents.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<AuditReceipt>(line) {
+                Ok(receipt) if receipt.version == RECEIPT_FORMAT_VERSION => receipts.push(receipt),
+                Ok(receipt) => {
+                    return self.mark_unloadable(
+                        inner,
+                        format!(
+                            "has a receipt of unsupported version {} on line {}",
+                            receipt.version,
+                            index + 1
+                        ),
+                    );
+                }
+                Err(_) => {
+                    return self.mark_unloadable(
+                        inner,
+                        format!("does not have the expected shape on line {}", index + 1),
+                    );
+                }
+            }
+        }
+        inner.receipts = receipts;
+        if enforce_retention(&mut inner.receipts, (self.clock)()) {
+            // Old entries are dropped from memory now and from the file on
+            // the next write; a read alone never rewrites the file.
+        }
+    }
+
+    fn mark_unloadable(&self, inner: &mut Inner, reason: String) {
+        log::warn!(
+            "[federation] audit log {} {reason}; no intent will be admitted and nothing will be written until it is repaired or moved aside and the server restarted",
+            self.path().display()
+        );
+        inner.unloadable = Some(reason);
+    }
+
+    /// Appends one line, creating the file owner-only if needed.
+    fn append(&self, receipt: &AuditReceipt) -> Result<(), FederationError> {
+        let path = self.path();
+        let io = |error: std::io::Error| FederationError::Io {
+            path: path.clone(),
+            message: error.to_string(),
+        };
+        let dir = path
+            .parent()
+            .ok_or_else(|| std::io::Error::other("audit log path has no directory"))
+            .map_err(io)?;
+        identity::create_private_dir(dir).map_err(io)?;
+        let mut line = serde_json::to_string(receipt)
+            .map_err(|error| std::io::Error::other(error.to_string()))
+            .map_err(io)?;
+        line.push('\n');
+        let mut options = std::fs::OpenOptions::new();
+        options.append(true).create(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&path).map_err(io)?;
+        use std::io::Write as _;
+        file.write_all(line.as_bytes()).map_err(io)?;
+        file.sync_all().map_err(io)
+    }
+
+    /// Replaces the file with `receipts`, oldest first, through a temporary
+    /// file and a rename.
+    fn rewrite(&self, receipts: &[AuditReceipt]) -> Result<(), FederationError> {
+        let path = self.path();
+        let io = |error: std::io::Error| FederationError::Io {
+            path: path.clone(),
+            message: error.to_string(),
+        };
+        let mut contents = String::new();
+        for receipt in receipts {
+            contents.push_str(
+                &serde_json::to_string(receipt)
+                    .map_err(|error| std::io::Error::other(error.to_string()))
+                    .map_err(io)?,
+            );
+            contents.push('\n');
+        }
+        identity::replace_private(&path, contents.as_bytes()).map_err(io)
     }
 
     fn refuse_if_unloadable(&self, inner: &Inner) -> Result<(), FederationError> {
@@ -97,7 +227,32 @@ impl AuditLog {
 /// Drops receipts beyond the bounds; returns whether anything was dropped.
 /// `receipts` is oldest first on the way in and out.
 fn enforce_retention(receipts: &mut Vec<AuditReceipt>, now: u64) -> bool {
-    todo!("bounded retention")
+    let before = receipts.len();
+    let oldest_allowed = now.saturating_sub(AUDIT_RETENTION_DAYS * 86_400);
+    receipts.retain(|receipt| receipt.at > oldest_allowed);
+    // Per peer: a receipt belongs to the companion on the other side, so a
+    // flood from one peer only ever pushes out that peer's own history.
+    let mut kept_per_peer: HashMap<String, usize> = HashMap::new();
+    let mut keep = vec![false; receipts.len()];
+    for (index, receipt) in receipts.iter().enumerate().rev() {
+        let peer = receipt.peer().to_owned();
+        let kept = kept_per_peer.entry(peer).or_insert(0);
+        if *kept < MAX_RECEIPTS_PER_PEER {
+            *kept += 1;
+            keep[index] = true;
+        }
+    }
+    let mut index = 0;
+    receipts.retain(|_| {
+        let kept = keep[index];
+        index += 1;
+        kept
+    });
+    if receipts.len() > MAX_AUDIT_RECEIPTS {
+        let excess = receipts.len() - MAX_AUDIT_RECEIPTS;
+        receipts.drain(..excess);
+    }
+    receipts.len() != before
 }
 
 #[derive(Default)]
@@ -209,9 +364,9 @@ mod tests {
     #[test]
     fn retention_keeps_the_newest_per_peer_and_overall_and_drops_old_ones() {
         // Per peer.
-        let mut receipts: Vec<AuditReceipt> = (0..MAX_RECEIPTS_PER_PEER as u64 + 5)
-            .map(|i| receipt("chatty", T0 + i))
-            .chain([receipt("quiet", T0)])
+        let mut receipts: Vec<AuditReceipt> = [receipt("quiet", T0)]
+            .into_iter()
+            .chain((1..MAX_RECEIPTS_PER_PEER as u64 + 6).map(|i| receipt("chatty", T0 + i)))
             .collect();
         assert!(enforce_retention(&mut receipts, T0 + 1000));
         assert_eq!(
@@ -229,7 +384,7 @@ mod tests {
                 .filter(|r| r.requester == "chatty")
                 .map(|r| r.at)
                 .min(),
-            Some(T0 + 5),
+            Some(T0 + 6),
             "the oldest of the chatty peer's receipts went first"
         );
         assert!(

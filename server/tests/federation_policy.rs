@@ -375,7 +375,9 @@ fn every_peer_side_transport_route_goes_through_the_gate() {
     let evaluate_at = admit
         .find("policy::evaluate(")
         .expect("admit runs the engine");
-    let record_at = admit.find(".record(").expect("admit records the receipt");
+    let record_at = admit
+        .find("self.record_answering(")
+        .expect("admit records the receipt");
     assert!(
         evaluate_at < record_at,
         "admit must evaluate before it records"

@@ -50,22 +50,96 @@ impl PolicyStore {
     /// The document as it is now. Fails closed over a file this build could
     /// not load.
     pub fn document(&self) -> Result<PolicyDocument, FederationError> {
-        todo!("read the policy document")
+        let mut inner = self.inner.lock().unwrap();
+        self.ensure_loaded(&mut inner);
+        self.refuse_if_unloadable(&inner)?;
+        Ok(inner.document.clone())
     }
 
     /// Applies `change` under the store lock and persists; a change that
     /// leaves the document as it was is not written. Fails closed, changing
     /// nothing, over a file this build could not load or when `change`
-    /// refuses.
+    /// refuses. The owner API (#109, PR 3) is the first production caller.
+    #[allow(dead_code)]
     pub fn update(
         &self,
         change: impl FnOnce(&mut PolicyDocument) -> Result<(), FederationError>,
     ) -> Result<PolicyDocument, FederationError> {
-        todo!("change and persist the policy document")
+        let mut inner = self.inner.lock().unwrap();
+        self.ensure_loaded(&mut inner);
+        self.refuse_if_unloadable(&inner)?;
+        let mut document = inner.document.clone();
+        change(&mut document)?;
+        if document == inner.document {
+            return Ok(document);
+        }
+        document.version = POLICY_VERSION;
+        self.persist(&document)?;
+        inner.document = document.clone();
+        Ok(document)
     }
 
+    /// Reads the file once. A missing file is the default document. A file
+    /// that cannot be read or is not a policy of this version leaves the
+    /// store marked unloadable: reported, never repaired, never overwritten.
     fn ensure_loaded(&self, inner: &mut Inner) {
-        todo!("load the policy file once")
+        if inner.loaded {
+            return;
+        }
+        inner.loaded = true;
+        let path = self.path();
+        let contents = match std::fs::metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => {
+                return self.mark_unloadable(inner, format!("cannot be read ({error})"));
+            }
+            Ok(metadata) if metadata.len() > MAX_POLICY_FILE_BYTES => {
+                return self.mark_unloadable(inner, "is larger than a policy can be".to_owned());
+            }
+            Ok(_) => match std::fs::read_to_string(&path) {
+                Ok(contents) => contents,
+                Err(error) => {
+                    return self.mark_unloadable(inner, format!("cannot be read ({error})"));
+                }
+            },
+        };
+        let version = serde_json::from_str::<FileVersion>(&contents)
+            .ok()
+            .map(|file| file.version);
+        match serde_json::from_str::<PolicyDocument>(&contents) {
+            Ok(document) if document.version == POLICY_VERSION => inner.document = document,
+            _ => {
+                let reason = match version {
+                    Some(version) if version != POLICY_VERSION => {
+                        format!("has unsupported version {version}")
+                    }
+                    _ => "does not have the expected shape".to_owned(),
+                };
+                self.mark_unloadable(inner, reason);
+            }
+        }
+    }
+
+    fn mark_unloadable(&self, inner: &mut Inner, reason: String) {
+        log::warn!(
+            "[federation] policy {} {reason}; nothing will be judged and nothing will be written until it is repaired or moved aside and the server restarted",
+            self.path().display()
+        );
+        inner.unloadable = Some(reason);
+    }
+
+    fn persist(&self, document: &PolicyDocument) -> Result<(), FederationError> {
+        let path = self.path();
+        let mut json =
+            serde_json::to_string_pretty(document).map_err(|error| FederationError::Io {
+                path: path.clone(),
+                message: error.to_string(),
+            })?;
+        json.push('\n');
+        identity::replace_private(&path, json.as_bytes()).map_err(|error| FederationError::Io {
+            path,
+            message: error.to_string(),
+        })
     }
 
     fn refuse_if_unloadable(&self, inner: &Inner) -> Result<(), FederationError> {

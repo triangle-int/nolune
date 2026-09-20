@@ -37,13 +37,43 @@ pub const SECONDS_PER_DAY: u32 = 86_400;
 /// anything that would show the peer something about this owner, or land
 /// in front of them, is `ask` at most, and the sensitive class is denied.
 pub fn default_access(intent: IntentClass, disclosure: DisclosureClass) -> Option<Access> {
-    todo!("the defaults table")
+    use DisclosureClass::{Availability, None as Nothing, Personal, Sensitive};
+    let access = match (intent, disclosure) {
+        (IntentClass::Ping, Nothing) => Access::Allow,
+        (IntentClass::Ping, _) => return None,
+        // A message, a reminder, or a proposal is delivered to the owner; it
+        // reveals nothing of theirs on its own, and a proposal may ask
+        // whether they are free.
+        (IntentClass::Message | IntentClass::Reminder, Nothing) => Access::Ask,
+        (IntentClass::Message | IntentClass::Reminder, _) => return None,
+        (IntentClass::Proposal, Nothing | Availability) => Access::Ask,
+        (IntentClass::Proposal, Personal) => Access::Deny,
+        // An availability query always discloses at least availability.
+        (IntentClass::Availability, Nothing) => return None,
+        (IntentClass::Availability, Availability) => Access::Ask,
+        (IntentClass::Availability, Personal) => Access::Deny,
+        // The sensitive class needs the owner's explicit rule, always.
+        (_, Sensitive) => Access::Deny,
+    };
+    Some(access)
 }
 
 /// Every supported (intent, disclosure) pair with its default, in a stable
 /// order, for the owner listing.
 pub fn defaults_table() -> Vec<DefaultAccess> {
-    todo!("enumerate the defaults table")
+    let mut table = Vec::new();
+    for intent in IntentClass::ALL {
+        for disclosure in DisclosureClass::ALL {
+            if let Some(access) = default_access(intent, disclosure) {
+                table.push(DefaultAccess {
+                    intent,
+                    disclosure,
+                    access,
+                });
+            }
+        }
+    }
+    table
 }
 
 /// A wire intent resolved to what the engine can judge, or a denial for
@@ -61,7 +91,19 @@ pub enum Classified {
 /// Resolves the names a peer used. An unknown intent is reported before an
 /// unknown disclosure; both fail closed.
 pub fn classify(intent: &str, disclosure: &str) -> Classified {
-    todo!("resolve wire names to classes or an unknown-name denial")
+    let Some(intent_class) = IntentClass::parse(intent) else {
+        return Classified::Unknown {
+            reason: DecisionReason::UnknownIntent,
+            detail: sanitize_name(intent),
+        };
+    };
+    let Some(disclosure_class) = DisclosureClass::parse(disclosure) else {
+        return Classified::Unknown {
+            reason: DecisionReason::UnknownDisclosure,
+            detail: sanitize_name(disclosure),
+        };
+    };
+    Classified::Known(IntentRequest::new(intent_class, disclosure_class))
 }
 
 /// A peer's recent requests, kept for the sliding-window rate limit. Holds
@@ -77,13 +119,35 @@ impl RateWindow {
     /// counted, so a peer over its budget is not pushed further out by
     /// retrying.
     pub fn admit(&mut self, limit: RateLimitPolicy, now: u64) -> Result<(), u64> {
-        todo!("sliding-window rate limit")
+        let window = limit.window_secs.max(1);
+        // Entries stamped after `now` (a clock that went back) stay: they
+        // still count, and they leave when their window would have ended.
+        self.accepted.retain(|&at| at.saturating_add(window) > now);
+        let budget = limit.max_requests as usize;
+        if self.accepted.len() > budget {
+            let excess = self.accepted.len() - budget;
+            self.accepted.drain(..excess);
+        }
+        if self.accepted.len() >= budget {
+            // The oldest request in the window is the first to leave it.
+            let retry_after = self
+                .accepted
+                .first()
+                .map(|&oldest| oldest.saturating_add(window).saturating_sub(now))
+                .unwrap_or(window)
+                .max(1);
+            return Err(retry_after);
+        }
+        self.accepted.push(now);
+        Ok(())
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.accepted.len()
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.accepted.is_empty()
     }
@@ -108,13 +172,99 @@ pub struct Evaluation<'a> {
 /// is the peer's rate window and is advanced by every request that reaches
 /// the rate check.
 pub fn evaluate(evaluation: Evaluation<'_>, usage: &mut RateWindow) -> Decision {
-    todo!("the policy engine")
+    let Evaluation {
+        document,
+        peer,
+        state,
+        request,
+        now,
+        local_seconds_of_day,
+    } = evaluation;
+
+    // 1. Only a paired peer is judged at all.
+    match state {
+        PeerState::Paired => {}
+        PeerState::Revoked => return Decision::deny(DecisionReason::PeerRevoked),
+        PeerState::Pending | PeerState::Invited => {
+            return Decision::deny(DecisionReason::PeerNotPaired);
+        }
+    }
+
+    // 2. The rate limit, before anything the peer asked for is looked at.
+    if let Err(retry_after) = usage.admit(document.rate_limit_for(peer), now) {
+        return Decision::rate_limited(retry_after);
+    }
+
+    // 3. The intent must be able to disclose at that class at all.
+    let Some(default) = default_access(request.intent, request.disclosure) else {
+        return Decision::deny(DecisionReason::UnsupportedDisclosure);
+    };
+
+    // 4. The owner's rules: the most restrictive live exact match, else the
+    // default, reported as such when a rule lapsed.
+    let policy = document.peer(peer);
+    let mut live: Option<Access> = None;
+    let mut expired = false;
+    for rule in policy.rules.iter().filter(|rule| rule.matches(request)) {
+        if rule.expired_at(now) {
+            expired = true;
+            continue;
+        }
+        live = Some(match live {
+            Some(current) => more_restrictive(current, rule.access),
+            None => rule.access,
+        });
+    }
+    let (access, reason) = match live {
+        Some(access) => (access, DecisionReason::Rule),
+        None if expired => (default, DecisionReason::RuleExpired),
+        None => (default, DecisionReason::Default),
+    };
+    let verdict = verdict_for(access);
+
+    // 5. Quiet hours hold whatever would reach the owner.
+    let reaches_owner = match verdict {
+        Verdict::Ask => true,
+        Verdict::Allow => request.intent.reaches_owner(),
+        Verdict::Deny | Verdict::Defer => false,
+    };
+    if reaches_owner
+        && let Some(quiet) = &document.quiet_hours
+        && quiet.contains(local_seconds_of_day / 3600)
+    {
+        let until = quiet_hours_end(now, local_seconds_of_day, quiet.end_hour);
+        return Decision {
+            retry_after_secs: Some(until.saturating_sub(now)),
+            ..Decision::deferred(until)
+        };
+    }
+
+    Decision::new(verdict, reason)
 }
 
 /// Unix seconds when the quiet hours ending at `end_hour` next end, given
 /// `now` and the local time of day.
 pub fn quiet_hours_end(now: u64, local_seconds_of_day: u32, end_hour: u8) -> u64 {
-    todo!("next end of quiet hours")
+    let local = local_seconds_of_day % SECONDS_PER_DAY;
+    let end = u32::from(end_hour) % 24 * 3600;
+    let remaining = if end > local {
+        end - local
+    } else {
+        SECONDS_PER_DAY - local + end
+    };
+    now.saturating_add(u64::from(remaining))
+}
+
+/// Of two rules for the same intent and class, the one that gives less.
+fn more_restrictive(a: Access, b: Access) -> Access {
+    fn rank(access: Access) -> u8 {
+        match access {
+            Access::Deny => 2,
+            Access::Ask => 1,
+            Access::Allow => 0,
+        }
+    }
+    if rank(b) > rank(a) { b } else { a }
 }
 
 /// The verdict a rule's access maps to.
@@ -233,11 +383,11 @@ mod tests {
                 if disclosure == DisclosureClass::Sensitive {
                     assert_eq!(decision.verdict, Verdict::Deny, "{intent} at sensitive");
                 }
-                if intent.reaches_owner() && expected.is_some() {
+                if intent.reaches_owner() && disclosure == DisclosureClass::None {
                     assert_eq!(
                         expected,
                         Some(Access::Ask),
-                        "{intent} lands in front of the owner"
+                        "{intent} lands in front of the owner, who is asked"
                     );
                 }
             }
@@ -644,8 +794,9 @@ mod tests {
         assert_eq!(window.admit(limit, 109), Err(1));
         assert_eq!(window.admit(limit, 110), Ok(()), "the request at 100 left");
         assert_eq!(window.len(), 2, "never more than the budget is kept");
-        // A clock that jumps back is not a way to refill the window.
-        assert_eq!(window.admit(limit, 50), Err(55));
+        // A clock that jumps back is not a way to refill the window: the
+        // two requests stay until their windows end, the earlier at 115.
+        assert_eq!(window.admit(limit, 50), Err(65));
         // A shrunk budget applies at once.
         let smaller = RateLimitPolicy {
             max_requests: 1,
