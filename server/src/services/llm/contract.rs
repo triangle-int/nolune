@@ -1,4 +1,6 @@
 //! Provider boundary. Conversation storage and the agent loop do not own API payloads.
+use std::time::Duration;
+
 use futures::future::BoxFuture;
 use tokio_util::sync::CancellationToken;
 
@@ -13,6 +15,8 @@ pub struct Capabilities {
     pub streaming: bool,
     pub reasoning_controls: bool,
     pub model_discovery: bool,
+    /// Whether `ProviderAdapter::count_tokens` returns the provider's own count.
+    pub token_counting: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -24,13 +28,28 @@ pub struct Usage {
     pub cache_write_tokens: u64,
 }
 
+/// Every failure a caller can act on has its own variant; `Http` is only the
+/// remainder. Callers match on the variant, never on status strings (#24, #25).
 #[derive(Debug)]
 pub enum LlmError {
     UnsupportedCapability(&'static str),
     SetupRequired(String),
+    /// The provider rejected the API key or its permissions (401, 403).
+    Authentication(String),
+    /// The provider asked for a pause: 429, Anthropic's 529, or an overloaded
+    /// error object. `retry_after` is the `Retry-After` header when one was sent.
+    RateLimited {
+        retry_after: Option<Duration>,
+        message: String,
+    },
+    /// The request no longer fits the model's context window.
+    ContextLength(String),
     Cancelled,
     Timeout,
-    Http { status: u16, message: String },
+    Http {
+        status: u16,
+        message: String,
+    },
     Transport(String),
     InvalidResponse(String),
 }
@@ -40,6 +59,20 @@ impl std::fmt::Display for LlmError {
         match self {
             Self::UnsupportedCapability(c) => write!(f, "selected provider does not support {c}"),
             Self::SetupRequired(s) => write!(f, "provider setup required: {s}"),
+            Self::Authentication(s) => write!(f, "LLM authentication failed: {s}"),
+            Self::RateLimited {
+                retry_after: Some(wait),
+                message,
+            } => write!(
+                f,
+                "LLM rate limited, retry after {}s: {message}",
+                wait.as_secs()
+            ),
+            Self::RateLimited {
+                retry_after: None,
+                message,
+            } => write!(f, "LLM rate limited: {message}"),
+            Self::ContextLength(s) => write!(f, "LLM context length exceeded: {s}"),
             Self::Cancelled => write!(f, "LLM request cancelled"),
             Self::Timeout => write!(f, "LLM stream timed out"),
             Self::Http { status, message } => write!(f, "LLM API error {status}: {message}"),
@@ -49,6 +82,20 @@ impl std::fmt::Display for LlmError {
     }
 }
 impl std::error::Error for LlmError {}
+
+/// The `Retry-After` header as a delay, when the provider sent one in seconds.
+pub(super) fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+        .map(Duration::from_secs_f64)
+}
+
 impl From<anyhow::Error> for LlmError {
     fn from(error: anyhow::Error) -> Self {
         match error.downcast::<Self>() {
@@ -207,6 +254,12 @@ pub trait ProviderAdapter: Send + Sync {
         request: LlmRequest<'a>,
         events: &'a EventSink<'a>,
     ) -> BoxFuture<'a, Result<LlmResponse, LlmError>>;
+    /// The provider's own input-token count for `request`, when
+    /// `Capabilities::token_counting` says it has one.
+    fn count_tokens<'a>(&'a self, request: LlmRequest<'a>) -> BoxFuture<'a, Result<u64, LlmError>> {
+        let _ = request;
+        Box::pin(async { Err(LlmError::UnsupportedCapability("token counting")) })
+    }
     // Reserved extension point; current adapters advertise discovery as unsupported.
     #[allow(dead_code)]
     fn discover_models(&self) -> BoxFuture<'_, Result<Vec<String>, LlmError>> {
@@ -343,10 +396,12 @@ mod tests {
                 .await,
             Err(LlmError::UnsupportedCapability("documents"))
         ));
+        let mut plain = backend(LlmProvider::Openai, "http://127.0.0.1:1");
+        plain.model = "gpt-4.1".into();
         let mut request = LlmRequest::new(ExecutionScope::Subagent, &[], &[], &[]);
         request.reasoning = Some("high");
         assert!(matches!(
-            adapter.complete(request).await,
+            plain.adapter().unwrap().complete(request).await,
             Err(LlmError::UnsupportedCapability("reasoning controls"))
         ));
         assert!(matches!(
@@ -373,6 +428,7 @@ mod tests {
             streaming: false,
             reasoning_controls: false,
             model_discovery: false,
+            token_counting: false,
         };
         let messages = [Message::User {
             content: vec![ContentBlock::ToolOutput {
@@ -420,6 +476,44 @@ mod tests {
                 async move {
                     captured.lock().unwrap().push(request);
                     (axum::http::StatusCode::from_u16(status).unwrap(), body)
+                }
+            },
+        ));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (url, requests, task)
+    }
+
+    /// Request path and body, per request the mock received.
+    type CapturedRequests = Arc<Mutex<Vec<(String, Value)>>>;
+
+    /// Like `mock_server`, but records each request's path and answers with
+    /// `headers` as well.
+    async fn mock_server_with(
+        status: u16,
+        headers: Vec<(&'static str, String)>,
+        body: String,
+    ) -> (String, CapturedRequests, tokio::task::JoinHandle<()>) {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let captured = requests.clone();
+        let app = axum::Router::new().fallback(axum::routing::post(
+            move |uri: axum::http::Uri, axum::Json(request): axum::Json<Value>| {
+                let captured = captured.clone();
+                let body = body.clone();
+                let headers = headers.clone();
+                async move {
+                    captured
+                        .lock()
+                        .unwrap()
+                        .push((uri.path().to_owned(), request));
+                    let mut map = axum::http::HeaderMap::new();
+                    for (name, value) in headers {
+                        map.insert(name, value.parse().unwrap());
+                    }
+                    (axum::http::StatusCode::from_u16(status).unwrap(), map, body)
                 }
             },
         ));
@@ -576,7 +670,7 @@ mod tests {
                 adapter
                     .complete(LlmRequest::new(ExecutionScope::Subagent, &[], &[], &[]))
                     .await,
-                Err(LlmError::Http { status: 429, .. })
+                Err(LlmError::RateLimited { .. })
             ));
             assert!(matches!(
                 adapter
@@ -585,7 +679,16 @@ mod tests {
                         &|_| {}
                     )
                     .await,
-                Err(LlmError::Http { status: 429, .. })
+                Err(LlmError::RateLimited { .. })
+            ));
+            task.abort();
+            let (url, _, task) = mock_server(418, "teapot".into()).await;
+            let adapter = backend(provider, &url).adapter().unwrap();
+            assert!(matches!(
+                adapter
+                    .complete(LlmRequest::new(ExecutionScope::Subagent, &[], &[], &[]))
+                    .await,
+                Err(LlmError::Http { status: 418, .. })
             ));
             task.abort();
             let (url, _, task) = mock_server(200, "data: {}\n\n".into()).await;
@@ -781,6 +884,426 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    // ── Typed provider errors (#24, #25) ─────────────────────────────────
+
+    fn anthropic_error_body(kind: &str, message: &str) -> String {
+        json!({"type": "error", "error": {"type": kind, "message": message}}).to_string()
+    }
+
+    fn openai_error_body(code: &str, message: &str) -> String {
+        json!({"error": {"type": "invalid_request_error", "code": code, "message": message}})
+            .to_string()
+    }
+
+    /// Provider, status, response headers, body, expected variant.
+    type ErrorCase = (
+        LlmProvider,
+        u16,
+        Vec<(&'static str, String)>,
+        String,
+        &'static str,
+    );
+
+    /// Both adapters answer the same failures with the same variants, in
+    /// both modes; `Http` is only the remainder.
+    #[tokio::test]
+    async fn adapters_map_provider_errors_to_typed_variants() {
+        use LlmProvider::{Anthropic, Openai};
+        let retry: Vec<(&'static str, String)> = vec![("retry-after", "7".into())];
+        let cases: Vec<ErrorCase> = vec![
+            (
+                Anthropic,
+                401,
+                vec![],
+                anthropic_error_body("authentication_error", "invalid x-api-key"),
+                "authentication",
+            ),
+            (
+                Openai,
+                401,
+                vec![],
+                openai_error_body("invalid_api_key", "Incorrect API key provided"),
+                "authentication",
+            ),
+            (
+                Anthropic,
+                403,
+                vec![],
+                anthropic_error_body("permission_error", "not allowed"),
+                "authentication",
+            ),
+            (
+                Openai,
+                403,
+                vec![],
+                openai_error_body("unsupported_country_region_territory", "no"),
+                "authentication",
+            ),
+            (
+                Anthropic,
+                429,
+                retry.clone(),
+                anthropic_error_body("rate_limit_error", "slow down"),
+                "rate_limited",
+            ),
+            (
+                Openai,
+                429,
+                retry.clone(),
+                openai_error_body("rate_limit_exceeded", "Rate limit reached"),
+                "rate_limited",
+            ),
+            (
+                Anthropic,
+                529,
+                vec![],
+                anthropic_error_body("overloaded_error", "Overloaded"),
+                "rate_limited",
+            ),
+            (Openai, 429, vec![], "plain text".into(), "rate_limited"),
+            (
+                Anthropic,
+                400,
+                vec![],
+                anthropic_error_body(
+                    "invalid_request_error",
+                    "prompt is too long: 213462 tokens > 200000 maximum",
+                ),
+                "context_length",
+            ),
+            (
+                Openai,
+                400,
+                vec![],
+                openai_error_body(
+                    "context_length_exceeded",
+                    "Your input exceeds the context window of this model.",
+                ),
+                "context_length",
+            ),
+            (
+                Anthropic,
+                400,
+                vec![],
+                anthropic_error_body("invalid_request_error", "messages: roles must alternate"),
+                "http",
+            ),
+            (
+                Openai,
+                400,
+                vec![],
+                openai_error_body("invalid_value", "Unsupported parameter"),
+                "http",
+            ),
+            (Anthropic, 500, vec![], "boom".into(), "http"),
+            (Openai, 503, vec![], "down".into(), "http"),
+        ];
+        for (provider, status, headers, body, expected) in cases {
+            let (url, _, task) = mock_server_with(status, headers.clone(), body.clone()).await;
+            let adapter = backend(provider, &url).adapter().unwrap();
+            let complete = adapter
+                .complete(LlmRequest::new(ExecutionScope::Subagent, &[], &[], &[]))
+                .await
+                .unwrap_err();
+            let stream = adapter
+                .stream(
+                    LlmRequest::new(ExecutionScope::Subagent, &[], &[], &[]),
+                    &|_| {},
+                )
+                .await
+                .unwrap_err();
+            task.abort();
+            for error in [complete, stream] {
+                let label = format!("{provider:?} {status} {body}: {error:?}");
+                match expected {
+                    "authentication" => {
+                        assert!(matches!(error, LlmError::Authentication(_)), "{label}")
+                    }
+                    "rate_limited" => {
+                        let LlmError::RateLimited { retry_after, .. } = error else {
+                            panic!("{label}");
+                        };
+                        let expected_wait =
+                            (!headers.is_empty()).then_some(std::time::Duration::from_secs(7));
+                        assert_eq!(retry_after, expected_wait, "{label}");
+                    }
+                    "context_length" => {
+                        assert!(matches!(error, LlmError::ContextLength(_)), "{label}")
+                    }
+                    _ => assert!(
+                        matches!(error, LlmError::Http { status: got, .. } if got == status),
+                        "{label}"
+                    ),
+                }
+            }
+        }
+    }
+
+    /// Anthropic can send the same error object mid-stream as an SSE
+    /// `error` event; it maps like the status it would have been.
+    #[tokio::test]
+    async fn anthropic_stream_error_events_map_like_status_errors() {
+        for (kind, expected) in [
+            ("overloaded_error", "rate_limited"),
+            ("rate_limit_error", "rate_limited"),
+            ("authentication_error", "authentication"),
+            ("api_error", "invalid"),
+        ] {
+            let sse = format!(
+                "event: message_start\ndata: {{\"message\":{{\"usage\":{{\"input_tokens\":5}}}}}}\n\nevent: error\ndata: {}\n\n",
+                anthropic_error_body(kind, "Overloaded")
+            );
+            let (url, _, task) = mock_server(200, sse).await;
+            let adapter = backend(LlmProvider::Anthropic, &url).adapter().unwrap();
+            let error = adapter
+                .stream(
+                    LlmRequest::new(ExecutionScope::Subagent, &[], &[], &[]),
+                    &|_| {},
+                )
+                .await
+                .unwrap_err();
+            task.abort();
+            let ok = match expected {
+                "rate_limited" => matches!(error, LlmError::RateLimited { .. }),
+                "authentication" => matches!(error, LlmError::Authentication(_)),
+                _ => matches!(error, LlmError::InvalidResponse(_)),
+            };
+            assert!(ok, "{kind}: {error:?}");
+        }
+    }
+
+    // ── Token counting behind the adapter (#24) ──────────────────────────
+
+    #[tokio::test]
+    async fn token_counting_goes_through_the_adapter_in_its_wire_format() {
+        let count = json!({"input_tokens": 42}).to_string();
+        let (url, requests, task) = mock_server_with(200, vec![], count.clone()).await;
+        let adapter = backend(LlmProvider::Anthropic, &url).adapter().unwrap();
+        assert!(adapter.capabilities().token_counting);
+        let tools = [ToolDefinition {
+            name: "search".into(),
+            description: "test".into(),
+            parameters: json!({"type":"object","properties":{"q":{"type":"string"}}}),
+        }];
+        let messages = [Message::user("hello")];
+        let counted = adapter
+            .count_tokens(LlmRequest::new(
+                ExecutionScope::Conversation,
+                &["system"],
+                &messages,
+                &tools,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(counted, 42);
+        {
+            let requests = requests.lock().unwrap();
+            let (path, body) = &requests[0];
+            assert_eq!(path, "/v1/messages/count_tokens");
+            assert_eq!(body["model"], "claude-sonnet-4-6");
+            assert_eq!(body["system"][0]["text"], "system");
+            assert_eq!(body["messages"][0]["content"][0]["text"], "hello");
+            // Tools are written as the Messages API reads them, never with
+            // the ToolDefinition field name the old hand-built request sent.
+            assert_eq!(body["tools"][0]["name"], "search");
+            assert_eq!(
+                body["tools"][0]["input_schema"]["properties"]["q"]["type"],
+                "string"
+            );
+            assert!(body["tools"][0].get("parameters").is_none());
+            // Generation-only fields stay out of a count.
+            for key in [
+                "max_tokens",
+                "stream",
+                "cache_control",
+                "context_management",
+            ] {
+                assert!(body.get(key).is_none(), "count request carries {key}");
+            }
+        }
+        task.abort();
+
+        let (url, requests, task) = mock_server_with(200, vec![], count).await;
+        let adapter = backend(LlmProvider::Openai, &url).adapter().unwrap();
+        assert!(!adapter.capabilities().token_counting);
+        assert!(matches!(
+            adapter
+                .count_tokens(LlmRequest::new(ExecutionScope::Conversation, &[], &[], &[]))
+                .await,
+            Err(LlmError::UnsupportedCapability("token counting"))
+        ));
+        assert!(
+            requests.lock().unwrap().is_empty(),
+            "an unsupported count never reaches the network"
+        );
+        task.abort();
+
+        // A failing count is a typed error like any other call.
+        let (url, _, task) = mock_server_with(
+            401,
+            vec![],
+            anthropic_error_body("authentication_error", "invalid x-api-key"),
+        )
+        .await;
+        let adapter = backend(LlmProvider::Anthropic, &url).adapter().unwrap();
+        assert!(matches!(
+            adapter
+                .count_tokens(LlmRequest::new(ExecutionScope::Conversation, &[], &[], &[]))
+                .await,
+            Err(LlmError::Authentication(_))
+        ));
+        task.abort();
+    }
+
+    // ── OpenAI reasoning controls per model (#25) ────────────────────────
+
+    #[tokio::test]
+    async fn openai_forwards_reasoning_effort_only_to_reasoning_models() {
+        let completed = json!({"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1}});
+        for (model, supported) in [
+            ("gpt-5.4", true),
+            ("gpt-5.4-mini", true),
+            ("o3", true),
+            ("o4-mini", true),
+            ("gpt-4.1", false),
+            ("gpt-4o", false),
+        ] {
+            let capabilities = super::super::provider_capabilities(LlmProvider::Openai, model);
+            assert_eq!(capabilities.reasoning_controls, supported, "{model}");
+            for streaming in [false, true] {
+                let body = if streaming {
+                    format!(
+                        "data: {}\n\n",
+                        json!({"type": "response.completed", "response": completed})
+                    )
+                } else {
+                    completed.to_string()
+                };
+                let (url, requests, task) = mock_server_with(200, vec![], body).await;
+                let mut backend = backend(LlmProvider::Openai, &url);
+                backend.model = model.into();
+                let adapter = backend.adapter().unwrap();
+                let mut request = LlmRequest::new(ExecutionScope::Subagent, &[], &[], &[]);
+                request.reasoning = Some("low");
+                let result = if streaming {
+                    adapter.stream(request, &|_| {}).await
+                } else {
+                    adapter.complete(request).await
+                };
+                {
+                    let requests = requests.lock().unwrap();
+                    if supported {
+                        result.unwrap();
+                        assert_eq!(
+                            requests[0].1["reasoning"]["effort"], "low",
+                            "{model} streaming={streaming}"
+                        );
+                    } else {
+                        assert!(
+                            matches!(
+                                result,
+                                Err(LlmError::UnsupportedCapability("reasoning controls"))
+                            ),
+                            "{model} streaming={streaming}: {result:?}"
+                        );
+                        assert!(requests.is_empty(), "{model}: rejected before the network");
+                    }
+                }
+                // Without a reasoning request nothing is sent, whatever the model.
+                let adapter = backend.adapter().unwrap();
+                let request = LlmRequest::new(ExecutionScope::Subagent, &[], &[], &[]);
+                if streaming {
+                    adapter.stream(request, &|_| {}).await.unwrap();
+                } else {
+                    adapter.complete(request).await.unwrap();
+                }
+                let requests = requests.lock().unwrap();
+                assert!(
+                    requests.last().unwrap().1.get("reasoning").is_none(),
+                    "{model} streaming={streaming}"
+                );
+                drop(requests);
+                task.abort();
+            }
+        }
+        assert!(
+            !super::super::provider_capabilities(LlmProvider::Anthropic, "claude-sonnet-4-6")
+                .reasoning_controls
+        );
+    }
+
+    // ── Key probe shared by both providers (#24, #25; #28 builds on it) ──
+
+    #[tokio::test]
+    async fn probe_key_accepts_authenticated_answers_and_rejects_bad_keys() {
+        for provider in [LlmProvider::Anthropic, LlmProvider::Openai] {
+            let success = if provider == LlmProvider::Anthropic {
+                END_TURN.to_string()
+            } else {
+                json!({"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1}}).to_string()
+            };
+            let cases = [
+                (200, success, "ok"),
+                // A rate limit, or any other answer past authentication,
+                // proves the key.
+                (429, "slow down".to_string(), "ok"),
+                (
+                    404,
+                    json!({"error": {"message": "model not found"}}).to_string(),
+                    "ok",
+                ),
+                (401, "nope".to_string(), "authentication"),
+                (503, "down".to_string(), "unavailable"),
+            ];
+            for (status, body, expected) in cases {
+                let (url, requests, task) = mock_server_with(status, vec![], body).await;
+                let mut backend = LlmBackend::probe(
+                    reqwest::Client::new(),
+                    provider,
+                    "model-x",
+                    "key-under-test",
+                );
+                backend.base_url = url;
+                let result = backend.probe_key().await;
+                task.abort();
+                let requests = requests.lock().unwrap();
+                let body = &requests[0].1;
+                assert_eq!(body["model"], "model-x");
+                // The smallest completion each API accepts.
+                let (limit, smallest) = if provider == LlmProvider::Anthropic {
+                    ("max_tokens", 1)
+                } else {
+                    ("max_output_tokens", 16)
+                };
+                assert_eq!(
+                    body[limit], smallest,
+                    "{provider:?}: a probe asks for the least"
+                );
+                let label = format!("{provider:?} {status}: {result:?}");
+                match expected {
+                    "ok" => assert!(result.is_ok(), "{label}"),
+                    "authentication" => {
+                        assert!(
+                            matches!(result, Err(LlmError::Authentication(_))),
+                            "{label}"
+                        )
+                    }
+                    _ => assert!(
+                        matches!(result, Err(LlmError::Http { status: 503, .. })),
+                        "{label}"
+                    ),
+                }
+            }
+            // An unreachable provider says nothing about the key.
+            let mut backend = LlmBackend::probe(reqwest::Client::new(), provider, "model-x", "k");
+            backend.base_url = "http://127.0.0.1:1".into();
+            assert!(matches!(
+                backend.probe_key().await,
+                Err(LlmError::Transport(_))
+            ));
         }
     }
 

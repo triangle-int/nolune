@@ -60,3 +60,5 @@ cua-protocol = { path = "../cua-protocol" }
 [dev-dependencies]
 # Already in the tree under ed25519-dalek; used only to build forged signatures in tests.
 curve25519-dalek = "4"
+# Paused time for the rate-limit retry tests; the dependency itself is unchanged.
+tokio = { version = "1.0", features = ["test-util"] }

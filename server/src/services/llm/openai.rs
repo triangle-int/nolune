@@ -4,6 +4,7 @@ use crate::services::tool::ToolDefinition;
 
 use super::contract::{
     Capabilities, EventSink, LlmError, LlmEvent, LlmRequest, ProviderAdapter, StopReason, Usage,
+    retry_after,
 };
 use super::types::LlmBackend;
 use super::types::{ContentBlock, ImageSource, LlmResponse, Message, ToolCall};
@@ -36,6 +37,32 @@ fn tool_output_to_string(content: &super::types::ToolOutputContent) -> String {
             .collect::<Vec<_>>()
             .join("\n"),
         ToolOutputContent::Legacy(value) => value.to_string(),
+    }
+}
+
+/// The typed error for a non-2xx Responses API answer. Callers act on the
+/// variant; the redacted body rides along for logs.
+fn openai_error(status: u16, retry_after: Option<std::time::Duration>, body: &str) -> LlmError {
+    let message = crate::services::tools::redact_secrets(body);
+    let parsed: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+    let code = parsed["error"]["code"].as_str().unwrap_or("");
+    let detail = parsed["error"]["message"]
+        .as_str()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match status {
+        401 | 403 => LlmError::Authentication(message),
+        429 => LlmError::RateLimited {
+            retry_after,
+            message,
+        },
+        400 if code == "context_length_exceeded"
+            || detail.contains("context window")
+            || detail.contains("maximum context length") =>
+        {
+            LlmError::ContextLength(message)
+        }
+        _ => LlmError::Http { status, message },
     }
 }
 
@@ -193,6 +220,7 @@ pub(crate) fn tools_to_openai(
 }
 
 /// Non-streaming OpenAI Responses API call.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn openai_complete(
     http: &reqwest::Client,
     api_key: &str,
@@ -201,6 +229,7 @@ pub(crate) async fn openai_complete(
     tool_defs: &[ToolDefinition],
     messages: &[Message],
     max_tokens: u64,
+    reasoning: Option<&str>,
     base_url: &str,
     json_schema: Option<&serde_json::Value>,
 ) -> anyhow::Result<LlmResponse> {
@@ -220,6 +249,9 @@ pub(crate) async fn openai_complete(
     if !tools.is_empty() {
         body["tools"] = serde_json::Value::Array(tools);
     }
+    if let Some(effort) = reasoning {
+        body["reasoning"] = serde_json::json!({"effort": effort});
+    }
 
     if let Some(schema) = json_schema {
         body["instructions"] = serde_json::json!(format!(
@@ -238,13 +270,10 @@ pub(crate) async fn openai_complete(
         .await?;
 
     let status = resp.status();
+    let retry_after = retry_after(resp.headers());
     let resp_text = resp.text().await?;
     if !status.is_success() {
-        return Err(LlmError::Http {
-            status: status.as_u16(),
-            message: crate::services::tools::redact_secrets(&resp_text),
-        }
-        .into());
+        return Err(openai_error(status.as_u16(), retry_after, &resp_text).into());
     }
 
     let resp_json: serde_json::Value = serde_json::from_str(&resp_text)?;
@@ -317,6 +346,7 @@ pub(crate) async fn openai_complete(
 }
 
 /// Streaming OpenAI Responses API call.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn openai_stream(
     http: &reqwest::Client,
     api_key: &str,
@@ -325,6 +355,7 @@ pub(crate) async fn openai_stream(
     tool_defs: &[ToolDefinition],
     messages: &[Message],
     max_tokens: u64,
+    reasoning: Option<&str>,
     events: &EventSink<'_>,
     base_url: &str,
 ) -> anyhow::Result<LlmResponse> {
@@ -345,6 +376,9 @@ pub(crate) async fn openai_stream(
     if !tools.is_empty() {
         body["tools"] = serde_json::Value::Array(tools);
     }
+    if let Some(effort) = reasoning {
+        body["reasoning"] = serde_json::json!({"effort": effort});
+    }
 
     let resp = http
         .post(&format!("{base_url}/v1/responses"))
@@ -356,12 +390,9 @@ pub(crate) async fn openai_stream(
 
     if !resp.status().is_success() {
         let status = resp.status();
+        let retry_after = retry_after(resp.headers());
         let text = resp.text().await.unwrap_or_default();
-        return Err(LlmError::Http {
-            status: status.as_u16(),
-            message: crate::services::tools::redact_secrets(&text),
-        }
-        .into());
+        return Err(openai_error(status.as_u16(), retry_after, &text).into());
     }
 
     let mut text = String::new();
@@ -578,14 +609,32 @@ pub(crate) async fn openai_stream(
     })
 }
 
-pub(super) const CAPABILITIES: Capabilities = Capabilities {
+const CAPABILITIES: Capabilities = Capabilities {
     vision: true,
     documents: false,
     tools: true,
     streaming: true,
     reasoning_controls: false,
     model_discovery: false,
+    token_counting: false,
 };
+
+/// `reasoning.effort` is a Responses API parameter only reasoning models
+/// accept: the GPT-5 family and the o-series. Other models answer it with
+/// a 400, so the contract refuses it for them before the network.
+fn supports_reasoning(model: &str) -> bool {
+    let model = model.trim().to_ascii_lowercase();
+    model.starts_with("gpt-5")
+        || (model.starts_with('o') && model[1..].starts_with(|c: char| c.is_ascii_digit()))
+}
+
+/// What the Responses API offers for one model id.
+pub(super) fn capabilities_for(model: &str) -> Capabilities {
+    Capabilities {
+        reasoning_controls: supports_reasoning(model),
+        ..CAPABILITIES
+    }
+}
 
 /// The transport implementation is private to this adapter.
 ///
@@ -595,7 +644,7 @@ pub(super) const CAPABILITIES: Capabilities = Capabilities {
 pub(super) struct OpenaiAdapter(pub LlmBackend);
 impl ProviderAdapter for OpenaiAdapter {
     fn capabilities(&self) -> Capabilities {
-        CAPABILITIES
+        capabilities_for(&self.0.model)
     }
     fn complete<'a>(
         &'a self,
@@ -607,7 +656,7 @@ impl ProviderAdapter for OpenaiAdapter {
             tokio::select! {
                 biased;
                 _ = request.cancellation.cancelled() => Err(LlmError::Cancelled),
-                result = openai_complete(&b.http, &b.api_key, &b.model, request.system, request.tools, request.messages, request.max_tokens, &b.base_url, request.json_schema) => result.map_err(LlmError::from),
+                result = openai_complete(&b.http, &b.api_key, &b.model, request.system, request.tools, request.messages, request.max_tokens, request.reasoning, &b.base_url, request.json_schema) => result.map_err(LlmError::from),
             }
         })
     }
@@ -622,7 +671,7 @@ impl ProviderAdapter for OpenaiAdapter {
             tokio::select! {
                 biased;
                 _ = request.cancellation.cancelled() => Err(LlmError::Cancelled),
-                result = openai_stream(&b.http, &b.api_key, &b.model, request.system, request.tools, request.messages, request.max_tokens, events, &b.base_url) => result.map_err(LlmError::from),
+                result = openai_stream(&b.http, &b.api_key, &b.model, request.system, request.tools, request.messages, request.max_tokens, request.reasoning, events, &b.base_url) => result.map_err(LlmError::from),
             }
         })
     }

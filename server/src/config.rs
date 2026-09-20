@@ -462,6 +462,11 @@ pub struct LlmConfig {
     pub background_preset: String,
     #[serde(flatten)]
     pub extra: std::collections::BTreeMap<String, toml::Value>,
+    /// The `provider` a config from before presets (#157) named. Read on
+    /// load so `seed_for_keys` puts that provider in the slots; never
+    /// written back.
+    #[serde(skip)]
+    retired_provider: Option<LlmProvider>,
 }
 
 /// `[llm]` keys from the tiered-model era. Dropped on load and on save.
@@ -489,6 +494,11 @@ struct RawLlmConfig {
 
 impl From<RawLlmConfig> for LlmConfig {
     fn from(mut raw: RawLlmConfig) -> Self {
+        let retired_provider = raw
+            .extra
+            .get("provider")
+            .and_then(toml::Value::as_str)
+            .and_then(LlmProvider::parse);
         for key in RETIRED_LLM_KEYS {
             raw.extra.remove(*key);
         }
@@ -498,6 +508,7 @@ impl From<RawLlmConfig> for LlmConfig {
             chat_preset: raw.chat_preset,
             background_preset: raw.background_preset,
             extra: raw.extra,
+            retired_provider,
         }
     }
 }
@@ -645,6 +656,30 @@ impl LlmConfig {
         added
     }
 
+    /// Configs written before presets existed (#157) carry a key and no
+    /// `[[llm.presets]]`. Seeding the keyed providers' defaults on load keeps
+    /// those installs working without a click; presets a user has written
+    /// or edited are never touched. The provider such a config named fills
+    /// the slots when it has a key, so an OpenAI user stays on OpenAI (#25).
+    /// Returns how many presets were added.
+    pub fn seed_for_keys(&mut self) -> usize {
+        if !self.presets.is_empty() {
+            return 0;
+        }
+        let mut providers = self.keyed_providers();
+        if let Some(named) = self
+            .retired_provider
+            .and_then(|named| providers.iter().position(|p| *p == named))
+        {
+            let named = providers.remove(named);
+            providers.insert(0, named);
+        }
+        providers
+            .into_iter()
+            .map(|provider| self.seed_presets(provider))
+            .sum()
+    }
+
     /// Reject shapes the UI must never save: empty or duplicate ids, empty
     /// names or models, and slots that point nowhere or at a provider with
     /// no key.
@@ -693,11 +728,6 @@ impl LlmConfig {
         Ok(())
     }
 
-    /// The Anthropic API key, or None if not configured.
-    pub fn api_key(&self) -> Option<&str> {
-        self.key_for(LlmProvider::Anthropic)
-    }
-
     /// List of service names that have API keys set.
     pub fn configured_providers(&self) -> Vec<&'static str> {
         let mut out = Vec::new();
@@ -715,16 +745,6 @@ impl LlmConfig {
         }
         out
     }
-
-    /// Anthropic API key + the chat model, for the count_tokens API. None
-    /// when chat runs on another provider.
-    pub fn anthropic_credentials(&self) -> Option<(&str, &str)> {
-        let chat = self.chat_preset()?;
-        if chat.provider != LlmProvider::Anthropic {
-            return None;
-        }
-        Some((self.api_key()?, chat.model.as_str()))
-    }
 }
 
 impl Default for LlmConfig {
@@ -735,6 +755,7 @@ impl Default for LlmConfig {
             chat_preset: String::new(),
             background_preset: String::new(),
             extra: Default::default(),
+            retired_provider: None,
         };
         config.seed_presets(LlmProvider::default());
         config
@@ -991,6 +1012,11 @@ pub fn load_config() -> anyhow::Result<Config> {
     }
 
     apply_public_url_default(&mut config);
+    // Installs from before presets (#157): a key without [[llm.presets]].
+    let seeded = config.llm.seed_for_keys();
+    if seeded > 0 {
+        log::info!("seeded {seeded} default model presets for the configured provider keys");
+    }
 
     Ok(config)
 }
@@ -1314,6 +1340,76 @@ custom_token = "retained"
         assert_eq!(roundtrip.llm.presets, config.llm.presets);
     }
 
+    /// Upgrade path (#25): a config from before presets carries a key and no
+    /// `[[llm.presets]]`; loading seeds that provider instead of asking the
+    /// person to click "Add defaults".
+    #[test]
+    fn keys_without_presets_are_seeded_on_load_and_written_presets_are_kept() {
+        let mut config: Config = toml::from_str("[llm]\n[llm.tokens]\nOPEN_AI='k'").unwrap();
+        assert!(config.llm.presets.is_empty());
+        assert_eq!(config.llm.seed_for_keys(), 2);
+        assert_eq!(config.llm.chat_preset, "gpt");
+        assert_eq!(config.llm.background_preset, "gpt-mini");
+        assert!(config.llm.is_configured());
+        assert_eq!(config.llm.setup_required(), None);
+        assert_eq!(config.llm.seed_for_keys(), 0, "seeding is idempotent");
+
+        // Both keys: every keyed provider gets its presets, and Anthropic,
+        // the default provider, fills the slots.
+        let mut both: Config =
+            toml::from_str("[llm]\n[llm.tokens]\nOPEN_AI='k'\nANTHROPIC='a'").unwrap();
+        assert_eq!(both.llm.seed_for_keys(), 5);
+        assert_eq!(both.llm.chat_preset, "sonnet");
+        assert!(both.llm.is_configured());
+
+        // A config from before presets named its provider (`provider =`,
+        // retired since). An OpenAI user with both keys stays on OpenAI.
+        let mut openai_user: Config =
+            toml::from_str("[llm]\nprovider='openai'\n[llm.tokens]\nOPEN_AI='k'\nANTHROPIC='a'")
+                .unwrap();
+        assert_eq!(openai_user.llm.seed_for_keys(), 5);
+        assert_eq!(openai_user.llm.chat_preset, "gpt");
+        assert_eq!(openai_user.llm.background_preset, "gpt-mini");
+        assert!(
+            !openai_user.llm.extra.contains_key("provider"),
+            "the retired key must not be written back"
+        );
+        let serialized: toml::Value =
+            toml::from_str(&toml::to_string(&openai_user).unwrap()).unwrap();
+        assert!(serialized["llm"].get("provider").is_none());
+
+        // The legacy spellings of the Anthropic provider still mean Anthropic.
+        let mut api_user: Config =
+            toml::from_str("[llm]\nprovider='api'\n[llm.tokens]\nOPEN_AI='k'\nANTHROPIC='a'")
+                .unwrap();
+        assert_eq!(api_user.llm.seed_for_keys(), 5);
+        assert_eq!(api_user.llm.chat_preset, "sonnet");
+
+        // A named provider without a key cannot fill the slots: the keyed
+        // provider does, and the person is not stuck at setup.
+        let mut unkeyed: Config =
+            toml::from_str("[llm]\nprovider='openai'\n[llm.tokens]\nANTHROPIC='a'").unwrap();
+        assert_eq!(unkeyed.llm.seed_for_keys(), 3);
+        assert_eq!(unkeyed.llm.chat_preset, "sonnet");
+        assert!(unkeyed.llm.is_configured());
+
+        // No provider key: nothing to seed, setup is still required.
+        let mut none: Config = toml::from_str("[llm]\n[llm.tokens]\nBRAVE_SEARCH='b'").unwrap();
+        assert_eq!(none.llm.seed_for_keys(), 0);
+        assert!(none.llm.presets.is_empty());
+        assert!(none.llm.setup_required().is_some());
+
+        // Presets a person wrote are never touched, even when another keyed
+        // provider has none.
+        let mut custom: Config = toml::from_str(
+            "[llm]\nchat_preset='mine'\nbackground_preset='mine'\n[llm.tokens]\nOPEN_AI='k'\nANTHROPIC='a'\n[[llm.presets]]\nid='mine'\nname='Mine'\nprovider='openai'\nmodel='gpt-custom'",
+        )
+        .unwrap();
+        assert_eq!(custom.llm.seed_for_keys(), 0);
+        assert_eq!(custom.llm.presets.len(), 1);
+        assert_eq!(custom.llm.chat_model(), Some("gpt-custom"));
+    }
+
     #[test]
     fn empty_presets_report_setup_and_seeding_fills_missing_without_duplicates() {
         let mut config: Config = toml::from_str("[llm]\n[llm.tokens]\nOPEN_AI='o'").unwrap();
@@ -1354,16 +1450,8 @@ custom_token = "retained"
             config.llm.background_preset().unwrap().model,
             "claude-haiku-4-5-20251001"
         );
-        assert_eq!(
-            config.llm.anthropic_credentials(),
-            None,
-            "chat is on OpenAI"
-        );
         config.llm.chat_preset = "opus".into();
-        assert_eq!(
-            config.llm.anthropic_credentials(),
-            Some(("a", "claude-opus-4-6"))
-        );
+        assert_eq!(config.llm.chat_model(), Some("claude-opus-4-6"));
         // A dangling background slot is reported, never silently replaced by chat.
         config.llm.background_preset = "gone".into();
         assert!(config.llm.background_preset().is_none());
