@@ -11,8 +11,12 @@
 //! events emitted before the answer and `then` events after it; `delay_ms`
 //! before answering; `exit` to die without answering; `ask` to send the
 //! client a request and answer only once the client answered that; `raw`
-//! to write a verbatim line with `$ID` replaced by the request id. Other
-//! lines are comments. Requests are served concurrently, so answers come
+//! to write a verbatim line with `$ID` replaced by the request id; `stdin`
+//! to stop serving stdin after this request while stdout stays open, the
+//! way a wedged app-server does: `ignore` leaves the pipe unread so the
+//! client's writes block once it is full, `close` closes the read end so
+//! they fail at once. Other lines are comments. Requests are served
+//! concurrently, so answers come
 //! back out of order like the real app-server's do. `initialize` must come
 //! first (`-32600 Not initialized` otherwise) and an unscripted method is
 //! `-32600 Invalid request: unknown variant`, the live error shapes.
@@ -132,6 +136,8 @@ struct Entry {
     ask: Option<Ask>,
     #[serde(default)]
     raw: Option<String>,
+    #[serde(default)]
+    stdin: Option<String>,
 }
 
 fn load(fixture: &Path) -> HashMap<String, Entry> {
@@ -237,6 +243,25 @@ fn handle(
     }
 }
 
+/// Stop serving stdin but stay alive with stdout open, like an app-server
+/// that wedged: `ignore` leaves the pipe unread, `close` closes the read
+/// end as well. Runs on the reader thread, so no read is in flight.
+fn stop_reading(how: &str) -> ! {
+    if how == "close" {
+        #[cfg(unix)]
+        {
+            use std::os::fd::FromRawFd as _;
+            // SAFETY: fd 0 is this process's stdin; the only reader is this
+            // thread, which reads no more, so closing it here closes the
+            // pipe's last read end.
+            drop(unsafe { std::fs::File::from_raw_fd(0) });
+        }
+    }
+    loop {
+        thread::sleep(Duration::from_secs(60));
+    }
+}
+
 fn serve(fixture: &Path) -> ! {
     if let Some(pid_file) = std::env::var_os(PID_FILE_ENV) {
         let mut file = std::fs::OpenOptions::new()
@@ -276,9 +301,13 @@ fn serve(fixture: &Path) -> ! {
         match (method, id) {
             (Some(method), Some(id)) => {
                 let params = frame.remove("params").unwrap_or(Value::Object(Map::new()));
+                let stdin_after = script.get(&method).and_then(|entry| entry.stdin.clone());
                 let (script, initialized, asks) =
                     (script.clone(), initialized.clone(), asks.clone());
                 thread::spawn(move || handle(script, initialized, asks, id, method, params));
+                if let Some(how) = stdin_after {
+                    stop_reading(&how);
+                }
             }
             (Some(_notification), None) => {}
             (None, Some(id)) => {

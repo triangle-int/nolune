@@ -36,9 +36,13 @@ The protocol is experimental, so it is pinned:
 The supervisor keeps exactly one child. It completes the `initialize`
 handshake within a deadline, matches answers to requests by id, streams
 notifications (turn items, message deltas) to subscribers, and forwards
-`turn/interrupt`. A child that crashes fails the requests in flight with a
-transport error and is started again on the next request after a bounded
-exponential backoff; shutting the gateway down kills the child. Nothing in
+`turn/interrupt`. Every exchange, the write included, is held to one
+deadline. A child that crashes, or that stops reading its input while it
+keeps its output open, fails the requests in flight with a transport error
+and is started again on the next request after a bounded exponential
+backoff; a request the app-server sends while nobody is listening for it is
+refused rather than left waiting; shutting the gateway down kills the
+child. Nothing in
 codex's own tool surface (shell, file edits, MCP servers) is exposed: only
 tools from Nolune's capability and approval layer will run, once the
 provider adapter lands.

@@ -3,11 +3,15 @@
 //! [`AppServer`] owns at most one child at a time. It completes the
 //! `initialize` handshake within a deadline, correlates answers to requests
 //! by id (the app-server answers out of order), hands notifications and the
-//! app-server's own requests to every subscriber, and when the child dies
-//! it fails what was pending with a typed error and starts a fresh child on
-//! the next request, after a bounded exponential backoff. `close` kills the
-//! child and refuses restarts; dropping the last handle kills it too, so no
-//! child outlives the gateway.
+//! app-server's own requests to every subscriber (and refuses a request
+//! nobody is listening for, so a turn never waits on an answer that cannot
+//! come), and when the child dies it fails what was pending with a typed
+//! error and starts a fresh child on the next request, after a bounded
+//! exponential backoff. Every exchange is held to one deadline that covers
+//! the write as well as the wait: a child that keeps stdout open but stops
+//! reading stdin is killed, not waited for. `close` kills the child and
+//! refuses restarts; dropping the last handle kills it too, so no child
+//! outlives the gateway.
 //!
 //! The child is owned by its pump task, which reads stdout until end of
 //! file, kills the child when told to stop or when the last handle is
@@ -20,16 +24,17 @@ use std::{
     path::{Path, PathBuf},
     process::Stdio,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, Weak,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use serde_json::{Value, json};
 use tokio::{
     io::{AsyncBufReadExt as _, AsyncWriteExt as _},
     sync::{broadcast, oneshot, watch},
+    time::Instant,
 };
 
 use super::{
@@ -53,13 +58,19 @@ const EXIT_GRACE: Duration = Duration::from_secs(2);
 ///
 /// Without them a binary that never speaks the protocol (a wrapper script,
 /// the wrong build) wedges the handshake, and a request the app-server
-/// never answers wedges its caller, silently and forever.
+/// never answers, or never reads, wedges its caller, silently and forever.
+/// Each deadline covers the write too: a frame larger than the pipe buffer
+/// to a child that stopped reading stdin would otherwise block its writer,
+/// and behind it every other writer, for as long as stdout stays open.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Timeouts {
-    /// How long a fresh child may take to answer `initialize`.
+    /// How long a fresh child may take to read and answer `initialize` and
+    /// read `initialized`.
     pub handshake: Duration,
-    /// How long one request may wait for its answer. Turn output streams
-    /// as notifications, so a request is only ever a short exchange.
+    /// How long one request may take to be written and answered. Turn
+    /// output streams as notifications, so a request is only ever a short
+    /// exchange. A notification or an answer to the app-server gets the
+    /// same bound on its write.
     pub request: Duration,
 }
 
@@ -149,7 +160,12 @@ pub enum Incoming {
     /// A streamed event.
     Notification { method: String, params: Value },
     /// A request the app-server sent; answer it with
-    /// [`AppServer::respond`] and the same `id`.
+    /// [`AppServer::respond`] and the same `id`. The app-server waits for
+    /// that answer for as long as it takes, so a subscriber that fell
+    /// behind (`RecvError::Lagged`) may have missed one and must not carry
+    /// on as if the turn were healthy: interrupt the turn or close the
+    /// supervisor. When nobody is subscribed at all, the supervisor refuses
+    /// the request itself (error `-32601`) rather than let the turn wait.
     Request {
         id: Value,
         method: String,
@@ -288,14 +304,27 @@ impl Shared {
         self.exit.send_replace(Some(reason));
         self.pending.lock().unwrap().clear();
     }
+
+    /// `codex app-server (pid N) <what happened>`: every reason a child is
+    /// gone is phrased the same way, whoever established it.
+    fn describe(&self, what_happened: &str) -> String {
+        format!("codex app-server (pid {}) {what_happened}", self.pid)
+    }
 }
 
 /// One live child: where to write, and what the pump shares.
 struct Connection {
     shared: Arc<Shared>,
     stdin: tokio::sync::Mutex<tokio::process::ChildStdin>,
-    /// `true`, or dropped, makes the pump kill the child.
-    stop: watch::Sender<bool>,
+    /// `Some(why)`, or dropped, makes the pump kill the child; the first
+    /// reason given is the one reported.
+    stop: watch::Sender<Option<String>>,
+}
+
+/// A request the app-server sent that no subscriber received.
+struct Unheard {
+    id: Value,
+    method: String,
 }
 
 impl Connection {
@@ -339,22 +368,33 @@ impl Connection {
             exit: watch::Sender::new(None),
             stderr,
         });
-        let (stop, stopped) = watch::channel(false);
-        tokio::spawn(pump(child, stdout, shared.clone(), events.clone(), stopped));
+        let (stop, stopped) = watch::channel(None);
         let connection = Arc::new(Self {
-            shared,
+            shared: shared.clone(),
             stdin: tokio::sync::Mutex::new(stdin),
             stop,
         });
+        tokio::spawn(pump(
+            child,
+            stdout,
+            shared,
+            Arc::downgrade(&connection),
+            events.clone(),
+            stopped,
+            launch.timeouts.request,
+        ));
 
+        // One deadline for the whole handshake: the `initialize` exchange
+        // and the `initialized` notification that completes it.
         let handshake = launch.timeouts.handshake;
+        let due = Instant::now() + handshake;
         let hello = connection
-            .request(next_id, INITIALIZE, initialize_params(), handshake)
+            .request_by(next_id, INITIALIZE, initialize_params(), handshake, due)
             .await;
         let hello = match hello {
             Ok(hello) => hello,
             Err(AppServerError::Timeout { .. }) => {
-                connection.stop();
+                connection.stop("was killed after the handshake failed");
                 return Err(AppServerError::Handshake(format!(
                     "{} did not answer initialize within {handshake:?}{}",
                     launch.command_line(),
@@ -362,15 +402,15 @@ impl Connection {
                 )));
             }
             Err(error) => {
-                connection.stop();
+                connection.stop("was killed after the handshake failed");
                 return Err(AppServerError::Handshake(error.to_string()));
             }
         };
         if let Err(error) = connection
-            .notify(INITIALIZED, Value::Object(Default::default()))
+            .notify(INITIALIZED, Value::Object(Default::default()), due)
             .await
         {
-            connection.stop();
+            connection.stop("was killed after the handshake failed");
             return Err(AppServerError::Handshake(error.to_string()));
         }
         log::info!(
@@ -383,34 +423,68 @@ impl Connection {
         Ok(connection)
     }
 
-    /// Ask the pump to kill the child. Harmless when it already ended.
-    fn stop(&self) {
-        self.stop.send_replace(true);
+    /// Ask the pump to kill the child, for this reason. Harmless when it
+    /// already ended; a second reason does not replace the first.
+    fn stop(&self, why: &str) {
+        self.stop.send_if_modified(|current| {
+            if current.is_some() {
+                return false;
+            }
+            *current = Some(why.to_owned());
+            true
+        });
     }
 
-    /// Write one line; a child that is not reading is reported as gone,
-    /// with the pump's reason once it has one.
-    async fn send(&self, line: String) -> Result<(), AppServerError> {
-        let mut stdin = self.stdin.lock().await;
-        let written = async {
+    /// Why nothing may be sent to this child any more: the pump's reason
+    /// once it reaped the child, or the kill that is on its way to it.
+    fn gone_reason(&self) -> Option<String> {
+        self.shared.exit_reason().or_else(|| {
+            self.stop
+                .borrow()
+                .as_deref()
+                .map(|why| self.shared.describe(why))
+        })
+    }
+
+    /// Write one line by `due`. A child that is not reading is gone: the
+    /// pump says why when it reaped the child (the write failed because it
+    /// died), and otherwise the child is killed. Whatever was half-written
+    /// is no frame, and a child that keeps stdout open while it ignores
+    /// stdin would hold every writer behind this one for good.
+    async fn send(&self, line: String, what: &str, due: Instant) -> Result<(), AppServerError> {
+        let written = tokio::time::timeout_at(due, async {
+            let mut stdin = self.stdin.lock().await;
             stdin.write_all(line.as_bytes()).await?;
             stdin.flush().await
-        }
+        })
         .await;
-        drop(stdin);
-        match written {
-            Ok(()) => Ok(()),
-            Err(error) => Err(AppServerError::Exited(
-                self.shared.exit_reason_soon().await.unwrap_or_else(|| {
-                    format!(
-                        "codex app-server (pid {}) is not reading: {error}",
-                        self.shared.pid
-                    )
-                }),
-            )),
-        }
+        let reason = match written {
+            Ok(Ok(())) => return Ok(()),
+            Ok(Err(error)) => match self.shared.exit_reason_soon().await {
+                Some(reason) => reason,
+                None => self.kill(&format!(
+                    "was killed because it stopped reading stdin: {error}"
+                )),
+            },
+            Err(_elapsed) => match self.shared.exit_reason() {
+                Some(reason) => reason,
+                None => self.kill(&format!(
+                    "was killed because it did not read {what} in time"
+                )),
+            },
+        };
+        Err(AppServerError::Exited(reason))
     }
 
+    /// Kill the child for this reason and return the reason as reported.
+    fn kill(&self, why: &str) -> String {
+        log::warn!("[codex] {}", self.shared.describe(why));
+        self.stop(why);
+        self.gone_reason()
+            .unwrap_or_else(|| self.shared.describe(why))
+    }
+
+    /// Send `method` and wait for its answer, all within `deadline`.
     async fn request(
         &self,
         next_id: &AtomicU64,
@@ -418,7 +492,21 @@ impl Connection {
         params: Value,
         deadline: Duration,
     ) -> Result<Value, AppServerError> {
-        if let Some(reason) = self.shared.exit_reason() {
+        self.request_by(next_id, method, params, deadline, Instant::now() + deadline)
+            .await
+    }
+
+    /// Send `method` and wait for its answer, both by `due`; `deadline` is
+    /// how long that was, for the error.
+    async fn request_by(
+        &self,
+        next_id: &AtomicU64,
+        method: &str,
+        params: Value,
+        deadline: Duration,
+        due: Instant,
+    ) -> Result<Value, AppServerError> {
+        if let Some(reason) = self.gone_reason() {
             return Err(AppServerError::Exited(reason));
         }
         let id = next_id.fetch_add(1, Ordering::Relaxed) + 1;
@@ -430,11 +518,14 @@ impl Connection {
             self.shared.pending.lock().unwrap().remove(&id);
             return Err(AppServerError::Exited(reason));
         }
-        if let Err(error) = self.send(protocol::request_line(id, method, params)).await {
+        if let Err(error) = self
+            .send(protocol::request_line(id, method, params), method, due)
+            .await
+        {
             self.shared.pending.lock().unwrap().remove(&id);
             return Err(error);
         }
-        match tokio::time::timeout(deadline, waiting).await {
+        match tokio::time::timeout_at(due, waiting).await {
             Ok(Ok(outcome)) => outcome,
             Ok(Err(_dropped)) => Err(AppServerError::Exited(
                 self.shared
@@ -451,24 +542,35 @@ impl Connection {
         }
     }
 
-    async fn notify(&self, method: &str, params: Value) -> Result<(), AppServerError> {
-        self.send(protocol::notification_line(method, params)).await
+    async fn notify(
+        &self,
+        method: &str,
+        params: Value,
+        due: Instant,
+    ) -> Result<(), AppServerError> {
+        self.send(protocol::notification_line(method, params), method, due)
+            .await
     }
 
     async fn respond(
         &self,
         id: &Value,
         outcome: Result<Value, RpcError>,
+        due: Instant,
     ) -> Result<(), AppServerError> {
-        self.send(protocol::response_line(id, outcome)).await
+        let what = format!("the answer to its request {id}");
+        self.send(protocol::response_line(id, outcome), &what, due)
+            .await
     }
 }
 
 /// Route one line the child wrote: answers to their requests, everything
 /// else to the subscribers. A line that is not JSON is chatter (the test
 /// harness prints some; codex prints none), a JSON object that is not a
-/// frame fails the request it was for, when it names one.
-fn dispatch(line: &str, shared: &Shared, events: &broadcast::Sender<Incoming>) {
+/// frame fails the request it was for, when it names one. A request from
+/// the app-server that no subscriber received is returned, for the caller
+/// to refuse: the app-server would wait for its answer forever.
+fn dispatch(line: &str, shared: &Shared, events: &broadcast::Sender<Incoming>) -> Option<Unheard> {
     match protocol::parse_frame(line) {
         Ok(Frame::Response { id, outcome }) => match shared.pending.lock().unwrap().remove(&id) {
             Some(waiting) => {
@@ -480,7 +582,14 @@ fn dispatch(line: &str, shared: &Shared, events: &broadcast::Sender<Incoming>) {
             let _ = events.send(Incoming::Notification { method, params });
         }
         Ok(Frame::Request { id, method, params }) => {
-            let _ = events.send(Incoming::Request { id, method, params });
+            let heard = events.send(Incoming::Request {
+                id: id.clone(),
+                method: method.clone(),
+                params,
+            });
+            if heard.is_err() {
+                return Some(Unheard { id, method });
+            }
         }
         Err(FrameError::NotJson(_)) => log::debug!("[codex] app-server stdout: {line}"),
         Err(FrameError::Shape(why)) => {
@@ -496,23 +605,36 @@ fn dispatch(line: &str, shared: &Shared, events: &broadcast::Sender<Incoming>) {
             }
         }
     }
+    None
 }
 
 /// Own the child: read its stdout until end of file or a stop, then reap
-/// it, fail what was pending and tell the subscribers.
+/// it, fail what was pending and tell the subscribers. A request from the
+/// app-server that nobody received is refused from a task of its own: the
+/// pump must keep reading stdout while that answer is written, or a child
+/// blocked on a full stdout and a pump blocked on a full stdin would wait
+/// for each other.
 async fn pump(
     mut child: tokio::process::Child,
     stdout: tokio::process::ChildStdout,
     shared: Arc<Shared>,
+    writer: Weak<Connection>,
     events: broadcast::Sender<Incoming>,
-    mut stopped: watch::Receiver<bool>,
+    mut stopped: watch::Receiver<Option<String>>,
+    write_deadline: Duration,
 ) {
     let mut lines = tokio::io::BufReader::new(stdout).lines();
-    let mut killed = false;
+    let mut killed = None;
     loop {
         tokio::select! {
             line = lines.next_line() => match line {
-                Ok(Some(line)) => dispatch(&line, &shared, &events),
+                Ok(Some(line)) => {
+                    if let Some(unheard) = dispatch(&line, &shared, &events)
+                        && let Some(connection) = writer.upgrade()
+                    {
+                        tokio::spawn(refuse(connection, unheard, write_deadline));
+                    }
+                }
                 Ok(None) => break,
                 Err(error) => {
                     log::warn!("[codex] app-server stdout: {error}");
@@ -521,8 +643,12 @@ async fn pump(
             },
             changed = stopped.changed() => {
                 // A stop, or the last handle dropped (`changed` is Err then).
-                if changed.is_err() || *stopped.borrow() {
-                    killed = true;
+                let why = match changed {
+                    Ok(()) => stopped.borrow_and_update().clone(),
+                    Err(_dropped) => Some("was stopped".to_owned()),
+                };
+                if let Some(why) = why {
+                    killed = Some(why);
                     let _ = child.start_kill();
                     break;
                 }
@@ -538,24 +664,46 @@ async fn pump(
             child.wait().await.ok()
         }
     };
-    let pid = shared.pid;
-    let reason = if killed {
-        log::info!("[codex] app-server stopped: pid {pid}");
-        format!("codex app-server (pid {pid}) was stopped")
-    } else {
-        let status = status.map_or("an unknown status".to_owned(), |status| status.to_string());
-        let reason = format!(
-            "codex app-server (pid {pid}) exited with {status}{}",
-            shared.stderr.suffix().await
-        );
-        log::warn!("[codex] {reason}");
-        reason
+    let reason = match killed {
+        Some(why) => {
+            let reason = shared.describe(&why);
+            log::info!("[codex] {reason}");
+            reason
+        }
+        None => {
+            let status = status.map_or("an unknown status".to_owned(), |status| status.to_string());
+            let reason = shared.describe(&format!(
+                "exited with {status}{}",
+                shared.stderr.suffix().await
+            ));
+            log::warn!("[codex] {reason}");
+            reason
+        }
     };
     shared.exited(reason.clone());
     let _ = events.send(Incoming::Exited {
         generation: shared.generation,
         reason,
     });
+}
+
+/// Answer a request from the app-server that no subscriber received with
+/// an error, so the turn it belongs to fails instead of waiting for an
+/// answer that cannot come.
+async fn refuse(connection: Arc<Connection>, unheard: Unheard, write_deadline: Duration) {
+    let Unheard { id, method } = unheard;
+    log::warn!(
+        "[codex] nobody is subscribed to answer the app-server's {method} request {id}: refusing it"
+    );
+    let refusal = RpcError {
+        code: -32601,
+        message: format!("nolune has no handler listening for {method}"),
+        data: None,
+    };
+    let due = Instant::now() + write_deadline;
+    if let Err(error) = connection.respond(&id, Err(refusal), due).await {
+        log::warn!("[codex] could not refuse the app-server's {method} request {id}: {error}");
+    }
 }
 
 struct State {
@@ -615,7 +763,7 @@ impl AppServer {
         Ok(state
             .connection
             .clone()
-            .filter(|connection| !connection.shared.is_gone()))
+            .filter(|connection| connection.gone_reason().is_none()))
     }
 
     /// The live child, or why there is none right now. Nothing is started:
@@ -627,7 +775,7 @@ impl AppServer {
             return Err(AppServerError::Closed);
         }
         match &state.connection {
-            Some(connection) => match connection.shared.exit_reason() {
+            Some(connection) => match connection.gone_reason() {
                 None => Ok(connection.clone()),
                 Some(reason) => Err(AppServerError::Exited(reason)),
             },
@@ -685,7 +833,7 @@ impl AppServer {
             let mut state = self.inner.state.lock().unwrap();
             // Closed while the child was starting: it must not outlive that.
             if state.closed {
-                connection.stop();
+                connection.stop("was stopped");
                 return Err(AppServerError::Closed);
             }
             state.generation = generation;
@@ -713,9 +861,9 @@ impl AppServer {
     }
 
     /// Send a notification to the live child; there is no child to start
-    /// for one.
+    /// for one. The write is held to the request deadline.
     pub async fn notify(&self, method: &str, params: Value) -> Result<(), AppServerError> {
-        self.current()?.notify(method, params).await
+        self.current()?.notify(method, params, self.due()).await
     }
 
     /// Answer a request the app-server sent ([`Incoming::Request`]). A
@@ -726,10 +874,19 @@ impl AppServer {
         id: &Value,
         outcome: Result<Value, RpcError>,
     ) -> Result<(), AppServerError> {
-        self.current()?.respond(id, outcome).await
+        self.current()?.respond(id, outcome, self.due()).await
     }
 
-    /// Listen to what the child says from now on.
+    /// When a write started now must be done by.
+    fn due(&self) -> Instant {
+        Instant::now() + self.inner.launch.timeouts.request
+    }
+
+    /// Listen to what the child says from now on. The channel keeps the
+    /// last [`EVENT_BUFFER`] events for a subscriber that falls behind; one
+    /// that is told it lagged may have missed an [`Incoming::Request`] the
+    /// app-server is still waiting on, and must interrupt the turn or close
+    /// the supervisor rather than carry on.
     pub fn subscribe(&self) -> broadcast::Receiver<Incoming> {
         self.inner.events.subscribe()
     }
@@ -760,7 +917,7 @@ impl AppServer {
             state.connection.take()
         };
         if let Some(connection) = connection {
-            connection.stop();
+            connection.stop("was stopped");
         }
     }
 }
@@ -1018,7 +1175,10 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("handshake"), "{message}");
         assert!(message.contains("run `codex login` first"), "{message}");
-        assert!(message.contains("3"), "the exit status is named: {message}");
+        assert!(
+            message.contains("exit status: 3"),
+            "the exit status is named: {message}"
+        );
     }
 
     #[cfg(unix)]
@@ -1132,6 +1292,35 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn a_request_from_the_app_server_nobody_listens_for_is_refused_not_left_hanging() {
+        // No subscriber at all: the app-server's question would otherwise
+        // wait forever for an answer (the fake gives up after 10 s, codex
+        // never does).
+        let server = start(None).await;
+        let started = Instant::now();
+        let answer = server.request("fake/ask", json!({})).await.unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "refused at once, not after the fake gave up: took {:?}",
+            started.elapsed()
+        );
+        assert_eq!(answer["refused"]["code"], -32601, "{answer}");
+        let message = answer["refused"]["message"].as_str().unwrap();
+        assert!(message.contains("item/tool/call"), "{message}");
+        // The child served the refusal and still serves.
+        assert_eq!(server.generation(), 1);
+        assert_eq!(
+            server
+                .request("fake/echo", json!({"after": true}))
+                .await
+                .unwrap(),
+            json!({"after": true})
+        );
+        server.close();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn a_crash_fails_the_pending_request_and_the_next_request_restarts_one_child() {
         let dir = tempfile::tempdir().unwrap();
         let pid_file = dir.path().join("pids");
@@ -1141,7 +1330,7 @@ mod tests {
 
         let error = server.request("fake/crash", json!({})).await.unwrap_err();
         assert!(
-            matches!(&error, AppServerError::Exited(reason) if reason.contains("3")),
+            matches!(&error, AppServerError::Exited(reason) if reason.contains("exit status: 3")),
             "the exit status is named: {error:?}"
         );
         assert!(matches!(LlmError::from(error), LlmError::Transport(_)));
@@ -1194,8 +1383,8 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(&refused, AppServerError::Exited(reason) if reason.contains("3")),
-            "{refused:?}"
+            matches!(&refused, AppServerError::Exited(reason) if reason.contains("exit status: 3")),
+            "the exit status is named: {refused:?}"
         );
         let refused = server.notify("initialized", json!({})).await.unwrap_err();
         assert!(matches!(refused, AppServerError::Exited(_)), "{refused:?}");
@@ -1274,6 +1463,118 @@ mod tests {
             server.request("fake/echo", json!({"ok": 1})).await.unwrap(),
             json!({"ok": 1})
         );
+        server.close();
+    }
+
+    /// A frame no pipe buffer holds, so a write to a child that is not
+    /// reading cannot complete: a `turn/start` with a long history and the
+    /// tool definitions is this large.
+    fn oversized_params() -> Value {
+        json!({"blob": "x".repeat(1 << 20)})
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_child_that_stops_reading_stdin_is_killed_within_the_deadline_and_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pids");
+        let mut launch = fake::launch(Some(&pid_file));
+        launch.timeouts.request = Duration::from_millis(500);
+        let server = AppServer::start(launch).await.unwrap();
+        let first = server.pid().unwrap();
+        let mut events = server.subscribe();
+        // After this answer the fake never reads stdin again; stdout stays
+        // open, so the pump sees nothing wrong.
+        server.request("fake/deaf", json!({})).await.unwrap();
+
+        // The oversized write cannot complete; the interrupt queues behind
+        // it for the shared stdin. Neither may wait past its deadline.
+        let started = Instant::now();
+        let (stuck, interrupt) =
+            tokio::join!(server.request("fake/echo", oversized_params()), async {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                server
+                    .request(
+                        TURN_INTERRUPT,
+                        json!({"threadId": "thr_fixture_1", "turnId": "turn_fixture_1"}),
+                    )
+                    .await
+            });
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the deadline bounds the write, not only the wait: took {:?}",
+            started.elapsed()
+        );
+        let error = stuck.unwrap_err();
+        assert!(
+            matches!(&error, AppServerError::Exited(reason) if reason.contains("fake/echo") && reason.contains("killed")),
+            "{error:?}"
+        );
+        assert!(matches!(LlmError::from(error), LlmError::Transport(_)));
+        let error = interrupt.unwrap_err();
+        assert!(
+            matches!(&error, AppServerError::Exited(_)),
+            "the interrupt is not wedged behind the stuck write: {error:?}"
+        );
+
+        // The wedged child is killed, subscribers hear it, and the next
+        // request is served by a fresh one.
+        assert_gone(first).await;
+        assert!(matches!(
+            next_event(&mut events).await,
+            Incoming::Exited { generation: 1, reason } if reason.contains("killed")
+        ));
+        assert_eq!(
+            server.request("fake/echo", json!({"ok": 1})).await.unwrap(),
+            json!({"ok": 1})
+        );
+        let second = server.pid().expect("a fresh child");
+        assert_ne!(first, second);
+        assert_eq!(server.generation(), 2);
+        assert_eq!(recorded_pids(&pid_file), vec![first, second]);
+        server.close();
+        assert_gone(second).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_child_that_closes_stdin_but_keeps_stdout_open_is_killed_and_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pids");
+        let server = start(Some(&pid_file)).await;
+        let first = server.pid().unwrap();
+        let mut events = server.subscribe();
+        // The fake closes its end of stdin after this answer: the next
+        // write fails at once, while the pump has no exit to report.
+        server.request("fake/close_stdin", json!({})).await.unwrap();
+
+        let started = Instant::now();
+        let error = server
+            .request("fake/echo", json!({"ok": 1}))
+            .await
+            .unwrap_err();
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "a failed write is not held to the request deadline: took {:?}",
+            started.elapsed()
+        );
+        assert!(
+            matches!(&error, AppServerError::Exited(reason) if reason.contains("killed")),
+            "{error:?}"
+        );
+
+        // A child that refuses to read is not handed out again.
+        assert_gone(first).await;
+        assert!(matches!(
+            next_event(&mut events).await,
+            Incoming::Exited { generation: 1, .. }
+        ));
+        assert_eq!(
+            server.request("fake/echo", json!({"ok": 2})).await.unwrap(),
+            json!({"ok": 2})
+        );
+        assert_eq!(server.generation(), 2);
+        assert_eq!(recorded_pids(&pid_file).len(), 2);
         server.close();
     }
 
