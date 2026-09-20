@@ -1,9 +1,10 @@
 //! Sibling profile discovery for #107: which isolated deployments share this host, so
-//! `onboard` can pick a free port and `gateway install` can refuse to collide with one.
+//! `onboard` can pick a free port, `gateway install` can refuse to collide with one, and
+//! `uninstall` can refuse a sibling's root and warn whose service loses the shared binary.
 //!
 //! Profile names are local deployment metadata only. Nothing here reads another
-//! profile's data beyond the `port` line of its config.toml and the data root its
-//! service definition names.
+//! profile's data beyond the `port` line of its config.toml and the data root and
+//! binary its service definition names.
 
 use std::{fmt, fs, path::Path};
 
@@ -74,7 +75,7 @@ impl fmt::Display for Collision {
         match self {
             Self::DataRoot { profile, other } => write!(
                 f,
-                "profile {profile} would use the data root of profile {other}; \
+                "profile {profile} addresses the data root of profile {other}; \
                  run this command with `--profile {other}` instead"
             ),
             Self::Port {
@@ -93,6 +94,34 @@ impl fmt::Display for Collision {
             ),
         }
     }
+}
+
+/// The sibling whose data root `target` addresses, when `NOLUNE_HOME` was pointed inside
+/// another profile's root: every command that writes or removes must fail closed on it.
+pub fn foreign_root(home_dir: &Path, target: &config::Profile) -> Option<Collision> {
+    siblings(home_dir)
+        .into_iter()
+        .find(|sibling| sibling.name != target.name && sibling.root == target.root)
+        .map(|sibling| Collision::DataRoot {
+            profile: target.name.clone(),
+            other: sibling.name,
+        })
+}
+
+/// Sibling profiles whose installed service runs a binary under `target.root`, which
+/// `nolune uninstall` removes along with `bin/`: their services break at the next restart.
+pub fn dependents(home_dir: &Path, target: &config::Profile) -> Vec<String> {
+    siblings(home_dir)
+        .into_iter()
+        .filter(|sibling| sibling.name != target.name)
+        .filter(|sibling| {
+            fs::read_to_string(service::definition_path(home_dir, &sibling.name))
+                .ok()
+                .and_then(|contents| service::definition_binary(&contents))
+                .is_some_and(|binary| binary.starts_with(&target.root))
+        })
+        .map(|sibling| sibling.name)
+        .collect()
 }
 
 /// Collisions between `target` (about to be installed on `port`) and every sibling profile.
@@ -268,6 +297,58 @@ mod tests {
             message.contains("default") && message.contains("molinka"),
             "{message}"
         );
+    }
+
+    #[test]
+    fn a_foreign_root_is_found_without_a_port_or_a_definition() {
+        let (_tmp, home) = home_with(&[("default", 26559), ("molinka", 26560)]);
+        let target = config::Profile {
+            name: "default".into(),
+            root: config::profile_root(&home, "molinka"),
+        };
+
+        assert_eq!(
+            foreign_root(&home, &target),
+            Some(Collision::DataRoot {
+                profile: "default".into(),
+                other: "molinka".into(),
+            })
+        );
+        assert_eq!(foreign_root(&home, &profile(&home, "default")), None);
+        assert_eq!(foreign_root(&home, &profile(&home, "molinka")), None);
+        // A root nobody else owns is fine, whatever NOLUNE_HOME says.
+        let elsewhere = config::Profile {
+            name: "default".into(),
+            root: home.join("elsewhere"),
+        };
+        assert_eq!(foreign_root(&home, &elsewhere), None);
+    }
+
+    #[test]
+    fn dependents_are_the_siblings_whose_service_runs_a_binary_under_this_root() {
+        let (_tmp, home) = home_with(&[("default", 26559), ("molinka", 26560), ("yuki", 26561)]);
+        let shared = config::profile_root(&home, "default").join("bin/nolune");
+        for (name, binary) in [
+            ("molinka", shared.clone()),
+            ("yuki", PathBuf::from("/opt/nolune")),
+        ] {
+            let spec = service::ServiceSpec {
+                binary,
+                home: config::profile_root(&home, name),
+                profile: name.into(),
+            };
+            let contents = if cfg!(target_os = "macos") {
+                service::render_launchd_plist(&spec)
+            } else {
+                service::render_systemd_unit(&spec)
+            };
+            service::write_definition(&service::definition_path(&home, name), &contents).unwrap();
+        }
+
+        assert_eq!(dependents(&home, &profile(&home, "default")), ["molinka"]);
+        // A profile's own service is not its dependent, and roots nobody runs from have none.
+        assert!(dependents(&home, &profile(&home, "molinka")).is_empty());
+        assert!(dependents(&home, &profile(&home, "yuki")).is_empty());
     }
 
     #[test]

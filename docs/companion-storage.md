@@ -106,9 +106,16 @@ local deployment metadata only: never a companion identity, a federation
 address, or a trust anchor. `nolune onboard --profile <name>` picks a free
 port above `26559` (or takes `--port`); `nolune gateway install --profile
 <name>` refuses to share a port, a data root, or a service with a sibling
-profile. A named profile refuses to run when `NOLUNE_HOME` points anywhere
-other than its own root. Co-located profiles receive no implicit trust: they
-talk to each other only through the federation protocol (#108).
+profile, and `nolune uninstall` / `nolune gateway uninstall` refuse to act on a
+root that belongs to another profile. A named profile refuses to run when
+`NOLUNE_HOME` points anywhere other than its own root. The binary itself is
+shared: every profile's service runs `~/.nolune/bin/nolune`, so uninstalling
+the default profile (even with `--keep-data`) warns which profiles' services
+will stop at their next restart; reinstall and run
+`nolune gateway install --profile <name>` again, or remove them with
+`nolune gateway uninstall --profile <name>`. Co-located profiles receive no
+implicit trust: they talk to each other only through the federation protocol
+(#108).
 
 ## Wire shape
 

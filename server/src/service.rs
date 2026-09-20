@@ -162,6 +162,26 @@ WantedBy=default.target
     )
 }
 
+/// The executable a written definition runs, read back from either format, so
+/// `nolune uninstall` can warn which sibling services lose their binary with `~/.nolune/bin`.
+pub fn definition_binary(contents: &str) -> Option<PathBuf> {
+    let mut lines = contents.lines().map(str::trim);
+    while let Some(line) = lines.next() {
+        if let Some(command) = line.strip_prefix("ExecStart=") {
+            return command.split(' ').next().map(PathBuf::from);
+        }
+        if line == "<key>ProgramArguments</key>" {
+            // The first entry of the array is the binary; the rest are its arguments.
+            return lines
+                .find(|next| next.starts_with("<string>"))
+                .and_then(|entry| entry.strip_prefix("<string>"))
+                .and_then(|rest| rest.strip_suffix("</string>"))
+                .map(PathBuf::from);
+        }
+    }
+    None
+}
+
 /// Write a definition, creating its directory if needed.
 pub fn write_definition(path: &Path, contents: &str) -> io::Result<()> {
     if let Some(parent) = path.parent() {
@@ -367,6 +387,24 @@ mod tests {
         );
         assert_eq!(definition_home("[Unit]\nDescription=x\n"), None);
         assert_eq!(definition_home("<plist></plist>"), None);
+    }
+
+    #[test]
+    fn definition_binary_reads_the_executable_back_from_either_format() {
+        assert_eq!(
+            definition_binary(&render_launchd_plist(&molinka())),
+            Some(PathBuf::from("/Users/me/.nolune/bin/nolune"))
+        );
+        assert_eq!(
+            definition_binary(&render_systemd_unit(&molinka())),
+            Some(PathBuf::from("/Users/me/.nolune/bin/nolune"))
+        );
+        assert_eq!(
+            definition_binary(&render_systemd_unit(&spec())),
+            Some(PathBuf::from("/Users/me/.nolune/bin/nolune"))
+        );
+        assert_eq!(definition_binary("[Unit]\nDescription=x\n"), None);
+        assert_eq!(definition_binary("<plist></plist>"), None);
     }
 
     #[test]

@@ -121,6 +121,16 @@ impl Sandbox {
         }
     }
 
+    /// How a written definition names its own profile: a plist carries its label, while a
+    /// systemd unit is named by its file and only describes the profile in its body.
+    fn self_identification(profile: &str) -> String {
+        if cfg!(target_os = "macos") {
+            format!("<string>{}</string>", Self::service_id(profile))
+        } else {
+            format!("(profile {profile})")
+        }
+    }
+
     fn calls(&self) -> String {
         fs::read_to_string(&self.calls).unwrap()
     }
@@ -302,6 +312,11 @@ fn uninstall_yes_removes_everything() {
     assert!(out.status.success(), "stderr: {}", text(&out.stderr));
     assert!(!sb.nolune_home.exists());
     assert!(!sb.definition().exists());
+    assert!(
+        !text(&out.stderr).contains("warning"),
+        "no other profile depends on this binary:\n{}",
+        text(&out.stderr)
+    );
 }
 
 #[test]
@@ -396,6 +411,56 @@ fn onboard_accepts_an_explicit_port() {
 }
 
 #[test]
+fn pair_before_onboard_still_moves_a_named_profile_off_the_default_port() {
+    let sb = Sandbox::new();
+
+    // `pair` (like any config reader) creates the profile's config.toml on the default port
+    // with an empty token; a later onboard must not leave the profile on 26559.
+    let out = sb.run_profile("molinka", &["pair"]);
+    assert!(out.status.success(), "stderr: {}", text(&out.stderr));
+    let config = sb.profile_home("molinka").join("config.toml");
+    assert!(
+        fs::read_to_string(&config)
+            .unwrap()
+            .contains("port = 26559"),
+        "precondition: pair created a config on the default port"
+    );
+
+    let out = sb.run_profile("molinka", &["onboard"]);
+
+    assert!(out.status.success(), "stderr: {}", text(&out.stderr));
+    let raw = fs::read_to_string(&config).unwrap();
+    assert!(!raw.contains("port = 26559"), "{raw}");
+    let report = sb.onboard_profile("molinka");
+    let port = report["port"].as_u64().unwrap();
+    assert_ne!(port, 26559);
+    assert!(raw.contains(&format!("port = {port}")), "{raw}");
+    assert!(report["created_config"] == false);
+    let stdout = text(&out.stdout);
+    assert!(
+        stdout.contains("26559") && stdout.contains(&port.to_string()),
+        "should say the profile was moved off the default port:\n{stdout}"
+    );
+
+    // A config that names no port at all is treated the same way.
+    let yuki = sb.profile_home("yuki");
+    fs::create_dir_all(&yuki).unwrap();
+    fs::write(
+        yuki.join("config.toml"),
+        "[llm]\nchat_preset = \"sonnet\"\n",
+    )
+    .unwrap();
+    let report = sb.onboard_profile("yuki");
+    assert_ne!(report["port"], 26559);
+    assert_ne!(report["port"], port);
+    assert!(
+        fs::read_to_string(yuki.join("config.toml"))
+            .unwrap()
+            .contains("chat_preset = \"sonnet\"")
+    );
+}
+
+#[test]
 fn profile_names_are_validated_and_a_foreign_nolune_home_is_refused() {
     let sb = Sandbox::new();
 
@@ -456,8 +521,8 @@ fn two_profiles_install_separate_services_and_uninstall_independently() {
             "{name}: the service must run its own profile:\n{definition}"
         );
         assert!(
-            definition.contains(&Sandbox::service_id(name)),
-            "{definition}"
+            definition.contains(&Sandbox::self_identification(name)),
+            "{name}: the definition must identify its own profile:\n{definition}"
         );
     }
     assert!(
@@ -557,6 +622,49 @@ fn gateway_install_refuses_a_data_root_that_belongs_to_another_profile() {
 }
 
 #[test]
+fn uninstall_refuses_a_data_root_that_belongs_to_another_profile() {
+    let sb = Sandbox::new();
+    let free = TcpListener::bind("127.0.0.1:0").unwrap();
+    sb.set_port(free.local_addr().unwrap().port());
+    drop(free);
+    seed_install(&sb.nolune_home);
+    sb.onboard_profile("molinka");
+    let out = sb.run(&["gateway", "install"]);
+    assert!(out.status.success(), "stderr: {}", text(&out.stderr));
+    let out = sb.run_profile("molinka", &["gateway", "install"]);
+    assert!(out.status.success(), "stderr: {}", text(&out.stderr));
+    let calls_before = sb.calls();
+
+    // NOLUNE_HOME inside a sibling's root addresses the default profile's service but
+    // molinka's data: neither may be touched.
+    for args in [
+        &["uninstall", "--yes"][..],
+        &["uninstall", "--keep-data"],
+        &["gateway", "uninstall"],
+    ] {
+        let out = sb
+            .command(args)
+            .env("NOLUNE_HOME", sb.profile_home("molinka"))
+            .output()
+            .unwrap();
+
+        assert!(!out.status.success(), "{args:?} must fail closed");
+        let stderr = text(&out.stderr);
+        assert!(stderr.contains("molinka"), "{args:?}: {stderr}");
+        assert!(stderr.contains("default"), "{args:?}: {stderr}");
+        assert!(stderr.contains("--profile molinka"), "{args:?}: {stderr}");
+        assert!(
+            sb.definition().exists(),
+            "{args:?} removed the default service"
+        );
+        assert!(sb.profile_definition("molinka").exists());
+        assert!(sb.profile_home("molinka").join("config.toml").exists());
+        assert!(sb.nolune_home.join("bin/nolune").exists());
+        assert_eq!(sb.calls(), calls_before, "{args:?} must stop nothing");
+    }
+}
+
+#[test]
 fn uninstall_profile_removes_only_that_profile() {
     let sb = Sandbox::new();
     sb.onboard_profile("molinka");
@@ -581,11 +689,35 @@ fn uninstall_profile_removes_only_that_profile() {
         "{stdout}"
     );
 
-    // Removing the default workspace leaves the remaining profile alone.
+    // Removing the default workspace leaves the remaining profile alone, but warns that
+    // yuki's service runs the shared binary under ~/.nolune/bin, which goes with it.
+    assert!(
+        sb.run_profile("yuki", &["gateway", "install"])
+            .status
+            .success()
+    );
+    let installed_binary = sb.nolune_home.join("bin/nolune");
+    let definition = fs::read_to_string(sb.profile_definition("yuki")).unwrap();
+    fs::write(
+        sb.profile_definition("yuki"),
+        definition.replace(BIN, installed_binary.to_str().unwrap()),
+    )
+    .unwrap();
     let out = sb.run(&["uninstall", "--yes"]);
     assert!(out.status.success(), "stderr: {}", text(&out.stderr));
     assert!(!sb.nolune_home.exists());
     assert!(sb.profile_home("yuki").join("config.toml").exists());
+    assert!(sb.profile_definition("yuki").exists());
+    let stderr = text(&out.stderr);
+    assert!(
+        stderr.contains("yuki") && stderr.contains(sb.nolune_home.join("bin").to_str().unwrap()),
+        "should warn which profile's service loses its binary:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("gateway uninstall --profile yuki")
+            || stderr.contains("gateway install --profile yuki"),
+        "should say how to fix yuki's service:\n{stderr}"
+    );
 
     // And --keep-data on a profile keeps its workspace.
     seed_install(&sb.profile_home("yuki"));

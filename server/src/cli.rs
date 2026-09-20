@@ -52,7 +52,8 @@ pub enum CliCommand {
         /// Print the outcome as one JSON line instead of human-readable progress
         #[arg(long)]
         json: bool,
-        /// Listen on this port; a named profile otherwise picks a free one above 26559
+        /// Listen on this port; a named profile otherwise keeps its port, or is moved off
+        /// 26559 to a free one above it
         #[arg(long, value_name = "PORT")]
         port: Option<u16>,
     },
@@ -245,7 +246,29 @@ fn gateway_install(profile: &Profile) -> i32 {
     0
 }
 
+/// Refuse to act on a sibling profile's data root through `NOLUNE_HOME`: the service this
+/// command would touch belongs to one profile and the data to another (#107).
+fn refuse_foreign_root(profile: &Profile) -> bool {
+    match profiles::foreign_root(&home_dir(), profile) {
+        Some(collision) => {
+            eprintln!("{collision}");
+            eprintln!("nothing was removed");
+            true
+        }
+        None => false,
+    }
+}
+
 fn gateway_uninstall(profile: &Profile) -> i32 {
+    if refuse_foreign_root(profile) {
+        return 1;
+    }
+    remove_service(profile)
+}
+
+/// Stop and remove the installed service definition; the caller has already checked that
+/// `profile` owns its root.
+fn remove_service(profile: &Profile) -> i32 {
     let definition = definition_path(profile);
     if !definition.exists() {
         println!(
@@ -285,11 +308,36 @@ fn uninstall_cmd(keep_data: bool, yes: bool, profile: &Profile) -> i32 {
         println!("nothing to uninstall: {} does not exist", home.display());
         return 0;
     }
+    if refuse_foreign_root(profile) {
+        return 1;
+    }
+    // Every profile runs the one installed binary, which lives under the default root's
+    // bin/ and goes with it (with or without --keep-data). Say so before asking anything.
+    let dependents = profiles::dependents(&home_dir(), profile);
+    if !dependents.is_empty() {
+        let (services, profiles, run, they) = if dependents.len() == 1 {
+            ("service", "profile", "runs", "it")
+        } else {
+            ("services", "profiles", "run", "they")
+        };
+        eprintln!(
+            "warning: the background {services} of {profiles} {} {run} the binary under {}, \
+             which this removes; {they} will stop working at the next restart",
+            dependents.join(", "),
+            home.join("bin").display()
+        );
+        for name in &dependents {
+            eprintln!(
+                "  profile {name}: `nolune gateway uninstall --profile {name}` removes its service; \
+                 after reinstalling nolune, `nolune gateway install --profile {name}` restores it"
+            );
+        }
+    }
     if !keep_data && !yes && !confirm_delete(home) {
         return 1;
     }
     if definition.exists() {
-        let code = gateway_uninstall(profile);
+        let code = remove_service(profile);
         if code != 0 {
             return code;
         }
@@ -349,27 +397,29 @@ fn confirm_delete(home: &std::path::Path) -> bool {
 fn onboard_cmd(json: bool, port: Option<u16>, profile: &Profile) -> i32 {
     let dir = &profile.root;
     // A named profile must not take the default port or one a sibling already uses; the
-    // default profile keeps 26559 so installers and the desktop app find it.
-    let fresh = !dir.join("config.toml").exists();
-    let port = match port {
-        Some(port) => Some(port),
-        None if fresh && !profile.is_default() => {
-            let taken: Vec<u16> = profiles::siblings(&home_dir())
-                .iter()
-                .filter_map(|sibling| profiles::configured_port(&sibling.root))
-                .collect();
-            match profiles::pick_free_port(&taken, service::port_is_listening) {
-                Some(port) => Some(port),
-                None => {
-                    eprintln!(
-                        "no free port found for profile {}; pass one with --port",
-                        profile.name
-                    );
-                    return 1;
-                }
+    // default profile keeps 26559 so installers and the desktop app find it. A config that
+    // another command created on the way (`pair`, `gateway run`) still sits on the default
+    // port, so it is moved just like a missing one.
+    let on_default_port =
+        profiles::configured_port(dir).is_none_or(|port| port == onboard::DEFAULT_PORT);
+    let pick = port.is_none() && on_default_port && !profile.is_default();
+    let port = if pick {
+        let taken: Vec<u16> = profiles::siblings(&home_dir())
+            .iter()
+            .filter_map(|sibling| profiles::configured_port(&sibling.root))
+            .collect();
+        match profiles::pick_free_port(&taken, service::port_is_listening) {
+            Some(port) => Some(port),
+            None => {
+                eprintln!(
+                    "no free port found for profile {}; pass one with --port",
+                    profile.name
+                );
+                return 1;
             }
         }
-        None => None,
+    } else {
+        port
     };
     let outcome = match crate::onboard::onboard(dir, &profile.name, port) {
         Ok(outcome) => outcome,
@@ -378,7 +428,20 @@ fn onboard_cmd(json: bool, port: Option<u16>, profile: &Profile) -> i32 {
             return 1;
         }
     };
+    // Say when an existing config was moved off the default port (or given its first one).
+    let moved = (pick && !outcome.created_config).then(|| {
+        format!(
+            "moved profile {} off the default port {} to {} (the default profile owns {})",
+            profile.name,
+            onboard::DEFAULT_PORT,
+            outcome.port,
+            onboard::DEFAULT_PORT
+        )
+    });
     if json {
+        if let Some(note) = &moved {
+            eprintln!("{note}");
+        }
         // One machine-readable line; the token appears here and nowhere else.
         return match serde_json::to_string(&outcome) {
             Ok(line) => {
@@ -396,6 +459,9 @@ fn onboard_cmd(json: bool, port: Option<u16>, profile: &Profile) -> i32 {
         println!("created {}", outcome.config_path.display());
     } else {
         println!("kept existing {}", outcome.config_path.display());
+    }
+    if let Some(note) = &moved {
+        println!("{note}");
     }
     if outcome.generated_token {
         println!("generated an authentication token (saved in config.toml)");

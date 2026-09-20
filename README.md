@@ -145,7 +145,7 @@ Everything the installers do, you can do yourself:
 | `nolune pair` | Prints a one-time code so a browser can sign in |
 | `nolune uninstall --keep-data` | Removes the service, binary, and log but keeps `~/.nolune` |
 | `nolune uninstall --yes` | Removes everything, including your data |
-| `--profile <name>` | Any of the above for a second, fully isolated server on the same machine: its own data root at `~/.nolune-profiles/<name>/`, config, port, auth token, log, and background service, from the same binary. `nolune onboard --profile molinka` then `nolune gateway install --profile molinka`; the default profile stays `~/.nolune` |
+| `--profile <name>` | Any of the above for a second, fully isolated server on the same machine: its own data root at `~/.nolune-profiles/<name>/`, config, port, auth token, log, and background service, from the same binary. `nolune onboard --profile molinka` then `nolune gateway install --profile molinka`; the default profile stays `~/.nolune`. All profiles run the one binary under `~/.nolune/bin/`, so `nolune uninstall` on the default profile warns which profiles' services lose it |
 
 Service registration is per user and needs no elevated privileges. It is not available on Windows yet; run `nolune gateway` there.
 
