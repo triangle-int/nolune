@@ -130,11 +130,108 @@ fn legacy_coordinate_actions_are_frozen() {
     }
 }
 
+/// The `include:` entries of the Rust CI matrix for one component, each as its
+/// own block of trimmed `key: value` lines. An entry ends at the next line that
+/// is indented no deeper than its `- component:` header (the next entry or the
+/// end of the list); a commented-out entry never starts a block.
+fn rust_matrix_entries(ci: &str, component: &str) -> Vec<String> {
+    let header = format!("- component: {component}");
+    let mut entries = Vec::new();
+    let mut open: Option<(usize, String)> = None;
+    for line in ci.lines() {
+        let trimmed = line.trim();
+        let indent = line.len() - line.trim_start().len();
+        if let Some((start, block)) = open.as_mut() {
+            if !trimmed.is_empty() && indent <= *start {
+                entries.push(std::mem::take(block));
+                open = None;
+            } else {
+                block.push_str(trimmed);
+                block.push('\n');
+            }
+        }
+        if trimmed == header {
+            open = Some((indent, String::new()));
+        }
+    }
+    if let Some((_, block)) = open {
+        entries.push(block);
+    }
+    entries
+}
+
+/// Checks that some `cua-protocol` matrix entry runs `cargo test` against the
+/// protocol crate's manifest, not merely that the manifest is mentioned.
+fn cua_protocol_tests_run_in(ci: &str) -> Result<(), String> {
+    let entries = rust_matrix_entries(ci, "cua-protocol");
+    if entries.is_empty() {
+        return Err("the Rust matrix must include cua-protocol so its tests run in CI".into());
+    }
+    let runs_tests = entries.iter().any(|entry| {
+        let has = |key: &str| entry.lines().any(|line| line == key);
+        has("manifest: cua-protocol/Cargo.toml") && has("check: test")
+    });
+    if runs_tests {
+        Ok(())
+    } else {
+        Err(format!(
+            "no cua-protocol matrix entry pairs `manifest: cua-protocol/Cargo.toml` with \
+             `check: test`; the `Run tests` step only runs for check == 'test'. Entries:\n{}",
+            entries.join("---\n")
+        ))
+    }
+}
+
 #[test]
 fn ci_runs_the_cua_protocol_tests() {
     let ci = fs::read_to_string(repo().join(".github/workflows/ci.yml")).unwrap();
+    if let Err(reason) = cua_protocol_tests_run_in(&ci) {
+        panic!("{reason}");
+    }
+}
+
+#[test]
+fn cua_protocol_ci_guard_rejects_entries_that_never_run_cargo_test() {
+    let matrix = |entries: &str| {
+        format!(
+            "jobs:\n  rust:\n    strategy:\n      matrix:\n        include:\n{entries}    runs-on: x\n"
+        )
+    };
+    let entry = |component: &str, check: &str, prefix: &str| {
+        format!(
+            "          {prefix}- component: {component}\n            {prefix}manifest: {component}/Cargo.toml\n            {prefix}os: ubuntu-latest\n            {prefix}check: {check}\n"
+        )
+    };
+
+    let server_test = entry("server", "test", "");
+    let protocol_test = entry("cua-protocol", "test", "");
+    let protocol_clippy = entry("cua-protocol", "clippy", "");
+    let protocol_commented = entry("cua-protocol", "test", "# ");
+
     assert!(
-        ci.contains("manifest: cua-protocol/Cargo.toml"),
-        "the Rust matrix must include cua-protocol so its tests run in CI"
+        cua_protocol_tests_run_in(&matrix(&format!("{server_test}{protocol_test}"))).is_ok(),
+        "a cua-protocol entry with check: test satisfies the guard"
+    );
+    assert!(
+        cua_protocol_tests_run_in(&matrix(&format!("{protocol_clippy}{protocol_test}"))).is_ok(),
+        "a clippy entry beside the test entry still satisfies the guard"
+    );
+    assert!(
+        cua_protocol_tests_run_in(&matrix(&format!("{server_test}{protocol_clippy}"))).is_err(),
+        "a clippy-only cua-protocol entry mentions the manifest but never runs its tests"
+    );
+    assert!(
+        cua_protocol_tests_run_in(&matrix(&format!("{server_test}{protocol_commented}"))).is_err(),
+        "a commented-out cua-protocol entry does not run anything"
+    );
+    assert!(
+        cua_protocol_tests_run_in(&matrix(&server_test)).is_err(),
+        "a matrix without cua-protocol fails"
+    );
+    // The `check: test` of a neighbouring entry must not leak into the
+    // cua-protocol block.
+    assert!(
+        cua_protocol_tests_run_in(&matrix(&format!("{protocol_clippy}{server_test}"))).is_err(),
+        "the following entry's check: test does not count for cua-protocol"
     );
 }
