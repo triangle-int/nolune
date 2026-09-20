@@ -18,20 +18,38 @@ use log::info;
 async fn main() {
     let args = cli::Cli::parse();
 
+    // Which isolated deployment this process addresses (#107). Everything below reads the
+    // workspace through `config`, so selecting it once is enough.
+    let profile = config::resolve_profile(args.profile.as_deref()).unwrap_or_else(|error| {
+        eprintln!("{error}");
+        std::process::exit(2);
+    });
+    config::select_workspace(profile.root.clone());
+
     // Everything except the server itself is a synchronous subcommand.
     match args.command {
-        None | Some(cli::CliCommand::Gateway { action: None }) => {}
+        None
+        | Some(cli::CliCommand::Gateway {
+            action: None | Some(cli::GatewayAction::Run),
+        }) => {}
         Some(cmd) => {
-            let code = cli::run(cmd);
+            let code = cli::run(cmd, &profile);
             std::process::exit(code);
         }
     }
 
-    // `nolune` and `nolune gateway` run the server in the foreground.
+    // `nolune`, `nolune gateway`, and `nolune gateway run` run the server in the foreground.
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .filter_module("tracing::span", log::LevelFilter::Warn)
         .format(app::logging::format_record)
         .init();
+    if !profile.is_default() {
+        info!(
+            "profile {} — workspace {}",
+            profile.name,
+            profile.root.display()
+        );
+    }
 
     let config = config::load_config().unwrap_or_else(|err| {
         panic!(
@@ -71,7 +89,7 @@ async fn main() {
     // Paired browsers survive restarts; the file holds only hashes.
     state
         .browser_sessions
-        .attach_storage(config::workspace_root().join("browser_sessions.json"));
+        .attach_storage(state.workspace_dir.join("browser_sessions.json"));
 
     // Remove unpublished passive-capture state before any agents start, using
     // the persistent workspace capability opened by the media store.

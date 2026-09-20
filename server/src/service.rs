@@ -3,6 +3,9 @@
 //! `nolune gateway install` writes a user-level launchd agent (macOS) or systemd user
 //! unit (Linux) that runs `nolune gateway`, and starts it. Nothing here runs unless the
 //! user asks; a plain install leaves the gateway in the foreground.
+//!
+//! Every profile (#107) gets its own definition, label, and unit name; the default
+//! profile keeps the pre-profile names and arguments so an upgrade finds its own service.
 
 use std::{
     fs, io,
@@ -10,6 +13,8 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+
+use crate::config::DEFAULT_PROFILE;
 
 pub const LABEL: &str = "dev.nolune.nolune";
 pub const UNIT_NAME: &str = "nolune";
@@ -24,33 +29,63 @@ pub struct ServiceSpec {
 
 /// The launchd label for a profile's service.
 pub fn label(profile: &str) -> String {
-    let _ = profile;
-    todo!("#107")
+    if profile == DEFAULT_PROFILE {
+        LABEL.to_owned()
+    } else {
+        format!("{LABEL}.{profile}")
+    }
 }
 
 /// The systemd user unit name for a profile's service.
 pub fn unit_name(profile: &str) -> String {
-    let _ = profile;
-    todo!("#107")
+    if profile == DEFAULT_PROFILE {
+        UNIT_NAME.to_owned()
+    } else {
+        format!("{UNIT_NAME}-{profile}")
+    }
 }
 
-/// The data root a written definition runs, read back from either format.
+/// The data root a written definition runs, read back from either format, so install can
+/// tell whose service already owns a root.
 pub fn definition_home(contents: &str) -> Option<PathBuf> {
-    let _ = contents;
-    todo!("#107")
+    let mut lines = contents.lines().map(str::trim);
+    while let Some(line) = lines.next() {
+        if let Some(value) = line.strip_prefix("Environment=NOLUNE_HOME=") {
+            return Some(PathBuf::from(value));
+        }
+        if line == "<key>NOLUNE_HOME</key>" {
+            return lines
+                .next()
+                .and_then(|next| next.strip_prefix("<string>"))
+                .and_then(|rest| rest.strip_suffix("</string>"))
+                .map(PathBuf::from);
+        }
+    }
+    None
 }
 
 /// Where this platform keeps the service definition, relative to the user's home directory.
 pub fn definition_path(home_dir: &Path, profile: &str) -> PathBuf {
-    let _ = profile;
     if cfg!(target_os = "macos") {
         home_dir
             .join("Library/LaunchAgents")
-            .join(format!("{LABEL}.plist"))
+            .join(format!("{}.plist", label(profile)))
     } else {
         home_dir
             .join(".config/systemd/user")
-            .join(format!("{UNIT_NAME}.service"))
+            .join(format!("{}.service", unit_name(profile)))
+    }
+}
+
+/// The `ProgramArguments` entries after the binary: the default profile runs the bare
+/// `gateway` it always did; a named profile names itself so `ps` and the logs show it.
+fn plist_arguments(profile: &str) -> String {
+    if profile == DEFAULT_PROFILE {
+        "        <string>gateway</string>\n".to_owned()
+    } else {
+        format!(
+            "        <string>gateway</string>\n        <string>run</string>\n        <string>--profile</string>\n        <string>{profile}</string>\n"
+        )
     }
 }
 
@@ -59,18 +94,19 @@ pub fn definition_path(home_dir: &Path, profile: &str) -> PathBuf {
 pub fn render_launchd_plist(spec: &ServiceSpec) -> String {
     let binary = spec.binary.display();
     let home = spec.home.display();
+    let label = label(&spec.profile);
+    let arguments = plist_arguments(&spec.profile);
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>{LABEL}</string>
+    <string>{label}</string>
     <key>ProgramArguments</key>
     <array>
         <string>{binary}</string>
-        <string>gateway</string>
-    </array>
+{arguments}    </array>
     <key>WorkingDirectory</key>
     <string>{home}</string>
     <key>EnvironmentVariables</key>
@@ -98,9 +134,17 @@ pub fn render_launchd_plist(spec: &ServiceSpec) -> String {
 pub fn render_systemd_unit(spec: &ServiceSpec) -> String {
     let binary = spec.binary.display();
     let home = spec.home.display();
+    let (description, arguments) = if spec.profile == DEFAULT_PROFILE {
+        (String::new(), String::new())
+    } else {
+        (
+            format!(" (profile {})", spec.profile),
+            format!(" run --profile {}", spec.profile),
+        )
+    };
     format!(
         "[Unit]
-Description=Nolune AI Companion
+Description=Nolune AI Companion{description}
 After=network.target
 
 [Service]
@@ -108,7 +152,7 @@ Type=simple
 WorkingDirectory={home}
 Environment=NOLUNE_HOME={home}
 Environment=RUST_LOG=info
-ExecStart={binary} gateway
+ExecStart={binary} gateway{arguments}
 Restart=always
 RestartSec=3
 

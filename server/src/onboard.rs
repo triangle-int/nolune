@@ -29,7 +29,6 @@ pub struct OnboardOutcome {
 /// is kept and only an empty or missing `auth_token` is backfilled; an explicit `port` is
 /// written whether the config is new or not.
 pub fn onboard(dir: &Path, profile: &str, port: Option<u16>) -> anyhow::Result<OnboardOutcome> {
-    let _ = (profile, port);
     for sub in ["", "instances", "skills", "bin"] {
         let path = dir.join(sub);
         fs::create_dir_all(&path).with_context(|| format!("cannot create {}", path.display()))?;
@@ -41,7 +40,7 @@ pub fn onboard(dir: &Path, profile: &str, port: Option<u16>) -> anyhow::Result<O
             .with_context(|| format!("cannot read {}", config_path.display()))?;
         let doc: toml::Value = toml::from_str(&raw)
             .with_context(|| format!("{} is not valid TOML", config_path.display()))?;
-        let port = doc
+        let configured = doc
             .get("port")
             .and_then(toml::Value::as_integer)
             .and_then(|p| u16::try_from(p).ok())
@@ -50,17 +49,27 @@ pub fn onboard(dir: &Path, profile: &str, port: Option<u16>) -> anyhow::Result<O
             .get("auth_token")
             .and_then(toml::Value::as_str)
             .unwrap_or_default();
-        if existing.is_empty() {
-            let token = generate_token();
-            write_private(&config_path, &with_token(&raw, &token))?;
-            (false, true, token, port)
+        let (generated, token) = if existing.is_empty() {
+            (true, generate_token())
         } else {
-            (false, false, existing.to_string(), port)
+            (false, existing.to_string())
+        };
+        let mut updated = raw.clone();
+        if generated {
+            updated = with_top_level(&updated, "auth_token", &format!("\"{token}\""));
         }
+        if let Some(port) = port.filter(|port| *port != configured) {
+            updated = with_top_level(&updated, "port", &port.to_string());
+        }
+        if updated != raw {
+            write_private(&config_path, &updated)?;
+        }
+        (false, generated, token, port.unwrap_or(configured))
     } else {
         let token = generate_token();
-        write_private(&config_path, &fresh_config(&token))?;
-        (true, true, token, DEFAULT_PORT)
+        let port = port.unwrap_or(DEFAULT_PORT);
+        write_private(&config_path, &fresh_config(&token, port))?;
+        (true, true, token, port)
     };
 
     Ok(OnboardOutcome {
@@ -93,10 +102,10 @@ pub fn generate_token() -> String {
     token
 }
 
-fn fresh_config(token: &str) -> String {
+fn fresh_config(token: &str, port: u16) -> String {
     format!(
         r#"host = "0.0.0.0"
-port = {DEFAULT_PORT}
+port = {port}
 auth_token = "{token}"
 
 [llm]
@@ -125,9 +134,9 @@ ELEVENLABS = ""      # Optional — text-to-speech
     )
 }
 
-/// Replace the top-level `auth_token` line, or insert one first, leaving every other byte alone.
-fn with_token(raw: &str, token: &str) -> String {
-    let line = format!("auth_token = \"{token}\"");
+/// Replace the top-level `key = ...` line, or insert one first, leaving every other byte alone.
+fn with_top_level(raw: &str, key: &str, value: &str) -> String {
+    let line = format!("{key} = {value}");
     let mut out: Vec<String> = Vec::new();
     let mut replaced = false;
     let mut in_table = false;
@@ -136,10 +145,10 @@ fn with_token(raw: &str, token: &str) -> String {
         if trimmed.starts_with('[') {
             in_table = true;
         }
-        let is_token_key = trimmed
-            .strip_prefix("auth_token")
+        let is_key = trimmed
+            .strip_prefix(key)
             .is_some_and(|rest| rest.trim_start().starts_with('='));
-        if !in_table && !replaced && is_token_key {
+        if !in_table && !replaced && is_key {
             out.push(line.clone());
             replaced = true;
         } else {

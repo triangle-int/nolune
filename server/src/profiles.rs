@@ -5,27 +5,53 @@
 //! profile's data beyond the `port` line of its config.toml and the data root its
 //! service definition names.
 
-use std::{fmt, path::Path};
+use std::{fmt, fs, path::Path};
 
 use crate::{config, onboard, service};
 
 /// Every profile with a data root on this host, `default` first, then by name.
 pub fn siblings(home_dir: &Path) -> Vec<config::Profile> {
-    let _ = home_dir;
-    todo!("#107: enumerate the default root and ~/.nolune-profiles/*")
+    let mut found = Vec::new();
+    let default_root = config::profile_root(home_dir, config::DEFAULT_PROFILE);
+    if default_root.is_dir() {
+        found.push(config::Profile {
+            name: config::DEFAULT_PROFILE.to_owned(),
+            root: default_root,
+        });
+    }
+    let mut named: Vec<String> = fs::read_dir(config::profiles_dir(home_dir))
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter(|entry| entry.path().is_dir())
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .filter(|name| config::validate_profile_name(name).is_ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    named.sort();
+    found.extend(named.into_iter().map(|name| config::Profile {
+        root: config::profile_root(home_dir, &name),
+        name,
+    }));
+    found
 }
 
 /// The `port` from a profile's config.toml, without loading (and thereby creating) a config.
 pub fn configured_port(root: &Path) -> Option<u16> {
-    let _ = root;
-    todo!("#107: read the port line")
+    fs::read_to_string(root.join("config.toml"))
+        .ok()
+        .and_then(|raw| toml::from_str::<toml::Value>(&raw).ok())
+        .and_then(|doc| doc.get("port").and_then(toml::Value::as_integer))
+        .and_then(|port| u16::try_from(port).ok())
 }
 
 /// The first port above the default one that no sibling configured and nothing is
 /// listening on. The default port itself is always left to the default profile.
 pub fn pick_free_port(taken: &[u16], is_listening: impl Fn(u16) -> bool) -> Option<u16> {
-    let _ = (taken, &is_listening, onboard::DEFAULT_PORT);
-    todo!("#107: scan upwards from DEFAULT_PORT + 1")
+    const CANDIDATES: u16 = 200;
+    (onboard::DEFAULT_PORT + 1..=onboard::DEFAULT_PORT + CANDIDATES)
+        .find(|port| !taken.contains(port) && !is_listening(*port))
 }
 
 /// Why installing `profile` would step on a sibling. Every message names both profiles.
@@ -45,15 +71,63 @@ pub enum Collision {
 
 impl fmt::Display for Collision {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let _ = (f, &service::LABEL);
-        todo!("#107")
+        match self {
+            Self::DataRoot { profile, other } => write!(
+                f,
+                "profile {profile} would use the data root of profile {other}; \
+                 run this command with `--profile {other}` instead"
+            ),
+            Self::Port {
+                profile,
+                other,
+                port,
+            } => write!(
+                f,
+                "profile {profile} and profile {other} are both configured for port {port}; \
+                 change `port` in one config.toml (or rerun `nolune onboard --profile {profile} --port <free port>`)"
+            ),
+            Self::Definition { profile, other } => write!(
+                f,
+                "the background service of profile {other} already runs the data root of \
+                 profile {profile}; remove it with `nolune gateway uninstall --profile {other}` first"
+            ),
+        }
     }
 }
 
 /// Collisions between `target` (about to be installed on `port`) and every sibling profile.
 pub fn collisions(home_dir: &Path, target: &config::Profile, port: u16) -> Vec<Collision> {
-    let _ = (home_dir, target, port);
-    todo!("#107: compare roots, ports, and installed definitions")
+    let mut found = Vec::new();
+    for sibling in siblings(home_dir) {
+        if sibling.name == target.name {
+            continue;
+        }
+        if sibling.root == target.root {
+            found.push(Collision::DataRoot {
+                profile: target.name.clone(),
+                other: sibling.name.clone(),
+            });
+            continue;
+        }
+        if configured_port(&sibling.root) == Some(port) {
+            found.push(Collision::Port {
+                profile: target.name.clone(),
+                other: sibling.name.clone(),
+                port,
+            });
+        }
+        let runs_our_root = fs::read_to_string(service::definition_path(home_dir, &sibling.name))
+            .ok()
+            .and_then(|contents| service::definition_home(&contents))
+            .is_some_and(|home| home == target.root);
+        if runs_our_root {
+            found.push(Collision::Definition {
+                profile: target.name.clone(),
+                other: sibling.name.clone(),
+            });
+        }
+    }
+    found
 }
 
 #[cfg(test)]

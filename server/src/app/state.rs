@@ -55,14 +55,15 @@ pub struct AppState {
 // Suggested MCP servers are listed in the client's Extensions settings.
 
 impl AppState {
-    /// Open the state for the workspace `root` (#107). `new` is the thin wrapper that
-    /// takes the root from the environment for the server entrypoint.
-    pub(crate) async fn new_in(config: Config, root: PathBuf) -> Self {
-        let _ = (config, root);
-        todo!("#107")
+    /// The state for the workspace the process was started for. `new_in` is the
+    /// explicit form; this wrapper only supplies the resolved root (#107).
+    pub async fn new(config: Config) -> Self {
+        Self::new_in(config, config::workspace_root()).await
     }
 
-    pub async fn new(config: Config) -> Self {
+    /// Open every store under `workspace_dir`. Nothing here consults the environment, so
+    /// two profiles in one test process, or one profile on a shared host, stay apart.
+    pub(crate) async fn new_in(config: Config, workspace_dir: PathBuf) -> Self {
         let (events, _) = broadcast::channel(4096);
         let llm = LlmBackend::from_config(&config);
         let background_llm = LlmBackend::background(&config);
@@ -78,11 +79,10 @@ impl AppState {
         let http_client = reqwest::Client::new();
 
         // Open the local derived vector index.
-        let vector_store =
-            VectorStore::connect_with_config(&config::workspace_root(), &config).await;
+        let vector_store = VectorStore::connect_with_config(&workspace_dir, &config).await;
 
         let proactive = crate::services::proactive::ProactiveLoop::new(
-            &config::workspace_root(),
+            &workspace_dir,
             crate::domain::companion::CANONICAL_SLUG,
         )
         .with_events(events.clone());
@@ -90,7 +90,7 @@ impl AppState {
         Self {
             resources: crate::services::resource_access::ResourceAccess::new(&config.auth_token),
             config: Arc::new(RwLock::new(config)),
-            workspace_dir: config::workspace_root(),
+            workspace_dir,
             events,
             llm: Arc::new(RwLock::new(llm)),
             background_llm: Arc::new(RwLock::new(background_llm)),

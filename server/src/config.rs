@@ -1,6 +1,7 @@
 use std::{
     env, fs, io,
     path::{Path, PathBuf},
+    sync::OnceLock,
 };
 
 use serde::{Deserialize, Serialize};
@@ -769,50 +770,95 @@ pub struct Profile {
 
 impl Profile {
     pub fn is_default(&self) -> bool {
-        todo!("#107")
+        self.name == DEFAULT_PROFILE
     }
 }
 
 /// Profile names are short lower-case slugs: `^[a-z0-9][a-z0-9-]{0,31}$`.
 pub fn validate_profile_name(name: &str) -> Result<(), String> {
-    let _ = name;
-    todo!("#107")
+    let mut chars = name.chars();
+    let valid = match chars.next() {
+        Some(first) if first.is_ascii_lowercase() || first.is_ascii_digit() => {
+            name.len() <= 32
+                && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        }
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(format!(
+            "invalid profile name {name:?}: use 1-32 lower-case letters, digits, or dashes, \
+             starting with a letter or digit"
+        ))
+    }
 }
 
 /// `~/.nolune-profiles`, the directory every named profile root lives in.
 pub fn profiles_dir(home_dir: &Path) -> PathBuf {
-    let _ = home_dir;
-    todo!("#107")
+    home_dir.join(PROFILES_DIR)
 }
 
 /// `~/.nolune` for the default profile, `~/.nolune-profiles/<name>` for any other.
 pub fn profile_root(home_dir: &Path, name: &str) -> PathBuf {
-    let _ = (home_dir, name);
-    todo!("#107")
+    if name == DEFAULT_PROFILE {
+        home_dir.join(".nolune")
+    } else {
+        profiles_dir(home_dir).join(name)
+    }
 }
 
 /// Resolve the profile a command addresses from `--profile` and `NOLUNE_HOME`.
 pub fn resolve_profile(name: Option<&str>) -> Result<Profile, String> {
-    let _ = name;
-    todo!("#107")
+    let home_dir = dirs::home_dir().ok_or("cannot resolve the home directory")?;
+    resolve_profile_in(
+        &home_dir,
+        env::var_os("NOLUNE_HOME").map(PathBuf::from),
+        name,
+    )
 }
 
+/// No name, or `default`, is today's workspace: `NOLUNE_HOME` when set, else `~/.nolune`.
+/// A named profile always lives at its sibling root; a `NOLUNE_HOME` that points anywhere
+/// else is refused rather than silently picking one of the two deployments.
 fn resolve_profile_in(
     home_dir: &Path,
     env_home: Option<PathBuf>,
     name: Option<&str>,
 ) -> Result<Profile, String> {
-    let _ = (home_dir, env_home, name);
-    todo!("#107")
+    let name = name.unwrap_or(DEFAULT_PROFILE);
+    validate_profile_name(name)?;
+    let root = profile_root(home_dir, name);
+    let root = match env_home {
+        Some(env_home) if name == DEFAULT_PROFILE => env_home,
+        Some(env_home) if env_home != root => {
+            return Err(format!(
+                "--profile {name} lives at {} but NOLUNE_HOME is {}; unset NOLUNE_HOME or drop --profile",
+                root.display(),
+                env_home.display()
+            ));
+        }
+        _ => root,
+    };
+    Ok(Profile {
+        name: name.to_owned(),
+        root,
+    })
 }
 
-/// Pin the workspace for this process once, so every later reader addresses it.
+static SELECTED_WORKSPACE: OnceLock<PathBuf> = OnceLock::new();
+
+/// Pin the workspace for this process once (#107): the entrypoint resolves the profile,
+/// then every `workspace_root()` and `config_path()` reader addresses it. Later calls
+/// are ignored so a running server can never switch roots.
 pub fn select_workspace(root: PathBuf) {
-    let _ = root;
-    todo!("#107")
+    let _ = SELECTED_WORKSPACE.set(root);
 }
 
 pub fn workspace_root() -> PathBuf {
+    if let Some(root) = SELECTED_WORKSPACE.get() {
+        return root.clone();
+    }
     if let Some(path) = env::var_os("NOLUNE_HOME") {
         return PathBuf::from(path);
     }
