@@ -57,25 +57,13 @@ impl std::fmt::Display for CommitmentError {
             Self::NotFound(id) => write!(f, "unknown commitment {id}"),
             Self::Invalid(message) => f.write_str(message),
             Self::Closed { id, status } => {
-                write!(f, "commitment {id} is already {}", status_word(*status))
+                write!(f, "commitment {id} is already {}", status.as_str())
             }
             Self::EvidenceRequired => f.write_str(
                 "completing a commitment needs the user's confirmation or recorded evidence",
             ),
             Self::Io(message) => f.write_str(message),
         }
-    }
-}
-
-fn status_word(status: CommitmentStatus) -> &'static str {
-    match status {
-        CommitmentStatus::Active => "active",
-        CommitmentStatus::Waiting => "waiting",
-        CommitmentStatus::Blocked => "blocked",
-        CommitmentStatus::Due => "due",
-        CommitmentStatus::Completed => "completed",
-        CommitmentStatus::Dismissed => "dismissed",
-        CommitmentStatus::Failed => "failed",
     }
 }
 
@@ -170,26 +158,101 @@ impl CommitmentStore {
     // ── lifecycle ──────────────────────────────────────────────────────────
 
     pub fn create(&self, new: NewCommitment, now: i64) -> Result<Commitment, CommitmentError> {
-        let _ = (new, now);
-        todo!("#85: create")
+        let mut commitment = Commitment {
+            version: COMMITMENT_FORMAT_VERSION,
+            id: new_commitment_id(now),
+            promise: new.promise,
+            owner: new.owner,
+            status: CommitmentStatus::Active,
+            deadline: new.deadline,
+            dependencies: new.dependencies,
+            waiting_on: new.waiting_on,
+            next_check: new.next_check,
+            continuity_ids: new.continuity_ids,
+            provenance: new.provenance,
+            completion: None,
+            snoozed_until: None,
+            snooze_count: 0,
+            last_check: None,
+            created_at: now,
+            updated_at: now,
+            status_changed_at: now,
+        };
+        self.normalize(&mut commitment)?;
+        if commitment.next_check.is_none() {
+            commitment.next_check = commitment.default_next_check();
+        }
+        commitment.status = self.derived_status(&commitment, now);
+        self.save(&commitment)?;
+        Ok(commitment)
     }
 
     /// Edit an open commitment; its status is derived again from the result.
+    /// Moving the deadline or the wait moves `next_check` with it unless the
+    /// patch sets or clears `next_check` itself.
     pub fn update(
         &self,
         id: &str,
         patch: CommitmentPatch,
         now: i64,
     ) -> Result<Commitment, CommitmentError> {
-        let _ = (id, patch, now);
-        todo!("#85: update")
+        let mut commitment = self.open(id)?;
+        if let Some(promise) = patch.promise {
+            commitment.promise = promise;
+        }
+        if let Some(owner) = patch.owner {
+            commitment.owner = owner;
+        }
+        let schedule_touched = patch.clear_deadline
+            || patch.deadline.is_some()
+            || patch.clear_waiting_on
+            || patch.waiting_on.is_some();
+        if patch.clear_deadline {
+            commitment.deadline = None;
+        } else if let Some(deadline) = patch.deadline {
+            commitment.deadline = Some(deadline);
+        }
+        if let Some(dependencies) = patch.dependencies {
+            commitment.dependencies = dependencies;
+        }
+        if patch.clear_waiting_on {
+            commitment.waiting_on = None;
+        } else if let Some(waiting_on) = patch.waiting_on {
+            commitment.waiting_on = Some(waiting_on);
+        }
+        if patch.clear_next_check {
+            commitment.next_check = None;
+        } else if let Some(next_check) = patch.next_check {
+            commitment.next_check = Some(next_check);
+        } else if schedule_touched && let Some(next_check) = commitment.default_next_check() {
+            commitment.next_check = Some(next_check);
+        }
+        if let Some(continuity_ids) = patch.continuity_ids {
+            commitment.continuity_ids = continuity_ids;
+        }
+        self.normalize(&mut commitment)?;
+        commitment.updated_at = now;
+        self.refresh_status(&mut commitment, now);
+        self.save(&commitment)?;
+        Ok(commitment)
     }
 
     /// Hold an open commitment until `until`; a due one goes back to active
     /// and becomes due again when the snooze ends.
     pub fn snooze(&self, id: &str, until: i64, now: i64) -> Result<Commitment, CommitmentError> {
-        let _ = (id, until, now);
-        todo!("#85: snooze")
+        let mut commitment = self.open(id)?;
+        if until <= now {
+            return Err(CommitmentError::Invalid(
+                "a snooze must end in the future".into(),
+            ));
+        }
+        commitment.snoozed_until = Some(until);
+        commitment.snooze_count += 1;
+        commitment.next_check = Some(until);
+        commitment.updated_at = now;
+        self.refresh_status(&mut commitment, now);
+        self.save(&commitment)?;
+        Ok(commitment)
     }
 
     /// Mark an open commitment completed. Refused without the user's
@@ -197,56 +260,253 @@ impl CommitmentStore {
     pub fn complete(
         &self,
         id: &str,
-        evidence: CompletionEvidence,
+        mut evidence: CompletionEvidence,
         now: i64,
     ) -> Result<Commitment, CommitmentError> {
-        let _ = (id, evidence, now);
-        todo!("#85: complete")
+        let mut commitment = self.open(id)?;
+        evidence.summary = evidence.summary.as_deref().and_then(bounded_note);
+        evidence.run_id = evidence.run_id.as_deref().and_then(bounded_note);
+        if !evidence.is_sufficient() {
+            return Err(CommitmentError::EvidenceRequired);
+        }
+        evidence.at = now;
+        commitment.completion = Some(evidence);
+        commitment.status = CommitmentStatus::Completed;
+        commitment.status_changed_at = now;
+        commitment.updated_at = now;
+        self.save(&commitment)?;
+        self.settle_dependents(&commitment.id, now);
+        Ok(commitment)
     }
 
     /// Dismiss an open commitment.
     pub fn cancel(&self, id: &str, now: i64) -> Result<Commitment, CommitmentError> {
-        let _ = (id, now);
-        todo!("#85: cancel")
+        let mut commitment = self.open(id)?;
+        commitment.status = CommitmentStatus::Dismissed;
+        commitment.status_changed_at = now;
+        commitment.updated_at = now;
+        self.save(&commitment)?;
+        Ok(commitment)
+    }
+
+    fn open(&self, id: &str) -> Result<Commitment, CommitmentError> {
+        let commitment = self
+            .get(id)
+            .ok_or_else(|| CommitmentError::NotFound(id.to_owned()))?;
+        if !commitment.is_open() {
+            return Err(CommitmentError::Closed {
+                id: commitment.id,
+                status: commitment.status,
+            });
+        }
+        Ok(commitment)
+    }
+
+    /// Bound every field and refuse links that point nowhere.
+    fn normalize(&self, commitment: &mut Commitment) -> Result<(), CommitmentError> {
+        let promise: String = commitment
+            .promise
+            .trim()
+            .chars()
+            .take(MAX_PROMISE_CHARS)
+            .collect();
+        if promise.is_empty() {
+            return Err(CommitmentError::Invalid("a promise cannot be empty".into()));
+        }
+        commitment.promise = promise;
+
+        if let Some(Deadline::Window { start, end }) = commitment.deadline
+            && end < start
+        {
+            return Err(CommitmentError::Invalid(
+                "a deadline window cannot end before it starts".into(),
+            ));
+        }
+        if let Some(WaitCondition::Event { event }) = &commitment.waiting_on {
+            commitment.waiting_on = Some(WaitCondition::Event {
+                event: bounded_note(event).ok_or_else(|| {
+                    CommitmentError::Invalid("a waited-for event needs a name".into())
+                })?,
+            });
+        }
+
+        let dependencies = dedupe(std::mem::take(&mut commitment.dependencies));
+        if dependencies.len() > MAX_LINKS {
+            return Err(CommitmentError::Invalid(format!(
+                "at most {MAX_LINKS} dependencies"
+            )));
+        }
+        for dependency in &dependencies {
+            if *dependency == commitment.id {
+                return Err(CommitmentError::Invalid(
+                    "a commitment cannot depend on itself".into(),
+                ));
+            }
+            if self.get(dependency).is_none() {
+                return Err(CommitmentError::Invalid(format!(
+                    "unknown dependency {dependency}"
+                )));
+            }
+        }
+        commitment.dependencies = dependencies;
+
+        let continuity_ids = dedupe(std::mem::take(&mut commitment.continuity_ids));
+        if continuity_ids.len() > MAX_LINKS {
+            return Err(CommitmentError::Invalid(format!(
+                "at most {MAX_LINKS} linked continuity records"
+            )));
+        }
+        commitment.continuity_ids = continuity_ids;
+        Ok(())
+    }
+
+    fn derived_status(&self, commitment: &Commitment, now: i64) -> CommitmentStatus {
+        commitment.derive_open_status(now, |dependency| self.unfinished(dependency))
+    }
+
+    /// A dependency counts as unfinished until it is completed; a dismissed
+    /// or missing one never finishes.
+    fn unfinished(&self, id: &str) -> bool {
+        self.get(id)
+            .is_none_or(|dependency| dependency.status != CommitmentStatus::Completed)
+    }
+
+    fn refresh_status(&self, commitment: &mut Commitment, now: i64) {
+        let status = self.derived_status(commitment, now);
+        if status != commitment.status {
+            commitment.status = status;
+            commitment.status_changed_at = now;
+        }
+    }
+
+    /// Re-derive every open commitment that depended on `of`.
+    fn settle_dependents(&self, of: &str, now: i64) {
+        for mut dependent in self.list(ListFilter::Open) {
+            if !dependent.dependencies.iter().any(|id| id == of) {
+                continue;
+            }
+            let before = dependent.status;
+            self.refresh_status(&mut dependent, now);
+            if dependent.status != before {
+                dependent.updated_at = now;
+                let _ = self.save(&dependent);
+            }
+        }
     }
 
     // ── queries ────────────────────────────────────────────────────────────
 
     pub fn get(&self, id: &str) -> Option<Commitment> {
-        let _ = id;
-        todo!("#85: get")
+        if id.contains('/') || id.contains('\\') || id.starts_with('.') {
+            return None;
+        }
+        let raw = fs::read_to_string(self.record_path(id)).ok()?;
+        serde_json::from_str(&raw).ok()
     }
 
     /// Newest first.
     pub fn list(&self, filter: ListFilter) -> Vec<Commitment> {
-        let _ = filter;
-        todo!("#85: list")
+        let Ok(entries) = fs::read_dir(self.commitments_dir()) else {
+            return Vec::new();
+        };
+        let mut commitments: Vec<Commitment> = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension().and_then(|ext| ext.to_str()) == Some("json")
+                    && !path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.starts_with('.'))
+            })
+            .filter_map(|path| fs::read_to_string(path).ok())
+            .filter_map(|raw| serde_json::from_str(&raw).ok())
+            .filter(|commitment: &Commitment| match filter {
+                ListFilter::Open => commitment.is_open(),
+                ListFilter::Closed => !commitment.is_open(),
+                ListFilter::All => true,
+            })
+            .collect();
+        commitments.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| b.id.cmp(&a.id))
+        });
+        commitments
     }
 
-    /// Open, unsnoozed commitments whose `next_check` has passed or whose
-    /// deadline has started. Reading never changes a record, so asking twice
-    /// at the same instant answers the same records: the evaluator, not the
-    /// store, decides what to do with them.
+    /// Open, unsnoozed commitments whose `next_check` has passed, oldest
+    /// first. Reading never changes a record, so asking twice at the same
+    /// instant answers the same records: the evaluator, not the store,
+    /// decides what to do with them.
     pub fn due_for_check(&self, now: i64) -> Vec<Commitment> {
-        let _ = now;
-        todo!("#85: due_for_check")
+        let mut due: Vec<Commitment> = self
+            .list(ListFilter::Open)
+            .into_iter()
+            .filter(|commitment| commitment.needs_check(now))
+            .collect();
+        due.reverse();
+        due
+    }
+
+    // ── storage ────────────────────────────────────────────────────────────
+
+    fn instance_dir(&self) -> PathBuf {
+        self.workspace_dir.join("instances").join(&self.slug)
+    }
+
+    fn commitments_dir(&self) -> PathBuf {
+        self.instance_dir().join(COMMITMENTS_DIR)
+    }
+
+    fn record_path(&self, id: &str) -> PathBuf {
+        self.commitments_dir().join(format!("{id}.json"))
+    }
+
+    fn save(&self, commitment: &Commitment) -> io::Result<()> {
+        fs::create_dir_all(self.commitments_dir())?;
+        write_atomic(
+            &self.record_path(&commitment.id),
+            &serde_json::to_string_pretty(commitment).map_err(io::Error::other)?,
+        )?;
+        if let Some(events) = &self.events {
+            let _ = events.send(crate::domain::events::ServerEvent::CommitmentUpdated {
+                instance_slug: self.slug.clone(),
+                commitment: commitment.clone(),
+            });
+        }
+        Ok(())
     }
 }
 
-#[allow(dead_code)]
+/// Trimmed and bounded to `MAX_NOTE_CHARS`; None when nothing is left.
+fn bounded_note(text: &str) -> Option<String> {
+    let note: String = text.trim().chars().take(MAX_NOTE_CHARS).collect();
+    (!note.is_empty()).then_some(note)
+}
+
+/// Trimmed, non-empty, first occurrence wins.
+fn dedupe(items: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(items.len());
+    for item in items {
+        let item = item.trim();
+        if !item.is_empty() && !out.iter().any(|seen| seen == item) {
+            out.push(item.to_owned());
+        }
+    }
+    out
+}
+
+fn new_commitment_id(now: i64) -> String {
+    let suffix: String = uuid::Uuid::new_v4().simple().to_string()[..8].to_owned();
+    format!("cmt_{now}_{suffix}")
+}
+
 fn write_atomic(path: &Path, content: &str) -> io::Result<()> {
     let tmp = path.with_extension("tmp");
     fs::write(&tmp, content)?;
     fs::rename(&tmp, path)
 }
-
-#[allow(dead_code)]
-const _: (u32, usize, usize, usize) = (
-    COMMITMENT_FORMAT_VERSION,
-    MAX_PROMISE_CHARS,
-    MAX_NOTE_CHARS,
-    MAX_LINKS,
-);
 
 #[cfg(test)]
 mod tests {
@@ -392,6 +652,15 @@ mod tests {
             timed_wait.next_check,
             Some(T0 + 600),
             "earliest of the wait and the deadline"
+        );
+        assert_eq!(
+            timed_wait.derive_open_status(T0 + 600, |_| false),
+            CommitmentStatus::Active,
+            "a timed wait settles itself"
+        );
+        assert_eq!(
+            timed_wait.derive_open_status(T0 + 900, |_| false),
+            CommitmentStatus::Due
         );
 
         let overdue = store
@@ -731,8 +1000,9 @@ mod tests {
             .unwrap();
         assert_eq!(due.status, CommitmentStatus::Due);
         assert_eq!(
-            due.next_check, None,
-            "an explicit edit does not invent a clock"
+            due.next_check,
+            Some(T0 + 2),
+            "a moved deadline moves the clock with it"
         );
 
         let cleared = store
@@ -748,11 +1018,29 @@ mod tests {
             .unwrap();
         assert_eq!(cleared.deadline, None);
         assert_eq!(cleared.status, CommitmentStatus::Active);
-        assert_eq!(cleared.next_check, Some(T0 + 900));
+        assert_eq!(cleared.status_changed_at, T0 + 7);
+        assert_eq!(cleared.next_check, Some(T0 + 900), "an explicit clock wins");
+
+        let relinked = store
+            .update(
+                &a.id,
+                CommitmentPatch {
+                    continuity_ids: Some(vec!["cont_9".into(), "cont_10".into()]),
+                    ..Default::default()
+                },
+                T0 + 8,
+            )
+            .unwrap();
+        assert_eq!(relinked.updated_at, T0 + 8);
         assert_eq!(
-            cleared.status_changed_at,
-            T0 + 6,
-            "unchanged status keeps its timestamp"
+            relinked.status_changed_at,
+            T0 + 7,
+            "an unchanged status keeps its timestamp"
+        );
+        assert_eq!(
+            relinked.next_check,
+            Some(T0 + 900),
+            "no schedule was touched"
         );
 
         assert!(matches!(
@@ -762,7 +1050,7 @@ mod tests {
                     dependencies: Some(vec![a.id.clone()]),
                     ..Default::default()
                 },
-                T0 + 8,
+                T0 + 9,
             ),
             Err(CommitmentError::Invalid(_))
         ));
@@ -773,17 +1061,17 @@ mod tests {
                     promise: Some(String::new()),
                     ..Default::default()
                 },
-                T0 + 8,
+                T0 + 9,
             ),
             Err(CommitmentError::Invalid(_))
         ));
         assert_eq!(
-            store.update("cmt_missing", CommitmentPatch::default(), T0 + 8),
+            store.update("cmt_missing", CommitmentPatch::default(), T0 + 9),
             Err(CommitmentError::NotFound("cmt_missing".into()))
         );
         assert_eq!(
             store.get(&a.id).unwrap(),
-            cleared,
+            relinked,
             "refused edits change nothing"
         );
 

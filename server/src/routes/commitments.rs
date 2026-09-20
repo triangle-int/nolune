@@ -193,13 +193,9 @@ mod tests {
             .unwrap();
         let status = response.status();
         let bytes = to_bytes(response.into_body(), 1 << 20).await.unwrap();
-        let value = if bytes.is_empty() {
-            serde_json::Value::Null
-        } else {
-            serde_json::from_slice(&bytes).unwrap_or_else(|error| {
-                panic!("{uri}: {error}: {}", String::from_utf8_lossy(&bytes))
-            })
-        };
+        // Framework rejections (bad JSON shape) are plain text; keep them readable.
+        let value = serde_json::from_slice(&bytes)
+            .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(&bytes).into()));
         (status, value)
     }
 

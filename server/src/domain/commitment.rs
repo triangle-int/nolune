@@ -52,6 +52,18 @@ impl CommitmentStatus {
             Self::Active | Self::Waiting | Self::Blocked | Self::Due
         )
     }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Waiting => "waiting",
+            Self::Blocked => "blocked",
+            Self::Due => "due",
+            Self::Completed => "completed",
+            Self::Dismissed => "dismissed",
+            Self::Failed => "failed",
+        }
+    }
 }
 
 /// When the promise falls due.
@@ -97,6 +109,17 @@ pub enum WaitCondition {
     Event { event: String },
     /// The user answers.
     UserReply,
+}
+
+impl WaitCondition {
+    /// Only the clock condition settles itself; events and replies are
+    /// observed by the evaluator or a tool, which then clears `waiting_on`.
+    pub fn is_met(&self, now: i64) -> bool {
+        match self {
+            Self::Until { until } => now >= *until,
+            Self::Event { .. } | Self::UserReply => false,
+        }
+    }
 }
 
 /// Where the commitment came from.
@@ -227,19 +250,31 @@ impl Commitment {
             CommitmentStatus::Due
         } else if self.dependencies.iter().any(|id| unfinished(id)) {
             CommitmentStatus::Blocked
-        } else if self.waiting_on.is_some() {
+        } else if self.waiting_on.as_ref().is_some_and(|w| !w.is_met(now)) {
             CommitmentStatus::Waiting
         } else {
             CommitmentStatus::Active
         }
     }
 
+    /// The moment the record itself asks to be looked at: the earliest of a
+    /// timed wait and the deadline start. Event waits have no clock.
+    pub fn default_next_check(&self) -> Option<i64> {
+        let until = match &self.waiting_on {
+            Some(WaitCondition::Until { until }) => Some(*until),
+            _ => None,
+        };
+        let deadline = self.deadline.map(|d| d.starts_at());
+        match (until, deadline) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
     /// Whether the evaluator should look at it now: open, not snoozed, and
-    /// either its `next_check` has passed or its deadline has started.
+    /// its `next_check` has passed. `next_check` is the one schedule the
+    /// record owns; the evaluator moves it forward after each check.
     pub fn needs_check(&self, now: i64) -> bool {
-        self.is_open()
-            && !self.is_snoozed(now)
-            && (self.next_check.is_some_and(|at| at <= now)
-                || self.deadline.is_some_and(|d| d.has_started(now)))
+        self.is_open() && !self.is_snoozed(now) && self.next_check.is_some_and(|at| at <= now)
     }
 }
