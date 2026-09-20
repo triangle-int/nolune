@@ -105,13 +105,14 @@ export function isOverdue(commitment, now) {
 }
 
 /**
- * "Due in 2 hours", "Due now", "Due now, 23 hours left", "Overdue by 3 hours"; "" without a deadline.
+ * "Due in 2 hours", "Due now", "Due now, 23 hours left", "Overdue by 3 hours";
+ * "" without a deadline, and for closed records (history is not overdue).
  * @param {Commitment} commitment
  * @param {number} now
  */
 export function dueLabel(commitment, now) {
 	const deadline = commitment.deadline;
-	if (!deadline) return "";
+	if (!deadline || !isOpen(commitment.status)) return "";
 	if (deadline.kind === "at") {
 		if (now < deadline.at) return `Due in ${describeDuration(deadline.at - now)}`;
 		if (now - deadline.at < MINUTE) return "Due now";
@@ -132,11 +133,12 @@ export function eventLabel(event) {
 
 /**
  * What the commitment is held by right now: dependencies first (they block
- * before a wait is even looked at), then the waiting condition.
+ * before a wait is even looked at), then the waiting condition. "" once closed.
  * @param {Commitment} commitment
  * @param {number} now
  */
 export function waitLabel(commitment, now) {
+	if (!isOpen(commitment.status)) return "";
 	const deps = commitment.dependencies.length;
 	if (deps > 0) return `Waiting on ${deps} other commitment${deps === 1 ? "" : "s"}`;
 	const wait = commitment.waiting_on;

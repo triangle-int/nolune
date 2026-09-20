@@ -33,14 +33,13 @@
 		waitLabel,
 	} from "$lib/commitments/commitments.js";
 	import { getWebSocket } from "$lib/stores/websocket.svelte.js";
-	import { getToasts } from "$lib/stores/toast.svelte.js";
+	import { tick, untrack } from "svelte";
 
 	// Promises the companion tracks as first-class state (#85). The server's
 	// record is the only source; every control here answers with the record it
 	// wrote, and completion is never silent: the user confirms or gives evidence.
 	let { slug, now }: { slug: string; now: number } = $props();
 
-	const toast = getToasts();
 	const ws = getWebSocket();
 
 	let commitments = $state<Commitment[]>([]);
@@ -53,12 +52,14 @@
 	type Panel = "details" | "edit" | "snooze" | "complete" | "cancel";
 	let open = $state<{ id: string; panel: Panel } | null>(null);
 	let formError = $state("");
-	// Edit form
+	// Edit form. The deadline inputs are minute-precise, so the ones the user
+	// did not touch are compared as strings and never re-sent rounded.
 	let editPromise = $state("");
 	let editDeadlineKind = $state<"none" | "at" | "window">("none");
 	let editAt = $state("");
 	let editStart = $state("");
 	let editEnd = $state("");
+	let editInitial = "";
 	// Snooze form
 	let snoozeCustom = $state("");
 	// Complete form
@@ -94,8 +95,33 @@
 				commitments = upsertCommitment(commitments, event.commitment);
 			}
 		});
-		return unsub;
+		window.addEventListener("hashchange", reveal);
+		return () => {
+			unsub();
+			window.removeEventListener("hashchange", reveal);
+		};
 	});
+
+	// A `#commitment-<id>` link (from a check-in receipt, or a dependency)
+	// must land on the record even when it sits under the other filter. Runs
+	// once the list has loaded, and on every hash change; never on updates.
+	$effect(() => {
+		if (loading) return;
+		untrack(() => void reveal());
+	});
+
+	async function reveal() {
+		const id = decodeURIComponent(location.hash).match(/^#commitment-(.+)$/)?.[1];
+		if (!id) return;
+		const target = commitments.find((c) => c.id === id);
+		if (!target) return;
+		const wanted = isOpen(target.status) ? "open" : "closed";
+		if (filter !== wanted) {
+			filter = wanted;
+			await tick();
+		}
+		document.getElementById(`commitment-${id}`)?.scrollIntoView({ block: "start" });
+	}
 
 	function isOpenPanel(c: Commitment, panel: Panel) {
 		return open?.id === c.id && open.panel === panel;
@@ -114,6 +140,7 @@
 			editAt = d?.kind === "at" ? localDateTimeValue(d.at) : "";
 			editStart = d?.kind === "window" ? localDateTimeValue(d.start) : "";
 			editEnd = d?.kind === "window" ? localDateTimeValue(d.end) : "";
+			editInitial = deadlineInputs();
 		} else if (panel === "snooze") {
 			snoozeCustom = "";
 		} else if (panel === "complete") {
@@ -141,12 +168,17 @@
 		}
 	}
 
+	function deadlineInputs(): string {
+		return JSON.stringify([editDeadlineKind, editAt, editStart, editEnd]);
+	}
+
 	function editPatch(c: Commitment): CommitmentPatch | string {
 		const patch: CommitmentPatch = {};
 		const promise = editPromise.trim();
 		if (promise === "") return "The promise cannot be empty.";
 		if (promise.length > MAX_PROMISE_CHARS) return `Keep the promise under ${MAX_PROMISE_CHARS} characters.`;
 		if (promise !== c.promise) patch.promise = promise;
+		if (deadlineInputs() === editInitial) return patch;
 		let deadline: CommitmentDeadline | null = null;
 		if (editDeadlineKind === "at") {
 			const at = parseLocalDateTime(editAt);
@@ -159,11 +191,8 @@
 			if (end <= start) return "The window must end after it starts.";
 			deadline = { kind: "window", start, end };
 		}
-		const before = JSON.stringify(c.deadline ?? null);
-		if (JSON.stringify(deadline) !== before) {
-			if (deadline) patch.deadline = deadline;
-			else patch.clear_deadline = true;
-		}
+		if (deadline) patch.deadline = deadline;
+		else if (c.deadline) patch.clear_deadline = true;
 		return patch;
 	}
 
@@ -253,7 +282,7 @@
 					{#if facts(c)}<p class="cmt-facts">{facts(c)}</p>{/if}
 					{#if completionNote(c)}<p class="cmt-facts">{completionNote(c)}</p>{/if}
 					<p class="cmt-check">
-						{lastCheckLabel(c.last_check, now)}{#if c.last_check?.run_id}<span aria-hidden="true"> · </span><a class="cmt-link" href={`#run-${c.last_check.run_id}`}>View the check-in</a>{/if}
+						{lastCheckLabel(c.last_check, now)}{#if c.last_check?.run_id}<a class="cmt-link cmt-link-after" href={`#run-${c.last_check.run_id}`}>View the check-in</a>{/if}
 					</p>
 
 					<div class="cmt-controls">
@@ -376,6 +405,7 @@
 	.cmt-promise { margin: 0; font: 400 16px/1.5 var(--font-body); color: var(--foreground); overflow-wrap: anywhere; }
 	.cmt-facts, .cmt-check { margin: 0; font: 400 13px/1.5 var(--font-body); color: var(--text-secondary); }
 	.cmt-link { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+	.cmt-link-after { margin-left: 8px; }
 	.cmt-controls { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 	.cmt-btn { min-height: 36px; padding: 0 12px; border: 1px solid var(--border); border-radius: var(--radius-control, 8px); background: var(--card); color: var(--foreground); font: 500 13px var(--font-body); cursor: pointer; }
 	.cmt-btn:hover:not(:disabled) { background: var(--accent); }

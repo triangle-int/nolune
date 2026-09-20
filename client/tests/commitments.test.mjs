@@ -84,6 +84,8 @@ test('due wording comes from the deadline and a fixed clock', () => {
 	assert.equal(dueLabel(at, T0 + 2 * HOUR), 'Due now');
 	assert.equal(dueLabel(at, T0 + 2 * HOUR + 30), 'Due now');
 	assert.equal(dueLabel(at, T0 + 5 * HOUR), 'Overdue by 3 hours');
+	assert.equal(dueLabel({ ...at, status: 'completed' }, T0 + 5 * HOUR), '');
+	assert.equal(dueLabel({ ...at, status: 'dismissed' }, T0), '');
 	assert.equal(isOverdue(at, T0), false);
 	assert.equal(isOverdue(at, T0 + 5 * HOUR), true);
 	// A snooze hides the overdue state until it ends; closed records are never overdue.
@@ -106,6 +108,7 @@ test('waiting, blocked, snooze, and next-check wording never invent facts', () =
 	assert.equal(waitLabel(commitment({ waiting_on: { kind: 'user_reply' } }), T0), 'Waiting for your reply');
 	assert.equal(waitLabel(commitment({ dependencies: ['cmt_a'] }), T0), 'Waiting on 1 other commitment');
 	assert.equal(waitLabel(commitment({ dependencies: ['cmt_a', 'cmt_b'] }), T0), 'Waiting on 2 other commitments');
+	assert.equal(waitLabel(commitment({ status: 'dismissed', waiting_on: { kind: 'user_reply' } }), T0), '');
 
 	assert.equal(eventLabel('machine_connected:studio-mac'), 'studio-mac connected');
 	assert.equal(eventLabel('commitment_completed:cmt_a'), 'a commitment it depended on was completed');
