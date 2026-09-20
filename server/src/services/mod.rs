@@ -6,6 +6,7 @@ pub mod keyword_search;
 pub mod browser_sessions;
 pub mod companion;
 pub mod companion_routine;
+pub mod continuity;
 pub mod drops;
 pub mod heartbeat;
 pub mod llm;

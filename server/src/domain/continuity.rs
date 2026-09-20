@@ -1,0 +1,597 @@
+//! Durable continuity records for explicit user tasks (#81).
+//!
+//! A record is the companion's bounded, inspectable memory of one unfinished
+//! task: the goal, where it stands, which computers and resources it touches,
+//! what already happened, what blocks it, and what to do next. Every write
+//! carries provenance so the user can see where each step and decision came
+//! from. Resources are kept as links (upload ids, memory paths, paths on a
+//! computer), never copied. Records are written only by explicit task
+//! activity, the `task_continuity_update` tool or the continuity API, and
+//! never inferred from screenshots, check-ins, or other passive observation.
+
+use serde::{Deserialize, Serialize};
+
+pub const CONTINUITY_FORMAT_VERSION: u32 = 1;
+
+/// Longest goal kept on a record.
+pub const MAX_GOAL_CHARS: usize = 500;
+/// Longest step, blocker, next step, or provenance note.
+pub const MAX_NOTE_CHARS: usize = 300;
+pub const MAX_STEPS: usize = 50;
+pub const MAX_BLOCKERS: usize = 20;
+pub const MAX_RESOURCES: usize = 40;
+pub const MAX_MACHINES: usize = 16;
+/// Provenance keeps the creating entry plus the most recent ones.
+pub const MAX_PROVENANCE: usize = 100;
+/// Largest record accepted on disk; bigger files are reported, never read.
+pub const MAX_RECORD_BYTES: usize = 64 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContinuityState {
+    /// Being worked on right now.
+    Active,
+    /// Paused on something outside the companion's control (the user, a computer, a resource).
+    Waiting,
+    /// Everything needed is available again; the next step can start.
+    ReadyToResume,
+    Completed,
+    Dismissed,
+    Failed,
+}
+
+impl ContinuityState {
+    pub const ALL: [Self; 6] = [
+        Self::Active,
+        Self::Waiting,
+        Self::ReadyToResume,
+        Self::Completed,
+        Self::Dismissed,
+        Self::Failed,
+    ];
+
+    /// Work the user may pick up again. Closed states never reappear as resumable.
+    pub fn is_resumable(self) -> bool {
+        matches!(self, Self::Active | Self::Waiting | Self::ReadyToResume)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProvenanceSource {
+    /// The user, through the continuity API.
+    User,
+    /// A chat turn the task originated from.
+    Chat,
+    /// The `task_continuity_update` tool during explicit task work.
+    Tool,
+    /// The server's reference check (a computer or resource went missing or came back).
+    Server,
+}
+
+/// Who changed the record, when, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Provenance {
+    pub source: ProvenanceSource,
+    pub at: i64,
+    pub note: String,
+}
+
+/// The conversation the task came from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Origin {
+    pub chat_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+}
+
+/// A link to something the task needs. Contents are never copied here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ResourceRef {
+    /// A file in the companion's upload store.
+    Upload { id: String },
+    /// A path in the memory library.
+    Memory { path: String },
+    /// A path on a connected computer.
+    MachinePath { machine_id: String, path: String },
+}
+
+impl ResourceRef {
+    pub fn validate(&self) -> Result<(), ContinuityError> {
+        todo!("#81 continuity domain")
+    }
+
+    /// Short user-readable name, used in blocker details.
+    pub fn describe(&self) -> String {
+        todo!("#81 continuity domain")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceLink {
+    pub resource: ResourceRef,
+    pub provenance: Provenance,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Step {
+    pub summary: String,
+    pub provenance: Provenance,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BlockerKind {
+    /// A computer the task needs is not connected.
+    MachineUnavailable { machine_id: String },
+    /// A linked resource cannot be found.
+    ResourceMissing { resource: ResourceRef },
+    /// Anything stated by the user or the tool.
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Blocker {
+    pub kind: BlockerKind,
+    pub detail: String,
+    pub provenance: Provenance,
+}
+
+impl Blocker {
+    /// Blockers the server adds and clears itself as references come and go.
+    pub fn is_reference_check(&self) -> bool {
+        !matches!(self.kind, BlockerKind::Other)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContinuityRecord {
+    pub version: u32,
+    pub id: String,
+    pub goal: String,
+    pub state: ContinuityState,
+    pub origin: Origin,
+    #[serde(default)]
+    pub machine_ids: Vec<String>,
+    #[serde(default)]
+    pub resources: Vec<ResourceLink>,
+    #[serde(default)]
+    pub completed_steps: Vec<Step>,
+    #[serde(default)]
+    pub blockers: Vec<Blocker>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_step: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub provenance: Vec<Provenance>,
+}
+
+/// One explicit change to a record. Lists are added to, never replaced.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ContinuityUpdate {
+    pub goal: Option<String>,
+    pub state: Option<ContinuityState>,
+    pub completed_step: Option<String>,
+    pub blocker: Option<String>,
+    /// Drop stated blockers; reference-check blockers stay until the reference returns.
+    pub clear_blockers: bool,
+    /// `Some("")` clears the next step.
+    pub next_step: Option<String>,
+    pub machine_ids: Vec<String>,
+    pub resources: Vec<ResourceRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContinuityError {
+    Invalid(String),
+    TooLarge { bytes: usize, max: usize },
+    NotFound,
+    Io(String),
+}
+
+impl std::fmt::Display for ContinuityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid(message) => f.write_str(message),
+            Self::TooLarge { bytes, max } => {
+                write!(f, "record is {bytes} bytes; the limit is {max}")
+            }
+            Self::NotFound => f.write_str("unknown continuity record"),
+            Self::Io(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for ContinuityError {}
+
+impl ContinuityRecord {
+    /// A fresh active record. `provenance` says who started it and why.
+    pub fn new(
+        id: String,
+        goal: &str,
+        origin: Origin,
+        provenance: Provenance,
+        now: i64,
+    ) -> Result<Self, ContinuityError> {
+        let _ = (id, goal, origin, provenance, now);
+        todo!("#81 continuity domain")
+    }
+
+    /// Apply one explicit change. Fails without touching `self` when the
+    /// change is invalid or would exceed a cap.
+    pub fn apply(
+        &mut self,
+        update: &ContinuityUpdate,
+        provenance: Provenance,
+        now: i64,
+    ) -> Result<(), ContinuityError> {
+        let _ = (update, provenance, now);
+        todo!("#81 continuity domain")
+    }
+
+    /// Every invariant a stored record must hold.
+    pub fn validate(&self) -> Result<(), ContinuityError> {
+        todo!("#81 continuity domain")
+    }
+}
+
+/// Record ids are one path component: `task_<unix seconds>_<8 hex>`.
+pub fn is_valid_id(id: &str) -> bool {
+    let _ = id;
+    todo!("#81 continuity domain")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const T0: i64 = 1_767_603_600;
+
+    fn by(source: ProvenanceSource, note: &str) -> Provenance {
+        Provenance {
+            source,
+            at: T0,
+            note: note.into(),
+        }
+    }
+
+    fn origin() -> Origin {
+        Origin {
+            chat_id: "default".into(),
+            message_id: Some("msg_1".into()),
+        }
+    }
+
+    fn record() -> ContinuityRecord {
+        ContinuityRecord::new(
+            "task_1767603600_0badcafe".into(),
+            "rename the photos from the trip",
+            origin(),
+            by(ProvenanceSource::Chat, "user asked in chat"),
+            T0,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn every_state_round_trips_losslessly_through_the_versioned_format() {
+        for state in ContinuityState::ALL {
+            let mut record = record();
+            record
+                .apply(
+                    &ContinuityUpdate {
+                        state: Some(state),
+                        completed_step: Some("listed the folder".into()),
+                        blocker: Some("needs the external drive".into()),
+                        next_step: Some("rename IMG_* files".into()),
+                        machine_ids: vec!["mac-mini".into()],
+                        resources: vec![
+                            ResourceRef::Upload {
+                                id: "upload_1".into(),
+                            },
+                            ResourceRef::Memory {
+                                path: "notes/trip.md".into(),
+                            },
+                            ResourceRef::MachinePath {
+                                machine_id: "mac-mini".into(),
+                                path: "/Volumes/Trip".into(),
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                    by(ProvenanceSource::Tool, "progress"),
+                    T0 + 1,
+                )
+                .unwrap();
+            let json = serde_json::to_string_pretty(&record).unwrap();
+            let back: ContinuityRecord = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, record, "{state:?}");
+            assert_eq!(back.version, CONTINUITY_FORMAT_VERSION);
+            assert!(json.contains("\"version\": 1"));
+            let name = serde_json::to_value(state).unwrap();
+            assert!(json.contains(&format!("\"state\": {name}")), "{json}");
+            assert_eq!(
+                state.is_resumable(),
+                matches!(
+                    state,
+                    ContinuityState::Active
+                        | ContinuityState::Waiting
+                        | ContinuityState::ReadyToResume
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn a_new_record_is_active_and_carries_its_origin_and_provenance() {
+        let record = record();
+        assert_eq!(record.state, ContinuityState::Active);
+        assert_eq!(record.origin, origin());
+        assert_eq!(record.created_at, T0);
+        assert_eq!(record.updated_at, T0);
+        assert_eq!(record.provenance.len(), 1);
+        assert_eq!(record.provenance[0].source, ProvenanceSource::Chat);
+        assert!(record.machine_ids.is_empty());
+        assert!(record.blockers.is_empty());
+        assert!(record.next_step.is_none());
+        record.validate().unwrap();
+
+        let long_goal = "g".repeat(MAX_GOAL_CHARS + 20);
+        let bounded = ContinuityRecord::new(
+            "task_1767603600_00000001".into(),
+            &long_goal,
+            origin(),
+            by(ProvenanceSource::User, "typed"),
+            T0,
+        )
+        .unwrap();
+        assert_eq!(bounded.goal.chars().count(), MAX_GOAL_CHARS);
+    }
+
+    #[test]
+    fn every_write_needs_a_goal_and_a_provenance_note() {
+        for goal in ["", "   "] {
+            assert!(matches!(
+                ContinuityRecord::new(
+                    "task_1767603600_00000001".into(),
+                    goal,
+                    origin(),
+                    by(ProvenanceSource::User, "typed"),
+                    T0,
+                ),
+                Err(ContinuityError::Invalid(_))
+            ));
+        }
+        assert!(matches!(
+            ContinuityRecord::new(
+                "task_1767603600_00000001".into(),
+                "goal",
+                origin(),
+                by(ProvenanceSource::User, "  "),
+                T0,
+            ),
+            Err(ContinuityError::Invalid(_))
+        ));
+
+        let mut unchanged = record();
+        let before = unchanged.clone();
+        let result = unchanged.apply(
+            &ContinuityUpdate {
+                state: Some(ContinuityState::Waiting),
+                ..Default::default()
+            },
+            by(ProvenanceSource::Tool, ""),
+            T0 + 5,
+        );
+        assert!(matches!(result, Err(ContinuityError::Invalid(_))));
+        assert_eq!(unchanged, before, "a rejected update changes nothing");
+
+        let mut stripped = record();
+        stripped.provenance.clear();
+        assert!(matches!(
+            stripped.validate(),
+            Err(ContinuityError::Invalid(_))
+        ));
+        let mut wrong_version = record();
+        wrong_version.version = CONTINUITY_FORMAT_VERSION + 1;
+        assert!(matches!(
+            wrong_version.validate(),
+            Err(ContinuityError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn updates_append_steps_blockers_links_and_provenance_with_bounds() {
+        let mut record = record();
+        let update = ContinuityUpdate {
+            goal: Some("  rename the photos  ".into()),
+            state: Some(ContinuityState::Waiting),
+            completed_step: Some("x".repeat(MAX_NOTE_CHARS + 10)),
+            blocker: Some("drive not mounted".into()),
+            next_step: Some("mount the drive".into()),
+            machine_ids: vec!["mac-mini".into(), "mac-mini".into()],
+            resources: vec![
+                ResourceRef::Upload {
+                    id: "upload_1".into(),
+                },
+                ResourceRef::Upload {
+                    id: "upload_1".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        record
+            .apply(&update, by(ProvenanceSource::Tool, "first pass"), T0 + 10)
+            .unwrap();
+        assert_eq!(record.goal, "rename the photos");
+        assert_eq!(record.state, ContinuityState::Waiting);
+        assert_eq!(record.completed_steps.len(), 1);
+        assert_eq!(
+            record.completed_steps[0].summary.chars().count(),
+            MAX_NOTE_CHARS
+        );
+        assert_eq!(record.completed_steps[0].provenance.note, "first pass");
+        assert_eq!(record.blockers.len(), 1);
+        assert_eq!(record.blockers[0].kind, BlockerKind::Other);
+        assert_eq!(record.blockers[0].detail, "drive not mounted");
+        assert_eq!(record.next_step.as_deref(), Some("mount the drive"));
+        assert_eq!(record.machine_ids, vec!["mac-mini"], "deduplicated");
+        assert_eq!(record.resources.len(), 1, "deduplicated");
+        assert_eq!(
+            record.resources[0].provenance.source,
+            ProvenanceSource::Tool
+        );
+        assert_eq!(record.updated_at, T0 + 10);
+        assert_eq!(record.created_at, T0);
+        assert_eq!(record.provenance.len(), 2);
+
+        // Clearing: stated blockers go, the next step can be emptied.
+        record
+            .apply(
+                &ContinuityUpdate {
+                    clear_blockers: true,
+                    next_step: Some(String::new()),
+                    ..Default::default()
+                },
+                by(ProvenanceSource::User, "mounted it"),
+                T0 + 20,
+            )
+            .unwrap();
+        assert!(record.blockers.is_empty());
+        assert!(record.next_step.is_none());
+
+        // A reference-check blocker survives clear_blockers.
+        record.blockers.push(Blocker {
+            kind: BlockerKind::MachineUnavailable {
+                machine_id: "mac-mini".into(),
+            },
+            detail: "computer mac-mini is not connected".into(),
+            provenance: by(ProvenanceSource::Server, "reference check"),
+        });
+        record
+            .apply(
+                &ContinuityUpdate {
+                    clear_blockers: true,
+                    ..Default::default()
+                },
+                by(ProvenanceSource::User, "again"),
+                T0 + 30,
+            )
+            .unwrap();
+        assert_eq!(record.blockers.len(), 1);
+        assert!(record.blockers[0].is_reference_check());
+
+        // Caps are enforced without partial writes.
+        for i in 0..(MAX_STEPS - 1) {
+            record
+                .apply(
+                    &ContinuityUpdate {
+                        completed_step: Some(format!("step {i}")),
+                        ..Default::default()
+                    },
+                    by(ProvenanceSource::Tool, "step"),
+                    T0 + 100 + i as i64,
+                )
+                .unwrap();
+        }
+        assert_eq!(record.completed_steps.len(), MAX_STEPS);
+        let before = record.clone();
+        assert!(matches!(
+            record.apply(
+                &ContinuityUpdate {
+                    completed_step: Some("one too many".into()),
+                    ..Default::default()
+                },
+                by(ProvenanceSource::Tool, "step"),
+                T0 + 999,
+            ),
+            Err(ContinuityError::Invalid(_))
+        ));
+        assert_eq!(record, before);
+        assert!(record.provenance.len() <= MAX_PROVENANCE);
+        assert_eq!(
+            record.provenance[0].note, "user asked in chat",
+            "the creating entry is never trimmed"
+        );
+        assert_eq!(record.provenance.last().unwrap().note, "step");
+    }
+
+    #[test]
+    fn resource_links_and_ids_are_validated_as_single_path_components() {
+        for bad in [
+            ResourceRef::Upload { id: "../x".into() },
+            ResourceRef::Upload { id: String::new() },
+            ResourceRef::Memory {
+                path: "/etc/passwd".into(),
+            },
+            ResourceRef::Memory {
+                path: "notes/../../x".into(),
+            },
+            ResourceRef::MachinePath {
+                machine_id: String::new(),
+                path: "/tmp".into(),
+            },
+            ResourceRef::MachinePath {
+                machine_id: "mac/mini".into(),
+                path: "/tmp".into(),
+            },
+            ResourceRef::MachinePath {
+                machine_id: "mac-mini".into(),
+                path: String::new(),
+            },
+        ] {
+            assert!(bad.validate().is_err(), "{bad:?}");
+            let mut record = record();
+            let before = record.clone();
+            assert!(
+                record
+                    .apply(
+                        &ContinuityUpdate {
+                            resources: vec![bad.clone()],
+                            ..Default::default()
+                        },
+                        by(ProvenanceSource::Tool, "link"),
+                        T0 + 1,
+                    )
+                    .is_err()
+            );
+            assert_eq!(record, before);
+        }
+        assert!(
+            ResourceRef::Memory {
+                path: "notes/trip.md".into()
+            }
+            .validate()
+            .is_ok()
+        );
+        assert_eq!(
+            ResourceRef::MachinePath {
+                machine_id: "mac-mini".into(),
+                path: "/Volumes/Trip".into(),
+            }
+            .describe(),
+            "/Volumes/Trip on mac-mini"
+        );
+
+        let mut record = record();
+        assert!(
+            record
+                .apply(
+                    &ContinuityUpdate {
+                        machine_ids: vec!["a/b".into()],
+                        ..Default::default()
+                    },
+                    by(ProvenanceSource::Tool, "link"),
+                    T0 + 1,
+                )
+                .is_err()
+        );
+
+        assert!(is_valid_id("task_1767603600_0badcafe"));
+        for bad in ["", "../x", "a/b", ".hidden", "task_1\\2", &"x".repeat(65)] {
+            assert!(!is_valid_id(bad), "{bad:?}");
+        }
+    }
+}
