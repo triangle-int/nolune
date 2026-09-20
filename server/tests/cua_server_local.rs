@@ -105,7 +105,7 @@ fn the_server_local_runtime_is_wired_sessioned_and_documented() {
         "main.rs must start the server-local runtime before serving"
     );
     assert!(
-        main.contains(".cua.shutdown()"),
+        main.contains("cua.shutdown()"),
         "main.rs must end every driver session and stop the driver on shutdown"
     );
     let module = fs::read_to_string(repo.join("server/src/services/cua/mod.rs")).unwrap();

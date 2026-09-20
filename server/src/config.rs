@@ -181,18 +181,34 @@ impl Default for CuaConfig {
 impl CuaConfig {
     /// The configured driver binary, `None` when the path is empty.
     pub fn driver_path(&self) -> Option<&Path> {
-        todo!("slice 3: [cua] config")
+        let path = self.driver_path.trim();
+        (!path.is_empty()).then(|| Path::new(path))
     }
 
     /// The driver deadlines; a zero keeps the default so a stray `0` never
     /// makes every call fail.
     pub fn timeouts(&self) -> crate::services::cua::transport::DriverTimeouts {
-        todo!("slice 3: [cua] config")
+        let defaults = crate::services::cua::transport::DriverTimeouts::default();
+        crate::services::cua::transport::DriverTimeouts {
+            handshake: secs_or(self.handshake_timeout_secs, defaults.handshake),
+            call: secs_or(self.call_timeout_secs, defaults.call),
+        }
     }
 
     /// How long one run may hold its session; zero keeps the default.
     pub fn run_timeout(&self) -> std::time::Duration {
-        todo!("slice 3: [cua] config")
+        secs_or(
+            self.run_timeout_secs,
+            std::time::Duration::from_secs(Self::default().run_timeout_secs),
+        )
+    }
+}
+
+fn secs_or(secs: u64, default: std::time::Duration) -> std::time::Duration {
+    if secs == 0 {
+        default
+    } else {
+        std::time::Duration::from_secs(secs)
     }
 }
 

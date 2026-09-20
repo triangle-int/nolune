@@ -121,12 +121,6 @@ impl Drop for StdioDriverTransport {
 }
 
 impl StdioDriverTransport {
-    /// Spawn `<driver> mcp` and complete the MCP handshake with the default
-    /// [`DriverTimeouts`].
-    pub async fn spawn(driver: &Path) -> anyhow::Result<Self> {
-        Self::spawn_with(driver, DriverTimeouts::default()).await
-    }
-
     /// Spawn `<driver> mcp` and complete the MCP handshake within
     /// `timeouts.handshake`; a child that has not answered by then is killed
     /// and the error names the driver.
@@ -166,14 +160,9 @@ impl StdioDriverTransport {
     }
 
     /// The deadlines this transport holds the driver to.
+    #[cfg(test)]
     pub fn timeouts(&self) -> DriverTimeouts {
         self.timeouts
-    }
-
-    /// Stop the driver child; the process is killed when the connection drops.
-    pub fn shutdown(self) {
-        self.close();
-        drop(self);
     }
 }
 
@@ -211,8 +200,13 @@ impl DriverTransport for StdioDriverTransport {
         })
     }
 
+    /// Abort the keep-alive task: the rmcp service drops, the connection
+    /// closes and the child is killed. Aborting twice is harmless.
     fn close(&self) {
-        todo!("slice 3: close the driver child from the shutdown hook")
+        if !self.keep_alive.is_finished() {
+            log::info!("[cua] driver stopped");
+        }
+        self.keep_alive.abort();
     }
 }
 
@@ -356,7 +350,10 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let missing = std::env::temp_dir().join("nolune-no-such-cua-driver");
         let error = runtime
-            .block_on(StdioDriverTransport::spawn(&missing))
+            .block_on(StdioDriverTransport::spawn_with(
+                &missing,
+                DriverTimeouts::default(),
+            ))
             .err()
             .expect("a missing binary cannot be spawned");
         assert!(
@@ -505,7 +502,7 @@ done
             matches!(again, Err(DriverCallFailure::Timeout(_))),
             "{again:?}"
         );
-        transport.shutdown();
+        transport.close();
     }
 
     #[cfg(unix)]

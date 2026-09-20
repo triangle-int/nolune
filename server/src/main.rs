@@ -150,6 +150,10 @@ async fn main() {
     // Report a connected computer whose heartbeat goes stale (#80).
     state.machine_registry.start_health_watch();
 
+    // The machine this server runs on as a computer-use target (#16): registered
+    // when a Cua driver and a display are there, skipped honestly otherwise.
+    state.cua.start().await;
+
     // One proactive loop (#92): finish what a previous process left running,
     // then trim old receipts.
     {
@@ -212,6 +216,7 @@ async fn main() {
         });
     }
 
+    let cua = state.cua.clone();
     let app = app::router::build_router(state, static_dir);
 
     info!("Starting server on http://{addr}");
@@ -236,7 +241,12 @@ async fn main() {
     println!("nolune: ready http://localhost:{port}");
 
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            // End every open driver session and stop the driver child before
+            // connections drain; the grace timer still bounds the whole exit.
+            cua.shutdown().await;
+        })
         .await
         .expect("server exited unexpectedly");
     info!("gateway stopped");

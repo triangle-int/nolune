@@ -14,7 +14,7 @@ Defined once in `client/src/lib/companion/navigation.js` and rendered by
 | Chat | `/{slug}/chat` | Talk with your companion. |
 | Activity | `/{slug}/activity` | What it did on its own, why, and what it made. Drops live here (`/{slug}/drops`), not as a tab. |
 | Memory | `/{slug}/memory` | What it remembers; inspect, correct, forget. |
-| Computers | `/{slug}/computers` | Desktops connected through the desktop app, from `GET /api/instances/{slug}/machines`. |
+| Computers | `/{slug}/computers` | Desktops connected through the desktop app, and the server machine itself when it has a Cua driver ([computer-use.md](computer-use.md)), from `GET /api/instances/{slug}/machines`. |
 | Settings | `/{slug}/settings` | How it behaves and what it may use. |
 
 There is no Agents, Thoughts, Stats, Skills, or Drops tab. Skills are a

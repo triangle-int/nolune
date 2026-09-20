@@ -144,7 +144,15 @@ impl std::error::Error for CuaRegistrationError {}
 /// surfacing later as `SelectionError::DuplicateMachineId`.
 #[derive(Clone, Default)]
 pub struct CuaTargets {
-    targets: Arc<Mutex<BTreeMap<MachineId, Arc<CheckedCuaAdapter>>>>,
+    targets: Arc<Mutex<BTreeMap<MachineId, CuaTarget>>>,
+}
+
+/// One registered target and the labels its descriptor does not carry.
+struct CuaTarget {
+    adapter: Arc<CheckedCuaAdapter>,
+    /// The host's name, known for the server-local target only.
+    hostname: Option<String>,
+    registered_at: i64,
 }
 
 /// A server-local target as `GET /machines` lists it: the descriptor plus
@@ -171,17 +179,46 @@ impl CuaTargets {
         hostname: &str,
         registered_at: i64,
     ) -> Result<(), CuaRegistrationError> {
-        let _ = (adapter, hostname, registered_at);
-        todo!("slice 3: server-local rows in GET /machines")
+        self.insert(adapter, Some(hostname.to_owned()), registered_at)
+            .await
     }
 
     /// The server-local targets as the known-machines listing shows them.
     pub async fn server_local_entries(&self) -> Vec<ServerLocalEntry> {
-        todo!("slice 3: server-local rows in GET /machines")
+        self.targets
+            .lock()
+            .await
+            .values()
+            .filter(|target| target.adapter.descriptor().location == MachineLocation::ServerLocal)
+            .map(|target| ServerLocalEntry {
+                descriptor: target.adapter.descriptor().clone(),
+                hostname: target.hostname.clone().unwrap_or_else(|| {
+                    target
+                        .adapter
+                        .descriptor()
+                        .machine_id
+                        .as_str()
+                        .trim_start_matches(crate::services::cua::host::SERVER_LOCAL_PREFIX)
+                        .to_owned()
+                }),
+                registered_at: target.registered_at,
+            })
+            .collect()
     }
 
     /// Add a target. Fails when its machine id is already registered.
+    #[allow(dead_code)] // Desktop targets register here (#17).
     pub async fn register(&self, adapter: CheckedCuaAdapter) -> Result<(), CuaRegistrationError> {
+        self.insert(adapter, None, chrono::Utc::now().timestamp())
+            .await
+    }
+
+    async fn insert(
+        &self,
+        adapter: CheckedCuaAdapter,
+        hostname: Option<String>,
+        registered_at: i64,
+    ) -> Result<(), CuaRegistrationError> {
         let descriptor = adapter.descriptor();
         let id = descriptor.machine_id.clone();
         let mut targets = self.targets.lock().await;
@@ -195,7 +232,14 @@ impl CuaTargets {
             descriptor.platform,
             descriptor.health
         );
-        targets.insert(id, Arc::new(adapter));
+        targets.insert(
+            id,
+            CuaTarget {
+                adapter: Arc::new(adapter),
+                hostname,
+                registered_at,
+            },
+        );
         Ok(())
     }
 
@@ -217,7 +261,7 @@ impl CuaTargets {
             .lock()
             .await
             .values()
-            .map(|adapter| adapter.descriptor().clone())
+            .map(|target| target.adapter.descriptor().clone())
             .collect()
     }
 
@@ -231,12 +275,12 @@ impl CuaTargets {
         let targets = self.targets.lock().await;
         let descriptors: Vec<MachineDescriptor> = targets
             .values()
-            .map(|adapter| adapter.descriptor().clone())
+            .map(|target| target.adapter.descriptor().clone())
             .collect();
         let chosen = select_machine(&descriptors, requested)?;
         targets
             .get(&chosen.machine_id)
-            .cloned()
+            .map(|target| target.adapter.clone())
             .ok_or(SelectionError::NotFound)
     }
 }
@@ -473,6 +517,46 @@ fn known_view(
         health: heartbeat_health(online, now - last_seen),
         driver_version: None,
         cua_health: None,
+    }
+}
+
+/// The server-local target as the API reports it: online while the driver
+/// is registered, with the driver's own health, permissions and
+/// capabilities; there is no record, so nothing here is written to disk and
+/// the row cannot be renamed.
+fn server_local_view(entry: &ServerLocalEntry, now: i64, slug: &str) -> KnownMachine {
+    let descriptor = &entry.descriptor;
+    let os = serde_json::to_value(descriptor.platform)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    KnownMachine {
+        machine_id: descriptor.machine_id.as_str().to_owned(),
+        display_name: entry.hostname.clone(),
+        custom_name: None,
+        hostname: entry.hostname.clone(),
+        os,
+        platform: Some(descriptor.platform),
+        location: descriptor.location,
+        screen_width: 0,
+        screen_height: 0,
+        permissions: Some(descriptor.permissions.clone()),
+        capabilities: descriptor
+            .capabilities
+            .iter()
+            .filter_map(|capability| {
+                serde_json::to_value(capability)
+                    .ok()
+                    .and_then(|value| value.as_str().map(str::to_owned))
+            })
+            .collect(),
+        first_seen: entry.registered_at,
+        last_seen: now,
+        instance_slug: Some(slug.to_owned()),
+        online: true,
+        health: descriptor.health,
+        driver_version: Some(descriptor.driver_version.as_str().to_owned()),
+        cua_health: Some(descriptor.health),
     }
 }
 
@@ -949,8 +1033,23 @@ impl MachineRegistry {
             .iter()
             .map(|agent| (agent.info.machine_id.as_str(), agent.info.last_seen))
             .collect();
+        // The server-local target (#16) is live state, never a record: its
+        // row comes from the registered descriptor, and a record that claims
+        // its id (the registration grammar allows the prefix) never shadows it.
+        let server_local: Vec<KnownMachine> = self
+            .cua
+            .server_local_entries()
+            .await
+            .iter()
+            .map(|entry| server_local_view(entry, now, &self.known.slug))
+            .collect();
         let mut machines: Vec<KnownMachine> = records
             .values()
+            .filter(|record| {
+                !server_local
+                    .iter()
+                    .any(|row| row.machine_id == record.machine_id)
+            })
             .map(|record| {
                 known_view(
                     record,
@@ -960,6 +1059,7 @@ impl MachineRegistry {
                 )
             })
             .collect();
+        machines.extend(server_local);
         machines.sort_by(|a, b| {
             b.online
                 .cmp(&a.online)

@@ -17,17 +17,24 @@ use std::{
     time::Duration,
 };
 
+use anyhow::Context as _;
 use cua_protocol::{
-    CuaAction, CuaRequestEnvelope, CuaResponseEnvelope, MachineDescriptor, MachineId, SessionLabel,
-    ValidationError,
+    CheckedCuaAdapter, CuaAction, CuaRequestEnvelope, CuaResponse, CuaResponseEnvelope,
+    MachineDescriptor, MachineId, ProtocolVersion, RequestId, SessionLabel, SessionRefArgs,
+    StartSessionArgs, ValidationError,
 };
 
 use super::{
     discovery::DriverLookupError,
-    host::{HostProbe, Skip},
-    transport::DriverTransport,
+    driver::{checked_adapter, describe_machine},
+    host::{HostProbe, Skip, server_local_machine_id, startup_plan},
+    session::{is_run_managed, with_session},
+    transport::{DriverTransport, StdioDriverTransport},
 };
 use crate::{config::CuaConfig, services::machine_registry::CuaTargets};
+
+/// Session labels are `nolune-run-<n>`; request ids hang off them.
+const RUN_LABEL_PREFIX: &str = "nolune-run-";
 
 /// Where the runtime is in its life.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -95,7 +102,7 @@ impl std::error::Error for ExecError {}
 /// boundary and the transport that owns the driver child.
 struct Target {
     machine_id: MachineId,
-    adapter: Arc<cua_protocol::CheckedCuaAdapter>,
+    adapter: Arc<CheckedCuaAdapter>,
     transport: Arc<dyn DriverTransport>,
 }
 
@@ -142,7 +149,9 @@ impl CuaRuntime {
     /// target when there is one. Every outcome is logged once; none of them
     /// fails the server.
     pub async fn start(&self) {
-        todo!("slice 3: runtime start")
+        let host = HostProbe::current();
+        let driver = super::discovery::discover(self.inner.config.driver_path());
+        self.start_from(host, driver).await;
     }
 
     /// `start` with the host and the driver lookup supplied, so tests decide
@@ -152,51 +161,217 @@ impl CuaRuntime {
         host: HostProbe,
         driver: Result<Option<PathBuf>, DriverLookupError>,
     ) {
-        let _ = (host, driver);
-        todo!("slice 3: runtime start")
+        if !matches!(*self.inner.state.lock().await, State::NotStarted) {
+            log::warn!("[cua] start called more than once; ignoring");
+            return;
+        }
+        let driver = match startup_plan(&self.inner.config, &host, driver) {
+            Ok(driver) => driver,
+            Err(skip) => {
+                let reason = skip.reason();
+                if skip.is_error() {
+                    log::error!("[cua] no server-local computer-use target: {reason}");
+                } else {
+                    log::info!("[cua] no server-local computer-use target: {reason}");
+                }
+                *self.inner.state.lock().await = State::Skipped(skip);
+                return;
+            }
+        };
+        let timeouts = self.inner.config.timeouts();
+        let transport = match StdioDriverTransport::spawn_with(&driver, timeouts).await {
+            Ok(transport) => Arc::new(transport),
+            Err(error) => {
+                let message = format!("{error:#}");
+                log::error!("[cua] driver did not start; no server-local target: {message}");
+                *self.inner.state.lock().await = State::Failed(message);
+                return;
+            }
+        };
+        let machine_id = server_local_machine_id(&host.hostname);
+        if let Err(error) = self.attach(transport, machine_id, &host.hostname).await {
+            log::error!("[cua] driver could not be described; no server-local target: {error:#}");
+        }
     }
 
     /// Register the target behind an already running transport: ask it for
     /// its health report, build the descriptor, and put the checked adapter
     /// into the shared registry. `hostname` labels the row the API lists.
+    /// On failure the transport is closed and the runtime reads `Failed`.
     pub(crate) async fn attach(
         &self,
         transport: Arc<dyn DriverTransport>,
         machine_id: MachineId,
         hostname: &str,
     ) -> anyhow::Result<MachineDescriptor> {
-        let _ = (transport, machine_id, hostname);
-        todo!("slice 3: runtime attach")
+        match self.register(transport.clone(), machine_id, hostname).await {
+            Ok(descriptor) => {
+                log::info!(
+                    "[cua] server-local target registered: {} ({:?} {}, {:?}, accessibility {:?}, \
+                     screen capture {:?}, {} capabilities)",
+                    descriptor.machine_id.as_str(),
+                    descriptor.platform,
+                    descriptor.driver_version.as_str(),
+                    descriptor.health,
+                    descriptor.permissions.accessibility,
+                    descriptor.permissions.screen_capture,
+                    descriptor.capabilities.len()
+                );
+                Ok(descriptor)
+            }
+            Err(error) => {
+                transport.close();
+                *self.inner.state.lock().await = State::Failed(format!("{error:#}"));
+                Err(error)
+            }
+        }
     }
 
+    async fn register(
+        &self,
+        transport: Arc<dyn DriverTransport>,
+        machine_id: MachineId,
+        hostname: &str,
+    ) -> anyhow::Result<MachineDescriptor> {
+        let descriptor = describe_machine(transport.as_ref(), machine_id.clone())
+            .await
+            .context("health report")?;
+        let adapter = checked_adapter(transport.clone(), descriptor.clone())
+            .map_err(|error| anyhow::anyhow!("descriptor refused: {error}"))?;
+        self.inner
+            .targets
+            .register_server_local(adapter, hostname, chrono::Utc::now().timestamp())
+            .await?;
+        let adapter = self
+            .inner
+            .targets
+            .select(Some(&machine_id))
+            .await
+            .map_err(|error| anyhow::anyhow!("registered target not selectable: {error:?}"))?;
+        *self.inner.state.lock().await = State::Running(Target {
+            machine_id,
+            adapter,
+            transport,
+        });
+        Ok(descriptor)
+    }
+
+    /// Where the runtime is; the typed machine tools (#17/#18) report it.
+    #[allow(dead_code)]
     pub async fn status(&self) -> RuntimeStatus {
-        todo!("slice 3: runtime status")
-    }
-
-    /// The registered target's id, `None` unless running.
-    pub async fn machine_id(&self) -> Option<MachineId> {
-        match self.status().await {
-            RuntimeStatus::Running(id) => Some(id),
-            _ => None,
+        match &*self.inner.state.lock().await {
+            State::NotStarted => RuntimeStatus::NotStarted,
+            State::Skipped(skip) => RuntimeStatus::Skipped(skip.clone()),
+            State::Failed(message) => RuntimeStatus::Failed(message.clone()),
+            State::Running(target) => RuntimeStatus::Running(target.machine_id.clone()),
+            State::Stopped => RuntimeStatus::Stopped,
         }
     }
 
     /// Execute `body` as one run: the first action it executes opens a driver
     /// session, every action carries that session, and the session is ended
     /// when the body completes, fails, or exceeds the run timeout.
+    #[allow(dead_code)] // Every typed machine tool (#17/#18) executes through a run.
     pub async fn run<T, F, Fut>(&self, purpose: &str, body: F) -> Result<T, RunError>
     where
         F: FnOnce(Arc<RunSession>) -> Fut,
         Fut: Future<Output = anyhow::Result<T>>,
     {
-        let _ = (purpose, body);
-        todo!("slice 3: per-run sessions")
+        let (machine_id, adapter) = match &*self.inner.state.lock().await {
+            State::Running(target) => (target.machine_id.clone(), target.adapter.clone()),
+            _ => return Err(RunError::Unavailable),
+        };
+        let n = self.inner.next_run.fetch_add(1, Ordering::Relaxed);
+        let label = SessionLabel::try_from(format!("{RUN_LABEL_PREFIX}{n}"))
+            .expect("the prefix plus a counter is an identifier");
+        let session = Arc::new(RunSession {
+            label,
+            machine_id,
+            adapter,
+            started: tokio::sync::Mutex::new(false),
+            open: self.inner.open.clone(),
+            next_request: AtomicU64::new(1),
+        });
+        log::info!("[cua] run {} begins: {purpose}", session.label().as_str());
+        let limit = self.inner.config.run_timeout();
+        let outcome = tokio::time::timeout(limit, body(session.clone())).await;
+        session.finish().await;
+        match outcome {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) => {
+                log::warn!("[cua] run {} failed: {error:#}", session.label.as_str());
+                Err(RunError::Failed(error))
+            }
+            Err(_elapsed) => {
+                log::warn!(
+                    "[cua] run {} exceeded {limit:?}; its session was ended",
+                    session.label.as_str()
+                );
+                Err(RunError::Timeout(limit))
+            }
+        }
     }
 
     /// End every open session, unregister the target and stop the driver.
     /// Safe to call on a runtime that never started or already stopped.
     pub async fn shutdown(&self) {
-        todo!("slice 3: shutdown hook")
+        let target = {
+            let mut state = self.inner.state.lock().await;
+            match std::mem::replace(&mut *state, State::Stopped) {
+                State::Running(target) => target,
+                _ => return,
+            }
+        };
+        let open: Vec<SessionLabel> = std::mem::take(&mut *lock_open(&self.inner.open))
+            .into_iter()
+            .collect();
+        for label in &open {
+            end_session(&target.adapter, &target.machine_id, label).await;
+        }
+        self.inner.targets.unregister(&target.machine_id).await;
+        target.transport.close();
+        log::info!(
+            "[cua] server-local target {} stopped; {} open session(s) ended",
+            target.machine_id.as_str(),
+            open.len()
+        );
+    }
+}
+
+/// The open-session set; a poisoned lock only means a run panicked, and the
+/// set itself is still consistent.
+fn lock_open(
+    open: &Mutex<BTreeSet<SessionLabel>>,
+) -> std::sync::MutexGuard<'_, BTreeSet<SessionLabel>> {
+    open.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// End one driver session; a failure is logged, never propagated, because
+/// the run is over either way and the child dies with the runtime.
+async fn end_session(adapter: &CheckedCuaAdapter, machine_id: &MachineId, label: &SessionLabel) {
+    let request = CuaRequestEnvelope {
+        version: ProtocolVersion::V1,
+        request_id: RequestId::try_from(format!("{}-end", label.as_str()))
+            .expect("a run label plus a suffix is an identifier"),
+        machine_id: machine_id.clone(),
+        action: CuaAction::EndSession(SessionRefArgs {
+            session: Some(label.clone()),
+        }),
+    };
+    match adapter.execute(&request).await {
+        Ok(envelope) => match envelope.response {
+            CuaResponse::Success { .. } => log::info!("[cua] session {} ended", label.as_str()),
+            CuaResponse::Error { error } => log::warn!(
+                "[cua] session {} did not end cleanly ({:?}): {}",
+                label.as_str(),
+                error.code,
+                error.message.as_str()
+            ),
+        },
+        Err(error) => log::warn!(
+            "[cua] session {} did not end cleanly: {error}",
+            label.as_str()
+        ),
     }
 }
 
@@ -205,7 +380,7 @@ impl CuaRuntime {
 pub struct RunSession {
     label: SessionLabel,
     machine_id: MachineId,
-    adapter: Arc<cua_protocol::CheckedCuaAdapter>,
+    adapter: Arc<CheckedCuaAdapter>,
     /// Set once `start_session` succeeded.
     started: tokio::sync::Mutex<bool>,
     open: Arc<Mutex<BTreeSet<SessionLabel>>>,
@@ -218,24 +393,73 @@ impl RunSession {
         &self.label
     }
 
-    pub fn machine_id(&self) -> &MachineId {
-        &self.machine_id
-    }
-
     /// Execute one action inside this run's session. The action is
     /// authorized against the target's descriptor before the session is
     /// opened, so a refused action never reaches the driver and never opens
     /// a session on its own.
+    #[allow(dead_code)] // The typed machine tools (#17/#18) execute through a run.
     pub async fn execute(&self, action: CuaAction) -> Result<CuaResponseEnvelope, ExecError> {
-        let _ = (action, &self.adapter, &self.started, &self.open);
-        todo!("slice 3: per-run sessions")
+        if is_run_managed(&action) {
+            return Err(ExecError::Refused(
+                "sessions are opened and closed by the run itself".to_owned(),
+            ));
+        }
+        self.adapter
+            .descriptor()
+            .authorize(&action)
+            .map_err(|error| ExecError::Refused(error.to_string()))?;
+        let action = with_session(action, &self.label);
+        self.ensure_started().await?;
+        let request = self.envelope(action);
+        self.adapter
+            .execute(&request)
+            .await
+            .map_err(ExecError::Protocol)
+    }
+
+    /// Open the driver session before the first action; later actions find
+    /// it open. Holding the lock across the call serializes a run's actions.
+    async fn ensure_started(&self) -> Result<(), ExecError> {
+        let mut started = self.started.lock().await;
+        if *started {
+            return Ok(());
+        }
+        let request = self.envelope(CuaAction::StartSession(StartSessionArgs {
+            session: Some(self.label.clone()),
+        }));
+        let envelope = self
+            .adapter
+            .execute(&request)
+            .await
+            .map_err(|error| ExecError::SessionFailed(error.to_string()))?;
+        match envelope.response {
+            CuaResponse::Success { .. } => {
+                *started = true;
+                lock_open(&self.open).insert(self.label.clone());
+                log::info!("[cua] session {} started", self.label.as_str());
+                Ok(())
+            }
+            CuaResponse::Error { error } => Err(ExecError::SessionFailed(format!(
+                "{:?}: {}",
+                error.code,
+                error.message.as_str()
+            ))),
+        }
+    }
+
+    /// End the session if this run opened it and nothing ended it already.
+    async fn finish(&self) {
+        if !lock_open(&self.open).remove(&self.label) {
+            return;
+        }
+        end_session(&self.adapter, &self.machine_id, &self.label).await;
     }
 
     fn envelope(&self, action: CuaAction) -> CuaRequestEnvelope {
         let n = self.next_request.fetch_add(1, Ordering::Relaxed);
         CuaRequestEnvelope {
-            version: cua_protocol::ProtocolVersion::V1,
-            request_id: cua_protocol::RequestId::try_from(format!("{}-{n}", self.label.as_str()))
+            version: ProtocolVersion::V1,
+            request_id: RequestId::try_from(format!("{}-{n}", self.label.as_str()))
                 .expect("a run label plus a counter is an identifier"),
             machine_id: self.machine_id.clone(),
             action,
@@ -416,7 +640,6 @@ mod tests {
             assert_eq!(runtime.status().await, RuntimeStatus::NotStarted);
             runtime.start_from(host, driver).await;
             assert_eq!(runtime.status().await, RuntimeStatus::Skipped(expected));
-            assert_eq!(runtime.machine_id().await, None);
             assert!(registry.cua().list().await.is_empty());
             assert!(registry.known_at(1_700_000_000).await.unwrap().is_empty());
             assert!(
@@ -511,7 +734,6 @@ mod tests {
 
         let id = server_local_machine_id("studio");
         assert_eq!(runtime.status().await, RuntimeStatus::Running(id.clone()));
-        assert_eq!(runtime.machine_id().await, Some(id.clone()));
 
         // The typed registry.
         let targets = registry.cua().list().await;
@@ -522,7 +744,8 @@ mod tests {
         assert!(targets[0].capabilities.contains(&Capability::Pointer));
 
         // GET /machines.
-        let known = registry.known_at(1_700_000_000).await.unwrap();
+        let now = chrono::Utc::now().timestamp();
+        let known = registry.known_at(now).await.unwrap();
         assert_eq!(known.len(), 1, "{known:?}");
         let row = &known[0];
         assert_eq!(row.machine_id, "server-local:studio");
@@ -545,11 +768,8 @@ mod tests {
         );
         assert!(row.capabilities.contains(&"pointer".to_owned()));
         assert!(row.capabilities.contains(&"session_lifecycle".to_owned()));
-        assert_eq!(
-            row.last_seen, 1_700_000_000,
-            "a running target was seen now"
-        );
-        assert!(row.first_seen <= row.last_seen);
+        assert_eq!(row.last_seen, now, "a running target was seen now");
+        assert!(now - row.first_seen < 60, "first_seen is the registration");
         assert_eq!(
             row.instance_slug.as_deref(),
             Some(crate::domain::companion::CANONICAL_SLUG)
@@ -620,18 +840,23 @@ mod tests {
         let (runtime, transport) = attached(
             &registry,
             HEALTHY,
-            vec![Ok(started(1)), Ok(json!({"apps": []})), Ok(ended(1))],
+            vec![Ok(started(2)), Ok(json!({"apps": []})), Ok(ended(2))],
         )
         .await;
 
-        // A run that executes nothing opens nothing.
-        let idle: Result<u8, _> = runtime.run("idle", |_| async { Ok(7) }).await;
+        // A run that executes nothing opens nothing; it still counts as a run.
+        let idle: Result<u8, _> = runtime
+            .run("idle", |run| async move {
+                assert_eq!(run.label().as_str(), "nolune-run-1");
+                Ok(7)
+            })
+            .await;
         assert_eq!(idle.unwrap(), 7);
         assert_eq!(transport.tools_called(), vec!["health_report".to_owned()]);
 
         let apps = runtime
             .run("list the apps", |run| async move {
-                assert_eq!(run.label().as_str(), "nolune-run-1");
+                assert_eq!(run.label().as_str(), "nolune-run-2");
                 let response = run.execute(list_apps()).await?;
                 assert_eq!(response.action, CuaActionKind::ListApps);
                 assert!(matches!(response.response, CuaResponse::Success { .. }));
@@ -646,8 +871,8 @@ mod tests {
             transport.tools_called(),
             vec!["health_report", "start_session", "list_apps", "end_session"]
         );
-        assert_eq!(calls[1].1["session"], label(1));
-        assert_eq!(calls[3].1["session"], label(1));
+        assert_eq!(calls[1].1["session"], label(2));
+        assert_eq!(calls[3].1["session"], label(2));
         assert!(
             registry.cua().list().await.len() == 1,
             "the target stays registered between runs"
@@ -938,12 +1163,11 @@ mod tests {
                 "end_session"
             ]
         );
-        for index in 2..=4 {
+        for (name, arguments) in &calls[2..=4] {
             assert_eq!(
-                calls[index].1["session"],
+                arguments["session"],
                 label(1),
-                "{} carries the run's session",
-                calls[index].0
+                "{name} carries the run's session"
             );
         }
         assert_eq!(calls[3].1["x"], 1.0);

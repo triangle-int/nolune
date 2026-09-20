@@ -37,8 +37,25 @@ pub struct HostProbe {
 impl HostProbe {
     /// Probe this process's host and environment.
     pub fn current() -> Self {
-        todo!("slice 3: headless detection")
+        let named = |key: &str| std::env::var_os(key).is_some_and(|value| !value.is_empty());
+        Self {
+            os: std::env::consts::OS,
+            display: named("DISPLAY") || named("WAYLAND_DISPLAY"),
+            container: std::path::Path::new("/.dockerenv").exists()
+                || std::path::Path::new("/run/.containerenv").exists()
+                || named("container")
+                || named("KUBERNETES_SERVICE_HOST"),
+            hostname: hostname(),
+        }
     }
+}
+
+/// The kernel hostname, empty when it cannot be read.
+pub fn hostname() -> String {
+    gethostname::gethostname()
+        .to_string_lossy()
+        .trim()
+        .to_owned()
 }
 
 /// Why no server-local target is registered on this host.
@@ -60,26 +77,75 @@ pub enum Skip {
 impl Skip {
     /// One log line explaining the absence of a server-local target.
     pub fn reason(&self) -> String {
-        todo!("slice 3: headless detection")
+        match self {
+            Self::Disabled => "[cua].enabled is false".to_owned(),
+            Self::Misconfigured(error) => error.to_string(),
+            Self::Container => {
+                "this process runs in a container, which has no desktop session".to_owned()
+            }
+            Self::NoDisplay => {
+                "neither DISPLAY nor WAYLAND_DISPLAY names a display in this session".to_owned()
+            }
+            Self::NoDriver => format!(
+                "no cua-driver binary: set [cua].driver_path, {} or put {} on PATH",
+                super::discovery::DRIVER_ENV,
+                super::discovery::DRIVER_BINARY
+            ),
+        }
+    }
+
+    /// Whether the reason deserves an error line rather than an info line: a
+    /// named driver that cannot run is a mistake, everything else is a fact
+    /// about the host.
+    pub fn is_error(&self) -> bool {
+        matches!(self, Self::Misconfigured(_))
     }
 }
 
 /// Decide whether to start a driver here: the binary to run, or why not.
+///
+/// A misconfigured driver path is reported before the host is judged, so a
+/// typo is never hidden behind a headless verdict.
 pub fn startup_plan(
     config: &CuaConfig,
     host: &HostProbe,
     driver: Result<Option<PathBuf>, DriverLookupError>,
 ) -> Result<PathBuf, Skip> {
-    let _ = (config, host, driver);
-    todo!("slice 3: headless detection")
+    if !config.enabled {
+        return Err(Skip::Disabled);
+    }
+    let driver = driver.map_err(Skip::Misconfigured)?;
+    if host.container {
+        return Err(Skip::Container);
+    }
+    if host.os == "linux" && !host.display {
+        return Err(Skip::NoDisplay);
+    }
+    driver.ok_or(Skip::NoDriver)
 }
 
 /// The id the server-local target registers under: `server-local:` plus the
 /// hostname reduced to the protocol's identifier grammar and bounded to
 /// `MAX_ID_BYTES`; an empty hostname reads `server-local:host`.
 pub fn server_local_machine_id(hostname: &str) -> MachineId {
-    let _ = (hostname, MAX_ID_BYTES, SERVER_LOCAL_PREFIX);
-    todo!("slice 3: server-local identity")
+    let budget = MAX_ID_BYTES - SERVER_LOCAL_PREFIX.len();
+    let reduced: String = hostname
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let reduced = reduced.trim_matches(|c| matches!(c, '-' | '.'));
+    let reduced = if reduced.is_empty() { "host" } else { reduced };
+    let id = format!(
+        "{SERVER_LOCAL_PREFIX}{}",
+        &reduced[..reduced.len().min(budget)]
+    );
+    MachineId::try_from(id).expect("the reduced hostname is an identifier within bounds")
 }
 
 #[cfg(test)]

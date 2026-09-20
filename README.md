@@ -203,6 +203,7 @@ Most settings are available through the interface. Advanced configuration lives 
 | `NOLUNE_HOME` | Data directory, defaults to `~/.nolune` |
 | `NOLUNE_AUTH_TOKEN` | API token override. The token is for automation, the CLI and the desktop app; browsers pair for a revocable session instead and are unaffected when it changes |
 | `NOLUNE_PUBLIC_URL` | Public URL for the server. Defaults to `http://localhost:<port>`; set it when you reach Nolune through another address so shared file links work |
+| `NOLUNE_CUA_DRIVER` | Path to the [Cua Driver](https://github.com/trycua/cua) binary that lets the companion use the server machine itself; without it `cua-driver` is looked up on `PATH`, and a headless server simply has no such target. See [docs/computer-use.md](docs/computer-use.md) |
 | `ANTHROPIC_API_KEY` | Anthropic API key override |
 | `OPENAI_API_KEY` | OpenAI API key override |
 | `RUST_LOG` | Logging level, defaults to `info` |

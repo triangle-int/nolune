@@ -7,9 +7,33 @@ use cua_protocol::{CuaAction, SessionLabel};
 /// The action as the run sends it: labelled with the run's session wherever
 /// the protocol carries one. Session-management and discovery calls have no
 /// label and pass through unchanged.
-pub fn with_session(action: CuaAction, session: &SessionLabel) -> CuaAction {
-    let _ = (action, session);
-    todo!("slice 3: per-run sessions")
+pub fn with_session(mut action: CuaAction, session: &SessionLabel) -> CuaAction {
+    let label = match &mut action {
+        CuaAction::GetWindowState(args) => &mut args.session,
+        CuaAction::SetWindowFrame(args) => &mut args.session,
+        CuaAction::Click(args) => &mut args.session,
+        CuaAction::DoubleClick(args) => &mut args.session,
+        CuaAction::RightClick(args) => &mut args.session,
+        CuaAction::MoveCursor(args) => &mut args.session,
+        CuaAction::Drag(args) => &mut args.session,
+        CuaAction::Scroll(args) => &mut args.session,
+        CuaAction::TypeText(args) => &mut args.session,
+        CuaAction::PressKey(args) => &mut args.session,
+        CuaAction::Hotkey(args) => &mut args.session,
+        CuaAction::SetValue(args) => &mut args.session,
+        CuaAction::InvokeMenu(args) => &mut args.session,
+        CuaAction::VerifyState(args) => &mut args.session,
+        CuaAction::ListApps(_)
+        | CuaAction::LaunchApp(_)
+        | CuaAction::ListWindows(_)
+        | CuaAction::StartSession(_)
+        | CuaAction::GetSession(_)
+        | CuaAction::ListSessions(_)
+        | CuaAction::EndSession(_)
+        | CuaAction::HealthReport(_) => return action,
+    };
+    *label = Some(session.clone());
+    action
 }
 
 /// Whether a run may execute this action itself. Starting and ending sessions

@@ -287,13 +287,20 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs an installed cua-driver binary"]
     async fn live_driver_reports_health_and_lists_sessions_through_the_checked_boundary() {
-        use crate::services::cua::{discovery, transport::StdioDriverTransport};
+        use crate::services::cua::{
+            discovery,
+            transport::{DriverTimeouts, StdioDriverTransport},
+        };
 
         let Some(driver) = discovery::discover(None).unwrap() else {
             eprintln!("no cua-driver on this host; nothing to check");
             return;
         };
-        let transport = Arc::new(StdioDriverTransport::spawn(&driver).await.unwrap());
+        let transport = Arc::new(
+            StdioDriverTransport::spawn_with(&driver, DriverTimeouts::default())
+                .await
+                .unwrap(),
+        );
         let machine = describe_machine(transport.as_ref(), id()).await.unwrap();
         eprintln!("live descriptor: {machine:?}");
         machine.validate().unwrap();
@@ -319,10 +326,7 @@ mod tests {
             CuaResponse::Error { error } => panic!("live list_sessions failed: {error:?}"),
         }
         drop(adapter);
-        Arc::try_unwrap(transport)
-            .ok()
-            .expect("the adapter was the only other owner")
-            .shutdown();
+        transport.close();
         // The child is killed asynchronously once the connection drops.
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
