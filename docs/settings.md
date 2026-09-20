@@ -89,10 +89,48 @@ Self-hosting controls that have no UI (local command MCP servers, the public
 URL, embedding endpoints) live in `~/.nolune/config.toml`; the README lists
 the environment overrides.
 
+## Computer-use driver (#20)
+
+Computer use runs on a [Cua Driver](https://github.com/trycua/cua) that is
+pinned per Nolune release in `cua_protocol::cua_driver_pin` (version, release
+tag, one verified asset per target; `cua-protocol/cua-driver.pin` is the copy
+scripts read). There is no setting for the driver version and no auto-update:
+Nolune never runs the driver's self-updater, and a new pin ships with a new
+Nolune release.
+
+- `nolune cua install` downloads the pinned asset for this host, checks its
+  size and sha256 before writing anything, extracts it under
+  `~/.nolune/cua-driver/releases/<version>/` (a profile's own data root with
+  `--profile`), asks the extracted binary for its version and refuses any
+  other than the pin, then records the install in
+  `~/.nolune/cua-driver/install.json`. A failed step leaves nothing behind.
+  `NOLUNE_CUA_RELEASE_URL` points it at a mirror; the checksum is enforced
+  either way. `NOLUNE_INSTALL_CUA_DRIVER=1` makes the one-line installer run
+  it; it is off by default.
+- `nolune cua status` prints the pin, the platform state, the installed
+  driver checked against the pin, the driver the server would run (an explicit
+  `NOLUNE_CUA_DRIVER`, then the workspace install, then `PATH`), and, when the
+  host can run it, the driver's own health report: its version against the
+  pin (a mismatch is reported and exits 1) and the Accessibility and Screen
+  Recording state under the driver's bundle identity.
+- Platform status: macOS is supported. Linux and Windows report
+  `platform: unsupported`; the pinned driver still installs there so a later
+  release can turn computer use on without moving the pin. A Linux host
+  without `DISPLAY` or `WAYLAND_DISPLAY` reports `headless` and the driver is
+  never started; headless installs need nothing from this section.
+- Releases: the desktop job of `release.yml` fetches the pinned asset for each
+  desktop target with `scripts/cua-driver.sh`, verifies it against the pin,
+  and uploads the verified archive beside the desktop bundle, so a pin that
+  no longer matches upstream fails the release instead of a user's install.
+
 ## Verifying
 
 - `cd client && pnpm check && pnpm test && pnpm build`
 - `cd server && cargo test --test navigation_settings_split` and the
   `connected_computers_are_listed_for_the_one_companion_only` router test.
+- `cargo test --manifest-path server/Cargo.toml --test cli_cua_driver` for
+  the driver install and status paths, and `bash scripts/tests/install.sh
+  && bash scripts/tests/release-workflow.sh` for the installer step and the
+  release fetch.
 - Open each section at phone width: the settings nav scrolls horizontally, the
   grid collapses to one column, and no page scrolls sideways.
