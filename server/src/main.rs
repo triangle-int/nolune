@@ -3,6 +3,7 @@ mod cli;
 mod config;
 mod domain;
 mod onboard;
+mod profiles;
 mod routes;
 mod service;
 mod services;

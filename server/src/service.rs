@@ -14,14 +14,35 @@ use std::{
 pub const LABEL: &str = "dev.nolune.nolune";
 pub const UNIT_NAME: &str = "nolune";
 
-/// What the service definition needs to know: which binary to run and where its home is.
+/// What the service definition needs to know: which binary to run, where its home is, and
+/// which profile it serves (#107).
 pub struct ServiceSpec {
     pub binary: PathBuf,
     pub home: PathBuf,
+    pub profile: String,
+}
+
+/// The launchd label for a profile's service.
+pub fn label(profile: &str) -> String {
+    let _ = profile;
+    todo!("#107")
+}
+
+/// The systemd user unit name for a profile's service.
+pub fn unit_name(profile: &str) -> String {
+    let _ = profile;
+    todo!("#107")
+}
+
+/// The data root a written definition runs, read back from either format.
+pub fn definition_home(contents: &str) -> Option<PathBuf> {
+    let _ = contents;
+    todo!("#107")
 }
 
 /// Where this platform keeps the service definition, relative to the user's home directory.
-pub fn definition_path(home_dir: &Path) -> PathBuf {
+pub fn definition_path(home_dir: &Path, profile: &str) -> PathBuf {
+    let _ = profile;
     if cfg!(target_os = "macos") {
         home_dir
             .join("Library/LaunchAgents")
@@ -120,6 +141,15 @@ mod tests {
         ServiceSpec {
             binary: PathBuf::from("/Users/me/.nolune/bin/nolune"),
             home: PathBuf::from("/Users/me/.nolune"),
+            profile: "default".into(),
+        }
+    }
+
+    fn molinka() -> ServiceSpec {
+        ServiceSpec {
+            binary: PathBuf::from("/Users/me/.nolune/bin/nolune"),
+            home: PathBuf::from("/Users/me/.nolune-profiles/molinka"),
+            profile: "molinka".into(),
         }
     }
 
@@ -161,8 +191,12 @@ mod tests {
     #[test]
     fn definition_lives_in_launch_agents() {
         assert_eq!(
-            definition_path(Path::new("/Users/me")),
+            definition_path(Path::new("/Users/me"), "default"),
             PathBuf::from("/Users/me/Library/LaunchAgents/dev.nolune.nolune.plist")
+        );
+        assert_eq!(
+            definition_path(Path::new("/Users/me"), "molinka"),
+            PathBuf::from("/Users/me/Library/LaunchAgents/dev.nolune.nolune.molinka.plist")
         );
     }
 
@@ -170,9 +204,125 @@ mod tests {
     #[test]
     fn definition_lives_in_user_systemd_dir() {
         assert_eq!(
-            definition_path(Path::new("/home/me")),
+            definition_path(Path::new("/home/me"), "default"),
             PathBuf::from("/home/me/.config/systemd/user/nolune.service")
         );
+        assert_eq!(
+            definition_path(Path::new("/home/me"), "molinka"),
+            PathBuf::from("/home/me/.config/systemd/user/nolune-molinka.service")
+        );
+    }
+
+    #[test]
+    fn service_names_are_functions_of_the_profile() {
+        // The default profile keeps the pre-#107 names so an upgrade finds its own service.
+        assert_eq!(label("default"), LABEL);
+        assert_eq!(unit_name("default"), UNIT_NAME);
+        assert_eq!(label("molinka"), "dev.nolune.nolune.molinka");
+        assert_eq!(unit_name("molinka"), "nolune-molinka");
+    }
+
+    #[test]
+    fn default_profile_definitions_carry_no_profile_arguments() {
+        let plist = render_launchd_plist(&spec());
+        assert!(
+            plist.contains("<string>gateway</string>\n    </array>"),
+            "`gateway` must stay the last argument:\n{plist}"
+        );
+        assert!(!plist.contains("--profile"), "{plist}");
+        assert!(!plist.contains("<string>run</string>"), "{plist}");
+        assert!(!plist.contains("default"), "{plist}");
+
+        let unit = render_systemd_unit(&spec());
+        assert!(unit.contains("Description=Nolune AI Companion\n"), "{unit}");
+        assert!(
+            unit.contains("ExecStart=/Users/me/.nolune/bin/nolune gateway\n"),
+            "{unit}"
+        );
+        assert!(!unit.contains("profile"), "{unit}");
+    }
+
+    #[test]
+    fn named_profile_plist_has_its_own_label_home_log_and_run_arguments() {
+        let plist = render_launchd_plist(&molinka());
+        assert!(
+            plist.contains("<key>Label</key>\n    <string>dev.nolune.nolune.molinka</string>"),
+            "{plist}"
+        );
+        assert!(
+            plist.contains(
+                "<array>\n        <string>/Users/me/.nolune/bin/nolune</string>\n        <string>gateway</string>\n        <string>run</string>\n        <string>--profile</string>\n        <string>molinka</string>\n    </array>"
+            ),
+            "{plist}"
+        );
+        assert!(
+            plist.contains(
+                "<key>NOLUNE_HOME</key>\n        <string>/Users/me/.nolune-profiles/molinka</string>"
+            ),
+            "{plist}"
+        );
+        assert!(
+            plist.contains(
+                "<key>WorkingDirectory</key>\n    <string>/Users/me/.nolune-profiles/molinka</string>"
+            ),
+            "{plist}"
+        );
+        assert!(
+            plist.contains(
+                "<key>StandardOutPath</key>\n    <string>/Users/me/.nolune-profiles/molinka/nolune.log</string>"
+            ),
+            "{plist}"
+        );
+        assert!(
+            plist.contains(
+                "<key>StandardErrorPath</key>\n    <string>/Users/me/.nolune-profiles/molinka/nolune.log</string>"
+            ),
+            "{plist}"
+        );
+        assert!(
+            !plist.contains("<string>dev.nolune.nolune</string>"),
+            "{plist}"
+        );
+    }
+
+    #[test]
+    fn named_profile_unit_has_its_own_name_home_and_run_arguments() {
+        let unit = render_systemd_unit(&molinka());
+        assert!(
+            unit.contains("ExecStart=/Users/me/.nolune/bin/nolune gateway run --profile molinka\n"),
+            "{unit}"
+        );
+        assert!(
+            unit.contains("Environment=NOLUNE_HOME=/Users/me/.nolune-profiles/molinka\n"),
+            "{unit}"
+        );
+        assert!(
+            unit.contains("WorkingDirectory=/Users/me/.nolune-profiles/molinka\n"),
+            "{unit}"
+        );
+        assert!(
+            unit.contains("Description=Nolune AI Companion (profile molinka)\n"),
+            "{unit}"
+        );
+        assert!(!unit.contains("User="), "user units must not set User=");
+    }
+
+    #[test]
+    fn definition_home_reads_the_root_back_from_either_format() {
+        assert_eq!(
+            definition_home(&render_launchd_plist(&molinka())),
+            Some(PathBuf::from("/Users/me/.nolune-profiles/molinka"))
+        );
+        assert_eq!(
+            definition_home(&render_systemd_unit(&molinka())),
+            Some(PathBuf::from("/Users/me/.nolune-profiles/molinka"))
+        );
+        assert_eq!(
+            definition_home(&render_systemd_unit(&spec())),
+            Some(PathBuf::from("/Users/me/.nolune"))
+        );
+        assert_eq!(definition_home("[Unit]\nDescription=x\n"), None);
+        assert_eq!(definition_home("<plist></plist>"), None);
     }
 
     #[test]

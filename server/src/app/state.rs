@@ -55,6 +55,13 @@ pub struct AppState {
 // Suggested MCP servers are listed in the client's Extensions settings.
 
 impl AppState {
+    /// Open the state for the workspace `root` (#107). `new` is the thin wrapper that
+    /// takes the root from the environment for the server entrypoint.
+    pub(crate) async fn new_in(config: Config, root: PathBuf) -> Self {
+        let _ = (config, root);
+        todo!("#107")
+    }
+
     pub async fn new(config: Config) -> Self {
         let (events, _) = broadcast::channel(4096);
         let llm = LlmBackend::from_config(&config);
@@ -157,5 +164,28 @@ impl AppState {
                 "embedding settings changed: restart required; active index remains unchanged"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn new_in_pins_the_workspace_and_opens_its_stores_there() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("profiles").join("molinka");
+
+        let state = AppState::new_in(Config::default(), root.clone()).await;
+
+        assert_eq!(state.workspace_dir, root);
+        assert!(
+            root.is_dir(),
+            "the vector store must open under the given root, not the process default"
+        );
+        assert!(
+            !tmp.path().join(".nolune").exists(),
+            "nothing may fall back to a home-relative root"
+        );
     }
 }

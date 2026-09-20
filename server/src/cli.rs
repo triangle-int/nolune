@@ -130,7 +130,7 @@ fn home_dir() -> PathBuf {
 }
 
 fn definition_path() -> PathBuf {
-    service::definition_path(&home_dir())
+    service::definition_path(&home_dir(), config::DEFAULT_PROFILE)
 }
 
 /// The port from config.toml, without loading the whole config (which would create one).
@@ -172,6 +172,7 @@ fn gateway_install() -> i32 {
     let spec = service::ServiceSpec {
         binary,
         home: home.clone(),
+        profile: config::DEFAULT_PROFILE.to_owned(),
     };
     if upgrade {
         // Reinstall in place: stop the old definition before overwriting it.
@@ -288,7 +289,7 @@ fn confirm_delete(home: &std::path::Path) -> bool {
 
 fn onboard_cmd(json: bool) -> i32 {
     let dir = config::workspace_root();
-    let outcome = match crate::onboard::onboard(&dir) {
+    let outcome = match crate::onboard::onboard(&dir, config::DEFAULT_PROFILE, None) {
         Ok(outcome) => outcome,
         Err(error) => {
             eprintln!("onboard failed: {error:#}");
