@@ -18,6 +18,7 @@ fn api_router(state: &AppState) -> Router<AppState> {
         .merge(routes::meta::router())
         .merge(routes::companion::router())
         .merge(routes::activity::router())
+        .merge(routes::commitments::router())
         .merge(routes::continuity::router())
         .merge(routes::resources::issuance_router())
         .merge(routes::instances::router())

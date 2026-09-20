@@ -6257,6 +6257,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "clap",
+ "cua-protocol",
  "curve25519-dalek",
  "dirs",
  "ed25519-dalek",
