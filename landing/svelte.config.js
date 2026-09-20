@@ -7,8 +7,9 @@ const config = {
 			runtime: 'nodejs22.x',
 		}),
 		prerender: {
-			handleHttpError: 'warn',
-			handleMissingId: 'warn',
+			// The whole site prerenders; a dangling link or hash is a build error.
+			handleHttpError: 'fail',
+			handleMissingId: 'fail',
 		},
 	}
 };
