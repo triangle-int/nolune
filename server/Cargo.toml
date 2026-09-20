@@ -51,3 +51,5 @@ clap = { version = "4", features = ["derive"] }
 cap-std = "4.0.3"
 cap-fs-ext = "4.0.3"
 same-file = "1.0.6"
+tar = "0.4"
+flate2 = "1"
