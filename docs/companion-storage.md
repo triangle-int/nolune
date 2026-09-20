@@ -210,10 +210,15 @@ event carries the same `memories` entries at retrieval time.
 
 The user can correct, pin, or exclude a memory without editing internal state
 (#84). Every control rewrites the canonical file under `memory/` and
-reconciles the derived index right away (the old entry is deleted, the new
-text re-embedded; BM25 re-reads the file), so the next recall sees the
-corrected text and never the old one, and everything survives a restart
-because nothing lives only in memory.
+reconciles the derived index right away (the path's vectors are replaced in
+one step, or removed and marked for backfill when the embedding provider is
+down; BM25 re-reads the file), so the next recall sees the corrected text
+and never the old one, and everything survives a restart because nothing
+lives only in memory. A text memory is read, rewritten, and re-indexed under
+the same per-companion lifecycle gate the companion's own `memory_write` and
+`memory_forget` hold, so a correction or flag change never interleaves with
+the companion's read-modify-write of that file and never brings back a
+memory a forget removed in the meantime (the correction answers `404`).
 
 Two flags sit in a text memory's frontmatter next to the timestamps. A line
 appears only when the flag is set, so an unflagged memory is byte-identical
@@ -275,9 +280,19 @@ small versioned ledger next to the memory store, written atomically:
 status is `applied` (in force: the memory reads as this statement),
 `superseded` (a later correction, a resolution, or the companion's own
 rewrite replaced it), `needs_resolution` (waiting for the user), or
-`withdrawn` (the user kept the earlier statement). The ledger keeps up to
-500 entries and drops the oldest settled ones first; a file with another
+`withdrawn` (the user kept the earlier statement). A file with another
 `version` or malformed JSON is reported and never rewritten.
+
+The ledger is bounded when it is written, never when it is read: at most
+500 entries and 4 MiB on disk. Past either bound the oldest settled entries
+(`superseded`, `withdrawn`) go first, then the oldest `applied` ones that no
+open question points at; such a memory keeps its text, the ledger just no
+longer remembers the correction, so the next correction of it applies as if
+it were the first. Open questions are never dropped: a correction the ledger
+cannot record because it holds nothing but open conflicts answers `507`
+without touching the memory, and resolving some makes room. A correction is
+recorded only after the memory file was rewritten, and the file is rewritten
+only once the ledger is known to have room for the record.
 
 Conflicts are never merged. A correction of a memory whose earlier
 correction is still in force (the memory still reads exactly as that
@@ -285,12 +300,16 @@ statement) and whose text differs is parked as `needs_resolution` and the
 memory stays as it was; the response lists both statements and the user
 chooses. Only one question is open per memory: further statements answer
 with the same open conflict until it is resolved. Once the companion has
-rewritten the memory itself, the earlier correction is no longer in force
-and the next correction applies directly.
+rewritten the memory itself (or it was forgotten and written anew), the
+earlier correction is no longer in force: the next correction of that memory
+marks it `superseded`, closes any question that was parked against it the
+same way (the memory reads as neither statement, so there is nothing left to
+choose between), and applies directly. The `current` side of a `409` is
+therefore always the text the memory holds on disk.
 
 | Route | Purpose |
 | --- | --- |
-| `PUT /api/instances/companion/memory/{path}` | `{content}`: `200 {status: "applied", correction}`, `200 {status: "unchanged"}`, or `409 {status: "needs_resolution", conflict_id, current, proposed}` |
+| `PUT /api/instances/companion/memory/{path}` | `{content}`: `200 {status: "applied", correction}`, `200 {status: "unchanged"}`, or `409 {status: "needs_resolution", conflict_id, current, proposed}`; `404` unknown memory, `422` empty or invalid, `413` over 64 KiB, `507` ledger full of open conflicts |
 | `PATCH /api/instances/companion/memory/{path}` | `{pinned?, exclude_from_proactive?}`; a flag left out is unchanged; returns both |
 | `GET /api/instances/companion/memory-corrections` | the ledger |
 | `POST /api/instances/companion/memory-corrections/{id}/resolve` | `{keep: "current" \| "proposed"}` settles one open conflict |

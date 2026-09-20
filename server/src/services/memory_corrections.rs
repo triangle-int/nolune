@@ -12,6 +12,13 @@
 //! authoritative through [`resolve`]. Flags (`pinned`,
 //! `exclude_from_proactive`) live in the memory's frontmatter, so they
 //! survive the companion's own rewrites and a server restart.
+//!
+//! A text memory is read, rewritten, and re-indexed under the vector store's
+//! per-companion lifecycle gate, the one its own `write_text_memory` and
+//! `delete_memory` hold, so a correction or flag change never interleaves
+//! with the companion's read-modify-write and never recreates a memory a
+//! forget removed in the meantime. The ledger is bounded on the write side
+//! (`MAX_ENTRIES`, `MAX_LEDGER_BYTES`) so it can always be read back.
 
 use std::{
     collections::HashMap,
@@ -35,8 +42,10 @@ pub const LEDGER_FILE: &str = "memory_corrections.json";
 pub const MAX_STATEMENT_BYTES: usize = 64 * 1024;
 /// Excerpt of the previous text kept per entry.
 const PREVIOUS_CHARS: usize = 240;
-/// Entries kept in the ledger; the oldest settled ones are dropped beyond it.
+/// Entries kept in the ledger; the oldest droppable ones go beyond it.
 const MAX_ENTRIES: usize = 500;
+/// Bytes the ledger file may hold, enforced when it is written so a read
+/// with the same bound never fails on a file this server wrote.
 const MAX_LEDGER_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,21 +138,52 @@ pub fn load_ledger(
     Ok(ledger)
 }
 
+/// The entry to drop when the ledger is over a bound: the oldest settled
+/// one, else the oldest applied one nothing open points at (its memory keeps
+/// its text; the ledger just no longer remembers the correction, so the next
+/// one applies as if it were the first). Open questions are never dropped.
+fn droppable(ledger: &CorrectionLedger) -> Option<usize> {
+    let settled = ledger.entries.iter().position(|entry| {
+        matches!(
+            entry.status,
+            CorrectionStatus::Superseded | CorrectionStatus::Withdrawn
+        )
+    });
+    settled.or_else(|| {
+        ledger.entries.iter().position(|entry| {
+            entry.status == CorrectionStatus::Applied
+                && !ledger.entries.iter().any(|other| {
+                    other.status == CorrectionStatus::NeedsResolution
+                        && other.conflicts_with.as_deref() == Some(entry.id.as_str())
+                })
+        })
+    })
+}
+
+/// Serialize the ledger within its bounds, dropping entries as
+/// [`droppable`] says until it fits. `LedgerFull` when nothing can go.
 fn encode_ledger(ledger: &mut CorrectionLedger) -> Result<String, CorrectionError> {
-    // Settled entries are the first to go once the ledger is full; entries
-    // in force or waiting on the user are never dropped.
-    while ledger.entries.len() > MAX_ENTRIES {
-        let Some(at) = ledger.entries.iter().position(|entry| {
-            matches!(
-                entry.status,
-                CorrectionStatus::Superseded | CorrectionStatus::Withdrawn
-            )
-        }) else {
-            break;
-        };
+    loop {
+        if ledger.entries.len() <= MAX_ENTRIES {
+            let json = serde_json::to_string_pretty(ledger)
+                .map_err(|error| CorrectionError::Io(error.to_string()))?;
+            if json.len() <= MAX_LEDGER_BYTES {
+                return Ok(json);
+            }
+        }
+        let at = droppable(ledger).ok_or(CorrectionError::LedgerFull)?;
         ledger.entries.remove(at);
     }
-    serde_json::to_string_pretty(ledger).map_err(|error| CorrectionError::Io(error.to_string()))
+}
+
+fn write_ledger(
+    media: &media_text::MediaStore,
+    instance_slug: &str,
+    json: &str,
+) -> Result<(), CorrectionError> {
+    media
+        .write_instance_text(instance_slug, LEDGER_FILE, json)
+        .map_err(|error| CorrectionError::Io(format!("write {LEDGER_FILE}: {error}")))
 }
 
 fn save_ledger(
@@ -152,9 +192,7 @@ fn save_ledger(
     ledger: &mut CorrectionLedger,
 ) -> Result<(), CorrectionError> {
     let json = encode_ledger(ledger)?;
-    media
-        .write_instance_text(instance_slug, LEDGER_FILE, &json)
-        .map_err(|error| CorrectionError::Io(format!("write {LEDGER_FILE}: {error}")))
+    write_ledger(media, instance_slug, &json)
 }
 
 fn now() -> String {
@@ -189,6 +227,20 @@ fn io_error(error: std::io::Error) -> CorrectionError {
     }
 }
 
+/// The companion's lifecycle gate, held for a text memory from the read
+/// through the re-index. A media memory's bound text goes through
+/// `edit_media_text`, which takes the gate itself.
+async fn text_gate(
+    store: &VectorStore,
+    instance_slug: &str,
+    path: &str,
+) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+    if media_text::source_type(path).is_some() {
+        return None;
+    }
+    Some(store.lifecycle_lock(instance_slug).lock_owned().await)
+}
+
 fn read_current(
     media: &media_text::MediaStore,
     instance_slug: &str,
@@ -220,7 +272,7 @@ fn read_current(
 }
 
 /// Write `statement` as the memory's text, keeping the frontmatter flags,
-/// and reconcile the derived index.
+/// and reconcile the derived index. The caller holds the [`text_gate`].
 async fn rewrite(
     store: &VectorStore,
     instance_slug: &str,
@@ -237,44 +289,70 @@ async fn rewrite(
     };
     let existing = memory::render_frontmatter(frontmatter, &current.body);
     let stamped = memory::stamp_content_with_flags(statement, Some(&existing), frontmatter.flags);
-    store
-        .media_store()
-        .write_memory_text(instance_slug, path, &stamped)
-        .map_err(io_error)?;
-    reindex(store, instance_slug, path, &stamped).await;
-    Ok(())
+    write_text(store, instance_slug, path, &stamped).await
 }
 
-/// Derived state after the canonical file changed: the old entry goes first
-/// so a failed re-embedding can never leave the stale text searchable, then
-/// the new text is embedded. A provider failure leaves the file as the
-/// truth and the BM25 view fresh; the vector side waits for the next backfill.
-async fn reindex(store: &VectorStore, instance_slug: &str, path: &str, stamped: &str) {
-    if let Err(error) = store.delete_by_path(instance_slug, path).await {
-        log::warn!("[memory_corrections] stale index entry for {path} not removed: {error}");
-    }
+/// Write a text memory's file as given and reconcile the derived index under
+/// the gate the caller holds. The vector index replaces the path's records in
+/// one mutation, or removes them and marks the collection for backfill when
+/// the provider fails, so the old text is never searchable after the file
+/// changed; BM25 is invalidated with it and re-reads the file.
+async fn write_text(
+    store: &VectorStore,
+    instance_slug: &str,
+    path: &str,
+    stamped: &str,
+) -> Result<(), CorrectionError> {
+    store
+        .media_store()
+        .write_memory_text(instance_slug, path, stamped)
+        .map_err(io_error)?;
     if let Err(error) = store.index_text(instance_slug, path, stamped).await {
         log::warn!("[memory_corrections] semantic re-index of {path} pending: {error}");
     }
+    Ok(())
 }
 
-/// The entry in force for `path`, if the memory still reads as it wrote it.
-/// One whose text the memory no longer holds (the companion rewrote it, or
-/// it was forgotten and recreated) is marked superseded on the way.
+/// The entry in force for `path`: the latest applied one, provided the
+/// memory still reads exactly as it wrote it.
 fn in_force<'a>(
-    ledger: &'a mut CorrectionLedger,
+    ledger: &'a CorrectionLedger,
     path: &str,
     body: &str,
-) -> Option<&'a mut CorrectionEntry> {
-    let at = ledger
+) -> Option<&'a CorrectionEntry> {
+    ledger
         .entries
         .iter()
-        .rposition(|entry| entry.path == path && entry.status == CorrectionStatus::Applied)?;
-    if ledger.entries[at].statement.trim() != body.trim() {
-        ledger.entries[at].status = CorrectionStatus::Superseded;
-        return None;
+        .rfind(|entry| entry.path == path && entry.status == CorrectionStatus::Applied)
+        .filter(|entry| entry.statement.trim() == body.trim())
+}
+
+/// Let go of what the memory no longer holds. An applied entry whose text
+/// the memory moved away from (the companion rewrote it, or it was forgotten
+/// and recreated) is superseded, and so is any question parked against it:
+/// the memory reads as neither statement, so there is nothing left to
+/// choose between and the next correction applies directly. Returns whether
+/// the ledger changed.
+fn release_stale(ledger: &mut CorrectionLedger, path: &str, body: &str) -> bool {
+    let in_force = in_force(ledger, path, body).map(|entry| entry.id.clone());
+    let mut changed = false;
+    for entry in ledger.entries.iter_mut().filter(|entry| entry.path == path) {
+        let stale = match entry.status {
+            CorrectionStatus::Applied => in_force.as_deref() != Some(entry.id.as_str()),
+            CorrectionStatus::NeedsResolution => {
+                entry.conflicts_with.as_deref() != in_force.as_deref()
+            }
+            CorrectionStatus::Superseded | CorrectionStatus::Withdrawn => false,
+        };
+        if stale {
+            if entry.status == CorrectionStatus::NeedsResolution {
+                entry.resolved_at = Some(now());
+            }
+            entry.status = CorrectionStatus::Superseded;
+            changed = true;
+        }
     }
-    Some(&mut ledger.entries[at])
+    changed
 }
 
 fn pending<'a>(ledger: &'a CorrectionLedger, path: &str) -> Option<&'a CorrectionEntry> {
@@ -318,20 +396,25 @@ pub async fn correct(
         return Err(CorrectionError::Invalid("statement cannot be empty".into()));
     }
     let _guard = companion_lock(instance_slug).lock_owned().await;
+    let _gate = text_gate(store, instance_slug, path).await;
     let media = store.media_store();
     let current = read_current(&media, instance_slug, path)?;
     if current.body.trim() == statement {
         return Ok(CorrectionOutcome::Unchanged);
     }
     let mut ledger = load_ledger(&media, instance_slug)?;
+    let released = release_stale(&mut ledger, path, &current.body);
 
-    // One open question per memory: further statements point at it.
+    // One open question per memory: further statements point at it. Its
+    // `current` side is the entry in force, so it always reads as the file.
     if let Some(parked) = pending(&ledger, path) {
-        return Ok(CorrectionOutcome::NeedsResolution(conflict_of(
-            &ledger, parked,
-        )));
+        let conflict = conflict_of(&ledger, parked);
+        if released {
+            save_ledger(&media, instance_slug, &mut ledger)?;
+        }
+        return Ok(CorrectionOutcome::NeedsResolution(conflict));
     }
-    if let Some(current_entry) = in_force(&mut ledger, path, &current.body) {
+    if let Some(current_entry) = in_force(&ledger, path, &current.body) {
         let proposed = CorrectionEntry {
             id: new_id(),
             path: path.to_owned(),
@@ -348,7 +431,6 @@ pub async fn correct(
         return Ok(CorrectionOutcome::NeedsResolution(conflict));
     }
 
-    rewrite(store, instance_slug, path, &current, statement).await?;
     let entry = CorrectionEntry {
         id: new_id(),
         path: path.to_owned(),
@@ -359,8 +441,12 @@ pub async fn correct(
         resolved_at: None,
         conflicts_with: None,
     };
+    // The ledger must be able to record the correction before the memory
+    // changes; a full ledger refuses without touching the file.
     ledger.entries.push(entry.clone());
-    save_ledger(&media, instance_slug, &mut ledger)?;
+    let json = encode_ledger(&mut ledger)?;
+    rewrite(store, instance_slug, path, &current, statement).await?;
+    write_ledger(&media, instance_slug, &json)?;
     Ok(CorrectionOutcome::Applied(entry))
 }
 
@@ -390,6 +476,7 @@ pub async fn resolve(
             entry.resolved_at = Some(resolved_at);
         }
         Keep::Proposed => {
+            let _gate = text_gate(store, instance_slug, &path).await;
             let current = read_current(&media, instance_slug, &path)?;
             let statement = ledger.entries[at].statement.clone();
             rewrite(store, instance_slug, &path, &current, &statement).await?;
@@ -422,6 +509,7 @@ pub async fn set_flags(
     update: FlagUpdate,
 ) -> Result<MemoryFlags, CorrectionError> {
     let _guard = companion_lock(instance_slug).lock_owned().await;
+    let _gate = text_gate(store, instance_slug, path).await;
     let media = store.media_store();
     let current = read_current(&media, instance_slug, path)?;
     let Some(mut frontmatter) = current.frontmatter else {
@@ -446,10 +534,7 @@ pub async fn set_flags(
     } else {
         memory::stamp_content_with_flags(&current.body, None, flags)
     };
-    media
-        .write_memory_text(instance_slug, path, &stamped)
-        .map_err(io_error)?;
-    reindex(store, instance_slug, path, &stamped).await;
+    write_text(store, instance_slug, path, &stamped).await?;
     Ok(flags)
 }
 
@@ -968,7 +1053,11 @@ mod tests {
             .write_text_memory("one", path, "fresh start", false)
             .await
             .unwrap();
-        let fifth = applied(correct(&store, "one", path, "drinks kombucha").await.unwrap());
+        let fifth = applied(
+            correct(&store, "one", path, "drinks kombucha")
+                .await
+                .unwrap(),
+        );
         assert_eq!(fifth.previous, "fresh start");
         assert_eq!(body_of(ws.path(), path), "drinks kombucha");
         let ledger_now = ledger(ws.path());
@@ -1056,7 +1145,10 @@ mod tests {
             correction.await.unwrap().unwrap_err(),
             CorrectionError::NotFound
         );
-        assert!(!dir.join("tea.md").exists(), "a forgotten memory stays forgotten");
+        assert!(
+            !dir.join("tea.md").exists(),
+            "a forgotten memory stays forgotten"
+        );
         assert!(store.search_text(SLUG, "sencha", 5).await.is_empty());
         let media = store.media_store();
         assert_eq!(
@@ -1103,7 +1195,12 @@ mod tests {
         }
         let recorded = load_ledger(&media, "one").unwrap();
         assert!(recorded.entries.len() < count, "the oldest were dropped");
-        assert!(recorded.entries.iter().all(|entry| entry.status == CorrectionStatus::Applied));
+        assert!(
+            recorded
+                .entries
+                .iter()
+                .all(|entry| entry.status == CorrectionStatus::Applied)
+        );
         assert_eq!(
             recorded.entries.last().unwrap().path,
             format!("about/{}.md", count - 1)
@@ -1145,14 +1242,24 @@ mod tests {
         ledger
             .entries
             .extend((over..2 * over).map(|i| entry(i, CorrectionStatus::Superseded)));
-        ledger.entries.push(entry(2 * over, CorrectionStatus::Applied));
+        ledger
+            .entries
+            .push(entry(2 * over, CorrectionStatus::Applied));
         let json = encode_ledger(&mut ledger).unwrap();
         assert!(json.len() <= MAX_LEDGER_BYTES);
         assert_eq!(ledger.entries[0].id, "corr_0");
-        assert_eq!(ledger.entries.last().unwrap().id, format!("corr_{}", 2 * over));
-        assert!(ledger.entries.len() > 2, "only as many as needed were dropped");
+        assert_eq!(
+            ledger.entries.last().unwrap().id,
+            format!("corr_{}", 2 * over)
+        );
         assert!(
-            ledger.entries[1..].iter().all(|entry| entry.id > ledger.entries[0].id),
+            ledger.entries.len() > 2,
+            "only as many as needed were dropped"
+        );
+        assert!(
+            ledger.entries[1..]
+                .iter()
+                .all(|entry| entry.id > ledger.entries[0].id),
             "{:?}",
             ledger.entries.iter().map(|e| &e.id).collect::<Vec<_>>()
         );
@@ -1168,9 +1275,21 @@ mod tests {
         ledger.entries.push(open);
         let json = encode_ledger(&mut ledger).unwrap();
         assert!(json.len() <= MAX_LEDGER_BYTES);
-        assert_eq!(ledger.entries[0].id, "corr_0");
-        assert_eq!(ledger.entries[1].id, "corr_2", "the oldest free applied entry went");
-        assert_eq!(ledger.entries.last().unwrap().status, CorrectionStatus::NeedsResolution);
+        assert_eq!(ledger.entries[0].id, "corr_0", "still pointed at");
+        let kept: Vec<usize> = ledger.entries[1..ledger.entries.len() - 1]
+            .iter()
+            .map(|entry| entry.id["corr_".len()..].parse().unwrap())
+            .collect();
+        assert!(kept.len() > 1 && kept.len() < over - 1, "{kept:?}");
+        assert_eq!(
+            kept,
+            (over - kept.len()..over).collect::<Vec<_>>(),
+            "the oldest free applied entries went, and only those"
+        );
+        assert_eq!(
+            ledger.entries.last().unwrap().status,
+            CorrectionStatus::NeedsResolution
+        );
 
         let mut ledger = CorrectionLedger::default();
         ledger
@@ -1184,10 +1303,12 @@ mod tests {
 
         // The entry cap is enforced the same way.
         let mut ledger = CorrectionLedger::default();
-        ledger.entries.extend((0..MAX_ENTRIES + 3).map(|i| CorrectionEntry {
-            statement: "short".into(),
-            ..entry(i, CorrectionStatus::Applied)
-        }));
+        ledger
+            .entries
+            .extend((0..MAX_ENTRIES + 3).map(|i| CorrectionEntry {
+                statement: "short".into(),
+                ..entry(i, CorrectionStatus::Applied)
+            }));
         encode_ledger(&mut ledger).unwrap();
         assert_eq!(ledger.entries.len(), MAX_ENTRIES);
         assert_eq!(ledger.entries[0].id, "corr_3");
