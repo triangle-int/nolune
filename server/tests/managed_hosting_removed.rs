@@ -18,7 +18,7 @@ use source_scan::without_cfg_test_items;
 use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
-    net::{TcpListener, TcpStream},
+    net::{IpAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::mpsc,
@@ -406,15 +406,24 @@ fn http_get(port: u16, path: &str) -> String {
 
 /// `cp config.example.toml config.toml` is what CONTRIBUTING tells a
 /// contributor to do. The result must start cleanly: no obsolete-setting
-/// warning on load, and `/healthz` answering on the configured port.
+/// warning on load, and `/healthz` answering on the configured port. The
+/// example runs verbatim, so it must bind loopback: with its empty token
+/// any other bind would be an open server, here and on a contributor's LAN.
 #[cfg(unix)]
 #[test]
 fn example_config_boots_a_gateway_without_obsolete_warnings() {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let example = fs::read_to_string(repo.join("server/config.example.toml")).unwrap();
-    // Listen on loopback only for the test; the example keeps the LAN default.
-    assert!(example.contains("host = \"0.0.0.0\""), "{example}");
-    let example = example.replace("host = \"0.0.0.0\"", "host = \"127.0.0.1\"");
+    let document: toml::Value = toml::from_str(&example).unwrap();
+    let host = document
+        .get("host")
+        .and_then(toml::Value::as_str)
+        .unwrap_or("0.0.0.0");
+    assert!(
+        host.parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback()),
+        "config.example.toml must bind loopback, not host = {host:?}"
+    );
 
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");

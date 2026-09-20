@@ -1637,6 +1637,96 @@ enabled_tools = ["brave_web_search"]
 }
 
 #[cfg(test)]
+mod example_config_tests {
+    //! `server/config.example.toml` is the file CONTRIBUTING tells a
+    //! contributor to copy by hand. It is compiled into this test so it must
+    //! deserialize into `Config` as is (every nested section against the real
+    //! schema, not only as TOML), and it must never combine a bind beyond
+    //! loopback with an empty token, a shape `nolune onboard` never writes.
+    use super::*;
+    use std::net::IpAddr;
+
+    const EXAMPLE: &str = include_str!("../config.example.toml");
+
+    fn loopback(host: &str) -> bool {
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<IpAddr>()
+                .is_ok_and(|address| address.is_loopback())
+    }
+
+    #[test]
+    fn example_config_deserializes_into_config_with_every_section() {
+        let config: Config =
+            toml::from_str(EXAMPLE).expect("config.example.toml must deserialize into Config");
+
+        assert!(
+            config.llm.extra.is_empty(),
+            "unknown [llm] keys in the example: {:?}",
+            config.llm.extra
+        );
+        assert_eq!(
+            config.llm.chat_preset().map(|preset| preset.id.as_str()),
+            Some("sonnet")
+        );
+        assert_eq!(
+            config
+                .llm
+                .background_preset()
+                .map(|preset| preset.id.as_str()),
+            Some("haiku")
+        );
+        for preset in &config.llm.presets {
+            assert!(
+                !preset.name.trim().is_empty() && !preset.model.trim().is_empty(),
+                "{preset:?} is incomplete"
+            );
+        }
+        assert_eq!(
+            config.llm.tokens,
+            LlmTokens::default(),
+            "the example must not ship a key"
+        );
+        assert_eq!(config.embedding, EmbeddingConfig::default());
+        assert_eq!(config.embedding.validate(), Ok(()));
+        assert!(config.mcp_servers.is_empty(), "{:?}", config.mcp_servers);
+        assert!(config.public_url.is_empty(), "{:?}", config.public_url);
+        assert!(config.static_dir.is_empty(), "{:?}", config.static_dir);
+        assert_eq!(config.port, default_port());
+        assert_eq!(config.registry_url, default_registry_url());
+
+        // Saving the loaded example keeps every section the loader read.
+        let saved = serialize_config_preserving_keys(&config, EXAMPLE).unwrap();
+        let reloaded: Config = toml::from_str(&saved).unwrap();
+        assert_eq!(reloaded.host, config.host);
+        assert_eq!(reloaded.port, config.port);
+        assert_eq!(reloaded.auth_token, config.auth_token);
+        assert_eq!(reloaded.llm.presets, config.llm.presets);
+        assert_eq!(reloaded.llm.chat_preset, config.llm.chat_preset);
+        assert_eq!(reloaded.llm.background_preset, config.llm.background_preset);
+        assert_eq!(reloaded.llm.tokens, config.llm.tokens);
+        assert_eq!(reloaded.embedding, config.embedding);
+    }
+
+    /// An empty `auth_token` lets any browser in, so the example may only
+    /// pair it with a loopback bind; a server reachable from the network
+    /// needs a token, which is what `nolune onboard` generates.
+    #[test]
+    fn example_config_never_serves_an_unauthenticated_server_beyond_loopback() {
+        let config: Config = toml::from_str(EXAMPLE).unwrap();
+        assert!(
+            loopback(&config.host) || !config.auth_token.trim().is_empty(),
+            "config.example.toml binds host = {:?} with auth_token = {:?}: that is an \
+             unauthenticated server on every interface",
+            config.host,
+            config.auth_token
+        );
+    }
+}
+
+#[cfg(test)]
 mod embedding_config_tests {
     use super::*;
 
