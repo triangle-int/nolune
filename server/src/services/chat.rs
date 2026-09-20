@@ -120,11 +120,15 @@ pub async fn run_single_turn(
     voice_mode: bool,
     vector_store: std::sync::Arc<crate::services::vector::VectorStore>,
     machine_registry: crate::services::machine_registry::MachineRegistry,
+    machine_target: Option<&str>,
     public_url: &str,
     resources: &crate::services::resource_access::ResourceAccess,
 ) -> io::Result<SingleTurnResult> {
     let instance_slug = sanitize_slug(instance_slug);
     let chat_id = sanitize_slug(chat_id);
+    // The computer the user chose for this run (#80), resolved once so the
+    // desktop tools, the prompt and the trail all name the same target.
+    let machine_target = tools::MachineTarget::resolve(&machine_registry, machine_target).await;
 
     // Build system prompt with all context
     let base_prompt = llm::load_system_prompt(workspace_dir, &instance_slug);
@@ -245,6 +249,7 @@ pub async fn run_single_turn(
             "\n\n## instance config (instance.toml)\n\
              ```toml\n{config_toml}```\n\
              connected desktops:\n{}\n\
+             {}\n\
              \n\
              the user can change these via settings UI or by asking you to call update_config.",
             if machine_lines.is_empty() {
@@ -252,6 +257,7 @@ pub async fn run_single_turn(
             } else {
                 machine_lines.join("\n")
             },
+            machine_target.prompt_line(machines.len()),
         ));
     }
 
@@ -466,6 +472,10 @@ pub async fn run_single_turn(
         };
         if t.is_empty() { None } else { Some(t) }
     };
+    log::info!(
+        "[chat] machine target for this turn: {:?}",
+        machine_target.selection()
+    );
     let (all_tools, sent_files) = tools::build_tools(
         workspace_dir,
         &instance_slug,
@@ -481,7 +491,7 @@ pub async fn run_single_turn(
         github_token,
         vector_store.clone(),
         machine_registry,
-        tools::MachineTarget::default(),
+        machine_target,
         &public_url,
         resources,
     );

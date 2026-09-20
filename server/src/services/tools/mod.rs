@@ -436,17 +436,36 @@ pub(crate) fn openai_schema<T: JsonSchema>() -> serde_json::Value {
 // ---------------------------------------------------------------------------
 
 pub fn tool_summary(name: &str, args: &str) -> String {
-    let v: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
-    let _ = &v;
     tool_summary_on(name, args, &MachineTarget::default())
 }
 
 /// `tool_summary` with the conversation's machine target (#80): the computer
-/// tools name the computer they act on the way the Computers tab does.
+/// tools name the computer they act on the way the Computers tab does, so
+/// the trail records the actual target machine.
 pub fn tool_summary_on(name: &str, args: &str, target: &MachineTarget) -> String {
-    let _ = target;
     let v: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
+    let on_machine = || target.describe(v["machine_id"].as_str());
     match name {
+        "list_machines" => "listing computers".into(),
+        "computer_use" => format!(
+            "{} {}",
+            v["action"].as_str().unwrap_or("computer action"),
+            on_machine()
+        ),
+        "remote_bash" => format!("running a command {}", on_machine()),
+        "remote_files" => {
+            let verb = match v["operation"].as_str() {
+                Some("read") => "reading",
+                Some("write") => "writing",
+                Some("list") => "listing",
+                _ => "touching",
+            };
+            format!(
+                "{verb} {} {}",
+                v["path"].as_str().unwrap_or("?"),
+                on_machine()
+            )
+        }
         "read_file" => format!("reading {}", v["path"].as_str().unwrap_or("?")),
         "write_file" => format!("writing {}", v["path"].as_str().unwrap_or("?")),
         "edit_file" => format!("editing {}", v["path"].as_str().unwrap_or("?")),

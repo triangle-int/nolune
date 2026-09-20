@@ -36,8 +36,16 @@ impl TargetSelection {
     /// From the chat request's `machine_id`: blank means nothing chosen, the
     /// synthesized home or a server-local id means the server home.
     pub fn from_request(machine_id: Option<&str>) -> Self {
-        let _ = machine_id;
-        todo!("#80 targeting")
+        match machine_id.map(str::trim) {
+            None | Some("") => Self::Unselected,
+            Some(id)
+                if id == SERVER_HOME_TARGET
+                    || id.starts_with(crate::services::cua::host::SERVER_LOCAL_PREFIX) =>
+            {
+                Self::ServerHome
+            }
+            Some(id) => Self::Machine(id.to_owned()),
+        }
     }
 }
 
@@ -95,14 +103,68 @@ pub enum TargetRefusal {
 impl TargetRefusal {
     /// Stable code the error string starts with.
     pub fn code(&self) -> &'static str {
-        todo!("#80 targeting")
+        match self {
+            Self::ChooseAComputer { .. } => "choose_a_computer",
+            Self::NoneConnected => "no_computer_connected",
+            Self::Unavailable { .. } => "machine_unavailable",
+            Self::Unhealthy { .. } => "machine_unhealthy",
+            Self::PermissionDenied { .. } => "permission_denied",
+            Self::ServerHome => "server_home",
+            Self::Mismatch { .. } => "target_mismatch",
+        }
     }
 }
 
 impl fmt::Display for TargetRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let _ = f;
-        todo!("#80 targeting")
+        write!(f, "{}: ", self.code())?;
+        match self {
+            Self::ChooseAComputer { labels } => write!(
+                f,
+                "several computers are connected ({}) and the user has not chosen one; \
+                 ask them to choose a computer in the composer, then try again",
+                labels.join(", ")
+            ),
+            Self::NoneConnected => f.write_str(
+                "no computer is connected; the user needs to open the Nolune desktop app \
+                 on the computer they want you to use",
+            ),
+            Self::Unavailable { label } => write!(
+                f,
+                "{label} is not connected; ask the user to open the Nolune desktop app there, \
+                 or to choose a connected computer in the composer"
+            ),
+            Self::Unhealthy { label, age_secs } => write!(
+                f,
+                "{label} has not answered for {age_secs} s; ask the user to check that it is \
+                 awake and the Nolune desktop app is still running there"
+            ),
+            Self::PermissionDenied {
+                label,
+                permission,
+                state,
+            } => {
+                let state = match state {
+                    Permission::Denied => "denied",
+                    _ => "not been allowed yet",
+                };
+                write!(
+                    f,
+                    "{permission} is {state} on {label}; ask the user to grant it to the \
+                     Nolune desktop app in System Settings there and reconnect"
+                )
+            }
+            Self::ServerHome => f.write_str(
+                "the user chose the server home for this conversation, where run_command \
+                 and the file tools already act; computer_use, remote_bash and remote_files \
+                 need a desktop, so ask the user to choose one in the composer",
+            ),
+            Self::Mismatch { chosen, requested } => write!(
+                f,
+                "the user chose {chosen} for this conversation, not {requested}; act on \
+                 {chosen} or ask them to switch computers in the composer"
+            ),
+        }
     }
 }
 
@@ -131,8 +193,22 @@ impl MachineTarget {
     /// The request's `machine_id` resolved against the registry: the
     /// selection plus a snapshot of every known machine's display name.
     pub async fn resolve(registry: &MachineRegistry, machine_id: Option<&str>) -> Self {
-        let _ = (registry, machine_id);
-        todo!("#80 targeting")
+        // The record's display name is the user's; a desktop the store cannot
+        // read right now (an unsupported file) is still named by its hostname.
+        let mut names: BTreeMap<String, String> = match registry.known().await {
+            Ok(known) => known
+                .into_iter()
+                .map(|machine| (machine.machine_id, machine.display_name))
+                .collect(),
+            Err(error) => {
+                log::warn!("[machines] known machines unavailable for the trail: {error}");
+                BTreeMap::new()
+            }
+        };
+        for live in registry.list().await {
+            names.entry(live.machine_id).or_insert(live.hostname);
+        }
+        Self::with_names(TargetSelection::from_request(machine_id), names)
     }
 
     pub fn selection(&self) -> &TargetSelection {
@@ -141,20 +217,48 @@ impl MachineTarget {
 
     /// The display name of a machine, else its id.
     pub fn label(&self, machine_id: &str) -> String {
-        let _ = machine_id;
-        todo!("#80 targeting")
+        self.names
+            .get(machine_id)
+            .cloned()
+            .unwrap_or_else(|| machine_id.to_owned())
     }
 
     /// Where a call acts, for the activity trail: "on <name>".
     pub fn describe(&self, requested: Option<&str>) -> String {
-        let _ = requested;
-        todo!("#80 targeting")
+        match (requested, &self.selection) {
+            (Some(id), _) => format!("on {}", self.label(id)),
+            (None, TargetSelection::Machine(id)) => format!("on {}", self.label(id)),
+            (None, TargetSelection::ServerHome) => "on the server home".to_owned(),
+            (None, TargetSelection::Unselected) => "on the connected computer".to_owned(),
+        }
     }
 
     /// The system-prompt sentence about the chosen computer.
     pub fn prompt_line(&self, connected_desktops: usize) -> String {
-        let _ = connected_desktops;
-        todo!("#80 targeting")
+        match &self.selection {
+            TargetSelection::Machine(id) => format!(
+                "the user chose {} for this conversation: computer_use, remote_bash and \
+                 remote_files act there and nowhere else.",
+                self.label(id)
+            ),
+            TargetSelection::ServerHome => "the user chose the server home for this \
+                 conversation: run_command and the file tools act there; computer_use, \
+                 remote_bash and remote_files are refused until they choose a desktop."
+                .to_owned(),
+            TargetSelection::Unselected => match connected_desktops {
+                0 => "no desktop is connected; computer_use, remote_bash and remote_files \
+                      will refuse."
+                    .to_owned(),
+                1 => "the user has not chosen a computer; the only connected desktop is used \
+                      by computer_use, remote_bash and remote_files."
+                    .to_owned(),
+                _ => "several desktops are connected and the user has not chosen one; \
+                      computer_use, remote_bash and remote_files will refuse until they \
+                      choose a computer in the composer, so ask them to choose one before \
+                      using those tools."
+                    .to_owned(),
+            },
+        }
     }
 
     /// The desktop one call acts on: the chosen one, or the only connected
@@ -177,8 +281,74 @@ impl MachineTarget {
         need: Need,
         now: i64,
     ) -> Result<ResolvedTarget, TargetRefusal> {
-        let _ = (live, requested, need, now);
-        todo!("#80 targeting")
+        // `live` is every connected desktop; the registry drops one the
+        // moment its socket closes, so absence here means not connected.
+        let connected = |id: &str| live.iter().find(|machine| machine.machine_id == id);
+        let label = |machine: &MachineInfo| {
+            self.names
+                .get(&machine.machine_id)
+                .cloned()
+                .unwrap_or_else(|| machine.hostname.clone())
+        };
+        let machine = match &self.selection {
+            TargetSelection::ServerHome => return Err(TargetRefusal::ServerHome),
+            TargetSelection::Machine(chosen) => {
+                if let Some(other) = requested.filter(|id| *id != chosen) {
+                    return Err(TargetRefusal::Mismatch {
+                        chosen: self.label(chosen),
+                        requested: self.label(other),
+                    });
+                }
+                connected(chosen).ok_or_else(|| TargetRefusal::Unavailable {
+                    label: self.label(chosen),
+                })?
+            }
+            TargetSelection::Unselected => {
+                if live.len() > 1 {
+                    // The model naming one of them is not the user choosing it.
+                    let mut labels: Vec<String> = live.iter().map(label).collect();
+                    labels.sort();
+                    return Err(TargetRefusal::ChooseAComputer { labels });
+                }
+                match requested {
+                    Some(id) => connected(id).ok_or_else(|| TargetRefusal::Unavailable {
+                        label: self.label(id),
+                    })?,
+                    None => match live {
+                        [only] => only,
+                        _ => return Err(TargetRefusal::NoneConnected),
+                    },
+                }
+            }
+        };
+
+        let label = label(machine);
+        let age_secs = now - machine.last_seen;
+        if crate::domain::machine::heartbeat_health(true, age_secs)
+            == cua_protocol::MachineHealth::Degraded
+        {
+            return Err(TargetRefusal::Unhealthy { label, age_secs });
+        }
+        // `unavailable` is the platform saying it cannot report, not a refusal
+        // (the same reading as the Computers tab).
+        let needed = match (need, &machine.permissions) {
+            (Need::Accessibility, Some(state)) => Some(("Accessibility", state.accessibility)),
+            (Need::ScreenCapture, Some(state)) => Some(("Screen recording", state.screen_capture)),
+            _ => None,
+        };
+        if let Some((permission, state @ (Permission::Denied | Permission::PromptRequired))) =
+            needed
+        {
+            return Err(TargetRefusal::PermissionDenied {
+                label,
+                permission,
+                state,
+            });
+        }
+        Ok(ResolvedTarget {
+            machine_id: machine.machine_id.clone(),
+            label,
+        })
     }
 }
 
@@ -374,6 +544,8 @@ impl Tool for ComputerUseTool {
         ToolDefinition {
             name: "computer_use".into(),
             description: "Control a connected desktop machine — take screenshots, click, type, press keys, scroll. \
+                It acts on the computer the user chose for this conversation (or the only connected one); \
+                with several connected and none chosen it refuses and you must ask the user to choose. \
                 Always take a screenshot first to see the current state. \
                 Coordinates are in the screenshot's pixel space. \
                 Available actions: screenshot, left_click, right_click, middle_click, double_click, \
@@ -417,17 +589,26 @@ impl Tool for ComputerUseTool {
             params,
         };
 
-        let machine_id = args.machine_id.clone().unwrap_or_default();
+        let need = if args.action == "screenshot" {
+            Need::ScreenCapture
+        } else {
+            Need::Accessibility
+        };
+        let target = self
+            .target
+            .desktop(&self.registry, args.machine_id.as_deref(), need)
+            .await?;
         log::info!(
-            "[computer_use] {} on machine '{}' (req={})",
+            "[computer_use] {} on machine '{}' ({}, req={})",
             args.action,
-            machine_id,
+            target.machine_id,
+            target.label,
             &request_id[..8]
         );
 
         let result = self
             .registry
-            .execute(&machine_id, call)
+            .execute(&target.machine_id, call)
             .await
             .map_err(ToolExecError)?;
 
@@ -458,8 +639,8 @@ impl Tool for ComputerUseTool {
                     let caption = serde_json::json!({
                         "type": "text",
                         "text": format!(
-                            "Screenshot captured ({}x{}). Show to user: ![screenshot]({})",
-                            w, h, chat_url
+                            "Screenshot captured ({}x{}) on {}. Show to user: ![screenshot]({})",
+                            w, h, target.label, chat_url
                         ),
                     });
 
@@ -481,12 +662,15 @@ impl Tool for ComputerUseTool {
             }
             "action" => {
                 if result.success.unwrap_or(false) {
-                    Ok(format!("Action '{}' executed successfully.", args.action))
+                    Ok(format!(
+                        "Action '{}' executed successfully on {}.",
+                        args.action, target.label
+                    ))
                 } else {
                     let err = result.error.unwrap_or_else(|| "unknown error".to_string());
                     Err(ToolExecError(format!(
-                        "Action '{}' failed: {}",
-                        args.action, err
+                        "Action '{}' failed on {}: {}",
+                        args.action, target.label, err
                     )))
                 }
             }
@@ -556,12 +740,20 @@ impl Tool for RemoteBashTool {
             }),
         };
 
-        let machine_id = args.machine_id.clone().unwrap_or_default();
-        log::info!("[remote_bash] '{}' on '{}'", args.command, machine_id);
+        let target = self
+            .target
+            .desktop(&self.registry, args.machine_id.as_deref(), Need::None)
+            .await?;
+        log::info!(
+            "[remote_bash] '{}' on '{}' ({})",
+            args.command,
+            target.machine_id,
+            target.label
+        );
 
         let result = self
             .registry
-            .execute(&machine_id, call)
+            .execute(&target.machine_id, call)
             .await
             .map_err(ToolExecError)?;
 
@@ -632,17 +824,21 @@ impl Tool for RemoteFilesTool {
             }),
         };
 
-        let machine_id = args.machine_id.clone().unwrap_or_default();
+        let target = self
+            .target
+            .desktop(&self.registry, args.machine_id.as_deref(), Need::None)
+            .await?;
         log::info!(
-            "[remote_files] {} '{}' on '{}'",
+            "[remote_files] {} '{}' on '{}' ({})",
             args.operation,
             args.path,
-            machine_id
+            target.machine_id,
+            target.label
         );
 
         let result = self
             .registry
-            .execute(&machine_id, call)
+            .execute(&target.machine_id, call)
             .await
             .map_err(ToolExecError)?;
 
@@ -1111,7 +1307,8 @@ mod target_tests {
         let seen = answering(registry.clone(), studio);
         let tools = harness(&registry, MachineTarget::resolve(&registry, None).await);
 
-        tools.computer.call(screenshot(None)).await.unwrap_err(); // no image in the fake answer
+        let output = tools.computer.call(screenshot(None)).await.unwrap();
+        assert!(output.contains("on studio"), "{output}");
         tools.bash.call(bash(None)).await.unwrap();
         tools.files.call(files(Some(STUDIO))).await.unwrap();
         tokio::task::yield_now().await;

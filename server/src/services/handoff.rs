@@ -48,7 +48,10 @@ use crate::{
         llm::{ContentBlock, Message},
         proactive::{Admission, RunHandle, outcome_from_trace},
         tool::Tool,
-        tools::computer::{MachineTarget, RemoteFilesArgs, RemoteFilesTool, TargetSelection},
+        tools::{
+            MachineTarget, TargetSelection,
+            computer::{RemoteFilesArgs, RemoteFilesTool},
+        },
     },
 };
 
@@ -409,7 +412,7 @@ async fn continue_on(
     // The acceptance itself decides whether the conversation needs a turn
     // started or is already running and will pick the request up; the
     // follower spawned below only waits for it to stop.
-    let own_loop = ensure_agent_loop(state, &chat_id).await;
+    let own_loop = ensure_agent_loop(state, &chat_id, Some(destination.machine_id.clone())).await;
     log::info!(
         "[handoff] {id}: continuing on '{}' as {run_id} in {chat_id} ({})",
         destination.machine_id,
@@ -651,11 +654,12 @@ fn spawn_continuation(
 }
 
 /// Start the conversation's agent loop when none is running, exactly as a
-/// sent message does; `None` when one is already running and will pick the
-/// handoff up on its next turn.
+/// sent message does, targeting the destination computer (#80); `None` when
+/// one is already running and will pick the handoff up on its next turn.
 async fn ensure_agent_loop(
     state: &AppState,
     chat_id: &str,
+    machine_target: Option<String>,
 ) -> Option<tokio::task::JoinHandle<AgentLoopExit>> {
     let key = crate::routes::chat::task_key(CANONICAL_SLUG, chat_id);
     let cancel = CancellationToken::new();
@@ -672,6 +676,7 @@ async fn ensure_agent_loop(
         chat_id.to_owned(),
         cancel,
         false,
+        machine_target,
     )))
 }
 

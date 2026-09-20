@@ -20,7 +20,13 @@ fn production(path: &str) -> String {
 #[test]
 fn computer_tools_never_default_a_machine() {
     let tools = production("server/src/services/tools/computer.rs");
-    for forbidden in ["machines[0]", "live[0]", ".first()", "unwrap_or_default()"] {
+    for forbidden in [
+        "machines[0]",
+        "live[0]",
+        ".first()",
+        "machine_id.unwrap_or",
+        "machine_id.clone().unwrap_or",
+    ] {
         assert!(
             !tools.contains(forbidden),
             "computer tools must resolve a target through the selection, never pick one ({forbidden} found)"

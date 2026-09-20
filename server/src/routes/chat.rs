@@ -70,6 +70,9 @@ async fn post_chat(
     let chat_id = request.chat_id.clone();
     let content = request.content.trim().to_string();
     let voice_mode = request.voice_mode;
+    // The computer the user chose (#80) travels with the run that this
+    // message starts; a running loop keeps the target it started with.
+    let machine_target = request.machine_id.clone();
 
     if content.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "content required").into_response());
@@ -110,7 +113,15 @@ async fn post_chat(
         let bg_state = state.clone();
         let bg_chat_id = chat_id.clone();
         tokio::spawn(async move {
-            run_agent_loop(bg_state, instance_slug, bg_chat_id, cancel, voice_mode).await;
+            run_agent_loop(
+                bg_state,
+                instance_slug,
+                bg_chat_id,
+                cancel,
+                voice_mode,
+                machine_target,
+            )
+            .await;
         });
     }
 
@@ -125,12 +136,16 @@ async fn post_chat(
 
 /// Agent loop: keeps calling the LLM until it responds without tool use or is cancelled.
 /// New user messages are automatically picked up because each turn re-reads from disk.
+/// `machine_target` is the computer the user chose for this run (#80): a
+/// known machine's stable id or `server-home`; `None` leaves the desktop
+/// tools to the only connected computer and refuses several.
 pub async fn run_agent_loop(
     state: AppState,
     instance_slug: String,
     chat_id: String,
     cancel: CancellationToken,
     voice_mode: bool,
+    machine_target: Option<String>,
 ) -> AgentLoopExit {
     let _ = state.events.send(ServerEvent::AgentRunning {
         instance_slug: instance_slug.clone(),
@@ -328,6 +343,7 @@ pub async fn run_agent_loop(
             voice_mode,
             state.vector_store.clone(),
             state.machine_registry.clone(),
+            machine_target.as_deref(),
             &public_url,
             &state.resources,
         );
