@@ -21,6 +21,11 @@
 //! `Host` header, or anything about the deployment; two profiles on one
 //! machine pair exactly like two machines. Secrets travel only inside signed
 //! POST bodies, never in URLs. Nothing here logs a secret.
+//!
+//! Every state transition is a compare-and-set inside the peer store's lock
+//! (`PeerStore::update`): the state a step requires is checked against the
+//! record as it is at that moment, never against an earlier snapshot, so a
+//! confirmation racing a revoke can never leave a revoked peer paired.
 
 use std::{
     path::{Path, PathBuf},
@@ -353,51 +358,55 @@ impl FederationState {
     /// The issuing owner's confirmation. Returns the record and whether the
     /// peer acknowledged the notice; an unreachable peer does not undo the
     /// local confirmation (confirming again resends).
+    ///
+    /// The state check and the transition run under the store lock, so a
+    /// revoke that lands meanwhile wins: the confirmation then fails with
+    /// `PeerRevoked` and nothing is sent.
     pub async fn confirm_peer(
         &self,
         companion_id: &str,
     ) -> Result<(PeerRecord, bool), FederationError> {
+        let mut paired_now = false;
+        let mut notify = true;
         let peer = self
             .peers
-            .get(companion_id)
+            .update(companion_id, |record| match (record.role, record.state) {
+                (_, PeerState::Revoked) => Err(FederationError::PeerRevoked),
+                (PairingRole::Issuer, PeerState::Pending) => {
+                    record.state = PeerState::Paired;
+                    record.approved_origins = record.pending_origin.take().into_iter().collect();
+                    paired_now = true;
+                    Ok(())
+                }
+                (PairingRole::Issuer, PeerState::Paired) => Ok(()),
+                (PairingRole::Accepter, PeerState::Paired) => {
+                    notify = false;
+                    Ok(())
+                }
+                (_, state) => Err(FederationError::PeerNotPaired { state }),
+            })?
             .ok_or(FederationError::UnknownPeer)?;
-        let record = match (peer.record.role, peer.record.state) {
-            (_, PeerState::Revoked) => return Err(FederationError::PeerRevoked),
-            (PairingRole::Issuer, PeerState::Pending) => {
-                let record = self
-                    .peers
-                    .update(companion_id, |record| {
-                        record.state = PeerState::Paired;
-                        record.approved_origins =
-                            record.pending_origin.take().into_iter().collect();
-                    })?
-                    .ok_or(FederationError::UnknownPeer)?;
-                log::info!(
-                    "[federation] pairing {}: companion {} paired by the owner",
-                    record.pairing_id,
-                    record.companion_id()
-                );
-                record
-            }
-            (PairingRole::Issuer, PeerState::Paired) => peer.record.clone(),
-            (PairingRole::Accepter, PeerState::Paired) => return Ok((peer.record, false)),
-            (_, state) => return Err(FederationError::PeerNotPaired { state }),
-        };
+        if paired_now {
+            log::info!(
+                "[federation] pairing {}: companion {} paired by the owner",
+                peer.record.pairing_id,
+                peer.record.companion_id()
+            );
+        }
+        if !notify {
+            return Ok((peer.record, false));
+        }
         let me = self.identity()?;
         let notice = PairingMessage::Confirm {
             version: FEDERATION_VERSION,
-            pairing_id: record.pairing_id.clone(),
+            pairing_id: peer.record.pairing_id.clone(),
             issuer: me.companion_id().to_owned(),
-            accepter: record.identity.companion_id.clone(),
-        };
-        let peer = Peer {
-            record: record.clone(),
-            verified: peer.verified,
+            accepter: peer.record.identity.companion_id.clone(),
         };
         let notified = self
             .notify(&peer, &notice, CONFIRM_PATH, PeerState::Paired)
             .await;
-        Ok((record, notified))
+        Ok((peer.record, notified))
     }
 
     /// The accepter's side of step 3.
@@ -425,22 +434,39 @@ impl FederationState {
         if accepter != me.companion_id() {
             return Err(FederationError::RecipientMismatch);
         }
-        if peer.record.state == PeerState::Revoked {
-            return Err(FederationError::PeerRevoked);
-        }
-        if pairing_id != peer.record.pairing_id {
-            return Err(FederationError::PairingMismatch);
-        }
-        if peer.record.role != PairingRole::Accepter {
-            return Err(FederationError::Malformed(
-                "only the issuing side confirms a pairing".into(),
-            ));
-        }
-        // Already paired: the notice was resent or replayed, and nothing changes.
-        if peer.record.state == PeerState::Pending {
-            self.peers.update(peer.record.companion_id(), |record| {
-                record.state = PeerState::Paired;
-            })?;
+        // Everything about the record's state is checked under the store
+        // lock, against the record as it is now: a revoke that landed since
+        // the signature was verified is never overwritten, and a replayed
+        // notice cannot revive a revoked peer.
+        let mut paired_now = false;
+        let peer = self
+            .peers
+            .update(peer.record.companion_id(), |record| {
+                if record.state == PeerState::Revoked {
+                    return Err(FederationError::PeerRevoked);
+                }
+                if pairing_id != record.pairing_id {
+                    return Err(FederationError::PairingMismatch);
+                }
+                if record.role != PairingRole::Accepter {
+                    return Err(FederationError::Malformed(
+                        "only the issuing side confirms a pairing".into(),
+                    ));
+                }
+                match record.state {
+                    PeerState::Pending => {
+                        record.state = PeerState::Paired;
+                        paired_now = true;
+                        Ok(())
+                    }
+                    // Already paired: the notice was resent or replayed,
+                    // and nothing changes.
+                    PeerState::Paired => Ok(()),
+                    state => Err(FederationError::PeerNotPaired { state }),
+                }
+            })?
+            .ok_or(FederationError::UnknownPeer)?;
+        if paired_now {
             log::info!(
                 "[federation] pairing {}: companion {} confirmed the pairing",
                 peer.record.pairing_id,
@@ -452,45 +478,43 @@ impl FederationState {
 
     /// Withdraws trust locally and tells the peer. Returns the record and
     /// whether the peer acknowledged; revoking an already revoked peer is a
-    /// no-op.
+    /// no-op. A revoke wins against any confirmation in flight.
     pub async fn revoke_peer(
         &self,
         companion_id: &str,
     ) -> Result<(PeerRecord, bool), FederationError> {
+        let mut already_revoked = false;
         let peer = self
             .peers
-            .get(companion_id)
-            .ok_or(FederationError::UnknownPeer)?;
-        if peer.record.state == PeerState::Revoked {
-            return Ok((peer.record, false));
-        }
-        let record = self
-            .peers
             .update(companion_id, |record| {
-                record.state = PeerState::Revoked;
-                record.pending_origin = None;
+                if record.state == PeerState::Revoked {
+                    already_revoked = true;
+                } else {
+                    record.state = PeerState::Revoked;
+                    record.pending_origin = None;
+                }
+                Ok(())
             })?
             .ok_or(FederationError::UnknownPeer)?;
+        if already_revoked {
+            return Ok((peer.record, false));
+        }
         log::info!(
             "[federation] pairing {}: companion {} revoked by the owner",
-            record.pairing_id,
-            record.companion_id()
+            peer.record.pairing_id,
+            peer.record.companion_id()
         );
         let me = self.identity()?;
         let notice = PairingMessage::Revoke {
             version: FEDERATION_VERSION,
-            pairing_id: record.pairing_id.clone(),
+            pairing_id: peer.record.pairing_id.clone(),
             sender: me.companion_id().to_owned(),
-            peer: record.identity.companion_id.clone(),
-        };
-        let peer = Peer {
-            record: record.clone(),
-            verified: peer.verified,
+            peer: peer.record.identity.companion_id.clone(),
         };
         let notified = self
             .notify(&peer, &notice, REVOKE_PATH, PeerState::Revoked)
             .await;
-        Ok((record, notified))
+        Ok((peer.record, notified))
     }
 
     /// The peer's side of step 4.
@@ -518,14 +542,23 @@ impl FederationState {
         if recipient != me.companion_id() {
             return Err(FederationError::RecipientMismatch);
         }
-        if pairing_id != peer.record.pairing_id {
-            return Err(FederationError::PairingMismatch);
-        }
-        if peer.record.state != PeerState::Revoked {
-            self.peers.update(peer.record.companion_id(), |record| {
-                record.state = PeerState::Revoked;
-                record.pending_origin = None;
-            })?;
+        // Checked and applied under the store lock, like a confirmation.
+        let mut revoked_now = false;
+        let peer = self
+            .peers
+            .update(peer.record.companion_id(), |record| {
+                if pairing_id != record.pairing_id {
+                    return Err(FederationError::PairingMismatch);
+                }
+                if record.state != PeerState::Revoked {
+                    record.state = PeerState::Revoked;
+                    record.pending_origin = None;
+                    revoked_now = true;
+                }
+                Ok(())
+            })?
+            .ok_or(FederationError::UnknownPeer)?;
+        if revoked_now {
             log::info!(
                 "[federation] pairing {}: companion {} revoked the pairing",
                 peer.record.pairing_id,
@@ -1372,5 +1405,119 @@ mod tests {
         assert_eq!(ack.sender, b_id);
         assert_eq!(b.overview().unwrap().peers[0].state, PeerState::Paired);
         assert!(b.verify_from_peer(&ping(&a)).is_ok());
+    }
+
+    /// Runs `first` and `second` on two threads released by one barrier, so
+    /// the store sees them in whichever order the scheduler picks.
+    fn race<A, B>(first: impl FnOnce() -> A + Send, second: impl FnOnce() -> B + Send) -> (A, B)
+    where
+        A: Send,
+        B: Send,
+    {
+        let barrier = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            let one = scope.spawn(|| {
+                barrier.wait();
+                first()
+            });
+            let two = scope.spawn(|| {
+                barrier.wait();
+                second()
+            });
+            (one.join().unwrap(), two.join().unwrap())
+        })
+    }
+
+    /// A confirmation that races the owner's revoke never revives the peer:
+    /// the state check and the transition happen under one lock, on both
+    /// the accepter (a replayed `pair_confirm` against `revoke_peer`) and
+    /// the issuer (the owner's `confirm_peer` against a `pair_revoke`).
+    #[test]
+    fn a_confirm_racing_a_revoke_never_leaves_the_peer_paired() {
+        use futures::executor::block_on;
+        const ROUNDS: usize = 24;
+
+        for round in 0..ROUNDS {
+            let mut network = Network::new();
+            let a = network.server(ORIGIN_A);
+            let b = network.server(ORIGIN_B);
+            let a_id = a.identity().unwrap().companion_id().to_owned();
+            let b_id = b.identity().unwrap().companion_id().to_owned();
+            let invite = a.create_invite(ORIGIN_A).unwrap();
+            block_on(b.accept_invite(accept_for(&invite), ORIGIN_B)).unwrap();
+            // Exactly the notice A sends on confirmation, held by whoever
+            // captured it: without a nonce it stays valid for replay.
+            let confirm = sign_message(
+                &a.identity().unwrap(),
+                &PairingMessage::Confirm {
+                    version: FEDERATION_VERSION,
+                    pairing_id: invite.id.clone(),
+                    issuer: a_id.clone(),
+                    accepter: b_id.clone(),
+                },
+            );
+
+            // Accepter side: the replayed confirm against B's owner revoking.
+            let (confirmed, revoked) = race(
+                || b.receive_confirm(&confirm),
+                || block_on(b.revoke_peer(&a_id)),
+            );
+            let (record, _) = revoked.unwrap();
+            assert_eq!(record.state, PeerState::Revoked);
+            // Either order is legal; only the outcome is not.
+            if let Err(error) = confirmed {
+                assert_eq!(error, FederationError::PeerRevoked, "round {round}");
+            }
+            let on_b = b.overview().unwrap().peers;
+            assert_eq!(
+                on_b[0].state,
+                PeerState::Revoked,
+                "round {round}: a confirm racing the revoke revived the peer on B"
+            );
+            assert_eq!(
+                b.verify_from_peer(&ping(&a)).unwrap_err(),
+                FederationError::PeerRevoked,
+                "round {round}"
+            );
+            assert_eq!(
+                b.receive_confirm(&confirm).unwrap_err(),
+                FederationError::PeerRevoked,
+                "round {round}: a later replay must fail closed too"
+            );
+            assert_eq!(a.overview().unwrap().peers[0].state, PeerState::Revoked);
+
+            // Issuer side: pair again, then A's owner confirms while B's
+            // owner revokes; both stores must end revoked whichever wins.
+            let invite = a.create_invite(ORIGIN_A).unwrap();
+            block_on(b.accept_invite(accept_for(&invite), ORIGIN_B)).unwrap();
+            let (confirmed, revoked) = race(
+                || block_on(a.confirm_peer(&b_id)),
+                || block_on(b.revoke_peer(&a_id)),
+            );
+            let (record, _) = revoked.unwrap();
+            assert_eq!(record.state, PeerState::Revoked);
+            match confirmed {
+                Ok((record, _)) => assert_eq!(record.state, PeerState::Paired),
+                Err(error) => assert_eq!(error, FederationError::PeerRevoked, "round {round}"),
+            }
+            assert_eq!(
+                a.overview().unwrap().peers[0].state,
+                PeerState::Revoked,
+                "round {round}: the owner's confirm overwrote the revoke on A"
+            );
+            assert_eq!(
+                b.overview().unwrap().peers[0].state,
+                PeerState::Revoked,
+                "round {round}: the confirm notice revived the peer on B"
+            );
+            assert_eq!(
+                a.verify_from_peer(&ping(&b)).unwrap_err(),
+                FederationError::PeerRevoked
+            );
+            assert_eq!(
+                b.verify_from_peer(&ping(&a)).unwrap_err(),
+                FederationError::PeerRevoked
+            );
+        }
     }
 }

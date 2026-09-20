@@ -5,12 +5,16 @@
 //! peer's self-signed identity document, its handshake state, the origins the
 //! owner approved, and the rotation history. Every document is re-verified on
 //! load; a record whose document no longer verifies is dropped rather than
-//! trusted.
+//! trusted. A file this build cannot load (another version, junk, the wrong
+//! shape) is a trust store this build must not touch: reads see no peers and
+//! every write fails closed, so the file is never replaced by an empty one.
 //!
 //! Invites live in memory only: an invite is a short-lived, one-time secret
 //! that the issuing owner sees exactly once, and the store keeps just a
 //! domain-separated SHA-256 of it, the way browser pairing codes are kept.
-//! A restart forgets outstanding invites. Nothing here logs a secret.
+//! The secret is 32 random bytes, so there is no failure counter: one would
+//! only let a stranger at the public route lock the owner out. A restart
+//! forgets outstanding invites. Nothing here logs a secret.
 
 use std::{
     path::{Path, PathBuf},
@@ -35,11 +39,6 @@ pub const PEERS_FILE: &str = "peers.json";
 pub const INVITE_TTL_SECS: u64 = 10 * 60;
 /// Outstanding invites kept at once; minting more evicts the oldest.
 pub const MAX_PENDING_INVITES: usize = 8;
-/// Failed redemptions are counted over this sliding window.
-pub const FAILURE_WINDOW_SECS: u64 = 10 * 60;
-/// Once this many redemptions fail inside the window, redeeming is refused
-/// until the window drains.
-pub const MAX_FAILURES_PER_WINDOW: u32 = 20;
 
 const STORE_VERSION: u32 = 1;
 const INVITE_SECRET_BYTES: usize = 32;
@@ -189,17 +188,12 @@ impl PeerStore {
     }
 
     /// Consumes the invite whose hash matches `secret`. Wrong, expired,
-    /// cancelled, and already redeemed secrets are all `InviteInvalid`; too
-    /// many failures in the window are `RateLimited` before anything is
-    /// compared.
+    /// cancelled, and already redeemed secrets are all `InviteInvalid`, and
+    /// a wrong secret changes nothing: the next presentation is judged on
+    /// its own.
     pub fn redeem_invite(&self, secret: &InviteSecret) -> Result<RedeemedInvite, FederationError> {
         let now = (self.clock)();
         let mut inner = self.inner.lock().unwrap();
-        inner.failures.retain(|at| at + FAILURE_WINDOW_SECS > now);
-        if inner.failures.len() as u32 >= MAX_FAILURES_PER_WINDOW {
-            log::warn!("[federation] invite redemption refused: too many failed attempts");
-            return Err(FederationError::RateLimited);
-        }
         inner.invites.retain(|invite| invite.expires_at > now);
         let presented = hash_invite(secret);
         let Some(index) = inner
@@ -207,7 +201,6 @@ impl PeerStore {
             .iter()
             .position(|invite| constant_time_eq(&invite.secret_hash, &presented))
         else {
-            inner.failures.push(now);
             log::warn!("[federation] invite redemption failed: no outstanding invite matches");
             return Err(FederationError::InviteInvalid);
         };
@@ -226,7 +219,9 @@ impl PeerStore {
         })
     }
 
-    /// Inserts or replaces the record for `record.companion_id()` and persists.
+    /// Inserts or replaces the record for `record.companion_id()` and
+    /// persists. Fails closed, changing nothing, over a store file this
+    /// build could not load.
     pub fn upsert(
         &self,
         record: PeerRecord,
@@ -239,6 +234,7 @@ impl PeerStore {
         }
         let mut inner = self.inner.lock().unwrap();
         self.ensure_loaded(&mut inner);
+        self.refuse_if_unloadable(&inner)?;
         let peer = Peer {
             record: record.clone(),
             verified,
@@ -272,16 +268,25 @@ impl PeerStore {
         inner.peers.iter().map(|peer| peer.record.clone()).collect()
     }
 
-    /// Applies `change` to the record for `companion_id`, stamps `updated_at`,
-    /// persists, and returns the new record; `Ok(None)` when unknown.
+    /// Applies `change` to the record for `companion_id` under the store
+    /// lock and returns the peer; `Ok(None)` when unknown.
+    ///
+    /// The closure sees the record as it is now, not as a caller last saw
+    /// it, so a state check inside it is a compare-and-set: a transition
+    /// that no longer fits returns an error, nothing is persisted, and the
+    /// error is passed through. A change that leaves the record as it was
+    /// is not stamped or written; otherwise `updated_at` is stamped and the
+    /// file is rewritten. Fails closed over a store file this build could
+    /// not load.
     pub fn update(
         &self,
         companion_id: &str,
-        change: impl FnOnce(&mut PeerRecord),
-    ) -> Result<Option<PeerRecord>, FederationError> {
+        change: impl FnOnce(&mut PeerRecord) -> Result<(), FederationError>,
+    ) -> Result<Option<Peer>, FederationError> {
         let now = (self.clock)();
         let mut inner = self.inner.lock().unwrap();
         self.ensure_loaded(&mut inner);
+        self.refuse_if_unloadable(&inner)?;
         let Some(index) = inner
             .peers
             .iter()
@@ -289,17 +294,21 @@ impl PeerStore {
         else {
             return Ok(None);
         };
-        let record = &mut inner.peers[index].record;
-        change(record);
+        let mut record = inner.peers[index].record.clone();
+        change(&mut record)?;
+        if record == inner.peers[index].record {
+            return Ok(Some(inner.peers[index].clone()));
+        }
         record.updated_at = now;
-        let record = record.clone();
+        inner.peers[index].record = record;
         self.persist(&inner)?;
-        Ok(Some(record))
+        Ok(Some(inner.peers[index].clone()))
     }
 
     /// Reads the store file once. Records whose document does not verify
-    /// are dropped; an unreadable file starts the store empty and is
-    /// reported, never repaired silently.
+    /// are dropped. A file that cannot be read or is not a store of this
+    /// version leaves the store empty and marked unloadable: it is reported,
+    /// never repaired, and never overwritten.
     fn ensure_loaded(&self, inner: &mut Inner) {
         if inner.loaded {
             return;
@@ -309,46 +318,32 @@ impl PeerStore {
         let text = match std::fs::metadata(&path) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
             Err(error) => {
-                log::warn!(
-                    "[federation] peer store {} cannot be read ({error}); starting empty",
-                    path.display()
-                );
-                return;
+                return self.mark_unloadable(inner, format!("cannot be read ({error})"));
             }
             Ok(metadata) if metadata.len() > MAX_STORE_FILE_BYTES => {
-                log::warn!(
-                    "[federation] peer store {} is larger than a peer store can be; starting empty",
-                    path.display()
-                );
-                return;
+                return self
+                    .mark_unloadable(inner, "is larger than a peer store can be".to_owned());
             }
             Ok(_) => match std::fs::read_to_string(&path) {
                 Ok(text) => text,
                 Err(error) => {
-                    log::warn!(
-                        "[federation] peer store {} cannot be read ({error}); starting empty",
-                        path.display()
-                    );
-                    return;
+                    return self.mark_unloadable(inner, format!("cannot be read ({error})"));
                 }
             },
         };
+        let version = serde_json::from_str::<StoreVersion>(&text)
+            .ok()
+            .map(|file| file.version);
         let file = match serde_json::from_str::<StoreFile>(&text) {
             Ok(file) if file.version == STORE_VERSION => file,
-            Ok(file) => {
-                log::warn!(
-                    "[federation] peer store {} has unsupported version {}; starting empty",
-                    path.display(),
-                    file.version
-                );
-                return;
-            }
-            Err(_) => {
-                log::warn!(
-                    "[federation] peer store {} does not have the expected shape; starting empty",
-                    path.display()
-                );
-                return;
+            _ => {
+                let reason = match version {
+                    Some(version) if version != STORE_VERSION => {
+                        format!("has unsupported version {version}")
+                    }
+                    _ => "does not have the expected shape".to_owned(),
+                };
+                return self.mark_unloadable(inner, reason);
             }
         };
         for record in file.peers {
@@ -359,6 +354,26 @@ impl PeerStore {
                     record.identity.companion_id
                 ),
             }
+        }
+    }
+
+    fn mark_unloadable(&self, inner: &mut Inner, reason: String) {
+        log::warn!(
+            "[federation] peer store {} {reason}; no peers are trusted and nothing will be written until it is repaired or moved aside and the server restarted",
+            self.path().display()
+        );
+        inner.unloadable = Some(reason);
+    }
+
+    fn refuse_if_unloadable(&self, inner: &Inner) -> Result<(), FederationError> {
+        match &inner.unloadable {
+            Some(reason) => Err(FederationError::Io {
+                path: self.path(),
+                message: format!(
+                    "peer store {reason}; repair or move it aside and restart before pairing"
+                ),
+            }),
+            None => Ok(()),
         }
     }
 
@@ -433,9 +448,10 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 #[derive(Default)]
 struct Inner {
     loaded: bool,
+    /// Why the store file could not be loaded, when it exists but could not.
+    unloadable: Option<String>,
     peers: Vec<Peer>,
     invites: Vec<Invite>,
-    failures: Vec<u64>,
 }
 
 struct Invite {
@@ -450,6 +466,13 @@ struct Invite {
 struct StoreFile {
     version: u32,
     peers: Vec<PeerRecord>,
+}
+
+/// Just the version, read leniently so an unsupported store is reported as
+/// such rather than as the wrong shape.
+#[derive(Deserialize)]
+struct StoreVersion {
+    version: u32,
 }
 
 #[cfg(test)]
@@ -540,7 +563,7 @@ mod tests {
     }
 
     #[test]
-    fn wrong_expired_and_cancelled_invites_fail_closed_with_rate_limiting() {
+    fn wrong_expired_and_cancelled_invites_fail_closed() {
         let (_tmp, now, store) = store();
         let wrong = InviteSecret::new("not-the-secret".into());
         assert_eq!(
@@ -564,29 +587,28 @@ mod tests {
             Err(FederationError::InviteInvalid)
         );
         assert!(store.invites().is_empty(), "expired invites are dropped");
+    }
 
-        // Start a fresh failure window, then fill it.
-        now.fetch_add(FAILURE_WINDOW_SECS, Ordering::SeqCst);
+    /// The secret is 32 random bytes, so guessing is hopeless and a failure
+    /// counter would only let a stranger at the public route lock the owner
+    /// out of a legitimate redemption. Any number of wrong secrets, from
+    /// anyone, leaves the right one redeemable.
+    #[test]
+    fn strangers_cannot_exhaust_invite_redemption_with_wrong_secrets() {
+        let (_tmp, _now, store) = store();
         let live = store.create_invite();
-        for _ in 0..MAX_FAILURES_PER_WINDOW {
+        let wrong = InviteSecret::new("not-the-secret".into());
+        for _ in 0..1_000 {
             assert_eq!(
                 store.redeem_invite(&wrong),
                 Err(FederationError::InviteInvalid)
             );
         }
-        assert_eq!(
-            store.redeem_invite(&live.secret),
-            Err(FederationError::RateLimited),
-            "even the right secret is refused while the window is full"
+        assert_eq!(store.invites().len(), 1, "the invite is untouched");
+        assert!(
+            store.redeem_invite(&live.secret).is_ok(),
+            "the right secret is never refused because strangers guessed wrong"
         );
-        now.fetch_add(FAILURE_WINDOW_SECS, Ordering::SeqCst);
-        assert_eq!(
-            store.redeem_invite(&live.secret),
-            Err(FederationError::InviteInvalid),
-            "the window drained but the invite expired meanwhile"
-        );
-        let fresh = store.create_invite();
-        assert!(store.redeem_invite(&fresh.secret).is_ok());
     }
 
     #[test]
@@ -653,13 +675,15 @@ mod tests {
                 record
                     .approved_origins
                     .push("https://second.example".into());
+                Ok(())
             })
             .unwrap()
-            .unwrap();
+            .unwrap()
+            .record;
         assert_eq!(updated.state, PeerState::Paired);
         assert_eq!(updated.updated_at, T0 + 5);
         assert_eq!(updated.created_at, T0);
-        assert_eq!(store.update("nobody", |_| {}).unwrap(), None);
+        assert!(store.update("nobody", |_| Ok(())).unwrap().is_none());
 
         let reopened = PeerStore::with_clock(tmp.path(), system_clock());
         let loaded = reopened.get(peer.companion_id()).expect("record reloads");
@@ -712,5 +736,128 @@ mod tests {
             let reopened = PeerStore::with_clock(tmp.path(), system_clock());
             assert!(reopened.list().is_empty(), "loaded peers from {junk}");
         }
+    }
+
+    /// A file this build cannot load (a newer version, junk, the wrong
+    /// shape) is a trust store this build must not touch: reads start
+    /// empty, every write fails closed, and the file stays byte for byte.
+    #[test]
+    fn an_unloadable_store_file_is_never_overwritten() {
+        let (tmp, _now, store) = store();
+        let peer = identity("peer");
+        let path = store.path();
+        for unloadable in [
+            r#"{"version":2,"peers":[{"future":"record"}],"extra":"data"}"#,
+            r#"{"version":2,"peers":[]}"#,
+            "not json",
+            r#"{"version":1,"peers":[{"state":"paired"}]}"#,
+        ] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, unloadable).unwrap();
+            let reopened = PeerStore::with_clock(tmp.path(), system_clock());
+            assert!(reopened.list().is_empty(), "{unloadable}");
+            assert!(reopened.get(peer.companion_id()).is_none());
+
+            let error = reopened
+                .upsert(record(&peer, PeerState::Pending), peer.verified().clone())
+                .unwrap_err();
+            assert!(
+                matches!(&error, FederationError::Io { path: at, .. } if *at == path),
+                "{unloadable}: {error:?}"
+            );
+            let error = reopened
+                .update(peer.companion_id(), |record| {
+                    record.state = PeerState::Paired;
+                    Ok(())
+                })
+                .unwrap_err();
+            assert!(
+                matches!(error, FederationError::Io { .. }),
+                "{unloadable}: {error:?}"
+            );
+            assert!(
+                reopened.list().is_empty() && reopened.get(peer.companion_id()).is_none(),
+                "{unloadable}: a refused write left something behind"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                unloadable,
+                "the unloadable file was rewritten"
+            );
+        }
+
+        // Invites do not depend on the store file and still work.
+        let reopened = PeerStore::with_clock(tmp.path(), system_clock());
+        let minted = reopened.create_invite();
+        assert!(reopened.redeem_invite(&minted.secret).is_ok());
+    }
+
+    /// The closure runs under the store lock and may refuse the change; a
+    /// refusal persists nothing, and an unchanged record is not rewritten.
+    #[test]
+    fn update_applies_the_change_under_the_lock_or_not_at_all() {
+        let (_tmp, now, store) = store();
+        let peer = identity("peer");
+        store
+            .upsert(record(&peer, PeerState::Pending), peer.verified().clone())
+            .unwrap();
+        // The store writes through a temp file and a rename, so a rewrite
+        // is a new inode even when the bytes are the same.
+        #[cfg(unix)]
+        let written = {
+            use std::os::unix::fs::MetadataExt;
+            std::fs::metadata(store.path()).unwrap().ino()
+        };
+
+        now.store(T0 + 7, Ordering::SeqCst);
+        let refused = store
+            .update(peer.companion_id(), |record| {
+                assert_eq!(record.state, PeerState::Pending);
+                record.state = PeerState::Paired;
+                Err(FederationError::PeerRevoked)
+            })
+            .unwrap_err();
+        assert_eq!(refused, FederationError::PeerRevoked);
+        let kept = store.get(peer.companion_id()).unwrap().record;
+        assert_eq!(kept.state, PeerState::Pending, "a refused change is undone");
+        assert_eq!(kept.updated_at, T0, "a refused change is not stamped");
+
+        let same = store
+            .update(peer.companion_id(), |_| Ok(()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            same.record.updated_at, T0,
+            "an unchanged record is not stamped"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(
+                std::fs::metadata(store.path()).unwrap().ino(),
+                written,
+                "an unchanged record is not rewritten"
+            );
+        }
+        assert_eq!(
+            store
+                .update("nobody", |_| Ok(()))
+                .unwrap()
+                .map(|p| p.record),
+            None
+        );
+
+        let changed = store
+            .update(peer.companion_id(), |record| {
+                record.state = PeerState::Paired;
+                Ok(())
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(changed.record.state, PeerState::Paired);
+        assert_eq!(changed.record.updated_at, T0 + 7);
+        assert_eq!(changed.verified.public_key, peer.verified().public_key);
+        let reopened = PeerStore::with_clock(_tmp.path(), system_clock());
+        assert_eq!(reopened.list()[0], changed.record);
     }
 }

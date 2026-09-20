@@ -423,8 +423,10 @@ reported but the owner has not approved yet), timestamps, and the key
 rotation history (empty until rotation ships). No display name, hostname, port,
 profile name, or address is stored, because none of them is trusted. Every
 document is re-verified when the file is loaded; a record whose document no
-longer verifies is dropped, and a file of another version or shape starts the
-store empty with a warning rather than being repaired.
+longer verifies is dropped. A file of another version or shape is never
+repaired and never overwritten: the server warns, trusts no peer, and refuses
+every pairing write until the file is repaired or moved aside and the server
+restarted.
 
 States: `invited` (an invite the owner minted; it lives in memory only, as a
 domain-separated SHA-256 of its one-time secret, and a restart forgets it),
@@ -434,7 +436,9 @@ peer's messages verify), `revoked` (trust withdrawn; the record stays so a
 stale confirmation cannot revive it, and only a new invite pairs the companion
 again). An invite expires after ten minutes, is redeemed at most once, and is
 shown to the issuing owner exactly once: it never appears in a URL, a log
-line, a chat, or any later listing.
+line, a chat, or any later listing. Its secret is 32 random bytes, so wrong
+guesses are not counted: a failure counter on a public route would only let
+a stranger lock the owner out of a legitimate redemption.
 
 The handshake runs over the owner routes `/api/federation/*` (behind the
 normal API authentication) and the public peer routes under
@@ -458,9 +462,12 @@ its signature and nothing else:
    peers; `DELETE /api/federation/invites/{id}` withdraws an invite.
 
 Every notice names its pairing id, so a notice about an earlier pairing is
-stale, and a body of one kind is never read as another. Two profiles on one
-host go through exactly these steps over their own ports. The general signed
-transport (nonces, expiry, key rotation) builds on this store.
+stale, and a body of one kind is never read as another. Every transition is
+checked and applied under the store's lock against the record as it is at
+that moment, so a confirmation that races a revocation can never leave a
+revoked peer paired. Two profiles on one host go through exactly these steps
+over their own ports. The general signed transport (nonces, expiry, key
+rotation) builds on this store.
 
 ## Changing this format
 

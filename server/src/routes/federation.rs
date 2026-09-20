@@ -15,7 +15,9 @@
 //! * `POST /federation/v1/pair/confirm` and `/revoke` carry signed notices.
 //!
 //! Every body is JSON and read whole under a size cap; nothing is taken from
-//! the query string, and parse failures never echo the body.
+//! the query string, and parse failures never echo the body. There is no
+//! failure counter on the public routes: the invite secret is 32 random
+//! bytes, and a counter would only let a stranger lock the owner out.
 
 use axum::{
     Json, Router,
@@ -33,7 +35,6 @@ use crate::{
     services::federation::{
         identity,
         pairing::{CONFIRM_PATH, MAX_ENVELOPE_BYTES, PAIR_PATH, REVOKE_PATH},
-        peers,
     },
 };
 
@@ -120,7 +121,6 @@ impl IntoResponse for ApiError {
             FederationError::PairingMismatch => (StatusCode::FORBIDDEN, "pairing_mismatch"),
             FederationError::PeerRevoked => (StatusCode::FORBIDDEN, "peer_revoked"),
             FederationError::InviteInvalid => (StatusCode::UNAUTHORIZED, "invalid_invite"),
-            FederationError::RateLimited => (StatusCode::TOO_MANY_REQUESTS, "rate_limited"),
             FederationError::UnknownPeer => (StatusCode::NOT_FOUND, "unknown_peer"),
             FederationError::PeerNotPaired { .. } => (StatusCode::CONFLICT, "peer_not_paired"),
             FederationError::Transport(_) => (StatusCode::BAD_GATEWAY, "peer_unreachable"),
@@ -142,14 +142,6 @@ impl IntoResponse for ApiError {
             }
             FederationError::PeerNotPaired { state } => body["state"] = json!(state),
             _ => {}
-        }
-        if status == StatusCode::TOO_MANY_REQUESTS {
-            return (
-                status,
-                [(header::RETRY_AFTER, peers::FAILURE_WINDOW_SECS.to_string())],
-                Json(body),
-            )
-                .into_response();
         }
         (status, Json(body)).into_response()
     }

@@ -411,8 +411,6 @@ pub enum FederationError {
     /// The invite secret is wrong, expired, cancelled, or already redeemed.
     /// One variant on purpose: a caller learns nothing about which.
     InviteInvalid,
-    /// Too many invite redemptions failed recently.
-    RateLimited,
     /// The pair request names an issuer other than this companion.
     IssuerMismatch,
     /// A notice names a recipient other than this companion.
@@ -480,7 +478,6 @@ impl fmt::Display for FederationError {
             }
             Self::Io { path, message } => write!(f, "{}: {message}", path.display()),
             Self::InviteInvalid => f.write_str("federation invite is invalid or expired"),
-            Self::RateLimited => f.write_str("too many failed federation pairing attempts"),
             Self::IssuerMismatch => {
                 f.write_str("federation pair request is addressed to another companion")
             }
@@ -564,7 +561,6 @@ mod tests {
                 message: "denied".into(),
             },
             FederationError::InviteInvalid,
-            FederationError::RateLimited,
             FederationError::IssuerMismatch,
             FederationError::RecipientMismatch,
             FederationError::PairingMismatch,

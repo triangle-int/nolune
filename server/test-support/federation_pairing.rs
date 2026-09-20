@@ -656,6 +656,23 @@ async fn owner_routes_need_the_owner_and_peer_routes_need_a_signature() {
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     assert_eq!(body["error"], "unknown_peer");
 
+    // Strangers guessing at the public route cannot lock the owner out:
+    // there is no failure counter to trip, because the secret is 32 random
+    // bytes and a counter would only serve a denial of service.
+    for _ in 0..64 {
+        let (status, body) = a
+            .anonymous(
+                Method::POST,
+                "/federation/v1/pair",
+                Some(serde_json::to_vec(&wrong).unwrap()),
+                &[],
+            )
+            .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+        assert_eq!(body["error"], "invalid_invite");
+        assert!(body.get("retry_after").is_none());
+    }
+
     // The genuine request still works after all that noise.
     let (status, accepted) = b
         .owner(
