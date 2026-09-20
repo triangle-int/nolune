@@ -12,10 +12,17 @@
 //! secret in this module, the invite secret, lives in [`InviteSecret`], which
 //! never formats itself.
 //!
+//! The transport (#108, PR 3) adds the [`TransportEnvelope`] that paired
+//! companions exchange after pairing: addressed to one recipient, single-use
+//! by nonce, bounded by `issued_at`/`expires_at`, and signed over the body's
+//! digest. [`KeyRotation`] is the new identity endorsed by the old key, and
+//! [`KeyTransition`] is the audited record a peer keeps of accepting one.
+//!
 //! Everything here is a shape. Signing, verification, and the keystore live in
 //! `services::federation::identity`; the peer store and the handshake live in
-//! `services::federation::{peers, pairing}`; the on-disk location is
-//! documented in `docs/companion-storage.md`.
+//! `services::federation::{peers, pairing}`; the transport verifier and the
+//! rotation proof live in `services::federation::{envelope, rotation}`; the
+//! on-disk location is documented in `docs/companion-storage.md`.
 
 use std::{fmt, path::PathBuf};
 
@@ -39,6 +46,12 @@ pub const SIGNATURE_BYTES: usize = 64;
 /// before base64url encoding.
 pub const COMPANION_ID_BYTES: usize = 32;
 
+/// Raw nonce length in a transport envelope: 128 random bits per message.
+pub const NONCE_BYTES: usize = 16;
+
+/// The body hash in a transport envelope is a SHA-256 digest.
+pub const BODY_HASH_BYTES: usize = 32;
+
 /// Public, self-signed identity of one companion. Peers persist this document
 /// (or the key and id inside it) and nothing else about the companion's
 /// deployment.
@@ -60,7 +73,8 @@ pub struct IdentityDocument {
 }
 
 /// The smallest signed message shape: a body signed by a known companion.
-/// Transport envelopes (nonce, expiry, recipient) extend this in later work.
+/// The pairing handshake uses it; everything after pairing travels in a
+/// [`TransportEnvelope`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SignedEnvelope {
@@ -71,6 +85,78 @@ pub struct SignedEnvelope {
     pub body: String,
     /// Ed25519 signature by the sender over the canonical envelope bytes,
     /// which commit to the SHA-256 of the body rather than the body itself.
+    pub signature: String,
+}
+
+/// The signed transport envelope paired companions exchange. It is addressed
+/// (`recipient`), single-use (`nonce`, remembered by the recipient until the
+/// envelope could no longer be accepted), bounded in time (`issued_at` and
+/// `expires_at`, judged with a clock-skew allowance), and signed over the
+/// canonical bytes of every field but the body, which is committed to by
+/// `body_hash`. Nothing in it names a host, port, or profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TransportEnvelope {
+    pub version: u32,
+    /// `companion_id` of the signer.
+    pub sender: String,
+    /// `companion_id` the envelope is for; anyone else refuses it.
+    pub recipient: String,
+    /// [`NONCE_BYTES`] random bytes, base64url without padding.
+    pub nonce: String,
+    /// Unix seconds by the sender's clock.
+    pub issued_at: u64,
+    /// Unix seconds by the sender's clock; at most a few minutes after
+    /// `issued_at`.
+    pub expires_at: u64,
+    /// base64url SHA-256 of the decoded body.
+    pub body_hash: String,
+    /// Opaque body bytes, base64url without padding.
+    pub body: String,
+    /// Ed25519 signature by the sender over the canonical transport bytes.
+    pub signature: String,
+}
+
+/// Bodies that travel in a [`TransportEnvelope`] between paired companions.
+/// Kind-tagged like [`PairingMessage`]; message semantics beyond a ping and
+/// the rotation notice arrive with #110.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", deny_unknown_fields)]
+pub enum TransportMessage {
+    /// Proves the transport works end to end; answered with a `pong`.
+    #[serde(rename = "ping")]
+    Ping { version: u32 },
+    #[serde(rename = "pong")]
+    Pong { version: u32 },
+    /// The sender rotated its key; sent inside an envelope signed by the
+    /// key being retired.
+    #[serde(rename = "key_rotation")]
+    KeyRotation { version: u32, rotation: KeyRotation },
+    /// The recipient recorded the rotation and now knows the sender as
+    /// `companion_id`.
+    #[serde(rename = "rotation_ack")]
+    RotationAck {
+        version: u32,
+        companion_id: String,
+        state: PeerState,
+    },
+}
+
+/// A key rotation: the new self-signed identity, endorsed by the previous
+/// key and acknowledged by the new one over the same canonical bytes, so a
+/// reader with the previous document can check that its owner chose the new
+/// key and that the new key exists.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeyRotation {
+    pub version: u32,
+    pub previous: IdentityDocument,
+    pub identity: IdentityDocument,
+    /// Unix seconds by the rotating companion's clock.
+    pub rotated_at: u64,
+    /// Signature by `previous`'s key over the canonical rotation bytes.
+    pub endorsement: String,
+    /// Signature by `identity`'s key over the same bytes.
     pub signature: String,
 }
 
@@ -115,15 +201,26 @@ pub enum PairingRole {
     Accepter,
 }
 
-/// One audited key transition of a peer. Nothing writes these yet: key
-/// rotation (#108, PR 3) fills the history; the field exists so the store
-/// format does not change when it does.
+/// One audited key transition of a peer: the rotation exactly as the peer
+/// sent it (both documents and both signatures, so it can be re-verified
+/// later) and when this server accepted it. The previous key keeps
+/// verifying for a transition window after `accepted_at`, then retires.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KeyTransition {
-    pub previous_public_key: String,
-    pub public_key: String,
-    pub rotated_at: u64,
+    pub rotation: KeyRotation,
+    /// Unix seconds by this server's clock.
+    pub accepted_at: u64,
+}
+
+impl KeyTransition {
+    pub fn previous_companion_id(&self) -> &str {
+        &self.rotation.previous.companion_id
+    }
+
+    pub fn companion_id(&self) -> &str {
+        &self.rotation.identity.companion_id
+    }
 }
 
 /// What a server persists about one peer: the peer's self-signed identity
@@ -436,6 +533,38 @@ pub enum FederationError {
         status: u16,
         error: String,
     },
+    /// The transport envelope's `expires_at` lies further in the past than
+    /// the clock-skew allowance.
+    Expired {
+        expires_at: u64,
+        now: u64,
+    },
+    /// The transport envelope's `issued_at` lies further in the future than
+    /// the clock-skew allowance.
+    IssuedInFuture {
+        issued_at: u64,
+        now: u64,
+    },
+    /// `expires_at` is not after `issued_at`, or the lifetime exceeds the
+    /// maximum an envelope may claim.
+    InvalidLifetime {
+        issued_at: u64,
+        expires_at: u64,
+    },
+    /// The body does not hash to the signed `body_hash`: the body was
+    /// altered after signing.
+    BodyHashMismatch,
+    /// The nonce was already accepted from this sender: a replay.
+    Replayed,
+    /// The replay set is full; nothing verifies until entries expire.
+    ReplayCapacity,
+    /// The sender is a previous key of a peer whose transition window has
+    /// closed; only the rotated key verifies now.
+    KeyRetired,
+    /// A rotation notice does not fit the peer on record: the previous
+    /// identity is not the sender's, the new key is the old one, or the new
+    /// identity already belongs to someone else.
+    RotationMismatch,
 }
 
 impl fmt::Display for FederationError {
@@ -498,6 +627,32 @@ impl fmt::Display for FederationError {
             Self::Transport(message) => write!(f, "federation peer unreachable: {message}"),
             Self::PeerRefused { status, error } => {
                 write!(f, "federation peer refused with {status} {error}")
+            }
+            Self::Expired { expires_at, now } => write!(
+                f,
+                "federation envelope expired at {expires_at}, before {now} less the skew allowance"
+            ),
+            Self::IssuedInFuture { issued_at, now } => write!(
+                f,
+                "federation envelope is issued at {issued_at}, beyond {now} plus the skew allowance"
+            ),
+            Self::InvalidLifetime {
+                issued_at,
+                expires_at,
+            } => write!(
+                f,
+                "federation envelope lifetime from {issued_at} to {expires_at} is not allowed"
+            ),
+            Self::BodyHashMismatch => {
+                f.write_str("federation envelope body does not match its signed hash")
+            }
+            Self::Replayed => f.write_str("federation envelope nonce was already accepted"),
+            Self::ReplayCapacity => f.write_str("federation replay set is full"),
+            Self::KeyRetired => f.write_str(
+                "federation sender key was rotated away and its transition window closed",
+            ),
+            Self::RotationMismatch => {
+                f.write_str("federation rotation does not fit the peer on record")
             }
         }
     }
@@ -575,6 +730,23 @@ mod tests {
                 status: 401,
                 error: "invalid_invite".into(),
             },
+            FederationError::Expired {
+                expires_at: 10,
+                now: 200,
+            },
+            FederationError::IssuedInFuture {
+                issued_at: 400,
+                now: 200,
+            },
+            FederationError::InvalidLifetime {
+                issued_at: 10,
+                expires_at: 5,
+            },
+            FederationError::BodyHashMismatch,
+            FederationError::Replayed,
+            FederationError::ReplayCapacity,
+            FederationError::KeyRetired,
+            FederationError::RotationMismatch,
         ];
         let rendered: Vec<String> = errors.iter().map(ToString::to_string).collect();
         for (index, text) in rendered.iter().enumerate() {
@@ -691,6 +863,146 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn transport_envelope_and_messages_are_strict_shapes() {
+        let envelope = TransportEnvelope {
+            version: FEDERATION_VERSION,
+            sender: "a".into(),
+            recipient: "b".into(),
+            nonce: "n".into(),
+            issued_at: 1,
+            expires_at: 61,
+            body_hash: "h".into(),
+            body: "".into(),
+            signature: "s".into(),
+        };
+        let json = serde_json::to_value(&envelope).unwrap();
+        let mut keys: Vec<&str> = json
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "body",
+                "body_hash",
+                "expires_at",
+                "issued_at",
+                "nonce",
+                "recipient",
+                "sender",
+                "signature",
+                "version",
+            ]
+        );
+        assert_eq!(
+            serde_json::from_value::<TransportEnvelope>(json.clone()).unwrap(),
+            envelope
+        );
+        for extra in ["hostname", "port", "profile", "origin"] {
+            let mut with_extra = json.clone();
+            with_extra[extra] = serde_json::json!("x");
+            assert!(
+                serde_json::from_value::<TransportEnvelope>(with_extra).is_err(),
+                "deployment metadata {extra:?} rode along in a transport envelope"
+            );
+        }
+        for missing in ["nonce", "recipient", "expires_at", "body_hash"] {
+            let mut without = json.clone();
+            without.as_object_mut().unwrap().remove(missing);
+            assert!(
+                serde_json::from_value::<TransportEnvelope>(without).is_err(),
+                "an envelope without {missing:?} was accepted"
+            );
+        }
+
+        let ping = TransportMessage::Ping {
+            version: FEDERATION_VERSION,
+        };
+        let json = serde_json::to_value(&ping).unwrap();
+        assert_eq!(json, serde_json::json!({ "kind": "ping", "version": 1 }));
+        assert_eq!(
+            serde_json::from_value::<TransportMessage>(json).unwrap(),
+            ping
+        );
+        let ack = TransportMessage::RotationAck {
+            version: FEDERATION_VERSION,
+            companion_id: "c".into(),
+            state: PeerState::Paired,
+        };
+        assert_eq!(serde_json::to_value(&ack).unwrap()["kind"], "rotation_ack");
+        for bad in [
+            r#"{"kind":"ping","version":1,"hostname":"m"}"#,
+            r#"{"kind":"pong"}"#,
+            r#"{"kind":"hello","version":1}"#,
+            r#"{"version":1}"#,
+            r#"{"kind":"key_rotation","version":1}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<TransportMessage>(bad).is_err(),
+                "accepted {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn key_transitions_carry_the_whole_rotation() {
+        let rotation = KeyRotation {
+            version: FEDERATION_VERSION,
+            previous: document(),
+            identity: IdentityDocument {
+                companion_id: "next".into(),
+                ..document()
+            },
+            rotated_at: 50,
+            endorsement: "e".into(),
+            signature: "s".into(),
+        };
+        let transition = KeyTransition {
+            rotation: rotation.clone(),
+            accepted_at: 60,
+        };
+        assert_eq!(transition.previous_companion_id(), "cid");
+        assert_eq!(transition.companion_id(), "next");
+        let json = serde_json::to_value(&transition).unwrap();
+        let mut keys: Vec<&str> = json
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["accepted_at", "rotation"]);
+        let mut rotation_keys: Vec<&str> = json["rotation"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        rotation_keys.sort_unstable();
+        assert_eq!(
+            rotation_keys,
+            [
+                "endorsement",
+                "identity",
+                "previous",
+                "rotated_at",
+                "signature",
+                "version",
+            ]
+        );
+        assert_eq!(
+            serde_json::from_value::<KeyTransition>(json.clone()).unwrap(),
+            transition
+        );
+        let mut extra = json;
+        extra["rotation"]["origin"] = serde_json::json!("https://b.example");
+        assert!(serde_json::from_value::<KeyTransition>(extra).is_err());
     }
 
     #[test]

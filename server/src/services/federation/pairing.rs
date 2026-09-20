@@ -26,6 +26,15 @@
 //! (`PeerStore::update`): the state a step requires is checked against the
 //! record as it is at that moment, never against an earlier snapshot, so a
 //! confirmation racing a revoke can never leave a revoked peer paired.
+//!
+//! After pairing, companions talk through the transport envelope
+//! (`seal`/`open`, `services::federation::envelope`): addressed, single-use
+//! by nonce, time-bounded, and verified with the key the peer store holds
+//! for the sender, which may be a key the peer rotated away from inside its
+//! grace window. `rotate_identity` replaces this server's key and tells
+//! every paired peer with a notice signed by the old key; `receive_rotation`
+//! verifies such a notice and re-keys the peer's record with an audited
+//! transition.
 
 use std::{
     path::{Path, PathBuf},
@@ -39,12 +48,15 @@ use zeroize::Zeroizing;
 
 use super::{
     check_version, decode,
+    envelope::{self, ReplayGuard},
     identity::{self, SigningIdentity},
-    peers::{Clock, Peer, PeerStore},
+    peers::{Clock, Peer, PeerStore, SenderKey},
+    rotation,
 };
 use crate::domain::federation::{
     AcceptInvite, FEDERATION_VERSION, FederationError, IdentityDocument, InviteSummary,
-    IssuedInvite, PairingMessage, PairingRole, PeerRecord, PeerState, PeerSummary, SignedEnvelope,
+    IssuedInvite, KeyRotation, PairingMessage, PairingRole, PeerRecord, PeerState, PeerSummary,
+    SignedEnvelope, TransportEnvelope,
 };
 
 /// Peer-side route for pair requests, relative to the peer's base URL.
@@ -53,6 +65,10 @@ pub const PAIR_PATH: &str = "/federation/v1/pair";
 pub const CONFIRM_PATH: &str = "/federation/v1/pair/confirm";
 /// Peer-side route for revocation notices.
 pub const REVOKE_PATH: &str = "/federation/v1/pair/revoke";
+/// Peer-side route for a transport ping between paired companions.
+pub const PING_PATH: &str = "/federation/v1/ping";
+/// Peer-side route for key rotation notices.
+pub const ROTATE_PATH: &str = "/federation/v1/rotate";
 /// Largest envelope accepted on the wire, in either direction.
 pub const MAX_ENVELOPE_BYTES: usize = 64 * 1024;
 /// A peer that does not answer within this is unreachable.
@@ -64,13 +80,20 @@ const MAX_PAIRING_ID_LEN: usize = 64;
 
 /// Sends one signed envelope to a peer URL and returns the signed answer.
 /// Production uses HTTPS through [`HttpTransport`]; tests route into another
-/// in-process server.
+/// in-process server. Pairing steps use [`SignedEnvelope`]; everything after
+/// pairing uses the addressed [`TransportEnvelope`].
 pub trait PeerTransport: Send + Sync {
     fn post<'a>(
         &'a self,
         url: &'a str,
         envelope: &'a SignedEnvelope,
     ) -> BoxFuture<'a, Result<SignedEnvelope, FederationError>>;
+
+    fn post_transport<'a>(
+        &'a self,
+        url: &'a str,
+        envelope: &'a TransportEnvelope,
+    ) -> BoxFuture<'a, Result<TransportEnvelope, FederationError>>;
 }
 
 /// The real transport: a JSON POST with a timeout and a size cap.
@@ -128,24 +151,55 @@ impl PeerTransport for HttpTransport {
             identity::parse_envelope(text)
         })
     }
+
+    fn post_transport<'a>(
+        &'a self,
+        url: &'a str,
+        envelope: &'a TransportEnvelope,
+    ) -> BoxFuture<'a, Result<TransportEnvelope, FederationError>> {
+        let _ = (url, envelope);
+        Box::pin(async move { todo!("PR 3: post a transport envelope over HTTP") })
+    }
 }
 
-/// What the owner list reports: this companion's identity, its outstanding
-/// invites, and its peers.
+/// What the owner list reports: this companion's identity, its own key
+/// rotations, its outstanding invites, and its peers.
 #[derive(Debug, Clone, Serialize)]
 pub struct Overview {
     pub companion_id: String,
     pub identity: IdentityDocument,
+    pub rotations: Vec<KeyRotation>,
     pub invites: Vec<InviteSummary>,
     pub peers: Vec<PeerSummary>,
 }
 
+/// A transport envelope that verified: the paired peer it came from, which
+/// of its keys signed it, and the body.
+#[derive(Debug, Clone)]
+pub struct Inbound {
+    pub peer: PeerRecord,
+    pub key: SenderKey,
+    pub body: Vec<u8>,
+}
+
+/// What the owner gets back from a rotation: the new identity, the proof,
+/// and which paired peers acknowledged the notice.
+#[derive(Debug, Clone, Serialize)]
+pub struct RotationReport {
+    pub identity: IdentityDocument,
+    pub rotation: KeyRotation,
+    pub notified: Vec<String>,
+    pub unreachable: Vec<String>,
+}
+
 /// This server's federation side: its signing identity (created on first
-/// use), its peers, and the transport to reach them.
+/// use), its peers, the nonces it accepted, and the transport to reach
+/// peers.
 pub struct FederationState {
     root: PathBuf,
     identity: Mutex<Option<Arc<SigningIdentity>>>,
     peers: PeerStore,
+    replay: Mutex<ReplayGuard>,
     transport: Arc<dyn PeerTransport>,
     clock: Clock,
 }
@@ -169,6 +223,7 @@ impl FederationState {
             root: workspace_root.to_path_buf(),
             identity: Mutex::new(None),
             peers: PeerStore::with_clock(workspace_root, clock.clone()),
+            replay: Mutex::new(ReplayGuard::default()),
             transport,
             clock,
         }
@@ -212,9 +267,57 @@ impl FederationState {
         Ok(Overview {
             companion_id: identity.companion_id().to_owned(),
             identity: identity.document().clone(),
+            rotations: rotation::load_rotations(&self.root)?,
             invites: self.peers.invites(),
             peers: self.peers.list().iter().map(PeerRecord::summary).collect(),
         })
+    }
+
+    /// Seals `body` for the peer `recipient` as this companion.
+    pub fn seal(&self, recipient: &str, body: &[u8]) -> Result<TransportEnvelope, FederationError> {
+        let _ = (recipient, body);
+        todo!("PR 3: seal a transport envelope as this companion")
+    }
+
+    /// Verifies a transport envelope from a paired peer: version, recipient,
+    /// sender (current key, or a rotated-away key inside its grace window),
+    /// signature, state, body hash, times, and finally the nonce, which is
+    /// consumed only once everything else passed. Unknown, pending, revoked,
+    /// and retired senders fail closed with distinct errors.
+    pub fn open(&self, envelope: &TransportEnvelope) -> Result<Inbound, FederationError> {
+        let _ = envelope;
+        todo!("PR 3: open a transport envelope")
+    }
+
+    /// A ping from a paired peer, answered with a sealed pong.
+    pub fn receive_ping(
+        &self,
+        envelope: &TransportEnvelope,
+    ) -> Result<TransportEnvelope, FederationError> {
+        let _ = envelope;
+        todo!("PR 3: answer a ping")
+    }
+
+    /// Replaces this companion's key: the rotation proof is persisted and
+    /// the keystore rewritten before anything is sent, outstanding invites
+    /// (which carried the old document) are withdrawn, and every paired peer
+    /// gets a notice signed by the old key. Peers that do not acknowledge
+    /// are reported; the local rotation stands regardless.
+    pub async fn rotate_identity(&self) -> Result<RotationReport, FederationError> {
+        todo!("PR 3: rotate this companion's identity")
+    }
+
+    /// The peer's side of a rotation: the notice must be signed by the key
+    /// being retired, endorse a new identity that verifies, and fit the
+    /// record on file. Answered with a sealed ack addressed to the new
+    /// identity. A notice resent for a rotation already applied is
+    /// acknowledged again.
+    pub fn receive_rotation(
+        &self,
+        envelope: &TransportEnvelope,
+    ) -> Result<TransportEnvelope, FederationError> {
+        let _ = envelope;
+        todo!("PR 3: apply a peer's rotation")
     }
 
     /// The accepting owner's step: redeem `accept` against the issuer at
@@ -813,6 +916,31 @@ mod tests {
                     PAIR_PATH => server.receive_pair_request(envelope),
                     CONFIRM_PATH => server.receive_confirm(envelope),
                     REVOKE_PATH => server.receive_revoke(envelope),
+                    other => Err(FederationError::Transport(format!("no route {other}"))),
+                }
+            })
+        }
+
+        fn post_transport<'a>(
+            &'a self,
+            url: &'a str,
+            envelope: &'a TransportEnvelope,
+        ) -> BoxFuture<'a, Result<TransportEnvelope, FederationError>> {
+            Box::pin(async move {
+                let (origin, path) = url
+                    .find("/federation/")
+                    .map(|at| (&url[..at], &url[at..]))
+                    .expect("peer URLs are base URL plus a federation path");
+                let server = self
+                    .servers
+                    .lock()
+                    .unwrap()
+                    .get(origin)
+                    .cloned()
+                    .ok_or_else(|| FederationError::Transport(format!("no route to {origin}")))?;
+                match path {
+                    PING_PATH => server.receive_ping(envelope),
+                    ROTATE_PATH => server.receive_rotation(envelope),
                     other => Err(FederationError::Transport(format!("no route {other}"))),
                 }
             })
@@ -1519,5 +1647,414 @@ mod tests {
                 FederationError::PeerRevoked
             );
         }
+    }
+
+    const PING: &[u8] = br#"{"kind":"ping","version":1}"#;
+
+    fn transport_ping(from: &FederationState, to: &FederationState) -> TransportEnvelope {
+        from.seal(to.identity().unwrap().companion_id(), PING)
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn paired_companions_exchange_transport_envelopes_once_each() {
+        use super::super::envelope::{ENVELOPE_LIFETIME_SECS, MAX_CLOCK_SKEW_SECS};
+        use crate::domain::federation::TransportMessage;
+        let mut network = Network::new();
+        let (a, b) = paired(&mut network).await;
+        let c = network.server("https://c.example");
+        let a_id = a.identity().unwrap().companion_id().to_owned();
+        let b_id = b.identity().unwrap().companion_id().to_owned();
+
+        // B pings A: verifies once, replays never.
+        let envelope = transport_ping(&b, &a);
+        assert_eq!(envelope.sender, b_id);
+        assert_eq!(envelope.recipient, a_id);
+        assert_eq!(envelope.issued_at, T0);
+        assert_eq!(envelope.expires_at, T0 + ENVELOPE_LIFETIME_SECS);
+        let inbound = a.open(&envelope).unwrap();
+        assert_eq!(inbound.peer.companion_id(), b_id);
+        assert_eq!(inbound.key, SenderKey::Current);
+        assert_eq!(inbound.body, PING);
+        assert_eq!(a.open(&envelope).unwrap_err(), FederationError::Replayed);
+        // A fresh envelope with the same body is a different message.
+        let again = transport_ping(&b, &a);
+        assert_ne!(again.nonce, envelope.nonce);
+        assert!(a.open(&again).is_ok());
+
+        // The ping route answers with a pong that B can open, once.
+        let pong = a.receive_ping(&transport_ping(&b, &a)).unwrap();
+        assert_eq!(pong.sender, a_id);
+        assert_eq!(pong.recipient, b_id);
+        let opened = b.open(&pong).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<TransportMessage>(&opened.body).unwrap(),
+            TransportMessage::Pong {
+                version: FEDERATION_VERSION
+            }
+        );
+        assert_eq!(b.open(&pong).unwrap_err(), FederationError::Replayed);
+        // A body that is not a ping is refused by the ping route.
+        let not_a_ping = b.seal(&a_id, br#"{"kind":"pong","version":1}"#).unwrap();
+        assert!(matches!(
+            a.receive_ping(&not_a_ping).unwrap_err(),
+            FederationError::Malformed(_)
+        ));
+
+        // Strangers, misdirected envelopes, tampering, and downgrades.
+        assert_eq!(
+            a.open(&transport_ping(&c, &a)).unwrap_err(),
+            FederationError::UnknownPeer
+        );
+        assert_eq!(
+            a.open(&transport_ping(&b, &c)).unwrap_err(),
+            FederationError::RecipientMismatch
+        );
+        let mut tampered = transport_ping(&b, &a);
+        tampered.body = super::super::encode(br#"{"kind":"pong","version":1}"#);
+        assert_eq!(
+            a.open(&tampered).unwrap_err(),
+            FederationError::BodyHashMismatch
+        );
+        let mut relabelled = transport_ping(&c, &a);
+        relabelled.sender = b_id.clone();
+        assert_eq!(
+            a.open(&relabelled).unwrap_err(),
+            FederationError::SignatureMismatch
+        );
+        let mut downgraded = transport_ping(&b, &a);
+        downgraded.version = 0;
+        assert_eq!(
+            a.open(&downgraded).unwrap_err(),
+            FederationError::VersionTooOld { found: 0, min: 1 }
+        );
+        let mut unknown = transport_ping(&b, &a);
+        unknown.version = FEDERATION_VERSION + 1;
+        assert_eq!(
+            a.open(&unknown).unwrap_err(),
+            FederationError::VersionUnsupported {
+                found: FEDERATION_VERSION + 1
+            }
+        );
+
+        // Expiry is judged by the recipient's clock with a skew allowance,
+        // and nothing that failed consumed its nonce.
+        let late = transport_ping(&b, &a);
+        network.now.store(
+            T0 + ENVELOPE_LIFETIME_SECS + MAX_CLOCK_SKEW_SECS,
+            Ordering::SeqCst,
+        );
+        assert_eq!(
+            a.open(&late).unwrap_err(),
+            FederationError::Expired {
+                expires_at: T0 + ENVELOPE_LIFETIME_SECS,
+                now: T0 + ENVELOPE_LIFETIME_SECS + MAX_CLOCK_SKEW_SECS,
+            }
+        );
+        network.now.store(T0, Ordering::SeqCst);
+        assert!(
+            a.open(&late).is_ok(),
+            "the nonce was not consumed by the failed attempt"
+        );
+        let early = transport_ping(&b, &a);
+        network
+            .now
+            .store(T0 - MAX_CLOCK_SKEW_SECS - 1, Ordering::SeqCst);
+        assert_eq!(
+            a.open(&early).unwrap_err(),
+            FederationError::IssuedInFuture {
+                issued_at: T0,
+                now: T0 - MAX_CLOCK_SKEW_SECS - 1,
+            }
+        );
+        network.now.store(T0, Ordering::SeqCst);
+
+        // Pending and revoked peers fail closed after the signature check.
+        let d = network.server("https://d.example");
+        let invite = a.create_invite(ORIGIN_A).unwrap();
+        d.accept_invite(accept_for(&invite), "https://d.example")
+            .await
+            .unwrap();
+        assert_eq!(
+            a.open(&transport_ping(&d, &a)).unwrap_err(),
+            FederationError::PeerNotPaired {
+                state: PeerState::Pending
+            }
+        );
+        b.revoke_peer(&a_id).await.unwrap();
+        assert_eq!(
+            a.open(&transport_ping(&b, &a)).unwrap_err(),
+            FederationError::PeerRevoked
+        );
+        assert_eq!(
+            b.open(&transport_ping(&a, &b)).unwrap_err(),
+            FederationError::PeerRevoked
+        );
+    }
+
+    #[tokio::test]
+    async fn rotation_moves_trust_to_the_new_key_with_an_audited_transition() {
+        use super::super::rotation::{ROTATION_GRACE_SECS, verify_rotation};
+        let mut network = Network::new();
+        let (a, b) = paired(&mut network).await;
+        let a_id = a.identity().unwrap().companion_id().to_owned();
+        let old_b = b.identity().unwrap();
+        let old_b_id = old_b.companion_id().to_owned();
+        let outstanding = b.create_invite(ORIGIN_B).unwrap();
+
+        network.now.store(T0 + 100, Ordering::SeqCst);
+        let report = b.rotate_identity().await.unwrap();
+        let new_b = b.identity().unwrap();
+        let new_b_id = new_b.companion_id().to_owned();
+        assert_ne!(new_b_id, old_b_id);
+        assert_eq!(&report.identity, new_b.document());
+        assert_eq!(&report.rotation.previous, old_b.document());
+        assert_eq!(&report.rotation.identity, new_b.document());
+        assert_eq!(report.rotation.rotated_at, T0 + 100);
+        assert!(verify_rotation(&report.rotation).is_ok());
+        assert_eq!(report.notified, vec![a_id.clone()]);
+        assert!(report.unreachable.is_empty());
+
+        // B's own history and keystore moved on; the outstanding invite
+        // carried the old document and is gone.
+        let overview = b.overview().unwrap();
+        assert_eq!(overview.companion_id, new_b_id);
+        assert_eq!(overview.rotations, vec![report.rotation.clone()]);
+        assert!(overview.invites.is_empty());
+        assert_eq!(
+            b.cancel_invite(&outstanding.id),
+            false,
+            "the invite was withdrawn by the rotation"
+        );
+
+        // A re-keyed its record with the transition on file.
+        let on_a = a.overview().unwrap().peers;
+        assert_eq!(on_a.len(), 1);
+        assert_eq!(on_a[0].companion_id, new_b_id);
+        assert_eq!(on_a[0].public_key, new_b.document().public_key);
+        assert_eq!(on_a[0].state, PeerState::Paired);
+        assert_eq!(on_a[0].rotation_history.len(), 1);
+        assert_eq!(on_a[0].rotation_history[0].rotation, report.rotation);
+        assert_eq!(on_a[0].rotation_history[0].accepted_at, T0 + 100);
+        assert_eq!(
+            on_a[0].approved_origins,
+            vec![ORIGIN_B.to_owned()],
+            "the approved origin survives the rotation"
+        );
+
+        // Both directions work under the new identity.
+        let inbound = a.open(&transport_ping(&b, &a)).unwrap();
+        assert_eq!(inbound.peer.companion_id(), new_b_id);
+        assert_eq!(inbound.key, SenderKey::Current);
+        assert!(b.open(&transport_ping(&a, &b)).is_ok());
+        // A still addressing B by its old id is refused by B.
+        assert_eq!(
+            b.open(&a.seal(&old_b_id, PING).unwrap()).unwrap_err(),
+            FederationError::RecipientMismatch
+        );
+        // On B, the old id no longer belongs to anyone.
+        assert_eq!(
+            b.open(&a.seal(&new_b_id, PING).unwrap())
+                .map(|inbound| inbound.key)
+                .unwrap(),
+            SenderKey::Current
+        );
+
+        // The old key still verifies on A inside the grace window, then retires.
+        let old_signed = envelope::seal(&old_b, &a_id, PING, T0 + 100).unwrap();
+        let inbound = a.open(&old_signed).unwrap();
+        assert_eq!(inbound.key, SenderKey::Previous);
+        assert_eq!(inbound.peer.companion_id(), new_b_id);
+        network
+            .now
+            .store(T0 + 100 + ROTATION_GRACE_SECS, Ordering::SeqCst);
+        let retired = envelope::seal(&old_b, &a_id, PING, T0 + 100 + ROTATION_GRACE_SECS).unwrap();
+        assert_eq!(a.open(&retired).unwrap_err(), FederationError::KeyRetired);
+        assert!(a.open(&transport_ping(&b, &a)).is_ok());
+
+        // A restart of either side sees the same state.
+        let a_again = FederationState::with_transport_and_clock(
+            &a.root,
+            network.direct.clone(),
+            Arc::new(|| T0 + 100 + ROTATION_GRACE_SECS),
+        );
+        assert_eq!(a_again.overview().unwrap().peers[0].companion_id, new_b_id);
+        assert!(a_again.open(&transport_ping(&b, &a)).is_ok());
+        let b_again = FederationState::with_transport_and_clock(
+            &b.root,
+            network.direct.clone(),
+            Arc::new(|| T0 + 100 + ROTATION_GRACE_SECS),
+        );
+        assert_eq!(b_again.identity().unwrap().companion_id(), new_b_id);
+        assert_eq!(b_again.overview().unwrap().rotations.len(), 1);
+
+        // Rotating again chains from the new key and A follows.
+        network
+            .now
+            .store(T0 + 200 + ROTATION_GRACE_SECS, Ordering::SeqCst);
+        let second = b.rotate_identity().await.unwrap();
+        assert_eq!(&second.rotation.previous, new_b.document());
+        assert_eq!(second.notified, vec![a_id.clone()]);
+        let on_a = a.overview().unwrap().peers;
+        assert_eq!(on_a[0].companion_id, b.identity().unwrap().companion_id());
+        assert_eq!(on_a[0].rotation_history.len(), 2);
+        assert!(a.open(&transport_ping(&b, &a)).is_ok());
+    }
+
+    #[tokio::test]
+    async fn rotation_notices_are_bound_to_the_retiring_key_and_fail_closed() {
+        use super::super::rotation::endorse;
+        use crate::domain::federation::TransportMessage;
+        let mut network = Network::new();
+        let (a, b) = paired(&mut network).await;
+        let a_id = a.identity().unwrap().companion_id().to_owned();
+        let b_identity = b.identity().unwrap();
+        let b_id = b_identity.companion_id().to_owned();
+        // C is paired with A too, so its envelopes open.
+        let c = network.server("https://c.example");
+        let invite = a.create_invite(ORIGIN_A).unwrap();
+        c.accept_invite(accept_for(&invite), "https://c.example")
+            .await
+            .unwrap();
+        a.confirm_peer(c.identity().unwrap().companion_id())
+            .await
+            .unwrap();
+        let c_identity = c.identity().unwrap();
+        let fresh = |label: &str| {
+            let tmp = tempfile::tempdir().unwrap();
+            identity::load_or_create_at(&tmp.path().join(label), T0).unwrap()
+        };
+        let notice = |from: &FederationState, rotation: &KeyRotation| {
+            let body = serde_json::to_vec(&TransportMessage::KeyRotation {
+                version: FEDERATION_VERSION,
+                rotation: rotation.clone(),
+            })
+            .unwrap();
+            from.seal(&a_id, &body).unwrap()
+        };
+
+        // C claims B rotated: the previous identity is not C's.
+        let next = fresh("next");
+        let b_to_next = endorse(&b_identity, &next, T0 + 1);
+        assert_eq!(
+            a.receive_rotation(&notice(&c, &b_to_next)).unwrap_err(),
+            FederationError::RotationMismatch
+        );
+        // B sends a rotation whose endorsement does not verify.
+        let mut forged = b_to_next.clone();
+        forged.endorsement = endorse(&c_identity, &next, T0 + 1).endorsement;
+        assert_eq!(
+            a.receive_rotation(&notice(&b, &forged)).unwrap_err(),
+            FederationError::SignatureMismatch
+        );
+        // A rotation to the same key.
+        let same = endorse(&b_identity, &b_identity, T0 + 1);
+        assert_eq!(
+            a.receive_rotation(&notice(&b, &same)).unwrap_err(),
+            FederationError::RotationMismatch
+        );
+        // A rotation to C's identity, which is already a peer.
+        let to_c = endorse(&b_identity, &c_identity, T0 + 1);
+        assert_eq!(
+            a.receive_rotation(&notice(&b, &to_c)).unwrap_err(),
+            FederationError::RotationMismatch
+        );
+        // Nothing changed on A.
+        let on_a = a.overview().unwrap().peers;
+        assert_eq!(on_a.len(), 2);
+        assert!(on_a.iter().all(|peer| peer.rotation_history.is_empty()));
+        assert!(on_a.iter().any(|peer| peer.companion_id == b_id));
+
+        // The genuine notice: applied once, replay refused, resend acknowledged.
+        let genuine = notice(&b, &b_to_next);
+        let ack = a.receive_rotation(&genuine).unwrap();
+        assert_eq!(ack.recipient, next.companion_id());
+        assert_eq!(
+            a.receive_rotation(&genuine).unwrap_err(),
+            FederationError::Replayed
+        );
+        let on_a = a.overview().unwrap().peers;
+        let rekeyed = on_a
+            .iter()
+            .find(|peer| peer.companion_id == next.companion_id())
+            .expect("B's record moved to the new id");
+        assert_eq!(rekeyed.rotation_history.len(), 1);
+        // The ack is addressed to the new identity and names it.
+        let opened = envelope::verify(
+            &ack,
+            &a.identity().unwrap().verified().public_key,
+            next.companion_id(),
+            T0,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<TransportMessage>(&opened.body).unwrap(),
+            TransportMessage::RotationAck {
+                version: FEDERATION_VERSION,
+                companion_id: next.companion_id().to_owned(),
+                state: PeerState::Paired,
+            }
+        );
+        // Resent (new nonce, old key inside its window): acknowledged, not
+        // applied twice.
+        let resent = notice(&b, &b_to_next);
+        let ack = a.receive_rotation(&resent).unwrap();
+        assert_eq!(ack.recipient, next.companion_id());
+        assert_eq!(
+            a.overview()
+                .unwrap()
+                .peers
+                .iter()
+                .find(|peer| peer.companion_id == next.companion_id())
+                .unwrap()
+                .rotation_history
+                .len(),
+            1
+        );
+        // But the retired key cannot rotate the record somewhere else.
+        let elsewhere = fresh("elsewhere");
+        let b_to_elsewhere = endorse(&b_identity, &elsewhere, T0 + 2);
+        assert_eq!(
+            a.receive_rotation(&notice(&b, &b_to_elsewhere))
+                .unwrap_err(),
+            FederationError::RotationMismatch
+        );
+    }
+
+    #[tokio::test]
+    async fn rotation_reports_peers_that_did_not_acknowledge() {
+        let mut network = Network::new();
+        let (a, b) = paired(&mut network).await;
+        let a_id = a.identity().unwrap().companion_id().to_owned();
+        // D pairs with B but is then unreachable: its origin is dropped
+        // from the network before B rotates.
+        let d = network.server("https://d.example");
+        let d_id = d.identity().unwrap().companion_id().to_owned();
+        let invite = b.create_invite(ORIGIN_B).unwrap();
+        d.accept_invite(accept_for(&invite), "https://d.example")
+            .await
+            .unwrap();
+        b.confirm_peer(&d_id).await.unwrap();
+        network
+            .direct
+            .servers
+            .lock()
+            .unwrap()
+            .remove("https://d.example");
+
+        let report = b.rotate_identity().await.unwrap();
+        assert_eq!(report.notified, vec![a_id]);
+        assert_eq!(report.unreachable, vec![d_id.clone()]);
+        // The local rotation stands: D will need the proof from B's history.
+        assert_eq!(b.overview().unwrap().rotations.len(), 1);
+        assert_eq!(
+            b.identity().unwrap().companion_id(),
+            report.identity.companion_id
+        );
+        // D still knows the old identity and refuses the new one.
+        assert_eq!(
+            d.open(&transport_ping(&b, &d)).unwrap_err(),
+            FederationError::UnknownPeer
+        );
     }
 }

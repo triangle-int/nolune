@@ -113,3 +113,7 @@ mod session_tests;
 #[cfg(test)]
 #[path = "../../test-support/federation_pairing.rs"]
 mod federation_tests;
+
+#[cfg(test)]
+#[path = "../../test-support/federation_transport.rs"]
+mod federation_transport_tests;

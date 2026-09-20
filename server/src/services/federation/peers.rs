@@ -9,6 +9,11 @@
 //! shape) is a trust store this build must not touch: reads see no peers and
 //! every write fails closed, so the file is never replaced by an empty one.
 //!
+//! A rotation (`rotate`) re-keys a record to the peer's new identity under
+//! the same lock and keeps the rotation in the record's history; a sender id
+//! that was rotated away resolves to the record for a grace window and then
+//! retires (`resolve_sender`).
+//!
 //! Invites live in memory only: an invite is a short-lived, one-time secret
 //! that the issuing owner sees exactly once, and the store keeps just a
 //! domain-separated SHA-256 of it, the way browser pairing codes are kept.
@@ -25,12 +30,14 @@ use std::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use ed25519_dalek::VerifyingKey;
+
 use super::{
     INVITE_HASH_DOMAIN, encode,
     identity::{self, VerifiedIdentity},
 };
 use crate::domain::federation::{
-    FederationError, InviteSecret, InviteSummary, PeerRecord, PeerState,
+    FederationError, InviteSecret, InviteSummary, KeyRotation, PeerRecord, PeerState,
 };
 
 /// Peer records, under the keystore directory.
@@ -90,6 +97,24 @@ pub struct RedeemedInvite {
 pub struct Peer {
     pub record: PeerRecord,
     pub verified: VerifiedIdentity,
+}
+
+/// Which of a peer's keys a sender id names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SenderKey {
+    /// The peer's current identity.
+    Current,
+    /// A key the peer rotated away from, still inside its grace window.
+    Previous,
+}
+
+/// A sender id resolved to the peer it belongs to and the key that must
+/// verify what it signed.
+#[derive(Debug, Clone)]
+pub struct ResolvedSender {
+    pub peer: Peer,
+    pub key: VerifyingKey,
+    pub kind: SenderKey,
 }
 
 pub struct PeerStore {
@@ -259,6 +284,35 @@ impl PeerStore {
             .iter()
             .find(|peer| peer.record.companion_id() == companion_id)
             .cloned()
+    }
+
+    /// Finds the peer that `sender` names: its current id, or a previous id
+    /// from its rotation history whose grace window is still open. A
+    /// previous id past the window is `KeyRetired`; anything else is
+    /// `UnknownPeer`.
+    pub fn resolve_sender(&self, sender: &str) -> Result<ResolvedSender, FederationError> {
+        let _ = sender;
+        todo!("PR 3: resolve a sender id to a peer and a key")
+    }
+
+    /// Re-keys the record for `rotation.previous` to `rotation.identity`
+    /// under the store lock and appends the transition to its history.
+    /// `next` must be the verified new identity. Checked against the record
+    /// as it is now: the peer must be paired and its identity must still be
+    /// the previous one. Applying the same rotation again is a no-op that
+    /// returns the record; `Ok(None)` when no record fits.
+    pub fn rotate(
+        &self,
+        rotation: &KeyRotation,
+        next: VerifiedIdentity,
+    ) -> Result<Option<Peer>, FederationError> {
+        let _ = (rotation, next);
+        todo!("PR 3: apply a peer rotation")
+    }
+
+    /// Withdraws every outstanding invite; returns how many there were.
+    pub fn cancel_all_invites(&self) -> usize {
+        todo!("PR 3: cancel every invite")
     }
 
     /// Every record, oldest first.
@@ -859,5 +913,239 @@ mod tests {
         assert_eq!(changed.verified.public_key, peer.verified().public_key);
         let reopened = PeerStore::with_clock(_tmp.path(), system_clock());
         assert_eq!(reopened.list()[0], changed.record);
+    }
+
+    /// A rotation from `from` to `to`, endorsed by both.
+    fn rotation(from: &SigningIdentity, to: &SigningIdentity, at: u64) -> KeyRotation {
+        super::super::rotation::endorse(from, to, at)
+    }
+
+    #[test]
+    fn rotation_rekeys_the_record_and_keeps_the_old_key_for_a_grace_window() {
+        use super::super::rotation::ROTATION_GRACE_SECS;
+        let (_tmp, now, store) = store();
+        let first = identity("first");
+        let second = identity("second");
+        let third = identity("third");
+        let stranger = identity("stranger");
+        store
+            .upsert(record(&first, PeerState::Paired), first.verified().clone())
+            .unwrap();
+
+        // Before any rotation: the current id resolves, nothing else does.
+        let resolved = store.resolve_sender(first.companion_id()).unwrap();
+        assert_eq!(resolved.kind, SenderKey::Current);
+        assert_eq!(resolved.key, first.verified().public_key);
+        assert_eq!(resolved.peer.record.companion_id(), first.companion_id());
+        assert_eq!(
+            store.resolve_sender(second.companion_id()).unwrap_err(),
+            FederationError::UnknownPeer
+        );
+
+        now.store(T0 + 100, Ordering::SeqCst);
+        let first_to_second = rotation(&first, &second, T0 + 90);
+        let peer = store
+            .rotate(&first_to_second, second.verified().clone())
+            .unwrap()
+            .unwrap();
+        assert_eq!(peer.record.companion_id(), second.companion_id());
+        assert_eq!(&peer.record.identity, second.document());
+        assert_eq!(peer.verified.public_key, second.verified().public_key);
+        assert_eq!(peer.record.state, PeerState::Paired);
+        assert_eq!(peer.record.pairing_id, "0011223344556677");
+        assert_eq!(
+            peer.record.approved_origins,
+            vec!["https://peer.example".to_owned()],
+            "origins, pairing id, and role survive a rotation"
+        );
+        assert_eq!(peer.record.updated_at, T0 + 100);
+        assert_eq!(peer.record.rotation_history.len(), 1);
+        assert_eq!(peer.record.rotation_history[0].rotation, first_to_second);
+        assert_eq!(peer.record.rotation_history[0].accepted_at, T0 + 100);
+        assert_eq!(store.list().len(), 1, "the record moved, it was not copied");
+        assert!(store.get(first.companion_id()).is_none());
+        assert!(store.get(second.companion_id()).is_some());
+
+        // The new id is current; the old one is a previous key for a while.
+        let resolved = store.resolve_sender(second.companion_id()).unwrap();
+        assert_eq!(resolved.kind, SenderKey::Current);
+        assert_eq!(resolved.key, second.verified().public_key);
+        let resolved = store.resolve_sender(first.companion_id()).unwrap();
+        assert_eq!(resolved.kind, SenderKey::Previous);
+        assert_eq!(resolved.key, first.verified().public_key);
+        assert_eq!(resolved.peer.record.companion_id(), second.companion_id());
+        now.store(T0 + 100 + ROTATION_GRACE_SECS - 1, Ordering::SeqCst);
+        assert_eq!(
+            store.resolve_sender(first.companion_id()).unwrap().kind,
+            SenderKey::Previous
+        );
+        now.store(T0 + 100 + ROTATION_GRACE_SECS, Ordering::SeqCst);
+        assert_eq!(
+            store.resolve_sender(first.companion_id()).unwrap_err(),
+            FederationError::KeyRetired
+        );
+        assert_eq!(
+            store.resolve_sender(second.companion_id()).unwrap().kind,
+            SenderKey::Current
+        );
+
+        // Persisted, and reloaded verified under the new identity.
+        let reloaded = PeerStore::with_clock(_tmp.path(), Arc::new(|| T0 + 200));
+        let peer = reloaded.get(second.companion_id()).unwrap();
+        assert_eq!(peer.verified.public_key, second.verified().public_key);
+        assert_eq!(peer.record.rotation_history.len(), 1);
+        assert!(reloaded.get(first.companion_id()).is_none());
+
+        // The same rotation again changes nothing; a stale one from a key
+        // that is no longer current does not fit.
+        let before = std::fs::metadata(store.path()).unwrap().modified().unwrap();
+        let again = store
+            .rotate(&first_to_second, second.verified().clone())
+            .unwrap()
+            .unwrap();
+        assert_eq!(again.record.rotation_history.len(), 1);
+        assert_eq!(
+            std::fs::metadata(store.path()).unwrap().modified().unwrap(),
+            before,
+            "an already applied rotation is not rewritten"
+        );
+        let first_to_third = rotation(&first, &third, T0 + 300);
+        assert_eq!(
+            store
+                .rotate(&first_to_third, third.verified().clone())
+                .unwrap_err(),
+            FederationError::RotationMismatch
+        );
+        // A rotation of an unknown peer fits no record.
+        let stranger_to_third = rotation(&stranger, &third, T0 + 300);
+        assert!(
+            store
+                .rotate(&stranger_to_third, third.verified().clone())
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(store.list().len(), 1);
+
+        // Chained: second to third; both older ids keep their own windows.
+        now.store(T0 + 1000, Ordering::SeqCst);
+        let second_to_third = rotation(&second, &third, T0 + 990);
+        let peer = store
+            .rotate(&second_to_third, third.verified().clone())
+            .unwrap()
+            .unwrap();
+        assert_eq!(peer.record.companion_id(), third.companion_id());
+        assert_eq!(peer.record.rotation_history.len(), 2);
+        assert_eq!(
+            store.resolve_sender(second.companion_id()).unwrap().kind,
+            SenderKey::Previous
+        );
+        assert_eq!(
+            store.resolve_sender(first.companion_id()).unwrap_err(),
+            FederationError::KeyRetired
+        );
+        now.store(T0 + 1000 + ROTATION_GRACE_SECS, Ordering::SeqCst);
+        assert_eq!(
+            store.resolve_sender(second.companion_id()).unwrap_err(),
+            FederationError::KeyRetired
+        );
+    }
+
+    #[test]
+    fn rotation_needs_a_paired_peer_and_the_identity_on_record() {
+        let (_tmp, _now, store) = store();
+        let first = identity("first");
+        let second = identity("second");
+        let third = identity("third");
+        for state in [PeerState::Pending, PeerState::Revoked] {
+            store
+                .upsert(record(&first, state), first.verified().clone())
+                .unwrap();
+            let expected = match state {
+                PeerState::Revoked => FederationError::PeerRevoked,
+                state => FederationError::PeerNotPaired { state },
+            };
+            assert_eq!(
+                store
+                    .rotate(&rotation(&first, &second, T0), second.verified().clone())
+                    .unwrap_err(),
+                expected
+            );
+            assert_eq!(store.get(first.companion_id()).unwrap().record.state, state);
+        }
+        // Paired, but the new identity already belongs to another record.
+        store
+            .upsert(record(&first, PeerState::Paired), first.verified().clone())
+            .unwrap();
+        store
+            .upsert(
+                record(&second, PeerState::Paired),
+                second.verified().clone(),
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .rotate(&rotation(&first, &second, T0), second.verified().clone())
+                .unwrap_err(),
+            FederationError::RotationMismatch
+        );
+        // A verified identity that is not the rotation's new document.
+        assert_eq!(
+            store
+                .rotate(&rotation(&first, &third, T0), second.verified().clone())
+                .unwrap_err(),
+            FederationError::CompanionIdMismatch
+        );
+        assert_eq!(store.list().len(), 2);
+        assert!(store.get(first.companion_id()).is_some());
+        assert!(store.get(third.companion_id()).is_none());
+    }
+
+    #[test]
+    fn rotation_history_is_bounded() {
+        use super::super::rotation::MAX_ROTATION_HISTORY;
+        let (_tmp, now, store) = store();
+        let mut current = identity("k0");
+        store
+            .upsert(
+                record(&current, PeerState::Paired),
+                current.verified().clone(),
+            )
+            .unwrap();
+        for step in 0..MAX_ROTATION_HISTORY + 3 {
+            let next = identity(&format!("k{}", step + 1));
+            now.store(T0 + step as u64, Ordering::SeqCst);
+            store
+                .rotate(
+                    &rotation(&current, &next, T0 + step as u64),
+                    next.verified().clone(),
+                )
+                .unwrap()
+                .unwrap();
+            current = next;
+        }
+        let peer = store.get(current.companion_id()).unwrap();
+        assert_eq!(peer.record.rotation_history.len(), MAX_ROTATION_HISTORY);
+        assert_eq!(
+            peer.record.rotation_history.last().unwrap().companion_id(),
+            current.companion_id(),
+            "the newest transitions are kept"
+        );
+        assert_eq!(store.list().len(), 1);
+    }
+
+    #[test]
+    fn cancelling_every_invite_leaves_none() {
+        let (_tmp, _now, store) = store();
+        assert_eq!(store.cancel_all_invites(), 0);
+        let a = store.create_invite();
+        let b = store.create_invite();
+        assert_eq!(store.cancel_all_invites(), 2);
+        assert!(store.invites().is_empty());
+        for secret in [&a.secret, &b.secret] {
+            assert_eq!(
+                store.redeem_invite(secret),
+                Err(FederationError::InviteInvalid)
+            );
+        }
     }
 }

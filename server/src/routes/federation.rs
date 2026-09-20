@@ -120,6 +120,15 @@ impl IntoResponse for ApiError {
             FederationError::RecipientMismatch => (StatusCode::FORBIDDEN, "recipient_mismatch"),
             FederationError::PairingMismatch => (StatusCode::FORBIDDEN, "pairing_mismatch"),
             FederationError::PeerRevoked => (StatusCode::FORBIDDEN, "peer_revoked"),
+            FederationError::Expired { .. } => (StatusCode::FORBIDDEN, "expired"),
+            FederationError::IssuedInFuture { .. } => (StatusCode::FORBIDDEN, "issued_in_future"),
+            FederationError::InvalidLifetime { .. } => {
+                (StatusCode::BAD_REQUEST, "invalid_lifetime")
+            }
+            FederationError::BodyHashMismatch => (StatusCode::FORBIDDEN, "body_hash_mismatch"),
+            FederationError::Replayed => (StatusCode::FORBIDDEN, "replayed"),
+            FederationError::KeyRetired => (StatusCode::FORBIDDEN, "key_retired"),
+            FederationError::RotationMismatch => (StatusCode::FORBIDDEN, "rotation_mismatch"),
             FederationError::InviteInvalid => (StatusCode::UNAUTHORIZED, "invalid_invite"),
             FederationError::UnknownPeer => (StatusCode::NOT_FOUND, "unknown_peer"),
             FederationError::PeerNotPaired { .. } => (StatusCode::CONFLICT, "peer_not_paired"),
@@ -130,6 +139,7 @@ impl IntoResponse for ApiError {
             | FederationError::IdentityDocumentMissing(_)
             | FederationError::InsecureKeyPermissions { .. }
             | FederationError::RandomnessUnavailable
+            | FederationError::ReplayCapacity
             | FederationError::Io { .. } => {
                 (StatusCode::SERVICE_UNAVAILABLE, "federation_unavailable")
             }

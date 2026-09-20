@@ -8,8 +8,11 @@
 //! copying `federation/` too, and nothing about the old host, port, profile
 //! name, or path is part of the identity.
 //!
-//! Every function here is pure over a workspace root. Wiring into startup and
-//! routes arrives with the peer store. Nothing here logs.
+//! Rotation ([`rotate_at`]) is the one time the files change: the new key
+//! and document replace the old ones through temporary files and renames,
+//! after the rotation proof was appended to `federation/rotations.json`.
+//!
+//! Every function here is pure over a workspace root. Nothing here logs.
 
 use std::{
     fmt, io,
@@ -94,6 +97,12 @@ impl SigningIdentity {
     /// Signs `body` as this companion at the current wire version.
     pub fn sign_envelope(&self, body: &[u8]) -> SignedEnvelope {
         sign_envelope_with(&self.key, FEDERATION_VERSION, self.companion_id(), body)
+    }
+
+    /// Raw signature over already canonical bytes, for the transport
+    /// envelope and the rotation proof. Callers pass domain-tagged bytes.
+    pub(super) fn sign_raw(&self, message: &[u8]) -> [u8; SIGNATURE_BYTES] {
+        self.key.sign(message).to_bytes()
     }
 }
 
@@ -191,6 +200,20 @@ pub(crate) fn load_or_create_at(
     Ok(identity)
 }
 
+/// Rotates the identity on disk from `previous` to a fresh key: the rotation
+/// proof (signed by both keys) is appended to `federation/rotations.json`
+/// first, then the key file and the document are replaced. Fails closed
+/// with `KeyMismatch` when the identity on disk is not `previous` any more,
+/// so two rotations cannot race past each other.
+pub(crate) fn rotate_at(
+    workspace_root: &Path,
+    previous: &SigningIdentity,
+    now: u64,
+) -> Result<(SigningIdentity, crate::domain::federation::KeyRotation), FederationError> {
+    let _ = (workspace_root, previous, now);
+    todo!("PR 3: rotate the keystore")
+}
+
 /// `Ok(None)` when no identity was created yet; `Err` when the files exist but
 /// cannot be trusted: missing halves, wrong permissions, a document that does
 /// not verify, or a document not signed by the stored key.
@@ -286,7 +309,7 @@ pub fn verify_envelope(
 }
 
 /// Builds an identity from a raw seed with a freshly signed document.
-fn from_seed(seed: &[u8; SEED_BYTES], created_at: u64) -> SigningIdentity {
+pub(super) fn from_seed(seed: &[u8; SEED_BYTES], created_at: u64) -> SigningIdentity {
     let key = SigningKey::from_bytes(seed);
     let companion_id = companion_id_for(&key.verifying_key().to_bytes());
     let document = sign_document(&key, FEDERATION_VERSION, &companion_id, created_at);
@@ -368,7 +391,7 @@ fn check_declared_version(json: &str, what: &str) -> Result<(), FederationError>
     check_version(versioned.version)
 }
 
-fn decode_public_key(encoded: &str) -> Result<VerifyingKey, FederationError> {
+pub(super) fn decode_public_key(encoded: &str) -> Result<VerifyingKey, FederationError> {
     let bytes = decode_exact(encoded, PUBLIC_KEY_BYTES)
         .ok_or_else(|| FederationError::Malformed("public key is not 32 base64url bytes".into()))?;
     let array: [u8; PUBLIC_KEY_BYTES] = bytes.try_into().expect("length checked");
@@ -384,7 +407,7 @@ fn decode_public_key(encoded: &str) -> Result<VerifyingKey, FederationError> {
     Ok(key)
 }
 
-fn decode_signature(encoded: &str) -> Result<Signature, FederationError> {
+pub(super) fn decode_signature(encoded: &str) -> Result<Signature, FederationError> {
     let bytes = decode_exact(encoded, SIGNATURE_BYTES)
         .ok_or_else(|| FederationError::Malformed("signature is not 64 base64url bytes".into()))?;
     let array: [u8; SIGNATURE_BYTES] = bytes.try_into().expect("length checked");
