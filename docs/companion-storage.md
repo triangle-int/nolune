@@ -594,6 +594,85 @@ file describe its shape and never quote its contents. Wire fixtures live in
 `server/tests/fixtures/federation/`; `generate.py` there rebuilds them with
 OpenSSL, independently of the server code.
 
+### Peers and pairing
+
+Trust between two companions is established by their owners, one invite at a
+time, and never implied by a shared host, OS account, profile name, port, or
+loopback address. `federation/peers.json` (mode `0600`) holds one record per
+peer:
+
+```json
+{
+  "version": 1,
+  "peers": [
+    {
+      "identity": { "version": 1, "companion_id": "…", "public_key": "…", "created_at": 1789862400, "signature": "…" },
+      "state": "paired",
+      "role": "issuer",
+      "pairing_id": "9f1c0b7e2a6d4c31",
+      "approved_origins": ["https://molinka.example"],
+      "created_at": 1789862400,
+      "updated_at": 1789862460,
+      "rotation_history": []
+    }
+  ]
+}
+```
+
+That is the whole record: the peer's self-signed identity document (its key
+and id), the handshake `state`, which side minted the invite (`role`), the id
+of the invite that started the pairing, the base URLs the owner approved for
+reaching the peer (`approved_origins`, plus a `pending_origin` the peer
+reported but the owner has not approved yet), timestamps, and the key
+rotation history (empty until rotation ships). No display name, hostname, port,
+profile name, or address is stored, because none of them is trusted. Every
+document is re-verified when the file is loaded; a record whose document no
+longer verifies is dropped. A file of another version or shape is never
+repaired and never overwritten: the server warns, trusts no peer, and refuses
+every pairing write until the file is repaired or moved aside and the server
+restarted.
+
+States: `invited` (an invite the owner minted; it lives in memory only, as a
+domain-separated SHA-256 of its one-time secret, and a restart forgets it),
+`pending` (keys exchanged, one owner still has to confirm: the issuer's owner
+on both sides), `paired` (both owners confirmed; the only state in which a
+peer's messages verify), `revoked` (trust withdrawn; the record stays so a
+stale confirmation cannot revive it, and only a new invite pairs the companion
+again). An invite expires after ten minutes, is redeemed at most once, and is
+shown to the issuing owner exactly once: it never appears in a URL, a log
+line, a chat, or any later listing. Its secret is 32 random bytes, so wrong
+guesses are not counted: a failure counter on a public route would only let
+a stranger lock the owner out of a legitimate redemption.
+
+The handshake runs over the owner routes `/api/federation/*` (behind the
+normal API authentication) and the public peer routes under
+`/federation/v1/pair`, which take a signed envelope in a POST body and verify
+its signature and nothing else:
+
+1. Owner A: `POST /api/federation/invites` returns the invite id, its secret,
+   A's base URL, and A's identity document, to hand to owner B out of band.
+2. Owner B: `POST /api/federation/accept` with that origin, secret, and
+   document. B pins A's document, then posts a signed `pair_request` (the
+   secret, B's own document, B's base URL) to `{origin}/federation/v1/pair`.
+   A verifies the document and the signature, redeems the secret, records B as
+   `pending`, and answers with a signed `pair_response`; B verifies it against
+   the pinned document and records A as `pending`.
+3. Owner A: `POST /api/federation/peers/{companion_id}/confirm` marks B
+   `paired`, approves the origin B reported, and posts a signed `pair_confirm`
+   to it; B marks A `paired` and acknowledges.
+4. Either owner: `POST /api/federation/peers/{companion_id}/revoke` marks the
+   peer `revoked` and posts a signed `pair_revoke`; the peer does the same.
+   `GET /api/federation/peers` lists the identity, outstanding invites, and
+   peers; `DELETE /api/federation/invites/{id}` withdraws an invite.
+
+Every notice names its pairing id, so a notice about an earlier pairing is
+stale, and a body of one kind is never read as another. Every transition is
+checked and applied under the store's lock against the record as it is at
+that moment, so a confirmation that races a revocation can never leave a
+revoked peer paired. Two profiles on one host go through exactly these steps
+over their own ports. The general signed transport (nonces, expiry, key
+rotation) builds on this store.
+
 ## Changing this format
 
 Bump `format_version` whenever the directory layout, the marker shape, or the
