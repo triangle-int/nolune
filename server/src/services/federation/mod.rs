@@ -13,10 +13,14 @@
 //! Nothing in this module logs a secret. The invite secret leaves the process
 //! once, in the owner's invite response, and the signing key never does.
 
+pub mod audit;
 pub mod envelope;
+pub mod gate;
 pub mod identity;
 pub mod pairing;
 pub mod peers;
+pub mod policy;
+pub mod policy_store;
 pub mod rotation;
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};

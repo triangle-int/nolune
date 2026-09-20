@@ -120,5 +120,9 @@ mod federation_tests;
 mod federation_transport_tests;
 
 #[cfg(test)]
+#[path = "../../test-support/federation_policy.rs"]
+mod federation_policy_tests;
+
+#[cfg(test)]
 #[path = "../../test-support/handoff_cards.rs"]
 mod handoff_tests;

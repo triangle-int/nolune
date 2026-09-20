@@ -10,8 +10,15 @@
 //! * `POST /api/federation/peers/{companion_id}/revoke` withdraws trust.
 //! * `POST /api/federation/rotate` replaces this companion's key, withdraws
 //!   invites and pending pairings, and tells every paired peer.
+//! * `GET /api/federation/policy` lists the owner's federation policy and
+//!   the defaults that apply where it says nothing (#109).
+//! * `GET /api/federation/receipts` lists the audit receipts, newest first.
 //!
-//! Peer side, public, verified by signature only:
+//! Peer side, public, verified by signature only. Every verified envelope
+//! is judged by the owner's policy and recorded before it is dispatched
+//! (#109): a refusal is `403` with a `policy_denied`, `approval_required`,
+//! or `deferred` code, or `429 rate_limited`, each carrying the decision.
+//!
 //!
 //! * `POST /federation/v1/pair` redeems an invite with a signed pair request.
 //! * `POST /federation/v1/pair/confirm` and `/revoke` carry signed notices.
@@ -37,7 +44,10 @@ use serde_json::json;
 
 use crate::{
     app::state::AppState,
-    domain::federation::{AcceptInvite, FederationError, SignedEnvelope, TransportEnvelope},
+    domain::{
+        federation::{AcceptInvite, FederationError, SignedEnvelope, TransportEnvelope},
+        federation_policy::{Decision, DecisionReason, Verdict},
+    },
     services::federation::{
         envelope, identity,
         pairing::{
@@ -61,6 +71,8 @@ pub fn router() -> Router<AppState> {
             post(revoke_peer),
         )
         .route("/api/federation/rotate", post(rotate_identity))
+        .route("/api/federation/policy", get(show_policy))
+        .route("/api/federation/receipts", get(list_receipts))
 }
 
 /// Mounted outside the auth middleware: a peer has no owner credential and
@@ -140,6 +152,14 @@ impl IntoResponse for ApiError {
             FederationError::Replayed => (StatusCode::FORBIDDEN, "replayed"),
             FederationError::KeyRetired => (StatusCode::FORBIDDEN, "key_retired"),
             FederationError::RotationMismatch => (StatusCode::FORBIDDEN, "rotation_mismatch"),
+            FederationError::PolicyRefused(decision) => (
+                if decision.reason == DecisionReason::RateLimited {
+                    StatusCode::TOO_MANY_REQUESTS
+                } else {
+                    StatusCode::FORBIDDEN
+                },
+                policy_error_code(decision),
+            ),
             FederationError::InviteInvalid => (StatusCode::UNAUTHORIZED, "invalid_invite"),
             FederationError::UnknownPeer => (StatusCode::NOT_FOUND, "unknown_peer"),
             FederationError::PeerNotPaired { .. } => (StatusCode::CONFLICT, "peer_not_paired"),
@@ -162,9 +182,32 @@ impl IntoResponse for ApiError {
                 body["peer_error"] = json!(error);
             }
             FederationError::PeerNotPaired { state } => body["state"] = json!(state),
+            FederationError::PolicyRefused(decision) => {
+                body["decision"] = json!(decision);
+                if let Some(secs) = decision.retry_after_secs {
+                    return (
+                        status,
+                        [(header::RETRY_AFTER, secs.to_string())],
+                        Json(body),
+                    )
+                        .into_response();
+                }
+            }
             _ => {}
         }
         (status, Json(body)).into_response()
+    }
+}
+
+/// The error code a policy refusal answers with, by verdict; the requesting
+/// side maps it back to a decision for its own receipt.
+pub(crate) fn policy_error_code(decision: &Decision) -> &'static str {
+    match decision.verdict {
+        Verdict::Allow => "policy_denied",
+        Verdict::Ask => "approval_required",
+        Verdict::Defer => "deferred",
+        Verdict::Deny if decision.reason == DecisionReason::RateLimited => "rate_limited",
+        Verdict::Deny => "policy_denied",
     }
 }
 
@@ -255,6 +298,14 @@ async fn rotate_identity(State(state): State<AppState>) -> Result<Response, ApiE
     Ok(Json(state.federation.rotate_identity().await?).into_response())
 }
 
+async fn show_policy(State(state): State<AppState>) -> Result<Response, ApiError> {
+    Ok(Json(state.federation_gate.policy()?).into_response())
+}
+
+async fn list_receipts(State(state): State<AppState>) -> Result<Response, ApiError> {
+    Ok(Json(json!({ "receipts": state.federation_gate.receipts()? })).into_response())
+}
+
 async fn pair(State(state): State<AppState>, request: Request) -> Result<Response, ApiError> {
     let envelope = parse_envelope(&read_body(request).await?)?;
     Ok(Json(state.federation.receive_pair_request(&envelope)?).into_response())
@@ -278,7 +329,10 @@ async fn revoke_notice(
 
 async fn ping(State(state): State<AppState>, request: Request) -> Result<Response, ApiError> {
     let envelope = parse_transport(&read_body(request).await?)?;
-    Ok(Json(state.federation.receive_ping(&envelope)?).into_response())
+    let pong = state
+        .federation_gate
+        .receive_ping(&state.federation, &envelope)?;
+    Ok(Json(pong).into_response())
 }
 
 async fn rotation_notice(
@@ -286,5 +340,8 @@ async fn rotation_notice(
     request: Request,
 ) -> Result<Response, ApiError> {
     let envelope = parse_transport(&read_body(request).await?)?;
-    Ok(Json(state.federation.receive_rotation(&envelope)?).into_response())
+    let ack = state
+        .federation_gate
+        .receive_rotation(&state.federation, &envelope)?;
+    Ok(Json(ack).into_response())
 }

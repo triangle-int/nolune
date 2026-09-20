@@ -58,6 +58,8 @@ pub struct AppState {
     pub browser_sessions: Arc<BrowserSessionStore>,
     /// Federation identity and peers (#108); the keystore under `workspace_dir` opens on first use.
     pub federation: Arc<crate::services::federation::pairing::FederationState>,
+    /// Federation policy and audit (#109): every verified envelope is judged and recorded here.
+    pub federation_gate: Arc<crate::services::federation::gate::FederationGate>,
     /// The server-local computer-use target (#16): idle until the gateway calls `start`,
     /// so building a state never spawns a driver.
     pub cua: crate::services::cua::runtime::CuaRuntime,
@@ -90,6 +92,10 @@ impl AppState {
 
         let http_client = reqwest::Client::new();
         let federation = crate::services::federation::pairing::FederationState::new(
+            &workspace_dir,
+            http_client.clone(),
+        );
+        let federation_gate = crate::services::federation::gate::FederationGate::new(
             &workspace_dir,
             http_client.clone(),
         );
@@ -134,6 +140,7 @@ impl AppState {
             commitments,
             browser_sessions: Arc::new(BrowserSessionStore::new()),
             federation: Arc::new(federation),
+            federation_gate: Arc::new(federation_gate),
             cua,
         }
     }

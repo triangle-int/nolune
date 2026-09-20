@@ -564,6 +564,9 @@ pub enum FederationError {
     /// identity is not the sender's, the new key is the old one, or the new
     /// identity already belongs to someone else.
     RotationMismatch,
+    /// The owner's federation policy did not allow the intent (#109); the
+    /// decision says whether it was denied, needs the owner, or waits.
+    PolicyRefused(crate::domain::federation_policy::Decision),
 }
 
 impl fmt::Display for FederationError {
@@ -653,6 +656,7 @@ impl fmt::Display for FederationError {
             Self::RotationMismatch => {
                 f.write_str("federation rotation does not fit the peer on record")
             }
+            Self::PolicyRefused(decision) => write!(f, "federation policy: {decision}"),
         }
     }
 }
@@ -746,6 +750,9 @@ mod tests {
             FederationError::ReplayCapacity,
             FederationError::KeyRetired,
             FederationError::RotationMismatch,
+            FederationError::PolicyRefused(crate::domain::federation_policy::Decision::ask(
+                crate::domain::federation_policy::DecisionReason::Default,
+            )),
         ];
         let rendered: Vec<String> = errors.iter().map(ToString::to_string).collect();
         for (index, text) in rendered.iter().enumerate() {
@@ -757,6 +764,11 @@ mod tests {
         }
         assert!(rendered[0].contains("older than"));
         assert!(rendered[10].contains("644"));
+        assert_eq!(
+            rendered.last().unwrap(),
+            "federation policy: ask (default)",
+            "a policy refusal says the verdict and the reason, nothing about the intent's payload"
+        );
     }
 
     const SECRET: &str = "issue-108-invite-secret-that-must-never-print";

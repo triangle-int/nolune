@@ -39,7 +39,9 @@ Unknown fields are rejected. A marker with any other `format_version` or
 │   ├── identity.json            public, self-signed identity document
 │   ├── signing_key.json         private Ed25519 seed, mode 0600
 │   ├── peers.json               paired companions and their key rotations
-│   └── rotations.json           this companion's own key rotations
+│   ├── rotations.json           this companion's own key rotations
+│   ├── policy.json              what each paired peer may ask for (#109)
+│   └── audit.jsonl              receipts for every judged intent, both sides
 ├── skills/                      installed skills (global)
 ├── vectors/                     derived vector index, keyed by slug
 ├── imports/                     restore staging (see Restore below); empty between imports unless a crash left a tree behind
@@ -944,6 +946,81 @@ acknowledged again without being applied twice. The peer answers with a
 `rotation_ack` addressed to the new identity. Companion ids are derived from
 keys, so a rotated companion has a new id; the transition record ties the
 two together, and both histories can be re-verified at any time.
+
+### Policy and audit
+
+A paired peer has no implicit access to anything (#109). Every verified
+envelope is classified into an intent (`ping`, `message`, `availability`,
+`reminder`, `proposal`) and a disclosure class (`none`, `availability`,
+`personal`, `sensitive`: what an answer would reveal about this owner),
+judged against `federation/policy.json` (mode `0600`, beside `peers.json`),
+and recorded before anything is dispatched. Memory and tool access have no
+intent class: there is nothing to grant. A kind or class the server does
+not know is denied and recorded as `unknown`, with the name the peer used
+reduced to `[a-z0-9_]` and bounded.
+
+```json
+{
+  "version": 1,
+  "quiet_hours": { "start_hour": 22, "end_hour": 7, "timezone": "Europe/Berlin" },
+  "rate_limit": { "max_requests": 60, "window_secs": 60 },
+  "peers": {
+    "<companion_id>": {
+      "rules": [
+        { "intent": "message", "disclosure": "none", "access": "allow", "granted_at": 1789862400, "expires_at": 1790467200 }
+      ],
+      "rate_limit": { "max_requests": 10, "window_secs": 60 }
+    }
+  }
+}
+```
+
+A rule is `allow`, `ask` (the owner decides each time), or `deny` for one
+intent at one disclosure class, and matches exactly: a grant at one class
+says nothing about another. From `expires_at` on the rule no longer applies
+and the default does. Where no rule applies, the defaults are closed: only a
+`ping` at `none` is allowed (pairing is the consent to be reachable; a ping
+discloses nothing more); a `message`, a `reminder`, a `proposal`, and an
+`availability` query at `availability` ask the owner; the `sensitive` class
+and any combination an intent cannot disclose at are denied. The checks run
+in a fixed order and each one short-circuits: a revoked or unpaired peer is
+denied whatever the rules say; past the rate limit (the document's, or the
+peer's own) the answer is a denial with a retry-after and nothing further is
+consulted; then the rules; and inside quiet hours (read in the given IANA
+zone, UTC when unset) anything that would land in front of the owner, or
+would ask them, is deferred until they end. Owners revoke a rule or a peer
+by removing it, and the very next evaluation sees the change. A missing
+file is the default document and is not written until the owner changes
+something; a file of another version or shape is never repaired and never
+overwritten: nothing is judged until it is repaired or moved aside.
+
+`federation/audit.jsonl` (mode `0600`) keeps one receipt per line for every
+decision, on both sides: the requesting companion records what it asked and
+what came back, the answering companion records what it was asked and what
+it decided. A receipt names the requester and responder ids, the intent and
+disclosure class, the decision (verdict, reason, retry-after or
+deferred-until) and the time, plus a one-line summary built from those
+names. Receipts never contain what the peer sent: no body, message, or text
+field exists in the shape, and unknown fields are refused. Retention is
+bounded like proactive run records: the newest 1000 overall, the newest 200
+per peer (so one chatty peer cannot push the others out), and nothing older
+than 30 days; past a bound the file is compacted through a temporary file
+and a rename. Repeated refusals of one kind from one peer inside a minute
+are recorded once. A log this build cannot load or write refuses every
+intent: a decision is not made without its receipt.
+
+Over the wire a refusal is `403` with `policy_denied`, `approval_required`,
+or `deferred`, or `429 rate_limited`, each carrying the decision and a
+`Retry-After` header when it says so; a revoked or unpaired sender keeps its
+own code and is recorded too, because its signature was checked before its
+state. Key rotation notices are trust maintenance rather than intents: they
+are gated by the peer's state and recorded as `key_rotation` once accepted.
+`GET /api/federation/policy` lists the document and the defaults table;
+`GET /api/federation/receipts` lists the receipts, newest first; both are
+read-only. Peer text is data, never instructions: it has no accessor and
+can only be rendered inside a delimited block that names it as untrusted
+content from a named companion, framed by a boundary the text cannot
+predict, and it never becomes a tool argument.
 
 ## Changing this format
 
