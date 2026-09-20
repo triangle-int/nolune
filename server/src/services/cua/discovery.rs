@@ -1,7 +1,8 @@
 //! Where the `cua-driver` binary is: an explicit `[cua].driver_path`, then the
-//! `NOLUNE_CUA_DRIVER` environment variable, then a `PATH` lookup. A host
-//! without a driver is not an error; the runtime simply registers no
-//! server-local target.
+//! `NOLUNE_CUA_DRIVER` environment variable, then the driver `nolune cua
+//! install` put under the workspace, then a `PATH` lookup. A host without a
+//! driver is not an error; the runtime simply registers no server-local
+//! target.
 
 use std::{
     ffi::OsStr,
@@ -22,8 +23,39 @@ pub struct DriverLookup<'a> {
     pub configured: Option<&'a Path>,
     /// The value of [`DRIVER_ENV`].
     pub env_override: Option<&'a OsStr>,
+    /// The driver recorded by the workspace's `cua-driver/install.json`
+    /// (#20). Skipped, not an error, when it no longer runs: `nolune cua
+    /// status` explains a stale install.
+    pub installed: Option<&'a Path>,
     /// The value of `PATH`.
     pub path: Option<&'a OsStr>,
+}
+
+/// Which source a lookup found the driver through.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DriverSource {
+    Configured,
+    Environment,
+    Installed,
+    SearchPath,
+}
+
+impl fmt::Display for DriverSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Configured => "[cua].driver_path",
+            Self::Environment => DRIVER_ENV,
+            Self::Installed => "Nolune install",
+            Self::SearchPath => "PATH",
+        })
+    }
+}
+
+/// A driver a lookup found, and where.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocatedDriver {
+    pub path: PathBuf,
+    pub source: DriverSource,
 }
 
 /// An explicitly named driver that cannot be run.
@@ -76,21 +108,39 @@ fn binary_name() -> String {
 /// explicitly but cannot run is an error so a typo is never a silent
 /// "no GUI target".
 pub fn locate_driver(lookup: DriverLookup<'_>) -> Result<Option<PathBuf>, DriverLookupError> {
+    locate(lookup).map(|found| found.map(|driver| driver.path))
+}
+
+/// [`locate_driver`], also saying which source the driver came from.
+pub fn locate(lookup: DriverLookup<'_>) -> Result<Option<LocatedDriver>, DriverLookupError> {
     let explicit = [
         (
             "[cua].driver_path",
+            DriverSource::Configured,
             lookup.configured.map(Path::to_path_buf),
         ),
-        (DRIVER_ENV, lookup.env_override.map(PathBuf::from)),
+        (
+            DRIVER_ENV,
+            DriverSource::Environment,
+            lookup.env_override.map(PathBuf::from),
+        ),
     ];
-    for (source, named) in explicit {
+    for (name, source, named) in explicit {
         if let Some(path) = named {
             return if is_executable(&path) {
-                Ok(Some(path))
+                Ok(Some(LocatedDriver { path, source }))
             } else {
-                Err(DriverLookupError::NotExecutable { source, path })
+                Err(DriverLookupError::NotExecutable { source: name, path })
             };
         }
+    }
+    // The workspace's own install (#20) is skipped when it no longer runs;
+    // `nolune cua status` reports the stale manifest instead.
+    if let Some(installed) = lookup.installed.filter(|path| is_executable(path)) {
+        return Ok(Some(LocatedDriver {
+            path: installed.to_path_buf(),
+            source: DriverSource::Installed,
+        }));
     }
     let name = binary_name();
     let found = lookup
@@ -99,18 +149,26 @@ pub fn locate_driver(lookup: DriverLookup<'_>) -> Result<Option<PathBuf>, Driver
         .flat_map(std::env::split_paths)
         .filter(|dir| !dir.as_os_str().is_empty())
         .map(|dir| dir.join(&name))
-        .find(|candidate| is_executable(candidate));
+        .find(|candidate| is_executable(candidate))
+        .map(|path| LocatedDriver {
+            path,
+            source: DriverSource::SearchPath,
+        });
     Ok(found)
 }
 
-/// Resolve the driver binary from the config value and this process's
-/// environment.
-pub fn discover(configured: Option<&Path>) -> Result<Option<PathBuf>, DriverLookupError> {
+/// Resolve the driver binary from the config value, the workspace install
+/// and this process's environment.
+pub fn discover(
+    configured: Option<&Path>,
+    installed: Option<&Path>,
+) -> Result<Option<LocatedDriver>, DriverLookupError> {
     let env_override = std::env::var_os(DRIVER_ENV);
     let path = std::env::var_os("PATH");
-    locate_driver(DriverLookup {
+    locate(DriverLookup {
         configured,
         env_override: env_override.as_deref(),
+        installed,
         path: path.as_deref(),
     })
 }
@@ -137,6 +195,7 @@ mod tests {
         let lookup = DriverLookup {
             configured: None,
             env_override: None,
+            installed: None,
             path: Some(empty.path().as_os_str()),
         };
         assert_eq!(locate_driver(lookup), Ok(None));
@@ -151,6 +210,7 @@ mod tests {
         let lookup = DriverLookup {
             configured: Some(&configured),
             env_override: Some(other.as_os_str()),
+            installed: None,
             path: Some(dir.path().as_os_str()),
         };
         assert_eq!(locate_driver(lookup), Ok(Some(configured)));
@@ -163,6 +223,7 @@ mod tests {
         let lookup = DriverLookup {
             configured: Some(&missing),
             env_override: None,
+            installed: None,
             path: Some(dir.path().as_os_str()),
         };
         assert_eq!(
@@ -178,6 +239,7 @@ mod tests {
         let lookup = DriverLookup {
             configured: None,
             env_override: Some(plain_file.as_os_str()),
+            installed: None,
             path: None,
         };
         let error = locate_driver(lookup).unwrap_err();
@@ -193,6 +255,7 @@ mod tests {
         let lookup = DriverLookup {
             configured: None,
             env_override: Some(named.as_os_str()),
+            installed: None,
             path: Some(on_path.path().as_os_str()),
         };
         assert_eq!(locate_driver(lookup), Ok(Some(named)));
@@ -209,6 +272,7 @@ mod tests {
         let lookup = DriverLookup {
             configured: None,
             env_override: None,
+            installed: None,
             path: Some(joined.as_os_str()),
         };
         #[cfg(unix)]
@@ -223,6 +287,92 @@ mod tests {
         // but it must never panic and must honour a configured driver.
         let dir = tempfile::tempdir().unwrap();
         let configured = executable(dir.path(), "driver");
-        assert_eq!(discover(Some(&configured)), Ok(Some(configured)));
+        assert_eq!(
+            discover(Some(&configured), None),
+            Ok(Some(LocatedDriver {
+                path: configured,
+                source: DriverSource::Configured,
+            }))
+        );
+    }
+
+    #[test]
+    fn the_workspace_install_beats_the_path_and_loses_to_explicit_names() {
+        let install = tempfile::tempdir().unwrap();
+        let on_path = tempfile::tempdir().unwrap();
+        let installed = executable(install.path(), DRIVER_BINARY);
+        let global = executable(on_path.path(), DRIVER_BINARY);
+
+        let lookup = DriverLookup {
+            configured: None,
+            env_override: None,
+            installed: Some(&installed),
+            path: Some(on_path.path().as_os_str()),
+        };
+        assert_eq!(
+            locate(lookup),
+            Ok(Some(LocatedDriver {
+                path: installed.clone(),
+                source: DriverSource::Installed,
+            }))
+        );
+        assert_eq!(locate_driver(lookup), Ok(Some(installed.clone())));
+
+        let named = executable(install.path(), "named-driver");
+        let lookup = DriverLookup {
+            configured: None,
+            env_override: Some(named.as_os_str()),
+            installed: Some(&installed),
+            path: Some(on_path.path().as_os_str()),
+        };
+        assert_eq!(
+            locate(lookup).unwrap().unwrap(),
+            LocatedDriver {
+                path: named,
+                source: DriverSource::Environment,
+            }
+        );
+
+        let lookup = DriverLookup {
+            configured: None,
+            env_override: None,
+            installed: None,
+            path: Some(on_path.path().as_os_str()),
+        };
+        assert_eq!(
+            locate(lookup).unwrap().unwrap(),
+            LocatedDriver {
+                path: global,
+                source: DriverSource::SearchPath,
+            }
+        );
+    }
+
+    #[test]
+    fn a_stale_workspace_install_is_skipped_rather_than_an_error() {
+        let install = tempfile::tempdir().unwrap();
+        let on_path = tempfile::tempdir().unwrap();
+        let gone = install.path().join("releases/0/cua-driver");
+        let global = executable(on_path.path(), DRIVER_BINARY);
+        let lookup = DriverLookup {
+            configured: None,
+            env_override: None,
+            installed: Some(&gone),
+            path: Some(on_path.path().as_os_str()),
+        };
+        assert_eq!(
+            locate(lookup).unwrap().unwrap(),
+            LocatedDriver {
+                path: global,
+                source: DriverSource::SearchPath,
+            }
+        );
+        let lookup = DriverLookup {
+            installed: Some(&gone),
+            ..DriverLookup::default()
+        };
+        assert_eq!(locate(lookup), Ok(None));
+        assert_eq!(DriverSource::Installed.to_string(), "Nolune install");
+        assert_eq!(DriverSource::Environment.to_string(), DRIVER_ENV);
     }
 }

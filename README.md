@@ -129,7 +129,7 @@ The script does the same on macOS or Linux and leaves the server running in the 
 curl -fsSL https://nolune.dev/install.sh | bash
 ```
 
-It is a thin wrapper: it downloads the binary and hands over to `nolune onboard` and `nolune gateway`. Set `NOLUNE_CHANNEL=nightly` for nightly builds or `NOLUNE_DIR` for a custom directory.
+It is a thin wrapper: it downloads the binary and hands over to `nolune onboard` and `nolune gateway`. Set `NOLUNE_CHANNEL=nightly` for nightly builds or `NOLUNE_DIR` for a custom directory. `NOLUNE_INSTALL_CUA_DRIVER=1` also runs `nolune cua install` for computer use; it is off by default, so headless servers install nothing they cannot use.
 
 ### The `nolune` command
 
@@ -143,6 +143,8 @@ Everything the installers do, you can do yourself:
 | `nolune gateway uninstall` | Stops and removes that service; data is untouched |
 | `nolune gateway start` / `stop` / `restart` / `nolune gateway status` / `nolune gateway logs` | Manage the service once installed |
 | `nolune pair` | Prints a one-time code so a browser can sign in |
+| `nolune cua install` | Downloads the Cua Driver release this version of Nolune is pinned to (refusing a mirror that announces another size, a body that grows past it, or one that stalls), verifies its size and sha256 before anything is written, installs it under `~/.nolune/cua-driver/`, and refuses a driver that reports any other version. `--force` reinstalls; `NOLUNE_CUA_RELEASE_URL` names a mirror |
+| `nolune cua status` | Shows the pinned version, whether this host is supported (macOS; Linux and Windows report `unsupported`, a host without a graphical session reports `headless` and never starts the driver), the installed and the discovered driver, its version against the pin, and its health and permission state. On macOS it starts the installed `CuaDriver.app` daemon by path when none is running and says which executable answered, so a driver installed elsewhere is named rather than mistaken for the Nolune install |
 | `nolune uninstall --keep-data` | Removes the service, binary, and log but keeps `~/.nolune` |
 | `nolune uninstall --yes` | Removes everything, including your data |
 | `--profile <name>` | Any of the above for a second, fully isolated server on the same machine: its own data root at `~/.nolune-profiles/<name>/`, config, port, auth token, log, and background service, from the same binary. `nolune onboard --profile molinka` then `nolune gateway install --profile molinka`; the default profile stays `~/.nolune`. All profiles run the one binary under `~/.nolune/bin/`, so `nolune uninstall` on the default profile warns which profiles' services lose it |
@@ -203,6 +205,8 @@ Most settings are available through the interface. Advanced configuration lives 
 | `NOLUNE_HOME` | Data directory, defaults to `~/.nolune` |
 | `NOLUNE_AUTH_TOKEN` | API token override. The token is for automation, the CLI and the desktop app; browsers pair for a revocable session instead and are unaffected when it changes |
 | `NOLUNE_PUBLIC_URL` | Public URL for the server. Defaults to `http://localhost:<port>`; set it when you reach Nolune through another address so shared file links work |
+| `NOLUNE_CUA_DRIVER` | Path of a Cua Driver binary to use instead of the one `nolune cua install` put under the workspace or the one on `PATH` |
+| `NOLUNE_CUA_RELEASE_URL` | Mirror that `nolune cua install` fetches the pinned Cua Driver assets from (`<url>/<asset name>`) instead of the upstream GitHub release; the pinned checksum is enforced either way |
 | `ANTHROPIC_API_KEY` | Anthropic API key override |
 | `OPENAI_API_KEY` | OpenAI API key override |
 | `OPENROUTER_API_KEY` | OpenRouter API key override |
@@ -219,6 +223,8 @@ Nolune checks for updates automatically. Apply an update through Settings or run
 ```
 
 Then restart the server: `nolune gateway restart` if it runs as a background service, otherwise stop it with Ctrl-C and run `nolune gateway` again (or reopen the desktop app, which restarts the server it manages). The desktop app's own updater only updates the app.
+
+The Cua Driver behind computer use is pinned per Nolune release and never updated on its own, not by Nolune and not through the driver's self-updater: when an update moves the pin, `nolune cua status` reports the installed driver as not the pinned version and `nolune cua install` installs the new one. Computer use is supported on macOS; on Linux and Windows the pinned driver installs but `nolune cua status` reports the host as unsupported until a release turns it on. A host without a graphical session (no `DISPLAY` or `WAYLAND_DISPLAY` on Linux, no Aqua login on macOS, no `SESSIONNAME` on Windows) reports `headless` and never starts the driver.
 
 ### Uninstall
 

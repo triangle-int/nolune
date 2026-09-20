@@ -282,3 +282,74 @@ fn the_current_host_resolves_to_its_target() {
     assert_eq!(Target::from_triple("riscv64gc-unknown-linux-gnu"), None);
     assert_eq!(Target::from_triple(""), None);
 }
+
+/// `cua-driver.pin` is the copy of this table that shell has to read
+/// (`scripts/cua-driver.sh`, `release.yml`): one `key value` line per
+/// release fact and one `asset <triple> <name> <sha256> <size>` line per
+/// target. It must say exactly what the Rust table says.
+#[test]
+fn the_pin_file_mirrors_the_rust_table_for_scripts() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("cua-driver.pin");
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("{} must exist: {error}", path.display()));
+    let mut facts = std::collections::BTreeMap::new();
+    let mut assets = std::collections::BTreeMap::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        match fields.as_slice() {
+            ["asset", triple, name, sha256, size] => {
+                let size: u64 = size
+                    .parse()
+                    .unwrap_or_else(|_| panic!("bad size in {line:?}"));
+                assert!(
+                    assets
+                        .insert(
+                            triple.to_string(),
+                            (name.to_string(), sha256.to_string(), size)
+                        )
+                        .is_none(),
+                    "{triple} is pinned twice"
+                );
+            }
+            [key, value] => {
+                assert!(
+                    facts.insert(key.to_string(), value.to_string()).is_none(),
+                    "{key} appears twice"
+                );
+            }
+            _ => panic!("unreadable pin line {line:?}"),
+        }
+    }
+    assert_eq!(
+        facts.get("version").map(String::as_str),
+        Some(PINNED_VERSION)
+    );
+    assert_eq!(facts.get("tag").map(String::as_str), Some(RELEASE_TAG));
+    assert_eq!(
+        facts.get("repository").map(String::as_str),
+        Some(RELEASE_REPOSITORY)
+    );
+    assert_eq!(
+        facts.get("commit").map(String::as_str),
+        Some(RELEASE_COMMIT)
+    );
+    assert_eq!(
+        assets.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        Target::ALL
+            .iter()
+            .map(|target| target.triple())
+            .collect::<BTreeSet<_>>(),
+        "the pin file must list exactly the release targets"
+    );
+    for target in Target::ALL {
+        let asset = asset_for(*target);
+        let (name, sha256, size) = &assets[target.triple()];
+        assert_eq!(name, asset.name, "{target}: asset name");
+        assert_eq!(sha256, asset.sha256, "{target}: sha256");
+        assert_eq!(*size, asset.size, "{target}: size");
+    }
+}
