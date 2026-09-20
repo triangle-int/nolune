@@ -123,3 +123,13 @@ export function relativeTime(unixSeconds, nowSeconds) {
 	if (diff < 7 * 86400) return `${Math.floor(diff / 86400)}d ago`;
 	return new Date(unixSeconds * 1000).toLocaleDateString([], { month: "short", day: "numeric" });
 }
+
+/** @param {ProactiveRun} run */
+export function commitmentReceipt(run) {
+	throw new Error("not implemented");
+}
+
+/** @param {string} condition */
+export function commitmentConditionLabel(condition) {
+	throw new Error("not implemented");
+}
