@@ -47,6 +47,8 @@ pub struct MediaStore {
     #[cfg(test)]
     fail_next_write: std::sync::atomic::AtomicBool,
     #[cfg(test)]
+    fail_next_import_publish: std::sync::atomic::AtomicBool,
+    #[cfg(test)]
     legacy_cleanup_failures: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
@@ -61,6 +63,8 @@ impl MediaStore {
             upload_dirs: std::sync::Mutex::new(HashMap::new()),
             #[cfg(test)]
             fail_next_write: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            fail_next_import_publish: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
             legacy_cleanup_failures: std::sync::Mutex::new(std::collections::HashSet::new()),
         })
@@ -973,6 +977,13 @@ impl MediaStore {
 impl MediaStore {
     pub(crate) fn inject_next_write_failure(&self) {
         self.fail_next_write
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Make the next `publish_import` rename fail before it runs, so a
+    /// restore exercises its rollback path.
+    pub(crate) fn inject_next_import_publish_failure(&self) {
+        self.fail_next_import_publish
             .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
