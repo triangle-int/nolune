@@ -69,6 +69,35 @@ Use the approved lavender crescent path and small dark eyes. Keep the face minim
 
 On the landing, the moon can float, blink, glance, and change expression on activation. Keep motion gentle and avoid changing animation duration on hover (this shifts phase and visibly snaps). Supply pause for continuous decorative motion and honor `prefers-reduced-motion`. Essential UI must remain usable without animation. Do not hide the avatar in reduced-motion mode.
 
+## Companion state
+
+Little Moon reflects what Nolune is really doing, never a decorative mood. The state comes from the pure reducer in `client/src/lib/companion/state.js`, held by the scene store (`scene.companion`, `scene.companionStatus`) and fed by the root layout from websocket events only. Every state has an accessible sentence that names the related action, computer, request, or blocker, so it reads without motion; when several facts hold at once the highest row wins.
+
+| Priority | State | Derived from | Status text |
+| --- | --- | --- | --- |
+| 1 | Offline | Socket closed or not open yet | “Nolune is offline, reconnecting (attempt 3).” / “Nolune is connecting.” |
+| 2 | Blocked by permissions | A tool error reporting a permission or policy denial in this run | “Nolune is blocked by permissions: running command (operation not permitted).” |
+| 3 | Waiting for approval | An unanswered `secret_request` or approval | “Nolune is waiting for you: a GitHub token for gh.” |
+| 4 | Failed | `agent_stopped` with an error | “Nolune stopped with an error: the provider returned 500.” |
+| 5 | Working on another computer | A tool call that names another machine (from #80’s trail) | “Nolune is working on studio-mac: opening Finder.” |
+| 6 | Working locally | A tool call on this computer | “Nolune is working on this computer: reading notes/tea.md.” |
+| 7 | Recalling | `memory_recall` before the first action of the run | “Nolune is recalling 3 memories.” |
+| 8 | Thinking | `agent_running` with no recall or action yet, or a reply after the last action | “Nolune is thinking.” |
+| 9 | Listening | The server accepted your message; no run yet | “Nolune is listening.” |
+| 10 | Completed | `agent_stopped` without error, blocker, or open request | “Nolune finished.” |
+| 11 | Idle | Connected, nothing in progress | “Nolune is idle.” |
+
+Rules that keep animation honest:
+
+- Offline beats everything and keeps the facts underneath, so reconnecting restores the state the runtime is still in.
+- Blocked and waiting beat working. Both outlast `agent_stopped`: a blocked run or an open request is never shown as completed. A blocker clears when the next message or run starts; a request clears only when answered.
+- Completed is claimed only for a run the client saw start, once its last run stops without an error. It is the one transient state: the scene store returns it to idle after a short hold; the reducer itself has no timers.
+- Recalling never overrides working: once an action runs, later recalls only add to the count.
+- A message sent to a companion that is already working is heard without interrupting the work. One companion may run several chats; it is working while any run is active.
+- Pass the companion’s name to `companionStatusText` when it is known; the product name is the fallback.
+
+The `/design-system` page reduces one documented event sequence per state, so the gallery cannot drift from the reducer. Expressions and motion per state, and the desktop overlay port, follow in later slices of #86.
+
 ## Accessibility and responsive behavior
 
 Visible keyboard focus; semantic buttons/links; meaningful labels for icon-only controls; decorative SVGs hidden from assistive technology. Main controls have 44px targets. Do not disable browser zoom. Support 390px mobile widths without page overflow. Long commands can scroll inside their own container. Announce asynchronous errors and success without stealing focus.
