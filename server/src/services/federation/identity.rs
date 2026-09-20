@@ -372,7 +372,16 @@ fn decode_public_key(encoded: &str) -> Result<VerifyingKey, FederationError> {
     let bytes = decode_exact(encoded, PUBLIC_KEY_BYTES)
         .ok_or_else(|| FederationError::Malformed("public key is not 32 base64url bytes".into()))?;
     let array: [u8; PUBLIC_KEY_BYTES] = bytes.try_into().expect("length checked");
-    VerifyingKey::from_bytes(&array).map_err(|_| FederationError::InvalidPublicKey)
+    let key = VerifyingKey::from_bytes(&array).map_err(|_| FederationError::InvalidPublicKey)?;
+    // A small-order point is a valid encoding that no seed produces, and
+    // under lax verification it admits a signature valid for every message.
+    // `verify_strict` refuses such keys too; refusing them here keeps them
+    // out of every later check and reports them as a bad key, not a bad
+    // signature.
+    if key.is_weak() {
+        return Err(FederationError::InvalidPublicKey);
+    }
+    Ok(key)
 }
 
 fn decode_signature(encoded: &str) -> Result<Signature, FederationError> {
@@ -404,8 +413,11 @@ fn read_signing_key(path: &Path) -> Result<SigningKey, FederationError> {
         }
     }
     let raw = read_keystore_file(path)?;
-    let stored: StoredSigningKey = serde_json::from_slice(&raw)
-        .map_err(|error| FederationError::Malformed(format!("signing key file: {error}")))?;
+    // serde's message quotes the primitive it rejected, which for this file
+    // could be the seed; the shape is all a caller needs to know.
+    let stored: StoredSigningKey = serde_json::from_slice(&raw).map_err(|_| {
+        FederationError::Malformed("signing key file does not have the expected shape".into())
+    })?;
     if stored.version != SIGNING_KEY_FORMAT_VERSION || stored.algorithm != SIGNING_KEY_ALGORITHM {
         return Err(FederationError::Malformed(
             "signing key file has an unsupported version or algorithm".into(),

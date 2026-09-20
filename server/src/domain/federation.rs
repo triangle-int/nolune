@@ -85,9 +85,14 @@ pub enum FederationError {
         found: u32,
     },
     /// The shape or an encoding is wrong: unknown fields, missing fields,
-    /// padding, wrong lengths. Never carries the offending contents.
+    /// padding, wrong lengths. For the public shapes the message may quote
+    /// the parser's reason, including a rejected value, so a peer's broken
+    /// document can be debugged; for the signing key file it never carries
+    /// anything from the file.
     Malformed(String),
-    /// The public key bytes are not a valid Ed25519 point.
+    /// The public key bytes are not a valid Ed25519 point, or are a
+    /// small-order point that no seed produces and that would verify forged
+    /// signatures under lax verification.
     InvalidPublicKey,
     /// The signature does not verify over the canonical bytes: the content or
     /// the signature was altered.

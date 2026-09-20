@@ -163,9 +163,11 @@ The identity document, version 1:
 (`sha256("nolune/federation/companion-id/v1\0" || key)`), the signature covers
 the canonical bytes of the other four fields, and every binary field is
 base64url without padding. A document with another version, an id that is not
-derived from its key, unknown fields, or a signature that does not verify is
-rejected before anything trusts it, and a signing key file that other users can
-read is refused on load. Wire fixtures live in
+derived from its key, unknown fields, a public key that is not a curve point
+(or is a small-order point, which no seed produces), or a signature that does
+not verify strictly is rejected before anything trusts it, and a signing key
+file that other users can read is refused on load. Errors about the signing key
+file describe its shape and never quote its contents. Wire fixtures live in
 `server/tests/fixtures/federation/`; `generate.py` there rebuilds them with
 OpenSSL, independently of the server code.
 
