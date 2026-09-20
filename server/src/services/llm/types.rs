@@ -320,13 +320,14 @@ pub(crate) const OPENAI_BASE_URL: &str = "https://api.openai.com";
 
 #[derive(Clone)]
 pub struct LlmBackend {
-    pub profile: crate::config::ProviderProfile,
+    /// Id of the preset this backend was built from (#156), for receipts and logs.
+    pub preset: String,
     pub http: reqwest::Client,
     pub api_key: String,
     pub model: String,
     /// Base URL for the selected adapter.
     pub base_url: String,
-    /// Provider identity; unsupported legacy selections remain typed setup errors.
+    /// Provider identity, taken from the preset.
     pub provider: crate::config::LlmProvider,
 }
 

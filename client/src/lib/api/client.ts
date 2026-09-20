@@ -244,20 +244,76 @@ export interface EmbeddingStatus {
 export function fetchConfigStatus(): Promise<{
 	embedding?: EmbeddingStatus;
 	llm_configured: boolean;
-	provider?: string;
 	setup_required?: string | null;
 	model?: string | null;
-	model_mode?: string;
+	chat_preset?: string;
+	background_preset?: string;
 	configured_keys?: string[];
 }> {
 	return json("/api/config/status");
 }
 
-export function updateProvider(provider: 'anthropic' | 'openai'): Promise<{ status: string; provider: string }> {
-	return json("/api/config/provider", {
+/** A user-defined model choice (#156): provider plus model id, under a name. */
+export interface ModelPreset {
+	id: string;
+	name: string;
+	provider: "anthropic" | "openai";
+	model: string;
+}
+
+export interface ModelPresets {
+	presets: ModelPreset[];
+	/** Preset conversations use unless a chat pins its own. */
+	chat_preset: string;
+	/** Preset for memory extraction, titles, check-ins, and reflection. */
+	background_preset: string;
+	/** Providers that have an API key. */
+	keyed_providers: ("anthropic" | "openai")[];
+	setup_required: string | null;
+}
+
+export function fetchModelPresets(): Promise<ModelPresets> {
+	return json("/api/config/models");
+}
+
+/** Replace presets and both slots atomically; the server validates the whole shape. */
+export function updateModelPresets(payload: {
+	presets: ModelPreset[];
+	chat_preset: string;
+	background_preset: string;
+}): Promise<ModelPresets> {
+	return json("/api/config/models", {
 		method: "PUT",
 		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(payload),
+	});
+}
+
+/** Add a provider's default presets and fill empty slots. Safe to repeat. */
+export function seedModelPresets(provider: "anthropic" | "openai"): Promise<ModelPresets & { added: number }> {
+	return json("/api/config/models/seed", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ provider }),
+	});
+}
+
+export interface ChatPreset {
+	/** The preset this chat pins, or null when it follows the Chat slot. */
+	preset: string | null;
+	effective_preset: string;
+	default_preset: string;
+}
+
+export function fetchChatPreset(slug: string, chatId: string): Promise<ChatPreset> {
+	return json(`/api/chat/${encodeURIComponent(slug)}/${encodeURIComponent(chatId)}/preset`);
+}
+
+export function updateChatPreset(slug: string, chatId: string, preset: string | null): Promise<ChatPreset> {
+	return json(`/api/chat/${encodeURIComponent(slug)}/${encodeURIComponent(chatId)}/preset`, {
+		method: "PUT",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ preset }),
 	});
 }
 
@@ -270,14 +326,6 @@ export function updateServerConfig(updates: { host?: string; port?: number; auth
 		method: "PUT",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(updates),
-	});
-}
-
-export function updateModelMode(mode: string): Promise<{ status: string; model_mode: string }> {
-	return json("/api/config/model-mode", {
-		method: "PUT",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ mode }),
 	});
 }
 

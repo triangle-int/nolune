@@ -28,7 +28,10 @@ pub struct AppState {
     pub(crate) resources: crate::services::resource_access::ResourceAccess,
     pub workspace_dir: PathBuf,
     pub events: broadcast::Sender<ServerEvent>,
+    /// Backend for conversations that pin no preset: the Chat slot (#156).
     pub llm: Arc<RwLock<Option<LlmBackend>>>,
+    /// Backend for memory extraction, titles, check-ins, and reflection: the Background slot.
+    pub background_llm: Arc<RwLock<Option<LlmBackend>>>,
     /// Active agent tasks per instance slug — cancellation tokens.
     pub agent_tasks: Arc<Mutex<HashMap<String, CancellationToken>>>,
     /// Pending secret requests awaiting user input.
@@ -55,6 +58,7 @@ impl AppState {
     pub async fn new(config: Config) -> Self {
         let (events, _) = broadcast::channel(4096);
         let llm = LlmBackend::from_config(&config);
+        let background_llm = LlmBackend::background(&config);
 
         // Connect to configured MCP servers
         let mcp_connections = crate::services::mcp::connect_all(&config.mcp_servers).await;
@@ -82,6 +86,7 @@ impl AppState {
             workspace_dir: config::workspace_root(),
             events,
             llm: Arc::new(RwLock::new(llm)),
+            background_llm: Arc::new(RwLock::new(background_llm)),
             agent_tasks: Arc::new(Mutex::new(HashMap::new())),
             pending_secrets: Arc::new(Mutex::new(HashMap::new())),
             mcp_registry,
@@ -91,6 +96,18 @@ impl AppState {
             proactive,
             browser_sessions: Arc::new(BrowserSessionStore::new()),
         }
+    }
+
+    /// Rebuild both backends from the in-memory config (#156): the Chat slot
+    /// and the Background slot. Callers that changed config in memory use
+    /// this instead of `reload_config`, which diffs against disk.
+    pub async fn rebuild_llm(&self) {
+        let config = self.config.read().await;
+        let chat = LlmBackend::from_config(&config);
+        let background = LlmBackend::background(&config);
+        drop(config);
+        *self.llm.write().await = chat;
+        *self.background_llm.write().await = background;
     }
 
     /// Reload config from disk and rebuild LLM if credentials or model selection changed.
@@ -105,10 +122,10 @@ impl AppState {
 
         let (llm_changed, mcp_changed) = {
             let mut old = self.config.write().await;
-            let tokens = old.llm.tokens != new_config.llm.tokens;
-            let provider = old.llm.provider != new_config.llm.provider;
-            let models = old.llm.profiles != new_config.llm.profiles;
-            let llm = tokens || provider || models;
+            let llm = old.llm.tokens != new_config.llm.tokens
+                || old.llm.presets != new_config.llm.presets
+                || old.llm.chat_preset != new_config.llm.chat_preset
+                || old.llm.background_preset != new_config.llm.background_preset;
             let mcp = old.mcp_servers.len() != new_config.mcp_servers.len()
                 || old
                     .mcp_servers
@@ -123,12 +140,8 @@ impl AppState {
         };
 
         if llm_changed {
-            let new_llm = LlmBackend::from_config(&new_config);
-            *self.llm.write().await = new_llm;
-            log::info!(
-                "config reloaded: LLM rebuilt (provider={:?})",
-                new_config.llm.provider
-            );
+            self.rebuild_llm().await;
+            log::info!("config reloaded: LLM rebuilt");
         }
 
         if mcp_changed {

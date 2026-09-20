@@ -937,25 +937,23 @@ impl Tool for GetSettingsTool {
         // LLM
         if let Ok(raw) = fs::read_to_string(&self.config_path) {
             if let Ok(config) = toml::from_str::<crate::config::Config>(&raw) {
-                let mode = match config.llm.model_mode {
-                    crate::config::ModelMode::Auto => "auto",
-                    crate::config::ModelMode::Fast => "fast",
-                    crate::config::ModelMode::Heavy => "heavy",
-                };
                 if let Some(reason) = config.llm.setup_required() {
-                    lines.push(format!(
-                        "llm: {:?} — setup required: {reason}",
-                        config.llm.provider
-                    ));
+                    lines.push(format!("llm: setup required: {reason}"));
                 } else {
-                    lines.push(format!(
-                        "llm: {:?} / {} (mode: {mode})",
-                        config.llm.provider,
-                        config.llm.model_name()
-                    ));
-                }
-                if config.llm.provider != crate::config::LlmProvider::Codex {
-                    lines.push(format!("fast model: {}", config.llm.fast_model_name()));
+                    for (slot, preset) in [
+                        ("chat", config.llm.chat_preset()),
+                        ("background", config.llm.background_preset()),
+                    ] {
+                        match preset {
+                            Some(p) => lines.push(format!(
+                                "{slot} model: {} ({} / {})",
+                                p.name,
+                                p.provider.label(),
+                                p.model
+                            )),
+                            None => lines.push(format!("{slot} model: not set")),
+                        }
+                    }
                 }
 
                 let keys = config.llm.configured_providers();
@@ -1060,8 +1058,6 @@ pub struct UpdateConfigArgs {
     pub add_email_account: Option<EmailAccountArg>,
     /// Remove an email account by address (matches smtp_from or smtp_user).
     pub remove_email_account: Option<String>,
-    /// Model routing mode: "auto" (classifier picks fast/heavy per message), "fast" (always cheap model), "heavy" (always powerful model). Leave null to keep current.
-    pub model_mode: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -1110,21 +1106,6 @@ impl Tool for UpdateConfigTool {
             .map_err(|e| ToolExecError(format!("failed to parse config: {e}")))?;
 
         let mut changes = Vec::new();
-
-        if let Some(mode) = &args.model_mode {
-            let m = mode.trim().to_lowercase();
-            match m.as_str() {
-                "auto" => config.llm.model_mode = crate::config::ModelMode::Auto,
-                "fast" => config.llm.model_mode = crate::config::ModelMode::Fast,
-                "heavy" => config.llm.model_mode = crate::config::ModelMode::Heavy,
-                other => {
-                    return Err(ToolExecError(format!(
-                        "unknown model_mode \"{other}\". supported: auto, fast, heavy"
-                    )));
-                }
-            }
-            changes.push(format!("model_mode → {m}"));
-        }
 
         if let Some(key) = &args.openai_key {
             let k = key.trim().to_string();
@@ -1259,8 +1240,7 @@ impl Tool for UpdateConfigTool {
         }
 
         // Save global config if anything changed there
-        if args.model_mode.is_some()
-            || args.openai_key.is_some()
+        if args.openai_key.is_some()
             || args.anthropic_key.is_some()
             || args.brave_search_key.is_some()
         {

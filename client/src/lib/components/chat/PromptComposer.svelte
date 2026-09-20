@@ -8,14 +8,13 @@
  import PromptAttachButton from './PromptAttachButton.svelte';
  import type { Snippet } from 'svelte';
  import * as Select from '$lib/components/ui/select/index.js';
- const modelModes = [
-  { value: 'auto', label: 'Auto' },
-  { value: 'fast', label: 'Fast' },
-  { value: 'heavy', label: 'Heavy' },
- ];
- let { onSend, onStop, disabled = false, agentRunning = false, modelMode, onModelChange, footer, onFileAdd }:
- { onSend: (text: string, files?: File[]) => void | boolean | Promise<void | boolean>; onStop: () => void; disabled?: boolean; agentRunning?: boolean; modelMode?: string; onModelChange?: (mode: string) => void; footer?: Snippet; onFileAdd?: () => void } = $props();
+ /** A preset the picker can offer (#156): the user's own name for a model. */
+ type PresetOption = { id: string; name: string; model: string };
+ let { onSend, onStop, disabled = false, agentRunning = false, presets = [], presetId = null, onPresetChange, footer, onFileAdd }:
+ { onSend: (text: string, files?: File[]) => void | boolean | Promise<void | boolean>; onStop: () => void; disabled?: boolean; agentRunning?: boolean; presets?: PresetOption[]; presetId?: string | null; onPresetChange?: (id: string) => void; footer?: Snippet; onFileAdd?: () => void } = $props();
  const modelId = $props.id();
+ const presetItems = $derived(presets.map(p => ({ value: p.id, label: p.name })));
+ const currentPreset = $derived(presets.find(p => p.id === presetId));
  let value = $state('');
  let attachments = $state<PromptInputAttachment[]>([]);
  let submitting = $state(false);
@@ -45,16 +44,16 @@
   <PromptToolbar class="gap-2 px-2 pb-2">
    <div class="flex min-w-0 items-center gap-1">
     <PromptAttachButton disabled={busy || agentRunning} />
-    {#if modelMode && onModelChange}
-     <label class="sr-only" for={modelId}>Model mode</label>
-     <Select.Root type="single" items={modelModes} disabled={busy}
-      bind:value={() => modelMode ?? 'auto', next => onModelChange?.(next)}>
-      <Select.Trigger id={modelId} aria-label="Model mode" class="w-28 gap-3 border-border bg-card px-3 text-[13px] text-secondary-foreground shadow-none data-[size=default]:h-11 dark:bg-card dark:hover:bg-accent">
-       <span data-slot="select-value">{modelModes.find(mode => mode.value === modelMode)?.label ?? "Model mode"}</span>
+    {#if presets.length > 0 && onPresetChange}
+     <label class="sr-only" for={modelId}>Model preset for this conversation</label>
+     <Select.Root type="single" items={presetItems} disabled={busy}
+      bind:value={() => presetId ?? '', next => { if (next) onPresetChange?.(next); }}>
+      <Select.Trigger id={modelId} aria-label="Model preset for this conversation" title={currentPreset?.model} class="w-36 gap-3 border-border bg-card px-3 text-[13px] text-secondary-foreground shadow-none data-[size=default]:h-11 dark:bg-card dark:hover:bg-accent">
+       <span data-slot="select-value" class="truncate">{currentPreset?.name ?? "Model"}</span>
       </Select.Trigger>
-      <Select.Content side="top" align="start" sideOffset={8} class="min-w-40 border border-border p-1 shadow-lg">
-       {#each modelModes as mode (mode.value)}
-        <Select.Item value={mode.value} label={mode.label} class="min-h-11 pl-3 pr-9">{mode.label}</Select.Item>
+      <Select.Content side="top" align="start" sideOffset={8} class="min-w-48 border border-border p-1 shadow-lg">
+       {#each presets as preset (preset.id)}
+        <Select.Item value={preset.id} label={preset.name} class="min-h-11 pl-3 pr-9"><span class="flex flex-col"><span>{preset.name}</span><span class="text-[11px] text-muted-foreground">{preset.model}</span></span></Select.Item>
        {/each}
       </Select.Content>
      </Select.Root>

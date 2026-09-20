@@ -10,7 +10,7 @@
 		setCompanionName,
 		fetchConfigStatus,
 		updateLlmConfig,
-		updateProvider,
+		seedModelPresets,
 	} from "$lib/api/client.js";
 	import type { SoulTemplate } from "$lib/api/types.js";
 	import { getCompanion } from "$lib/stores/companion.svelte.js";
@@ -243,7 +243,7 @@
 		stage = "testing";
 
 		try {
-			await saveOnboardingProvider(selectedProvider, key, { updateLlmConfig, updateProvider });
+			await saveOnboardingProvider(selectedProvider, key, { updateLlmConfig, seedModelPresets });
 			apiKeyInput = "";
 			stage = "intro";
 			await pause(200);

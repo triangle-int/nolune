@@ -38,6 +38,10 @@ pub fn router() -> Router<AppState> {
         // Legacy routes (use default chat_id)
         .route("/api/chat/{instance_slug}/stop", post(stop_agent_default))
         .route(
+            "/api/chat/{instance_slug}/{chat_id}/preset",
+            get(get_chat_preset).put(update_chat_preset),
+        )
+        .route(
             "/api/chat/{instance_slug}/context",
             delete(clear_context_default),
         )
@@ -238,35 +242,6 @@ pub async fn run_agent_loop(
     const MAX_ITERATIONS: usize = 5;
     let mut iteration = 0;
 
-    // Classify model ONCE before the loop — the same model is used for all
-    // iterations of this request. Re-classifying mid-task would downgrade
-    // from heavy to fast in the middle of complex tool-use chains.
-    let classified_heavy: Option<bool> = {
-        let cfg = state.config.read().await;
-        let model_mode = cfg.llm.model_mode;
-        drop(cfg);
-        match model_mode {
-            config::ModelMode::Heavy => Some(true),
-            config::ModelMode::Fast => Some(false),
-            config::ModelMode::Auto => {
-                let llm_guard = state.llm.read().await;
-                if let Some(llm_ref) = llm_guard.as_ref() {
-                    let llm = llm_ref.clone();
-                    drop(llm_guard);
-                    let last_msg =
-                        chat::last_user_content(&state.workspace_dir, &instance_slug, &chat_id);
-                    if let Some(msg) = last_msg {
-                        Some(llm.classify_needs_heavy(&msg).await)
-                    } else {
-                        Some(true) // default to heavy if no message
-                    }
-                } else {
-                    None // no LLM configured
-                }
-            }
-        }
-    };
-
     loop {
         if cancel.is_cancelled() {
             log::info!("[agent] {instance_slug}/{chat_id} — cancelled by user");
@@ -281,38 +256,59 @@ pub async fn run_agent_loop(
         iteration += 1;
 
         let config_path = config::config_path();
-        let (fast_model_name, public_url) = {
+
+        // Resolve the model for this turn (#156): the chat's pinned preset,
+        // else the Chat slot. Background work always uses the Background slot.
+        let pinned = chat::get_chat_preset(&state.workspace_dir, &instance_slug, &chat_id)
+            .ok()
+            .flatten();
+        let (effective_llm, background_llm, public_url) = {
             let cfg = state.config.read().await;
+            let public_url = cfg.public_url.clone();
+            let pinned_llm = pinned.as_deref().and_then(|id| {
+                match crate::services::llm::LlmBackend::for_preset(
+                    &cfg,
+                    state.http_client.clone(),
+                    id,
+                ) {
+                    Ok(backend) => Some(backend),
+                    Err(error) => {
+                        log::warn!(
+                            "[agent] {instance_slug}/{chat_id} — pinned preset {id:?} unavailable ({error}); using the Chat slot"
+                        );
+                        None
+                    }
+                }
+            });
+            drop(cfg);
+            let effective = match pinned_llm {
+                Some(backend) => Some(backend),
+                None => state.llm.read().await.clone(),
+            };
             (
-                cfg.llm.fast_model_name().to_string(),
-                cfg.public_url.clone(),
+                effective,
+                state.background_llm.read().await.clone(),
+                public_url,
             )
         };
-
-        let llm_guard = state.llm.read().await;
-        let llm_ref = match llm_guard.as_ref() {
-            Some(l) => l.clone(),
-            None => {
-                log::warn!("[agent] {instance_slug}/{chat_id} — no LLM configured");
-                break;
-            }
+        let Some(effective_llm) = effective_llm else {
+            log::warn!("[agent] {instance_slug}/{chat_id} — no LLM configured");
+            break;
         };
-        drop(llm_guard);
+        if background_llm.is_none() {
+            log::warn!(
+                "[agent] {instance_slug}/{chat_id} — background preset unavailable; memory extraction is skipped this turn"
+            );
+        }
 
         // Timeout must exceed stream item timeout (480s) to allow long tools to complete.
         const TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 
-        // Use the model decided before the loop — consistent across all iterations.
-        let used_heavy = classified_heavy.unwrap_or(true);
         log::info!(
-            "[agent] {instance_slug}/{chat_id} — used_heavy={used_heavy}, base_model={}",
-            llm_ref.model
+            "[agent] {instance_slug}/{chat_id} — preset={} model={}",
+            effective_llm.preset,
+            effective_llm.model
         );
-        let effective_llm = if used_heavy {
-            llm_ref.clone()
-        } else {
-            llm_ref.fast_variant_with(Some(&fast_model_name))
-        };
 
         let turn_fut = chat::run_single_turn(
             &state.workspace_dir,
@@ -320,6 +316,7 @@ pub async fn run_agent_loop(
             &instance_slug,
             &chat_id,
             &effective_llm,
+            background_llm.as_ref(),
             state.events.clone(),
             state.pending_secrets.clone(),
             &state.mcp_registry,
@@ -418,7 +415,7 @@ pub async fn run_agent_loop(
             .unwrap_or(true);
 
         if needs_title && !response.messages.is_empty() {
-            let llm_guard = state.llm.read().await;
+            let llm_guard = state.background_llm.read().await;
             if let Some(llm) = llm_guard.as_ref() {
                 let snippet: String = response
                     .messages
@@ -494,6 +491,68 @@ fn send_snapshot(state: &AppState, instance_slug: &str, chat_id: &str, agent_run
 
 /// Check if the last message in the chat is from the user (meaning they sent something
 /// while the agent was processing and we should do another turn).
+#[derive(serde::Deserialize)]
+struct ChatPresetRequest {
+    /// Preset id to pin, or null to follow the Chat slot.
+    preset: Option<String>,
+}
+
+async fn chat_preset_json(
+    state: &AppState,
+    instance_slug: &str,
+    chat_id: &str,
+) -> Result<serde_json::Value, (StatusCode, String)> {
+    let pinned = chat::get_chat_preset(&state.workspace_dir, instance_slug, chat_id)
+        .map_err(map_chat_error)?;
+    let cfg = state.config.read().await;
+    let effective = pinned
+        .as_deref()
+        .filter(|id| cfg.llm.preset(id).is_some())
+        .map(str::to_owned)
+        .unwrap_or_else(|| cfg.llm.chat_preset.clone());
+    Ok(serde_json::json!({
+        "preset": pinned,
+        "effective_preset": effective,
+        "default_preset": cfg.llm.chat_preset,
+    }))
+}
+
+/// Per-conversation model preset (#156).
+async fn get_chat_preset(
+    State(state): State<AppState>,
+    Path((instance_slug, chat_id)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    Ok(Json(
+        chat_preset_json(&state, &instance_slug, &chat_id).await?,
+    ))
+}
+
+async fn update_chat_preset(
+    State(state): State<AppState>,
+    Path((instance_slug, chat_id)): Path<(String, String)>,
+    Json(request): Json<ChatPresetRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let preset = request
+        .preset
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    if let Some(id) = preset {
+        let cfg = state.config.read().await;
+        if cfg.llm.preset(id).is_none() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("unknown model preset {id:?}"),
+            ));
+        }
+    }
+    chat::set_chat_preset(&state.workspace_dir, &instance_slug, &chat_id, preset)
+        .map_err(map_chat_error)?;
+    Ok(Json(
+        chat_preset_json(&state, &instance_slug, &chat_id).await?,
+    ))
+}
+
 async fn has_pending_user_message(state: &AppState, instance_slug: &str, chat_id: &str) -> bool {
     match chat::load_messages(&state.workspace_dir, instance_slug, chat_id) {
         Ok(response) => response

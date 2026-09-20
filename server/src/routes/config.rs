@@ -4,7 +4,6 @@ use axum::{
     http::StatusCode,
     routing::{delete, get, post, put},
 };
-// Note: `put` still used by update_model_mode
 use serde::Deserialize;
 use serde_json::json;
 
@@ -15,14 +14,14 @@ use crate::{
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/config/model-mode", put(update_model_mode))
         .route("/api/config/status", get(get_status))
+        .route("/api/config/models", get(get_models).put(update_models))
+        .route("/api/config/models/seed", post(seed_models))
         .route(
             "/api/config/embedding",
             get(get_embedding).put(update_embedding),
         )
         .route("/api/config/llm", put(update_llm_key))
-        .route("/api/config/provider", put(update_provider))
         .route("/api/config/mcp", get(list_mcp_servers))
         .route("/api/config/mcp", post(add_mcp_server))
         .route("/api/config/mcp/suggested", get(suggested_mcp_servers))
@@ -36,11 +35,6 @@ pub fn router() -> Router<AppState> {
 
 async fn get_status(State(state): State<AppState>) -> Json<serde_json::Value> {
     let config = state.config.read().await;
-    let mode = match config.llm.model_mode {
-        config::ModelMode::Auto => "auto",
-        config::ModelMode::Fast => "fast",
-        config::ModelMode::Heavy => "heavy",
-    };
     // Which optional keys are configured
     let t = &config.llm.tokens;
     let keys: Vec<&str> = [
@@ -54,21 +48,17 @@ async fn get_status(State(state): State<AppState>) -> Json<serde_json::Value> {
     .map(|(name, _)| *name)
     .collect();
 
-    let provider = match config.llm.provider {
-        config::LlmProvider::Anthropic => "anthropic",
-        config::LlmProvider::Openai => "openai",
-        config::LlmProvider::Codex => "codex",
-    };
-
     Json(json!({
         "embedding": embedding_status(&state, &config),
         "llm_configured": config.llm.is_configured(),
-        "provider": provider,
         "setup_required": config.llm.setup_required(),
-        "capabilities": crate::services::llm::provider_capabilities(config.llm.provider),
-        "model": (config.llm.provider != config::LlmProvider::Codex).then(|| config.llm.model_name()),
-        "fast_model": (config.llm.provider != config::LlmProvider::Codex).then(|| config.llm.fast_model_name()),
-        "model_mode": mode,
+        "capabilities": config
+            .llm
+            .chat_preset()
+            .map(|preset| crate::services::llm::provider_capabilities(preset.provider)),
+        "chat_preset": config.llm.chat_preset,
+        "background_preset": config.llm.background_preset,
+        "model": config.llm.chat_model(),
         "configured_keys": keys,
         "host": config.host,
         "port": config.port,
@@ -113,33 +103,6 @@ async fn update_embedding(
 // ---------------------------------------------------------------------------
 // Model mode
 // ---------------------------------------------------------------------------
-
-#[derive(Deserialize)]
-struct UpdateModelModeRequest {
-    mode: String,
-}
-
-async fn update_model_mode(
-    State(state): State<AppState>,
-    Json(request): Json<UpdateModelModeRequest>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let mode = match request.mode.to_lowercase().as_str() {
-        "auto" => config::ModelMode::Auto,
-        "fast" => config::ModelMode::Fast,
-        "heavy" => config::ModelMode::Heavy,
-        other => return Err((StatusCode::BAD_REQUEST, format!("unknown mode: {other}"))),
-    };
-
-    {
-        let mut cfg = state.config.write().await;
-        cfg.llm.model_mode = mode;
-        save_config(&cfg)?;
-    }
-
-    Ok(Json(
-        json!({ "status": "ok", "model_mode": request.mode.to_lowercase() }),
-    ))
-}
 
 // ---------------------------------------------------------------------------
 // LLM API keys
@@ -220,11 +183,8 @@ async fn update_llm_key(
     // Can't use reload_config() — it compares disk vs in-memory, but we
     // already updated in-memory above, so it sees no diff.
     if !changes.is_empty() {
-        let cfg = state.config.read().await;
-        let new_llm = crate::services::llm::LlmBackend::from_config(&cfg);
-        drop(cfg);
-        *state.llm.write().await = new_llm;
-        log::info!("LLM backend rebuilt after API key change");
+        state.rebuild_llm().await;
+        log::info!("LLM backends rebuilt after API key change");
     }
 
     let cfg = state.config.read().await;
@@ -548,6 +508,95 @@ async fn update_server(
 }
 
 /// Write the current config back to disk.
+/// Model presets and slots (#156), plus which providers can back them.
+fn models_json(config: &config::Config) -> serde_json::Value {
+    json!({
+        "presets": config.llm.presets,
+        "chat_preset": config.llm.chat_preset,
+        "background_preset": config.llm.background_preset,
+        "keyed_providers": config.llm.keyed_providers(),
+        "setup_required": config.llm.setup_required(),
+    })
+}
+
+type ModelsError = (StatusCode, Json<serde_json::Value>);
+
+fn models_error(code: StatusCode, error: &str, message: String) -> ModelsError {
+    (code, Json(json!({ "error": error, "message": message })))
+}
+
+async fn get_models(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(models_json(&*state.config.read().await))
+}
+
+#[derive(Deserialize)]
+struct UpdateModelsRequest {
+    presets: Vec<config::ModelPreset>,
+    chat_preset: String,
+    background_preset: String,
+}
+
+/// Replace presets and both slots atomically; nothing is saved unless the
+/// whole shape validates.
+async fn update_models(
+    State(state): State<AppState>,
+    Json(request): Json<UpdateModelsRequest>,
+) -> Result<Json<serde_json::Value>, ModelsError> {
+    {
+        let mut cfg = state.config.write().await;
+        let mut next = cfg.llm.clone();
+        next.presets = request
+            .presets
+            .into_iter()
+            .map(|preset| config::ModelPreset {
+                id: preset.id.trim().to_owned(),
+                name: preset.name.trim().to_owned(),
+                provider: preset.provider,
+                model: preset.model.trim().to_owned(),
+            })
+            .collect();
+        next.chat_preset = request.chat_preset.trim().to_owned();
+        next.background_preset = request.background_preset.trim().to_owned();
+        next.validate_presets()
+            .map_err(|message| models_error(StatusCode::BAD_REQUEST, "invalid_presets", message))?;
+        cfg.llm = next;
+        save_config_at(&cfg, &state.workspace_dir.join("config.toml"))
+            .map_err(|(code, message)| models_error(code, "save_failed", message))?;
+    }
+    state.rebuild_llm().await;
+    Ok(Json(models_json(&*state.config.read().await)))
+}
+
+#[derive(Deserialize)]
+struct SeedModelsRequest {
+    provider: String,
+}
+
+/// Add a provider's default presets and fill empty slots. Idempotent.
+async fn seed_models(
+    State(state): State<AppState>,
+    Json(request): Json<SeedModelsRequest>,
+) -> Result<Json<serde_json::Value>, ModelsError> {
+    let Some(provider) = config::LlmProvider::parse(request.provider.trim()) else {
+        return Err(models_error(
+            StatusCode::BAD_REQUEST,
+            "unknown_provider",
+            format!("unknown provider: {}", request.provider),
+        ));
+    };
+    let added = {
+        let mut cfg = state.config.write().await;
+        let added = cfg.llm.seed_presets(provider);
+        save_config_at(&cfg, &state.workspace_dir.join("config.toml"))
+            .map_err(|(code, message)| models_error(code, "save_failed", message))?;
+        added
+    };
+    state.rebuild_llm().await;
+    let mut body = models_json(&*state.config.read().await);
+    body["added"] = json!(added);
+    Ok(Json(body))
+}
+
 fn save_config(config: &config::Config) -> Result<(), (StatusCode, String)> {
     save_config_at(config, &config::config_path())
 }
@@ -584,42 +633,6 @@ fn save_config_at(
 // ---------------------------------------------------------------------------
 // Provider switching
 // ---------------------------------------------------------------------------
-
-#[derive(Deserialize)]
-struct UpdateProviderRequest {
-    provider: String,
-}
-
-async fn update_provider(
-    State(state): State<AppState>,
-    Json(req): Json<UpdateProviderRequest>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let provider = match req.provider.as_str() {
-        "api" | "anthropic" => config::LlmProvider::Anthropic,
-        "openai" => config::LlmProvider::Openai,
-        other => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                format!("unknown provider: {other}"),
-            ));
-        }
-    };
-
-    {
-        let mut cfg = state.config.write().await;
-        cfg.llm.provider = provider;
-        save_config(&cfg)?;
-    }
-    // Force LLM rebuild (reload_config diff would be empty since we changed in-memory first)
-    {
-        let cfg = state.config.read().await;
-        let new_llm = crate::services::llm::LlmBackend::from_config(&cfg);
-        *state.llm.write().await = new_llm;
-        log::info!("LLM rebuilt (provider={:?})", provider);
-    }
-
-    Ok(Json(json!({ "status": "ok", "provider": provider })))
-}
 
 #[cfg(test)]
 mod embedding_status_tests {

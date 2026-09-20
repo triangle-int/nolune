@@ -629,6 +629,24 @@ async fn proactive_activity_api_lists_cancels_retries_and_exposes_policy() {
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "hours are validated");
 
+    // Quiet hours are judged against the wall clock, so clear them before
+    // starting runs; otherwise this test fails whenever CI runs at night.
+    let (status, _) = h
+        .send(
+            Method::PUT,
+            &api("proactive"),
+            Some(serde_json::json!({
+                "enabled": true,
+                "quiet_hours": null,
+                "cooldown_secs": 60,
+                "daily_reach_out_budget": 3,
+                "retention_max": 50,
+                "retention_days": 7
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
     // Records created by the loop are visible, bounded, and controllable.
     let Admission::Admitted(running) = h.state.proactive.begin(
         Trigger::Heartbeat {
@@ -714,6 +732,163 @@ async fn proactive_activity_api_lists_cancels_retries_and_exposes_policy() {
             .is_file()
     );
     let _ = RunOutcome::default();
+}
+
+#[tokio::test]
+async fn model_presets_api_validates_seeds_and_pins_per_chat() {
+    let h = harness().await;
+    companion::ensure_identity(h.workspace.path()).unwrap();
+    h.state.config.write().await.llm.tokens.anthropic = "anthropic-key".into();
+
+    // Defaults: the Anthropic seeds, both slots filled, only Anthropic keyed.
+    let (status, body) = h.json(Method::GET, "/api/config/models", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["chat_preset"], "sonnet");
+    assert_eq!(body["background_preset"], "haiku");
+    assert_eq!(body["keyed_providers"], serde_json::json!(["anthropic"]));
+    assert_eq!(body["presets"].as_array().unwrap().len(), 3);
+
+    // A slot pointing at a provider without a key is rejected as one unit.
+    let mut presets = body["presets"].clone();
+    presets.as_array_mut().unwrap().push(serde_json::json!({
+        "id": "gpt", "name": "GPT-5.4", "provider": "openai", "model": "gpt-5.4"
+    }));
+    let (status, body) = h
+        .json(
+            Method::PUT,
+            "/api/config/models",
+            Some(serde_json::json!({
+                "presets": presets,
+                "chat_preset": "gpt",
+                "background_preset": "haiku",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "invalid_presets");
+    assert!(
+        body["message"].as_str().unwrap().contains("OpenAI"),
+        "{body}"
+    );
+    assert_eq!(
+        h.state.config.read().await.llm.chat_preset,
+        "sonnet",
+        "a rejected update changes nothing"
+    );
+
+    // A valid update replaces presets and slots atomically and rebuilds backends.
+    let (status, body) = h
+        .json(
+            Method::PUT,
+            "/api/config/models",
+            Some(serde_json::json!({
+                "presets": [
+                    {"id": "opus", "name": "Claude Opus", "provider": "anthropic", "model": "claude-opus-4-6"},
+                    {"id": "haiku", "name": "Claude Haiku", "provider": "anthropic", "model": "claude-haiku-4-5-20251001"}
+                ],
+                "chat_preset": "opus",
+                "background_preset": "haiku",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["presets"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        h.state.llm.read().await.as_ref().unwrap().model,
+        "claude-opus-4-6"
+    );
+    assert_eq!(
+        h.state.background_llm.read().await.as_ref().unwrap().model,
+        "claude-haiku-4-5-20251001"
+    );
+    let persisted: crate::config::Config =
+        toml::from_str(&fs::read_to_string(h.workspace.path().join("config.toml")).unwrap())
+            .unwrap();
+    assert_eq!(persisted.llm.chat_preset, "opus");
+    assert_eq!(persisted.llm.presets.len(), 2);
+
+    // Seeding adds a provider's defaults without touching chosen slots.
+    let (status, body) = h
+        .json(
+            Method::POST,
+            "/api/config/models/seed",
+            Some(serde_json::json!({ "provider": "openai" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["added"], 2);
+    assert_eq!(body["chat_preset"], "opus");
+    let (status, body) = h
+        .json(
+            Method::POST,
+            "/api/config/models/seed",
+            Some(serde_json::json!({ "provider": "gemini" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "unknown_provider");
+
+    // Per-conversation pins: absent by default, validated, clearable.
+    let (status, body) = h
+        .json(Method::GET, "/api/chat/companion/thread-1/preset", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["preset"], serde_json::Value::Null);
+    assert_eq!(body["effective_preset"], "opus");
+    let (status, _) = h
+        .send(
+            Method::PUT,
+            "/api/chat/companion/thread-1/preset",
+            Some(serde_json::json!({ "preset": "nope" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, body) = h
+        .json(
+            Method::PUT,
+            "/api/chat/companion/thread-1/preset",
+            Some(serde_json::json!({ "preset": "haiku" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["preset"], "haiku");
+    assert_eq!(body["effective_preset"], "haiku");
+    assert_eq!(
+        crate::services::chat::get_chat_preset(h.workspace.path(), "companion", "thread-1")
+            .unwrap()
+            .as_deref(),
+        Some("haiku")
+    );
+    let (status, body) = h
+        .json(
+            Method::PUT,
+            "/api/chat/companion/thread-1/preset",
+            Some(serde_json::json!({ "preset": null })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["preset"], serde_json::Value::Null);
+    assert_eq!(body["effective_preset"], "opus");
+
+    // Foreign companions fail closed on every new route.
+    for (method, uri) in [
+        (Method::GET, "/api/chat/alice/thread-1/preset"),
+        (Method::PUT, "/api/chat/alice/thread-1/preset"),
+    ] {
+        let (status, body) = h
+            .json(method, uri, Some(serde_json::json!({ "preset": null })))
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{uri}: {body}");
+        assert_eq!(body["error"], "unknown_companion");
+    }
+    let (status, _) = h.send(Method::PUT, "/api/config/model-mode", None).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "model-mode route must be gone"
+    );
+    let (status, _) = h.send(Method::PUT, "/api/config/provider", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "provider route must be gone");
 }
 
 #[tokio::test]

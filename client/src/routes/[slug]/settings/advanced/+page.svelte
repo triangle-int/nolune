@@ -8,8 +8,6 @@
 		fetchChangelog,
 		getUpdateChannel,
 		setUpdateChannel,
-		fetchConfigStatus,
-		updateModelMode,
 		fetchVoiceId,
 		updateVoiceId,
 		fetchEmailAccounts,
@@ -113,26 +111,6 @@
 		try { await setUpdateChannel(next); channel = next; }
 		catch { getToasts().error("Could not change update channel."); }
 		finally { channelSaving = false; }
-	}
-
-	// --- model routing ---
-	let modelMode = $state("auto");
-	let modelModeSaving = $state(false);
-	$effect(() => {
-		fetchConfigStatus().then((s) => {
-			if (s.model_mode) modelMode = s.model_mode;
-		}).catch(() => {});
-	});
-	async function setModelMode(mode: string) {
-		modelModeSaving = true;
-		try {
-			await updateModelMode(mode);
-			modelMode = mode;
-		} catch {
-			// revert on failure
-		} finally {
-			modelModeSaving = false;
-		}
 	}
 
 	// --- voice id ---
@@ -402,32 +380,6 @@
 			{/if}
 		</div>
 	{/if}
-	</div>
-</section>
-
-<!-- Model routing -->
-<section class="settings-section">
-	<div class="section-header">
-		<div>
-			<h3 class="section-label">Model routing <span class="owner-badge">This server</span></h3>
-			<p class="section-desc">How the AI model is picked for each message. Auto is right for almost everyone.</p>
-		</div>
-	</div>
-	<div class="section-body">
-		<div class="model-mode-options" class:disabled={modelModeSaving}>
-			<button class="mode-option" class:mode-active={modelMode === "auto"} onclick={() => setModelMode("auto")} disabled={modelModeSaving}>
-				<span class="mode-name">Auto</span>
-				<span class="mode-desc">Smart routing — cheap for casual, powerful when needed</span>
-			</button>
-			<button class="mode-option" class:mode-active={modelMode === "fast"} onclick={() => setModelMode("fast")} disabled={modelModeSaving}>
-				<span class="mode-name">Fast</span>
-				<span class="mode-desc">Always use the lightweight model — saves budget</span>
-			</button>
-			<button class="mode-option" class:mode-active={modelMode === "heavy"} onclick={() => setModelMode("heavy")} disabled={modelModeSaving}>
-				<span class="mode-name">Heavy</span>
-				<span class="mode-desc">Always use the powerful model — uses 10x more budget</span>
-			</button>
-	</div>
 	</div>
 </section>
 

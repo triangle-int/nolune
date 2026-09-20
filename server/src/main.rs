@@ -146,7 +146,7 @@ async fn main() {
     {
         services::heartbeat::start(
             &state.workspace_dir,
-            state.llm.clone(),
+            state.background_llm.clone(),
             state.events.clone(),
             state.vector_store.clone(),
             state.resources.clone(),

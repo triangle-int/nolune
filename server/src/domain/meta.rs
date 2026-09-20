@@ -26,8 +26,10 @@ pub struct ServerMetaResponse {
 
 #[derive(Serialize)]
 pub struct LlmSummary {
-    pub provider: crate::config::LlmProvider,
-    pub setup_required: Option<&'static str>,
+    /// Id of the Chat slot preset (#156), when it resolves.
+    pub chat_preset: Option<String>,
+    pub provider: Option<crate::config::LlmProvider>,
+    pub setup_required: Option<String>,
     pub model: Option<String>,
     pub configured: bool,
 }

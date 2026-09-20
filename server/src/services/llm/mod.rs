@@ -31,13 +31,30 @@ use helpers::retry_on_rate_limit;
 pub(crate) use anthropic::messages_to_anthropic;
 use types::{ANTHROPIC_BASE_URL, OPENAI_BASE_URL};
 
-pub fn provider_capabilities(
-    provider: crate::config::LlmProvider,
-) -> Option<contract::Capabilities> {
+pub fn provider_capabilities(provider: crate::config::LlmProvider) -> contract::Capabilities {
     match provider {
-        crate::config::LlmProvider::Anthropic => Some(anthropic::CAPABILITIES),
-        crate::config::LlmProvider::Openai => Some(openai::CAPABILITIES),
-        crate::config::LlmProvider::Codex => None,
+        crate::config::LlmProvider::Anthropic => anthropic::CAPABILITIES,
+        crate::config::LlmProvider::Openai => openai::CAPABILITIES,
+    }
+}
+
+/// Why a preset cannot become a backend (#156).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PresetError {
+    /// No preset with that id exists.
+    Unknown(String),
+    /// The preset's provider has no API key.
+    MissingKey(crate::config::LlmProvider),
+}
+
+impl std::fmt::Display for PresetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PresetError::Unknown(id) => write!(f, "model preset {id:?} does not exist"),
+            PresetError::MissingKey(provider) => {
+                write!(f, "no {} API key is configured", provider.label())
+            }
+        }
     }
 }
 
@@ -48,123 +65,58 @@ impl LlmBackend {
                 Ok(Box::new(anthropic::AnthropicAdapter(self.clone())))
             }
             crate::config::LlmProvider::Openai => Ok(Box::new(openai::OpenaiAdapter(self.clone()))),
-            crate::config::LlmProvider::Codex => Err(LlmError::SetupRequired(
-                "Codex is not supported yet; select Anthropic or OpenAI".into(),
-            )),
         }
     }
 
+    /// Build the backend for one named preset, sharing the given HTTP client.
+    pub fn for_preset(
+        config: &Config,
+        http: reqwest::Client,
+        preset_id: &str,
+    ) -> Result<Self, PresetError> {
+        let preset = config
+            .llm
+            .preset(preset_id)
+            .ok_or_else(|| PresetError::Unknown(preset_id.to_owned()))?;
+        let api_key = config
+            .llm
+            .key_for(preset.provider)
+            .ok_or(PresetError::MissingKey(preset.provider))?
+            .to_owned();
+        Ok(Self {
+            preset: preset.id.clone(),
+            http,
+            api_key,
+            model: preset.model.clone(),
+            base_url: match preset.provider {
+                crate::config::LlmProvider::Anthropic => ANTHROPIC_BASE_URL.to_string(),
+                crate::config::LlmProvider::Openai => OPENAI_BASE_URL.to_string(),
+            },
+            provider: preset.provider,
+        })
+    }
+
+    /// The backend for conversations that pin no preset: the Chat slot.
     pub fn from_config(config: &Config) -> Option<Self> {
-        let http = reqwest::Client::new();
-        let model = config.llm.model_name().to_string();
-
-        match config.llm.provider {
-            crate::config::LlmProvider::Codex => {
-                log::warn!("{}", config.llm.setup_required().unwrap());
-                Some(Self {
-                    profile: config.llm.profile().clone(),
-                    http,
-                    api_key: String::new(),
-                    model: String::new(),
-                    base_url: String::new(),
-                    provider: crate::config::LlmProvider::Codex,
-                })
-            }
-            crate::config::LlmProvider::Anthropic => {
-                let api_key = config.llm.api_key()?.to_string();
-                Some(Self {
-                    profile: config.llm.profile().clone(),
-                    http,
-                    api_key,
-                    model,
-                    base_url: ANTHROPIC_BASE_URL.to_string(),
-                    provider: crate::config::LlmProvider::Anthropic,
-                })
-            }
-            crate::config::LlmProvider::Openai => {
-                let api_key = if config.llm.tokens.open_ai.is_empty() {
-                    return None;
-                } else {
-                    config.llm.tokens.open_ai.clone()
-                };
-                Some(Self {
-                    profile: config.llm.profile().clone(),
-                    http,
-                    api_key,
-                    model,
-                    base_url: OPENAI_BASE_URL.to_string(),
-                    provider: crate::config::LlmProvider::Openai,
-                })
-            }
-        }
+        Self::for_preset(config, reqwest::Client::new(), &config.llm.chat_preset)
+            .map_err(|error| log::warn!("[llm] chat preset unavailable: {error}"))
+            .ok()
     }
 
-    /// Create a variant using the fast model.
-    pub fn fast_variant_with(&self, override_model: Option<&str>) -> Self {
-        Self {
-            profile: self.profile.clone(),
-            http: self.http.clone(),
-            api_key: self.api_key.clone(),
-            model: override_model
-                .filter(|s| !s.is_empty())
-                .unwrap_or(&self.profile.fast)
-                .to_string(),
-            base_url: self.base_url.clone(),
-            provider: self.provider,
-        }
-    }
-
-    /// Create a variant using the cheapest model for background tasks.
-    pub fn cheap_variant(&self) -> Self {
-        Self {
-            profile: self.profile.clone(),
-            http: self.http.clone(),
-            api_key: self.api_key.clone(),
-            model: self.profile.cheap.clone(),
-            base_url: self.base_url.clone(),
-            provider: self.provider,
-        }
-    }
-
-    /// Create a variant using the heavy model for deep reflection.
-    pub fn heavy_variant(&self) -> Self {
-        Self {
-            profile: self.profile.clone(),
-            http: self.http.clone(),
-            api_key: self.api_key.clone(),
-            model: self.profile.heavy.clone(),
-            base_url: self.base_url.clone(),
-            provider: self.provider,
-        }
+    /// The backend for memory extraction, titles, check-ins, and reflection:
+    /// the Background slot. Never the chat preset by accident.
+    pub fn background(config: &Config) -> Option<Self> {
+        Self::for_preset(
+            config,
+            reqwest::Client::new(),
+            &config.llm.background_preset,
+        )
+        .map_err(|error| log::warn!("[llm] background preset unavailable: {error}"))
+        .ok()
     }
 
     pub fn model_name(&self) -> &str {
         &self.model
-    }
-
-    /// Classify whether a user message needs the heavy model.
-    pub async fn classify_needs_heavy(&self, user_message: &str) -> bool {
-        let classifier = self.cheap_variant();
-        let system = "Classify this message. Respond with exactly one word.\n\
-            Say \"heavy\" if it needs: complex reasoning, code, analysis, creative writing, research, multi-step tasks, tool use.\n\
-            Say \"fast\" if it's: casual chat, greeting, short reply, simple question, emotional support, acknowledgment.";
-
-        match classifier.chat(system, user_message, vec![]).await {
-            Ok((response, _)) => {
-                let word = response.trim().to_lowercase();
-                let heavy = word.contains("heavy");
-                log::info!(
-                    "model router: classified as {} for: {}",
-                    if heavy { "heavy" } else { "fast" },
-                    &user_message.chars().take(80).collect::<String>()
-                );
-                heavy
-            }
-            Err(e) => {
-                log::warn!("model router: classifier failed, defaulting to heavy: {e}");
-                true
-            }
-        }
     }
 
     /// Simple chat without tools. Returns (text, tokens_used).
@@ -385,44 +337,47 @@ mod tests {
 
     // ── Model selection per provider ─────────────────────────────────────
 
-    #[test]
-    fn anthropic_provider_uses_claude_models() {
-        let p = LlmProvider::Anthropic;
-        assert!(profile(p).heavy.starts_with("claude-"), "heavy");
-        assert!(profile(p).fast.starts_with("claude-"), "fast");
-        assert!(profile(p).cheap.starts_with("claude-"), "cheap");
-    }
-
-    #[test]
-    fn openai_provider_uses_gpt_models() {
-        let p = LlmProvider::Openai;
-        assert!(profile(p).heavy.starts_with("gpt-"), "heavy");
-        assert!(profile(p).fast.starts_with("gpt-"), "fast");
-        assert!(profile(p).cheap.starts_with("gpt-"), "cheap");
-    }
-
     // ── Backend construction ─────────────────────────────────────────────
 
-    fn profile(provider: LlmProvider) -> crate::config::ProviderProfile {
-        let profiles = crate::config::ProviderProfiles::default();
-        match provider {
-            LlmProvider::Openai => profiles.openai,
-            _ => profiles.anthropic,
-        }
+    /// Model id of a seeded preset, by the tier name the old profiles used.
+    fn seed(provider: LlmProvider, tier: &str) -> String {
+        let id = match (provider, tier) {
+            (LlmProvider::Anthropic, "heavy") => "opus",
+            (LlmProvider::Anthropic, "fast") => "sonnet",
+            (LlmProvider::Anthropic, _) => "haiku",
+            (LlmProvider::Openai, "cheap") => "gpt-mini",
+            (LlmProvider::Openai, _) => "gpt",
+        };
+        crate::config::default_presets(provider)
+            .into_iter()
+            .find(|preset| preset.id == id)
+            .unwrap()
+            .model
+    }
+
+    fn keyed_config(provider: LlmProvider) -> Config {
+        let mut config = Config::default();
+        config.llm.seed_presets(provider);
+        config.llm.tokens.anthropic = "test-key".into();
+        config.llm.tokens.open_ai = "test-key".into();
+        config
     }
 
     fn make_backend(provider: LlmProvider) -> LlmBackend {
-        LlmBackend {
-            profile: profile(provider),
-            http: reqwest::Client::new(),
-            api_key: "test-key".to_string(),
-            model: profile(provider).heavy.to_string(),
-            base_url: match provider {
-                LlmProvider::Anthropic => ANTHROPIC_BASE_URL.to_string(),
-                LlmProvider::Openai => OPENAI_BASE_URL.to_string(),
-                LlmProvider::Codex => unreachable!(),
-            },
-            provider,
+        let id = match provider {
+            LlmProvider::Anthropic => "sonnet",
+            LlmProvider::Openai => "gpt",
+        };
+        LlmBackend::for_preset(&keyed_config(provider), reqwest::Client::new(), id).unwrap()
+    }
+
+    #[test]
+    fn seeded_presets_name_real_models_per_provider() {
+        for preset in crate::config::default_presets(LlmProvider::Anthropic) {
+            assert!(preset.model.starts_with("claude-"), "{preset:?}");
+        }
+        for preset in crate::config::default_presets(LlmProvider::Openai) {
+            assert!(preset.model.starts_with("gpt-"), "{preset:?}");
         }
     }
 
@@ -431,6 +386,7 @@ mod tests {
         let b = make_backend(LlmProvider::Anthropic);
         assert_eq!(b.base_url, "https://api.anthropic.com");
         assert!(b.model.starts_with("claude-"));
+        assert_eq!(b.preset, "sonnet");
     }
 
     #[test]
@@ -440,48 +396,45 @@ mod tests {
         assert!(b.model.starts_with("gpt-"));
     }
 
-    // ── Backend variants ─────────────────────────────────────────────────
+    // ── Presets (#156) ───────────────────────────────────────────────────
 
     #[test]
-    fn fast_variant_uses_fast_model() {
-        for provider in [LlmProvider::Anthropic, LlmProvider::Openai] {
-            let b = make_backend(provider);
-            let fast = b.fast_variant_with(None);
-            assert_eq!(fast.model, profile(provider).fast, "{provider:?}");
-            assert_eq!(fast.base_url, b.base_url, "{provider:?} base_url preserved");
-        }
+    fn for_preset_reports_unknown_ids_and_missing_keys() {
+        let mut config = keyed_config(LlmProvider::Anthropic);
+        config.llm.seed_presets(LlmProvider::Openai);
+        config.llm.tokens.open_ai.clear();
+        let http = reqwest::Client::new();
+        assert_eq!(
+            LlmBackend::for_preset(&config, http.clone(), "nope").err(),
+            Some(PresetError::Unknown("nope".into()))
+        );
+        assert_eq!(
+            LlmBackend::for_preset(&config, http.clone(), "gpt").err(),
+            Some(PresetError::MissingKey(LlmProvider::Openai))
+        );
+        let opus = LlmBackend::for_preset(&config, http, "opus").unwrap();
+        assert_eq!(opus.model, "claude-opus-4-6");
+        assert_eq!(opus.provider, LlmProvider::Anthropic);
+        assert_eq!(opus.api_key, "test-key");
     }
 
     #[test]
-    fn fast_variant_with_override() {
-        let b = make_backend(LlmProvider::Openai);
-        let fast = b.fast_variant_with(Some("gpt-4o-mini"));
-        assert_eq!(fast.model, "gpt-4o-mini");
-    }
+    fn chat_and_background_builders_follow_their_slots_independently() {
+        let mut config = keyed_config(LlmProvider::Anthropic);
+        config.llm.seed_presets(LlmProvider::Openai);
+        config.llm.chat_preset = "gpt".into();
+        config.llm.background_preset = "haiku".into();
+        let chat = LlmBackend::from_config(&config).unwrap();
+        assert_eq!(chat.provider, LlmProvider::Openai);
+        assert_eq!(chat.model, "gpt-5.4");
+        let background = LlmBackend::background(&config).unwrap();
+        assert_eq!(background.provider, LlmProvider::Anthropic);
+        assert_eq!(background.model, "claude-haiku-4-5-20251001");
 
-    #[test]
-    fn fast_variant_ignores_empty_override() {
-        let b = make_backend(LlmProvider::Openai);
-        let fast = b.fast_variant_with(Some(""));
-        assert_eq!(fast.model, profile(LlmProvider::Openai).fast);
-    }
-
-    #[test]
-    fn cheap_variant_uses_cheap_model() {
-        for provider in [LlmProvider::Anthropic, LlmProvider::Openai] {
-            let b = make_backend(provider);
-            let cheap = b.cheap_variant();
-            assert_eq!(cheap.model, profile(provider).cheap, "{provider:?}");
-        }
-    }
-
-    #[test]
-    fn heavy_variant_uses_heavy_model() {
-        for provider in [LlmProvider::Anthropic, LlmProvider::Openai] {
-            let b = make_backend(provider);
-            let heavy = b.heavy_variant();
-            assert_eq!(heavy.model, profile(provider).heavy, "{provider:?}");
-        }
+        // A dangling background slot yields no backend rather than the chat one.
+        config.llm.background_preset = "gone".into();
+        assert!(LlmBackend::background(&config).is_none());
+        assert!(LlmBackend::from_config(&config).is_some());
     }
 
     // ── OpenAI Responses API message conversion ────────────────────────
@@ -759,8 +712,8 @@ mod tests {
     #[test]
     fn all_providers_have_distinct_model_tiers() {
         for provider in [LlmProvider::Anthropic, LlmProvider::Openai] {
-            let heavy = profile(provider).heavy;
-            let cheap = profile(provider).cheap;
+            let heavy = seed(provider, "heavy");
+            let cheap = seed(provider, "cheap");
             assert_ne!(heavy, cheap, "{provider:?}: heavy and cheap should differ");
         }
     }
@@ -894,7 +847,7 @@ mod tests {
             .ok()
             .filter(|k| !k.is_empty())?;
         Some(LlmBackend {
-            profile: profile(LlmProvider::Anthropic),
+            preset: "network".into(),
             http: reqwest::Client::new(),
             api_key: key,
             model: model.to_string(),
@@ -908,7 +861,7 @@ mod tests {
             .ok()
             .filter(|k| !k.is_empty())?;
         Some(LlmBackend {
-            profile: profile(LlmProvider::Openai),
+            preset: "network".into(),
             http: reqwest::Client::new(),
             api_key: key,
             model: model.to_string(),
@@ -922,7 +875,7 @@ mod tests {
     #[tokio::test]
     #[ignore] // requires ANTHROPIC_API_KEY
     async fn network_anthropic_haiku_chat() {
-        let Some(b) = anthropic_backend(&profile(LlmProvider::Anthropic).cheap) else {
+        let Some(b) = anthropic_backend(&seed(LlmProvider::Anthropic, "cheap")) else {
             eprintln!("SKIP: ANTHROPIC_API_KEY not set");
             return;
         };
@@ -937,7 +890,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn network_anthropic_sonnet_chat() {
-        let Some(b) = anthropic_backend(&profile(LlmProvider::Anthropic).fast) else {
+        let Some(b) = anthropic_backend(&seed(LlmProvider::Anthropic, "fast")) else {
             eprintln!("SKIP: ANTHROPIC_API_KEY not set");
             return;
         };
@@ -952,7 +905,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn network_anthropic_chat_with_history() {
-        let Some(b) = anthropic_backend(&profile(LlmProvider::Anthropic).cheap) else {
+        let Some(b) = anthropic_backend(&seed(LlmProvider::Anthropic, "cheap")) else {
             eprintln!("SKIP: ANTHROPIC_API_KEY not set");
             return;
         };
@@ -978,7 +931,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn network_anthropic_json_output() {
-        let Some(b) = anthropic_backend(&profile(LlmProvider::Anthropic).cheap) else {
+        let Some(b) = anthropic_backend(&seed(LlmProvider::Anthropic, "cheap")) else {
             eprintln!("SKIP: ANTHROPIC_API_KEY not set");
             return;
         };
@@ -1007,7 +960,7 @@ mod tests {
     #[tokio::test]
     #[ignore] // requires OPENAI_API_KEY
     async fn network_openai_mini_chat() {
-        let Some(b) = openai_backend(&profile(LlmProvider::Openai).cheap) else {
+        let Some(b) = openai_backend(&seed(LlmProvider::Openai, "cheap")) else {
             eprintln!("SKIP: OPENAI_API_KEY not set");
             return;
         };
@@ -1022,7 +975,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn network_openai_heavy_chat() {
-        let Some(b) = openai_backend(&profile(LlmProvider::Openai).heavy) else {
+        let Some(b) = openai_backend(&seed(LlmProvider::Openai, "heavy")) else {
             eprintln!("SKIP: OPENAI_API_KEY not set");
             return;
         };
@@ -1037,7 +990,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn network_openai_chat_with_history() {
-        let Some(b) = openai_backend(&profile(LlmProvider::Openai).cheap) else {
+        let Some(b) = openai_backend(&seed(LlmProvider::Openai, "cheap")) else {
             eprintln!("SKIP: OPENAI_API_KEY not set");
             return;
         };
@@ -1063,7 +1016,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn network_openai_json_output() {
-        let Some(b) = openai_backend(&profile(LlmProvider::Openai).cheap) else {
+        let Some(b) = openai_backend(&seed(LlmProvider::Openai, "cheap")) else {
             eprintln!("SKIP: OPENAI_API_KEY not set");
             return;
         };
@@ -1091,7 +1044,7 @@ mod tests {
     #[ignore]
     async fn network_openai_max_completion_tokens_accepted() {
         // Regression test: gpt-5.x rejects max_tokens, requires max_completion_tokens
-        let Some(b) = openai_backend(&profile(LlmProvider::Openai).heavy) else {
+        let Some(b) = openai_backend(&seed(LlmProvider::Openai, "heavy")) else {
             eprintln!("SKIP: OPENAI_API_KEY not set");
             return;
         };
@@ -1108,8 +1061,8 @@ mod tests {
     #[tokio::test]
     #[ignore] // requires both ANTHROPIC_API_KEY and OPENAI_API_KEY
     async fn network_cross_provider_same_prompt() {
-        let anthropic = anthropic_backend(&profile(LlmProvider::Anthropic).cheap);
-        let openai = openai_backend(&profile(LlmProvider::Openai).cheap);
+        let anthropic = anthropic_backend(&seed(LlmProvider::Anthropic, "cheap"));
+        let openai = openai_backend(&seed(LlmProvider::Openai, "cheap"));
         if anthropic.is_none() || openai.is_none() {
             eprintln!("SKIP: need both ANTHROPIC_API_KEY and OPENAI_API_KEY");
             return;

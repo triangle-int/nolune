@@ -60,9 +60,10 @@ mod provider_error_tests {
 
     #[tokio::test]
     async fn setup_error_has_typed_http_body() {
-        let error = ProviderRequestError::Setup(
-            crate::services::llm::contract::LlmError::SetupRequired("Codex is unsupported".into()),
-        );
+        let error =
+            ProviderRequestError::Setup(crate::services::llm::contract::LlmError::SetupRequired(
+                "Choose a model preset for chat.".into(),
+            ));
         let response = error.into_response();
         assert_eq!(
             response.status(),
@@ -73,7 +74,7 @@ mod provider_error_tests {
             .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(body["error"], "setup_required");
-        assert!(body["message"].as_str().unwrap().contains("Codex"));
+        assert!(body["message"].as_str().unwrap().contains("preset"));
     }
 }
 

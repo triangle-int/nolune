@@ -353,67 +353,54 @@ impl McpServerConfig {
     }
 }
 
-/// Model names belong to configuration, not provider identity.
+/// A user-defined model choice (#156): which provider and model to call.
+/// Presets replace the retired cheap/fast/heavy tiers. Users name them, and
+/// the two slots on [`LlmConfig`] say which preset does which job.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct ProviderProfile {
-    pub heavy: String,
-    pub fast: String,
-    pub cheap: String,
+pub struct ModelPreset {
+    pub id: String,
+    pub name: String,
+    pub provider: LlmProvider,
+    pub model: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(default)]
-pub struct ProviderProfiles {
-    #[serde(deserialize_with = "anthropic_profile")]
-    pub anthropic: ProviderProfile,
-    #[serde(deserialize_with = "openai_profile")]
-    pub openai: ProviderProfile,
-}
-
-#[derive(Deserialize, Default)]
-#[serde(default)]
-struct PartialProfile {
-    heavy: Option<String>,
-    fast: Option<String>,
-    cheap: Option<String>,
-}
-fn read_profile<'de, D: serde::Deserializer<'de>>(
-    d: D,
-    mut base: ProviderProfile,
-) -> Result<ProviderProfile, D::Error> {
-    let p = PartialProfile::deserialize(d)?;
-    if let Some(v) = p.heavy.filter(|s| !s.is_empty()) {
-        base.heavy = v;
-    }
-    if let Some(v) = p.fast.filter(|s| !s.is_empty()) {
-        base.fast = v;
-    }
-    if let Some(v) = p.cheap.filter(|s| !s.is_empty()) {
-        base.cheap = v;
-    }
-    Ok(base)
-}
-fn anthropic_profile<'de, D: serde::Deserializer<'de>>(d: D) -> Result<ProviderProfile, D::Error> {
-    read_profile(d, ProviderProfiles::default().anthropic)
-}
-fn openai_profile<'de, D: serde::Deserializer<'de>>(d: D) -> Result<ProviderProfile, D::Error> {
-    read_profile(d, ProviderProfiles::default().openai)
-}
-
-impl Default for ProviderProfiles {
-    fn default() -> Self {
+impl ModelPreset {
+    fn seeded(id: &str, name: &str, provider: LlmProvider, model: &str) -> Self {
         Self {
-            anthropic: ProviderProfile {
-                heavy: "claude-opus-4-6".into(),
-                fast: "claude-sonnet-4-6".into(),
-                cheap: "claude-haiku-4-5-20251001".into(),
-            },
-            openai: ProviderProfile {
-                heavy: "gpt-5.4".into(),
-                fast: "gpt-5.4".into(),
-                cheap: "gpt-5.4-mini".into(),
-            },
+            id: id.into(),
+            name: name.into(),
+            provider,
+            model: model.into(),
         }
+    }
+}
+
+/// Presets seeded when a provider is first set up. Users can rename, edit,
+/// or delete them like any other preset.
+pub fn default_presets(provider: LlmProvider) -> Vec<ModelPreset> {
+    match provider {
+        LlmProvider::Anthropic => vec![
+            ModelPreset::seeded("sonnet", "Claude Sonnet", provider, "claude-sonnet-4-6"),
+            ModelPreset::seeded("opus", "Claude Opus", provider, "claude-opus-4-6"),
+            ModelPreset::seeded(
+                "haiku",
+                "Claude Haiku",
+                provider,
+                "claude-haiku-4-5-20251001",
+            ),
+        ],
+        LlmProvider::Openai => vec![
+            ModelPreset::seeded("gpt", "GPT-5.4", provider, "gpt-5.4"),
+            ModelPreset::seeded("gpt-mini", "GPT-5.4 mini", provider, "gpt-5.4-mini"),
+        ],
+    }
+}
+
+/// Which seeded preset fills each slot for a provider: `(chat, background)`.
+fn default_slots(provider: LlmProvider) -> (&'static str, &'static str) {
+    match provider {
+        LlmProvider::Anthropic => ("sonnet", "haiku"),
+        LlmProvider::Openai => ("gpt", "gpt-mini"),
     }
 }
 
@@ -424,23 +411,31 @@ pub enum LlmProvider {
     Anthropic,
     /// OpenAI API (requires API key). Format: OpenAI Responses.
     Openai,
-    /// Legacy selection retained for setup; no Codex adapter is implemented.
-    Codex,
+}
+
+impl LlmProvider {
+    pub fn label(self) -> &'static str {
+        match self {
+            LlmProvider::Anthropic => "Anthropic",
+            LlmProvider::Openai => "OpenAI",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "api" | "anthropic" | "claude_cli" | "cli" => Some(Self::Anthropic),
+            "openai" => Some(Self::Openai),
+            _ => None,
+        }
+    }
 }
 
 // Read legacy names, but always serialize the canonical provider name.
 impl<'de> serde::Deserialize<'de> for LlmProvider {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
-        match s.as_str() {
-            "api" | "anthropic" | "claude_cli" | "cli" => Ok(Self::Anthropic),
-            "openai" => Ok(Self::Openai),
-            "codex" => Ok(Self::Codex),
-            other => Err(serde::de::Error::unknown_variant(
-                other,
-                &["anthropic", "openai", "codex"],
-            )),
-        }
+        Self::parse(&s)
+            .ok_or_else(|| serde::de::Error::unknown_variant(&s, &["anthropic", "openai"]))
     }
 }
 
@@ -450,77 +445,58 @@ impl Default for LlmProvider {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ModelMode {
-    Auto,
-    Fast,
-    Heavy,
-}
-
-impl Default for ModelMode {
-    fn default() -> Self {
-        ModelMode::Auto
-    }
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(from = "LegacyLlmConfig")]
+#[serde(from = "RawLlmConfig")]
 pub struct LlmConfig {
     #[serde(default)]
-    pub provider: LlmProvider,
-    #[serde(default)]
     pub tokens: LlmTokens,
+    /// User-defined model presets (#156), `[[llm.presets]]` in config.toml.
     #[serde(default)]
-    pub model_mode: ModelMode,
+    pub presets: Vec<ModelPreset>,
+    /// Preset id for conversations, unless a chat pins its own.
     #[serde(default)]
-    pub profiles: ProviderProfiles,
+    pub chat_preset: String,
+    /// Preset id for memory extraction, chat titles, check-ins, and reflection.
+    #[serde(default)]
+    pub background_preset: String,
     #[serde(flatten)]
     pub extra: std::collections::BTreeMap<String, toml::Value>,
 }
+
+/// `[llm]` keys from the tiered-model era. Dropped on load and on save.
+pub const RETIRED_LLM_KEYS: &[&str] = &[
+    "provider",
+    "model_mode",
+    "profiles",
+    "model",
+    "heavy_multiplier",
+];
 
 #[derive(Deserialize)]
-struct LegacyLlmConfig {
+struct RawLlmConfig {
     #[serde(default)]
-    pub provider: LlmProvider,
+    tokens: LlmTokens,
     #[serde(default)]
-    pub tokens: LlmTokens,
+    presets: Vec<ModelPreset>,
     #[serde(default)]
-    pub model_mode: ModelMode,
+    chat_preset: String,
     #[serde(default)]
-    pub profiles: ProviderProfiles,
-    /// Preserve legacy model overrides (including the old example config).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
+    background_preset: String,
     #[serde(flatten)]
-    pub extra: std::collections::BTreeMap<String, toml::Value>,
+    extra: std::collections::BTreeMap<String, toml::Value>,
 }
 
-impl From<LegacyLlmConfig> for LlmConfig {
-    fn from(mut old: LegacyLlmConfig) -> Self {
-        old.extra.remove("heavy_multiplier");
-        if let Some(model) = old.model.take().filter(|s| !s.is_empty()) {
-            // Claude overrides originate from Anthropic even if the provider was
-            // subsequently switched in an old config. Unknown names use that
-            // config's selected provider as their origin.
-            let profile = if model.starts_with("claude-")
-                || (old.provider != LlmProvider::Openai
-                    && !["gpt-", "chatgpt-", "o1", "o3", "o4"]
-                        .iter()
-                        .any(|prefix| model.starts_with(prefix)))
-            {
-                &mut old.profiles.anthropic
-            } else {
-                &mut old.profiles.openai
-            };
-            profile.heavy = model;
+impl From<RawLlmConfig> for LlmConfig {
+    fn from(mut raw: RawLlmConfig) -> Self {
+        for key in RETIRED_LLM_KEYS {
+            raw.extra.remove(*key);
         }
         Self {
-            provider: old.provider,
-            tokens: old.tokens,
-            model_mode: old.model_mode,
-            profiles: old.profiles,
-            extra: old.extra,
+            tokens: raw.tokens,
+            presets: raw.presets,
+            chat_preset: raw.chat_preset,
+            background_preset: raw.background_preset,
+            extra: raw.extra,
         }
     }
 }
@@ -584,60 +560,141 @@ impl Default for Config {
 }
 
 impl LlmConfig {
-    pub fn profile(&self) -> &ProviderProfile {
-        match self.provider {
-            LlmProvider::Openai => &self.profiles.openai,
-            // Unconfigured legacy selections cannot construct a backend.
-            _ => &self.profiles.anthropic,
-        }
+    pub fn preset(&self, id: &str) -> Option<&ModelPreset> {
+        self.presets.iter().find(|preset| preset.id == id)
     }
 
-    pub fn setup_required(&self) -> Option<&'static str> {
-        if self.provider == LlmProvider::Codex {
-            Some(
-                "Codex requires setup and is not supported yet. Select Anthropic or OpenAI and configure its API key.",
-            )
-        } else if !self.is_configured() {
-            Some("Configure an API key for the selected provider.")
-        } else {
-            None
-        }
+    /// The preset conversations use unless a chat pins its own.
+    pub fn chat_preset(&self) -> Option<&ModelPreset> {
+        self.preset(&self.chat_preset)
     }
 
-    /// The heavy model for the current provider.
-    pub fn model_name(&self) -> &str {
-        if self.provider == LlmProvider::Codex {
-            ""
-        } else {
-            &self.profile().heavy
-        }
+    /// The preset for everything the companion does off-screen. It never
+    /// falls back to the chat preset: pointing both slots at one preset is
+    /// the user's explicit choice, not a default.
+    pub fn background_preset(&self) -> Option<&ModelPreset> {
+        self.preset(&self.background_preset)
     }
 
-    /// The fast model for the current provider.
-    pub fn fast_model_name(&self) -> &str {
-        if self.provider == LlmProvider::Codex {
-            ""
-        } else {
-            &self.profile().fast
+    /// The API key for a provider, or None when it is not configured.
+    pub fn key_for(&self, provider: LlmProvider) -> Option<&str> {
+        let key = match provider {
+            LlmProvider::Anthropic => &self.tokens.anthropic,
+            LlmProvider::Openai => &self.tokens.open_ai,
+        };
+        (!key.is_empty()).then_some(key.as_str())
+    }
+
+    pub fn has_key(&self, provider: LlmProvider) -> bool {
+        self.key_for(provider).is_some()
+    }
+
+    /// Providers that have an API key, in preset-provider order.
+    pub fn keyed_providers(&self) -> Vec<LlmProvider> {
+        [LlmProvider::Anthropic, LlmProvider::Openai]
+            .into_iter()
+            .filter(|provider| self.has_key(*provider))
+            .collect()
+    }
+
+    pub fn setup_required(&self) -> Option<String> {
+        if self.presets.is_empty() {
+            return Some("Add a model preset and an API key for its provider.".into());
         }
+        let Some(chat) = self.chat_preset() else {
+            return Some("Choose a model preset for chat.".into());
+        };
+        if !self.has_key(chat.provider) {
+            return Some(format!(
+                "Configure an API key for {}.",
+                chat.provider.label()
+            ));
+        }
+        None
+    }
+
+    /// Whether conversations can run: the chat preset exists and its provider has a key.
+    pub fn is_configured(&self) -> bool {
+        self.chat_preset()
+            .is_some_and(|preset| self.has_key(preset.provider))
+    }
+
+    /// The model conversations use by default, for status surfaces.
+    pub fn chat_model(&self) -> Option<&str> {
+        self.chat_preset().map(|preset| preset.model.as_str())
+    }
+
+    /// Add the provider's default presets that are missing and fill empty or
+    /// dangling slots. Returns how many presets were added.
+    pub fn seed_presets(&mut self, provider: LlmProvider) -> usize {
+        let mut added = 0;
+        for preset in default_presets(provider) {
+            if self.preset(&preset.id).is_none() {
+                self.presets.push(preset);
+                added += 1;
+            }
+        }
+        let (chat, background) = default_slots(provider);
+        if self.chat_preset().is_none() {
+            self.chat_preset = chat.into();
+        }
+        if self.background_preset().is_none() {
+            self.background_preset = background.into();
+        }
+        added
+    }
+
+    /// Reject shapes the UI must never save: empty or duplicate ids, empty
+    /// names or models, and slots that point nowhere or at a provider with
+    /// no key.
+    pub fn validate_presets(&self) -> Result<(), String> {
+        let mut seen = std::collections::HashSet::new();
+        for preset in &self.presets {
+            let id = preset.id.trim();
+            if id.is_empty()
+                || !id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                return Err(format!(
+                    "preset id {:?} must use letters, digits, '-' or '_'",
+                    preset.id
+                ));
+            }
+            if !seen.insert(id) {
+                return Err(format!("duplicate preset id {id:?}"));
+            }
+            if preset.name.trim().is_empty() {
+                return Err(format!("preset {id:?} needs a name"));
+            }
+            if preset.model.trim().is_empty() {
+                return Err(format!("preset {id:?} needs a model"));
+            }
+        }
+        if self.presets.is_empty() {
+            return Ok(());
+        }
+        for (slot, id) in [
+            ("chat_preset", &self.chat_preset),
+            ("background_preset", &self.background_preset),
+        ] {
+            let Some(preset) = self.preset(id) else {
+                return Err(format!("{slot} points at unknown preset {id:?}"));
+            };
+            if !self.has_key(preset.provider) {
+                return Err(format!(
+                    "{slot} uses {} but no {} API key is configured",
+                    preset.name,
+                    preset.provider.label()
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// The Anthropic API key, or None if not configured.
     pub fn api_key(&self) -> Option<&str> {
-        if self.tokens.anthropic.is_empty() {
-            None
-        } else {
-            Some(&self.tokens.anthropic)
-        }
-    }
-
-    /// Whether the LLM is fully configured.
-    pub fn is_configured(&self) -> bool {
-        match self.provider {
-            LlmProvider::Anthropic => self.api_key().is_some(),
-            LlmProvider::Openai => !self.tokens.open_ai.is_empty(),
-            LlmProvider::Codex => false,
-        }
+        self.key_for(LlmProvider::Anthropic)
     }
 
     /// List of service names that have API keys set.
@@ -658,36 +715,28 @@ impl LlmConfig {
         out
     }
 
-    /// Get Anthropic API key + model (for count_tokens API etc.).
+    /// Anthropic API key + the chat model, for the count_tokens API. None
+    /// when chat runs on another provider.
     pub fn anthropic_credentials(&self) -> Option<(&str, &str)> {
-        if self.provider != LlmProvider::Anthropic {
+        let chat = self.chat_preset()?;
+        if chat.provider != LlmProvider::Anthropic {
             return None;
         }
-        let key = if self.tokens.anthropic.is_empty() {
-            return None;
-        } else {
-            &self.tokens.anthropic
-        };
-        Some((
-            key,
-            if self.model_mode == ModelMode::Fast {
-                self.fast_model_name()
-            } else {
-                self.model_name()
-            },
-        ))
+        Some((self.api_key()?, chat.model.as_str()))
     }
 }
 
 impl Default for LlmConfig {
     fn default() -> Self {
-        Self {
-            provider: LlmProvider::default(),
+        let mut config = Self {
             tokens: LlmTokens::default(),
-            model_mode: ModelMode::default(),
-            profiles: ProviderProfiles::default(),
+            presets: Vec::new(),
+            chat_preset: String::new(),
+            background_preset: String::new(),
             extra: Default::default(),
-        }
+        };
+        config.seed_presets(LlmProvider::default());
+        config
     }
 }
 
@@ -752,12 +801,14 @@ pub fn load_config() -> anyhow::Result<Config> {
             obsolete.push(format!("config.{key}"));
         }
     }
-    if document
-        .get("llm")
-        .and_then(|value| value.get("heavy_multiplier"))
-        .is_some()
-    {
-        obsolete.push("config.llm.heavy_multiplier".to_string());
+    if let Some(llm) = document.get("llm") {
+        for key in RETIRED_LLM_KEYS {
+            if llm.get(key).is_some() {
+                obsolete.push(format!(
+                    "config.llm.{key} (model presets replaced model modes, #156)"
+                ));
+            }
+        }
     }
     if let Some(tokens) = document.get("llm").and_then(|value| value.get("tokens")) {
         for key in RETIRED_TOKEN_KEYS {
@@ -833,15 +884,6 @@ pub fn load_config() -> anyhow::Result<Config> {
         }
     }
 
-    if let Ok(mode) = env::var("NOLUNE_MODEL_MODE") {
-        match mode.to_lowercase().as_str() {
-            "auto" => config.llm.model_mode = ModelMode::Auto,
-            "fast" => config.llm.model_mode = ModelMode::Fast,
-            "heavy" => config.llm.model_mode = ModelMode::Heavy,
-            _ => {}
-        }
-    }
-
     Ok(config)
 }
 
@@ -868,7 +910,9 @@ pub fn serialize_config_preserving_keys(config: &Config, original: &str) -> anyh
             root.remove(obsolete);
         }
         if let Some(llm) = root.get_mut("llm").and_then(toml::Value::as_table_mut) {
-            llm.remove("heavy_multiplier");
+            for key in RETIRED_LLM_KEYS {
+                llm.remove(*key);
+            }
         }
     }
     // Avoid duplicate fields when an old token alias and its canonical spelling
@@ -894,9 +938,6 @@ pub fn serialize_config_preserving_keys(config: &Config, original: &str) -> anyh
             tokens.remove(retired);
         }
     }
-    if let Some(llm) = document.get_mut("llm").and_then(toml::Value::as_table_mut) {
-        llm.remove("model");
-    }
     merge(&mut document, toml::Value::try_from(config)?);
     Ok(toml::to_string_pretty(&document)?)
 }
@@ -905,135 +946,208 @@ pub fn serialize_config_preserving_keys(config: &Config, original: &str) -> anyh
 mod llm_config_tests {
     use super::*;
 
+    fn keyed(config: &mut Config, anthropic: bool, openai: bool) {
+        config.llm.tokens.anthropic = if anthropic { "a".into() } else { String::new() };
+        config.llm.tokens.open_ai = if openai { "o".into() } else { String::new() };
+    }
+
     #[test]
-    fn legacy_names_migrate_without_losing_config_keys() {
-        for name in ["api", "anthropic", "cli", "claude_cli"] {
-            let original = format!(
-                r#"
+    fn retired_tier_keys_are_dropped_on_load_and_save_without_losing_others() {
+        let original = r#"
 custom_global = "retained"
 [llm]
-provider = "{name}"
+provider = "api"
 model_mode = "fast"
 model = "custom-model"
+heavy_multiplier = 2.5
 custom_llm = "retained"
+[llm.profiles.anthropic]
+heavy = "claude-historical"
 [llm.tokens]
 ANTHROPIC = "anthropic-secret"
 OPEN_AI = "openai-secret"
-OPENROUTER = "router-secret"
 custom_token = "retained"
-[github]
-custom_github = "retained"
-"#
-            );
-            let config: Config = toml::from_str(&original).unwrap();
-            assert_eq!(config.llm.provider, LlmProvider::Anthropic);
-            assert_eq!(config.llm.model_name(), "custom-model");
-            let serialized = serialize_config_preserving_keys(&config, &original).unwrap();
-            let result: toml::Value = toml::from_str(&serialized).unwrap();
-            let source: toml::Value = toml::from_str(&original).unwrap();
-            assert_eq!(result["llm"]["provider"].as_str(), Some("anthropic"));
-            for (key, value) in source["llm"]["tokens"].as_table().unwrap() {
-                assert_eq!(&result["llm"]["tokens"][key], value);
-            }
-            for key in ["model_mode", "custom_llm"] {
-                assert_eq!(result["llm"][key], source["llm"][key]);
-            }
-            assert_eq!(result["custom_global"], source["custom_global"]);
-            assert_eq!(
-                result["github"]["custom_github"],
-                source["github"]["custom_github"]
-            );
-            let roundtrip: Config = toml::from_str(&serialized).unwrap();
-            assert_eq!(roundtrip.llm.tokens.open_ai, "openai-secret");
-        }
-    }
-
-    #[test]
-    fn codex_stays_unconfigured_even_with_openai_key() {
-        let config: Config =
-            toml::from_str("[llm]\nprovider='codex'\n[llm.tokens]\nOPEN_AI='key'").unwrap();
-        assert_eq!(config.llm.provider, LlmProvider::Codex);
-        assert!(!config.llm.is_configured());
-        assert!(config.llm.setup_required().unwrap().contains("Codex"));
-        assert!(matches!(
-            crate::services::llm::LlmBackend::from_config(&config)
-                .unwrap()
-                .adapter(),
-            Err(crate::services::llm::contract::LlmError::SetupRequired(_))
-        ));
-        let roundtrip: Config = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
-        assert_eq!(roundtrip.llm.provider, LlmProvider::Codex);
-    }
-
-    #[test]
-    fn legacy_models_are_scoped_before_provider_switch_and_save() {
-        for selected in ["api", "openai"] {
-            let raw = format!(
-                "[llm]\nprovider='{selected}'\nmodel='claude-historical'\n[llm.tokens]\nANTHROPIC='key'\nOPEN_AI='key'"
-            );
-            let mut config: Config = toml::from_str(&raw).unwrap();
-            assert_eq!(config.llm.profiles.anthropic.heavy, "claude-historical");
-            config.llm.provider = LlmProvider::Openai;
-            assert_eq!(
-                config.llm.model_name(),
-                ProviderProfiles::default().openai.heavy
-            );
-            let saved = serialize_config_preserving_keys(&config, &raw).unwrap();
-            let saved_value: toml::Value = toml::from_str(&saved).unwrap();
-            assert!(saved_value["llm"].get("model").is_none());
-            let mut restored: Config = toml::from_str(&saved).unwrap();
-            restored.llm.provider = LlmProvider::Anthropic;
-            assert_eq!(
-                restored.llm.anthropic_credentials().unwrap().1,
-                restored.llm.model_name()
-            );
-            assert_eq!(restored.llm.model_name(), "claude-historical");
-            restored.llm.model_mode = ModelMode::Fast;
-            assert_eq!(
-                restored.llm.anthropic_credentials().unwrap().1,
-                restored.llm.fast_model_name()
+"#;
+        let config: Config = toml::from_str(original).unwrap();
+        for key in RETIRED_LLM_KEYS {
+            assert!(
+                !config.llm.extra.contains_key(*key),
+                "{key} leaked into extra"
             );
         }
-    }
-
-    #[test]
-    fn partial_profiles_use_their_own_provider_defaults() {
-        let config: Config = toml::from_str("[llm.profiles.openai]\nfast='custom-fast'\n[llm.profiles.anthropic]\ncheap='custom-cheap'").unwrap();
-        let defaults = ProviderProfiles::default();
-        assert_eq!(config.llm.profiles.openai.heavy, defaults.openai.heavy);
-        assert_eq!(config.llm.profiles.openai.cheap, defaults.openai.cheap);
-        assert_eq!(config.llm.profiles.openai.fast, "custom-fast");
-        assert_eq!(config.llm.profiles.anthropic.fast, defaults.anthropic.fast);
-        assert_eq!(config.llm.profiles.anthropic.cheap, "custom-cheap");
-    }
-
-    #[test]
-    fn profiles_drive_all_backend_variants() {
-        let config: Config = toml::from_str(
-            r#"
-[llm]
-provider = "openai"
-[llm.tokens]
-openai = "key"
-[llm.profiles.openai]
-heavy = "custom-heavy"
-fast = "custom-fast"
-cheap = "custom-cheap"
-"#,
-        )
-        .unwrap();
-        let backend = crate::services::llm::LlmBackend::from_config(&config).unwrap();
-        assert_eq!(backend.model_name(), "custom-heavy");
-        assert_eq!(backend.fast_variant_with(None).model_name(), "custom-fast");
-        assert_eq!(backend.cheap_variant().model_name(), "custom-cheap");
-        assert_eq!(backend.heavy_variant().model_name(), "custom-heavy");
+        assert_eq!(config.llm.extra["custom_llm"].as_str(), Some("retained"));
+        assert_eq!(config.llm.tokens.open_ai, "openai-secret");
+        let serialized = serialize_config_preserving_keys(&config, original).unwrap();
+        let value: toml::Value = toml::from_str(&serialized).unwrap();
+        for key in RETIRED_LLM_KEYS {
+            assert!(value["llm"].get(key).is_none(), "{key} survived save");
+        }
+        assert_eq!(value["llm"]["custom_llm"].as_str(), Some("retained"));
+        assert_eq!(value["custom_global"].as_str(), Some("retained"));
         assert_eq!(
-            backend.fast_variant_with(Some("override")).model_name(),
-            "override"
+            value["llm"]["tokens"]["custom_token"].as_str(),
+            Some("retained")
+        );
+        let roundtrip: Config = toml::from_str(&serialized).unwrap();
+        assert_eq!(roundtrip.llm.tokens, config.llm.tokens);
+        assert_eq!(roundtrip.llm.presets, config.llm.presets);
+    }
+
+    #[test]
+    fn codex_and_unknown_providers_are_rejected() {
+        for provider in ["codex", "openrouter"] {
+            let raw =
+                format!("[[llm.presets]]\nid='x'\nname='x'\nprovider='{provider}'\nmodel='m'");
+            assert!(
+                toml::from_str::<Config>(&raw).is_err(),
+                "{provider} accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn default_config_seeds_anthropic_presets_and_slots() {
+        let config = Config::default();
+        assert_eq!(
+            config
+                .llm
+                .presets
+                .iter()
+                .map(|p| p.id.as_str())
+                .collect::<Vec<_>>(),
+            ["sonnet", "opus", "haiku"]
+        );
+        assert_eq!(config.llm.chat_preset, "sonnet");
+        assert_eq!(config.llm.background_preset, "haiku");
+        assert!(!config.llm.is_configured());
+        assert!(config.llm.setup_required().unwrap().contains("Anthropic"));
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        assert!(serialized.contains("[[llm.presets]]"), "{serialized}");
+        let roundtrip: Config = toml::from_str(&serialized).unwrap();
+        assert_eq!(roundtrip.llm.presets, config.llm.presets);
+    }
+
+    #[test]
+    fn empty_presets_report_setup_and_seeding_fills_missing_without_duplicates() {
+        let mut config: Config = toml::from_str("[llm]\n[llm.tokens]\nOPEN_AI='o'").unwrap();
+        assert!(config.llm.presets.is_empty());
+        assert!(config.llm.setup_required().unwrap().contains("preset"));
+
+        assert_eq!(config.llm.seed_presets(LlmProvider::Openai), 2);
+        assert_eq!(config.llm.chat_preset, "gpt");
+        assert_eq!(config.llm.background_preset, "gpt-mini");
+        assert!(config.llm.is_configured());
+        assert_eq!(config.llm.setup_required(), None);
+
+        // A second provider adds its presets but leaves the chosen slots alone.
+        assert_eq!(config.llm.seed_presets(LlmProvider::Anthropic), 3);
+        assert_eq!(config.llm.chat_preset, "gpt");
+        assert_eq!(config.llm.seed_presets(LlmProvider::Anthropic), 0);
+        assert_eq!(config.llm.presets.len(), 5);
+
+        // A user-edited seed keeps its edits.
+        config.llm.presets[0].model = "gpt-custom".into();
+        assert_eq!(config.llm.seed_presets(LlmProvider::Openai), 0);
+        assert_eq!(config.llm.chat_preset().unwrap().model, "gpt-custom");
+    }
+
+    #[test]
+    fn slots_resolve_independently_across_providers() {
+        let mut config = Config::default();
+        keyed(&mut config, true, true);
+        config.llm.seed_presets(LlmProvider::Openai);
+        config.llm.chat_preset = "gpt".into();
+        config.llm.background_preset = "haiku".into();
+        assert_eq!(
+            config.llm.chat_preset().unwrap().provider,
+            LlmProvider::Openai
+        );
+        assert_eq!(config.llm.chat_model(), Some("gpt-5.4"));
+        assert_eq!(
+            config.llm.background_preset().unwrap().model,
+            "claude-haiku-4-5-20251001"
         );
         assert_eq!(
-            config.llm.profiles.anthropic.heavy,
-            ProviderProfiles::default().anthropic.heavy
+            config.llm.anthropic_credentials(),
+            None,
+            "chat is on OpenAI"
+        );
+        config.llm.chat_preset = "opus".into();
+        assert_eq!(
+            config.llm.anthropic_credentials(),
+            Some(("a", "claude-opus-4-6"))
+        );
+        // A dangling background slot is reported, never silently replaced by chat.
+        config.llm.background_preset = "gone".into();
+        assert!(config.llm.background_preset().is_none());
+        assert!(
+            config
+                .llm
+                .validate_presets()
+                .unwrap_err()
+                .contains("background_preset")
+        );
+    }
+
+    #[test]
+    fn presets_validate_ids_names_models_slots_and_keys() {
+        let mut config = Config::default();
+        keyed(&mut config, true, false);
+        assert_eq!(config.llm.validate_presets(), Ok(()));
+
+        let mut dup = config.clone();
+        dup.llm.presets.push(ModelPreset::seeded(
+            "sonnet",
+            "Again",
+            LlmProvider::Anthropic,
+            "m",
+        ));
+        assert!(
+            dup.llm
+                .validate_presets()
+                .unwrap_err()
+                .contains("duplicate")
+        );
+
+        let mut bad_id = config.clone();
+        bad_id.llm.presets[0].id = "no spaces".into();
+        assert!(bad_id.llm.validate_presets().unwrap_err().contains("id"));
+
+        let mut no_model = config.clone();
+        no_model.llm.presets[1].model = "  ".into();
+        assert!(
+            no_model
+                .llm
+                .validate_presets()
+                .unwrap_err()
+                .contains("model")
+        );
+
+        let mut no_name = config.clone();
+        no_name.llm.presets[1].name = String::new();
+        assert!(no_name.llm.validate_presets().unwrap_err().contains("name"));
+
+        let mut unknown_slot = config.clone();
+        unknown_slot.llm.chat_preset = "missing".into();
+        assert!(
+            unknown_slot
+                .llm
+                .validate_presets()
+                .unwrap_err()
+                .contains("missing")
+        );
+
+        let mut no_key = config.clone();
+        no_key.llm.seed_presets(LlmProvider::Openai);
+        no_key.llm.chat_preset = "gpt".into();
+        let error = no_key.llm.validate_presets().unwrap_err();
+        assert!(error.contains("OpenAI") && error.contains("key"), "{error}");
+
+        let empty: Config = toml::from_str("[llm]").unwrap();
+        assert_eq!(
+            empty.llm.validate_presets(),
+            Ok(()),
+            "no presets is a valid empty state"
         );
     }
 
@@ -1044,11 +1158,6 @@ cheap = "custom-cheap"
         let serialized = serialize_config_preserving_keys(&config, original).unwrap();
         let restored: Config = toml::from_str(&serialized).unwrap();
         assert_eq!(restored.llm.tokens, config.llm.tokens);
-    }
-
-    #[test]
-    fn unknown_provider_is_not_silently_replaced() {
-        assert!(toml::from_str::<Config>("[llm]\nprovider='openrouter'").is_err());
     }
 }
 #[cfg(test)]
@@ -1167,12 +1276,8 @@ mod embedding_config_tests {
         assert_eq!(value["embedding"]["model"], "text-embedding-3-small");
         assert_eq!(value["embedding"]["dimensions"], 768);
         assert_eq!(value["embedding"]["base_url"], "https://api.openai.com/v1");
-        for chat in [
-            LlmProvider::Anthropic,
-            LlmProvider::Codex,
-            LlmProvider::Openai,
-        ] {
-            cfg.llm.provider = chat;
+        for chat in ["sonnet", "gpt", "missing"] {
+            cfg.llm.chat_preset = chat.into();
             cfg.llm.tokens.open_ai = "secret-openai-token".into();
             let status = cfg.embedding_status();
             assert_eq!(status["configured"], true);

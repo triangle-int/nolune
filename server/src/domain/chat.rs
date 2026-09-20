@@ -69,6 +69,9 @@ pub struct ChatResponse {
 pub struct ChatSummary {
     pub id: String,
     pub title: String,
+    /// Preset this chat pins (#156); None follows the Chat slot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
     pub message_count: usize,
     pub last_message_at: Option<String>,
     pub created_at: String,
@@ -80,4 +83,7 @@ pub struct ChatMeta {
     pub id: String,
     pub title: String,
     pub created_at: String,
+    /// Preset this chat pins (#156); None follows the Chat slot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
 }

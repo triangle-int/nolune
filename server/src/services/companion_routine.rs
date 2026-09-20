@@ -112,13 +112,6 @@ you may add or update memories and connect related ones. you cannot delete memor
 if nothing significant happened, say so honestly.",
         }
     }
-
-    fn model_variant(self, llm: &LlmBackend) -> LlmBackend {
-        match self {
-            Self::CheckIn => llm.clone(),
-            Self::Reflection => llm.heavy_variant(),
-        }
-    }
 }
 
 pub struct RoutineRunResult {
@@ -260,8 +253,9 @@ pub async fn run(
         resources,
         Some((proactive.0.clone(), proactive.1.to_owned())),
     );
-    let (_private_text, tokens, trace) = routine
-        .model_variant(llm)
+    // Every routine runs on the Background preset (#156); reflection is no
+    // longer promoted to a "heavy" tier behind the user's back.
+    let (_private_text, tokens, trace) = llm
         .chat_with_tools_traced(&system, &prompt, Vec::new(), tools)
         .await?;
     Ok(RoutineRunResult { tokens, trace })

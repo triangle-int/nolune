@@ -112,6 +112,7 @@ pub async fn run_single_turn(
     instance_slug: &str,
     chat_id: &str,
     llm: &LlmBackend,
+    background: Option<&LlmBackend>,
     events: broadcast::Sender<ServerEvent>,
     pending_secrets: std::sync::Arc<
         tokio::sync::Mutex<std::collections::HashMap<String, crate::app::state::PendingSecret>>,
@@ -632,8 +633,8 @@ pub async fn run_single_turn(
     }
 
     // Background memory + sentiment extraction (AFTER rig_history is saved)
-    if let Some(last_msg) = assistant_messages.last().cloned() {
-        let fast = llm.cheap_variant();
+    if let (Some(last_msg), Some(background)) = (assistant_messages.last().cloned(), background) {
+        let fast = background.clone();
         let ws = workspace_dir.to_path_buf();
         let slug = instance_slug.clone();
         let cid = chat_id.clone();
@@ -690,20 +691,6 @@ pub fn load_messages(
         messages,
         agent_running: false, // Caller sets this from AppState
     })
-}
-
-/// Get the content of the last user message in a chat (for model routing).
-pub fn last_user_content(
-    workspace_dir: &Path,
-    instance_slug: &str,
-    chat_id: &str,
-) -> Option<String> {
-    let resp = load_messages(workspace_dir, instance_slug, chat_id).ok()?;
-    resp.messages
-        .iter()
-        .rev()
-        .find(|m| m.role == crate::domain::chat::ChatRole::User)
-        .map(|m| m.content.clone())
 }
 
 pub fn clear_context(workspace_dir: &Path, instance_slug: &str, chat_id: &str) {
@@ -898,6 +885,7 @@ pub fn list_chats(
                 id: chat_id.clone(),
                 title: String::new(),
                 created_at: String::new(),
+                preset: None,
             }
         };
 
@@ -914,6 +902,7 @@ pub fn list_chats(
             } else {
                 meta.title
             },
+            preset: meta.preset,
             message_count: msgs.len(),
             last_message_at: last_at,
             created_at: meta.created_at,
@@ -963,6 +952,7 @@ pub fn update_chat_title(
             id: chat_id,
             title: String::new(),
             created_at: timestamp(),
+            preset: None,
         }
     };
 
@@ -970,6 +960,54 @@ pub fn update_chat_title(
     let body = serde_json::to_string_pretty(&meta)
         .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
     fs::write(meta_path, body)
+}
+
+fn load_or_new_meta(dir: &Path, chat_id: &str) -> io::Result<crate::domain::chat::ChatMeta> {
+    let meta_path = dir.join("meta.json");
+    if meta_path.exists() {
+        let raw = fs::read_to_string(&meta_path)?;
+        serde_json::from_str(&raw).map_err(|e| io::Error::new(ErrorKind::InvalidData, e))
+    } else {
+        Ok(crate::domain::chat::ChatMeta {
+            id: chat_id.to_owned(),
+            title: String::new(),
+            created_at: timestamp(),
+            preset: None,
+        })
+    }
+}
+
+/// The preset a chat pins (#156), if any. Missing chats pin nothing.
+pub fn get_chat_preset(
+    workspace_dir: &Path,
+    instance_slug: &str,
+    chat_id: &str,
+) -> io::Result<Option<String>> {
+    let instance_slug = sanitize_slug(instance_slug);
+    let chat_id = sanitize_slug(chat_id);
+    let dir = chat_dir(workspace_dir, &instance_slug, &chat_id);
+    if !dir.join("meta.json").exists() {
+        return Ok(None);
+    }
+    Ok(load_or_new_meta(&dir, &chat_id)?.preset)
+}
+
+/// Pin a preset to a chat, or clear the pin with None.
+pub fn set_chat_preset(
+    workspace_dir: &Path,
+    instance_slug: &str,
+    chat_id: &str,
+    preset: Option<&str>,
+) -> io::Result<()> {
+    let instance_slug = sanitize_slug(instance_slug);
+    let chat_id = sanitize_slug(chat_id);
+    let dir = chat_dir(workspace_dir, &instance_slug, &chat_id);
+    fs::create_dir_all(&dir)?;
+    let mut meta = load_or_new_meta(&dir, &chat_id)?;
+    meta.preset = preset.map(str::to_owned).filter(|p| !p.is_empty());
+    let body = serde_json::to_string_pretty(&meta)
+        .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
+    fs::write(dir.join("meta.json"), body)
 }
 
 // ---------------------------------------------------------------------------
@@ -1078,6 +1116,7 @@ fn ensure_chat_dir(workspace_dir: &Path, instance_slug: &str, chat_id: &str) -> 
             id: chat_id.to_string(),
             title: String::new(),
             created_at: timestamp(),
+            preset: None,
         };
         let body = serde_json::to_string_pretty(&meta)
             .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;

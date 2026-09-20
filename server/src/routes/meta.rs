@@ -35,10 +35,10 @@ async fn server_meta(State(state): State<AppState>) -> Json<ServerMetaResponse> 
         instances_count,
         skills_count: workspace::count_directories(&skills_dir).unwrap_or(0),
         llm: LlmSummary {
-            provider: cfg.llm.provider,
+            chat_preset: cfg.llm.chat_preset().map(|preset| preset.id.clone()),
+            provider: cfg.llm.chat_preset().map(|preset| preset.provider),
             setup_required: cfg.llm.setup_required(),
-            model: (cfg.llm.provider != crate::config::LlmProvider::Codex)
-                .then(|| cfg.llm.model_name().to_string()),
+            model: cfg.llm.chat_model().map(str::to_owned),
             configured: cfg.llm.is_configured(),
         },
     })

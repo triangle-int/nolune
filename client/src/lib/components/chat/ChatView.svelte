@@ -848,7 +848,7 @@ import McpAppViewer from "./McpAppViewer.svelte";
 				</ConversationContent>
 			</Conversation>
 
-			<ChatInput onSend={handleSend} onStop={handleStop} disabled={sending || agentRunning} {agentRunning} {uploadProgress} />
+			<ChatInput {slug} chatId={activeChatId} onSend={handleSend} onStop={handleStop} disabled={sending || agentRunning} {agentRunning} {uploadProgress} />
 		</div>
 
 		<aside class="chat-sidebar">
