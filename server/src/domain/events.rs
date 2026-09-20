@@ -2,6 +2,7 @@ use serde::Serialize;
 
 use crate::domain::{
     chat::ChatMessage, commitment::Commitment, drop::Drop, proactive::ProactiveRun,
+    receipt::RecalledMemory,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -90,7 +91,7 @@ pub enum ServerEvent {
         chat_id: String,
         delta: String,
     },
-    /// Automatic memory recall — shows which memories were injected into context.
+    /// Automatic memory recall — the same entries the message's receipt persists (#84).
     MemoryRecall {
         instance_slug: String,
         chat_id: String,
@@ -103,11 +104,4 @@ pub enum ServerEvent {
         messages: Vec<ChatMessage>,
         agent_running: bool,
     },
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct RecalledMemory {
-    pub path: String,
-    pub preview: String,
-    pub score: f32,
 }

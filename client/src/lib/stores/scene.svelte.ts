@@ -9,6 +9,7 @@
  */
 
 import { getContext, setContext } from "svelte";
+import type { RecalledMemory } from "$lib/api/types.js";
 import {
 	companionStatusText,
 	initialCompanionState,
@@ -32,7 +33,7 @@ export interface SceneStore {
 	readonly thinking: boolean;
 	readonly voiceAmplitude: number;
 	presenting: boolean;
-	recalledMemories: {path: string; preview: string; score: number}[];
+	recalledMemories: RecalledMemory[];
 	/** What the companion is really doing, derived from runtime events (#86). */
 	readonly companion: CompanionState;
 	/** Accessible sentence for `companion`, e.g. "Nolune is working on studio-mac: opening Finder." */
@@ -71,7 +72,7 @@ export function createSceneStore(): SceneStore {
 	let thinking = $state(false);
 	let voiceAmplitude = $state(0);
 	let presenting = $state(false);
-	let recalledMemories = $state<{path: string; preview: string; score: number}[]>([]);
+	let recalledMemories = $state<RecalledMemory[]>([]);
 	// The reducer returns frozen snapshots, replaced wholesale; no deep proxy needed.
 	let companion = $state.raw<CompanionState>(initialCompanionState());
 	const companionStatus = $derived(companionStatusText(companion));

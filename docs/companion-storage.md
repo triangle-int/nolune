@@ -47,7 +47,7 @@ Unknown fields are rejected. A marker with any other `format_version` or
         ├── project_state.json   name, timezone, and other settings
         ├── instance.toml        per-companion configuration
         ├── memory/              long-term memory library (source of truth)
-        ├── chats/{chat_id}/     conversation history and agent markers
+        ├── chats/{chat_id}/     conversation history, agent markers, receipts/
         ├── scheduled/*.json     scheduled tasks
         ├── activity/*.json      proactive run records (docs/proactive-loop.md)
         ├── commitments/*.json   promises the companion follows through on (docs/proactive-loop.md)
@@ -142,6 +142,67 @@ committing only a complete candidate so the last good index stays searchable
 if a provider call fails. Deleting a memory reconciles its index entries
 immediately. There is no button and no manual reindex route; delete the
 `vectors/` directory to force a rebuild on the next start.
+
+### Memory recall receipts
+
+Every assistant message keeps a bounded record of the memories that were
+auto-recalled into its prompt (#84), so the client can answer "why did Nolune
+remember this?" without exposing model reasoning:
+
+```text
+chats/{chat_id}/receipts/{message_id}.json
+```
+
+Each file is written atomically (temp file + rename) right after the turn and
+is a derived record: `memory/` stays the source of truth. The shape:
+
+```json
+{
+  "message_id": "msg_1758360000000_3",
+  "chat_id": "default",
+  "memories": [
+    {
+      "path": "about/basics.md",
+      "source": "about/basics.md",
+      "excerpt": "likes tea, lives in Lisbon",
+      "reason": "semantic",
+      "confidence": "high",
+      "retrieved_at": "2026-09-20T09:00:00Z",
+      "source_status": "present"
+    },
+    {
+      "path": "photos/sky.png",
+      "source": "photos/sky.png.md",
+      "excerpt": "sky over Lisbon at dusk",
+      "reason": "linked_to",
+      "linked_from": "about/basics.md",
+      "confidence": "low",
+      "retrieved_at": "2026-09-20T09:00:00Z",
+      "source_status": "missing"
+    }
+  ]
+}
+```
+
+- `path` is the memory as the library shows it; `source` is the canonical
+  file whose text was recalled. Media memories cite their bound text
+  representation (`<media>.md`, see `media_text.rs`).
+- `excerpt` is a bounded slice of the memory body; the stamped
+  `created`/`updated` frontmatter is never part of it.
+- `reason` is `semantic` (vector index), `keyword` (BM25), `linked_to` (one
+  graph hop from `linked_from`), or `matched` when hybrid search cannot say
+  which channel found a media memory.
+- `confidence` is a bucket (`high`, `medium`, `low`); raw scores never leave
+  the server.
+- `source_status` is resolved again on every read: a memory that was deleted
+  or moved after the turn is reported as `missing` and the receipt still
+  loads. An empty `memories` list means no memory influenced that reply.
+
+Routes (companion-scoped like every other `/api/instances/{slug}/…` path):
+`GET /api/instances/{slug}/{chat_id}/receipts` lists a chat's receipts and
+`GET /api/instances/{slug}/{chat_id}/receipts/{message_id}` returns one
+(`404` only when no receipt exists). The transient `memory_recall` server
+event carries the same `memories` entries at retrieval time.
 
 ### Profiles: several servers on one host
 

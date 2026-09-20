@@ -245,6 +245,28 @@ export interface MemoryGraph {
 	edges: [string, string][];
 }
 
+/** How auto-recall surfaced a memory (#84). */
+export type RecallReason = "semantic" | "keyword" | "linked_to" | "matched";
+/** Coarse confidence bucket; raw scores never leave the server. */
+export type RecallConfidence = "high" | "medium" | "low";
+
+/** One recalled memory as carried by the `memory_recall` event and persisted receipts. */
+export interface RecalledMemory {
+	/** Memory path as the library shows it (for media, the media file). */
+	path: string;
+	/** Canonical file whose text was recalled; media memories cite their bound text. */
+	source: string;
+	excerpt: string;
+	reason: RecallReason;
+	/** The recalled memory this one was linked from (`linked_to` only). */
+	linked_from?: string;
+	confidence: RecallConfidence;
+	/** RFC 3339 UTC timestamp of the retrieval. */
+	retrieved_at: string;
+	/** Resolved on every receipt read; a deleted source is reported, not dropped. */
+	source_status: "present" | "missing";
+}
+
 export type ServerEvent =
 	| {
 			type: "chat_message_created";
@@ -340,7 +362,8 @@ export type ServerEvent =
 	| {
 			type: "memory_recall";
 			instance_slug: string;
-			memories: { path: string; preview: string; score: number }[];
+			chat_id: string;
+			memories: RecalledMemory[];
 	  }
 	| {
 			type: "computer_use_request";

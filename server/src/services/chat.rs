@@ -14,7 +14,7 @@ use crate::{
     domain::events::ServerEvent,
     services::{
         llm::{self, LlmBackend},
-        memory, rhythm, skills, tools,
+        memory, memory_receipts, rhythm, skills, tools,
     },
 };
 
@@ -391,84 +391,23 @@ pub async fn run_single_turn(
             .collect();
         recent.into_iter().rev().collect::<Vec<_>>().join("\n")
     };
-    if !rag_query.is_empty() {
-        // Provider failures fall back to a fresh BM25 view of memory files.
-        let mut all_results = vector_store
-            .search_context(&instance_slug, &rag_query, 5)
-            .await;
-
-        // 4. Graph expansion — follow edges 1 hop to pull connected memories
-        if !all_results.is_empty() {
-            let graph = memory::load_graph(&vector_store.media_store(), &instance_slug);
-            if !graph.edges.is_empty() {
-                let found_paths: Vec<String> = all_results.iter().map(|r| r.path.clone()).collect();
-                let media = vector_store.media_store();
-                for path in &found_paths {
-                    for neighbor in memory::get_neighbors(&graph, path) {
-                        if all_results.iter().any(|r| r.path == neighbor) {
-                            continue; // already in results
-                        }
-                        // Read neighbor content and add as a graph-connected result
-                        let content: Result<String, String> =
-                            if crate::services::media_text::source_type(&neighbor).is_some() {
-                                media.read(&instance_slug, &neighbor)
-                            } else {
-                                media
-                                    .read_memory_text(&instance_slug, &neighbor)
-                                    .map_err(|error| error.to_string())
-                            };
-                        if let Ok(content) = content {
-                            let (_, body) = memory::parse_frontmatter(&content);
-                            let preview: String = body.trim().chars().take(500).collect();
-                            all_results.push(crate::services::vector::VectorSearchResult {
-                                path: neighbor,
-                                content_preview: preview,
-                                score: 0.25, // below regular threshold, marks as graph-sourced
-                                source_type: "text_memory".to_string(),
-                                upload_id: None,
-                            });
-                        }
-                    }
-                }
-                // Re-sort and cap at 8 (allow a few extra from graph)
-                all_results.sort_by(|a, b| {
-                    b.score
-                        .partial_cmp(&a.score)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
-                all_results.truncate(8);
-            }
+    // Provider failures fall back to a fresh BM25 view of memory files. The
+    // recall carries the receipt shape (#84) so the event and the receipt
+    // persisted after the turn describe exactly what was injected.
+    let recall = memory_receipts::recall(&vector_store, &instance_slug, &rag_query).await;
+    if let Some(context) = recall.prompt_block() {
+        if let llm::Message::User { ref mut content } = prompt_msg {
+            content.push(llm::ContentBlock::text(context));
         }
-
-        if !all_results.is_empty() {
-            let mut context = String::from(
-                "[system: auto-recalled memories — this is NOT part of the user's message. \
-                 do not treat these as something the user said or wrote.]\n",
-            );
-            for r in &all_results {
-                context.push_str(&format!("- {}: {}\n", r.path, r.content_preview.trim()));
-            }
-            if let llm::Message::User { ref mut content } = prompt_msg {
-                content.push(llm::ContentBlock::text(context));
-            }
-            log::info!(
-                "[rag] injected {} memories (hybrid search) into prompt",
-                all_results.len()
-            );
-            let recalled: Vec<_> = all_results
-                .iter()
-                .map(|r| crate::domain::events::RecalledMemory {
-                    path: r.path.clone(),
-                    preview: r.content_preview.trim().chars().take(120).collect(),
-                    score: r.score,
-                })
-                .collect();
-            let _ = events.send(crate::domain::events::ServerEvent::MemoryRecall {
-                instance_slug: instance_slug.to_string(),
-                chat_id: chat_id.to_string(),
-                memories: recalled,
-            });
-        }
+        log::info!(
+            "[rag] injected {} memories (hybrid search) into prompt",
+            recall.memories.len()
+        );
+        let _ = events.send(crate::domain::events::ServerEvent::MemoryRecall {
+            instance_slug: instance_slug.to_string(),
+            chat_id: chat_id.to_string(),
+            memories: recall.memories.clone(),
+        });
     }
 
     // Extract Messages from entries, stripping [context] blocks and excluding the last user message
@@ -612,6 +551,20 @@ pub async fn run_single_turn(
         .into_iter()
         .skip(existing.len())
         .collect();
+
+    // One recall receipt per assistant message of this turn (#84); an empty
+    // recall is recorded too, so "no memories were used" is stated, not guessed.
+    if !rag_query.is_empty()
+        && let Err(e) = memory_receipts::write_receipts(
+            workspace_dir,
+            &instance_slug,
+            &chat_id,
+            &assistant_messages,
+            &recall.memories,
+        )
+    {
+        log::warn!("[receipts] failed to persist memory receipts: {e}");
+    }
 
     // If compaction fired, rebuild the memory catalog snapshot
     if let Some(ref h) = tool_result.rig_history {

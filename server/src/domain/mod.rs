@@ -10,6 +10,7 @@ pub mod memory;
 pub mod meta;
 pub mod mood;
 pub mod proactive;
+pub mod receipt;
 pub mod rhythm;
 pub mod skill;
 pub mod soul;
