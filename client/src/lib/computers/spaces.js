@@ -264,7 +264,7 @@ export function spaceHints(machine, nowSeconds) {
 	if (!machine.driver_version) {
 		hints.push({
 			level: "info",
-			text: "Cua driver not reported: screen actions use the desktop app’s built-in path until the driver ships.",
+			text: "Screen actions use the desktop app’s built-in path until the Cua driver ships.",
 		});
 	} else if (machine.cua_health === "degraded") {
 		hints.push({ level: "warn", text: `The Cua driver on ${name} is degraded. Restart the Nolune desktop app there.` });

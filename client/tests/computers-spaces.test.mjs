@@ -117,11 +117,11 @@ test('permissions, capabilities and the Cua driver are summarized without guessi
 
 test('hints name the computer and the one thing to do about it', () => {
 	assert.deepEqual(spaceHints(desktop(), NOW), [
-		{ level: 'info', text: 'Cua driver not reported: screen actions use the desktop app’s built-in path until the driver ships.' },
+		{ level: 'info', text: 'Screen actions use the desktop app’s built-in path until the Cua driver ships.' },
 	]);
 	assert.deepEqual(spaceHints(offline, NOW), [
 		{ level: 'warn', text: 'laptop is offline. Open the Nolune desktop app there to reconnect it.' },
-		{ level: 'info', text: 'Cua driver not reported: screen actions use the desktop app’s built-in path until the driver ships.' },
+		{ level: 'info', text: 'Screen actions use the desktop app’s built-in path until the Cua driver ships.' },
 	]);
 	assert.deepEqual(spaceHints(stale, NOW)[0], {
 		level: 'warn',

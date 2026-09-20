@@ -20,6 +20,12 @@
 	let draft = $state("");
 	let saving = $state(false);
 	let error = $state("");
+	let input = $state<HTMLInputElement | null>(null);
+
+	// The field takes focus when it appears, so Rename is one click away from typing.
+	$effect(() => {
+		if (editing) input?.focus();
+	});
 
 	const hints = $derived(compact ? space.hints.filter((h) => h.level === "warn") : space.hints);
 	const inputId = $derived(`space-name-${space.id}`);
@@ -65,6 +71,7 @@
 				<div class="space-rename-row">
 					<input
 						id={inputId}
+						bind:this={input}
 						class="nl-input space-rename-input"
 						type="text"
 						maxlength="64"
@@ -108,12 +115,12 @@
 </li>
 
 <style>
-	.space { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); min-width: 0; }
+	.space { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: start; gap: 4px 12px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); min-width: 0; }
 	.space-compact { padding: 12px 14px; }
 	.space-home { background: var(--popover); }
-	.space-glyph { display: flex; align-items: center; justify-content: center; flex: 0 0 32px; width: 32px; height: 32px; border-radius: 8px; background: var(--background); color: var(--text-secondary); margin-top: 1px; }
+	.space-glyph { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 8px; background: var(--background); color: var(--text-secondary); margin-top: 1px; }
 	.space-home .space-glyph { background: var(--accent); }
-	.space-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1 1 auto; }
+	.space-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 	.space-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; min-width: 0; }
 	.space-name { font: 500 15px/1.4 var(--font-body); color: var(--foreground); overflow-wrap: anywhere; }
 	.space-hostname { font: 400 13px/1.4 var(--font-mono, monospace); color: var(--text-muted); overflow-wrap: anywhere; }
@@ -129,7 +136,7 @@
 	.space-hint { font: 400 13px/1.5 var(--font-body); color: var(--foreground); margin: 2px 0 0; padding-left: 10px; border-left: 2px solid var(--destructive); }
 	.space-hint-info { color: var(--text-muted); border-left-color: var(--border); }
 	.space-error { font: 400 13px/1.5 var(--font-body); color: var(--destructive); margin: 2px 0 0; }
-	.space-rename-btn { flex: 0 0 auto; min-height: 44px; padding: 0 12px; border: 1px solid transparent; border-radius: var(--radius-control, 8px); background: none; color: var(--text-secondary); font: 500 13px/1.5 var(--font-body); cursor: pointer; }
+	.space-rename-btn { min-height: 44px; padding: 0 12px; border: 1px solid transparent; border-radius: var(--radius-control, 8px); background: none; color: var(--text-secondary); font: 500 13px/1.5 var(--font-body); cursor: pointer; }
 	.space-rename-btn:hover { color: var(--foreground); border-color: var(--border); }
 	.space-rename { display: flex; flex-direction: column; gap: 6px; }
 	.space-rename-label { font: 500 13px/1.4 var(--font-body); color: var(--text-secondary); }
@@ -137,7 +144,8 @@
 	.space-rename-input { flex: 1 1 200px; min-width: 0; }
 	.space-rename-hint { font: 400 12px/1.5 var(--font-body); color: var(--text-muted); margin: 0; }
 	@media (max-width: 480px) {
-		.space { flex-wrap: wrap; }
-		.space-rename-btn { margin-left: 44px; min-height: 40px; }
+		/* The glyph keeps its column; Rename moves under the text instead of squeezing it. */
+		.space { grid-template-columns: 32px minmax(0, 1fr); }
+		.space-rename-btn { grid-column: 2; justify-self: start; margin-left: -12px; }
 	}
 </style>
