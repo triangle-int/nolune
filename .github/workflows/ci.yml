@@ -120,6 +120,9 @@ jobs:
         if: matrix.project == 'client' || matrix.project == 'desktop'
         run: pnpm test
       - run: pnpm build
+      - name: Check the landing site is static and link-complete
+        if: matrix.project == 'landing'
+        run: python3 ../scripts/tests/landing-static-site.py
 
   scripts:
     name: Shell regression tests
