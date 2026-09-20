@@ -5,11 +5,15 @@
 //! obsolete companions), validates it there, and only then swaps it into
 //! `instances/companion`: the live tree moves to `imports/previous-<id>`, the
 //! staged tree moves into place, and a failure of the second rename moves the
-//! previous tree back. The whole sequence runs under the same per-companion
-//! lifecycle gate every memory write holds, so a write that arrives during an
-//! import lands in the imported tree afterwards instead of racing the swap.
-//! Derived state (vectors, BM25, the catalog snapshot) is rebuilt from the
-//! imported memory files before the previous tree is discarded, and a
+//! previous tree back. Both renames and the rollback run on one blocking
+//! thread, and the whole transaction from staging to the discard of the
+//! previous tree runs on a task of its own that owns the per-companion
+//! lifecycle gate every memory write holds: a write that arrives during an
+//! import lands in the imported tree afterwards instead of racing the swap,
+//! and a caller that stops waiting (an HTTP client that disconnects drops
+//! the handler future) detaches from the import instead of aborting it half
+//! way. Derived state (vectors, BM25, the catalog snapshot) is rebuilt from
+//! the imported memory files before the previous tree is discarded, and a
 //! provider that cannot embed leaves the collection marked for the startup
 //! backfill rather than claiming a full rebuild.
 //! See `docs/companion-storage.md` for the contract.
@@ -48,9 +52,12 @@ const MAX_IDENTITY_BYTES: u64 = 4096;
 pub enum DerivedIndex {
     /// Vectors and BM25 were rebuilt from the imported memory files.
     Rebuilt,
-    /// The files are in place but the embedding provider could not rebuild
-    /// the vectors; `VectorStore::needs_backfill` stays `true` and the
-    /// startup backfill retries. BM25 is rebuilt lazily on the next search.
+    /// The files are in place but the vectors were not rebuilt: the
+    /// embedding provider could not embed, or the emptied collection could
+    /// not be written and was discarded instead. Either way no record of the
+    /// replaced tree is served, `VectorStore::needs_backfill` is `true` and
+    /// the startup backfill retries. BM25 is rebuilt lazily on the next
+    /// search.
     Pending,
 }
 
@@ -93,6 +100,10 @@ pub enum RestoreError {
         rollback: io::Error,
         previous: String,
     },
+    /// The transaction task stopped without reporting (a panic, or the
+    /// runtime shutting down). The gate is released and `imports/` holds
+    /// whatever step it reached; the startup recovery reconciles it.
+    Aborted(io::Error),
 }
 
 impl std::fmt::Display for RestoreError {
@@ -118,6 +129,7 @@ impl std::fmt::Display for RestoreError {
                 f,
                 "import failed ({error}) and the rollback failed ({rollback}); the previous companion is intact at imports/{previous}"
             ),
+            Self::Aborted(error) => write!(f, "import did not run to completion: {error}"),
         }
     }
 }
@@ -128,20 +140,26 @@ impl std::error::Error for RestoreError {}
 ///
 /// Holds `VectorStore::lifecycle_lock(slug)` from before the archive is
 /// staged until derived state has been rebuilt and the previous tree removed.
-/// The archive is read on a blocking thread through the validating extractor
-/// in `profile_archive`, so nothing but the staging directory is written
-/// before validation succeeds.
+/// Once the busy check has passed the transaction runs on a task of its own
+/// that owns the gate, so dropping this future (an HTTP client that
+/// disconnects drops the axum handler future) detaches from the import
+/// rather than stopping it between two steps; the import then finishes on
+/// its own and logs its result. The archive is read on a blocking thread
+/// through the validating extractor in `profile_archive`, so nothing but the
+/// staging directory is written before validation succeeds.
 pub async fn restore_companion<R: Read + Send + 'static>(
     store: Arc<VectorStore>,
     agent_tasks: &tokio::sync::Mutex<HashMap<String, CancellationToken>>,
     slug: &str,
     archive: R,
 ) -> Result<RestoreOutcome, RestoreError> {
-    let _gate = store.lifecycle_lock(slug).lock_owned().await;
+    let gate = store.lifecycle_lock(slug).lock_owned().await;
 
     // Chat and scheduler agents write the companion through ambient paths
     // that the gate does not cover, so an import while one runs would race
     // the swap. Refuse before anything is staged; the route answers 409.
+    // Nothing has been written up to here, so dropping the future while it
+    // waits on either lock is harmless.
     let running = {
         let prefix = format!("{slug}/");
         let tasks = agent_tasks.lock().await;
@@ -151,6 +169,31 @@ pub async fn restore_companion<R: Read + Send + 'static>(
         return Err(RestoreError::Busy { tasks: running });
     }
 
+    let slug = slug.to_owned();
+    tokio::spawn(async move {
+        let result = transaction(&store, &slug, archive).await;
+        match &result {
+            Ok(outcome) => log::info!(
+                "[import] restored {slug}: {} files, {} bytes, index {:?}",
+                outcome.files,
+                outcome.bytes,
+                outcome.derived_index
+            ),
+            Err(error) => log::warn!("[import] restore of {slug} failed: {error}"),
+        }
+        drop(gate);
+        result
+    })
+    .await
+    .unwrap_or_else(|error| Err(RestoreError::Aborted(task_error(error))))
+}
+
+/// The import proper, run with the lifecycle gate held by the caller.
+async fn transaction<R: Read + Send + 'static>(
+    store: &VectorStore,
+    slug: &str,
+    archive: R,
+) -> Result<RestoreOutcome, RestoreError> {
     let media = store.media_store();
     let id = uuid::Uuid::new_v4();
     let staging_name = format!("{STAGING_PREFIX}{id}");
@@ -180,56 +223,25 @@ pub async fn restore_companion<R: Read + Send + 'static>(
         }
     };
 
-    // Swap: park the live tree, move the staged tree into place, and move
-    // the parked tree back if that second rename fails.
-    let had_previous = match blocking({
+    // Swap: both renames and the rollback on one blocking thread, so no
+    // other task runs between them and, once started, they run to
+    // completion whatever happens to the futures waiting on them.
+    let swapped = tokio::task::spawn_blocking({
         let media = media.clone();
-        let name = previous_name.clone();
         let slug = slug.to_owned();
-        move || media.stash_companion(&slug, &name)
+        let staging = staging_name.clone();
+        let previous = previous_name.clone();
+        move || swap(&media, &slug, &staging, &previous)
     })
     .await
-    {
+    .unwrap_or_else(|error| Err(RestoreError::Aborted(task_error(error))));
+    let had_previous = match swapped {
         Ok(had_previous) => had_previous,
         Err(error) => {
             discard(&media, &staging_name).await;
-            return Err(RestoreError::PublishFailed(error));
+            return Err(error);
         }
     };
-    let published = blocking({
-        let media = media.clone();
-        let name = staging_name.clone();
-        let slug = slug.to_owned();
-        move || media.publish_import(&slug, &name)
-    })
-    .await;
-    if let Err(error) = published {
-        let rollback = if had_previous {
-            blocking({
-                let media = media.clone();
-                let name = previous_name.clone();
-                let slug = slug.to_owned();
-                move || media.publish_import(&slug, &name)
-            })
-            .await
-        } else {
-            Ok(())
-        };
-        discard(&media, &staging_name).await;
-        return Err(match rollback {
-            Ok(()) => RestoreError::PublishFailed(error),
-            Err(rollback) => {
-                log::error!(
-                    "[import] rollback failed; the previous companion is at imports/{previous_name}: {rollback}"
-                );
-                RestoreError::PublishStranded {
-                    error,
-                    rollback,
-                    previous: previous_name,
-                }
-            }
-        });
-    }
     log::info!(
         "[import] published {} files ({} bytes) for {slug}",
         summary.files,
@@ -237,8 +249,9 @@ pub async fn restore_companion<R: Read + Send + 'static>(
     );
 
     // Derived state: vectors and BM25 are emptied and rebuilt from the
-    // imported memory files. A provider that cannot embed leaves the
-    // collection marked for the startup backfill; BM25 rebuilds lazily.
+    // imported memory files. A provider that cannot embed, or a reset that
+    // cannot be written (the collection is discarded then), leaves it marked
+    // for the startup backfill; BM25 rebuilds lazily.
     let (derived_index, pending_reason, indexed_chunks) =
         match store.rebuild_derived_no_lifecycle(slug).await {
             Ok(chunks) => (DerivedIndex::Rebuilt, None, chunks),
@@ -275,6 +288,42 @@ pub async fn restore_companion<R: Read + Send + 'static>(
         derived_index,
         pending_reason,
         indexed_chunks,
+    })
+}
+
+/// Park the live tree, move the staged tree into place, and move the parked
+/// tree back if that second rename fails. `Ok(true)` when a previous tree
+/// was replaced. Runs on one blocking thread: there is no point between the
+/// renames at which another task is scheduled or a dropped future stops it.
+fn swap(
+    media: &MediaStore,
+    slug: &str,
+    staging: &str,
+    previous: &str,
+) -> Result<bool, RestoreError> {
+    let had_previous = media
+        .stash_companion(slug, previous)
+        .map_err(RestoreError::PublishFailed)?;
+    let Err(error) = media.publish_import(slug, staging) else {
+        return Ok(had_previous);
+    };
+    let rollback = if had_previous {
+        media.publish_import(slug, previous)
+    } else {
+        Ok(())
+    };
+    Err(match rollback {
+        Ok(()) => RestoreError::PublishFailed(error),
+        Err(rollback) => {
+            log::error!(
+                "[import] rollback failed; the previous companion is at imports/{previous}: {rollback}"
+            );
+            RestoreError::PublishStranded {
+                error,
+                rollback,
+                previous: previous.to_owned(),
+            }
+        }
     })
 }
 

@@ -40,7 +40,7 @@ Unknown fields are rejected. A marker with any other `format_version` or
 │   └── signing_key.json         private Ed25519 seed, mode 0600
 ├── skills/                      installed skills (global)
 ├── vectors/                     derived vector index, keyed by slug
-├── imports/                     restore staging (see Archive format below); empty between imports
+├── imports/                     restore staging (see Restore below); empty between imports unless a crash left a tree behind
 └── instances/
     └── companion/               the one companion
         ├── companion.json       identity marker (see above)
@@ -554,7 +554,12 @@ refused as truncated rather than restored with files missing.
 one transaction under the companion's lifecycle gate, the same
 `VectorStore::lifecycle_lock` every memory write, delete, media replacement,
 and backfill holds. A memory write that arrives during an import waits and
-then lands in the imported tree; two imports serialize the same way.
+then lands in the imported tree; two imports serialize the same way. Once
+the busy check below has passed, the transaction runs on a task of its own
+that owns the gate: a caller that stops waiting (an HTTP client that
+disconnects drops the handler future) detaches from the import rather than
+stopping it between two steps, and the import finishes on its own and logs
+its result.
 
 1. **Refuse while busy.** While chat or scheduler agent tasks exist for the
    companion (they write through ambient paths the gate does not cover) the
@@ -572,24 +577,42 @@ then lands in the imported tree; two imports serialize the same way.
    rename fails, the previous tree is renamed back and the error says so;
    the tree and the derived index are exactly what they were. If that
    rollback also fails, the previous companion is left intact at
-   `imports/previous-<id>` and the error names it. The cached uploads
-   directory handle is dropped on both sides of the swap.
+   `imports/previous-<id>` and the error names it. Both renames and the
+   rollback run on one blocking thread, so no other task is scheduled
+   between them and, once started, they run to completion. The cached
+   uploads directory handle is dropped on both sides of the swap.
 5. **Rebuild derived state.** The vector collection is reset (which also
    invalidates BM25) and backfilled from the imported `memory/`; the catalog
    snapshot is rebuilt and the memory graph is loaded from the imported
    file. When the embedding provider is unconfigured or unreachable the
    result reports `derived_index: pending`, the collection stays marked for
    the startup backfill (`needs_backfill`), and BM25 rebuilds on the next
-   search; otherwise `derived_index: rebuilt`.
+   search; otherwise `derived_index: rebuilt`. When the emptied collection
+   itself cannot be written, the cached collection is discarded and its
+   index file unlinked, so the result is `pending` for that reason and
+   `needs_backfill` is `true` either way: no record of the replaced tree is
+   served.
 6. **Discard the previous tree.** `imports/previous-<id>` is removed only
    after the new tree is in place and derived state has been handled.
 
+The busy check covers agent tasks only. Writers that create the companion
+directory ambiently (`companion_boundary::admit`'s `ensure_identity` on
+every `POST`/`PUT`/`PATCH` with a slug, the proactive loop, the scheduler)
+are not gated yet, so one of them can still recreate `instances/companion`
+in the window between the two renames: the second rename then fails with
+`AlreadyExists`, the rollback fails the same way, and the error names
+`imports/previous-<id>`. A process-wide import-in-progress gate those
+writers consult belongs with the route wiring in the last #74 slice.
+
 If the process dies between the two renames, the previous companion is at
-`imports/previous-<id>`; move it back to `instances/companion` by hand.
-Wiring the multipart route, the `restore_backup` tool, and the `nolune
-restore` CLI to this restore is the last #74 slice; until it lands,
-`POST /api/instances/companion/import` answers `501` and the tool stays
-disabled.
+`imports/previous-<id>`; move it back to `instances/companion` by hand. A
+crash during extraction leaves `imports/staging-<id>` behind. A startup
+recovery (move a lone `previous-*` back when `instances/companion` is
+missing, sweep the rest of `imports/`) belongs to `main.rs` and lands with
+the route wiring. Wiring the multipart route, the `restore_backup` tool,
+and the `nolune restore` CLI to this restore is that last #74 slice; until
+it lands, `POST /api/instances/companion/import` answers `501` and the tool
+stays disabled.
 
 ## Federation identity
 

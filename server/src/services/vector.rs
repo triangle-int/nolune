@@ -543,9 +543,23 @@ impl VectorStore {
     /// now on disk, under a lifecycle gate the caller already holds (the
     /// companion restore in `profile_import`). The collection is emptied
     /// first so no record of the replaced tree survives; a provider failure
-    /// then leaves it marked for the startup backfill.
+    /// then leaves it marked for the startup backfill. When the emptied
+    /// collection cannot be written, the cached copy and the index file are
+    /// discarded instead, so `Err` always means `needs_backfill()` is `true`
+    /// and nothing of the replaced tree is served.
     pub(crate) async fn rebuild_derived_no_lifecycle(&self, slug: &str) -> Result<usize, String> {
-        self.reset_collection(slug).await?;
+        if let Err(error) = self.reset_collection(slug).await {
+            let discarded = self.mutate(slug, |store, slug| store.discard(&slug)).await;
+            self.keywords.invalidate(slug);
+            return Err(match discarded {
+                Ok(()) => format!(
+                    "vector reset not persisted, collection discarded for the startup backfill: {error}"
+                ),
+                Err(discard) => format!(
+                    "vector reset not persisted ({error}) and the index file was not removed ({discard}); the cached collection is empty and marked for the startup backfill"
+                ),
+            });
+        }
         self.backfill_no_lifecycle(slug).await
     }
 
