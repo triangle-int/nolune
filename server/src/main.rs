@@ -212,6 +212,7 @@ async fn main() {
         });
     }
 
+    let cua = state.cua.clone();
     let app = app::router::build_router(state, static_dir);
 
     info!("Starting server on http://{addr}");
@@ -235,8 +236,23 @@ async fn main() {
     // Installers and the desktop app wait for this exact stdout line (#124).
     println!("nolune: ready http://localhost:{port}");
 
+    // The machine this server runs on as a computer-use target (#16): registered
+    // when a Cua driver and a display are there, skipped honestly otherwise. It
+    // starts behind the ready line, in the background, so a driver that stalls
+    // on its handshake or health report never delays serving; the registry is
+    // shared, so the target is listed as soon as it is registered.
+    tokio::spawn({
+        let cua = cua.clone();
+        async move { cua.start().await }
+    });
+
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            // End every open driver session and stop the driver child before
+            // connections drain; the grace timer still bounds the whole exit.
+            cua.shutdown().await;
+        })
         .await
         .expect("server exited unexpectedly");
     info!("gateway stopped");

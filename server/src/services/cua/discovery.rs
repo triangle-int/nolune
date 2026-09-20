@@ -103,15 +103,17 @@ fn binary_name() -> String {
     format!("{DRIVER_BINARY}{}", std::env::consts::EXE_SUFFIX)
 }
 
-/// Resolve the driver binary from the given sources. `Ok(None)` means no
-/// driver is installed anywhere it was looked for; a path that was named
-/// explicitly but cannot run is an error so a typo is never a silent
-/// "no GUI target".
+/// [`locate`] reduced to the path, for tests that only care where the
+/// driver is.
+#[cfg(test)]
 pub fn locate_driver(lookup: DriverLookup<'_>) -> Result<Option<PathBuf>, DriverLookupError> {
     locate(lookup).map(|found| found.map(|driver| driver.path))
 }
 
-/// [`locate_driver`], also saying which source the driver came from.
+/// Resolve the driver binary from the given sources, saying which source it
+/// came from. `Ok(None)` means no driver is installed anywhere it was looked
+/// for; a path that was named explicitly but cannot run is an error so a
+/// typo is never a silent "no GUI target".
 pub fn locate(lookup: DriverLookup<'_>) -> Result<Option<LocatedDriver>, DriverLookupError> {
     let explicit = [
         (

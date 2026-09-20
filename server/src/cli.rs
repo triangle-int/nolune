@@ -24,7 +24,7 @@ use crate::{
         driver,
         host::{self, DisplaySession, PlatformSupport},
         install::{self, InstallOutcome, InstallRequest, InstallStep},
-        transport::StdioDriverTransport,
+        transport::{DriverTransport as _, StdioDriverTransport},
     },
     uninstall,
 };
@@ -782,7 +782,7 @@ async fn probe_driver(driver: PathBuf) -> Probe {
         let transport = StdioDriverTransport::spawn(&driver).await?;
         let machine_id = MachineId::try_from("server-local").expect("static id");
         let report = driver::health_report(&transport, &machine_id).await;
-        transport.shutdown();
+        transport.close();
         report
     }
     .await;
