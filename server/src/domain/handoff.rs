@@ -209,6 +209,20 @@ fn resource_missing(record: &ContinuityRecord, resource: &ResourceRef) -> bool {
     })
 }
 
+/// A resource as the card names it: a file on a computer is named by that
+/// computer's display name, not its id.
+fn resource_label(resource: &ResourceRef, machines: &[KnownMachine]) -> String {
+    match resource {
+        ResourceRef::MachinePath { machine_id, path } => {
+            format!(
+                "{path} on {}",
+                computer_summary(machine_id, machines).display_name
+            )
+        }
+        _ => resource.describe(),
+    }
+}
+
 /// The card for one record against the current machine list.
 pub fn build_card(record: &ContinuityRecord, machines: &[KnownMachine]) -> HandoffCard {
     let summary = |machine_id: &str| computer_summary(machine_id, machines);
@@ -228,7 +242,7 @@ pub fn build_card(record: &ContinuityRecord, machines: &[KnownMachine]) -> Hando
             .iter()
             .map(|link| CardResource {
                 resource: link.resource.clone(),
-                label: link.resource.describe(),
+                label: resource_label(&link.resource, machines),
                 available: !resource_missing(record, &link.resource),
             })
             .collect(),
@@ -596,7 +610,7 @@ mod tests {
             vec![
                 ("upload upload_1", false),
                 ("memory notes/trip.md", true),
-                ("/Volumes/Trip on mac-a", true),
+                ("/Volumes/Trip on mac-a name", true),
             ]
         );
         assert_eq!(
@@ -613,8 +627,10 @@ mod tests {
         assert_eq!(card.created_at, T0);
         assert_eq!(card.updated_at, T0 + 1);
 
-        // The origin is still named when the machine list has never heard of it.
+        // The origin is still named when the machine list has never heard of
+        // it, and so is the computer holding a file.
         let card = build_card(&record, &[]);
+        assert_eq!(card.resources[2].label, "/Volumes/Trip on mac-a");
         let origin = card.origin.unwrap();
         assert_eq!(origin.display_name, "mac-a");
         assert!(!origin.known && !origin.online);
@@ -624,7 +640,7 @@ mod tests {
         // A task that never touched a computer has no origin computer.
         let chat_only = ContinuityRecord::new(
             "task_1767603600_00000001".into(),
-            "draft the newsletter".into(),
+            "draft the newsletter",
             Origin {
                 chat_id: "default".into(),
                 message_id: None,

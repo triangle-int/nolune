@@ -438,8 +438,8 @@ async fn a_task_started_on_one_computer_is_reviewed_and_continued_on_another() {
     assert_eq!(card["resources"][0]["label"], "memory notes/trip.md");
     assert_eq!(card["resources"][0]["available"], true);
     assert_eq!(
-        card["resources"][1]["label"],
-        format!("/Volumes/Trip on {MAC_A}")
+        card["resources"][1]["label"], "/Volumes/Trip on studio",
+        "a file is named by its computer's name, not its id"
     );
     assert_eq!(
         card["required"]["permissions"],
