@@ -126,8 +126,9 @@ const ALLOWED: &[(&str, &str, usize)] = &[
         "`bollyai.dev` and `www.bollyai.dev` answer 308",
         1,
     ),
-    ("docs/nolune-cutover.md", "titles itself \"Bolly Docs\"", 1),
+    ("docs/nolune-cutover.md", "\"Bolly Docs\"", 1),
     ("docs/nolune-cutover.md", "links to `bollyai.dev`", 1),
+    ("docs/nolune-cutover.md", "still called `bollyai`", 1),
     ("docs/nolune-cutover.md", "`triangle-int/bolly-skills`", 1),
 ];
 
