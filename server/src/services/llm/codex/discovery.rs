@@ -80,28 +80,93 @@ fn binary_name() -> String {
 /// so a typo never silently means "not installed"), else the first
 /// executable `codex` on `PATH`.
 pub fn locate(lookup: BinaryLookup<'_>) -> Result<(PathBuf, BinarySource), AppServerError> {
-    let _ = lookup;
-    todo!("locate the binary")
+    if let Some(named) = lookup.env_override {
+        let path = PathBuf::from(named);
+        return if is_executable(&path) {
+            Ok((path, BinarySource::Environment))
+        } else {
+            Err(AppServerError::Unusable {
+                path,
+                reason: format!("{CODEX_ENV} does not name an executable file"),
+            })
+        };
+    }
+    let name = binary_name();
+    lookup
+        .path
+        .into_iter()
+        .flat_map(std::env::split_paths)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .map(|dir| dir.join(&name))
+        .find(|candidate| is_executable(candidate))
+        .map(|path| (path, BinarySource::SearchPath))
+        .ok_or(AppServerError::NotInstalled)
 }
 
 /// The version from `codex --version` output (`codex-cli 0.155.0`): the
 /// last whitespace-separated token of the first non-empty line, without a
 /// `v` prefix, when it starts with a digit.
 pub fn parse_version_output(stdout: &str) -> Option<String> {
-    let _ = stdout;
-    todo!("parse --version output")
+    let line = stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?;
+    let token = line.split_whitespace().last()?;
+    let token = token.strip_prefix('v').unwrap_or(token);
+    token
+        .starts_with(|c: char| c.is_ascii_digit())
+        .then(|| token.to_owned())
 }
 
 /// Ask `binary --version` which version it is.
 pub async fn reported_version(binary: &Path) -> Result<String, AppServerError> {
-    let _ = binary;
-    todo!("run --version")
+    let unusable = |reason: String| AppServerError::Unusable {
+        path: binary.to_path_buf(),
+        reason,
+    };
+    let output = tokio::time::timeout(
+        VERSION_TIMEOUT,
+        tokio::process::Command::new(binary)
+            .arg("--version")
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| {
+        unusable(format!(
+            "--version did not answer within {VERSION_TIMEOUT:?}"
+        ))
+    })?
+    .map_err(|error| unusable(format!("cannot run --version: {error}")))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(unusable(format!(
+            "--version failed ({}): {}",
+            output.status,
+            stderr.trim()
+        )));
+    }
+    parse_version_output(&stdout)
+        .ok_or_else(|| unusable(format!("unexpected --version output {:?}", stdout.trim())))
 }
 
 /// [`locate`], then `--version`, then the pin check.
 pub async fn discover_with(lookup: BinaryLookup<'_>) -> Result<LocatedBinary, AppServerError> {
-    let _ = lookup;
-    todo!("discover and verify")
+    let (path, source) = locate(lookup)?;
+    let version = reported_version(&path).await?;
+    if version != CODEX_VERSION {
+        return Err(AppServerError::Incompatible {
+            path,
+            found: version,
+        });
+    }
+    Ok(LocatedBinary {
+        path,
+        source,
+        version,
+    })
 }
 
 /// [`discover_with`] from this process's environment.

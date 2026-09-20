@@ -73,31 +73,91 @@ impl std::fmt::Display for FrameError {
 /// Read one line the app-server wrote. Unknown members (`emittedAtMs` on
 /// notifications, whatever a later release adds) are ignored.
 pub fn parse_frame(line: &str) -> Result<Frame, FrameError> {
-    let _ = line;
-    todo!("parse one app-server line")
+    let not_json = || FrameError::NotJson(line.chars().take(120).collect());
+    let Ok(Value::Object(mut frame)) = serde_json::from_str::<Value>(line) else {
+        return Err(not_json());
+    };
+    let id = frame.remove("id");
+    let method = match frame.remove("method") {
+        Some(Value::String(method)) => Some(method),
+        Some(other) => {
+            return Err(FrameError::Shape(format!(
+                "method is not a string: {other}"
+            )));
+        }
+        None => None,
+    };
+    let params = frame
+        .remove("params")
+        .unwrap_or_else(|| Value::Object(Map::new()));
+    match (method, id) {
+        (Some(method), Some(id)) => Ok(Frame::Request { id, method, params }),
+        (Some(method), None) => Ok(Frame::Notification { method, params }),
+        (None, Some(id)) => {
+            let id = id.as_u64().ok_or_else(|| {
+                FrameError::Shape(format!("response id {id} is not one this client sends"))
+            })?;
+            let outcome = match (frame.remove("result"), frame.remove("error")) {
+                (Some(result), _) => Ok(result),
+                (None, Some(error)) => {
+                    Err(serde_json::from_value::<RpcError>(error).map_err(|error| {
+                        FrameError::Shape(format!("malformed error object: {error}"))
+                    })?)
+                }
+                (None, None) => {
+                    return Err(FrameError::Shape(format!(
+                        "response {id} has neither result nor error"
+                    )));
+                }
+            };
+            Ok(Frame::Response { id, outcome })
+        }
+        (None, None) => Err(FrameError::Shape(
+            "object has neither method nor id".to_owned(),
+        )),
+    }
 }
 
 /// The line that sends request `id` for `method`.
 pub fn request_line(id: RequestId, method: &str, params: Value) -> String {
-    let _ = (id, method, params);
-    todo!("encode a request")
+    let mut frame = Map::new();
+    frame.insert("id".into(), Value::from(id));
+    frame.insert("method".into(), Value::from(method));
+    frame.insert("params".into(), params);
+    line(frame)
 }
 
 /// The line that sends a notification.
 pub fn notification_line(method: &str, params: Value) -> String {
-    let _ = (method, params);
-    todo!("encode a notification")
+    let mut frame = Map::new();
+    frame.insert("method".into(), Value::from(method));
+    frame.insert("params".into(), params);
+    line(frame)
 }
 
 /// The line that answers the app-server's request `id`.
 pub fn response_line(id: &Value, outcome: Result<Value, RpcError>) -> String {
-    let _ = (id, outcome);
-    todo!("encode a response")
+    let mut frame = Map::new();
+    match outcome {
+        Ok(result) => {
+            frame.insert("id".into(), id.clone());
+            frame.insert("result".into(), result);
+        }
+        Err(error) => {
+            // The live shape puts `error` before `id`.
+            frame.insert(
+                "error".into(),
+                serde_json::to_value(error).expect("an error object serializes"),
+            );
+            frame.insert("id".into(), id.clone());
+        }
+    }
+    line(frame)
 }
 
 /// One JSON object per line: the app-server reads up to the newline, so a
-/// frame must never contain one. `serde_json` never emits raw newlines, and
-/// this keeps the invariant visible at the call sites.
+/// frame must never contain one. `serde_json` escapes newlines inside
+/// strings and emits none of its own, which this keeps visible.
 fn line(frame: Map<String, Value>) -> String {
     let mut text = Value::Object(frame).to_string();
     debug_assert!(!text.contains('\n'));

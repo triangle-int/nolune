@@ -10,7 +10,8 @@
 //! request params as the result) or `error` (an error object); `notify`
 //! events emitted before the answer and `then` events after it; `delay_ms`
 //! before answering; `exit` to die without answering; `ask` to send the
-//! client a request and answer only once the client answered that. Other
+//! client a request and answer only once the client answered that; `raw`
+//! to write a verbatim line with `$ID` replaced by the request id. Other
 //! lines are comments. Requests are served concurrently, so answers come
 //! back out of order like the real app-server's do. `initialize` must come
 //! first (`-32600 Not initialized` otherwise) and an unscripted method is
@@ -129,6 +130,8 @@ struct Entry {
     exit: Option<i32>,
     #[serde(default)]
     ask: Option<Ask>,
+    #[serde(default)]
+    raw: Option<String>,
 }
 
 fn load(fixture: &Path) -> HashMap<String, Entry> {
@@ -204,6 +207,12 @@ fn handle(
     }
     if let Some(code) = entry.exit {
         std::process::exit(code);
+    }
+    if let Some(raw) = &entry.raw {
+        let mut out = std::io::stdout().lock();
+        writeln!(out, "{}", raw.replace("$ID", &id.to_string())).expect("stdout");
+        out.flush().expect("stdout");
+        return;
     }
     if let Some(ask) = &entry.ask {
         let (tx, rx) = mpsc::channel();
