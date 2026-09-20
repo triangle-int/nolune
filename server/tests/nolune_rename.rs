@@ -1,6 +1,7 @@
 //! Guard for #68: the rename from Bolly to Nolune is complete and stays
-//! complete. Source, packaging, scripts, workflows and public docs carry only
-//! Nolune identifiers. The few intentional remnants (the separate
+//! complete. Source, tests, packaging, the example configuration, scripts,
+//! workflows and public docs carry only Nolune identifiers. The few
+//! intentional remnants (the separate
 //! `bolly-skills` registry, the legacy browser credential names the auth
 //! cleanup removes, other guards' forbidden strings, and the cutover record's
 //! history) are listed exactly, so any new reference fails CI.
@@ -19,6 +20,7 @@ const SCANNED_DIRS: &[&str] = &[
     "client/tests",
     "landing/src",
     "desktop/src",
+    "desktop/tests",
     "desktop/src-tauri/src",
     "server/src",
     "server/tests",
@@ -31,12 +33,17 @@ const SCANNED_DIRS: &[&str] = &[
 const SCANNED_FILES: &[&str] = &[
     "Cargo.toml",
     "server/Cargo.toml",
+    "server/config.example.toml",
     "desktop/src-tauri/Cargo.toml",
     "desktop/src-tauri/tauri.conf.json",
+    "desktop/src-tauri/capabilities/default.json",
     "client/package.json",
     "desktop/package.json",
     "landing/package.json",
     "README.md",
+    "client/README.md",
+    "desktop/README.md",
+    "landing/README.md",
     "SECURITY.md",
     "CONTRIBUTING.md",
 ];
