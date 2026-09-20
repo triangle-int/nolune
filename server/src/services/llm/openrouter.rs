@@ -1,7 +1,7 @@
 //! OpenRouter (#26): one key, models from many vendors, spoken as OpenAI
 //! Chat Completions at openrouter.ai. The wire format lives here only.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -64,10 +64,15 @@ fn tool_output_text(content: &ToolOutputContent) -> String {
 }
 
 /// Convert our internal Message format to Chat Completions messages: the
-/// system prompt first, a user turn's text and images as one message of
-/// parts, each tool result as a `tool` message (its images follow in a
-/// user message, since a tool message holds text only), and an assistant
-/// turn's text and `tool_calls` together.
+/// system prompt first, a user turn's tool results as `tool` messages, and
+/// its text and images (with the images the tool results carried, since a
+/// tool message holds text only) as one user message after them; an
+/// assistant turn's text and `tool_calls` together.
+///
+/// The `tool` messages of a turn stay contiguous: Chat Completions rejects
+/// a request where anything but a `tool` message follows the assistant's
+/// `tool_calls` before every call is answered, and the agent loop answers
+/// all of a turn's calls in one user message.
 pub(crate) fn messages_to_openrouter(
     system: &[&str],
     messages: &[Message],
@@ -86,14 +91,6 @@ pub(crate) fn messages_to_openrouter(
         match message {
             Message::User { content } => {
                 let mut parts: Vec<serde_json::Value> = Vec::new();
-                let flush = |parts: &mut Vec<serde_json::Value>,
-                             out: &mut Vec<serde_json::Value>| {
-                    if !parts.is_empty() {
-                        out.push(
-                            serde_json::json!({"role": "user", "content": std::mem::take(parts)}),
-                        );
-                    }
-                };
                 for block in content {
                     match block {
                         ContentBlock::Text { text } => {
@@ -101,7 +98,6 @@ pub(crate) fn messages_to_openrouter(
                         }
                         ContentBlock::Image { source, .. } => parts.push(image_part(source)),
                         ContentBlock::ToolOutput { call_id, content } => {
-                            flush(&mut parts, &mut out);
                             out.push(serde_json::json!({
                                 "role": "tool",
                                 "tool_call_id": call_id,
@@ -125,7 +121,9 @@ pub(crate) fn messages_to_openrouter(
                         _ => {}
                     }
                 }
-                flush(&mut parts, &mut out);
+                if !parts.is_empty() {
+                    out.push(serde_json::json!({"role": "user", "content": parts}));
+                }
             }
             Message::Assistant { content } => {
                 let mut text = String::new();
@@ -438,6 +436,42 @@ struct StreamedCall {
     arguments: String,
 }
 
+/// The calls of one streamed answer, in the order they started. A piece
+/// names its call by `index`; a piece at a known index whose id differs
+/// from the call there starts a new call (some vendors number every call
+/// 0), and the pieces that follow at that index continue the newest one.
+/// A piece without an index starts a new call when it carries an id and
+/// continues the last call otherwise.
+#[derive(Default)]
+struct StreamedCalls {
+    calls: Vec<StreamedCall>,
+    /// Wire index → position in `calls` of the call it currently names.
+    slots: HashMap<usize, usize>,
+}
+
+impl StreamedCalls {
+    /// The position of the call `piece` belongs to, and whether it starts one.
+    fn place(&mut self, piece: &serde_json::Value) -> (usize, bool) {
+        let has_id = piece.get("id").is_some_and(|id| !id.is_null());
+        let Some(index) = piece["index"].as_u64().map(|index| index as usize) else {
+            return if has_id {
+                (self.calls.len(), true)
+            } else {
+                (self.calls.len().saturating_sub(1), false)
+            };
+        };
+        match self.slots.get(&index) {
+            Some(&position) if !has_id || piece["id"] == self.calls[position].id.as_str() => {
+                (position, false)
+            }
+            _ => {
+                self.slots.insert(index, self.calls.len());
+                (self.calls.len(), true)
+            }
+        }
+    }
+}
+
 /// Streaming Chat Completions call: `data:` events with `choices[0].delta`
 /// text and `tool_calls` pieces, `finish_reason` on the last content event,
 /// a usage-only event when asked, `[DONE]` at the end. `: OPENROUTER
@@ -451,7 +485,7 @@ pub(crate) async fn openrouter_stream(
     let response = post_chat(backend, &body).await?;
 
     let mut text = String::new();
-    let mut calls: BTreeMap<usize, StreamedCall> = BTreeMap::new();
+    let mut calls = StreamedCalls::default();
     let mut finish: Option<StopReason> = None;
     let mut usage = Usage::default();
     let mut done = false;
@@ -500,25 +534,8 @@ pub(crate) async fn openrouter_stream(
                 }
                 if let Some(pieces) = delta["tool_calls"].as_array() {
                     for piece in pieces {
-                        let index = piece["index"]
-                            .as_u64()
-                            .map(|index| index as usize)
-                            .unwrap_or_else(|| {
-                                // Without an index a piece with an id starts
-                                // a new call; one without continues the last.
-                                if piece.get("id").is_some_and(|id| !id.is_null()) {
-                                    calls.len()
-                                } else {
-                                    calls.len().saturating_sub(1)
-                                }
-                            });
                         let function = &piece["function"];
-                        let starts_call = match calls.get(&index) {
-                            None => true,
-                            Some(call) => piece
-                                .get("id")
-                                .is_some_and(|id| !id.is_null() && id != call.id.as_str()),
-                        };
+                        let (position, starts_call) = calls.place(piece);
                         if starts_call {
                             let id = ToolCall::required_string(piece, "id")?;
                             let name = ToolCall::required_string(function, "name")?;
@@ -526,14 +543,11 @@ pub(crate) async fn openrouter_stream(
                                 id: id.clone(),
                                 name: name.clone(),
                             });
-                            calls.insert(
-                                index,
-                                StreamedCall {
-                                    id,
-                                    name,
-                                    arguments: String::new(),
-                                },
-                            );
+                            calls.calls.push(StreamedCall {
+                                id,
+                                name,
+                                arguments: String::new(),
+                            });
                         }
                         if let Some(arguments) =
                             function.get("arguments").filter(|value| !value.is_null())
@@ -544,7 +558,7 @@ pub(crate) async fn openrouter_stream(
                                 )
                             })?;
                             if !arguments.is_empty() {
-                                let call = calls.get_mut(&index).ok_or_else(|| {
+                                let call = calls.calls.get_mut(position).ok_or_else(|| {
                                     LlmError::InvalidResponse(
                                         "arguments without tool metadata".into(),
                                     )
@@ -575,8 +589,8 @@ pub(crate) async fn openrouter_stream(
         ));
     }
 
-    let mut tool_calls = Vec::with_capacity(calls.len());
-    for call in calls.into_values() {
+    let mut tool_calls = Vec::with_capacity(calls.calls.len());
+    for call in calls.calls {
         tool_calls.push(ToolCall {
             arguments: ToolCall::parse_arguments(&call.arguments)?,
             id: call.id,
@@ -1078,6 +1092,71 @@ mod tests {
         let post = request.iter().find(|r| r.method == "POST").unwrap();
         assert_eq!(post.path, "/api/v1/chat/completions");
         assert_eq!(post.headers["authorization"], "Bearer test-key");
+    }
+
+    /// Some vendors behind OpenRouter number every call `index: 0`. A piece
+    /// whose id differs from the call at its index starts a new call, the
+    /// argument pieces that follow at that index continue the newest one,
+    /// and the earlier call is kept.
+    #[tokio::test]
+    async fn streamed_calls_that_reuse_an_index_are_kept_apart() {
+        let sse = concat!(
+            r#"data: {"id":"gen-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"one","arguments":"{\"n\":1}"}}]},"finish_reason":null}]}"#,
+            "\n\n",
+            r#"data: {"id":"gen-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"b","type":"function","function":{"name":"two","arguments":"{\"n\":"}}]},"finish_reason":null}]}"#,
+            "\n\n",
+            r#"data: {"id":"gen-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"2}"}}]},"finish_reason":"tool_calls"}]}"#,
+            "\n\n",
+            "data: [DONE]\n\n"
+        );
+        let (url, _, task) = mock(None, 200, vec![], sse.into()).await;
+        let adapter = backend(&url, "anthropic/claude-sonnet-4.6")
+            .adapter()
+            .unwrap();
+        let events = Mutex::new(Vec::new());
+        let sink = |event| events.lock().unwrap().push(event);
+        let response = adapter
+            .stream(
+                LlmRequest::new(ExecutionScope::Subagent, &[], &[], &[]),
+                &sink,
+            )
+            .await
+            .unwrap();
+        task.abort();
+
+        assert_eq!(response.stop_reason, StopReason::ToolCalls);
+        let calls: Vec<(&str, &str, Value)> = response
+            .tool_calls
+            .iter()
+            .map(|call| (call.id.as_str(), call.name.as_str(), call.arguments.clone()))
+            .collect();
+        assert_eq!(
+            calls,
+            [("a", "one", json!({"n": 1})), ("b", "two", json!({"n": 2}))]
+        );
+        let events = events.lock().unwrap();
+        let started: Vec<&str> = events
+            .iter()
+            .filter_map(|event| match event {
+                LlmEvent::ToolCallStarted { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(started, ["a", "b"]);
+        let deltas: Vec<(&str, &str)> = events
+            .iter()
+            .filter_map(|event| match event {
+                LlmEvent::ToolArgumentsDelta { id, delta, .. } => {
+                    Some((id.as_str(), delta.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            deltas,
+            [("a", "{\"n\":1}"), ("b", "{\"n\":"), ("b", "2}")],
+            "the continuation piece belongs to the newest call at its index"
+        );
     }
 
     #[tokio::test]
@@ -1584,6 +1663,46 @@ mod tests {
             wire[5]
         );
         assert!(!serde_json::to_string(&wire).unwrap().contains(secret));
+
+        // The agent loop answers every call of a turn in one user message.
+        // Chat Completions wants those `tool` messages right after the
+        // assistant's `tool_calls`, so the images the results carry follow
+        // the last of them rather than splitting them.
+        let batch = [Message::User {
+            content: vec![
+                ContentBlock::ToolOutput {
+                    call_id: "call1".into(),
+                    content: ToolOutputContent::Blocks(vec![
+                        ContentBlock::text("captured"),
+                        ContentBlock::Image {
+                            source: ImageSource::Url {
+                                url: "https://example.test/shot.png".into(),
+                            },
+                            resource_provenance: None,
+                        },
+                    ]),
+                },
+                ContentBlock::ToolOutput {
+                    call_id: "call2".into(),
+                    content: ToolOutputContent::Text("found".into()),
+                },
+            ],
+        }];
+        let wire = messages_to_openrouter(&[], &batch);
+        let roles: Vec<&str> = wire.iter().map(|m| m["role"].as_str().unwrap()).collect();
+        assert_eq!(roles, ["tool", "tool", "user"], "{wire:?}");
+        assert_eq!(
+            wire[0],
+            json!({"role": "tool", "tool_call_id": "call1", "content": "captured"})
+        );
+        assert_eq!(
+            wire[1],
+            json!({"role": "tool", "tool_call_id": "call2", "content": "found"})
+        );
+        assert_eq!(
+            wire[2]["content"],
+            json!([{"type": "image_url", "image_url": {"url": "https://example.test/shot.png"}}])
+        );
 
         let tools = tools_to_openrouter(&[tool()]);
         assert_eq!(tools.len(), 1);

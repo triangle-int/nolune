@@ -274,7 +274,7 @@ mod tests {
     use super::super::{
         anthropic::messages_to_anthropic,
         openai::messages_to_openai,
-        types::{DocumentSource, HistoryEntry, ImageSource, LlmBackend},
+        types::{DocumentSource, HistoryEntry, ImageSource, LlmBackend, ToolOutputContent},
     };
     use super::*;
     use crate::config::{Config, LlmProvider};
@@ -811,6 +811,349 @@ mod tests {
             _: String,
         ) -> BoxFuture<'a, Result<String, crate::services::tool::ToolError>> {
             Box::pin(async { panic!("invalid provider response reached tool execution") })
+        }
+    }
+
+    /// A tool that answers every call with the same text.
+    struct Answers {
+        name: &'static str,
+        output: &'static str,
+    }
+    impl crate::services::tool::ToolDyn for Answers {
+        fn name(&self) -> String {
+            self.name.into()
+        }
+        fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
+            Box::pin(async {
+                ToolDefinition {
+                    name: self.name.into(),
+                    description: "test".into(),
+                    parameters: json!({"type":"object"}),
+                }
+            })
+        }
+        fn call<'a>(
+            &'a self,
+            _: String,
+        ) -> BoxFuture<'a, Result<String, crate::services::tool::ToolError>> {
+            Box::pin(async { Ok(self.output.into()) })
+        }
+    }
+
+    /// Like `mock_server_with`, but the n-th POST is answered with the n-th
+    /// body (the last one repeats), so a multi-turn loop can be driven.
+    async fn mock_server_sequence(
+        bodies: Vec<String>,
+    ) -> (String, CapturedRequests, tokio::task::JoinHandle<()>) {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let captured = requests.clone();
+        let bodies = Arc::new(bodies);
+        let app = axum::Router::new().fallback(axum::routing::post(
+            move |uri: axum::http::Uri, axum::Json(request): axum::Json<Value>| {
+                let captured = captured.clone();
+                let bodies = bodies.clone();
+                async move {
+                    let mut captured = captured.lock().unwrap();
+                    let body = bodies[captured.len().min(bodies.len() - 1)].clone();
+                    captured.push((uri.path().to_owned(), request));
+                    (axum::http::StatusCode::OK, body)
+                }
+            },
+        ));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (url, requests, task)
+    }
+
+    /// A screenshot-like tool result: text plus an image, as the computer,
+    /// files, image and memory tools return them.
+    const SHOT_OUTPUT: &str = r#"[{"type":"text","text":"captured"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"abc"}}]"#;
+    const SHOT_DATA_URL: &str = "data:image/png;base64,abc";
+
+    /// Turn 1: "Looking." plus two calls, `shot` (call1) and `search`
+    /// (call2); turn 2: "done". Non-streaming and streaming bodies per
+    /// provider.
+    fn round_trip_bodies(provider: LlmProvider, streaming: bool) -> Vec<String> {
+        match (provider, streaming) {
+            (LlmProvider::Anthropic, false) => vec![
+                json!({"content":[{"type":"text","text":"Looking."},{"type":"tool_use","id":"call1","name":"shot","input":{}},{"type":"tool_use","id":"call2","name":"search","input":{"q":"rust"}}],"stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":4}}).to_string(),
+                json!({"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{"input_tokens":20,"output_tokens":1}}).to_string(),
+            ],
+            (LlmProvider::Anthropic, true) => vec![
+                concat!(
+                    "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":10}}}\n\n",
+                    "event: content_block_start\ndata: {\"content_block\":{\"type\":\"text\"}}\n\n",
+                    "event: content_block_delta\ndata: {\"delta\":{\"type\":\"text_delta\",\"text\":\"Looking.\"}}\n\n",
+                    "event: content_block_stop\ndata: {}\n\n",
+                    "event: content_block_start\ndata: {\"content_block\":{\"type\":\"tool_use\",\"id\":\"call1\",\"name\":\"shot\"}}\n\n",
+                    "event: content_block_delta\ndata: {\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{}\"}}\n\n",
+                    "event: content_block_stop\ndata: {}\n\n",
+                    "event: content_block_start\ndata: {\"content_block\":{\"type\":\"tool_use\",\"id\":\"call2\",\"name\":\"search\"}}\n\n",
+                    "event: content_block_delta\ndata: {\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"q\\\":\\\"rust\\\"}\"}}\n\n",
+                    "event: content_block_stop\ndata: {}\n\n",
+                    "event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":4}}\n\n",
+                    "event: message_stop\ndata: {}\n\n"
+                )
+                .into(),
+                concat!(
+                    "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":20}}}\n\n",
+                    "event: content_block_start\ndata: {\"content_block\":{\"type\":\"text\"}}\n\n",
+                    "event: content_block_delta\ndata: {\"delta\":{\"type\":\"text_delta\",\"text\":\"done\"}}\n\n",
+                    "event: content_block_stop\ndata: {}\n\n",
+                    "event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n",
+                    "event: message_stop\ndata: {}\n\n"
+                )
+                .into(),
+            ],
+            (LlmProvider::Openai, false) => vec![
+                json!({"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"Looking."}]},{"type":"function_call","call_id":"call1","name":"shot","arguments":"{}"},{"type":"function_call","call_id":"call2","name":"search","arguments":"{\"q\":\"rust\"}"}],"usage":{"input_tokens":10,"output_tokens":4}}).to_string(),
+                json!({"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}],"usage":{"input_tokens":20,"output_tokens":1}}).to_string(),
+            ],
+            (LlmProvider::Openai, true) => vec![
+                concat!(
+                    "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Looking.\"}\n\n",
+                    "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"type\":\"function_call\",\"call_id\":\"call1\",\"name\":\"shot\"}}\n\n",
+                    "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":1,\"delta\":\"{}\"}\n\n",
+                    "data: {\"type\":\"response.output_item.added\",\"output_index\":2,\"item\":{\"type\":\"function_call\",\"call_id\":\"call2\",\"name\":\"search\"}}\n\n",
+                    "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":2,\"delta\":\"{\\\"q\\\":\\\"rust\\\"}\"}\n\n",
+                    "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"function_call\",\"call_id\":\"call1\",\"name\":\"shot\",\"arguments\":\"{}\"},{\"type\":\"function_call\",\"call_id\":\"call2\",\"name\":\"search\",\"arguments\":\"{\\\"q\\\":\\\"rust\\\"}\"}],\"usage\":{\"input_tokens\":10,\"output_tokens\":4}}}\n\n"
+                )
+                .into(),
+                concat!(
+                    "data: {\"type\":\"response.output_text.delta\",\"delta\":\"done\"}\n\n",
+                    "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\"}]}],\"usage\":{\"input_tokens\":20,\"output_tokens\":1}}}\n\n"
+                )
+                .into(),
+            ],
+            (LlmProvider::Openrouter, false) => vec![
+                openrouter_completion(
+                    "Looking.",
+                    json!([
+                        {"id":"call1","type":"function","function":{"name":"shot","arguments":"{}"}},
+                        {"id":"call2","type":"function","function":{"name":"search","arguments":"{\"q\":\"rust\"}"}}
+                    ]),
+                    "tool_calls",
+                    json!({"prompt_tokens":10,"completion_tokens":4}),
+                )
+                .to_string(),
+                openrouter_completion(
+                    "done",
+                    Value::Null,
+                    "stop",
+                    json!({"prompt_tokens":20,"completion_tokens":1}),
+                )
+                .to_string(),
+            ],
+            (LlmProvider::Openrouter, true) => vec![
+                concat!(
+                    "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Looking.\"},\"finish_reason\":null}]}\n\n",
+                    "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call1\",\"type\":\"function\",\"function\":{\"name\":\"shot\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}\n\n",
+                    "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\n",
+                    "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call2\",\"type\":\"function\",\"function\":{\"name\":\"search\",\"arguments\":\"{\\\"q\\\":\"}}]},\"finish_reason\":null}]}\n\n",
+                    "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"function\":{\"arguments\":\"\\\"rust\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+                    "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":4}}\n\n",
+                    "data: [DONE]\n\n"
+                )
+                .into(),
+                concat!(
+                    "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\n",
+                    "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":1}}\n\n",
+                    "data: [DONE]\n\n"
+                )
+                .into(),
+            ],
+        }
+    }
+
+    /// Turn 1 answers with two tool calls, both tools run (the first one
+    /// returns an image), and turn 2's request carries the assistant's
+    /// calls and every result in the shape the provider requires: Chat
+    /// Completions needs the `tool` messages contiguous right after the
+    /// assistant's `tool_calls`, Anthropic every `tool_result` in the one
+    /// user message that follows, the Responses API a `function_call_output`
+    /// per call.
+    #[tokio::test]
+    async fn tool_call_round_trip_keeps_every_result_next_to_its_call() {
+        for provider in PROVIDERS {
+            for streaming in [false, true] {
+                let label = format!("{provider:?} streaming={streaming}");
+                let (url, requests, task) =
+                    mock_server_sequence(round_trip_bodies(provider, streaming)).await;
+                let tools: Vec<Box<dyn crate::services::tool::ToolDyn>> = vec![
+                    Box::new(Answers {
+                        name: "shot",
+                        output: SHOT_OUTPUT,
+                    }),
+                    Box::new(Answers {
+                        name: "search",
+                        output: "found",
+                    }),
+                ];
+                let backend = backend(provider, &url);
+                let (text, trace) = if streaming {
+                    let workspace = tempfile::tempdir().unwrap();
+                    let result = backend
+                        .chat_with_tools_streaming(
+                            &["system"],
+                            Message::user("hi"),
+                            vec![],
+                            tools,
+                            tokio::sync::broadcast::channel(32).0,
+                            "companion",
+                            "chat",
+                            workspace.path(),
+                            None,
+                            Default::default(),
+                        )
+                        .await
+                        .unwrap_or_else(|error| panic!("{label}: {error:?}"));
+                    (result.text, result.rig_history.unwrap())
+                } else {
+                    let (text, _, trace) = backend
+                        .chat_with_tools_traced("system", "hi", vec![], tools)
+                        .await
+                        .unwrap_or_else(|error| panic!("{label}: {error:?}"));
+                    (text, trace)
+                };
+                task.abort();
+                assert_eq!(text, "done", "{label}");
+
+                // The canonical trace: user, assistant with both calls, user
+                // with both results (the first carrying its image), assistant.
+                assert_eq!(trace.len(), 4, "{label}: {trace:?}");
+                let Message::Assistant { content } = &trace[1] else {
+                    panic!("{label}: {:?}", trace[1]);
+                };
+                let calls: Vec<&str> = content
+                    .iter()
+                    .filter_map(|block| match block {
+                        ContentBlock::ToolCall { id, .. } => Some(id.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(calls, ["call1", "call2"], "{label}");
+                let Message::User { content } = &trace[2] else {
+                    panic!("{label}: {:?}", trace[2]);
+                };
+                assert_eq!(content.len(), 2, "{label}: {content:?}");
+                assert!(
+                    matches!(
+                        &content[0],
+                        ContentBlock::ToolOutput { call_id, content: ToolOutputContent::Blocks(blocks) }
+                            if call_id == "call1" && blocks.iter().any(|b| matches!(b, ContentBlock::Image { .. }))
+                    ),
+                    "{label}: {:?}",
+                    content[0]
+                );
+                assert!(
+                    matches!(
+                        &content[1],
+                        ContentBlock::ToolOutput { call_id, content: ToolOutputContent::Text(text) }
+                            if call_id == "call2" && text == "found"
+                    ),
+                    "{label}: {:?}",
+                    content[1]
+                );
+
+                // The second request, on the wire.
+                let requests = requests.lock().unwrap();
+                assert_eq!(requests.len(), 2, "{label}: {requests:?}");
+                let second = &requests[1].1;
+                match provider {
+                    LlmProvider::Openrouter => {
+                        let messages = second["messages"].as_array().unwrap();
+                        let roles: Vec<&str> = messages
+                            .iter()
+                            .map(|m| m["role"].as_str().unwrap())
+                            .collect();
+                        assert_eq!(
+                            roles,
+                            ["system", "user", "assistant", "tool", "tool", "user"],
+                            "{label}: {second}"
+                        );
+                        assert_eq!(messages[2]["content"], "Looking.", "{label}");
+                        assert_eq!(messages[2]["tool_calls"][0]["id"], "call1", "{label}");
+                        assert_eq!(
+                            messages[2]["tool_calls"][1]["function"]["arguments"],
+                            "{\"q\":\"rust\"}",
+                            "{label}"
+                        );
+                        assert_eq!(messages[3]["tool_call_id"], "call1", "{label}");
+                        assert_eq!(messages[3]["content"], "captured", "{label}");
+                        assert_eq!(messages[4]["tool_call_id"], "call2", "{label}");
+                        assert_eq!(messages[4]["content"], "found", "{label}");
+                        assert_eq!(
+                            messages[5]["content"][0]["image_url"]["url"], SHOT_DATA_URL,
+                            "{label}"
+                        );
+                    }
+                    LlmProvider::Anthropic => {
+                        let messages = second["messages"].as_array().unwrap();
+                        assert_eq!(messages.len(), 3, "{label}: {second}");
+                        let calls: Vec<&str> = messages[1]["content"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .filter(|block| block["type"] == "tool_use")
+                            .map(|block| block["id"].as_str().unwrap())
+                            .collect();
+                        assert_eq!(calls, ["call1", "call2"], "{label}");
+                        assert_eq!(messages[2]["role"], "user", "{label}");
+                        let results = messages[2]["content"].as_array().unwrap();
+                        assert_eq!(results.len(), 2, "{label}: {second}");
+                        assert!(
+                            results.iter().all(|block| block["type"] == "tool_result"),
+                            "{label}: {second}"
+                        );
+                        assert_eq!(results[0]["tool_use_id"], "call1", "{label}");
+                        assert_eq!(results[0]["content"][1]["type"], "image", "{label}");
+                        assert_eq!(results[1]["tool_use_id"], "call2", "{label}");
+                        assert_eq!(results[1]["content"], "found", "{label}");
+                    }
+                    LlmProvider::Openai => {
+                        let input = second["input"].as_array().unwrap();
+                        let calls: Vec<&str> = input
+                            .iter()
+                            .filter(|item| item["type"] == "function_call")
+                            .map(|item| item["call_id"].as_str().unwrap())
+                            .collect();
+                        assert_eq!(calls, ["call1", "call2"], "{label}: {second}");
+                        let outputs: Vec<(&str, &str)> = input
+                            .iter()
+                            .filter(|item| item["type"] == "function_call_output")
+                            .map(|item| {
+                                (
+                                    item["call_id"].as_str().unwrap(),
+                                    item["output"].as_str().unwrap(),
+                                )
+                            })
+                            .collect();
+                        assert_eq!(
+                            outputs,
+                            [("call1", "captured"), ("call2", "found")],
+                            "{label}: {second}"
+                        );
+                        let last_call = input
+                            .iter()
+                            .rposition(|item| item["type"] == "function_call")
+                            .unwrap();
+                        let first_output = input
+                            .iter()
+                            .position(|item| item["type"] == "function_call_output")
+                            .unwrap();
+                        assert!(last_call < first_output, "{label}: {second}");
+                        assert!(
+                            input.iter().any(|item| item["type"] == "message"
+                                && item["role"] == "user"
+                                && item["content"][0]["image_url"] == SHOT_DATA_URL),
+                            "{label}: {second}"
+                        );
+                    }
+                }
+            }
         }
     }
 
