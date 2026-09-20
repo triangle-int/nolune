@@ -16,10 +16,17 @@
 //! `--profile` selects the server like every other subcommand. Nothing here
 //! logs, nothing reads or builds a URL that carries an invite, and the only
 //! line that ever carries an invite secret is the one `invite` prints.
+//!
+//! The commands that make the server talk to peers (`accept`, `confirm`,
+//! `revoke`, `rotate`) wait for its report however long that takes: the
+//! server bounds every peer attempt with its own transport timeout, one
+//! origin after another, and the CLI does not guess at how many peers and
+//! origins that is. A server that was reached but never answered is told
+//! apart from one that is not running, because the work may stand there.
 
 use std::{
     io::{self, IsTerminal, Read},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use clap::Subcommand;
@@ -122,9 +129,32 @@ fn connect_base(config: &Config) -> String {
     format!("http://{host}:{}", config.port)
 }
 
+/// Connecting to the server: loopback answers or refuses at once, and a
+/// bound address elsewhere that swallows the handshake is given this long.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// A server answering from its own state that takes longer than this is
+/// wedged, and saying so beats hanging.
+const LOCAL_ANSWER_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long the CLI waits for the server's answer.
+#[derive(Clone, Copy)]
+enum Wait {
+    /// The server answers from its own state.
+    Local,
+    /// The server talks to peers before it can answer, each attempt bounded
+    /// by its own transport timeout and one origin after another. Only the
+    /// server knows how many that is, so the CLI puts no cap of its own
+    /// on the answer: a cap shorter than the server's worst case would
+    /// call a rotation that happened "not reachable".
+    Peers,
+}
+
 enum CallError {
-    /// The server did not answer at all.
+    /// The server did not take the request: nothing happened there.
     Unreachable(String),
+    /// The server took the request and no answer came back: the work
+    /// may stand there.
+    Unanswered(String),
     /// The server refused the profile's token.
     Unauthorized,
     /// The server answered with an error body.
@@ -132,16 +162,25 @@ enum CallError {
 }
 
 /// One owner request: the answer is JSON, or nothing (204).
-fn call(owner: &Owner, method: &str, path: &str, body: Option<Value>) -> Result<Value, CallError> {
+fn call(
+    owner: &Owner,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+    wait: Wait,
+) -> Result<Value, CallError> {
     let url = format!("{}{path}", owner.base);
     let token = owner.token.clone();
     let method = reqwest::Method::from_bytes(method.as_bytes()).expect("static method");
     // `main` is already inside the tokio runtime; the request runs on its own.
     let outcome = super::on_own_runtime(move || async move {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+        let mut builder = reqwest::Client::builder().connect_timeout(CONNECT_TIMEOUT);
+        if let Wait::Local = wait {
+            builder = builder.timeout(LOCAL_ANSWER_TIMEOUT);
+        }
+        let client = builder
             .build()
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| CallError::Unreachable(describe(&error)))?;
         let mut request = client.request(method, &url);
         if !token.is_empty() {
             request = request.bearer_auth(&token);
@@ -149,14 +188,26 @@ fn call(owner: &Owner, method: &str, path: &str, body: Option<Value>) -> Result<
         if let Some(body) = body {
             request = request.json(&body);
         }
-        let response = request.send().await.map_err(|error| error.to_string())?;
+        let response = request.send().await.map_err(|error| {
+            if error.is_connect() {
+                CallError::Unreachable(describe(&error))
+            } else {
+                CallError::Unanswered(describe(&error))
+            }
+        })?;
         let status = response.status();
-        let text = response.text().await.unwrap_or_default();
+        // The status arrived, so the server acted; a body cut short is
+        // still an answer that never came whole.
+        let text = response
+            .text()
+            .await
+            .map_err(|error| CallError::Unanswered(describe(&error)))?;
         let value = serde_json::from_str(&text).unwrap_or(Value::Null);
-        Ok::<_, String>((status, value))
+        Ok::<_, CallError>((status, value))
     });
     match outcome {
-        Err(error) | Ok(Err(error)) => Err(CallError::Unreachable(error)),
+        Err(error) => Err(CallError::Unreachable(error)),
+        Ok(Err(error)) => Err(error),
         Ok(Ok((status, _))) if status == reqwest::StatusCode::UNAUTHORIZED => {
             Err(CallError::Unauthorized)
         }
@@ -168,6 +219,19 @@ fn call(owner: &Owner, method: &str, path: &str, body: Option<Value>) -> Result<
     }
 }
 
+/// A transport error with its causes, so "error sending request" says
+/// whether the connection was refused, timed out, or closed.
+fn describe(error: &reqwest::Error) -> String {
+    let mut text = error.to_string();
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        text.push_str(": ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    text
+}
+
 /// Reports a failed call in the profile's terms and returns the exit code.
 fn report(error: CallError, verb: &str, profile: &Profile) -> i32 {
     let flag = super::profile_flag(profile);
@@ -175,6 +239,12 @@ fn report(error: CallError, verb: &str, profile: &Profile) -> i32 {
         CallError::Unreachable(error) => {
             eprintln!(
                 "{} is not reachable ({error}).\nStart it with `nolune gateway{flag}` and try again.",
+                super::display(profile)
+            );
+        }
+        CallError::Unanswered(error) => {
+            eprintln!(
+                "{} took the request but no answer came back ({error}).\nIt may have finished {verb} anyway: `nolune federation peers{flag}` shows what stands there, so check that before running this again.",
                 super::display(profile)
             );
         }
@@ -206,7 +276,7 @@ fn invite(json: bool, profile: &Profile) -> i32 {
         Ok(owner) => owner,
         Err(code) => return code,
     };
-    let issued = match call(&owner, "POST", "/api/federation/invites", None) {
+    let issued = match call(&owner, "POST", "/api/federation/invites", None, Wait::Local) {
         Ok(issued) => issued,
         Err(error) => return report(error, "minting an invite", profile),
     };
@@ -301,11 +371,13 @@ fn accept(argument: Option<String>, json: bool, profile: &Profile) -> i32 {
         Ok(owner) => owner,
         Err(code) => return code,
     };
+    // The server redeems the invite with the issuer over the wire.
     let answer = match call(
         &owner,
         "POST",
         "/api/federation/accept",
         Some(serde_json::json!({ "invite": line })),
+        Wait::Peers,
     ) {
         Ok(answer) => answer,
         Err(error) => return report(error, "accepting the invite", profile),
@@ -331,7 +403,7 @@ fn peers(json: bool, profile: &Profile) -> i32 {
         Ok(owner) => owner,
         Err(code) => return code,
     };
-    let overview = match call(&owner, "GET", "/api/federation/peers", None) {
+    let overview = match call(&owner, "GET", "/api/federation/peers", None, Wait::Local) {
         Ok(overview) => overview,
         Err(error) => return report(error, "listing peers", profile),
     };
@@ -453,6 +525,7 @@ fn confirm(companion_id: &str, profile: &Profile) -> i32 {
             encode_path(companion_id)
         ),
         None,
+        Wait::Peers,
     ) {
         Ok(answer) => answer,
         Err(error) => return report(error, "confirming the peer", profile),
@@ -493,6 +566,7 @@ fn revoke(companion_id: &str, profile: &Profile) -> i32 {
         "POST",
         &format!("/api/federation/peers/{}/revoke", encode_path(companion_id)),
         None,
+        Wait::Peers,
     ) {
         Ok(answer) => answer,
         Err(error) => return report(error, "revoking the peer", profile),
@@ -520,7 +594,8 @@ fn rotate(yes: bool, json: bool, profile: &Profile) -> i32 {
         Ok(owner) => owner,
         Err(code) => return code,
     };
-    let report_body = match call(&owner, "POST", "/api/federation/rotate", None) {
+    // Every paired peer is told before the report exists; this waits for it.
+    let report_body = match call(&owner, "POST", "/api/federation/rotate", None, Wait::Peers) {
         Ok(report_body) => report_body,
         Err(error) => return report(error, "rotating the identity", profile),
     };

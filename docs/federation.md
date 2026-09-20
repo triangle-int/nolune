@@ -90,6 +90,16 @@ that could not be reached is reported and keeps trusting the old key until
 it hears the proof. A rotated companion has a new id, which the listing
 shows beside its previous one.
 
+Telling the peers takes as long as it takes: the server gives every origin
+its own transport timeout (15 seconds) and tries them one after another, so
+the report for a rotation, a confirmation, or a revocation exists only once
+the last peer has answered or run out of time. The CLI waits for that
+report rather than guessing at a cap of its own. If the server was reached
+but the answer never arrived, the command says so and points at
+`nolune federation peers`, which shows what stands, instead of at
+`nolune gateway`: the work may have been done, and a rotation must not be
+repeated on the strength of a wrong message.
+
 ## No implicit trust on a shared host
 
 Profiles on the same host (`nolune gateway run --profile molinka` beside

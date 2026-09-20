@@ -191,6 +191,46 @@ fn http(port: u16, method: &str, path: &str, headers: &[(&str, &str)], body: &st
     response
 }
 
+/// One HTTP/1.1 request read whole off `stream` (head, then the body its
+/// Content-Length announces); returns the head. The caller decides whether
+/// to answer.
+fn read_request(stream: &mut TcpStream) -> String {
+    let mut reader = BufReader::new(stream);
+    let mut head = String::new();
+    let mut content_length = 0usize;
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+            break;
+        }
+        if let Some(value) = line
+            .split_once(':')
+            .filter(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+            .map(|(_, value)| value.trim())
+        {
+            content_length = value.parse().unwrap();
+        }
+        head.push_str(&line);
+    }
+    let mut body = vec![0u8; content_length];
+    reader.read_exact(&mut body).unwrap();
+    head
+}
+
+/// A well-formed invite line built in the test around `secret`, so a
+/// run can prove the secret shows up nowhere.
+fn invite_line_carrying(secret: &str) -> String {
+    let doc = serde_json::json!({
+        "origin": "https://a.test",
+        "secret": secret,
+        "issuer": serde_json::from_str::<serde_json::Value>(&read("server/tests/fixtures/federation/identity_v1.json")).unwrap(),
+    });
+    format!(
+        "{INVITE_PREFIX}{}",
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&doc).unwrap())
+    )
+}
+
 /// The invite line `nolune federation invite` printed, and the secret inside
 /// it (decoded here, in the test, to prove it never shows up anywhere else).
 fn invite_line_and_secret(stdout: &str) -> (String, String) {
@@ -298,15 +338,7 @@ fn accept_refuses_urls_and_junk_and_needs_a_running_server() {
 
     // A well-formed line with no server running: the server is named, the
     // line is not echoed.
-    let doc = serde_json::json!({
-        "origin": "https://a.test",
-        "secret": fake_secret,
-        "issuer": serde_json::from_str::<serde_json::Value>(&read("server/tests/fixtures/federation/identity_v1.json")).unwrap(),
-    });
-    let line = format!(
-        "{INVITE_PREFIX}{}",
-        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&doc).unwrap())
-    );
+    let line = invite_line_carrying(fake_secret);
     let (code, stdout, stderr) = run(cmd().args(["federation", "accept", &line]), None);
     assert_eq!(code, 1, "{stdout}{stderr}");
     assert!(stderr.contains("nolune gateway --profile solo"), "{stderr}");
@@ -339,6 +371,148 @@ fn accept_refuses_urls_and_junk_and_needs_a_running_server() {
     assert!(
         !home_dir.join(".nolune").exists(),
         "a named profile never touches the default root"
+    );
+}
+
+/// A gateway that took the request and hung up before answering is not
+/// one that is not running: the work may stand there (a rotation's report
+/// arrives only once every paired peer has been told, and the server's
+/// transport gives each origin its own timeout). The CLI says so and points
+/// at `peers`, never at `nolune gateway`, so an owner is not talked into
+/// rotating or revoking a second time on the strength of a wrong message.
+#[test]
+fn a_taken_request_with_no_answer_is_not_reported_as_unreachable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home_dir = tmp.path().join("home");
+    fs::create_dir_all(&home_dir).unwrap();
+    onboard_profile(&home_dir, "quiet");
+    // A stand-in for a busy gateway on the profile's port: it takes each
+    // request whole and hangs up without a word.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = mpsc::channel::<String>();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            if tx.send(read_request(&mut stream)).is_err() {
+                break;
+            }
+            // `stream` drops here: hung up, no answer.
+        }
+    });
+    let cmd = || profile_cmd(&home_dir, "quiet", Some(port));
+    let fake_secret = "quiet-secret-that-must-not-be-echoed";
+    let line = invite_line_carrying(fake_secret);
+    for (args, path) in [
+        (
+            &["federation", "rotate", "--yes"][..],
+            "POST /api/federation/rotate ",
+        ),
+        (
+            &["federation", "revoke", "someone"][..],
+            "POST /api/federation/peers/someone/revoke ",
+        ),
+        (
+            &["federation", "confirm", "someone"][..],
+            "POST /api/federation/peers/someone/confirm ",
+        ),
+        (
+            &["federation", "accept", &line][..],
+            "POST /api/federation/accept ",
+        ),
+        (
+            &["federation", "invite"][..],
+            "POST /api/federation/invites ",
+        ),
+        (&["federation", "peers"][..], "GET /api/federation/peers "),
+    ] {
+        let (code, stdout, stderr) = run(cmd().args(args), None);
+        let head = rx
+            .recv_timeout(Duration::from_secs(30))
+            .unwrap_or_else(|_| panic!("{args:?} never reached the server"));
+        assert!(head.starts_with(path), "{args:?} sent:\n{head}");
+        assert_eq!(code, 1, "{args:?}: {stdout}{stderr}");
+        assert!(
+            !stderr.contains("nolune gateway"),
+            "{args:?} blamed a server it reached:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("federation peers --profile quiet"),
+            "{args:?} must point at the listing:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("may") && stderr.to_lowercase().contains("answer"),
+            "{args:?} must say the work may stand and no answer came:\n{stderr}"
+        );
+        assert!(
+            !stdout.contains(fake_secret)
+                && !stderr.contains(fake_secret)
+                && !stderr.contains(&line),
+            "{args:?}: {stdout}{stderr}"
+        );
+    }
+}
+
+/// `rotate` waits for the server's report however long telling the peers
+/// takes: a gateway with two paired peers that accept and never answer
+/// needs the transport timeout twice over before it can report, and the
+/// CLI must not give up first and call a rotation that happened
+/// "not reachable".
+#[test]
+fn rotate_outlasts_the_server_telling_silent_peers() {
+    // Two peers that accept and never answer cost the server 15 s each,
+    // one after another, before the report exists.
+    const TWO_SILENT_PEERS: Duration = Duration::from_secs(32);
+    let tmp = tempfile::tempdir().unwrap();
+    let home_dir = tmp.path().join("home");
+    fs::create_dir_all(&home_dir).unwrap();
+    onboard_profile(&home_dir, "patient");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let report = serde_json::json!({
+        "identity": { "companion_id": "NEWID" },
+        "rotation": { "previous": { "companion_id": "OLDID" } },
+        "notified": [],
+        "unreachable": ["SILENT-ONE", "SILENT-TWO"],
+    })
+    .to_string();
+    let (tx, rx) = mpsc::channel::<String>();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        tx.send(read_request(&mut stream)).unwrap();
+        thread::sleep(TWO_SILENT_PEERS);
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{report}",
+            report.len()
+        )
+        .unwrap();
+        stream.flush().unwrap();
+    });
+    let started = Instant::now();
+    let (code, stdout, stderr) = run(
+        profile_cmd(&home_dir, "patient", Some(port)).args(["federation", "rotate", "--yes"]),
+        None,
+    );
+    let head = rx.recv_timeout(Duration::from_secs(30)).unwrap();
+    assert!(head.starts_with("POST /api/federation/rotate "), "{head}");
+    assert!(
+        started.elapsed() >= TWO_SILENT_PEERS,
+        "the CLI gave up after {:?}",
+        started.elapsed()
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(
+        !stderr.contains("nolune gateway"),
+        "a rotation that happened was called unreachable:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("OLDID") && stdout.contains("NEWID"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("unreachable: SILENT-ONE, SILENT-TWO"),
+        "{stdout}"
     );
 }
 
