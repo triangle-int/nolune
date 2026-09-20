@@ -26,7 +26,7 @@ pub use types::{ContentBlock, HistoryEntry, LlmBackend, Message, ToolChatResult}
 pub use types::{DocumentSource, ImageSource, ResourceProvenance};
 
 use agent_loop::{agent_loop, collect_tool_defs, streaming_agent_loop};
-use contract::{LlmError, LlmRequest, ProviderAdapter};
+use contract::{ExecutionScope, LlmError, LlmRequest, ProviderAdapter};
 use helpers::retry_on_rate_limit;
 
 pub(crate) use anthropic::messages_to_anthropic;
@@ -121,6 +121,7 @@ impl LlmBackend {
     }
 
     /// Simple chat without tools. Returns (text, tokens_used).
+    /// A subagent one-shot: its cache entries need only outlive the run.
     pub async fn chat(
         &self,
         system_prompt: &str,
@@ -141,7 +142,12 @@ impl LlmBackend {
                 let adapter = backend.adapter()?;
                 let system = [system.as_str()];
                 let response = adapter
-                    .complete(LlmRequest::new(&system, &messages, &[]))
+                    .complete(LlmRequest::new(
+                        ExecutionScope::Subagent,
+                        &system,
+                        &messages,
+                        &[],
+                    ))
                     .await?;
                 Ok((response.text, response.tokens_used))
             }
@@ -159,7 +165,7 @@ impl LlmBackend {
         retry_on_rate_limit(|| async {
             let messages = [Message::user(prompt)];
             let system = [system_prompt];
-            let mut request = LlmRequest::new(&system, &messages, &[]);
+            let mut request = LlmRequest::new(ExecutionScope::Subagent, &system, &messages, &[]);
             request.json_schema = Some(&schema);
             let response = self.adapter()?.complete(request).await?;
             Ok((response.text, response.tokens_used))
@@ -167,7 +173,8 @@ impl LlmBackend {
         .await
     }
 
-    /// Streaming chat with tools.
+    /// Streaming chat with tools: the conversation loop, so its prompt cache
+    /// outlives the pause between a person's turns (#137).
     pub async fn chat_with_tools_streaming(
         &self,
         system_prompt: &[&str],
@@ -191,6 +198,7 @@ impl LlmBackend {
 
         let result = streaming_agent_loop(
             self,
+            ExecutionScope::Conversation,
             system_prompt,
             &tool_defs,
             &tools,
@@ -233,10 +241,19 @@ impl LlmBackend {
         let mut messages = history;
         messages.push(Message::user(prompt));
 
-        agent_loop(self, system_blocks, &tool_defs, &tools, &mut messages).await
+        agent_loop(
+            self,
+            ExecutionScope::Subagent,
+            system_blocks,
+            &tool_defs,
+            &tools,
+            &mut messages,
+        )
+        .await
     }
 
-    /// Like `chat_with_tools_only` but returns the full message trace.
+    /// Like `chat_with_tools_only` but returns the full message trace. The
+    /// companion routines run here, in subagent scope.
     pub async fn chat_with_tools_traced(
         &self,
         system_prompt: &str,
@@ -252,8 +269,15 @@ impl LlmBackend {
         let tool_defs = collect_tool_defs(&tools).await;
         let mut messages = history;
         messages.push(Message::user(prompt));
-        let (text, tokens) =
-            agent_loop(self, system_blocks, &tool_defs, &tools, &mut messages).await?;
+        let (text, tokens) = agent_loop(
+            self,
+            ExecutionScope::Subagent,
+            system_blocks,
+            &tool_defs,
+            &tools,
+            &mut messages,
+        )
+        .await?;
         Ok((text, tokens, messages))
     }
 }
@@ -284,6 +308,7 @@ mod tests {
             &[],
             &[],
             100,
+            contract::ExecutionScope::Subagent,
             &base,
             None,
         )
@@ -322,6 +347,7 @@ mod tests {
             &[],
             &messages,
             100,
+            contract::ExecutionScope::Subagent,
             false,
             "provider-key",
         );
@@ -548,6 +574,7 @@ mod tests {
             &[],
             &msgs,
             4096,
+            contract::ExecutionScope::Subagent,
             false,
             "key",
         );
@@ -565,6 +592,7 @@ mod tests {
             &[],
             &msgs,
             4096,
+            contract::ExecutionScope::Subagent,
             false,
             "key",
         );
@@ -587,6 +615,7 @@ mod tests {
             &[],
             &msgs,
             4096,
+            contract::ExecutionScope::Subagent,
             false,
             "key",
         );
@@ -609,6 +638,7 @@ mod tests {
             &tools,
             &msgs,
             4096,
+            contract::ExecutionScope::Subagent,
             false,
             "key",
         );
@@ -617,6 +647,101 @@ mod tests {
         assert_eq!(t["input_schema"]["type"], "object");
         // Last tool gets cache_control
         assert_eq!(t["cache_control"]["type"], "ephemeral");
+    }
+
+    // ── Prompt-cache TTL per execution scope (#137) ──────────────────────
+
+    /// Every `cache_control` object anywhere in a request body.
+    fn cache_controls(value: &serde_json::Value) -> Vec<&serde_json::Value> {
+        fn walk<'a>(value: &'a serde_json::Value, out: &mut Vec<&'a serde_json::Value>) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    for (key, child) in map {
+                        if key == "cache_control" {
+                            out.push(child);
+                        } else {
+                            walk(child, out);
+                        }
+                    }
+                }
+                serde_json::Value::Array(items) => items.iter().for_each(|item| walk(item, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        walk(value, &mut out);
+        out
+    }
+
+    /// Builds a streaming chat request with two system blocks and two tools,
+    /// then checks each breakpoint the adapter places: both system blocks,
+    /// the last tool, and the top-level field. Nothing else may carry one,
+    /// and none may omit the ttl (the API would silently default to 5m).
+    fn assert_every_breakpoint_uses(scope: contract::ExecutionScope, ttl: &str) {
+        let tool = |name: &str| ToolDefinition {
+            name: name.into(),
+            description: "test".into(),
+            parameters: serde_json::json!({"type": "object"}),
+        };
+        let tools = vec![tool("first"), tool("last")];
+        let msgs = vec![Message::user("hi")];
+        let req = anthropic::build_anthropic_request(
+            "claude-sonnet-4-6",
+            &["block1", "block2"],
+            &tools,
+            &msgs,
+            4096,
+            scope,
+            true,
+            "key",
+        );
+        let expected = serde_json::json!({"type": "ephemeral", "ttl": ttl});
+        assert_eq!(req["cache_control"], expected, "top-level breakpoint");
+        for block in req["system"].as_array().unwrap() {
+            assert_eq!(
+                block["cache_control"], expected,
+                "system block {}",
+                block["text"]
+            );
+        }
+        let tools = req["tools"].as_array().unwrap();
+        assert!(
+            tools[0].get("cache_control").is_none(),
+            "only the last tool is a breakpoint"
+        );
+        assert_eq!(tools[1]["cache_control"], expected, "last tool breakpoint");
+        let all = cache_controls(&req);
+        assert_eq!(
+            all.len(),
+            4,
+            "two system blocks, last tool, top level: {all:?}"
+        );
+        assert!(
+            all.iter().all(|control| **control == expected),
+            "every breakpoint must be {expected}: {all:?}"
+        );
+    }
+
+    #[test]
+    fn execution_scopes_map_to_distinct_cache_ttls() {
+        use contract::ExecutionScope;
+        assert_eq!(ExecutionScope::Conversation.cache_ttl(), "1h");
+        assert_eq!(ExecutionScope::Subagent.cache_ttl(), "5m");
+        assert_ne!(
+            ExecutionScope::Conversation.cache_ttl(),
+            ExecutionScope::Subagent.cache_ttl(),
+            "conversation and subagent runs must not share one cache TTL"
+        );
+    }
+
+    #[test]
+    fn anthropic_conversation_requests_cache_for_one_hour() {
+        assert_every_breakpoint_uses(contract::ExecutionScope::Conversation, "1h");
+    }
+
+    #[test]
+    fn anthropic_subagent_requests_cache_for_five_minutes() {
+        assert_every_breakpoint_uses(contract::ExecutionScope::Subagent, "5m");
     }
 
     #[test]
@@ -633,6 +758,7 @@ mod tests {
             &tools,
             &msgs,
             4096,
+            contract::ExecutionScope::Subagent,
             true,
             "key",
         );
@@ -662,6 +788,7 @@ mod tests {
             &tools,
             &msgs,
             4096,
+            contract::ExecutionScope::Subagent,
             false,
             "key",
         );
@@ -680,6 +807,7 @@ mod tests {
             &[],
             &msgs,
             4096,
+            contract::ExecutionScope::Subagent,
             false,
             "key",
         );

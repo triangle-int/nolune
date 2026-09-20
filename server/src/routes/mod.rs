@@ -1,7 +1,9 @@
 pub mod activity;
 pub mod chat;
+pub mod commitments;
 pub mod companion;
 pub mod config;
+pub mod continuity;
 pub mod drops;
 
 pub mod health;

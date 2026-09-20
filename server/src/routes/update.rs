@@ -100,9 +100,8 @@ async fn check_update(State(state): State<AppState>) -> Json<UpdateCheck> {
 }
 
 async fn apply_update(State(state): State<AppState>) -> Json<serde_json::Value> {
-    // Find the update script in the configured installation directory
-    let nolune_home = std::env::var("NOLUNE_HOME")
-        .unwrap_or_else(|_| state.workspace_dir.to_string_lossy().to_string());
+    // Find the update script in this profile's installation directory (#107).
+    let nolune_home = state.workspace_dir.to_string_lossy().to_string();
     let candidates = [format!("{nolune_home}/bin/update")];
 
     let script = candidates

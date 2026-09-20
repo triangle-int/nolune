@@ -11,8 +11,8 @@ use std::fs;
 
 use crate::{
     app::state::AppState,
-    domain::memory::MemoryEntry,
-    services::{chat, memory, tools},
+    domain::{memory::MemoryEntry, receipt::MemoryReceipt},
+    services::{chat, memory, memory_receipts, profile_archive, tools},
 };
 
 /// Retired control-token resource namespace; always denies access.
@@ -65,6 +65,14 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/instances/{instance_slug}/memory/{*path}",
             get(read_memory_file).delete(delete_memory_file),
+        )
+        .route(
+            "/api/instances/{instance_slug}/{chat_id}/receipts",
+            get(list_memory_receipts),
+        )
+        .route(
+            "/api/instances/{instance_slug}/{chat_id}/receipts/{message_id}",
+            get(get_memory_receipt),
         )
         .route(
             "/api/instances/{instance_slug}/email",
@@ -671,6 +679,50 @@ async fn delete_memory_file(
 }
 
 // ---------------------------------------------------------------------------
+// Memory recall receipts (#84) — read-only provenance per assistant message
+// ---------------------------------------------------------------------------
+
+/// GET /api/instances/{slug}/{chat_id}/receipts — every receipt of one chat.
+async fn list_memory_receipts(
+    State(state): State<AppState>,
+    Path((instance_slug, chat_id)): Path<(String, String)>,
+) -> Result<Json<Vec<MemoryReceipt>>, StatusCode> {
+    let media = state.vector_store.media_store();
+    let workspace = state.workspace_dir.clone();
+    tokio::task::spawn_blocking(move || {
+        memory_receipts::list_receipts(&workspace, &media, &instance_slug, &chat_id)
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .map(Json)
+    .map_err(|error| {
+        log::warn!("[receipts] listing failed: {error}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })
+}
+
+/// GET /api/instances/{slug}/{chat_id}/receipts/{message_id} — one receipt,
+/// with deleted sources reported as missing; 404 only when no receipt exists.
+async fn get_memory_receipt(
+    State(state): State<AppState>,
+    Path((instance_slug, chat_id, message_id)): Path<(String, String, String)>,
+) -> Result<Json<MemoryReceipt>, StatusCode> {
+    let media = state.vector_store.media_store();
+    let workspace = state.workspace_dir.clone();
+    tokio::task::spawn_blocking(move || {
+        memory_receipts::read_receipt(&workspace, &media, &instance_slug, &chat_id, &message_id)
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .map_err(|error| {
+        log::warn!("[receipts] read failed: {error}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?
+    .map(Json)
+    .ok_or(StatusCode::NOT_FOUND)
+}
+
+// ---------------------------------------------------------------------------
 // Email config (per-instance SMTP/IMAP)
 // ---------------------------------------------------------------------------
 
@@ -811,60 +863,89 @@ async fn cancel_scheduled(
 // Export / Import
 // ---------------------------------------------------------------------------
 
-/// GET /api/instances/{slug}/export → tar.gz download of the entire instance directory.
-/// Streams the tar output directly so the client receives data immediately.
+/// GET /api/instances/{slug}/export → tar.gz download of the companion directory.
+/// The archive is written in-process by `services::profile_archive` (#74) on a
+/// blocking thread and streamed to the client as it is produced.
 async fn export_instance(
     Path(instance_slug): Path<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
+    use futures::StreamExt;
+
     let instance_dir = state.workspace_dir.join("instances").join(&instance_slug);
     if !instance_dir.is_dir() {
         return (StatusCode::NOT_FOUND, "instance not found").into_response();
     }
-
-    // Spawn tar and stream stdout directly to the response.
-    let child = tokio::process::Command::new("tar")
-        .arg("czf")
-        .arg("-") // stdout
-        .arg("--exclude=node_modules")
-        .arg("--exclude=.git")
-        .arg("--exclude=target")
-        .arg("--exclude=.venv")
-        .arg("--exclude=__pycache__")
-        .arg("--exclude=.next")
-        .arg("--exclude=dist")
-        .arg("--exclude=build")
-        .arg("-C")
-        .arg(state.workspace_dir.join("instances"))
-        .arg(&instance_slug)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn();
-
-    match child {
-        Ok(mut child) => {
-            let stdout = child.stdout.take().unwrap();
-            let stream = tokio_util::io::ReaderStream::new(stdout);
-            let body = Body::from_stream(stream);
-
-            // Reap the child process in the background to avoid zombies.
-            tokio::spawn(async move {
-                let _ = child.wait().await;
-            });
-
-            let headers = [
-                (axum::http::header::CONTENT_TYPE, "application/gzip"),
-                (
-                    axum::http::header::CONTENT_DISPOSITION,
-                    &format!("attachment; filename=\"{instance_slug}.tar.gz\""),
-                ),
-            ];
-            (headers, body).into_response()
-        }
+    let source = match profile_archive::open_companion_dir(&instance_dir) {
+        Ok(dir) => dir,
         Err(e) => {
-            log::error!("[export] failed to spawn tar: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "export failed").into_response()
+            log::error!("[export] failed to open companion directory: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "export failed").into_response();
         }
+    };
+
+    // The first chunk (or the first error) decides the status code. A failure
+    // after that aborts the body; the writer poisons its sink first, so the
+    // bytes already delivered lack the tar and gzip trailers and no reader
+    // accepts them as a complete backup.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<std::io::Result<axum::body::Bytes>>(16);
+    tokio::task::spawn_blocking(move || {
+        let mut sink = ArchiveChunks { tx: tx.clone() };
+        if let Err(error) = profile_archive::write_archive(&source, &mut sink) {
+            log::error!("[export] failed to write archive: {error}");
+            let _ = tx.blocking_send(Err(std::io::Error::other(error.to_string())));
+        }
+    });
+    let first = match rx.recv().await {
+        Some(Ok(chunk)) => chunk,
+        Some(Err(_)) | None => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "export failed").into_response();
+        }
+    };
+    let rest = futures::stream::unfold(rx, |mut rx| async move {
+        rx.recv().await.map(|chunk| (chunk, rx))
+    });
+    let body = Body::from_stream(
+        futures::stream::once(async move { Ok::<_, std::io::Error>(first) }).chain(rest),
+    );
+
+    let headers = [
+        (
+            axum::http::header::CONTENT_TYPE,
+            profile_archive::ARCHIVE_CONTENT_TYPE,
+        ),
+        (
+            axum::http::header::CONTENT_DISPOSITION,
+            &format!(
+                "attachment; filename=\"{}\"",
+                profile_archive::ARCHIVE_FILE_NAME
+            ),
+        ),
+    ];
+    (headers, body).into_response()
+}
+
+/// `Write` sink that hands archive chunks from the blocking writer to the
+/// response stream and stops the writer once the client has gone away.
+struct ArchiveChunks {
+    tx: tokio::sync::mpsc::Sender<std::io::Result<axum::body::Bytes>>,
+}
+
+impl std::io::Write for ArchiveChunks {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        self.tx
+            .blocking_send(Ok(axum::body::Bytes::copy_from_slice(buf)))
+            .map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::BrokenPipe, "export client went away")
+            })?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -926,6 +1007,182 @@ mod media_tests {
         );
         assert!(!workspace.path().join("instances/new").exists());
         assert_eq!(store.list_all("existing", 10).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn export_streams_an_in_process_archive_that_round_trips() {
+        use axum::{
+            body::{Body, to_bytes},
+            http::Request,
+        };
+        use cap_std::{ambient_authority, fs::Dir};
+        use tower::ServiceExt;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let companion = workspace.path().join("instances/companion");
+        std::fs::create_dir_all(companion.join("memory/notes")).unwrap();
+        std::fs::write(
+            companion.join("companion.json"),
+            serde_json::to_vec(&crate::domain::companion::CompanionIdentity::canonical()).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(companion.join("soul.md"), b"# soul\n").unwrap();
+        std::fs::write(companion.join("memory/notes/tea.md"), b"oolong").unwrap();
+        let mut state = AppState::new(crate::config::Config::default()).await;
+        state.workspace_dir = workspace.path().to_owned();
+        let app = router().with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/instances/companion/export")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[axum::http::header::CONTENT_TYPE],
+            "application/gzip"
+        );
+        assert_eq!(
+            response.headers()[axum::http::header::CONTENT_DISPOSITION],
+            "attachment; filename=\"companion.tar.gz\""
+        );
+        let archive = to_bytes(response.into_body(), 16 * 1024 * 1024)
+            .await
+            .unwrap();
+
+        let staging = workspace.path().join("staging");
+        std::fs::create_dir(&staging).unwrap();
+        let staging_dir = Dir::open_ambient_dir(&staging, ambient_authority()).unwrap();
+        let summary = profile_archive::extract_into(archive.as_ref(), &staging_dir).unwrap();
+        assert_eq!(summary.files, 3);
+        assert_eq!(
+            std::fs::read(staging.join("memory/notes/tea.md")).unwrap(),
+            b"oolong"
+        );
+        assert_eq!(std::fs::read(staging.join("soul.md")).unwrap(), b"# soul\n");
+    }
+
+    #[tokio::test]
+    async fn export_fails_before_streaming_when_the_marker_is_missing() {
+        use axum::{
+            body::{Body, to_bytes},
+            http::Request,
+        };
+        use tower::ServiceExt;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let companion = workspace.path().join("instances/companion");
+        std::fs::create_dir_all(&companion).unwrap();
+        std::fs::write(companion.join("soul.md"), b"# soul\n").unwrap();
+        let mut state = AppState::new(crate::config::Config::default()).await;
+        state.workspace_dir = workspace.path().to_owned();
+        let app = router().with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/instances/companion/export")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = to_bytes(response.into_body(), 4096).await.unwrap();
+        assert_eq!(&body[..], b"export failed");
+    }
+
+    /// A failure after the first chunk has left cannot change the status any
+    /// more, so the body is aborted instead; the bytes delivered up to then
+    /// must not form an archive the reader accepts, or a client that keeps
+    /// the partial download holds a backup that silently lacks files.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn export_aborts_without_a_complete_archive_when_a_file_is_unreadable() {
+        use axum::{body::Body, http::Request};
+        use cap_std::{ambient_authority, fs::Dir};
+        use futures::StreamExt;
+        use std::os::unix::fs::PermissionsExt;
+        use tower::ServiceExt;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let companion = workspace.path().join("instances/companion");
+        std::fs::create_dir_all(&companion).unwrap();
+        std::fs::write(
+            companion.join("companion.json"),
+            serde_json::to_vec(&crate::domain::companion::CompanionIdentity::canonical()).unwrap(),
+        )
+        .unwrap();
+        // Incompressible bytes so real chunks stream before the failure.
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        let noise: Vec<u8> = (0..256 * 1024)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (state >> 56) as u8
+            })
+            .collect();
+        std::fs::write(companion.join("a.md"), &noise).unwrap();
+        let unreadable = companion.join("b_unreadable.md");
+        std::fs::write(&unreadable, b"secret").unwrap();
+        std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::File::open(&unreadable).is_ok() {
+            // Running as root: permissions cannot make the read fail.
+            return;
+        }
+        std::fs::write(companion.join("c.md"), b"after the failure").unwrap();
+        let mut state = AppState::new(crate::config::Config::default()).await;
+        state.workspace_dir = workspace.path().to_owned();
+        let app = router().with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/instances/companion/export")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let mut chunks = response.into_body().into_data_stream();
+        let mut delivered = Vec::new();
+        let mut aborted = false;
+        while let Some(chunk) = chunks.next().await {
+            match chunk {
+                Ok(bytes) => delivered.extend_from_slice(&bytes),
+                Err(_) => {
+                    aborted = true;
+                    break;
+                }
+            }
+        }
+        assert!(aborted, "the body must end in an error, not a clean EOF");
+        assert!(
+            !delivered.is_empty(),
+            "the failure must come after the first chunk"
+        );
+
+        let staging = workspace.path().join("staging");
+        std::fs::create_dir(&staging).unwrap();
+        let staging_dir = Dir::open_ambient_dir(&staging, ambient_authority()).unwrap();
+        let error = profile_archive::extract_into(delivered.as_slice(), &staging_dir).unwrap_err();
+        assert!(
+            matches!(error, profile_archive::ArchiveError::Malformed(_)),
+            "the delivered prefix must be refused as truncated, got: {error}"
+        );
+        assert!(!staging.join("c.md").exists());
     }
 
     #[tokio::test]
@@ -1142,5 +1399,111 @@ mod media_tests {
             state.vector_store.list_all("one", 10).await.unwrap().len(),
             3
         );
+    }
+}
+
+#[cfg(test)]
+mod receipt_tests {
+    use super::*;
+    use crate::domain::receipt::{Confidence, RecallReason, RecalledMemory, SourceStatus};
+    use axum::{
+        body::{Body, to_bytes},
+        http::Request,
+    };
+    use tower::ServiceExt;
+
+    async fn state_with_receipt(ws: &std::path::Path) -> AppState {
+        let memory = ws.join("instances/one/memory");
+        std::fs::create_dir_all(&memory).unwrap();
+        std::fs::write(memory.join("note.md"), "Orion nebula").unwrap();
+        let message = crate::domain::chat::ChatMessage {
+            id: "msg_1".into(),
+            role: crate::domain::chat::ChatRole::Assistant,
+            content: "hi".into(),
+            created_at: "1".into(),
+            kind: Default::default(),
+            tool_name: None,
+            mcp_app_html: None,
+            mcp_app_input: None,
+            model: None,
+        };
+        let memories = vec![
+            RecalledMemory {
+                path: "note.md".into(),
+                source: "note.md".into(),
+                excerpt: "Orion nebula".into(),
+                reason: RecallReason::Semantic,
+                linked_from: None,
+                confidence: Confidence::High,
+                retrieved_at: "2026-09-20T12:00:00Z".into(),
+                source_status: SourceStatus::Present,
+            },
+            RecalledMemory {
+                path: "gone.md".into(),
+                source: "gone.md".into(),
+                excerpt: "deleted later".into(),
+                reason: RecallReason::Keyword,
+                linked_from: None,
+                confidence: Confidence::Low,
+                retrieved_at: "2026-09-20T12:00:00Z".into(),
+                source_status: SourceStatus::Present,
+            },
+        ];
+        memory_receipts::write_receipts(ws, "one", "default", &[message], &memories).unwrap();
+        let mut state = AppState::new(crate::config::Config::default()).await;
+        state.workspace_dir = ws.to_owned();
+        state.vector_store =
+            std::sync::Arc::new(crate::services::vector::VectorStore::connect(ws).await);
+        state
+    }
+
+    async fn get_json(state: &AppState, uri: &str) -> (StatusCode, serde_json::Value) {
+        let response = router()
+            .with_state(state.clone())
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let value = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, value)
+    }
+
+    #[tokio::test]
+    async fn receipt_routes_serve_one_chat_and_report_missing_sources() {
+        let ws = tempfile::tempdir().unwrap();
+        let state = state_with_receipt(ws.path()).await;
+
+        let (status, receipt) = get_json(&state, "/api/instances/one/default/receipts/msg_1").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(receipt["message_id"], "msg_1");
+        assert_eq!(receipt["chat_id"], "default");
+        assert_eq!(receipt["memories"][0]["path"], "note.md");
+        assert_eq!(receipt["memories"][0]["reason"], "semantic");
+        assert_eq!(receipt["memories"][0]["confidence"], "high");
+        assert_eq!(receipt["memories"][0]["source_status"], "present");
+        assert!(receipt["memories"][0].get("score").is_none());
+        assert_eq!(receipt["memories"][1]["path"], "gone.md");
+        assert_eq!(
+            receipt["memories"][1]["source_status"], "missing",
+            "a deleted source never fails the receipt"
+        );
+
+        let (status, listed) = get_json(&state, "/api/instances/one/default/receipts").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(listed.as_array().map(Vec::len), Some(1));
+        assert_eq!(listed[0]["message_id"], "msg_1");
+
+        for uri in [
+            "/api/instances/one/default/receipts/msg_2",
+            "/api/instances/one/other/receipts/msg_1",
+            "/api/instances/one/default/receipts/..%2Fmsg_1",
+        ] {
+            let (status, _) = get_json(&state, uri).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
+        }
+        let (status, listed) = get_json(&state, "/api/instances/one/other/receipts").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(listed, serde_json::json!([]));
     }
 }

@@ -12,6 +12,9 @@ import type {
 	SoulTemplate,
 	ProactiveRun,
 	ProactivePolicy,
+	ContinuityListing,
+	ContinuityRecord,
+	ContinuityUpdate,
 	UpdateLlmRequest,
 	MemoryEntry,
 	UploadMeta,
@@ -577,6 +580,38 @@ export function updateProactivePolicy(slug: string, policy: ProactivePolicy): Pr
 	});
 }
 
+/** Resumable task records (#81). Reads run the reference check; writes carry a note. */
+export function fetchContinuity(slug: string, resumable = false): Promise<ContinuityListing> {
+	return json(`/api/instances/${encodeURIComponent(slug)}/continuity${resumable ? "?resumable=true" : ""}`);
+}
+
+export function fetchContinuityRecord(slug: string, recordId: string): Promise<ContinuityRecord> {
+	return json(`/api/instances/${encodeURIComponent(slug)}/continuity/${encodeURIComponent(recordId)}`);
+}
+
+export function updateContinuityRecord(slug: string, recordId: string, update: ContinuityUpdate): Promise<ContinuityRecord> {
+	return json(`/api/instances/${encodeURIComponent(slug)}/continuity/${encodeURIComponent(recordId)}`, {
+		method: "PUT",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(update),
+	});
+}
+
+export function completeContinuityRecord(slug: string, recordId: string, note = ""): Promise<ContinuityRecord> {
+	return json(`/api/instances/${encodeURIComponent(slug)}/continuity/${encodeURIComponent(recordId)}/complete`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ note }),
+	});
+}
+
+export function dismissContinuityRecord(slug: string, recordId: string, note = ""): Promise<ContinuityRecord> {
+	return json(`/api/instances/${encodeURIComponent(slug)}/continuity/${encodeURIComponent(recordId)}/dismiss`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ note }),
+	});
+}
 
 /** A desktop connected to the companion through the Nolune desktop app (#98). */
 export interface MachineInfo {
