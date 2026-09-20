@@ -2,7 +2,7 @@
 
 Everything the companion starts on its own passes through one loop (#92):
 hourly check-ins, explicit schedules, connected-computer events, manual
-triggers, commitment checks (#85), and the future handoff (#82) trigger.
+triggers, commitment checks (#85), and accepted handoffs (#82).
 There is one execution record, one policy, and one place where duplicates,
 quiet hours, cooldowns, and the attention budget are enforced.
 
@@ -293,4 +293,5 @@ a date alone is the start of that day. Every write is broadcast as
 ## Migration hooks
 
 #85 adds the commitment trigger and its evaluator; #82 adds the handoff
-trigger.
+trigger, admitted only by the user's acceptance of a handoff card (see
+[companion-storage.md](companion-storage.md#handoff-cards)).

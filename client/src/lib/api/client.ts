@@ -15,6 +15,11 @@ import type {
 	ContinuityListing,
 	ContinuityRecord,
 	ContinuityUpdate,
+	ContinuationCheck,
+	ContinuationPreview,
+	HandoffAccepted,
+	HandoffCard,
+	HandoffListing,
 	UpdateLlmRequest,
 	MemoryEntry,
 	UploadMeta,
@@ -613,6 +618,65 @@ export function dismissContinuityRecord(slug: string, recordId: string, note = "
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ note }),
 	});
+}
+
+/** Handoff cards (#82): reads derive the card; the three decisions are the only writes. */
+export function fetchHandoffs(slug: string): Promise<HandoffListing> {
+	return json(`/api/instances/${encodeURIComponent(slug)}/handoffs`);
+}
+
+export function fetchHandoff(slug: string, recordId: string): Promise<HandoffCard> {
+	return json(`/api/instances/${encodeURIComponent(slug)}/continuity/${encodeURIComponent(recordId)}/handoff`);
+}
+
+/** The destination and every check for continuing there. Starts nothing. */
+export function previewHandoff(slug: string, recordId: string, machineId: string): Promise<ContinuationPreview> {
+	return json(
+		`/api/instances/${encodeURIComponent(slug)}/continuity/${encodeURIComponent(recordId)}/handoff/preview?machine_id=${encodeURIComponent(machineId)}`,
+	);
+}
+
+/** A refused continuation: the server's checks, each with a sentence to show. */
+export class HandoffNotReady extends Error {
+	checks: ContinuationCheck[];
+	constructor(message: string, checks: ContinuationCheck[]) {
+		super(message);
+		this.name = "HandoffNotReady";
+		this.checks = checks;
+	}
+}
+
+/**
+ * Continue the task on the computer with that stable id. Re-checked by the
+ * server at this moment; a refusal throws `HandoffNotReady` with the reasons.
+ * Accepting again while the continuation runs returns the same run.
+ */
+export function acceptHandoff(slug: string, recordId: string, machineId: string): Promise<HandoffAccepted> {
+	return acceptHandoffRequest(slug, recordId, machineId);
+}
+
+async function acceptHandoffRequest(slug: string, recordId: string, machineId: string): Promise<HandoffAccepted> {
+	const res = await authedFetch(
+		`/api/instances/${encodeURIComponent(slug)}/continuity/${encodeURIComponent(recordId)}/handoff/accept`,
+		{ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine_id: machineId }) },
+	);
+	if (res.status === 401) throw new AuthError();
+	if (res.status === 409) {
+		const body = (await res.json().catch(() => null)) as { message?: string; checks?: ContinuationCheck[] } | null;
+		throw new HandoffNotReady(body?.message ?? "cannot continue yet", body?.checks ?? []);
+	}
+	if (!res.ok) throw new Error(await res.text().catch(() => res.statusText));
+	return res.json();
+}
+
+/** Keep there: leave the task on its origin computer and stop offering the card until explicit work updates it. */
+export function keepHandoff(slug: string, recordId: string): Promise<HandoffCard> {
+	return json(`/api/instances/${encodeURIComponent(slug)}/continuity/${encodeURIComponent(recordId)}/handoff/keep`, { method: "POST" });
+}
+
+/** Dismiss: stop offering the card until explicit work updates the record; the record stays resumable. */
+export function dismissHandoff(slug: string, recordId: string): Promise<HandoffCard> {
+	return json(`/api/instances/${encodeURIComponent(slug)}/continuity/${encodeURIComponent(recordId)}/handoff/dismiss`, { method: "POST" });
 }
 
 export function fetchMachines(slug: string): Promise<{ machines: MachineInfo[] }> {

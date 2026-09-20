@@ -5,6 +5,7 @@
 	import { getWebSocket } from "$lib/stores/websocket.svelte.js";
 	import { getToasts } from "$lib/stores/toast.svelte.js";
 	import { upsertRun } from "$lib/activity/receipts.js";
+	import HandoffCards from "$lib/components/continuity/HandoffCards.svelte";
 
 	const toast = getToasts();
 	let { slug }: { slug: string } = $props();
@@ -80,6 +81,8 @@
 		<p>What your companion did on its own, why, and what it was allowed to do. Nothing here is private reasoning.</p>
 		<a class="nl-button-secondary activity-drops-link" href={`/${slug}/drops`}>Things it made · Drops</a>
 	</header>
+
+	<HandoffCards {slug} />
 
 	{#if loading}
 		<p role="status" class="activity-center">Loading activity…</p>
