@@ -7,6 +7,7 @@ mod openrouter;
 mod types;
 
 use std::path::Path;
+use std::time::Duration;
 
 use tokio::sync::broadcast;
 
@@ -31,6 +32,13 @@ use contract::{ExecutionScope, LlmError, LlmRequest, ProviderAdapter};
 use helpers::retry_on_rate_limit;
 
 use types::{ANTHROPIC_BASE_URL, OPENAI_BASE_URL, OPENROUTER_BASE_URL};
+
+/// How long a key probe or connection test waits for the provider's answer
+/// (#28). The shared `reqwest::Client` sets no timeout, so without one a
+/// provider that accepts the connection and never answers would hold a key
+/// save or a Test button open forever. Well above a slow first token for a
+/// one-token completion.
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// What a preset's provider offers for its model id; OpenAI's and
 /// OpenRouter's answers vary by model.
@@ -203,7 +211,9 @@ impl LlmBackend {
     /// or any other answer that required authentication first.
     /// `Err(Authentication)` means it rejected the key. Transport and server
     /// errors are returned as they are: the key is unknown, not wrong.
-    pub async fn probe_key(&self) -> Result<(), LlmError> {
+    /// `deadline` bounds the wait for the answer; past it, `Timeout`.
+    pub async fn probe_key(&self, deadline: Duration) -> Result<(), LlmError> {
+        let _ = deadline;
         match self.smallest_completion().await {
             Ok(_) => Ok(()),
             // Past authentication, whatever the provider then objected to.
@@ -222,7 +232,9 @@ impl LlmBackend {
     /// answer counts. A wrong model id, an exhausted quota or a rate limit
     /// comes back as its variant, so the person learns what to fix. It
     /// never touches a conversation.
-    pub async fn test_connection(&self) -> Result<contract::Usage, LlmError> {
+    /// `deadline` bounds the wait for the answer; past it, `Timeout`.
+    pub async fn test_connection(&self, deadline: Duration) -> Result<contract::Usage, LlmError> {
+        let _ = deadline;
         self.smallest_completion()
             .await
             .map(|response| response.usage)

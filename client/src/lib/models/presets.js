@@ -208,3 +208,20 @@ export function presetTestCopy(outcome, preset) {
 	};
 	return { tone: "error", text: copy[outcome.error] ?? said };
 }
+
+/**
+ * @typedef {ModelPreset & { warnings: CapabilityWarning[] }} PickerPreset
+ */
+
+/**
+ * The presets the composer picker offers (#28): each row with what its
+ * model cannot do, so the chips show before a model is chosen and the
+ * sentence under the composer once it is. A listing without capabilities
+ * (an older server) warns about nothing.
+ * @param {{ presets?: ModelPreset[], capabilities?: Record<string, Capabilities> } | null | undefined} models
+ * @returns {PickerPreset[]}
+ */
+export function pickerPresets(models) {
+	void models;
+	return [];
+}

@@ -48,3 +48,21 @@ export async function saveOnboardingProvider(provider, key, api) {
 	}
 	return outcome;
 }
+
+/**
+ * Where onboarding resumes once the server has said whether a provider is
+ * configured (#28). `llm_configured` only means a key and a Chat preset are
+ * saved; a preset that never answered is saved too, so only a passing test
+ * skips to the first message. Anything else returns to the provider step
+ * with the outcome sentence, or `null` when there is nothing to report.
+ * @param {{ llm_configured: boolean, chat_preset?: string, chat_provider?: string | null, model?: string | null }} status
+ * @param {PresetTestOk | PresetTestFailure | null} outcome the Chat preset's test, `null` when it could not run
+ * @param {ModelPreset | null | undefined} preset the Chat preset's row when the listing loaded
+ * @returns {{ step: 'first-message' } | { step: 'provider', reason: string | null }}
+ */
+export function resumeOnboarding(status, outcome, preset) {
+	void status;
+	void outcome;
+	void preset;
+	return { step: "provider", reason: null };
+}

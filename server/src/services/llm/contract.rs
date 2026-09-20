@@ -272,6 +272,7 @@ pub trait ProviderAdapter: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::super::{
+        PROBE_TIMEOUT,
         anthropic::messages_to_anthropic,
         openai::messages_to_openai,
         types::{DocumentSource, HistoryEntry, ImageSource, LlmBackend, ToolOutputContent},
@@ -1760,7 +1761,7 @@ mod tests {
                     "key-under-test",
                 );
                 backend.base_url = url;
-                let result = backend.probe_key().await;
+                let result = backend.probe_key(PROBE_TIMEOUT).await;
                 task.abort();
                 let requests = requests.lock().unwrap();
                 let body = &requests[0].1;
@@ -1794,7 +1795,7 @@ mod tests {
             let mut backend = LlmBackend::probe(reqwest::Client::new(), provider, "model-x", "k");
             backend.base_url = "http://127.0.0.1:1".into();
             assert!(matches!(
-                backend.probe_key().await,
+                backend.probe_key(PROBE_TIMEOUT).await,
                 Err(LlmError::Transport(_))
             ));
         }
@@ -1822,7 +1823,7 @@ mod tests {
             let (url, requests, task) = mock_server_with(200, vec![], success).await;
             let mut backend = LlmBackend::probe(reqwest::Client::new(), provider, "model-x", "k");
             backend.base_url = url;
-            let usage = backend.test_connection().await.unwrap();
+            let usage = backend.test_connection(PROBE_TIMEOUT).await.unwrap();
             task.abort();
             assert_eq!(
                 (usage.input_tokens, usage.output_tokens),
@@ -1862,7 +1863,7 @@ mod tests {
                 let mut backend =
                     LlmBackend::probe(reqwest::Client::new(), provider, "model-x", "k");
                 backend.base_url = url;
-                let result = backend.test_connection().await;
+                let result = backend.test_connection(PROBE_TIMEOUT).await;
                 task.abort();
                 let label = format!("{provider:?} {status}: {result:?}");
                 match check {
@@ -1881,6 +1882,49 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A provider that accepts the connection and never answers ends both
+    /// probes at the deadline as `Timeout` (#28): the shared client has no
+    /// timeout of its own, so without one a key save or a connection test
+    /// would wait forever.
+    #[tokio::test]
+    async fn probes_give_up_on_a_provider_that_never_answers() {
+        for provider in PROVIDERS {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let task = tokio::spawn(async move {
+                let mut held = Vec::new();
+                loop {
+                    let (socket, _) = listener.accept().await.unwrap();
+                    held.push(socket);
+                }
+            });
+            let mut backend = LlmBackend::probe(reqwest::Client::new(), provider, "model-x", "k");
+            backend.base_url = url;
+            let deadline = Duration::from_millis(200);
+            let started = std::time::Instant::now();
+            let test = backend.test_connection(deadline).await;
+            let probe = backend.probe_key(deadline).await;
+            task.abort();
+            assert!(
+                matches!(test, Err(LlmError::Timeout)),
+                "{provider:?}: connection test answered {test:?}"
+            );
+            assert!(
+                matches!(probe, Err(LlmError::Timeout)),
+                "{provider:?}: key probe answered {probe:?}"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "{provider:?}: the probes waited {:?}",
+                started.elapsed()
+            );
+        }
+        assert!(
+            PROBE_TIMEOUT >= Duration::from_secs(10),
+            "a live probe must outwait a slow first token"
+        );
     }
 
     /// The `ttl` of every `cache_control` anywhere in a captured request

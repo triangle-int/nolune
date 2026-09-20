@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { onboardingTestPreset, saveOnboardingProvider } from '../src/lib/components/onboarding/provider.js';
+import { onboardingTestPreset, resumeOnboarding, saveOnboardingProvider } from '../src/lib/components/onboarding/provider.js';
 
 const seeded = (provider) => ({
 	presets: [
@@ -68,4 +68,41 @@ test('the preset onboarding tests is the new provider\'s, the Chat slot when it 
 	assert.equal(onboardingTestPreset(models, 'anthropic'), 'sonnet');
 	assert.equal(onboardingTestPreset({ ...models, chat_preset: 'gpt' }, 'openai'), 'gpt');
 	assert.equal(onboardingTestPreset({ ...models, presets: [] }, 'openai'), null);
+});
+
+// --- the gate on a reload (#28) ---
+// Once a key is saved and presets are seeded, the server reports
+// `llm_configured` even when the preset never answered; onboarding must
+// test again instead of trusting the flag.
+
+const gpt = { id: 'gpt', name: 'GPT-5.4', provider: 'openai', model: 'gpt-5.4' };
+
+test('a companion without a provider goes to the provider step', () => {
+	assert.deepEqual(resumeOnboarding({ llm_configured: false }, null, null), { step: 'provider', reason: null });
+	assert.deepEqual(resumeOnboarding({ llm_configured: false, chat_preset: 'gpt' }, { ok: true, preset: 'gpt', provider: 'openai', model: 'gpt-5.4', usage: { input_tokens: 1, output_tokens: 1 } }, gpt), { step: 'provider', reason: null });
+});
+
+test('a configured provider skips to the first message only when its Chat preset answered', () => {
+	const ok = { ok: true, preset: 'gpt', provider: 'openai', model: 'gpt-5.4', usage: { input_tokens: 8, output_tokens: 1 } };
+	assert.deepEqual(resumeOnboarding({ llm_configured: true, chat_preset: 'gpt' }, ok, gpt), { step: 'first-message' });
+});
+
+test('a configured provider whose preset does not answer returns to the provider step with the typed outcome', () => {
+	for (const [error, message, pattern] of [
+		['model_not_found', 'OpenAI has no model "gpt-5.4": does not exist', /no model "gpt-5\.4"/],
+		['rate_limited', 'OpenAI accepted the key but is rate limiting', /rate limiting/],
+		['provider_rejected', 'OpenAI rejected the request (402): Insufficient credits', /Insufficient credits/],
+		['authentication', 'OpenAI rejected the API key.', /rejected the API key/],
+	]) {
+		const next = resumeOnboarding({ llm_configured: true, chat_preset: 'gpt' }, { ok: false, error, message, status: 422 }, gpt);
+		assert.equal(next.step, 'provider', error);
+		assert.match(next.reason, pattern, `${error}: ${next.reason}`);
+	}
+	// A test that could not run at all is not a pass either.
+	const failed = resumeOnboarding({ llm_configured: true, chat_preset: 'gpt' }, null, gpt);
+	assert.equal(failed.step, 'provider');
+	assert.match(failed.reason, /could not be tested/i);
+	// Without the preset row, the sentence still names the provider from the status.
+	const bare = resumeOnboarding({ llm_configured: true, chat_preset: 'gpt', chat_provider: 'openai', model: 'gpt-5.4' }, { ok: false, error: 'model_not_found', message: 'nope', status: 404 }, null);
+	assert.match(bare.reason, /OpenAI has no model "gpt-5\.4"/);
 });

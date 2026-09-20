@@ -5,6 +5,7 @@ import {
 	capabilityWarnings,
 	effectivePresetId,
 	modelShortLabel,
+	pickerPresets,
 	presetCapabilities,
 	presetLabel,
 	presetTestCopy,
@@ -149,6 +150,25 @@ test('unknown capabilities warn about nothing', () => {
 	assert.equal(presetCapabilities({ capabilities: caps }, 'missing'), undefined);
 	assert.equal(presetCapabilities({}, 'gpt'), undefined);
 	assert.equal(presetCapabilities(null, 'gpt'), undefined);
+});
+
+test('the composer picker carries each preset with what its model cannot do (#28)', () => {
+	const models = { presets, chat_preset: 'sonnet', background_preset: 'haiku', keyed_providers: ['anthropic', 'openai'], setup_required: null, capabilities: { sonnet: caps.sonnet, gpt: caps.gpt, router: caps.text } };
+	const options = pickerPresets(models);
+	assert.deepEqual(options.map((o) => o.id), ['sonnet', 'haiku', 'gpt', 'router']);
+	// The row keeps the preset's own fields so the picker can show name and model.
+	assert.equal(options[2].name, 'GPT-5.4');
+	assert.equal(options[2].model, 'gpt-5.4');
+	assert.deepEqual(options[0].warnings, []);
+	// A preset with no capabilities yet (haiku) warns about nothing.
+	assert.deepEqual(options[1].warnings, []);
+	assert.deepEqual(options[2].warnings.map((w) => w.chip), ['no documents']);
+	assert.match(options[2].warnings[0].detail, /GPT-5\.4 cannot read PDFs/);
+	assert.deepEqual(options[3].warnings.map((w) => w.chip), ['no vision', 'no documents', 'no tools']);
+	// Listings without capabilities (an older server) and nothing at all still render.
+	assert.deepEqual(pickerPresets({ presets: presets.slice(0, 1) })[0].warnings, []);
+	assert.deepEqual(pickerPresets(null), []);
+	assert.deepEqual(pickerPresets({}), []);
 });
 
 test('connection test outcomes read as one sentence each, typed by the server error', () => {
