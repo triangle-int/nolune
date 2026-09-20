@@ -97,6 +97,14 @@ async fn retry_activity(
             Err(message) => Err((StatusCode::CONFLICT, message)),
         };
     }
+    if matches!(previous.trigger, Trigger::Handoff { .. }) {
+        // A handoff continuation is re-accepted on its bound computer (#82):
+        // the checks run again and the attempt is linked to this run.
+        return match crate::services::handoff::retry(&state, &run_id, now).await {
+            Ok(accepted) => Ok((StatusCode::ACCEPTED, Json(accepted.run))),
+            Err(error) => Err((StatusCode::CONFLICT, error.to_string())),
+        };
+    }
     match state.proactive.retry(&run_id, now) {
         Ok(Admission::Admitted(handle)) => {
             // The retry is admitted as a pending run; the owning trigger's worker

@@ -12,6 +12,7 @@ pub mod continuity;
 pub mod cua;
 pub mod drops;
 pub mod federation;
+pub mod handoff;
 pub mod heartbeat;
 pub mod llm;
 pub mod machine_registry;
