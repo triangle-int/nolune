@@ -410,7 +410,7 @@
 	<div class="section-header">
 		<div>
 			<h3 class="section-label">Computers</h3>
-			<p class="section-desc">Desktops running the Nolune app that your companion can see and act on.</p>
+			<p class="section-desc">Where your companion can act: this server and the desktops running the Nolune app. Rename a computer here; its state and hints match the Computers tab.</p>
 		</div>
 	</div>
 	<div class="section-body">
