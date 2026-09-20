@@ -103,7 +103,7 @@ async fn get_commitment(
         .commitments
         .get(&commitment_id)
         .map(Json)
-        .ok_or_else(|| ApiError(CommitmentError::NotFound(commitment_id)))
+        .ok_or(ApiError(CommitmentError::NotFound(commitment_id)))
 }
 
 async fn update_commitment(

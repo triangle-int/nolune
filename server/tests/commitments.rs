@@ -15,7 +15,7 @@ fn commitment_routes_sit_behind_the_companion_boundary() {
     let routes = fs::read_to_string(repo.join("server/src/routes/commitments.rs")).unwrap();
     for route in ["/commitments", "/snooze", "/complete", "/cancel"] {
         assert!(
-            routes.contains(&format!("{{instance_slug}}/commitments")) && routes.contains(route),
+            routes.contains("{instance_slug}/commitments") && routes.contains(route),
             "commitment routes are missing {route:?}"
         );
     }

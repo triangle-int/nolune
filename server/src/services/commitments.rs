@@ -439,6 +439,7 @@ impl CommitmentStore {
     /// first. Reading never changes a record, so asking twice at the same
     /// instant answers the same records: the evaluator, not the store,
     /// decides what to do with them.
+    #[allow(dead_code)] // Foundation for the commitment evaluator (#85, PR B).
     pub fn due_for_check(&self, now: i64) -> Vec<Commitment> {
         let mut due: Vec<Commitment> = self
             .list(ListFilter::Open)

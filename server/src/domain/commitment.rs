@@ -85,14 +85,6 @@ impl Deadline {
         }
     }
 
-    /// The last moment it can still be kept on time.
-    pub fn ends_at(&self) -> i64 {
-        match self {
-            Self::At { at } => *at,
-            Self::Window { end, .. } => *end,
-        }
-    }
-
     pub fn has_started(&self, now: i64) -> bool {
         now >= self.starts_at()
     }
