@@ -54,12 +54,11 @@ None of this is code in this repository; it is the reason #68 stays open.
   has no MX record and no SPF TXT record (dns.google, 2026-09-20), so mail
   to either address bounces. Pick a mail provider, add its MX, SPF and DKIM
   records at Cloudflare, and send a test message to both addresses.
-- Docs. `landing/vercel.json` rewrites `/docs` to the Mintlify site built
-  from the separate `triangle-int/docs` repository, which still titles
-  itself "Bolly Docs" and links to `bollyai.dev` (last pushed 2026-04-04).
-  Nothing in the landing app or README links to `/docs` today. #32 replaces
-  the rewrite with in-repo docs in the landing app; rename the Mintlify
-  content only if #32 slips.
+- Docs. #32 landed the self-hosting docs as pages of the landing app
+  (`/docs`), and `landing/vercel.json` no longer rewrites anything off-site.
+  The separate `triangle-int/docs` repository, which still titles itself
+  "Bolly Docs" and links to `bollyai.dev` (last pushed 2026-04-04), is
+  unused; archive it so it is never published again.
 - Vercel project name. The project is still called `bollyai`, which only
   shows in `*.vercel.app` preview hostnames and the inspector URL. Rename it
   in the Vercel project settings when convenient.

@@ -1,3 +1,7 @@
+# Example ~/.nolune/config.toml for a self-hosted Nolune server.
+# `nolune onboard` writes the same shape with a generated auth token; copy this
+# file only when you want to start from a hand-edited configuration.
+
 host = "0.0.0.0"
 port = 26559
 
@@ -5,35 +9,58 @@ port = 26559
 # Browsers never use it: they pair with a one-time code from `nolune pair`.
 auth_token = ""
 
-# Path to pre-built client files (leave empty to skip static serving)
+# Public URL of this server. Defaults to http://localhost:<port>; set it when you
+# reach Nolune through another address so shared file links work.
+public_url = ""
+
+# Path to pre-built client files (leave empty to serve the embedded web client)
 static_dir = ""
 
 [llm]
-provider = "anthropic" # anthropic or openai; legacy "api" is accepted
-# model = "custom-model" # optional active model override
+# Model presets (#156): name the models you want, then pick which preset
+# handles conversations and which does background work (memory extraction,
+# chat titles, check-ins, reflection).
+chat_preset = "sonnet"
+background_preset = "haiku"
 
-[llm.profiles.anthropic]
-heavy = "claude-opus-4-6"
-fast = "claude-sonnet-4-6"
-cheap = "claude-haiku-4-5-20251001"
+[[llm.presets]]
+id = "sonnet"
+name = "Claude Sonnet"
+provider = "anthropic"
+model = "claude-sonnet-4-6"
 
-[llm.profiles.openai]
-heavy = "gpt-5.4"
-fast = "gpt-5.4"
-cheap = "gpt-5.4-mini"
+[[llm.presets]]
+id = "opus"
+name = "Claude Opus"
+provider = "anthropic"
+model = "claude-opus-4-6"
+
+[[llm.presets]]
+id = "haiku"
+name = "Claude Haiku"
+provider = "anthropic"
+model = "claude-haiku-4-5-20251001"
+
+# An OpenAI preset works the same way once OPEN_AI is set:
+# [[llm.presets]]
+# id = "gpt"
+# name = "GPT-5.4"
+# provider = "openai"
+# model = "gpt-5.4"
 
 [llm.tokens]
-OPEN_AI = ""         # OpenAI chat and independent semantic text memory
-ANTHROPIC = ""       # Required when provider is anthropic — API key (sk-ant-...)
-GOOGLE_AI = ""       # Optional — Google AI / Gemini video analysis
-ELEVENLABS = ""      # Optional — ElevenLabs (text-to-speech)
-OPENROUTER = ""      # Optional — OpenRouter (video analysis)
+ANTHROPIC = ""       # Required for anthropic presets — https://console.anthropic.com
+OPEN_AI = ""         # OpenAI presets and text embeddings for memory search
+ELEVENLABS = ""      # Optional — text-to-speech
+BRAVE_SEARCH = ""    # Optional — Brave Search API key
+OPENROUTER = ""      # Optional — OpenRouter API key
 
 # Optional: set FAL_KEY env var for AI image generation via fal.ai MCP
 
-# Email is configured per-instance via Settings UI
+# Email accounts (SMTP/IMAP) are added under Settings → Advanced and stored next
+# to the companion, not here.
 
-# Text embeddings are independent of the chat provider and reuse OPEN_AI above.
+# Text embeddings are independent of the chat presets and reuse OPEN_AI above.
 # Restart after changing this section or the OpenAI key. Missing/disabled/unavailable
 # embeddings use BM25; memory writes and generic media attachments keep working.
 # Raw media is not embedded until description/transcript support is implemented.
@@ -50,3 +77,11 @@ base_url = "https://api.openai.com/v1"
 # OPEN_AI is never sent to them. Remote, private-network, link-local, metadata, userinfo,
 # query, and fragment URLs are rejected. No OpenRouter or remote custom provider support
 # is implied, and no custom endpoint credential exists in this release.
+
+# MCP servers are usually added under Settings → Capabilities; each entry here
+# has the same fields. Custom entries grant no tools until enabled_tools names them.
+# [[mcp_servers]]
+# name = "excalidraw"
+# url = "https://mcp.excalidraw.com/mcp"
+# trust = "custom"
+# enabled_tools = []
