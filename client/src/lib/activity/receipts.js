@@ -23,15 +23,18 @@
  * }} ProactiveRun
  */
 
-/** @param {Tagged} trigger */
-export function triggerLabel(trigger) {
+/**
+ * @param {Tagged} trigger
+ * @param {{ machine_id: string; display_name: string }[]} [machines] Names a connected computer (#80).
+ */
+export function triggerLabel(trigger, machines = []) {
 	switch (trigger.kind) {
 		case "heartbeat":
 			return trigger.agent === "reflection" ? "Reflection" : "Check-in";
 		case "schedule":
 			return "Scheduled";
 		case "machine_connected":
-			return `Computer connected${trigger.machine_id ? ` · ${trigger.machine_id}` : ""}`;
+			return `Computer connected${trigger.machine_id ? ` · ${machineName(String(trigger.machine_id), machines)}` : ""}`;
 		case "manual":
 			return "Run by you";
 		case "commitment":
@@ -50,9 +53,29 @@ export function triggerLabel(trigger) {
  * @param {{ machine_id: string; display_name: string }[]} [machines]
  */
 export function targetLabel(target, machines = []) {
-	void target;
-	void machines;
-	throw new Error("targetLabel not implemented");
+	if (target.kind !== "machine") return "";
+	return `On ${machineName(String(target.machine_id ?? ""), machines)}`;
+}
+
+/**
+ * The target line an Activity card shows (#80): the run's target machine
+ * unless the trigger already names that same computer ("Computer connected
+ * · studio" is not followed by "On studio").
+ * @param {ProactiveRun} run
+ * @param {{ machine_id: string; display_name: string }[]} [machines]
+ */
+export function runTargetLabel(run, machines = []) {
+	if (run.trigger.kind === "machine_connected" && run.trigger.machine_id === run.target.machine_id) return "";
+	return targetLabel(run.target, machines);
+}
+
+/**
+ * A machine by the name the Computers tab shows, else its id.
+ * @param {string} machineId
+ * @param {{ machine_id: string; display_name: string }[]} machines
+ */
+function machineName(machineId, machines) {
+	return machines.find((m) => m.machine_id === machineId)?.display_name || machineId;
 }
 
 /** @param {Tagged} status */

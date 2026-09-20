@@ -8,7 +8,7 @@
 	import { receiptsByMessage } from "$lib/memory/receipts.js";
 	import { getWebSocket } from "$lib/stores/websocket.svelte.js";
 	import MessageBubble from "./MessageBubble.svelte";
-	import ChatInput from "./ChatInput.svelte";
+	import ChatInput, { type ChatTarget } from "./ChatInput.svelte";
 	import PresentationOverlay from "./PresentationOverlay.svelte";
 	import { getPresentationState } from "$lib/stores/presentation.svelte.js";
 	import CreatureBubble from "./CreatureBubble.svelte";
@@ -594,6 +594,11 @@ import McpAppViewer from "./McpAppViewer.svelte";
 
 	let uploadProgress = $state<{ fileIndex: number; fileCount: number; loaded: number; total: number } | null>(null);
 
+	// The computer the composer chose (#80): sent with every message and named
+	// in the bar while the companion works. The composer reports it as the
+	// listing changes, so a computer that went away is never named here.
+	let chatTarget = $state<ChatTarget>({ machineId: null, label: "" });
+
 	async function handleSend(content: string, files?: File[]) {
 		// Warm up AudioContext on user gesture (send is always click/Enter)
 		if (voice.enabled) warmUpAudio();
@@ -620,7 +625,7 @@ import McpAppViewer from "./McpAppViewer.svelte";
 			clearAudioQueue();
 			voiceText = "";
 			turnMessageIds = [];
-			const res = await sendMessage(slug, finalContent, activeChatId, voice.enabled);
+			const res = await sendMessage(slug, finalContent, activeChatId, voice.enabled, chatTarget.machineId);
 			for (const msg of res.messages) addMessage(msg);
 			return true;
 		} catch (e) {
@@ -753,7 +758,7 @@ import McpAppViewer from "./McpAppViewer.svelte";
 			{#if sending || agentRunning}
 				<span class="bar-activity">
 					<span class="bar-activity-dot"></span>
-					working
+					working{#if chatTarget.label}<span class="bar-target"> {chatTarget.label}</span>{/if}
 				</span>
 			{/if}
 		</div>
@@ -861,7 +866,7 @@ import McpAppViewer from "./McpAppViewer.svelte";
 				</ConversationContent>
 			</Conversation>
 
-			<ChatInput {slug} chatId={activeChatId} onSend={handleSend} onStop={handleStop} disabled={sending || agentRunning} {agentRunning} {uploadProgress} />
+			<ChatInput {slug} chatId={activeChatId} onSend={handleSend} onStop={handleStop} onTargetChange={(target) => (chatTarget = target)} disabled={sending || agentRunning} {agentRunning} {uploadProgress} />
 		</div>
 
 		<aside class="chat-sidebar">
@@ -1061,6 +1066,9 @@ import McpAppViewer from "./McpAppViewer.svelte";
 		background: var(--card);
 		animation: pulse-alive 2.5s ease-in-out infinite;
 	}
+
+	/* The computer the running action is on (#80), beside the word, never a color alone. */
+	.bar-target { color: var(--primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40vw; }
 
 	.bar-btn {
 		display: flex;

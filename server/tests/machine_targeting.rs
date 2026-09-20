@@ -110,10 +110,23 @@ fn the_choice_travels_from_the_composer_to_the_tools() {
         "the client sends the chosen machine with the message"
     );
     let composer =
+        fs::read_to_string(repo().join("client/src/lib/components/chat/PromptComposer.svelte"))
+            .unwrap();
+    assert!(
+        composer.contains("<TargetPicker"),
+        "the composer offers the computer selector"
+    );
+    let input =
         fs::read_to_string(repo().join("client/src/lib/components/chat/ChatInput.svelte")).unwrap();
     assert!(
-        composer.contains("TargetPicker"),
-        "the composer offers the computer selector"
+        input.contains("targetOptions(") && input.contains("targetStorageKey("),
+        "the chat input builds the selector from the Computers rows and remembers the choice"
+    );
+    let view =
+        fs::read_to_string(repo().join("client/src/lib/components/chat/ChatView.svelte")).unwrap();
+    assert!(
+        view.contains("chatTarget.machineId") && view.contains("chatTarget.label"),
+        "the chat view sends the choice and names it while the companion works"
     );
     let spaces = fs::read_to_string(repo().join("client/src/lib/computers/spaces.js")).unwrap();
     let computer = production("server/src/services/tools/computer.rs");
