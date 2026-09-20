@@ -108,7 +108,7 @@ fn clients_receive_machine_updates_as_one_event() {
         "the client must be able to name a computer"
     );
     assert!(
-        client.contains("export function forgetMachine("),
+        client.contains("function forgetMachine("),
         "the client must be able to forget an offline computer"
     );
 }

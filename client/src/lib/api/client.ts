@@ -628,6 +628,16 @@ export function renameMachine(slug: string, machineId: string, displayName: stri
 	});
 }
 
+/** Forget an offline computer; a connected one is refused (409 `machine_online`). */
+export async function forgetMachine(slug: string, machineId: string): Promise<void> {
+	const res = await authedFetch(
+		`/api/instances/${encodeURIComponent(slug)}/machines/${encodeURIComponent(machineId)}`,
+		{ method: "DELETE" },
+	);
+	if (res.status === 401) throw new AuthError();
+	if (!res.ok) throw new Error(await res.text().catch(() => res.statusText));
+}
+
 export function machineHello(slug: string): Promise<void> {
 	return authedFetch(`/api/instances/${encodeURIComponent(slug)}/machine-hello`, { method: "POST" }).then(() => {});
 }

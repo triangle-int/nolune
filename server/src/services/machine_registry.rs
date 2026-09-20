@@ -220,34 +220,60 @@ impl CuaTargets {
 /// desktop stays listed as offline with its last-seen time and a reconnect
 /// under the same stable id updates one record instead of adding another.
 ///
-/// The file is loaded once, on first use, and every change is written back
-/// through a temp file and a rename. A file with another version, another
-/// slug, unknown fields, duplicate ids, or invalid JSON fails closed: reads
-/// answer `MachineError::Unsupported` and nothing is ever written over it.
-/// Without a path (`MachineRegistry::new`) the records live in memory only.
+/// The file is read on every access and every change is written back through
+/// a temp file and a rename, so a file the user fixes or removes takes effect
+/// without a restart. A file with another version, another slug, unknown
+/// fields, duplicate ids, or invalid JSON fails closed: reads answer
+/// `MachineError::Unsupported` and nothing is ever written over it. Every
+/// access first puts back the connected agents the store has no record for,
+/// so a desktop that connected while the file was unusable is recorded as
+/// soon as the file is readable again. Without a path
+/// (`MachineRegistry::new`) the records live in memory only.
 #[derive(Clone)]
 struct KnownMachines {
     path: Option<PathBuf>,
     slug: String,
-    /// `None` until first use; then the records or the reason the file is unusable.
-    state: Arc<std::sync::Mutex<Option<LoadedRecords>>>,
+    /// Serializes every read-modify-write cycle.
+    state: Arc<std::sync::Mutex<StoreState>>,
 }
 
-/// The records by id, or why the file could not be read.
-type LoadedRecords = Result<BTreeMap<String, MachineRecord>, String>;
+#[derive(Default)]
+struct StoreState {
+    /// The records of a store without a path.
+    memory: BTreeMap<String, MachineRecord>,
+    /// Why the last read failed, so one broken file is logged once.
+    last_failure: Option<String>,
+}
 
-/// Larger than any file the bounded store writes; anything bigger is not ours.
+/// A connected agent as the store needs it: enough to rebuild its record.
+#[derive(Clone)]
+struct LiveSnapshot {
+    info: MachineInfo,
+    /// When this connection registered; `first_seen` for a record built from it.
+    registered_at: i64,
+}
+
+/// Ids whose records a change dropped: a legacy record migrated into a
+/// stable one, or the longest-offline record evicted to make room. Clients
+/// hear about each as `machine_forgotten`.
+type Forgotten = Vec<String>;
+
+/// Larger than any file the bounded store writes (`save` refuses more), so
+/// anything bigger is not ours.
 const MAX_MACHINES_FILE_BYTES: usize = 1024 * 1024;
 /// A connected machine's heartbeat reaches its record at least this often,
 /// so a crash leaves `last_seen` at most a minute behind.
 const HEARTBEAT_PERSIST_SECS: i64 = 60;
+/// How often the health watch looks for heartbeats that went stale; a third
+/// of `STALE_HEARTBEAT_SECS`, so clients hear within 15 seconds of the change.
+const HEALTH_WATCH_SECS: u64 = 15;
 
 impl KnownMachines {
     fn in_memory(slug: &str) -> Self {
         Self {
             path: None,
             slug: slug.to_owned(),
-            state: Arc::new(std::sync::Mutex::new(None)),
+            state: Arc::new(std::sync::Mutex::new(StoreState::default())),
         }
     }
 
@@ -263,30 +289,49 @@ impl KnownMachines {
         }
     }
 
-    /// Run `f` over the records under the store lock, loading the file on
-    /// first use, and write the file back when `f` reports a change.
+    /// Read the records, put back the connected agents that have none, run
+    /// `f` over them under the store lock, and write the file back when
+    /// anything changed. Returns `f`'s value and the ids that were dropped.
     fn with<T>(
         &self,
+        live: &[LiveSnapshot],
         f: impl FnOnce(&mut BTreeMap<String, MachineRecord>) -> (T, bool),
-    ) -> Result<T, MachineError> {
+    ) -> Result<(T, Forgotten), MachineError> {
         // A poisoned lock only means a writer panicked; the file is consistent.
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let loaded = state.get_or_insert_with(|| {
-            self.load().inspect_err(|reason| {
-                log::error!(
-                    "[machines] known machines file is unsupported; nothing is read or written: {reason}"
-                );
-            })
-        });
-        let records = match loaded {
-            Ok(records) => records,
-            Err(reason) => return Err(MachineError::Unsupported(reason.clone())),
+        let mut records = if self.path.is_none() {
+            state.memory.clone()
+        } else {
+            match self.load() {
+                Ok(records) => {
+                    if state.last_failure.take().is_some() {
+                        log::info!("[machines] the known machines file is readable again");
+                    }
+                    records
+                }
+                Err(reason) => {
+                    if state.last_failure.as_ref() != Some(&reason) {
+                        log::error!(
+                            "[machines] known machines file is unsupported; nothing is read or written: {reason}"
+                        );
+                        state.last_failure = Some(reason.clone());
+                    }
+                    return Err(MachineError::Unsupported(reason));
+                }
+            }
         };
-        let (value, changed) = f(records);
+        let mut forgotten = Vec::new();
+        let mut changed = backfill_live(&mut records, live, &mut forgotten);
+        let (value, changed_by_f) = f(&mut records);
+        changed |= changed_by_f;
         if changed {
-            self.save(records)?;
+            if self.path.is_none() {
+                state.memory = records;
+            } else {
+                self.save(&records)?;
+            }
         }
-        Ok(value)
+        Ok((value, forgotten))
     }
 
     fn load(&self) -> Result<BTreeMap<String, MachineRecord>, String> {
@@ -335,20 +380,30 @@ impl KnownMachines {
         Ok(records)
     }
 
+    /// Write the records; refused, leaving the previous file in place, when
+    /// they would not fit under `MAX_MACHINES_FILE_BYTES`, so this store never
+    /// writes a file `load` rejects.
     fn save(&self, records: &BTreeMap<String, MachineRecord>) -> Result<(), MachineError> {
         use crate::domain::machine::{MACHINES_FORMAT_VERSION, MachinesFile};
         let Some(path) = &self.path else {
             return Ok(());
         };
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
         let file = MachinesFile {
             version: MACHINES_FORMAT_VERSION,
             slug: self.slug.clone(),
             machines: records.values().cloned().collect(),
         };
         let json = serde_json::to_string_pretty(&file).map_err(std::io::Error::other)?;
+        if json.len() > MAX_MACHINES_FILE_BYTES {
+            return Err(MachineError::Io(format!(
+                "refusing to write {}: {} bytes is more than the {MAX_MACHINES_FILE_BYTES} this server reads",
+                path.display(),
+                json.len()
+            )));
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         write_atomic(path, &json)?;
         Ok(())
     }
@@ -395,28 +450,39 @@ fn known_view(
     }
 }
 
-/// Refresh a machine's record from a registration, keeping `first_seen` and
-/// the user's name; a machine never seen before gets a record, evicting the
-/// longest-offline one when the store is full. Returns whether anything changed.
-fn upsert_record(
+/// Give a connected agent the record it has none of: a desktop upgraded from
+/// the hostname-keyed id takes over its offline legacy record (keeping
+/// `first_seen` and the user's name), otherwise a new record is added,
+/// evicting the longest-offline one when the store is full. Returns whether
+/// anything changed; dropped ids land in `forgotten`.
+fn insert_record(
     records: &mut BTreeMap<String, MachineRecord>,
-    info: &MachineInfo,
-    now: i64,
+    agent: &LiveSnapshot,
     online: &std::collections::HashSet<String>,
+    forgotten: &mut Forgotten,
 ) -> bool {
     use crate::domain::machine::MAX_KNOWN_MACHINES;
-    if let Some(record) = records.get_mut(&info.machine_id) {
-        record.hostname = info.hostname.clone();
-        record.os = info.os.clone();
-        record.platform = info.platform;
-        record.location = info.location;
-        record.screen_width = info.screen_width;
-        record.screen_height = info.screen_height;
-        record.permissions = info.permissions.clone();
-        record.capabilities = info.capabilities.clone();
-        record.last_seen = now;
-        return true;
-    }
+    let info = &agent.info;
+    // Before #80 the desktop registered under its hostname, as both id and
+    // hostname. That offline record is this computer, so it moves under the
+    // stable id instead of staying behind as a duplicate.
+    let legacy = (info.hostname != info.machine_id && !online.contains(&info.hostname))
+        .then(|| records.get(&info.hostname))
+        .flatten()
+        .filter(|legacy| legacy.hostname == legacy.machine_id)
+        .map(|legacy| legacy.machine_id.clone());
+    let (display_name, first_seen) = match legacy.and_then(|id| records.remove(&id)) {
+        Some(legacy) => {
+            log::info!(
+                "[machines] '{}' now registers as '{}'; moving its record",
+                legacy.machine_id,
+                info.machine_id
+            );
+            forgotten.push(legacy.machine_id);
+            (legacy.display_name, legacy.first_seen)
+        }
+        None => (None, agent.registered_at),
+    };
     if records.len() >= MAX_KNOWN_MACHINES {
         let evict = records
             .values()
@@ -430,6 +496,7 @@ fn upsert_record(
                     info.machine_id
                 );
                 records.remove(&id);
+                forgotten.push(id);
             }
             None => {
                 log::warn!(
@@ -444,7 +511,7 @@ fn upsert_record(
         info.machine_id.clone(),
         MachineRecord {
             machine_id: info.machine_id.clone(),
-            display_name: None,
+            display_name,
             hostname: info.hostname.clone(),
             os: info.os.clone(),
             platform: info.platform,
@@ -453,10 +520,58 @@ fn upsert_record(
             screen_height: info.screen_height,
             permissions: info.permissions.clone(),
             capabilities: info.capabilities.clone(),
-            first_seen: now,
-            last_seen: now,
+            first_seen,
+            last_seen: info.last_seen,
         },
     );
+    true
+}
+
+/// Every connected agent with a usable id has a record: the ones missing
+/// (registered while the file was unusable, or forgotten while connected)
+/// get theirs back. Returns whether anything changed.
+fn backfill_live(
+    records: &mut BTreeMap<String, MachineRecord>,
+    live: &[LiveSnapshot],
+    forgotten: &mut Forgotten,
+) -> bool {
+    use crate::domain::machine::validate_machine_id;
+    let online: std::collections::HashSet<String> = live
+        .iter()
+        .map(|agent| agent.info.machine_id.clone())
+        .collect();
+    let mut changed = false;
+    for agent in live {
+        if records.contains_key(&agent.info.machine_id)
+            || validate_machine_id(&agent.info.machine_id).is_err()
+        {
+            continue;
+        }
+        changed |= insert_record(records, agent, &online, forgotten);
+    }
+    changed
+}
+
+/// Refresh a machine's record from a registration, keeping `first_seen` and
+/// the user's name. The record exists by now (`backfill_live`) unless the
+/// store is full of connected machines. Returns whether anything changed.
+fn refresh_record(
+    records: &mut BTreeMap<String, MachineRecord>,
+    info: &MachineInfo,
+    now: i64,
+) -> bool {
+    let Some(record) = records.get_mut(&info.machine_id) else {
+        return false;
+    };
+    record.hostname = info.hostname.clone();
+    record.os = info.os.clone();
+    record.platform = info.platform;
+    record.location = info.location;
+    record.screen_width = info.screen_width;
+    record.screen_height = info.screen_height;
+    record.permissions = info.permissions.clone();
+    record.capabilities = info.capabilities.clone();
+    record.last_seen = now;
     true
 }
 
@@ -467,7 +582,12 @@ struct LiveAgent {
     sender: AgentSender,
     /// Distinguishes a reconnect from the socket it replaced (`unregister_connection`).
     connection: u64,
+    /// When this connection registered: `first_seen` if the record has to be rebuilt.
+    registered_at: i64,
     last_persisted: i64,
+    /// The health clients last heard about, so the health watch and a
+    /// recovering heartbeat each report one change once.
+    announced_health: cua_protocol::MachineHealth,
 }
 
 /// Registry of the machines this server can control: the connected Tauri
@@ -500,7 +620,7 @@ impl MachineRegistry {
     }
 
     /// A registry whose known machines persist under
-    /// `instances/{slug}/machines.json`. The file is read on first use.
+    /// `instances/{slug}/machines.json`. The file is read on every access.
     pub fn open(workspace_dir: &Path, slug: &str) -> Self {
         Self::with_known(KnownMachines::at(workspace_dir, slug))
     }
@@ -530,6 +650,52 @@ impl MachineRegistry {
         &self.cua
     }
 
+    /// Watch heartbeat age in the background: a connected computer whose
+    /// heartbeat goes stale is reported as `degraded` within
+    /// `HEALTH_WATCH_SECS`, so clients never have to re-derive it from a clock.
+    pub fn start_health_watch(&self) {
+        let registry = self.clone();
+        tokio::spawn(async move {
+            let mut ticks =
+                tokio::time::interval(std::time::Duration::from_secs(HEALTH_WATCH_SECS));
+            ticks.tick().await; // the first tick is immediate
+            loop {
+                ticks.tick().await;
+                registry.sweep_health().await;
+            }
+        });
+    }
+
+    /// One pass of the health watch against the wall clock.
+    pub async fn sweep_health(&self) -> Vec<String> {
+        self.sweep_health_at(chrono::Utc::now().timestamp()).await
+    }
+
+    /// Report every connected machine whose derived health differs from what
+    /// clients last heard, as `machine_updated`; returns the ids it broadcast.
+    pub async fn sweep_health_at(&self, now: i64) -> Vec<String> {
+        use crate::domain::machine::heartbeat_health;
+        let changed: Vec<String> = {
+            let mut agents = self.agents.lock().await;
+            agents
+                .values_mut()
+                .filter_map(|agent| {
+                    let health = heartbeat_health(true, now - agent.info.last_seen);
+                    if health == agent.announced_health {
+                        return None;
+                    }
+                    agent.announced_health = health;
+                    Some(agent.info.machine_id.clone())
+                })
+                .collect()
+        };
+        for machine_id in &changed {
+            log::info!("[machines] '{machine_id}' heartbeat health changed");
+            self.broadcast(machine_id, now).await;
+        }
+        changed
+    }
+
     /// Register a new agent connection and return its connection number, which
     /// `unregister_connection` needs so a stale socket closing after a
     /// reconnect never disconnects the live one.
@@ -540,7 +706,9 @@ impl MachineRegistry {
     /// `first_seen` for a machine never seen before.
     pub async fn register(&self, mut info: MachineInfo, sender: AgentSender) -> u64 {
         use crate::domain::companion::{CANONICAL_SLUG, is_canonical};
-        use crate::domain::machine::{normalize_capabilities, validate_machine_id};
+        use crate::domain::machine::{
+            normalize_capabilities, normalize_label, validate_machine_id,
+        };
         if let Some(requested) = info.instance_slug.as_deref()
             && !is_canonical(requested)
         {
@@ -550,6 +718,10 @@ impl MachineRegistry {
             );
         }
         info.instance_slug = Some(CANONICAL_SLUG.to_owned());
+        // The one place labels and capabilities are bounded and normalized:
+        // the live entry, the record and the file all carry the same values.
+        info.hostname = normalize_label(&info.hostname);
+        info.os = normalize_label(&info.os);
         info.capabilities = normalize_capabilities(std::mem::take(&mut info.capabilities));
         let id = info.machine_id.clone();
         let now = info.last_seen;
@@ -563,22 +735,25 @@ impl MachineRegistry {
         let connection = self
             .next_connection
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let online: std::collections::HashSet<String> = {
-            let mut agents = self.agents.lock().await;
-            agents.insert(
-                id.clone(),
-                LiveAgent {
-                    info: info.clone(),
-                    sender,
-                    connection,
-                    last_persisted: now,
-                },
-            );
-            agents.keys().cloned().collect()
-        };
+        self.agents.lock().await.insert(
+            id.clone(),
+            LiveAgent {
+                info: info.clone(),
+                sender,
+                connection,
+                registered_at: now,
+                last_persisted: now,
+                announced_health: cua_protocol::MachineHealth::Healthy,
+            },
+        );
 
         match validate_machine_id(&id) {
-            Ok(()) => self.persist(|records| upsert_record(records, &info, now, &online)),
+            // The record exists by now (`backfill_live` on this very access);
+            // this refreshes it from the registration.
+            Ok(()) => {
+                self.persist(|records| refresh_record(records, &info, now))
+                    .await
+            }
             Err(error) => log::warn!("[machines] '{id}' is not recorded: {error}"),
         }
         self.broadcast(&id, now).await;
@@ -630,7 +805,8 @@ impl MachineRegistry {
                 true
             }
             None => false,
-        });
+        })
+        .await;
         self.broadcast(machine_id, now).await;
     }
 
@@ -654,7 +830,11 @@ impl MachineRegistry {
             if persist {
                 agent.last_persisted = now;
             }
-            (persist, before == MachineHealth::Degraded)
+            // Stale by the clock, or already reported stale by the health watch.
+            let recovered = before == MachineHealth::Degraded
+                || agent.announced_health == MachineHealth::Degraded;
+            agent.announced_health = MachineHealth::Healthy;
+            (persist, recovered)
         };
         if persist {
             self.persist(|records| match records.get_mut(machine_id) {
@@ -663,7 +843,8 @@ impl MachineRegistry {
                     true
                 }
                 None => false,
-            });
+            })
+            .await;
         }
         // A healthy heartbeat is routine; the one that ends a stale stretch is news.
         if recovered {
@@ -671,11 +852,26 @@ impl MachineRegistry {
         }
     }
 
-    /// Apply a change to the records; the unsupported-file case was logged at
-    /// load and an I/O failure is logged here, neither stops the live agent.
-    fn persist(&self, change: impl FnOnce(&mut BTreeMap<String, MachineRecord>) -> bool) {
-        match self.known.with(|records| ((), change(records))) {
-            Ok(()) | Err(MachineError::Unsupported(_)) => {}
+    /// The connected agents as the store needs them.
+    async fn live_snapshot(&self) -> Vec<LiveSnapshot> {
+        self.agents
+            .lock()
+            .await
+            .values()
+            .map(|agent| LiveSnapshot {
+                info: agent.info.clone(),
+                registered_at: agent.registered_at,
+            })
+            .collect()
+    }
+
+    /// Apply a change to the records; the unsupported-file case was logged by
+    /// the store and an I/O failure is logged here, neither stops the live agent.
+    async fn persist(&self, change: impl FnOnce(&mut BTreeMap<String, MachineRecord>) -> bool) {
+        let live = self.live_snapshot().await;
+        match self.known.with(&live, |records| ((), change(records))) {
+            Ok(((), forgotten)) => self.broadcast_forgotten(forgotten).await,
+            Err(MachineError::Unsupported(_)) => {}
             Err(error) => log::error!("[machines] could not persist known machines: {error}"),
         }
     }
@@ -688,6 +884,18 @@ impl MachineRegistry {
             let _ = events.send(crate::domain::events::ServerEvent::MachineUpdated {
                 instance_slug: self.known.slug.clone(),
                 machine,
+            });
+        }
+    }
+
+    async fn broadcast_forgotten(&self, forgotten: Forgotten) {
+        let Some(events) = &self.events else {
+            return;
+        };
+        for machine_id in forgotten {
+            let _ = events.send(crate::domain::events::ServerEvent::MachineForgotten {
+                instance_slug: self.known.slug.clone(),
+                machine_id,
             });
         }
     }
@@ -708,20 +916,19 @@ impl MachineRegistry {
     }
 
     pub async fn known_at(&self, now: i64) -> Result<Vec<KnownMachine>, MachineError> {
-        let live: HashMap<String, i64> = self
-            .agents
-            .lock()
-            .await
-            .values()
-            .map(|agent| (agent.info.machine_id.clone(), agent.info.last_seen))
+        let live = self.live_snapshot().await;
+        let (records, forgotten) = self.known.with(&live, |records| (records.clone(), false))?;
+        self.broadcast_forgotten(forgotten).await;
+        let live_seen: HashMap<&str, i64> = live
+            .iter()
+            .map(|agent| (agent.info.machine_id.as_str(), agent.info.last_seen))
             .collect();
-        let records = self.known.with(|records| (records.clone(), false))?;
         let mut machines: Vec<KnownMachine> = records
             .values()
             .map(|record| {
                 known_view(
                     record,
-                    live.get(&record.machine_id).copied(),
+                    live_seen.get(record.machine_id.as_str()).copied(),
                     now,
                     &self.known.slug,
                 )
@@ -767,30 +974,42 @@ impl MachineRegistry {
     ) -> Result<KnownMachine, MachineError> {
         let name = crate::domain::machine::normalize_display_name(display_name)
             .map_err(MachineError::Invalid)?;
-        self.known
-            .with(|records| match records.get_mut(machine_id) {
-                Some(record) => {
-                    let changed = record.display_name != name;
-                    record.display_name = name;
-                    (Ok(()), changed)
-                }
-                None => (Err(MachineError::NotFound(machine_id.to_owned())), false),
-            })??;
+        let live = self.live_snapshot().await;
+        let (renamed, forgotten) =
+            self.known
+                .with(&live, |records| match records.get_mut(machine_id) {
+                    Some(record) => {
+                        let changed = record.display_name != name;
+                        record.display_name = name;
+                        (Ok(()), changed)
+                    }
+                    None => (Err(MachineError::NotFound(machine_id.to_owned())), false),
+                })?;
+        self.broadcast_forgotten(forgotten).await;
+        renamed?;
         self.broadcast(machine_id, now).await;
         self.get_known(machine_id, now).await
     }
 
-    /// Forget an offline known machine; a connected one is refused.
+    /// Forget an offline known machine: its record and the user's name are
+    /// dropped and clients hear `machine_forgotten`. A connected one is
+    /// refused; if it connects again later it is simply new.
     pub async fn forget(&self, machine_id: &str) -> Result<(), MachineError> {
-        let _ = machine_id;
-        todo!("forget an offline known machine (#80 review)")
-    }
-
-    /// Report every connected machine whose heartbeat went stale since the
-    /// last sweep as `machine_updated`; returns the ids it broadcast.
-    pub async fn sweep_health_at(&self, now: i64) -> Vec<String> {
-        let _ = now;
-        todo!("watch heartbeat age (#80 review)")
+        let live = self.live_snapshot().await;
+        if live.iter().any(|agent| agent.info.machine_id == machine_id) {
+            return Err(MachineError::Online(machine_id.to_owned()));
+        }
+        let (removed, forgotten) =
+            self.known
+                .with(&live, |records| match records.remove(machine_id) {
+                    Some(_) => (Ok(()), true),
+                    None => (Err(MachineError::NotFound(machine_id.to_owned())), false),
+                })?;
+        self.broadcast_forgotten(forgotten).await;
+        removed?;
+        log::info!("[machines] forgot '{machine_id}'");
+        self.broadcast_forgotten(vec![machine_id.to_owned()]).await;
+        Ok(())
     }
 
     /// Send a toolcall to a specific machine and wait for the result.
@@ -1783,14 +2002,16 @@ mod known_machines_tests {
         assert_eq!(machine.last_seen, T0 + 500);
         assert!(machine.online);
 
-        let ServerEvent::MachineUpdated { machine, .. } = rx.try_recv().unwrap() else {
-            panic!("unexpected event");
-        };
-        assert_eq!(machine.machine_id, STABLE_ID);
+        // Clients drop the legacy row first, then receive the stable one.
         let ServerEvent::MachineForgotten { machine_id, .. } = rx.try_recv().unwrap() else {
             panic!("unexpected event");
         };
         assert_eq!(machine_id, "studio", "clients drop the legacy row");
+        let ServerEvent::MachineUpdated { machine, .. } = rx.try_recv().unwrap() else {
+            panic!("unexpected event");
+        };
+        assert_eq!(machine.machine_id, STABLE_ID);
+        assert!(rx.try_recv().is_err(), "nothing else");
 
         let file: MachinesFile =
             serde_json::from_str(&fs::read_to_string(machines_path(&ws)).unwrap()).unwrap();

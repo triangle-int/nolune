@@ -280,7 +280,9 @@ export interface MachinePermissions {
 /**
  * A computer that has ever connected to the companion through the Nolune
  * desktop app (#80). Disconnected computers stay listed as offline; a
- * `machine_updated` server event carries the same shape on every change.
+ * `machine_updated` server event carries the same shape on every change
+ * (including a heartbeat that goes stale), and `machine_forgotten` names a
+ * row to drop.
  */
 export interface MachineInfo {
 	/** Stable id the desktop persists; survives reconnects and hostname changes. */
@@ -355,6 +357,12 @@ export type ServerEvent =
 			type: "machine_updated";
 			instance_slug: string;
 			machine: MachineInfo;
+	  }
+	| {
+			/** An offline computer was forgotten, migrated into its stable id, or evicted: drop its row. */
+			type: "machine_forgotten";
+			instance_slug: string;
+			machine_id: string;
 	  }
 	| {
 			type: "context_compacting";

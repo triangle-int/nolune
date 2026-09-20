@@ -31,7 +31,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/instances/{instance_slug}/machines/{machine_id}",
-            axum::routing::put(rename_machine),
+            axum::routing::put(rename_machine).delete(forget_machine),
         )
 }
 
@@ -92,6 +92,16 @@ async fn rename_machine(
         .rename(&machine_id, body.display_name.as_deref())
         .await?;
     Ok(Json(machine))
+}
+
+/// Forget an offline computer: its record and name are dropped and every
+/// client hears `machine_forgotten`. A connected one answers `409 machine_online`.
+async fn forget_machine(
+    State(state): State<AppState>,
+    Path((_instance_slug, machine_id)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    state.machine_registry.forget(&machine_id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Which computer a hello or bye is about. Absent means "the connected one"
@@ -256,8 +266,19 @@ impl Registration {
     /// capabilities are handed over as reported; the registry bounds and
     /// normalizes them in one place.
     fn into_info(self, now: i64) -> MachineInfo {
-        let _ = now;
-        todo!("single normalization point (#80 review)")
+        MachineInfo {
+            platform: crate::domain::machine::platform_from_os(&self.os),
+            machine_id: self.machine_id,
+            os: self.os,
+            hostname: self.hostname,
+            screen_width: self.screen_width,
+            screen_height: self.screen_height,
+            last_seen: now,
+            instance_slug: self.instance_slug,
+            location: cua_protocol::MachineLocation::Desktop,
+            permissions: self.permissions,
+            capabilities: self.capabilities,
+        }
     }
 }
 

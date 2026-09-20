@@ -160,7 +160,7 @@ the computer a name, which is stored on the server so every client shows it.
 | `slug` | always `companion`; a file naming another companion is refused |
 | `machine_id` | the desktop's stable id: 1 to 128 bytes of letters, digits, `-`, `_`, `.`, `:` |
 | `display_name` | the user's name, at most 64 characters on one line; `null` shows the hostname |
-| `hostname`, `os`, `screen_width`, `screen_height` | as reported at the last registration |
+| `hostname`, `os`, `screen_width`, `screen_height` | as reported at the last registration; the two labels are cut at 256 characters |
 | `platform` | `macos`, `windows`, `linux`, or `null` when `os` names none of them |
 | `location` | `desktop` for every desktop registration; the server home is a Cua target (#16), never a desktop record |
 | `permissions` | accessibility and screen capture as `granted` or `denied` (the protocol's names); `null` when the desktop did not report them |
@@ -168,15 +168,24 @@ the computer a name, which is stored on the server so every client shows it.
 | `first_seen`, `last_seen` | unix seconds of the first registration and of the last heartbeat or disconnect |
 
 Bounds: 64 records (a new computer evicts the longest-offline one), 64
-capability names per record, 1 MiB per file. The file is loaded once, on
-first use, and every change lands through a temp file and a rename. A file
-that is larger, is not JSON, carries unknown fields, another version or
-slug, an invalid id, or the same id twice fails closed: the listing route
-answers `503 machines_format_unsupported`, renames are refused, and the
-file is never rewritten, while connected computers keep working in memory
-until the file is fixed or removed. A connected computer's heartbeat
-reaches its record at least once a minute, so a crash leaves `last_seen` at
-most a minute behind.
+capability names per record, 256 characters per hostname and OS label, 1 MiB
+per file; the store refuses to write more than it reads, so it never leaves
+a file behind that it would reject. The file is read on every access and
+every change lands through a temp file and a rename. A file that is larger,
+is not JSON, carries unknown fields, another version or slug, an invalid id,
+or the same id twice fails closed: the listing route answers
+`503 machines_format_unsupported`, renames are refused, and the file is
+never rewritten, while connected computers keep working in memory. Fixing
+or removing the file takes effect on the next access, without a restart,
+and every computer that connected in the meantime is recorded then. A
+connected computer's heartbeat reaches its record at least once a minute,
+so a crash leaves `last_seen` at most a minute behind.
+
+A desktop upgraded from a release that registered under its hostname takes
+over that offline record the first time it registers under its stable id,
+keeping `first_seen` and the user's name; the hostname-keyed row is dropped
+instead of staying behind as a duplicate. An offline computer can also be
+forgotten explicitly (`DELETE`); a connected one cannot.
 
 The API reports each record with live state that is never written to disk:
 `display_name` resolved to the hostname when unnamed (`custom_name` holds
@@ -189,12 +198,18 @@ the user's name or `null`), `online`, `health` derived from heartbeat age
 | --- | --- |
 | `GET /api/instances/companion/machines` | `{machines}`, online first, then most recently seen |
 | `PUT /api/instances/companion/machines/{machine_id}` | `{display_name}`; blank or `null` shows the hostname again |
+| `DELETE /api/instances/companion/machines/{machine_id}` | forget an offline computer (`204`); `409 machine_online` while it is connected, `404 not_found` otherwise |
 | `POST /api/instances/companion/machine-hello` | optional `{machine_id}`; runs the connection check-in for the named or only connected computer, `409 ambiguous_machine` (with `machine_ids`) when several are connected and none is named, `409 machine_offline` or `404 not_found` for a named one that is not connected or not known |
 | `POST /api/instances/companion/machine-bye` | optional `{machine_id}`; records which connected computers stay attached, the named one or all of them |
 
-Every registration, disconnect, rename, and recovered heartbeat is
-broadcast to clients as one `machine_updated` server event carrying the same
-shape as the listing.
+Every registration, disconnect, rename, and change of health is broadcast
+to clients as one `machine_updated` server event carrying the same shape as
+the listing: a heartbeat that goes stale is reported as `degraded` by a
+watch that runs every 15 seconds, and the heartbeat that ends the stale
+stretch as `healthy`; routine heartbeats are silent. A record that is
+forgotten, taken over by a stable id, or evicted is broadcast as
+`machine_forgotten` (`{instance_slug, machine_id}`), so clients drop the row
+without refetching.
 
 ### Obsolete sibling directories
 

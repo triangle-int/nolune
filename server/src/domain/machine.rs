@@ -16,7 +16,9 @@ pub const MACHINES_FILE: &str = "machines.json";
 pub const MAX_KNOWN_MACHINES: usize = 64;
 /// Longest machine id accepted at registration; matches `cua_protocol::MAX_ID_BYTES`.
 pub const MAX_MACHINE_ID_BYTES: usize = 128;
-/// Longest hostname kept on a record, in characters; longer ones are cut.
+/// Longest hostname or OS label kept on a record, in characters; longer ones
+/// are cut (`normalize_label`), so the file the store writes always fits
+/// under its read bound.
 pub const MAX_LABEL_CHARS: usize = 256;
 /// Longest user-given display name.
 pub const MAX_DISPLAY_NAME_CHARS: usize = 64;
@@ -167,6 +169,12 @@ pub fn normalize_capabilities(reported: Vec<String>) -> Vec<String> {
     kept
 }
 
+/// A hostname or OS label as the record keeps it: the first
+/// `MAX_LABEL_CHARS` characters of what the desktop reported.
+pub fn normalize_label(label: &str) -> String {
+    label.chars().take(MAX_LABEL_CHARS).collect()
+}
+
 /// A machine id the record can carry: one non-empty line of at most
 /// `MAX_MACHINE_ID_BYTES` in the protocol's identifier grammar (letters,
 /// digits, `-`, `_`, `.`, `:`), so a UUID and a hostname both fit and a path
@@ -263,6 +271,17 @@ mod tests {
 
         // Nothing valid reported: that is not a legacy desktop, it reports nothing.
         assert!(normalize_capabilities(vec!["has space".to_owned()]).is_empty());
+    }
+
+    #[test]
+    fn labels_are_cut_at_the_bound() {
+        assert_eq!(normalize_label("studio.local"), "studio.local");
+        assert_eq!(normalize_label(""), "");
+        assert_eq!(
+            normalize_label(&"é".repeat(MAX_LABEL_CHARS + 10)),
+            "é".repeat(MAX_LABEL_CHARS),
+            "the bound counts characters, not bytes"
+        );
     }
 
     #[test]
