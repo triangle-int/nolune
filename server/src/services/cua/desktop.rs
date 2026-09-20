@@ -13,7 +13,7 @@
 //! typed frame.
 
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::HashMap,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -27,6 +27,8 @@ use cua_protocol::{
 use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
+
+use super::session::OpenSessions;
 
 /// The frame the server sends a desktop for one typed request. The envelope
 /// travels whole under `request`, so the desktop decodes it with
@@ -115,13 +117,14 @@ pub struct DesktopLink {
     /// How long one call may wait for its `cua_response`.
     call_timeout: Duration,
     state: Mutex<LinkState>,
+    /// The sessions the desktop confirmed open and has not ended: the same
+    /// bookkeeping as the runtime's per-run sessions.
+    open: OpenSessions,
 }
 
 #[derive(Default)]
 struct LinkState {
     pending: HashMap<RequestId, oneshot::Sender<Result<CuaResponseEnvelope, DriverCallFailure>>>,
-    /// Labels of the sessions the desktop confirmed open and has not ended.
-    open: BTreeSet<SessionLabel>,
     /// Set by `disconnect`; every later call fails at once.
     closed: bool,
 }
@@ -140,6 +143,7 @@ impl DesktopLink {
             sender,
             call_timeout,
             state: Mutex::new(LinkState::default()),
+            open: OpenSessions::new(),
         })
     }
 
@@ -202,7 +206,7 @@ impl DesktopLink {
     /// The sessions the desktop confirmed open and has not ended, in label order.
     #[cfg(test)]
     pub fn open_sessions(&self) -> Vec<SessionLabel> {
-        self.lock().open.iter().cloned().collect()
+        self.open.labels()
     }
 
     /// How many calls are waiting for a `cua_response`.
@@ -215,16 +219,21 @@ impl DesktopLink {
     /// instead of at its deadline, and the sessions the desktop held are
     /// lost with it (there is nobody left to end them). Idempotent.
     pub fn disconnect(&self) -> Dropped {
-        let mut state = self.lock();
-        state.closed = true;
-        let pending = state.pending.len();
-        for (_, waiting) in state.pending.drain() {
-            let _ = waiting.send(Err(DriverCallFailure::Transport(
-                "desktop disconnected".to_owned(),
-            )));
+        let pending = {
+            let mut state = self.lock();
+            state.closed = true;
+            let pending = state.pending.len();
+            for (_, waiting) in state.pending.drain() {
+                let _ = waiting.send(Err(DriverCallFailure::Transport(
+                    "desktop disconnected".to_owned(),
+                )));
+            }
+            pending
+        };
+        Dropped {
+            pending,
+            sessions: self.open.take(),
         }
-        let sessions = std::mem::take(&mut state.open).into_iter().collect();
-        Dropped { pending, sessions }
     }
 
     /// One request over the socket: frame it, wait for the answer that
@@ -322,19 +331,19 @@ impl DesktopLink {
                     return;
                 }
                 if let Some(label) = started.session.clone().or_else(|| args.session.clone()) {
-                    self.lock().open.insert(label);
+                    self.open.insert(label);
                 }
             }
             (CuaAction::EndSession(args), CuaActionResult::EndSession(ended)) => {
                 if let Some(label) = ended.session.clone().or_else(|| args.session.clone()) {
-                    self.lock().open.remove(&label);
+                    self.open.remove(&label);
                 }
             }
             _ => {}
         }
     }
 
-    /// A poisoned lock only means a task panicked mid-update; the maps are
+    /// A poisoned lock only means a task panicked mid-update; the map is
     /// still consistent enough to drain.
     fn lock(&self) -> std::sync::MutexGuard<'_, LinkState> {
         self.state
