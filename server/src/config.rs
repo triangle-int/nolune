@@ -394,7 +394,22 @@ pub fn default_presets(provider: LlmProvider) -> Vec<ModelPreset> {
             ModelPreset::seeded("gpt", "GPT-5.4", provider, "gpt-5.4"),
             ModelPreset::seeded("gpt-mini", "GPT-5.4 mini", provider, "gpt-5.4-mini"),
         ],
-        LlmProvider::Openrouter => vec![],
+        // OpenRouter ids are `vendor/model`; the ids stay clear of the
+        // vendors' own seeds so both can coexist.
+        LlmProvider::Openrouter => vec![
+            ModelPreset::seeded(
+                "openrouter-sonnet",
+                "Claude Sonnet via OpenRouter",
+                provider,
+                "anthropic/claude-sonnet-4.6",
+            ),
+            ModelPreset::seeded(
+                "openrouter-gpt-mini",
+                "GPT-5.4 mini via OpenRouter",
+                provider,
+                "openai/gpt-5.4-mini",
+            ),
+        ],
     }
 }
 
@@ -403,15 +418,17 @@ fn default_slots(provider: LlmProvider) -> (&'static str, &'static str) {
     match provider {
         LlmProvider::Anthropic => ("sonnet", "haiku"),
         LlmProvider::Openai => ("gpt", "gpt-mini"),
-        LlmProvider::Openrouter => ("", ""),
+        LlmProvider::Openrouter => ("openrouter-sonnet", "openrouter-gpt-mini"),
     }
 }
 
 /// OpenRouter names models `vendor/model`, optionally with a `:variant`
 /// suffix (`anthropic/claude-sonnet-4.6`, `meta-llama/llama-4:free`).
 pub fn is_openrouter_model_id(model: &str) -> bool {
-    let _ = model;
-    true
+    let Some((vendor, name)) = model.split_once('/') else {
+        return false;
+    };
+    !vendor.is_empty() && !name.is_empty() && !model.chars().any(char::is_whitespace)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -439,6 +456,7 @@ impl LlmProvider {
         match value {
             "api" | "anthropic" | "claude_cli" | "cli" => Some(Self::Anthropic),
             "openai" => Some(Self::Openai),
+            "openrouter" | "open_router" => Some(Self::Openrouter),
             _ => None,
         }
     }
@@ -448,8 +466,9 @@ impl LlmProvider {
 impl<'de> serde::Deserialize<'de> for LlmProvider {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
-        Self::parse(&s)
-            .ok_or_else(|| serde::de::Error::unknown_variant(&s, &["anthropic", "openai"]))
+        Self::parse(&s).ok_or_else(|| {
+            serde::de::Error::unknown_variant(&s, &["anthropic", "openai", "openrouter"])
+        })
     }
 }
 
@@ -486,7 +505,7 @@ pub struct LlmConfig {
 }
 
 /// OpenRouter-only settings (#26). Attribution is off until a person fills
-/// it in: nothing about this instance, not even its `public_url`, reaches
+/// it in: nothing about this server, not even its `public_url`, reaches
 /// openrouter.ai unless these say so.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
@@ -656,7 +675,7 @@ impl LlmConfig {
         let key = match provider {
             LlmProvider::Anthropic => &self.tokens.anthropic,
             LlmProvider::Openai => &self.tokens.open_ai,
-            LlmProvider::Openrouter => return None,
+            LlmProvider::Openrouter => &self.tokens.open_router,
         };
         (!key.is_empty()).then_some(key.as_str())
     }
@@ -667,10 +686,14 @@ impl LlmConfig {
 
     /// Providers that have an API key, in preset-provider order.
     pub fn keyed_providers(&self) -> Vec<LlmProvider> {
-        [LlmProvider::Anthropic, LlmProvider::Openai]
-            .into_iter()
-            .filter(|provider| self.has_key(*provider))
-            .collect()
+        [
+            LlmProvider::Anthropic,
+            LlmProvider::Openai,
+            LlmProvider::Openrouter,
+        ]
+        .into_iter()
+        .filter(|provider| self.has_key(*provider))
+        .collect()
     }
 
     pub fn setup_required(&self) -> Option<String> {
@@ -769,6 +792,13 @@ impl LlmConfig {
             }
             if preset.model.trim().is_empty() {
                 return Err(format!("preset {id:?} needs a model"));
+            }
+            if preset.provider == LlmProvider::Openrouter
+                && !is_openrouter_model_id(preset.model.trim())
+            {
+                return Err(format!(
+                    "preset {id:?} needs an OpenRouter model id in vendor/model form"
+                ));
             }
         }
         if self.presets.is_empty() {

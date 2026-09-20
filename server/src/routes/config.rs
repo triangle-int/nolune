@@ -187,6 +187,7 @@ async fn save_llm_keys(
     for (provider, key) in [
         (config::LlmProvider::Anthropic, &req.api_key),
         (config::LlmProvider::Openai, &req.openai),
+        (config::LlmProvider::Openrouter, &req.openrouter),
     ] {
         if let Some(key) = key.as_deref().map(str::trim).filter(|key| !key.is_empty()) {
             verify_provider_key(state, provider, key, probe_base_url).await?;
