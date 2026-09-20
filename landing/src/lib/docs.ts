@@ -21,7 +21,7 @@ export const sections: DocsSection[] = [
 	{
 		slug: 'upgrade',
 		title: 'Upgrade',
-		summary: 'Apply an update from Settings or the command line, then restart the server the way it was started.'
+		summary: 'Install again from the desktop app, or run the update script from the web interface or a terminal, then restart the server the way it was started.'
 	},
 	{
 		slug: 'backup',
