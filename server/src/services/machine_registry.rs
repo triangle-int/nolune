@@ -38,6 +38,8 @@ pub enum MachineError {
     NotFound(String),
     /// The input is not a keepable name or id.
     Invalid(String),
+    /// The machine is connected right now, so it cannot be forgotten.
+    Online(String),
     /// The machines file is not one this server can read; nothing is read
     /// from or written to it until the user fixes or removes it.
     Unsupported(String),
@@ -50,6 +52,7 @@ impl MachineError {
         match self {
             Self::NotFound(_) => "not_found",
             Self::Invalid(_) => "invalid",
+            Self::Online(_) => "machine_online",
             Self::Unsupported(_) => "machines_format_unsupported",
             Self::Io(_) => "storage_error",
         }
@@ -60,6 +63,7 @@ impl fmt::Display for MachineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotFound(id) => write!(f, "unknown machine {id}"),
+            Self::Online(id) => write!(f, "machine {id} is connected"),
             Self::Invalid(message) | Self::Io(message) => f.write_str(message),
             Self::Unsupported(message) => {
                 write!(f, "the known machines file is unsupported: {message}")
@@ -774,6 +778,19 @@ impl MachineRegistry {
             })??;
         self.broadcast(machine_id, now).await;
         self.get_known(machine_id, now).await
+    }
+
+    /// Forget an offline known machine; a connected one is refused.
+    pub async fn forget(&self, machine_id: &str) -> Result<(), MachineError> {
+        let _ = machine_id;
+        todo!("forget an offline known machine (#80 review)")
+    }
+
+    /// Report every connected machine whose heartbeat went stale since the
+    /// last sweep as `machine_updated`; returns the ids it broadcast.
+    pub async fn sweep_health_at(&self, now: i64) -> Vec<String> {
+        let _ = now;
+        todo!("watch heartbeat age (#80 review)")
     }
 
     /// Send a toolcall to a specific machine and wait for the result.
@@ -1597,5 +1614,352 @@ mod known_machines_tests {
         };
         assert!(!machine.online);
         assert!(registry.list().await.is_empty());
+    }
+
+    /// Review finding: the persisted `os` label was unbounded, so the store could
+    /// write a file it would refuse to read back.
+    #[tokio::test]
+    async fn oversized_labels_are_cut_so_the_file_the_store_writes_is_one_it_reads() {
+        use crate::domain::machine::MAX_LABEL_CHARS;
+        let (ws, registry) = harness();
+        let mut info = desktop(STABLE_ID, "studio", T0);
+        info.os = "o".repeat(1_200_000);
+        info.hostname = "h".repeat(10_000);
+        let _rx = connect(&registry, info).await;
+
+        let live = registry.list().await;
+        assert_eq!(live[0].os.chars().count(), MAX_LABEL_CHARS);
+        assert_eq!(live[0].hostname.chars().count(), MAX_LABEL_CHARS);
+
+        let known = registry.known_at(T0 + 1).await.unwrap();
+        assert_eq!(known.len(), 1);
+        assert_eq!(known[0].os.chars().count(), MAX_LABEL_CHARS);
+        assert_eq!(known[0].hostname.chars().count(), MAX_LABEL_CHARS);
+        assert!(
+            fs::metadata(machines_path(&ws)).unwrap().len() < MAX_MACHINES_FILE_BYTES as u64,
+            "the written file stays within what load() accepts"
+        );
+
+        let reopened = MachineRegistry::open(ws.path(), CANONICAL_SLUG);
+        let after_restart = reopened.known_at(T0 + 2).await.unwrap();
+        assert_eq!(
+            after_restart.len(),
+            1,
+            "the reopened registry still lists it"
+        );
+        assert_eq!(after_restart[0].machine_id, STABLE_ID);
+    }
+
+    #[test]
+    fn the_store_refuses_to_write_a_file_it_could_not_read_back() {
+        let ws = tempfile::tempdir().unwrap();
+        let store = KnownMachines::at(ws.path(), CANONICAL_SLUG);
+        let mut records = BTreeMap::new();
+        let mut record = MachineRecord {
+            machine_id: STABLE_ID.into(),
+            display_name: None,
+            hostname: "studio".into(),
+            os: "o".repeat(MAX_MACHINES_FILE_BYTES + 1),
+            platform: Some(Platform::Macos),
+            location: MachineLocation::Desktop,
+            screen_width: 1,
+            screen_height: 1,
+            permissions: None,
+            capabilities: Vec::new(),
+            first_seen: T0,
+            last_seen: T0,
+        };
+        assert!(
+            matches!(store.save(&records), Ok(())),
+            "an empty store writes fine"
+        );
+        records.insert(STABLE_ID.into(), record.clone());
+        let refused = store.save(&records);
+        assert!(matches!(refused, Err(MachineError::Io(_))), "{refused:?}");
+        let path = ws
+            .path()
+            .join("instances")
+            .join(CANONICAL_SLUG)
+            .join(MACHINES_FILE);
+        assert!(
+            fs::metadata(&path).unwrap().len() < 200,
+            "the previous (empty) file is left in place"
+        );
+        assert!(
+            !path.with_extension("tmp").exists(),
+            "no temp file left behind"
+        );
+
+        record.os = "macos".into();
+        records.insert(STABLE_ID.into(), record);
+        store.save(&records).unwrap();
+        assert!(store.load().is_ok(), "what save() writes, load() reads");
+    }
+
+    /// Review finding: the fail-closed state was cached for the process lifetime,
+    /// so fixing or removing the file did nothing until a restart.
+    #[tokio::test]
+    async fn a_fixed_or_removed_machines_file_is_read_again_without_a_restart() {
+        let (ws, registry) = harness();
+        fs::write(machines_path(&ws), "{not json").unwrap();
+        assert!(matches!(
+            registry.known_at(T0).await,
+            Err(MachineError::Unsupported(_))
+        ));
+
+        // A desktop connects while the file is broken: live, but not recorded.
+        let _rx = connect(&registry, desktop(STABLE_ID, "studio", T0 + 1)).await;
+        assert!(matches!(
+            registry.known_at(T0 + 2).await,
+            Err(MachineError::Unsupported(_))
+        ));
+        assert_eq!(fs::read_to_string(machines_path(&ws)).unwrap(), "{not json");
+
+        // The user removes the file: the next read works and the connected
+        // desktop is recorded without reconnecting.
+        fs::remove_file(machines_path(&ws)).unwrap();
+        let known = registry.known_at(T0 + 3).await.unwrap();
+        assert_eq!(known.len(), 1, "the connected desktop gets its record back");
+        assert_eq!(known[0].machine_id, STABLE_ID);
+        assert!(known[0].online);
+        assert_eq!(
+            known[0].first_seen,
+            T0 + 1,
+            "recorded from its registration time"
+        );
+        assert!(machines_path(&ws).is_file(), "and it is persisted");
+
+        // The record survives a disconnect and a restart like any other.
+        registry.unregister_at(STABLE_ID, T0 + 4).await;
+        let reopened = MachineRegistry::open(ws.path(), CANONICAL_SLUG);
+        let after = reopened.known_at(T0 + 5).await.unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].last_seen, T0 + 4);
+
+        // Broken again while running: fails closed again, then a fixed file is read.
+        fs::write(machines_path(&ws), "{not json").unwrap();
+        assert!(matches!(
+            registry.known_at(T0 + 6).await,
+            Err(MachineError::Unsupported(_))
+        ));
+        let fixed = MachinesFile {
+            version: MACHINES_FORMAT_VERSION,
+            slug: CANONICAL_SLUG.into(),
+            machines: vec![],
+        };
+        fs::write(machines_path(&ws), serde_json::to_string(&fixed).unwrap()).unwrap();
+        assert_eq!(registry.known_at(T0 + 7).await.unwrap(), vec![]);
+    }
+
+    /// Review finding: a desktop upgraded from the hostname-keyed id left a
+    /// permanent duplicate next to its new UUID record.
+    #[tokio::test]
+    async fn a_desktop_upgraded_from_a_hostname_id_keeps_one_record() {
+        let (ws, registry) = harness();
+        let (events, mut rx) = tokio::sync::broadcast::channel(16);
+        let registry = registry.with_events(events);
+
+        // Before the upgrade the desktop registered under its hostname.
+        let _old = connect(&registry, desktop("studio", "studio", T0)).await;
+        registry.rename("studio", Some("Studio Mac")).await.unwrap();
+        registry.unregister_at("studio", T0 + 10).await;
+        while rx.try_recv().is_ok() {}
+
+        // After the upgrade it registers under its persisted UUID, same hostname.
+        let _new = connect(&registry, desktop(STABLE_ID, "studio", T0 + 500)).await;
+        let known = registry.known_at(T0 + 501).await.unwrap();
+        assert_eq!(
+            known.len(),
+            1,
+            "the legacy record is migrated, not duplicated"
+        );
+        let machine = &known[0];
+        assert_eq!(machine.machine_id, STABLE_ID);
+        assert_eq!(
+            machine.first_seen, T0,
+            "the old record's first_seen survives"
+        );
+        assert_eq!(machine.display_name, "Studio Mac", "and the user's name");
+        assert_eq!(machine.last_seen, T0 + 500);
+        assert!(machine.online);
+
+        let ServerEvent::MachineUpdated { machine, .. } = rx.try_recv().unwrap() else {
+            panic!("unexpected event");
+        };
+        assert_eq!(machine.machine_id, STABLE_ID);
+        let ServerEvent::MachineForgotten { machine_id, .. } = rx.try_recv().unwrap() else {
+            panic!("unexpected event");
+        };
+        assert_eq!(machine_id, "studio", "clients drop the legacy row");
+
+        let file: MachinesFile =
+            serde_json::from_str(&fs::read_to_string(machines_path(&ws)).unwrap()).unwrap();
+        assert_eq!(file.machines.len(), 1);
+        assert_eq!(file.machines[0].machine_id, STABLE_ID);
+
+        // Only an offline record keyed by the hostname is migrated: a connected
+        // one with that id is another computer, and an existing UUID record wins.
+        let _other = connect(&registry, desktop("laptop", "laptop", T0 + 600)).await;
+        let _same_name = connect(&registry, desktop("other-uuid", "laptop", T0 + 601)).await;
+        let ids: Vec<String> = registry
+            .known_at(T0 + 602)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.machine_id)
+            .collect();
+        assert!(ids.contains(&"laptop".to_owned()), "{ids:?}");
+        assert!(ids.contains(&"other-uuid".to_owned()), "{ids:?}");
+        registry.unregister_at("laptop", T0 + 700).await;
+        let _again = connect(&registry, desktop("other-uuid", "laptop", T0 + 800)).await;
+        let ids: Vec<String> = registry
+            .known_at(T0 + 801)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.machine_id)
+            .collect();
+        assert_eq!(ids.len(), 3, "{ids:?}");
+        assert!(
+            ids.contains(&"laptop".to_owned()),
+            "a UUID record already exists: nothing to migrate"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_offline_machine_can_be_forgotten() {
+        let (ws, registry) = harness();
+        let (events, mut rx) = tokio::sync::broadcast::channel(16);
+        let registry = registry.with_events(events);
+        let _rx = connect(&registry, desktop(STABLE_ID, "studio", T0)).await;
+        let _other = connect(&registry, desktop("laptop", "laptop", T0)).await;
+        registry.unregister_at("laptop", T0 + 1).await;
+        while rx.try_recv().is_ok() {}
+
+        assert_eq!(
+            registry.forget(STABLE_ID).await,
+            Err(MachineError::Online(STABLE_ID.into())),
+            "a connected computer cannot be forgotten"
+        );
+        assert_eq!(
+            registry.forget("nobody").await,
+            Err(MachineError::NotFound("nobody".into()))
+        );
+        assert!(rx.try_recv().is_err(), "refusals are silent");
+
+        registry.forget("laptop").await.unwrap();
+        let ids: Vec<String> = registry
+            .known_at(T0 + 2)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.machine_id)
+            .collect();
+        assert_eq!(ids, vec![STABLE_ID.to_owned()]);
+        let ServerEvent::MachineForgotten {
+            instance_slug,
+            machine_id,
+        } = rx.try_recv().unwrap()
+        else {
+            panic!("unexpected event");
+        };
+        assert_eq!(instance_slug, CANONICAL_SLUG);
+        assert_eq!(machine_id, "laptop");
+        assert_eq!(
+            registry.forget("laptop").await,
+            Err(MachineError::NotFound("laptop".into())),
+            "gone"
+        );
+
+        let file: MachinesFile =
+            serde_json::from_str(&fs::read_to_string(machines_path(&ws)).unwrap()).unwrap();
+        assert_eq!(file.machines.len(), 1);
+
+        // A forgotten computer that connects again is simply new.
+        let _back = connect(&registry, desktop("laptop", "laptop", T0 + 900)).await;
+        let back = registry.get_known("laptop", T0 + 901).await.unwrap();
+        assert_eq!(back.first_seen, T0 + 900);
+    }
+
+    /// Review finding: health only went `degraded` by time and nothing watched
+    /// the clock, so clients never heard about a stale heartbeat.
+    #[tokio::test]
+    async fn the_health_watch_broadcasts_a_stale_heartbeat_once() {
+        let (_ws, registry) = harness();
+        let (events, mut rx) = tokio::sync::broadcast::channel(16);
+        let registry = registry.with_events(events);
+        let _agent = connect(&registry, desktop(STABLE_ID, "studio", T0)).await;
+        let _offline = connect(&registry, desktop("laptop", "laptop", T0)).await;
+        registry.unregister_at("laptop", T0 + 1).await;
+        while rx.try_recv().is_ok() {}
+
+        assert_eq!(
+            registry.sweep_health_at(T0 + 10).await,
+            Vec::<String>::new()
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "a fresh heartbeat is nothing to report"
+        );
+
+        assert_eq!(
+            registry
+                .sweep_health_at(T0 + STALE_HEARTBEAT_SECS + 1)
+                .await,
+            vec![STABLE_ID.to_owned()],
+            "the offline computer is unavailable already, not degraded"
+        );
+        let ServerEvent::MachineUpdated { machine, .. } = rx.try_recv().unwrap() else {
+            panic!("unexpected event");
+        };
+        assert_eq!(machine.machine_id, STABLE_ID);
+        assert!(machine.online);
+        assert_eq!(machine.health, MachineHealth::Degraded);
+
+        assert!(
+            registry
+                .sweep_health_at(T0 + STALE_HEARTBEAT_SECS + 30)
+                .await
+                .is_empty(),
+            "still stale: announced once"
+        );
+        assert!(rx.try_recv().is_err());
+
+        // The heartbeat that ends the stale stretch is broadcast, then the
+        // watch has nothing to add.
+        registry
+            .heartbeat_at(STABLE_ID, T0 + STALE_HEARTBEAT_SECS + 40)
+            .await;
+        let ServerEvent::MachineUpdated { machine, .. } = rx.try_recv().unwrap() else {
+            panic!("unexpected event");
+        };
+        assert_eq!(machine.health, MachineHealth::Healthy);
+        assert!(
+            registry
+                .sweep_health_at(T0 + STALE_HEARTBEAT_SECS + 41)
+                .await
+                .is_empty()
+        );
+        assert!(rx.try_recv().is_err());
+
+        // Disconnecting a degraded computer is reported as unavailable, once.
+        registry
+            .sweep_health_at(T0 + 2 * STALE_HEARTBEAT_SECS + 100)
+            .await;
+        let _ = rx.try_recv().unwrap();
+        registry
+            .unregister_at(STABLE_ID, T0 + 2 * STALE_HEARTBEAT_SECS + 101)
+            .await;
+        let ServerEvent::MachineUpdated { machine, .. } = rx.try_recv().unwrap() else {
+            panic!("unexpected event");
+        };
+        assert_eq!(machine.health, MachineHealth::Unavailable);
+        assert!(
+            registry
+                .sweep_health_at(T0 + 2 * STALE_HEARTBEAT_SECS + 102)
+                .await
+                .is_empty()
+        );
+        assert!(rx.try_recv().is_err());
     }
 }

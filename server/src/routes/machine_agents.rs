@@ -11,7 +11,7 @@ use axum::{
 use serde::Deserialize;
 
 use crate::app::state::AppState;
-use crate::domain::machine::{KnownMachine, normalize_capabilities, validate_machine_id};
+use crate::domain::machine::{KnownMachine, validate_machine_id};
 use crate::services::machine_registry::{ActionResult, MachineError, MachineInfo};
 
 pub fn router() -> Router<AppState> {
@@ -49,6 +49,7 @@ impl IntoResponse for ApiError {
         let status = match &self.0 {
             MachineError::NotFound(_) => StatusCode::NOT_FOUND,
             MachineError::Invalid(_) => StatusCode::BAD_REQUEST,
+            MachineError::Online(_) => StatusCode::CONFLICT,
             MachineError::Unsupported(_) => StatusCode::SERVICE_UNAVAILABLE,
             MachineError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
@@ -231,27 +232,41 @@ async fn upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> Respons
     ws.on_upgrade(move |socket| handle_agent(socket, state))
 }
 
+/// What a desktop sends first on its socket. `machine_id` is the desktop's
+/// persisted stable id (#80); older desktops send their hostname.
+#[derive(Deserialize)]
+struct Registration {
+    machine_id: String,
+    os: String,
+    hostname: String,
+    screen_width: u32,
+    screen_height: u32,
+    #[serde(default)]
+    instance_slug: Option<String>,
+    /// Desktop permission state, in the protocol's shape; absent from older desktops.
+    #[serde(default)]
+    permissions: Option<cua_protocol::PermissionState>,
+    /// Action names the agent executes; absent from older desktops (legacy set).
+    #[serde(default)]
+    capabilities: Vec<String>,
+}
+
+impl Registration {
+    /// The registry's view of this registration, seen at `now`. Labels and
+    /// capabilities are handed over as reported; the registry bounds and
+    /// normalizes them in one place.
+    fn into_info(self, now: i64) -> MachineInfo {
+        let _ = now;
+        todo!("single normalization point (#80 review)")
+    }
+}
+
 /// Message types from the agent.
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum AgentMessage {
-    /// Agent registers itself on connect. `machine_id` is the desktop's
-    /// persisted stable id (#80); older desktops send their hostname.
-    Register {
-        machine_id: String,
-        os: String,
-        hostname: String,
-        screen_width: u32,
-        screen_height: u32,
-        #[serde(default)]
-        instance_slug: Option<String>,
-        /// Desktop permission state, in the protocol's shape; absent from older desktops.
-        #[serde(default)]
-        permissions: Option<cua_protocol::PermissionState>,
-        /// Action names the agent executes; absent from older desktops (legacy set).
-        #[serde(default)]
-        capabilities: Vec<String>,
-    },
+    /// Agent registers itself on connect.
+    Register(Registration),
     /// Agent sends back the result of a toolcall.
     ActionResult {
         request_id: String,
@@ -303,7 +318,7 @@ async fn handle_agent(mut socket: WebSocket, state: AppState) {
                                 AgentMessage::Heartbeat { machine_id: mid } => {
                                     state.machine_registry.heartbeat(&mid).await;
                                 }
-                                AgentMessage::Register { .. } => {
+                                AgentMessage::Register(_) => {
                                     // Already registered, ignore duplicate
                                 }
                             }
@@ -365,29 +380,18 @@ async fn wait_for_registration(
             incoming = socket.recv() => {
                 match incoming {
                     Some(Ok(Message::Text(text))) => {
-                        if let Ok(AgentMessage::Register { machine_id, os, hostname, screen_width, screen_height, instance_slug, permissions, capabilities }) =
+                        if let Ok(AgentMessage::Register(registration)) =
                             serde_json::from_str::<AgentMessage>(&text)
                         {
-                            if let Err(error) = validate_machine_id(&machine_id) {
+                            if let Err(error) = validate_machine_id(&registration.machine_id) {
                                 log::warn!("[machine-ws] registration refused: {error}");
                                 let refusal = serde_json::json!({"type": "error", "error": "invalid_machine_id", "message": error});
                                 let _ = socket.send(Message::Text(refusal.to_string().into())).await;
                                 return None;
                             }
                             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-                            let info = MachineInfo {
-                                machine_id: machine_id.clone(),
-                                platform: crate::domain::machine::platform_from_os(&os),
-                                os: os.clone(),
-                                hostname: hostname.chars().take(crate::domain::machine::MAX_LABEL_CHARS).collect(),
-                                screen_width,
-                                screen_height,
-                                last_seen: chrono::Utc::now().timestamp(),
-                                instance_slug: instance_slug.clone(),
-                                location: cua_protocol::MachineLocation::Desktop,
-                                permissions,
-                                capabilities: normalize_capabilities(capabilities),
-                            };
+                            let machine_id = registration.machine_id.clone();
+                            let info = registration.into_info(chrono::Utc::now().timestamp());
                             let connection = state.machine_registry.register(info, tx).await;
 
                             // Send ack
@@ -521,4 +525,94 @@ pub(crate) async fn on_machine_connected(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod registration_tests {
+    use super::*;
+    use crate::domain::machine::LEGACY_DESKTOP_CAPABILITIES;
+    use crate::services::machine_registry::MachineRegistry;
+
+    const T0: i64 = 1_767_603_600;
+    const STABLE_ID: &str = "4f3c1c2e-9b5e-4d2b-8f0a-1c2d3e4f5a6b";
+
+    fn registration(extra: serde_json::Value) -> Registration {
+        let mut frame = serde_json::json!({
+            "type": "register",
+            "machine_id": STABLE_ID,
+            "os": "macos",
+            "hostname": "studio",
+            "screen_width": 1440,
+            "screen_height": 900,
+        });
+        frame
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let AgentMessage::Register(registration) =
+            serde_json::from_str(&frame.to_string()).unwrap()
+        else {
+            panic!("not a registration");
+        };
+        registration
+    }
+
+    /// Review finding: the route normalized capabilities and the registry did
+    /// it again, so a report with only invalid names became the legacy set.
+    #[tokio::test]
+    async fn capabilities_are_normalized_once_so_only_invalid_names_record_none() {
+        let info =
+            registration(serde_json::json!({"capabilities": ["Has Space", "UPPER"]})).into_info(T0);
+        assert_eq!(
+            info.capabilities,
+            vec!["Has Space".to_owned(), "UPPER".to_owned()],
+            "the route hands the report over untouched; the registry is the one normalizer"
+        );
+        assert_eq!(info.last_seen, T0);
+        assert_eq!(info.platform, Some(cua_protocol::Platform::Macos));
+        assert_eq!(info.location, cua_protocol::MachineLocation::Desktop);
+
+        let registry = MachineRegistry::new();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        registry.register(info, tx).await;
+        let known = registry.get_known(STABLE_ID, T0).await.unwrap();
+        assert_eq!(
+            known.capabilities,
+            Vec::<String>::new(),
+            "nothing valid reported: it reports nothing, not the legacy set"
+        );
+
+        // A desktop that predates capability reporting still gets the legacy set.
+        let legacy = registration(serde_json::json!({})).into_info(T0);
+        assert!(legacy.capabilities.is_empty());
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        registry.register(legacy, tx).await;
+        assert_eq!(
+            registry
+                .get_known(STABLE_ID, T0)
+                .await
+                .unwrap()
+                .capabilities,
+            LEGACY_DESKTOP_CAPABILITIES
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn labels_are_handed_over_untouched_and_bounded_by_the_registry() {
+        let info = registration(serde_json::json!({
+            "os": "o".repeat(5_000),
+            "hostname": "h".repeat(5_000),
+            "permissions": {"accessibility": "granted", "screen_capture": "denied"},
+        }))
+        .into_info(T0);
+        assert_eq!(info.os.len(), 5_000);
+        assert_eq!(info.hostname.len(), 5_000);
+        assert_eq!(
+            info.permissions.as_ref().unwrap().screen_capture,
+            cua_protocol::Permission::Denied
+        );
+    }
 }

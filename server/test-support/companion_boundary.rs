@@ -1058,6 +1058,173 @@ async fn a_broken_machines_file_answers_503_instead_of_an_empty_list() {
         "{not json",
         "the file is never rewritten"
     );
+
+    // A desktop connects while the file is broken; renaming it is refused.
+    let (sender, _receiver) = tokio::sync::mpsc::unbounded_channel();
+    h.state
+        .machine_registry
+        .register(
+            MachineInfo {
+                machine_id: "mac-mini".into(),
+                os: "macos".into(),
+                hostname: "studio".into(),
+                screen_width: 1440,
+                screen_height: 900,
+                last_seen: 1_700_000_000,
+                instance_slug: None,
+                platform: Some(cua_protocol::Platform::Macos),
+                location: cua_protocol::MachineLocation::Desktop,
+                permissions: None,
+                capabilities: Vec::new(),
+            },
+            sender,
+        )
+        .await;
+    let (status, body) = h
+        .json(
+            Method::PUT,
+            "/api/instances/companion/machines/mac-mini",
+            Some(serde_json::json!({"display_name": "Studio Mac"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+
+    // Removing the file takes effect without a restart, and the connected
+    // desktop is recorded.
+    fs::remove_file(h.companion().join("machines.json")).unwrap();
+    let (status, body) = h
+        .json(Method::GET, "/api/instances/companion/machines", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let machines = body["machines"].as_array().unwrap();
+    assert_eq!(machines.len(), 1, "{body}");
+    assert_eq!(machines[0]["machine_id"], "mac-mini");
+    assert_eq!(machines[0]["online"], true);
+    assert!(h.companion().join("machines.json").is_file());
+}
+
+#[tokio::test]
+async fn only_invalid_capabilities_are_recorded_as_none() {
+    let h = harness().await;
+    companion::ensure_identity(h.workspace.path()).unwrap();
+    let (sender, _receiver) = tokio::sync::mpsc::unbounded_channel();
+    h.state
+        .machine_registry
+        .register(
+            MachineInfo {
+                machine_id: "mac-mini".into(),
+                os: "macos".into(),
+                hostname: "studio".into(),
+                screen_width: 1440,
+                screen_height: 900,
+                last_seen: 1_700_000_000,
+                instance_slug: None,
+                platform: Some(cua_protocol::Platform::Macos),
+                location: cua_protocol::MachineLocation::Desktop,
+                permissions: None,
+                capabilities: vec!["Has Space".into(), "UPPER".into()],
+            },
+            sender,
+        )
+        .await;
+    let (status, body) = h
+        .json(Method::GET, "/api/instances/companion/machines", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["machines"][0]["capabilities"],
+        serde_json::json!([]),
+        "nothing valid reported is not a legacy desktop"
+    );
+}
+
+#[tokio::test]
+async fn an_offline_computer_can_be_forgotten_over_the_api() {
+    let h = harness().await;
+    companion::ensure_identity(h.workspace.path()).unwrap();
+    let mut receivers = Vec::new();
+    for id in ["mac-mini", "laptop"] {
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        receivers.push(receiver);
+        h.state
+            .machine_registry
+            .register(
+                MachineInfo {
+                    machine_id: id.into(),
+                    os: "macos".into(),
+                    hostname: id.into(),
+                    screen_width: 1440,
+                    screen_height: 900,
+                    last_seen: 1_700_000_000,
+                    instance_slug: None,
+                    platform: Some(cua_protocol::Platform::Macos),
+                    location: cua_protocol::MachineLocation::Desktop,
+                    permissions: None,
+                    capabilities: Vec::new(),
+                },
+                sender,
+            )
+            .await;
+    }
+    h.state.machine_registry.unregister("laptop").await;
+    let mut events = h.state.events.subscribe();
+
+    // Connected computers stay; unknown ones and foreign slugs fail closed.
+    let (status, body) = h
+        .json(
+            Method::DELETE,
+            "/api/instances/companion/machines/mac-mini",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "machine_online");
+    let (status, body) = h
+        .json(
+            Method::DELETE,
+            "/api/instances/companion/machines/ghost",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "not_found");
+    let (status, body) = h
+        .json(Method::DELETE, "/api/instances/alice/machines/laptop", None)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "unknown_companion");
+
+    let (status, _) = h
+        .send(
+            Method::DELETE,
+            "/api/instances/companion/machines/laptop",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, body) = h
+        .json(Method::GET, "/api/instances/companion/machines", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let ids: Vec<&str> = body["machines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["machine_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["mac-mini"]);
+    let event = serde_json::to_value(events.try_recv().unwrap()).unwrap();
+    assert_eq!(event["type"], "machine_forgotten");
+    assert_eq!(event["instance_slug"], CANONICAL_SLUG);
+    assert_eq!(event["machine_id"], "laptop");
+    let (status, _) = h
+        .send(
+            Method::DELETE,
+            "/api/instances/companion/machines/laptop",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "already gone");
 }
 
 #[tokio::test]

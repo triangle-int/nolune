@@ -44,6 +44,8 @@ fn known_machines_are_persisted_and_documented() {
         "machine_updated",
         "machines_format_unsupported",
         "PUT /api/instances/companion/machines/{machine_id}",
+        "DELETE /api/instances/companion/machines/{machine_id}",
+        "machine_forgotten",
         "#80",
     ] {
         assert!(
@@ -81,6 +83,10 @@ fn clients_receive_machine_updates_as_one_event() {
         types.contains("type: \"machine_updated\""),
         "client ServerEvent union must declare machine_updated"
     );
+    assert!(
+        events.contains("MachineForgotten {") && types.contains("type: \"machine_forgotten\""),
+        "a forgotten machine must reach clients as machine_forgotten"
+    );
     let machine = &types[types.find("export interface MachineInfo").unwrap()..];
     let machine = &machine[..machine.find("\n}").unwrap()];
     for field in [
@@ -100,5 +106,9 @@ fn clients_receive_machine_updates_as_one_event() {
     assert!(
         client.contains("export function renameMachine("),
         "the client must be able to name a computer"
+    );
+    assert!(
+        client.contains("export function forgetMachine("),
+        "the client must be able to forget an offline computer"
     );
 }

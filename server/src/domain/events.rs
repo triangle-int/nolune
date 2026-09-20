@@ -44,6 +44,11 @@ pub enum ServerEvent {
         instance_slug: String,
         machine: KnownMachine,
     },
+    /// An offline known machine was forgotten (#80): clients drop its row.
+    MachineForgotten {
+        instance_slug: String,
+        machine_id: String,
+    },
     ContextCompacting {
         instance_slug: String,
         chat_id: String,
