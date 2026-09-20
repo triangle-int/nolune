@@ -35,6 +35,9 @@ Unknown fields are rejected. A marker with any other `format_version` or
 ```text
 ~/.nolune/
 ├── config.toml                  server configuration (global)
+├── federation/                  companion signing identity (#108), see below
+│   ├── identity.json            public, self-signed identity document
+│   └── signing_key.json         private Ed25519 seed, mode 0600
 ├── skills/                      installed skills (global)
 ├── vectors/                     derived vector index, keyed by slug
 └── instances/
@@ -48,6 +51,7 @@ Unknown fields are rejected. A marker with any other `format_version` or
         ├── scheduled/*.json     scheduled tasks
         ├── activity/*.json      proactive run records (docs/proactive-loop.md)
         ├── commitments/*.json   promises the companion follows through on (docs/proactive-loop.md)
+        ├── continuity/*.json    resumable task records (see below)
         ├── proactive_policy.json quiet hours, budget, routine intervals
         ├── heartbeat.md         optional guidance for check-ins
         ├── uploads/             user-uploaded files
@@ -62,6 +66,59 @@ bindings, export) lives under this single directory. Retired layouts
 companion directory at startup and never read. The derived vector index
 under `vectors/` is keyed by the same slug and can always be rebuilt from
 `memory/`.
+
+### Continuity records
+
+An unfinished task the user asked for survives chat, model, server, and
+device restarts as one JSON file under `instances/companion/continuity/{id}.json`
+(#81). The file is a link-and-provenance record, never a copy of the files
+or memories it points at.
+
+| Field | Meaning |
+| --- | --- |
+| `version` | `1`; a file with any other version is reported and left alone |
+| `id` | `task_<unix seconds>_<8 hex>`, one path component |
+| `goal` | the user's goal in their words, at most 500 characters |
+| `state` | `active`, `waiting`, `ready_to_resume`, `completed`, `dismissed`, or `failed` |
+| `origin` | `chat_id` and, when known, the `message_id` the task came from |
+| `machine_ids` | connected computers the task needs |
+| `resources` | links only: `upload` (`id`), `memory` (`path`), or `machine_path` (`machine_id`, `path`), each with the provenance that added it |
+| `completed_steps` | what already happened, each with provenance |
+| `blockers` | `machine_unavailable`, `resource_missing` (added and cleared by the server's reference check), or `other` (stated by the user or the tool), each with a detail and provenance |
+| `next_step` | the suggested next step |
+| `created_at`, `updated_at` | unix seconds |
+| `provenance` | every write: `source` (`user`, `chat`, `tool`, `server`), `at`, and a note |
+
+Bounds are enforced on every write: 50 steps, 20 blockers, 40 resources,
+16 computers, 100 provenance entries (the creating entry is always kept),
+300 characters per step, blocker, note, or next step, and 1 MiB per file.
+No record built within those caps can reach the file cap, so a record that
+has used every cap can still be completed or dismissed. A file that is
+larger, is not JSON, or breaks an invariant is skipped and surfaced as an
+error by the listing API; it is never deleted or rewritten. Every write is
+a read-modify-write of one file under one lock for the directory, shared by
+the API and the chat tool, and lands through a uniquely named temp file
+and a rename, so a read never overwrites a write that landed in between.
+
+Records are written only by explicit task activity: the
+`task_continuity_update` chat tool, which the companion calls while doing
+work the user asked for, and the API below. Nothing is ever inferred from
+screenshots, connected-computer events, check-ins, reflections, or
+schedules, and the tool is not part of any routine's tool set. Only
+`active`, `waiting`, and `ready_to_resume` records are resumable;
+`completed` and `dismissed` records stay inspectable but never reappear as
+work to pick up. Reads run a reference check: a computer that is not
+connected or an upload or memory path that cannot be found becomes an
+explicit blocker with `server` provenance, and the blocker clears when the
+reference is back.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/instances/companion/continuity?resumable=` | `{records, errors}`, most recently updated first |
+| `GET /api/instances/companion/continuity/{id}` | one record after the reference check |
+| `PUT /api/instances/companion/continuity/{id}` | apply `goal`, `state`, `completed_step`, `blocker`, `clear_blockers`, `next_step`, `machine_ids`, `resources` with a required `note` |
+| `POST /api/instances/companion/continuity/{id}/complete` | mark done (optional `note`) |
+| `POST /api/instances/companion/continuity/{id}/dismiss` | dismiss (optional `note`) |
 
 ### Obsolete sibling directories
 
@@ -85,6 +142,38 @@ committing only a complete candidate so the last good index stays searchable
 if a provider call fails. Deleting a memory reconciles its index entries
 immediately. There is no button and no manual reindex route; delete the
 `vectors/` directory to force a rebuild on the next start.
+
+### Profiles: several servers on one host
+
+One host can run several fully isolated servers from one binary (#107). Each is a
+*profile*: `nolune --profile <name> …` (or `--profile <name>` after any
+subcommand) addresses its own data root, config, port, auth token, log, and
+background service. The rule is one profile = one server = one companion: a
+profile never holds more than one identity, and nothing is shared between
+profiles.
+
+| Profile | Data root | Service |
+| --- | --- | --- |
+| `default` (no flag) | `~/.nolune/` (or `NOLUNE_HOME`) | `dev.nolune.nolune` / `nolune.service` |
+| any other `<name>` | `~/.nolune-profiles/<name>/` | `dev.nolune.nolune.<name>` / `nolune-<name>.service` |
+
+Profile roots are siblings of `~/.nolune`, never inside it, so
+`nolune uninstall --yes` on one profile cannot touch another. Inside a root the
+layout above is identical. Names match `^[a-z0-9][a-z0-9-]{0,31}$` and are
+local deployment metadata only: never a companion identity, a federation
+address, or a trust anchor. `nolune onboard --profile <name>` picks a free
+port above `26559` (or takes `--port`); `nolune gateway install --profile
+<name>` refuses to share a port, a data root, or a service with a sibling
+profile, and `nolune uninstall` / `nolune gateway uninstall` refuse to act on a
+root that belongs to another profile. A named profile refuses to run when
+`NOLUNE_HOME` points anywhere other than its own root. The binary itself is
+shared: every profile's service runs `~/.nolune/bin/nolune`, so uninstalling
+the default profile (even with `--keep-data`) warns which profiles' services
+will stop at their next restart; reinstall and run
+`nolune gateway install --profile <name>` again, or remove them with
+`nolune gateway uninstall --profile <name>`. Co-located profiles receive no
+implicit trust: they talk to each other only through the federation protocol
+(#108).
 
 ## Wire shape
 
@@ -123,6 +212,51 @@ rooted at `companion/` (for example `companion/companion.json`,
 `companion/soul.md`, `companion/memory/…`). Import (#74) must require a valid
 `companion/companion.json` with `format_version: 1` and reject archives with
 any other root, slug, or version.
+
+## Federation identity
+
+Federation peers (#108) are companion signing identities, never machines,
+profile names, ports, or hostnames. The identity lives at the workspace root,
+outside `instances/companion/`:
+
+| File | Contents | Mode |
+| --- | --- | --- |
+| `federation/identity.json` | public, self-signed identity document | `0600` |
+| `federation/signing_key.json` | private Ed25519 seed: `{"version":1,"algorithm":"ed25519","secret_key":"…"}` | `0600` |
+
+Both files are created together on first use and never rewritten; a key
+without its document (or the reverse) fails closed rather than being repaired
+silently. The export archive is rooted at `companion/`, so it never contains
+either file: an export carries the companion's memory and settings, not its
+federation identity. To move the companion to another host, copy `federation/`
+alongside `instances/`; the identity verifies there because nothing in it
+names the old host, port, service label, profile name, or path, and peers keep
+trusting the same key. Deleting `federation/` creates a new identity on the
+next use, which peers must pair with again.
+
+The identity document, version 1:
+
+```json
+{
+  "version": 1,
+  "companion_id": "<base64url sha256 of the public key>",
+  "public_key": "<base64url Ed25519 public key>",
+  "created_at": 1789862400,
+  "signature": "<base64url Ed25519 signature>"
+}
+```
+
+`companion_id` is derived from `public_key`
+(`sha256("nolune/federation/companion-id/v1\0" || key)`), the signature covers
+the canonical bytes of the other four fields, and every binary field is
+base64url without padding. A document with another version, an id that is not
+derived from its key, unknown fields, a public key that is not a curve point
+(or is a small-order point, which no seed produces), or a signature that does
+not verify strictly is rejected before anything trusts it, and a signing key
+file that other users can read is refused on load. Errors about the signing key
+file describe its shape and never quote its contents. Wire fixtures live in
+`server/tests/fixtures/federation/`; `generate.py` there rebuilds them with
+OpenSSL, independently of the server code.
 
 ## Changing this format
 

@@ -15,17 +15,20 @@ pub const DEFAULT_PORT: u16 = 26559;
 /// What `onboard` did, printed as JSON with `--json` so installers never parse config.toml.
 #[derive(Debug, Serialize)]
 pub struct OnboardOutcome {
+    pub profile: String,
     pub dir: PathBuf,
     pub config_path: PathBuf,
     pub url: String,
+    pub port: u16,
     pub token: String,
     pub created_config: bool,
     pub generated_token: bool,
 }
 
-/// Prepare `dir` as a Nolune workspace. Idempotent: an existing config.toml is kept
-/// and only an empty or missing `auth_token` is backfilled.
-pub fn onboard(dir: &Path) -> anyhow::Result<OnboardOutcome> {
+/// Prepare `dir` as a Nolune workspace for `profile`. Idempotent: an existing config.toml
+/// is kept and only an empty or missing `auth_token` is backfilled; an explicit `port` is
+/// written whether the config is new or not.
+pub fn onboard(dir: &Path, profile: &str, port: Option<u16>) -> anyhow::Result<OnboardOutcome> {
     for sub in ["", "instances", "skills", "bin"] {
         let path = dir.join(sub);
         fs::create_dir_all(&path).with_context(|| format!("cannot create {}", path.display()))?;
@@ -37,7 +40,7 @@ pub fn onboard(dir: &Path) -> anyhow::Result<OnboardOutcome> {
             .with_context(|| format!("cannot read {}", config_path.display()))?;
         let doc: toml::Value = toml::from_str(&raw)
             .with_context(|| format!("{} is not valid TOML", config_path.display()))?;
-        let port = doc
+        let configured = doc
             .get("port")
             .and_then(toml::Value::as_integer)
             .and_then(|p| u16::try_from(p).ok())
@@ -46,23 +49,35 @@ pub fn onboard(dir: &Path) -> anyhow::Result<OnboardOutcome> {
             .get("auth_token")
             .and_then(toml::Value::as_str)
             .unwrap_or_default();
-        if existing.is_empty() {
-            let token = generate_token();
-            write_private(&config_path, &with_token(&raw, &token))?;
-            (false, true, token, port)
+        let (generated, token) = if existing.is_empty() {
+            (true, generate_token())
         } else {
-            (false, false, existing.to_string(), port)
+            (false, existing.to_string())
+        };
+        let mut updated = raw.clone();
+        if generated {
+            updated = with_top_level(&updated, "auth_token", &format!("\"{token}\""));
         }
+        if let Some(port) = port.filter(|port| *port != configured) {
+            updated = with_top_level(&updated, "port", &port.to_string());
+        }
+        if updated != raw {
+            write_private(&config_path, &updated)?;
+        }
+        (false, generated, token, port.unwrap_or(configured))
     } else {
         let token = generate_token();
-        write_private(&config_path, &fresh_config(&token))?;
-        (true, true, token, DEFAULT_PORT)
+        let port = port.unwrap_or(DEFAULT_PORT);
+        write_private(&config_path, &fresh_config(&token, port))?;
+        (true, true, token, port)
     };
 
     Ok(OnboardOutcome {
+        profile: profile.to_owned(),
         dir: dir.to_path_buf(),
         config_path,
         url: format!("http://localhost:{port}"),
+        port,
         token,
         created_config,
         generated_token,
@@ -87,10 +102,10 @@ pub fn generate_token() -> String {
     token
 }
 
-fn fresh_config(token: &str) -> String {
+fn fresh_config(token: &str, port: u16) -> String {
     format!(
         r#"host = "0.0.0.0"
-port = {DEFAULT_PORT}
+port = {port}
 auth_token = "{token}"
 
 [llm]
@@ -119,9 +134,9 @@ ELEVENLABS = ""      # Optional — text-to-speech
     )
 }
 
-/// Replace the top-level `auth_token` line, or insert one first, leaving every other byte alone.
-fn with_token(raw: &str, token: &str) -> String {
-    let line = format!("auth_token = \"{token}\"");
+/// Replace the top-level `key = ...` line, or insert one first, leaving every other byte alone.
+fn with_top_level(raw: &str, key: &str, value: &str) -> String {
+    let line = format!("{key} = {value}");
     let mut out: Vec<String> = Vec::new();
     let mut replaced = false;
     let mut in_table = false;
@@ -130,10 +145,10 @@ fn with_token(raw: &str, token: &str) -> String {
         if trimmed.starts_with('[') {
             in_table = true;
         }
-        let is_token_key = trimmed
-            .strip_prefix("auth_token")
+        let is_key = trimmed
+            .strip_prefix(key)
             .is_some_and(|rest| rest.trim_start().starts_with('='));
-        if !in_table && !replaced && is_token_key {
+        if !in_table && !replaced && is_key {
             out.push(line.clone());
             replaced = true;
         } else {
@@ -189,13 +204,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("home");
 
-        let out = onboard(&dir).unwrap();
+        let out = onboard(&dir, "default", None).unwrap();
 
         assert!(out.created_config);
         assert!(out.generated_token);
         assert_eq!(out.dir, dir);
         assert_eq!(out.config_path, dir.join("config.toml"));
         assert_eq!(out.url, "http://localhost:26559");
+        assert_eq!(out.port, 26559);
+        assert_eq!(out.profile, "default");
         for sub in ["instances", "skills", "bin"] {
             assert!(dir.join(sub).is_dir(), "{sub}/ should exist");
         }
@@ -240,10 +257,10 @@ mod tests {
     #[test]
     fn second_run_changes_nothing() {
         let tmp = tempfile::tempdir().unwrap();
-        let first = onboard(tmp.path()).unwrap();
+        let first = onboard(tmp.path(), "default", None).unwrap();
         let raw_before = read(&first.config_path);
 
-        let second = onboard(tmp.path()).unwrap();
+        let second = onboard(tmp.path(), "default", None).unwrap();
 
         assert!(!second.created_config);
         assert!(!second.generated_token);
@@ -261,11 +278,12 @@ mod tests {
         )
         .unwrap();
 
-        let out = onboard(tmp.path()).unwrap();
+        let out = onboard(tmp.path(), "default", None).unwrap();
 
         assert!(!out.created_config);
         assert!(out.generated_token);
         assert_eq!(out.url, "http://localhost:4242");
+        assert_eq!(out.port, 4242);
         let parsed = parsed(&config);
         assert_eq!(parsed.auth_token, out.token);
         assert_eq!(parsed.host, "127.0.0.1");
@@ -280,7 +298,7 @@ mod tests {
         let config = tmp.path().join("config.toml");
         fs::write(&config, "port = 26559\n\n[llm]\nchat_preset = \"sonnet\"\n").unwrap();
 
-        let out = onboard(tmp.path()).unwrap();
+        let out = onboard(tmp.path(), "default", None).unwrap();
 
         assert!(out.generated_token);
         let parsed = parsed(&config);
@@ -299,10 +317,71 @@ mod tests {
         )
         .unwrap();
 
-        let out = onboard(tmp.path()).unwrap();
+        let out = onboard(tmp.path(), "default", None).unwrap();
 
         assert!(!out.generated_token);
         assert_eq!(out.token, "keepme0000000000000000000000000");
         assert_eq!(parsed(&config).auth_token, out.token);
+    }
+
+    #[test]
+    fn explicit_port_and_profile_go_into_a_fresh_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("molinka");
+
+        let out = onboard(&dir, "molinka", Some(26560)).unwrap();
+
+        assert_eq!(out.profile, "molinka");
+        assert_eq!(out.port, 26560);
+        assert_eq!(out.url, "http://localhost:26560");
+        let config = parsed(&out.config_path);
+        assert_eq!(config.port, 26560);
+        assert_eq!(config.auth_token, out.token);
+        assert!(
+            !read(&out.config_path).contains("molinka"),
+            "the profile name is deployment metadata, not configuration"
+        );
+    }
+
+    #[test]
+    fn explicit_port_rewrites_an_existing_config_and_keeps_the_rest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = tmp.path().join("config.toml");
+        fs::write(
+            &config,
+            "host = \"127.0.0.1\"\nport = 4242\nauth_token = \"keepme0000000000000000000000000\"\n\n[llm]\nchat_preset = \"opus\"\n",
+        )
+        .unwrap();
+
+        let out = onboard(tmp.path(), "default", Some(5000)).unwrap();
+
+        assert!(!out.created_config);
+        assert!(!out.generated_token);
+        assert_eq!(out.port, 5000);
+        assert_eq!(out.url, "http://localhost:5000");
+        let parsed = parsed(&config);
+        assert_eq!(parsed.port, 5000);
+        assert_eq!(parsed.host, "127.0.0.1");
+        assert_eq!(parsed.auth_token, "keepme0000000000000000000000000");
+        assert!(read(&config).contains("chat_preset = \"opus\""));
+        assert_eq!(read(&config).matches("port =").count(), 1);
+
+        // Without an explicit port a rerun keeps what is there.
+        let again = onboard(tmp.path(), "default", None).unwrap();
+        assert_eq!(again.port, 5000);
+    }
+
+    #[test]
+    fn missing_port_line_is_inserted_when_a_port_is_requested() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = tmp.path().join("config.toml");
+        fs::write(&config, "[llm]\nchat_preset = \"sonnet\"\n").unwrap();
+
+        let out = onboard(tmp.path(), "default", Some(26561)).unwrap();
+
+        assert_eq!(out.port, 26561);
+        assert_eq!(parsed(&config).port, 26561);
+        assert_eq!(parsed(&config).auth_token, out.token);
+        assert!(read(&config).contains("chat_preset = \"sonnet\""));
     }
 }

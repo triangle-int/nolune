@@ -1014,3 +1014,225 @@ async fn scheduled_tasks_and_machine_connects_route_through_the_proactive_loop()
         "{statuses:?}"
     );
 }
+
+#[tokio::test]
+async fn continuity_api_lists_inspects_updates_completes_and_dismisses_records() {
+    use crate::domain::continuity::{
+        ContinuityState, ContinuityUpdate, Origin, Provenance, ProvenanceSource, ResourceRef,
+    };
+    use crate::services::continuity::ContinuityStore;
+
+    let h = harness().await;
+    companion::ensure_identity(h.workspace.path()).unwrap();
+    let api = |suffix: &str| format!("/api/instances/{CANONICAL_SLUG}/{suffix}");
+    let store = ContinuityStore::new(h.workspace.path(), CANONICAL_SLUG);
+    let by = |note: &str| Provenance {
+        source: ProvenanceSource::Chat,
+        at: 1_767_603_600,
+        note: note.into(),
+    };
+    let origin = || Origin {
+        chat_id: "default".into(),
+        message_id: Some("msg_1".into()),
+    };
+
+    // Nothing yet: an empty listing, no storage created by the read.
+    let (status, listing) = h.json(Method::GET, &api("continuity"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listing, serde_json::json!({"records": [], "errors": []}));
+    assert!(
+        !companion::companion_dir(h.workspace.path())
+            .join("continuity")
+            .exists()
+    );
+
+    // Records are started by explicit task activity (the tool); the API
+    // lists, inspects, and changes them.
+    let photos = store
+        .create(
+            "rename the trip photos",
+            origin(),
+            &ContinuityUpdate {
+                machine_ids: vec!["mac-mini".into()],
+                resources: vec![ResourceRef::Upload {
+                    id: "upload_gone".into(),
+                }],
+                next_step: Some("list the folder".into()),
+                ..Default::default()
+            },
+            by("asked in chat"),
+            1_767_603_600,
+        )
+        .await
+        .unwrap();
+    let taxes = store
+        .create(
+            "file the taxes",
+            origin(),
+            &ContinuityUpdate::default(),
+            by("asked in chat"),
+            1_767_603_601,
+        )
+        .await
+        .unwrap();
+    store
+        .complete(&taxes.id, by("done last week"), 1_767_603_602)
+        .await
+        .unwrap();
+
+    let (status, listing) = h.json(Method::GET, &api("continuity"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let records = listing["records"].as_array().unwrap();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0]["id"], taxes.id, "most recently updated first");
+    assert_eq!(listing["errors"], serde_json::json!([]));
+    let (_, resumable) = h
+        .json(Method::GET, &api("continuity?resumable=true"), None)
+        .await;
+    let resumable = resumable["records"].as_array().unwrap();
+    assert_eq!(resumable.len(), 1);
+    assert_eq!(resumable[0]["id"], photos.id);
+    assert_eq!(resumable[0]["state"], "active");
+
+    // Inspecting runs the reference check: the unknown computer and the
+    // missing upload are explicit blockers with server provenance.
+    let (status, one) = h
+        .json(
+            Method::GET,
+            &api(&format!("continuity/{}", photos.id)),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(one["goal"], "rename the trip photos");
+    assert_eq!(one["origin"]["chat_id"], "default");
+    let blockers = one["blockers"].as_array().unwrap();
+    assert_eq!(blockers.len(), 2, "{one}");
+    assert_eq!(blockers[0]["kind"]["kind"], "machine_unavailable");
+    assert_eq!(blockers[0]["kind"]["machine_id"], "mac-mini");
+    assert_eq!(blockers[1]["kind"]["kind"], "resource_missing");
+    assert_eq!(blockers[1]["kind"]["resource"]["kind"], "upload");
+    assert_eq!(blockers[1]["provenance"]["source"], "server");
+    assert_eq!(one["resources"][0]["resource"]["id"], "upload_gone");
+    assert!(
+        one["resources"][0].get("content").is_none() && one["resources"][0].get("bytes").is_none(),
+        "resources are links, never contents"
+    );
+    let (status, _) = h
+        .send(Method::GET, &api("continuity/task_missing"), None)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Updating is explicit user activity with a note.
+    let (status, updated) = h
+        .json(
+            Method::PUT,
+            &api(&format!("continuity/{}", photos.id)),
+            Some(serde_json::json!({
+                "state": "waiting",
+                "completed_step": "listed 212 files",
+                "next_step": "rename IMG_* to trip-*",
+                "note": "picked a naming scheme",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["state"], "waiting");
+    assert_eq!(updated["completed_steps"][0]["summary"], "listed 212 files");
+    assert_eq!(updated["next_step"], "rename IMG_* to trip-*");
+    let provenance = updated["provenance"].as_array().unwrap();
+    assert_eq!(provenance.last().unwrap()["source"], "user");
+    assert_eq!(provenance.last().unwrap()["note"], "picked a naming scheme");
+    let (status, error) = h
+        .json(
+            Method::PUT,
+            &api(&format!("continuity/{}", photos.id)),
+            Some(serde_json::json!({"state": "active", "note": ""})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error["error"], "continuity");
+    let (status, _) = h
+        .send(
+            Method::PUT,
+            &api("continuity/task_missing"),
+            Some(serde_json::json!({"state": "active", "note": "x"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        store.get(&photos.id).unwrap().state,
+        ContinuityState::Waiting,
+        "rejected writes change nothing"
+    );
+
+    // Complete and dismiss close records; closed records are not resumable.
+    let (status, done) = h
+        .json(
+            Method::POST,
+            &api(&format!("continuity/{}/complete", photos.id)),
+            Some(serde_json::json!({"note": "all renamed"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["state"], "completed");
+    assert_eq!(
+        done["provenance"].as_array().unwrap().last().unwrap()["note"],
+        "all renamed"
+    );
+    let (status, dismissed) = h
+        .json(
+            Method::POST,
+            &api(&format!("continuity/{}/dismiss", taxes.id)),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{dismissed}");
+    assert_eq!(dismissed["state"], "dismissed");
+    assert_eq!(
+        dismissed["provenance"].as_array().unwrap().last().unwrap()["source"],
+        "user"
+    );
+    let (status, _) = h
+        .send(Method::POST, &api("continuity/task_missing/complete"), None)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (_, resumable) = h
+        .json(Method::GET, &api("continuity?resumable=true"), None)
+        .await;
+    assert_eq!(resumable["records"], serde_json::json!([]));
+    assert_eq!(store.list().len(), 2, "closed records stay inspectable");
+
+    // Corrupt files are surfaced, not hidden or deleted.
+    let dir = companion::companion_dir(h.workspace.path()).join("continuity");
+    fs::write(dir.join("task_broken.json"), "{").unwrap();
+    let (_, listing) = h.json(Method::GET, &api("continuity"), None).await;
+    assert_eq!(listing["records"].as_array().unwrap().len(), 2);
+    assert_eq!(listing["errors"][0]["file"], "task_broken.json");
+    assert!(dir.join("task_broken.json").is_file());
+
+    // Every record lives under the canonical companion; foreign slugs fail closed.
+    assert!(dir.join(format!("{}.json", photos.id)).is_file());
+    for (method, uri) in [
+        (Method::GET, "/api/instances/alice/continuity".to_owned()),
+        (
+            Method::PUT,
+            format!("/api/instances/alice/continuity/{}", photos.id),
+        ),
+        (
+            Method::POST,
+            format!("/api/instances/alice/continuity/{}/dismiss", photos.id),
+        ),
+    ] {
+        let (status, value) = h
+            .json(
+                method,
+                &uri,
+                Some(serde_json::json!({"state": "active", "note": "x"})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
+        assert_eq!(value["error"], "unknown_companion", "{uri}");
+    }
+    assert_eq!(h.instance_dirs(), vec![CANONICAL_SLUG]);
+}
