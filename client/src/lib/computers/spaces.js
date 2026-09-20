@@ -59,6 +59,7 @@ export const HOME_SPACE_ID = "server-home";
  *   hints: SpaceHint[];
  *   note: string;
  *   canRename: boolean;
+ *   canForget: boolean;
  * }} SpaceView
  */
 
@@ -78,9 +79,44 @@ const HEALTH_RANK = { healthy: 0, degraded: 1, unavailable: 2 };
 
 const CUA_NOT_REPORTED = "Cua driver not reported";
 
-/** @param {MachineInfo} machine */
+/**
+ * The home row: a `server_local` record the server listed (the Cua driver
+ * beside it) or the row this client synthesizes while there is none.
+ *
+ * @param {MachineInfo} machine
+ */
 function isHome(machine) {
 	return machine.location === "server_local";
+}
+
+/**
+ * The synthesized home stands for this browser's socket to the server, not
+ * for a machine record: its absence is a closed socket, it has no facts of
+ * its own, and it cannot be renamed or forgotten. A listed `server_local`
+ * record is a real machine and reads like one.
+ *
+ * @param {MachineInfo} machine
+ */
+function isSynthesizedHome(machine) {
+	return isHome(machine) && machine.machine_id === HOME_SPACE_ID;
+}
+
+/**
+ * The words a hint uses for the program that connects a machine: the Nolune
+ * desktop app on a desktop, the Cua driver beside the server for a listed
+ * server-local record.
+ *
+ * @param {MachineInfo} machine
+ */
+function agentCopy(machine) {
+	return isHome(machine)
+		? { app: "the Cua driver", there: "on the server", host: "the server", restart: "Restart it on the server." }
+		: {
+				app: "the Nolune desktop app",
+				there: "there",
+				host: "the computer",
+				restart: "Restart the Nolune desktop app there.",
+			};
 }
 
 /**
@@ -151,9 +187,9 @@ export function stateLabel(machine, nowSeconds) {
 		case "restricted":
 			return "Needs permission";
 		default:
-			// The home row is this browser's connection to the server, so its
-			// absence is a closed socket, not a server that went away.
-			return isHome(machine) ? "Reconnecting" : "Offline";
+			// The synthesized home is this browser's connection to the server,
+			// so its absence is a closed socket, not a server that went away.
+			return isSynthesizedHome(machine) ? "Reconnecting" : "Offline";
 	}
 }
 
@@ -223,7 +259,7 @@ export function spaceHints(machine, nowSeconds) {
 	const name = machine.display_name || machine.hostname || machine.machine_id;
 	const health = deriveHealth(machine, nowSeconds);
 
-	if (isHome(machine)) {
+	if (isSynthesizedHome(machine)) {
 		if (!machine.online) {
 			hints.push({
 				level: "warn",
@@ -233,13 +269,21 @@ export function spaceHints(machine, nowSeconds) {
 		return hints;
 	}
 
+	const { app, there, host, restart } = agentCopy(machine);
+	const home = isHome(machine);
+
 	if (health === "unavailable") {
-		hints.push({ level: "warn", text: `${name} is offline. Open the Nolune desktop app there to reconnect it.` });
+		hints.push({
+			level: "warn",
+			text: home
+				? `${name} is offline. Start ${app} ${there} to reconnect it.`
+				: `${name} is offline. Open ${app} ${there} to reconnect it.`,
+		});
 	} else if (health === "degraded") {
 		const age = Math.max(0, nowSeconds - machine.last_seen);
 		hints.push({
 			level: "warn",
-			text: `${name} has not answered for ${age} s. Check that the computer is awake and the desktop app is still running.`,
+			text: `${name} has not answered for ${age} s. Check that ${host} is awake and ${home ? app : "the desktop app"} is still running.`,
 		});
 	}
 
@@ -247,29 +291,34 @@ export function spaceHints(machine, nowSeconds) {
 		if (permission.state === "denied") {
 			hints.push({
 				level: "warn",
-				text: `${permission.label} is denied on ${name}. Grant it to the Nolune desktop app in System Settings, then reconnect.`,
+				text: `${permission.label} is denied on ${name}. Grant it to ${app} in System Settings, then reconnect.`,
 			});
 		} else if (permission.state === "prompt_required") {
 			hints.push({
 				level: "warn",
-				text: `${permission.label} has not been allowed on ${name} yet. Open the Nolune desktop app there to allow it.`,
+				text: home
+					? `${permission.label} has not been allowed on ${name} yet. Allow it for ${app} ${there}.`
+					: `${permission.label} has not been allowed on ${name} yet. Open ${app} ${there} to allow it.`,
 			});
 		}
 	}
 
 	if (machine.capabilities.length === 0) {
-		hints.push({ level: "warn", text: `${name} reported no actions it can perform. Update the Nolune desktop app there.` });
+		hints.push({ level: "warn", text: `${name} reported no actions it can perform. Update ${app} ${there}.` });
 	}
 
 	if (!machine.driver_version) {
-		hints.push({
-			level: "info",
-			text: "Screen actions use the desktop app’s built-in path until the Cua driver ships.",
-		});
+		// A server-local record is the Cua driver itself; only a desktop has a built-in path to explain.
+		if (!home) {
+			hints.push({
+				level: "info",
+				text: "Screen actions use the desktop app’s built-in path until the Cua driver ships.",
+			});
+		}
 	} else if (machine.cua_health === "degraded") {
-		hints.push({ level: "warn", text: `The Cua driver on ${name} is degraded. Restart the Nolune desktop app there.` });
+		hints.push({ level: "warn", text: `The Cua driver on ${name} is degraded. ${restart}` });
 	} else if (machine.cua_health === "unavailable") {
-		hints.push({ level: "warn", text: `The Cua driver on ${name} is unavailable. Restart the Nolune desktop app there.` });
+		hints.push({ level: "warn", text: `The Cua driver on ${name} is unavailable. ${restart}` });
 	}
 
 	return hints;
@@ -330,14 +379,21 @@ export function sortSpaces(machines, nowSeconds) {
 }
 
 /**
+ * The row model. `companionName` names the companion in the home row's note;
+ * the synthesized home already carries it (the inverse of `homeSpace`), a
+ * listed `server_local` record needs it passed in, and the product name
+ * stands in when neither has one.
+ *
  * @param {MachineInfo} machine
  * @param {number} nowSeconds
+ * @param {string} [companionName]
  * @returns {SpaceView}
  */
-export function spaceView(machine, nowSeconds) {
+export function spaceView(machine, nowSeconds, companionName = "") {
 	const home = isHome(machine);
-	const companionName = home ? machine.display_name.replace(/’s home$/, "") : "";
-	const meta = home
+	const synthesized = isSynthesizedHome(machine);
+	const who = companionName.trim() || (synthesized ? machine.display_name.replace(/’s home$/, "") : "") || "Nolune";
+	const meta = synthesized
 		? [locationLabel(machine), machine.hostname, machine.os].filter(Boolean).join(" · ")
 		: [
 				platformLabel(machine),
@@ -356,18 +412,18 @@ export function spaceView(machine, nowSeconds) {
 		health: deriveHealth(machine, nowSeconds),
 		status: spaceStatus(machine, nowSeconds),
 		stateLabel: stateLabel(machine, nowSeconds),
-		platform: home ? "" : platformLabel(machine),
+		platform: synthesized ? "" : platformLabel(machine),
 		location: locationLabel(machine),
 		meta,
-		lastSeen: home ? "" : lastSeenLabel(machine, nowSeconds),
-		permissions: home ? [] : permissionRows(machine),
-		capabilities: home && machine.machine_id === HOME_SPACE_ID ? "" : capabilitySummary(machine),
-		cua: home ? "" : cuaLabel(machine),
+		lastSeen: synthesized ? "" : lastSeenLabel(machine, nowSeconds),
+		permissions: synthesized ? [] : permissionRows(machine),
+		capabilities: synthesized ? "" : capabilitySummary(machine),
+		cua: synthesized ? "" : cuaLabel(machine),
 		hints: spaceHints(machine, nowSeconds),
-		note: home
-			? `Where ${companionName} runs. The computers below are other places it can act; they are not separate companions.`
-			: "",
-		canRename: !home,
+		note: home ? `Where ${who} runs. The computers below are other places it can act; they are not separate companions.` : "",
+		canRename: !synthesized,
+		// The server refuses to forget a connected computer (409 `machine_online`).
+		canForget: !synthesized && !machine.online,
 	};
 }
 
@@ -378,11 +434,12 @@ export function spaceView(machine, nowSeconds) {
  * @param {MachineInfo[]} machines
  * @param {number} nowSeconds
  * @param {MachineInfo | null | undefined} home
+ * @param {string} [companionName] Names the companion in the home row's note.
  * @returns {SpaceView[]}
  */
-export function buildSpaces(machines, nowSeconds, home) {
+export function buildSpaces(machines, nowSeconds, home, companionName = "") {
 	const rows = home && !machines.some(isHome) ? [home, ...machines] : machines;
-	return sortSpaces(rows, nowSeconds).map((machine) => spaceView(machine, nowSeconds));
+	return sortSpaces(rows, nowSeconds).map((machine) => spaceView(machine, nowSeconds, companionName));
 }
 
 /**
@@ -406,4 +463,32 @@ export function applyMachineEvent(machines, event) {
 			: machines;
 	}
 	return machines;
+}
+
+/**
+ * Fold a listing into rows that may have changed while it was in flight. A
+ * poll answers with the state at the moment it was served, so a row the
+ * client changed since the request started (an event, a rename, a forget)
+ * keeps its local state: it stays renamed, stays gone, or stays listed.
+ * Everything else takes the listing. With nothing changed the listing is
+ * returned as it came, so a caller can compare identity.
+ *
+ * @param {MachineInfo[]} local
+ * @param {MachineInfo[]} listing
+ * @param {Iterable<string>} changedSince Ids changed locally since the request started.
+ * @returns {MachineInfo[]}
+ */
+export function reconcileListing(local, listing, changedSince) {
+	const changed = new Set(changedSince);
+	if (changed.size === 0) return listing;
+	const kept = new Map(local.filter((m) => changed.has(m.machine_id)).map((m) => [m.machine_id, m]));
+	const merged = listing.flatMap((row) => {
+		if (!changed.has(row.machine_id)) return [row];
+		const mine = kept.get(row.machine_id);
+		// Changed and not held locally means it was forgotten after the request started.
+		return mine ? [mine] : [];
+	});
+	const listed = new Set(listing.map((row) => row.machine_id));
+	for (const [id, row] of kept) if (!listed.has(id)) merged.push(row);
+	return merged;
 }

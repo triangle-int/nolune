@@ -5,10 +5,13 @@
 	// listed as offline. Rows update from `machine_updated` and
 	// `machine_forgotten` events; routine heartbeats are silent on the
 	// socket, so the listing is also refreshed by polling, and a 5 s clock
-	// re-derives health and last-seen labels between refreshes.
-	import { fetchMachines, fetchMeta, isDesktopRelay, renameMachine, type MachineInfo } from "$lib/api/client.js";
+	// re-derives health and last-seen labels between refreshes. A poll that
+	// was in flight when an event, a rename or a forget landed never reverts
+	// that row: the response is folded in around what changed since it was
+	// requested, and a response for a slug this component has left is dropped.
+	import { fetchMachines, fetchMeta, forgetMachine, isDesktopRelay, renameMachine, type MachineInfo } from "$lib/api/client.js";
 	import type { ServerEvent } from "$lib/api/types.js";
-	import { applyMachineEvent, buildSpaces, homeSpace } from "$lib/computers/spaces.js";
+	import { applyMachineEvent, buildSpaces, homeSpace, reconcileListing } from "$lib/computers/spaces.js";
 	import { getCompanion } from "$lib/stores/companion.svelte.js";
 	import { getWebSocket } from "$lib/stores/websocket.svelte.js";
 	import SpaceRow from "./SpaceRow.svelte";
@@ -32,22 +35,44 @@
 	let freshAt = $state(nowSeconds());
 	let version = $state("");
 
+	/** Bumped on every local change to a row; a fetch captures it when it starts. */
+	let generation = 0;
+	/** The generation at which each row last changed locally (updated or forgotten). */
+	const touched = new Map<string, number>();
+	/** Bumped when the effect (re)starts and when it is torn down, so a stale fetch is dropped. */
+	let epoch = 0;
+
 	function nowSeconds(): number {
 		return Math.floor(Date.now() / 1000);
 	}
 
+	/** Record one local change so an in-flight listing cannot revert it. */
+	function applyLocally(event: Extract<ServerEvent, { type: "machine_updated" | "machine_forgotten" }>) {
+		generation += 1;
+		touched.set(event.type === "machine_updated" ? event.machine.machine_id : event.machine_id, generation);
+		machines = applyMachineEvent(machines, event);
+		now = nowSeconds();
+		freshAt = now;
+	}
+
 	async function load() {
+		const startedEpoch = epoch;
+		const startedAt = generation;
 		try {
-			machines = (await fetchMachines(slug)).machines;
+			const listing = (await fetchMachines(slug)).machines;
+			if (startedEpoch !== epoch) return;
+			const changedSince = [...touched].filter(([, at]) => at > startedAt).map(([id]) => id);
+			machines = reconcileListing(machines, listing, changedSince);
 			now = nowSeconds();
 			freshAt = now;
 			loadError = "";
 			refreshError = false;
 		} catch {
+			if (startedEpoch !== epoch) return;
 			if (loading) loadError = "Could not check which computers are connected.";
 			else refreshError = true;
 		} finally {
-			loading = false;
+			if (startedEpoch === epoch) loading = false;
 		}
 	}
 
@@ -59,16 +84,19 @@
 
 	$effect(() => {
 		slug;
+		epoch += 1;
+		touched.clear();
+		machines = [];
 		loading = true;
+		loadError = "";
+		refreshError = false;
 		load();
 		fetchMeta()
 			.then((meta) => (version = meta.version))
 			.catch(() => {});
 		const unsub = ws.subscribe((event: ServerEvent) => {
 			if ((event.type === "machine_updated" || event.type === "machine_forgotten") && event.instance_slug === slug) {
-				machines = applyMachineEvent(machines, event);
-				now = nowSeconds();
-				freshAt = now;
+				applyLocally(event);
 			}
 		});
 		const tick = setInterval(() => (now = nowSeconds()), TICK_SECS * 1000);
@@ -79,6 +107,7 @@
 		};
 		document.addEventListener("visibilitychange", onVisible);
 		return () => {
+			epoch += 1;
 			unsub();
 			clearInterval(tick);
 			clearInterval(poll);
@@ -98,14 +127,42 @@
 			nowSeconds: now,
 		}),
 	);
-	const spaces = $derived(buildSpaces(machines, clock, home));
+	const spaces = $derived(buildSpaces(machines, clock, home, companion.context?.companion_name ?? ""));
 	const desktops = $derived(spaces.filter((space) => space.kind === "desktop").length);
 
 	function renamer(machineId: string): (name: string | null) => Promise<void> {
 		return async (name) => {
 			const updated = await renameMachine(slug, machineId, name);
-			machines = applyMachineEvent(machines, { type: "machine_updated", instance_slug: slug, machine: updated });
+			applyLocally({ type: "machine_updated", instance_slug: slug, machine: updated });
 		};
+	}
+
+	// The server also broadcasts `machine_forgotten`; applying it twice is a no-op.
+	// Its refusal for a computer that reconnected meanwhile (409 `machine_online`)
+	// is read out of the JSON body, which `forgetMachine` passes through as text.
+	function forgetter(machineId: string): () => Promise<void> {
+		return async () => {
+			try {
+				await forgetMachine(slug, machineId);
+			} catch (e) {
+				const name = machines.find((m) => m.machine_id === machineId)?.display_name ?? "This computer";
+				throw new Error(forgetRefusal(e, name));
+			}
+			applyLocally({ type: "machine_forgotten", instance_slug: slug, machine_id: machineId });
+		};
+	}
+
+	function forgetRefusal(e: unknown, name: string): string {
+		const text = e instanceof Error ? e.message : "";
+		let code = "";
+		try {
+			code = String((JSON.parse(text) as { error?: string }).error ?? "");
+		} catch {
+			code = text;
+		}
+		if (code.includes("machine_online")) return `${name} is connected again, so it stays listed.`;
+		if (code.includes("not_found")) return `${name} was already forgotten.`;
+		return "Could not forget this computer. Try again in a moment.";
 	}
 </script>
 
@@ -120,7 +177,12 @@
 	{:else}
 		<ul class="computers-list">
 			{#each spaces as space (space.id)}
-				<SpaceRow {space} {compact} onrename={space.canRename ? renamer(space.id) : undefined} />
+				<SpaceRow
+					{space}
+					{compact}
+					onrename={space.canRename ? renamer(space.id) : undefined}
+					onforget={space.canForget ? forgetter(space.id) : undefined}
+				/>
 			{/each}
 		</ul>
 		{#if desktops === 0}

@@ -24,12 +24,15 @@
   sampleDesktop({ machine_id: 'sample-laptop', hostname: 'laptop', display_name: 'laptop', os: 'Ubuntu 24.04', platform: 'linux', online: false, health: 'unavailable', last_seen: spacesNow - 7200 }),
  ]);
  const sampleHome = homeSpace({ connected: true, address: 'nolune.local:26559', version: '0.36.0', companionName: 'Luna', nowSeconds: spacesNow });
- const sampleSpaces = $derived(buildSpaces(sampleMachines, spacesNow, sampleHome));
- // The sample rename never leaves the page: it applies the same event the server would send.
+ const sampleSpaces = $derived(buildSpaces(sampleMachines, spacesNow, sampleHome, 'Luna'));
+ // The sample rename and forget never leave the page: they apply the same events the server would send.
  const sampleRename = (id: string) => async (name: string | null) => {
   const machine = sampleMachines.find((m) => m.machine_id === id);
   if (!machine) return;
   sampleMachines = applyMachineEvent(sampleMachines, { type: 'machine_updated', instance_slug: 'companion', machine: { ...machine, custom_name: name, display_name: name ?? machine.hostname } });
+ };
+ const sampleForget = (id: string) => async () => {
+  sampleMachines = applyMachineEvent(sampleMachines, { type: 'machine_forgotten', instance_slug: 'companion', machine_id: id });
  };
  let exampleRhythm = $state(true);
  let sampleName = $state('');
@@ -59,7 +62,7 @@
   </div>
  </div></section>
  <section id="companion"><p class="nl-eyebrow">06 / Companion state</p><h2>The moon says what is really happening.</h2><p>Every state is derived from a runtime event and resolved in this priority order; the sentence beside each moon is its accessible status text, so the state reads without motion. Examples are reduced live by <code>lib/companion/state.js</code>. Read-only.</p><ol class="states">{#each companionStates as s, i (s.kind)}<li class="nl-panel state"><img src={s.avatar} alt="" width="48" height="48" /><div><strong><code class="state-rank">{i + 1}</code>{s.label}</strong><p class="state-text">{s.text}</p><small>{s.source}</small></div></li>{/each}</ol></section>
- <section id="spaces"><p class="nl-eyebrow">07 / Connected spaces</p><h2>Every place it can act, one list.</h2><p>The Computers tab and Settings › Connections list the server home first, then desktops: online by name, then offline by last seen. Each row pairs its state word with a color, shows what the desktop reported (permissions, actions, Cua driver), and carries one hint per thing to do. Rows are viewed by <code>lib/computers/spaces.js</code> from sample records at a fixed clock; renaming here changes nothing on a server.</p><ul class="spaces">{#each sampleSpaces as space (space.id)}<SpaceRow {space} onrename={space.canRename ? sampleRename(space.id) : undefined} />{/each}</ul></section>
+ <section id="spaces"><p class="nl-eyebrow">07 / Connected spaces</p><h2>Every place it can act, one list.</h2><p>The Computers tab and Settings › Connections list the server home first, then desktops: online by name, then offline by last seen. Each row pairs its state word with a color, shows what the desktop reported (permissions, actions, Cua driver), and carries one hint per thing to do. Rename is inline; Forget, on an offline row only, asks once before it drops the record. Rows are viewed by <code>lib/computers/spaces.js</code> from sample records at a fixed clock; renaming or forgetting here changes nothing on a server.</p><ul class="spaces">{#each sampleSpaces as space (space.id)}<SpaceRow {space} onrename={space.canRename ? sampleRename(space.id) : undefined} onforget={space.canForget ? sampleForget(space.id) : undefined} />{/each}</ul></section>
  <section id="principles"><p class="nl-eyebrow">08 / Principles</p><div class="two"><article class="nl-panel"><h3>A companion, with restraint.</h3><p>Use the moon as a recognizable presence. Keep working surfaces quiet. Use the same plum panels and lavender actions across settings, content, and conversation views. Keep loading, empty, and error states distinct.</p></article><article class="nl-panel"><h3>Accessible by default.</h3><p>44px controls, visible keyboard focus, readable secondary text, and reduced-motion support. Dialogs contain keyboard focus and restore it when closed. Pair every status color with words.</p></article></div></section>
  <footer>Implementation reference: docs/design-system.md · Tokens: client/src/lib/styles/tokens.css</footer>
 </main>

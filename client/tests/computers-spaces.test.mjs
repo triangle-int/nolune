@@ -12,6 +12,7 @@ import {
 	lastSeenLabel,
 	permissionRows,
 	platformLabel,
+	reconcileListing,
 	sortSpaces,
 	spaceHints,
 	spaceStatus,
@@ -197,11 +198,89 @@ test('buildSpaces synthesizes the home only when the listing has no server-local
 		['off-1', 'desktop', 'Offline'],
 	]);
 	const listed = desktop({ machine_id: 'srv', hostname: 'srv', display_name: 'srv', location: 'server_local', capabilities: ['bash'] });
-	const withListed = buildSpaces([listed, desktop()], NOW, home);
+	const withListed = buildSpaces([listed, desktop()], NOW, home, 'Luna');
 	assert.deepEqual(withListed.map((v) => v.id), ['srv', desktop().machine_id], 'the listed home replaces the synthesized one');
 	assert.equal(withListed[0].kind, 'home');
 	assert.equal(withListed[0].capabilities, '1 action', 'a listed home keeps its own facts');
+	assert.equal(withListed[0].note, 'Where Luna runs. The computers below are other places it can act; they are not separate companions.', 'the note names the companion, not the record');
 	assert.deepEqual(buildSpaces([], NOW, null).map((v) => v.id), [], 'no home is invented when the caller has none');
+});
+
+test('a listed server-local record is the home row but keeps its own state, facts and hints', () => {
+	// Only the synthesized row stands for this browser's socket; a record the
+	// server listed is a real machine (the Cua driver beside the server) and
+	// reads like one: Offline, not Reconnecting, with its permissions and hints.
+	const listedOffline = desktop({ machine_id: 'srv', hostname: 'srv', display_name: 'srv', location: 'server_local', online: false, health: 'unavailable', last_seen: NOW - 7200, driver_version: '0.28.2', cua_health: 'unavailable' });
+	assert.equal(stateLabel(listedOffline, NOW), 'Offline');
+	const offlineView = spaceView(listedOffline, NOW, 'Luna');
+	assert.equal(offlineView.kind, 'home');
+	assert.equal(offlineView.status, 'offline');
+	assert.equal(offlineView.stateLabel, 'Offline');
+	assert.equal(offlineView.location, 'This server');
+	assert.equal(offlineView.meta, 'macOS · 2560×1440 · This server');
+	assert.equal(offlineView.lastSeen, 'Seen 2 h ago');
+	assert.equal(offlineView.note, 'Where Luna runs. The computers below are other places it can act; they are not separate companions.');
+	assert.equal(offlineView.cua, 'Cua driver 0.28.2 · unavailable');
+	assert.deepEqual(offlineView.hints, [
+		{ level: 'warn', text: 'srv is offline. Start the Cua driver on the server to reconnect it.' },
+		{ level: 'warn', text: 'The Cua driver on srv is unavailable. Restart it on the server.' },
+	]);
+	assert.equal(offlineView.canForget, true, 'an offline listed record can be forgotten like any other');
+
+	const listedDenied = desktop({ machine_id: 'srv', hostname: 'srv', display_name: 'srv', location: 'server_local', permissions: { accessibility: 'denied', screen_capture: 'granted' }, capabilities: [], driver_version: '0.28.2', cua_health: 'healthy' });
+	const deniedView = spaceView(listedDenied, NOW, 'Luna');
+	assert.equal(deniedView.stateLabel, 'Needs permission');
+	assert.equal(deniedView.status, 'restricted');
+	assert.deepEqual(deniedView.permissions.map((p) => [p.key, p.state, p.blocking]), [
+		['accessibility', 'denied', true],
+		['screen_capture', 'granted', false],
+	]);
+	assert.equal(deniedView.capabilities, 'No actions reported');
+	assert.deepEqual(deniedView.hints, [
+		{ level: 'warn', text: 'Accessibility is denied on srv. Grant it to the Cua driver in System Settings, then reconnect.' },
+		{ level: 'warn', text: 'srv reported no actions it can perform. Update the Cua driver on the server.' },
+	]);
+	assert.equal(deniedView.lastSeen, 'Online now');
+	assert.equal(deniedView.canForget, false, 'a connected record cannot be forgotten');
+	assert.equal(spaceView(listedDenied, NOW).note, 'Where Nolune runs. The computers below are other places it can act; they are not separate companions.', 'the product name stands in when no companion name is passed');
+
+	const listedStale = desktop({ machine_id: 'srv', hostname: 'srv', display_name: 'srv', location: 'server_local', last_seen: NOW - STALE_HEARTBEAT_SECS - 5, health: 'degraded' });
+	assert.deepEqual(
+		spaceHints(listedStale, NOW),
+		[{ level: 'warn', text: `srv has not answered for ${STALE_HEARTBEAT_SECS + 5} s. Check that the server is awake and the Cua driver is still running.` }],
+		'a server-local record never gets the desktop-app info hint',
+	);
+
+	// The synthesized row keeps its own copy: its absence is this browser's socket.
+	const away = spaceView(homeSpace({ connected: false, companionName: 'Luna', nowSeconds: NOW }), NOW);
+	assert.equal(away.stateLabel, 'Reconnecting');
+	assert.equal(away.canForget, false);
+	assert.deepEqual(away.hints, [{ level: 'warn', text: 'This browser lost its connection to the server. The list updates as soon as it is back.' }]);
+});
+
+test('only an offline listed record can be forgotten', () => {
+	assert.equal(spaceView(desktop(), NOW).canForget, false, 'the server refuses to forget a connected computer');
+	assert.equal(spaceView(offline, NOW).canForget, true);
+	assert.equal(spaceView(stale, NOW).canForget, false, 'a silent socket is still open');
+	assert.equal(spaceView(homeSpace({ connected: false, nowSeconds: NOW }), NOW).canForget, false, 'the synthesized home is not a record');
+});
+
+test('a listing folds into rows changed since it was requested without reverting them', () => {
+	// A poll that was in flight when an event or a rename landed must not
+	// undo it: rows changed since the request started keep their local state.
+	const renamed = desktop({ custom_name: 'Studio Mac', display_name: 'Studio Mac' });
+	const newcomer = desktop({ machine_id: 'new-1', hostname: 'new', display_name: 'new' });
+	const local = [renamed, newcomer];
+	const listing = [desktop(), offline, desktop({ ...stale, last_seen: NOW - 1, health: 'healthy' })];
+	const merged = reconcileListing(local, listing, ['off-1', desktop().machine_id, 'new-1']);
+	assert.deepEqual(
+		merged.map((m) => [m.machine_id, m.display_name]),
+		[[desktop().machine_id, 'Studio Mac'], ['stale-1', 'den'], ['new-1', 'new']],
+		'a renamed row keeps its name, a forgotten row stays gone, a newcomer stays, everything else takes the listing',
+	);
+	assert.equal(reconcileListing(local, listing, []), listing, 'nothing changed since the request means the listing as it came');
+	assert.deepEqual(reconcileListing([], listing, ['nobody']).map((m) => m.machine_id), listing.map((m) => m.machine_id), 'an id that was neither listed nor kept changes nothing');
+	assert.deepEqual(local.map((m) => m.display_name), ['Studio Mac', 'new'], 'the input is never mutated');
 });
 
 test('a desktop view carries every fact the surface shows', () => {

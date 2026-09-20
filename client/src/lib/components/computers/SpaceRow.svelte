@@ -9,30 +9,54 @@
 		space,
 		compact = false,
 		onrename,
+		onforget,
 	}: {
 		space: SpaceView;
 		compact?: boolean;
 		/** Saves the user's name; `null` shows the hostname again. Absent means the row cannot be renamed. */
 		onrename?: (name: string | null) => Promise<void>;
+		/** Drops an offline computer's record and name. Absent means the row cannot be forgotten. */
+		onforget?: () => Promise<void>;
 	} = $props();
 
 	let editing = $state(false);
 	let draft = $state("");
 	let saving = $state(false);
+	let confirming = $state(false);
+	let forgetting = $state(false);
 	let error = $state("");
+	/** A change that closed a step on its own, announced without stealing focus. */
+	let notice = $state("");
 	let input = $state<HTMLInputElement | null>(null);
+	let confirmButton = $state<HTMLButtonElement | null>(null);
 
-	// The field takes focus when it appears, so Rename is one click away from typing.
+	// The field takes focus when it appears, so Rename is one click away from typing;
+	// the confirm step likewise, so Forget is one more Enter or one Escape away.
 	$effect(() => {
 		if (editing) input?.focus();
 	});
+	$effect(() => {
+		if (confirming) confirmButton?.focus();
+	});
+	// A computer that reconnects while its confirm is open can no longer be
+	// forgotten (the server would refuse); the step closes and says why.
+	$effect(() => {
+		if (confirming && !forgetting && !(space.canForget && onforget)) {
+			confirming = false;
+			// A refusal that arrived first already says so.
+			if (!error) notice = `${space.name} is connected again, so it stays listed.`;
+		}
+	});
 
 	const hints = $derived(compact ? space.hints.filter((h) => h.level === "warn") : space.hints);
+	const facts = $derived(!compact && (space.permissions.length > 0 || space.capabilities !== "" || space.cua !== ""));
 	const inputId = $derived(`space-name-${space.id}`);
 
 	function startRename() {
 		draft = space.customName ?? "";
 		error = "";
+		notice = "";
+		confirming = false;
 		editing = true;
 	}
 
@@ -52,6 +76,33 @@
 			error = e instanceof Error && e.message ? e.message : "Could not rename this computer.";
 		} finally {
 			saving = false;
+		}
+	}
+
+	function startForget() {
+		error = "";
+		notice = "";
+		editing = false;
+		confirming = true;
+	}
+
+	function cancelForget() {
+		confirming = false;
+		error = "";
+	}
+
+	async function confirmForget() {
+		if (!onforget || forgetting) return;
+		forgetting = true;
+		error = "";
+		try {
+			await onforget();
+			confirming = false;
+		} catch (e) {
+			// The server answers 409 `machine_online` for a computer that reconnected meanwhile.
+			error = e instanceof Error && e.message ? e.message : "Could not forget this computer.";
+		} finally {
+			forgetting = false;
 		}
 	}
 </script>
@@ -95,22 +146,39 @@
 		{/if}
 		<p class="space-meta">{space.meta}{space.lastSeen ? ` · ${space.lastSeen}` : ""}</p>
 		{#if space.note}<p class="space-note">{space.note}</p>{/if}
-		{#if !compact && space.kind === "desktop"}
+		{#if facts}
 			<ul class="space-facts">
 				{#each space.permissions as permission (permission.key)}
 					<li class:space-fact-blocking={permission.blocking}>{permission.label} {permission.stateLabel}</li>
 				{/each}
-				<li>{space.capabilities}</li>
-				<li>{space.cua}</li>
+				{#if space.capabilities}<li>{space.capabilities}</li>{/if}
+				{#if space.cua}<li>{space.cua}</li>{/if}
 			</ul>
 		{/if}
 		{#each hints as hint (hint.text)}
 			<p class="space-hint" class:space-hint-info={hint.level === "info"}>{hint.text}</p>
 		{/each}
+		{#if confirming}
+			<div class="space-confirm" role="group" aria-labelledby={`space-forget-${space.id}`}>
+				<p id={`space-forget-${space.id}`} class="space-confirm-text">Forget {space.name}? Its record and name are dropped; if it connects again it is listed as new.</p>
+				<div class="space-confirm-row">
+					<button bind:this={confirmButton} class="nl-button-secondary space-confirm-btn" type="button" onclick={confirmForget} disabled={forgetting} onkeydown={(e) => { if (e.key === "Escape") cancelForget(); }}>{forgetting ? "Forgetting…" : "Forget"}</button>
+					<button class="nl-button-secondary" type="button" onclick={cancelForget} disabled={forgetting} onkeydown={(e) => { if (e.key === "Escape") cancelForget(); }}>Keep</button>
+				</div>
+			</div>
+		{/if}
 		{#if error}<p class="space-error" role="alert">{error}</p>{/if}
+		{#if notice}<p class="space-notice" role="status">{notice}</p>{/if}
 	</div>
-	{#if space.canRename && onrename && !editing}
-		<button class="space-rename-btn" type="button" onclick={startRename} aria-label={`Rename ${space.name}`}>Rename</button>
+	{#if !editing && !confirming && ((space.canRename && onrename) || (space.canForget && onforget))}
+		<div class="space-actions">
+			{#if space.canRename && onrename}
+				<button class="space-action-btn" type="button" onclick={startRename} aria-label={`Rename ${space.name}`}>Rename</button>
+			{/if}
+			{#if space.canForget && onforget}
+				<button class="space-action-btn" type="button" onclick={startForget} aria-label={`Forget ${space.name}`}>Forget</button>
+			{/if}
+		</div>
 	{/if}
 </li>
 
@@ -136,16 +204,24 @@
 	.space-hint { font: 400 13px/1.5 var(--font-body); color: var(--foreground); margin: 2px 0 0; padding-left: 10px; border-left: 2px solid var(--destructive); }
 	.space-hint-info { color: var(--text-muted); border-left-color: var(--border); }
 	.space-error { font: 400 13px/1.5 var(--font-body); color: var(--destructive); margin: 2px 0 0; }
-	.space-rename-btn { min-height: 44px; padding: 0 12px; border: 1px solid transparent; border-radius: var(--radius-control, 8px); background: none; color: var(--text-secondary); font: 500 13px/1.5 var(--font-body); cursor: pointer; }
-	.space-rename-btn:hover { color: var(--foreground); border-color: var(--border); }
+	.space-notice { font: 400 13px/1.5 var(--font-body); color: var(--text-secondary); margin: 2px 0 0; }
+	.space-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+	.space-action-btn { min-height: 44px; padding: 0 12px; border: 1px solid transparent; border-radius: var(--radius-control, 8px); background: none; color: var(--text-secondary); font: 500 13px/1.5 var(--font-body); cursor: pointer; }
+	.space-action-btn:hover { color: var(--foreground); border-color: var(--border); }
+	.space-confirm { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--background); }
+	.space-confirm-text { font: 400 13px/1.5 var(--font-body); color: var(--foreground); margin: 0; }
+	.space-confirm-row { display: flex; flex-wrap: wrap; gap: 8px; }
+	/* Destructive confirm follows the outlined pattern from settings: the word and its border carry the color. */
+	.space-confirm-btn { background: none; border-color: var(--destructive); color: var(--destructive); }
+	.space-confirm-btn:hover:not(:disabled) { background: var(--accent); border-color: var(--destructive); color: var(--destructive); }
 	.space-rename { display: flex; flex-direction: column; gap: 6px; }
 	.space-rename-label { font: 500 13px/1.4 var(--font-body); color: var(--text-secondary); }
 	.space-rename-row { display: flex; flex-wrap: wrap; gap: 8px; }
 	.space-rename-input { flex: 1 1 200px; min-width: 0; }
 	.space-rename-hint { font: 400 12px/1.5 var(--font-body); color: var(--text-muted); margin: 0; }
 	@media (max-width: 480px) {
-		/* The glyph keeps its column; Rename moves under the text instead of squeezing it. */
+		/* The glyph keeps its column; Rename and Forget move under the text instead of squeezing it. */
 		.space { grid-template-columns: 32px minmax(0, 1fr); }
-		.space-rename-btn { grid-column: 2; justify-self: start; margin-left: -12px; }
+		.space-actions { grid-column: 2; justify-self: start; margin-left: -12px; }
 	}
 </style>
