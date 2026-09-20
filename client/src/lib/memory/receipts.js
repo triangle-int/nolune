@@ -71,20 +71,6 @@ export function confidenceLabel(confidence) {
 	}
 }
 
-/** @param {string | undefined} confidence */
-export function confidenceHint(confidence) {
-	switch (confidence) {
-		case "high":
-			return "A strong match.";
-		case "medium":
-			return "A partial match.";
-		case "low":
-			return "A weak match; it may not be relevant.";
-		default:
-			return "";
-	}
-}
-
 /**
  * Copy for a source that no longer exists; empty while it is present.
  * @param {RecalledMemory} memory
@@ -256,7 +242,7 @@ export function canFlag(path) {
 }
 
 /**
- * The two flag toggles with the label for their next state.
+ * The two flag toggles, each labelled with the state it switches to.
  * @param {MemoryFlags | null | undefined} flags
  */
 export function flagControls(flags) {
@@ -267,14 +253,12 @@ export function flagControls(flags) {
 			flag: /** @type {const} */ ("pinned"),
 			active: pinned,
 			label: pinned ? "Unpin" : "Pin",
-			hint: pinned ? "Recalled on every turn." : "Recall this on every turn, whatever the conversation is about.",
 			next: { pinned: !pinned },
 		},
 		{
 			flag: /** @type {const} */ ("exclude_from_proactive"),
 			active: excluded,
 			label: excluded ? "Allow proactive use" : "Exclude from proactive use",
-			hint: excluded ? "Check-ins and reflections never see this memory." : "Keep this out of check-ins and reflections; chat still sees it.",
 			next: { exclude_from_proactive: !excluded },
 		},
 	];

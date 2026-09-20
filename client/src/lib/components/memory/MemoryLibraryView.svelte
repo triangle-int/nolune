@@ -3,7 +3,7 @@
 	import { fetchChats, fetchCompanionName, fetchMemory, fetchMemoryContent, fetchMemoryGraph, fetchMemoryReceipts, searchMemory, type MemorySearchResult } from "$lib/api/client.js";
 	import type { MemoryEntry, MemoryGraph, MemoryReceipt } from "$lib/api/types.js";
 	import { displayName, filterEntries, formatSize, groupByFolder, mediaKind, relatedPaths } from "$lib/memory/library.js";
-	import { confidenceHint, confidenceLabel, flagBadges, reasonLabel, recalledWhen, recallsOf, receiptHeading } from "$lib/memory/receipts.js";
+	import { confidenceLabel, flagBadges, reasonLabel, recalledWhen, recallsOf, receiptHeading } from "$lib/memory/receipts.js";
 	import MemoryControls, { type MemoryChange } from "./MemoryControls.svelte";
 	import { openFile } from "$lib/stores/fileviewer.svelte.js";
 
@@ -214,7 +214,7 @@
 							{#if recall.memory.excerpt}<blockquote class="recall-excerpt">{recall.memory.excerpt}</blockquote>{/if}
 							<p class="recall-meta">
 								<span>{reasonLabel(recall.memory)}</span>
-								<span title={confidenceHint(recall.memory.confidence)}>{confidenceLabel(recall.memory.confidence)}</span>
+								<span>{confidenceLabel(recall.memory.confidence)}</span>
 								<span>Recalled {recalledWhen(recall.memory.retrieved_at) || "at an unknown time"}</span>
 								<a class="recall-link" href={chatHref(recall.chat_id)}>Open conversation</a>
 							</p>
@@ -314,7 +314,7 @@
 	.memory-summary { font: 400 13px/1.5 var(--font-body); color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.memory-size { font: 400 12px var(--font-body); color: var(--text-muted); white-space: nowrap; }
 	.memory-toolbar { align-items: center; }
-	.memory-path { font: 400 13px var(--font-mono); color: var(--text-secondary); overflow-wrap: anywhere; flex: 1; }
+	.memory-path { font: 400 13px var(--font-mono); color: var(--text-secondary); overflow-wrap: anywhere; flex: 1 1 160px; }
 	.memory-doc { max-width: 840px; margin: 0 auto 20px; background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 20px; }
 	.doc-content { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 400 14px/1.7 var(--font-body); color: var(--foreground); }
 	.doc-media { max-width: 100%; max-height: 70vh; border-radius: 12px; display: block; margin: 0 auto; }

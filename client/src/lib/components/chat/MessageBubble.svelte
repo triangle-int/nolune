@@ -171,7 +171,8 @@
    </div>
   {/if}
   {#if isLastInGroup()}<span class="time">{time()}{#if modelLabel && !isUser}<span class="model">{modelLabel}</span>{/if}</span>{/if}
-  {#if !isUser && !streaming && receipt && slug && chatId}
+  <!-- One receipt per turn: every text block of a turn carries the same recall, so the group's last bubble shows it. -->
+  {#if !isUser && !streaming && receipt && slug && chatId && isLastInGroup()}
    <MemoryReceiptPanel {slug} {chatId} messageId={message.id} memories={receipt} {companionName} />
   {/if}
  </Message>

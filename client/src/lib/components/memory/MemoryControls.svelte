@@ -220,7 +220,7 @@
 			<button type="button" class="nl-button-secondary control" onclick={startEditing}><Pencil size={16} aria-hidden="true" />Correct</button>
 			{#if isText}
 				{#each controls as control (control.flag)}
-					<button type="button" class="nl-button-secondary control" class:active={control.active} disabled={flagBusy !== null || flags === null} title={control.hint} aria-pressed={control.active} onclick={() => toggleFlag(control)}>
+					<button type="button" class="nl-button-secondary control" class:active={control.active} disabled={flagBusy !== null || flags === null} aria-pressed={control.active} onclick={() => toggleFlag(control)}>
 						{#if control.flag === "pinned"}
 							{#if control.active}<PinOff size={16} aria-hidden="true" />{:else}<Pin size={16} aria-hidden="true" />{/if}
 						{:else if control.active}<Eye size={16} aria-hidden="true" />{:else}<EyeOff size={16} aria-hidden="true" />{/if}

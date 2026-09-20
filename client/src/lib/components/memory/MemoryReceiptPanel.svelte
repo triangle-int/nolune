@@ -12,7 +12,7 @@
 	import { fetchMemory, fetchMemoryReceipt } from "$lib/api/client.js";
 	import type { MemoryFlags, RecalledMemory } from "$lib/api/types.js";
 	import { displayName } from "$lib/memory/library.js";
-	import { confidenceHint, confidenceLabel, flagBadges, isMediaMemory, reasonLabel, recalledWhen, receiptHeading, receiptSummary, sourceStatusCopy } from "$lib/memory/receipts.js";
+	import { confidenceLabel, flagBadges, isMediaMemory, reasonLabel, recalledWhen, receiptHeading, receiptSummary, sourceStatusCopy } from "$lib/memory/receipts.js";
 	import MemoryControls, { type MemoryChange } from "./MemoryControls.svelte";
 	import ChevronDown from "@lucide/svelte/icons/chevron-down";
 
@@ -116,7 +116,7 @@
 						{/if}
 						<p class="receipt-meta">
 							<span>{reasonLabel(memory)}</span>
-							<span title={confidenceHint(memory.confidence)}>{confidenceLabel(memory.confidence)}</span>
+							<span>{confidenceLabel(memory.confidence)}</span>
 							<span>Recalled {recalledWhen(memory.retrieved_at) || "at an unknown time"}</span>
 						</p>
 						{#if missing}

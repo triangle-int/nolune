@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url';
 import {
 	canFlag,
 	conflictPrompt,
-	confidenceHint,
 	confidenceLabel,
 	correctionOutcome,
 	flagBadges,
@@ -56,9 +55,6 @@ test('reasons and confidence buckets are plain sentences, never scores', () => {
 	assert.equal(confidenceLabel('medium'), 'Medium confidence');
 	assert.equal(confidenceLabel('low'), 'Low confidence');
 	assert.equal(confidenceLabel(undefined), 'Confidence not reported');
-	assert.equal(confidenceHint('high'), 'A strong match.');
-	assert.equal(confidenceHint('low'), 'A weak match; it may not be relevant.');
-	assert.equal(confidenceHint('nope'), '');
 });
 
 test('missing and media sources are stated honestly', () => {
