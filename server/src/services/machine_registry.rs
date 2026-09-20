@@ -241,8 +241,53 @@ impl CuaTargets {
         &self,
         adapter: CheckedCuaAdapter,
     ) -> Result<bool, CuaRegistrationError> {
-        let _ = adapter;
-        todo!("slice 1 of #17")
+        let descriptor = adapter.descriptor();
+        let id = descriptor.machine_id.clone();
+        let mut targets = self.targets.lock().await;
+        let replaced = match targets.get(&id) {
+            Some(existing)
+                if existing.adapter.descriptor().location != MachineLocation::Desktop =>
+            {
+                return Err(CuaRegistrationError::DuplicateMachineId(id));
+            }
+            Some(_) => true,
+            None => false,
+        };
+        log::info!(
+            "[machines] desktop cua target {}: {} ({:?}, {:?}, {} capabilities)",
+            if replaced { "replaced" } else { "registered" },
+            id.as_str(),
+            descriptor.platform,
+            descriptor.health,
+            descriptor.capabilities.len()
+        );
+        targets.insert(
+            id,
+            CuaTarget {
+                adapter: Arc::new(adapter),
+                hostname: None,
+                registered_at: chrono::Utc::now().timestamp(),
+            },
+        );
+        Ok(replaced)
+    }
+
+    /// The descriptors of the desktop targets, by machine id: what the
+    /// known-machines listing joins onto the desktop records.
+    async fn desktop_descriptors(&self) -> HashMap<String, MachineDescriptor> {
+        self.targets
+            .lock()
+            .await
+            .values()
+            .map(|target| target.adapter.descriptor())
+            .filter(|descriptor| descriptor.location == MachineLocation::Desktop)
+            .map(|descriptor| {
+                (
+                    descriptor.machine_id.as_str().to_owned(),
+                    descriptor.clone(),
+                )
+            })
+            .collect()
     }
 
     async fn insert(
@@ -1035,16 +1080,63 @@ impl MachineRegistry {
         descriptor: MachineDescriptor,
         call_timeout: Duration,
     ) -> Result<Arc<DesktopLink>, CuaRegistrationError> {
-        let _ = (machine_id, connection, descriptor, call_timeout);
-        todo!("slice 1 of #17")
+        let id = descriptor.machine_id.clone();
+        // Held across the registration so a registration or disconnect of
+        // the same desktop lands wholly before or wholly after: the target
+        // is registered and the link stored as one step, and whoever comes
+        // next finds both or neither.
+        let mut agents = self.agents.lock().await;
+        let agent = agents
+            .get_mut(machine_id)
+            .filter(|agent| agent.connection == connection)
+            .ok_or_else(|| CuaRegistrationError::NoConnection(id.clone()))?;
+        let link = DesktopLink::new(id, agent.sender.clone(), call_timeout);
+        let adapter = link
+            .checked_adapter(descriptor)
+            .map_err(|error| CuaRegistrationError::Invalid(error.to_string()))?;
+        self.cua.register_desktop(adapter).await?;
+        agent.cua = Some(link.clone());
+        Ok(link)
     }
 
     /// A `cua_response` frame from a connected desktop: resolve the call
     /// waiting for it. Returns whether a call was resolved or failed by it;
     /// a frame from a desktop without a typed target is dropped.
     pub async fn complete_cua(&self, machine_id: &str, response: serde_json::Value) -> bool {
-        let _ = (machine_id, response);
-        todo!("slice 1 of #17")
+        let link = self
+            .agents
+            .lock()
+            .await
+            .get(machine_id)
+            .and_then(|agent| agent.cua.clone());
+        let Some(link) = link else {
+            log::warn!("[machines] '{machine_id}' sent a cua_response but has no typed target");
+            return false;
+        };
+        match link.complete(response) {
+            Completion::Resolved(request_id) => {
+                log::info!(
+                    "[machines] cua response from '{machine_id}' for {}",
+                    request_id.as_str()
+                );
+                true
+            }
+            Completion::Failed { request_id, reason } => {
+                log::warn!(
+                    "[machines] cua response from '{machine_id}' failed {}: {reason}",
+                    request_id.as_str()
+                );
+                true
+            }
+            Completion::Unmatched(request_id) => {
+                log::warn!("[machines] no pending cua request {request_id} for '{machine_id}'");
+                false
+            }
+            Completion::Unreadable(reason) => {
+                log::warn!("[machines] dropped a cua_response from '{machine_id}': {reason}");
+                false
+            }
+        }
     }
 
     /// The typed-frame link of a connected desktop, if it registered one.
@@ -1061,8 +1153,15 @@ impl MachineRegistry {
     /// now, the sessions it held are lost with it, and its target leaves
     /// `CuaTargets`.
     async fn detach_desktop_cua(&self, link: &DesktopLink) {
-        let _ = link;
-        todo!("slice 1 of #17")
+        let dropped = link.disconnect();
+        self.cua.unregister(link.machine_id()).await;
+        log::info!(
+            "[machines] desktop cua target {} detached: {} waiting call(s) failed, {} open \
+             session(s) lost with the socket",
+            link.machine_id().as_str(),
+            dropped.pending,
+            dropped.sessions.len()
+        );
     }
 
     /// The connected agents as the store needs them.
@@ -1146,6 +1245,10 @@ impl MachineRegistry {
             .iter()
             .map(|entry| server_local_view(entry, now, &self.known.slug))
             .collect();
+        // A connected desktop that registered a Cua descriptor (#17) shows
+        // its driver on its own row; the fields are live state like the
+        // socket, never written to the record.
+        let desktop_cua = self.cua.desktop_descriptors().await;
         let mut machines: Vec<KnownMachine> = records
             .values()
             .filter(|record| {
@@ -1154,12 +1257,17 @@ impl MachineRegistry {
                     .any(|row| row.machine_id == record.machine_id)
             })
             .map(|record| {
-                known_view(
+                let mut row = known_view(
                     record,
                     live_seen.get(record.machine_id.as_str()).copied(),
                     now,
                     &self.known.slug,
-                )
+                );
+                if let Some(descriptor) = desktop_cua.get(&row.machine_id).filter(|_| row.online) {
+                    row.driver_version = Some(descriptor.driver_version.as_str().to_owned());
+                    row.cua_health = Some(descriptor.health);
+                }
+                row
             })
             .collect();
         machines.extend(server_local);
@@ -2710,7 +2818,11 @@ mod desktop_cua_tests {
                 "server-local:studio"
             )))
         );
-        assert_eq!(targets.list().await, vec![local, again]);
+        assert_eq!(
+            targets.list().await,
+            vec![again, local],
+            "both targets, in id order"
+        );
     }
 
     #[tokio::test]

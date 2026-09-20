@@ -609,7 +609,7 @@ async fn a_registration_without_cua_keeps_the_legacy_toolcalls_working() {
 #[tokio::test]
 async fn a_reconnect_under_the_same_id_replaces_the_target_instead_of_duplicating_it() {
     let h = harness().await;
-    let mut first = FakeDesktop::registered(
+    let first = FakeDesktop::registered(
         h.addr,
         register(STUDIO, Some(cua_field(STUDIO, MachineLocation::Desktop))),
     )

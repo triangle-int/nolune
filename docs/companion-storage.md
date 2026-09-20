@@ -314,10 +314,11 @@ The API reports each record with live state that is never written to disk:
 the user's name or `null`), `online`, `health` derived from heartbeat age
 (`healthy`; `degraded` when the socket is open but no heartbeat arrived for
 45 seconds; `unavailable` when offline), and `driver_version` and
-`cua_health`, both `null` until the Cua driver (#18) reports them. The
-server machine itself, when it has a Cua driver (#16), is listed beside the
-records as one live `server_local` row with both filled in; it is never
-written to this file (see [computer-use.md](computer-use.md)).
+`cua_health`, filled in while a connected desktop has registered its Cua
+driver (#17) and `null` otherwise. The server machine itself, when it has a
+Cua driver (#16), is listed beside the records as one live `server_local`
+row with both filled in; it is never written to this file (see
+[computer-use.md](computer-use.md)).
 
 | Route | Purpose |
 | --- | --- |

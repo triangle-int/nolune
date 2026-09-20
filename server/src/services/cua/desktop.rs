@@ -43,12 +43,20 @@ pub enum DesktopFrame {
 /// it names the machine the socket registered as and a desktop location:
 /// the descriptor is bound to the authenticated socket, never the other way
 /// round, and a desktop never registers as the server machine.
-pub fn accept_registration(
-    machine_id: &str,
-    cua: &Value,
-) -> Result<MachineDescriptor, ValidationError> {
-    let _ = (machine_id, cua);
-    todo!("slice 1 of #17")
+pub fn accept_registration(machine_id: &str, cua: &Value) -> Result<MachineDescriptor, String> {
+    let envelope =
+        CuaRegistrationEnvelope::from_json(&cua.to_string()).map_err(|error| error.to_string())?;
+    let descriptor = envelope.machine;
+    if descriptor.machine_id.as_str() != machine_id {
+        return Err(format!(
+            "cua descriptor names machine '{}' but the socket registered as '{machine_id}'",
+            descriptor.machine_id.as_str()
+        ));
+    }
+    if descriptor.location != MachineLocation::Desktop {
+        return Err("a desktop registers as a desktop target, never as the server machine".into());
+    }
+    Ok(descriptor)
 }
 
 /// What one `cua_response` frame did.
@@ -126,47 +134,190 @@ impl DesktopLink {
         self: &Arc<Self>,
         descriptor: MachineDescriptor,
     ) -> Result<CheckedCuaAdapter, ValidationError> {
-        let _ = descriptor;
-        todo!("slice 1 of #17")
+        let link = self.clone();
+        CheckedCuaAdapter::new(descriptor, move |request| {
+            let link = link.clone();
+            Box::pin(async move { link.call(request).await })
+        })
     }
 
     /// A `cua_response` frame arrived on the socket: decode it through the
     /// protocol's bounds and hand it to the call waiting for its request id.
     pub fn complete(&self, response: Value) -> Completion {
-        let _ = response;
-        todo!("slice 1 of #17")
+        match CuaResponseEnvelope::from_json(&response.to_string()) {
+            Ok(envelope) => {
+                let request_id = envelope.request_id.clone();
+                match self.lock().pending.remove(&request_id) {
+                    Some(waiting) => {
+                        let _ = waiting.send(Ok(envelope));
+                        Completion::Resolved(request_id)
+                    }
+                    None => Completion::Unmatched(request_id.as_str().to_owned()),
+                }
+            }
+            Err(error) => {
+                let reason = format!("unreadable cua_response: {error}");
+                // The frame may still say which call it was for; that call
+                // fails now rather than at its deadline.
+                let named = response
+                    .get("request_id")
+                    .and_then(Value::as_str)
+                    .and_then(|id| RequestId::try_from(id).ok());
+                let Some(request_id) = named else {
+                    return Completion::Unreadable(reason);
+                };
+                match self.lock().pending.remove(&request_id) {
+                    Some(waiting) => {
+                        let _ = waiting.send(Err(DriverCallFailure::Malformed(reason.clone())));
+                        Completion::Failed { request_id, reason }
+                    }
+                    None => Completion::Unreadable(reason),
+                }
+            }
+        }
     }
 
     /// The sessions the desktop confirmed open and has not ended, in label order.
+    #[cfg(test)]
     pub fn open_sessions(&self) -> Vec<SessionLabel> {
-        todo!("slice 1 of #17")
+        self.lock().open.iter().cloned().collect()
     }
 
     /// How many calls are waiting for a `cua_response`.
+    #[cfg(test)]
     pub fn pending(&self) -> usize {
-        todo!("slice 1 of #17")
+        self.lock().pending.len()
     }
 
     /// The socket is gone: every waiting call fails now as unavailable
     /// instead of at its deadline, and the sessions the desktop held are
     /// lost with it (there is nobody left to end them). Idempotent.
     pub fn disconnect(&self) -> Dropped {
-        todo!("slice 1 of #17")
+        let mut state = self.lock();
+        state.closed = true;
+        let pending = state.pending.len();
+        for (_, waiting) in state.pending.drain() {
+            let _ = waiting.send(Err(DriverCallFailure::Transport(
+                "desktop disconnected".to_owned(),
+            )));
+        }
+        let sessions = std::mem::take(&mut state.open).into_iter().collect();
+        Dropped { pending, sessions }
     }
 
-    #[allow(dead_code)] // Used by `checked_adapter` once implemented.
+    /// One request over the socket: frame it, wait for the answer that
+    /// names its request id, and check that the answer is for this request
+    /// before handing it back. Every way the desktop can fail the call
+    /// (gone, silent, answering something else or something unreadable) is
+    /// a typed runtime error correlated to the request.
     async fn call(&self, request: CuaRequestEnvelope) -> CuaResponseEnvelope {
-        let _ = request;
-        todo!("slice 1 of #17")
+        let frame = match serde_json::to_string(&DesktopFrame::CuaRequest {
+            request: request.clone(),
+        }) {
+            Ok(frame) => frame,
+            Err(error) => {
+                return error_response(
+                    &request,
+                    &DriverCallFailure::Malformed(format!("request could not be framed: {error}")),
+                );
+            }
+        };
+        let (respond, waiting) = oneshot::channel();
+        {
+            let mut state = self.lock();
+            if state.closed {
+                return error_response(
+                    &request,
+                    &DriverCallFailure::Transport("desktop disconnected".to_owned()),
+                );
+            }
+            if state.pending.contains_key(&request.request_id) {
+                return error_response(
+                    &request,
+                    &DriverCallFailure::Malformed(format!(
+                        "request {} is already in flight",
+                        request.request_id.as_str()
+                    )),
+                );
+            }
+            if self.sender.send(frame).is_err() {
+                return error_response(
+                    &request,
+                    &DriverCallFailure::Transport(
+                        "desktop disconnected (socket closed)".to_owned(),
+                    ),
+                );
+            }
+            state.pending.insert(request.request_id.clone(), respond);
+        }
+
+        let response = match tokio::time::timeout(self.call_timeout, waiting).await {
+            Ok(Ok(Ok(response))) => response,
+            Ok(Ok(Err(failure))) => return error_response(&request, &failure),
+            Ok(Err(_dropped)) => {
+                return error_response(
+                    &request,
+                    &DriverCallFailure::Transport(
+                        "desktop disconnected before answering".to_owned(),
+                    ),
+                );
+            }
+            Err(_elapsed) => {
+                self.lock().pending.remove(&request.request_id);
+                return error_response(
+                    &request,
+                    &DriverCallFailure::Timeout(format!(
+                        "desktop did not answer {:?} within {:?}",
+                        request.action.kind(),
+                        self.call_timeout
+                    )),
+                );
+            }
+        };
+        if let Err(error) = response.validate_response_for(&request) {
+            return error_response(
+                &request,
+                &DriverCallFailure::Malformed(format!(
+                    "desktop answered request {} with a response that does not match it: {error}",
+                    request.request_id.as_str()
+                )),
+            );
+        }
+        self.note_session(&request.action, &response.response);
+        response
     }
 
     /// The bookkeeping for a confirmed answer: a `start_session` that came
     /// back active opens its label, an `end_session` closes it. Implicit
     /// sessions carry no label and are the desktop's own to end.
-    #[allow(dead_code)] // Used by `call` once implemented.
     fn note_session(&self, action: &CuaAction, response: &CuaResponse) {
-        let _ = (action, response);
-        todo!("slice 1 of #17")
+        let CuaResponse::Success { result } = response else {
+            return;
+        };
+        match (action, &**result) {
+            (CuaAction::StartSession(args), CuaActionResult::StartSession(started)) => {
+                if !started.active {
+                    return;
+                }
+                if let Some(label) = started.session.clone().or_else(|| args.session.clone()) {
+                    self.lock().open.insert(label);
+                }
+            }
+            (CuaAction::EndSession(args), CuaActionResult::EndSession(ended)) => {
+                if let Some(label) = ended.session.clone().or_else(|| args.session.clone()) {
+                    self.lock().open.remove(&label);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A poisoned lock only means a task panicked mid-update; the maps are
+    /// still consistent enough to drain.
+    fn lock(&self) -> std::sync::MutexGuard<'_, LinkState> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 

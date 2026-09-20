@@ -270,7 +270,10 @@ impl Registration {
     /// The Cua descriptor this registration carries, checked against the
     /// machine it registers as; `None` for a legacy-only desktop.
     fn cua_descriptor(&self) -> Result<Option<cua_protocol::MachineDescriptor>, String> {
-        todo!("slice 1 of #17")
+        self.cua
+            .as_ref()
+            .map(|cua| crate::services::cua::desktop::accept_registration(&self.machine_id, cua))
+            .transpose()
     }
 
     /// The registry's view of this registration, seen at `now`. Labels and
@@ -332,7 +335,7 @@ async fn handle_agent(mut socket: WebSocket, state: AppState) {
             toolcall_msg = agent_rx.recv() => {
                 match toolcall_msg {
                     Some(msg) => {
-                        log::info!("[machine-ws] sending toolcall to '{machine_id}'");
+                        log::info!("[machine-ws] sending frame to '{machine_id}'");
                         if socket.send(Message::Text(msg.into())).await.is_err() {
                             log::warn!("[machine-ws] failed to send to '{machine_id}', disconnecting");
                             break;
@@ -352,8 +355,7 @@ async fn handle_agent(mut socket: WebSocket, state: AppState) {
                                     state.machine_registry.complete(&request_id, result).await;
                                 }
                                 AgentMessage::CuaResponse { response } => {
-                                    let _ = response;
-                                    todo!("slice 1 of #17")
+                                    state.machine_registry.complete_cua(&machine_id, response).await;
                                 }
                                 AgentMessage::Heartbeat { machine_id: mid } => {
                                     state.machine_registry.heartbeat(&mid).await;
@@ -429,13 +431,45 @@ async fn wait_for_registration(
                                 let _ = socket.send(Message::Text(refusal.to_string().into())).await;
                                 return None;
                             }
+                            // A descriptor that is not this desktop's is a bug on
+                            // the other end, not a downgrade: refused like a bad id.
+                            let descriptor = match registration.cua_descriptor() {
+                                Ok(descriptor) => descriptor,
+                                Err(error) => {
+                                    log::warn!("[machine-ws] registration of '{}' refused: {error}", registration.machine_id);
+                                    let refusal = serde_json::json!({"type": "error", "error": "invalid_cua_registration", "message": error});
+                                    let _ = socket.send(Message::Text(refusal.to_string().into())).await;
+                                    return None;
+                                }
+                            };
                             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
                             let machine_id = registration.machine_id.clone();
-                            let info = registration.into_info(chrono::Utc::now().timestamp());
+                            let mut info = registration.into_info(chrono::Utc::now().timestamp());
+                            if info.permissions.is_none() {
+                                info.permissions = descriptor.as_ref().map(|d| d.permissions.clone());
+                            }
                             let connection = state.machine_registry.register(info, tx).await;
 
-                            // Send ack
-                            let ack = serde_json::json!({"type": "registered", "machine_id": machine_id});
+                            // The typed target (#17) beside the legacy registration:
+                            // a refusal (the id belongs to the server-local target)
+                            // keeps the legacy toolcalls working and is logged.
+                            let mut cua = false;
+                            if let Some(descriptor) = descriptor {
+                                let call_timeout = state.config.read().await.cua.timeouts().call;
+                                match state
+                                    .machine_registry
+                                    .attach_desktop_cua(&machine_id, connection, descriptor, call_timeout)
+                                    .await
+                                {
+                                    Ok(_) => cua = true,
+                                    Err(error) => log::error!(
+                                        "[machine-ws] '{machine_id}' registered without a typed cua target: {error}"
+                                    ),
+                                }
+                            }
+
+                            // Send ack; `cua` says whether typed frames will follow.
+                            let ack = serde_json::json!({"type": "registered", "machine_id": machine_id, "cua": cua});
                             let _ = socket.send(Message::Text(serde_json::to_string(&ack).unwrap().into())).await;
 
                             return Some((machine_id, connection, rx));

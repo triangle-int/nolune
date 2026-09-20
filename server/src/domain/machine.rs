@@ -111,9 +111,9 @@ pub struct KnownMachine {
     /// Derived from heartbeat age: `healthy`, `degraded` (open socket, stale
     /// heartbeat), or `unavailable` (offline).
     pub health: MachineHealth,
-    /// Reserved for the Cua driver (#18); `None` means not reported.
+    /// The Cua driver a connected desktop registered (#17); `None` means not reported.
     pub driver_version: Option<String>,
-    /// Reserved for the Cua driver's own health (#18); `None` means not reported.
+    /// That driver's own health (#17); `None` means not reported.
     pub cua_health: Option<MachineHealth>,
 }
 
