@@ -111,8 +111,7 @@ fn instance_mentions_outside_paths(text: &str) -> Vec<String> {
             || line.contains("importInstance")
             || line.contains("exportInstance")
             || line.contains("instances_count")
-            || line.contains("multi-instance")
-            || line.contains("hosted-instance");
+            || line.contains("multi-instance");
         if !allowed {
             out.push(line.trim().to_owned());
         }
