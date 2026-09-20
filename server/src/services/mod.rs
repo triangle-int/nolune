@@ -8,6 +8,7 @@ pub mod commitments;
 pub mod companion;
 pub mod companion_routine;
 pub mod continuity;
+pub mod cua;
 pub mod drops;
 pub mod federation;
 pub mod heartbeat;
