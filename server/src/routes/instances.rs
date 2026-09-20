@@ -11,8 +11,16 @@ use std::fs;
 
 use crate::{
     app::state::AppState,
-    domain::{memory::MemoryEntry, receipt::MemoryReceipt},
-    services::{chat, memory, memory_receipts, profile_archive, tools},
+    domain::{
+        correction::{CorrectionLedger, Keep},
+        memory::MemoryEntry,
+        receipt::MemoryReceipt,
+    },
+    services::{
+        chat, memory,
+        memory_corrections::{self, CorrectionError, CorrectionOutcome, FlagUpdate},
+        memory_receipts, profile_archive, tools,
+    },
 };
 
 /// Retired control-token resource namespace; always denies access.
@@ -64,7 +72,18 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/instances/{instance_slug}/memory/{*path}",
-            get(read_memory_file).delete(delete_memory_file),
+            get(read_memory_file)
+                .delete(delete_memory_file)
+                .put(correct_memory_file)
+                .patch(set_memory_flags),
+        )
+        .route(
+            "/api/instances/{instance_slug}/memory-corrections",
+            get(list_memory_corrections),
+        )
+        .route(
+            "/api/instances/{instance_slug}/memory-corrections/{conflict_id}/resolve",
+            post(resolve_memory_correction),
         )
         .route(
             "/api/instances/{instance_slug}/{chat_id}/receipts",
@@ -676,6 +695,126 @@ async fn delete_memory_file(
         return StatusCode::INTERNAL_SERVER_ERROR;
     }
     StatusCode::OK
+}
+
+// ---------------------------------------------------------------------------
+// Memory corrections (#84) — correct, pin, exclude, and the conflict ledger
+// ---------------------------------------------------------------------------
+
+type CorrectionApiError = (StatusCode, Json<serde_json::Value>);
+
+fn correction_error(path: &str, error: CorrectionError) -> CorrectionApiError {
+    let status = match error {
+        CorrectionError::NotFound => StatusCode::NOT_FOUND,
+        CorrectionError::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
+        CorrectionError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+        CorrectionError::LedgerFull => StatusCode::INSUFFICIENT_STORAGE,
+        CorrectionError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    if status == StatusCode::INTERNAL_SERVER_ERROR {
+        log::warn!("[memory_corrections] {path}: {error}");
+    }
+    (
+        status,
+        Json(serde_json::json!({
+            "error": "memory_correction",
+            "message": error.to_string(),
+            "path": path,
+        })),
+    )
+}
+
+#[derive(Deserialize)]
+struct CorrectionBody {
+    /// What the memory should say; replaces the body, keeps the flags.
+    content: String,
+}
+
+/// PUT /api/instances/{slug}/memory/{*path} — the user's own statement.
+/// `200 applied` / `200 unchanged`, or `409 needs_resolution` listing both
+/// statements when an earlier correction is still in force and differs.
+async fn correct_memory_file(
+    State(state): State<AppState>,
+    Path((instance_slug, file_path)): Path<(String, String)>,
+    Json(body): Json<CorrectionBody>,
+) -> Result<(StatusCode, Json<serde_json::Value>), CorrectionApiError> {
+    let outcome = memory_corrections::correct(
+        &state.vector_store,
+        &instance_slug,
+        &file_path,
+        &body.content,
+    )
+    .await
+    .map_err(|error| correction_error(&file_path, error))?;
+    Ok(match outcome {
+        CorrectionOutcome::Applied(entry) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "status": "applied",
+                "path": file_path,
+                "correction": entry,
+            })),
+        ),
+        CorrectionOutcome::Unchanged => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "status": "unchanged", "path": file_path })),
+        ),
+        CorrectionOutcome::NeedsResolution(conflict) => {
+            let mut value = serde_json::to_value(conflict).unwrap_or_default();
+            value["status"] = serde_json::Value::String("needs_resolution".into());
+            (StatusCode::CONFLICT, Json(value))
+        }
+    })
+}
+
+/// PATCH /api/instances/{slug}/memory/{*path} — `pinned` and/or
+/// `exclude_from_proactive`; a flag left out is unchanged.
+async fn set_memory_flags(
+    State(state): State<AppState>,
+    Path((instance_slug, file_path)): Path<(String, String)>,
+    Json(update): Json<FlagUpdate>,
+) -> Result<Json<serde_json::Value>, CorrectionApiError> {
+    let flags =
+        memory_corrections::set_flags(&state.vector_store, &instance_slug, &file_path, update)
+            .await
+            .map_err(|error| correction_error(&file_path, error))?;
+    let mut value = serde_json::to_value(flags).unwrap_or_default();
+    value["path"] = serde_json::Value::String(file_path);
+    Ok(Json(value))
+}
+
+/// GET /api/instances/{slug}/memory-corrections — the whole ledger.
+async fn list_memory_corrections(
+    State(state): State<AppState>,
+    Path(instance_slug): Path<String>,
+) -> Result<Json<CorrectionLedger>, CorrectionApiError> {
+    let media = state.vector_store.media_store();
+    tokio::task::spawn_blocking(move || memory_corrections::load_ledger(&media, &instance_slug))
+        .await
+        .map_err(|error| correction_error("", CorrectionError::Io(error.to_string())))?
+        .map(Json)
+        .map_err(|error| correction_error("", error))
+}
+
+#[derive(Deserialize)]
+struct ResolveBody {
+    keep: Keep,
+}
+
+/// POST /api/instances/{slug}/memory-corrections/{id}/resolve — settle a
+/// `needs_resolution` entry by keeping `current` or `proposed`.
+async fn resolve_memory_correction(
+    State(state): State<AppState>,
+    Path((instance_slug, conflict_id)): Path<(String, String)>,
+    Json(body): Json<ResolveBody>,
+) -> Result<Json<serde_json::Value>, CorrectionApiError> {
+    let resolution =
+        memory_corrections::resolve(&state.vector_store, &instance_slug, &conflict_id, body.keep)
+            .await
+            .map_err(|error| correction_error(&conflict_id, error))?;
+    let mut value = serde_json::to_value(resolution).unwrap_or_default();
+    value["status"] = serde_json::Value::String("resolved".into());
+    Ok(Json(value))
 }
 
 // ---------------------------------------------------------------------------
@@ -1505,5 +1644,245 @@ mod receipt_tests {
         let (status, listed) = get_json(&state, "/api/instances/one/other/receipts").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(listed, serde_json::json!([]));
+    }
+}
+
+#[cfg(test)]
+mod correction_tests {
+    use super::*;
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Method, Request},
+    };
+    use tower::ServiceExt;
+
+    const STAMPED: &str = "---\ncreated: 2026-01-01\nupdated: 2026-01-01\n---\nlikes tea\n";
+
+    async fn state(ws: &std::path::Path) -> AppState {
+        let memory = ws.join("instances/one/memory/about");
+        std::fs::create_dir_all(&memory).unwrap();
+        std::fs::write(memory.join("tea.md"), STAMPED).unwrap();
+        std::fs::write(ws.join("instances/one/memory/photo.png"), [0xff]).unwrap();
+        let mut state = AppState::new(crate::config::Config::default()).await;
+        state.workspace_dir = ws.to_owned();
+        state.vector_store =
+            std::sync::Arc::new(crate::services::vector::VectorStore::connect(ws).await);
+        state
+    }
+
+    async fn call(
+        state: &AppState,
+        method: Method,
+        uri: &str,
+        body: Option<serde_json::Value>,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut request = Request::builder().method(method).uri(uri);
+        let body = match body {
+            Some(json) => {
+                request = request.header(axum::http::header::CONTENT_TYPE, "application/json");
+                Body::from(serde_json::to_vec(&json).unwrap())
+            }
+            None => Body::empty(),
+        };
+        let response = router()
+            .with_state(state.clone())
+            .oneshot(request.body(body).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let value = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, value)
+    }
+
+    fn body_of(ws: &std::path::Path) -> String {
+        let raw = std::fs::read_to_string(ws.join("instances/one/memory/about/tea.md")).unwrap();
+        memory::parse_frontmatter(&raw).1.to_owned()
+    }
+
+    #[tokio::test]
+    async fn correction_routes_apply_park_conflicts_and_resolve() {
+        let ws = tempfile::tempdir().unwrap();
+        let state = state(ws.path()).await;
+        let uri = "/api/instances/one/memory/about/tea.md";
+        let correct = |content: &str| serde_json::json!({ "content": content });
+
+        let (status, value) = call(&state, Method::PUT, uri, Some(correct("drinks oolong"))).await;
+        assert_eq!(status, StatusCode::OK, "{value}");
+        assert_eq!(value["status"], "applied");
+        assert_eq!(value["path"], "about/tea.md");
+        assert_eq!(value["correction"]["statement"], "drinks oolong");
+        assert_eq!(value["correction"]["previous"], "likes tea");
+        assert_eq!(value["correction"]["status"], "applied");
+        let first_id = value["correction"]["id"].as_str().unwrap().to_owned();
+        assert_eq!(body_of(ws.path()), "drinks oolong");
+
+        let (status, value) = call(&state, Method::PUT, uri, Some(correct("drinks oolong"))).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["status"], "unchanged");
+
+        // The second statement is parked with both statements listed.
+        let (status, value) = call(&state, Method::PUT, uri, Some(correct("drinks matcha"))).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{value}");
+        assert_eq!(value["status"], "needs_resolution");
+        assert_eq!(value["path"], "about/tea.md");
+        assert_eq!(value["current"]["id"], first_id);
+        assert_eq!(value["current"]["statement"], "drinks oolong");
+        assert_eq!(value["proposed"]["statement"], "drinks matcha");
+        let conflict_id = value["conflict_id"].as_str().unwrap().to_owned();
+        assert_eq!(value["proposed"]["id"], conflict_id);
+        assert_eq!(body_of(ws.path()), "drinks oolong");
+
+        let (status, ledger) = call(
+            &state,
+            Method::GET,
+            "/api/instances/one/memory-corrections",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(ledger["version"], 1);
+        assert_eq!(ledger["entries"].as_array().map(Vec::len), Some(2));
+        assert_eq!(ledger["entries"][1]["status"], "needs_resolution");
+        assert_eq!(ledger["entries"][1]["conflicts_with"], first_id);
+
+        // Resolve in favour of the proposed statement.
+        let (status, value) = call(
+            &state,
+            Method::POST,
+            &format!("/api/instances/one/memory-corrections/{conflict_id}/resolve"),
+            Some(serde_json::json!({ "keep": "proposed" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{value}");
+        assert_eq!(value["status"], "resolved");
+        assert_eq!(value["kept"], "proposed");
+        assert_eq!(value["entry"]["id"], conflict_id);
+        assert_eq!(value["entry"]["status"], "applied");
+        assert_eq!(body_of(ws.path()), "drinks matcha");
+        let (status, _) = call(
+            &state,
+            Method::POST,
+            &format!("/api/instances/one/memory-corrections/{conflict_id}/resolve"),
+            Some(serde_json::json!({ "keep": "current" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "settled conflicts are gone");
+        let (status, value) = call(
+            &state,
+            Method::POST,
+            &format!("/api/instances/one/memory-corrections/{conflict_id}/resolve"),
+            Some(serde_json::json!({ "keep": "both" })),
+        )
+        .await;
+        assert!(status.is_client_error(), "{status} {value}");
+
+        // Refusals keep the file as it is.
+        let (status, value) = call(
+            &state,
+            Method::PUT,
+            "/api/instances/one/memory/about/missing.md",
+            Some(correct("x")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(value["error"], "memory_correction");
+        let (status, _) = call(&state, Method::PUT, uri, Some(correct("   "))).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        let (status, _) = call(
+            &state,
+            Method::PUT,
+            uri,
+            Some(correct(&"x".repeat(64 * 1024 + 1))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(body_of(ws.path()), "drinks matcha");
+    }
+
+    #[tokio::test]
+    async fn flag_routes_rewrite_the_file_and_show_in_the_listing() {
+        let ws = tempfile::tempdir().unwrap();
+        let state = state(ws.path()).await;
+        let uri = "/api/instances/one/memory/about/tea.md";
+
+        let (status, value) = call(
+            &state,
+            Method::PATCH,
+            uri,
+            Some(serde_json::json!({ "pinned": true })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{value}");
+        assert_eq!(
+            value,
+            serde_json::json!({ "path": "about/tea.md", "pinned": true, "exclude_from_proactive": false })
+        );
+        let (status, value) = call(
+            &state,
+            Method::PATCH,
+            uri,
+            Some(serde_json::json!({ "exclude_from_proactive": true })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{value}");
+        assert_eq!(value["pinned"], true);
+        assert_eq!(value["exclude_from_proactive"], true);
+        let raw =
+            std::fs::read_to_string(ws.path().join("instances/one/memory/about/tea.md")).unwrap();
+        assert_eq!(
+            raw,
+            "---\ncreated: 2026-01-01\nupdated: 2026-01-01\npinned: true\nexclude_from_proactive: true\n---\nlikes tea\n"
+        );
+
+        // Still listed and searchable from the library, flags included.
+        let (status, listed) = call(&state, Method::GET, "/api/instances/one/memory", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let entry = listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["path"] == "about/tea.md")
+            .unwrap();
+        assert_eq!(entry["pinned"], true);
+        assert_eq!(entry["exclude_from_proactive"], true);
+        let (status, found) = call(
+            &state,
+            Method::GET,
+            "/api/instances/one/memory/search?q=tea",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(found[0]["path"], "about/tea.md");
+
+        // Media memories carry no flags; unknown paths are 404.
+        let (status, value) = call(
+            &state,
+            Method::PATCH,
+            "/api/instances/one/memory/photo.png",
+            Some(serde_json::json!({ "pinned": true })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{value}");
+        let (status, _) = call(
+            &state,
+            Method::PATCH,
+            "/api/instances/one/memory/about/missing.md",
+            Some(serde_json::json!({ "pinned": true })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Forgetting still works on a flagged memory (memory_forget path).
+        assert_eq!(
+            delete_memory_file(
+                State(state.clone()),
+                Path(("one".into(), "about/tea.md".into()))
+            )
+            .await,
+            StatusCode::OK
+        );
+        assert!(!ws.path().join("instances/one/memory/about/tea.md").exists());
     }
 }

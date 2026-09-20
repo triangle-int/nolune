@@ -71,7 +71,10 @@ impl VectorStore {
         self.media.clone()
     }
 
-    fn lifecycle_lock(&self, slug: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    /// The per-companion gate every memory lifecycle change holds (write,
+    /// delete, media replace, backfill). `memory_corrections` takes it around
+    /// the user's own rewrites so they never interleave with the companion's.
+    pub(crate) fn lifecycle_lock(&self, slug: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
         let mut locks = self
             .lifecycle
             .lock()

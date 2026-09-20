@@ -47,6 +47,7 @@ Unknown fields are rejected. A marker with any other `format_version` or
         ├── project_state.json   name, timezone, and other settings
         ├── instance.toml        per-companion configuration
         ├── memory/              long-term memory library (source of truth)
+        ├── memory_corrections.json  the user's corrections and open conflicts (see below)
         ├── chats/{chat_id}/     conversation history, agent markers, receipts/
         ├── scheduled/*.json     scheduled tasks
         ├── activity/*.json      proactive run records (docs/proactive-loop.md)
@@ -190,8 +191,9 @@ is a derived record: `memory/` stays the source of truth. The shape:
 - `excerpt` is a bounded slice of the memory body; the stamped
   `created`/`updated` frontmatter is never part of it.
 - `reason` is `semantic` (vector index), `keyword` (BM25), `linked_to` (one
-  graph hop from `linked_from`), or `matched` when hybrid search cannot say
-  which channel found a media memory.
+  graph hop from `linked_from`), `matched` when hybrid search cannot say
+  which channel found a media memory, or `pinned` for a memory the user
+  pinned (recalled on every turn, see below).
 - `confidence` is a bucket (`high`, `medium`, `low`); raw scores never leave
   the server.
 - `source_status` is resolved again on every read: a memory that was deleted
@@ -203,6 +205,117 @@ Routes (companion-scoped like every other `/api/instances/{slug}/…` path):
 `GET /api/instances/{slug}/{chat_id}/receipts/{message_id}` returns one
 (`404` only when no receipt exists). The transient `memory_recall` server
 event carries the same `memories` entries at retrieval time.
+
+### Memory flags and corrections
+
+The user can correct, pin, or exclude a memory without editing internal state
+(#84). Every control rewrites the canonical file under `memory/` and
+reconciles the derived index right away (the path's vectors are replaced in
+one step, or removed and marked for backfill when the embedding provider is
+down; BM25 re-reads the file), so the next recall sees the corrected text
+and never the old one, and everything survives a restart because nothing
+lives only in memory. A text memory is read, rewritten, and re-indexed under
+the same per-companion lifecycle gate the companion's own `memory_write` and
+`memory_forget` hold, so a correction or flag change never interleaves with
+the companion's read-modify-write of that file and never brings back a
+memory a forget removed in the meantime (the correction answers `404`).
+
+Two flags sit in a text memory's frontmatter next to the timestamps. A line
+appears only when the flag is set, so an unflagged memory is byte-identical
+to the layout before #84, and both flags are carried over whenever the
+companion rewrites or appends to the file (`stamp_content`):
+
+```text
+---
+created: 2026-09-20
+updated: 2026-09-20
+pinned: true
+exclude_from_proactive: true
+---
+likes tea, lives in Lisbon
+```
+
+- `pinned: true` — the memory is auto-recalled into the user's chat on every
+  turn, with `reason: "pinned"` on the receipt, whether or not the
+  conversation matches it (up to eight, by path).
+- `exclude_from_proactive: true` — the memory never reaches the companion's
+  own routines: the check-in and reflection catalog omits it, and their
+  `memory_list`, `memory_search`, `memory_read`, and `memory_write` tools
+  never list, return, read, or rewrite it. The user's chat, auto-recall, and
+  the library (`GET …/memory`, `GET …/memory/search`) still see it, and the
+  listing reports both flags per entry.
+- Flags apply to text memories; a media memory's flag request answers `422`.
+  Correcting a media memory rewrites its bound text (`<media>.md`).
+
+Corrections are recorded in `instances/companion/memory_corrections.json`, a
+small versioned ledger next to the memory store, written atomically:
+
+```json
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "corr_1758360000_1a2b3c4d",
+      "path": "about/basics.md",
+      "statement": "likes oolong, lives in Porto",
+      "previous": "likes tea, lives in Lisbon",
+      "status": "applied",
+      "corrected_at": "2026-09-20T09:00:00Z"
+    },
+    {
+      "id": "corr_1758363600_5e6f7a8b",
+      "path": "about/basics.md",
+      "statement": "likes matcha, lives in Porto",
+      "previous": "likes oolong, lives in Porto",
+      "status": "needs_resolution",
+      "corrected_at": "2026-09-20T10:00:00Z",
+      "conflicts_with": "corr_1758360000_1a2b3c4d"
+    }
+  ]
+}
+```
+
+`statement` is the user's text in full (a resolution re-applies it; at most
+64 KiB), `previous` a bounded excerpt of what the memory said before. A
+status is `applied` (in force: the memory reads as this statement),
+`superseded` (a later correction, a resolution, or the companion's own
+rewrite replaced it), `needs_resolution` (waiting for the user), or
+`withdrawn` (the user kept the earlier statement). A file with another
+`version` or malformed JSON is reported and never rewritten.
+
+The ledger is bounded when it is written, never when it is read: at most
+500 entries and 4 MiB on disk. Past either bound the oldest settled entries
+(`superseded`, `withdrawn`) go first, then the oldest `applied` ones that no
+open question points at; such a memory keeps its text, the ledger just no
+longer remembers the correction, so the next correction of it applies as if
+it were the first. Open questions are never dropped: a correction the ledger
+cannot record because it holds nothing but open conflicts answers `507`
+without touching the memory, and resolving some makes room. A correction is
+recorded only after the memory file was rewritten, and the file is rewritten
+only once the ledger is known to have room for the record.
+
+Conflicts are never merged. A correction of a memory whose earlier
+correction is still in force (the memory still reads exactly as that
+statement) and whose text differs is parked as `needs_resolution` and the
+memory stays as it was; the response lists both statements and the user
+chooses. Only one question is open per memory: further statements answer
+with the same open conflict until it is resolved. Once the companion has
+rewritten the memory itself (or it was forgotten and written anew), the
+earlier correction is no longer in force: the next correction of that memory
+marks it `superseded`, closes any question that was parked against it the
+same way (the memory reads as neither statement, so there is nothing left to
+choose between), and applies directly. The `current` side of a `409` is
+therefore always the text the memory holds on disk.
+
+| Route | Purpose |
+| --- | --- |
+| `PUT /api/instances/companion/memory/{path}` | `{content}`: `200 {status: "applied", correction}`, `200 {status: "unchanged"}`, or `409 {status: "needs_resolution", conflict_id, current, proposed}`; `404` unknown memory, `422` empty or invalid, `413` over 64 KiB, `507` ledger full of open conflicts |
+| `PATCH /api/instances/companion/memory/{path}` | `{pinned?, exclude_from_proactive?}`; a flag left out is unchanged; returns both |
+| `GET /api/instances/companion/memory-corrections` | the ledger |
+| `POST /api/instances/companion/memory-corrections/{id}/resolve` | `{keep: "current" \| "proposed"}` settles one open conflict |
+
+Forgetting (`DELETE …/memory/{path}` and the `memory_forget` chat tool) is
+unchanged and removes the file and its index entries regardless of flags.
 
 ### Profiles: several servers on one host
 

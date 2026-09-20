@@ -34,6 +34,8 @@ pub const RECEIPTS_DIR: &str = "receipts";
 /// Hybrid search hits per turn; graph expansion may add a few more.
 const SEARCH_LIMIT: usize = 5;
 const RECALL_CAP: usize = 8;
+/// Pinned memories injected on top of the search results, by path order.
+const PINNED_CAP: usize = 8;
 /// Prompt text per memory (unchanged from the inline RAG block).
 const PROMPT_CHARS: usize = 500;
 /// Receipt excerpt bound.
@@ -136,6 +138,33 @@ pub async fn recall(vector_store: &VectorStore, instance_slug: &str, query: &str
         }
     }
 
+    // Pinned memories (#84) are recalled on every turn: a search hit that is
+    // pinned reports that stronger reason, the rest ride along behind the
+    // hits with their body.
+    let pinned = memory::pinned_memories(&media, instance_slug);
+    for candidate in &mut candidates {
+        if pinned.iter().any(|(path, _)| *path == candidate.hit.path) {
+            candidate.reason = RecallReason::Pinned;
+            candidate.linked_from = None;
+        }
+    }
+    for (path, body) in pinned.into_iter().take(PINNED_CAP) {
+        if candidates.iter().any(|c| c.hit.path == path) {
+            continue;
+        }
+        candidates.push(Candidate {
+            hit: VectorSearchResult {
+                path,
+                content_preview: body.trim().chars().take(PROMPT_CHARS).collect(),
+                score: 0.,
+                source_type: "text_memory".to_string(),
+                upload_id: None,
+            },
+            reason: RecallReason::Pinned,
+            linked_from: None,
+        });
+    }
+
     let retrieved_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mut recall = Recall::default();
     for candidate in candidates {
@@ -190,6 +219,8 @@ fn bucket(reason: RecallReason, score: f32) -> Confidence {
         },
         RecallReason::Matched if score >= 0.6 => Confidence::Medium,
         RecallReason::Matched | RecallReason::LinkedTo => Confidence::Low,
+        // The user asked for it on every turn; retrieval is certain.
+        RecallReason::Pinned => Confidence::High,
     }
 }
 
@@ -664,6 +695,82 @@ mod tests {
 
     /// The client declares the `memory_recall` event by hand; keep it honest
     /// about the wire shape (no stale `preview`/`score`, every key declared).
+    /// A pinned memory is recalled on every turn with the honest reason, and
+    /// exclusion from proactive use never hides a memory from the user's
+    /// own chat (#84).
+    #[tokio::test]
+    async fn pinned_memories_are_always_recalled_and_excluded_ones_still_reach_chat() {
+        let workspace = tempfile::tempdir().unwrap();
+        let dir = memory_dir(workspace.path());
+        fs::write(
+            dir.join("ritual.md"),
+            "---\ncreated: 2026-01-01\nupdated: 2026-01-01\npinned: true\n---\nmorning walk before work\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("secret.md"),
+            "---\nexclude_from_proactive: true\n---\nOrion nebula\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("both.md"),
+            "---\npinned: true\n---\nOrion pinned\n",
+        )
+        .unwrap();
+        fs::write(dir.join("plain.md"), "Pleiades\n").unwrap();
+        // No embedding provider: BM25 only.
+        let store = VectorStore::connect(workspace.path()).await;
+
+        let recalled = recall(&store, "one", "Orion").await;
+        let by_path = |path: &str| {
+            recalled
+                .memories
+                .iter()
+                .find(|m| m.path == path)
+                .unwrap_or_else(|| panic!("{path} was not recalled: {:?}", recalled.memories))
+        };
+        let ritual = by_path("ritual.md");
+        assert_eq!(ritual.reason, RecallReason::Pinned);
+        assert_eq!(ritual.confidence, Confidence::High);
+        assert_eq!(ritual.excerpt, "morning walk before work");
+        assert_eq!(ritual.source, "ritual.md");
+        assert_eq!(ritual.source_status, SourceStatus::Present);
+        let secret = by_path("secret.md");
+        assert_eq!(secret.reason, RecallReason::Keyword);
+        // A search hit that is also pinned reports the stronger reason once.
+        let both = by_path("both.md");
+        assert_eq!(both.reason, RecallReason::Pinned);
+        assert_eq!(
+            recalled
+                .memories
+                .iter()
+                .filter(|m| m.path == "both.md")
+                .count(),
+            1
+        );
+        assert!(recalled.memories.iter().all(|m| m.path != "plain.md"));
+        let block = recalled.prompt_block().unwrap();
+        assert!(block.contains("- ritual.md: "), "{block}");
+        assert!(block.contains("morning walk before work"), "{block}");
+        assert!(block.contains("- secret.md: "), "{block}");
+
+        // Pinned memories ride along even when nothing else matches.
+        let recalled = recall(&store, "one", "zzz nothing").await;
+        assert_eq!(
+            recalled
+                .memories
+                .iter()
+                .map(|m| (m.path.as_str(), m.reason))
+                .collect::<Vec<_>>(),
+            [
+                ("both.md", RecallReason::Pinned),
+                ("ritual.md", RecallReason::Pinned)
+            ]
+        );
+        assert!(recalled.prompt_block().is_some());
+        assert!(recall(&store, "one", "  ").await.memories.is_empty());
+    }
+
     #[test]
     fn memory_recall_event_matches_the_client_type() {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();

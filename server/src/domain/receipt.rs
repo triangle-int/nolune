@@ -22,6 +22,9 @@ pub enum RecallReason {
     /// the search result. Currently only media memories while the embedding
     /// provider is available; never used for text memories.
     Matched,
+    /// The user pinned the memory (`pinned: true` in its frontmatter): it is
+    /// recalled on every turn regardless of what the conversation is about.
+    Pinned,
 }
 
 /// Coarse confidence bucket. Raw scores never leave the server.
