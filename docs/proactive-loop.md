@@ -120,7 +120,12 @@ A commitment is a promise the companion tracks as first-class state, so
 following through never collapses into a timer. Each one is one JSON file
 under `instances/companion/commitments/{id}.json`, format version 1. The
 record is the source of truth: the evaluator reads it and keeps no schedule
-of its own, so a restart cannot create a duplicate one.
+of its own, so a restart cannot create a duplicate one. The store has one
+writer at a time: a lock is held across every read-modify-write (edit,
+snooze, complete together with the dependents it settles, cancel), and each
+write goes to a temp file of its own before it is renamed over the record,
+so concurrent writers can neither interleave on one record nor share a temp
+file. A record that no longer parses is logged and skipped, not hidden.
 
 | Field | Meaning |
 | --- | --- |
@@ -145,14 +150,20 @@ commitment re-derives every open commitment that depended on it; a dismissed
 dependency never finishes. On creation `next_check` defaults to the earliest
 of a timed wait and the deadline start; moving either moves it along unless
 the edit sets `next_check` itself. A snooze sets `next_check` to its end and
-turns a `due` commitment back to `active` until then.
+turns a `due` commitment back to `active` until then. Every read (`get`,
+`list`, and the routes) re-derives an open status against the clock, so a
+passed deadline, an ended timed wait, or an expired snooze reads as `due` or
+`active` at once; reading persists nothing, `status_changed_at` is the last
+transition a write recorded, and closed statuses are never re-derived.
 
 A commitment cannot be marked complete without explicit user confirmation
 (`confirmed_by_user`) or recorded evidence (a non-empty `summary`, or the
 `run_id` of the activity record that shows the work): the store answers
-`evidence_required` and changes nothing. Completed, dismissed, and failed
-commitments are history; edits, snoozes, and further completion answer
-`closed`.
+`evidence_required` and changes nothing. A `run_id` only counts when that
+activity record exists (`activity/{run_id}.json`): the store asks the
+proactive loop, and a made-up run answers `invalid` and changes nothing.
+Completed, dismissed, and failed commitments are history; edits, snoozes,
+and further completion answer `closed`.
 
 | Route | Purpose |
 | --- | --- |
@@ -161,7 +172,7 @@ commitments are history; edits, snoozes, and further completion answer
 | `GET /api/instances/companion/commitments/{id}` | one record |
 | `PATCH /api/instances/companion/commitments/{id}` | edit fields; `clear_deadline`, `clear_waiting_on`, `clear_next_check` remove optional ones |
 | `POST /api/instances/companion/commitments/{id}/snooze` | `{until}`, which must be in the future |
-| `POST /api/instances/companion/commitments/{id}/complete` | body is the evidence; `422 evidence_required` without confirmation or evidence |
+| `POST /api/instances/companion/commitments/{id}/complete` | body is the evidence; `422 evidence_required` without confirmation or evidence, `400 invalid` for a `run_id` with no activity record |
 | `POST /api/instances/companion/commitments/{id}/cancel` | dismiss |
 
 Refusals are JSON `{error, message}` with `not_found` (404), `invalid`

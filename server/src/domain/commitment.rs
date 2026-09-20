@@ -132,7 +132,8 @@ pub enum Provenance {
 }
 
 /// Why a commitment counts as done. At least one of `confirmed_by_user`, a
-/// non-empty `summary`, or a `run_id` is required to complete it.
+/// non-empty `summary`, or a `run_id` is required to complete it, and a
+/// `run_id` only counts when the store finds that activity record.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompletionEvidence {
     /// The user said it was done.
@@ -141,7 +142,8 @@ pub struct CompletionEvidence {
     /// What was observed: a reply, a file, a receipt. At most `MAX_NOTE_CHARS`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
-    /// The proactive run whose receipts show the work.
+    /// The proactive run whose receipts show the work
+    /// (`activity/{run_id}.json`); it must exist.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
     /// When the evidence was recorded.
@@ -192,6 +194,9 @@ pub struct Commitment {
     pub id: String,
     pub promise: String,
     pub owner: Owner,
+    /// The status last written. The store re-derives an open one against
+    /// the clock on every read, so a record can read `due` before a write
+    /// says so.
     pub status: CommitmentStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deadline: Option<Deadline>,
@@ -218,6 +223,7 @@ pub struct Commitment {
     pub last_check: Option<Check>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// When a write last changed `status`.
     pub status_changed_at: i64,
 }
 

@@ -4,13 +4,19 @@
 //! record is the source of truth: its `next_check`, waiting condition,
 //! dependencies, and snooze survive a restart as plain fields, so the
 //! evaluator never has to keep a schedule of its own and a restart cannot
-//! create a duplicate one. Every write goes through `write_atomic`; every
-//! read of one record goes through the `get` path guard. Callers pass `now`
-//! so tests run against a fixed clock.
+//! create a duplicate one. The store is written from several places at once
+//! (API handlers, dependents settled by a completion, the evaluator), so one
+//! writer at a time holds `writes` across each read-modify-write, and every
+//! write lands in its own temp file before it is renamed into place. Every
+//! read of one record goes through the `load` path guard. Reads re-derive an
+//! open status against the caller's clock and persist nothing. Callers pass
+//! `now` so tests run against a fixed clock.
 
 use std::{
-    fs, io,
+    fs,
+    io::{self, Write},
     path::{Path, PathBuf},
+    sync::{Arc, Mutex, MutexGuard},
 };
 
 use serde::Deserialize;
@@ -133,6 +139,9 @@ pub enum ListFilter {
 pub struct CommitmentStore {
     workspace_dir: PathBuf,
     slug: String,
+    /// One writer at a time: every read-modify-write holds this, so two
+    /// writers can never interleave on one record (mirrors `ProactiveLoop.active`).
+    writes: Arc<Mutex<()>>,
     /// Record updates for connected clients. None in tests that do not care.
     events: Option<tokio::sync::broadcast::Sender<crate::domain::events::ServerEvent>>,
 }
@@ -142,8 +151,15 @@ impl CommitmentStore {
         Self {
             workspace_dir: workspace_dir.to_path_buf(),
             slug: slug.to_owned(),
+            writes: Arc::new(Mutex::new(())),
             events: None,
         }
+    }
+
+    /// Held for the whole of a read-modify-write. A poisoned lock only means
+    /// a writer panicked; the files are still consistent, so keep going.
+    fn write_guard(&self) -> MutexGuard<'_, ()> {
+        self.writes.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Broadcast every record change as `commitment_updated`.
@@ -158,6 +174,7 @@ impl CommitmentStore {
     // ── lifecycle ──────────────────────────────────────────────────────────
 
     pub fn create(&self, new: NewCommitment, now: i64) -> Result<Commitment, CommitmentError> {
+        let _writes = self.write_guard();
         let mut commitment = Commitment {
             version: COMMITMENT_FORMAT_VERSION,
             id: new_commitment_id(now),
@@ -196,6 +213,7 @@ impl CommitmentStore {
         patch: CommitmentPatch,
         now: i64,
     ) -> Result<Commitment, CommitmentError> {
+        let _writes = self.write_guard();
         let mut commitment = self.open(id)?;
         if let Some(promise) = patch.promise {
             commitment.promise = promise;
@@ -240,6 +258,7 @@ impl CommitmentStore {
     /// Hold an open commitment until `until`; a due one goes back to active
     /// and becomes due again when the snooze ends.
     pub fn snooze(&self, id: &str, until: i64, now: i64) -> Result<Commitment, CommitmentError> {
+        let _writes = self.write_guard();
         let mut commitment = self.open(id)?;
         if until <= now {
             return Err(CommitmentError::Invalid(
@@ -256,18 +275,29 @@ impl CommitmentStore {
     }
 
     /// Mark an open commitment completed. Refused without the user's
-    /// confirmation or recorded evidence; unblocks commitments that depended on it.
+    /// confirmation or recorded evidence; unblocks commitments that depended
+    /// on it. A `run_id` counts as evidence only when `run_exists` says the
+    /// activity record is there: the store, not the caller, keeps a made-up
+    /// run from completing anything, so every caller (the API now, the chat
+    /// tool later) has to answer from the activity store.
     pub fn complete(
         &self,
         id: &str,
         mut evidence: CompletionEvidence,
         now: i64,
+        run_exists: impl Fn(&str) -> bool,
     ) -> Result<Commitment, CommitmentError> {
+        let _writes = self.write_guard();
         let mut commitment = self.open(id)?;
         evidence.summary = evidence.summary.as_deref().and_then(bounded_note);
         evidence.run_id = evidence.run_id.as_deref().and_then(bounded_note);
         if !evidence.is_sufficient() {
             return Err(CommitmentError::EvidenceRequired);
+        }
+        if let Some(run_id) = &evidence.run_id
+            && !run_exists(run_id)
+        {
+            return Err(CommitmentError::Invalid(format!("unknown run {run_id}")));
         }
         evidence.at = now;
         commitment.completion = Some(evidence);
@@ -281,6 +311,7 @@ impl CommitmentStore {
 
     /// Dismiss an open commitment.
     pub fn cancel(&self, id: &str, now: i64) -> Result<Commitment, CommitmentError> {
+        let _writes = self.write_guard();
         let mut commitment = self.open(id)?;
         commitment.status = CommitmentStatus::Dismissed;
         commitment.status_changed_at = now;
@@ -289,9 +320,10 @@ impl CommitmentStore {
         Ok(commitment)
     }
 
+    /// The persisted record, for a caller about to change it.
     fn open(&self, id: &str) -> Result<Commitment, CommitmentError> {
         let commitment = self
-            .get(id)
+            .load(id)
             .ok_or_else(|| CommitmentError::NotFound(id.to_owned()))?;
         if !commitment.is_open() {
             return Err(CommitmentError::Closed {
@@ -342,7 +374,7 @@ impl CommitmentStore {
                     "a commitment cannot depend on itself".into(),
                 ));
             }
-            if self.get(dependency).is_none() {
+            if self.load(dependency).is_none() {
                 return Err(CommitmentError::Invalid(format!(
                     "unknown dependency {dependency}"
                 )));
@@ -365,9 +397,11 @@ impl CommitmentStore {
     }
 
     /// A dependency counts as unfinished until it is completed; a dismissed
-    /// or missing one never finishes.
+    /// or missing one never finishes. Reads the persisted record: open or
+    /// closed never depends on the clock, and a dependency cycle must not
+    /// turn one read into an endless chain of derivations.
     fn unfinished(&self, id: &str) -> bool {
-        self.get(id)
+        self.load(id)
             .is_none_or(|dependency| dependency.status != CommitmentStatus::Completed)
     }
 
@@ -379,10 +413,12 @@ impl CommitmentStore {
         }
     }
 
-    /// Re-derive every open commitment that depended on `of`.
+    /// Re-derive every open commitment that depended on `of`. Runs under the
+    /// caller's write guard and compares against the persisted status, so a
+    /// transition the clock already implied is written down too.
     fn settle_dependents(&self, of: &str, now: i64) {
-        for mut dependent in self.list(ListFilter::Open) {
-            if !dependent.dependencies.iter().any(|id| id == of) {
+        for mut dependent in self.load_all() {
+            if !dependent.is_open() || !dependent.dependencies.iter().any(|id| id == of) {
                 continue;
             }
             let before = dependent.status;
@@ -396,16 +432,48 @@ impl CommitmentStore {
 
     // ── queries ────────────────────────────────────────────────────────────
 
-    pub fn get(&self, id: &str) -> Option<Commitment> {
+    /// One record as it reads at `now`: an open status is re-derived from the
+    /// record's own fields, so a passed deadline, an ended timed wait, or an
+    /// expired snooze shows without waiting for the next write. Nothing is
+    /// persisted; `status_changed_at` stays the last written transition.
+    pub fn get(&self, id: &str, now: i64) -> Option<Commitment> {
+        self.load(id).map(|commitment| self.fresh(commitment, now))
+    }
+
+    /// Newest first, each record as it reads at `now` (see `get`).
+    pub fn list(&self, filter: ListFilter, now: i64) -> Vec<Commitment> {
+        self.load_all()
+            .into_iter()
+            .filter(|commitment| match filter {
+                ListFilter::Open => commitment.is_open(),
+                ListFilter::Closed => !commitment.is_open(),
+                ListFilter::All => true,
+            })
+            .map(|commitment| self.fresh(commitment, now))
+            .collect()
+    }
+
+    fn fresh(&self, mut commitment: Commitment, now: i64) -> Commitment {
+        if commitment.is_open() {
+            commitment.status = self.derived_status(&commitment, now);
+        }
+        commitment
+    }
+
+    /// The persisted record behind the path guard; None when it is missing.
+    /// A record that no longer parses is reported, not hidden: it is a
+    /// storage fault, and this is where it would otherwise vanish silently.
+    fn load(&self, id: &str) -> Option<Commitment> {
         if id.contains('/') || id.contains('\\') || id.starts_with('.') {
             return None;
         }
-        let raw = fs::read_to_string(self.record_path(id)).ok()?;
-        serde_json::from_str(&raw).ok()
+        let path = self.record_path(id);
+        let raw = fs::read_to_string(&path).ok()?;
+        parse_record(&path, &raw)
     }
 
-    /// Newest first.
-    pub fn list(&self, filter: ListFilter) -> Vec<Commitment> {
+    /// Every persisted record, newest first.
+    fn load_all(&self) -> Vec<Commitment> {
         let Ok(entries) = fs::read_dir(self.commitments_dir()) else {
             return Vec::new();
         };
@@ -419,12 +487,9 @@ impl CommitmentStore {
                         .and_then(|name| name.to_str())
                         .is_some_and(|name| name.starts_with('.'))
             })
-            .filter_map(|path| fs::read_to_string(path).ok())
-            .filter_map(|raw| serde_json::from_str(&raw).ok())
-            .filter(|commitment: &Commitment| match filter {
-                ListFilter::Open => commitment.is_open(),
-                ListFilter::Closed => !commitment.is_open(),
-                ListFilter::All => true,
+            .filter_map(|path| {
+                let raw = fs::read_to_string(&path).ok()?;
+                parse_record(&path, &raw)
             })
             .collect();
         commitments.sort_by(|a, b| {
@@ -442,7 +507,7 @@ impl CommitmentStore {
     #[allow(dead_code)] // Foundation for the commitment evaluator (#85, PR B).
     pub fn due_for_check(&self, now: i64) -> Vec<Commitment> {
         let mut due: Vec<Commitment> = self
-            .list(ListFilter::Open)
+            .list(ListFilter::Open, now)
             .into_iter()
             .filter(|commitment| commitment.needs_check(now))
             .collect();
@@ -503,10 +568,30 @@ fn new_commitment_id(now: i64) -> String {
     format!("cmt_{now}_{suffix}")
 }
 
+fn parse_record(path: &Path, raw: &str) -> Option<Commitment> {
+    match serde_json::from_str(raw) {
+        Ok(commitment) => Some(commitment),
+        Err(error) => {
+            log::warn!(
+                "commitments: skipping unparseable record {}: {error}",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
+/// Write to a temp file of its own in the same directory, then rename it
+/// over `path`: a reader sees the old record or the new one, never a partial
+/// one, and two writers can never share a temp file.
 fn write_atomic(path: &Path, content: &str) -> io::Result<()> {
-    let tmp = path.with_extension("tmp");
-    fs::write(&tmp, content)?;
-    fs::rename(&tmp, path)
+    let dir = path
+        .parent()
+        .ok_or_else(|| io::Error::other("record path has no directory"))?;
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(content.as_bytes())?;
+    tmp.persist(path).map_err(|error| error.error)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -582,12 +667,13 @@ mod tests {
                 "record leaks model text: {forbidden}"
             );
         }
-        assert!(
-            !path.with_extension("tmp").exists(),
+        assert_eq!(
+            fs::read_dir(path.parent().unwrap()).unwrap().count(),
+            1,
             "atomic write leaves no temp file"
         );
-        assert_eq!(store.get(&created.id).unwrap(), created);
-        assert_eq!(store.list(ListFilter::Open), vec![created]);
+        assert_eq!(store.get(&created.id, T0).unwrap(), created);
+        assert_eq!(store.list(ListFilter::Open, T0), vec![created]);
     }
 
     #[test]
@@ -706,7 +792,7 @@ mod tests {
             );
         }
         assert_eq!(
-            store.list(ListFilter::Open).len(),
+            store.list(ListFilter::Open, T0).len(),
             5,
             "rejected input is not stored"
         );
@@ -737,9 +823,9 @@ mod tests {
         assert_eq!(waiting.continuity_ids, vec!["cont_1", "cont_2"]);
 
         let fresh = CommitmentStore::new(ws.path(), CANONICAL_SLUG);
-        assert_eq!(fresh.get(&waiting.id).unwrap(), waiting);
-        assert_eq!(fresh.get(&blocked.id).unwrap(), blocked);
-        assert_eq!(fresh.list(ListFilter::Open).len(), 2);
+        assert_eq!(fresh.get(&waiting.id, T0).unwrap(), waiting);
+        assert_eq!(fresh.get(&blocked.id, T0).unwrap(), blocked);
+        assert_eq!(fresh.list(ListFilter::Open, T0).len(), 2);
 
         assert!(fresh.due_for_check(T0 + 599).is_empty(), "not yet");
         let first: Vec<String> = fresh
@@ -755,12 +841,12 @@ mod tests {
         assert_eq!(first, vec![waiting.id.clone()]);
         assert_eq!(first, second, "asking twice does not schedule twice");
         assert_eq!(
-            fresh.list(ListFilter::All).len(),
+            fresh.list(ListFilter::All, T0).len(),
             2,
             "no record was created by asking"
         );
         assert_eq!(
-            fresh.get(&blocked.id).unwrap().status,
+            fresh.get(&blocked.id, T0).unwrap().status,
             CommitmentStatus::Blocked,
             "the dependency is still open"
         );
@@ -781,18 +867,20 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                store.complete(&a.id, empty, T0 + 5),
+                store.complete(&a.id, empty, T0 + 5, |_| true),
                 Err(CommitmentError::EvidenceRequired),
                 "{label}"
             );
         }
         assert_eq!(
-            store.get(&a.id).unwrap(),
+            store.get(&a.id, T0).unwrap(),
             a,
             "a refused completion changes nothing"
         );
 
-        let done = store.complete(&a.id, confirmed(), T0 + 10).unwrap();
+        let done = store
+            .complete(&a.id, confirmed(), T0 + 10, |_| true)
+            .unwrap();
         assert_eq!(done.status, CommitmentStatus::Completed);
         assert_eq!(done.status_changed_at, T0 + 10);
         assert_eq!(done.updated_at, T0 + 10);
@@ -800,7 +888,7 @@ mod tests {
         assert!(evidence.confirmed_by_user);
         assert_eq!(evidence.at, T0 + 10, "the store stamps the evidence");
         assert_eq!(
-            store.complete(&a.id, confirmed(), T0 + 11),
+            store.complete(&a.id, confirmed(), T0 + 11, |_| true),
             Err(CommitmentError::Closed {
                 id: a.id.clone(),
                 status: CommitmentStatus::Completed
@@ -817,6 +905,7 @@ mod tests {
                     ..Default::default()
                 },
                 T0 + 20,
+                |_| true,
             )
             .unwrap();
         assert_eq!(
@@ -841,14 +930,15 @@ mod tests {
                     ..Default::default()
                 },
                 T0 + 30,
+                |_| true,
             )
             .unwrap();
         assert_eq!(
             by_run.completion.unwrap().run_id.as_deref(),
             Some("run_1_abcdef01")
         );
-        assert_eq!(store.list(ListFilter::Open).len(), 0);
-        assert_eq!(store.list(ListFilter::Closed).len(), 3);
+        assert_eq!(store.list(ListFilter::Open, T0).len(), 0);
+        assert_eq!(store.list(ListFilter::Closed, T0).len(), 3);
     }
 
     #[test]
@@ -869,7 +959,7 @@ mod tests {
 
         store.cancel(&b.id, T0 + 5).unwrap();
         assert_eq!(
-            store.get(&c.id).unwrap().status,
+            store.get(&c.id, T0).unwrap().status,
             CommitmentStatus::Blocked,
             "a dismissed dependency never finished"
         );
@@ -883,10 +973,15 @@ mod tests {
                 T0 + 6,
             )
             .unwrap();
-        assert_eq!(store.get(&c.id).unwrap().status, CommitmentStatus::Blocked);
+        assert_eq!(
+            store.get(&c.id, T0).unwrap().status,
+            CommitmentStatus::Blocked
+        );
 
-        store.complete(&a.id, confirmed(), T0 + 10).unwrap();
-        let unblocked = store.get(&c.id).unwrap();
+        store
+            .complete(&a.id, confirmed(), T0 + 10, |_| true)
+            .unwrap();
+        let unblocked = store.get(&c.id, T0).unwrap();
         assert_eq!(unblocked.status, CommitmentStatus::Active);
         assert_eq!(unblocked.status_changed_at, T0 + 10);
         assert_eq!(unblocked.updated_at, T0 + 10);
@@ -949,9 +1044,9 @@ mod tests {
         assert!(store.due_for_check(T0 + 7200).is_empty());
 
         let fresh = CommitmentStore::new(ws.path(), CANONICAL_SLUG);
-        assert_eq!(fresh.get(&due.id).unwrap(), dismissed);
-        assert_eq!(fresh.list(ListFilter::Open).len(), 0);
-        assert_eq!(fresh.list(ListFilter::Closed).len(), 1);
+        assert_eq!(fresh.get(&due.id, T0).unwrap(), dismissed);
+        assert_eq!(fresh.list(ListFilter::Open, T0).len(), 0);
+        assert_eq!(fresh.list(ListFilter::Closed, T0).len(), 1);
     }
 
     #[test]
@@ -1071,22 +1166,270 @@ mod tests {
             Err(CommitmentError::NotFound("cmt_missing".into()))
         );
         assert_eq!(
-            store.get(&a.id).unwrap(),
+            store.get(&a.id, T0).unwrap(),
             relinked,
             "refused edits change nothing"
         );
 
         for hostile in ["../soul", "..\\soul", ".ledger", "a/b"] {
-            assert!(store.get(hostile).is_none(), "{hostile} must not be read");
+            assert!(
+                store.get(hostile, T0).is_none(),
+                "{hostile} must not be read"
+            );
         }
 
         let b = store.create(promise("newer"), T0 + 100).unwrap();
         let ids: Vec<String> = store
-            .list(ListFilter::All)
+            .list(ListFilter::All, T0)
             .into_iter()
             .map(|c| c.id)
             .collect();
         assert_eq!(ids, vec![b.id.clone(), a.id.clone()], "newest first");
+    }
+
+    #[test]
+    fn concurrent_writers_never_corrupt_a_record_or_lose_a_completion() {
+        use std::sync::{Arc, Barrier};
+
+        let (ws, store) = harness();
+        let dir = ws
+            .path()
+            .join("instances")
+            .join(CANONICAL_SLUG)
+            .join("commitments");
+        // A long edit and a short completion racing on one record: without
+        // one writer at a time and one temp file per write, the shorter body
+        // keeps the longer one's tail, or the completion is overwritten.
+        let filler = "z".repeat(MAX_PROMISE_CHARS);
+        const ROUNDS: i64 = 48;
+        for round in 0..ROUNDS {
+            let created = store.create(promise("ship it"), T0 + round).unwrap();
+            let id = created.id.clone();
+            let start = Arc::new(Barrier::new(2));
+            let completer = {
+                let (store, id, start) = (store.clone(), id.clone(), start.clone());
+                std::thread::spawn(move || {
+                    start.wait();
+                    store.complete(&id, confirmed(), T0 + 100, |_| true)
+                })
+            };
+            let editor = {
+                let (store, id, start, filler) =
+                    (store.clone(), id.clone(), start.clone(), filler.clone());
+                std::thread::spawn(move || {
+                    start.wait();
+                    store.update(
+                        &id,
+                        CommitmentPatch {
+                            promise: Some(filler),
+                            ..Default::default()
+                        },
+                        T0 + 100,
+                    )
+                })
+            };
+            let completed = completer.join().unwrap();
+            let edited = editor.join().unwrap();
+
+            let raw = fs::read_to_string(dir.join(format!("{id}.json"))).unwrap();
+            let on_disk: Commitment = serde_json::from_str(&raw).unwrap_or_else(|error| {
+                panic!("round {round}: record unparseable: {error}\n{raw}")
+            });
+            assert!(
+                completed.is_ok(),
+                "round {round}: an edit cannot close a commitment: {completed:?}"
+            );
+            assert_eq!(
+                on_disk.status,
+                CommitmentStatus::Completed,
+                "round {round}: an acknowledged completion was reverted"
+            );
+            assert!(on_disk.completion.is_some(), "round {round}");
+            match edited {
+                Ok(_) => assert_eq!(on_disk.promise, filler, "round {round}: edit ran first"),
+                Err(CommitmentError::Closed { .. }) => {
+                    assert_eq!(on_disk.promise, "ship it", "round {round}: edit ran second");
+                }
+                Err(other) => panic!("round {round}: unexpected refusal {other:?}"),
+            }
+            assert_eq!(
+                store.list(ListFilter::All, T0 + 100).len(),
+                (round + 1) as usize,
+                "round {round}: a record vanished from the list"
+            );
+            assert_eq!(
+                fs::read_dir(&dir).unwrap().count(),
+                (round + 1) as usize,
+                "round {round}: a temp file was left behind"
+            );
+        }
+    }
+
+    #[test]
+    fn unparseable_records_are_skipped_not_fatal() {
+        let (ws, store) = harness();
+        let good = store.create(promise("keep this"), T0).unwrap();
+        let dir = ws
+            .path()
+            .join("instances")
+            .join(CANONICAL_SLUG)
+            .join("commitments");
+        fs::write(
+            dir.join("cmt_broken.json"),
+            "{\"version\": 1, \"id\": \"cmt_bro",
+        )
+        .unwrap();
+        assert_eq!(store.list(ListFilter::All, T0), vec![good]);
+        assert_eq!(store.get("cmt_broken", T0), None);
+    }
+
+    #[test]
+    fn run_evidence_must_name_a_recorded_run() {
+        let (_ws, store) = harness();
+        let a = store.create(promise("summarise the thread"), T0).unwrap();
+        let dangling = CompletionEvidence {
+            run_id: Some("run_does_not_exist".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            store.complete(&a.id, dangling, T0 + 1, |_| false),
+            Err(CommitmentError::Invalid(
+                "unknown run run_does_not_exist".into()
+            )),
+            "a run id is evidence only when the activity record exists"
+        );
+        assert!(
+            matches!(
+                store.complete(
+                    &a.id,
+                    CompletionEvidence {
+                        confirmed_by_user: true,
+                        run_id: Some("run_does_not_exist".into()),
+                        ..Default::default()
+                    },
+                    T0 + 1,
+                    |_| false,
+                ),
+                Err(CommitmentError::Invalid(_))
+            ),
+            "confirmation does not make a dangling run link valid"
+        );
+        assert_eq!(store.get(&a.id, T0 + 1).unwrap(), a, "nothing was written");
+        assert_eq!(
+            store.complete(&a.id, CompletionEvidence::default(), T0 + 1, |_| true),
+            Err(CommitmentError::EvidenceRequired),
+            "the lookup never replaces the evidence rule"
+        );
+
+        let by_run = store
+            .complete(
+                &a.id,
+                CompletionEvidence {
+                    run_id: Some("run_1_abcdef01".into()),
+                    ..Default::default()
+                },
+                T0 + 2,
+                |run| run == "run_1_abcdef01",
+            )
+            .unwrap();
+        assert_eq!(by_run.status, CommitmentStatus::Completed);
+        assert_eq!(
+            by_run.completion.unwrap().run_id.as_deref(),
+            Some("run_1_abcdef01")
+        );
+    }
+
+    #[test]
+    fn reads_report_the_status_the_clock_implies() {
+        let (ws, store) = harness();
+        let path = |id: &str| {
+            ws.path()
+                .join("instances")
+                .join(CANONICAL_SLUG)
+                .join("commitments")
+                .join(format!("{id}.json"))
+        };
+        let later = store
+            .create(
+                NewCommitment {
+                    deadline: Some(Deadline::At { at: T0 + 60 }),
+                    ..promise("send the draft")
+                },
+                T0,
+            )
+            .unwrap();
+        assert_eq!(later.status, CommitmentStatus::Active);
+        assert_eq!(
+            store.get(&later.id, T0 + 59).unwrap().status,
+            CommitmentStatus::Active
+        );
+        let due = store.get(&later.id, T0 + 60).unwrap();
+        assert_eq!(
+            due.status,
+            CommitmentStatus::Due,
+            "a passed deadline shows on read"
+        );
+        assert_eq!(
+            due.status_changed_at, T0,
+            "reading persists nothing: the last written transition stands"
+        );
+        assert!(
+            fs::read_to_string(path(&later.id))
+                .unwrap()
+                .contains("\"status\": \"active\""),
+            "the file is untouched by reads"
+        );
+        assert_eq!(
+            store.list(ListFilter::Open, T0 + 60)[0].status,
+            CommitmentStatus::Due
+        );
+
+        let waiting = store
+            .create(
+                NewCommitment {
+                    waiting_on: Some(WaitCondition::Until { until: T0 + 30 }),
+                    ..promise("check the build")
+                },
+                T0,
+            )
+            .unwrap();
+        assert_eq!(waiting.status, CommitmentStatus::Waiting);
+        assert_eq!(
+            store.get(&waiting.id, T0 + 30).unwrap().status,
+            CommitmentStatus::Active,
+            "an ended timed wait shows on read"
+        );
+
+        let snoozed = store.snooze(&later.id, T0 + 120, T0 + 61).unwrap();
+        assert_eq!(snoozed.status, CommitmentStatus::Active);
+        assert_eq!(
+            store.get(&later.id, T0 + 119).unwrap().status,
+            CommitmentStatus::Active
+        );
+        assert_eq!(
+            store.get(&later.id, T0 + 120).unwrap().status,
+            CommitmentStatus::Due,
+            "an expired snooze shows on read"
+        );
+
+        let persisted = store
+            .update(&later.id, CommitmentPatch::default(), T0 + 121)
+            .unwrap();
+        assert_eq!(persisted.status, CommitmentStatus::Due);
+        assert_eq!(
+            persisted.status_changed_at,
+            T0 + 121,
+            "the next write persists the transition"
+        );
+
+        store
+            .complete(&later.id, confirmed(), T0 + 130, |_| true)
+            .unwrap();
+        assert_eq!(
+            store.get(&later.id, T0 + 9_999).unwrap().status,
+            CommitmentStatus::Completed,
+            "closed records are history and never re-derived"
+        );
     }
 
     #[test]
@@ -1098,10 +1441,12 @@ mod tests {
         store.snooze(&a.id, T0 + 600, T0 + 1).unwrap();
         assert!(
             store
-                .complete(&a.id, CompletionEvidence::default(), T0 + 2)
+                .complete(&a.id, CompletionEvidence::default(), T0 + 2, |_| true)
                 .is_err()
         );
-        store.complete(&a.id, confirmed(), T0 + 3).unwrap();
+        store
+            .complete(&a.id, confirmed(), T0 + 3, |_| true)
+            .unwrap();
 
         let mut statuses = Vec::new();
         while let Ok(event) = rx.try_recv() {
@@ -1126,14 +1471,14 @@ mod tests {
         );
         let json = serde_json::to_string(&crate::domain::events::ServerEvent::CommitmentUpdated {
             instance_slug: CANONICAL_SLUG.into(),
-            commitment: store.get(&a.id).unwrap(),
+            commitment: store.get(&a.id, T0).unwrap(),
         })
         .unwrap();
         assert!(json.contains("\"type\":\"commitment_updated\""));
         assert!(json.contains("\"status\":\"completed\""));
 
         // The evaluator's check record round-trips as part of the same file.
-        let mut with_check = store.get(&a.id).unwrap();
+        let mut with_check = store.get(&a.id, T0).unwrap();
         with_check.last_check = Some(crate::domain::commitment::Check {
             at: T0 + 4,
             outcome: CheckOutcome::Failed {

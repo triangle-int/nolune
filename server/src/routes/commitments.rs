@@ -83,7 +83,7 @@ async fn list_commitments(
     Path(_instance_slug): Path<String>,
     Query(query): Query<ListQuery>,
 ) -> Json<Vec<Commitment>> {
-    Json(state.commitments.list(query.status))
+    Json(state.commitments.list(query.status, now()))
 }
 
 async fn create_commitment(
@@ -101,7 +101,7 @@ async fn get_commitment(
 ) -> Result<Json<Commitment>, ApiError> {
     state
         .commitments
-        .get(&commitment_id)
+        .get(&commitment_id, now())
         .map(Json)
         .ok_or(ApiError(CommitmentError::NotFound(commitment_id)))
 }
@@ -144,6 +144,7 @@ async fn complete_commitment(
         &commitment_id,
         evidence,
         now(),
+        |run_id| state.proactive.get(run_id).is_some(),
     )?))
 }
 
@@ -158,7 +159,9 @@ async fn cancel_commitment(
 mod tests {
     use super::*;
     use crate::domain::companion::CANONICAL_SLUG;
+    use crate::domain::proactive::{Target, Trigger};
     use crate::services::commitments::CommitmentStore;
+    use crate::services::proactive::{Admission, ProactiveLoop};
     use axum::{
         body::{Body, to_bytes},
         http::{Method, Request},
@@ -168,6 +171,7 @@ mod tests {
     async fn state(workspace: &std::path::Path) -> AppState {
         let mut state = AppState::new(crate::config::Config::default()).await;
         state.workspace_dir = workspace.to_path_buf();
+        state.proactive = ProactiveLoop::new(workspace, CANONICAL_SLUG);
         state.commitments = CommitmentStore::new(workspace, CANONICAL_SLUG);
         state
     }
@@ -311,6 +315,104 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(dismissed["status"], "dismissed");
+    }
+
+    #[tokio::test]
+    async fn run_evidence_is_checked_against_the_activity_store() {
+        let workspace = tempfile::tempdir().unwrap();
+        let state = state(workspace.path()).await;
+        let base = format!("/api/instances/{CANONICAL_SLUG}/commitments");
+        let (_, created) = call(
+            &state,
+            Method::POST,
+            &base,
+            Some(serde_json::json!({"promise": "summarise the thread"})),
+        )
+        .await;
+        let id = created["id"].as_str().unwrap().to_owned();
+
+        let (status, refused) = call(
+            &state,
+            Method::POST,
+            &format!("{base}/{id}/complete"),
+            Some(serde_json::json!({"run_id": "run_does_not_exist"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+        assert_eq!(refused["error"], "invalid");
+        assert!(
+            refused["message"].as_str().unwrap().contains("unknown run"),
+            "{refused}"
+        );
+        let (_, unchanged) = call(&state, Method::GET, &format!("{base}/{id}"), None).await;
+        assert_eq!(unchanged["status"], "active", "nothing was written");
+        assert!(unchanged.get("completion").is_none());
+
+        let Admission::Admitted(run) = state.proactive.begin_at(
+            Trigger::Manual {
+                agent: "companion".into(),
+            },
+            "follow through",
+            Target::Companion,
+            chrono::Utc::now().timestamp(),
+        ) else {
+            panic!("the run was not admitted");
+        };
+        let run_id = run.id().to_owned();
+        let (status, done) = call(
+            &state,
+            Method::POST,
+            &format!("{base}/{id}/complete"),
+            Some(serde_json::json!({"run_id": run_id})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{done}");
+        assert_eq!(done["status"], "completed");
+        assert_eq!(done["completion"]["run_id"], run_id);
+        assert_eq!(done["completion"]["confirmed_by_user"], false);
+    }
+
+    #[tokio::test]
+    async fn reads_derive_the_status_from_the_record_and_the_clock() {
+        let workspace = tempfile::tempdir().unwrap();
+        let state = state(workspace.path()).await;
+        let base = format!("/api/instances/{CANONICAL_SLUG}/commitments");
+        let now = chrono::Utc::now().timestamp();
+        let (_, created) = call(
+            &state,
+            Method::POST,
+            &base,
+            Some(serde_json::json!({
+                "promise": "send the draft",
+                "deadline": {"kind": "at", "at": now + 86_400},
+            })),
+        )
+        .await;
+        assert_eq!(created["status"], "active");
+        let id = created["id"].as_str().unwrap().to_owned();
+
+        // The record is the source of truth: move its deadline into the past
+        // on disk, as the passage of time would, without any write through
+        // the store re-deriving the persisted status.
+        let path = workspace
+            .path()
+            .join("instances")
+            .join(CANONICAL_SLUG)
+            .join("commitments")
+            .join(format!("{id}.json"));
+        let mut record: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        record["deadline"]["at"] = serde_json::json!(now - 60);
+        std::fs::write(&path, serde_json::to_string_pretty(&record).unwrap()).unwrap();
+
+        let (status, one) = call(&state, Method::GET, &format!("{base}/{id}"), None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(one["status"], "due", "a passed deadline shows on read");
+        let (_, open) = call(&state, Method::GET, &base, None).await;
+        assert_eq!(open[0]["status"], "due");
+        let on_disk: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(on_disk["status"], "active", "reading persists nothing");
     }
 
     #[tokio::test]
