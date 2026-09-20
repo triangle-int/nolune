@@ -142,6 +142,38 @@ if a provider call fails. Deleting a memory reconciles its index entries
 immediately. There is no button and no manual reindex route; delete the
 `vectors/` directory to force a rebuild on the next start.
 
+### Profiles: several servers on one host
+
+One host can run several fully isolated servers from one binary (#107). Each is a
+*profile*: `nolune --profile <name> …` (or `--profile <name>` after any
+subcommand) addresses its own data root, config, port, auth token, log, and
+background service. The rule is one profile = one server = one companion: a
+profile never holds more than one identity, and nothing is shared between
+profiles.
+
+| Profile | Data root | Service |
+| --- | --- | --- |
+| `default` (no flag) | `~/.nolune/` (or `NOLUNE_HOME`) | `dev.nolune.nolune` / `nolune.service` |
+| any other `<name>` | `~/.nolune-profiles/<name>/` | `dev.nolune.nolune.<name>` / `nolune-<name>.service` |
+
+Profile roots are siblings of `~/.nolune`, never inside it, so
+`nolune uninstall --yes` on one profile cannot touch another. Inside a root the
+layout above is identical. Names match `^[a-z0-9][a-z0-9-]{0,31}$` and are
+local deployment metadata only: never a companion identity, a federation
+address, or a trust anchor. `nolune onboard --profile <name>` picks a free
+port above `26559` (or takes `--port`); `nolune gateway install --profile
+<name>` refuses to share a port, a data root, or a service with a sibling
+profile, and `nolune uninstall` / `nolune gateway uninstall` refuse to act on a
+root that belongs to another profile. A named profile refuses to run when
+`NOLUNE_HOME` points anywhere other than its own root. The binary itself is
+shared: every profile's service runs `~/.nolune/bin/nolune`, so uninstalling
+the default profile (even with `--keep-data`) warns which profiles' services
+will stop at their next restart; reinstall and run
+`nolune gateway install --profile <name>` again, or remove them with
+`nolune gateway uninstall --profile <name>`. Co-located profiles receive no
+implicit trust: they talk to each other only through the federation protocol
+(#108).
+
 ## Wire shape
 
 ### Slug in URLs, bodies, and events

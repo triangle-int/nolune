@@ -55,7 +55,15 @@ pub struct AppState {
 // Suggested MCP servers are listed in the client's Extensions settings.
 
 impl AppState {
+    /// The state for the workspace the process was started for. `new_in` is the
+    /// explicit form; this wrapper only supplies the resolved root (#107).
     pub async fn new(config: Config) -> Self {
+        Self::new_in(config, config::workspace_root()).await
+    }
+
+    /// Open every store under `workspace_dir`. Nothing here consults the environment, so
+    /// two profiles in one test process, or one profile on a shared host, stay apart.
+    pub(crate) async fn new_in(config: Config, workspace_dir: PathBuf) -> Self {
         let (events, _) = broadcast::channel(4096);
         let llm = LlmBackend::from_config(&config);
         let background_llm = LlmBackend::background(&config);
@@ -71,11 +79,10 @@ impl AppState {
         let http_client = reqwest::Client::new();
 
         // Open the local derived vector index.
-        let vector_store =
-            VectorStore::connect_with_config(&config::workspace_root(), &config).await;
+        let vector_store = VectorStore::connect_with_config(&workspace_dir, &config).await;
 
         let proactive = crate::services::proactive::ProactiveLoop::new(
-            &config::workspace_root(),
+            &workspace_dir,
             crate::domain::companion::CANONICAL_SLUG,
         )
         .with_events(events.clone());
@@ -83,7 +90,7 @@ impl AppState {
         Self {
             resources: crate::services::resource_access::ResourceAccess::new(&config.auth_token),
             config: Arc::new(RwLock::new(config)),
-            workspace_dir: config::workspace_root(),
+            workspace_dir,
             events,
             llm: Arc::new(RwLock::new(llm)),
             background_llm: Arc::new(RwLock::new(background_llm)),
@@ -157,5 +164,28 @@ impl AppState {
                 "embedding settings changed: restart required; active index remains unchanged"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn new_in_pins_the_workspace_and_opens_its_stores_there() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("profiles").join("molinka");
+
+        let state = AppState::new_in(Config::default(), root.clone()).await;
+
+        assert_eq!(state.workspace_dir, root);
+        assert!(
+            root.is_dir(),
+            "the vector store must open under the given root, not the process default"
+        );
+        assert!(
+            !tmp.path().join(".nolune").exists(),
+            "nothing may fall back to a home-relative root"
+        );
     }
 }

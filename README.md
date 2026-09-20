@@ -137,14 +137,15 @@ Everything the installers do, you can do yourself:
 
 | Command | What it does |
 |---------|--------------|
-| `nolune onboard` | Prepares `~/.nolune` and `config.toml` with a generated auth token. Safe to rerun. `--json` prints the result for scripts |
-| `nolune gateway` | Runs the server in the foreground and prints `nolune: ready <url>` once it listens |
+| `nolune onboard` | Prepares `~/.nolune` and `config.toml` with a generated auth token. Safe to rerun. `--json` prints the result for scripts, `--port` picks the port |
+| `nolune gateway` | Runs the server in the foreground and prints `nolune: ready <url>` once it listens (`nolune gateway run` is the explicit form) |
 | `nolune gateway install` | Registers a user-level launchd agent (macOS) or systemd user unit (Linux) that runs the gateway, and starts it |
 | `nolune gateway uninstall` | Stops and removes that service; data is untouched |
 | `nolune gateway start` / `stop` / `restart` / `nolune gateway status` / `nolune gateway logs` | Manage the service once installed |
 | `nolune pair` | Prints a one-time code so a browser can sign in |
 | `nolune uninstall --keep-data` | Removes the service, binary, and log but keeps `~/.nolune` |
 | `nolune uninstall --yes` | Removes everything, including your data |
+| `--profile <name>` | Any of the above for a second, fully isolated server on the same machine: its own data root at `~/.nolune-profiles/<name>/`, config, port, auth token, log, and background service, from the same binary. `nolune onboard --profile molinka` then `nolune gateway install --profile molinka`; the default profile stays `~/.nolune`. All profiles run the one binary under `~/.nolune/bin/`, so `nolune uninstall` on the default profile warns which profiles' services lose it |
 
 Service registration is per user and needs no elevated privileges. It is not available on Windows yet; run `nolune gateway` there.
 

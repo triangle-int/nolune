@@ -6,7 +6,10 @@ use std::{
 
 use clap::{Parser, Subcommand};
 
-use crate::{config, onboard, service, uninstall};
+use crate::{
+    config::{self, Profile},
+    onboard, profiles, service, uninstall,
+};
 
 #[derive(Parser)]
 #[command(
@@ -15,6 +18,10 @@ use crate::{config, onboard, service, uninstall};
     version = env!("CARGO_PKG_VERSION"),
 )]
 pub struct Cli {
+    /// Address an isolated server profile: its own data root beside ~/.nolune, config,
+    /// port, token, and background service. Omit for the default profile
+    #[arg(long, global = true, value_name = "NAME")]
+    pub profile: Option<String>,
     #[command(subcommand)]
     pub command: Option<CliCommand>,
 }
@@ -45,6 +52,10 @@ pub enum CliCommand {
         /// Print the outcome as one JSON line instead of human-readable progress
         #[arg(long)]
         json: bool,
+        /// Listen on this port; a named profile otherwise keeps its port, or is moved off
+        /// 26559 to a free one above it
+        #[arg(long, value_name = "PORT")]
+        port: Option<u16>,
     },
     /// Run the server in the foreground, or manage the optional background service
     Gateway {
@@ -53,7 +64,7 @@ pub enum CliCommand {
     },
     /// Remove the background service and installed files; keeps data only with --keep-data
     Uninstall {
-        /// Keep ~/.nolune (config, memory, chats); remove only the service, binary, and log
+        /// Keep the data root (config, memory, chats); remove only the service, binary, and log
         #[arg(long)]
         keep_data: bool,
         /// Delete data without asking (required when not running in a terminal)
@@ -64,6 +75,8 @@ pub enum CliCommand {
 
 #[derive(Subcommand)]
 pub enum GatewayAction {
+    /// Run the server in the foreground (the same as a bare `nolune gateway`)
+    Run,
     /// Register the gateway as a user-level background service and start it
     Install,
     /// Stop and remove the background service (data is untouched)
@@ -80,29 +93,31 @@ pub enum GatewayAction {
     Logs,
 }
 
-pub fn run(cmd: CliCommand) -> i32 {
+/// Run a subcommand for `profile`, whose root the entrypoint has already selected as the
+/// process workspace, so `config::workspace_root()` and `config::config_path()` agree.
+pub fn run(cmd: CliCommand, profile: &Profile) -> i32 {
     match cmd {
-        CliCommand::Start => gateway(GatewayAction::Start),
-        CliCommand::Stop => gateway(GatewayAction::Stop),
-        CliCommand::Restart => gateway(GatewayAction::Restart),
-        CliCommand::Status => gateway(GatewayAction::Status),
-        CliCommand::Logs => gateway(GatewayAction::Logs),
+        CliCommand::Start => gateway(GatewayAction::Start, profile),
+        CliCommand::Stop => gateway(GatewayAction::Stop, profile),
+        CliCommand::Restart => gateway(GatewayAction::Restart, profile),
+        CliCommand::Status => gateway(GatewayAction::Status, profile),
+        CliCommand::Logs => gateway(GatewayAction::Logs, profile),
+        // main runs the server for `gateway` and `gateway run` before ever reaching here.
+        CliCommand::Gateway { action: None } => unreachable!("gateway is run by main"),
         CliCommand::Gateway {
             action: Some(action),
-        } => gateway(action),
-        // main runs the server for this variant before ever reaching here.
-        CliCommand::Gateway { action: None } => unreachable!("gateway is run by main"),
-        CliCommand::Uninstall { keep_data, yes } => uninstall_cmd(keep_data, yes),
+        } => gateway(action, profile),
+        CliCommand::Uninstall { keep_data, yes } => uninstall_cmd(keep_data, yes, profile),
         CliCommand::Version => {
             println!("nolune {}", env!("CARGO_PKG_VERSION"));
             0
         }
-        CliCommand::Pair => pair(),
-        CliCommand::Onboard { json } => onboard_cmd(json),
+        CliCommand::Pair => pair(profile),
+        CliCommand::Onboard { json, port } => onboard_cmd(json, port, profile),
     }
 }
 
-fn gateway(action: GatewayAction) -> i32 {
+fn gateway(action: GatewayAction, profile: &Profile) -> i32 {
     if !cfg!(any(target_os = "macos", target_os = "linux")) {
         eprintln!(
             "background service management is not supported on this platform yet; run `nolune gateway` in the foreground"
@@ -110,16 +125,17 @@ fn gateway(action: GatewayAction) -> i32 {
         return 1;
     }
     match action {
-        GatewayAction::Install => gateway_install(),
-        GatewayAction::Uninstall => gateway_uninstall(),
-        GatewayAction::Start => svc_start(),
-        GatewayAction::Stop => svc_stop(),
+        GatewayAction::Run => unreachable!("gateway run is run by main"),
+        GatewayAction::Install => gateway_install(profile),
+        GatewayAction::Uninstall => gateway_uninstall(profile),
+        GatewayAction::Start => svc_start(profile),
+        GatewayAction::Stop => svc_stop(profile),
         GatewayAction::Restart => {
-            svc_stop();
-            svc_start()
+            svc_stop(profile);
+            svc_start(profile)
         }
-        GatewayAction::Status => svc_status(),
-        GatewayAction::Logs => svc_logs(),
+        GatewayAction::Status => svc_status(profile),
+        GatewayAction::Logs => svc_logs(profile),
     }
 }
 
@@ -129,36 +145,59 @@ fn home_dir() -> PathBuf {
     dirs::home_dir().expect("cannot resolve home directory")
 }
 
-fn definition_path() -> PathBuf {
-    service::definition_path(&home_dir())
+fn definition_path(profile: &Profile) -> PathBuf {
+    service::definition_path(&home_dir(), &profile.name)
+}
+
+/// How the profile appears in messages: the default one is just "Nolune".
+fn display(profile: &Profile) -> String {
+    if profile.is_default() {
+        "Nolune".to_owned()
+    } else {
+        format!("Nolune profile {}", profile.name)
+    }
+}
+
+/// The `--profile <name>` suffix for commands the user is told to run next.
+fn profile_flag(profile: &Profile) -> String {
+    if profile.is_default() {
+        String::new()
+    } else {
+        format!(" --profile {}", profile.name)
+    }
 }
 
 /// The port from config.toml, without loading the whole config (which would create one).
 fn configured_port(home: &std::path::Path) -> u16 {
-    std::fs::read_to_string(home.join("config.toml"))
-        .ok()
-        .and_then(|raw| toml::from_str::<toml::Value>(&raw).ok())
-        .and_then(|doc| doc.get("port").and_then(toml::Value::as_integer))
-        .and_then(|port| u16::try_from(port).ok())
-        .unwrap_or(onboard::DEFAULT_PORT)
+    profiles::configured_port(home).unwrap_or(onboard::DEFAULT_PORT)
 }
 
-fn gateway_install() -> i32 {
-    let home = config::workspace_root();
+fn gateway_install(profile: &Profile) -> i32 {
+    let home = &profile.root;
+    let flag = profile_flag(profile);
     if !home.join("config.toml").exists() {
         eprintln!(
-            "no config at {}; run `nolune onboard` first",
+            "no config at {}; run `nolune onboard{flag}` first",
             home.join("config.toml").display()
         );
         return 1;
     }
-    let definition = definition_path();
-    let port = configured_port(&home);
+    let definition = definition_path(profile);
+    let port = configured_port(home);
+    // Another profile on this host must never share a port, a data root, or a service.
+    let collisions = profiles::collisions(&home_dir(), profile, port);
+    if !collisions.is_empty() {
+        for collision in &collisions {
+            eprintln!("{collision}");
+        }
+        eprintln!("nothing was installed");
+        return 1;
+    }
     let upgrade = definition.exists();
     if !upgrade && service::port_is_listening(port) {
         eprintln!(
             "something is already listening on port {port}, probably a foreground `nolune gateway`. \
-             Stop it, then run `nolune gateway install` again."
+             Stop it, then run `nolune gateway install{flag}` again."
         );
         return 1;
     }
@@ -172,10 +211,11 @@ fn gateway_install() -> i32 {
     let spec = service::ServiceSpec {
         binary,
         home: home.clone(),
+        profile: profile.name.clone(),
     };
     if upgrade {
         // Reinstall in place: stop the old definition before overwriting it.
-        platform_stop_quietly();
+        platform_stop_quietly(profile);
     }
     let contents = if cfg!(target_os = "macos") {
         service::render_launchd_plist(&spec)
@@ -186,59 +226,123 @@ fn gateway_install() -> i32 {
         eprintln!("cannot write {}: {error}", definition.display());
         return 1;
     }
-    let code = platform_install_start(&definition);
+    let code = platform_install_start(&definition, profile);
     if code != 0 {
         return code;
     }
     println!(
-        "background service {} and started (definition: {})",
+        "background service {}{} and started (definition: {})",
         if upgrade { "updated" } else { "installed" },
+        if profile.is_default() {
+            String::new()
+        } else {
+            format!(" for profile {}", profile.name)
+        },
         definition.display()
     );
-    println!("  status: nolune gateway status");
-    println!("  logs:   nolune gateway logs");
-    println!("  remove: nolune gateway uninstall");
+    println!("  status: nolune gateway status{flag}");
+    println!("  logs:   nolune gateway logs{flag}");
+    println!("  remove: nolune gateway uninstall{flag}");
     0
 }
 
-fn gateway_uninstall() -> i32 {
-    let definition = definition_path();
+/// Refuse to act on a sibling profile's data root through `NOLUNE_HOME`: the service this
+/// command would touch belongs to one profile and the data to another (#107).
+fn refuse_foreign_root(profile: &Profile) -> bool {
+    match profiles::foreign_root(&home_dir(), profile) {
+        Some(collision) => {
+            eprintln!("{collision}");
+            eprintln!("nothing was removed");
+            true
+        }
+        None => false,
+    }
+}
+
+fn gateway_uninstall(profile: &Profile) -> i32 {
+    if refuse_foreign_root(profile) {
+        return 1;
+    }
+    remove_service(profile)
+}
+
+/// Stop and remove the installed service definition; the caller has already checked that
+/// `profile` owns its root.
+fn remove_service(profile: &Profile) -> i32 {
+    let definition = definition_path(profile);
     if !definition.exists() {
-        println!("no background service is installed");
+        println!(
+            "no background service is installed{}",
+            if profile.is_default() {
+                String::new()
+            } else {
+                format!(" for profile {}", profile.name)
+            }
+        );
         return 0;
     }
-    platform_stop_quietly();
+    platform_stop_quietly(profile);
     if let Err(error) = std::fs::remove_file(&definition) {
         eprintln!("cannot remove {}: {error}", definition.display());
         return 1;
     }
     platform_after_remove();
     println!(
-        "background service removed; data at {} is untouched",
-        config::workspace_root().display()
+        "background service{} removed; data at {} is untouched",
+        if profile.is_default() {
+            String::new()
+        } else {
+            format!(" of profile {}", profile.name)
+        },
+        profile.root.display()
     );
     0
 }
 
 // ── Uninstall (#126) ────────────────────────────────────────────────────
 
-fn uninstall_cmd(keep_data: bool, yes: bool) -> i32 {
-    let home = config::workspace_root();
-    let definition = definition_path();
+fn uninstall_cmd(keep_data: bool, yes: bool, profile: &Profile) -> i32 {
+    let home = &profile.root;
+    let definition = definition_path(profile);
     if !home.exists() && !definition.exists() {
         println!("nothing to uninstall: {} does not exist", home.display());
         return 0;
     }
-    if !keep_data && !yes && !confirm_delete(&home) {
+    if refuse_foreign_root(profile) {
+        return 1;
+    }
+    // Every profile runs the one installed binary, which lives under the default root's
+    // bin/ and goes with it (with or without --keep-data). Say so before asking anything.
+    let dependents = profiles::dependents(&home_dir(), profile);
+    if !dependents.is_empty() {
+        let (services, profiles, run, they) = if dependents.len() == 1 {
+            ("service", "profile", "runs", "it")
+        } else {
+            ("services", "profiles", "run", "they")
+        };
+        eprintln!(
+            "warning: the background {services} of {profiles} {} {run} the binary under {}, \
+             which this removes; {they} will stop working at the next restart",
+            dependents.join(", "),
+            home.join("bin").display()
+        );
+        for name in &dependents {
+            eprintln!(
+                "  profile {name}: `nolune gateway uninstall --profile {name}` removes its service; \
+                 after reinstalling nolune, `nolune gateway install --profile {name}` restores it"
+            );
+        }
+    }
+    if !keep_data && !yes && !confirm_delete(home) {
         return 1;
     }
     if definition.exists() {
-        let code = gateway_uninstall();
+        let code = remove_service(profile);
         if code != 0 {
             return code;
         }
     }
-    let report = match uninstall::remove_files(&home, keep_data) {
+    let report = match uninstall::remove_files(home, keep_data) {
         Ok(report) => report,
         Err(error) => {
             eprintln!("uninstall failed: {error}");
@@ -250,12 +354,16 @@ fn uninstall_cmd(keep_data: bool, yes: bool) -> i32 {
     }
     if let Some(kept) = &report.kept {
         println!("kept {} (config, memory, chats)", kept.display());
-        println!("  to remove it later: nolune uninstall --yes (or delete the directory)");
+        println!(
+            "  to remove it later: nolune uninstall --yes{} (or delete the directory)",
+            profile_flag(profile)
+        );
     }
-    if service::port_is_listening(configured_port(&home)) {
+    if service::port_is_listening(configured_port(home)) {
         eprintln!(
-            "note: something is still listening on port {}; a foreground `nolune gateway` may still be running",
-            configured_port(&home)
+            "note: something is still listening on port {}; a foreground `nolune gateway{}` may still be running",
+            configured_port(home),
+            profile_flag(profile)
         );
     }
     0
@@ -286,16 +394,54 @@ fn confirm_delete(home: &std::path::Path) -> bool {
     }
 }
 
-fn onboard_cmd(json: bool) -> i32 {
-    let dir = config::workspace_root();
-    let outcome = match crate::onboard::onboard(&dir) {
+fn onboard_cmd(json: bool, port: Option<u16>, profile: &Profile) -> i32 {
+    let dir = &profile.root;
+    // A named profile must not take the default port or one a sibling already uses; the
+    // default profile keeps 26559 so installers and the desktop app find it. A config that
+    // another command created on the way (`pair`, `gateway run`) still sits on the default
+    // port, so it is moved just like a missing one.
+    let on_default_port =
+        profiles::configured_port(dir).is_none_or(|port| port == onboard::DEFAULT_PORT);
+    let pick = port.is_none() && on_default_port && !profile.is_default();
+    let port = if pick {
+        let taken: Vec<u16> = profiles::siblings(&home_dir())
+            .iter()
+            .filter_map(|sibling| profiles::configured_port(&sibling.root))
+            .collect();
+        match profiles::pick_free_port(&taken, service::port_is_listening) {
+            Some(port) => Some(port),
+            None => {
+                eprintln!(
+                    "no free port found for profile {}; pass one with --port",
+                    profile.name
+                );
+                return 1;
+            }
+        }
+    } else {
+        port
+    };
+    let outcome = match crate::onboard::onboard(dir, &profile.name, port) {
         Ok(outcome) => outcome,
         Err(error) => {
             eprintln!("onboard failed: {error:#}");
             return 1;
         }
     };
+    // Say when an existing config was moved off the default port (or given its first one).
+    let moved = (pick && !outcome.created_config).then(|| {
+        format!(
+            "moved profile {} off the default port {} to {} (the default profile owns {})",
+            profile.name,
+            onboard::DEFAULT_PORT,
+            outcome.port,
+            onboard::DEFAULT_PORT
+        )
+    });
     if json {
+        if let Some(note) = &moved {
+            eprintln!("{note}");
+        }
         // One machine-readable line; the token appears here and nowhere else.
         return match serde_json::to_string(&outcome) {
             Ok(line) => {
@@ -314,11 +460,15 @@ fn onboard_cmd(json: bool) -> i32 {
     } else {
         println!("kept existing {}", outcome.config_path.display());
     }
+    if let Some(note) = &moved {
+        println!("{note}");
+    }
     if outcome.generated_token {
         println!("generated an authentication token (saved in config.toml)");
     }
     println!(
-        "next: run `nolune gateway` to start the server, then open {}",
+        "next: run `nolune gateway{}` to start the server, then open {}",
+        profile_flag(profile),
         outcome.url
     );
     0
@@ -329,7 +479,7 @@ fn onboard_cmd(json: bool) -> i32 {
 /// Ask the running server for a pairing code and print it. This is the local
 /// owner surface for #112: the code is short-lived and single-use, and the
 /// API token itself never leaves this process.
-fn pair() -> i32 {
+fn pair(profile: &Profile) -> i32 {
     let config = match config::load_config() {
         Ok(config) => config,
         Err(error) => {
@@ -386,18 +536,20 @@ fn pair() -> i32 {
     .join()
     .unwrap_or_else(|_| Err("pairing thread panicked".to_string()));
 
+    let flag = profile_flag(profile);
     match response {
         Err(error) => {
             eprintln!(
-                "Nolune is not reachable at {url} ({error}).
-Start it with `nolune gateway` and try again."
+                "{} is not reachable at {url} ({error}).
+Start it with `nolune gateway{flag}` and try again.",
+                display(profile)
             );
             1
         }
         Ok((status, _)) if status == reqwest::StatusCode::UNAUTHORIZED => {
             eprintln!(
                 "The running server rejected the token from {}.
-If the service was started with NOLUNE_AUTH_TOKEN, run `nolune pair` with the same value.",
+If the service was started with NOLUNE_AUTH_TOKEN, run `nolune pair{flag}` with the same value.",
                 config::config_path().display()
             );
             1
@@ -418,7 +570,7 @@ If the service was started with NOLUNE_AUTH_TOKEN, run `nolune pair` with the sa
             println!();
             println!("  Open {open_url} in the browser you want to connect and enter this code.");
             println!(
-                "  It works once and expires in {minutes} minutes. Run `nolune pair` again for another browser."
+                "  It works once and expires in {minutes} minutes. Run `nolune pair{flag}` again for another browser."
             );
             println!();
             0
@@ -438,14 +590,14 @@ fn uid() -> String {
 }
 
 #[cfg(target_os = "macos")]
-fn launchd_target() -> String {
-    format!("gui/{}/{}", uid(), service::LABEL)
+fn launchd_target(profile: &Profile) -> String {
+    format!("gui/{}/{}", uid(), service::label(&profile.name))
 }
 
 #[cfg(target_os = "macos")]
-fn platform_stop_quietly() {
+fn platform_stop_quietly(profile: &Profile) {
     let _ = Command::new("launchctl")
-        .args(["bootout", &launchd_target()])
+        .args(["bootout", &launchd_target(profile)])
         .output();
 }
 
@@ -453,7 +605,7 @@ fn platform_stop_quietly() {
 fn platform_after_remove() {}
 
 #[cfg(target_os = "macos")]
-fn platform_install_start(definition: &std::path::Path) -> i32 {
+fn platform_install_start(definition: &std::path::Path, profile: &Profile) -> i32 {
     let domain = format!("gui/{}", uid());
     let plist = definition.to_string_lossy();
     match Command::new("launchctl")
@@ -474,7 +626,7 @@ fn platform_install_start(definition: &std::path::Path) -> i32 {
         }
     }
     match Command::new("launchctl")
-        .args(["kickstart", "-k", &launchd_target()])
+        .args(["kickstart", "-k", &launchd_target(profile)])
         .status()
     {
         Ok(status) if status.success() => 0,
@@ -493,10 +645,13 @@ fn platform_install_start(definition: &std::path::Path) -> i32 {
 }
 
 #[cfg(target_os = "macos")]
-fn svc_start() -> i32 {
-    let plist = definition_path();
+fn svc_start(profile: &Profile) -> i32 {
+    let plist = definition_path(profile);
     if !plist.exists() {
-        eprintln!("background service is not installed; run `nolune gateway install`");
+        eprintln!(
+            "background service is not installed; run `nolune gateway install{}`",
+            profile_flag(profile)
+        );
         return 1;
     }
     let domain = format!("gui/{}", uid());
@@ -505,12 +660,12 @@ fn svc_start() -> i32 {
         .status();
     match status {
         Ok(s) if s.success() => {
-            println!("Nolune service started.");
+            println!("{} service started.", display(profile));
             0
         }
         // exit code 37 = already loaded
         Ok(s) if s.code() == Some(37) => {
-            println!("Nolune service is already running.");
+            println!("{} service is already running.", display(profile));
             0
         }
         Ok(s) => {
@@ -528,17 +683,17 @@ fn svc_start() -> i32 {
 }
 
 #[cfg(target_os = "macos")]
-fn svc_stop() -> i32 {
+fn svc_stop(profile: &Profile) -> i32 {
     let status = Command::new("launchctl")
-        .args(["bootout", &launchd_target()])
+        .args(["bootout", &launchd_target(profile)])
         .status();
     match status {
         Ok(s) if s.success() => {
-            println!("Nolune service stopped.");
+            println!("{} service stopped.", display(profile));
             0
         }
         Ok(s) if s.code() == Some(3) => {
-            println!("Nolune service is not running.");
+            println!("{} service is not running.", display(profile));
             0
         }
         Ok(s) => {
@@ -556,15 +711,16 @@ fn svc_stop() -> i32 {
 }
 
 #[cfg(target_os = "macos")]
-fn svc_status() -> i32 {
-    if !definition_path().exists() {
+fn svc_status(profile: &Profile) -> i32 {
+    if !definition_path(profile).exists() {
+        let flag = profile_flag(profile);
         println!(
-            "background service is not installed (run `nolune gateway` for the foreground, or `nolune gateway install`)"
+            "background service is not installed (run `nolune gateway{flag}` for the foreground, or `nolune gateway install{flag}`)"
         );
         return 0;
     }
     let output = Command::new("launchctl")
-        .args(["print", &launchd_target()])
+        .args(["print", &launchd_target(profile)])
         .output();
     match output {
         Ok(out) => {
@@ -580,9 +736,12 @@ fn svc_status() -> i32 {
                     .find(|l| l.trim().starts_with("pid ="))
                     .map(|l| l.trim().trim_start_matches("pid = "))
                     .unwrap_or("-");
-                println!("Nolune is running (pid {pid}, state: {state})");
+                println!(
+                    "{} is running (pid {pid}, state: {state})",
+                    display(profile)
+                );
             } else {
-                println!("Nolune service is installed but not running.");
+                println!("{} service is installed but not running.", display(profile));
             }
             0
         }
@@ -594,8 +753,8 @@ fn svc_status() -> i32 {
 }
 
 #[cfg(target_os = "macos")]
-fn svc_logs() -> i32 {
-    let log_path = config::workspace_root().join("nolune.log");
+fn svc_logs(profile: &Profile) -> i32 {
+    let log_path = profile.root.join("nolune.log");
     if !log_path.exists() {
         eprintln!("log file not found at {}", log_path.display());
         return 1;
@@ -615,9 +774,14 @@ fn svc_logs() -> i32 {
 // ── Linux (systemd, user unit only) ─────────────────────────────────────
 
 #[cfg(target_os = "linux")]
-fn platform_stop_quietly() {
+fn platform_stop_quietly(profile: &Profile) {
     let _ = Command::new("systemctl")
-        .args(["--user", "disable", "--now", service::UNIT_NAME])
+        .args([
+            "--user",
+            "disable",
+            "--now",
+            &service::unit_name(&profile.name),
+        ])
         .output();
 }
 
@@ -629,49 +793,65 @@ fn platform_after_remove() {
 }
 
 #[cfg(target_os = "linux")]
-fn platform_install_start(_definition: &std::path::Path) -> i32 {
-    let reload = run_systemctl(&["daemon-reload"], "reloaded");
+fn platform_install_start(_definition: &std::path::Path, profile: &Profile) -> i32 {
+    let reload = run_systemctl(&["daemon-reload"], "reloaded", profile);
     if reload != 0 {
         return reload;
     }
     run_systemctl(
-        &["enable", "--now", service::UNIT_NAME],
+        &["enable", "--now", &service::unit_name(&profile.name)],
         "enabled and started",
+        profile,
     )
 }
 
 #[cfg(target_os = "linux")]
-fn svc_start() -> i32 {
-    if !definition_path().exists() {
-        eprintln!("background service is not installed; run `nolune gateway install`");
+fn svc_start(profile: &Profile) -> i32 {
+    if !definition_path(profile).exists() {
+        eprintln!(
+            "background service is not installed; run `nolune gateway install{}`",
+            profile_flag(profile)
+        );
         return 1;
     }
-    run_systemctl(&["start", service::UNIT_NAME], "started")
+    run_systemctl(
+        &["start", &service::unit_name(&profile.name)],
+        "started",
+        profile,
+    )
 }
 
 #[cfg(target_os = "linux")]
-fn svc_stop() -> i32 {
-    run_systemctl(&["stop", service::UNIT_NAME], "stopped")
+fn svc_stop(profile: &Profile) -> i32 {
+    run_systemctl(
+        &["stop", &service::unit_name(&profile.name)],
+        "stopped",
+        profile,
+    )
 }
 
 #[cfg(target_os = "linux")]
-fn svc_status() -> i32 {
-    if !definition_path().exists() {
+fn svc_status(profile: &Profile) -> i32 {
+    if !definition_path(profile).exists() {
+        let flag = profile_flag(profile);
         println!(
-            "background service is not installed (run `nolune gateway` for the foreground, or `nolune gateway install`)"
+            "background service is not installed (run `nolune gateway{flag}` for the foreground, or `nolune gateway install{flag}`)"
         );
         return 0;
     }
     let output = Command::new("systemctl")
-        .args(["--user", "is-active", service::UNIT_NAME])
+        .args(["--user", "is-active", &service::unit_name(&profile.name)])
         .output();
     match output {
         Ok(out) => {
             let state = String::from_utf8_lossy(&out.stdout).trim().to_string();
             if state == "active" {
-                println!("Nolune is running.");
+                println!("{} is running.", display(profile));
             } else {
-                println!("Nolune service is installed but not running ({state}).");
+                println!(
+                    "{} service is installed but not running ({state}).",
+                    display(profile)
+                );
             }
             0
         }
@@ -683,9 +863,15 @@ fn svc_status() -> i32 {
 }
 
 #[cfg(target_os = "linux")]
-fn svc_logs() -> i32 {
+fn svc_logs(profile: &Profile) -> i32 {
     let status = Command::new("journalctl")
-        .args(["--user", "-u", service::UNIT_NAME, "-f", "--no-pager"])
+        .args([
+            "--user",
+            "-u",
+            &service::unit_name(&profile.name),
+            "-f",
+            "--no-pager",
+        ])
         .status();
     match status {
         Ok(_) => 0,
@@ -697,10 +883,10 @@ fn svc_logs() -> i32 {
 }
 
 #[cfg(target_os = "linux")]
-fn run_systemctl(args: &[&str], verb: &str) -> i32 {
+fn run_systemctl(args: &[&str], verb: &str, profile: &Profile) -> i32 {
     match Command::new("systemctl").arg("--user").args(args).status() {
         Ok(s) if s.success() => {
-            println!("Nolune service {verb}.");
+            println!("{} service {verb}.", display(profile));
             0
         }
         Ok(s) => {
@@ -717,32 +903,32 @@ fn run_systemctl(args: &[&str], verb: &str) -> i32 {
 // ── Unsupported platform ────────────────────────────────────────────────
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn platform_stop_quietly() {}
+fn platform_stop_quietly(_profile: &Profile) {}
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn platform_after_remove() {}
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn platform_install_start(_definition: &std::path::Path) -> i32 {
+fn platform_install_start(_definition: &std::path::Path, _profile: &Profile) -> i32 {
     1
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn svc_start() -> i32 {
+fn svc_start(_profile: &Profile) -> i32 {
     1
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn svc_stop() -> i32 {
+fn svc_stop(_profile: &Profile) -> i32 {
     1
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn svc_status() -> i32 {
+fn svc_status(_profile: &Profile) -> i32 {
     1
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn svc_logs() -> i32 {
+fn svc_logs(_profile: &Profile) -> i32 {
     1
 }
