@@ -708,6 +708,7 @@ fn correction_error(path: &str, error: CorrectionError) -> CorrectionApiError {
         CorrectionError::NotFound => StatusCode::NOT_FOUND,
         CorrectionError::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
         CorrectionError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+        CorrectionError::LedgerFull => StatusCode::INSUFFICIENT_STORAGE,
         CorrectionError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     if status == StatusCode::INTERNAL_SERVER_ERROR {

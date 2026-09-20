@@ -44,6 +44,9 @@ pub enum CorrectionError {
     NotFound,
     Invalid(String),
     TooLarge,
+    /// The ledger holds nothing but open questions and cannot record one
+    /// more; resolve some first.
+    LedgerFull,
     Io(String),
 }
 
@@ -53,6 +56,9 @@ impl std::fmt::Display for CorrectionError {
             Self::NotFound => f.write_str("memory not found"),
             Self::Invalid(message) | Self::Io(message) => f.write_str(message),
             Self::TooLarge => write!(f, "statement exceeds {MAX_STATEMENT_BYTES} bytes"),
+            Self::LedgerFull => f.write_str(
+                "the corrections ledger is full of open conflicts; resolve some before correcting more",
+            ),
         }
     }
 }
@@ -123,11 +129,7 @@ pub fn load_ledger(
     Ok(ledger)
 }
 
-fn save_ledger(
-    media: &media_text::MediaStore,
-    instance_slug: &str,
-    ledger: &mut CorrectionLedger,
-) -> Result<(), CorrectionError> {
+fn encode_ledger(ledger: &mut CorrectionLedger) -> Result<String, CorrectionError> {
     // Settled entries are the first to go once the ledger is full; entries
     // in force or waiting on the user are never dropped.
     while ledger.entries.len() > MAX_ENTRIES {
@@ -141,8 +143,15 @@ fn save_ledger(
         };
         ledger.entries.remove(at);
     }
-    let json = serde_json::to_string_pretty(ledger)
-        .map_err(|error| CorrectionError::Io(error.to_string()))?;
+    serde_json::to_string_pretty(ledger).map_err(|error| CorrectionError::Io(error.to_string()))
+}
+
+fn save_ledger(
+    media: &media_text::MediaStore,
+    instance_slug: &str,
+    ledger: &mut CorrectionLedger,
+) -> Result<(), CorrectionError> {
+    let json = encode_ledger(ledger)?;
     media
         .write_instance_text(instance_slug, LEDGER_FILE, &json)
         .map_err(|error| CorrectionError::Io(format!("write {LEDGER_FILE}: {error}")))
@@ -887,6 +896,301 @@ mod tests {
             assert_eq!(fs::read_to_string(&file).unwrap(), raw, "never rewritten");
             assert_eq!(body_of(ws.path(), "about/tea.md"), "likes tea\n");
         }
+    }
+
+    #[tokio::test]
+    async fn a_stale_conflict_is_released_by_the_companions_own_rewrite() {
+        let ws = tempfile::tempdir().unwrap();
+        seed(ws.path());
+        let store = VectorStore::connect(ws.path()).await;
+        let path = "about/tea.md";
+        let applied = |outcome: CorrectionOutcome| match outcome {
+            CorrectionOutcome::Applied(entry) => entry,
+            other => panic!("expected applied, got {other:?}"),
+        };
+        let parked = |outcome: CorrectionOutcome| match outcome {
+            CorrectionOutcome::NeedsResolution(conflict) => conflict,
+            other => panic!("expected needs_resolution, got {other:?}"),
+        };
+
+        let first = applied(correct(&store, "one", path, "drinks oolong").await.unwrap());
+        let conflict = parked(correct(&store, "one", path, "drinks matcha").await.unwrap());
+        assert_eq!(conflict.current.statement, body_of(ws.path(), path));
+
+        // The companion rewrites the memory while the question is open: the
+        // memory holds neither statement any more, so the next correction
+        // applies directly instead of answering with a conflict that
+        // describes text the memory no longer holds.
+        store
+            .write_text_memory("one", path, "drinks coffee now", false)
+            .await
+            .unwrap();
+        let third = applied(correct(&store, "one", path, "only water").await.unwrap());
+        assert_eq!(third.previous, "drinks coffee now");
+        assert_eq!(body_of(ws.path(), path), "only water");
+        let ledger_now = ledger(ws.path());
+        assert_eq!(ledger_now.entries.len(), 3);
+        assert_eq!(ledger_now.entries[0].id, first.id);
+        assert_eq!(ledger_now.entries[0].status, CorrectionStatus::Superseded);
+        assert_eq!(ledger_now.entries[1].id, conflict.conflict_id);
+        assert_eq!(
+            ledger_now.entries[1].status,
+            CorrectionStatus::Superseded,
+            "the parked statement was overtaken by the companion's rewrite"
+        );
+        assert!(ledger_now.entries[1].resolved_at.is_some());
+        assert_eq!(ledger_now.entries[2], third);
+        assert_eq!(
+            resolve(&store, "one", &conflict.conflict_id, Keep::Current)
+                .await
+                .unwrap_err(),
+            CorrectionError::NotFound,
+            "a released question cannot be resolved"
+        );
+
+        // Forget and re-create: the same release, from a fresh file.
+        let conflict = parked(correct(&store, "one", path, "drinks sencha").await.unwrap());
+        assert_eq!(conflict.current.id, third.id);
+        store.delete_memory("one", path).await.unwrap();
+        assert_eq!(
+            correct(&store, "one", path, "drinks kombucha")
+                .await
+                .unwrap_err(),
+            CorrectionError::NotFound,
+            "a forgotten memory cannot be corrected"
+        );
+        assert_eq!(
+            ledger(ws.path()).entries[3].status,
+            CorrectionStatus::NeedsResolution,
+            "nothing was decided while the memory is gone"
+        );
+        store
+            .write_text_memory("one", path, "fresh start", false)
+            .await
+            .unwrap();
+        let fifth = applied(correct(&store, "one", path, "drinks kombucha").await.unwrap());
+        assert_eq!(fifth.previous, "fresh start");
+        assert_eq!(body_of(ws.path(), path), "drinks kombucha");
+        let ledger_now = ledger(ws.path());
+        assert_eq!(ledger_now.entries.len(), 5);
+        assert_eq!(ledger_now.entries[2].status, CorrectionStatus::Superseded);
+        assert_eq!(ledger_now.entries[3].status, CorrectionStatus::Superseded);
+        assert_eq!(ledger_now.entries[4], fifth);
+
+        // A conflict is only ever reported against the text on disk.
+        let conflict = parked(correct(&store, "one", path, "drinks mate").await.unwrap());
+        assert_eq!(conflict.current.id, fifth.id);
+        assert_eq!(conflict.current.statement, body_of(ws.path(), path));
+    }
+
+    #[tokio::test]
+    async fn text_rewrites_wait_for_the_companion_lifecycle_gate() {
+        // Its own companion: the correction lock is per slug across the
+        // process, so no other test can park these tasks on it.
+        const SLUG: &str = "gated";
+        let ws = tempfile::tempdir().unwrap();
+        let dir = ws.path().join("instances").join(SLUG).join("memory/about");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("tea.md"), STAMPED).unwrap();
+        let store = std::sync::Arc::new(VectorStore::connect(ws.path()).await);
+        let path = "about/tea.md";
+
+        // While the companion holds the gate (its own write or forget in
+        // flight), neither a correction nor a flag change touches the file.
+        let guard = store.lifecycle_lock(SLUG).lock_owned().await;
+        let correction = {
+            let store = store.clone();
+            tokio::spawn(async move { correct(&store, SLUG, path, "likes oolong").await })
+        };
+        tokio::task::yield_now().await;
+        let flag = {
+            let store = store.clone();
+            tokio::spawn(async move {
+                set_flags(
+                    &store,
+                    SLUG,
+                    path,
+                    FlagUpdate {
+                        pinned: Some(true),
+                        exclude_from_proactive: None,
+                    },
+                )
+                .await
+            })
+        };
+        tokio::task::yield_now().await;
+        assert!(!correction.is_finished() && !flag.is_finished());
+        assert_eq!(
+            fs::read_to_string(dir.join("tea.md")).unwrap(),
+            STAMPED,
+            "nothing is written before the gate is held"
+        );
+        drop(guard);
+        assert!(matches!(
+            correction.await.unwrap().unwrap(),
+            CorrectionOutcome::Applied(_)
+        ));
+        assert!(flag.await.unwrap().unwrap().pinned);
+        let raw = fs::read_to_string(dir.join("tea.md")).unwrap();
+        let (frontmatter, body) = memory::parse_frontmatter(&raw);
+        assert_eq!(body, "likes oolong");
+        assert!(frontmatter.flags.pinned && frontmatter.flags.exclude_from_proactive);
+
+        // A forget already queued on the gate goes first, and the correction
+        // behind it finds nothing to correct instead of recreating the file.
+        let guard = store.lifecycle_lock(SLUG).lock_owned().await;
+        let forget = {
+            let store = store.clone();
+            tokio::spawn(async move { store.delete_memory(SLUG, path).await })
+        };
+        tokio::task::yield_now().await;
+        let correction = {
+            let store = store.clone();
+            tokio::spawn(async move { correct(&store, SLUG, path, "likes sencha").await })
+        };
+        tokio::task::yield_now().await;
+        assert!(!forget.is_finished() && !correction.is_finished());
+        drop(guard);
+        forget.await.unwrap().unwrap();
+        assert_eq!(
+            correction.await.unwrap().unwrap_err(),
+            CorrectionError::NotFound
+        );
+        assert!(!dir.join("tea.md").exists(), "a forgotten memory stays forgotten");
+        assert!(store.search_text(SLUG, "sencha", 5).await.is_empty());
+        let media = store.media_store();
+        assert_eq!(
+            load_ledger(&media, SLUG).unwrap().entries.len(),
+            1,
+            "nothing recorded for it"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_full_ledger_never_locks_out_further_corrections() {
+        let ws = tempfile::tempdir().unwrap();
+        let dir = seed(ws.path());
+        let store = VectorStore::connect(ws.path()).await;
+        let media = store.media_store();
+        // Enough max-size statements to pass the ledger's byte bound many
+        // times over if nothing were dropped.
+        let count = MAX_LEDGER_BYTES / MAX_STATEMENT_BYTES + 8;
+        let statement = |i: usize| format!("{i:04}{}", "x".repeat(MAX_STATEMENT_BYTES - 4));
+        for i in 0..count {
+            fs::write(dir.join(format!("{i}.md")), STAMPED).unwrap();
+        }
+
+        for i in 0..count {
+            let path = format!("about/{i}.md");
+            let outcome = correct(&store, "one", &path, &statement(i)).await;
+            assert!(
+                matches!(outcome, Ok(CorrectionOutcome::Applied(_))),
+                "correction {i}: {outcome:?}"
+            );
+            assert_eq!(body_of(ws.path(), &path), statement(i));
+            let recorded = load_ledger(&media, "one")
+                .unwrap_or_else(|error| panic!("ledger unreadable after {i}: {error}"));
+            assert!(
+                recorded.entries.iter().any(|entry| entry.path == path),
+                "the latest correction is always recorded"
+            );
+            assert!(
+                fs::metadata(ws.path().join("instances/one").join(LEDGER_FILE))
+                    .unwrap()
+                    .len() as usize
+                    <= MAX_LEDGER_BYTES
+            );
+        }
+        let recorded = load_ledger(&media, "one").unwrap();
+        assert!(recorded.entries.len() < count, "the oldest were dropped");
+        assert!(recorded.entries.iter().all(|entry| entry.status == CorrectionStatus::Applied));
+        assert_eq!(
+            recorded.entries.last().unwrap().path,
+            format!("about/{}.md", count - 1)
+        );
+
+        // The memory whose entry was dropped keeps its text; the ledger just
+        // no longer remembers the correction, so the next one applies as if
+        // it were the first.
+        assert_eq!(body_of(ws.path(), "about/0.md"), statement(0));
+        assert!(matches!(
+            correct(&store, "one", "about/0.md", "short again")
+                .await
+                .unwrap(),
+            CorrectionOutcome::Applied(_)
+        ));
+        assert_eq!(body_of(ws.path(), "about/0.md"), "short again");
+    }
+
+    #[test]
+    fn ledger_encoding_drops_settled_then_applied_entries_but_never_open_ones() {
+        let entry = |i: usize, status: CorrectionStatus| CorrectionEntry {
+            id: format!("corr_{i}"),
+            path: format!("about/{i}.md"),
+            statement: "x".repeat(MAX_STATEMENT_BYTES),
+            previous: String::new(),
+            status,
+            corrected_at: String::new(),
+            resolved_at: None,
+            conflicts_with: None,
+        };
+        let over = MAX_LEDGER_BYTES / MAX_STATEMENT_BYTES + 2;
+
+        // Settled entries go first, oldest first, and only as many as needed.
+        let mut ledger = CorrectionLedger::default();
+        ledger.entries.push(entry(0, CorrectionStatus::Applied));
+        ledger
+            .entries
+            .extend((1..over).map(|i| entry(i, CorrectionStatus::Withdrawn)));
+        ledger
+            .entries
+            .extend((over..2 * over).map(|i| entry(i, CorrectionStatus::Superseded)));
+        ledger.entries.push(entry(2 * over, CorrectionStatus::Applied));
+        let json = encode_ledger(&mut ledger).unwrap();
+        assert!(json.len() <= MAX_LEDGER_BYTES);
+        assert_eq!(ledger.entries[0].id, "corr_0");
+        assert_eq!(ledger.entries.last().unwrap().id, format!("corr_{}", 2 * over));
+        assert!(ledger.entries.len() > 2, "only as many as needed were dropped");
+        assert!(
+            ledger.entries[1..].iter().all(|entry| entry.id > ledger.entries[0].id),
+            "{:?}",
+            ledger.entries.iter().map(|e| &e.id).collect::<Vec<_>>()
+        );
+
+        // Then the oldest applied entries, except one an open question still
+        // points at; open questions themselves are never dropped.
+        let mut ledger = CorrectionLedger::default();
+        ledger
+            .entries
+            .extend((0..over).map(|i| entry(i, CorrectionStatus::Applied)));
+        let mut open = entry(over, CorrectionStatus::NeedsResolution);
+        open.conflicts_with = Some("corr_0".into());
+        ledger.entries.push(open);
+        let json = encode_ledger(&mut ledger).unwrap();
+        assert!(json.len() <= MAX_LEDGER_BYTES);
+        assert_eq!(ledger.entries[0].id, "corr_0");
+        assert_eq!(ledger.entries[1].id, "corr_2", "the oldest free applied entry went");
+        assert_eq!(ledger.entries.last().unwrap().status, CorrectionStatus::NeedsResolution);
+
+        let mut ledger = CorrectionLedger::default();
+        ledger
+            .entries
+            .extend((0..over).map(|i| entry(i, CorrectionStatus::NeedsResolution)));
+        assert_eq!(
+            encode_ledger(&mut ledger).unwrap_err(),
+            CorrectionError::LedgerFull
+        );
+        assert_eq!(ledger.entries.len(), over, "nothing open was dropped");
+
+        // The entry cap is enforced the same way.
+        let mut ledger = CorrectionLedger::default();
+        ledger.entries.extend((0..MAX_ENTRIES + 3).map(|i| CorrectionEntry {
+            statement: "short".into(),
+            ..entry(i, CorrectionStatus::Applied)
+        }));
+        encode_ledger(&mut ledger).unwrap();
+        assert_eq!(ledger.entries.len(), MAX_ENTRIES);
+        assert_eq!(ledger.entries[0].id, "corr_3");
     }
 
     #[test]
