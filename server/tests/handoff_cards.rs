@@ -43,7 +43,11 @@ fn a_handoff_is_continued_only_after_the_user_accepts() {
     }
 
     // The service admits exactly one run per acceptance through the loop,
-    // bound to the chosen computer, and never drives a computer itself.
+    // bound to the chosen computer, and never drives a computer itself. The
+    // one thing it asks a desktop is a read-only folder listing through the
+    // conversation's own `remote_files` tool, at acceptance and never
+    // before, to confirm a file the record places on the destination; no
+    // screen, input, shell, or write action exists here.
     let service = without_cfg_test_items(&read(repo, "server/src/services/handoff.rs"));
     for required in [
         "Trigger::Handoff",
@@ -51,10 +55,16 @@ fn a_handoff_is_continued_only_after_the_user_accepts() {
         "decide_handoff(",
         "record_handoff_outcome(",
         "validate_references(",
+        "operation: \"list\"",
     ] {
         if !service.contains(required) {
             violations.push(format!("services/handoff.rs must use {required:?}"));
         }
+    }
+    if service.matches("RemoteFilesArgs {").count() != 1 {
+        violations.push(
+            "services/handoff.rs asks a desktop exactly one thing, the folder listing".into(),
+        );
     }
     for relative in [
         "server/src/services/handoff.rs",
@@ -63,10 +73,14 @@ fn a_handoff_is_continued_only_after_the_user_accepts() {
         let production = without_cfg_test_items(&read(repo, relative));
         for forbidden in [
             ".execute(",
+            "AgentToolCall",
             "ComputerUseTool",
             "RemoteBashTool",
             "\"screenshot\"",
-            "AgentToolCall",
+            "\"left_click\"",
+            "\"bash\"",
+            "operation: \"read\"",
+            "operation: \"write\"",
             "companion_routine::",
             "Routine::",
         ] {
@@ -74,6 +88,10 @@ fn a_handoff_is_continued_only_after_the_user_accepts() {
                 violations.push(format!("{relative} must not use {forbidden:?}"));
             }
         }
+    }
+    let route = without_cfg_test_items(&read(repo, "server/src/routes/handoff.rs"));
+    if route.contains("RemoteFilesTool") {
+        violations.push("routes/handoff.rs must not touch a desktop".into());
     }
 
     // Only the handoff API records a decision; the store and the record

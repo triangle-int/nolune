@@ -12,7 +12,7 @@ use crate::{
     app::state::AppState,
     config,
     domain::{
-        chat::{ChatMessage, ChatRequest, ChatResponse, ChatRole, ChatSummary},
+        chat::{AgentLoopExit, ChatMessage, ChatRequest, ChatResponse, ChatRole, ChatSummary},
         events::ServerEvent,
     },
     services::chat,
@@ -131,7 +131,7 @@ pub async fn run_agent_loop(
     chat_id: String,
     cancel: CancellationToken,
     voice_mode: bool,
-) {
+) -> AgentLoopExit {
     let _ = state.events.send(ServerEvent::AgentRunning {
         instance_slug: instance_slug.clone(),
         chat_id: chat_id.clone(),
@@ -242,10 +242,13 @@ pub async fn run_agent_loop(
 
     const MAX_ITERATIONS: usize = 5;
     let mut iteration = 0;
+    // Why the loop stops, recorded for whoever waits on this conversation.
+    let mut exit = AgentLoopExit::Finished;
 
     loop {
         if cancel.is_cancelled() {
             log::info!("[agent] {instance_slug}/{chat_id} — cancelled by user");
+            exit = AgentLoopExit::Cancelled;
             break;
         }
 
@@ -294,6 +297,7 @@ pub async fn run_agent_loop(
         };
         let Some(effective_llm) = effective_llm else {
             log::warn!("[agent] {instance_slug}/{chat_id} — no LLM configured");
+            exit = AgentLoopExit::NoModel;
             break;
         };
         if background_llm.is_none() {
@@ -340,6 +344,7 @@ pub async fn run_agent_loop(
             }
             _ = cancel.cancelled() => {
                 log::info!("[agent] {instance_slug}/{chat_id} — cancelled during turn");
+                exit = AgentLoopExit::Cancelled;
                 break;
             }
         };
@@ -404,6 +409,9 @@ pub async fn run_agent_loop(
                         message: m,
                     });
                 }
+                exit = AgentLoopExit::Failed {
+                    error: error_label.to_owned(),
+                };
                 break;
             }
         }
@@ -452,6 +460,13 @@ pub async fn run_agent_loop(
     chat::clear_agent_running(&state.workspace_dir, &instance_slug, &chat_id);
 
     let key = task_key(&instance_slug, &chat_id);
+    // The reason is on record before the key is released, so a follower
+    // that sees the conversation idle can read it.
+    state
+        .agent_exits
+        .lock()
+        .await
+        .insert(key.clone(), exit.clone());
     {
         let mut tasks = state.agent_tasks.lock().await;
         tasks.remove(&key);
@@ -473,6 +488,7 @@ pub async fn run_agent_loop(
     if let Some(synth) = tts_synth_handle {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(30), synth).await;
     }
+    exit
 }
 
 /// Send a full chat state snapshot so all clients converge to the same state.

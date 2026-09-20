@@ -127,6 +127,11 @@ pub enum CheckKind {
         resource: ResourceRef,
         machine_id: String,
     },
+    /// A file on the destination itself: whether it is still there is only
+    /// known once the user confirms, when the service looks for it.
+    ResourceUnverified {
+        resource: ResourceRef,
+    },
     /// No chat model is configured, so no continuation can run.
     ModelUnavailable,
     /// Initiative is off, so the loop admits no run.
@@ -387,11 +392,24 @@ pub fn continuation_checks(
             }
             continue;
         };
-        // A file on the destination itself is reachable exactly when the
-        // destination is, which the machine checks above already say; and
-        // whether a file elsewhere is reachable is a question about the
-        // destination, which an unknown one has already answered.
-        if on == machine_id || machine.is_none() {
+        // Whether a file is reachable is a question about the destination,
+        // which an unknown one has already answered.
+        if machine.is_none() {
+            continue;
+        }
+        // A file on the destination itself is only known to be there once
+        // the user confirms and the service looks for it; the preview says
+        // so rather than passing over it.
+        if on == machine_id {
+            checks.push(check(
+                CheckKind::ResourceUnverified {
+                    resource: resource.clone(),
+                },
+                Note,
+                format!(
+                    "{path} on {name} is looked for when you confirm; the continuation stops if it is not there"
+                ),
+            ));
             continue;
         }
         // The reference check marks a file on a computer that is not
@@ -840,13 +858,43 @@ mod tests {
                 .any(|c| matches!(c.kind, CheckKind::ResourceElsewhere { .. }))
         );
 
-        // Continuing on the origin itself needs no note about its own file.
+        // Continuing on the origin itself: its own file is not elsewhere, but
+        // whether it is still there is only known once the user confirms, and
+        // the preview says so instead of skipping it.
         let p = preview(&record, "mac-a", &machines, environment());
         assert!(p.ready);
         assert!(
             !p.checks
                 .iter()
                 .any(|c| matches!(c.kind, CheckKind::ResourceElsewhere { .. }))
+        );
+        let unverified = p
+            .checks
+            .iter()
+            .find(|c| {
+                c.kind
+                    == CheckKind::ResourceUnverified {
+                        resource: ResourceRef::MachinePath {
+                            machine_id: "mac-a".into(),
+                            path: "/Volumes/Trip".into(),
+                        },
+                    }
+            })
+            .expect("the destination's own file is named");
+        assert_eq!(unverified.severity, Severity::Note);
+        assert!(
+            unverified.detail.contains("/Volumes/Trip") && unverified.detail.contains("mac-a name"),
+            "{}",
+            unverified.detail
+        );
+        // An unknown destination has already been refused; nothing is said
+        // about its files, and the file of a known destination is never a stop
+        // before acceptance.
+        let p = preview(&record, "ghost", &machines, environment());
+        assert!(
+            !p.checks
+                .iter()
+                .any(|c| matches!(c.kind, CheckKind::ResourceUnverified { .. }))
         );
 
         let p = preview(

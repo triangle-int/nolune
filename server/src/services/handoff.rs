@@ -3,17 +3,24 @@
 //!
 //! Nothing starts on its own. The card and the preview are reads. Accepting
 //! is the one action: it re-runs every check against the destination at
-//! that moment, refuses with the reasons when one blocks, binds the record
+//! that moment, looks for the files the record places on that computer
+//! (one read-only folder listing each, the only toolcall this module ever
+//! sends), refuses with the reasons when anything blocks, binds the record
 //! to the chosen stable machine id, admits one run through the proactive
-//! loop under `Trigger::Handoff` (the dedupe key makes a second acceptance
-//! return the same run instead of starting duplicate work), and hands the
-//! task to the conversation it came from as an explicit request naming
-//! that computer. The conversation's own tools do the work; when it stops,
-//! the receipts land on the run and the outcome on the record, so the trail
-//! is one place. Keeping or dismissing writes the decision and nothing
-//! else.
+//! loop under `Trigger::Handoff`, and hands the task to the conversation it
+//! came from as an explicit request naming that computer. Acceptances of
+//! one record are serialized, so a second one, however close, reads the
+//! bound record and answers the run that already started instead of
+//! starting duplicate work. The conversation's own tools do the work; when
+//! it stops, the receipts land on the run and the outcome on the record,
+//! so the trail is one place. Keeping or dismissing writes the decision and
+//! nothing else.
 
-use std::path::Path;
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::{Arc, OnceLock},
+};
 
 use chrono::Utc;
 use tokio_util::sync::CancellationToken;
@@ -21,10 +28,11 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     app::state::AppState,
     domain::{
+        chat::AgentLoopExit,
         companion::CANONICAL_SLUG,
         continuity::{
             ContinuityError, ContinuityRecord, HandoffDecision, HandoffOutcome,
-            HandoffOutcomeStatus, MAX_NOTE_CHARS, Provenance, ProvenanceSource,
+            HandoffOutcomeStatus, MAX_NOTE_CHARS, Provenance, ProvenanceSource, ResourceRef,
         },
         events::ServerEvent,
         handoff::{
@@ -37,8 +45,10 @@ use crate::{
     services::{
         chat,
         continuity::{ContinuityStore, RecordError},
-        llm::Message,
+        llm::{ContentBlock, Message},
         proactive::{Admission, RunHandle, outcome_from_trace},
+        tool::Tool,
+        tools::computer::{RemoteFilesArgs, RemoteFilesTool},
     },
 };
 
@@ -48,6 +58,9 @@ use crate::{
 const CONTINUATION_WAIT_SECS: u64 = 3600;
 /// How long a cancelled continuation waits for the conversation to wind down.
 const CANCEL_WAIT_SECS: u64 = 30;
+/// How long an acceptance waits for the destination to list a folder
+/// before refusing with that as the reason.
+const LISTING_WAIT_SECS: u64 = 30;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HandoffError {
@@ -113,6 +126,23 @@ pub enum ContinuationResult {
 
 fn store(state: &AppState) -> ContinuityStore {
     ContinuityStore::new(&state.workspace_dir, CANONICAL_SLUG)
+}
+
+/// One lock per record and workspace, held from the checks through the
+/// binding, so two acceptances that arrive together (a double click, two
+/// clients) cannot both pass the "already running" read.
+fn acceptance_lock(workspace_dir: &Path, id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    type Locks = HashMap<(PathBuf, String), Arc<tokio::sync::Mutex<()>>>;
+    static LOCKS: OnceLock<std::sync::Mutex<Locks>> = OnceLock::new();
+    let mut locks = LOCKS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    Arc::clone(
+        locks
+            .entry((workspace_dir.to_path_buf(), id.to_owned()))
+            .or_default(),
+    )
 }
 
 /// Every known machine, or none when the machine list is unusable (the
@@ -260,6 +290,8 @@ async fn continue_on(
     now: i64,
     retry_of: Option<&str>,
 ) -> Result<Accepted, HandoffError> {
+    let lock = acceptance_lock(&state.workspace_dir, id);
+    let _accepting = lock.lock().await;
     let (record, preview) = checked(state, id, machine_id, now).await?;
 
     // Idempotent: a continuation that is still running is the answer, whatever
@@ -276,6 +308,14 @@ async fn continue_on(
     }
     if !preview.ready {
         return Err(HandoffError::NotReady(preview.checks));
+    }
+    // The user has accepted: the files the record places on the destination
+    // are looked for there now, and a missing one is a stop with its name.
+    let missing = confirm_destination_files(state, &record, &preview.destination).await;
+    if !missing.is_empty() {
+        let mut checks = preview.checks;
+        checks.extend(missing);
+        return Err(HandoffError::NotReady(checks));
     }
 
     let destination = preview.destination;
@@ -386,6 +426,7 @@ async fn continue_on(
             chat_id,
             destination_name: destination.display_name.clone(),
             message_id: saved.id,
+            requested_at: saved.created_at.parse().unwrap_or(0),
         },
         handle,
         own_loop,
@@ -449,6 +490,71 @@ pub async fn dismiss(state: &AppState, id: &str, now: i64) -> Result<HandoffCard
     Ok(card)
 }
 
+/// Look for every file the record places on the destination, one
+/// read-only listing of its folder each, and name the ones that are not
+/// there. Only reached after the user accepted; files on other computers
+/// are the checks' business (`resource_elsewhere`), never probed here.
+async fn confirm_destination_files(
+    state: &AppState,
+    record: &ContinuityRecord,
+    destination: &ComputerSummary,
+) -> Vec<ContinuationCheck> {
+    let mut missing = Vec::new();
+    for link in &record.resources {
+        let ResourceRef::MachinePath { machine_id, path } = &link.resource else {
+            continue;
+        };
+        if machine_id != &destination.machine_id {
+            continue;
+        }
+        let Err(detail) = look_for(state, &destination.machine_id, path).await else {
+            continue;
+        };
+        missing.push(ContinuationCheck {
+            kind: CheckKind::ResourceMissing {
+                resource: link.resource.clone(),
+            },
+            severity: Severity::Blocking,
+            detail: format!(
+                "{path} cannot be found on {}: {detail}",
+                destination.display_name
+            ),
+        });
+    }
+    missing
+}
+
+/// Ask the destination's desktop app for the folder that should hold
+/// `path`, through the same `remote_files` listing the conversation's tools
+/// use, and look for the name in what it lists. `Ok` means it is there;
+/// `Err` says why not, in the desktop's own words when it answered.
+async fn look_for(state: &AppState, machine_id: &str, path: &str) -> Result<(), String> {
+    // A root or a bare home needs no looking for, and the desktop lists it
+    // as itself; anything else is looked for by name in its folder.
+    let (folder, name) = match split_parent(path) {
+        Some(parts) => parts,
+        None => (path.to_owned(), String::new()),
+    };
+    log::info!("[handoff] looking for '{path}' on '{machine_id}'");
+    let listing = tokio::time::timeout(
+        std::time::Duration::from_secs(LISTING_WAIT_SECS),
+        RemoteFilesTool::new(state.machine_registry.clone()).call(RemoteFilesArgs {
+            machine_id: machine_id.to_owned(),
+            operation: "list".into(),
+            path: folder.clone(),
+            content: None,
+        }),
+    )
+    .await
+    .map_err(|_| format!("its desktop app did not answer within {LISTING_WAIT_SECS}s"))?
+    .map_err(|error| error.to_string())?;
+    if name.is_empty() || listing_has(&listing, &name) {
+        Ok(())
+    } else {
+        Err(format!("it is not in {folder}"))
+    }
+}
+
 /// The explicit request the continuation puts into the task's conversation:
 /// the record as it stands and the one computer to act on.
 pub fn continuation_message(record: &ContinuityRecord, destination: &ComputerSummary) -> String {
@@ -493,6 +599,9 @@ struct Continuation {
     destination_name: String,
     /// The handoff request in the conversation; receipts come from what follows it.
     message_id: String,
+    /// When that request was written, in unix milliseconds: the anchor when
+    /// the message id did not survive a compaction.
+    requested_at: u128,
 }
 
 /// Follow the conversation until it stops (or the run is cancelled), then
@@ -503,37 +612,47 @@ fn spawn_continuation(
     state: AppState,
     continuation: Continuation,
     handle: RunHandle,
-    own_loop: Option<tokio::task::JoinHandle<()>>,
+    own_loop: Option<tokio::task::JoinHandle<AgentLoopExit>>,
 ) {
     tokio::spawn(async move {
         let key = crate::routes::chat::task_key(CANONICAL_SLUG, &continuation.chat_id);
         let cancelled = handle.token();
+        // How the conversation ended, from the loop itself: its own return
+        // when this acceptance started the turn, else what it left on record
+        // when it released the conversation.
         let follow = async {
             match own_loop {
-                Some(join) => {
-                    let _ = join.await;
+                Some(join) => join.await.ok(),
+                None => {
+                    if wait_for_conversation(&state, &key, CONTINUATION_WAIT_SECS).await {
+                        state.agent_exits.lock().await.get(&key).cloned()
+                    } else {
+                        None
+                    }
                 }
-                None => wait_for_conversation(&state, &key, CONTINUATION_WAIT_SECS).await,
             }
         };
-        let was_cancelled = tokio::select! {
-            _ = follow => false,
+        let (exit, was_cancelled) = tokio::select! {
+            exit = follow => (exit, false),
             _ = cancelled.cancelled() => {
                 if let Some(token) = state.agent_tasks.lock().await.get(&key) {
                     token.cancel();
                 }
                 wait_for_conversation(&state, &key, CANCEL_WAIT_SECS).await;
-                true
+                (None, true)
             }
         };
-        finalize(&state, &continuation, handle, was_cancelled).await;
+        finalize(&state, &continuation, handle, exit, was_cancelled).await;
     });
 }
 
 /// Start the conversation's agent loop when none is running, exactly as a
 /// sent message does; `None` when one is already running and will pick the
 /// handoff up on its next turn.
-async fn ensure_agent_loop(state: &AppState, chat_id: &str) -> Option<tokio::task::JoinHandle<()>> {
+async fn ensure_agent_loop(
+    state: &AppState,
+    chat_id: &str,
+) -> Option<tokio::task::JoinHandle<AgentLoopExit>> {
     let key = crate::routes::chat::task_key(CANONICAL_SLUG, chat_id);
     let cancel = CancellationToken::new();
     {
@@ -552,16 +671,17 @@ async fn ensure_agent_loop(state: &AppState, chat_id: &str) -> Option<tokio::tas
     )))
 }
 
-/// Wait until no agent loop runs for `key`, or `max_secs` pass.
-async fn wait_for_conversation(state: &AppState, key: &str, max_secs: u64) {
+/// Wait until no agent loop runs for `key`; `false` when `max_secs` passed
+/// first and the conversation is still going.
+async fn wait_for_conversation(state: &AppState, key: &str, max_secs: u64) -> bool {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(max_secs);
     loop {
         if !state.agent_tasks.lock().await.contains_key(key) {
-            return;
+            return true;
         }
         if tokio::time::Instant::now() >= deadline {
             log::warn!("[handoff] {key}: the conversation did not stop in time");
-            return;
+            return false;
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
@@ -571,6 +691,7 @@ async fn finalize(
     state: &AppState,
     continuation: &Continuation,
     handle: RunHandle,
+    exit: Option<AgentLoopExit>,
     cancelled: bool,
 ) {
     let trace = trace_after(
@@ -578,8 +699,9 @@ async fn finalize(
         CANONICAL_SLUG,
         &continuation.chat_id,
         &continuation.message_id,
+        continuation.requested_at,
     );
-    let result = continuation_result(&trace, cancelled);
+    let result = continuation_result(&trace, exit.as_ref(), cancelled);
     let now = Utc::now().timestamp();
     let run_id = handle.id().to_owned();
     match &result {
@@ -622,57 +744,188 @@ async fn finalize(
     }
 }
 
-/// The conversation's messages after `message_id`, for receipts.
+/// The conversation's messages after the handoff request, for receipts.
+/// The request is found by its id; when a server-side compaction has
+/// rewritten the history since (fresh ids, everything before its summary
+/// dropped), a summary written after the request means everything that
+/// survived came after it. An anchor that is missing for any other reason
+/// yields no receipts rather than someone else's.
 pub fn trace_after(
     workspace_dir: &Path,
     slug: &str,
     chat_id: &str,
     message_id: &str,
+    requested_at: u128,
 ) -> Vec<Message> {
     let entries = chat::load_rig_history(&chat::rig_history_path(workspace_dir, slug, chat_id))
         .unwrap_or_default();
-    let Some(at) = entries
+    if let Some(at) = entries
         .iter()
         .position(|entry| entry.id.as_deref() == Some(message_id))
-    else {
-        return Vec::new();
-    };
-    entries
-        .into_iter()
-        .skip(at + 1)
-        .map(|entry| entry.message)
-        .collect()
+    {
+        return entries
+            .into_iter()
+            .skip(at + 1)
+            .map(|entry| entry.message)
+            .collect();
+    }
+    let compacted_after_request = entries.first().is_some_and(|first| {
+        holds_summary(&first.message)
+            && first
+                .ts
+                .as_deref()
+                .and_then(|ts| ts.parse::<u128>().ok())
+                .is_some_and(|ts| ts >= requested_at)
+    });
+    if compacted_after_request {
+        entries.into_iter().map(|entry| entry.message).collect()
+    } else {
+        Vec::new()
+    }
 }
 
-/// What the trace says about the continuation: receipts when a turn ran,
-/// the server's own `[system]` line when it stopped with an error, and a
-/// retryable failure when no turn ran at all.
-pub fn continuation_result(trace: &[Message], cancelled: bool) -> ContinuationResult {
-    use crate::services::llm::ContentBlock;
+fn holds_summary(message: &Message) -> bool {
+    match message {
+        Message::Assistant { content } => content.iter().any(|block| {
+            matches!(
+                block,
+                ContentBlock::ContextSummary { .. } | ContentBlock::LegacyContextSummary { .. }
+            )
+        }),
+        Message::User { .. } => false,
+    }
+}
+
+/// What happened to the continuation: how the loop says the conversation
+/// ended, then the receipts. Chat text is never read for this; other
+/// writers put `[system]` lines into the same conversation at any time.
+pub fn continuation_result(
+    trace: &[Message],
+    exit: Option<&AgentLoopExit>,
+    cancelled: bool,
+) -> ContinuationResult {
     if cancelled {
         return ContinuationResult::Cancelled;
     }
-    let last_reply = trace.iter().rev().find_map(|message| match message {
-        Message::Assistant { content } => Some(content),
-        Message::User { .. } => None,
-    });
-    let Some(last_reply) = last_reply else {
+    match exit {
+        Some(AgentLoopExit::Failed { error }) => {
+            return ContinuationResult::Failed {
+                error: error.clone(),
+                retryable: true,
+            };
+        }
+        Some(AgentLoopExit::Cancelled) => return ContinuationResult::Cancelled,
+        Some(AgentLoopExit::NoModel) => {
+            return ContinuationResult::Failed {
+                error: "no chat model is configured; add one in Settings".into(),
+                retryable: true,
+            };
+        }
+        Some(AgentLoopExit::Finished) | None => {}
+    }
+    let took_it_up = trace
+        .iter()
+        .any(|message| matches!(message, Message::Assistant { .. }));
+    if !took_it_up {
         return ContinuationResult::Failed {
             error: "the conversation stopped before taking the task up".into(),
             retryable: true,
         };
-    };
-    let system_line = last_reply.iter().rev().find_map(|block| match block {
-        ContentBlock::Text { text } => text.strip_prefix("[system] "),
-        _ => None,
-    });
-    if let Some(error) = system_line {
-        return ContinuationResult::Failed {
-            error: error.trim().to_owned(),
-            retryable: true,
-        };
     }
     ContinuationResult::Completed(outcome_from_trace(trace, 0))
+}
+
+/// After a restart: an acceptance whose follower died with the previous
+/// process is closed with what its run says (the proactive loop's own
+/// recovery has already failed every run that was still going), so the
+/// card stops saying the task is continuing and offers it again. Returns
+/// how many acceptances were closed.
+pub async fn recover_on_restart(state: &AppState, now: i64) -> usize {
+    let store = store(state);
+    let (records, _) = store
+        .list_validated(&state.machine_registry, now, false)
+        .await;
+    let mut closed = 0;
+    for record in records {
+        let Some(HandoffDecision::Accepted {
+            run_id,
+            outcome: None,
+            ..
+        }) = &record.handoff
+        else {
+            continue;
+        };
+        let run_id = run_id.as_str();
+        let run = state.proactive.get(run_id);
+        if run.as_ref().is_some_and(|run| !run.status.is_finished()) {
+            continue;
+        }
+        let result = match run.map(|run| (run.status, run.outcome)) {
+            Some((RunStatus::Completed, outcome)) => {
+                ContinuationResult::Completed(outcome.unwrap_or_default())
+            }
+            Some((RunStatus::Cancelled, _)) => ContinuationResult::Cancelled,
+            Some((RunStatus::Failed { error, retryable }, _)) => {
+                ContinuationResult::Failed { error, retryable }
+            }
+            Some((RunStatus::Skipped { .. }, _)) => ContinuationResult::Failed {
+                error: "the companion loop did not admit the continuation".into(),
+                retryable: true,
+            },
+            Some((RunStatus::Running, _)) | None => ContinuationResult::Failed {
+                error: "interrupted by a server restart".into(),
+                retryable: true,
+            },
+        };
+        let outcome = handoff_outcome(&result, now);
+        let note = format!("continuation closed after a restart: {}", outcome.summary);
+        match store
+            .record_handoff_outcome(&record.id, run_id, outcome, by_server(note, now), now)
+            .await
+        {
+            Ok(record) => {
+                closed += 1;
+                broadcast(state, &build_card(&record, &machines(state, now).await));
+            }
+            Err(error) => log::warn!(
+                "[handoff] {}: could not close the interrupted continuation {run_id}: {error}",
+                record.id
+            ),
+        }
+    }
+    closed
+}
+
+/// A path's folder and its own name, whichever separator the computer
+/// uses; `None` for a root or a bare `~`, which need no looking for.
+pub fn split_parent(path: &str) -> Option<(String, String)> {
+    let trimmed = path.trim_end_matches(['/', '\\']);
+    if trimmed.is_empty() || trimmed == "~" {
+        return None;
+    }
+    let cut = trimmed.rfind(['/', '\\'])?;
+    let name = &trimmed[cut + 1..];
+    if name.is_empty() {
+        return None;
+    }
+    let parent = &trimmed[..cut];
+    let parent = if parent.is_empty() {
+        &trimmed[..=cut]
+    } else {
+        parent
+    };
+    Some((parent.to_owned(), name.to_owned()))
+}
+
+/// Whether a desktop's folder listing (`name/` for folders, `name  (n
+/// bytes)` for files) names `name`.
+pub fn listing_has(listing: &str, name: &str) -> bool {
+    listing.lines().any(|line| {
+        line.strip_suffix('/').is_some_and(|folder| folder == name)
+            || line
+                .strip_prefix(name)
+                .is_some_and(|rest| rest.starts_with("  ("))
+    })
 }
 
 /// The record's receipt of a finished run.
@@ -797,7 +1050,8 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let path = chat::rig_history_path(ws.path(), CANONICAL_SLUG, "chat_1");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let entry = |id: &str, message: Message| HistoryEntry::new(message, "0".into(), id.into());
+        let entry =
+            |id: &str, message: Message| HistoryEntry::new(message, id[1..].to_owned(), id.into());
         let tool_call = Message::Assistant {
             content: vec![ContentBlock::ToolCall {
                 id: "call_1".into(),
@@ -815,17 +1069,17 @@ mod tests {
                 entry("m5", Message::assistant("done")),
             ],
         );
-        let trace = trace_after(ws.path(), CANONICAL_SLUG, "chat_1", "m3");
+        let trace = trace_after(ws.path(), CANONICAL_SLUG, "chat_1", "m3", 3);
         assert_eq!(
             serde_json::to_value(&trace).unwrap(),
             serde_json::to_value(vec![tool_call, Message::assistant("done")]).unwrap()
         );
-        assert!(trace_after(ws.path(), CANONICAL_SLUG, "chat_1", "m5").is_empty());
+        assert!(trace_after(ws.path(), CANONICAL_SLUG, "chat_1", "m5", 5).is_empty());
         assert!(
-            trace_after(ws.path(), CANONICAL_SLUG, "chat_1", "missing").is_empty(),
+            trace_after(ws.path(), CANONICAL_SLUG, "chat_1", "missing", 0).is_empty(),
             "an unknown anchor yields no receipts rather than the whole history"
         );
-        assert!(trace_after(ws.path(), CANONICAL_SLUG, "chat_none", "m3").is_empty());
+        assert!(trace_after(ws.path(), CANONICAL_SLUG, "chat_none", "m3", 3).is_empty());
     }
 
     #[test]
@@ -852,7 +1106,9 @@ mod tests {
             },
             Message::assistant("renamed the files."),
         ];
-        let ContinuationResult::Completed(outcome) = continuation_result(&trace, false) else {
+        let finished = Some(&AgentLoopExit::Finished);
+        let ContinuationResult::Completed(outcome) = continuation_result(&trace, finished, false)
+        else {
             panic!("a trace with tool calls completes");
         };
         assert_eq!(outcome.actions.len(), 2);
@@ -873,28 +1129,12 @@ mod tests {
         assert_eq!(receipt.summary, "2 actions");
 
         // A reply without actions still completed; it just did nothing.
-        let quiet = continuation_result(&[Message::assistant("nothing to do")], false);
+        let quiet = continuation_result(&[Message::assistant("nothing to do")], finished, false);
         assert!(matches!(quiet, ContinuationResult::Completed(ref o) if o.actions.is_empty()));
         assert_eq!(handoff_outcome(&quiet, T0).summary, "no actions");
 
-        // The server's own error line is a failure the user can retry.
-        let failed =
-            continuation_result(&[Message::assistant("[system] request timed out")], false);
-        assert_eq!(
-            failed,
-            ContinuationResult::Failed {
-                error: "request timed out".into(),
-                retryable: true,
-            }
-        );
-        assert_eq!(
-            handoff_outcome(&failed, T0).status,
-            HandoffOutcomeStatus::Failed
-        );
-        assert_eq!(handoff_outcome(&failed, T0).summary, "request timed out");
-
-        // No turn at all (no model, or the conversation never picked it up).
-        let none = continuation_result(&[], false);
+        // No turn at all (the conversation never picked the request up).
+        let none = continuation_result(&[], finished, false);
         assert!(matches!(
             none,
             ContinuationResult::Failed {
@@ -906,7 +1146,7 @@ mod tests {
 
         // Cancellation wins over whatever the trace says.
         assert_eq!(
-            continuation_result(&[Message::assistant("done")], true),
+            continuation_result(&[Message::assistant("done")], finished, true),
             ContinuationResult::Cancelled
         );
         assert_eq!(
@@ -920,5 +1160,218 @@ mod tests {
             retryable: false,
         };
         assert!(handoff_outcome(&long, T0).summary.chars().count() <= MAX_NOTE_CHARS);
+    }
+
+    #[test]
+    fn the_loop_says_how_the_continuation_ended_and_other_system_lines_do_not() {
+        let worked = |last: &str| {
+            vec![
+                Message::Assistant {
+                    content: vec![ContentBlock::ToolCall {
+                        id: "call_1".into(),
+                        name: "computer_use".into(),
+                        arguments: serde_json::json!({"machine_id": "mac-b", "action": "screenshot"}),
+                    }],
+                },
+                Message::user("tool result"),
+                Message::assistant("renamed the files."),
+                Message::assistant(last),
+            ]
+        };
+        // Other writers append `[system]` lines to the same conversation at
+        // any time (the mood extract, the heartbeat, a desktop connecting);
+        // none of them is the continuation's error.
+        for line in [
+            "[system] mood → curious",
+            "[system] rhythm update\nquiet afternoon",
+            "[system] desktop 'mac-b' connected.",
+        ] {
+            let trace = worked(line);
+            let result = continuation_result(&trace, Some(&AgentLoopExit::Finished), false);
+            assert!(
+                matches!(result, ContinuationResult::Completed(ref o) if o.actions.len() == 1),
+                "{line:?}: {result:?}"
+            );
+            let unobserved = continuation_result(&trace, None, false);
+            assert!(
+                matches!(unobserved, ContinuationResult::Completed(_)),
+                "{line:?} without an exit: {unobserved:?}"
+            );
+        }
+
+        // The loop's own error is the failure, with the label it wrote.
+        let failed = continuation_result(
+            &[Message::assistant("[system] request timed out")],
+            Some(&AgentLoopExit::Failed {
+                error: "request timed out".into(),
+            }),
+            false,
+        );
+        assert_eq!(
+            failed,
+            ContinuationResult::Failed {
+                error: "request timed out".into(),
+                retryable: true,
+            }
+        );
+        assert_eq!(
+            handoff_outcome(&failed, T0).status,
+            HandoffOutcomeStatus::Failed
+        );
+        assert_eq!(handoff_outcome(&failed, T0).summary, "request timed out");
+        // Even when the work before the error looked complete.
+        let failed = continuation_result(
+            &worked("[system] rate limited — try again in a moment"),
+            Some(&AgentLoopExit::Failed {
+                error: "rate limited — try again in a moment".into(),
+            }),
+            false,
+        );
+        assert!(matches!(
+            failed,
+            ContinuationResult::Failed {
+                retryable: true,
+                ..
+            }
+        ));
+
+        // No model: no turn ran, and the reason is stated.
+        let no_model = continuation_result(&[], Some(&AgentLoopExit::NoModel), false);
+        let ContinuationResult::Failed { error, retryable } = no_model else {
+            panic!("no model is a failure");
+        };
+        assert!(retryable);
+        assert!(error.contains("model"), "{error}");
+
+        // The user stopped the conversation from the chat: cancelled, not failed.
+        assert_eq!(
+            continuation_result(&worked("stopping"), Some(&AgentLoopExit::Cancelled), false),
+            ContinuationResult::Cancelled
+        );
+    }
+
+    #[test]
+    fn receipts_survive_a_compaction_that_rewrote_the_history_after_the_request() {
+        let ws = tempfile::tempdir().unwrap();
+        let path = chat::rig_history_path(ws.path(), CANONICAL_SLUG, "chat_1");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let entry = |id: &str, ts: u128, message: Message| {
+            HistoryEntry::new(message, ts.to_string(), id.into())
+        };
+        let tool_call = Message::Assistant {
+            content: vec![ContentBlock::ToolCall {
+                id: "call_1".into(),
+                name: "computer_use".into(),
+                arguments: serde_json::json!({"machine_id": "mac-b", "action": "screenshot"}),
+            }],
+        };
+        let summary = Message::Assistant {
+            content: vec![ContentBlock::ContextSummary {
+                content: "the user asked to rename the trip photos".into(),
+            }],
+        };
+        let requested_at: u128 = 1_000;
+
+        // Server-side compaction during the continuation: the history is
+        // rewritten with fresh ids and a later timestamp, and everything
+        // before the summary is dropped on the next load.
+        chat::save_rig_history(
+            &path,
+            &[
+                entry("compact_0_2000", 2_000, Message::user("earlier")),
+                entry("compact_1_2000", 2_000, Message::assistant("earlier reply")),
+                entry("compact_2_2000", 2_000, Message::user("[handoff] continue")),
+                entry("compact_3_2000", 2_000, summary.clone()),
+            ],
+        );
+        chat::append_to_rig_history(&path, &entry("m5", 2_100, tool_call.clone()));
+        chat::append_to_rig_history(&path, &entry("m6", 2_200, Message::assistant("done")));
+        let trace = trace_after(ws.path(), CANONICAL_SLUG, "chat_1", "m3", requested_at);
+        assert_eq!(
+            serde_json::to_value(&trace).unwrap(),
+            serde_json::to_value(vec![
+                summary.clone(),
+                tool_call.clone(),
+                Message::assistant("done")
+            ])
+            .unwrap(),
+            "everything that survived the compaction came after the request"
+        );
+        let ContinuationResult::Completed(outcome) =
+            continuation_result(&trace, Some(&AgentLoopExit::Finished), false)
+        else {
+            panic!("the continuation completed");
+        };
+        assert_eq!(outcome.actions.len(), 1);
+
+        // A compaction from before the request explains nothing: with the
+        // anchor gone, there are no receipts rather than someone else's.
+        chat::save_rig_history(
+            &path,
+            &[
+                entry("compact_0_500", 500, summary.clone()),
+                entry("m7", 600, tool_call.clone()),
+                entry("m8", 700, Message::assistant("older work")),
+            ],
+        );
+        assert!(trace_after(ws.path(), CANONICAL_SLUG, "chat_1", "m3", requested_at).is_empty());
+
+        // The anchor itself still wins when it is there.
+        chat::save_rig_history(
+            &path,
+            &[
+                entry("compact_0_500", 500, summary),
+                entry("m3", 1_000, Message::user("[handoff] continue")),
+                entry("m9", 1_100, tool_call.clone()),
+            ],
+        );
+        assert_eq!(
+            serde_json::to_value(trace_after(
+                ws.path(),
+                CANONICAL_SLUG,
+                "chat_1",
+                "m3",
+                requested_at
+            ))
+            .unwrap(),
+            serde_json::to_value(vec![tool_call]).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_file_is_looked_for_in_its_folder_by_name() {
+        assert_eq!(
+            split_parent("/Users/me/Trip"),
+            Some(("/Users/me".to_owned(), "Trip".to_owned()))
+        );
+        assert_eq!(
+            split_parent("/Users/me/Trip/"),
+            Some(("/Users/me".to_owned(), "Trip".to_owned()))
+        );
+        assert_eq!(
+            split_parent("~/Desktop/notes.md"),
+            Some(("~/Desktop".to_owned(), "notes.md".to_owned()))
+        );
+        assert_eq!(
+            split_parent("/Volumes"),
+            Some(("/".to_owned(), "Volumes".to_owned()))
+        );
+        assert_eq!(
+            split_parent(r"C:\Users\me\Trip"),
+            Some((r"C:\Users\me".to_owned(), "Trip".to_owned()))
+        );
+        assert_eq!(split_parent("/"), None);
+        assert_eq!(split_parent("~"), None);
+        assert_eq!(split_parent(""), None);
+
+        // The desktop lists a folder as `name/` for folders and
+        // `name  (n bytes)` for files.
+        let listing = "IMG_0001.jpg  (12 bytes)\nTrip/\nTrip.zip  (3 bytes)\n";
+        assert!(listing_has(listing, "Trip"));
+        assert!(listing_has(listing, "Trip.zip"));
+        assert!(listing_has(listing, "IMG_0001.jpg"));
+        assert!(!listing_has(listing, "Tri"));
+        assert!(!listing_has(listing, "IMG_0001"));
+        assert!(!listing_has("", "Trip"));
     }
 }

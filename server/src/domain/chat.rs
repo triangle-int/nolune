@@ -87,3 +87,19 @@ pub struct ChatMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<String>,
 }
+
+/// Why a conversation's agent loop stopped, as the loop itself reports it.
+/// A caller that waits for a conversation to stop reads this instead of
+/// guessing the reason from chat text, which other writers append to as
+/// well (mood lines, rhythm updates, a desktop connecting).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentLoopExit {
+    /// The turn (or turns) finished and the conversation is idle.
+    Finished,
+    /// A turn errored; `error` is the label the loop wrote to the chat.
+    Failed { error: String },
+    /// Stopped by the user, or by whoever holds the conversation's token.
+    Cancelled,
+    /// No chat model is configured, so no turn ran.
+    NoModel,
+}

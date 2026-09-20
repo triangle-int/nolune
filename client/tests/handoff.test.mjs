@@ -95,6 +95,11 @@ test('actions follow the decision: a running continuation cannot be started twic
 	assert.deepEqual(cardActions(running), { continueHere: false, continueOn: false, keepThere: false, dismiss: false, continuing: true });
 	const finished = { ...running, decision: { ...running.decision, outcome: { status: 'failed', finished_at: NOW, summary: 'no model turn ran' } } };
 	assert.deepEqual(cardActions(finished), { continueHere: true, continueOn: true, keepThere: true, dismiss: true, continuing: false });
+	// A server restart closes the acceptance with the run's own failure;
+	// the card offers the task again instead of waiting on a dead run.
+	const interrupted = { ...running, decision: { ...running.decision, outcome: { status: 'failed', finished_at: NOW, summary: 'interrupted by server restart' } } };
+	assert.deepEqual(cardActions(interrupted), { continueHere: true, continueOn: true, keepThere: true, dismiss: true, continuing: false });
+	assert.equal(decisionLabel({ ...interrupted, bound_to: { ...studio, machine_id: 'mac-b', display_name: 'Travel Laptop' } }), 'Stopped on Travel Laptop · interrupted by server restart');
 	const closed = { ...card, state: 'completed', offered: false };
 	assert.deepEqual(cardActions(closed), { continueHere: false, continueOn: false, keepThere: false, dismiss: false, continuing: false });
 });

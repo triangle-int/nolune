@@ -158,6 +158,12 @@ async fn main() {
         if recovered > 0 {
             log::warn!("[proactive] marked {recovered} interrupted run(s) failed and retryable");
         }
+        // A handoff continuation (#82) that died with the process is closed
+        // on its record too, so the card offers the task again.
+        let closed = services::handoff::recover_on_restart(&state, now).await;
+        if closed > 0 {
+            log::warn!("[handoff] closed {closed} interrupted continuation(s) on their records");
+        }
         let removed = state.proactive.enforce_retention(now);
         if removed > 0 {
             info!("[proactive] removed {removed} old activity record(s)");

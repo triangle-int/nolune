@@ -4,7 +4,10 @@
 	// `handoff_updated`; the computers to pick from come from `GET /machines`
 	// and follow `machine_updated` / `machine_forgotten`. "Continue here" is
 	// the computer the user named before (kept in this browser), or the only
-	// connected one; otherwise the card asks.
+	// connected one; otherwise the card asks. A reconnect reloads both, so a
+	// continuation the server closed while this browser was away (a restart)
+	// shows its outcome instead of "continuing" forever.
+	import { untrack } from "svelte";
 	import {
 		acceptHandoff,
 		dismissHandoff,
@@ -64,6 +67,20 @@
 			loading = false;
 		}
 	}
+
+	let hadConnection = false;
+	$effect(() => {
+		const isConnected = ws.connected;
+		untrack(() => {
+			if (!isConnected) return;
+			if (!hadConnection) {
+				// The first connection: the load below covers it.
+				hadConnection = true;
+				return;
+			}
+			load();
+		});
+	});
 
 	$effect(() => {
 		remembered = readRemembered();

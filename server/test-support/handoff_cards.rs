@@ -27,7 +27,7 @@ use crate::{
         chat, companion,
         continuity::ContinuityStore,
         llm::{ContentBlock, HistoryEntry, Message},
-        machine_registry::MachineInfo,
+        machine_registry::{ActionResult, MachineInfo},
     },
 };
 use axum::{
@@ -35,7 +35,7 @@ use axum::{
     http::{Method, Request, StatusCode, header},
 };
 use cua_protocol::{MachineLocation, Permission, PermissionState, Platform};
-use std::{fs, time::Duration};
+use std::{fs, sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
@@ -79,6 +79,17 @@ async fn harness() -> Harness {
     harness_with(configured()).await
 }
 
+impl Harness {
+    /// The same workspace under a new process: everything on disk stays,
+    /// everything in memory (connections, active runs, followers) is gone.
+    async fn restarted(self) -> Harness {
+        let Harness { workspace, state } = self;
+        drop(state);
+        let state = AppState::new_in(configured(), workspace.path().to_owned()).await;
+        Harness { workspace, state }
+    }
+}
+
 fn now() -> i64 {
     chrono::Utc::now().timestamp()
 }
@@ -116,6 +127,39 @@ impl Desktop {
             self.calls.try_recv().is_err(),
             "{label}: a toolcall reached the desktop"
         );
+    }
+
+    /// Answer the next toolcall the way the desktop app does: `Ok` is the
+    /// listing it printed, `Err` the reason it could not. Returns the call.
+    async fn answer(&mut self, state: &AppState, reply: Result<&str, &str>) -> serde_json::Value {
+        let raw = tokio::time::timeout(Duration::from_secs(5), self.calls.recv())
+            .await
+            .expect("the desktop was asked in time")
+            .expect("a toolcall");
+        let call: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let (success, output) = match reply {
+            Ok(listing) => (true, listing),
+            Err(error) => (false, error),
+        };
+        assert!(
+            state
+                .machine_registry
+                .complete(
+                    call["request_id"].as_str().unwrap(),
+                    ActionResult {
+                        result_type: "action".into(),
+                        image: None,
+                        width: None,
+                        height: None,
+                        scale: None,
+                        success: Some(success),
+                        error: Some(output.into()),
+                    },
+                )
+                .await,
+            "the registry was waiting for {call}"
+        );
+        call
     }
 }
 
@@ -383,6 +427,27 @@ impl Harness {
     }
 }
 
+/// The checks that refuse a continuation, as `severity:kind`.
+fn blocking_kinds(body: &serde_json::Value) -> Vec<String> {
+    check_kinds(body)
+        .into_iter()
+        .filter(|kind| kind.starts_with("blocking:"))
+        .collect()
+}
+
+/// The sentence of the one blocking check in a refusal.
+fn blocking_detail(body: &serde_json::Value) -> String {
+    let stops: Vec<&str> = body["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|check| check["severity"] == "blocking")
+        .map(|check| check["detail"].as_str().unwrap())
+        .collect();
+    assert_eq!(stops.len(), 1, "{body}");
+    stops[0].to_owned()
+}
+
 fn check_kinds(body: &serde_json::Value) -> Vec<String> {
     body["checks"]
         .as_array()
@@ -607,6 +672,71 @@ async fn accepting_twice_returns_the_same_run_and_starts_nothing_new() {
     assert_eq!(third["already_running"], false);
     assert_ne!(third["run"]["id"], first["run"]["id"]);
     assert_eq!(h.activity().await.len(), 2);
+}
+
+/// Two clients (or a double click) accept at the same moment: acceptance is
+/// serialized per record, so exactly one run starts and one request lands
+/// in the conversation, and every caller is told about that one run.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn accepts_that_race_start_one_run_and_one_request() {
+    let h = Arc::new(harness().await);
+    let _a = h.connect_ready(MAC_A, "studio").await;
+    let _b = h.connect_ready(MAC_B, "laptop").await;
+    let task = h.task(Harness::usual_resources()).await;
+    let _token = h.conversation_running(CHAT).await;
+
+    let accepts: Vec<_> = (0..8)
+        .map(|_| {
+            let h = Arc::clone(&h);
+            let id = task.id.clone();
+            tokio::spawn(async move { h.accept(&id, MAC_B).await })
+        })
+        .collect();
+    let mut run_ids = Vec::new();
+    let mut started = 0;
+    for accept in accepts {
+        let (status, body) = accept.await.unwrap();
+        assert_eq!(status, StatusCode::OK, "{body}");
+        if body["already_running"] == false {
+            started += 1;
+        }
+        run_ids.push(body["run"]["id"].as_str().unwrap().to_owned());
+    }
+    assert_eq!(
+        started, 1,
+        "exactly one acceptance started work: {run_ids:?}"
+    );
+    run_ids.dedup();
+    assert_eq!(run_ids.len(), 1, "every caller was told about the one run");
+
+    assert_eq!(h.activity().await.len(), 1, "one run in the trail");
+    assert_eq!(
+        h.handoff_messages(CHAT).len(),
+        1,
+        "one request in the conversation"
+    );
+    let record = h.store().get(&task.id).unwrap();
+    assert!(
+        matches!(record.handoff, Some(HandoffDecision::Accepted { ref run_id, .. }) if run_id == &run_ids[0]),
+        "the record is bound to the run that started: {:?}",
+        record.handoff
+    );
+    assert_eq!(
+        record
+            .provenance
+            .iter()
+            .filter(|p| p.source == ProvenanceSource::User)
+            .count(),
+        1,
+        "one acceptance in the provenance"
+    );
+
+    // The one run closes normally and its outcome lands on the record.
+    h.play_conversation(CHAT, MAC_B);
+    h.conversation_stopped(CHAT).await;
+    let card = h.wait_for_outcome(&task.id).await;
+    assert_eq!(card["decision"]["run_id"], run_ids[0]);
+    assert_eq!(card["decision"]["outcome"]["status"], "completed", "{card}");
 }
 
 #[tokio::test]
@@ -838,7 +968,7 @@ async fn a_missing_model_or_initiative_off_is_a_stated_reason_not_a_silent_stop(
     let task = h.task(Harness::usual_resources()).await;
     let (_, preview) = h.preview(&task.id, MAC_A).await;
     assert_eq!(preview["ready"], false);
-    assert_eq!(check_kinds(&preview), vec!["blocking:model_unavailable"]);
+    assert_eq!(blocking_kinds(&preview), vec!["blocking:model_unavailable"]);
     let (status, _) = h.accept(&task.id, MAC_A).await;
     assert_eq!(status, StatusCode::CONFLICT);
 
@@ -853,7 +983,7 @@ async fn a_missing_model_or_initiative_off_is_a_stated_reason_not_a_silent_stop(
         })
         .unwrap();
     let (_, preview) = h.preview(&task.id, MAC_A).await;
-    assert_eq!(check_kinds(&preview), vec!["blocking:initiative_off"]);
+    assert_eq!(blocking_kinds(&preview), vec!["blocking:initiative_off"]);
     let (status, refused) = h.accept(&task.id, MAC_A).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(refused["error"], "handoff_not_ready");
@@ -1056,24 +1186,170 @@ async fn a_cancelled_or_interrupted_continuation_is_closed_on_the_trail_and_can_
             .is_none()
     );
 
-    // A restart interrupts a running continuation; the record is still bound
-    // and offered, so the user can pick it up again.
+    // A restart interrupts a running continuation: the run is failed like
+    // any other, and the record's acceptance is closed with that outcome so
+    // the card does not keep saying "continuing" for a run that died with
+    // the process; it stays bound and offered, so the user can pick it up
+    // again.
     let _token = h.conversation_running(CHAT).await;
     let _c = h.connect_ready(MAC_B, "laptop").await;
     let (status, accepted) = h.accept(&task.id, MAC_B).await;
     assert_eq!(status, StatusCode::OK, "{accepted}");
     let run_id = accepted["run"]["id"].as_str().unwrap().to_owned();
+    let h = h.restarted().await;
+    let mut events = h.state.events.subscribe();
     assert_eq!(h.state.proactive.recover_on_restart(now()), 1);
+    assert_eq!(
+        crate::services::handoff::recover_on_restart(&h.state, now()).await,
+        1,
+        "the interrupted acceptance is closed"
+    );
+    assert_eq!(
+        crate::services::handoff::recover_on_restart(&h.state, now()).await,
+        0,
+        "closing it is not repeated"
+    );
     let (_, run) = h
         .json(Method::GET, &api(&format!("activity/{run_id}")), None)
         .await;
     assert!(matches!(
         serde_json::from_value::<RunStatus>(run["status"].clone()).unwrap(),
-        RunStatus::Failed { .. }
+        RunStatus::Failed {
+            retryable: true,
+            ..
+        }
     ));
     let card = h.card(&task.id).await;
     assert_eq!(card["offered"], true);
     assert_eq!(card["decision"]["run_id"], run_id);
+    assert_eq!(card["decision"]["outcome"]["status"], "failed", "{card}");
+    assert_eq!(
+        card["decision"]["outcome"]["summary"], run["status"]["error"],
+        "the card carries the run's own reason"
+    );
+    let closed = h.store().get(&task.id).unwrap();
+    let last = closed.provenance.last().unwrap();
+    assert_eq!(last.source, ProvenanceSource::Server);
+    assert!(last.note.contains("restart"), "{}", last.note);
+    let mut saw_card_event = false;
+    while let Ok(event) = events.try_recv() {
+        if let ServerEvent::HandoffUpdated { card, .. } = event {
+            saw_card_event = true;
+            assert_eq!(card.record_id, task.id);
+        }
+    }
+    assert!(saw_card_event, "clients hear the closed acceptance");
+    // The desktops connect to the new process and the task can be picked
+    // up again: a new run, not the dead one.
+    let _a = h.connect_ready(MAC_A, "studio").await;
+    let _b = h.connect_ready(MAC_B, "laptop").await;
     let (_, preview) = h.preview(&task.id, MAC_B).await;
     assert_eq!(preview["ready"], true, "{preview}");
+    let _token = h.conversation_running(CHAT).await;
+    let (status, again) = h.accept(&task.id, MAC_B).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["already_running"], false, "{again}");
+    assert_ne!(again["run"]["id"], run_id);
+}
+
+/// A file the record places on the destination itself is looked for there
+/// when the user confirms: one read-only listing of its folder, nothing at
+/// preview time, and a file that is not there stops the continuation with
+/// its name instead of being skipped.
+#[tokio::test]
+async fn a_file_the_task_places_on_the_destination_is_looked_for_there_at_acceptance() {
+    let h = harness().await;
+    let mut a = h.connect_ready(MAC_A, "studio").await;
+    let mut b = h.connect_ready(MAC_B, "laptop").await;
+    let task = h
+        .task(vec![
+            ResourceRef::Memory {
+                path: "notes/trip.md".into(),
+            },
+            ResourceRef::MachinePath {
+                machine_id: MAC_B.into(),
+                path: "/Users/me/Trip".into(),
+            },
+        ])
+        .await;
+
+    // The preview says the file will be looked for; no desktop is asked.
+    let (status, preview) = h.preview(&task.id, MAC_B).await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["ready"], true, "{preview}");
+    assert_eq!(check_kinds(&preview), vec!["note:resource_unverified"]);
+    assert!(
+        preview["checks"][0]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("/Users/me/Trip"),
+        "{preview}"
+    );
+    a.assert_untouched("preview");
+    b.assert_untouched("preview");
+
+    // Accept while the file is gone: the destination is asked for the
+    // folder once, the answer names the missing file, and nothing starts.
+    let _token = h.conversation_running(CHAT).await;
+    let (refused, call) = tokio::join!(
+        h.accept(&task.id, MAC_B),
+        b.answer(&h.state, Ok("IMG_0001.jpg  (12 bytes)\nOther/"))
+    );
+    assert_eq!(call["action"], "file_list", "{call}");
+    assert_eq!(call["path"], "/Users/me", "{call}");
+    let (status, refused) = refused;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["error"], "handoff_not_ready");
+    assert_eq!(blocking_kinds(&refused), vec!["blocking:resource_missing"]);
+    let detail = blocking_detail(&refused);
+    assert!(
+        detail.contains("/Users/me/Trip") && detail.contains("laptop"),
+        "{detail}"
+    );
+    assert!(h.activity().await.is_empty(), "nothing was admitted");
+    assert!(h.handoff_messages(CHAT).is_empty());
+    assert_eq!(h.store().get(&task.id).unwrap().handoff, None);
+    a.assert_untouched("refused acceptance");
+    b.assert_untouched("refused acceptance: one listing, no more");
+
+    // A folder the desktop cannot read is a stop with the desktop's reason.
+    let (refused, _) = tokio::join!(
+        h.accept(&task.id, MAC_B),
+        b.answer(&h.state, Err("list /Users/me: permission denied"))
+    );
+    let (status, refused) = refused;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(blocking_kinds(&refused), vec!["blocking:resource_missing"]);
+    assert!(
+        blocking_detail(&refused).contains("permission denied"),
+        "{refused}"
+    );
+    assert!(h.activity().await.is_empty());
+
+    // The file is there: accepted after one listing, and the desktops are
+    // otherwise untouched.
+    let (accepted, call) = tokio::join!(
+        h.accept(&task.id, MAC_B),
+        b.answer(&h.state, Ok("IMG_0001.jpg  (12 bytes)\nTrip/"))
+    );
+    assert_eq!(call["action"], "file_list");
+    let (status, accepted) = accepted;
+    assert_eq!(status, StatusCode::OK, "{accepted}");
+    assert_eq!(accepted["already_running"], false);
+    assert_eq!(accepted["card"]["decision"]["machine_id"], MAC_B);
+    assert_eq!(h.activity().await.len(), 1);
+    assert_eq!(h.handoff_messages(CHAT).len(), 1);
+    a.assert_untouched("acceptance");
+    b.assert_untouched("acceptance: the listing was the only call");
+
+    // A file on another computer is never probed through the destination.
+    h.play_conversation(CHAT, MAC_B);
+    h.conversation_stopped(CHAT).await;
+    h.wait_for_outcome(&task.id).await;
+    let elsewhere = h.task(Harness::usual_resources()).await;
+    let _token = h.conversation_running(CHAT).await;
+    let (status, accepted) = h.accept(&elsewhere.id, MAC_B).await;
+    assert_eq!(status, StatusCode::OK, "{accepted}");
+    a.assert_untouched("a file on the origin");
+    b.assert_untouched("a file on the origin");
 }
