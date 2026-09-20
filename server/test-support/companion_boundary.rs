@@ -629,6 +629,24 @@ async fn proactive_activity_api_lists_cancels_retries_and_exposes_policy() {
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "hours are validated");
 
+    // Quiet hours are judged against the wall clock, so clear them before
+    // starting runs; otherwise this test fails whenever CI runs at night.
+    let (status, _) = h
+        .send(
+            Method::PUT,
+            &api("proactive"),
+            Some(serde_json::json!({
+                "enabled": true,
+                "quiet_hours": null,
+                "cooldown_secs": 60,
+                "daily_reach_out_budget": 3,
+                "retention_max": 50,
+                "retention_days": 7
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
     // Records created by the loop are visible, bounded, and controllable.
     let Admission::Admitted(running) = h.state.proactive.begin(
         Trigger::Heartbeat {
