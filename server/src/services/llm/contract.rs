@@ -94,7 +94,29 @@ pub enum LlmEvent {
 }
 pub type EventSink<'a> = dyn Fn(LlmEvent) + Send + Sync + 'a;
 
+/// The loop a request belongs to. A conversation waits on a person between
+/// turns; a subagent run (companion routine, background one-shot) chains its
+/// requests within minutes and then stops.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExecutionScope {
+    Conversation,
+    Subagent,
+}
+
+impl ExecutionScope {
+    /// Anthropic `cache_control.ttl` for prompt-cache entries written in this
+    /// scope. The only place these literals live (#137).
+    pub fn cache_ttl(self) -> &'static str {
+        match self {
+            Self::Conversation => "1h",
+            Self::Subagent => "5m",
+        }
+    }
+}
+
 pub struct LlmRequest<'a> {
+    /// Chooses the prompt-cache lifetime; see `ExecutionScope::cache_ttl`.
+    pub scope: ExecutionScope,
     pub system: &'a [&'a str],
     pub messages: &'a [Message],
     pub tools: &'a [ToolDefinition],
@@ -106,11 +128,13 @@ pub struct LlmRequest<'a> {
 }
 impl<'a> LlmRequest<'a> {
     pub fn new(
+        scope: ExecutionScope,
         system: &'a [&'a str],
         messages: &'a [Message],
         tools: &'a [ToolDefinition],
     ) -> Self {
         Self {
+            scope,
             system,
             messages,
             tools,
@@ -309,10 +333,17 @@ mod tests {
             }],
         }];
         assert!(matches!(
-            adapter.complete(LlmRequest::new(&[], &messages, &[])).await,
+            adapter
+                .complete(LlmRequest::new(
+                    ExecutionScope::Subagent,
+                    &[],
+                    &messages,
+                    &[]
+                ))
+                .await,
             Err(LlmError::UnsupportedCapability("documents"))
         ));
-        let mut request = LlmRequest::new(&[], &[], &[]);
+        let mut request = LlmRequest::new(ExecutionScope::Subagent, &[], &[], &[]);
         request.reasoning = Some("high");
         assert!(matches!(
             adapter.complete(request).await,
@@ -324,7 +355,7 @@ mod tests {
         ));
         for provider in [LlmProvider::Anthropic, LlmProvider::Openai] {
             let adapter = backend(provider, "http://127.0.0.1:1").adapter().unwrap();
-            let request = LlmRequest::new(&[], &[], &[]);
+            let request = LlmRequest::new(ExecutionScope::Subagent, &[], &[], &[]);
             request.cancellation.cancel();
             assert!(matches!(
                 adapter.stream(request, &|_| {}).await,
@@ -357,11 +388,12 @@ mod tests {
             }],
         }];
         assert!(matches!(
-            LlmRequest::new(&[], &messages, &[]).validate(capabilities, false),
+            LlmRequest::new(ExecutionScope::Subagent, &[], &messages, &[])
+                .validate(capabilities, false),
             Err(LlmError::UnsupportedCapability("vision"))
         ));
         assert!(matches!(
-            LlmRequest::new(&[], &[], &[]).validate(capabilities, true),
+            LlmRequest::new(ExecutionScope::Subagent, &[], &[], &[]).validate(capabilities, true),
             Err(LlmError::UnsupportedCapability("streaming"))
         ));
         let capabilities = Capabilities {
@@ -369,7 +401,8 @@ mod tests {
             ..capabilities
         };
         assert!(matches!(
-            LlmRequest::new(&[], &messages, &[]).validate(capabilities, false),
+            LlmRequest::new(ExecutionScope::Subagent, &[], &messages, &[])
+                .validate(capabilities, false),
             Err(LlmError::UnsupportedCapability("tools"))
         ));
     }
@@ -414,7 +447,12 @@ mod tests {
             let adapter = backend(provider, &url).adapter().unwrap();
             let messages = [Message::user("hello")];
             let response = adapter
-                .complete(LlmRequest::new(&["system"], &messages, &[]))
+                .complete(LlmRequest::new(
+                    ExecutionScope::Subagent,
+                    &["system"],
+                    &messages,
+                    &[],
+                ))
                 .await
                 .unwrap();
             assert_eq!(response.text, "hello");
@@ -496,7 +534,10 @@ mod tests {
             let sink = |event| events.lock().unwrap().push(event);
             let adapter = backend(provider, &url).adapter().unwrap();
             let response = adapter
-                .stream(LlmRequest::new(&[], &[], &[]), &sink)
+                .stream(
+                    LlmRequest::new(ExecutionScope::Subagent, &[], &[], &[]),
+                    &sink,
+                )
                 .await
                 .unwrap();
             assert_eq!(response.text, "hello");
@@ -532,12 +573,17 @@ mod tests {
             let (url, _, task) = mock_server(429, "rate limited".into()).await;
             let adapter = backend(provider, &url).adapter().unwrap();
             assert!(matches!(
-                adapter.complete(LlmRequest::new(&[], &[], &[])).await,
+                adapter
+                    .complete(LlmRequest::new(ExecutionScope::Subagent, &[], &[], &[]))
+                    .await,
                 Err(LlmError::Http { status: 429, .. })
             ));
             assert!(matches!(
                 adapter
-                    .stream(LlmRequest::new(&[], &[], &[]), &|_| {})
+                    .stream(
+                        LlmRequest::new(ExecutionScope::Subagent, &[], &[], &[]),
+                        &|_| {}
+                    )
                     .await,
                 Err(LlmError::Http { status: 429, .. })
             ));
@@ -546,7 +592,10 @@ mod tests {
             let adapter = backend(provider, &url).adapter().unwrap();
             assert!(matches!(
                 adapter
-                    .stream(LlmRequest::new(&[], &[], &[]), &|_| {})
+                    .stream(
+                        LlmRequest::new(ExecutionScope::Subagent, &[], &[], &[]),
+                        &|_| {}
+                    )
                     .await,
                 Err(LlmError::InvalidResponse(_))
             ));
@@ -576,7 +625,7 @@ mod tests {
             let server = tokio::spawn(async move {
                 axum::serve(listener, app).await.unwrap();
             });
-            let request = LlmRequest::new(&[], &[], &[]);
+            let request = LlmRequest::new(ExecutionScope::Subagent, &[], &[], &[]);
             let token = request.cancellation.clone();
             let cancel = async {
                 entered.notified().await;
@@ -687,7 +736,7 @@ mod tests {
                     for (streaming, body) in [(false, complete.to_string()), (true, stream)] {
                         let (url, _, task) = mock_server(200, body).await;
                         let adapter = backend(provider, &url).adapter().unwrap();
-                        let request = LlmRequest::new(&[], &[], &[]);
+                        let request = LlmRequest::new(ExecutionScope::Subagent, &[], &[], &[]);
                         let result = if streaming {
                             adapter.stream(request, &|_| {}).await
                         } else {
@@ -733,6 +782,97 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The `ttl` of every `cache_control` anywhere in a captured request
+    /// body; `None` where a breakpoint carries no ttl.
+    fn cache_ttls(value: &Value) -> Vec<Option<String>> {
+        let mut out = Vec::new();
+        match value {
+            Value::Object(map) => {
+                for (key, child) in map {
+                    if key == "cache_control" {
+                        out.push(child["ttl"].as_str().map(str::to_owned));
+                    } else {
+                        out.extend(cache_ttls(child));
+                    }
+                }
+            }
+            Value::Array(items) => out.extend(items.iter().flat_map(cache_ttls)),
+            _ => {}
+        }
+        out
+    }
+
+    fn assert_cached_for(requests: &[Value], ttl: &str, path: &str) {
+        assert!(!requests.is_empty(), "{path}: no request captured");
+        for request in requests {
+            let ttls = cache_ttls(request);
+            assert!(!ttls.is_empty(), "{path}: request has no cache breakpoints");
+            assert!(
+                ttls.iter().all(|t| t.as_deref() == Some(ttl)),
+                "{path}: every breakpoint must use ttl {ttl:?}, got {ttls:?}"
+            );
+        }
+    }
+
+    const END_TURN: &str = r#"{"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":4}}"#;
+
+    #[tokio::test]
+    async fn subagent_paths_request_five_minute_cache_entries() {
+        let (url, requests, task) = mock_server(200, END_TURN.into()).await;
+        let backend = backend(LlmProvider::Anthropic, &url);
+        // Companion routines: one tool so the traced path does not short-circuit to chat().
+        let tools: Vec<Box<dyn crate::services::tool::ToolDyn>> = vec![Box::new(MustNotExecute)];
+        backend
+            .chat_with_tools_traced("system", "prompt", vec![], tools)
+            .await
+            .unwrap();
+        assert_cached_for(&requests.lock().unwrap(), "5m", "chat_with_tools_traced");
+        requests.lock().unwrap().clear();
+        // Background one-shots.
+        backend.chat("system", "prompt", vec![]).await.unwrap();
+        assert_cached_for(&requests.lock().unwrap(), "5m", "chat");
+        requests.lock().unwrap().clear();
+        backend
+            .chat_json("system", "prompt", json!({"type":"object"}))
+            .await
+            .unwrap();
+        assert_cached_for(&requests.lock().unwrap(), "5m", "chat_json");
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn conversation_path_requests_one_hour_cache_entries() {
+        let sse = concat!(
+            "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":5}}}\n\n",
+            "event: content_block_start\ndata: {\"content_block\":{\"type\":\"text\"}}\n\n",
+            "event: content_block_delta\ndata: {\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n",
+            "event: content_block_stop\ndata: {}\n\n",
+            "event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n",
+            "event: message_stop\ndata: {}\n\n"
+        );
+        let (url, requests, task) = mock_server(200, sse.into()).await;
+        let workspace = tempfile::tempdir().unwrap();
+        let tools: Vec<Box<dyn crate::services::tool::ToolDyn>> = vec![Box::new(MustNotExecute)];
+        let result = backend(LlmProvider::Anthropic, &url)
+            .chat_with_tools_streaming(
+                &["system"],
+                Message::user("hi"),
+                vec![],
+                tools,
+                tokio::sync::broadcast::channel(32).0,
+                "companion",
+                "chat",
+                workspace.path(),
+                None,
+                Default::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.text, "hello");
+        assert_cached_for(&requests.lock().unwrap(), "1h", "chat_with_tools_streaming");
+        task.abort();
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use std::{
     env, fs, io,
     path::{Path, PathBuf},
+    sync::OnceLock,
 };
 
 use serde::{Deserialize, Serialize};
@@ -752,7 +753,112 @@ impl Default for LlmTokens {
     }
 }
 
+/// The profile every existing install lives in; its root is `~/.nolune` (or `NOLUNE_HOME`).
+pub const DEFAULT_PROFILE: &str = "default";
+
+/// Where named profiles keep their roots: a sibling of `~/.nolune`, never inside it, so
+/// `nolune uninstall --yes` on one profile cannot reach another (#107).
+pub const PROFILES_DIR: &str = ".nolune-profiles";
+
+/// The isolated deployment a command addresses (#107). The name is local deployment
+/// metadata only: never a companion identity, federation address, or trust anchor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Profile {
+    pub name: String,
+    pub root: PathBuf,
+}
+
+impl Profile {
+    pub fn is_default(&self) -> bool {
+        self.name == DEFAULT_PROFILE
+    }
+}
+
+/// Profile names are short lower-case slugs: `^[a-z0-9][a-z0-9-]{0,31}$`.
+pub fn validate_profile_name(name: &str) -> Result<(), String> {
+    let mut chars = name.chars();
+    let valid = match chars.next() {
+        Some(first) if first.is_ascii_lowercase() || first.is_ascii_digit() => {
+            name.len() <= 32
+                && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        }
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(format!(
+            "invalid profile name {name:?}: use 1-32 lower-case letters, digits, or dashes, \
+             starting with a letter or digit"
+        ))
+    }
+}
+
+/// `~/.nolune-profiles`, the directory every named profile root lives in.
+pub fn profiles_dir(home_dir: &Path) -> PathBuf {
+    home_dir.join(PROFILES_DIR)
+}
+
+/// `~/.nolune` for the default profile, `~/.nolune-profiles/<name>` for any other.
+pub fn profile_root(home_dir: &Path, name: &str) -> PathBuf {
+    if name == DEFAULT_PROFILE {
+        home_dir.join(".nolune")
+    } else {
+        profiles_dir(home_dir).join(name)
+    }
+}
+
+/// Resolve the profile a command addresses from `--profile` and `NOLUNE_HOME`.
+pub fn resolve_profile(name: Option<&str>) -> Result<Profile, String> {
+    let home_dir = dirs::home_dir().ok_or("cannot resolve the home directory")?;
+    resolve_profile_in(
+        &home_dir,
+        env::var_os("NOLUNE_HOME").map(PathBuf::from),
+        name,
+    )
+}
+
+/// No name, or `default`, is today's workspace: `NOLUNE_HOME` when set, else `~/.nolune`.
+/// A named profile always lives at its sibling root; a `NOLUNE_HOME` that points anywhere
+/// else is refused rather than silently picking one of the two deployments.
+fn resolve_profile_in(
+    home_dir: &Path,
+    env_home: Option<PathBuf>,
+    name: Option<&str>,
+) -> Result<Profile, String> {
+    let name = name.unwrap_or(DEFAULT_PROFILE);
+    validate_profile_name(name)?;
+    let root = profile_root(home_dir, name);
+    let root = match env_home {
+        Some(env_home) if name == DEFAULT_PROFILE => env_home,
+        Some(env_home) if env_home != root => {
+            return Err(format!(
+                "--profile {name} lives at {} but NOLUNE_HOME is {}; unset NOLUNE_HOME or drop --profile",
+                root.display(),
+                env_home.display()
+            ));
+        }
+        _ => root,
+    };
+    Ok(Profile {
+        name: name.to_owned(),
+        root,
+    })
+}
+
+static SELECTED_WORKSPACE: OnceLock<PathBuf> = OnceLock::new();
+
+/// Pin the workspace for this process once (#107): the entrypoint resolves the profile,
+/// then every `workspace_root()` and `config_path()` reader addresses it. Later calls
+/// are ignored so a running server can never switch roots.
+pub fn select_workspace(root: PathBuf) {
+    let _ = SELECTED_WORKSPACE.set(root);
+}
+
 pub fn workspace_root() -> PathBuf {
+    if let Some(root) = SELECTED_WORKSPACE.get() {
+        return root.clone();
+    }
     if let Some(path) = env::var_os("NOLUNE_HOME") {
         return PathBuf::from(path);
     }
@@ -1436,5 +1542,108 @@ mod embedding_config_tests {
         );
         config.base_url = "https://api.openai.com/v1/".into();
         assert!(config.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+
+    #[test]
+    fn profile_names_are_short_lowercase_slugs() {
+        for ok in [
+            "a",
+            "molinka",
+            "a-b",
+            "0abc",
+            "x-1-y",
+            &"a".repeat(32),
+            DEFAULT_PROFILE,
+        ] {
+            assert_eq!(validate_profile_name(ok), Ok(()), "{ok:?} should be valid");
+        }
+        for bad in [
+            "",
+            "-a",
+            "Molinka",
+            "a_b",
+            "a.b",
+            "a/b",
+            "..",
+            "a b",
+            "é",
+            &"a".repeat(33),
+        ] {
+            let error =
+                validate_profile_name(bad).expect_err(&format!("{bad:?} should be invalid"));
+            assert!(error.contains("profile"), "{error}");
+        }
+    }
+
+    #[test]
+    fn default_root_is_the_plain_home_and_named_roots_are_siblings() {
+        let home = Path::new("/Users/me");
+        assert_eq!(
+            profile_root(home, DEFAULT_PROFILE),
+            PathBuf::from("/Users/me/.nolune")
+        );
+        let molinka = profile_root(home, "molinka");
+        assert_eq!(molinka, PathBuf::from("/Users/me/.nolune-profiles/molinka"));
+        assert!(
+            !molinka.starts_with("/Users/me/.nolune"),
+            "a profile root inside ~/.nolune would be deleted by `nolune uninstall --yes`"
+        );
+        assert_eq!(
+            profiles_dir(home),
+            PathBuf::from("/Users/me/.nolune-profiles")
+        );
+    }
+
+    #[test]
+    fn unnamed_and_default_profiles_follow_nolune_home() {
+        let home = Path::new("/Users/me");
+        let plain = resolve_profile_in(home, None, None).unwrap();
+        assert_eq!(plain.name, DEFAULT_PROFILE);
+        assert_eq!(plain.root, PathBuf::from("/Users/me/.nolune"));
+        assert!(plain.is_default());
+
+        let custom = resolve_profile_in(home, Some(PathBuf::from("/data")), None).unwrap();
+        assert_eq!(custom.root, PathBuf::from("/data"));
+        let explicit =
+            resolve_profile_in(home, Some(PathBuf::from("/data")), Some("default")).unwrap();
+        assert_eq!(explicit, custom);
+    }
+
+    #[test]
+    fn named_profile_resolves_beside_the_default_root() {
+        let home = Path::new("/Users/me");
+        let profile = resolve_profile_in(home, None, Some("molinka")).unwrap();
+        assert_eq!(profile.name, "molinka");
+        assert_eq!(
+            profile.root,
+            PathBuf::from("/Users/me/.nolune-profiles/molinka")
+        );
+        assert!(!profile.is_default());
+
+        // The service definition sets NOLUNE_HOME to the same root; that is not a conflict.
+        let agreeing = resolve_profile_in(home, Some(profile.root.clone()), Some("molinka"));
+        assert_eq!(agreeing.unwrap(), profile);
+    }
+
+    #[test]
+    fn named_profile_refuses_a_nolune_home_that_points_elsewhere() {
+        let home = Path::new("/Users/me");
+        let error = resolve_profile_in(home, Some(PathBuf::from("/data")), Some("molinka"))
+            .expect_err("a named profile under a foreign NOLUNE_HOME must fail closed");
+        assert!(error.contains("molinka"), "{error}");
+        assert!(error.contains("/data"), "{error}");
+        assert!(error.contains("NOLUNE_HOME"), "{error}");
+        assert!(
+            error.contains("/Users/me/.nolune-profiles/molinka"),
+            "{error}"
+        );
+
+        let invalid = resolve_profile_in(home, None, Some("Molinka")).unwrap_err();
+        assert!(invalid.contains("Molinka"), "{invalid}");
     }
 }

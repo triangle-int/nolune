@@ -91,6 +91,12 @@ gone with the retired night-maintenance agent. Reflection is off until
 delete them. A user-written `instances/companion/heartbeat.md` is appended to
 the check-in prompt as guidance.
 
+Routines run in the subagent execution scope (#137): with the Anthropic
+provider their prompt-cache entries live five minutes, long enough to chain
+the tool calls of one run. A conversation runs in the conversation scope and
+caches for one hour, so a person can pause mid-chat and come back without
+the whole prefix being sent uncached again.
+
 The next run of a routine is derived from its last finished activity record,
 so schedules survive restarts without marker files. A machine-connect event
 runs the check-in once with a connection task.

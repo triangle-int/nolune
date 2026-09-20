@@ -6,7 +6,7 @@ use crate::domain::chat::{ChatMessage, ChatRole};
 use crate::domain::events::ServerEvent;
 use crate::services::tool::{ToolDefinition, ToolDyn};
 
-use super::contract::{LlmEvent, LlmRequest, StopReason};
+use super::contract::{ExecutionScope, LlmEvent, LlmRequest, StopReason};
 use super::helpers::strip_context_blocks;
 
 use super::types::{ContentBlock, HistoryEntry, LlmBackend, LlmResponse, Message, ToolCall};
@@ -26,6 +26,7 @@ pub(crate) async fn collect_tool_defs(tools: &[Box<dyn ToolDyn>]) -> Vec<ToolDef
 /// Non-streaming agent loop. Returns (final text, total tokens used).
 pub(crate) async fn agent_loop(
     backend: &LlmBackend,
+    scope: ExecutionScope,
     system: &[&str],
     tool_defs: &[ToolDefinition],
     tools: &[Box<dyn ToolDyn>],
@@ -34,7 +35,7 @@ pub(crate) async fn agent_loop(
     let mut total_tokens: u64 = 0;
     loop {
         let (text, tool_calls, stop_reason, tokens) =
-            complete_once(backend, system, tool_defs, messages).await?;
+            complete_once(backend, scope, system, tool_defs, messages).await?;
         total_tokens += tokens;
 
         // Build assistant message
@@ -89,8 +90,10 @@ pub(crate) async fn agent_loop(
 }
 
 /// Streaming agent loop. Returns (final text, message_id, total tokens).
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn streaming_agent_loop(
     backend: &LlmBackend,
+    scope: ExecutionScope,
     system: &[&str],
     tool_defs: &[ToolDefinition],
     tools: &[Box<dyn ToolDyn>],
@@ -109,6 +112,7 @@ pub(crate) async fn streaming_agent_loop(
     loop {
         let turn = stream_once(
             backend,
+            scope,
             system,
             tool_defs,
             messages,
@@ -345,13 +349,14 @@ pub(crate) async fn execute_tool(
 /// Non-streaming completion. Returns (text, tool_calls, stop_reason, tokens).
 pub(crate) async fn complete_once(
     backend: &LlmBackend,
+    scope: ExecutionScope,
     system: &[&str],
     tool_defs: &[ToolDefinition],
     messages: &[Message],
 ) -> anyhow::Result<(String, Vec<ToolCall>, StopReason, u64)> {
     let response = backend
         .adapter()?
-        .complete(LlmRequest::new(system, messages, tool_defs))
+        .complete(LlmRequest::new(scope, system, messages, tool_defs))
         .await?;
     log::debug!("LLM completion usage: {:?}", response.usage);
     Ok((
@@ -363,8 +368,10 @@ pub(crate) async fn complete_once(
 }
 
 /// Streaming dispatch: route to provider-specific streaming.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn stream_once(
     backend: &LlmBackend,
+    scope: ExecutionScope,
     system: &[&str],
     tool_defs: &[ToolDefinition],
     messages: &[Message],
@@ -436,7 +443,7 @@ pub(crate) async fn stream_once(
     };
     Ok(backend
         .adapter()?
-        .stream(LlmRequest::new(system, messages, tool_defs), &sink)
+        .stream(LlmRequest::new(scope, system, messages, tool_defs), &sink)
         .await?)
 }
 

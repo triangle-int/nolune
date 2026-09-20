@@ -27,6 +27,8 @@ postcard = { version = "1", default-features = false, features = ["alloc"] }
 sha2 = "0.10"
 hmac = "0.12"
 getrandom = "0.3"
+ed25519-dalek = "2"
+zeroize = "1"
 unicode-normalization = "0.1"
 tempfile = "3"
 chrono = "0.4"
@@ -53,3 +55,7 @@ cap-fs-ext = "4.0.3"
 same-file = "1.0.6"
 tar = "0.4"
 flate2 = "1"
+
+[dev-dependencies]
+# Already in the tree under ed25519-dalek; used only to build forged signatures in tests.
+curve25519-dalek = "4"
