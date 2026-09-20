@@ -26,6 +26,8 @@ pub struct Usage {
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_write_tokens: u64,
+    /// What the provider charged for the turn, in USD, when it says (OpenRouter).
+    pub cost: Option<f64>,
 }
 
 /// Every failure a caller can act on has its own variant; `Http` is only the
@@ -279,18 +281,32 @@ mod tests {
     use serde_json::{Value, json};
     use std::sync::{Arc, Mutex};
 
+    /// Every provider the contract covers; each new adapter joins here.
+    const PROVIDERS: [LlmProvider; 3] = [
+        LlmProvider::Anthropic,
+        LlmProvider::Openai,
+        LlmProvider::Openrouter,
+    ];
+
     fn backend(provider: LlmProvider, url: &str) -> LlmBackend {
         let mut config = Config::default();
         config.llm.seed_presets(provider);
         config.llm.tokens.anthropic = "test".into();
         config.llm.tokens.open_ai = "test".into();
+        config.llm.tokens.open_router = "test".into();
         let preset = match provider {
-            LlmProvider::Anthropic => "sonnet",
-            LlmProvider::Openai => "gpt",
+            LlmProvider::Anthropic => "sonnet".to_owned(),
+            LlmProvider::Openai => "gpt".to_owned(),
+            LlmProvider::Openrouter => crate::config::default_presets(provider)[0].id.clone(),
         };
-        let mut backend = LlmBackend::for_preset(&config, reqwest::Client::new(), preset).unwrap();
+        let mut backend = LlmBackend::for_preset(&config, reqwest::Client::new(), &preset).unwrap();
         backend.base_url = url.into();
         backend
+    }
+
+    /// A finished Chat Completions answer, as openrouter.ai sends it.
+    fn openrouter_completion(text: &str, tool_calls: Value, finish: &str, usage: Value) -> Value {
+        json!({"id":"gen-1","choices":[{"index":0,"message":{"role":"assistant","content":text,"tool_calls":tool_calls},"finish_reason":finish}],"usage":usage})
     }
 
     #[test]
@@ -408,7 +424,7 @@ mod tests {
             adapter.discover_models().await,
             Err(LlmError::UnsupportedCapability("model discovery"))
         ));
-        for provider in [LlmProvider::Anthropic, LlmProvider::Openai] {
+        for provider in PROVIDERS {
             let adapter = backend(provider, "http://127.0.0.1:1").adapter().unwrap();
             let request = LlmRequest::new(ExecutionScope::Subagent, &[], &[], &[]);
             request.cancellation.cancel();
@@ -536,6 +552,15 @@ mod tests {
                 LlmProvider::Openai,
                 json!({"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"hello"}]},{"type":"function_call","call_id":"call1","name":"search","arguments":"{\"q\":\"rust\"}"}],"usage":{"input_tokens":15,"output_tokens":4,"input_tokens_details":{"cached_tokens":2}}}),
             ),
+            (
+                LlmProvider::Openrouter,
+                openrouter_completion(
+                    "hello",
+                    json!([{"id":"call1","type":"function","function":{"name":"search","arguments":"{\"q\":\"rust\"}"}}]),
+                    "tool_calls",
+                    json!({"prompt_tokens":15,"completion_tokens":4,"prompt_tokens_details":{"cached_tokens":2}}),
+                ),
+            ),
         ] {
             let (url, requests, task) = mock_server(200, body.to_string()).await;
             let adapter = backend(provider, &url).adapter().unwrap();
@@ -580,6 +605,15 @@ mod tests {
                 LlmProvider::Openai,
                 json!({"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"{}"}]}],"usage":{"input_tokens":10,"output_tokens":4}}),
             ),
+            (
+                LlmProvider::Openrouter,
+                openrouter_completion(
+                    "{}",
+                    Value::Null,
+                    "stop",
+                    json!({"prompt_tokens":10,"completion_tokens":4}),
+                ),
+            ),
         ] {
             let (url, requests, task) = mock_server(200, body.to_string()).await;
             let backend = backend(provider, &url);
@@ -591,11 +625,17 @@ mod tests {
             assert_eq!(text, "{}");
             assert_eq!(tokens, 14);
             let requests = requests.lock().unwrap();
-            if provider == LlmProvider::Anthropic {
-                assert_eq!(requests[0]["output_config"]["format"]["schema"], schema);
-            } else {
-                assert_eq!(requests[0]["text"]["format"]["type"], "json_object");
-                assert_eq!(requests[0]["store"], false);
+            match provider {
+                LlmProvider::Anthropic => {
+                    assert_eq!(requests[0]["output_config"]["format"]["schema"], schema);
+                }
+                LlmProvider::Openai => {
+                    assert_eq!(requests[0]["text"]["format"]["type"], "json_object");
+                    assert_eq!(requests[0]["store"], false);
+                }
+                LlmProvider::Openrouter => {
+                    assert_eq!(requests[0]["response_format"]["type"], "json_object");
+                }
             }
             task.abort();
         }
@@ -619,9 +659,17 @@ mod tests {
             "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":1,\"delta\":\"{}\"}\n\n",
             "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"function_call\",\"call_id\":\"call1\",\"name\":\"search\",\"arguments\":\"{}\"}],\"usage\":{\"input_tokens\":5,\"output_tokens\":3}}}\n\n"
         );
+        let openrouter = concat!(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hello\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call1\",\"type\":\"function\",\"function\":{\"name\":\"search\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":3}}\n\n",
+            "data: [DONE]\n\n"
+        );
         for (provider, body) in [
             (LlmProvider::Anthropic, anthropic),
             (LlmProvider::Openai, openai),
+            (LlmProvider::Openrouter, openrouter),
         ] {
             let (url, _, task) = mock_server(200, body.into()).await;
             let events = Mutex::new(Vec::new());
@@ -663,7 +711,7 @@ mod tests {
 
     #[tokio::test]
     async fn adapters_return_typed_http_and_truncated_stream_errors() {
-        for provider in [LlmProvider::Anthropic, LlmProvider::Openai] {
+        for provider in PROVIDERS {
             let (url, _, task) = mock_server(429, "rate limited".into()).await;
             let adapter = backend(provider, &url).adapter().unwrap();
             assert!(matches!(
@@ -708,7 +756,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_interrupts_in_flight_http_request() {
-        for provider in [LlmProvider::Anthropic, LlmProvider::Openai] {
+        for provider in PROVIDERS {
             let entered = Arc::new(tokio::sync::Notify::new());
             let notify = entered.clone();
             let app = axum::Router::new().fallback(axum::routing::post(move || {
@@ -766,19 +814,53 @@ mod tests {
         }
     }
 
+    /// Where a provider keeps a tool call's id, name and arguments.
+    fn tool_call_keys(provider: LlmProvider) -> (&'static str, &'static str) {
+        match provider {
+            LlmProvider::Anthropic => ("id", "input"),
+            LlmProvider::Openai => ("call_id", "arguments"),
+            LlmProvider::Openrouter => ("id", "arguments"),
+        }
+    }
+
+    /// A well-formed tool call in the provider's own shape.
+    fn valid_tool_call(provider: LlmProvider) -> Value {
+        match provider {
+            LlmProvider::Anthropic => {
+                json!({"type":"tool_use","id":"id","name":"search","input":{}})
+            }
+            LlmProvider::Openai => {
+                json!({"type":"function_call","call_id":"id","name":"search","arguments":"{}"})
+            }
+            LlmProvider::Openrouter => {
+                json!({"id":"id","type":"function","function":{"name":"search","arguments":"{}"}})
+            }
+        }
+    }
+
+    /// Sets or removes one field of a tool call where that provider keeps it.
+    fn corrupt_tool_call(
+        provider: LlmProvider,
+        call: &mut Value,
+        field: &str,
+        bad: &Option<Value>,
+    ) {
+        let target = match (provider, field) {
+            (LlmProvider::Openrouter, "name" | "arguments") => &mut call["function"],
+            _ => call,
+        };
+        match bad {
+            Some(value) => target[field] = value.clone(),
+            None => {
+                target.as_object_mut().unwrap().remove(field);
+            }
+        }
+    }
+
     #[tokio::test]
     async fn invalid_tool_calls_are_rejected_in_both_modes() {
-        for provider in [LlmProvider::Anthropic, LlmProvider::Openai] {
-            let id_key = if provider == LlmProvider::Anthropic {
-                "id"
-            } else {
-                "call_id"
-            };
-            let args_key = if provider == LlmProvider::Anthropic {
-                "input"
-            } else {
-                "arguments"
-            };
+        for provider in PROVIDERS {
+            let (id_key, args_key) = tool_call_keys(provider);
             for field in [id_key, "name", args_key] {
                 for bad in [
                     None,
@@ -788,53 +870,62 @@ mod tests {
                     Some(json!("broken{")),
                     Some(json!([])),
                 ] {
-                    let mut call = if provider == LlmProvider::Anthropic {
-                        json!({"type":"tool_use","id":"id","name":"search","input":{}})
-                    } else {
-                        json!({"type":"function_call","call_id":"id","name":"search","arguments":"{}"})
-                    };
+                    let mut call = valid_tool_call(provider);
                     // Nonempty strings are valid IDs/names.
                     if field != args_key && bad == Some(json!("broken{")) {
                         continue;
                     }
-                    match &bad {
-                        Some(value) => {
-                            call[field] = value.clone();
+                    corrupt_tool_call(provider, &mut call, field, &bad);
+                    let complete = match provider {
+                        LlmProvider::Anthropic => {
+                            json!({"content":[call.clone()],"stop_reason":"tool_use"})
                         }
-                        None => {
-                            call.as_object_mut().unwrap().remove(field);
+                        LlmProvider::Openai => {
+                            json!({"status":"completed","output":[call.clone()]})
                         }
-                    }
-                    let complete = if provider == LlmProvider::Anthropic {
-                        json!({"content":[call.clone()],"stop_reason":"tool_use"})
-                    } else {
-                        json!({"status":"completed","output":[call.clone()]})
+                        LlmProvider::Openrouter => openrouter_completion(
+                            "",
+                            json!([call.clone()]),
+                            "tool_calls",
+                            json!({"prompt_tokens":1,"completion_tokens":1}),
+                        ),
                     };
-                    let stream = if provider == LlmProvider::Anthropic {
-                        let arguments = if field == args_key {
-                            bad.as_ref()
-                                .map(|v| {
-                                    v.as_str()
-                                        .map(str::to_owned)
-                                        .unwrap_or_else(|| v.to_string())
-                                })
-                                .unwrap_or_default()
-                        } else {
-                            "{}".into()
-                        };
-                        format!(
-                            "event: content_block_start\ndata: {}\n\nevent: content_block_delta\ndata: {}\n\nevent: content_block_stop\ndata: {{}}\n\nevent: message_delta\ndata: {{\"delta\":{{\"stop_reason\":\"tool_use\"}}}}\n\nevent: message_stop\ndata: {{}}\n\n",
-                            json!({"content_block":call}),
-                            json!({"delta":{"type":"input_json_delta","partial_json":arguments}})
-                        )
-                    } else {
-                        let args = call.get("arguments").and_then(Value::as_str).unwrap_or("");
-                        format!(
-                            "data: {}\n\ndata: {}\n\ndata: {}\n\n",
-                            json!({"type":"response.output_item.added","output_index":0,"item":call}),
-                            json!({"type":"response.function_call_arguments.delta","output_index":0,"delta":args}),
-                            json!({"type":"response.completed","response":complete})
-                        )
+                    let stream = match provider {
+                        LlmProvider::Anthropic => {
+                            let arguments = if field == args_key {
+                                bad.as_ref()
+                                    .map(|v| {
+                                        v.as_str()
+                                            .map(str::to_owned)
+                                            .unwrap_or_else(|| v.to_string())
+                                    })
+                                    .unwrap_or_default()
+                            } else {
+                                "{}".into()
+                            };
+                            format!(
+                                "event: content_block_start\ndata: {}\n\nevent: content_block_delta\ndata: {}\n\nevent: content_block_stop\ndata: {{}}\n\nevent: message_delta\ndata: {{\"delta\":{{\"stop_reason\":\"tool_use\"}}}}\n\nevent: message_stop\ndata: {{}}\n\n",
+                                json!({"content_block":call}),
+                                json!({"delta":{"type":"input_json_delta","partial_json":arguments}})
+                            )
+                        }
+                        LlmProvider::Openai => {
+                            let args = call.get("arguments").and_then(Value::as_str).unwrap_or("");
+                            format!(
+                                "data: {}\n\ndata: {}\n\ndata: {}\n\n",
+                                json!({"type":"response.output_item.added","output_index":0,"item":call}),
+                                json!({"type":"response.function_call_arguments.delta","output_index":0,"delta":args}),
+                                json!({"type":"response.completed","response":complete})
+                            )
+                        }
+                        LlmProvider::Openrouter => {
+                            let mut delta = call.clone();
+                            delta["index"] = json!(0);
+                            format!(
+                                "data: {}\n\ndata: [DONE]\n\n",
+                                json!({"choices":[{"index":0,"delta":{"tool_calls":[delta]},"finish_reason":"tool_calls"}]})
+                            )
+                        }
                     };
                     for (streaming, body) in [(false, complete.to_string()), (true, stream)] {
                         let (url, _, task) = mock_server(200, body).await;
@@ -898,6 +989,10 @@ mod tests {
             .to_string()
     }
 
+    fn openrouter_error_body(code: u16, message: &str) -> String {
+        json!({"error": {"code": code, "message": message}}).to_string()
+    }
+
     /// Provider, status, response headers, body, expected variant.
     type ErrorCase = (
         LlmProvider,
@@ -907,13 +1002,60 @@ mod tests {
         &'static str,
     );
 
-    /// Both adapters answer the same failures with the same variants, in
+    /// Every adapter answers the same failures with the same variants, in
     /// both modes; `Http` is only the remainder.
     #[tokio::test]
     async fn adapters_map_provider_errors_to_typed_variants() {
-        use LlmProvider::{Anthropic, Openai};
+        use LlmProvider::{Anthropic, Openai, Openrouter};
         let retry: Vec<(&'static str, String)> = vec![("retry-after", "7".into())];
         let cases: Vec<ErrorCase> = vec![
+            (
+                Openrouter,
+                401,
+                vec![],
+                openrouter_error_body(401, "No auth credentials found"),
+                "authentication",
+            ),
+            (
+                Openrouter,
+                403,
+                vec![],
+                openrouter_error_body(403, "Key limit exceeded"),
+                "authentication",
+            ),
+            (
+                Openrouter,
+                429,
+                retry.clone(),
+                openrouter_error_body(429, "Rate limit exceeded"),
+                "rate_limited",
+            ),
+            (Openrouter, 429, vec![], "plain text".into(), "rate_limited"),
+            (
+                Openrouter,
+                400,
+                vec![],
+                openrouter_error_body(
+                    400,
+                    "This endpoint's maximum context length is 8192 tokens. However, you requested about 9000 tokens",
+                ),
+                "context_length",
+            ),
+            (
+                Openrouter,
+                400,
+                vec![],
+                openrouter_error_body(400, "anthropic/nope is not a valid model ID"),
+                "http",
+            ),
+            (
+                Openrouter,
+                404,
+                vec![],
+                openrouter_error_body(404, "No endpoints found for anthropic/nope"),
+                "http",
+            ),
+            (Openrouter, 502, vec![], "bad gateway".into(), "http"),
             (
                 Anthropic,
                 401,
@@ -1239,11 +1381,19 @@ mod tests {
 
     #[tokio::test]
     async fn probe_key_accepts_authenticated_answers_and_rejects_bad_keys() {
-        for provider in [LlmProvider::Anthropic, LlmProvider::Openai] {
-            let success = if provider == LlmProvider::Anthropic {
-                END_TURN.to_string()
-            } else {
-                json!({"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1}}).to_string()
+        for provider in PROVIDERS {
+            let success = match provider {
+                LlmProvider::Anthropic => END_TURN.to_string(),
+                LlmProvider::Openai => {
+                    json!({"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1}}).to_string()
+                }
+                LlmProvider::Openrouter => openrouter_completion(
+                    "ok",
+                    Value::Null,
+                    "stop",
+                    json!({"prompt_tokens":1,"completion_tokens":1}),
+                )
+                .to_string(),
             };
             let cases = [
                 (200, success, "ok"),
@@ -1273,10 +1423,10 @@ mod tests {
                 let body = &requests[0].1;
                 assert_eq!(body["model"], "model-x");
                 // The smallest completion each API accepts.
-                let (limit, smallest) = if provider == LlmProvider::Anthropic {
-                    ("max_tokens", 1)
-                } else {
-                    ("max_output_tokens", 16)
+                let (limit, smallest) = match provider {
+                    LlmProvider::Anthropic => ("max_tokens", 1),
+                    LlmProvider::Openai => ("max_output_tokens", 16),
+                    LlmProvider::Openrouter => ("max_tokens", 16),
                 };
                 assert_eq!(
                     body[limit], smallest,

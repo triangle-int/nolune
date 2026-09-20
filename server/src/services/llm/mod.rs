@@ -3,6 +3,7 @@ mod anthropic;
 pub mod contract;
 mod helpers;
 mod openai;
+mod openrouter;
 mod types;
 
 use std::path::Path;
@@ -29,9 +30,10 @@ use agent_loop::{agent_loop, collect_tool_defs, streaming_agent_loop};
 use contract::{ExecutionScope, LlmError, LlmRequest, ProviderAdapter};
 use helpers::retry_on_rate_limit;
 
-use types::{ANTHROPIC_BASE_URL, OPENAI_BASE_URL};
+use types::{ANTHROPIC_BASE_URL, OPENAI_BASE_URL, OPENROUTER_BASE_URL};
 
-/// What a preset's provider offers for its model id; OpenAI's answer varies by model.
+/// What a preset's provider offers for its model id; OpenAI's and
+/// OpenRouter's answers vary by model.
 pub fn provider_capabilities(
     provider: crate::config::LlmProvider,
     model: &str,
@@ -39,7 +41,18 @@ pub fn provider_capabilities(
     match provider {
         crate::config::LlmProvider::Anthropic => anthropic::CAPABILITIES,
         crate::config::LlmProvider::Openai => openai::capabilities_for(model),
+        crate::config::LlmProvider::Openrouter => openrouter::capabilities_for(model),
     }
+}
+
+/// The base URL each provider's adapter posts to.
+fn provider_base_url(provider: crate::config::LlmProvider) -> String {
+    match provider {
+        crate::config::LlmProvider::Anthropic => ANTHROPIC_BASE_URL,
+        crate::config::LlmProvider::Openai => OPENAI_BASE_URL,
+        crate::config::LlmProvider::Openrouter => OPENROUTER_BASE_URL,
+    }
+    .to_string()
 }
 
 /// The model a key probe for `provider` should name: the chat preset when it
@@ -95,6 +108,9 @@ impl LlmBackend {
                 Ok(Box::new(anthropic::AnthropicAdapter(self.clone())))
             }
             crate::config::LlmProvider::Openai => Ok(Box::new(openai::OpenaiAdapter(self.clone()))),
+            crate::config::LlmProvider::Openrouter => {
+                Ok(Box::new(openrouter::OpenrouterAdapter(self.clone())))
+            }
         }
     }
 
@@ -118,11 +134,9 @@ impl LlmBackend {
             http,
             api_key,
             model: preset.model.clone(),
-            base_url: match preset.provider {
-                crate::config::LlmProvider::Anthropic => ANTHROPIC_BASE_URL.to_string(),
-                crate::config::LlmProvider::Openai => OPENAI_BASE_URL.to_string(),
-            },
+            base_url: provider_base_url(preset.provider),
             provider: preset.provider,
+            openrouter: config.llm.openrouter.clone(),
         })
     }
 
@@ -162,11 +176,9 @@ impl LlmBackend {
             http,
             api_key: api_key.to_owned(),
             model: model.to_owned(),
-            base_url: match provider {
-                crate::config::LlmProvider::Anthropic => ANTHROPIC_BASE_URL.to_string(),
-                crate::config::LlmProvider::Openai => OPENAI_BASE_URL.to_string(),
-            },
+            base_url: provider_base_url(provider),
             provider,
+            openrouter: Default::default(),
         }
     }
 
@@ -179,10 +191,11 @@ impl LlmBackend {
     pub async fn probe_key(&self) -> Result<(), LlmError> {
         let messages = [Message::user("hi")];
         let mut request = LlmRequest::new(ExecutionScope::Subagent, &[], &messages, &[]);
-        // The smallest completion each API accepts.
+        // The smallest completion each API accepts; OpenRouter passes the
+        // limit on to vendors whose floor is OpenAI's.
         request.max_tokens = match self.provider {
             crate::config::LlmProvider::Anthropic => 1,
-            crate::config::LlmProvider::Openai => 16,
+            crate::config::LlmProvider::Openai | crate::config::LlmProvider::Openrouter => 16,
         };
         match self.adapter()?.complete(request).await {
             Ok(_) => Ok(()),
@@ -420,10 +433,30 @@ mod tests {
         .await
         .err()
         .unwrap();
+        let mut router = LlmBackend::probe(
+            http.clone(),
+            LlmProvider::Openrouter,
+            "vendor/model",
+            "provider-key",
+        );
+        router.base_url = base.clone();
+        let r = router
+            .adapter()
+            .unwrap()
+            .complete(contract::LlmRequest::new(
+                contract::ExecutionScope::Subagent,
+                &[],
+                &[],
+                &[],
+            ))
+            .await
+            .err()
+            .unwrap();
         task.abort();
         assert!(!a.to_string().contains(SECRET));
         assert!(!o.to_string().contains(SECRET));
         assert!(!count.to_string().contains(SECRET));
+        assert!(!r.to_string().contains(SECRET));
     }
 
     #[test]
@@ -447,6 +480,8 @@ mod tests {
         let (instructions, input) = openai::messages_to_openai(&[secret], &messages);
         assert!(!instructions.contains(secret));
         assert!(!serde_json::to_string(&input).unwrap().contains(secret));
+        let router = openrouter::messages_to_openrouter(&[secret], &messages);
+        assert!(!serde_json::to_string(&router).unwrap().contains(secret));
     }
 
     use super::*;
@@ -466,6 +501,8 @@ mod tests {
             (LlmProvider::Anthropic, _) => "haiku",
             (LlmProvider::Openai, "cheap") => "gpt-mini",
             (LlmProvider::Openai, _) => "gpt",
+            (LlmProvider::Openrouter, "cheap") => "openrouter-gpt-mini",
+            (LlmProvider::Openrouter, _) => "openrouter-sonnet",
         };
         crate::config::default_presets(provider)
             .into_iter()
@@ -479,6 +516,7 @@ mod tests {
         config.llm.seed_presets(provider);
         config.llm.tokens.anthropic = "test-key".into();
         config.llm.tokens.open_ai = "test-key".into();
+        config.llm.tokens.open_router = "test-key".into();
         config
     }
 
@@ -486,6 +524,7 @@ mod tests {
         let id = match provider {
             LlmProvider::Anthropic => "sonnet",
             LlmProvider::Openai => "gpt",
+            LlmProvider::Openrouter => "openrouter-sonnet",
         };
         LlmBackend::for_preset(&keyed_config(provider), reqwest::Client::new(), id).unwrap()
     }
@@ -497,6 +536,12 @@ mod tests {
         }
         for preset in crate::config::default_presets(LlmProvider::Openai) {
             assert!(preset.model.starts_with("gpt-"), "{preset:?}");
+        }
+        for preset in crate::config::default_presets(LlmProvider::Openrouter) {
+            assert!(
+                crate::config::is_openrouter_model_id(&preset.model),
+                "{preset:?}"
+            );
         }
     }
 
@@ -513,6 +558,35 @@ mod tests {
         let b = make_backend(LlmProvider::Openai);
         assert_eq!(b.base_url, "https://api.openai.com");
         assert!(b.model.starts_with("gpt-"));
+    }
+
+    /// An OpenRouter backend posts to openrouter.ai with the OPENROUTER
+    /// token and carries the `[llm.openrouter]` options along (#26).
+    #[test]
+    fn backend_openrouter_points_to_openrouter() {
+        let mut config = keyed_config(LlmProvider::Openrouter);
+        config.llm.tokens.open_router = "router-key".into();
+        config.llm.openrouter.app_name = "Nolune".into();
+        let b =
+            LlmBackend::for_preset(&config, reqwest::Client::new(), "openrouter-sonnet").unwrap();
+        assert_eq!(b.base_url, "https://openrouter.ai");
+        assert_eq!(b.provider, LlmProvider::Openrouter);
+        assert_eq!(b.api_key, "router-key");
+        assert_eq!(b.model, "anthropic/claude-sonnet-4.6");
+        assert_eq!(b.openrouter.app_name(), Some("Nolune"));
+        assert!(b.adapter().unwrap().capabilities().tools);
+        assert_eq!(
+            probe_model(&config.llm, LlmProvider::Openrouter),
+            "anthropic/claude-sonnet-4.6"
+        );
+        let probe = LlmBackend::probe(
+            reqwest::Client::new(),
+            LlmProvider::Openrouter,
+            "vendor/model",
+            "k",
+        );
+        assert_eq!(probe.base_url, OPENROUTER_BASE_URL);
+        assert_eq!(probe.openrouter, Default::default());
     }
 
     // ── Presets (#156) ───────────────────────────────────────────────────
@@ -957,7 +1031,11 @@ mod tests {
 
     #[test]
     fn all_providers_have_distinct_model_tiers() {
-        for provider in [LlmProvider::Anthropic, LlmProvider::Openai] {
+        for provider in [
+            LlmProvider::Anthropic,
+            LlmProvider::Openai,
+            LlmProvider::Openrouter,
+        ] {
             let heavy = seed(provider, "heavy");
             let cheap = seed(provider, "cheap");
             assert_ne!(heavy, cheap, "{provider:?}: heavy and cheap should differ");
@@ -970,6 +1048,8 @@ mod tests {
         assert_eq!(api.base_url, ANTHROPIC_BASE_URL);
         let oai = make_backend(LlmProvider::Openai);
         assert_eq!(oai.base_url, OPENAI_BASE_URL);
+        let router = make_backend(LlmProvider::Openrouter);
+        assert_eq!(router.base_url, OPENROUTER_BASE_URL);
     }
 
     // ── Content block helpers ────────────────────────────────────────────
@@ -1099,6 +1179,7 @@ mod tests {
             model: model.to_string(),
             base_url: ANTHROPIC_BASE_URL.to_string(),
             provider: LlmProvider::Anthropic,
+            openrouter: Default::default(),
         })
     }
 
@@ -1113,6 +1194,7 @@ mod tests {
             model: model.to_string(),
             base_url: OPENAI_BASE_URL.to_string(),
             provider: LlmProvider::Openai,
+            openrouter: Default::default(),
         })
     }
 
@@ -1300,6 +1382,38 @@ mod tests {
             "gpt-5.x should accept max_completion_tokens: {}",
             result.unwrap_err()
         );
+    }
+
+    // ── OpenRouter (direct API) ──────────────────────────────────────
+
+    fn openrouter_backend(model: &str) -> Option<LlmBackend> {
+        let key = std::env::var("OPENROUTER_API_KEY")
+            .ok()
+            .filter(|k| !k.is_empty())?;
+        Some(LlmBackend {
+            preset: "network".into(),
+            http: reqwest::Client::new(),
+            api_key: key,
+            model: model.to_string(),
+            base_url: OPENROUTER_BASE_URL.to_string(),
+            provider: LlmProvider::Openrouter,
+            openrouter: Default::default(),
+        })
+    }
+
+    #[tokio::test]
+    #[ignore] // requires OPENROUTER_API_KEY
+    async fn network_openrouter_cheap_chat() {
+        let Some(b) = openrouter_backend(&seed(LlmProvider::Openrouter, "cheap")) else {
+            eprintln!("SKIP: OPENROUTER_API_KEY not set");
+            return;
+        };
+        let (text, tokens) = b
+            .chat("Reply with exactly one word: hello", "say it", vec![])
+            .await
+            .unwrap();
+        assert!(!text.is_empty(), "expected non-empty response");
+        assert!(tokens > 0, "expected token usage > 0");
     }
 
     // ── Cross-provider: same prompt, both formats ─���───────���──────────

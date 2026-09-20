@@ -394,6 +394,7 @@ pub fn default_presets(provider: LlmProvider) -> Vec<ModelPreset> {
             ModelPreset::seeded("gpt", "GPT-5.4", provider, "gpt-5.4"),
             ModelPreset::seeded("gpt-mini", "GPT-5.4 mini", provider, "gpt-5.4-mini"),
         ],
+        LlmProvider::Openrouter => vec![],
     }
 }
 
@@ -402,7 +403,15 @@ fn default_slots(provider: LlmProvider) -> (&'static str, &'static str) {
     match provider {
         LlmProvider::Anthropic => ("sonnet", "haiku"),
         LlmProvider::Openai => ("gpt", "gpt-mini"),
+        LlmProvider::Openrouter => ("", ""),
     }
+}
+
+/// OpenRouter names models `vendor/model`, optionally with a `:variant`
+/// suffix (`anthropic/claude-sonnet-4.6`, `meta-llama/llama-4:free`).
+pub fn is_openrouter_model_id(model: &str) -> bool {
+    let _ = model;
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -412,6 +421,9 @@ pub enum LlmProvider {
     Anthropic,
     /// OpenAI API (requires API key). Format: OpenAI Responses.
     Openai,
+    /// OpenRouter (requires API key): one key, models from many vendors.
+    /// Format: OpenAI Chat Completions at openrouter.ai (#26).
+    Openrouter,
 }
 
 impl LlmProvider {
@@ -419,6 +431,7 @@ impl LlmProvider {
         match self {
             LlmProvider::Anthropic => "Anthropic",
             LlmProvider::Openai => "OpenAI",
+            LlmProvider::Openrouter => "OpenRouter",
         }
     }
 
@@ -460,6 +473,9 @@ pub struct LlmConfig {
     /// Preset id for memory extraction, chat titles, check-ins, and reflection.
     #[serde(default)]
     pub background_preset: String,
+    /// OpenRouter attribution and routing, `[llm.openrouter]` (#26).
+    #[serde(default, skip_serializing_if = "OpenrouterConfig::is_default")]
+    pub openrouter: OpenrouterConfig,
     #[serde(flatten)]
     pub extra: std::collections::BTreeMap<String, toml::Value>,
     /// The `provider` a config from before presets (#157) named. Read on
@@ -467,6 +483,50 @@ pub struct LlmConfig {
     /// written back.
     #[serde(skip)]
     retired_provider: Option<LlmProvider>,
+}
+
+/// OpenRouter-only settings (#26). Attribution is off until a person fills
+/// it in: nothing about this instance, not even its `public_url`, reaches
+/// openrouter.ai unless these say so.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct OpenrouterConfig {
+    /// Where this deployment lives, listed on openrouter.ai app rankings
+    /// when set. Blank sends nothing.
+    pub site_url: String,
+    /// The app name listed on openrouter.ai app rankings when set. Blank
+    /// sends nothing.
+    pub app_name: String,
+    /// Provider routing preferences, sent with every request as
+    /// OpenRouter's `provider` object (`order`, `only`, `ignore`,
+    /// `allow_fallbacks`, `sort`, ...). Absent means OpenRouter's defaults.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub routing: Option<toml::Table>,
+}
+
+impl OpenrouterConfig {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The site URL to attribute requests to, when one is configured.
+    pub fn site_url(&self) -> Option<&str> {
+        let url = self.site_url.trim();
+        (!url.is_empty()).then_some(url)
+    }
+
+    /// The app name to attribute requests to, when one is configured.
+    pub fn app_name(&self) -> Option<&str> {
+        let name = self.app_name.trim();
+        (!name.is_empty()).then_some(name)
+    }
+
+    /// The routing preferences as the JSON object the request carries.
+    pub fn routing_json(&self) -> Option<serde_json::Value> {
+        self.routing
+            .as_ref()
+            .and_then(|table| serde_json::to_value(table).ok())
+    }
 }
 
 /// `[llm]` keys from the tiered-model era. Dropped on load and on save.
@@ -488,6 +548,8 @@ struct RawLlmConfig {
     chat_preset: String,
     #[serde(default)]
     background_preset: String,
+    #[serde(default)]
+    openrouter: OpenrouterConfig,
     #[serde(flatten)]
     extra: std::collections::BTreeMap<String, toml::Value>,
 }
@@ -507,6 +569,7 @@ impl From<RawLlmConfig> for LlmConfig {
             presets: raw.presets,
             chat_preset: raw.chat_preset,
             background_preset: raw.background_preset,
+            openrouter: raw.openrouter,
             extra: raw.extra,
             retired_provider,
         }
@@ -593,6 +656,7 @@ impl LlmConfig {
         let key = match provider {
             LlmProvider::Anthropic => &self.tokens.anthropic,
             LlmProvider::Openai => &self.tokens.open_ai,
+            LlmProvider::Openrouter => return None,
         };
         (!key.is_empty()).then_some(key.as_str())
     }
@@ -754,6 +818,7 @@ impl Default for LlmConfig {
             presets: Vec::new(),
             chat_preset: String::new(),
             background_preset: String::new(),
+            openrouter: OpenrouterConfig::default(),
             extra: Default::default(),
             retired_provider: None,
         };
@@ -1308,7 +1373,7 @@ custom_token = "retained"
 
     #[test]
     fn codex_and_unknown_providers_are_rejected() {
-        for provider in ["codex", "openrouter"] {
+        for provider in ["codex", "gemini"] {
             let raw =
                 format!("[[llm.presets]]\nid='x'\nname='x'\nprovider='{provider}'\nmodel='m'");
             assert!(
@@ -1316,6 +1381,156 @@ custom_token = "retained"
                 "{provider} accepted"
             );
         }
+    }
+
+    // ── OpenRouter (#26) ─────────────────────────────────────────────────
+
+    /// OpenRouter is a provider of its own: its key lives in the existing
+    /// `OPENROUTER` token, its presets name `vendor/model` ids, and it
+    /// takes part in every per-provider rule like the other two.
+    #[test]
+    fn openrouter_is_a_provider_with_its_own_key_and_vendor_model_presets() {
+        let config: Config = toml::from_str(
+            "[llm]\nchat_preset='router'\nbackground_preset='router'\n[llm.tokens]\nOPENROUTER='k'\n[[llm.presets]]\nid='router'\nname='Router'\nprovider='openrouter'\nmodel='anthropic/claude-sonnet-4.6'",
+        )
+        .unwrap();
+        assert_eq!(config.llm.presets[0].provider, LlmProvider::Openrouter);
+        assert_eq!(LlmProvider::Openrouter.label(), "OpenRouter");
+        for spelling in ["openrouter", "open_router"] {
+            assert_eq!(LlmProvider::parse(spelling), Some(LlmProvider::Openrouter));
+        }
+        assert_eq!(
+            serde_json::to_value(LlmProvider::Openrouter).unwrap(),
+            "openrouter"
+        );
+        let serialized = toml::to_string(&config).unwrap();
+        assert!(
+            serialized.contains("provider = \"openrouter\""),
+            "{serialized}"
+        );
+
+        // The key comes from tokens.OPENROUTER, nowhere else.
+        assert_eq!(config.llm.key_for(LlmProvider::Openrouter), Some("k"));
+        assert!(config.llm.has_key(LlmProvider::Openrouter));
+        assert!(config.llm.is_configured());
+        assert_eq!(config.llm.setup_required(), None);
+        assert_eq!(config.llm.validate_presets(), Ok(()));
+        assert_eq!(config.llm.keyed_providers(), [LlmProvider::Openrouter]);
+        let mut all = config.clone();
+        all.llm.tokens.anthropic = "a".into();
+        all.llm.tokens.open_ai = "o".into();
+        assert_eq!(
+            all.llm.keyed_providers(),
+            [
+                LlmProvider::Anthropic,
+                LlmProvider::Openai,
+                LlmProvider::Openrouter
+            ]
+        );
+        let mut none = config.clone();
+        none.llm.tokens.open_router.clear();
+        assert_eq!(none.llm.key_for(LlmProvider::Openrouter), None);
+        assert!(!none.llm.is_configured());
+        assert!(none.llm.setup_required().unwrap().contains("OpenRouter"));
+        let error = none.llm.validate_presets().unwrap_err();
+        assert!(
+            error.contains("OpenRouter") && error.contains("key"),
+            "{error}"
+        );
+
+        // Seeded presets name vendor/model ids, fill both slots, and never
+        // collide with the ids the other providers seed.
+        let presets = default_presets(LlmProvider::Openrouter);
+        assert!(presets.len() >= 2, "{presets:?}");
+        for preset in &presets {
+            assert_eq!(preset.provider, LlmProvider::Openrouter);
+            assert!(is_openrouter_model_id(&preset.model), "{preset:?}");
+        }
+        for other in [LlmProvider::Anthropic, LlmProvider::Openai] {
+            for foreign in default_presets(other) {
+                assert!(
+                    presets.iter().all(|preset| preset.id != foreign.id),
+                    "{} is seeded by {other:?} too",
+                    foreign.id
+                );
+            }
+        }
+        let mut seeded: Config = toml::from_str("[llm]\n[llm.tokens]\nOPENROUTER='k'").unwrap();
+        assert_eq!(seeded.llm.seed_for_keys(), presets.len());
+        let chat = seeded.llm.chat_preset().unwrap();
+        let background = seeded.llm.background_preset().unwrap();
+        assert_eq!(chat.provider, LlmProvider::Openrouter);
+        assert_eq!(background.provider, LlmProvider::Openrouter);
+        assert_ne!(chat.id, background.id, "chat and background differ");
+        assert!(seeded.llm.is_configured());
+        assert_eq!(seeded.llm.validate_presets(), Ok(()));
+    }
+
+    /// An OpenRouter model id is `vendor/model`; a bare id would be sent to
+    /// openrouter.ai and answered with "not a valid model ID" after the save.
+    #[test]
+    fn openrouter_presets_name_models_as_vendor_slash_model() {
+        for ok in [
+            "anthropic/claude-sonnet-4.6",
+            "openai/gpt-5.4-mini",
+            "meta-llama/llama-4-maverick:free",
+        ] {
+            assert!(is_openrouter_model_id(ok), "{ok}");
+        }
+        for bad in [
+            "claude-sonnet-4-6",
+            "/model",
+            "vendor/",
+            "vendor/mo del",
+            "",
+        ] {
+            assert!(!is_openrouter_model_id(bad), "{bad:?}");
+        }
+        let mut config: Config = toml::from_str(
+            "[llm]\nchat_preset='r'\nbackground_preset='r'\n[llm.tokens]\nOPENROUTER='k'\nOPEN_AI='o'\n[[llm.presets]]\nid='r'\nname='Router'\nprovider='openrouter'\nmodel='gpt-5.4'",
+        )
+        .unwrap();
+        let error = config.llm.validate_presets().unwrap_err();
+        assert!(error.contains("vendor/model"), "{error}");
+        // The other providers keep their plain ids.
+        config.llm.presets[0].provider = LlmProvider::Openai;
+        assert_eq!(config.llm.validate_presets(), Ok(()));
+    }
+
+    /// Attribution headers and routing preferences come from
+    /// `[llm.openrouter]` only: unset by default, blank means unset, and
+    /// the defaults are not written into config.toml.
+    #[test]
+    fn openrouter_attribution_and_routing_are_off_until_configured() {
+        let plain: Config =
+            toml::from_str("[llm]\npublic_url = 'https://private.example'").unwrap();
+        assert_eq!(plain.llm.openrouter, OpenrouterConfig::default());
+        assert_eq!(plain.llm.openrouter.site_url(), None);
+        assert_eq!(plain.llm.openrouter.app_name(), None);
+        assert_eq!(plain.llm.openrouter.routing_json(), None);
+        let serialized = toml::to_string(&plain).unwrap();
+        assert!(!serialized.contains("[llm.openrouter]"), "{serialized}");
+
+        let configured: Config = toml::from_str(
+            "[llm.openrouter]\nsite_url = 'https://nolune.example'\napp_name = 'Nolune'\n[llm.openrouter.routing]\norder = ['anthropic', 'openai']\nallow_fallbacks = false",
+        )
+        .unwrap();
+        assert_eq!(
+            configured.llm.openrouter.site_url(),
+            Some("https://nolune.example")
+        );
+        assert_eq!(configured.llm.openrouter.app_name(), Some("Nolune"));
+        let routing = configured.llm.openrouter.routing_json().unwrap();
+        assert_eq!(routing["order"][1], "openai");
+        assert_eq!(routing["allow_fallbacks"], false);
+        let serialized = serialize_config_preserving_keys(&configured, "").unwrap();
+        let restored: Config = toml::from_str(&serialized).unwrap();
+        assert_eq!(restored.llm.openrouter, configured.llm.openrouter);
+
+        let blank: Config =
+            toml::from_str("[llm.openrouter]\nsite_url = '  '\napp_name = ''").unwrap();
+        assert_eq!(blank.llm.openrouter.site_url(), None);
+        assert_eq!(blank.llm.openrouter.app_name(), None);
     }
 
     #[test]
