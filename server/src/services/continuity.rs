@@ -10,10 +10,10 @@ use std::{
 };
 
 use crate::domain::continuity::{
-    ContinuityError, ContinuityRecord, ContinuityState, ContinuityUpdate, Origin, Provenance,
-    ProvenanceSource, is_valid_id,
+    Blocker, BlockerKind, ContinuityError, ContinuityRecord, ContinuityState, ContinuityUpdate,
+    MAX_BLOCKERS, MAX_RECORD_BYTES, Origin, Provenance, ProvenanceSource, ResourceRef, is_valid_id,
 };
-use crate::services::machine_registry::MachineRegistry;
+use crate::services::{machine_registry::MachineRegistry, uploads};
 
 const CONTINUITY_DIR: &str = "continuity";
 
@@ -60,8 +60,15 @@ impl ContinuityStore {
         provenance: Provenance,
         now: i64,
     ) -> Result<ContinuityRecord, ContinuityError> {
-        let _ = (goal, origin, update, provenance, now);
-        todo!("#81 continuity store")
+        let mut record =
+            ContinuityRecord::new(new_record_id(now), goal, origin, provenance.clone(), now)?;
+        if *update != ContinuityUpdate::default() {
+            record.apply(update, provenance, now)?;
+            // Creation and the initial details are one act, not two entries.
+            record.provenance.truncate(1);
+        }
+        self.save(&record)?;
+        Ok(record)
     }
 
     /// Apply one explicit change to an existing record and persist it.
@@ -72,8 +79,10 @@ impl ContinuityStore {
         provenance: Provenance,
         now: i64,
     ) -> Result<ContinuityRecord, ContinuityError> {
-        let _ = (id, update, provenance, now);
-        todo!("#81 continuity store")
+        let mut record = self.get(id).ok_or(ContinuityError::NotFound)?;
+        record.apply(update, provenance, now)?;
+        self.save(&record)?;
+        Ok(record)
     }
 
     pub fn complete(
@@ -82,8 +91,7 @@ impl ContinuityStore {
         provenance: Provenance,
         now: i64,
     ) -> Result<ContinuityRecord, ContinuityError> {
-        let _ = (id, provenance, now);
-        todo!("#81 continuity store")
+        self.set_state(id, ContinuityState::Completed, provenance, now)
     }
 
     pub fn dismiss(
@@ -92,36 +100,97 @@ impl ContinuityStore {
         provenance: Provenance,
         now: i64,
     ) -> Result<ContinuityRecord, ContinuityError> {
-        let _ = (id, provenance, now);
-        todo!("#81 continuity store")
+        self.set_state(id, ContinuityState::Dismissed, provenance, now)
+    }
+
+    fn set_state(
+        &self,
+        id: &str,
+        state: ContinuityState,
+        provenance: Provenance,
+        now: i64,
+    ) -> Result<ContinuityRecord, ContinuityError> {
+        self.update(
+            id,
+            &ContinuityUpdate {
+                state: Some(state),
+                ..Default::default()
+            },
+            provenance,
+            now,
+        )
     }
 
     /// Validate, bound, and atomically write one record.
     pub fn save(&self, record: &ContinuityRecord) -> Result<(), ContinuityError> {
-        let _ = record;
-        todo!("#81 continuity store")
+        record.validate()?;
+        let json = serde_json::to_string_pretty(record).map_err(io_error)?;
+        if json.len() > MAX_RECORD_BYTES {
+            return Err(ContinuityError::TooLarge {
+                bytes: json.len(),
+                max: MAX_RECORD_BYTES,
+            });
+        }
+        fs::create_dir_all(self.dir()).map_err(io_error)?;
+        write_atomic(&self.record_path(&record.id), &json).map_err(io_error)
     }
 
     // ── reads ──────────────────────────────────────────────────────────────
 
     pub fn get(&self, id: &str) -> Option<ContinuityRecord> {
-        let _ = id;
-        todo!("#81 continuity store")
+        if !is_valid_id(id) {
+            return None;
+        }
+        read_record(&self.record_path(id)).ok()
     }
 
     /// Every readable record, most recently updated first.
     pub fn list(&self) -> Vec<ContinuityRecord> {
-        todo!("#81 continuity store")
+        self.scan().0
     }
 
     /// Files that were skipped, and why. Nothing is deleted.
     pub fn list_errors(&self) -> Vec<RecordError> {
-        todo!("#81 continuity store")
+        self.scan().1
     }
 
     /// Records the user can pick up again: active, waiting, ready to resume.
     pub fn resumable(&self) -> Vec<ContinuityRecord> {
-        todo!("#81 continuity store")
+        self.list()
+            .into_iter()
+            .filter(|record| record.state.is_resumable())
+            .collect()
+    }
+
+    fn scan(&self) -> (Vec<ContinuityRecord>, Vec<RecordError>) {
+        let Ok(entries) = fs::read_dir(self.dir()) else {
+            return (Vec::new(), Vec::new());
+        };
+        let mut records = Vec::new();
+        let mut errors = Vec::new();
+        for path in entries.filter_map(Result::ok).map(|entry| entry.path()) {
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if name.starts_with('.')
+                || path.extension().and_then(|ext| ext.to_str()) != Some("json")
+            {
+                continue;
+            }
+            match read_record(&path) {
+                Ok(record) => records.push(record),
+                Err(reason) => errors.push(RecordError {
+                    file: name.to_owned(),
+                    reason,
+                }),
+            }
+        }
+        records.sort_by(|a, b| {
+            b.updated_at
+                .cmp(&a.updated_at)
+                .then_with(|| b.id.cmp(&a.id))
+        });
+        (records, errors)
     }
 
     /// Missing computers and resources become explicit `machine_unavailable`
@@ -130,17 +199,107 @@ impl ContinuityStore {
     /// was added or removed.
     pub async fn validate_references(
         &self,
-        record: ContinuityRecord,
+        mut record: ContinuityRecord,
         machines: &MachineRegistry,
         now: i64,
     ) -> ContinuityRecord {
-        let _ = (machines, now);
-        let _ = ProvenanceSource::Server;
-        let _ = ContinuityState::Active;
-        let _ = is_valid_id;
-        let _: fn(&Path, &str) -> io::Result<()> = write_atomic;
+        let connected: Vec<String> = machines
+            .list()
+            .await
+            .into_iter()
+            .map(|machine| machine.machine_id)
+            .collect();
+        let mut expected: Vec<(BlockerKind, String)> = Vec::new();
+        for machine_id in &record.machine_ids {
+            if !connected.contains(machine_id) {
+                expected.push((
+                    BlockerKind::MachineUnavailable {
+                        machine_id: machine_id.clone(),
+                    },
+                    format!("computer {machine_id} is not connected"),
+                ));
+            }
+        }
+        for link in &record.resources {
+            let present = match &link.resource {
+                ResourceRef::Upload { id } => {
+                    uploads::get_upload_file_path(&self.workspace_dir, &self.slug, id).is_some()
+                }
+                ResourceRef::Memory { path } => self
+                    .workspace_dir
+                    .join("instances")
+                    .join(&self.slug)
+                    .join("memory")
+                    .join(path)
+                    .is_file(),
+                ResourceRef::MachinePath { machine_id, .. } => connected.contains(machine_id),
+            };
+            if !present {
+                expected.push((
+                    BlockerKind::ResourceMissing {
+                        resource: link.resource.clone(),
+                    },
+                    format!("{} cannot be found", link.resource.describe()),
+                ));
+            }
+        }
+
+        let before = record.blockers.clone();
+        // Reference-check blockers whose reference is back are cleared.
+        record.blockers.retain(|blocker| {
+            !blocker.is_reference_check() || expected.iter().any(|(kind, _)| kind == &blocker.kind)
+        });
+        // Missing references gain one blocker each; existing ones are kept as they were.
+        for (kind, detail) in expected {
+            if record.blockers.len() >= MAX_BLOCKERS {
+                break;
+            }
+            if !record.blockers.iter().any(|blocker| blocker.kind == kind) {
+                record.blockers.push(Blocker {
+                    kind,
+                    detail,
+                    provenance: Provenance {
+                        source: ProvenanceSource::Server,
+                        at: now,
+                        note: "reference check".into(),
+                    },
+                });
+            }
+        }
+        if record.blockers != before
+            && let Err(error) = self.save(&record)
+        {
+            log::warn!(
+                "[continuity] could not persist reference check for {}: {error}",
+                record.id
+            );
+        }
         record
     }
+}
+
+/// Read one file defensively: size cap first, then JSON, then invariants.
+fn read_record(path: &Path) -> Result<ContinuityRecord, String> {
+    let len = fs::metadata(path).map_err(|error| error.to_string())?.len();
+    if len > MAX_RECORD_BYTES as u64 {
+        return Err(format!(
+            "record is {len} bytes; the limit is {MAX_RECORD_BYTES}"
+        ));
+    }
+    let raw = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let record: ContinuityRecord =
+        serde_json::from_str(&raw).map_err(|error| format!("not a continuity record: {error}"))?;
+    record.validate().map_err(|error| error.to_string())?;
+    Ok(record)
+}
+
+fn new_record_id(now: i64) -> String {
+    let suffix: String = uuid::Uuid::new_v4().simple().to_string()[..8].to_owned();
+    format!("task_{now}_{suffix}")
+}
+
+fn io_error(error: impl std::fmt::Display) -> ContinuityError {
+    ContinuityError::Io(error.to_string())
 }
 
 fn write_atomic(path: &Path, content: &str) -> io::Result<()> {
@@ -576,16 +735,31 @@ mod tests {
         ));
         assert_eq!(fs::read_to_string(&path).unwrap(), before);
 
+        // Every field at its own cap adds up to more than one file may hold.
+        use crate::domain::continuity::{
+            MAX_NOTE_CHARS, MAX_PATH_BYTES, MAX_PROVENANCE, MAX_RESOURCES, MAX_STEPS, ResourceLink,
+            Step,
+        };
         let mut huge = record.clone();
-        huge.completed_steps = (0..crate::domain::continuity::MAX_STEPS)
-            .map(|i| crate::domain::continuity::Step {
-                summary: format!("{i}").repeat(300),
-                provenance: by(ProvenanceSource::Tool, &"n".repeat(300)),
+        huge.completed_steps = (0..MAX_STEPS)
+            .map(|_| Step {
+                summary: "s".repeat(MAX_NOTE_CHARS),
+                provenance: by(ProvenanceSource::Tool, &"n".repeat(MAX_NOTE_CHARS)),
             })
             .collect();
-        huge.provenance = (0..crate::domain::continuity::MAX_PROVENANCE)
-            .map(|_| by(ProvenanceSource::Tool, &"p".repeat(300)))
+        huge.resources = (0..MAX_RESOURCES)
+            .map(|i| ResourceLink {
+                resource: ResourceRef::MachinePath {
+                    machine_id: "mac-mini".into(),
+                    path: format!("/{i}/{}", "p".repeat(MAX_PATH_BYTES - 8)),
+                },
+                provenance: by(ProvenanceSource::Tool, "link"),
+            })
             .collect();
+        huge.provenance = (0..MAX_PROVENANCE)
+            .map(|_| by(ProvenanceSource::Tool, &"p".repeat(MAX_NOTE_CHARS)))
+            .collect();
+        huge.validate().unwrap();
         match store.save(&huge) {
             Err(ContinuityError::TooLarge { bytes, max }) => {
                 assert!(bytes > max);

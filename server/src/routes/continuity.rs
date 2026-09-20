@@ -7,6 +7,7 @@ use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
+    routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
 
@@ -14,13 +15,31 @@ use crate::{
     app::state::AppState,
     domain::{
         companion::CANONICAL_SLUG,
-        continuity::{ContinuityError, ContinuityRecord, ContinuityUpdate},
+        continuity::{
+            ContinuityError, ContinuityRecord, ContinuityUpdate, Provenance, ProvenanceSource,
+        },
     },
     services::continuity::{ContinuityStore, RecordError},
 };
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route(
+            "/api/instances/{instance_slug}/continuity",
+            get(list_records),
+        )
+        .route(
+            "/api/instances/{instance_slug}/continuity/{record_id}",
+            get(get_record).put(update_record),
+        )
+        .route(
+            "/api/instances/{instance_slug}/continuity/{record_id}/complete",
+            post(complete_record),
+        )
+        .route(
+            "/api/instances/{instance_slug}/continuity/{record_id}/dismiss",
+            post(dismiss_record),
+        )
 }
 
 fn store(state: &AppState) -> ContinuityStore {
@@ -74,14 +93,94 @@ fn api_error(error: ContinuityError) -> ApiError {
     )
 }
 
-#[allow(dead_code)]
+fn by_user(note: &str, fallback: &str, now: i64) -> Provenance {
+    let note = note.trim();
+    Provenance {
+        source: ProvenanceSource::User,
+        at: now,
+        note: if note.is_empty() { fallback } else { note }.to_owned(),
+    }
+}
+
 async fn list_records(
     State(state): State<AppState>,
     Path(_instance_slug): Path<String>,
     Query(query): Query<ListQuery>,
 ) -> Json<Listing> {
-    let _ = (store(&state), query.resumable, api_error);
-    let _: Option<(UpdateBody, NoteBody)> = None;
-    let _: fn(fn() -> ()) = |_| {};
-    todo!("#81 continuity routes")
+    let store = store(&state);
+    let now = chrono::Utc::now().timestamp();
+    let errors = store.list_errors();
+    let listed = if query.resumable {
+        store.resumable()
+    } else {
+        store.list()
+    };
+    let mut records = Vec::with_capacity(listed.len());
+    for record in listed {
+        records.push(
+            store
+                .validate_references(record, &state.machine_registry, now)
+                .await,
+        );
+    }
+    Json(Listing { records, errors })
+}
+
+async fn get_record(
+    State(state): State<AppState>,
+    Path((_instance_slug, record_id)): Path<(String, String)>,
+) -> Result<Json<ContinuityRecord>, ApiError> {
+    let store = store(&state);
+    let record = store
+        .get(&record_id)
+        .ok_or_else(|| api_error(ContinuityError::NotFound))?;
+    let now = chrono::Utc::now().timestamp();
+    Ok(Json(
+        store
+            .validate_references(record, &state.machine_registry, now)
+            .await,
+    ))
+}
+
+async fn update_record(
+    State(state): State<AppState>,
+    Path((_instance_slug, record_id)): Path<(String, String)>,
+    Json(body): Json<UpdateBody>,
+) -> Result<Json<ContinuityRecord>, ApiError> {
+    let now = chrono::Utc::now().timestamp();
+    let provenance = Provenance {
+        source: ProvenanceSource::User,
+        at: now,
+        note: body.note,
+    };
+    store(&state)
+        .update(&record_id, &body.update, provenance, now)
+        .map(Json)
+        .map_err(api_error)
+}
+
+async fn complete_record(
+    State(state): State<AppState>,
+    Path((_instance_slug, record_id)): Path<(String, String)>,
+    body: Option<Json<NoteBody>>,
+) -> Result<Json<ContinuityRecord>, ApiError> {
+    let now = chrono::Utc::now().timestamp();
+    let note = body.map(|Json(body)| body.note).unwrap_or_default();
+    store(&state)
+        .complete(&record_id, by_user(&note, "marked done", now), now)
+        .map(Json)
+        .map_err(api_error)
+}
+
+async fn dismiss_record(
+    State(state): State<AppState>,
+    Path((_instance_slug, record_id)): Path<(String, String)>,
+    body: Option<Json<NoteBody>>,
+) -> Result<Json<ContinuityRecord>, ApiError> {
+    let now = chrono::Utc::now().timestamp();
+    let note = body.map(|Json(body)| body.note).unwrap_or_default();
+    store(&state)
+        .dismiss(&record_id, by_user(&note, "dismissed", now), now)
+        .map(Json)
+        .map_err(api_error)
 }

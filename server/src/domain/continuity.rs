@@ -25,6 +25,10 @@ pub const MAX_MACHINES: usize = 16;
 pub const MAX_PROVENANCE: usize = 100;
 /// Largest record accepted on disk; bigger files are reported, never read.
 pub const MAX_RECORD_BYTES: usize = 64 * 1024;
+/// Longest path on a computer kept as a link.
+pub const MAX_PATH_BYTES: usize = 1024;
+/// Longest record id or machine id.
+pub const MAX_ID_BYTES: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -99,12 +103,31 @@ pub enum ResourceRef {
 
 impl ResourceRef {
     pub fn validate(&self) -> Result<(), ContinuityError> {
-        todo!("#81 continuity domain")
+        use crate::services::resource_capability::CapabilityResource;
+        match self {
+            Self::Upload { id } => CapabilityResource::uploaded_file(id.as_str())
+                .map(drop)
+                .map_err(|_| invalid(format!("invalid upload id {id:?}"))),
+            Self::Memory { path } => CapabilityResource::memory(path.as_str())
+                .map(drop)
+                .map_err(|_| invalid(format!("invalid memory path {path:?}"))),
+            Self::MachinePath { machine_id, path } => {
+                validate_machine_id(machine_id)?;
+                if path.trim().is_empty() || path.len() > MAX_PATH_BYTES {
+                    return Err(invalid(format!("invalid path {path:?} on {machine_id}")));
+                }
+                Ok(())
+            }
+        }
     }
 
     /// Short user-readable name, used in blocker details.
     pub fn describe(&self) -> String {
-        todo!("#81 continuity domain")
+        match self {
+            Self::Upload { id } => format!("upload {id}"),
+            Self::Memory { path } => format!("memory {path}"),
+            Self::MachinePath { machine_id, path } => format!("{path} on {machine_id}"),
+        }
     }
 }
 
@@ -215,8 +238,25 @@ impl ContinuityRecord {
         provenance: Provenance,
         now: i64,
     ) -> Result<Self, ContinuityError> {
-        let _ = (id, goal, origin, provenance, now);
-        todo!("#81 continuity domain")
+        let goal = required(goal, MAX_GOAL_CHARS, "goal")?;
+        let provenance = checked_provenance(provenance)?;
+        let record = Self {
+            version: CONTINUITY_FORMAT_VERSION,
+            id,
+            goal,
+            state: ContinuityState::Active,
+            origin,
+            machine_ids: Vec::new(),
+            resources: Vec::new(),
+            completed_steps: Vec::new(),
+            blockers: Vec::new(),
+            next_step: None,
+            created_at: now,
+            updated_at: now,
+            provenance: vec![provenance],
+        };
+        record.validate()?;
+        Ok(record)
     }
 
     /// Apply one explicit change. Fails without touching `self` when the
@@ -227,20 +267,167 @@ impl ContinuityRecord {
         provenance: Provenance,
         now: i64,
     ) -> Result<(), ContinuityError> {
-        let _ = (update, provenance, now);
-        todo!("#81 continuity domain")
+        let provenance = checked_provenance(provenance)?;
+        let mut next = self.clone();
+
+        if let Some(goal) = &update.goal {
+            next.goal = required(goal, MAX_GOAL_CHARS, "goal")?;
+        }
+        if let Some(state) = update.state {
+            next.state = state;
+        }
+        if let Some(step) = &update.completed_step {
+            next.completed_steps.push(Step {
+                summary: required(step, MAX_NOTE_CHARS, "completed step")?,
+                provenance: provenance.clone(),
+            });
+        }
+        if update.clear_blockers {
+            next.blockers.retain(Blocker::is_reference_check);
+        }
+        if let Some(blocker) = &update.blocker {
+            next.blockers.push(Blocker {
+                kind: BlockerKind::Other,
+                detail: required(blocker, MAX_NOTE_CHARS, "blocker")?,
+                provenance: provenance.clone(),
+            });
+        }
+        if let Some(next_step) = &update.next_step {
+            let next_step = bounded(next_step, MAX_NOTE_CHARS);
+            next.next_step = (!next_step.is_empty()).then_some(next_step);
+        }
+        for machine_id in &update.machine_ids {
+            validate_machine_id(machine_id)?;
+            if !next.machine_ids.contains(machine_id) {
+                next.machine_ids.push(machine_id.clone());
+            }
+        }
+        for resource in &update.resources {
+            resource.validate()?;
+            if !next.resources.iter().any(|link| &link.resource == resource) {
+                next.resources.push(ResourceLink {
+                    resource: resource.clone(),
+                    provenance: provenance.clone(),
+                });
+            }
+        }
+        next.updated_at = now;
+        next.provenance.push(provenance);
+        if next.provenance.len() > MAX_PROVENANCE {
+            // Keep the creating entry and the most recent ones.
+            let excess = next.provenance.len() - MAX_PROVENANCE;
+            next.provenance.drain(1..1 + excess);
+        }
+
+        next.validate()?;
+        *self = next;
+        Ok(())
     }
 
     /// Every invariant a stored record must hold.
     pub fn validate(&self) -> Result<(), ContinuityError> {
-        todo!("#81 continuity domain")
+        if self.version != CONTINUITY_FORMAT_VERSION {
+            return Err(invalid(format!(
+                "unsupported continuity format version {} (this server writes {CONTINUITY_FORMAT_VERSION})",
+                self.version
+            )));
+        }
+        if !is_valid_id(&self.id) {
+            return Err(invalid(format!("invalid record id {:?}", self.id)));
+        }
+        if self.goal.trim().is_empty() {
+            return Err(invalid("goal is required"));
+        }
+        if self.provenance.is_empty() {
+            return Err(invalid("provenance is required"));
+        }
+        for entry in &self.provenance {
+            if entry.note.trim().is_empty() {
+                return Err(invalid("provenance note is required"));
+            }
+        }
+        if self.origin.chat_id.trim().is_empty() {
+            return Err(invalid("origin chat_id is required"));
+        }
+        for (label, len, max) in [
+            ("goal", self.goal.chars().count(), MAX_GOAL_CHARS),
+            ("completed steps", self.completed_steps.len(), MAX_STEPS),
+            ("blockers", self.blockers.len(), MAX_BLOCKERS),
+            ("resources", self.resources.len(), MAX_RESOURCES),
+            ("computers", self.machine_ids.len(), MAX_MACHINES),
+            ("provenance", self.provenance.len(), MAX_PROVENANCE),
+        ] {
+            if len > max {
+                return Err(invalid(format!("{label} exceed the limit of {max}")));
+            }
+        }
+        for text in self
+            .completed_steps
+            .iter()
+            .map(|step| &step.summary)
+            .chain(self.blockers.iter().map(|blocker| &blocker.detail))
+            .chain(self.provenance.iter().map(|entry| &entry.note))
+            .chain(self.next_step.iter())
+        {
+            if text.chars().count() > MAX_NOTE_CHARS {
+                return Err(invalid(format!(
+                    "text exceeds the limit of {MAX_NOTE_CHARS} characters"
+                )));
+            }
+        }
+        for machine_id in &self.machine_ids {
+            validate_machine_id(machine_id)?;
+        }
+        for link in &self.resources {
+            link.resource.validate()?;
+        }
+        Ok(())
     }
 }
 
 /// Record ids are one path component: `task_<unix seconds>_<8 hex>`.
 pub fn is_valid_id(id: &str) -> bool {
-    let _ = id;
-    todo!("#81 continuity domain")
+    !id.is_empty()
+        && id.len() <= MAX_ID_BYTES
+        && !id.starts_with('.')
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+}
+
+fn validate_machine_id(machine_id: &str) -> Result<(), ContinuityError> {
+    if machine_id.is_empty()
+        || machine_id.len() > MAX_ID_BYTES
+        || machine_id.starts_with('.')
+        || machine_id.contains(['/', '\\', '\0'])
+        || machine_id.chars().any(char::is_control)
+    {
+        return Err(invalid(format!("invalid machine id {machine_id:?}")));
+    }
+    Ok(())
+}
+
+fn invalid(message: impl Into<String>) -> ContinuityError {
+    ContinuityError::Invalid(message.into())
+}
+
+fn bounded(text: &str, max: usize) -> String {
+    text.trim().chars().take(max).collect()
+}
+
+fn required(text: &str, max: usize, label: &str) -> Result<String, ContinuityError> {
+    let text = bounded(text, max);
+    if text.is_empty() {
+        return Err(invalid(format!("{label} is required")));
+    }
+    Ok(text)
+}
+
+fn checked_provenance(provenance: Provenance) -> Result<Provenance, ContinuityError> {
+    Ok(Provenance {
+        note: required(&provenance.note, MAX_NOTE_CHARS, "provenance note")?,
+        ..provenance
+    })
 }
 
 #[cfg(test)]

@@ -80,15 +80,77 @@ pub struct TaskContinuityUpdateArgs {
 
 impl TaskContinuityUpdateArgs {
     fn update(&self) -> Result<ContinuityUpdate, ToolExecError> {
-        let _ = self;
-        todo!("#81 continuity tool")
+        let state = match self.state.as_deref().map(str::trim) {
+            None | Some("") => None,
+            Some(state) => Some(
+                serde_json::from_value::<ContinuityState>(serde_json::Value::String(
+                    state.to_owned(),
+                ))
+                .map_err(|_| {
+                    let known: Vec<String> = ContinuityState::ALL
+                        .iter()
+                        .filter_map(|known| serde_json::to_value(known).ok())
+                        .filter_map(|value| value.as_str().map(str::to_owned))
+                        .collect();
+                    ToolExecError(format!(
+                        "unknown state {state:?}; use one of {}",
+                        known.join(", ")
+                    ))
+                })?,
+            ),
+        };
+        let mut resources: Vec<ResourceRef> = Vec::new();
+        resources.extend(
+            self.upload_ids
+                .iter()
+                .map(|id| ResourceRef::Upload { id: id.clone() }),
+        );
+        resources.extend(
+            self.memory_paths
+                .iter()
+                .map(|path| ResourceRef::Memory { path: path.clone() }),
+        );
+        resources.extend(
+            self.machine_paths
+                .iter()
+                .map(|arg| ResourceRef::MachinePath {
+                    machine_id: arg.machine_id.clone(),
+                    path: arg.path.clone(),
+                }),
+        );
+        Ok(ContinuityUpdate {
+            goal: self.goal.clone(),
+            state,
+            completed_step: self.completed_step.clone(),
+            blocker: self.blocker.clone(),
+            clear_blockers: self.clear_blockers,
+            next_step: self.next_step.clone(),
+            machine_ids: self.machine_ids.clone(),
+            resources,
+        })
     }
 }
 
 /// What the model gets back: enough to keep working, never the whole file.
 fn summary(record: &ContinuityRecord) -> serde_json::Value {
-    let _ = record;
-    todo!("#81 continuity tool")
+    serde_json::json!({
+        "id": record.id,
+        "state": record.state,
+        "goal": record.goal,
+        "next_step": record.next_step,
+        "completed_steps": record.completed_steps.len(),
+        "blockers": record
+            .blockers
+            .iter()
+            .map(|blocker| blocker.detail.as_str())
+            .collect::<Vec<_>>(),
+        "machine_ids": record.machine_ids,
+        "resources": record
+            .resources
+            .iter()
+            .map(|link| link.resource.describe())
+            .collect::<Vec<_>>(),
+    })
 }
 
 impl Tool for TaskContinuityUpdateTool {
@@ -106,18 +168,37 @@ impl Tool for TaskContinuityUpdateTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let _ = (&self.store, &self.chat_id, args);
-        let _ = (
-            ContinuityState::Active,
-            ProvenanceSource::Tool,
-            Origin {
-                chat_id: String::new(),
-                message_id: None,
-            },
-        );
-        let _: Option<Provenance> = None;
-        let _: Option<ResourceRef> = None;
-        todo!("#81 continuity tool")
+        let now = chrono::Utc::now().timestamp();
+        let update = args.update()?;
+        let provenance = Provenance {
+            source: ProvenanceSource::Tool,
+            at: now,
+            note: args.note.clone(),
+        };
+        let record = match args.id.as_deref().map(str::trim) {
+            Some(id) if !id.is_empty() => self
+                .store
+                .update(id, &update, provenance, now)
+                .map_err(|error| ToolExecError(error.to_string()))?,
+            _ => {
+                let goal = args
+                    .goal
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|goal| !goal.is_empty())
+                    .ok_or_else(|| {
+                        ToolExecError("goal is required to start a task record".into())
+                    })?;
+                let origin = Origin {
+                    chat_id: self.chat_id.clone(),
+                    message_id: None,
+                };
+                self.store
+                    .create(goal, origin, &update, provenance, now)
+                    .map_err(|error| ToolExecError(error.to_string()))?
+            }
+        };
+        Ok(summary(&record))
     }
 }
 
