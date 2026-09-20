@@ -81,17 +81,24 @@ fn clients_receive_machine_updates_as_one_event() {
         types.contains("type: \"machine_updated\""),
         "client ServerEvent union must declare machine_updated"
     );
-    let client = fs::read_to_string(repo.join("client/src/lib/api/client.ts")).unwrap();
+    let machine = &types[types.find("export interface MachineInfo").unwrap()..];
+    let machine = &machine[..machine.find("\n}").unwrap()];
     for field in [
         "display_name",
         "online",
         "health",
         "capabilities",
         "permissions",
+        "driver_version",
     ] {
         assert!(
-            client.contains(&format!("\t{field}")),
+            machine.contains(&format!("\t{field}:")),
             "client MachineInfo is missing {field}"
         );
     }
+    let client = fs::read_to_string(repo.join("client/src/lib/api/client.ts")).unwrap();
+    assert!(
+        client.contains("export function renameMachine("),
+        "the client must be able to name a computer"
+    );
 }

@@ -963,8 +963,15 @@ fn stable_machine_id(app: &tauri::AppHandle) -> Result<String, String> {
 
 /// The stored id when it is a UUID, otherwise a fresh one and `true`.
 fn machine_id_from_store(stored: Option<serde_json::Value>) -> (String, bool) {
-    let _ = stored;
-    todo!("machine_id_from_store")
+    let kept = stored
+        .as_ref()
+        .and_then(serde_json::Value::as_str)
+        .filter(|id| uuid::Uuid::parse_str(id).is_ok())
+        .map(str::to_owned);
+    match kept {
+        Some(id) => (id, false),
+        None => (uuid::Uuid::new_v4().to_string(), true),
+    }
 }
 
 /// The registration the server expects: stable id, hostname for display,
@@ -978,8 +985,21 @@ fn register_message(
     instance_slug: Option<String>,
     permissions: &crate::permissions::PermissionStatus,
 ) -> serde_json::Value {
-    let _ = (machine_id, os, hostname, screen, instance_slug, permissions);
-    todo!("register_message")
+    let state = |granted: bool| if granted { "granted" } else { "denied" };
+    serde_json::json!({
+        "type": "register",
+        "machine_id": machine_id,
+        "os": os,
+        "hostname": hostname,
+        "screen_width": screen.0,
+        "screen_height": screen.1,
+        "instance_slug": instance_slug,
+        "permissions": {
+            "accessibility": state(permissions.accessibility),
+            "screen_capture": state(permissions.screen_recording),
+        },
+        "capabilities": CAPABILITIES,
+    })
 }
 
 /// Upload a local file to the server via curl.

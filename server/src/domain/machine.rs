@@ -16,8 +16,8 @@ pub const MACHINES_FILE: &str = "machines.json";
 pub const MAX_KNOWN_MACHINES: usize = 64;
 /// Longest machine id accepted at registration; matches `cua_protocol::MAX_ID_BYTES`.
 pub const MAX_MACHINE_ID_BYTES: usize = 128;
-/// Longest hostname or OS label kept on a record.
-pub const MAX_LABEL_BYTES: usize = 256;
+/// Longest hostname kept on a record, in characters; longer ones are cut.
+pub const MAX_LABEL_CHARS: usize = 256;
 /// Longest user-given display name.
 pub const MAX_DISPLAY_NAME_CHARS: usize = 64;
 /// Most capability names kept per machine.
@@ -118,35 +118,89 @@ pub struct KnownMachine {
 /// Health from heartbeat age alone: offline machines are unavailable, a
 /// connected one is healthy until its heartbeat goes stale.
 pub fn heartbeat_health(online: bool, heartbeat_age_secs: i64) -> MachineHealth {
-    let _ = (online, heartbeat_age_secs);
-    todo!("heartbeat_health")
+    if !online {
+        MachineHealth::Unavailable
+    } else if heartbeat_age_secs > STALE_HEARTBEAT_SECS {
+        MachineHealth::Degraded
+    } else {
+        MachineHealth::Healthy
+    }
 }
 
 /// The protocol platform for an `std::env::consts::OS` label, when it names one.
 pub fn platform_from_os(os: &str) -> Option<Platform> {
-    let _ = os;
-    todo!("platform_from_os")
+    match os {
+        "macos" => Some(Platform::Macos),
+        "windows" => Some(Platform::Windows),
+        "linux" => Some(Platform::Linux),
+        _ => None,
+    }
+}
+
+fn is_capability_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 
 /// Capability names as the record keeps them: short lower-case identifiers,
 /// deduplicated, at most `MAX_CAPABILITIES`. An empty report means a desktop
 /// that predates capability reporting, which accepts the legacy set.
 pub fn normalize_capabilities(reported: Vec<String>) -> Vec<String> {
-    let _ = reported;
-    todo!("normalize_capabilities")
+    if reported.is_empty() {
+        return LEGACY_DESKTOP_CAPABILITIES
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+    }
+    let mut kept: Vec<String> = Vec::new();
+    for name in reported {
+        if is_capability_name(&name) && !kept.contains(&name) {
+            kept.push(name);
+        }
+        if kept.len() == MAX_CAPABILITIES {
+            break;
+        }
+    }
+    kept
 }
 
-/// Why a registration or rename is refused.
+/// A machine id the record can carry: one non-empty line of at most
+/// `MAX_MACHINE_ID_BYTES` in the protocol's identifier grammar (letters,
+/// digits, `-`, `_`, `.`, `:`), so a UUID and a hostname both fit and a path
+/// or a control character never does.
 pub fn validate_machine_id(machine_id: &str) -> Result<(), String> {
-    let _ = machine_id;
-    todo!("validate_machine_id")
+    if machine_id.is_empty() || machine_id.len() > MAX_MACHINE_ID_BYTES {
+        return Err(format!(
+            "machine id must be 1 to {MAX_MACHINE_ID_BYTES} bytes"
+        ));
+    }
+    if !machine_id
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':'))
+    {
+        return Err("machine id may only contain letters, digits, '-', '_', '.', and ':'".into());
+    }
+    Ok(())
 }
 
 /// A display name as the record keeps it: trimmed, single line, at most
 /// `MAX_DISPLAY_NAME_CHARS`. Blank clears the name.
 pub fn normalize_display_name(display_name: Option<&str>) -> Result<Option<String>, String> {
-    let _ = display_name;
-    todo!("normalize_display_name")
+    let Some(name) = display_name.map(str::trim).filter(|name| !name.is_empty()) else {
+        return Ok(None);
+    };
+    if name.chars().any(char::is_control) {
+        return Err("display name must be a single line".into());
+    }
+    if name.chars().count() > MAX_DISPLAY_NAME_CHARS {
+        return Err(format!(
+            "display name must be at most {MAX_DISPLAY_NAME_CHARS} characters"
+        ));
+    }
+    Ok(Some(name.to_owned()))
 }
 
 #[cfg(test)]

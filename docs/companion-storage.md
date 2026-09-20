@@ -52,6 +52,7 @@ Unknown fields are rejected. A marker with any other `format_version` or
         ├── activity/*.json      proactive run records (docs/proactive-loop.md)
         ├── commitments/*.json   promises the companion follows through on (docs/proactive-loop.md)
         ├── continuity/*.json    resumable task records (see below)
+        ├── machines.json        every computer that ever connected (see below)
         ├── proactive_policy.json quiet hours, budget, routine intervals
         ├── heartbeat.md         optional guidance for check-ins
         ├── uploads/             user-uploaded files
@@ -119,6 +120,81 @@ reference is back.
 | `PUT /api/instances/companion/continuity/{id}` | apply `goal`, `state`, `completed_step`, `blocker`, `clear_blockers`, `next_step`, `machine_ids`, `resources` with a required `note` |
 | `POST /api/instances/companion/continuity/{id}/complete` | mark done (optional `note`) |
 | `POST /api/instances/companion/continuity/{id}/dismiss` | dismiss (optional `note`) |
+
+### Known machines
+
+Every computer that ever attached through the Nolune desktop app is one
+record in `instances/companion/machines.json` (#80), so a disconnected
+computer stays listed as offline with the time it was last seen instead of
+vanishing, and a reconnect updates the same record instead of adding one.
+The desktop registers under a stable id (a UUID it persists in its settings
+store on first use) and sends its hostname for display; the user can give
+the computer a name, which is stored on the server so every client shows it.
+
+```json
+{
+  "version": 1,
+  "slug": "companion",
+  "machines": [
+    {
+      "machine_id": "4f3c1c2e-9b5e-4d2b-8f0a-1c2d3e4f5a6b",
+      "display_name": "Studio Mac",
+      "hostname": "studio.local",
+      "os": "macos",
+      "platform": "macos",
+      "location": "desktop",
+      "screen_width": 2560,
+      "screen_height": 1440,
+      "permissions": { "accessibility": "granted", "screen_capture": "denied" },
+      "capabilities": ["screenshot", "left_click", "bash", "file_read"],
+      "first_seen": 1789862400,
+      "last_seen": 1789866000
+    }
+  ]
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `version` | `1`; the file is refused with any other value |
+| `slug` | always `companion`; a file naming another companion is refused |
+| `machine_id` | the desktop's stable id: 1 to 128 bytes of letters, digits, `-`, `_`, `.`, `:` |
+| `display_name` | the user's name, at most 64 characters on one line; `null` shows the hostname |
+| `hostname`, `os`, `screen_width`, `screen_height` | as reported at the last registration |
+| `platform` | `macos`, `windows`, `linux`, or `null` when `os` names none of them |
+| `location` | `desktop` for every desktop registration; the server home is a Cua target (#16), never a desktop record |
+| `permissions` | accessibility and screen capture as `granted` or `denied` (the protocol's names); `null` when the desktop did not report them |
+| `capabilities` | action names the desktop executes; a desktop that reports none is recorded with the legacy set |
+| `first_seen`, `last_seen` | unix seconds of the first registration and of the last heartbeat or disconnect |
+
+Bounds: 64 records (a new computer evicts the longest-offline one), 64
+capability names per record, 1 MiB per file. The file is loaded once, on
+first use, and every change lands through a temp file and a rename. A file
+that is larger, is not JSON, carries unknown fields, another version or
+slug, an invalid id, or the same id twice fails closed: the listing route
+answers `503 machines_format_unsupported`, renames are refused, and the
+file is never rewritten, while connected computers keep working in memory
+until the file is fixed or removed. A connected computer's heartbeat
+reaches its record at least once a minute, so a crash leaves `last_seen` at
+most a minute behind.
+
+The API reports each record with live state that is never written to disk:
+`display_name` resolved to the hostname when unnamed (`custom_name` holds
+the user's name or `null`), `online`, `health` derived from heartbeat age
+(`healthy`; `degraded` when the socket is open but no heartbeat arrived for
+45 seconds; `unavailable` when offline), and `driver_version` and
+`cua_health`, both `null` until the Cua driver (#18) reports them.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/instances/companion/machines` | `{machines}`, online first, then most recently seen |
+| `PUT /api/instances/companion/machines/{machine_id}` | `{display_name}`; blank or `null` shows the hostname again |
+| `POST /api/instances/companion/machine-hello` | optional `{machine_id}`; runs the connection check-in for the named or only connected computer, `409 ambiguous_machine` (with `machine_ids`) when several are connected and none is named, `409 machine_offline` or `404 not_found` for a named one that is not connected or not known |
+| `POST /api/instances/companion/machine-bye` | optional `{machine_id}`; records which connected computers stay attached, the named one or all of them |
+
+Every registration, disconnect, rename, and recovered heartbeat is
+broadcast to clients as one `machine_updated` server event carrying the same
+shape as the listing.
 
 ### Obsolete sibling directories
 

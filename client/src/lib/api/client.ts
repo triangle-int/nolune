@@ -18,7 +18,9 @@ import type {
 	UpdateLlmRequest,
 	MemoryEntry,
 	UploadMeta,
+	MachineInfo,
 } from "./types.js";
+export type { MachineInfo } from "./types.js";
 import { clearLegacyBrowserAuth } from "./legacy-auth-cleanup.js";
 
 const BASE = "";
@@ -613,20 +615,17 @@ export function dismissContinuityRecord(slug: string, recordId: string, note = "
 	});
 }
 
-/** A desktop connected to the companion through the Nolune desktop app (#98). */
-export interface MachineInfo {
-	machine_id: string;
-	os: string;
-	hostname: string;
-	screen_width: number;
-	screen_height: number;
-	/** Unix seconds of the last heartbeat. */
-	last_seen: number;
-	instance_slug: string | null;
-}
-
 export function fetchMachines(slug: string): Promise<{ machines: MachineInfo[] }> {
 	return json(`/api/instances/${encodeURIComponent(slug)}/machines`);
+}
+
+/** Name a computer; a blank name shows its hostname again. */
+export function renameMachine(slug: string, machineId: string, displayName: string | null): Promise<MachineInfo> {
+	return json(`/api/instances/${encodeURIComponent(slug)}/machines/${encodeURIComponent(machineId)}`, {
+		method: "PUT",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ display_name: displayName }),
+	});
 }
 
 export function machineHello(slug: string): Promise<void> {
