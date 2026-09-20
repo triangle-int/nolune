@@ -11,6 +11,7 @@
 		fetchConfigStatus,
 		updateLlmConfig,
 		seedModelPresets,
+		testPreset,
 	} from "$lib/api/client.js";
 	import type { SoulTemplate } from "$lib/api/types.js";
 	import { getCompanion } from "$lib/stores/companion.svelte.js";
@@ -247,7 +248,10 @@
 		stage = "testing";
 
 		try {
-			await saveOnboardingProvider(selectedProvider, key, { updateLlmConfig, seedModelPresets });
+			// The key is probed before it is saved, and a seeded preset must
+			// answer before "connected." (#28): a provider that cannot reply
+			// keeps this step open, with what to fix in the error line.
+			await saveOnboardingProvider(selectedProvider, key, { updateLlmConfig, seedModelPresets, testPreset });
 			apiKeyInput = "";
 			stage = "intro";
 			await pause(200);
@@ -257,6 +261,8 @@
 		} catch (e) {
 			apiKeyError = e instanceof Error ? e.message : "invalid key";
 			stage = "waiting-key";
+			await pause(100);
+			apiKeyInputEl?.focus();
 		}
 	}
 

@@ -7,6 +7,7 @@
 		fetchModelPresets,
 		updateModelPresets,
 		seedModelPresets,
+		testPreset,
 		type ModelPreset,
 		type ModelPresets,
 		fetchPairedDevices,
@@ -19,7 +20,7 @@
 		type AuthKind,
 	} from "$lib/api/client.js";
 	import ConnectedComputers from "$lib/components/computers/ConnectedComputers.svelte";
-	import { PROVIDERS, suggestPresetId, validatePresets } from "$lib/models/presets.js";
+	import { PROVIDERS, capabilityWarnings, presetCapabilities, presetTestCopy, suggestPresetId, validatePresets } from "$lib/models/presets.js";
 
 	// Connections (#98): what this server talks to. The provider and keys are
 	// server-global; computers and browsers are the places the companion is.
@@ -136,6 +137,38 @@
 			modelsError = e instanceof Error ? e.message : "Could not add default presets.";
 		} finally {
 			modelsSaving = false;
+		}
+	}
+
+	// --- connection tests and capability warnings (#28) ---
+	let testingId = $state("");
+	let testResults = $state<Record<string, { tone: "ok" | "error"; text: string }>>({});
+
+	/** The row is what the server has: its test and capabilities describe it. */
+	function isSaved(preset: ModelPreset): boolean {
+		return !!saved?.presets.some((p) => p.id === preset.id && p.provider === preset.provider && p.model === preset.model);
+	}
+	function warningsFor(preset: ModelPreset | undefined) {
+		return preset && isSaved(preset) ? capabilityWarnings(preset, presetCapabilities(saved, preset.id)) : [];
+	}
+	function slotWarnings(id: string) {
+		return warningsFor(draft.presets.find((p) => p.id === id));
+	}
+	/** What the picker shows beside a preset before it is chosen. */
+	function optionLabel(preset: ModelPreset): string {
+		const chips = warningsFor(preset).map((w) => w.chip).join(", ");
+		return `${preset.name || "(unnamed)"} · ${preset.model || "no model"}${chips ? ` — ${chips}` : ""}`;
+	}
+
+	async function runTest(preset: ModelPreset) {
+		if (testingId) return;
+		testingId = preset.id;
+		try {
+			testResults = { ...testResults, [preset.id]: presetTestCopy(await testPreset(preset.id), preset) };
+		} catch (e) {
+			testResults = { ...testResults, [preset.id]: { tone: "error", text: e instanceof Error ? e.message : "The test could not run." } };
+		} finally {
+			testingId = "";
 		}
 	}
 
@@ -284,19 +317,25 @@
 				<label class="setting-label" for="chat-preset-slot">Chat</label>
 				<select id="chat-preset-slot" class="setting-input" bind:value={draft.chat_preset} disabled={modelsSaving}>
 					{#each draft.presets as preset (preset.id)}
-						<option value={preset.id}>{preset.name || "(unnamed)"} · {preset.model || "no model"}</option>
+						<option value={preset.id}>{optionLabel(preset)}</option>
 					{/each}
 				</select>
 				<p class="setting-hint">Used for conversations unless a chat picks another preset.</p>
+				{#each slotWarnings(draft.chat_preset) as warning (warning.id)}
+					<p class="setting-hint setting-warning" role="status">{warning.detail}</p>
+				{/each}
 			</div>
 			<div class="setting-row">
 				<label class="setting-label" for="background-preset-slot">Background</label>
 				<select id="background-preset-slot" class="setting-input" bind:value={draft.background_preset} disabled={modelsSaving}>
 					{#each draft.presets as preset (preset.id)}
-						<option value={preset.id}>{preset.name || "(unnamed)"} · {preset.model || "no model"}</option>
+						<option value={preset.id}>{optionLabel(preset)}</option>
 					{/each}
 				</select>
 				<p class="setting-hint">Memory extraction, chat titles, check-ins, and reflection. Never the chat preset unless you choose it here.</p>
+				{#each slotWarnings(draft.background_preset) as warning (warning.id)}
+					<p class="setting-hint setting-warning" role="status">{warning.detail}</p>
+				{/each}
 			</div>
 		{/if}
 
@@ -308,11 +347,26 @@
 				<ul class="preset-list" aria-labelledby="presets-label">
 					{#each draft.presets as preset, index (preset.id)}
 						{@const inUse = draft.chat_preset === preset.id || draft.background_preset === preset.id}
+						{@const testable = isSaved(preset)}
+						{@const result = testResults[preset.id]}
 						<li class="preset-row">
 							<label class="preset-field">Name<input class="ext-input" type="text" placeholder="Claude Sonnet" value={preset.name} oninput={(e) => renamePreset(index, (e.currentTarget as HTMLInputElement).value)} disabled={modelsSaving} /></label>
 							<label class="preset-field">Provider<select class="setting-input" bind:value={preset.provider} disabled={modelsSaving}>{#each PROVIDERS as provider (provider.id)}<option value={provider.id}>{provider.label}</option>{/each}</select></label>
 							<label class="preset-field preset-field-model">Model id<input class="ext-input" type="text" placeholder={preset.provider === "openrouter" ? "vendor/model" : "claude-sonnet-4-6"} bind:value={preset.model} disabled={modelsSaving} spellcheck="false" /></label>
 							<button class="setting-btn setting-btn-danger preset-remove" onclick={() => removePreset(index)} disabled={modelsSaving} title={inUse ? "In use by a slot; the slot moves to the first preset" : "Remove preset"}>Remove</button>
+							<div class="preset-foot">
+								{#each warningsFor(preset) as warning (warning.id)}
+									<span class="preset-chip" title={warning.detail}>{warning.chip}</span>
+								{/each}
+								<button class="nl-button-secondary preset-test" onclick={() => runTest(preset)} disabled={!testable || !!testingId || modelsSaving} title={testable ? "Send one short request to this model; nothing is added to any chat" : "Save the preset first, then test it"}>
+									{testingId === preset.id ? "Testing..." : "Test"}
+								</button>
+								{#if result}
+									<span class="preset-result" class:preset-result-ok={result.tone === "ok"} class:preset-result-error={result.tone === "error"} role={result.tone === "ok" ? "status" : "alert"}>{result.text}</span>
+								{:else if !testable}
+									<span class="setting-hint">Save to test.</span>
+								{/if}
+							</div>
 						</li>
 					{/each}
 				</ul>

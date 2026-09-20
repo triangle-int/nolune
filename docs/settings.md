@@ -34,7 +34,7 @@ one section and one scope:
 | Section | Route | Owns | Scope |
 |---------|-------|------|-------|
 | Companion | `settings/companion` | Little Moon presence, Learn my rhythm, Initiative (check-in, quiet hours, daily budget, reflection), Timezone, Scheduled messages | companion |
-| Connections | `settings/connections` | Model presets and slots (#156), API keys, Connected computers (the compact Connected Spaces list, #80), Paired browsers | server |
+| Connections | `settings/connections` | Model presets and slots (#156) with capability chips and a connection test per preset (#28), API keys, Connected computers (the compact Connected Spaces list, #80), Paired browsers | server |
 | Capabilities | `settings/capabilities` | Skills (registry), Extensions (curated MCP catalog, per-tool grants, custom servers behind the #97 acknowledgement) | server |
 | Data | `settings/data` | What the companion keeps, Export, Import | companion |
 | Advanced | `settings/advanced` | Server port and API token, Updates and release channel, ElevenLabs voice ID, Email (SMTP/IMAP), GitHub token | mixed; each control carries an owner badge |
@@ -62,6 +62,46 @@ non-empty model, slots pointing at presets whose provider has a key), and
 calls after saving the first key. A new key is checked with its provider
 before it is saved (`PUT /api/config/llm`, one-token completion); a rejected
 key answers 401 and stores nothing.
+
+### Connection test and capability warnings (#28)
+
+Every preset row under Settings › Connections has a **Test** button (once
+the row is saved): `POST /api/config/models/{id}/test` sends one short
+completion through the preset's adapter and answers with a typed outcome.
+It creates no chat message and writes nothing under the workspace, so a test
+never shows up in a conversation. A real answer is
+`{ok: true, preset, provider, model, usage: {input_tokens, output_tokens},
+capabilities}`; a failure is `{ok: false, error, message}` where `error`
+names what to fix, matched on the adapter's `LlmError` variant:
+`setup_required` (503, no key for the provider), `authentication` (401, the
+provider rejected the key), `rate_limited` (429, the key works;
+`retry_after_seconds` when the provider said), `model_not_found` (404),
+`provider_rejected` (422, any other 4xx such as OpenRouter's "Insufficient
+credits"), `provider_unavailable` (502, a 5xx), `unreachable` (502),
+`timeout` (504), `invalid_response` (502), `unsupported` (422) and
+`unknown_preset` (404). Messages name the provider and arrive redacted
+from the adapters; saved keys never appear in any answer.
+
+`GET /api/config/models` also carries `capabilities`, keyed by preset id:
+what the provider offers for that model (`vision`, `documents`, `tools`,
+`streaming`, `reasoning_controls`, `model_discovery`, `token_counting`).
+The client turns the three that change what a conversation can do into
+chips on the preset row (`no vision`, `no documents`, `no tools`, from
+`capabilityWarnings` in `client/src/lib/models/presets.js`), appends them
+to each option of the Chat and Background pickers, and repeats the sentence
+under the picker as soon as a preset with a limitation is selected, before
+Save. OpenRouter presets report the catalog's answer once it has loaded,
+and the adapter defaults until then.
+
+Onboarding runs the same test after the first key is saved and its
+presets are seeded (`saveOnboardingProvider` in
+`client/src/lib/components/onboarding/provider.js`, on the Chat slot when it
+runs on that provider, else the provider's first preset). "connected." is
+typed only after the model answered; a failure keeps the key step open
+with the outcome sentence, so onboarding cannot finish with a provider
+that does not reply. A provider that was already working is untouched: a
+new key is stored only when its probe passes, seeding never moves a slot
+that points at a usable preset, and the test itself saves nothing.
 
 ### OpenRouter (#26)
 

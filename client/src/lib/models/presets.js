@@ -6,6 +6,10 @@
  * @typedef {{ id: string, label: string }} Provider
  * @typedef {{ id: string, name: string, provider: string, model: string }} ModelPreset
  * @typedef {{ chat_preset: string, background_preset: string }} Slots
+ * @typedef {{ vision: boolean, documents: boolean, tools: boolean }} Capabilities
+ * @typedef {{ id: 'vision' | 'documents' | 'tools', chip: string, detail: string }} CapabilityWarning
+ * @typedef {{ ok: true, preset: string, provider: string, model: string, usage: { input_tokens: number, output_tokens: number } }} PresetTestOk
+ * @typedef {{ ok: false, error: string, message: string, status: number, retry_after_seconds?: number | null }} PresetTestFailure
  */
 
 /** @type {readonly Provider[]} */
@@ -140,27 +144,65 @@ export function presetsByProvider(presets) {
 }
 
 /**
- * What a preset's model cannot do (#28). Stub.
+ * What a preset's model cannot do (#28), as a chip for the row and a
+ * sentence for the warning shown before the model is selected. Unknown
+ * capabilities (a preset not saved yet) warn about nothing.
+ *
  * @param {ModelPreset} preset
- * @param {unknown} caps
- * @returns {{ id: string, chip: string, detail: string }[]}
+ * @param {Capabilities | null | undefined} caps what the server reports for this preset
+ * @returns {CapabilityWarning[]}
  */
 export function capabilityWarnings(preset, caps) {
-	void preset;
-	void caps;
-	return [];
+	if (!caps) return [];
+	const name = (preset?.name ?? "").trim() || preset?.model || "This model";
+	/** @type {CapabilityWarning[]} */
+	const warnings = [];
+	if (!caps.vision) warnings.push({ id: "vision", chip: "no vision", detail: `${name} cannot see images: screenshots and photos sent to it are refused.` });
+	if (!caps.documents) warnings.push({ id: "documents", chip: "no documents", detail: `${name} cannot read PDFs and other documents; share them as text instead.` });
+	if (!caps.tools) warnings.push({ id: "tools", chip: "no tools", detail: `${name} cannot call tools, so with it the companion cannot act on computers, search, or use extensions.` });
+	return warnings;
 }
 
-/** @param {unknown} models @param {string} id */
+/**
+ * The capabilities `GET /api/config/models` reports for one preset id.
+ * @param {{ capabilities?: Record<string, Capabilities> } | null | undefined} models
+ * @param {string} id
+ * @returns {Capabilities | undefined}
+ */
 export function presetCapabilities(models, id) {
-	void models;
-	void id;
-	return undefined;
+	return models?.capabilities?.[id];
 }
 
-/** @param {unknown} outcome @param {ModelPreset} preset */
+/**
+ * One sentence for a connection test outcome (#28), keyed on the typed
+ * `error` the server answers with; anything it does not know shows the
+ * server's own message.
+ *
+ * @param {PresetTestOk | PresetTestFailure} outcome
+ * @param {ModelPreset} preset
+ * @returns {{ tone: 'ok' | 'error', text: string }}
+ */
 export function presetTestCopy(outcome, preset) {
-	void outcome;
-	void preset;
-	return { tone: "error", text: "" };
+	const provider = providerLabel(preset?.provider);
+	const model = preset?.model || "the model";
+	if (outcome.ok) {
+		const tokens = (outcome.usage?.input_tokens ?? 0) + (outcome.usage?.output_tokens ?? 0);
+		return { tone: "ok", text: `${outcome.model || model} answered · ${tokens} tokens used.` };
+	}
+	const said = outcome.message?.trim() || `${provider} did not answer.`;
+	/** @type {Record<string, string>} */
+	const copy = {
+		setup_required: `No ${provider} API key yet. Add one under API keys, then test again.`,
+		authentication: `${provider} rejected the API key. Change it under API keys.`,
+		rate_limited: `${provider} accepted the key but is rate limiting right now; the key works, try again${outcome.retry_after_seconds ? ` in ${outcome.retry_after_seconds} s` : " in a moment"}.`,
+		model_not_found: `${provider} has no model "${model}". Check the model id.`,
+		provider_rejected: `${provider} rejected the request: ${said}`,
+		provider_unavailable: `${provider} is having trouble: ${said}`,
+		unreachable: `Could not reach ${provider}: ${said}`,
+		timeout: `${provider} did not answer in time. Try again.`,
+		invalid_response: `${provider} answered with something unexpected: ${said}`,
+		unsupported: `${provider} cannot run this preset: ${said}`,
+		unknown_preset: `Save the preset first, then test it.`,
+	};
+	return { tone: "error", text: copy[outcome.error] ?? said };
 }

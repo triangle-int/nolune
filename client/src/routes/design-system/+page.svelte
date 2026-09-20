@@ -11,6 +11,12 @@
   { path: 'photos/sky.png', source: 'photos/sky.png.md', excerpt: 'Sky over Lisbon at dusk, taken from the balcony.', reason: 'linked_to', linked_from: 'about/tea.md', confidence: 'low', retrieved_at: new Date(Date.now() - 3 * 86_400_000).toISOString(), source_status: 'missing' },
  ];
  import '$lib/settings/settings.css';
+ import { capabilityWarnings, presetTestCopy } from '$lib/models/presets.js';
+ // Sample preset row (#28): chips from the real helper, a test result that never leaves the page.
+ const examplePreset = { id: 'gpt', name: 'GPT-5.4', provider: 'openai', model: 'gpt-5.4' };
+ const exampleWarnings = capabilityWarnings(examplePreset, { vision: true, documents: false, tools: true });
+ let exampleTested = $state(false);
+ const exampleTestCopy = presetTestCopy({ ok: true, preset: 'gpt', provider: 'openai', model: 'gpt-5.4', usage: { input_tokens: 8, output_tokens: 1 } }, examplePreset);
  import { COMPANION_KINDS, STATE_EXAMPLES, companionStatusText, initialCompanionState, reduceCompanion } from '$lib/companion/state.js';
  import SpaceRow from '$lib/components/computers/SpaceRow.svelte';
  import { STALE_HEARTBEAT_SECS, applyMachineEvent, buildSpaces, homeSpace } from '$lib/computers/spaces.js';
@@ -89,6 +95,8 @@
    <section class="settings-section"><div class="section-header"><div><h3 class="section-label">Companion</h3><p class="section-desc">Little Moon, your familiar presence across devices.</p></div>
 </div><div class="section-body"><div class="setting-row"><span class="setting-label" id="ds-rhythm-label">Learn my rhythm</span><div class="setting-input-row"><button class="setting-btn" role="switch" aria-checked={exampleRhythm} aria-labelledby="ds-rhythm-label" onclick={() => (exampleRhythm = !exampleRhythm)}>{exampleRhythm ? 'On' : 'Off'}</button></div><p class="setting-hint">Keeps a bounded summary of when you tend to write, so check-ins land at good moments.</p></div>
 </div></section>
+   <section class="settings-section"><div class="section-header"><div><h3 class="section-label">Models</h3><p class="section-desc">A preset row says what its model cannot do as chips, and Test sends one short request without touching any chat.</p></div>
+</div><div class="section-body"><ul class="preset-list" aria-label="Example preset"><li class="preset-row"><label class="preset-field">Name<input class="ext-input" type="text" value={examplePreset.name} readonly /></label><label class="preset-field">Provider<select class="setting-input" disabled><option>OpenAI</option></select></label><label class="preset-field preset-field-model">Model id<input class="ext-input" type="text" value={examplePreset.model} readonly /></label><button class="setting-btn setting-btn-danger preset-remove" type="button" disabled>Remove</button><div class="preset-foot">{#each exampleWarnings as warning (warning.id)}<span class="preset-chip" title={warning.detail}>{warning.chip}</span>{/each}<button class="nl-button-secondary preset-test" type="button" onclick={() => (exampleTested = !exampleTested)}>{exampleTested ? 'Reset' : 'Test'}</button>{#if exampleTested}<span class="preset-result preset-result-ok" role="status">{exampleTestCopy.text} (example)</span>{/if}</div></li></ul>{#each exampleWarnings as warning (warning.id)}<p class="setting-hint setting-warning">{warning.detail}</p>{/each}</div></section>
    <section class="settings-section"><div class="section-header"><div><h3 class="section-label">Server <span class="owner-badge">This server</span></h3><p class="section-desc">Owner badges mark controls that apply to the whole server.</p></div>
 </div><div class="section-body"><div class="setting-row"><label class="setting-label" for="ds-port">Port</label><div class="setting-input-row"><input class="setting-input" id="ds-port" type="number" value="26559" readonly /><button class="setting-btn" type="button" disabled>Save</button></div><p class="setting-hint">Inputs keep 16px text and a visible focus ring. Actions stay 44px tall.</p></div>
 </div></section>
