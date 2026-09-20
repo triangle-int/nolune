@@ -276,6 +276,19 @@ pub(crate) async fn on_machine_connected(
         return;
     }
 
+    // A commitment waiting on this computer stops waiting and is checked on
+    // the next evaluator tick (#85).
+    let observed = state.commitments.observe_event(
+        &crate::services::commitment_evaluator::machine_connected_event(machine_id),
+        chrono::Utc::now().timestamp(),
+    );
+    if !observed.is_empty() {
+        log::info!(
+            "[machine-connect] '{machine_id}' resolves {} waiting commitment(s)",
+            observed.len()
+        );
+    }
+
     // Reconnect bursts are deduplicated and rate-limited by the loop.
     let handle = match state.proactive.begin(
         Trigger::MachineConnected {
