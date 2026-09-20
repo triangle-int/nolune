@@ -120,6 +120,9 @@ type AgentSender = tokio::sync::mpsc::UnboundedSender<String>;
 pub enum CuaRegistrationError {
     /// A target with this machine id is already registered.
     DuplicateMachineId(MachineId),
+    /// No target with this machine id is registered, so there is nothing to
+    /// replace.
+    NotRegistered(MachineId),
 }
 
 impl fmt::Display for CuaRegistrationError {
@@ -127,6 +130,9 @@ impl fmt::Display for CuaRegistrationError {
         match self {
             Self::DuplicateMachineId(id) => {
                 write!(f, "cua machine '{}' is already registered", id.as_str())
+            }
+            Self::NotRegistered(id) => {
+                write!(f, "cua machine '{}' is not registered", id.as_str())
             }
         }
     }
@@ -241,6 +247,23 @@ impl CuaTargets {
             },
         );
         Ok(())
+    }
+
+    /// Swap the adapter of a registered target for one advertising a fresh
+    /// descriptor (a new health report), keeping the labels the descriptor
+    /// does not carry. Fails when the id is not registered: a swap never
+    /// registers. Returns the adapter now serving the id.
+    pub async fn replace(
+        &self,
+        adapter: CheckedCuaAdapter,
+    ) -> Result<Arc<CheckedCuaAdapter>, CuaRegistrationError> {
+        let id = adapter.descriptor().machine_id.clone();
+        let mut targets = self.targets.lock().await;
+        let target = targets
+            .get_mut(&id)
+            .ok_or_else(|| CuaRegistrationError::NotRegistered(id.clone()))?;
+        target.adapter = Arc::new(adapter);
+        Ok(target.adapter.clone())
     }
 
     /// Remove a target; returns whether it was registered.
@@ -1510,6 +1533,75 @@ mod cua_targets_tests {
         // Unregistered targets leave no row behind.
         assert!(registry.cua().unregister(&id("server-local:studio")).await);
         assert!(registry.known_at(1_700_000_600).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn replace_swaps_the_adapter_of_a_registered_target_and_keeps_its_labels() {
+        let registry = MachineRegistry::new();
+        let healthy = descriptor("server-local:studio", MachineLocation::ServerLocal);
+        registry
+            .cua()
+            .register_server_local(fake_adapter(healthy.clone()), "studio.local", 1_700_000_000)
+            .await
+            .unwrap();
+
+        // A later health report says accessibility went away.
+        let degraded = MachineDescriptor {
+            health: MachineHealth::Degraded,
+            permissions: PermissionState {
+                accessibility: Permission::Denied,
+                screen_capture: Permission::Granted,
+            },
+            capabilities: vec![],
+            ..healthy.clone()
+        };
+        let swapped = registry
+            .cua()
+            .replace(fake_adapter(degraded.clone()))
+            .await
+            .unwrap();
+        assert_eq!(
+            swapped.descriptor(),
+            &degraded,
+            "the new adapter is returned"
+        );
+        assert_eq!(registry.cua().list().await, vec![degraded.clone()]);
+        assert_eq!(
+            registry.cua().server_local_entries().await,
+            vec![ServerLocalEntry {
+                descriptor: degraded.clone(),
+                hostname: "studio.local".into(),
+                registered_at: 1_700_000_000,
+            }],
+            "hostname and registration time survive the swap"
+        );
+        let selected = registry
+            .cua()
+            .select(Some(&id("server-local:studio")))
+            .await
+            .unwrap();
+        assert_eq!(
+            selected.descriptor(),
+            &degraded,
+            "select hands out the new adapter"
+        );
+        let known = registry.known_at(1_700_000_600).await.unwrap();
+        assert_eq!(known[0].cua_health, Some(MachineHealth::Degraded));
+        assert_eq!(
+            known[0].permissions.as_ref().map(|p| p.accessibility),
+            Some(Permission::Denied)
+        );
+        assert_eq!(known[0].first_seen, 1_700_000_000);
+
+        // Only a registered id can be replaced; a swap never registers.
+        let stranger = descriptor("server-local:elsewhere", MachineLocation::ServerLocal);
+        assert_eq!(
+            registry.cua().replace(fake_adapter(stranger)).await.err(),
+            Some(CuaRegistrationError::NotRegistered(id(
+                "server-local:elsewhere"
+            )))
+        );
+        assert_eq!(registry.cua().list().await.len(), 1);
     }
 
     #[tokio::test]

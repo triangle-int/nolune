@@ -150,10 +150,6 @@ async fn main() {
     // Report a connected computer whose heartbeat goes stale (#80).
     state.machine_registry.start_health_watch();
 
-    // The machine this server runs on as a computer-use target (#16): registered
-    // when a Cua driver and a display are there, skipped honestly otherwise.
-    state.cua.start().await;
-
     // One proactive loop (#92): finish what a previous process left running,
     // then trim old receipts.
     {
@@ -239,6 +235,16 @@ async fn main() {
 
     // Installers and the desktop app wait for this exact stdout line (#124).
     println!("nolune: ready http://localhost:{port}");
+
+    // The machine this server runs on as a computer-use target (#16): registered
+    // when a Cua driver and a display are there, skipped honestly otherwise. It
+    // starts behind the ready line, in the background, so a driver that stalls
+    // on its handshake or health report never delays serving; the registry is
+    // shared, so the target is listed as soon as it is registered.
+    tokio::spawn({
+        let cua = cua.clone();
+        async move { cua.start().await }
+    });
 
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {

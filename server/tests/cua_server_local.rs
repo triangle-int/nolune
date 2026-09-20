@@ -100,9 +100,16 @@ fn the_server_local_runtime_is_wired_sessioned_and_documented() {
         "AppState must construct the server-local Cua runtime over the registry's targets"
     );
     let main = production(&repo.join("server/src/main.rs"));
+    let started_at = main
+        .find("cua.start()")
+        .expect("main.rs must start the server-local runtime");
+    let ready_at = main
+        .find("nolune: ready")
+        .expect("main.rs prints the ready line installers wait for");
     assert!(
-        main.contains(".cua.start()"),
-        "main.rs must start the server-local runtime before serving"
+        ready_at < started_at,
+        "main.rs must bind the listener and print the ready line before it starts the driver: \
+         serving never waits on the handshake or the health report (#16)"
     );
     assert!(
         main.contains("cua.shutdown()"),
@@ -154,6 +161,8 @@ fn the_server_local_runtime_is_wired_sessioned_and_documented() {
         "start_session",
         "end_session",
         "one-shot",
+        "health_interval_secs",
+        "nolune: ready",
         "#16",
     ] {
         assert!(

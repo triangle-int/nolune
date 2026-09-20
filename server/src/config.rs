@@ -164,6 +164,9 @@ pub struct CuaConfig {
     /// Seconds one run may keep its driver session open before the session is
     /// ended and the run reported as timed out.
     pub run_timeout_secs: u64,
+    /// Seconds between health reports while the driver runs, so a permission
+    /// granted or revoked after startup reaches the advertised descriptor.
+    pub health_interval_secs: u64,
 }
 
 impl Default for CuaConfig {
@@ -174,6 +177,7 @@ impl Default for CuaConfig {
             handshake_timeout_secs: 10,
             call_timeout_secs: 30,
             run_timeout_secs: 900,
+            health_interval_secs: 60,
         }
     }
 }
@@ -200,6 +204,15 @@ impl CuaConfig {
         secs_or(
             self.run_timeout_secs,
             std::time::Duration::from_secs(Self::default().run_timeout_secs),
+        )
+    }
+
+    /// How often the running driver is asked for a fresh health report; zero
+    /// keeps the default.
+    pub fn health_interval(&self) -> std::time::Duration {
+        secs_or(
+            self.health_interval_secs,
+            std::time::Duration::from_secs(Self::default().health_interval_secs),
         )
     }
 }
@@ -1926,6 +1939,7 @@ mod cua_config_tests {
         assert_eq!(timeouts.handshake, Duration::from_secs(10));
         assert_eq!(timeouts.call, Duration::from_secs(30));
         assert_eq!(config.cua.run_timeout(), Duration::from_secs(900));
+        assert_eq!(config.cua.health_interval(), Duration::from_secs(60));
 
         // The default config file carries the section so users can find it.
         let saved = toml::to_string_pretty(&Config::default()).unwrap();
@@ -1946,6 +1960,7 @@ driver_path = "/opt/cua/bin/cua-driver"
 handshake_timeout_secs = 3
 call_timeout_secs = 45
 run_timeout_secs = 120
+health_interval_secs = 15
 "#,
         )
         .unwrap();
@@ -1958,14 +1973,17 @@ run_timeout_secs = 120
         assert_eq!(timeouts.handshake, Duration::from_secs(3));
         assert_eq!(timeouts.call, Duration::from_secs(45));
         assert_eq!(config.cua.run_timeout(), Duration::from_secs(120));
+        assert_eq!(config.cua.health_interval(), Duration::from_secs(15));
 
         // A zero never makes every call fail; it keeps the default.
         let zeros: Config = toml::from_str(
-            "[cua]\nhandshake_timeout_secs = 0\ncall_timeout_secs = 0\nrun_timeout_secs = 0",
+            "[cua]\nhandshake_timeout_secs = 0\ncall_timeout_secs = 0\nrun_timeout_secs = 0\n\
+             health_interval_secs = 0",
         )
         .unwrap();
         assert_eq!(zeros.cua.timeouts(), CuaConfig::default().timeouts());
         assert_eq!(zeros.cua.run_timeout(), Duration::from_secs(900));
+        assert_eq!(zeros.cua.health_interval(), Duration::from_secs(60));
 
         // A misspelt option is refused instead of silently meaning "no driver".
         let typo = toml::from_str::<Config>("[cua]\ndriver_pth = \"/x\"");

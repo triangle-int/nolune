@@ -39,6 +39,27 @@ the capabilities those permissions allow. A driver that does not answer the
 handshake or the health report is stopped and reported; the server runs on
 without a server-local target.
 
+The driver starts in the background after the gateway has bound its port and
+printed `nolune: ready`, so serving never waits on the handshake or the
+health report: a driver that stalls (a wrapper script, a process blocked on a
+permission prompt) costs nothing but its own deadline, `/healthz` answers at
+once, and the target appears in the listings the moment it is registered.
+
+## While it runs
+
+The advertised descriptor stays honest for as long as the driver does:
+
+- The server watches the child. If it exits or crashes, the target is
+  unregistered at once, every session it held is lost with it (there is
+  nobody left to end them), and one error line says so. The row is gone
+  from `list_machines` and the Computers page; restart the gateway to
+  register it again.
+- Every `health_interval_secs` the server asks the running driver for a
+  fresh health report. A permission granted or revoked after startup changes
+  the health, permissions and capabilities the target advertises, and the
+  next run authorizes against the new descriptor; a report that cannot be
+  read keeps the last one. Only an exit drops the target.
+
 ## Identity
 
 The target registers as `server-local:<hostname>`, the hostname reduced to
@@ -97,6 +118,7 @@ driver_path = ""               # empty: NOLUNE_CUA_DRIVER, then cua-driver on PA
 handshake_timeout_secs = 10    # MCP handshake at startup
 call_timeout_secs = 30         # one driver call; a slow driver is cancelled, not waited on
 run_timeout_secs = 900         # one run's session; ended and reported as timed out after this
+health_interval_secs = 60      # how often the running driver is asked for a fresh health report
 ```
 
 Unknown keys in `[cua]` are refused at load. A zero timeout keeps the

@@ -5,6 +5,11 @@
 //! Nothing here consults the host on construction; `start` does, so tests
 //! that build an `AppState` never spawn a driver. A headless host or a driver
 //! that cannot start leaves the runtime idle and the server healthy.
+//!
+//! While the driver runs, one watch task per target keeps the advertised
+//! descriptor honest: a child that exits is unregistered at once, and a
+//! fresh health report every `[cua].health_interval_secs` carries a
+//! permission granted or revoked after startup into the descriptor.
 
 use std::{
     collections::BTreeSet,
@@ -104,6 +109,10 @@ struct Target {
     machine_id: MachineId,
     adapter: Arc<CheckedCuaAdapter>,
     transport: Arc<dyn DriverTransport>,
+    /// The task watching the driver's liveness and refreshing its
+    /// descriptor; `shutdown` aborts it first so a deliberate stop is never
+    /// taken for a crash.
+    watch: tokio::task::AbortHandle,
 }
 
 enum State {
@@ -161,9 +170,16 @@ impl CuaRuntime {
         host: HostProbe,
         driver: Result<Option<PathBuf>, DriverLookupError>,
     ) {
-        if !matches!(*self.inner.state.lock().await, State::NotStarted) {
-            log::warn!("[cua] start called more than once; ignoring");
-            return;
+        match &*self.inner.state.lock().await {
+            State::NotStarted => {}
+            State::Stopped => {
+                log::info!("[cua] not starting: the gateway is already stopping");
+                return;
+            }
+            _ => {
+                log::warn!("[cua] start called more than once; ignoring");
+                return;
+            }
         }
         let driver = match startup_plan(&self.inner.config, &host, driver) {
             Ok(driver) => driver,
@@ -189,22 +205,36 @@ impl CuaRuntime {
             }
         };
         let machine_id = server_local_machine_id(&host.hostname);
-        if let Err(error) = self.attach(transport, machine_id, &host.hostname).await {
+        let refresh = Some(self.inner.config.health_interval());
+        if let Err(error) = self
+            .attach(transport, machine_id, &host.hostname, refresh)
+            .await
+        {
             log::error!("[cua] driver could not be described; no server-local target: {error:#}");
         }
     }
 
     /// Register the target behind an already running transport: ask it for
-    /// its health report, build the descriptor, and put the checked adapter
-    /// into the shared registry. `hostname` labels the row the API lists.
-    /// On failure the transport is closed and the runtime reads `Failed`.
+    /// its health report, build the descriptor, put the checked adapter into
+    /// the shared registry and start watching the driver. `hostname` labels
+    /// the row the API lists; `refresh` is how often the driver's health is
+    /// re-read while it runs (`start` passes `[cua].health_interval_secs`;
+    /// `None` keeps the registration report, for tests that pin a run's
+    /// exact call log). Liveness is watched either way. On failure the
+    /// transport is closed and the runtime reads `Failed`; a runtime that
+    /// was stopped meanwhile stays `Stopped` and the late driver is closed
+    /// rather than registered.
     pub(crate) async fn attach(
         &self,
         transport: Arc<dyn DriverTransport>,
         machine_id: MachineId,
         hostname: &str,
+        refresh: Option<Duration>,
     ) -> anyhow::Result<MachineDescriptor> {
-        match self.register(transport.clone(), machine_id, hostname).await {
+        match self
+            .register(transport.clone(), machine_id, hostname, refresh)
+            .await
+        {
             Ok(descriptor) => {
                 log::info!(
                     "[cua] server-local target registered: {} ({:?} {}, {:?}, accessibility {:?}, \
@@ -221,7 +251,10 @@ impl CuaRuntime {
             }
             Err(error) => {
                 transport.close();
-                *self.inner.state.lock().await = State::Failed(format!("{error:#}"));
+                let mut state = self.inner.state.lock().await;
+                if !matches!(*state, State::Stopped) {
+                    *state = State::Failed(format!("{error:#}"));
+                }
                 Err(error)
             }
         }
@@ -232,12 +265,20 @@ impl CuaRuntime {
         transport: Arc<dyn DriverTransport>,
         machine_id: MachineId,
         hostname: &str,
+        refresh: Option<Duration>,
     ) -> anyhow::Result<MachineDescriptor> {
         let descriptor = describe_machine(transport.as_ref(), machine_id.clone())
             .await
             .context("health report")?;
         let adapter = checked_adapter(transport.clone(), descriptor.clone())
             .map_err(|error| anyhow::anyhow!("descriptor refused: {error}"))?;
+        // Held across the registration so a shutdown that lands now either
+        // runs first (and this driver is closed, not registered) or finds
+        // the target fully registered and stops it.
+        let mut state = self.inner.state.lock().await;
+        if matches!(*state, State::Stopped) {
+            anyhow::bail!("the gateway stopped while the driver was starting");
+        }
         self.inner
             .targets
             .register_server_local(adapter, hostname, chrono::Utc::now().timestamp())
@@ -248,12 +289,107 @@ impl CuaRuntime {
             .select(Some(&machine_id))
             .await
             .map_err(|error| anyhow::anyhow!("registered target not selectable: {error:?}"))?;
-        *self.inner.state.lock().await = State::Running(Target {
+        let watch = tokio::spawn(watch_driver(
+            self.clone(),
+            transport.clone(),
+            machine_id.clone(),
+            refresh,
+        ));
+        *state = State::Running(Target {
             machine_id,
             adapter,
             transport,
+            watch: watch.abort_handle(),
         });
         Ok(descriptor)
+    }
+
+    /// The driver child is gone: the target is unregistered at once, the
+    /// sessions it held are lost with it (there is nobody left to end them),
+    /// and the runtime reads `Failed` until the gateway restarts.
+    async fn driver_exited(&self, machine_id: &MachineId) {
+        let target = {
+            let mut state = self.inner.state.lock().await;
+            match &*state {
+                State::Running(target) if target.machine_id == *machine_id => {}
+                _ => return,
+            }
+            match std::mem::replace(&mut *state, State::Failed("the driver exited".to_owned())) {
+                State::Running(target) => target,
+                _ => unreachable!("matched Running above"),
+            }
+        };
+        let lost = std::mem::take(&mut *lock_open(&self.inner.open)).len();
+        self.inner.targets.unregister(&target.machine_id).await;
+        target.transport.close();
+        log::error!(
+            "[cua] driver exited; server-local target {} unregistered, {lost} open session(s) lost \
+             with it. Restart the gateway to register it again",
+            target.machine_id.as_str()
+        );
+    }
+
+    /// Ask the running driver for a fresh health report and, when it says
+    /// something new, advertise that: a new checked adapter over the same
+    /// transport replaces the registered one, so the next run authorizes
+    /// against the current permissions. A report that cannot be read keeps
+    /// the last one; only an exit drops the target.
+    async fn refresh(&self, transport: &Arc<dyn DriverTransport>, machine_id: &MachineId) {
+        let current = match &*self.inner.state.lock().await {
+            State::Running(target) if target.machine_id == *machine_id => {
+                target.adapter.descriptor().clone()
+            }
+            _ => return,
+        };
+        let fresh = match describe_machine(transport.as_ref(), machine_id.clone()).await {
+            Ok(fresh) => fresh,
+            Err(error) => {
+                log::warn!(
+                    "[cua] health refresh of {} failed; keeping its last report: {error:#}",
+                    machine_id.as_str()
+                );
+                return;
+            }
+        };
+        if fresh == current {
+            return;
+        }
+        let adapter = match checked_adapter(transport.clone(), fresh.clone()) {
+            Ok(adapter) => adapter,
+            Err(error) => {
+                log::warn!(
+                    "[cua] refreshed descriptor of {} refused; keeping the last one: {error}",
+                    machine_id.as_str()
+                );
+                return;
+            }
+        };
+        let mut state = self.inner.state.lock().await;
+        let State::Running(target) = &mut *state else {
+            return;
+        };
+        if target.machine_id != *machine_id {
+            return;
+        }
+        match self.inner.targets.replace(adapter).await {
+            Ok(adapter) => {
+                target.adapter = adapter;
+                log::info!(
+                    "[cua] server-local target {} health changed: {:?} -> {:?} (accessibility {:?}, \
+                     screen capture {:?}, {} capabilities)",
+                    machine_id.as_str(),
+                    current.health,
+                    fresh.health,
+                    fresh.permissions.accessibility,
+                    fresh.permissions.screen_capture,
+                    fresh.capabilities.len()
+                );
+            }
+            Err(error) => log::warn!(
+                "[cua] refreshed descriptor of {} not applied: {error}",
+                machine_id.as_str()
+            ),
+        }
     }
 
     /// Where the runtime is; the typed machine tools (#17/#18) report it.
@@ -322,6 +458,7 @@ impl CuaRuntime {
                 _ => return,
             }
         };
+        target.watch.abort();
         let open: Vec<SessionLabel> = std::mem::take(&mut *lock_open(&self.inner.open))
             .into_iter()
             .collect();
@@ -335,6 +472,39 @@ impl CuaRuntime {
             target.machine_id.as_str(),
             open.len()
         );
+    }
+}
+
+/// Watch one driver until it is gone: an exit unregisters the target at
+/// once; until then, every `refresh` interval re-reads its health.
+async fn watch_driver(
+    runtime: CuaRuntime,
+    transport: Arc<dyn DriverTransport>,
+    machine_id: MachineId,
+    refresh: Option<Duration>,
+) {
+    let mut ticks = refresh.map(|every| {
+        let mut ticks = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
+        ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        ticks
+    });
+    loop {
+        let tick = async {
+            match ticks.as_mut() {
+                Some(ticks) => {
+                    ticks.tick().await;
+                }
+                None => std::future::pending::<()>().await,
+            }
+        };
+        tokio::select! {
+            biased;
+            () = transport.exited() => {
+                runtime.driver_exited(&machine_id).await;
+                return;
+            }
+            () = tick => runtime.refresh(&transport, &machine_id).await,
+        }
     }
 }
 
@@ -575,6 +745,18 @@ mod tests {
         report: &str,
         answers: Vec<crate::services::cua::transport::CallOutcome>,
     ) -> (CuaRuntime, Arc<FakeTransport>) {
+        attached_with(registry, report, answers, None).await
+    }
+
+    /// `attached` with a say in how often the driver's health is re-read
+    /// while it runs; the session and policy tests attach with `None` so the
+    /// call log is exactly the run's.
+    async fn attached_with(
+        registry: &MachineRegistry,
+        report: &str,
+        answers: Vec<crate::services::cua::transport::CallOutcome>,
+        refresh: Option<Duration>,
+    ) -> (CuaRuntime, Arc<FakeTransport>) {
         let mut outcomes = vec![Ok(payload(report))];
         outcomes.extend(answers);
         let transport = Arc::new(FakeTransport::answering(outcomes));
@@ -584,10 +766,26 @@ mod tests {
                 transport.clone(),
                 server_local_machine_id("studio"),
                 "studio",
+                refresh,
             )
             .await
             .unwrap();
         (runtime, transport)
+    }
+
+    /// Yield until `condition` holds, or fail after a bounded number of turns.
+    async fn eventually<F, Fut>(what: &str, mut condition: F)
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = bool>,
+    {
+        for _ in 0..1000 {
+            if condition().await {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!("{what} never happened");
     }
 
     async fn listed_by_tool(registry: &MachineRegistry) -> String {
@@ -1204,6 +1402,194 @@ mod tests {
             vec!["health_report", "start_session"],
             "nothing was executed and nothing is ended for a session that never opened"
         );
+    }
+
+    #[tokio::test]
+    async fn a_driver_that_dies_after_registration_drops_the_target() {
+        let registry = MachineRegistry::new();
+        let (runtime, transport) = attached(
+            &registry,
+            HEALTHY,
+            vec![Ok(started(1)), Ok(json!({"apps": []}))],
+        )
+        .await;
+        assert_eq!(registry.cua().list().await.len(), 1);
+
+        // A run parks mid-session, holding the driver session open.
+        let release = Arc::new(tokio::sync::Notify::new());
+        let parked = tokio::spawn({
+            let runtime = runtime.clone();
+            let release = release.clone();
+            async move {
+                runtime
+                    .run("parked", |run| async move {
+                        run.execute(list_apps()).await?;
+                        release.notified().await;
+                        Ok(())
+                    })
+                    .await
+            }
+        });
+        eventually("the parked run opened its session", || async {
+            transport.tools_called().len() == 3
+        })
+        .await;
+
+        // The child dies; nobody asks the runtime anything.
+        transport.crash();
+        eventually("the target left the registry", || async {
+            registry.cua().list().await.is_empty()
+        })
+        .await;
+        assert!(
+            registry.known_at(1_700_000_000).await.unwrap().is_empty(),
+            "GET /machines no longer lists a dead driver as online"
+        );
+        assert!(
+            listed_by_tool(&registry)
+                .await
+                .starts_with("No machines connected")
+        );
+        match runtime.status().await {
+            RuntimeStatus::Failed(message) => assert!(message.contains("exited"), "{message}"),
+            other => panic!("a dead driver is a failure, got {other:?}"),
+        }
+        assert!(transport.closed(), "the runtime lets go of the dead child");
+        assert!(matches!(
+            runtime.run("late", |_| async { Ok(()) }).await,
+            Err(RunError::Unavailable)
+        ));
+
+        // The parked run finishes; its session died with the driver, so
+        // nothing is sent to end it.
+        release.notify_one();
+        parked.await.unwrap().unwrap();
+        assert_eq!(
+            transport.tools_called(),
+            vec!["health_report", "start_session", "list_apps"]
+        );
+
+        // Shutting down afterwards has nothing left to do.
+        runtime.shutdown().await;
+        assert_eq!(runtime.status().await, RuntimeStatus::Stopped);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_descriptor_follows_the_drivers_health_reports_while_it_runs() {
+        let registry = MachineRegistry::new();
+        let every = Duration::from_secs(60);
+        let (runtime, transport) = attached_with(
+            &registry,
+            HEALTHY,
+            vec![
+                Ok(payload(ACCESSIBILITY_DENIED)),
+                Ok(payload(HEALTHY)),
+                Err(cua_protocol::driver_mcp::DriverCallFailure::Timeout(
+                    "health_report did not answer within 30s".into(),
+                )),
+            ],
+            Some(every),
+        )
+        .await;
+        let first_seen = registry.known_at(1_700_000_000).await.unwrap()[0].first_seen;
+        let health = |registry: &MachineRegistry| {
+            let registry = registry.clone();
+            async move { registry.cua().list().await[0].health }
+        };
+        assert_eq!(health(&registry).await, MachineHealth::Healthy);
+
+        // Accessibility is revoked after startup: the next report says so
+        // and the target advertises it everywhere a new run would look.
+        tokio::time::sleep(every + Duration::from_secs(1)).await;
+        eventually("the first refresh landed", || async {
+            health(&registry).await == MachineHealth::Degraded
+        })
+        .await;
+        let row = &registry.known_at(1_700_000_000).await.unwrap()[0];
+        assert_eq!(row.cua_health, Some(MachineHealth::Degraded));
+        assert_eq!(
+            row.permissions.as_ref().map(|p| p.accessibility),
+            Some(Permission::Denied)
+        );
+        assert_eq!(
+            row.first_seen, first_seen,
+            "a refresh is not a new registration"
+        );
+        let entries: Vec<Value> = serde_json::from_str(&listed_by_tool(&registry).await).unwrap();
+        assert_eq!(entries[0]["health"], "degraded");
+        let calls_before = transport.tools_called().len();
+        runtime
+            .run("click after the revoke", |run| async move {
+                let refused = run.execute(click()).await;
+                assert!(matches!(refused, Err(ExecError::Refused(_))), "{refused:?}");
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            transport.tools_called().len(),
+            calls_before,
+            "a run authorizes against the refreshed descriptor before any driver call"
+        );
+
+        // Granted again: back to healthy.
+        tokio::time::sleep(every).await;
+        eventually("the second refresh landed", || async {
+            health(&registry).await == MachineHealth::Healthy
+        })
+        .await;
+        assert_eq!(registry.cua().list().await.len(), 1, "still one target");
+
+        // A report that fails keeps the last one; only an exit drops the target.
+        tokio::time::sleep(every).await;
+        eventually("the third refresh was attempted", || async {
+            transport.tools_called().len() == 4
+        })
+        .await;
+        assert_eq!(health(&registry).await, MachineHealth::Healthy);
+        assert_eq!(
+            runtime.status().await,
+            RuntimeStatus::Running(server_local_machine_id("studio"))
+        );
+        assert_eq!(
+            transport.tools_called(),
+            vec!["health_report"; 4],
+            "one report at registration and one per interval, nothing else"
+        );
+
+        runtime.shutdown().await;
+        assert!(transport.closed());
+    }
+
+    #[tokio::test]
+    async fn a_driver_that_finishes_starting_after_shutdown_is_closed_not_registered() {
+        let registry = MachineRegistry::new();
+        let runtime = CuaRuntime::new(config(), registry.cua().clone());
+        // The gateway stopped while `start` was still spawning the driver.
+        runtime.shutdown().await;
+        assert_eq!(runtime.status().await, RuntimeStatus::Stopped);
+
+        let transport = Arc::new(FakeTransport::answering([Ok(payload(HEALTHY))]));
+        let error = runtime
+            .attach(
+                transport.clone(),
+                server_local_machine_id("studio"),
+                "studio",
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("stopped"), "{error:#}");
+        assert!(transport.closed(), "the late driver is stopped, not leaked");
+        assert!(registry.cua().list().await.is_empty());
+        assert_eq!(
+            runtime.status().await,
+            RuntimeStatus::Stopped,
+            "a late failure does not overwrite the stop"
+        );
+        // And a `start` that only now gets its turn does nothing either.
+        runtime.start_from(gui_host(), Ok(None)).await;
+        assert_eq!(runtime.status().await, RuntimeStatus::Stopped);
     }
 
     /// Against a real `cua-driver mcp` child; run by hand with `--ignored`

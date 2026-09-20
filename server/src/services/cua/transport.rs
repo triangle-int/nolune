@@ -33,7 +33,14 @@ pub trait DriverTransport: Send + Sync {
     /// Stop the driver for good: later calls fail and the child, if any, is
     /// killed. Idempotent, so a shutdown hook and a drop can both call it.
     fn close(&self);
+
+    /// Resolve once the driver is gone for any reason: the child exited or
+    /// crashed on its own, or `close` ran. Resolves at once for a driver that
+    /// is already gone, so a watcher can never miss the exit.
+    fn exited(&self) -> ExitFuture<'_>;
 }
+
+pub type ExitFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 
 /// The structured payload of an MCP `tools/call` result.
 ///
@@ -107,10 +114,15 @@ impl Default for DriverTimeouts {
 ///
 /// The child lives exactly as long as this transport: the keep-alive task
 /// owns the rmcp service, and dropping the transport aborts that task, which
-/// drops the service, closes the connection and kills the child.
+/// drops the service, closes the connection and kills the child. The task
+/// also ends by itself when the child exits, which is how [`exited`]
+/// (`DriverTransport::exited`) learns that the driver is gone.
 pub struct StdioDriverTransport {
     sink: ServerSink,
-    keep_alive: tokio::task::JoinHandle<()>,
+    /// Aborting this ends the rmcp service and kills the child.
+    keep_alive: tokio::task::AbortHandle,
+    /// `true` once the keep-alive task has ended, whatever ended it.
+    gone: tokio::sync::watch::Receiver<bool>,
     timeouts: DriverTimeouts,
 }
 
@@ -152,9 +164,18 @@ impl StdioDriverTransport {
             ),
         };
         log::info!("[cua] driver started: {} mcp", driver.display());
+        // The keep-alive task ends when the child exits or when it is
+        // aborted; either way the flag flips exactly once.
+        let abort = keep_alive.abort_handle();
+        let (flag, gone) = tokio::sync::watch::channel(false);
+        tokio::spawn(async move {
+            let _ = keep_alive.await;
+            flag.send_replace(true);
+        });
         Ok(Self {
             sink,
-            keep_alive,
+            keep_alive: abort,
+            gone,
             timeouts,
         })
     }
@@ -208,6 +229,15 @@ impl DriverTransport for StdioDriverTransport {
         }
         self.keep_alive.abort();
     }
+
+    fn exited(&self) -> ExitFuture<'_> {
+        let mut gone = self.gone.clone();
+        Box::pin(async move {
+            // A closed channel means the flag task is over, which it only is
+            // after it flipped the flag: gone either way.
+            let _ = gone.wait_for(|gone| *gone).await;
+        })
+    }
 }
 
 #[cfg(test)]
@@ -218,11 +248,19 @@ pub(crate) mod fake {
     use super::*;
     use std::{collections::VecDeque, sync::Mutex};
 
-    #[derive(Default)]
     pub struct FakeTransport {
         calls: Mutex<Vec<(String, Map<String, Value>)>>,
         outcomes: Mutex<VecDeque<CallOutcome>>,
         closed: std::sync::atomic::AtomicBool,
+        /// Flipped by `close` and by `crash`: the stand-in for a child that
+        /// is no longer there.
+        gone: tokio::sync::watch::Sender<bool>,
+    }
+
+    impl Default for FakeTransport {
+        fn default() -> Self {
+            Self::answering([])
+        }
     }
 
     impl FakeTransport {
@@ -231,7 +269,20 @@ pub(crate) mod fake {
                 calls: Mutex::new(Vec::new()),
                 outcomes: Mutex::new(outcomes.into_iter().collect()),
                 closed: std::sync::atomic::AtomicBool::new(false),
+                gone: tokio::sync::watch::Sender::new(false),
             }
+        }
+
+        /// The driver child died on its own: `exited` resolves and every
+        /// later call fails, while `closed` stays false because nobody
+        /// asked for the stop.
+        pub fn crash(&self) {
+            self.gone.send_replace(true);
+        }
+
+        /// Whether the driver is gone, by a crash or a close.
+        pub fn gone(&self) -> bool {
+            *self.gone.borrow()
         }
 
         /// Every `(tool, arguments)` pair in the order it was called.
@@ -252,11 +303,12 @@ pub(crate) mod fake {
 
     impl DriverTransport for FakeTransport {
         fn call_tool(&self, name: &str, arguments: Map<String, Value>) -> TransportFuture<'_> {
-            if self.closed() {
-                return Box::pin(async {
-                    Err(DriverCallFailure::Transport(
-                        "fake driver is closed".to_owned(),
-                    ))
+            if self.gone() {
+                let why = if self.closed() { "closed" } else { "exited" };
+                return Box::pin(async move {
+                    Err(DriverCallFailure::Transport(format!(
+                        "fake driver is {why}"
+                    )))
                 });
             }
             self.calls
@@ -278,6 +330,14 @@ pub(crate) mod fake {
 
         fn close(&self) {
             self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+            self.gone.send_replace(true);
+        }
+
+        fn exited(&self) -> ExitFuture<'_> {
+            let mut gone = self.gone.subscribe();
+            Box::pin(async move {
+                let _ = gone.wait_for(|gone| *gone).await;
+            })
         }
     }
 }
@@ -548,6 +608,109 @@ done
             after.is_err(),
             "a closed transport answers nothing: {after:?}"
         );
+    }
+
+    /// A stdio MCP server that completes the handshake and exits as soon as
+    /// the client's `initialized` notification arrives: a driver that dies
+    /// right after it was described.
+    #[cfg(unix)]
+    const EXIT_AFTER_HANDSHAKE_SERVER: &str = r#"
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"stub","version":"0"}}}\n' "$id"
+      ;;
+    *'"method":"notifications/initialized"'*)
+      exit 3
+      ;;
+  esac
+done
+"#;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_driver_that_exits_on_its_own_is_reported_gone() {
+        use std::time::{Duration, Instant};
+
+        let dir = tempfile::tempdir().unwrap();
+        let dying = script(dir.path(), "dying-driver", EXIT_AFTER_HANDSHAKE_SERVER);
+        let transport = StdioDriverTransport::spawn_with(
+            &dying,
+            DriverTimeouts {
+                handshake: Duration::from_secs(10),
+                call: Duration::from_millis(500),
+            },
+        )
+        .await
+        .expect("the stub completes the handshake before it exits");
+
+        let started = Instant::now();
+        tokio::time::timeout(Duration::from_secs(5), transport.exited())
+            .await
+            .expect("exited resolves once the child is gone");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        // Resolves again at once for a driver that is already gone.
+        tokio::time::timeout(Duration::from_millis(100), transport.exited())
+            .await
+            .expect("an exited driver stays exited");
+        let after = transport.call_tool("health_report", Map::new()).await;
+        assert!(after.is_err(), "a dead driver answers nothing: {after:?}");
+        // Closing what already exited is harmless.
+        transport.close();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn close_resolves_exited_too() {
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().unwrap();
+        let stub = script(dir.path(), "closing-driver", HANDSHAKE_ONLY_SERVER);
+        let transport = StdioDriverTransport::spawn_with(&stub, DriverTimeouts::default())
+            .await
+            .expect("the stub completes the handshake");
+        let still_running =
+            tokio::time::timeout(Duration::from_millis(200), transport.exited()).await;
+        assert!(still_running.is_err(), "a live driver has not exited");
+
+        transport.close();
+        tokio::time::timeout(Duration::from_secs(5), transport.exited())
+            .await
+            .expect("close is an exit as well");
+    }
+
+    #[tokio::test]
+    async fn the_fake_reports_a_crash_and_a_close_alike_but_remembers_which() {
+        use fake::FakeTransport;
+        use std::time::Duration;
+
+        let crashed = FakeTransport::answering([Ok(json!({"apps": []}))]);
+        let alive = tokio::time::timeout(Duration::from_millis(50), crashed.exited()).await;
+        assert!(alive.is_err(), "a fresh fake is alive");
+        crashed.crash();
+        tokio::time::timeout(Duration::from_millis(50), crashed.exited())
+            .await
+            .expect("a crashed fake has exited");
+        assert!(!crashed.closed(), "nobody closed it");
+        assert!(crashed.gone());
+        let after = crashed.call_tool("list_apps", Map::new()).await;
+        assert!(
+            matches!(&after, Err(DriverCallFailure::Transport(message)) if message.contains("exited")),
+            "{after:?}"
+        );
+        assert!(
+            crashed.calls().is_empty(),
+            "a call to a dead driver is not recorded as delivered"
+        );
+
+        let closed = FakeTransport::default();
+        closed.close();
+        tokio::time::timeout(Duration::from_millis(50), closed.exited())
+            .await
+            .expect("a closed fake has exited");
+        assert!(closed.closed());
+        assert!(closed.gone());
     }
 
     #[test]

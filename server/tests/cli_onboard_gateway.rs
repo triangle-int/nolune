@@ -32,7 +32,27 @@ fn onboard(home: &Path) -> serde_json::Value {
     );
     let stdout = String::from_utf8(out.stdout).unwrap();
     let last = stdout.lines().last().expect("onboard printed nothing");
-    serde_json::from_str(last).unwrap_or_else(|e| panic!("last line is not JSON ({e}): {last:?}"))
+    let report: serde_json::Value = serde_json::from_str(last)
+        .unwrap_or_else(|e| panic!("last line is not JSON ({e}): {last:?}"));
+    without_computer_use(home);
+    report
+}
+
+/// Keep the gateways these tests spawn from driving this machine: `[cua]`
+/// defaults to looking for `cua-driver`, and a developer Mac that has it on
+/// `PATH` (with Accessibility and Screen Recording granted) would otherwise
+/// get a real driver child started by every test here (#16). The one live
+/// driver test is `services::cua::runtime::tests::live_server_local_target_round_trips_a_session`,
+/// run by hand with `--ignored`.
+fn without_computer_use(dir: &Path) {
+    let config = dir.join("config.toml");
+    let mut raw = fs::read_to_string(&config).unwrap();
+    assert!(
+        !raw.contains("[cua]"),
+        "onboard wrote a [cua] section; edit it instead of appending one:\n{raw}"
+    );
+    raw.push_str("\n[cua]\nenabled = false\n");
+    fs::write(&config, raw).unwrap();
 }
 
 fn wait_exit(child: &mut Child, limit: Duration) -> Option<std::process::ExitStatus> {
@@ -223,7 +243,10 @@ fn two_profiles_run_concurrently_with_separate_roots_ports_and_tokens() {
             String::from_utf8_lossy(&out.stderr)
         );
         let stdout = String::from_utf8(out.stdout).unwrap();
-        serde_json::from_str(stdout.lines().last().unwrap()).unwrap()
+        let report: serde_json::Value =
+            serde_json::from_str(stdout.lines().last().unwrap()).unwrap();
+        without_computer_use(Path::new(report["dir"].as_str().unwrap()));
+        report
     };
 
     let molinka = onboard_profile("molinka");
