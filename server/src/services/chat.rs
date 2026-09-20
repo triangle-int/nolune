@@ -515,16 +515,13 @@ pub async fn run_single_turn(
     let tool_result = match tool_result {
         Ok(r) => r,
         Err(e) => {
-            let msg = e.to_string();
-            log::error!("LLM call failed: {msg}");
+            log::error!("LLM call failed: {e}");
 
             // Rate limits / overload: return a friendly message, don't propagate error
-            if msg.contains("429")
-                || msg.contains("rate_limit")
-                || msg.contains("Too Many Requests")
-                || msg.contains("529")
-                || msg.contains("overloaded")
-            {
+            if matches!(
+                e.downcast_ref::<llm::contract::LlmError>(),
+                Some(llm::contract::LlmError::RateLimited { .. })
+            ) {
                 llm::ToolChatResult {
                     text: "i'm being rate limited right now — give me a moment and try again"
                         .to_string(),
@@ -1264,8 +1261,8 @@ pub async fn compute_context_stats_async(
             let preset = pinned.as_deref().unwrap_or(&config.llm.chat_preset);
             llm::LlmBackend::for_preset(&config, http_client.clone(), preset).ok()
         });
-        if let Some(backend) = backend {
-            if let Some(real_total) = count_tokens_api(
+        if let Some(backend) = backend
+            && let Some(real_total) = count_tokens_api(
                 &backend,
                 &workspace_dir,
                 &instance_slug,
@@ -1274,22 +1271,21 @@ pub async fn compute_context_stats_async(
                 &resources,
             )
             .await
-            {
-                let local_total = stats.total_input_tokens_estimate;
-                if local_total > 0 && real_total > 0 {
-                    let ratio = real_total as f64 / local_total as f64;
-                    for section in &mut stats.system_prompt {
-                        section.tokens = (section.tokens as f64 * ratio).round() as usize;
-                    }
-                    stats.system_prompt_total_tokens =
-                        stats.system_prompt.iter().map(|s| s.tokens).sum();
-                    stats.tools_tokens_estimate =
-                        (stats.tools_tokens_estimate as f64 * ratio).round() as usize;
-                    stats.history_tokens_estimate =
-                        real_total - stats.system_prompt_total_tokens - stats.tools_tokens_estimate;
+        {
+            let local_total = stats.total_input_tokens_estimate;
+            if local_total > 0 && real_total > 0 {
+                let ratio = real_total as f64 / local_total as f64;
+                for section in &mut stats.system_prompt {
+                    section.tokens = (section.tokens as f64 * ratio).round() as usize;
                 }
-                stats.total_input_tokens_estimate = real_total;
+                stats.system_prompt_total_tokens =
+                    stats.system_prompt.iter().map(|s| s.tokens).sum();
+                stats.tools_tokens_estimate =
+                    (stats.tools_tokens_estimate as f64 * ratio).round() as usize;
+                stats.history_tokens_estimate =
+                    real_total - stats.system_prompt_total_tokens - stats.tools_tokens_estimate;
             }
+            stats.total_input_tokens_estimate = real_total;
         }
     }
 

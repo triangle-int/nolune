@@ -85,8 +85,15 @@ impl std::error::Error for LlmError {}
 
 /// The `Retry-After` header as a delay, when the provider sent one in seconds.
 pub(super) fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
-    let _ = headers;
-    None
+    headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+        .map(Duration::from_secs_f64)
 }
 
 impl From<anyhow::Error> for LlmError {
@@ -480,17 +487,16 @@ mod tests {
         (url, requests, task)
     }
 
+    /// Request path and body, per request the mock received.
+    type CapturedRequests = Arc<Mutex<Vec<(String, Value)>>>;
+
     /// Like `mock_server`, but records each request's path and answers with
     /// `headers` as well.
     async fn mock_server_with(
         status: u16,
         headers: Vec<(&'static str, String)>,
         body: String,
-    ) -> (
-        String,
-        Arc<Mutex<Vec<(String, Value)>>>,
-        tokio::task::JoinHandle<()>,
-    ) {
+    ) -> (String, CapturedRequests, tokio::task::JoinHandle<()>) {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let captured = requests.clone();
         let app = axum::Router::new().fallback(axum::routing::post(
@@ -892,13 +898,22 @@ mod tests {
             .to_string()
     }
 
+    /// Provider, status, response headers, body, expected variant.
+    type ErrorCase = (
+        LlmProvider,
+        u16,
+        Vec<(&'static str, String)>,
+        String,
+        &'static str,
+    );
+
     /// Both adapters answer the same failures with the same variants, in
     /// both modes; `Http` is only the remainder.
     #[tokio::test]
     async fn adapters_map_provider_errors_to_typed_variants() {
         use LlmProvider::{Anthropic, Openai};
         let retry: Vec<(&'static str, String)> = vec![("retry-after", "7".into())];
-        let cases: Vec<(LlmProvider, u16, Vec<(&'static str, String)>, String, &str)> = vec![
+        let cases: Vec<ErrorCase> = vec![
             (
                 Anthropic,
                 401,
@@ -1257,12 +1272,16 @@ mod tests {
                 let requests = requests.lock().unwrap();
                 let body = &requests[0].1;
                 assert_eq!(body["model"], "model-x");
-                let limit = if provider == LlmProvider::Anthropic {
-                    "max_tokens"
+                // The smallest completion each API accepts.
+                let (limit, smallest) = if provider == LlmProvider::Anthropic {
+                    ("max_tokens", 1)
                 } else {
-                    "max_output_tokens"
+                    ("max_output_tokens", 16)
                 };
-                assert_eq!(body[limit], 1, "{provider:?}: a probe asks for one token");
+                assert_eq!(
+                    body[limit], smallest,
+                    "{provider:?}: a probe asks for the least"
+                );
                 let label = format!("{provider:?} {status}: {result:?}");
                 match expected {
                     "ok" => assert!(result.is_ok(), "{label}"),
