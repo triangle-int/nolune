@@ -436,10 +436,23 @@ mod tests {
         )
         .unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let warmed = std::process::Command::new(&path)
-            .arg("warm-up")
-            .status()
-            .unwrap();
+        // Other tests in this binary fork concurrently; on Linux a child forked
+        // while the script was still open for writing holds that descriptor
+        // until it execs, and running the script meanwhile fails with
+        // ETXTBSY. Retry briefly instead of failing on that window.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let warmed = loop {
+            match std::process::Command::new(&path).arg("warm-up").status() {
+                Ok(status) => break status,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(error) => panic!("{}: {error}", path.display()),
+            }
+        };
         assert!(warmed.success(), "{}", path.display());
         path
     }
