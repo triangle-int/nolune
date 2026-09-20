@@ -55,6 +55,7 @@ impl IntoResponse for ApiError {
             CommitmentError::Invalid(_) => StatusCode::BAD_REQUEST,
             CommitmentError::Closed { .. } => StatusCode::CONFLICT,
             CommitmentError::EvidenceRequired => StatusCode::UNPROCESSABLE_ENTITY,
+            CommitmentError::Superseded(_) => StatusCode::CONFLICT,
             CommitmentError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (

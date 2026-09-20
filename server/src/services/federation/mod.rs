@@ -8,14 +8,12 @@
 //! agree byte for byte or a signature simply does not verify.
 //! `server/tests/fixtures/federation/generate.py` is the second encoder.
 //!
-//! Nothing in this module logs. Secrets never leave the process except
-//! through the keystore's private files.
-
-// Foundation for federation pairing and transport (#108, later PRs); routes
-// and startup wiring arrive with the peer store.
-#![allow(dead_code)]
+//! Nothing in this module logs a secret. The invite secret leaves the process
+//! once, in the owner's invite response, and the signing key never does.
 
 pub mod identity;
+pub mod pairing;
+pub mod peers;
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use sha2::{Digest, Sha256};
@@ -30,6 +28,8 @@ pub(crate) const COMPANION_ID_DOMAIN: &[u8] = b"nolune/federation/companion-id/v
 pub(crate) const IDENTITY_SIGNING_DOMAIN: &[u8] = b"nolune/federation/identity/v1\0";
 /// Domain tag for a signed envelope.
 pub(crate) const ENVELOPE_SIGNING_DOMAIN: &[u8] = b"nolune/federation/envelope/v1\0";
+/// Domain tag for the stored hash of an invite secret.
+pub(crate) const INVITE_HASH_DOMAIN: &[u8] = b"nolune/federation/invite/v1\0";
 
 /// Builder for canonical signing bytes; see the module docs for the layout.
 pub(crate) struct Canonical {

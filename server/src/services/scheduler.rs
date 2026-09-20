@@ -27,6 +27,9 @@ pub(crate) async fn check_and_trigger(state: &AppState) {
     let now = Utc::now().timestamp();
     let instance_slug = CANONICAL_SLUG.to_owned();
 
+    // Commitments whose next check has come up (#85): one run each through the loop.
+    crate::services::commitment_evaluator::tick(state, now).await;
+
     for (path, scheduled) in due_scheduled_tasks(&state.workspace_dir, now) {
         // Remove the scheduled file first (prevent re-trigger on next tick)
         let _ = fs::remove_file(&path);

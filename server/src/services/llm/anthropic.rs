@@ -6,10 +6,20 @@ use crate::services::tool::ToolDefinition;
 
 use super::contract::{
     Capabilities, EventSink, ExecutionScope, LlmError, LlmEvent, LlmRequest, ProviderAdapter,
-    StopReason, Usage,
+    StopReason, Usage, retry_after,
 };
 use super::types::LlmBackend;
 use super::types::{ContentBlock, LlmResponse, Message, ToolCall};
+
+/// Anthropic rejects inline images whose base64 payload exceeds 5 MiB; larger
+/// blocks are stripped before the request is sent.
+pub const MAX_INLINE_IMAGE_BASE64_BYTES: usize = 5 * 1024 * 1024;
+
+/// Raw image bytes that still fit [`MAX_INLINE_IMAGE_BASE64_BYTES`] once encoded
+/// (base64 grows 3 bytes into 4). Provider-facing fallbacks check this before
+/// reading a blob so an oversized image degrades to a placeholder instead of a
+/// block the provider would drop.
+pub const MAX_INLINE_IMAGE_BYTES: usize = MAX_INLINE_IMAGE_BASE64_BYTES / 4 * 3;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Anthropic API
@@ -32,6 +42,37 @@ pub(crate) fn anthropic_headers(api_key: &str) -> Result<reqwest::header::Header
     headers.insert("anthropic-version", "2023-06-01".parse().unwrap());
     headers.insert("content-type", "application/json".parse().unwrap());
     Ok(headers)
+}
+
+/// The typed error for an Anthropic error object, whether it came as a
+/// non-2xx body or as an SSE `error` event (same `{"error": {"type",
+/// "message"}}` shape). Callers act on the variant; the redacted body rides
+/// along for logs.
+fn anthropic_error(status: u16, retry_after: Option<Duration>, body: &str) -> LlmError {
+    let message = crate::services::tools::redact_secrets(body);
+    let parsed: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+    let kind = parsed["error"]["type"].as_str().unwrap_or("");
+    let detail = parsed["error"]["message"]
+        .as_str()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match (status, kind) {
+        (401 | 403, _) | (_, "authentication_error" | "permission_error") => {
+            LlmError::Authentication(message)
+        }
+        (429 | 529, _) | (_, "rate_limit_error" | "overloaded_error") => LlmError::RateLimited {
+            retry_after,
+            message,
+        },
+        (400, _)
+            if detail.contains("prompt is too long")
+                || detail.contains("context_length")
+                || detail.contains("context length") =>
+        {
+            LlmError::ContextLength(message)
+        }
+        _ => LlmError::Http { status, message },
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -105,7 +146,7 @@ pub(crate) fn build_anthropic_request(
                     // Strip oversized base64 images
                     if block_type == Some("image") {
                         if let Some(data) = block.pointer("/source/data").and_then(|d| d.as_str()) {
-                            if data.len() > 5 * 1024 * 1024 {
+                            if data.len() > MAX_INLINE_IMAGE_BASE64_BYTES {
                                 log::info!(
                                     "stripping oversized base64 image ({} bytes)",
                                     data.len()
@@ -270,6 +311,7 @@ pub(crate) async fn anthropic_complete(
         .await?;
 
     let status = resp.status();
+    let retry_after = retry_after(resp.headers());
     let resp_text = resp.text().await?;
     if !status.is_success() {
         log::error!(
@@ -277,11 +319,7 @@ pub(crate) async fn anthropic_complete(
             messages.len(),
             serde_json::to_string(&body).map(|s| s.len()).unwrap_or(0),
         );
-        return Err(LlmError::Http {
-            status: status.as_u16(),
-            message: crate::services::tools::redact_secrets(&resp_text),
-        }
-        .into());
+        return Err(anthropic_error(status.as_u16(), retry_after, &resp_text).into());
     }
 
     let resp_json: serde_json::Value = serde_json::from_str(&resp_text)?;
@@ -398,6 +436,7 @@ pub(crate) async fn anthropic_stream(
 
     let status = resp.status();
     if !status.is_success() {
+        let retry_after = retry_after(resp.headers());
         let err_text = resp.text().await.unwrap_or_default();
         log::error!(
             "[llm] streaming API {status} — model={model}, msgs={}",
@@ -424,11 +463,7 @@ pub(crate) async fn anthropic_stream(
                 .collect();
             log::error!("[llm] msg[{i}] {role}: {:?}", types);
         }
-        return Err(LlmError::Http {
-            status: status.as_u16(),
-            message: crate::services::tools::redact_secrets(&err_text),
-        }
-        .into());
+        return Err(anthropic_error(status.as_u16(), retry_after, &err_text).into());
     }
 
     let mut text = String::new();
@@ -656,8 +691,15 @@ pub(crate) async fn anthropic_stream(
                     completed = true;
                 }
                 "error" => {
-                    let error_msg = ev["error"]["message"].as_str().unwrap_or("unknown error");
-                    return Err(anyhow::anyhow!("Anthropic stream error: {error_msg}"));
+                    // The same error object a non-2xx response carries, sent
+                    // mid-stream; an unknown kind is a broken stream.
+                    return Err(match anthropic_error(status.as_u16(), None, data) {
+                        LlmError::Http { message, .. } => {
+                            LlmError::InvalidResponse(format!("Anthropic stream error: {message}"))
+                        }
+                        error => error,
+                    }
+                    .into());
                 }
                 _ => {}
             }
@@ -701,6 +743,75 @@ pub(crate) async fn anthropic_stream(
     })
 }
 
+/// `POST /v1/messages/count_tokens`: the chat request as `build_anthropic_request`
+/// writes it, minus the fields that only apply to generation, so the count
+/// covers exactly what the next turn sends.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn anthropic_count_tokens(
+    http: &reqwest::Client,
+    api_key: &str,
+    model: &str,
+    system: &[&str],
+    tool_defs: &[ToolDefinition],
+    messages: &[Message],
+    scope: ExecutionScope,
+    base_url: &str,
+) -> Result<u64, LlmError> {
+    let mut body =
+        build_anthropic_request(model, system, tool_defs, messages, 1, scope, false, api_key);
+    if let Some(object) = body.as_object_mut() {
+        for key in [
+            "max_tokens",
+            "stream",
+            "cache_control",
+            "context_management",
+        ] {
+            object.remove(key);
+        }
+    }
+    let resp = http
+        .post(format!("{base_url}/v1/messages/count_tokens"))
+        .headers(anthropic_headers(api_key)?)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| LlmError::Transport(error.to_string()))?;
+    let status = resp.status();
+    let retry_after = retry_after(resp.headers());
+    let text = bounded_text(resp).await?;
+    if !status.is_success() {
+        return Err(anthropic_error(status.as_u16(), retry_after, &text));
+    }
+    let data: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|error| LlmError::InvalidResponse(format!("count_tokens: {error}")))?;
+    data["input_tokens"]
+        .as_u64()
+        .ok_or_else(|| LlmError::InvalidResponse("count_tokens: missing input_tokens".into()))
+}
+
+/// Reads a small response in full. A count is a few bytes and an error body
+/// needs no more; anything larger is not read into memory (#120).
+async fn bounded_text(resp: reqwest::Response) -> Result<String, LlmError> {
+    const MAX_BYTES: usize = 64 * 1024;
+    let too_large = || LlmError::InvalidResponse("count_tokens: response too large".into());
+    if resp
+        .content_length()
+        .is_some_and(|length| length > MAX_BYTES as u64)
+    {
+        return Err(too_large());
+    }
+    let mut bytes = Vec::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| LlmError::Transport(error.to_string()))?;
+        if bytes.len().saturating_add(chunk.len()) > MAX_BYTES {
+            return Err(too_large());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 pub(super) const CAPABILITIES: Capabilities = Capabilities {
     vision: true,
     documents: true,
@@ -708,6 +819,7 @@ pub(super) const CAPABILITIES: Capabilities = Capabilities {
     streaming: true,
     reasoning_controls: false,
     model_discovery: false,
+    token_counting: true,
 };
 
 /// The transport implementation is private to this adapter.
@@ -742,6 +854,20 @@ impl ProviderAdapter for AnthropicAdapter {
                 biased;
                 _ = request.cancellation.cancelled() => Err(LlmError::Cancelled),
                 result = anthropic_stream(&b.http, &b.api_key, &b.model, request.system, request.tools, request.messages, request.max_tokens, request.scope, events, &b.base_url) => result.map_err(LlmError::from),
+            }
+        })
+    }
+    fn count_tokens<'a>(
+        &'a self,
+        request: LlmRequest<'a>,
+    ) -> futures::future::BoxFuture<'a, Result<u64, LlmError>> {
+        Box::pin(async move {
+            request.validate(self.capabilities(), false)?;
+            let b = &self.0;
+            tokio::select! {
+                biased;
+                _ = request.cancellation.cancelled() => Err(LlmError::Cancelled),
+                result = anthropic_count_tokens(&b.http, &b.api_key, &b.model, request.system, request.tools, request.messages, request.scope, &b.base_url) => result,
             }
         })
     }

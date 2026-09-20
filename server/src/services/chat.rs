@@ -6,7 +6,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use futures::StreamExt;
 use tokio::sync::broadcast;
 
 use crate::{
@@ -516,16 +515,13 @@ pub async fn run_single_turn(
     let tool_result = match tool_result {
         Ok(r) => r,
         Err(e) => {
-            let msg = e.to_string();
-            log::error!("LLM call failed: {msg}");
+            log::error!("LLM call failed: {e}");
 
             // Rate limits / overload: return a friendly message, don't propagate error
-            if msg.contains("429")
-                || msg.contains("rate_limit")
-                || msg.contains("Too Many Requests")
-                || msg.contains("529")
-                || msg.contains("overloaded")
-            {
+            if matches!(
+                e.downcast_ref::<llm::contract::LlmError>(),
+                Some(llm::contract::LlmError::RateLimited { .. })
+            ) {
                 llm::ToolChatResult {
                     text: "i'm being rate limited right now — give me a moment and try again"
                         .to_string(),
@@ -1104,18 +1100,22 @@ fn strip_leaked_tool_calls(reply: &str) -> String {
     collapsed.trim().to_string()
 }
 
-/// Call Anthropic /v1/messages/count_tokens API for accurate token count.
+/// The provider's own input-token count for the next turn of a chat: the
+/// same system prompt, history and tool definitions the turn would send,
+/// through the backend's adapter. None when the provider cannot count or
+/// the call fails; the caller keeps its local estimate.
 async fn count_tokens_api(
-    client: &reqwest::Client,
-    endpoint: &str,
-    api_key: &str,
-    model: &str,
+    backend: &llm::LlmBackend,
     workspace_dir: &Path,
     instance_slug: &str,
     chat_id: &str,
     public_url: &str,
     resources: &crate::services::resource_access::ResourceAccess,
 ) -> Option<usize> {
+    let adapter = backend.adapter().ok()?;
+    if !adapter.capabilities().token_counting {
+        return None;
+    }
     // Build the same system prompt + messages we'd send to the LLM
     let system_prompt = llm::load_system_prompt(workspace_dir, instance_slug);
     let rig_path = rig_history_path(workspace_dir, instance_slug, chat_id);
@@ -1123,70 +1123,28 @@ async fn count_tokens_api(
     let mut messages = llm::HistoryEntry::to_messages(&entries);
     llm::refresh_resource_messages(&mut messages, public_url, instance_slug, resources);
 
-    let msgs_json = llm::messages_to_anthropic(&messages);
+    // Tool definitions from cache (real schemas, not stubs); the adapter
+    // writes them in its own wire format.
+    let tool_defs: Vec<crate::services::tool::ToolDefinition> = tools::cached_tool_defs()
+        .defs_json
+        .into_iter()
+        .filter_map(|value| serde_json::from_value(value).ok())
+        .collect();
 
-    // Build tool definitions from cache (real schemas, not stubs)
-    let tool_snapshot = tools::cached_tool_defs();
-    let tool_defs = tool_snapshot.defs_json;
-
-    // System must be an array of content blocks, same as the real chat request
-    let system_blocks = vec![serde_json::json!({"type": "text", "text": system_prompt})];
-
-    let mut body = serde_json::json!({
-        "model": model,
-        "system": system_blocks,
-        "messages": msgs_json,
-    });
-    if !tool_defs.is_empty() {
-        body["tools"] = serde_json::Value::Array(tool_defs);
-    }
-
-    let body = tools::redact_value(body);
-    let res = client
-        .post(endpoint)
-        .header("x-api-key", api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .ok()?;
-
-    let status = res.status();
-    const MAX_COUNT_TOKENS_RESPONSE_BYTES: usize = 64 * 1024;
-    if res
-        .content_length()
-        .is_some_and(|length| length > MAX_COUNT_TOKENS_RESPONSE_BYTES as u64)
-    {
-        log::warn!("count_tokens API failed: response too large");
-        return None;
-    }
-    let mut response_bytes = Vec::new();
-    let mut stream = res.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.ok()?;
-        if response_bytes.len().saturating_add(chunk.len()) > MAX_COUNT_TOKENS_RESPONSE_BYTES {
-            log::warn!("count_tokens API failed: response too large");
-            return None;
+    let system = [system_prompt.as_str()];
+    let request = llm::contract::LlmRequest::new(
+        llm::contract::ExecutionScope::Conversation,
+        &system,
+        &messages,
+        &tool_defs,
+    );
+    match adapter.count_tokens(request).await {
+        Ok(tokens) => Some(tokens as usize),
+        Err(error) => {
+            log::warn!("count_tokens API failed: {error}");
+            None
         }
-        response_bytes.extend_from_slice(&chunk);
     }
-    if !status.is_success() {
-        log::warn!(
-            "count_tokens API failed: {}",
-            count_tokens_failure(status, &response_bytes)
-        );
-        return None;
-    }
-
-    let data: serde_json::Value = serde_json::from_slice(&response_bytes).ok()?;
-    data["input_tokens"].as_u64().map(|t| t as usize)
-}
-
-fn count_tokens_failure(status: reqwest::StatusCode, body: &[u8]) -> String {
-    let status = tools::redact_secrets(&status.to_string());
-    let body = tools::redact_secrets(&String::from_utf8_lossy(body));
-    format!("{status} — {body}")
 }
 
 /// Rough token estimate: ~4 chars per token for English, ~2 for code/mixed.
@@ -1293,18 +1251,19 @@ pub async fn compute_context_stats_async(
         }
         stats.total_input_tokens_estimate = real_total;
     } else {
-        // Fallback: try count_tokens API if no cached data (first load before any chat)
-        let api_info: Option<(String, String)> =
-            crate::config::load_config().ok().and_then(|config| {
-                let (key, model) = config.llm.anthropic_credentials()?;
-                Some((key.to_string(), model.to_string()))
-            });
-        if let Some((api_key, model)) = api_info {
-            if let Some(real_total) = count_tokens_api(
-                &http_client,
-                "https://api.anthropic.com/v1/messages/count_tokens",
-                &api_key,
-                &model,
+        // Fallback: ask the chat's provider to count when nothing is cached
+        // yet (first load before any turn). The chat's pinned preset wins
+        // over the Chat slot, as it does for the turn itself (#156).
+        let backend = crate::config::load_config().ok().and_then(|config| {
+            let pinned = get_chat_preset(&workspace_dir, &instance_slug, &chat_id)
+                .ok()
+                .flatten();
+            let preset = pinned.as_deref().unwrap_or(&config.llm.chat_preset);
+            llm::LlmBackend::for_preset(&config, http_client.clone(), preset).ok()
+        });
+        if let Some(backend) = backend
+            && let Some(real_total) = count_tokens_api(
+                &backend,
                 &workspace_dir,
                 &instance_slug,
                 &chat_id,
@@ -1312,22 +1271,21 @@ pub async fn compute_context_stats_async(
                 &resources,
             )
             .await
-            {
-                let local_total = stats.total_input_tokens_estimate;
-                if local_total > 0 && real_total > 0 {
-                    let ratio = real_total as f64 / local_total as f64;
-                    for section in &mut stats.system_prompt {
-                        section.tokens = (section.tokens as f64 * ratio).round() as usize;
-                    }
-                    stats.system_prompt_total_tokens =
-                        stats.system_prompt.iter().map(|s| s.tokens).sum();
-                    stats.tools_tokens_estimate =
-                        (stats.tools_tokens_estimate as f64 * ratio).round() as usize;
-                    stats.history_tokens_estimate =
-                        real_total - stats.system_prompt_total_tokens - stats.tools_tokens_estimate;
+        {
+            let local_total = stats.total_input_tokens_estimate;
+            if local_total > 0 && real_total > 0 {
+                let ratio = real_total as f64 / local_total as f64;
+                for section in &mut stats.system_prompt {
+                    section.tokens = (section.tokens as f64 * ratio).round() as usize;
                 }
-                stats.total_input_tokens_estimate = real_total;
+                stats.system_prompt_total_tokens =
+                    stats.system_prompt.iter().map(|s| s.tokens).sum();
+                stats.tools_tokens_estimate =
+                    (stats.tools_tokens_estimate as f64 * ratio).round() as usize;
+                stats.history_tokens_estimate =
+                    real_total - stats.system_prompt_total_tokens - stats.tools_tokens_estimate;
             }
+            stats.total_input_tokens_estimate = real_total;
         }
     }
 
@@ -1996,17 +1954,23 @@ mod count_tokens_tests {
             )
             .with_state(captured.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = format!(
-            "http://{}/v1/messages/count_tokens",
-            listener.local_addr().unwrap()
-        );
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
         let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let resources = crate::services::resource_access::ResourceAccess::new(SECRET);
-        let result = count_tokens_api(
-            &reqwest::Client::new(),
-            &endpoint,
-            "provider-key",
+        // The count goes through the chat backend's adapter, never a
+        // hand-built provider request (#24).
+        let backend = llm::LlmBackend::probe(
+            reqwest::Client::new(),
+            crate::config::LlmProvider::Anthropic,
             "model",
+            "provider-key",
+        );
+        let backend = llm::LlmBackend {
+            base_url,
+            ..backend
+        };
+        let result = count_tokens_api(
+            &backend,
             workspace.path(),
             "moon",
             "default",
@@ -2021,9 +1985,16 @@ mod count_tokens_tests {
         assert!(!request.contains(SECRET));
         assert!(!request.contains("stale.invalid"));
         assert!(request.contains("/resources/model-provider/files/moon/upload_1.png?cap="));
-        let failure = count_tokens_failure(StatusCode::BAD_GATEWAY, SECRET.as_bytes());
-        assert!(!failure.contains(SECRET));
-        assert!(failure.contains("[REDACTED]"));
+        let openai = llm::LlmBackend::probe(
+            reqwest::Client::new(),
+            crate::config::LlmProvider::Openai,
+            "gpt-5.4",
+            "provider-key",
+        );
+        assert!(
+            !openai.adapter().unwrap().capabilities().token_counting,
+            "OpenAI has no count endpoint: the caller keeps its local estimate"
+        );
     }
 }
 

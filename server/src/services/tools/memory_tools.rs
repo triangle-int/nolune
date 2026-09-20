@@ -2,6 +2,7 @@
 use std::fs;
 use std::{path::Path, sync::Arc};
 
+use crate::services::memory::MemoryAccess;
 use crate::services::tool::{Tool, ToolDefinition};
 use crate::services::vector::VectorStore;
 use schemars::JsonSchema;
@@ -16,6 +17,7 @@ use super::{ToolExecError, openai_schema};
 pub struct MemoryWriteTool {
     instance_slug: String,
     vector_store: Arc<VectorStore>,
+    access: MemoryAccess,
 }
 
 impl MemoryWriteTool {
@@ -23,7 +25,15 @@ impl MemoryWriteTool {
         Self {
             instance_slug: instance_slug.to_string(),
             vector_store,
+            access: MemoryAccess::Direct,
         }
+    }
+
+    /// Who is writing: a routine may not touch memories excluded from
+    /// proactive use (#84).
+    pub fn with_access(mut self, access: MemoryAccess) -> Self {
+        self.access = access;
+        self
     }
 }
 
@@ -106,6 +116,16 @@ impl Tool for MemoryWriteTool {
         if clean_path.is_empty() {
             return Err(ToolExecError("invalid path".into()));
         }
+        if !crate::services::memory::visible_to(
+            &self.vector_store.media_store(),
+            &self.instance_slug,
+            &clean_path,
+            self.access,
+        ) {
+            return Err(ToolExecError(format!(
+                "memory excluded from proactive use: {clean_path}"
+            )));
+        }
 
         // Editing a reserved media sidecar must preserve its versioned owner binding.
         if let Some(owner) = crate::services::media_text::media_path(&clean_path) {
@@ -150,6 +170,7 @@ pub struct MemoryReadTool {
     media: Arc<crate::services::media_text::MediaStore>,
     public_url: String,
     resources: crate::services::resource_access::ResourceAccess,
+    access: MemoryAccess,
 }
 
 impl MemoryReadTool {
@@ -165,7 +186,15 @@ impl MemoryReadTool {
             media: vector_store.media_store(),
             public_url: public_url.to_string(),
             resources: resources.clone(),
+            access: MemoryAccess::Direct,
         }
+    }
+
+    /// Who is reading: a routine never sees memories excluded from
+    /// proactive use (#84).
+    pub fn with_access(mut self, access: MemoryAccess) -> Self {
+        self.access = access;
+        self
     }
 }
 
@@ -203,7 +232,7 @@ impl Tool for MemoryReadTool {
             )
         };
         if clean_path.is_empty() || metadata.is_some_and(|metadata| metadata.is_dir) {
-            // List directory contents
+            // List directory contents, minus what this reader may not see.
             let items = self
                 .media
                 .list_memory_dir(
@@ -212,6 +241,19 @@ impl Tool for MemoryReadTool {
                 )
                 .map_err(|error| ToolExecError(error.to_string()))?
                 .into_iter()
+                .filter(|entry| {
+                    entry.is_dir
+                        || crate::services::memory::visible_to(
+                            &self.media,
+                            &self.instance_slug,
+                            &if clean_path.is_empty() {
+                                entry.name.clone()
+                            } else {
+                                format!("{clean_path}/{}", entry.name)
+                            },
+                            self.access,
+                        )
+                })
                 .map(|entry| {
                     if entry.is_dir {
                         format!("{}/", entry.name)
@@ -226,6 +268,16 @@ impl Tool for MemoryReadTool {
                 Ok(items.join("\n"))
             }
         } else if metadata.is_some_and(|metadata| metadata.is_file) {
+            if !crate::services::memory::visible_to(
+                &self.media,
+                &self.instance_slug,
+                clean_path,
+                self.access,
+            ) {
+                return Err(ToolExecError(format!(
+                    "memory excluded from proactive use: {clean_path}"
+                )));
+            }
             let ext = Path::new(clean_path)
                 .extension()
                 .and_then(|e| e.to_str())
@@ -236,14 +288,17 @@ impl Tool for MemoryReadTool {
             let is_pdf = ext == "pdf";
             let is_media = is_image || is_pdf || matches!(ext, "mp4" | "mov" | "mp3" | "wav");
 
-            if (is_image || is_pdf) && !self.public_url.is_empty() {
+            // Content blocks go to the model provider, which cannot fetch a
+            // localhost URL; those installs inline the bytes instead.
+            let provider_url = crate::config::provider_reachable_public_url(&self.public_url);
+            let block_type = if is_image { "image" } else { "document" };
+            if let Some(base) = provider_url.filter(|_| is_image || is_pdf) {
                 let url = super::public_memory_url(
-                    &self.public_url,
+                    base,
                     &self.instance_slug,
-                    &clean_path,
+                    clean_path,
                     &self.resources,
                 );
-                let block_type = if is_image { "image" } else { "document" };
                 let blocks = serde_json::json!([
                     {"type": "text", "text": format!("memory file: {clean_path}")},
                     {"type": block_type, "source": {"type": "url", "url": url},
@@ -251,6 +306,31 @@ impl Tool for MemoryReadTool {
                          "slug": self.instance_slug, "path": clean_path}},
                 ]);
                 Ok(serde_json::to_string(&blocks).unwrap())
+            } else if let Some(media_type) = inline_media_type(ext).filter(|_| is_image || is_pdf) {
+                let max_bytes = if is_image {
+                    crate::services::llm::MAX_INLINE_IMAGE_BYTES
+                } else {
+                    MAX_INLINE_PDF_BYTES
+                };
+                match self
+                    .media
+                    .read_memory_file(&self.instance_slug, clean_path, max_bytes)
+                {
+                    Ok(bytes) => {
+                        use base64::Engine;
+                        let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                        let blocks = serde_json::json!([
+                            {"type": "text", "text": format!("memory file: {clean_path}")},
+                            {"type": block_type,
+                             "source": {"type": "base64", "media_type": media_type, "data": data}},
+                        ]);
+                        Ok(serde_json::to_string(&blocks).unwrap())
+                    }
+                    Err(error) => Err(ToolExecError(format!(
+                        "{clean_path}: cannot inline for the model ({error}); \
+                         set public_url to a provider-reachable address to attach it by URL"
+                    ))),
+                }
             } else if is_media {
                 // Audio/video — return metadata only (LLM can't inline these)
                 let size = metadata.map_or(0, |metadata| metadata.len);
@@ -288,6 +368,7 @@ impl Tool for MemoryReadTool {
 pub struct MemoryListTool {
     media: Arc<crate::services::media_text::MediaStore>,
     instance_slug: String,
+    access: MemoryAccess,
 }
 
 impl MemoryListTool {
@@ -295,7 +376,15 @@ impl MemoryListTool {
         Self {
             media: vector_store.media_store(),
             instance_slug: instance_slug.to_string(),
+            access: MemoryAccess::Direct,
         }
+    }
+
+    /// Who is listing: a routine never sees memories excluded from
+    /// proactive use (#84).
+    pub fn with_access(mut self, access: MemoryAccess) -> Self {
+        self.access = access;
+        self
     }
 }
 
@@ -321,7 +410,11 @@ impl Tool for MemoryListTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let entries = crate::services::memory::scan_library(&self.media, &self.instance_slug);
+        let entries = crate::services::memory::scan_library_for(
+            &self.media,
+            &self.instance_slug,
+            self.access,
+        );
 
         if entries.is_empty() {
             return Ok("(empty library — no memories yet)".into());
@@ -467,6 +560,7 @@ pub struct MemorySearchTool {
     vector_store: Arc<VectorStore>,
     public_url: String,
     resources: crate::services::resource_access::ResourceAccess,
+    access: MemoryAccess,
 }
 
 impl MemorySearchTool {
@@ -483,7 +577,15 @@ impl MemorySearchTool {
             vector_store,
             public_url: public_url.to_string(),
             resources,
+            access: MemoryAccess::Direct,
         }
+    }
+
+    /// Who is searching: a routine never sees memories excluded from
+    /// proactive use (#84).
+    pub fn with_access(mut self, access: MemoryAccess) -> Self {
+        self.access = access;
+        self
     }
 }
 
@@ -522,18 +624,30 @@ impl Tool for MemorySearchTool {
         }
         let limit = args.limit.unwrap_or(5).min(20);
 
-        let results = self
+        let media = self.vector_store.media_store();
+        let results: Vec<_> = self
             .vector_store
             .search_text(&self.instance_slug, query, limit)
-            .await;
+            .await
+            .into_iter()
+            .filter(|hit| {
+                crate::services::memory::visible_to(
+                    &media,
+                    &self.instance_slug,
+                    &hit.path,
+                    self.access,
+                )
+            })
+            .collect();
 
         if results.is_empty() {
             return Ok(format!("no memories matched \"{query}\""));
         }
 
+        let provider_url = crate::config::provider_reachable_public_url(&self.public_url);
         let has_images = results
             .iter()
-            .any(|r| r.source_type == "media_image" && !self.public_url.is_empty());
+            .any(|r| r.source_type == "media_image" && r.upload_id.is_some());
 
         if !has_images {
             // Text-only results — return plain string
@@ -578,25 +692,22 @@ impl Tool for MemorySearchTool {
                 text_buf.push_str(&format!("media: {url}\n\n"));
             }
 
-            if r.source_type == "media_image" && !self.public_url.is_empty() {
-                if let Some(upload_id) = &r.upload_id {
-                    // Flush text before image
-                    if !text_buf.trim().is_empty() {
-                        blocks.push(serde_json::json!({"type": "text", "text": text_buf.trim()}));
-                        text_buf.clear();
-                    }
-                    // Preserve the exact memory or upload identity when minting the provider URL.
-                    let memory_identity = upload_id == &r.path || upload_id.contains('/');
+            if r.source_type == "media_image"
+                && let Some(upload_id) = &r.upload_id
+            {
+                // Preserve the exact memory or upload identity when minting the provider URL.
+                let memory_identity = upload_id == &r.path || upload_id.contains('/');
+                let image_block = if let Some(base) = provider_url {
                     let url = if memory_identity {
                         super::public_memory_url(
-                            &self.public_url,
+                            base,
                             &self.instance_slug,
                             upload_id,
                             &self.resources,
                         )
                     } else {
                         super::public_file_url(
-                            &self.public_url,
+                            base,
                             &self.instance_slug,
                             upload_id,
                             &self.resources,
@@ -609,9 +720,66 @@ impl Tool for MemorySearchTool {
                         serde_json::json!({"kind": "uploaded_file", "version": 1,
                             "slug": self.instance_slug, "id": upload_id})
                     };
-                    blocks.push(serde_json::json!({"type": "image",
+                    Some(serde_json::json!({"type": "image",
                         "source": {"type": "url", "url": url},
-                        "resource_provenance": provenance}));
+                        "resource_provenance": provenance}))
+                } else {
+                    // Localhost installs: inline the bytes, or skip the image
+                    // (the text above still names the file) when it cannot be inlined.
+                    let media = self.vector_store.media_store();
+                    let inline = if memory_identity {
+                        let ext = Path::new(upload_id)
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or("")
+                            .to_ascii_lowercase();
+                        inline_media_type(&ext)
+                            .filter(|media_type| media_type.starts_with("image/"))
+                            .and_then(|media_type| {
+                                media
+                                    .read_memory_file(
+                                        &self.instance_slug,
+                                        upload_id,
+                                        crate::services::llm::MAX_INLINE_IMAGE_BYTES,
+                                    )
+                                    .ok()
+                                    .map(|bytes| (media_type.to_string(), bytes))
+                            })
+                    } else {
+                        media
+                            .read_upload_bounded(
+                                &self.instance_slug,
+                                upload_id,
+                                crate::services::llm::MAX_INLINE_IMAGE_BYTES,
+                            )
+                            .ok()
+                            .filter(|(meta, _)| meta.mime_type.starts_with("image/"))
+                            .map(|(meta, bytes)| (meta.mime_type, bytes))
+                    };
+                    match inline {
+                        Some((media_type, bytes)) => {
+                            use base64::Engine;
+                            let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                            Some(serde_json::json!({"type": "image",
+                                "source": {"type": "base64", "media_type": media_type,
+                                    "data": data}}))
+                        }
+                        None => {
+                            log::warn!(
+                                "memory_search: {upload_id} not inlined for the model \
+                                 (no provider-reachable public_url)"
+                            );
+                            None
+                        }
+                    }
+                };
+                if let Some(image_block) = image_block {
+                    // Flush text before image
+                    if !text_buf.trim().is_empty() {
+                        blocks.push(serde_json::json!({"type": "text", "text": text_buf.trim()}));
+                        text_buf.clear();
+                    }
+                    blocks.push(image_block);
                 }
             }
         }
@@ -626,6 +794,22 @@ impl Tool for MemorySearchTool {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Anthropic accepts PDF documents up to 32 MB; the same bound as `read_file`.
+const MAX_INLINE_PDF_BYTES: usize = 32 * 1024 * 1024;
+
+/// Media type for an inline base64 block, limited to formats providers accept.
+/// SVG is deliberately absent: it can be fetched by URL but not inlined.
+fn inline_media_type(ext: &str) -> Option<&'static str> {
+    Some(match ext {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "pdf" => "application/pdf",
+        _ => return None,
+    })
+}
 
 fn sanitize_path(path: &str) -> String {
     let path = path.trim().trim_start_matches('/');
@@ -1279,5 +1463,190 @@ mod media_tests {
         assert!(ws.path().join("instances/one/memory/photo.png").is_file());
         assert!(store.needs_backfill("one").await.unwrap());
         assert!(store.list_all("one", 10).await.unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod proactive_access_tests {
+    use super::*;
+
+    const EXCLUDED: &str = "---\ncreated: 2026-01-01\nupdated: 2026-01-01\nexclude_from_proactive: true\n---\nnever in a check-in: Orion secret\n";
+
+    async fn workspace() -> (tempfile::TempDir, Arc<VectorStore>) {
+        let workspace = tempfile::tempdir().unwrap();
+        let memory = workspace.path().join("instances/one/memory/about");
+        fs::create_dir_all(&memory).unwrap();
+        fs::write(memory.join("secret.md"), EXCLUDED).unwrap();
+        fs::write(
+            memory.join("tea.md"),
+            "---\ncreated: 2026-01-01\nupdated: 2026-01-01\n---\nlikes Orion tea\n",
+        )
+        .unwrap();
+        let store = Arc::new(VectorStore::connect(workspace.path()).await);
+        (workspace, store)
+    }
+
+    #[tokio::test]
+    async fn proactive_tools_never_surface_excluded_memories() {
+        let (workspace, store) = workspace().await;
+        let resources = crate::services::resource_access::ResourceAccess::new("");
+        let ws = workspace.path();
+
+        // Proactive first: the direct pass at the end is allowed to rewrite.
+        for access in [MemoryAccess::Proactive, MemoryAccess::Direct] {
+            let proactive = access == MemoryAccess::Proactive;
+            let listed = MemoryListTool::new(ws, "one", store.clone())
+                .with_access(access)
+                .call(MemoryListArgs {
+                    prefix: String::new(),
+                })
+                .await
+                .unwrap();
+            assert!(listed.contains("about/tea.md"), "{access:?}: {listed}");
+            assert_eq!(
+                listed.contains("about/secret.md"),
+                !proactive,
+                "{access:?}: {listed}"
+            );
+
+            let found = MemorySearchTool::new(ws, "one", store.clone(), "", &resources)
+                .with_access(access)
+                .call(MemorySearchArgs {
+                    query: "Orion".into(),
+                    limit: None,
+                })
+                .await
+                .unwrap();
+            assert!(found.contains("about/tea.md"), "{access:?}: {found}");
+            assert_eq!(found.contains("secret"), !proactive, "{access:?}: {found}");
+
+            let reader =
+                MemoryReadTool::new(ws, "one", "", store.clone(), &resources).with_access(access);
+            let read = reader
+                .call(MemoryReadArgs {
+                    path: "about/secret.md".into(),
+                })
+                .await;
+            match read {
+                Ok(text) => assert!(!proactive && text.contains("Orion secret"), "{access:?}"),
+                Err(error) => assert!(
+                    proactive && error.0.contains("excluded from proactive use"),
+                    "{access:?}: {error}"
+                ),
+            }
+            let folder = reader
+                .call(MemoryReadArgs {
+                    path: "about/".into(),
+                })
+                .await
+                .unwrap();
+            assert!(folder.contains("tea.md"), "{access:?}: {folder}");
+            assert_eq!(
+                folder.contains("secret.md"),
+                !proactive,
+                "{access:?}: {folder}"
+            );
+
+            let write = MemoryWriteTool::new(ws, "one", store.clone())
+                .with_access(access)
+                .call(MemoryWriteArgs {
+                    path: "about/secret.md".into(),
+                    content: "rewritten by a routine".into(),
+                    mode: "append".into(),
+                    upload_id: None,
+                })
+                .await;
+            let raw = fs::read_to_string(ws.join("instances/one/memory/about/secret.md")).unwrap();
+            if proactive {
+                let error = write.unwrap_err();
+                assert!(error.0.contains("excluded from proactive use"), "{error}");
+                assert!(!raw.contains("rewritten"), "{raw}");
+            } else {
+                write.unwrap();
+                assert!(raw.contains("rewritten"), "{raw}");
+                assert!(
+                    raw.contains("exclude_from_proactive: true"),
+                    "the user's flag survives the companion's append: {raw}"
+                );
+            }
+        }
+        // A search that only finds excluded memories says so honestly.
+        let none = MemorySearchTool::new(ws, "one", store.clone(), "", &resources)
+            .with_access(MemoryAccess::Proactive)
+            .call(MemorySearchArgs {
+                query: "secret".into(),
+                limit: None,
+            })
+            .await
+            .unwrap();
+        assert!(none.starts_with("no memories matched"), "{none}");
+    }
+}
+
+#[cfg(test)]
+mod provider_reachability_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn memory_read_inlines_images_when_the_public_url_is_local() {
+        let workspace = tempfile::tempdir().unwrap();
+        let memory = workspace.path().join("instances/one/memory/moments");
+        fs::create_dir_all(&memory).unwrap();
+        fs::write(memory.join("sunset.png"), b"\x89PNG\r\n\x1a\nfake").unwrap();
+        let store = Arc::new(VectorStore::connect(workspace.path()).await);
+        let resources = crate::services::resource_access::ResourceAccess::new("control-token");
+
+        let local = MemoryReadTool::new(
+            workspace.path(),
+            "one",
+            "http://localhost:26559",
+            store.clone(),
+            &resources,
+        );
+        let output = local
+            .call(MemoryReadArgs {
+                path: "moments/sunset.png".into(),
+            })
+            .await
+            .unwrap();
+        assert!(!output.contains("localhost"), "{output}");
+        let blocks: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(blocks[0]["text"], "memory file: moments/sunset.png");
+        assert_eq!(blocks[1]["type"], "image");
+        assert_eq!(blocks[1]["source"]["type"], "base64");
+        assert_eq!(blocks[1]["source"]["media_type"], "image/png");
+
+        let public = MemoryReadTool::new(
+            workspace.path(),
+            "one",
+            "https://public.invalid",
+            store,
+            &resources,
+        );
+        let output = public
+            .call(MemoryReadArgs {
+                path: "moments/sunset.png".into(),
+            })
+            .await
+            .unwrap();
+        let blocks: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(blocks[1]["source"]["type"], "url");
+        assert!(
+            blocks[1]["source"]["url"]
+                .as_str()
+                .unwrap()
+                .starts_with("https://public.invalid/"),
+            "{output}"
+        );
+        assert_eq!(blocks[1]["resource_provenance"]["kind"], "memory_path");
+    }
+
+    #[test]
+    fn inline_media_types_cover_provider_supported_formats_only() {
+        assert_eq!(inline_media_type("jpg"), Some("image/jpeg"));
+        assert_eq!(inline_media_type("webp"), Some("image/webp"));
+        assert_eq!(inline_media_type("pdf"), Some("application/pdf"));
+        assert_eq!(inline_media_type("svg"), None);
+        assert_eq!(inline_media_type("mp4"), None);
     }
 }

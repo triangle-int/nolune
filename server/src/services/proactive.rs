@@ -229,6 +229,13 @@ impl ProactiveLoop {
         })
     }
 
+    /// The id of the run executing under this trigger's dedupe key right
+    /// now, if any: a caller that owns a schedule of its own (the commitment
+    /// evaluator) can hold instead of offering a duplicate.
+    pub fn running(&self, trigger: &Trigger) -> Option<String> {
+        self.active_id(&trigger.dedupe_key())
+    }
+
     fn active_id(&self, dedupe_key: &str) -> Option<String> {
         self.active
             .lock()
@@ -384,6 +391,26 @@ impl ProactiveLoop {
                 .map_err(|error| Denied::Io(error.to_string()))?;
         }
         decision
+    }
+
+    /// Whether a reach-out would be allowed right now, without consuming
+    /// budget or recording anything: the commitment evaluator holds a check
+    /// until contact is possible instead of spending a run on a denial.
+    pub fn reach_out_allowed(&self, now: i64) -> Result<(), Denied> {
+        let policy = self.policy();
+        if self.in_quiet_hours(&policy, now) {
+            return Err(Denied::QuietHours);
+        }
+        let recent = self
+            .ledger()
+            .reach_outs
+            .iter()
+            .filter(|at| now - *at < 86_400)
+            .count();
+        if recent >= policy.daily_reach_out_budget as usize {
+            return Err(Denied::AttentionBudget);
+        }
+        Ok(())
     }
 
     fn ledger(&self) -> Ledger {

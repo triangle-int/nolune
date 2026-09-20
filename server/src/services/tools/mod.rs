@@ -72,6 +72,7 @@ pub fn media_result_url(
 }
 
 // Sub-modules
+pub mod commitments;
 pub mod communication;
 pub mod companion;
 pub mod computer;
@@ -452,6 +453,12 @@ pub fn tool_summary(name: &str, args: &str) -> String {
         "create_drop" => format!("creating drop: {}", v["title"].as_str().unwrap_or("?")),
         "get_settings" => "reading current settings".into(),
         "task_continuity_update" => "recording task progress".into(),
+        "commitment_create" => format!("committing to: {}", v["promise"].as_str().unwrap_or("?")),
+        "commitment_update" => "editing a commitment".into(),
+        "commitment_complete" => "completing a commitment".into(),
+        "commitment_cancel" => "cancelling a commitment".into(),
+        "commitment_snooze" => "snoozing a commitment".into(),
+        "commitment_list" => "listing commitments".into(),
         "send_email" => {
             let to = v["to"].as_str().unwrap_or("?");
             format!("sending email to {to}")
@@ -825,6 +832,11 @@ pub fn build_tools(
         workspace_dir,
         instance_slug,
     ))));
+    // Commitments (#85): chat only; the check-in states them but never closes one.
+    for tool in commitments::commitment_tools(workspace_dir, instance_slug, chat_id, events.clone())
+    {
+        tools.push(wrap(tool));
+    }
 
     // ── Data ──
     tools.push(wrap(Box::new(ExportProfileTool::new(

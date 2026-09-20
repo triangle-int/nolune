@@ -367,28 +367,28 @@ pub async fn run_agent_loop(
                 break;
             }
             Err(e) => {
+                use crate::services::llm::contract::LlmError;
                 let msg = e.to_string();
                 log::warn!("[agent] {instance_slug}/{chat_id} — error: {msg}");
 
-                let error_label = if matches!(
-                    e.get_ref()
-                        .and_then(|e| e.downcast_ref::<crate::services::llm::contract::LlmError>()),
-                    Some(crate::services::llm::contract::LlmError::SetupRequired(_))
-                ) {
-                    msg.as_str()
-                } else if msg.contains("rate limit") || msg.contains("429") {
-                    "rate limited — try again in a moment"
-                } else if msg.contains("timed out") {
-                    "request timed out"
-                } else if msg.contains("token_not_found")
-                    || msg.contains("authentication")
-                    || msg.contains("401")
-                {
-                    "not authenticated — reconnect your account in Settings → Provider"
-                } else if msg.contains("no LLM") || msg.contains("not configured") {
-                    "no API key configured — add one in Settings"
-                } else {
-                    "something went wrong"
+                // Provider failures arrive typed; the strings below are the
+                // turn timeout and the missing-backend cases, not the API.
+                let llm_error = e.get_ref().and_then(|e| e.downcast_ref::<LlmError>());
+                let error_label = match llm_error {
+                    Some(LlmError::SetupRequired(_)) => msg.as_str(),
+                    Some(LlmError::RateLimited { .. }) => "rate limited — try again in a moment",
+                    Some(LlmError::Timeout) => "request timed out",
+                    Some(LlmError::Authentication(_)) => {
+                        "not authenticated — check the API key in Settings → Provider"
+                    }
+                    Some(LlmError::ContextLength(_)) => {
+                        "this conversation no longer fits the model's context — clear context or start a new chat"
+                    }
+                    _ if msg.contains("timed out") => "request timed out",
+                    _ if msg.contains("no LLM") || msg.contains("not configured") => {
+                        "no API key configured — add one in Settings"
+                    }
+                    _ => "something went wrong",
                 };
                 let error_msg = chat::save_system_message(
                     &state.workspace_dir,

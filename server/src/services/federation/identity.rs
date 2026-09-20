@@ -447,7 +447,7 @@ fn read_keystore_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, FederationError
         .map_err(|error| io_error(path, error))
 }
 
-fn create_private_dir(dir: &Path) -> io::Result<()> {
+pub(super) fn create_private_dir(dir: &Path) -> io::Result<()> {
     std::fs::create_dir_all(dir)?;
     #[cfg(unix)]
     {

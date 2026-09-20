@@ -34,6 +34,7 @@ fn api_router(state: &AppState) -> Router<AppState> {
         .merge(routes::memory_import::router())
         .merge(routes::machine_agents::router())
         .merge(routes::session::router())
+        .merge(routes::federation::router())
         // Removed or unknown API paths answer 404 JSON instead of the SPA shell.
         .route("/api/{*rest}", any(api_not_found))
         // Inner: admit only the canonical companion once the caller is authenticated.
@@ -73,6 +74,8 @@ pub fn build_router(state: AppState, static_dir: Option<PathBuf>) -> Router {
     );
     // Browser pairing has no credential yet and no companion slug (#112).
     let pairing = routes::session::public_router();
+    // Peer-side federation routes are verified by signature only (#108).
+    let federation = routes::federation::public_router();
 
     let app = Router::new()
         .merge(health)
@@ -80,6 +83,7 @@ pub fn build_router(state: AppState, static_dir: Option<PathBuf>) -> Router {
         .merge(public_files)
         .merge(public_memory)
         .merge(pairing)
+        .merge(federation)
         .merge(api)
         .with_state(state);
 
@@ -105,3 +109,7 @@ mod companion_boundary_tests;
 #[cfg(test)]
 #[path = "../../test-support/session_security.rs"]
 mod session_tests;
+
+#[cfg(test)]
+#[path = "../../test-support/federation_pairing.rs"]
+mod federation_tests;

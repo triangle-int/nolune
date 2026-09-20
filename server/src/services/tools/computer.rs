@@ -80,6 +80,54 @@ impl Tool for ListMachinesTool {
     }
 }
 
+/// The image block a screenshot contributes to the tool result.
+///
+/// With a provider-reachable `public_url` the provider fetches the saved upload
+/// by URL, keeping base64 out of the context. Localhost installs inline the
+/// bytes instead, and drop the image (leaving the caption) when the encoded
+/// payload exceeds the provider's inline limit.
+fn screenshot_image_block(
+    public_url: &str,
+    instance_slug: &str,
+    upload_id: &str,
+    image_b64: &str,
+    resources: &crate::services::resource_access::ResourceAccess,
+) -> Option<serde_json::Value> {
+    if let Some(base) = crate::config::provider_reachable_public_url(public_url) {
+        // URL-based image — no base64 in context, no truncation, no context bloat
+        let full_url = super::public_file_url(base, instance_slug, upload_id, resources);
+        return Some(serde_json::json!({
+            "type": "image",
+            "source": {
+                "type": "url",
+                "url": full_url,
+            },
+            "resource_provenance": {
+                "kind": "uploaded_file",
+                "version": 1,
+                "slug": instance_slug,
+                "id": upload_id,
+            }
+        }));
+    }
+    if image_b64.len() > crate::services::llm::MAX_INLINE_IMAGE_BASE64_BYTES {
+        log::warn!(
+            "screenshot {upload_id}: {} base64 bytes exceed the inline limit and no \
+             provider-reachable public_url is configured; sending caption only",
+            image_b64.len()
+        );
+        return None;
+    }
+    Some(serde_json::json!({
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/jpeg",
+            "data": image_b64,
+        }
+    }))
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // computer_use — route action to a specific machine agent
 // ═══════════════════════════════════════════════════════════════════════════
@@ -222,39 +270,28 @@ impl Tool for ComputerUseTool {
                     });
 
                 if let Some(meta) = saved {
-                    // URL-based image — no base64 in context, no truncation, no context bloat
-                    let full_url = super::public_file_url(
-                        &self.public_url,
-                        &self.instance_slug,
-                        &meta.id,
-                        &self.resources,
-                    );
                     let chat_url = self.resources.url("", &self.instance_slug,
                         crate::services::resource_capability::CapabilityResource::uploaded_file(&meta.id).map_err(|e| ToolExecError(e.to_string()))?,
                         crate::services::resource_capability::CapabilityAudience::Browser).map_err(|e| ToolExecError(e.to_string()))?;
+                    let caption = serde_json::json!({
+                        "type": "text",
+                        "text": format!(
+                            "Screenshot captured ({}x{}). Show to user: ![screenshot]({})",
+                            w, h, chat_url
+                        ),
+                    });
 
-                    let blocks = serde_json::json!([
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "url",
-                                "url": full_url,
-                            },
-                            "resource_provenance": {
-                                "kind": "uploaded_file",
-                                "version": 1,
-                                "slug": self.instance_slug,
-                                "id": meta.id,
-                            }
-                        },
-                        {
-                            "type": "text",
-                            "text": format!(
-                                "Screenshot captured ({}x{}). Show to user: ![screenshot]({})",
-                                w, h, chat_url
-                            ),
-                        }
-                    ]);
+                    let image_block = screenshot_image_block(
+                        &self.public_url,
+                        &self.instance_slug,
+                        &meta.id,
+                        &image_b64,
+                        &self.resources,
+                    );
+                    let blocks = match image_block {
+                        Some(image_block) => serde_json::json!([image_block, caption]),
+                        None => serde_json::json!([caption]),
+                    };
                     Ok(blocks.to_string())
                 } else {
                     Err(ToolExecError("failed to save screenshot".into()))
@@ -431,6 +468,64 @@ impl Tool for RemoteFilesTool {
 }
 
 #[cfg(test)]
+mod screenshot_block_tests {
+    use super::screenshot_image_block;
+
+    #[test]
+    fn local_public_url_inlines_the_screenshot() {
+        let resources = crate::services::resource_access::ResourceAccess::new("control-token");
+        for public_url in ["http://localhost:26559", "http://0.0.0.0:26559", ""] {
+            let block =
+                screenshot_image_block(public_url, "moon", "shot.jpg", "aGVsbG8=", &resources)
+                    .unwrap();
+            assert_eq!(block["source"]["type"], "base64", "{public_url}");
+            assert_eq!(block["source"]["media_type"], "image/jpeg");
+            assert_eq!(block["source"]["data"], "aGVsbG8=");
+            assert!(block.get("resource_provenance").is_none());
+            assert!(!block.to_string().contains("localhost"));
+        }
+    }
+
+    #[test]
+    fn routable_public_url_hands_the_provider_a_url() {
+        let resources = crate::services::resource_access::ResourceAccess::new("control-token");
+        let block = screenshot_image_block(
+            "https://public.invalid",
+            "moon",
+            "shot.jpg",
+            "aGVsbG8=",
+            &resources,
+        )
+        .unwrap();
+        assert_eq!(block["source"]["type"], "url");
+        assert!(
+            block["source"]["url"]
+                .as_str()
+                .unwrap()
+                .starts_with("https://public.invalid/resources/model-provider/files/moon/shot.jpg"),
+            "{block}"
+        );
+        assert_eq!(block["resource_provenance"]["id"], "shot.jpg");
+    }
+
+    #[test]
+    fn oversized_inline_screenshot_is_dropped() {
+        let resources = crate::services::resource_access::ResourceAccess::new("control-token");
+        let huge = "A".repeat(crate::services::llm::MAX_INLINE_IMAGE_BASE64_BYTES + 1);
+        assert!(
+            screenshot_image_block(
+                "http://localhost:26559",
+                "moon",
+                "shot.jpg",
+                &huge,
+                &resources
+            )
+            .is_none()
+        );
+    }
+}
+
+#[cfg(test)]
 mod list_machines_tests {
     use super::*;
     use crate::services::machine_registry::MachineInfo;
@@ -449,6 +544,10 @@ mod list_machines_tests {
             screen_height: 900,
             last_seen: 1_700_000_000,
             instance_slug: None,
+            platform: Some(Platform::Macos),
+            location: MachineLocation::Desktop,
+            permissions: None,
+            capabilities: Vec::new(),
         }
     }
 

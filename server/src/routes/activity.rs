@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use crate::{
     app::state::AppState,
-    domain::proactive::{ProactivePolicy, ProactiveRun},
+    domain::proactive::{ProactivePolicy, ProactiveRun, Trigger},
     services::proactive::Admission,
 };
 
@@ -85,10 +85,18 @@ async fn retry_activity(
     State(state): State<AppState>,
     Path((_instance_slug, run_id)): Path<(String, String)>,
 ) -> Result<(StatusCode, Json<ProactiveRun>), (StatusCode, String)> {
-    if state.proactive.get(&run_id).is_none() {
+    let Some(previous) = state.proactive.get(&run_id) else {
         return Err((StatusCode::NOT_FOUND, format!("unknown run {run_id}")));
-    }
+    };
     let now = chrono::Utc::now().timestamp();
+    if matches!(previous.trigger, Trigger::Commitment { .. }) {
+        // A commitment check is executed by its evaluator (#85), which admits
+        // the linked attempt and runs it; the route never leaves a run behind.
+        return match crate::services::commitment_evaluator::retry(&state, &run_id, now).await {
+            Ok(run) => Ok((StatusCode::ACCEPTED, Json(run))),
+            Err(message) => Err((StatusCode::CONFLICT, message)),
+        };
+    }
     match state.proactive.retry(&run_id, now) {
         Ok(Admission::Admitted(handle)) => {
             // The retry is admitted as a pending run; the owning trigger's worker
@@ -148,4 +156,127 @@ async fn set_policy(
         .set_policy(&policy)
         .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
     Ok(StatusCode::OK)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::commitment::Deadline;
+    use crate::domain::companion::CANONICAL_SLUG;
+    use crate::domain::proactive::{RunStatus, Target, Trigger};
+    use crate::services::commitment_evaluator::CommitmentEvaluator;
+    use crate::services::commitments::{CommitmentStore, NewCommitment};
+    use crate::services::proactive::ProactiveLoop;
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Method, Request},
+    };
+    use tower::ServiceExt;
+
+    async fn state(workspace: &std::path::Path) -> AppState {
+        let mut state = AppState::new(crate::config::Config::default()).await;
+        state.workspace_dir = workspace.to_path_buf();
+        state.proactive = ProactiveLoop::new(workspace, CANONICAL_SLUG);
+        state.commitments = CommitmentStore::new(workspace, CANONICAL_SLUG);
+        state
+    }
+
+    async fn post(state: &AppState, uri: &str) -> (StatusCode, serde_json::Value) {
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap();
+        let response = router()
+            .with_state(state.clone())
+            .oneshot(request)
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let value = serde_json::from_slice(&bytes)
+            .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(&bytes).into()));
+        (status, value)
+    }
+
+    #[tokio::test]
+    async fn a_commitment_retry_goes_through_the_evaluator_and_never_orphans_a_run() {
+        let workspace = tempfile::tempdir().unwrap();
+        let state = state(workspace.path()).await;
+        let instance_dir = workspace.path().join("instances").join(CANONICAL_SLUG);
+        std::fs::create_dir_all(&instance_dir).unwrap();
+        std::fs::write(instance_dir.join("soul.md"), "i am little moon").unwrap();
+        let now = chrono::Utc::now().timestamp();
+        let call = state
+            .commitments
+            .create(
+                NewCommitment {
+                    promise: "call the dentist".into(),
+                    deadline: Some(Deadline::At { at: now - 60 }),
+                    ..Default::default()
+                },
+                now - 120,
+            )
+            .unwrap();
+        let evaluator =
+            CommitmentEvaluator::new(state.commitments.clone(), state.proactive.clone());
+        let mut runs = evaluator.admit_due(now);
+        assert_eq!(runs.len(), 1);
+        let failed = evaluator.finish(runs.remove(0), Err("provider offline".into()), now);
+        let trigger = Trigger::Commitment {
+            commitment_id: call.id.clone(),
+        };
+        let retry_uri = |id: &str| format!("/api/instances/{CANONICAL_SLUG}/activity/{id}/retry");
+
+        // Without a background model the check cannot run: the retry is
+        // refused, and nothing is admitted or parked under the dedupe key.
+        let (status, body) = post(&state, &retry_uri(&failed.id)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert!(
+            body.as_str()
+                .is_some_and(|s| s.contains("background model")),
+            "{body}"
+        );
+        assert_eq!(state.proactive.running(&trigger), None);
+        assert_eq!(
+            state.proactive.list(usize::MAX).len(),
+            1,
+            "no run was admitted"
+        );
+        assert_eq!(
+            state.commitments.get(&call.id, now).unwrap().next_check,
+            Some(now + crate::services::commitment_evaluator::RETRY_BACKOFF_SECS),
+            "the record is untouched"
+        );
+
+        // The evaluator's own backoff look still happens.
+        let later = now + crate::services::commitment_evaluator::RETRY_BACKOFF_SECS;
+        let mut runs = evaluator.admit_due(later);
+        assert_eq!(runs.len(), 1);
+        let done = evaluator.finish(
+            runs.remove(0),
+            Ok(crate::domain::proactive::RunOutcome::default()),
+            later + 1,
+        );
+        assert_eq!(done.status, RunStatus::Completed);
+
+        // Other triggers keep the loop's plain retry, and unknown runs are 404.
+        let Admission::Admitted(heartbeat) = state.proactive.begin_at(
+            Trigger::Heartbeat {
+                agent: "companion".into(),
+            },
+            "check-in",
+            Target::Companion,
+            now,
+        ) else {
+            panic!("admitted");
+        };
+        let heartbeat = heartbeat.fail_at("provider offline", true, now + 1);
+        let (status, body) = post(&state, &retry_uri(&heartbeat.id)).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        assert_eq!(body["retry_of"], heartbeat.id);
+        assert_eq!(body["attempt"], 2);
+        let (status, _) = post(&state, &retry_uri("run_missing")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
 }

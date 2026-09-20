@@ -208,14 +208,29 @@ impl MediaStore {
         upload_id: &str,
     ) -> io::Result<(crate::domain::upload::UploadMeta, Vec<u8>)> {
         const MAX_INLINE_UPLOAD_BYTES: usize = 4 * 1024 * 1024;
+        self.read_upload_bounded(slug, upload_id, MAX_INLINE_UPLOAD_BYTES)
+    }
+
+    /// Read an upload through a held no-follow handle, refusing blobs whose
+    /// recorded size exceeds `max_bytes` before touching the data. Callers that
+    /// inline media for a model provider pass that provider's payload limit.
+    pub fn read_upload_bounded(
+        &self,
+        slug: &str,
+        upload_id: &str,
+        max_bytes: usize,
+    ) -> io::Result<(crate::domain::upload::UploadMeta, Vec<u8>)> {
         let (meta, blob) = self.validated_upload(slug, upload_id)?;
-        if meta.size > MAX_INLINE_UPLOAD_BYTES as u64 {
+        if meta.size > max_bytes as u64 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "inline attachment exceeds 4 MiB limit",
+                format!(
+                    "inline attachment exceeds {:.1} MiB limit",
+                    max_bytes as f64 / (1024.0 * 1024.0)
+                ),
             ));
         }
-        let bytes = read_bounded_file(blob, MAX_INLINE_UPLOAD_BYTES)?;
+        let bytes = read_bounded_file(blob, max_bytes)?;
         if bytes.len() as u64 != meta.size {
             return Err(invalid_path("upload size mismatch"));
         }

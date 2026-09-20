@@ -265,6 +265,8 @@ See [SECURITY.md](SECURITY.md) to report a vulnerability.
 
 MIT — see [LICENSE](LICENSE).
 
+Computer use is driven by a pinned [Cua Driver](https://github.com/trycua/cua) 0.28.2 (MIT, Cua AI, Inc.), verified by checksum and never updated on its own; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 <br>
 
 <p align="center">

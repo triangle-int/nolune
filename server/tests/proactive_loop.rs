@@ -11,6 +11,10 @@ fn every_proactive_trigger_routes_through_the_companion_loop() {
         ("server/src/services/heartbeat.rs", "Routine::CheckIn"),
         ("server/src/services/scheduler.rs", "Trigger::Schedule"),
         (
+            "server/src/services/commitment_evaluator.rs",
+            "Trigger::Commitment",
+        ),
+        (
             "server/src/routes/machine_agents.rs",
             "Trigger::MachineConnected",
         ),

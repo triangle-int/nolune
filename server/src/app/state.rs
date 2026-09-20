@@ -42,7 +42,8 @@ pub struct AppState {
     pub http_client: reqwest::Client,
     /// Versioned local vector store for semantic memory search.
     pub vector_store: Arc<VectorStore>,
-    /// Registry of connected Tauri agent machines (for computer use).
+    /// Connected Tauri agent machines (for computer use) and every machine
+    /// that ever registered, persisted under the companion directory (#80).
     pub machine_registry: MachineRegistry,
     /// The one proactive companion loop (#92): every self-started run is admitted here.
     pub proactive: crate::services::proactive::ProactiveLoop,
@@ -51,6 +52,8 @@ pub struct AppState {
     /// Paired browsers and pending pairing codes (#112). In memory until
     /// `attach_storage` is called by the server entrypoint.
     pub browser_sessions: Arc<BrowserSessionStore>,
+    /// Federation identity and peers (#108); the keystore under `workspace_dir` opens on first use.
+    pub federation: Arc<crate::services::federation::pairing::FederationState>,
 }
 
 // No hardcoded MCP servers — users add them via Settings UI or config.toml.
@@ -79,6 +82,10 @@ impl AppState {
         }
 
         let http_client = reqwest::Client::new();
+        let federation = crate::services::federation::pairing::FederationState::new(
+            &workspace_dir,
+            http_client.clone(),
+        );
 
         // Open the local derived vector index.
         let vector_store = VectorStore::connect_with_config(&workspace_dir, &config).await;
@@ -93,6 +100,9 @@ impl AppState {
             crate::domain::companion::CANONICAL_SLUG,
         )
         .with_events(events.clone());
+        let machine_registry =
+            MachineRegistry::open(&workspace_dir, crate::domain::companion::CANONICAL_SLUG)
+                .with_events(events.clone());
 
         Self {
             resources: crate::services::resource_access::ResourceAccess::new(&config.auth_token),
@@ -106,10 +116,11 @@ impl AppState {
             mcp_registry,
             http_client,
             vector_store: Arc::new(vector_store),
-            machine_registry: MachineRegistry::new(),
+            machine_registry,
             proactive,
             commitments,
             browser_sessions: Arc::new(BrowserSessionStore::new()),
+            federation: Arc::new(federation),
         }
     }
 

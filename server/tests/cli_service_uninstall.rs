@@ -147,6 +147,15 @@ impl Sandbox {
     fn set_port(&self, port: u16) {
         set_port_in(&self.nolune_home, port);
     }
+
+    /// Move the default profile off 26559 so a gateway really running on this machine
+    /// cannot make `gateway install` refuse with "something is already listening".
+    fn use_free_port(&self) {
+        let free = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = free.local_addr().unwrap().port();
+        drop(free);
+        self.set_port(port);
+    }
 }
 
 fn set_port_in(home: &Path, port: u16) {
@@ -179,6 +188,7 @@ fn seed_install(home: &Path) {
 #[test]
 fn gateway_install_writes_definition_and_starts_service() {
     let sb = Sandbox::new();
+    sb.use_free_port();
 
     let out = sb.run(&["gateway", "install"]);
 
@@ -236,6 +246,7 @@ fn gateway_install_refuses_when_a_foreground_gateway_holds_the_port() {
 #[test]
 fn gateway_uninstall_removes_definition_and_status_reports_not_installed() {
     let sb = Sandbox::new();
+    sb.use_free_port();
     assert!(sb.run(&["gateway", "install"]).status.success());
     assert!(sb.definition().exists());
 
@@ -284,6 +295,7 @@ fn top_level_service_verbs_still_work_as_hidden_aliases() {
 #[test]
 fn uninstall_keep_data_removes_bin_and_service_but_keeps_workspace() {
     let sb = Sandbox::new();
+    sb.use_free_port();
     seed_install(&sb.nolune_home);
     assert!(sb.run(&["gateway", "install"]).status.success());
 
@@ -624,9 +636,7 @@ fn gateway_install_refuses_a_data_root_that_belongs_to_another_profile() {
 #[test]
 fn uninstall_refuses_a_data_root_that_belongs_to_another_profile() {
     let sb = Sandbox::new();
-    let free = TcpListener::bind("127.0.0.1:0").unwrap();
-    sb.set_port(free.local_addr().unwrap().port());
-    drop(free);
+    sb.use_free_port();
     seed_install(&sb.nolune_home);
     sb.onboard_profile("molinka");
     let out = sb.run(&["gateway", "install"]);
