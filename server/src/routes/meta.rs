@@ -41,6 +41,7 @@ async fn server_meta(State(state): State<AppState>) -> Json<ServerMetaResponse> 
             model: cfg.llm.chat_model().map(str::to_owned),
             configured: cfg.llm.is_configured(),
         },
+        cua_driver_pin: cua_protocol::cua_driver_pin::PINNED_VERSION,
     })
 }
 

@@ -22,6 +22,8 @@ pub struct ServerMetaResponse {
     pub instances_count: usize,
     pub skills_count: usize,
     pub llm: LlmSummary,
+    /// The Cua Driver version this build expects on every machine (#20).
+    pub cua_driver_pin: &'static str,
 }
 
 #[derive(Serialize)]
