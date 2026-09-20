@@ -786,7 +786,7 @@ fn test_outcome(
         Err(LlmError::Http { status, message }) => (
             StatusCode::BAD_GATEWAY,
             "provider_unavailable",
-            format!("{provider} answered {status}: {message} — try again"),
+            format!("{provider} answered {status}: {message}"),
             None,
         ),
         Err(LlmError::Transport(message)) => (

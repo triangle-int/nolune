@@ -158,30 +158,31 @@ test('connection test outcomes read as one sentence each, typed by the server er
 	assert.match(ok.text, /gpt-5\.4/);
 	assert.match(ok.text, /answered/);
 	assert.match(ok.text, /9 tokens/);
+	// [error, what the server says, what the person reads]
 	const cases = [
-		['setup_required', /no OpenAI API key/i],
-		['authentication', /OpenAI rejected the API key/],
-		['rate_limited', /rate limit/i],
-		['model_not_found', /gpt-5\.4/],
-		['provider_rejected', /Insufficient credits/],
-		['provider_unavailable', /OpenAI/],
-		['unreachable', /reach OpenAI/],
-		['timeout', /OpenAI/],
-		['invalid_response', /OpenAI/],
-		['unsupported', /OpenAI/],
-		['unknown_preset', /save/i],
+		['setup_required', 'no OpenAI API key is configured', /no OpenAI API key.*API keys/i],
+		['authentication', 'OpenAI rejected the API key: Incorrect API key provided', /OpenAI rejected the API key\. Change it under API keys\./],
+		['rate_limited', 'OpenAI accepted the key but is rate limiting: slow down', /key works.*in a moment/],
+		['model_not_found', 'OpenAI has no model "gpt-5.4": The model does not exist', /no model "gpt-5\.4"\. Check the model id\./],
+		['provider_rejected', 'OpenAI rejected the request (402): Insufficient credits', /^OpenAI rejected the request \(402\): Insufficient credits$/],
+		['provider_unavailable', 'OpenAI answered 503: down', /^OpenAI answered 503: down\. Try again/],
+		['unreachable', 'failed to reach OpenAI: connection refused', /^failed to reach OpenAI: connection refused\. Check/],
+		['timeout', 'OpenAI did not answer in time', /OpenAI did not answer in time\. Try again\./],
+		['invalid_response', 'OpenAI answered with something unexpected: no choices', /^OpenAI answered with something unexpected: no choices$/],
+		['unsupported', 'OpenAI does not support tools for "gpt-5.4"', /^OpenAI does not support tools/],
+		['unknown_preset', 'model preset "gpt" does not exist', /Save the preset first/],
 	];
-	for (const [error, pattern] of cases) {
-		const copy = presetTestCopy({ ok: false, error, message: `OpenAI said: Insufficient credits`, status: 422 }, gpt);
+	for (const [error, message, pattern] of cases) {
+		const copy = presetTestCopy({ ok: false, error, message, status: 422 }, gpt);
 		assert.equal(copy.tone, 'error', error);
 		assert.match(copy.text, pattern, `${error}: ${copy.text}`);
 	}
 	// A rate limit means the key works; the copy says so and how long to wait.
 	const limited = presetTestCopy({ ok: false, error: 'rate_limited', message: 'slow down', status: 429, retry_after_seconds: 7 }, gpt);
 	assert.match(limited.text, /key works/i);
-	assert.match(limited.text, /7 s/);
+	assert.match(limited.text, /in 7 s/);
 	// An error the client does not know still shows the server's message.
 	const other = presetTestCopy({ ok: false, error: 'something_new', message: 'the server said this', status: 500 }, gpt);
 	assert.equal(other.tone, 'error');
-	assert.match(other.text, /the server said this/);
+	assert.equal(other.text, 'the server said this');
 });

@@ -175,8 +175,9 @@ export function presetCapabilities(models, id) {
 
 /**
  * One sentence for a connection test outcome (#28), keyed on the typed
- * `error` the server answers with; anything it does not know shows the
- * server's own message.
+ * `error` the server answers with. The server's message already names the
+ * provider and what it said; the copy here adds what to do about it, and
+ * an error the client does not know shows the message as it is.
  *
  * @param {PresetTestOk | PresetTestFailure} outcome
  * @param {ModelPreset} preset
@@ -190,19 +191,20 @@ export function presetTestCopy(outcome, preset) {
 		return { tone: "ok", text: `${outcome.model || model} answered · ${tokens} tokens used.` };
 	}
 	const said = outcome.message?.trim() || `${provider} did not answer.`;
+	const wait = outcome.retry_after_seconds ? `in ${outcome.retry_after_seconds} s` : "in a moment";
 	/** @type {Record<string, string>} */
 	const copy = {
 		setup_required: `No ${provider} API key yet. Add one under API keys, then test again.`,
 		authentication: `${provider} rejected the API key. Change it under API keys.`,
-		rate_limited: `${provider} accepted the key but is rate limiting right now; the key works, try again${outcome.retry_after_seconds ? ` in ${outcome.retry_after_seconds} s` : " in a moment"}.`,
+		rate_limited: `${provider} accepted the key but is rate limiting right now; the key works, try again ${wait}.`,
 		model_not_found: `${provider} has no model "${model}". Check the model id.`,
-		provider_rejected: `${provider} rejected the request: ${said}`,
-		provider_unavailable: `${provider} is having trouble: ${said}`,
-		unreachable: `Could not reach ${provider}: ${said}`,
+		provider_rejected: said,
+		provider_unavailable: `${said}. Try again in a moment.`,
+		unreachable: `${said}. Check that this server can reach the internet.`,
 		timeout: `${provider} did not answer in time. Try again.`,
-		invalid_response: `${provider} answered with something unexpected: ${said}`,
-		unsupported: `${provider} cannot run this preset: ${said}`,
-		unknown_preset: `Save the preset first, then test it.`,
+		invalid_response: said,
+		unsupported: said,
+		unknown_preset: "Save the preset first, then test it.",
 	};
 	return { tone: "error", text: copy[outcome.error] ?? said };
 }
