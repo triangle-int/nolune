@@ -35,6 +35,9 @@ Unknown fields are rejected. A marker with any other `format_version` or
 ```text
 ~/.nolune/
 ├── config.toml                  server configuration (global)
+├── federation/                  companion signing identity (#108), see below
+│   ├── identity.json            public, self-signed identity document
+│   └── signing_key.json         private Ed25519 seed, mode 0600
 ├── skills/                      installed skills (global)
 ├── vectors/                     derived vector index, keyed by slug
 └── instances/
@@ -122,6 +125,49 @@ rooted at `companion/` (for example `companion/companion.json`,
 `companion/soul.md`, `companion/memory/…`). Import (#74) must require a valid
 `companion/companion.json` with `format_version: 1` and reject archives with
 any other root, slug, or version.
+
+## Federation identity
+
+Federation peers (#108) are companion signing identities, never machines,
+profile names, ports, or hostnames. The identity lives at the workspace root,
+outside `instances/companion/`:
+
+| File | Contents | Mode |
+| --- | --- | --- |
+| `federation/identity.json` | public, self-signed identity document | `0600` |
+| `federation/signing_key.json` | private Ed25519 seed: `{"version":1,"algorithm":"ed25519","secret_key":"…"}` | `0600` |
+
+Both files are created together on first use and never rewritten; a key
+without its document (or the reverse) fails closed rather than being repaired
+silently. The export archive is rooted at `companion/`, so it never contains
+either file: an export carries the companion's memory and settings, not its
+federation identity. To move the companion to another host, copy `federation/`
+alongside `instances/`; the identity verifies there because nothing in it
+names the old host, port, service label, profile name, or path, and peers keep
+trusting the same key. Deleting `federation/` creates a new identity on the
+next use, which peers must pair with again.
+
+The identity document, version 1:
+
+```json
+{
+  "version": 1,
+  "companion_id": "<base64url sha256 of the public key>",
+  "public_key": "<base64url Ed25519 public key>",
+  "created_at": 1789862400,
+  "signature": "<base64url Ed25519 signature>"
+}
+```
+
+`companion_id` is derived from `public_key`
+(`sha256("nolune/federation/companion-id/v1\0" || key)`), the signature covers
+the canonical bytes of the other four fields, and every binary field is
+base64url without padding. A document with another version, an id that is not
+derived from its key, unknown fields, or a signature that does not verify is
+rejected before anything trusts it, and a signing key file that other users can
+read is refused on load. Wire fixtures live in
+`server/tests/fixtures/federation/`; `generate.py` there rebuilds them with
+OpenSSL, independently of the server code.
 
 ## Changing this format
 

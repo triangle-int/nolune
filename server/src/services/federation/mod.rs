@@ -17,7 +17,12 @@
 
 pub mod identity;
 
-use crate::domain::federation::{FederationError, PUBLIC_KEY_BYTES};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use sha2::{Digest, Sha256};
+
+use crate::domain::federation::{
+    FEDERATION_VERSION, FederationError, MIN_FEDERATION_VERSION, PUBLIC_KEY_BYTES,
+};
 
 /// Domain tag for `companion_id = sha256(tag || public_key)`.
 pub(crate) const COMPANION_ID_DOMAIN: &[u8] = b"nolune/federation/companion-id/v1\0";
@@ -33,19 +38,26 @@ pub(crate) struct Canonical {
 
 impl Canonical {
     pub(crate) fn new(domain: &[u8]) -> Self {
-        todo!("#108: canonical encoding")
+        Self {
+            bytes: domain.to_vec(),
+        }
     }
 
-    pub(crate) fn u32(self, value: u32) -> Self {
-        todo!("#108: canonical encoding")
+    pub(crate) fn u32(mut self, value: u32) -> Self {
+        self.bytes.extend_from_slice(&value.to_be_bytes());
+        self
     }
 
-    pub(crate) fn u64(self, value: u64) -> Self {
-        todo!("#108: canonical encoding")
+    pub(crate) fn u64(mut self, value: u64) -> Self {
+        self.bytes.extend_from_slice(&value.to_be_bytes());
+        self
     }
 
-    pub(crate) fn bytes(self, value: &[u8]) -> Self {
-        todo!("#108: canonical encoding")
+    pub(crate) fn bytes(mut self, value: &[u8]) -> Self {
+        let len = u32::try_from(value.len()).expect("canonical fields are far below 4 GiB");
+        self.bytes.extend_from_slice(&len.to_be_bytes());
+        self.bytes.extend_from_slice(value);
+        self
     }
 
     pub(crate) fn str(self, value: &str) -> Self {
@@ -59,23 +71,47 @@ impl Canonical {
 
 /// base64url without padding, the encoding of every binary wire field.
 pub(crate) fn encode(bytes: &[u8]) -> String {
-    todo!("#108: canonical base64url")
+    URL_SAFE_NO_PAD.encode(bytes)
 }
 
-/// Decodes a base64url field that must be exactly `len` bytes and must be the
-/// canonical encoding of those bytes (no padding, no trailing bits).
+/// Decodes a base64url field that must be the canonical encoding of its bytes:
+/// no padding, no trailing bits, no standard-alphabet characters.
+pub(crate) fn decode(value: &str) -> Option<Vec<u8>> {
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return None;
+    }
+    let decoded = URL_SAFE_NO_PAD.decode(value).ok()?;
+    (URL_SAFE_NO_PAD.encode(&decoded) == value).then_some(decoded)
+}
+
+/// [`decode`] for a field that must be exactly `len` bytes.
 pub(crate) fn decode_exact(value: &str, len: usize) -> Option<Vec<u8>> {
-    todo!("#108: canonical base64url")
+    decode(value).filter(|decoded| decoded.len() == len)
 }
 
 /// Stable companion id: base64url of `sha256(COMPANION_ID_DOMAIN || public_key)`.
 pub fn companion_id_for(public_key: &[u8; PUBLIC_KEY_BYTES]) -> String {
-    todo!("#108: companion id derivation")
+    let mut hasher = Sha256::new();
+    hasher.update(COMPANION_ID_DOMAIN);
+    hasher.update(public_key);
+    encode(&hasher.finalize())
 }
 
 /// Rejects versions this server does not speak, downgrades first.
 pub(crate) fn check_version(found: u32) -> Result<(), FederationError> {
-    todo!("#108: version gate")
+    if found < MIN_FEDERATION_VERSION {
+        return Err(FederationError::VersionTooOld {
+            found,
+            min: MIN_FEDERATION_VERSION,
+        });
+    }
+    if found > FEDERATION_VERSION {
+        return Err(FederationError::VersionUnsupported { found });
+    }
+    Ok(())
 }
 
 #[cfg(test)]

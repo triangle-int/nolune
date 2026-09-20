@@ -12,13 +12,24 @@
 //! routes arrives with the peer store. Nothing here logs.
 
 use std::{
-    fmt,
+    fmt, io,
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use zeroize::{Zeroize as _, Zeroizing};
 
-use crate::domain::federation::{FederationError, IdentityDocument, SignedEnvelope};
+use super::{
+    Canonical, ENVELOPE_SIGNING_DOMAIN, IDENTITY_SIGNING_DOMAIN, check_version, companion_id_for,
+    decode, decode_exact, encode,
+};
+use crate::domain::federation::{
+    COMPANION_ID_BYTES, FEDERATION_VERSION, FederationError, IdentityDocument, PUBLIC_KEY_BYTES,
+    SIGNATURE_BYTES, SignedEnvelope,
+};
 
 /// Directory under the workspace root. Deliberately not under `instances/`.
 pub const FEDERATION_DIR: &str = "federation";
@@ -26,6 +37,12 @@ pub const FEDERATION_DIR: &str = "federation";
 pub const IDENTITY_FILE: &str = "identity.json";
 /// Private Ed25519 seed. Owner-only permissions are enforced on load.
 pub const SIGNING_KEY_FILE: &str = "signing_key.json";
+
+const SIGNING_KEY_FORMAT_VERSION: u32 = 1;
+const SIGNING_KEY_ALGORITHM: &str = "ed25519";
+/// Upper bound for either keystore file; anything larger is not ours.
+const MAX_KEYSTORE_FILE_BYTES: u64 = 16 * 1024;
+const SEED_BYTES: usize = 32;
 
 /// `workspace/federation`
 pub fn federation_dir(workspace_root: &Path) -> PathBuf {
@@ -76,26 +93,55 @@ impl SigningIdentity {
 
     /// Signs `body` as this companion at the current wire version.
     pub fn sign_envelope(&self, body: &[u8]) -> SignedEnvelope {
-        todo!("#108: envelope signing")
+        sign_envelope_with(&self.key, FEDERATION_VERSION, self.companion_id(), body)
     }
 }
 
 impl fmt::Debug for SigningIdentity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!("#108: redacted debug")
+        f.debug_struct("SigningIdentity")
+            .field("companion_id", &self.verified.companion_id)
+            .field("public_key", &self.document.public_key)
+            .field("created_at", &self.document.created_at)
+            .finish_non_exhaustive()
     }
 }
 
 impl fmt::Display for SigningIdentity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!("#108: redacted display")
+        write!(
+            f,
+            "companion {} (ed25519 {})",
+            self.verified.companion_id, self.document.public_key
+        )
+    }
+}
+
+/// Shape of `signing_key.json`. Never derives `Debug`, so it cannot be
+/// formatted by accident, and wipes the seed when dropped.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredSigningKey {
+    version: u32,
+    algorithm: String,
+    /// base64url of the 32-byte seed.
+    secret_key: String,
+}
+
+impl Drop for StoredSigningKey {
+    fn drop(&mut self) {
+        self.secret_key.zeroize();
     }
 }
 
 /// Loads the identity, generating and persisting a new one when neither file
 /// exists yet. A half-present or inconsistent keystore fails closed.
 pub fn load_or_create(workspace_root: &Path) -> Result<SigningIdentity, FederationError> {
-    todo!("#108: keystore")
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0);
+    load_or_create_at(workspace_root, now)
 }
 
 /// [`load_or_create`] with an explicit creation time (unix seconds).
@@ -103,30 +149,120 @@ pub(crate) fn load_or_create_at(
     workspace_root: &Path,
     now: u64,
 ) -> Result<SigningIdentity, FederationError> {
-    todo!("#108: keystore")
+    if let Some(existing) = load(workspace_root)? {
+        return Ok(existing);
+    }
+
+    let mut seed = Zeroizing::new([0u8; SEED_BYTES]);
+    getrandom::fill(seed.as_mut()).map_err(|_| FederationError::RandomnessUnavailable)?;
+    let identity = from_seed(&seed, now);
+
+    let dir = federation_dir(workspace_root);
+    create_private_dir(&dir).map_err(|error| io_error(&dir, error))?;
+
+    let key_path = signing_key_path(workspace_root);
+    let stored = StoredSigningKey {
+        version: SIGNING_KEY_FORMAT_VERSION,
+        algorithm: SIGNING_KEY_ALGORITHM.to_owned(),
+        secret_key: encode(seed.as_ref()),
+    };
+    let mut key_json = serde_json::to_string_pretty(&stored).expect("signing key serializes");
+    key_json.push('\n');
+    let key_json = Zeroizing::new(key_json);
+    match write_new_private(&key_path, key_json.as_bytes()) {
+        Ok(()) => {}
+        // Another process created the identity between our load and our write:
+        // theirs wins and ours is dropped.
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            return load(workspace_root)?.ok_or_else(|| {
+                FederationError::IdentityDocumentMissing(identity_path(workspace_root))
+            });
+        }
+        Err(error) => return Err(io_error(&key_path, error)),
+    }
+
+    let doc_path = identity_path(workspace_root);
+    let mut doc_json =
+        serde_json::to_string_pretty(identity.document()).expect("identity document serializes");
+    doc_json.push('\n');
+    write_new_private(&doc_path, doc_json.as_bytes())
+        .map_err(|error| io_error(&doc_path, error))?;
+
+    Ok(identity)
 }
 
 /// `Ok(None)` when no identity was created yet; `Err` when the files exist but
 /// cannot be trusted: missing halves, wrong permissions, a document that does
 /// not verify, or a document not signed by the stored key.
 pub fn load(workspace_root: &Path) -> Result<Option<SigningIdentity>, FederationError> {
-    todo!("#108: keystore")
+    let key_path = signing_key_path(workspace_root);
+    let doc_path = identity_path(workspace_root);
+    match (key_path.exists(), doc_path.exists()) {
+        (false, false) => return Ok(None),
+        (false, true) => return Err(FederationError::SigningKeyMissing(key_path)),
+        (true, false) => return Err(FederationError::IdentityDocumentMissing(doc_path)),
+        (true, true) => {}
+    }
+
+    let key = read_signing_key(&key_path)?;
+    let doc_json = read_keystore_file(&doc_path)?;
+    let doc_json = std::str::from_utf8(&doc_json)
+        .map_err(|_| FederationError::Malformed("identity document is not UTF-8".into()))?;
+    let document = parse_document(doc_json)?;
+    let verified = verify_document(&document)?;
+    if verified.public_key != key.verifying_key() {
+        return Err(FederationError::KeyMismatch);
+    }
+    Ok(Some(SigningIdentity {
+        key,
+        document,
+        verified,
+    }))
 }
 
 /// Parses an identity document, refusing unsupported versions before the
 /// strict shape check so a downgrade is reported as such.
 pub fn parse_document(json: &str) -> Result<IdentityDocument, FederationError> {
-    todo!("#108: parsing")
+    check_declared_version(json, "identity document")?;
+    serde_json::from_str(json)
+        .map_err(|error| FederationError::Malformed(format!("identity document: {error}")))
 }
 
 /// Checks version, encodings, id derivation, and the self-signature.
 pub fn verify_document(document: &IdentityDocument) -> Result<VerifiedIdentity, FederationError> {
-    todo!("#108: verification")
+    check_version(document.version)?;
+    let public_key = decode_public_key(&document.public_key)?;
+    let signature = decode_signature(&document.signature)?;
+    if decode_exact(&document.companion_id, COMPANION_ID_BYTES).is_none() {
+        return Err(FederationError::Malformed(
+            "companion id is not a base64url digest".into(),
+        ));
+    }
+    if document.companion_id != companion_id_for(&public_key.to_bytes()) {
+        return Err(FederationError::CompanionIdMismatch);
+    }
+    let message = document_signing_bytes(
+        document.version,
+        &document.companion_id,
+        &public_key.to_bytes(),
+        document.created_at,
+    );
+    public_key
+        .verify_strict(&message, &signature)
+        .map_err(|_| FederationError::SignatureMismatch)?;
+    Ok(VerifiedIdentity {
+        version: document.version,
+        companion_id: document.companion_id.clone(),
+        public_key,
+        created_at: document.created_at,
+    })
 }
 
 /// Parses a signed envelope with the same version-first policy as documents.
 pub fn parse_envelope(json: &str) -> Result<SignedEnvelope, FederationError> {
-    todo!("#108: parsing")
+    check_declared_version(json, "envelope")?;
+    serde_json::from_str(json)
+        .map_err(|error| FederationError::Malformed(format!("envelope: {error}")))
 }
 
 /// Verifies `envelope` against a sender whose identity was already verified
@@ -135,26 +271,200 @@ pub fn verify_envelope(
     envelope: &SignedEnvelope,
     sender: &VerifiedIdentity,
 ) -> Result<Vec<u8>, FederationError> {
-    todo!("#108: verification")
+    check_version(envelope.version)?;
+    if envelope.sender != sender.companion_id {
+        return Err(FederationError::SenderMismatch);
+    }
+    let signature = decode_signature(&envelope.signature)?;
+    let body = decode_body(&envelope.body)?;
+    let message = envelope_signing_bytes(envelope.version, &envelope.sender, &body);
+    sender
+        .public_key
+        .verify_strict(&message, &signature)
+        .map_err(|_| FederationError::SignatureMismatch)?;
+    Ok(body)
 }
 
-/// Builds an identity from a raw seed. `companion_id` is passed explicitly so
-/// tests can produce a document that lies about it.
-fn from_seed(seed: &[u8; 32], created_at: u64) -> SigningIdentity {
-    todo!("#108: keystore")
+/// Builds an identity from a raw seed with a freshly signed document.
+fn from_seed(seed: &[u8; SEED_BYTES], created_at: u64) -> SigningIdentity {
+    let key = SigningKey::from_bytes(seed);
+    let companion_id = companion_id_for(&key.verifying_key().to_bytes());
+    let document = sign_document(&key, FEDERATION_VERSION, &companion_id, created_at);
+    let verified = VerifiedIdentity {
+        version: document.version,
+        companion_id,
+        public_key: key.verifying_key(),
+        created_at,
+    };
+    SigningIdentity {
+        key,
+        document,
+        verified,
+    }
 }
 
+/// `companion_id` is passed explicitly so tests can produce a document that
+/// lies about it; production callers derive it from `key`.
 fn sign_document(
     key: &SigningKey,
     version: u32,
     companion_id: &str,
     created_at: u64,
 ) -> IdentityDocument {
-    todo!("#108: signing")
+    let public_key = key.verifying_key().to_bytes();
+    let message = document_signing_bytes(version, companion_id, &public_key, created_at);
+    IdentityDocument {
+        version,
+        companion_id: companion_id.to_owned(),
+        public_key: encode(&public_key),
+        created_at,
+        signature: encode(&key.sign(&message).to_bytes()),
+    }
 }
 
 fn sign_envelope_with(key: &SigningKey, version: u32, sender: &str, body: &[u8]) -> SignedEnvelope {
-    todo!("#108: signing")
+    let message = envelope_signing_bytes(version, sender, body);
+    SignedEnvelope {
+        version,
+        sender: sender.to_owned(),
+        body: encode(body),
+        signature: encode(&key.sign(&message).to_bytes()),
+    }
+}
+
+fn document_signing_bytes(
+    version: u32,
+    companion_id: &str,
+    public_key: &[u8; PUBLIC_KEY_BYTES],
+    created_at: u64,
+) -> Vec<u8> {
+    Canonical::new(IDENTITY_SIGNING_DOMAIN)
+        .u32(version)
+        .str(companion_id)
+        .bytes(public_key)
+        .u64(created_at)
+        .finish()
+}
+
+/// Commits to the body's digest so large bodies are hashed once and the
+/// transport envelope can later carry the digest without the body.
+fn envelope_signing_bytes(version: u32, sender: &str, body: &[u8]) -> Vec<u8> {
+    Canonical::new(ENVELOPE_SIGNING_DOMAIN)
+        .u32(version)
+        .str(sender)
+        .bytes(&Sha256::digest(body))
+        .finish()
+}
+
+/// Reads only the `version` field so an unsupported version is reported
+/// before the strict shape check can mask it as a generic parse error.
+fn check_declared_version(json: &str, what: &str) -> Result<(), FederationError> {
+    #[derive(Deserialize)]
+    struct Versioned {
+        version: u32,
+    }
+    let versioned: Versioned = serde_json::from_str(json)
+        .map_err(|error| FederationError::Malformed(format!("{what}: {error}")))?;
+    check_version(versioned.version)
+}
+
+fn decode_public_key(encoded: &str) -> Result<VerifyingKey, FederationError> {
+    let bytes = decode_exact(encoded, PUBLIC_KEY_BYTES)
+        .ok_or_else(|| FederationError::Malformed("public key is not 32 base64url bytes".into()))?;
+    let array: [u8; PUBLIC_KEY_BYTES] = bytes.try_into().expect("length checked");
+    VerifyingKey::from_bytes(&array).map_err(|_| FederationError::InvalidPublicKey)
+}
+
+fn decode_signature(encoded: &str) -> Result<Signature, FederationError> {
+    let bytes = decode_exact(encoded, SIGNATURE_BYTES)
+        .ok_or_else(|| FederationError::Malformed("signature is not 64 base64url bytes".into()))?;
+    let array: [u8; SIGNATURE_BYTES] = bytes.try_into().expect("length checked");
+    Ok(Signature::from_bytes(&array))
+}
+
+fn decode_body(encoded: &str) -> Result<Vec<u8>, FederationError> {
+    decode(encoded)
+        .ok_or_else(|| FederationError::Malformed("body is not canonical base64url".into()))
+}
+
+fn read_signing_key(path: &Path) -> Result<SigningKey, FederationError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path)
+            .map_err(|error| io_error(path, error))?
+            .permissions()
+            .mode()
+            & 0o777;
+        if mode & 0o077 != 0 {
+            return Err(FederationError::InsecureKeyPermissions {
+                path: path.to_path_buf(),
+                mode,
+            });
+        }
+    }
+    let raw = read_keystore_file(path)?;
+    let stored: StoredSigningKey = serde_json::from_slice(&raw)
+        .map_err(|error| FederationError::Malformed(format!("signing key file: {error}")))?;
+    if stored.version != SIGNING_KEY_FORMAT_VERSION || stored.algorithm != SIGNING_KEY_ALGORITHM {
+        return Err(FederationError::Malformed(
+            "signing key file has an unsupported version or algorithm".into(),
+        ));
+    }
+    let decoded = decode_exact(&stored.secret_key, SEED_BYTES)
+        .map(Zeroizing::new)
+        .ok_or_else(|| FederationError::Malformed("signing key seed has the wrong shape".into()))?;
+    let mut seed = Zeroizing::new([0u8; SEED_BYTES]);
+    seed.copy_from_slice(&decoded);
+    Ok(SigningKey::from_bytes(&seed))
+}
+
+/// Reads a keystore file into a buffer that is wiped on drop.
+fn read_keystore_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, FederationError> {
+    let len = std::fs::metadata(path)
+        .map_err(|error| io_error(path, error))?
+        .len();
+    if len > MAX_KEYSTORE_FILE_BYTES {
+        return Err(FederationError::Malformed(format!(
+            "{} is larger than a keystore file can be",
+            path.display()
+        )));
+    }
+    std::fs::read(path)
+        .map(Zeroizing::new)
+        .map_err(|error| io_error(path, error))
+}
+
+fn create_private_dir(dir: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+/// Creates `path` owner-readable only and never replaces an existing file.
+fn write_new_private(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut handle = options.open(path)?;
+    use std::io::Write as _;
+    handle.write_all(contents)?;
+    handle.sync_all()
+}
+
+fn io_error(path: &Path, error: io::Error) -> FederationError {
+    FederationError::Io {
+        path: path.to_path_buf(),
+        message: error.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -260,9 +570,14 @@ mod tests {
             Err(FederationError::CompanionIdMismatch)
         );
 
+        // Roughly half of all 32-byte strings decode to no curve point.
+        let not_a_point = (0u8..=255)
+            .map(|byte| [byte; 32])
+            .find(|bytes| VerifyingKey::from_bytes(bytes).is_err())
+            .unwrap();
         let mut bad_key = document.clone();
-        bad_key.public_key = encode(&[0xff; 32]);
-        bad_key.companion_id = companion_id_for(&[0xff; 32]);
+        bad_key.public_key = encode(&not_a_point);
+        bad_key.companion_id = companion_id_for(&not_a_point);
         assert_eq!(
             verify_document(&bad_key),
             Err(FederationError::InvalidPublicKey)
@@ -297,7 +612,7 @@ mod tests {
         for broken in [
             document.signature[..80].to_owned(),
             format!("{}=", document.signature),
-            document.signature.replace('-', "+"),
+            format!("+{}", &document.signature[1..]),
             String::new(),
         ] {
             let mut malformed = document.clone();
@@ -484,8 +799,8 @@ mod tests {
 
         let key_path = signing_key_path(root);
         let doc_path = identity_path(root);
-        let key_file: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&key_path).unwrap()).unwrap();
+        let key_text = std::fs::read_to_string(&key_path).unwrap();
+        let key_file: serde_json::Value = serde_json::from_str(&key_text).unwrap();
         assert_eq!(key_file["version"], 1);
         assert_eq!(key_file["algorithm"], "ed25519");
         let secret = key_file["secret_key"].as_str().unwrap().to_owned();
@@ -518,7 +833,7 @@ mod tests {
         );
         assert_eq!(
             std::fs::read_to_string(&key_path).unwrap(),
-            serde_json::to_string_pretty(&key_file).unwrap() + "\n",
+            key_text,
             "the key file is never rewritten"
         );
     }
