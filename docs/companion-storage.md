@@ -50,6 +50,7 @@ Unknown fields are rejected. A marker with any other `format_version` or
         ├── chats/{chat_id}/     conversation history and agent markers
         ├── scheduled/*.json     scheduled tasks
         ├── activity/*.json      proactive run records (docs/proactive-loop.md)
+        ├── continuity/*.json    resumable task records (see below)
         ├── proactive_policy.json quiet hours, budget, routine intervals
         ├── heartbeat.md         optional guidance for check-ins
         ├── uploads/             user-uploaded files
@@ -64,6 +65,59 @@ bindings, export) lives under this single directory. Retired layouts
 companion directory at startup and never read. The derived vector index
 under `vectors/` is keyed by the same slug and can always be rebuilt from
 `memory/`.
+
+### Continuity records
+
+An unfinished task the user asked for survives chat, model, server, and
+device restarts as one JSON file under `instances/companion/continuity/{id}.json`
+(#81). The file is a link-and-provenance record, never a copy of the files
+or memories it points at.
+
+| Field | Meaning |
+| --- | --- |
+| `version` | `1`; a file with any other version is reported and left alone |
+| `id` | `task_<unix seconds>_<8 hex>`, one path component |
+| `goal` | the user's goal in their words, at most 500 characters |
+| `state` | `active`, `waiting`, `ready_to_resume`, `completed`, `dismissed`, or `failed` |
+| `origin` | `chat_id` and, when known, the `message_id` the task came from |
+| `machine_ids` | connected computers the task needs |
+| `resources` | links only: `upload` (`id`), `memory` (`path`), or `machine_path` (`machine_id`, `path`), each with the provenance that added it |
+| `completed_steps` | what already happened, each with provenance |
+| `blockers` | `machine_unavailable`, `resource_missing` (added and cleared by the server's reference check), or `other` (stated by the user or the tool), each with a detail and provenance |
+| `next_step` | the suggested next step |
+| `created_at`, `updated_at` | unix seconds |
+| `provenance` | every write: `source` (`user`, `chat`, `tool`, `server`), `at`, and a note |
+
+Bounds are enforced on every write: 50 steps, 20 blockers, 40 resources,
+16 computers, 100 provenance entries (the creating entry is always kept),
+300 characters per step, blocker, note, or next step, and 1 MiB per file.
+No record built within those caps can reach the file cap, so a record that
+has used every cap can still be completed or dismissed. A file that is
+larger, is not JSON, or breaks an invariant is skipped and surfaced as an
+error by the listing API; it is never deleted or rewritten. Every write is
+a read-modify-write of one file under one lock for the directory, shared by
+the API and the chat tool, and lands through a uniquely named temp file
+and a rename, so a read never overwrites a write that landed in between.
+
+Records are written only by explicit task activity: the
+`task_continuity_update` chat tool, which the companion calls while doing
+work the user asked for, and the API below. Nothing is ever inferred from
+screenshots, connected-computer events, check-ins, reflections, or
+schedules, and the tool is not part of any routine's tool set. Only
+`active`, `waiting`, and `ready_to_resume` records are resumable;
+`completed` and `dismissed` records stay inspectable but never reappear as
+work to pick up. Reads run a reference check: a computer that is not
+connected or an upload or memory path that cannot be found becomes an
+explicit blocker with `server` provenance, and the blocker clears when the
+reference is back.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/instances/companion/continuity?resumable=` | `{records, errors}`, most recently updated first |
+| `GET /api/instances/companion/continuity/{id}` | one record after the reference check |
+| `PUT /api/instances/companion/continuity/{id}` | apply `goal`, `state`, `completed_step`, `blocker`, `clear_blockers`, `next_step`, `machine_ids`, `resources` with a required `note` |
+| `POST /api/instances/companion/continuity/{id}/complete` | mark done (optional `note`) |
+| `POST /api/instances/companion/continuity/{id}/dismiss` | dismiss (optional `note`) |
 
 ### Obsolete sibling directories
 
