@@ -2,17 +2,20 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use crate::domain::chat::ChatMessage;
-use crate::domain::memory::{MemoryEntry, MemoryGraph};
+use crate::domain::memory::{MemoryEntry, MemoryFlags, MemoryGraph};
 use crate::services::llm::LlmBackend;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Frontmatter — timestamps for temporal awareness
+// Frontmatter — timestamps for temporal awareness, user flags (#84)
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Parsed frontmatter from a memory file.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Frontmatter {
     pub created: Option<String>,
     pub updated: Option<String>,
+    /// User-set flags (#84); absent lines mean `false`.
+    pub flags: MemoryFlags,
 }
 
 /// Parse YAML frontmatter from memory file content.
@@ -20,13 +23,7 @@ pub struct Frontmatter {
 pub fn parse_frontmatter(content: &str) -> (Frontmatter, &str) {
     let trimmed = content.trim_start();
     if !trimmed.starts_with("---") {
-        return (
-            Frontmatter {
-                created: None,
-                updated: None,
-            },
-            content,
-        );
+        return (Frontmatter::default(), content);
     }
 
     // Find closing ---
@@ -35,31 +32,32 @@ pub fn parse_frontmatter(content: &str) -> (Frontmatter, &str) {
         let body_start = 3 + end + 4; // skip closing "---"
         let body = trimmed[body_start..].trim_start_matches('\n');
 
-        let mut created = None;
-        let mut updated = None;
+        let mut frontmatter = Frontmatter::default();
         for line in yaml.lines() {
             let line = line.trim();
             if let Some(val) = line.strip_prefix("created:") {
-                created = Some(val.trim().to_string());
+                frontmatter.created = Some(val.trim().to_string());
             } else if let Some(val) = line.strip_prefix("updated:") {
-                updated = Some(val.trim().to_string());
+                frontmatter.updated = Some(val.trim().to_string());
             }
         }
 
-        (Frontmatter { created, updated }, body)
+        (frontmatter, body)
     } else {
-        (
-            Frontmatter {
-                created: None,
-                updated: None,
-            },
-            content,
-        )
+        (Frontmatter::default(), content)
     }
 }
 
+/// Serialize frontmatter ahead of a body. Flag lines appear only when set,
+/// so a memory without flags is byte-identical to the pre-#84 layout.
+pub fn render_frontmatter(frontmatter: &Frontmatter, body: &str) -> String {
+    let _ = (frontmatter, body);
+    todo!("render frontmatter with flags")
+}
+
 /// Add or update frontmatter timestamps on memory content.
-/// For new files: adds created + updated. For existing: updates the updated field.
+/// For new files: adds created + updated. For existing: updates the updated
+/// field. User flags on the existing file are carried over (#84).
 pub fn stamp_content(content: &str, existing_content: Option<&str>) -> String {
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
 
@@ -72,6 +70,59 @@ pub fn stamp_content(content: &str, existing_content: Option<&str>) -> String {
         // New file
         format!("---\ncreated: {today}\nupdated: {today}\n---\n{content}")
     }
+}
+
+/// [`stamp_content`] with the flags set explicitly instead of carried over.
+pub fn stamp_content_with_flags(
+    content: &str,
+    existing_content: Option<&str>,
+    flags: MemoryFlags,
+) -> String {
+    let _ = (content, existing_content, flags);
+    todo!("stamp content with explicit flags")
+}
+
+/// Who is reading the library. Memories flagged `exclude_from_proactive`
+/// are hidden from the companion's own routines (#84) but stay visible to
+/// the user's chat and the library.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MemoryAccess {
+    /// The user's chat turn or the library: everything is visible.
+    #[default]
+    Direct,
+    /// A check-in or reflection acting on its own initiative.
+    Proactive,
+}
+
+/// The flags of one memory. Media memories carry none; a missing or
+/// unreadable file reads as unflagged.
+pub fn memory_flags(
+    media: &super::media_text::MediaStore,
+    instance_slug: &str,
+    path: &str,
+) -> MemoryFlags {
+    let _ = (media, instance_slug, path);
+    todo!("read memory flags")
+}
+
+/// Whether `access` may see the memory at `path`.
+pub fn visible_to(
+    media: &super::media_text::MediaStore,
+    instance_slug: &str,
+    path: &str,
+    access: MemoryAccess,
+) -> bool {
+    access == MemoryAccess::Direct
+        || !memory_flags(media, instance_slug, path).exclude_from_proactive
+}
+
+/// Every pinned text memory as `(path, body)`, sorted by path.
+pub fn pinned_memories(
+    media: &super::media_text::MediaStore,
+    instance_slug: &str,
+) -> Vec<(String, String)> {
+    let _ = (media, instance_slug);
+    todo!("collect pinned memories")
 }
 
 /// Format a YYYY-MM-DD date as short display (Mar 28).
@@ -127,6 +178,7 @@ pub fn scan_library_checked(
                 path,
                 summary: format!("[{kind}: {extension}]"),
                 size: usize::try_from(metadata.len).unwrap_or(usize::MAX),
+                flags: MemoryFlags::default(),
             });
             continue;
         }
@@ -151,6 +203,7 @@ pub fn scan_library_checked(
             path,
             summary: format!("{date_prefix}{summary_text}"),
             size: content.len(),
+            flags: MemoryFlags::default(),
         });
     }
     Ok(entries)
@@ -161,6 +214,17 @@ pub fn scan_library(
     instance_slug: &str,
 ) -> Vec<MemoryEntry> {
     scan_library_checked(media, instance_slug).unwrap_or_default()
+}
+
+/// [`scan_library`] as seen by `access`: a routine never sees memories the
+/// user excluded from proactive use (#84).
+pub fn scan_library_for(
+    media: &super::media_text::MediaStore,
+    instance_slug: &str,
+    access: MemoryAccess,
+) -> Vec<MemoryEntry> {
+    let _ = (media, instance_slug, access);
+    todo!("scan the library for one access level")
 }
 
 /// Rebuild and persist the memory catalog snapshot to disk.
@@ -225,9 +289,13 @@ pub fn load_catalog_snapshot(media: &super::media_text::MediaStore, instance_slu
 }
 
 /// Build a full library catalog for memory maintenance (heartbeat).
-/// Shows every file path, size, and first-line summary.
-pub fn build_library_catalog(media: &super::media_text::MediaStore, instance_slug: &str) -> String {
-    let entries = scan_library(media, instance_slug);
+/// Shows every file path, size, and first-line summary that `access` may see.
+pub fn build_library_catalog(
+    media: &super::media_text::MediaStore,
+    instance_slug: &str,
+    access: MemoryAccess,
+) -> String {
+    let entries = scan_library_for(media, instance_slug, access);
     if entries.is_empty() {
         return String::from("(empty library)");
     }
@@ -887,6 +955,179 @@ mod strict_scan_tests {
         if let Err(error) = result {
             assert!(error.contains("scan memory directory"));
         }
+    }
+}
+
+#[cfg(test)]
+mod flag_tests {
+    use super::*;
+
+    const STAMPED: &str = "---\ncreated: 2026-01-01\nupdated: 2026-01-02\n---\nlikes tea\n";
+
+    #[test]
+    fn frontmatter_flags_round_trip_through_parse_and_stamp() {
+        // Absent lines read as false and the body is untouched.
+        let (fm, body) = parse_frontmatter(STAMPED);
+        assert_eq!(fm.created.as_deref(), Some("2026-01-01"));
+        assert_eq!(fm.flags, MemoryFlags::default());
+        assert_eq!(body, "likes tea\n");
+
+        // Flag lines are parsed wherever they sit in the block.
+        let flagged = "---\npinned: true\ncreated: 2026-01-01\nexclude_from_proactive: true\nupdated: 2026-01-02\n---\nlikes tea\n";
+        let (fm, body) = parse_frontmatter(flagged);
+        assert!(fm.flags.pinned);
+        assert!(fm.flags.exclude_from_proactive);
+        assert_eq!(body, "likes tea\n");
+        assert_eq!(
+            render_frontmatter(&fm, body),
+            "---\ncreated: 2026-01-01\nupdated: 2026-01-02\npinned: true\nexclude_from_proactive: true\n---\nlikes tea\n"
+        );
+        // Only `true` sets a flag; `false` and junk leave it off.
+        let (fm, _) = parse_frontmatter("---\npinned: false\nexclude_from_proactive: yes\n---\nx");
+        assert_eq!(fm.flags, MemoryFlags::default());
+
+        // A rewrite through the ordinary stamp keeps the user's flags and the
+        // created date, and a memory without flags stays byte-identical to
+        // the pre-#84 layout.
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let restamped = stamp_content("likes oolong", Some(flagged));
+        assert_eq!(
+            restamped,
+            format!(
+                "---\ncreated: 2026-01-01\nupdated: {today}\npinned: true\nexclude_from_proactive: true\n---\nlikes oolong"
+            )
+        );
+        assert_eq!(
+            stamp_content("likes oolong", Some(STAMPED)),
+            format!("---\ncreated: 2026-01-01\nupdated: {today}\n---\nlikes oolong")
+        );
+        assert_eq!(
+            stamp_content("new", None),
+            format!("---\ncreated: {today}\nupdated: {today}\n---\nnew")
+        );
+        let (fm, body) = parse_frontmatter(&restamped);
+        assert!(fm.flags.pinned && fm.flags.exclude_from_proactive);
+        assert_eq!(body, "likes oolong");
+
+        // Explicit flags replace the carried ones (and work on a legacy file
+        // that never had frontmatter).
+        let pinned_only = MemoryFlags {
+            pinned: true,
+            exclude_from_proactive: false,
+        };
+        let explicit = stamp_content_with_flags("likes oolong", Some(flagged), pinned_only);
+        assert_eq!(
+            explicit,
+            format!("---\ncreated: 2026-01-01\nupdated: {today}\npinned: true\n---\nlikes oolong")
+        );
+        assert_eq!(parse_frontmatter(&explicit).0.flags, pinned_only);
+        let legacy = stamp_content_with_flags("plain", Some("plain"), pinned_only);
+        assert_eq!(
+            legacy,
+            format!("---\ncreated: {today}\nupdated: {today}\npinned: true\n---\nplain")
+        );
+        assert_eq!(
+            stamp_content_with_flags("x", None, MemoryFlags::default()),
+            stamp_content("x", None)
+        );
+    }
+
+    #[test]
+    fn proactive_scan_hides_excluded_memories_but_direct_scan_lists_them() {
+        let workspace = tempfile::tempdir().unwrap();
+        let dir = workspace.path().join("instances/one/memory");
+        std::fs::create_dir_all(dir.join("about")).unwrap();
+        std::fs::write(dir.join("about/tea.md"), STAMPED).unwrap();
+        std::fs::write(
+            dir.join("about/secret.md"),
+            "---\ncreated: 2026-01-01\nupdated: 2026-01-01\nexclude_from_proactive: true\n---\nnever in a check-in\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("about/ritual.md"),
+            "---\npinned: true\n---\nmorning walk\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("photo.png"), [0xff]).unwrap();
+        std::fs::write(dir.join("legacy.md"), "no frontmatter").unwrap();
+        let media = super::super::media_text::MediaStore::open(workspace.path()).unwrap();
+
+        let direct = scan_library_for(&media, "one", MemoryAccess::Direct);
+        let paths = |entries: &[MemoryEntry]| {
+            entries
+                .iter()
+                .map(|entry| entry.path.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            paths(&direct),
+            [
+                "about/ritual.md",
+                "about/secret.md",
+                "about/tea.md",
+                "legacy.md",
+                "photo.png"
+            ]
+        );
+        let by_path = |path: &str| direct.iter().find(|entry| entry.path == path).unwrap();
+        assert!(by_path("about/secret.md").flags.exclude_from_proactive);
+        assert!(by_path("about/ritual.md").flags.pinned);
+        assert_eq!(by_path("about/tea.md").flags, MemoryFlags::default());
+        assert_eq!(by_path("photo.png").flags, MemoryFlags::default());
+        assert_eq!(
+            serde_json::to_value(by_path("about/secret.md")).unwrap()["exclude_from_proactive"],
+            true,
+            "flags are flat on the wire"
+        );
+        assert_eq!(
+            paths(&scan_library(&media, "one")),
+            paths(&direct),
+            "scan_library stays the direct view"
+        );
+
+        let proactive = scan_library_for(&media, "one", MemoryAccess::Proactive);
+        assert_eq!(
+            paths(&proactive),
+            ["about/ritual.md", "about/tea.md", "legacy.md", "photo.png"]
+        );
+        let catalog = build_library_catalog(&media, "one", MemoryAccess::Proactive);
+        assert!(!catalog.contains("secret"), "{catalog}");
+        assert!(catalog.starts_with("4 files:"), "{catalog}");
+        assert!(
+            build_library_catalog(&media, "one", MemoryAccess::Direct).contains("about/secret.md")
+        );
+
+        assert!(memory_flags(&media, "one", "about/secret.md").exclude_from_proactive);
+        assert_eq!(
+            memory_flags(&media, "one", "missing.md"),
+            MemoryFlags::default()
+        );
+        assert_eq!(
+            memory_flags(&media, "one", "photo.png"),
+            MemoryFlags::default()
+        );
+        assert!(!visible_to(
+            &media,
+            "one",
+            "about/secret.md",
+            MemoryAccess::Proactive
+        ));
+        assert!(visible_to(
+            &media,
+            "one",
+            "about/secret.md",
+            MemoryAccess::Direct
+        ));
+        assert!(visible_to(
+            &media,
+            "one",
+            "about/tea.md",
+            MemoryAccess::Proactive
+        ));
+        assert_eq!(
+            pinned_memories(&media, "one"),
+            [("about/ritual.md".to_string(), "morning walk\n".to_string())]
+        );
     }
 }
 

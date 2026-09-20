@@ -2,6 +2,7 @@
 use std::fs;
 use std::{path::Path, sync::Arc};
 
+use crate::services::memory::MemoryAccess;
 use crate::services::tool::{Tool, ToolDefinition};
 use crate::services::vector::VectorStore;
 use schemars::JsonSchema;
@@ -16,6 +17,7 @@ use super::{ToolExecError, openai_schema};
 pub struct MemoryWriteTool {
     instance_slug: String,
     vector_store: Arc<VectorStore>,
+    access: MemoryAccess,
 }
 
 impl MemoryWriteTool {
@@ -23,7 +25,15 @@ impl MemoryWriteTool {
         Self {
             instance_slug: instance_slug.to_string(),
             vector_store,
+            access: MemoryAccess::Direct,
         }
+    }
+
+    /// Who is writing: a routine may not touch memories excluded from
+    /// proactive use (#84).
+    pub fn with_access(mut self, access: MemoryAccess) -> Self {
+        self.access = access;
+        self
     }
 }
 
@@ -150,6 +160,7 @@ pub struct MemoryReadTool {
     media: Arc<crate::services::media_text::MediaStore>,
     public_url: String,
     resources: crate::services::resource_access::ResourceAccess,
+    access: MemoryAccess,
 }
 
 impl MemoryReadTool {
@@ -165,7 +176,15 @@ impl MemoryReadTool {
             media: vector_store.media_store(),
             public_url: public_url.to_string(),
             resources: resources.clone(),
+            access: MemoryAccess::Direct,
         }
+    }
+
+    /// Who is reading: a routine never sees memories excluded from
+    /// proactive use (#84).
+    pub fn with_access(mut self, access: MemoryAccess) -> Self {
+        self.access = access;
+        self
     }
 }
 
@@ -288,6 +307,7 @@ impl Tool for MemoryReadTool {
 pub struct MemoryListTool {
     media: Arc<crate::services::media_text::MediaStore>,
     instance_slug: String,
+    access: MemoryAccess,
 }
 
 impl MemoryListTool {
@@ -295,7 +315,15 @@ impl MemoryListTool {
         Self {
             media: vector_store.media_store(),
             instance_slug: instance_slug.to_string(),
+            access: MemoryAccess::Direct,
         }
+    }
+
+    /// Who is listing: a routine never sees memories excluded from
+    /// proactive use (#84).
+    pub fn with_access(mut self, access: MemoryAccess) -> Self {
+        self.access = access;
+        self
     }
 }
 
@@ -467,6 +495,7 @@ pub struct MemorySearchTool {
     vector_store: Arc<VectorStore>,
     public_url: String,
     resources: crate::services::resource_access::ResourceAccess,
+    access: MemoryAccess,
 }
 
 impl MemorySearchTool {
@@ -483,7 +512,15 @@ impl MemorySearchTool {
             vector_store,
             public_url: public_url.to_string(),
             resources,
+            access: MemoryAccess::Direct,
         }
+    }
+
+    /// Who is searching: a routine never sees memories excluded from
+    /// proactive use (#84).
+    pub fn with_access(mut self, access: MemoryAccess) -> Self {
+        self.access = access;
+        self
     }
 }
 
@@ -1279,5 +1316,122 @@ mod media_tests {
         assert!(ws.path().join("instances/one/memory/photo.png").is_file());
         assert!(store.needs_backfill("one").await.unwrap());
         assert!(store.list_all("one", 10).await.unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod proactive_access_tests {
+    use super::*;
+
+    const EXCLUDED: &str = "---\ncreated: 2026-01-01\nupdated: 2026-01-01\nexclude_from_proactive: true\n---\nnever in a check-in: Orion secret\n";
+
+    async fn workspace() -> (tempfile::TempDir, Arc<VectorStore>) {
+        let workspace = tempfile::tempdir().unwrap();
+        let memory = workspace.path().join("instances/one/memory/about");
+        fs::create_dir_all(&memory).unwrap();
+        fs::write(memory.join("secret.md"), EXCLUDED).unwrap();
+        fs::write(
+            memory.join("tea.md"),
+            "---\ncreated: 2026-01-01\nupdated: 2026-01-01\n---\nlikes Orion tea\n",
+        )
+        .unwrap();
+        let store = Arc::new(VectorStore::connect(workspace.path()).await);
+        (workspace, store)
+    }
+
+    #[tokio::test]
+    async fn proactive_tools_never_surface_excluded_memories() {
+        let (workspace, store) = workspace().await;
+        let resources = crate::services::resource_access::ResourceAccess::new("");
+        let ws = workspace.path();
+
+        // Proactive first: the direct pass at the end is allowed to rewrite.
+        for access in [MemoryAccess::Proactive, MemoryAccess::Direct] {
+            let proactive = access == MemoryAccess::Proactive;
+            let listed = MemoryListTool::new(ws, "one", store.clone())
+                .with_access(access)
+                .call(MemoryListArgs {
+                    prefix: String::new(),
+                })
+                .await
+                .unwrap();
+            assert!(listed.contains("about/tea.md"), "{access:?}: {listed}");
+            assert_eq!(
+                listed.contains("about/secret.md"),
+                !proactive,
+                "{access:?}: {listed}"
+            );
+
+            let found = MemorySearchTool::new(ws, "one", store.clone(), "", &resources)
+                .with_access(access)
+                .call(MemorySearchArgs {
+                    query: "Orion".into(),
+                    limit: None,
+                })
+                .await
+                .unwrap();
+            assert!(found.contains("about/tea.md"), "{access:?}: {found}");
+            assert_eq!(found.contains("secret"), !proactive, "{access:?}: {found}");
+
+            let reader =
+                MemoryReadTool::new(ws, "one", "", store.clone(), &resources).with_access(access);
+            let read = reader
+                .call(MemoryReadArgs {
+                    path: "about/secret.md".into(),
+                })
+                .await;
+            match read {
+                Ok(text) => assert!(!proactive && text.contains("Orion secret"), "{access:?}"),
+                Err(error) => assert!(
+                    proactive && error.0.contains("excluded from proactive use"),
+                    "{access:?}: {error}"
+                ),
+            }
+            let folder = reader
+                .call(MemoryReadArgs {
+                    path: "about/".into(),
+                })
+                .await
+                .unwrap();
+            assert!(folder.contains("tea.md"), "{access:?}: {folder}");
+            assert_eq!(
+                folder.contains("secret.md"),
+                !proactive,
+                "{access:?}: {folder}"
+            );
+
+            let write = MemoryWriteTool::new(ws, "one", store.clone())
+                .with_access(access)
+                .call(MemoryWriteArgs {
+                    path: "about/secret.md".into(),
+                    content: "rewritten by a routine".into(),
+                    mode: "append".into(),
+                    upload_id: None,
+                })
+                .await;
+            let raw = fs::read_to_string(ws.join("instances/one/memory/about/secret.md")).unwrap();
+            if proactive {
+                let error = write.unwrap_err();
+                assert!(error.0.contains("excluded from proactive use"), "{error}");
+                assert!(!raw.contains("rewritten"), "{raw}");
+            } else {
+                write.unwrap();
+                assert!(raw.contains("rewritten"), "{raw}");
+                assert!(
+                    raw.contains("exclude_from_proactive: true"),
+                    "the user's flag survives the companion's append: {raw}"
+                );
+            }
+        }
+        // A search that only finds excluded memories says so honestly.
+        let none = MemorySearchTool::new(ws, "one", store.clone(), "", &resources)
+            .with_access(MemoryAccess::Proactive)
+            .call(MemorySearchArgs {
+                query: "secret".into(),
+                limit: None,
+            })
+            .await
+            .unwrap();
+        assert!(none.starts_with("no memories matched"), "{none}");
     }
 }

@@ -1,0 +1,616 @@
+//! Memory correction controls (#84): correct, pin, exclude, and a conflict
+//! ledger.
+//!
+//! Every action here rewrites the canonical memory file the user owns and
+//! reconciles the derived search state through the vector store's existing
+//! delete and re-index calls, so the next recall sees the corrected text and
+//! never the old one. Corrections are recorded in a small versioned ledger
+//! next to the memory store (`memory_corrections.json`, see
+//! `docs/companion-storage.md`). A second, different correction of a memory
+//! whose earlier correction is still in force is not merged: it is parked as
+//! `needs_resolution` and the user chooses which statement stays
+//! authoritative through [`resolve`]. Flags (`pinned`,
+//! `exclude_from_proactive`) live in the memory's frontmatter, so they
+//! survive the companion's own rewrites and a server restart.
+
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, OnceLock},
+};
+
+use crate::{
+    domain::{
+        correction::{
+            CorrectionConflict, CorrectionEntry, CorrectionLedger, CorrectionStatement,
+            CorrectionStatus, Keep, LEDGER_VERSION,
+        },
+        memory::MemoryFlags,
+    },
+    services::{media_text, memory, vector::VectorStore},
+};
+
+/// Ledger file next to `memory/`, addressed through the workspace capability.
+pub const LEDGER_FILE: &str = "memory_corrections.json";
+/// A correction statement larger than this is refused (`TooLarge`).
+pub const MAX_STATEMENT_BYTES: usize = 64 * 1024;
+/// Excerpt of the previous text kept per entry.
+const PREVIOUS_CHARS: usize = 240;
+/// Entries kept in the ledger; the oldest settled ones are dropped beyond it.
+const MAX_ENTRIES: usize = 500;
+const MAX_LEDGER_BYTES: usize = 4 * 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CorrectionError {
+    NotFound,
+    Invalid(String),
+    TooLarge,
+    Io(String),
+}
+
+impl std::fmt::Display for CorrectionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound => f.write_str("memory not found"),
+            Self::Invalid(message) | Self::Io(message) => f.write_str(message),
+            Self::TooLarge => write!(f, "statement exceeds {MAX_STATEMENT_BYTES} bytes"),
+        }
+    }
+}
+
+impl std::error::Error for CorrectionError {}
+
+/// What a correction did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CorrectionOutcome {
+    /// The file was rewritten and re-indexed; the entry is `applied`.
+    Applied(CorrectionEntry),
+    /// The memory already said this; nothing was written or recorded.
+    Unchanged,
+    /// Parked: an earlier correction is still in force and differs.
+    NeedsResolution(CorrectionConflict),
+}
+
+/// Flag changes; `None` leaves a flag as it is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+pub struct FlagUpdate {
+    #[serde(default)]
+    pub pinned: Option<bool>,
+    #[serde(default)]
+    pub exclude_from_proactive: Option<bool>,
+}
+
+/// The entry a resolution settled on, plus what the user kept.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Resolution {
+    pub kept: Keep,
+    pub path: String,
+    pub entry: CorrectionEntry,
+}
+
+/// One lock per companion for the ledger read-modify-write and the file
+/// rewrite around it, whichever store handle asks.
+fn companion_lock(instance_slug: &str) -> Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+    let mut locks = LOCKS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    Arc::clone(locks.entry(instance_slug.to_owned()).or_default())
+}
+
+/// The ledger as persisted; missing reads as empty, another version or a
+/// malformed file is reported and left alone.
+pub fn load_ledger(
+    media: &media_text::MediaStore,
+    instance_slug: &str,
+) -> Result<CorrectionLedger, CorrectionError> {
+    let _ = (media, instance_slug, LEDGER_VERSION, MAX_LEDGER_BYTES);
+    todo!("load the corrections ledger")
+}
+
+/// Rewrite a memory with the user's statement and record it.
+pub async fn correct(
+    store: &VectorStore,
+    instance_slug: &str,
+    path: &str,
+    statement: &str,
+) -> Result<CorrectionOutcome, CorrectionError> {
+    let _ = (
+        store,
+        instance_slug,
+        path,
+        statement,
+        PREVIOUS_CHARS,
+        MAX_ENTRIES,
+    );
+    let _ = (companion_lock, CorrectionStatus::Applied);
+    let _ = <CorrectionStatement as From<&CorrectionEntry>>::from;
+    todo!("apply a correction")
+}
+
+/// Settle a `needs_resolution` entry.
+pub async fn resolve(
+    store: &VectorStore,
+    instance_slug: &str,
+    conflict_id: &str,
+    keep: Keep,
+) -> Result<Resolution, CorrectionError> {
+    let _ = (store, instance_slug, conflict_id, keep);
+    todo!("resolve a conflict")
+}
+
+/// Set `pinned` / `exclude_from_proactive` on a text memory and re-index it.
+/// Returns the flags now on the file.
+pub async fn set_flags(
+    store: &VectorStore,
+    instance_slug: &str,
+    path: &str,
+    update: FlagUpdate,
+) -> Result<MemoryFlags, CorrectionError> {
+    let _ = (store, instance_slug, path, update);
+    let _ = memory::memory_flags;
+    todo!("set memory flags")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::{
+        embedding::tests::{MockServer, response},
+        media_text::MediaStore,
+    };
+    use std::{fs, path::Path};
+
+    const STAMPED: &str = "---\ncreated: 2026-01-01\nupdated: 2026-01-02\nexclude_from_proactive: true\n---\nlikes tea\n";
+
+    fn seed(workspace: &Path) -> std::path::PathBuf {
+        let dir = workspace.join("instances/one/memory/about");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("tea.md"), STAMPED).unwrap();
+        dir
+    }
+
+    fn body_of(workspace: &Path, path: &str) -> String {
+        let raw = fs::read_to_string(workspace.join("instances/one/memory").join(path)).unwrap();
+        memory::parse_frontmatter(&raw).1.to_owned()
+    }
+
+    fn ledger(workspace: &Path) -> CorrectionLedger {
+        let media = MediaStore::open(workspace).unwrap();
+        load_ledger(&media, "one").unwrap()
+    }
+
+    #[tokio::test]
+    async fn correction_rewrites_the_canonical_file_and_reindexes() {
+        // One document embedding for the re-index, one query embedding for
+        // the search that must see the corrected text.
+        let mock = MockServer::new(vec![
+            (200, response(vec![1., 0., 0.])),
+            (200, response(vec![1., 0., 0.])),
+        ])
+        .await;
+        let ws = tempfile::tempdir().unwrap();
+        seed(ws.path());
+        let store = VectorStore::connect_with_config(ws.path(), &mock.config).await;
+        store
+            .upsert_text_memory(
+                "one",
+                "about/tea.md",
+                vec![(STAMPED.to_owned(), vec![1., 0., 0.])],
+            )
+            .await
+            .unwrap();
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
+        let outcome = correct(&store, "one", "about/tea.md", "likes oolong")
+            .await
+            .unwrap();
+        let CorrectionOutcome::Applied(entry) = outcome else {
+            panic!("expected an applied correction, got {outcome:?}");
+        };
+        assert_eq!(entry.path, "about/tea.md");
+        assert_eq!(entry.statement, "likes oolong");
+        assert_eq!(entry.previous, "likes tea");
+        assert_eq!(entry.status, CorrectionStatus::Applied);
+        assert!(entry.id.starts_with("corr_"), "{}", entry.id);
+        assert!(entry.corrected_at.ends_with('Z'), "{}", entry.corrected_at);
+
+        // The canonical file: new body, created kept, updated bumped, flags kept.
+        let raw = fs::read_to_string(ws.path().join("instances/one/memory/about/tea.md")).unwrap();
+        assert_eq!(
+            raw,
+            format!(
+                "---\ncreated: 2026-01-01\nupdated: {today}\nexclude_from_proactive: true\n---\nlikes oolong"
+            )
+        );
+
+        // Derived state: the semantic hit previews the corrected text, never the old.
+        let hits = store.search_text("one", "oolong", 5).await;
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].path, "about/tea.md");
+        assert_eq!(
+            hits[0].source_type, "text_memory",
+            "served by the re-indexed vector"
+        );
+        assert!(hits[0].content_preview.contains("likes oolong"), "{hits:?}");
+        assert!(!hits[0].content_preview.contains("likes tea"), "{hits:?}");
+        assert_eq!(mock.requests.lock().unwrap().len(), 2);
+        let listed = store.list_all("one", 10).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].content_preview.contains("likes oolong"));
+
+        // The ledger recorded exactly this.
+        let recorded = ledger(ws.path());
+        assert_eq!(recorded.version, LEDGER_VERSION);
+        assert_eq!(recorded.entries, vec![entry.clone()]);
+        assert!(ws.path().join("instances/one").join(LEDGER_FILE).exists());
+
+        // Saying the same thing again changes nothing and records nothing.
+        assert_eq!(
+            correct(&store, "one", "about/tea.md", " likes oolong \n")
+                .await
+                .unwrap(),
+            CorrectionOutcome::Unchanged
+        );
+        assert_eq!(ledger(ws.path()).entries.len(), 1);
+
+        // Refusals.
+        assert_eq!(
+            correct(&store, "one", "about/missing.md", "x")
+                .await
+                .unwrap_err(),
+            CorrectionError::NotFound
+        );
+        assert!(matches!(
+            correct(&store, "one", "../outside.md", "x")
+                .await
+                .unwrap_err(),
+            CorrectionError::Invalid(_)
+        ));
+        assert!(matches!(
+            correct(&store, "one", "about/tea.md", "  \n")
+                .await
+                .unwrap_err(),
+            CorrectionError::Invalid(_)
+        ));
+        assert_eq!(
+            correct(
+                &store,
+                "one",
+                "about/tea.md",
+                &"x".repeat(MAX_STATEMENT_BYTES + 1)
+            )
+            .await
+            .unwrap_err(),
+            CorrectionError::TooLarge
+        );
+        assert_eq!(body_of(ws.path(), "about/tea.md"), "likes oolong");
+        assert_eq!(ledger(ws.path()).entries.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn conflicting_corrections_need_explicit_resolution_and_survive_restart() {
+        let ws = tempfile::tempdir().unwrap();
+        seed(ws.path());
+        // No embedding provider: the file and BM25 are the whole truth here.
+        let store = VectorStore::connect(ws.path()).await;
+
+        let first = match correct(&store, "one", "about/tea.md", "drinks oolong")
+            .await
+            .unwrap()
+        {
+            CorrectionOutcome::Applied(entry) => entry,
+            other => panic!("{other:?}"),
+        };
+
+        // A different second statement is parked, not merged.
+        let conflict = match correct(&store, "one", "about/tea.md", "drinks matcha")
+            .await
+            .unwrap()
+        {
+            CorrectionOutcome::NeedsResolution(conflict) => conflict,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(conflict.path, "about/tea.md");
+        assert_eq!(conflict.current.id, first.id);
+        assert_eq!(conflict.current.statement, "drinks oolong");
+        assert_eq!(conflict.proposed.statement, "drinks matcha");
+        assert_ne!(conflict.proposed.id, first.id);
+        assert_eq!(conflict.conflict_id, conflict.proposed.id);
+        assert_eq!(body_of(ws.path(), "about/tea.md"), "drinks oolong");
+        assert!(
+            store.search_text("one", "matcha", 5).await.is_empty(),
+            "a parked statement is not retrievable"
+        );
+        let ledger_now = ledger(ws.path());
+        assert_eq!(ledger_now.entries.len(), 2);
+        assert_eq!(ledger_now.entries[0].status, CorrectionStatus::Applied);
+        assert_eq!(
+            ledger_now.entries[1].status,
+            CorrectionStatus::NeedsResolution
+        );
+        assert_eq!(
+            ledger_now.entries[1].conflicts_with.as_deref(),
+            Some(first.id.as_str())
+        );
+
+        // While one conflict is pending, further statements point at it.
+        match correct(&store, "one", "about/tea.md", "drinks sencha")
+            .await
+            .unwrap()
+        {
+            CorrectionOutcome::NeedsResolution(again) => {
+                assert_eq!(again.conflict_id, conflict.conflict_id);
+                assert_eq!(again.proposed.statement, "drinks matcha");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(ledger(ws.path()).entries.len(), 2, "conflicts do not stack");
+
+        // Restart: a fresh store over the same workspace sees the same ledger
+        // and the user resolves in favour of the proposed statement.
+        drop(store);
+        let store = VectorStore::connect(ws.path()).await;
+        assert_eq!(
+            load_ledger(&store.media_store(), "one").unwrap(),
+            ledger_now
+        );
+        let resolution = resolve(&store, "one", &conflict.conflict_id, Keep::Proposed)
+            .await
+            .unwrap();
+        assert_eq!(resolution.kept, Keep::Proposed);
+        assert_eq!(resolution.path, "about/tea.md");
+        assert_eq!(resolution.entry.id, conflict.conflict_id);
+        assert_eq!(resolution.entry.status, CorrectionStatus::Applied);
+        assert!(resolution.entry.resolved_at.is_some());
+        assert_eq!(body_of(ws.path(), "about/tea.md"), "drinks matcha");
+        let hits = store.search_text("one", "matcha", 5).await;
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        let ledger_now = ledger(ws.path());
+        assert_eq!(ledger_now.entries[0].status, CorrectionStatus::Superseded);
+        assert_eq!(ledger_now.entries[1], resolution.entry);
+        assert_eq!(
+            resolve(&store, "one", &conflict.conflict_id, Keep::Proposed)
+                .await
+                .unwrap_err(),
+            CorrectionError::NotFound,
+            "a settled conflict cannot be resolved twice"
+        );
+        assert_eq!(
+            resolve(&store, "one", "corr_nope", Keep::Current)
+                .await
+                .unwrap_err(),
+            CorrectionError::NotFound
+        );
+
+        // Keeping the current statement withdraws the proposed one.
+        let conflict = match correct(&store, "one", "about/tea.md", "drinks sencha")
+            .await
+            .unwrap()
+        {
+            CorrectionOutcome::NeedsResolution(conflict) => conflict,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(conflict.current.statement, "drinks matcha");
+        let resolution = resolve(&store, "one", &conflict.conflict_id, Keep::Current)
+            .await
+            .unwrap();
+        assert_eq!(resolution.kept, Keep::Current);
+        assert_eq!(resolution.entry.status, CorrectionStatus::Withdrawn);
+        assert_eq!(resolution.entry.statement, "drinks sencha");
+        assert_eq!(body_of(ws.path(), "about/tea.md"), "drinks matcha");
+        let ledger_now = ledger(ws.path());
+        assert_eq!(ledger_now.entries.len(), 3);
+        assert_eq!(ledger_now.entries[1].status, CorrectionStatus::Applied);
+        assert_eq!(ledger_now.entries[2].status, CorrectionStatus::Withdrawn);
+
+        // Once the companion rewrote the memory itself, the earlier
+        // correction is no longer in force: the next one applies directly.
+        store
+            .write_text_memory("one", "about/tea.md", "drinks matcha and coffee", false)
+            .await
+            .unwrap();
+        let entry = match correct(&store, "one", "about/tea.md", "only water")
+            .await
+            .unwrap()
+        {
+            CorrectionOutcome::Applied(entry) => entry,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(entry.previous, "drinks matcha and coffee");
+        assert_eq!(body_of(ws.path(), "about/tea.md"), "only water");
+        let ledger_now = ledger(ws.path());
+        assert_eq!(ledger_now.entries.len(), 4);
+        assert_eq!(ledger_now.entries[1].status, CorrectionStatus::Superseded);
+        assert_eq!(ledger_now.entries[3].status, CorrectionStatus::Applied);
+        // The user's flags rode along through every rewrite.
+        assert!(
+            memory::memory_flags(&store.media_store(), "one", "about/tea.md")
+                .exclude_from_proactive
+        );
+    }
+
+    #[tokio::test]
+    async fn flags_rewrite_the_file_and_survive_restart() {
+        let ws = tempfile::tempdir().unwrap();
+        let dir = seed(ws.path());
+        fs::write(dir.join("plain.md"), "no frontmatter yet").unwrap();
+        let store = VectorStore::connect(ws.path()).await;
+        let pin = FlagUpdate {
+            pinned: Some(true),
+            exclude_from_proactive: None,
+        };
+
+        let flags = set_flags(&store, "one", "about/tea.md", pin).await.unwrap();
+        assert!(flags.pinned && flags.exclude_from_proactive);
+        assert_eq!(
+            fs::read_to_string(dir.join("tea.md")).unwrap(),
+            "---\ncreated: 2026-01-01\nupdated: 2026-01-02\npinned: true\nexclude_from_proactive: true\n---\nlikes tea\n",
+            "flags are not a content change: updated stays"
+        );
+        let flags = set_flags(&store, "one", "plain.md", pin).await.unwrap();
+        assert_eq!(
+            flags,
+            MemoryFlags {
+                pinned: true,
+                exclude_from_proactive: false
+            }
+        );
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        assert_eq!(
+            fs::read_to_string(dir.join("plain.md")).unwrap(),
+            format!(
+                "---\ncreated: {today}\nupdated: {today}\npinned: true\n---\nno frontmatter yet"
+            )
+        );
+
+        // Restart, then clear and set through a fresh store.
+        drop(store);
+        let store = VectorStore::connect(ws.path()).await;
+        let media = store.media_store();
+        assert!(memory::memory_flags(&media, "one", "about/tea.md").pinned);
+        assert!(memory::memory_flags(&media, "one", "plain.md").pinned);
+        let flags = set_flags(
+            &store,
+            "one",
+            "about/tea.md",
+            FlagUpdate {
+                pinned: Some(false),
+                exclude_from_proactive: Some(false),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(flags, MemoryFlags::default());
+        assert_eq!(
+            fs::read_to_string(dir.join("tea.md")).unwrap(),
+            STAMPED.replace("exclude_from_proactive: true\n", "")
+        );
+        let before = fs::read_to_string(dir.join("tea.md")).unwrap();
+        assert_eq!(
+            set_flags(&store, "one", "about/tea.md", FlagUpdate::default())
+                .await
+                .unwrap(),
+            MemoryFlags::default()
+        );
+        assert_eq!(fs::read_to_string(dir.join("tea.md")).unwrap(), before);
+        assert_eq!(
+            memory::scan_library_for(&media, "one", memory::MemoryAccess::Proactive)
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            ["about/tea.md", "plain.md"]
+        );
+        // The BM25 view was refreshed with every rewrite.
+        assert_eq!(store.search_text("one", "tea", 5).await.len(), 1);
+
+        assert_eq!(
+            set_flags(&store, "one", "about/missing.md", pin)
+                .await
+                .unwrap_err(),
+            CorrectionError::NotFound
+        );
+        fs::write(dir.join("photo.png"), [0xff]).unwrap();
+        assert!(matches!(
+            set_flags(&store, "one", "about/photo.png", pin)
+                .await
+                .unwrap_err(),
+            CorrectionError::Invalid(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn media_memories_are_corrected_through_their_bound_text() {
+        let mock = MockServer::new(vec![
+            (200, response(vec![1., 0., 0.])),
+            (200, response(vec![1., 0., 0.])),
+        ])
+        .await;
+        let ws = tempfile::tempdir().unwrap();
+        let dir = ws.path().join("instances/one/memory");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("photo.png"), [0xff, 0x81]).unwrap();
+        media_text::write(&dir, "photo.png", "sky over Lisbon").unwrap();
+        let store = VectorStore::connect_with_config(ws.path(), &mock.config).await;
+
+        let entry = match correct(&store, "one", "photo.png", "sky over Porto")
+            .await
+            .unwrap()
+        {
+            CorrectionOutcome::Applied(entry) => entry,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(entry.path, "photo.png");
+        assert_eq!(entry.previous, "sky over Lisbon");
+        assert_eq!(
+            store.media_store().read("one", "photo.png").unwrap(),
+            "sky over Porto"
+        );
+        let hits = store.search_text("one", "Porto", 5).await;
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].path, "photo.png");
+        assert!(hits[0].content_preview.contains("Porto"));
+        assert!(!hits[0].content_preview.contains("Lisbon"));
+        assert_eq!(ledger(ws.path()).entries, vec![entry]);
+
+        // A second, different statement conflicts like a text memory would.
+        assert!(matches!(
+            correct(&store, "one", "photo.png", "sky over Faro")
+                .await
+                .unwrap(),
+            CorrectionOutcome::NeedsResolution(_)
+        ));
+        assert_eq!(
+            store.media_store().read("one", "photo.png").unwrap(),
+            "sky over Porto"
+        );
+    }
+
+    #[tokio::test]
+    async fn ledger_file_is_versioned_and_left_alone_when_unreadable() {
+        let ws = tempfile::tempdir().unwrap();
+        seed(ws.path());
+        let store = VectorStore::connect(ws.path()).await;
+        let media = store.media_store();
+        assert_eq!(
+            load_ledger(&media, "one").unwrap(),
+            CorrectionLedger::default()
+        );
+
+        let file = ws.path().join("instances/one").join(LEDGER_FILE);
+        for raw in [r#"{"version":2,"entries":[]}"#, "{not json"] {
+            fs::write(&file, raw).unwrap();
+            assert!(
+                matches!(load_ledger(&media, "one"), Err(CorrectionError::Invalid(_))),
+                "{raw}"
+            );
+            assert!(matches!(
+                correct(&store, "one", "about/tea.md", "drinks oolong")
+                    .await
+                    .unwrap_err(),
+                CorrectionError::Invalid(_)
+            ));
+            assert_eq!(fs::read_to_string(&file).unwrap(), raw, "never rewritten");
+            assert_eq!(body_of(ws.path(), "about/tea.md"), "likes tea\n");
+        }
+    }
+
+    #[test]
+    fn memory_flags_and_ledger_are_documented() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let doc = fs::read_to_string(repo.join("docs/companion-storage.md")).unwrap();
+        for required in [
+            LEDGER_FILE,
+            "pinned: true",
+            "exclude_from_proactive",
+            "needs_resolution",
+            "/memory-corrections",
+            "resolve",
+        ] {
+            assert!(
+                doc.contains(required),
+                "storage doc is missing {required:?}"
+            );
+        }
+    }
+}

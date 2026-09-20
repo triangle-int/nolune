@@ -3,6 +3,7 @@ pub mod commitment;
 pub mod companion;
 pub mod config;
 pub mod continuity;
+pub mod correction;
 pub mod drop;
 pub mod events;
 pub mod federation;

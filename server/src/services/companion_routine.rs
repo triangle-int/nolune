@@ -16,7 +16,11 @@ use crate::services::tools::{
     self, CreateDropTool, MemoryConnectTool, MemoryListTool, MemoryReadTool, MemorySearchTool,
     MemoryWriteTool, ReachOutTool, load_mood_state,
 };
-use crate::services::{chat, llm::LlmBackend, memory};
+use crate::services::{
+    chat,
+    llm::LlmBackend,
+    memory::{self, MemoryAccess},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Routine {
@@ -140,7 +144,12 @@ pub async fn run(
     let soul = std::fs::read_to_string(instance_dir.join("soul.md")).unwrap_or_default();
     let mood = load_mood_state(instance_dir);
     let now = crate::routes::instances::format_instance_now(instance_dir);
-    let library_catalog = memory::build_library_catalog(&vector_store.media_store(), slug);
+    // Memories the user excluded from proactive use are invisible here (#84).
+    let library_catalog = memory::build_library_catalog(
+        &vector_store.media_store(),
+        slug,
+        memory::MemoryAccess::Proactive,
+    );
     let window_hours = routine.interval_hours(&policy).max(0.25);
 
     // Recent conversation, bounded to the routine's window.
@@ -309,6 +318,9 @@ pub fn build_routine_tools(
     raw
 }
 
+/// The memory tools of a routine run with proactive access: memories the
+/// user excluded from proactive use are never listed, searched, read, or
+/// rewritten here (#84).
 fn push_memory_tools(
     raw: &mut Vec<Box<dyn ToolDyn>>,
     workspace_dir: &Path,
@@ -317,30 +329,34 @@ fn push_memory_tools(
     vector_store: &Arc<crate::services::vector::VectorStore>,
     resources: &crate::services::resource_access::ResourceAccess,
 ) {
-    raw.push(Box::new(MemoryWriteTool::new(
-        workspace_dir,
-        slug,
-        vector_store.clone(),
-    )));
-    raw.push(Box::new(MemoryReadTool::new(
-        workspace_dir,
-        slug,
-        public_url,
-        vector_store.clone(),
-        resources,
-    )));
-    raw.push(Box::new(MemoryListTool::new(
-        workspace_dir,
-        slug,
-        vector_store.clone(),
-    )));
-    raw.push(Box::new(MemorySearchTool::new(
-        workspace_dir,
-        slug,
-        vector_store.clone(),
-        public_url,
-        resources,
-    )));
+    raw.push(Box::new(
+        MemoryWriteTool::new(workspace_dir, slug, vector_store.clone())
+            .with_access(MemoryAccess::Proactive),
+    ));
+    raw.push(Box::new(
+        MemoryReadTool::new(
+            workspace_dir,
+            slug,
+            public_url,
+            vector_store.clone(),
+            resources,
+        )
+        .with_access(MemoryAccess::Proactive),
+    ));
+    raw.push(Box::new(
+        MemoryListTool::new(workspace_dir, slug, vector_store.clone())
+            .with_access(MemoryAccess::Proactive),
+    ));
+    raw.push(Box::new(
+        MemorySearchTool::new(
+            workspace_dir,
+            slug,
+            vector_store.clone(),
+            public_url,
+            resources,
+        )
+        .with_access(MemoryAccess::Proactive),
+    ));
 }
 
 #[cfg(test)]
@@ -380,6 +396,64 @@ mod tests {
                 "memory_search",
                 "memory_connect"
             ]
+        );
+    }
+
+    /// The routine tool set is built with proactive access: a memory the
+    /// user excluded never reaches a check-in or reflection (#84).
+    #[tokio::test]
+    async fn routine_memory_tools_never_see_excluded_memories() {
+        let workspace = tempfile::tempdir().unwrap();
+        let memory = workspace.path().join("instances/one/memory");
+        std::fs::create_dir_all(&memory).unwrap();
+        std::fs::write(
+            memory.join("secret.md"),
+            "---\nexclude_from_proactive: true\n---\nOrion secret\n",
+        )
+        .unwrap();
+        std::fs::write(memory.join("tea.md"), "likes Orion tea\n").unwrap();
+        let store = Arc::new(crate::services::vector::VectorStore::connect(workspace.path()).await);
+        let resources = crate::services::resource_access::ResourceAccess::new("");
+        let mut tools: Vec<Box<dyn ToolDyn>> = Vec::new();
+        push_memory_tools(&mut tools, workspace.path(), "one", "", &store, &resources);
+        let call = |name: &'static str, args: serde_json::Value| {
+            let tool = tools
+                .iter()
+                .find(|tool| tool.name() == name)
+                .unwrap_or_else(|| panic!("{name} missing"));
+            tool.call(args.to_string())
+        };
+
+        let listed = call("memory_list", serde_json::json!({})).await.unwrap();
+        assert!(
+            listed.contains("tea.md") && !listed.contains("secret"),
+            "{listed}"
+        );
+        let found = call("memory_search", serde_json::json!({"query": "Orion"}))
+            .await
+            .unwrap();
+        assert!(
+            found.contains("tea.md") && !found.contains("secret"),
+            "{found}"
+        );
+        let read = call("memory_read", serde_json::json!({"path": "secret.md"})).await;
+        assert!(read.is_err(), "{read:?}");
+        let write = call(
+            "memory_write",
+            serde_json::json!({"path": "secret.md", "content": "x", "mode": "append"}),
+        )
+        .await;
+        assert!(write.is_err(), "{write:?}");
+        assert_eq!(
+            std::fs::read_to_string(memory.join("secret.md")).unwrap(),
+            "---\nexclude_from_proactive: true\n---\nOrion secret\n"
+        );
+        // The catalog a routine is shown omits it as well.
+        let catalog =
+            memory::build_library_catalog(&store.media_store(), "one", MemoryAccess::Proactive);
+        assert!(
+            catalog.contains("tea.md") && !catalog.contains("secret"),
+            "{catalog}"
         );
     }
 

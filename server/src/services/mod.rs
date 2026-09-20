@@ -16,6 +16,7 @@ pub mod machine_registry;
 pub mod mcp;
 pub mod media_text;
 pub mod memory;
+pub mod memory_corrections;
 pub mod memory_receipts;
 pub mod proactive;
 pub mod profile_archive;

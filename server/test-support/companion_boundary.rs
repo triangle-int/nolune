@@ -1104,6 +1104,108 @@ async fn memory_receipts_are_readable_only_through_the_canonical_companion() {
 }
 
 #[tokio::test]
+async fn memory_corrections_act_only_on_the_canonical_companion() {
+    let h = harness().await;
+    companion::ensure_identity(h.workspace.path()).unwrap();
+    h.seed_obsolete("alice");
+    let memory = h.companion().join("memory");
+    fs::create_dir_all(&memory).unwrap();
+    fs::write(memory.join("facts.md"), "- likes tea").unwrap();
+
+    let uri = format!("/api/instances/{CANONICAL_SLUG}/memory/facts.md");
+    let (status, value) = h
+        .json(
+            Method::PUT,
+            &uri,
+            Some(serde_json::json!({ "content": "- likes oolong" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    assert_eq!(value["status"], "applied");
+    let (status, value) = h
+        .json(
+            Method::PATCH,
+            &uri,
+            Some(serde_json::json!({ "exclude_from_proactive": true })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    assert_eq!(value["exclude_from_proactive"], true);
+    let (status, value) = h
+        .json(
+            Method::PUT,
+            &uri,
+            Some(serde_json::json!({ "content": "- likes matcha" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{value}");
+    let conflict_id = value["conflict_id"].as_str().unwrap().to_owned();
+    let (status, ledger) = h
+        .json(
+            Method::GET,
+            &format!("/api/instances/{CANONICAL_SLUG}/memory-corrections"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ledger["entries"].as_array().map(Vec::len), Some(2));
+    assert!(h.companion().join("memory_corrections.json").is_file());
+
+    // Every write surface fails closed for any other slug, with no ledger
+    // and no file change behind it.
+    for (method, uri, body) in [
+        (
+            Method::PUT,
+            "/api/instances/alice/memory/facts.md".to_owned(),
+            Some(serde_json::json!({ "content": "- likes matcha" })),
+        ),
+        (
+            Method::PATCH,
+            "/api/instances/alice/memory/facts.md".to_owned(),
+            Some(serde_json::json!({ "pinned": true })),
+        ),
+        (
+            Method::GET,
+            "/api/instances/alice/memory-corrections".to_owned(),
+            None,
+        ),
+        (
+            Method::POST,
+            format!("/api/instances/alice/memory-corrections/{conflict_id}/resolve"),
+            Some(serde_json::json!({ "keep": "proposed" })),
+        ),
+        (
+            Method::POST,
+            format!("/api/instances/Companion/memory-corrections/{conflict_id}/resolve"),
+            Some(serde_json::json!({ "keep": "proposed" })),
+        ),
+    ] {
+        let (status, value) = h.json(method.clone(), &uri, body).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method} {uri}: {value}");
+        assert_eq!(value["error"], "unknown_companion", "{method} {uri}");
+    }
+    h.assert_obsolete_untouched("alice");
+    assert!(!h.instances().join("alice/memory_corrections.json").exists());
+    assert_eq!(
+        h.instance_dirs(),
+        ["alice", "companion",],
+        "no companion was created as a side effect"
+    );
+
+    let (status, value) = h
+        .json(
+            Method::POST,
+            &format!("/api/instances/{CANONICAL_SLUG}/memory-corrections/{conflict_id}/resolve"),
+            Some(serde_json::json!({ "keep": "proposed" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    let raw = fs::read_to_string(memory.join("facts.md")).unwrap();
+    assert!(raw.ends_with("- likes matcha"), "{raw}");
+    assert!(raw.contains("exclude_from_proactive: true"), "{raw}");
+}
+
+#[tokio::test]
 async fn continuity_api_lists_inspects_updates_completes_and_dismisses_records() {
     use crate::domain::continuity::{
         ContinuityState, ContinuityUpdate, Origin, Provenance, ProvenanceSource, ResourceRef,
