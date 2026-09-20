@@ -477,7 +477,9 @@ mod tests {
             federation::{companion_id_for, decode_exact, encode},
         },
     };
-    use sha2::{Digest, Sha256};
+    use curve25519_dalek::{edwards::EdwardsPoint, scalar::Scalar, traits::Identity as _};
+    use ed25519_dalek::Verifier as _;
+    use sha2::{Digest, Sha256, Sha512};
 
     const IDENTITY_FIXTURE: &str =
         include_str!("../../../tests/fixtures/federation/identity_v1.json");
@@ -488,8 +490,69 @@ mod tests {
     const FIXTURE_CREATED_AT: u64 = 1_789_862_400;
     const FIXTURE_BODY: &[u8] = br#"{"kind":"ping"}"#;
 
+    /// The eight small-order points of the Ed25519 group in compressed form,
+    /// the identity first. `VerifyingKey::from_bytes` accepts every one of
+    /// them; only `is_weak` tells them apart from a real key.
+    const SMALL_ORDER_POINTS: [&str; 8] = [
+        "0100000000000000000000000000000000000000000000000000000000000000",
+        "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000080",
+        "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+        "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+        "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+        "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+    ];
+
+    /// The group order `L`, little-endian (RFC 8032 section 5.1).
+    const GROUP_ORDER: [u8; 32] = [
+        0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde,
+        0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x10,
+    ];
+
     fn fixture_seed() -> [u8; 32] {
         Sha256::digest(FIXTURE_SEED_LABEL).into()
+    }
+
+    fn point_from_hex(hex: &str) -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        for (byte, pair) in bytes.iter_mut().zip(hex.as_bytes().chunks(2)) {
+            *byte = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
+        }
+        bytes
+    }
+
+    /// The lax verification equation is `R == [S]B - [k]A`. With `R` fixed to
+    /// the identity point it becomes `[S]B == [k]A`, which the key's owner can
+    /// satisfy for any message by setting `S = k * a`. `verify_strict` refuses
+    /// a small-order `R` regardless, so this is the one signature that tells a
+    /// strict verifier from a lax one when the key itself is sound.
+    fn small_order_r_signature(key: &SigningKey, message: &[u8]) -> [u8; 64] {
+        let r = EdwardsPoint::identity().compress();
+        let challenge = Sha512::new()
+            .chain_update(r.as_bytes())
+            .chain_update(key.verifying_key().as_bytes())
+            .chain_update(message)
+            .finalize();
+        let k = Scalar::from_bytes_mod_order_wide(&challenge.into());
+        let mut signature = [0u8; 64];
+        signature[..32].copy_from_slice(r.as_bytes());
+        signature[32..].copy_from_slice(&(k * key.to_scalar()).to_bytes());
+        signature
+    }
+
+    /// `S + L` encodes the same scalar to a lax decoder and must be refused.
+    fn add_group_order_to_scalar(signature: &str) -> String {
+        let mut bytes = decode_exact(signature, 64).unwrap();
+        let mut carry = 0u16;
+        for (byte, order) in bytes[32..].iter_mut().zip(GROUP_ORDER) {
+            let sum = u16::from(*byte) + u16::from(order) + carry;
+            *byte = (sum & 0xff) as u8;
+            carry = sum >> 8;
+        }
+        assert_eq!(carry, 0, "S < L, so S + L still fits in 32 bytes");
+        encode(&bytes)
     }
 
     fn fixture_identity() -> SigningIdentity {
@@ -626,6 +689,128 @@ mod tests {
                 malformed.signature
             );
         }
+    }
+
+    #[test]
+    fn small_order_public_keys_are_refused_before_any_signature_check() {
+        // With A = identity the lax equation R == [S]B - [k]A no longer
+        // depends on the message, so R = [S]B verifies everything; S = 0 and
+        // R = identity is the smallest such pair. The decoder must refuse the
+        // key before a signature is even looked at.
+        let mut forged_bytes = [0u8; 64];
+        forged_bytes[0] = 1;
+        let forged = encode(&forged_bytes);
+
+        let document = parse_document(IDENTITY_FIXTURE).unwrap();
+        for hex in SMALL_ORDER_POINTS {
+            let point = point_from_hex(hex);
+            let key = VerifyingKey::from_bytes(&point).expect("small-order points decode");
+            assert!(key.is_weak(), "{hex}");
+
+            let mut weak = document.clone();
+            weak.public_key = encode(&point);
+            weak.companion_id = companion_id_for(&point);
+            weak.signature = forged.clone();
+            assert_eq!(
+                verify_document(&weak),
+                Err(FederationError::InvalidPublicKey),
+                "{hex}"
+            );
+        }
+
+        // Prove the forgery is real, then check that the envelope verifier
+        // refuses it even when handed a weak identity that skipped decoding.
+        let identity_point = point_from_hex(SMALL_ORDER_POINTS[0]);
+        let weak_sender = VerifiedIdentity {
+            version: FEDERATION_VERSION,
+            companion_id: companion_id_for(&identity_point),
+            public_key: VerifyingKey::from_bytes(&identity_point).unwrap(),
+            created_at: 0,
+        };
+        let forged_signature = Signature::from_bytes(&forged_bytes);
+        for body in [b"ping".as_slice(), b"transfer everything".as_slice()] {
+            let message =
+                envelope_signing_bytes(FEDERATION_VERSION, &weak_sender.companion_id, body);
+            assert!(
+                weak_sender
+                    .public_key
+                    .verify(&message, &forged_signature)
+                    .is_ok(),
+                "lax verification accepts the universal forgery"
+            );
+            let envelope = SignedEnvelope {
+                version: FEDERATION_VERSION,
+                sender: weak_sender.companion_id.clone(),
+                body: encode(body),
+                signature: forged.clone(),
+            };
+            assert_eq!(
+                verify_envelope(&envelope, &weak_sender),
+                Err(FederationError::SignatureMismatch)
+            );
+        }
+    }
+
+    #[test]
+    fn small_order_r_signatures_are_refused_even_from_a_genuine_key() {
+        let identity = fixture_identity();
+        let public_key = identity.verified().public_key;
+
+        let document = identity.document().clone();
+        let message = document_signing_bytes(
+            document.version,
+            &document.companion_id,
+            &public_key.to_bytes(),
+            document.created_at,
+        );
+        let forged = small_order_r_signature(&identity.key, &message);
+        assert!(
+            public_key
+                .verify(&message, &Signature::from_bytes(&forged))
+                .is_ok(),
+            "lax verification accepts a small-order R"
+        );
+        let mut lax_only = document.clone();
+        lax_only.signature = encode(&forged);
+        assert_eq!(
+            verify_document(&lax_only),
+            Err(FederationError::SignatureMismatch)
+        );
+
+        let mut envelope = identity.sign_envelope(FIXTURE_BODY);
+        let message = envelope_signing_bytes(envelope.version, &envelope.sender, FIXTURE_BODY);
+        let forged = small_order_r_signature(&identity.key, &message);
+        assert!(
+            public_key
+                .verify(&message, &Signature::from_bytes(&forged))
+                .is_ok()
+        );
+        envelope.signature = encode(&forged);
+        assert_eq!(
+            verify_envelope(&envelope, identity.verified()),
+            Err(FederationError::SignatureMismatch)
+        );
+    }
+
+    #[test]
+    fn malleated_signature_scalars_are_refused() {
+        let document = parse_document(IDENTITY_FIXTURE).unwrap();
+        let identity = verify_document(&document).unwrap();
+
+        let mut malleated = document.clone();
+        malleated.signature = add_group_order_to_scalar(&document.signature);
+        assert_ne!(malleated.signature, document.signature);
+        assert_eq!(
+            verify_document(&malleated),
+            Err(FederationError::SignatureMismatch)
+        );
+
+        let mut envelope = parse_envelope(ENVELOPE_FIXTURE).unwrap();
+        envelope.signature = add_group_order_to_scalar(&envelope.signature);
+        assert_eq!(
+            verify_envelope(&envelope, &identity),
+            Err(FederationError::SignatureMismatch)
+        );
     }
 
     #[test]
@@ -909,6 +1094,24 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(load(root), Err(FederationError::Malformed(_))));
+
+        // A corrupt key file is reported by shape only. serde's type-mismatch
+        // message quotes the primitive it rejected, which for this file could
+        // be the seed, so none of the file's values may reach the error.
+        for corrupt in [
+            r#"{"version":"SEEDSEEDSEEDSEEDSEEDSEEDSEEDSEEDSEEDSEEDSEED","algorithm":"ed25519","secret_key":"x"}"#,
+            r#"{"version":1,"algorithm":"ed25519","secret_key":424242424242}"#,
+            r#"{"version":1,"algorithm":"LEAKALGO","secret_key":"NOTASEED","note":"LEAKNOTE"}"#,
+            r#"["SEEDSEEDSEEDSEEDSEEDSEEDSEEDSEEDSEEDSEEDSEED"]"#,
+        ] {
+            std::fs::write(&key_path, corrupt).unwrap();
+            let error = load(root).unwrap_err();
+            assert!(matches!(error, FederationError::Malformed(_)), "{error}");
+            let rendered = format!("{error} / {error:?}");
+            for value in ["SEEDSEED", "424242", "LEAKALGO", "NOTASEED", "LEAKNOTE"] {
+                assert!(!rendered.contains(value), "{rendered}");
+            }
+        }
         std::fs::write(&key_path, &key_text).unwrap();
 
         #[cfg(unix)]

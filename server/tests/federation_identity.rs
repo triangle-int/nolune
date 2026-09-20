@@ -79,8 +79,39 @@ fn macro_arguments(source: &str, name: &str) -> Vec<String> {
     out
 }
 
+/// Logging macros of the `log` and `tracing` facades. Matching on the bare
+/// name catches `warn!(`, `log::warn!(` and `tracing::warn!(` alike.
+const LOG_MACROS: [&str; 8] = [
+    "error", "warn", "info", "debug", "trace", "log", "event", "span",
+];
+
+/// Macros whose message reaches stderr, a panic hook, or a formatter.
+const OUTPUT_MACROS: [&str; 7] = [
+    "panic",
+    "unreachable",
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "write",
+    "writeln",
+];
+
+/// Ways to bring a logging facade into scope so its macros appear bare.
+const FACADE_IMPORTS: [&str; 7] = [
+    "use log::",
+    "use log;",
+    "use tracing::",
+    "use tracing;",
+    "extern crate log",
+    "extern crate tracing",
+    "#[macro_use]",
+];
+
 #[test]
 fn federation_code_never_logs_or_prints_key_material() {
+    // Every identifier that holds the seed or a buffer that contained it,
+    // including the raw file buffers in the keystore, so logging a buffer is
+    // caught even when the word "secret" never appears in the call.
     let secret_tokens = [
         "secret",
         "seed",
@@ -88,8 +119,14 @@ fn federation_code_never_logs_or_prints_key_material() {
         "private_key",
         "SigningKey",
         "to_bytes",
+        "to_scalar",
         "key_text",
         "key_bytes",
+        "key_json",
+        "raw",
+        "decoded",
+        "stored",
+        "Zeroizing",
     ];
     let mut violations = Vec::new();
     for (path, production) in federation_sources() {
@@ -98,19 +135,67 @@ fn federation_code_never_logs_or_prints_key_material() {
                 violations.push(format!("{path} calls {print}!"));
             }
         }
-        for level in ["error", "warn", "info", "debug", "trace"] {
-            for arguments in macro_arguments(&production, &format!("log::{level}")) {
+        for import in FACADE_IMPORTS {
+            if production.contains(import) {
+                violations.push(format!(
+                    "{path} brings a logging facade into scope via {import:?}"
+                ));
+            }
+        }
+        for name in LOG_MACROS {
+            let invocations = macro_arguments(&production, name);
+            // The keystore module never logs at all: every function in it
+            // holds the seed or a buffer that held it.
+            if path.ends_with("identity.rs") && !invocations.is_empty() {
+                violations.push(format!(
+                    "{path} logs via {name}! ({} call(s)); the keystore never logs",
+                    invocations.len()
+                ));
+            }
+            for arguments in invocations {
                 for token in secret_tokens {
                     if arguments.to_lowercase().contains(&token.to_lowercase()) {
-                        violations.push(format!(
-                            "{path} formats {token:?} in log::{level}!({arguments})"
-                        ));
+                        violations
+                            .push(format!("{path} formats {token:?} in {name}!({arguments})"));
+                    }
+                }
+            }
+        }
+        for name in OUTPUT_MACROS {
+            for arguments in macro_arguments(&production, name) {
+                for token in secret_tokens {
+                    if arguments.to_lowercase().contains(&token.to_lowercase()) {
+                        violations
+                            .push(format!("{path} formats {token:?} in {name}!({arguments})"));
                     }
                 }
             }
         }
     }
     assert!(violations.is_empty(), "{}", violations.join("\n"));
+}
+
+#[test]
+fn federation_code_only_verifies_signatures_strictly() {
+    // Lax `Verifier::verify` accepts a universal forgery from a small-order
+    // key and a small-order `R` from a genuine one; only `verify_strict`
+    // refuses both. The unit tests prove it with forged signatures; this
+    // keeps the lax entry points out of the production source altogether.
+    let mut violations = Vec::new();
+    let mut strict_calls = 0;
+    for (path, production) in federation_sources() {
+        for lax in [".verify(", "Verifier", "verify_prehashed", "DigestVerifier"] {
+            if production.contains(lax) {
+                violations.push(format!("{path} uses lax verification via {lax:?}"));
+            }
+        }
+        strict_calls += production.matches(".verify_strict(").count();
+    }
+    assert!(violations.is_empty(), "{}", violations.join("\n"));
+    assert!(
+        strict_calls >= 2,
+        "expected strict verification of both documents and envelopes, found {strict_calls} call(s)"
+    );
 }
 
 #[test]
