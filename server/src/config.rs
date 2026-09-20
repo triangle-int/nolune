@@ -1008,6 +1008,54 @@ pub fn uses_local_public_url(config: &Config) -> bool {
     config.public_url == local_public_url(config.port)
 }
 
+/// The public URL only if a remote model provider can fetch from it.
+///
+/// The local default (`http://localhost:<port>`) and any other loopback or
+/// unspecified host are fine for links shown to the user, who sits on the same
+/// machine, but a provider such as Anthropic cannot reach them and rejects the
+/// whole request. Provider-facing callers use this and fall back to inline
+/// base64 when it returns `None`; user-facing links keep using `public_url`.
+pub fn provider_reachable_public_url(public_url: &str) -> Option<&str> {
+    let trimmed = public_url.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let rest = trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("http://"))
+        .unwrap_or(trimmed);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host_port)| host_port);
+    let host = if let Some(bracketed) = host_port.strip_prefix('[') {
+        bracketed.split(']').next().unwrap_or_default()
+    } else if host_port.parse::<std::net::Ipv6Addr>().is_ok() {
+        host_port
+    } else {
+        host_port
+            .rsplit_once(':')
+            .map_or(host_port, |(host, _port)| host)
+    };
+    if host.is_empty() || host_is_local(host) {
+        return None;
+    }
+    Some(trimmed)
+}
+
+fn host_is_local(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") || host.to_ascii_lowercase().ends_with(".localhost") {
+        return true;
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(ip) => {
+            let ip = ip.to_canonical();
+            ip.is_loopback() || ip.is_unspecified()
+        }
+        Err(_) => false,
+    }
+}
+
 /// Every reader of the config (startup, per-turn reloads, background routines)
 /// must see the same public URL, or tools that mint links flip between working
 /// and "no public URL configured" depending on which path loaded the file.
@@ -1117,6 +1165,57 @@ mod public_url_tests {
         let mut reloaded: Config = toml::from_str(&serialized).unwrap();
         apply_public_url_default(&mut reloaded);
         assert_eq!(reloaded.public_url, "http://localhost:26559");
+    }
+
+    #[test]
+    fn loopback_and_unspecified_hosts_are_not_provider_reachable() {
+        for url in [
+            "",
+            "   ",
+            "http://localhost:26559",
+            "http://localhost",
+            "https://LOCALHOST:8443/",
+            "http://app.localhost:3000",
+            "http://127.0.0.1:26559",
+            "http://127.9.8.7",
+            "http://[::1]:26559",
+            "http://[::]:26559",
+            "http://0.0.0.0:26559",
+            "http://[::ffff:127.0.0.1]:26559",
+            "http://user:pass@localhost:26559",
+            "http://",
+        ] {
+            assert_eq!(provider_reachable_public_url(url), None, "{url:?}");
+        }
+        let mut config: Config = toml::from_str("port = 26559\npublic_url = \"\"").unwrap();
+        apply_public_url_default(&mut config);
+        assert_eq!(provider_reachable_public_url(&config.public_url), None);
+    }
+
+    #[test]
+    fn routable_hosts_are_provider_reachable() {
+        for url in [
+            "https://nolune.example",
+            "https://nolune.example/",
+            "http://nolune.example:26559/base?x=1",
+            "http://192.168.1.20:26559",
+            "http://10.0.0.5",
+            "https://[2001:db8::1]:8443",
+            "http://user:pass@nolune.example",
+            "https://localhost.example.com",
+        ] {
+            assert_eq!(provider_reachable_public_url(url), Some(url), "{url:?}");
+        }
+        assert_eq!(
+            provider_reachable_public_url("  https://nolune.example  "),
+            Some("https://nolune.example")
+        );
+        let config: Config =
+            toml::from_str("port = 26559\npublic_url = \"https://nolune.example\"").unwrap();
+        assert_eq!(
+            provider_reachable_public_url(&config.public_url),
+            Some("https://nolune.example")
+        );
     }
 
     #[test]

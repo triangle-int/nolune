@@ -14,6 +14,7 @@ use crate::domain::events::ServerEvent;
 use crate::services::tool::ToolDyn;
 
 // Re-export all public types and functions that were accessible from crate::services::llm::*
+pub use anthropic::{MAX_INLINE_IMAGE_BASE64_BYTES, MAX_INLINE_IMAGE_BYTES};
 #[allow(unused_imports)]
 pub use helpers::DEFAULT_ONBOARDING_PROMPT;
 pub use helpers::{
