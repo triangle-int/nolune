@@ -179,6 +179,7 @@ impl Tool for TaskContinuityUpdateTool {
             Some(id) if !id.is_empty() => self
                 .store
                 .update(id, &update, provenance, now)
+                .await
                 .map_err(|error| ToolExecError(error.to_string()))?,
             _ => {
                 let goal = args
@@ -195,6 +196,7 @@ impl Tool for TaskContinuityUpdateTool {
                 };
                 self.store
                     .create(goal, origin, &update, provenance, now)
+                    .await
                     .map_err(|error| ToolExecError(error.to_string()))?
             }
         };

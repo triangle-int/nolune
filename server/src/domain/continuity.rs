@@ -23,12 +23,17 @@ pub const MAX_RESOURCES: usize = 40;
 pub const MAX_MACHINES: usize = 16;
 /// Provenance keeps the creating entry plus the most recent ones.
 pub const MAX_PROVENANCE: usize = 100;
-/// Largest record accepted on disk; bigger files are reported, never read.
-pub const MAX_RECORD_BYTES: usize = 64 * 1024;
+/// Largest file read back; bigger files are reported, never read. No record
+/// built within the caps above can reach it, even with the most expensive
+/// characters everywhere (`valid_content_never_reaches_the_file_cap`), so a
+/// valid record can always be closed with one more provenance entry.
+pub const MAX_RECORD_BYTES: usize = 1024 * 1024;
 /// Longest path on a computer kept as a link.
 pub const MAX_PATH_BYTES: usize = 1024;
 /// Longest record id or machine id.
 pub const MAX_ID_BYTES: usize = 64;
+/// Longest chat id or message id kept as the origin.
+pub const MAX_ORIGIN_BYTES: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -113,7 +118,10 @@ impl ResourceRef {
                 .map_err(|_| invalid(format!("invalid memory path {path:?}"))),
             Self::MachinePath { machine_id, path } => {
                 validate_machine_id(machine_id)?;
-                if path.trim().is_empty() || path.len() > MAX_PATH_BYTES {
+                if path.trim().is_empty()
+                    || path.len() > MAX_PATH_BYTES
+                    || path.chars().any(char::is_control)
+                {
                     return Err(invalid(format!("invalid path {path:?} on {machine_id}")));
                 }
                 Ok(())
@@ -348,6 +356,17 @@ impl ContinuityRecord {
         }
         if self.origin.chat_id.trim().is_empty() {
             return Err(invalid("origin chat_id is required"));
+        }
+        if self.origin.chat_id.len() > MAX_ORIGIN_BYTES
+            || self
+                .origin
+                .message_id
+                .as_ref()
+                .is_some_and(|id| id.len() > MAX_ORIGIN_BYTES)
+        {
+            return Err(invalid(format!(
+                "origin ids exceed the limit of {MAX_ORIGIN_BYTES} bytes"
+            )));
         }
         for (label, len, max) in [
             ("goal", self.goal.chars().count(), MAX_GOAL_CHARS),
@@ -705,6 +724,79 @@ mod tests {
         assert_eq!(record.provenance.last().unwrap().note, "step");
     }
 
+    /// Every field at its cap, filled with the characters that take the most
+    /// bytes once serialized: a character-capped text of control characters
+    /// escapes to six bytes per character, a byte-capped path of quotes
+    /// doubles, and the origin ids escape to six bytes per byte.
+    fn maximal_record() -> ContinuityRecord {
+        let worst = || "\u{1}".repeat(MAX_NOTE_CHARS);
+        let prov = |_: usize| Provenance {
+            source: ProvenanceSource::Server,
+            at: i64::MAX,
+            note: worst(),
+        };
+        let machine_id = |i: usize| format!("{i:02}{}", "\"".repeat(MAX_ID_BYTES - 2));
+        let path = |i: usize| format!("{i:02}{}", "\"".repeat(MAX_PATH_BYTES - 2));
+        let mut record = ContinuityRecord::new(
+            "x".repeat(MAX_ID_BYTES),
+            &"\u{1}".repeat(MAX_GOAL_CHARS),
+            Origin {
+                chat_id: "\u{1}".repeat(MAX_ORIGIN_BYTES),
+                message_id: Some("\u{1}".repeat(MAX_ORIGIN_BYTES)),
+            },
+            prov(0),
+            i64::MAX,
+        )
+        .unwrap();
+        record.state = ContinuityState::ReadyToResume;
+        record.machine_ids = (0..MAX_MACHINES).map(machine_id).collect();
+        record.resources = (0..MAX_RESOURCES)
+            .map(|i| ResourceLink {
+                resource: ResourceRef::MachinePath {
+                    machine_id: machine_id(i),
+                    path: path(i),
+                },
+                provenance: prov(i),
+            })
+            .collect();
+        record.completed_steps = (0..MAX_STEPS)
+            .map(|i| Step {
+                summary: worst(),
+                provenance: prov(i + 1),
+            })
+            .collect();
+        record.blockers = (0..MAX_BLOCKERS)
+            .map(|i| Blocker {
+                kind: BlockerKind::ResourceMissing {
+                    resource: ResourceRef::MachinePath {
+                        machine_id: machine_id(i),
+                        path: path(i),
+                    },
+                },
+                detail: worst(),
+                provenance: prov(i + 2),
+            })
+            .collect();
+        record.next_step = Some(worst());
+        record.updated_at = i64::MAX;
+        record.provenance = (0..MAX_PROVENANCE).map(prov).collect();
+        record
+    }
+
+    #[test]
+    fn valid_content_never_reaches_the_file_cap() {
+        let record = maximal_record();
+        record.validate().unwrap();
+        let json = serde_json::to_string_pretty(&record).unwrap();
+        assert!(
+            json.len() <= MAX_RECORD_BYTES,
+            "a record built within every cap is {} bytes, over the {MAX_RECORD_BYTES}-byte file cap",
+            json.len()
+        );
+        let back: ContinuityRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, record);
+    }
+
     #[test]
     fn resource_links_and_ids_are_validated_as_single_path_components() {
         for bad in [
@@ -727,6 +819,14 @@ mod tests {
             ResourceRef::MachinePath {
                 machine_id: "mac-mini".into(),
                 path: String::new(),
+            },
+            ResourceRef::MachinePath {
+                machine_id: "mac-mini".into(),
+                path: "/tmp/\u{1}".into(),
+            },
+            ResourceRef::MachinePath {
+                machine_id: "mac-mini".into(),
+                path: "/".repeat(MAX_PATH_BYTES + 1),
             },
         ] {
             assert!(bad.validate().is_err(), "{bad:?}");
@@ -780,5 +880,13 @@ mod tests {
         for bad in ["", "../x", "a/b", ".hidden", "task_1\\2", &"x".repeat(65)] {
             assert!(!is_valid_id(bad), "{bad:?}");
         }
+
+        // The origin is bounded too, so nothing on a record is open-ended.
+        let mut wide = self::record();
+        wide.origin.chat_id = "c".repeat(MAX_ORIGIN_BYTES + 1);
+        assert!(matches!(wide.validate(), Err(ContinuityError::Invalid(_))));
+        let mut wide = self::record();
+        wide.origin.message_id = Some("m".repeat(MAX_ORIGIN_BYTES + 1));
+        assert!(matches!(wide.validate(), Err(ContinuityError::Invalid(_))));
     }
 }

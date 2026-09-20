@@ -1,7 +1,9 @@
 //! Continuity records API (#81): list, inspect, update, complete, dismiss.
 //! Every write here is explicit user activity and carries provenance. Reads
 //! run the reference check so missing computers and resources show up as
-//! blockers rather than as broken records.
+//! blockers rather than as broken records. Every handle for the companion's
+//! continuity directory shares one lock, so a read here never overwrites a
+//! write from the chat tool or another request.
 
 use axum::{
     Json, Router,
@@ -107,22 +109,10 @@ async fn list_records(
     Path(_instance_slug): Path<String>,
     Query(query): Query<ListQuery>,
 ) -> Json<Listing> {
-    let store = store(&state);
     let now = chrono::Utc::now().timestamp();
-    let errors = store.list_errors();
-    let listed = if query.resumable {
-        store.resumable()
-    } else {
-        store.list()
-    };
-    let mut records = Vec::with_capacity(listed.len());
-    for record in listed {
-        records.push(
-            store
-                .validate_references(record, &state.machine_registry, now)
-                .await,
-        );
-    }
+    let (records, errors) = store(&state)
+        .list_validated(&state.machine_registry, now, query.resumable)
+        .await;
     Json(Listing { records, errors })
 }
 
@@ -130,16 +120,12 @@ async fn get_record(
     State(state): State<AppState>,
     Path((_instance_slug, record_id)): Path<(String, String)>,
 ) -> Result<Json<ContinuityRecord>, ApiError> {
-    let store = store(&state);
-    let record = store
-        .get(&record_id)
-        .ok_or_else(|| api_error(ContinuityError::NotFound))?;
     let now = chrono::Utc::now().timestamp();
-    Ok(Json(
-        store
-            .validate_references(record, &state.machine_registry, now)
-            .await,
-    ))
+    store(&state)
+        .validate_references(&record_id, &state.machine_registry, now)
+        .await
+        .map(Json)
+        .ok_or_else(|| api_error(ContinuityError::NotFound))
 }
 
 async fn update_record(
@@ -155,6 +141,7 @@ async fn update_record(
     };
     store(&state)
         .update(&record_id, &body.update, provenance, now)
+        .await
         .map(Json)
         .map_err(api_error)
 }
@@ -168,6 +155,7 @@ async fn complete_record(
     let note = body.map(|Json(body)| body.note).unwrap_or_default();
     store(&state)
         .complete(&record_id, by_user(&note, "marked done", now), now)
+        .await
         .map(Json)
         .map_err(api_error)
 }
@@ -181,6 +169,7 @@ async fn dismiss_record(
     let note = body.map(|Json(body)| body.note).unwrap_or_default();
     store(&state)
         .dismiss(&record_id, by_user(&note, "dismissed", now), now)
+        .await
         .map(Json)
         .map_err(api_error)
 }

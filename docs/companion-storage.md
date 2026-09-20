@@ -87,9 +87,14 @@ or memories it points at.
 
 Bounds are enforced on every write: 50 steps, 20 blockers, 40 resources,
 16 computers, 100 provenance entries (the creating entry is always kept),
-300 characters per step, blocker, note, or next step, and 64 KiB per file.
-A file that is larger, is not JSON, or breaks an invariant is skipped and
-surfaced as an error by the listing API; it is never deleted or rewritten.
+300 characters per step, blocker, note, or next step, and 1 MiB per file.
+No record built within those caps can reach the file cap, so a record that
+has used every cap can still be completed or dismissed. A file that is
+larger, is not JSON, or breaks an invariant is skipped and surfaced as an
+error by the listing API; it is never deleted or rewritten. Every write is
+a read-modify-write of one file under one lock for the directory, shared by
+the API and the chat tool, and lands through a uniquely named temp file
+and a rename, so a read never overwrites a write that landed in between.
 
 Records are written only by explicit task activity: the
 `task_continuity_update` chat tool, which the companion calls while doing

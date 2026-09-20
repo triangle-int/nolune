@@ -1063,6 +1063,7 @@ async fn continuity_api_lists_inspects_updates_completes_and_dismisses_records()
             by("asked in chat"),
             1_767_603_600,
         )
+        .await
         .unwrap();
     let taxes = store
         .create(
@@ -1072,9 +1073,11 @@ async fn continuity_api_lists_inspects_updates_completes_and_dismisses_records()
             by("asked in chat"),
             1_767_603_601,
         )
+        .await
         .unwrap();
     store
         .complete(&taxes.id, by("done last week"), 1_767_603_602)
+        .await
         .unwrap();
 
     let (status, listing) = h.json(Method::GET, &api("continuity"), None).await;
