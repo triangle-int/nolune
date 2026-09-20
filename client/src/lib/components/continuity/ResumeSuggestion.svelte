@@ -97,7 +97,8 @@
 {/if}
 
 <style>
-	.resume-slot { flex-shrink: 0; padding: 12px 24px 0; max-width: 100%; }
+	/* Above the moon scene, which is drawn behind the companion views. */
+	.resume-slot { position: relative; z-index: 1; flex-shrink: 0; padding: 12px 24px 0; max-width: 100%; }
 	.resume-slot > :global(.resume) { max-width: 720px; margin: 0 auto; }
 	@media (max-width: 720px) { .resume-slot { padding: 12px 16px 0; } }
 </style>
