@@ -213,7 +213,11 @@ fn summary(commitment: &Commitment, tz: chrono_tz::Tz) -> serde_json::Value {
                 format!("observed {event}")
             }
         };
-        serde_json::json!({"at": format_at(check.at, tz), "outcome": outcome})
+        serde_json::json!({
+            "at": format_at(check.at, tz),
+            "outcome": outcome,
+            "pending_event": check.pending_event,
+        })
     });
     serde_json::json!({
         "id": commitment.id,

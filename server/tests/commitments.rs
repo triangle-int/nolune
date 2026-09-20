@@ -46,6 +46,13 @@ fn commitment_checks_run_through_the_scheduler_tick_and_tools_stay_in_chat() {
     if !scheduler.contains("commitment_evaluator::tick") {
         violations.push("scheduler::check_and_trigger must tick the commitment evaluator".into());
     }
+    // A retry of a commitment check is executed by the evaluator, never left as an orphaned run.
+    let activity = fs::read_to_string(repo.join("server/src/routes/activity.rs")).unwrap();
+    if !activity.contains("commitment_evaluator::retry") {
+        violations.push(
+            "routes/activity.rs must hand a commitment retry to commitment_evaluator::retry".into(),
+        );
+    }
     // A connected computer is a named event commitments can wait on.
     let machines = fs::read_to_string(repo.join("server/src/routes/machine_agents.rs")).unwrap();
     if !machines.contains("observe_event") {
@@ -89,6 +96,8 @@ fn commitments_are_documented() {
         "commitment_complete",
         "commitment_snooze",
         "commitment_cancel",
+        "pending_event",
+        "activity/{id}/retry",
     ] {
         assert!(
             doc.contains(required),

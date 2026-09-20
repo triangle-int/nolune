@@ -71,7 +71,7 @@ asked for that time) but still cannot message the user during quiet hours.
 | `GET /api/instances/companion/activity?limit=` | newest records first |
 | `GET /api/instances/companion/activity/{id}` | one record |
 | `POST /api/instances/companion/activity/{id}/cancel` | signal a running run; `409` when nothing is running |
-| `POST /api/instances/companion/activity/{id}/retry` | new attempt of a retryable failure or a cancelled run; `409` otherwise |
+| `POST /api/instances/companion/activity/{id}/retry` | new attempt of a retryable failure or a cancelled run; `409` otherwise. A commitment check is retried through its evaluator (#85, below) |
 | `GET/PUT /api/instances/companion/proactive` | policy |
 
 ## Routines
@@ -151,7 +151,7 @@ file. A record that no longer parses is logged and skipped, not hidden.
 | `provenance` | `manual`, `chat` (`chat_id`, `message_id`), or `run` (`run_id`) |
 | `completion` | evidence it was done: `confirmed_by_user`, `summary`, `run_id`, `at` |
 | `snoozed_until`, `snooze_count` | not surfaced before this moment; how often it was deferred |
-| `last_check` | what the last evaluation concluded (`unchanged`, `triggered`, `failed` with `retryable`, or `observed` with the event) and the run it produced |
+| `last_check` | what the last evaluation concluded (`unchanged`, `triggered`, `failed` with `retryable`, or `observed` with the event) and the run it produced; a failed or denied check also keeps the observation it was for as `pending_event` |
 
 Status is derived from the record's own fields: a started deadline makes it
 `due` (unless snoozed), an unfinished dependency makes it `blocked`, an unmet
@@ -198,12 +198,15 @@ own: each tick asks the store for the open, unsnoozed commitments whose
 `next_check` has passed and offers each one to the loop with
 `begin(Trigger::Commitment {commitment_id})`, target `companion`, and a
 stated reason of the form `deadline arrived: <promise>`. Admission never
-moves `next_check`; the loop's dedupe key (`commitment:<id>`) is the
-duplicate suppression, so a second tick while a check runs is recorded as
-`skipped/duplicate` and starts nothing, and a restart cannot create a second
-schedule because the record is the only one. A run left `running` by a dead
-process is marked failed on startup like any other, and the record's
-unchanged `next_check` has the next tick check the commitment once.
+moves `next_check`. A commitment whose check is still running (the loop
+reports the run under its dedupe key, `commitment:<id>`) is not offered
+again and nothing is recorded for it, so a check that takes a few minutes
+does not leave a skipped record per tick; the dedupe key stays the backstop,
+and anything else that offers the commitment while its check runs is
+recorded as `skipped/duplicate` and starts nothing. A restart cannot create
+a second schedule because the record is the only one. A run left `running`
+by a dead process is marked failed on startup like any other, and the
+record's unchanged `next_check` has the next tick check the commitment once.
 
 Checks are held, not spent, when contact is not possible: while `enabled`
 is off, during quiet hours, and once the rolling `daily_reach_out_budget` is
@@ -234,12 +237,31 @@ commitment: only the user does that, in a conversation or through the API.
 When the check ends, what it concluded is written on the record as
 `last_check` (`triggered`, `unchanged` for a cancelled run, or `failed` with
 `retryable: true` and the error) together with the run id, so a failed
-evaluation stays inspectable on both the commitment and the activity record
-and can be retried through `POST .../activity/{id}/retry`. `next_check`
-moves to the earliest of the record's own next moment (a snooze end, a
-timed wait, the deadline start) and, for a failure or a denied reach-out,
-`now + 600`; a deadline with nothing later is therefore checked exactly
-once.
+evaluation stays inspectable on both the commitment and the activity record.
+`next_check` moves to the earliest of the record's own next moment (a snooze
+end, a timed wait, the deadline start) and, for a failure or a denied
+reach-out, `now + 600`; a deadline with nothing later is therefore checked
+exactly once. A failed check, or one whose reach-out was denied, keeps the
+observation it was for as `last_check.pending_event`, so the next look still
+states the event or the completed dependency as its condition instead of
+"nothing else changed"; a check that goes through clears it.
+
+A failed or cancelled check can be retried at once through
+`POST .../activity/{id}/retry` (the Activity tab's Retry). The route hands a
+commitment run to the evaluator (`commitment_evaluator::retry`): the loop
+admits a linked attempt (`retry_of`, `attempt` + 1) and the evaluator runs it
+the way a tick would, so the check-in runs with the same commitment and
+condition and its `reach_out` still goes through `approve_side_effect`; the
+route never leaves a commitment run behind for nobody to finish. The retry's
+conclusion is written on the record like any other check and its
+`next_check` replaces the backoff look, so a retried failure is checked
+exactly once more. The retry is refused (`409`, nothing admitted, the record
+keeps its backoff) for a run that is not retryable, a commitment that is
+gone or closed, and while the companion is not onboarded or no background
+model is configured; a retry while a check is already running is recorded
+`skipped/duplicate` like any other. An explicit retry runs during quiet
+hours or with the budget spent, since the user asked, but its message is
+still denied then and the commitment is looked at again after the backoff.
 
 Events are named observations. `machine_connected:<machine_id>` is observed
 when a computer connects: every open commitment waiting on that event stops
@@ -249,7 +271,10 @@ commitment that depended on it and changed status, so an unblocked
 dependent is checked once with the completion as its stated condition. A
 `user_reply` wait is cleared from the conversation (`commitment_update` with
 `clear_wait`). An observation that arrives while a check is running is left
-in place and gets a check of its own.
+in place and gets a check of its own: the store compares, under its writer
+lock, the observation on the record with the `last_check` the check was
+admitted for, and refuses the check's conclusion (`superseded`) when they
+differ, so the observation and the check it asks for stand.
 
 ### Chat tools
 

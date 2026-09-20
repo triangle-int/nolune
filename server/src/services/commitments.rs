@@ -45,6 +45,9 @@ pub enum CommitmentError {
     },
     /// Completion needs explicit user confirmation or recorded evidence.
     EvidenceRequired,
+    /// An observation arrived while the check ran: the observation stands
+    /// and the check's conclusion is not written.
+    Superseded(String),
     Io(String),
 }
 
@@ -56,6 +59,7 @@ impl CommitmentError {
             Self::Invalid(_) => "invalid",
             Self::Closed { .. } => "closed",
             Self::EvidenceRequired => "evidence_required",
+            Self::Superseded(_) => "superseded",
             Self::Io(_) => "storage_error",
         }
     }
@@ -71,6 +75,10 @@ impl std::fmt::Display for CommitmentError {
             }
             Self::EvidenceRequired => f.write_str(
                 "completing a commitment needs the user's confirmation or recorded evidence",
+            ),
+            Self::Superseded(id) => write!(
+                f,
+                "commitment {id} observed an event while the check ran; the observation stands"
             ),
             Self::Io(message) => f.write_str(message),
         }
@@ -347,16 +355,32 @@ impl CommitmentStore {
     /// look is the earliest of the record's own next moment
     /// (`next_check_after`) and `retry_at`, so a failed or held check comes
     /// back without ever pre-empting a snooze end, a timed wait, or a
-    /// deadline. A closed record answers `Closed` and keeps its history.
+    /// deadline. `seen` is the `last_check` the caller read when the check
+    /// was admitted: if the record now holds an observation that is not the
+    /// one seen, one arrived while the check ran, and the write is refused
+    /// with `Superseded` under the writer lock so the observation and the
+    /// check it asks for stand. A closed record answers `Closed` and keeps
+    /// its history.
     pub fn record_check(
         &self,
         id: &str,
         check: Check,
         retry_at: Option<i64>,
         now: i64,
+        seen: Option<&Check>,
     ) -> Result<Commitment, CommitmentError> {
         let _writes = self.write_guard();
         let mut commitment = self.open(id)?;
+        if let Some(
+            current @ Check {
+                outcome: CheckOutcome::Observed { .. },
+                ..
+            },
+        ) = &commitment.last_check
+            && seen != Some(current)
+        {
+            return Err(CommitmentError::Superseded(commitment.id));
+        }
         commitment.last_check = Some(check);
         commitment.next_check = match (commitment.next_check_after(now), retry_at) {
             (Some(own), Some(retry)) => Some(own.min(retry)),
@@ -403,6 +427,7 @@ impl CommitmentStore {
                 event: event.to_owned(),
             },
             run_id: None,
+            pending_event: None,
         });
         commitment.next_check = Some(now);
         commitment.updated_at = now;
@@ -1581,6 +1606,7 @@ mod tests {
                 retryable: true,
             },
             run_id: Some("run_1_abcdef01".into()),
+            pending_event: Some("machine_connected:mac".into()),
         });
         let json = serde_json::to_string(&with_check).unwrap();
         let back: Commitment = serde_json::from_str(&json).unwrap();
@@ -1607,6 +1633,7 @@ mod tests {
             at: T0 + 60,
             outcome: CheckOutcome::Triggered,
             run_id: Some(run.into()),
+            pending_event: None,
         };
 
         // A checked deadline is not looked at again: nothing later is named.
@@ -1620,7 +1647,7 @@ mod tests {
             )
             .unwrap();
         let checked = store
-            .record_check(&due.id, triggered("run_1"), None, T0 + 60)
+            .record_check(&due.id, triggered("run_1"), None, T0 + 60, None)
             .unwrap();
         assert_eq!(checked.last_check, Some(triggered("run_1")));
         assert_eq!(checked.next_check, None, "a deadline is checked once");
@@ -1650,6 +1677,7 @@ mod tests {
                 triggered("run_2"),
                 Some(T0 + 600 + 3600),
                 T0 + 600,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -1665,9 +1693,16 @@ mod tests {
                 retryable: true,
             },
             run_id: Some("run_3".into()),
+            pending_event: None,
         };
         let snoozed = store
-            .record_check(&waiting.id, failed.clone(), Some(T0 + 901 + 600), T0 + 901)
+            .record_check(
+                &waiting.id,
+                failed.clone(),
+                Some(T0 + 901 + 600),
+                T0 + 901,
+                None,
+            )
             .unwrap();
         assert_eq!(snoozed.last_check, Some(failed));
         assert_eq!(
@@ -1677,14 +1712,14 @@ mod tests {
         );
         let plain = store.create(promise("water the plants"), T0).unwrap();
         let retry = store
-            .record_check(&plain.id, triggered("run_4"), Some(T0 + 660), T0 + 60)
+            .record_check(&plain.id, triggered("run_4"), Some(T0 + 660), T0 + 60, None)
             .unwrap();
         assert_eq!(retry.next_check, Some(T0 + 660), "only the retry is left");
 
         // Closed records keep their history.
         store.cancel(&plain.id, T0 + 70).unwrap();
         assert_eq!(
-            store.record_check(&plain.id, triggered("run_5"), None, T0 + 80),
+            store.record_check(&plain.id, triggered("run_5"), None, T0 + 80, None),
             Err(CommitmentError::Closed {
                 id: plain.id.clone(),
                 status: CommitmentStatus::Dismissed
@@ -1695,7 +1730,7 @@ mod tests {
             Some(triggered("run_4"))
         );
         assert_eq!(
-            store.record_check("cmt_missing", triggered("run_6"), None, T0),
+            store.record_check("cmt_missing", triggered("run_6"), None, T0, None),
             Err(CommitmentError::NotFound("cmt_missing".into()))
         );
 
@@ -1760,6 +1795,7 @@ mod tests {
                     event: "machine_connected:mac".into()
                 },
                 run_id: None,
+                pending_event: None,
             })
         );
         assert_eq!(store.get(&on_mac.id, T0 + 10).unwrap(), *seen);
@@ -1802,6 +1838,7 @@ mod tests {
                     event: format!("commitment_completed:{}", export.id)
                 },
                 run_id: None,
+                pending_event: None,
             })
         );
         assert_eq!(
@@ -1812,6 +1849,115 @@ mod tests {
         assert!(
             store.observe_event("", T0 + 40).is_empty(),
             "an empty event name observes nothing"
+        );
+    }
+
+    #[test]
+    fn record_check_leaves_a_fresh_observation_in_place() {
+        let (_ws, store) = harness();
+        let wait_for_mac = || CommitmentPatch {
+            waiting_on: Some(WaitCondition::Event {
+                event: "machine_connected:mac".into(),
+            }),
+            ..Default::default()
+        };
+        let triggered = |at: i64, run: &str| Check {
+            at,
+            outcome: CheckOutcome::Triggered,
+            run_id: Some(run.into()),
+            pending_event: None,
+        };
+        let on_mac = store
+            .create(
+                NewCommitment {
+                    waiting_on: Some(WaitCondition::Event {
+                        event: "machine_connected:mac".into(),
+                    }),
+                    ..promise("finish the export on the mac")
+                },
+                T0,
+            )
+            .unwrap();
+
+        // The check admitted for an observation ends normally when nothing
+        // else arrived: the persisted observation is the one it saw.
+        let seen = store
+            .observe_event("machine_connected:mac", T0 + 10)
+            .remove(0)
+            .last_check;
+        let written = store
+            .record_check(
+                &on_mac.id,
+                triggered(T0 + 20, "run_1"),
+                None,
+                T0 + 20,
+                seen.as_ref(),
+            )
+            .unwrap();
+        assert_eq!(written.last_check, Some(triggered(T0 + 20, "run_1")));
+        assert_eq!(written.next_check, None);
+
+        // An observation that lands while the check runs is decided under the
+        // writer lock: the check's conclusion is refused, the observation and
+        // its `next_check` stand, and nothing is written.
+        store.update(&on_mac.id, wait_for_mac(), T0 + 30).unwrap();
+        let stale = store
+            .observe_event("machine_connected:mac", T0 + 40)
+            .remove(0)
+            .last_check;
+        store.update(&on_mac.id, wait_for_mac(), T0 + 50).unwrap();
+        let fresh = store
+            .observe_event("machine_connected:mac", T0 + 60)
+            .remove(0);
+        assert_eq!(
+            store.record_check(
+                &on_mac.id,
+                triggered(T0 + 70, "run_2"),
+                Some(T0 + 70 + 600),
+                T0 + 70,
+                stale.as_ref(),
+            ),
+            Err(CommitmentError::Superseded(on_mac.id.clone()))
+        );
+        assert_eq!(
+            store.get(&on_mac.id, T0 + 70).unwrap(),
+            fresh,
+            "the fresh observation stands, untouched"
+        );
+        assert_eq!(fresh.next_check, Some(T0 + 60));
+        assert_eq!(
+            store.record_check(&on_mac.id, triggered(T0 + 71, "run_3"), None, T0 + 71, None),
+            Err(CommitmentError::Superseded(on_mac.id.clone())),
+            "a check admitted before any observation is superseded the same way"
+        );
+
+        // The fresh observation's own check writes normally.
+        let done = store
+            .record_check(
+                &on_mac.id,
+                triggered(T0 + 80, "run_4"),
+                None,
+                T0 + 80,
+                fresh.last_check.as_ref(),
+            )
+            .unwrap();
+        assert_eq!(done.last_check, Some(triggered(T0 + 80, "run_4")));
+
+        // Only observations are protected: over any other conclusion a stale
+        // `seen` writes, since the record's own schedule is recomputed anyway.
+        let over_triggered = store
+            .record_check(
+                &on_mac.id,
+                triggered(T0 + 90, "run_5"),
+                None,
+                T0 + 90,
+                stale.as_ref(),
+            )
+            .unwrap();
+        assert_eq!(over_triggered.last_check, Some(triggered(T0 + 90, "run_5")));
+        assert_eq!(
+            CommitmentError::Superseded("cmt_x".into()).code(),
+            "superseded"
         );
     }
 }

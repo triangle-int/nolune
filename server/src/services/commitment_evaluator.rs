@@ -2,16 +2,18 @@
 //!
 //! Every 30 seconds the scheduler tick asks the store which commitments are
 //! due for a check and offers each one to the proactive loop under
-//! `Trigger::Commitment`; the loop's dedupe key is the duplicate
-//! suppression, and the record's `next_check` is the only schedule, so a
-//! restart or a repeated tick can never create a second one. An admitted
-//! check runs the companion check-in with a task that states the commitment
-//! and the exact trigger condition (what changed and why now); `reach_out`
-//! inside it still asks `approve_side_effect`. Checks are held, not spent,
-//! while initiative is off, during quiet hours, or once the attention budget
-//! is used up. What each check concluded is written back on the record, so
-//! a failed evaluation stays inspectable and is looked at again after a
-//! backoff. Callers pass `now` so tests run against a fixed clock.
+//! `Trigger::Commitment`; a commitment whose check is still running is not
+//! offered again (the loop's dedupe key stays the backstop), and the record's
+//! `next_check` is the only schedule, so a restart or a repeated tick can
+//! never create a second one. An admitted check runs the companion check-in
+//! with a task that states the commitment and the exact trigger condition
+//! (what changed and why now); `reach_out` inside it still asks
+//! `approve_side_effect`. Checks are held, not spent, while initiative is
+//! off, during quiet hours, or once the attention budget is used up. What
+//! each check concluded is written back on the record, so a failed
+//! evaluation stays inspectable and is looked at again after a backoff; an
+//! explicit retry from the activity route is admitted as a linked attempt and
+//! executed here. Callers pass `now` so tests run against a fixed clock.
 
 use std::path::Path;
 
@@ -20,7 +22,7 @@ use chrono::{TimeZone, Utc};
 use crate::app::state::AppState;
 use crate::domain::commitment::{Check, CheckOutcome, Commitment, Owner, WaitCondition};
 use crate::domain::proactive::{ProactiveRun, RunOutcome, SideEffect, Target, Trigger};
-use crate::services::commitments::CommitmentStore;
+use crate::services::commitments::{CommitmentError, CommitmentStore};
 use crate::services::companion_routine::{self, Routine};
 use crate::services::proactive::{Admission, ProactiveLoop, RunHandle, outcome_from_trace};
 use crate::services::{companion, llm::LlmBackend};
@@ -57,16 +59,14 @@ pub enum TriggerCondition {
 
 impl TriggerCondition {
     /// Derived from the record as persisted and the clock, most recent
-    /// change first: a pending observation, then a snooze that ended since
-    /// the last check, then a started deadline, then an ended timed wait.
+    /// change first: a pending observation (one the store noted, or one a
+    /// failed or denied check carried forward), then a snooze that ended
+    /// since the last check, then a started deadline, then an ended timed
+    /// wait.
     pub fn for_commitment(commitment: &Commitment, now: i64) -> Self {
-        if let Some(Check {
-            outcome: CheckOutcome::Observed { event },
-            ..
-        }) = &commitment.last_check
-        {
+        if let Some(event) = commitment.last_check.as_ref().and_then(pending_observation) {
             return Self::Observed {
-                event: event.clone(),
+                event: event.to_owned(),
             };
         }
         let last_check_at = commitment.last_check.as_ref().map(|check| check.at);
@@ -131,6 +131,15 @@ impl TriggerCondition {
     }
 }
 
+/// The observation a check still has to act on: the one the store noted on
+/// the record, or the one a failed or denied check carried forward.
+fn pending_observation(check: &Check) -> Option<&str> {
+    match &check.outcome {
+        CheckOutcome::Observed { event } => Some(event),
+        _ => check.pending_event.as_deref(),
+    }
+}
+
 /// One admitted check: the record as it read at admission, the condition,
 /// and the loop's handle. Exactly one of `finish` or `cancel` ends it.
 pub struct CommitmentRun {
@@ -145,6 +154,27 @@ impl CommitmentRun {
     }
 }
 
+impl std::fmt::Debug for CommitmentRun {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CommitmentRun")
+            .field("run_id", &self.id())
+            .field("commitment_id", &self.commitment.id)
+            .field("condition", &self.condition)
+            .finish()
+    }
+}
+
+/// What an explicit retry of a commitment check produced. Both sides are
+/// boxed: the value is handed over once and either record is large.
+#[derive(Debug)]
+pub enum RetryAdmission {
+    /// A linked attempt the evaluator now executes.
+    Admitted(Box<CommitmentRun>),
+    /// The loop refused it (a check is already running, or initiative is
+    /// off); the skip is recorded like any other.
+    Skipped(Box<ProactiveRun>),
+}
+
 #[derive(Clone)]
 pub struct CommitmentEvaluator {
     store: CommitmentStore,
@@ -157,11 +187,13 @@ impl CommitmentEvaluator {
     }
 
     /// One tick: every commitment due for a check is offered to the loop
-    /// once. Admission never moves `next_check`; the loop's dedupe key keeps
-    /// a second tick from starting a second run, and `finish` moves the
-    /// schedule when the check is over. Nothing is offered while initiative
-    /// is off, during quiet hours, or with the attention budget spent: the
-    /// records stay as they are and are picked up when contact is possible.
+    /// once. Admission never moves `next_check`: a commitment whose check is
+    /// still running is not offered again (nothing is recorded for it; the
+    /// loop's dedupe key stays the backstop for a race), and `finish` moves
+    /// the schedule when the check is over. Nothing is offered while
+    /// initiative is off, during quiet hours, or with the attention budget
+    /// spent: the records stay as they are and are picked up when contact is
+    /// possible.
     pub fn admit_due(&self, now: i64) -> Vec<CommitmentRun> {
         let due = self.store.due_for_check(now);
         if due.is_empty() {
@@ -177,16 +209,22 @@ impl CommitmentEvaluator {
         }
         let mut admitted = Vec::new();
         for commitment in due {
+            let trigger = Trigger::Commitment {
+                commitment_id: commitment.id.clone(),
+            };
+            if let Some(running) = self.proactive.running(&trigger) {
+                log::debug!(
+                    "[commitments] {} due, held: check {running} is still running",
+                    commitment.id
+                );
+                continue;
+            }
             let condition = TriggerCondition::for_commitment(&commitment, now);
             let reason = format!("{}: {}", condition.summary(), commitment.promise);
-            match self.proactive.begin_at(
-                Trigger::Commitment {
-                    commitment_id: commitment.id.clone(),
-                },
-                &reason,
-                Target::Companion,
-                now,
-            ) {
+            match self
+                .proactive
+                .begin_at(trigger, &reason, Target::Companion, now)
+            {
                 Admission::Admitted(handle) => admitted.push(CommitmentRun {
                     commitment,
                     condition,
@@ -198,6 +236,48 @@ impl CommitmentEvaluator {
             }
         }
         admitted
+    }
+
+    /// An explicit retry of a failed or cancelled commitment check (the
+    /// activity route): the loop admits it as a linked attempt (`retry_of`,
+    /// `attempt` + 1) and the caller executes it like any other admitted
+    /// check, with the condition the record states now. Refused, writing
+    /// nothing, for a run that is not a commitment check, one that is not
+    /// retryable, and a commitment that is gone or closed. A check already
+    /// running answers the loop's duplicate skip, which is recorded like any
+    /// other.
+    pub fn retry(&self, run_id: &str, now: i64) -> Result<RetryAdmission, String> {
+        let previous = self
+            .proactive
+            .get(run_id)
+            .ok_or_else(|| format!("unknown run {run_id}"))?;
+        let Trigger::Commitment { commitment_id } = &previous.trigger else {
+            return Err(format!("run {run_id} is not a commitment check"));
+        };
+        let commitment = self
+            .store
+            .get(commitment_id, now)
+            .ok_or_else(|| format!("unknown commitment {commitment_id}"))?;
+        if !commitment.is_open() {
+            return Err(format!(
+                "commitment {commitment_id} is already {}",
+                commitment.status.as_str()
+            ));
+        }
+        match self.proactive.retry(run_id, now)? {
+            Admission::Admitted(handle) => {
+                let condition = TriggerCondition::for_commitment(&commitment, now);
+                Ok(RetryAdmission::Admitted(Box::new(CommitmentRun {
+                    commitment,
+                    condition,
+                    handle,
+                })))
+            }
+            Admission::Skipped(run) => {
+                log::info!("[commitments] retry of {run_id} skipped ({:?})", run.status);
+                Ok(RetryAdmission::Skipped(Box::new(run)))
+            }
+        }
     }
 
     /// The check-in's task: the commitment, what changed, and why now.
@@ -285,23 +365,29 @@ impl CommitmentEvaluator {
     /// End an admitted check and write what it concluded on the record. A
     /// failure is recorded `failed` (retryable) on both the run and the
     /// commitment and looked at again after `RETRY_BACKOFF_SECS`; a run whose
-    /// reach-out was denied is looked at again the same way. An observation
-    /// that arrived while the check ran is left in place: it asks for a
-    /// check of its own.
+    /// reach-out was denied is looked at again the same way. Either keeps the
+    /// observation the check was for as `pending_event`, so the next look
+    /// still states it. An observation that arrived while the check ran is
+    /// left in place: it asks for a check of its own.
     pub fn finish(
         &self,
         run: CommitmentRun,
         result: Result<RunOutcome, String>,
         now: i64,
     ) -> ProactiveRun {
-        let (finished, outcome, retry_at) = match result {
+        let observed = match &run.condition {
+            TriggerCondition::Observed { event } => Some(event.clone()),
+            _ => None,
+        };
+        let (finished, outcome, retry_at, pending_event) = match result {
             Ok(outcome) => {
                 let finished = run.handle.complete_at(outcome, now);
                 let denied = finished.approvals.iter().any(|approval| {
                     approval.side_effect == SideEffect::ReachOut && !approval.allowed
                 });
                 let retry_at = denied.then_some(now + RETRY_BACKOFF_SECS);
-                (finished, CheckOutcome::Triggered, retry_at)
+                let pending_event = if denied { observed } else { None };
+                (finished, CheckOutcome::Triggered, retry_at, pending_event)
             }
             Err(error) => {
                 let finished = run.handle.fail_at(&error, true, now);
@@ -309,57 +395,46 @@ impl CommitmentEvaluator {
                     error: error.chars().take(200).collect(),
                     retryable: true,
                 };
-                (finished, outcome, Some(now + RETRY_BACKOFF_SECS))
+                (finished, outcome, Some(now + RETRY_BACKOFF_SECS), observed)
             }
         };
-        self.record(&run.commitment, &finished.id, outcome, retry_at, now);
+        let check = Check {
+            at: now,
+            outcome,
+            run_id: Some(finished.id.clone()),
+            pending_event,
+        };
+        self.record(&run.commitment, check, retry_at, now);
         finished
     }
 
     /// The user cancelled the run: nothing changed for the commitment.
     pub fn cancel(&self, run: CommitmentRun, now: i64) -> ProactiveRun {
         let finished = run.handle.cancel_at(now);
-        self.record(
-            &run.commitment,
-            &finished.id,
-            CheckOutcome::Unchanged,
-            None,
-            now,
-        );
+        let check = Check {
+            at: now,
+            outcome: CheckOutcome::Unchanged,
+            run_id: Some(finished.id.clone()),
+            pending_event: None,
+        };
+        self.record(&run.commitment, check, None, now);
         finished
     }
 
-    fn record(
-        &self,
-        seen: &Commitment,
-        run_id: &str,
-        outcome: CheckOutcome,
-        retry_at: Option<i64>,
-        now: i64,
-    ) {
-        let fresh_observation = self.store.get(&seen.id, now).is_some_and(|current| {
-            matches!(
-                &current.last_check,
-                Some(Check {
-                    outcome: CheckOutcome::Observed { .. },
-                    ..
-                })
-            ) && current.last_check != seen.last_check
-        });
-        if fresh_observation {
-            log::info!(
+    /// Write the check on the record as it read at admission (`seen`). The
+    /// store decides under its writer lock whether an observation arrived in
+    /// the meantime; if one did, the observation stands and asks for a check
+    /// of its own.
+    fn record(&self, seen: &Commitment, check: Check, retry_at: Option<i64>, now: i64) {
+        match self
+            .store
+            .record_check(&seen.id, check, retry_at, now, seen.last_check.as_ref())
+        {
+            Ok(_) => {}
+            Err(CommitmentError::Superseded(_)) => log::info!(
                 "[commitments] {}: an observation arrived during the check; it asks for its own",
                 seen.id
-            );
-            return;
-        }
-        let check = Check {
-            at: now,
-            outcome,
-            run_id: Some(run_id.to_owned()),
-        };
-        match self.store.record_check(&seen.id, check, retry_at, now) {
-            Ok(_) => {}
+            ),
             Err(error) => log::info!("[commitments] {}: check not recorded: {error}", seen.id),
         }
     }
@@ -382,30 +457,76 @@ pub(crate) async fn tick(state: &AppState, now: i64) {
     };
     let evaluator = CommitmentEvaluator::new(state.commitments.clone(), state.proactive.clone());
     for run in evaluator.admit_due(now) {
-        let evaluator = evaluator.clone();
-        let instance_dir = instance_dir.clone();
-        let ws = state.workspace_dir.clone();
-        let events = state.events.clone();
-        let vector_store = state.vector_store.clone();
-        let resources = state.resources.clone();
-        let proactive = state.proactive.clone();
-        let llm = llm.clone();
-        tokio::spawn(async move {
-            run_check_in(
-                evaluator,
-                run,
-                &ws,
-                &instance_dir,
-                &llm,
-                &events,
-                &vector_store,
-                &resources,
-                &proactive,
-                now,
-            )
-            .await;
-        });
+        spawn_check_in(state, evaluator.clone(), run, &instance_dir, &llm, now);
     }
+}
+
+/// An explicit retry from the activity route: the linked attempt is admitted
+/// through the evaluator and executed here, never left as a run nobody
+/// finishes. Refused when the companion is not onboarded or no background
+/// model is configured, since the check could not run; nothing is admitted
+/// then and the record keeps its own schedule.
+pub(crate) async fn retry(
+    state: &AppState,
+    run_id: &str,
+    now: i64,
+) -> Result<ProactiveRun, String> {
+    let instance_dir = companion::companion_dir(&state.workspace_dir);
+    if !instance_dir.join("soul.md").exists() {
+        return Err("the companion is not onboarded yet; the check cannot run".into());
+    }
+    let llm = state
+        .background_llm
+        .read()
+        .await
+        .clone()
+        .ok_or("no background model preset is configured; the check cannot run")?;
+    let evaluator = CommitmentEvaluator::new(state.commitments.clone(), state.proactive.clone());
+    match evaluator.retry(run_id, now)? {
+        RetryAdmission::Admitted(run) => {
+            let record = state
+                .proactive
+                .get(run.id())
+                .ok_or_else(|| "run vanished".to_owned())?;
+            spawn_check_in(state, evaluator, *run, &instance_dir, &llm, now);
+            Ok(record)
+        }
+        RetryAdmission::Skipped(run) => Ok(*run),
+    }
+}
+
+/// Run an admitted check's check-in in the background with the run's
+/// cancellation token.
+fn spawn_check_in(
+    state: &AppState,
+    evaluator: CommitmentEvaluator,
+    run: CommitmentRun,
+    instance_dir: &Path,
+    llm: &LlmBackend,
+    now: i64,
+) {
+    let instance_dir = instance_dir.to_path_buf();
+    let ws = state.workspace_dir.clone();
+    let events = state.events.clone();
+    let vector_store = state.vector_store.clone();
+    let resources = state.resources.clone();
+    let proactive = state.proactive.clone();
+    let llm = llm.clone();
+    tokio::spawn(async move {
+        run_check_in(
+            evaluator,
+            run,
+            &ws,
+            &instance_dir,
+            &llm,
+            &events,
+            &vector_store,
+            &resources,
+            &proactive,
+            now,
+        )
+        .await;
+    });
 }
 
 /// One admitted check: the companion check-in with the commitment as its task.
@@ -600,15 +721,41 @@ mod tests {
 
         let first = one(h.evaluator.admit_due(T0 + 60));
         assert_eq!(first.commitment.id, draft.id);
-        let second = h.evaluator.admit_due(T0 + 60);
-        assert!(second.is_empty(), "the loop suppresses the duplicate");
+        let trigger = Trigger::Commitment {
+            commitment_id: draft.id.clone(),
+        };
+        assert_eq!(
+            h.proactive.running(&trigger),
+            Some(first.id().to_owned()),
+            "the check runs under the commitment's dedupe key"
+        );
+        for tick in [T0 + 60, T0 + 90, T0 + 120] {
+            assert!(
+                h.evaluator.admit_due(tick).is_empty(),
+                "a running check is not offered again at {tick}"
+            );
+        }
+        assert_eq!(
+            h.commitment_runs().len(),
+            1,
+            "a tick during a running check records nothing"
+        );
+        assert_eq!(
+            h.store.get(&draft.id, T0 + 60).unwrap().next_check,
+            Some(T0 + 60),
+            "admission never moves the schedule; the running check is the duplicate suppression"
+        );
 
-        let runs = h.commitment_runs();
-        assert_eq!(runs.len(), 2, "the skip is recorded, not hidden");
-        let skipped = runs
-            .iter()
-            .find(|run| run.id != first.id())
-            .expect("the second tick's record");
+        // The loop's dedupe key stays the backstop for anything else that
+        // offers the same commitment while its check runs.
+        let Admission::Skipped(skipped) = h.proactive.begin_at(
+            trigger.clone(),
+            "deadline arrived: send the draft",
+            Target::Companion,
+            T0 + 60,
+        ) else {
+            panic!("the dedupe key must refuse a second run");
+        };
         assert_eq!(
             skipped.status,
             RunStatus::Skipped {
@@ -622,16 +769,356 @@ mod tests {
             format!("commitment:{}", draft.id),
             "one key per commitment"
         );
-        assert_eq!(
-            h.store.get(&draft.id, T0 + 60).unwrap().next_check,
-            Some(T0 + 60),
-            "admission never moves the schedule; the loop owns duplicate suppression"
-        );
 
         h.evaluator
             .finish(first, Ok(RunOutcome::default()), T0 + 90);
+        assert_eq!(h.proactive.running(&trigger), None);
         assert!(h.evaluator.admit_due(T0 + 90).is_empty());
         assert_eq!(h.commitment_runs().len(), 2);
+    }
+
+    #[test]
+    fn a_retry_from_the_activity_route_makes_exactly_one_further_check() {
+        let h = Harness::new();
+        let call = h
+            .store
+            .create(deadline_at("call the dentist", T0 + 60), T0)
+            .unwrap();
+        let run = one(h.evaluator.admit_due(T0 + 60));
+        let failed = h
+            .evaluator
+            .finish(run, Err("provider offline".into()), T0 + 65);
+        assert_eq!(
+            h.store.get(&call.id, T0 + 65).unwrap().next_check,
+            Some(T0 + 65 + RETRY_BACKOFF_SECS)
+        );
+
+        // The route hands a commitment retry to the evaluator: a linked
+        // attempt that the evaluator executes, never an orphaned run.
+        let retried = match h.evaluator.retry(&failed.id, T0 + 70) {
+            Ok(RetryAdmission::Admitted(run)) => *run,
+            Ok(RetryAdmission::Skipped(run)) => panic!("unexpectedly skipped: {:?}", run.status),
+            Err(error) => panic!("a failed evaluation must be retryable: {error}"),
+        };
+        assert_eq!(retried.commitment.id, call.id);
+        assert_eq!(
+            retried.condition,
+            TriggerCondition::DeadlineArrived { at: T0 + 60 },
+            "the retry states the same condition"
+        );
+        let record = h.proactive.get(retried.id()).unwrap();
+        assert_eq!(record.attempt, 2);
+        assert_eq!(record.retry_of.as_deref(), Some(failed.id.as_str()));
+        assert_eq!(record.status, RunStatus::Running);
+        assert_eq!(
+            record.trigger,
+            Trigger::Commitment {
+                commitment_id: call.id.clone()
+            }
+        );
+        assert!(
+            h.evaluator
+                .check_in_task(&retried, chrono_tz::UTC, T0 + 70)
+                .contains("its deadline arrived at Monday, January 5, 2026 09:01 UTC")
+        );
+
+        // While the retry runs, no tick offers the commitment again or records
+        // anything, and a second retry is the loop's duplicate.
+        for tick in (T0 + 70..=T0 + 700).step_by(30) {
+            assert!(h.evaluator.admit_due(tick).is_empty(), "at {tick}");
+        }
+        assert_eq!(h.commitment_runs().len(), 2);
+        match h.evaluator.retry(&failed.id, T0 + 80) {
+            Ok(RetryAdmission::Skipped(run)) => assert_eq!(
+                run.status,
+                RunStatus::Skipped {
+                    reason: SkipReason::Duplicate {
+                        of: retried.id().to_owned()
+                    }
+                }
+            ),
+            other => panic!("expected the duplicate to be skipped: {:?}", other.err()),
+        }
+        assert_eq!(h.commitment_runs().len(), 3);
+
+        let done = h
+            .evaluator
+            .finish(retried, Ok(RunOutcome::default()), T0 + 90);
+        assert_eq!(done.status, RunStatus::Completed);
+        let after = h.store.get(&call.id, T0 + 90).unwrap();
+        assert_eq!(
+            after.last_check,
+            Some(Check {
+                at: T0 + 90,
+                outcome: CheckOutcome::Triggered,
+                run_id: Some(done.id.clone()),
+                pending_event: None,
+            })
+        );
+        assert_eq!(
+            after.next_check, None,
+            "the retry replaces the backoff look"
+        );
+        for tick in [T0 + 91, T0 + 665, T0 + 700, T0 + 86_400] {
+            assert!(h.evaluator.admit_due(tick).is_empty(), "at {tick}");
+        }
+        let completed = h
+            .commitment_runs()
+            .into_iter()
+            .filter(|run| run.status == RunStatus::Completed)
+            .count();
+        assert_eq!(completed, 1, "exactly one further check");
+        assert_eq!(h.commitment_runs().len(), 3);
+
+        // Refusals write nothing: a completed run, a run that is not a
+        // commitment check, and a closed commitment.
+        assert!(h.evaluator.retry(&done.id, T0 + 100).is_err());
+        let Admission::Admitted(heartbeat) = h.proactive.begin_at(
+            Trigger::Heartbeat {
+                agent: "companion".into(),
+            },
+            "check-in",
+            Target::Companion,
+            T0 + 100,
+        ) else {
+            panic!("admitted");
+        };
+        let heartbeat = heartbeat.fail_at("provider offline", true, T0 + 101);
+        let error = h.evaluator.retry(&heartbeat.id, T0 + 102).unwrap_err();
+        assert!(error.contains("not a commitment"), "{error}");
+        h.store.cancel(&call.id, T0 + 110).unwrap();
+        let error = h.evaluator.retry(&failed.id, T0 + 111).unwrap_err();
+        assert!(error.contains("dismissed"), "{error}");
+        assert_eq!(h.commitment_runs().len(), 3, "refusals write nothing");
+        assert_eq!(h.proactive.list(usize::MAX).len(), 4);
+    }
+
+    #[test]
+    fn an_orphaned_run_holds_the_commitment_without_a_write_loop() {
+        let h = Harness::new();
+        let call = h
+            .store
+            .create(deadline_at("call the dentist", T0 + 60), T0)
+            .unwrap();
+        let run = one(h.evaluator.admit_due(T0 + 60));
+        let failed = h
+            .evaluator
+            .finish(run, Err("provider offline".into()), T0 + 65);
+
+        // A retry admitted straight through the loop and never executed
+        // (what the activity route used to do): the key stays taken.
+        let Admission::Admitted(orphan) = h.proactive.retry(&failed.id, T0 + 70).unwrap() else {
+            panic!("admitted");
+        };
+        let orphan_id = orphan.id().to_owned();
+        std::mem::forget(orphan);
+
+        for tick in (T0 + 65 + RETRY_BACKOFF_SECS..).step_by(30).take(20) {
+            assert!(h.evaluator.admit_due(tick).is_empty(), "at {tick}");
+        }
+        assert_eq!(
+            h.commitment_runs().len(),
+            2,
+            "held, not littered: no skipped record per tick"
+        );
+        assert_eq!(
+            h.store.get(&call.id, T0 + 2000).unwrap().next_check,
+            Some(T0 + 65 + RETRY_BACKOFF_SECS),
+            "the record is untouched"
+        );
+
+        // A restart recovers the orphan and the check is made once.
+        let h2 = h.restart();
+        assert_eq!(h2.proactive.recover_on_restart(T0 + 2000), 1);
+        assert!(matches!(
+            h2.proactive.get(&orphan_id).unwrap().status,
+            RunStatus::Failed {
+                retryable: true,
+                ..
+            }
+        ));
+        let run = one(h2.evaluator.admit_due(T0 + 2000));
+        assert_eq!(run.commitment.id, call.id);
+        h2.evaluator
+            .finish(run, Ok(RunOutcome::default()), T0 + 2010);
+        assert!(h2.evaluator.admit_due(T0 + 3000).is_empty());
+        let completed = h2
+            .commitment_runs()
+            .into_iter()
+            .filter(|run| run.status == RunStatus::Completed)
+            .count();
+        assert_eq!(completed, 1);
+        assert_eq!(h2.commitment_runs().len(), 3);
+    }
+
+    #[test]
+    fn a_failed_or_denied_check_keeps_the_observation_as_its_condition() {
+        let h = Harness::new();
+        let on_mac = h
+            .store
+            .create(
+                NewCommitment {
+                    waiting_on: Some(WaitCondition::Event {
+                        event: machine_connected_event("mac"),
+                    }),
+                    ..promise("resume the photo export on the mac")
+                },
+                T0,
+            )
+            .unwrap();
+        assert_eq!(
+            h.store
+                .observe_event(&machine_connected_event("mac"), T0 + 10)
+                .len(),
+            1
+        );
+        let run = one(h.evaluator.admit_due(T0 + 10));
+        assert_eq!(
+            run.condition,
+            TriggerCondition::Observed {
+                event: "machine_connected:mac".into()
+            }
+        );
+        let failed = h
+            .evaluator
+            .finish(run, Err("provider offline".into()), T0 + 15);
+        let after = h.store.get(&on_mac.id, T0 + 15).unwrap();
+        assert_eq!(
+            after.last_check,
+            Some(Check {
+                at: T0 + 15,
+                outcome: CheckOutcome::Failed {
+                    error: "provider offline".into(),
+                    retryable: true,
+                },
+                run_id: Some(failed.id.clone()),
+                pending_event: Some("machine_connected:mac".into()),
+            }),
+            "the failure is inspectable and the observation is kept"
+        );
+        assert_eq!(after.next_check, Some(T0 + 15 + RETRY_BACKOFF_SECS));
+
+        // The explicit retry states the event, and so does the backoff look
+        // after the retry fails as well.
+        let retried = match h.evaluator.retry(&failed.id, T0 + 20) {
+            Ok(RetryAdmission::Admitted(run)) => *run,
+            other => panic!("retryable: {:?}", other.err()),
+        };
+        assert_eq!(
+            retried.condition,
+            TriggerCondition::Observed {
+                event: "machine_connected:mac".into()
+            }
+        );
+        h.evaluator
+            .finish(retried, Err("provider offline".into()), T0 + 25);
+        let again = one(h.evaluator.admit_due(T0 + 25 + RETRY_BACKOFF_SECS));
+        assert_eq!(
+            again.condition,
+            TriggerCondition::Observed {
+                event: "machine_connected:mac".into()
+            }
+        );
+        let task = h
+            .evaluator
+            .check_in_task(&again, chrono_tz::UTC, T0 + 25 + RETRY_BACKOFF_SECS);
+        assert!(
+            task.contains("the event it waited for was observed: machine_connected:mac"),
+            "{task}"
+        );
+        assert!(!task.contains("nothing else changed"), "{task}");
+        let done = h.evaluator.finish(
+            again,
+            Ok(RunOutcome::default()),
+            T0 + 30 + RETRY_BACKOFF_SECS,
+        );
+        let settled = h.store.get(&on_mac.id, T0 + 7200).unwrap();
+        assert_eq!(
+            settled.last_check,
+            Some(Check {
+                at: T0 + 30 + RETRY_BACKOFF_SECS,
+                outcome: CheckOutcome::Triggered,
+                run_id: Some(done.id),
+                pending_event: None,
+            }),
+            "a check that went through consumes the observation"
+        );
+        assert_eq!(settled.next_check, None);
+        assert!(h.evaluator.admit_due(T0 + 7200).is_empty());
+
+        // A completed dependency whose check could not reach out keeps the
+        // completion as its condition until a check goes through.
+        fs::write(
+            h.instance_dir().join("project_state.json"),
+            r#"{"timezone":"Asia/Tokyo"}"#,
+        )
+        .unwrap();
+        h.proactive
+            .set_policy(&ProactivePolicy {
+                quiet_hours: Some(QuietHours {
+                    start_hour: 22,
+                    end_hour: 7,
+                }),
+                ..ProactivePolicy::default()
+            })
+            .unwrap();
+        let export = h.store.create(promise("finish the export"), T0).unwrap();
+        let announce = h
+            .store
+            .create(
+                NewCommitment {
+                    dependencies: vec![export.id.clone()],
+                    ..promise("tell them the export is ready")
+                },
+                T0 + 1,
+            )
+            .unwrap();
+        h.store
+            .complete(&export.id, confirmed(), T0 + 40, |_| true)
+            .unwrap();
+        let run = one(h.evaluator.admit_due(T0 + 40));
+        assert_eq!(run.commitment.id, announce.id);
+        let night = T0 + 5 * 3600;
+        assert_eq!(
+            h.proactive
+                .approve_side_effect(Some(run.id()), SideEffect::ReachOut, night),
+            Err(Denied::QuietHours)
+        );
+        let held = h
+            .evaluator
+            .finish(run, Ok(RunOutcome::default()), night + 1);
+        let after = h.store.get(&announce.id, night + 1).unwrap();
+        assert_eq!(
+            after.last_check,
+            Some(Check {
+                at: night + 1,
+                outcome: CheckOutcome::Triggered,
+                run_id: Some(held.id),
+                pending_event: Some(dependency_completed_event(&export.id)),
+            })
+        );
+        assert_eq!(after.next_check, Some(night + 1 + RETRY_BACKOFF_SECS));
+        let morning = T0 + 13 * 3600;
+        let again = one(h.evaluator.admit_due(morning));
+        assert_eq!(
+            again.condition,
+            TriggerCondition::Observed {
+                event: dependency_completed_event(&export.id)
+            }
+        );
+        let task = h.evaluator.check_in_task(&again, chrono_tz::UTC, morning);
+        assert!(
+            task.contains(&format!(
+                "the commitment it depended on ({}) was completed: \"finish the export\"",
+                export.id
+            )),
+            "{task}"
+        );
+        h.evaluator
+            .finish(again, Ok(RunOutcome::default()), morning + 10);
+        let settled = h.store.get(&announce.id, morning + 10).unwrap();
+        assert_eq!(settled.last_check.as_ref().unwrap().pending_event, None);
+        assert_eq!(settled.next_check, None);
     }
 
     #[test]
@@ -693,6 +1180,7 @@ mod tests {
                 at: T0 + 75,
                 outcome: CheckOutcome::Triggered,
                 run_id: Some(finished.id.clone()),
+                pending_event: None,
             })
         );
         assert_eq!(after.next_check, None, "a deadline is checked exactly once");
@@ -894,6 +1382,7 @@ mod tests {
                     event: "machine_connected:mac".into()
                 },
                 run_id: None,
+                pending_event: None,
             }),
             "the fresh observation is kept"
         );
@@ -906,11 +1395,12 @@ mod tests {
             .into_iter()
             .filter(|run| run.status == RunStatus::Completed)
             .count();
+        assert_eq!(completed, 2, "one check per observation");
         assert_eq!(
-            completed, 2,
-            "one check per observation, plus one recorded skip"
+            h.commitment_runs().len(),
+            2,
+            "the tick during the first check recorded nothing"
         );
-        assert_eq!(h.commitment_runs().len(), 3);
     }
 
     #[test]
@@ -943,6 +1433,7 @@ mod tests {
                     retryable: true,
                 },
                 run_id: Some(run_id.clone()),
+                pending_event: None,
             }),
             "the failure is inspectable on the record"
         );
@@ -1193,6 +1684,7 @@ mod tests {
                 at: T0 + 610,
                 outcome: CheckOutcome::Unchanged,
                 run_id: Some(cancelled.id.clone()),
+                pending_event: None,
             })
         );
         assert_eq!(after.next_check, None);

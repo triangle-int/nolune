@@ -229,6 +229,13 @@ impl ProactiveLoop {
         })
     }
 
+    /// The id of the run executing under this trigger's dedupe key right
+    /// now, if any: a caller that owns a schedule of its own (the commitment
+    /// evaluator) can hold instead of offering a duplicate.
+    pub fn running(&self, trigger: &Trigger) -> Option<String> {
+        self.active_id(&trigger.dedupe_key())
+    }
+
     fn active_id(&self, dedupe_key: &str) -> Option<String> {
         self.active
             .lock()

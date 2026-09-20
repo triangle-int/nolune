@@ -194,6 +194,12 @@ pub struct Check {
     /// The activity record the check produced, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
+    /// The observation this check was asked for and did not act on: a check
+    /// that failed, or whose reach-out was denied, carries the event forward
+    /// so the next evaluation still states it as the trigger condition. Gone
+    /// once a check goes through.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_event: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
