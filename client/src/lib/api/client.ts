@@ -24,6 +24,10 @@ import type {
 	HandoffAccepted,
 	HandoffCard,
 	HandoffListing,
+	ResumeOutcome,
+	ResumePolicyEdit,
+	ResumeRitualPolicy,
+	ResumeStatus,
 	UpdateLlmRequest,
 	MemoryEntry,
 	MemoryFlags,
@@ -739,6 +743,65 @@ export function keepHandoff(slug: string, recordId: string): Promise<HandoffCard
 /** Dismiss: stop offering the card until explicit work updates the record; the record stays resumable. */
 export function dismissHandoff(slug: string, recordId: string): Promise<HandoffCard> {
 	return json(`/api/instances/${encodeURIComponent(slug)}/continuity/${encodeURIComponent(recordId)}/handoff/dismiss`, { method: "POST" });
+}
+
+/** Resume my work (#83): the ritual's policy and its one suggestion; continuation goes through the handoff card. */
+export function fetchResume(slug: string): Promise<ResumeStatus> {
+	return json(`/api/instances/${encodeURIComponent(slug)}/resume`);
+}
+
+export function updateResumePolicy(slug: string, edit: ResumePolicyEdit): Promise<ResumeRitualPolicy> {
+	return json(`/api/instances/${encodeURIComponent(slug)}/resume`, {
+		method: "PUT",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(edit),
+	});
+}
+
+export class ResumeDisabled extends Error {
+	constructor() {
+		super("Resume my work is off");
+		this.name = "ResumeDisabled";
+	}
+}
+
+/** "Resume my work": an explicit request; throws `ResumeDisabled` while the ritual is off. */
+export async function invokeResume(slug: string): Promise<ResumeOutcome> {
+	const res = await authedFetch(`/api/instances/${encodeURIComponent(slug)}/resume`, { method: "POST" });
+	if (res.status === 401) throw new AuthError();
+	if (res.status === 409) throw new ResumeDisabled();
+	if (!res.ok) throw new Error(await res.text().catch(() => res.statusText));
+	return res.json();
+}
+
+/** Nolune was opened or brought back: a suggestion only after the configured break. */
+export function resumeOpened(slug: string): Promise<ResumeOutcome> {
+	return json(`/api/instances/${encodeURIComponent(slug)}/resume/opened`, { method: "POST" });
+}
+
+/** "Not now": drops the suggestion and starts the cooldown. */
+export async function refuseResume(slug: string): Promise<void> {
+	const res = await authedFetch(`/api/instances/${encodeURIComponent(slug)}/resume/refuse`, { method: "POST" });
+	if (res.status === 401) throw new AuthError();
+	if (!res.ok) throw new Error(await res.text().catch(() => res.statusText));
+}
+
+/** Snooze until a unix time, or `null` to end the snooze. */
+export function snoozeResume(slug: string, until: number | null): Promise<ResumeRitualPolicy> {
+	return json(`/api/instances/${encodeURIComponent(slug)}/resume/snooze`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ until }),
+	});
+}
+
+/** Never suggest this record again; the record itself is untouched. */
+export function dismissResume(slug: string, recordId: string): Promise<ResumeRitualPolicy> {
+	return json(`/api/instances/${encodeURIComponent(slug)}/resume/dismiss`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ record_id: recordId }),
+	});
 }
 
 export function fetchMachines(slug: string): Promise<{ machines: MachineInfo[] }> {
