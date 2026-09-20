@@ -26,6 +26,10 @@ import type {
 	HandoffListing,
 	UpdateLlmRequest,
 	MemoryEntry,
+	MemoryFlags,
+	MemoryReceipt,
+	CorrectionLedger,
+	CorrectionResponse,
 	UploadMeta,
 	MachineInfo,
 } from "./types.js";
@@ -816,6 +820,62 @@ export async function deleteMemoryFile(slug: string, path: string): Promise<void
 	const res = await authedFetch(`/api/instances/${encodeURIComponent(slug)}/memory/${encodedMemoryPath(path)}`, { method: 'DELETE' });
 	if (res.status === 401) throw new AuthError();
 	if (!res.ok) throw new Error(await res.text().catch(() => res.statusText));
+}
+
+// ---------------------------------------------------------------------------
+// Memory receipts and corrections (#84). Every request is scoped to the
+// current companion: the server only ever answers for `slug`'s own files.
+// ---------------------------------------------------------------------------
+
+/** Every receipt of one chat, keyed by assistant message id on the server. */
+export function fetchMemoryReceipts(slug: string, chatId: string): Promise<MemoryReceipt[]> {
+	return json(`/api/instances/${encodeURIComponent(slug)}/${encodeURIComponent(chatId)}/receipts`);
+}
+
+/** One receipt; `null` when the reply predates receipts. Deleted sources come back as `missing`. */
+export async function fetchMemoryReceipt(slug: string, chatId: string, messageId: string): Promise<MemoryReceipt | null> {
+	const res = await authedFetch(`/api/instances/${encodeURIComponent(slug)}/${encodeURIComponent(chatId)}/receipts/${encodeURIComponent(messageId)}`);
+	if (res.status === 401) throw new AuthError();
+	if (res.status === 404) return null;
+	if (!res.ok) throw new Error(await res.text().catch(() => res.statusText));
+	return res.json();
+}
+
+/**
+ * The user's own statement of what a memory should say. A 409 is not an
+ * error: it carries both statements for the user to choose between.
+ */
+export async function correctMemoryFile(slug: string, path: string, content: string): Promise<CorrectionResponse> {
+	const res = await authedFetch(`/api/instances/${encodeURIComponent(slug)}/memory/${encodedMemoryPath(path)}`, {
+		method: "PUT",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ content }),
+	});
+	if (res.status === 401) throw new AuthError();
+	if (!res.ok && res.status !== 409) throw new Error(await res.text().catch(() => res.statusText));
+	return res.json();
+}
+
+/** Pin and/or exclude a text memory; a flag left out is unchanged. */
+export function setMemoryFlags(slug: string, path: string, flags: Partial<MemoryFlags>): Promise<MemoryFlags & { path: string }> {
+	return json(`/api/instances/${encodeURIComponent(slug)}/memory/${encodedMemoryPath(path)}`, {
+		method: "PATCH",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(flags),
+	});
+}
+
+export function fetchMemoryCorrections(slug: string): Promise<CorrectionLedger> {
+	return json(`/api/instances/${encodeURIComponent(slug)}/memory-corrections`);
+}
+
+/** Settle a `needs_resolution` conflict by keeping the current or the proposed statement. */
+export function resolveMemoryCorrection(slug: string, conflictId: string, keep: "current" | "proposed"): Promise<void> {
+	return json(`/api/instances/${encodeURIComponent(slug)}/memory-corrections/${encodeURIComponent(conflictId)}/resolve`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ keep }),
+	}).then(() => {});
 }
 
 export function fetchDrops(slug: string): Promise<Drop[]> {

@@ -1,12 +1,13 @@
 <script lang="ts">
 	import { modelShortLabel } from "$lib/models/presets.js";
 	import { resourceMedia, resourceProse, prepareResourceHtml } from "$lib/api/resource-media.js";
-	import type { ChatMessage } from "$lib/api/types.js";
+	import type { ChatMessage, RecalledMemory } from "$lib/api/types.js";
 	import { uploadFileUrl } from "$lib/api/client.js";
 	import { linkFileName } from "$lib/api/file-names.js";
 	import { openFile } from "$lib/stores/fileviewer.svelte.js";
 	import Message from "$lib/components/ai-elements/message/core/message.svelte";
 	import MessageContent from "$lib/components/ai-elements/message/core/message-content.svelte";
+	import MemoryReceiptPanel from "$lib/components/memory/MemoryReceiptPanel.svelte";
 	import { FileText } from "@lucide/svelte";
 	import DOMPurify from "dompurify";
 	import { Marked } from "marked";
@@ -47,6 +48,9 @@
 		speaking = false,
 		revealProgress = 1,
 		streaming = false,
+		chatId = "",
+		receipt,
+		companionName = "",
 	}: {
 		message: ChatMessage;
 		slug?: string;
@@ -58,6 +62,10 @@
 		speaking?: boolean;
 		revealProgress?: number;
 		streaming?: boolean;
+		chatId?: string;
+		/** The memory receipt of this assistant message (#84); absent when none was written. */
+		receipt?: RecalledMemory[];
+		companionName?: string;
 	} = $props();
 
 	const isUser = $derived(message.role === "user");
@@ -163,6 +171,10 @@
    </div>
   {/if}
   {#if isLastInGroup()}<span class="time">{time()}{#if modelLabel && !isUser}<span class="model">{modelLabel}</span>{/if}</span>{/if}
+  <!-- One receipt per turn: every text block of a turn carries the same recall, so the group's last bubble shows it. -->
+  {#if !isUser && !streaming && receipt && slug && chatId && isLastInGroup()}
+   <MemoryReceiptPanel {slug} {chatId} messageId={message.id} memories={receipt} {companionName} />
+  {/if}
  </Message>
 </div>
 <style>

@@ -2,7 +2,9 @@
 //!
 //! The Cua targets registry is typed by `cua_protocol`, the legacy
 //! coordinate-only action vocabulary of `computer_use` is frozen so new machine
-//! actions land in the protocol instead, and CI runs the protocol crate's tests.
+//! actions land in the protocol instead, CI runs the protocol crate's tests,
+//! and the server-local target is started by the gateway, stopped by its
+//! shutdown hook, sessioned only by the runtime, and documented.
 
 #[path = "../test-support/source_scan.rs"]
 mod source_scan;
@@ -84,6 +86,98 @@ fn server_depends_on_and_uses_the_shared_cua_protocol() {
     assert!(
         tools.contains(".cua()"),
         "list_machines must enumerate the Cua targets beside the legacy agents"
+    );
+}
+
+#[test]
+fn the_server_local_runtime_is_wired_sessioned_and_documented() {
+    let repo = repo();
+
+    // Constructed with the state, started and stopped by the gateway.
+    let state = production(&repo.join("server/src/app/state.rs"));
+    assert!(
+        state.contains("CuaRuntime::new(") && state.contains(".cua()"),
+        "AppState must construct the server-local Cua runtime over the registry's targets"
+    );
+    let main = production(&repo.join("server/src/main.rs"));
+    let started_at = main
+        .find("cua.start()")
+        .expect("main.rs must start the server-local runtime");
+    let ready_at = main
+        .find("nolune: ready")
+        .expect("main.rs prints the ready line installers wait for");
+    assert!(
+        ready_at < started_at,
+        "main.rs must bind the listener and print the ready line before it starts the driver: \
+         serving never waits on the handshake or the health report (#16)"
+    );
+    assert!(
+        main.contains("cua.shutdown()"),
+        "main.rs must end every driver session and stop the driver on shutdown"
+    );
+    let module = fs::read_to_string(repo.join("server/src/services/cua/mod.rs")).unwrap();
+    assert!(
+        !module.contains("allow(dead_code)"),
+        "the driver modules are wired now; nothing in services/cua is dead"
+    );
+
+    // The [cua] section is real config.
+    let config = production(&repo.join("server/src/config.rs"));
+    assert!(
+        config.contains("pub struct CuaConfig") && config.contains("pub cua: CuaConfig"),
+        "config.rs must carry the [cua] section"
+    );
+
+    // Sessions are opened and closed by the runtime alone, so cleanup is
+    // deterministic: no other production code starts or ends one.
+    for path in rust_files(&repo.join("server/src")) {
+        let relative = path
+            .strip_prefix(&repo)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        if relative.starts_with("server/src/services/cua/") {
+            continue;
+        }
+        let source = production(&path);
+        for managed in ["CuaAction::StartSession(", "CuaAction::EndSession("] {
+            assert!(
+                !source.contains(managed),
+                "{relative} manages driver sessions itself; go through services::cua::runtime"
+            );
+        }
+    }
+
+    // Documented: how the target appears, when it does not, and what it never does.
+    let doc = fs::read_to_string(repo.join("docs/computer-use.md"))
+        .expect("docs/computer-use.md documents the server-local target");
+    for required in [
+        "server-local:",
+        "[cua]",
+        "NOLUNE_CUA_DRIVER",
+        "driver_path",
+        "DISPLAY",
+        "headless",
+        "start_session",
+        "end_session",
+        "one-shot",
+        "health_interval_secs",
+        "nolune: ready",
+        "#16",
+    ] {
+        assert!(
+            doc.contains(required),
+            "docs/computer-use.md is missing {required:?}"
+        );
+    }
+    let readme = fs::read_to_string(repo.join("README.md")).unwrap();
+    assert!(
+        readme.contains("| `NOLUNE_CUA_DRIVER` |"),
+        "README.md must list NOLUNE_CUA_DRIVER in the environment table"
+    );
+    assert!(
+        readme.contains("docs/computer-use.md"),
+        "README.md must point at docs/computer-use.md"
     );
 }
 

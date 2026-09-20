@@ -40,11 +40,12 @@ export function displayName(path) {
 /**
  * Group entries by top-level folder, folders alphabetical with root files
  * last, entries alphabetical by path.
- * @param {MemoryEntry[]} entries
- * @returns {{ folder: string; entries: MemoryEntry[]; size: number }[]}
+ * @template {MemoryEntry} T
+ * @param {T[]} entries
+ * @returns {{ folder: string; entries: T[]; size: number }[]}
  */
 export function groupByFolder(entries) {
-	/** @type {Map<string, MemoryEntry[]>} */
+	/** @type {Map<string, T[]>} */
 	const map = new Map();
 	for (const entry of entries) {
 		const folder = folderOf(entry.path);
@@ -89,8 +90,10 @@ export function formatSize(bytes) {
 /**
  * Case-insensitive local filter used while the server search is pending or
  * for short queries.
- * @param {MemoryEntry[]} entries
+ * @template {MemoryEntry} T
+ * @param {T[]} entries
  * @param {string} query
+ * @returns {T[]}
  */
 export function filterEntries(entries, query) {
 	const q = query.trim().toLowerCase();

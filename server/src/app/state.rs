@@ -58,6 +58,9 @@ pub struct AppState {
     pub browser_sessions: Arc<BrowserSessionStore>,
     /// Federation identity and peers (#108); the keystore under `workspace_dir` opens on first use.
     pub federation: Arc<crate::services::federation::pairing::FederationState>,
+    /// The server-local computer-use target (#16): idle until the gateway calls `start`,
+    /// so building a state never spawns a driver.
+    pub cua: crate::services::cua::runtime::CuaRuntime,
 }
 
 // No hardcoded MCP servers — users add them via Settings UI or config.toml.
@@ -107,6 +110,11 @@ impl AppState {
         let machine_registry =
             MachineRegistry::open(&workspace_dir, crate::domain::companion::CANONICAL_SLUG)
                 .with_events(events.clone());
+        let cua = crate::services::cua::runtime::CuaRuntime::new(
+            config.cua.clone(),
+            machine_registry.cua().clone(),
+            workspace_dir.clone(),
+        );
 
         Self {
             resources: crate::services::resource_access::ResourceAccess::new(&config.auth_token),
@@ -126,6 +134,7 @@ impl AppState {
             commitments,
             browser_sessions: Arc::new(BrowserSessionStore::new()),
             federation: Arc::new(federation),
+            cua,
         }
     }
 

@@ -340,7 +340,15 @@ export interface ContextStats {
 	total_input_tokens_estimate: number;
 }
 
-export interface MemoryEntry {
+/** User-set flags on a text memory (#84); a media memory carries none. */
+export interface MemoryFlags {
+	/** Always auto-recalled into the user's chat. */
+	pinned: boolean;
+	/** Hidden from the companion's own routines (check-in, reflection). */
+	exclude_from_proactive: boolean;
+}
+
+export interface MemoryEntry extends MemoryFlags {
 	path: string;
 	summary: string;
 	size: number;
@@ -351,7 +359,7 @@ export interface MemoryGraph {
 }
 
 /** How auto-recall surfaced a memory (#84). */
-export type RecallReason = "semantic" | "keyword" | "linked_to" | "matched";
+export type RecallReason = "semantic" | "keyword" | "linked_to" | "matched" | "pinned";
 /** Coarse confidence bucket; raw scores never leave the server. */
 export type RecallConfidence = "high" | "medium" | "low";
 
@@ -371,6 +379,53 @@ export interface RecalledMemory {
 	/** Resolved on every receipt read; a deleted source is reported, not dropped. */
 	source_status: "present" | "missing";
 }
+
+/** Persisted provenance for one assistant message (`chats/{chat_id}/receipts/{message_id}.json`). */
+export interface MemoryReceipt {
+	message_id: string;
+	chat_id: string;
+	memories: RecalledMemory[];
+}
+
+/** One side of a correction conflict, in full. */
+export interface CorrectionStatement {
+	id: string;
+	statement: string;
+	corrected_at: string;
+}
+
+/** Two user statements about one memory; the user picks which one stays. */
+export interface CorrectionConflict {
+	conflict_id: string;
+	path: string;
+	current: CorrectionStatement;
+	proposed: CorrectionStatement;
+}
+
+export type CorrectionStatus = "applied" | "superseded" | "needs_resolution" | "withdrawn";
+
+/** One entry of the companion's correction ledger. */
+export interface CorrectionEntry {
+	id: string;
+	path: string;
+	statement: string;
+	previous: string;
+	status: CorrectionStatus;
+	corrected_at: string;
+	resolved_at?: string;
+	conflicts_with?: string;
+}
+
+export interface CorrectionLedger {
+	version: number;
+	entries: CorrectionEntry[];
+}
+
+/** `PUT …/memory/{path}`: applied, a no-op, or a conflict for the user to settle (409). */
+export type CorrectionResponse =
+	| { status: "applied"; path: string; correction: CorrectionEntry }
+	| { status: "unchanged"; path: string }
+	| ({ status: "needs_resolution" } & CorrectionConflict);
 
 export type MachinePlatform = "macos" | "windows" | "linux";
 export type MachineLocation = "server_local" | "desktop";
