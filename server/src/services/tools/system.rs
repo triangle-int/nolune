@@ -1869,29 +1869,26 @@ impl Tool for ExportProfileTool {
         if !instance_dir.is_dir() {
             return Err(ToolExecError("instance directory not found".into()));
         }
+        let source = crate::services::profile_archive::open_companion_dir(&instance_dir)
+            .map_err(|e| ToolExecError(format!("failed to open profile directory: {e}")))?;
 
-        // Create tar.gz
-        let output = tokio::process::Command::new("tar")
-            .arg("czf")
-            .arg("-")
-            .arg("-C")
-            .arg(self.workspace_dir.join("instances"))
-            .arg(&self.instance_slug)
-            .output()
-            .await
-            .map_err(|e| ToolExecError(format!("failed to create archive: {e}")))?;
-
-        if !output.status.success() {
-            return Err(ToolExecError("tar failed".into()));
-        }
+        // Write the versioned archive in-process (#74); it is held in memory
+        // only as long as the upload it becomes.
+        let archive = tokio::task::spawn_blocking(move || {
+            let mut bytes = Vec::new();
+            crate::services::profile_archive::write_archive(&source, &mut bytes).map(|_| bytes)
+        })
+        .await
+        .map_err(|e| ToolExecError(format!("failed to create archive: {e}")))?
+        .map_err(|e| ToolExecError(format!("failed to create archive: {e}")))?;
 
         // Save to uploads so user can download
-        let filename = format!("{}.tar.gz", self.instance_slug);
+        let filename = crate::services::profile_archive::ARCHIVE_FILE_NAME.to_string();
         let meta = crate::services::uploads::save_upload(
             &self.workspace_dir,
             &self.instance_slug,
             &filename,
-            &output.stdout,
+            &archive,
         )
         .map_err(|e| ToolExecError(format!("failed to save archive: {e}")))?;
 
@@ -1905,8 +1902,73 @@ impl Tool for ExportProfileTool {
 
         Ok(format!(
             "exported profile as {filename} ({} bytes). {marker}",
-            output.stdout.len()
+            archive.len()
         ))
+    }
+}
+
+#[cfg(test)]
+mod create_backup_tests {
+    use super::*;
+    use cap_std::{ambient_authority, fs::Dir};
+
+    #[tokio::test]
+    async fn backup_is_an_in_process_archive_saved_as_an_upload() {
+        let workspace = tempfile::tempdir().unwrap();
+        let companion = workspace.path().join("instances/companion");
+        fs::create_dir_all(companion.join("memory")).unwrap();
+        fs::write(
+            companion.join("companion.json"),
+            serde_json::to_vec(&crate::domain::companion::CompanionIdentity::canonical()).unwrap(),
+        )
+        .unwrap();
+        fs::write(companion.join("soul.md"), b"# soul\n").unwrap();
+        fs::write(companion.join("memory/tea.md"), b"oolong").unwrap();
+        let (events, _) = broadcast::channel(8);
+        let tool = ExportProfileTool::new(workspace.path(), "companion", events);
+
+        let output = tool
+            .call(ExportProfileArgs { _reason: None })
+            .await
+            .unwrap();
+
+        assert!(
+            output.starts_with("exported profile as companion.tar.gz ("),
+            "{output}"
+        );
+        let id = output
+            .rsplit_once(" (")
+            .and_then(|(_, rest)| rest.strip_suffix(")]"))
+            .unwrap();
+        let blob = companion.join("uploads").join(format!("{id}_blob.gz"));
+        let archive = fs::read(&blob).unwrap();
+
+        let staging = workspace.path().join("staging");
+        fs::create_dir(&staging).unwrap();
+        let staging_dir = Dir::open_ambient_dir(&staging, ambient_authority()).unwrap();
+        let summary =
+            crate::services::profile_archive::extract_into(archive.as_slice(), &staging_dir)
+                .unwrap();
+        assert_eq!(summary.files, 3);
+        assert_eq!(fs::read(staging.join("memory/tea.md")).unwrap(), b"oolong");
+    }
+
+    #[tokio::test]
+    async fn backup_fails_without_a_valid_marker() {
+        let workspace = tempfile::tempdir().unwrap();
+        let companion = workspace.path().join("instances/companion");
+        fs::create_dir_all(&companion).unwrap();
+        fs::write(companion.join("soul.md"), b"# soul\n").unwrap();
+        let (events, _) = broadcast::channel(8);
+        let tool = ExportProfileTool::new(workspace.path(), "companion", events);
+
+        let error = tool
+            .call(ExportProfileArgs { _reason: None })
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("companion.json"), "{error}");
+        assert!(!companion.join("uploads").exists());
     }
 }
 

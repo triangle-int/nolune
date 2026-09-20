@@ -272,7 +272,78 @@ only accepted value is `companion`, matched exactly.
 rooted at `companion/` (for example `companion/companion.json`,
 `companion/soul.md`, `companion/memory/…`). Import (#74) must require a valid
 `companion/companion.json` with `format_version: 1` and reject archives with
-any other root, slug, or version.
+any other root, slug, or version. The full contract is the
+[archive format](#archive-format) below.
+
+## Archive format
+
+Version 1 of the backup archive is the companion directory verbatim, so it
+shares `format_version` with the storage layout above. The export route and
+the `create_backup` tool produce it in-process
+(`server/src/services/profile_archive.rs`, #74) and the same module reads it
+back; no external `tar` runs in either direction.
+
+### Container
+
+- A gzip-compressed tar stream, offered as `companion.tar.gz` with media type
+  `application/gzip`.
+- Every entry path starts with `companion/`; the archive root is the companion
+  directory. A `companion/` directory entry may appear once.
+- Only regular files and directories. Symlinks, hard links, devices, fifos,
+  sparse and contiguous files, and pax `size` overrides are refused.
+- Paths are UTF-8, relative, `/`-separated, at most 4096 bytes, without empty,
+  `.`, or `..` segments, backslashes, drive prefixes, or NUL bytes. GNU
+  long-name entries and pax `path` records carry long paths.
+- No entry is repeated, and a file and a directory never claim the same path.
+  Missing parent directories are created on the way.
+- Modes and ownership are not preserved: files are written `0644`,
+  directories `0755`. Modification times are informational.
+
+### Manifest
+
+`companion/companion.json` is the manifest. It is the identity marker
+described above, byte for byte:
+
+```json
+{
+  "format_version": 1,
+  "slug": "companion"
+}
+```
+
+The writer emits it first. A reader validates it as soon as it is seen and
+refuses the archive when it is missing, larger than 4 KiB, carries unknown
+fields, or names another `format_version` or `slug`. Archives that still hold
+a retired layout (`stats/`, `agents/`, `agent_runs/`, `thoughts/`) are refused
+rather than trimmed.
+
+### Limits
+
+Readers enforce these caps while streaming, so a hostile archive is cut off
+before it can fill disk or memory:
+
+| Limit | Value |
+| --- | --- |
+| Entries, long-name and pax entries included | 100 000 |
+| One regular file | 512 MiB |
+| All regular files together | 8 GiB |
+| Bytes leaving the gzip decoder | 8.25 GiB |
+
+### Extraction
+
+The reader writes only into a staging directory handed to it as a capability:
+every file is created with `create_new`, symlinks are never followed, and
+files and directories are fsynced before the reader reports success. It never
+touches `instances/companion/` itself. Publishing the staged tree under the
+lifecycle gate and rebuilding derived state is the remaining import work
+tracked by #74; until it lands, `POST /api/instances/companion/import` answers
+`501` and the `restore_backup` tool stays disabled.
+
+Exporting skips symlinks, special files, and retired layouts (they are
+counted, never followed), so a fresh export always imports. An export that
+fails part-way never completes the archive: the tar end-of-archive blocks and
+the gzip trailer are withheld, so whatever a client kept of the download is
+refused as truncated rather than restored with files missing.
 
 ## Federation identity
 
