@@ -15,12 +15,12 @@ case "${1:?Expected release or publish}" in
     if release_id > /dev/null 2> "$error"; then
       echo "Reusing release $RELEASE_TAG"
     elif grep -Fxq 'release not found' "$error"; then
-      body=$(sed 's/^/- /' "${COMMITS_FILE:-/tmp/commits.txt}")
+      notes_file=${RELEASE_NOTES_FILE:-/tmp/release-notes.md}
       # A concurrent run may have created the release after our lookup.
       if ! gh release create "$RELEASE_TAG" \
         --repo "$GH_REPO" \
         --title "Nolune $RELEASE_TAG" \
-        --notes "$body" \
+        --notes-file "$notes_file" \
         --draft; then
         release_id > /dev/null
       fi

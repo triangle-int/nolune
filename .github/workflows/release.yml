@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: read
 
 jobs:
   # ── Create empty draft release first (fast) ──
@@ -25,20 +26,25 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Collect changelog
+      - name: Generate release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          RELEASE_NOTES_MODEL: ${{ vars.RELEASE_NOTES_MODEL }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          prev_tag=$(git tag --sort=-v:refname | sed -n '2p')
-          if [ -z "$prev_tag" ]; then
-            git log --oneline > /tmp/commits.txt
-          else
-            git log --oneline "${prev_tag}..HEAD" > /tmp/commits.txt
-          fi
+          python3 scripts/release_notes.py \
+            --repository "${{ github.repository }}" \
+            --release-tag "$RELEASE_TAG" \
+            --exclude-contributor "${{ github.actor }}" \
+            --output /tmp/release-notes.md
 
       - name: Create or reuse release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_NOTES_FILE: /tmp/release-notes.md
         run: bash scripts/release-workflow.sh release
 
   # ── Server binaries (parallel with desktop) ──

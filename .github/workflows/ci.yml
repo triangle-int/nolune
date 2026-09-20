@@ -138,6 +138,8 @@ jobs:
         run: bash scripts/tests/uninstall.sh
       - name: Test release workflow
         run: bash scripts/tests/release-workflow.sh
+      - name: Test release notes
+        run: python3 scripts/tests/test_release_notes.py
       - name: Enforce no passive screen recording
         run: python3 scripts/tests/no-continuous-screen-recording.py
       - name: Check install-flow docs
