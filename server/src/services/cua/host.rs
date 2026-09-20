@@ -91,13 +91,63 @@ pub fn display_session() -> DisplaySession {
 
 /// The display session for operating system `os` given `facts` about it.
 pub fn display_session_for(os: &str, facts: &SessionFacts<'_>) -> DisplaySession {
-    let _ = (os, facts);
-    todo!("session facts per platform")
+    let set = |name: &str, value: Option<&OsStr>| {
+        value
+            .filter(|value| !value.is_empty())
+            .map(|value| format!("{name}={}", value.to_string_lossy()))
+    };
+    match os {
+        "linux" => match set("WAYLAND_DISPLAY", facts.wayland_display)
+            .or_else(|| set("DISPLAY", facts.display))
+        {
+            Some(found) => DisplaySession::Present(found),
+            None => DisplaySession::Headless(
+                "no display session (DISPLAY and WAYLAND_DISPLAY are unset): a headless host, \
+                 so the driver is never started"
+                    .to_owned(),
+            ),
+        },
+        // A graphical login runs its processes under launchd's Aqua manager;
+        // SSH sessions and daemons run under Background or System, where
+        // no window server is reachable and `open` cannot launch the app.
+        "macos" => match facts.launchd_manager.map(str::trim) {
+            Some("Aqua") => {
+                DisplaySession::Present("launchd session Aqua (a graphical login)".to_owned())
+            }
+            Some(manager) => DisplaySession::Headless(format!(
+                "no graphical session (launchctl managername reports {manager}, an SSH or \
+                 background session, not Aqua): a headless host, so the driver is never started"
+            )),
+            None => DisplaySession::NotChecked,
+        },
+        // Only an interactive session (the console or an RDP one) carries
+        // SESSIONNAME; services and headless hosts have none.
+        "windows" => match set("SESSIONNAME", facts.session_name) {
+            Some(found) => DisplaySession::Present(found),
+            None => DisplaySession::Headless(
+                "no interactive session (SESSIONNAME is unset): a service or headless host, so \
+                 the driver is never started"
+                    .to_owned(),
+            ),
+        },
+        _ => DisplaySession::NotChecked,
+    }
 }
 
 /// `launchctl managername` on macOS; `None` elsewhere or when it fails.
 fn launchd_manager_name() -> Option<String> {
-    todo!("launchctl managername")
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let output = std::process::Command::new("launchctl")
+        .arg("managername")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (!name.is_empty()).then_some(name)
 }
 
 /// The target triple of this build, for messages about hosts the pin does

@@ -104,20 +104,45 @@ Nolune release.
   `--profile`), asks the extracted binary for its version and refuses any
   other than the pin, then records the install in
   `~/.nolune/cua-driver/install.json`. A failed step leaves nothing behind.
-  `NOLUNE_CUA_RELEASE_URL` points it at a mirror; the checksum is enforced
-  either way. `NOLUNE_INSTALL_CUA_DRIVER=1` makes the one-line installer run
-  it; it is off by default.
-- `nolune cua status` prints the pin, the platform state, the installed
-  driver checked against the pin, the driver the server would run (an explicit
-  `NOLUNE_CUA_DRIVER`, then the workspace install, then `PATH`), and, when the
-  host can run it, the driver's own health report: its version against the
-  pin (a mismatch is reported and exits 1) and the Accessibility and Screen
-  Recording state under the driver's bundle identity.
+  The download itself is bounded by the pin: a mirror that announces another
+  size is refused before the body is read, a body that grows past the pinned
+  size is abandoned, and a stalled mirror fails on a read deadline (60 s of
+  silence) or the overall one (30 min) instead of hanging; the release
+  script's curl carries `--max-filesize` and `--max-time` for the same
+  reason. `NOLUNE_CUA_RELEASE_URL` points it at a mirror; the checksum is
+  enforced either way. `NOLUNE_INSTALL_CUA_DRIVER=1` makes the one-line
+  installer run it; it is off by default.
+- `nolune cua status` prints the pin, the platform state, the session state,
+  the installed driver checked against the pin, the driver the server would
+  run (an explicit `NOLUNE_CUA_DRIVER`, then the workspace install, then
+  `PATH`), and, when the host can run it, the driver's own health report: its
+  version against the pin (a mismatch is reported and exits 1) and the
+  Accessibility and Screen Recording state under the driver's bundle
+  identity. When the driver cannot report, the status line repeats what the
+  driver said on stderr (its permission hint, for one) instead of a bare
+  handshake timeout.
+- The macOS daemon: `cua-driver mcp` on macOS is a proxy to the login
+  session's `CuaDriver.app` daemon, and on its own it would start one *by
+  name* through LaunchServices, which picks whatever `CuaDriver.app` the
+  system knows (none on a fresh Mac, `/Applications/CuaDriver.app` after the
+  upstream installer), never the copy Nolune verified. So when the driver
+  runs from a genuine `CuaDriver.app` (its `Info.plist` says
+  `com.trycua.driver`) and no daemon is running, `nolune cua status` starts
+  that bundle by path (`open -n -g <bundle> --args serve`, which is what
+  makes macOS attribute the permissions to the bundle) and reports
+  `daemon: started … by path`; the daemon keeps running, `<driver> stop`
+  stops it. The health report names the executable that answered
+  (`answered by: …`): when it is not the driver above, another
+  `CuaDriver.app` owns the session's daemon (the driver keeps one per login
+  session), the line says so and how to stop it, and the version check still
+  applies to it. Nolune never stops or replaces a daemon it did not start.
 - Platform status: macOS is supported. Linux and Windows report
   `platform: unsupported`; the pinned driver still installs there so a later
-  release can turn computer use on without moving the pin. A Linux host
-  without `DISPLAY` or `WAYLAND_DISPLAY` reports `headless` and the driver is
-  never started; headless installs need nothing from this section.
+  release can turn computer use on without moving the pin. A host without a
+  graphical session reports `headless` and the driver is never started: on
+  Linux without `DISPLAY` or `WAYLAND_DISPLAY`, on macOS when `launchctl
+  managername` is not `Aqua` (an SSH or background session), on Windows
+  without `SESSIONNAME`; headless installs need nothing from this section.
 - Releases: the desktop job of `release.yml` fetches the pinned asset for each
   desktop target with `scripts/cua-driver.sh`, verifies it against the pin,
   and uploads the verified archive beside the desktop bundle, so a pin that

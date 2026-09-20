@@ -81,7 +81,11 @@ case "$mode" in
         tmp=$(mktemp "$dest/.$asset.XXXXXX")
         trap 'rm -f "$tmp"' EXIT
         printf 'fetching %s (%s bytes)\n' "$url" "$size"
-        curl -fL --connect-timeout 15 --retry 3 --retry-delay 2 --retry-connrefused "$url" -o "$tmp" \
+        # --max-filesize refuses a body the server announces as larger than
+        # the pin and stops one that grows past it; --max-time bounds a
+        # stalled mirror. Either way nothing is kept.
+        curl -fL --connect-timeout 15 --max-time 1800 --max-filesize "$size" \
+            --retry 3 --retry-delay 2 --retry-connrefused "$url" -o "$tmp" \
             || fail "download failed: $url"
         actual_size=$(wc -c < "$tmp" | tr -d ' ')
         [[ "$actual_size" == "$size" ]] \

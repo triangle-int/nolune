@@ -5,20 +5,29 @@
 //! speaks MCP over stdio to a `cua-driver mcp` child; tests use an in-memory
 //! fake so no driver binary is ever required.
 
-use std::{future::Future, path::Path, pin::Pin, time::Duration};
+use std::{
+    collections::VecDeque,
+    future::Future,
+    path::Path,
+    pin::Pin,
+    process::Stdio,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use anyhow::Context as _;
 use cua_protocol::driver_mcp::DriverCallFailure;
 use rmcp::{
+    ServiceExt as _,
     model::{
         CallToolRequest, CallToolRequestParams, CallToolResult, ClientRequest, RawContent,
         ServerResult,
     },
     service::{PeerRequestOptions, ServerSink, ServiceError},
+    transport::TokioChildProcess,
 };
 use serde_json::{Map, Value};
-
-use crate::config::McpServerConfig;
+use tokio::io::AsyncBufReadExt as _;
 
 /// The structured payload of one tool call, or why there is none.
 pub type CallOutcome = Result<Value, DriverCallFailure>;
@@ -99,6 +108,75 @@ impl Default for DriverTimeouts {
     }
 }
 
+/// How many of the driver's stderr lines are kept for an error message.
+const STDERR_LINES_KEPT: usize = 16;
+/// How long a stderr line may be in an error message.
+const STDERR_LINE_LIMIT: usize = 400;
+/// How long the stderr reader gets to drain after the child failed.
+const STDERR_DRAIN: Duration = Duration::from_millis(300);
+
+/// The last lines a driver child wrote to stderr, read as they arrive.
+///
+/// The driver explains itself there (`mcp launched without CuaDriver.app's
+/// TCC grants; auto-launching the daemon`, `grant Accessibility + Screen
+/// Recording to CuaDriver.app in System Settings and retry`), and only a
+/// message that repeats it is actionable; inherited stderr reaches the
+/// terminal after the parent has already printed its own verdict.
+struct DriverStderr {
+    lines: Arc<Mutex<VecDeque<String>>>,
+    reader: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl DriverStderr {
+    fn capture(stderr: Option<tokio::process::ChildStderr>) -> Self {
+        let lines = Arc::new(Mutex::new(VecDeque::new()));
+        let reader = stderr.map(|stderr| {
+            let lines = lines.clone();
+            tokio::spawn(async move {
+                let mut reader = tokio::io::BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    let line = line.trim().to_owned();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    log::info!("[cua] driver: {line}");
+                    let mut kept = lines.lock().unwrap();
+                    if kept.len() == STDERR_LINES_KEPT {
+                        kept.pop_front();
+                    }
+                    kept.push_back(line.chars().take(STDERR_LINE_LIMIT).collect());
+                }
+            })
+        });
+        Self { lines, reader }
+    }
+
+    /// `; the driver said: "..."` once the child is gone and its stderr is
+    /// drained, or nothing when it said nothing.
+    async fn suffix(mut self) -> String {
+        if let Some(mut reader) = self.reader.take() {
+            // The child is dead or dying by now; give the reader a moment to
+            // reach end of file. Past that the pipe is held open by a
+            // grandchild: report what arrived so far and stop reading.
+            if tokio::time::timeout(STDERR_DRAIN, &mut reader)
+                .await
+                .is_err()
+            {
+                reader.abort();
+            }
+        }
+        let lines = self.lines.lock().unwrap();
+        if lines.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; the driver said: \"{}\"",
+                lines.iter().cloned().collect::<Vec<_>>().join(" | ")
+            )
+        }
+    }
+}
+
 /// MCP over stdio to one persistent `cua-driver mcp` child process.
 ///
 /// The child lives exactly as long as this transport: the keep-alive task
@@ -125,34 +203,43 @@ impl StdioDriverTransport {
 
     /// Spawn `<driver> mcp` and complete the MCP handshake within
     /// `timeouts.handshake`; a child that has not answered by then is killed
-    /// and the error names the driver.
+    /// and the error names the driver and repeats what it said on stderr,
+    /// which is where the driver explains a missing daemon or permission.
     pub async fn spawn_with(driver: &Path, timeouts: DriverTimeouts) -> anyhow::Result<Self> {
-        let config = McpServerConfig {
-            name: "cua-driver".to_owned(),
-            url: None,
-            command: Some(driver.to_string_lossy().into_owned()),
-            args: vec!["mcp".to_owned()],
-            headers: Default::default(),
-            trust: Default::default(),
-            enabled_tools: Vec::new(),
-        };
+        let mut command = tokio::process::Command::new(driver);
+        command.arg("mcp");
+        let (process, stderr) = TokioChildProcess::builder(command)
+            .stderr(Stdio::piped())
+            .spawn()
+            .with_context(|| format!("could not start {} mcp", driver.display()))?;
+        let said = DriverStderr::capture(stderr);
         // On expiry the connect future is dropped with the child process
         // still inside it, which kills the child.
         let connected = tokio::time::timeout(
             timeouts.handshake,
-            crate::services::mcp::connect_stdio(&config),
+            crate::services::mcp::client_info().serve(process),
         )
         .await;
-        let (sink, keep_alive) = match connected {
-            Ok(connection) => {
-                connection.with_context(|| format!("could not start {} mcp", driver.display()))?
+        let running = match connected {
+            Ok(Ok(running)) => running,
+            Ok(Err(error)) => {
+                return Err(anyhow::Error::new(error).context(format!(
+                    "could not start {} mcp{}",
+                    driver.display(),
+                    said.suffix().await
+                )));
             }
             Err(_elapsed) => anyhow::bail!(
-                "{} mcp did not complete the MCP handshake within {:?}",
+                "{} mcp did not complete the MCP handshake within {:?}{}",
                 driver.display(),
-                timeouts.handshake
+                timeouts.handshake,
+                said.suffix().await
             ),
         };
+        let sink = running.peer().clone();
+        let keep_alive = tokio::spawn(async move {
+            let _ = running.waiting().await;
+        });
         log::info!("[cua] driver started: {} mcp", driver.display());
         Ok(Self {
             sink,

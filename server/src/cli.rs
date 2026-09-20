@@ -7,7 +7,7 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use cua_protocol::{
-    HealthOverall, HealthReportResult, MachineId, Permission,
+    HealthCheckData, HealthOverall, HealthReportResult, MachineId, Permission,
     cua_driver_pin::{
         self, PINNED_VERSION, PinnedAsset, RELEASE_REPOSITORY, RELEASE_TAG, Target,
         check_driver_version,
@@ -19,7 +19,9 @@ use crate::{
     config::{self, Profile},
     onboard, profiles, service,
     services::cua::{
-        discovery, driver,
+        daemon::{self, DaemonState},
+        discovery::{self, DriverSource},
+        driver,
         host::{self, DisplaySession, PlatformSupport},
         install::{self, InstallOutcome, InstallRequest, InstallStep},
         transport::StdioDriverTransport,
@@ -735,13 +737,72 @@ fn cua_install(force: bool, profile: &Profile) -> i32 {
     }
 }
 
+/// How long the app daemon gets to come up after `open` on macOS.
+const DAEMON_START_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// What probing the driver found: lines about its daemon, then the report.
+struct Probe {
+    notes: Vec<String>,
+    report: anyhow::Result<HealthReportResult>,
+}
+
 /// Start the driver, take its health report, stop it.
-async fn probe_driver(driver: PathBuf) -> anyhow::Result<HealthReportResult> {
-    let transport = StdioDriverTransport::spawn(&driver).await?;
-    let machine_id = MachineId::try_from("server-local").expect("static id");
-    let report = driver::health_report(&transport, &machine_id).await;
-    transport.shutdown();
-    report
+///
+/// On macOS `<driver> mcp` proxies to the login session's `CuaDriver.app`
+/// daemon and would start one by name when none runs, which picks whatever
+/// `CuaDriver.app` LaunchServices knows (none on a fresh Mac, the upstream
+/// installer's copy otherwise). When the driver runs from a genuine bundle
+/// and no daemon is up, that bundle is started by path first, so the daemon
+/// that answers is the one the driver above belongs to.
+async fn probe_driver(driver: PathBuf) -> Probe {
+    let mut notes = Vec::new();
+    if cfg!(target_os = "macos")
+        && let Some(bundle) = daemon::app_bundle(&driver)
+    {
+        match daemon::state(&driver).await {
+            DaemonState::Running => notes.push("daemon: running".to_owned()),
+            DaemonState::NotRunning => {
+                let launch = daemon::launch_command(&bundle);
+                if let Err(error) = daemon::start(&driver, launch, DAEMON_START_WAIT).await {
+                    return Probe {
+                        notes,
+                        report: Err(error.context("the driver's daemon did not start")),
+                    };
+                }
+                notes.push(format!(
+                    "daemon: started {} by path (it keeps running; `{} stop` stops it)",
+                    bundle.display(),
+                    driver.display()
+                ));
+            }
+            DaemonState::Unknown(why) => notes.push(format!("daemon: {why}")),
+        }
+    }
+    let report = async {
+        let transport = StdioDriverTransport::spawn(&driver).await?;
+        let machine_id = MachineId::try_from("server-local").expect("static id");
+        let report = driver::health_report(&transport, &machine_id).await;
+        transport.shutdown();
+        report
+    }
+    .await;
+    Probe { notes, report }
+}
+
+/// The executable that produced `report`, when it says: the `bundle_identity`
+/// check of a macOS daemon carries it.
+fn answering_executable(report: &HealthReportResult) -> Option<PathBuf> {
+    report.checks.iter().find_map(|check| match &check.data {
+        Some(HealthCheckData::BundleIdentity(identity)) => {
+            Some(PathBuf::from(identity.executable_path.as_str()))
+        }
+        _ => None,
+    })
+}
+
+/// Whether two paths name the same file, following symlinks and `/private`.
+fn same_executable(a: &std::path::Path, b: &std::path::Path) -> bool {
+    same_file::is_same_file(a, b).unwrap_or(a == b)
 }
 
 fn permission_word(permission: Permission) -> &'static str {
@@ -797,7 +858,7 @@ fn cua_status(profile: &Profile) -> i32 {
             installed.driver.display()
         ),
         Some(installed) => {
-            let pinned_sha256 = target.map(|target| cua_driver_pin::asset_for(target).sha256);
+            let pinned_sha256 = target.map(|target| host_asset(target).sha256);
             let verdict = if installed.version != PINNED_VERSION {
                 format!("not the pinned version; run `nolune cua install{flag}`")
             } else if pinned_sha256.is_some_and(|sha256| sha256 != installed.sha256) {
@@ -838,17 +899,45 @@ fn cua_status(profile: &Profile) -> i32 {
         return 0;
     }
 
-    let report = match on_own_runtime(move || probe_driver(located.path)) {
-        Ok(Ok(report)) => report,
-        Ok(Err(error)) => {
-            println!("  health: the driver could not report ({error:#})");
-            return 1;
-        }
+    let driver_path = located.path.clone();
+    let probe = match on_own_runtime(move || probe_driver(driver_path)) {
+        Ok(probe) => probe,
         Err(error) => {
             println!("  health: the driver could not report ({error})");
             return 1;
         }
     };
+    for note in &probe.notes {
+        println!("  {note}");
+    }
+    let report = match probe.report {
+        Ok(report) => report,
+        Err(error) => {
+            println!("  health: the driver could not report ({error:#})");
+            return 1;
+        }
+    };
+    if let Some(answered_by) = answering_executable(&report) {
+        if same_executable(&answered_by, &located.path) {
+            println!(
+                "  answered by: {} ({})",
+                answered_by.display(),
+                if located.source == DriverSource::Installed {
+                    "the Nolune install"
+                } else {
+                    "the driver above"
+                }
+            );
+        } else {
+            println!(
+                "  answered by: {}, not the driver above: another CuaDriver.app owns this login \
+                 session's daemon, so the health below is its own; `{} stop` stops it, and the \
+                 next `nolune cua status{flag}` starts the driver above instead",
+                answered_by.display(),
+                answered_by.display()
+            );
+        }
+    }
     let version_ok = match check_driver_version(&report.driver_version) {
         Ok(()) => {
             println!(

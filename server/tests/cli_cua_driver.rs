@@ -5,7 +5,8 @@
 //! script that answers `--version` and, for `mcp`, a canned health report.
 //! The pinned digest is 70 MB of real driver, so the success paths override
 //! it through the debug-only `NOLUNE_CUA_TEST_PIN` seam; the wrong-checksum
-//! path uses the real pin and must refuse whatever the server sends.
+//! path uses the real pin (which refuses whatever the server sends) and then
+//! the seam with the right size and a wrong digest.
 #![cfg(unix)]
 
 use std::{
@@ -168,6 +169,7 @@ esac
 
 /// A driver stand-in that records every `mcp` start in `marker` and then
 /// behaves like [`fake_driver_script`].
+#[cfg(target_os = "linux")]
 fn recording_driver_script(version: &str, report_file: &Path, marker: &Path) -> String {
     fake_driver_script(version, report_file).replacen(
         "  mcp) ;;",
@@ -486,18 +488,39 @@ fn install_downloads_verifies_and_installs_the_pinned_driver_under_the_workspace
 #[test]
 fn install_refuses_a_wrong_checksum_and_leaves_nothing_installed() {
     let sb = Sandbox::new();
-    // Real pin, wrong bytes: whatever the mirror serves, it is not the driver.
     let script = fake_driver_script(PINNED_VERSION, &sb.report_file);
-    sb.publish(&fake_archive(host(), &script));
+    let archive = fake_archive(host(), &script);
+    let pin = sb.publish(&archive);
 
+    // Real pin, wrong bytes: whatever the mirror serves, it is not the
+    // driver, and the pinned size already tells.
     let out = sb.run(&["cua", "install"]);
     let stderr = text(&out.stderr);
     assert_eq!(out.status.code(), Some(1), "stderr: {stderr}");
     assert_eq!(sb.release.requests(), vec![asset_path()]);
+    assert!(
+        stderr.contains(&asset_for(host()).size.to_string()),
+        "names the pinned size: {stderr}"
+    );
+    assert!(stderr.contains("nothing was installed"), "{stderr}");
+    sb.assert_nothing_installed();
+
+    // The right size with the wrong digest: only the sha256 can tell, and
+    // it does, before anything is written.
+    let (_, size) = pin.split_once(':').unwrap();
+    let wrong_digest = "0".repeat(64);
+    let out = sb.run_pinned(&format!("{wrong_digest}:{size}"), &["cua", "install"]);
+    let stderr = text(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "stderr: {stderr}");
+    assert_eq!(sb.release.requests().len(), 2);
     assert!(stderr.contains("sha256"), "{stderr}");
     assert!(
-        stderr.contains(asset_for(host()).sha256),
+        stderr.contains(&wrong_digest),
         "names the pinned digest: {stderr}"
+    );
+    assert!(
+        stderr.contains(&sha256_hex(&archive)),
+        "and the digest it got: {stderr}"
     );
     assert!(stderr.contains("nothing was installed"), "{stderr}");
     sb.assert_nothing_installed();

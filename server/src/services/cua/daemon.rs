@@ -25,8 +25,6 @@ use anyhow::Context as _;
 
 /// The bundle identifier of the genuine driver app.
 pub const BUNDLE_ID: &str = "com.trycua.driver";
-/// The bundle's file name inside a release.
-pub const BUNDLE_NAME: &str = "CuaDriver.app";
 
 /// How often the daemon is asked whether it is up while it starts.
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -48,27 +46,88 @@ pub enum DaemonState {
 /// bundle without a readable plist. Symlinks (the upstream installer's
 /// `~/.local/bin/cua-driver`) are followed first.
 pub fn app_bundle(driver: &Path) -> Option<PathBuf> {
-    let _ = driver;
-    todo!("app bundle detection")
+    let driver = fs::canonicalize(driver).ok()?;
+    // <bundle>/Contents/MacOS/<binary>
+    let macos = driver.parent()?;
+    let contents = macos.parent()?;
+    let bundle = contents.parent()?;
+    if macos.file_name()? != "MacOS"
+        || contents.file_name()? != "Contents"
+        || bundle.extension()? != "app"
+    {
+        return None;
+    }
+    let plist = fs::read_to_string(contents.join("Info.plist")).ok()?;
+    (bundle_identifier(&plist).as_deref() == Some(BUNDLE_ID)).then(|| bundle.to_path_buf())
 }
 
 /// `CFBundleIdentifier` from an XML `Info.plist`.
 pub fn bundle_identifier(info_plist: &str) -> Option<String> {
-    let _ = info_plist;
-    todo!("plist parsing")
+    let key = "<key>CFBundleIdentifier</key>";
+    let after_key = &info_plist[info_plist.find(key)? + key.len()..];
+    let value = after_key.trim_start().strip_prefix("<string>")?;
+    let end = value.find("</string>")?;
+    let id = value[..end].trim();
+    (!id.is_empty()).then(|| id.to_owned())
 }
 
 /// Ask `<driver> status` whether the daemon it proxies to is running.
 pub async fn state(driver: &Path) -> DaemonState {
-    let _ = driver;
-    todo!("daemon state")
+    let output = tokio::time::timeout(
+        STATUS_TIMEOUT,
+        tokio::process::Command::new(driver)
+            .arg("status")
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await;
+    let output = match output {
+        Ok(Ok(output)) => output,
+        Ok(Err(error)) => {
+            return DaemonState::Unknown(format!(
+                "cannot run {} status: {error}",
+                driver.display()
+            ));
+        }
+        Err(_elapsed) => {
+            return DaemonState::Unknown(format!(
+                "{} status did not answer within {STATUS_TIMEOUT:?}",
+                driver.display()
+            ));
+        }
+    };
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    if output.status.success() {
+        DaemonState::Running
+    } else if text.contains("not running") {
+        DaemonState::NotRunning
+    } else {
+        DaemonState::Unknown(format!(
+            "{} status answered ({}): {}",
+            driver.display(),
+            output.status,
+            text.split_whitespace().collect::<Vec<_>>().join(" ")
+        ))
+    }
 }
 
 /// The LaunchServices launch of `bundle`'s daemon: `open -n -g <bundle>
 /// --args serve`, by path so no other `CuaDriver.app` can answer.
 pub fn launch_command(bundle: &Path) -> tokio::process::Command {
-    let _ = bundle;
-    todo!("launch command")
+    let mut command = tokio::process::Command::new("open");
+    command
+        .arg("-n")
+        .arg("-g")
+        .arg(bundle)
+        .arg("--args")
+        .arg("serve")
+        .stdin(std::process::Stdio::null());
+    command
 }
 
 /// Run `launch`, then wait until `<driver> status` reports the daemon as
@@ -78,8 +137,45 @@ pub async fn start(
     mut launch: tokio::process::Command,
     wait: Duration,
 ) -> anyhow::Result<()> {
-    let _ = (driver, &mut launch, wait);
-    todo!("daemon start")
+    let describe = |command: &tokio::process::Command| {
+        let command = command.as_std();
+        std::iter::once(command.get_program())
+            .chain(command.get_args())
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let launched = describe(&launch);
+    let output = launch
+        .output()
+        .await
+        .with_context(|| format!("cannot run `{launched}`"))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "`{launched}` failed ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let deadline = Instant::now() + wait;
+    loop {
+        match state(driver).await {
+            DaemonState::Running => return Ok(()),
+            DaemonState::NotRunning | DaemonState::Unknown(_) if Instant::now() < deadline => {
+                tokio::time::sleep(POLL_INTERVAL).await;
+            }
+            DaemonState::NotRunning => anyhow::bail!(
+                "the daemon did not answer within {wait:?} of `{launched}`; if macOS is asking \
+                 to grant Accessibility or Screen Recording to Cua Driver, grant them and run \
+                 the status again"
+            ),
+            DaemonState::Unknown(why) => anyhow::bail!(
+                "the daemon did not answer within {wait:?} of `{launched}` ({why}); if macOS \
+                 is asking to grant Accessibility or Screen Recording to Cua Driver, grant \
+                 them and run the status again"
+            ),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -128,7 +224,7 @@ mod tests {
     }
 
     fn bundle_with(dir: &Path, plist: Option<&str>) -> PathBuf {
-        let bundle = dir.join(BUNDLE_NAME);
+        let bundle = dir.join("CuaDriver.app");
         let macos = bundle.join("Contents/MacOS");
         fs::create_dir_all(&macos).unwrap();
         fs::write(macos.join("cua-driver"), "#!/bin/sh\n").unwrap();

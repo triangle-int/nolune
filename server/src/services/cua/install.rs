@@ -176,8 +176,43 @@ async fn download(
     expected_size: u64,
     limits: DownloadLimits,
 ) -> anyhow::Result<Vec<u8>> {
-    let _ = (url, expected_size, limits);
-    todo!("download with limits")
+    use futures::StreamExt as _;
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(limits.connect)
+        .read_timeout(limits.read)
+        .timeout(limits.total)
+        .build()?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .with_context(|| format!("cannot download {url}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        anyhow::bail!("{url} answered HTTP {status}");
+    }
+    if let Some(announced) = response.content_length()
+        && announced != expected_size
+    {
+        anyhow::bail!(
+            "{url} announces {announced} bytes, the pin expects {expected_size}; nothing was downloaded"
+        );
+    }
+    // The pin bounds the allocation; a body that keeps coming past it is
+    // abandoned, not buffered.
+    let mut bytes = Vec::with_capacity(usize::try_from(expected_size).unwrap_or(0));
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.with_context(|| format!("the download of {url} was interrupted"))?;
+        if bytes.len() as u64 + chunk.len() as u64 > expected_size {
+            anyhow::bail!(
+                "{url} sent more than the pinned {expected_size} bytes; the download was abandoned"
+            );
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
 }
 
 /// Unpack a downloaded `.tar.gz` or `.zip` asset into `dest`. Entries that
