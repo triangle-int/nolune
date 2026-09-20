@@ -1,7 +1,9 @@
 //! Guard for #32: the landing app is a fully static product site. Every
 //! route prerenders at build time, nothing runs on a request path, the two
 //! script endpoints serve the repository's own installers from the deployed
-//! commit, and the site carries no analytics so the privacy page stays true.
+//! commit, the site carries no analytics so the privacy page stays true, and
+//! the self-hosting docs are pages in this repository rather than a rewrite
+//! to a hosted docs product.
 
 use std::{
     fs,
@@ -40,6 +42,7 @@ fn landing_sources(repo: &Path) -> Vec<(String, String)> {
     paths.push(repo.join("landing/package.json"));
     paths.push(repo.join("landing/svelte.config.js"));
     paths.push(repo.join("landing/vite.config.ts"));
+    paths.push(repo.join("landing/vercel.json"));
     paths
         .into_iter()
         .map(|path| {
@@ -199,6 +202,62 @@ fn skills_library_is_reachable_from_every_page() {
     assert!(
         violations.is_empty(),
         "skills page is orphaned:\n{}",
+        violations.join("\n")
+    );
+}
+
+/// The docs a self-hoster needs, each one a prerendered page under /docs.
+const DOCS_SECTIONS: &[&str] = &[
+    "prerequisites",
+    "install",
+    "upgrade",
+    "backup",
+    "uninstall",
+    "troubleshooting",
+];
+
+#[test]
+fn self_hosting_docs_are_pages_in_this_repository() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let sources = landing_sources(repo);
+    let mut violations = Vec::new();
+
+    // The docs index and one page per section live in the source tree, so
+    // they build, link-check and deploy with the rest of the site.
+    let mut pages = vec!["landing/src/routes/docs/+page.svelte".to_owned()];
+    pages.extend(
+        DOCS_SECTIONS
+            .iter()
+            .map(|section| format!("landing/src/routes/docs/{section}/+page.svelte")),
+    );
+    for page in &pages {
+        if !sources.iter().any(|(path, _)| path == page) {
+            violations.push(format!("{page} is missing"));
+        }
+    }
+
+    // Vercel must serve those pages, not rewrite /docs to a hosted product
+    // whose source is not in this repository.
+    let vercel = source(&sources, "landing/vercel.json");
+    if vercel.to_lowercase().contains("mintlify") {
+        violations.push("landing/vercel.json still rewrites /docs to Mintlify".to_owned());
+    }
+
+    // Every page reaches the docs: the nav and footer render everywhere, and
+    // the hero is the first thing a new visitor sees.
+    for component in [
+        "landing/src/lib/components/Nav.svelte",
+        "landing/src/lib/components/Footer.svelte",
+        "landing/src/lib/components/Hero.svelte",
+    ] {
+        if !source(&sources, component).contains("href=\"/docs\"") {
+            violations.push(format!("{component} must link href=\"/docs\""));
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "self-hosting docs are not part of the site:\n{}",
         violations.join("\n")
     );
 }
