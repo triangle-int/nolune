@@ -388,6 +388,14 @@
 		margin-top: 0.5rem;
 		line-height: 1.5;
 	}
+	/* Import asks once, inline, like Forget on a connected computer: the word
+	   and its border carry the destructive color, Keep is the plain secondary. */
+	.settings-page .data-confirm { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--background); }
+	.settings-page .data-confirm-text { font: 400 14px/1.5 var(--font-body); color: var(--foreground); margin: 0; overflow-wrap: anywhere; }
+	.settings-page .data-confirm-row { display: flex; flex-wrap: wrap; gap: 8px; }
+	.settings-page .data-confirm-btn { background: none; border-color: var(--destructive); color: var(--destructive); }
+	.settings-page .data-confirm-btn:hover:not(:disabled) { background: var(--accent); border-color: var(--destructive); color: var(--destructive); }
+	.settings-page .data-status { font: 400 13px/1.5 var(--font-body); color: var(--text-secondary); margin: 0.5rem 0 0; overflow-wrap: anywhere; }
 
 	
 	.settings-page .model-mode-options {

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from "$app/state";
-	import { exportInstance, importInstance } from "$lib/api/client.js";
+	import { tick } from "svelte";
+	import { exportInstance, importInstance, ImportError, type ImportOutcome } from "$lib/api/client.js";
 
 	// Data ownership (#98): everything here belongs to the one companion and
 	// can leave with you as one archive.
@@ -9,10 +10,16 @@
 	let exporting = $state(false);
 	let exportBytes = $state(0);
 	let exportError = $state("");
-	let importing = $state(false);
-	let importError = $state("");
-	let importDone = $state(false);
 	let importFileInput: HTMLInputElement | undefined = $state();
+	// Import (#74) is a replacement, so it asks once, inline, before anything
+	// leaves the browser: the chosen file waits here until Replace or Keep.
+	let pendingFile: File | null = $state(null);
+	let confirmButton: HTMLButtonElement | undefined = $state();
+	let importing = $state(false);
+	let importSent = $state(0);
+	let importTotal = $state(0);
+	let importResult: ImportOutcome | null = $state(null);
+	let importError = $state("");
 
 	function formatBytes(bytes: number): string {
 		if (bytes < 1024) return `${bytes} B`;
@@ -42,20 +49,50 @@
 	async function handleImport() {
 		const file = importFileInput?.files?.[0];
 		if (!file) return;
-		importing = true;
+		importResult = null;
 		importError = "";
-		importDone = false;
+		pendingFile = file;
+		await tick();
+		confirmButton?.focus();
+	}
+
+	function cancelImport() {
+		pendingFile = null;
+		if (importFileInput) importFileInput.value = "";
+	}
+
+	async function confirmImport() {
+		const file = pendingFile;
+		if (!file || importing) return;
+		pendingFile = null;
+		importing = true;
+		importSent = 0;
+		importTotal = file.size;
+		importError = "";
 		try {
-			await importInstance(slug, file);
-			importDone = true;
-			setTimeout(() => { importDone = false; }, 4000);
+			importResult = await importInstance(slug, file, (sent, total) => {
+				importSent = sent;
+				importTotal = total;
+			});
 		} catch (e) {
-			importError = e instanceof Error ? e.message : "import failed";
+			if (e instanceof ImportError && e.code === "companion_busy") {
+				importError = `Your companion is busy right now, so nothing was changed. Wait for it to finish, then try again. (${e.message})`;
+			} else {
+				importError = e instanceof Error ? `Import failed and nothing was changed: ${e.message}` : "import failed";
+			}
 		} finally {
 			importing = false;
 			if (importFileInput) importFileInput.value = "";
 		}
 	}
+
+	const importProgress = $derived.by(() => {
+		if (!importing) return "";
+		if (importTotal > 0 && importSent < importTotal) {
+			return `Uploading… ${formatBytes(importSent)} of ${formatBytes(importTotal)}`;
+		}
+		return "Restoring… the server is checking the archive and rebuilding the search index. This can take a while for a large archive.";
+	});
 </script>
 
 <!-- What Nolune keeps -->
@@ -101,25 +138,45 @@
 					Export
 				{/if}
 			</button>
-			<button type="button" class="data-btn data-btn-import" onclick={() => importFileInput?.click()} disabled={importing}>
+			<button type="button" class="data-btn data-btn-import" onclick={() => importFileInput?.click()} disabled={importing || pendingFile !== null}>
 				{#if importing}
-					Importing...
-				{:else if importDone}
-					Imported!
+					Importing…
 				{:else}
-					Import
+					Import…
 				{/if}
 			</button>
 			<input
 				type="file"
-				accept=".tar.gz,.tgz"
+				accept=".tar.gz,.tgz,application/gzip"
 				bind:this={importFileInput}
 				onchange={handleImport}
 				hidden
 				disabled={importing}
 			/>
 	</div>
-	<p class="data-hint">Export downloads a .tar.gz of your companion’s data. Import merges an archive into your companion.</p>
+	<p class="data-hint">Export downloads a .tar.gz of your companion’s data. Import replaces your companion with an archive: afterwards its memory, personality, drops, and chat history are the archive’s, and what it keeps now is not kept. Export first if you want to hold on to it.</p>
+
+	{#if pendingFile}
+		<div class="data-confirm" role="group" aria-labelledby="import-confirm-label">
+			<p id="import-confirm-label" class="data-confirm-text">Replace your companion with {pendingFile.name} ({formatBytes(pendingFile.size)})? Everything it keeps now is replaced by the archive and not kept.</p>
+			<div class="data-confirm-row">
+				<button bind:this={confirmButton} class="nl-button-secondary data-confirm-btn" type="button" onclick={confirmImport} onkeydown={(e) => { if (e.key === "Escape") cancelImport(); }}>Replace</button>
+				<button class="nl-button-secondary" type="button" onclick={cancelImport} onkeydown={(e) => { if (e.key === "Escape") cancelImport(); }}>Keep current</button>
+			</div>
+		</div>
+	{/if}
+	{#if importing}
+		<p class="data-status" role="status" aria-live="polite">{importProgress}</p>
+	{:else if importResult}
+		<p class="data-status" role="status">
+			Restored {importResult.files} files ({formatBytes(importResult.bytes)}).
+			{#if importResult.derived_index === "rebuilt"}
+				Search index rebuilt.
+			{:else}
+				Search index pending: it is rebuilt the next time the server starts{#if importResult.pending_reason}&nbsp;({importResult.pending_reason}){/if}.
+			{/if}
+		</p>
+	{/if}
 
 	{#if importError}
 		<p class="error-msg" role="alert">{importError}</p>

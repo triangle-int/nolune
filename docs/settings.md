@@ -36,7 +36,7 @@ one section and one scope:
 | Companion | `settings/companion` | Little Moon presence, Learn my rhythm, Initiative (check-in, quiet hours, daily budget, reflection), Timezone, Scheduled messages | companion |
 | Connections | `settings/connections` | Model presets and slots (#156), API keys, Connected computers (the compact Connected Spaces list, #80), Paired browsers | server |
 | Capabilities | `settings/capabilities` | Skills (registry), Extensions (curated MCP catalog, per-tool grants, custom servers behind the #97 acknowledgement) | server |
-| Data | `settings/data` | What the companion keeps, Export, Import | companion |
+| Data | `settings/data` | What the companion keeps, Export, Import (replaces the companion after an inline confirmation) | companion |
 | Advanced | `settings/advanced` | Server port and API token, Updates and release channel, ElevenLabs voice ID, Email (SMTP/IMAP), GitHub token | mixed; each control carries an owner badge |
 
 ## Model presets (#156)
@@ -99,6 +99,30 @@ leave empty space. The section nav under the `Settings` heading is a segmented
 control with a lavender active pill and `aria-current`.
 `server/tests/navigation_settings_split.rs` guards the panel, the divider, and
 the retired icon and grid markup.
+
+## Data: export and import (#74)
+
+Export (`GET /api/instances/{slug}/export`) downloads `companion.tar.gz`, the
+versioned archive described in [companion-storage.md](companion-storage.md)
+under *Archive format*. Import replaces the companion with such an archive:
+afterwards its memory, personality, drops, and chat history are the
+archive's, and what it kept before is not kept. Because of that the Data
+page asks once, inline, before anything leaves the browser (Replace / Keep
+current, focus on Replace, Escape keeps), shows the upload as it streams and
+then a restoring line while the server validates the archive and rebuilds
+the search index, and ends with what was restored (files, size, whether the
+index was rebuilt or is pending until the next start). A refused archive, a
+busy companion (`409`: an agent is still running), or an interrupted upload
+is announced with what it means, and in every one of those cases nothing
+was changed.
+
+The same restore is reachable in two other ways, both through the server's
+validating import: the `restore_backup` tool takes only the upload id of an
+archive attached to the chat (never a path), and `nolune restore <archive>`
+sends an operator-chosen local file to the running server with the API
+token from `config.toml` (`--profile` for a named profile, `--yes` to skip
+the question when no terminal is attached). `POST
+/api/instances/{slug}/import` is the multipart endpoint behind all three.
 
 ## Raw fields stay on Advanced
 

@@ -729,13 +729,36 @@ writers consult belongs with the route wiring in the last #74 slice.
 
 If the process dies between the two renames, the previous companion is at
 `imports/previous-<id>`; move it back to `instances/companion` by hand. A
-crash during extraction leaves `imports/staging-<id>` behind. A startup
-recovery (move a lone `previous-*` back when `instances/companion` is
-missing, sweep the rest of `imports/`) belongs to `main.rs` and lands with
-the route wiring. Wiring the multipart route, the `restore_backup` tool,
-and the `nolune restore` CLI to this restore is that last #74 slice; until
-it lands, `POST /api/instances/companion/import` answers `501` and the tool
-stays disabled.
+crash during extraction leaves `imports/staging-<id>` behind, and one
+during an upload leaves `imports/upload-<id>.companion.tar.gz`; both can be
+deleted. A startup recovery (move a lone `previous-*` back when
+`instances/companion` is missing, sweep the rest of `imports/`) is still
+open.
+
+Three surfaces reach this restore, and nothing else writes the companion
+tree wholesale:
+
+- `POST /api/instances/companion/import` takes a multipart `file` field.
+  The body streams into `imports/upload-<id>.companion.tar.gz` through the
+  workspace capability as it arrives (bounded by a `DefaultBodyLimit` just
+  above the reader's 8 GiB payload cap, never buffered in memory), the
+  restore reads it from there, and the file is removed afterwards. The
+  answer is `200` with `{ok, files, directories, bytes, derived_index,
+  pending_reason?, indexed_chunks}`; `409 companion_busy` while an agent
+  task runs; `400 archive_refused` (or `413 archive_too_large`) for an
+  archive the reader rejects, with the companion exactly as it was; `500
+  import_failed` or `import_stranded` (the message names
+  `imports/previous-<id>`) when the swap itself failed. The Data settings
+  page asks once before sending and shows the upload and the restore.
+- The `restore_backup` tool takes only the upload id (`upload_<id>`) of an
+  archive attached to the chat or produced by `create_backup`, opened
+  through `MediaStore::open_upload_blob`; a path from the model is refused
+  before anything is looked up. The conversation running the tool is
+  blocked on it and does not count as busy; every other one still does.
+- `nolune restore <archive> [--yes] [--profile <name>]` posts an
+  operator-chosen local file to the local API with the token from
+  `config.toml`. The CLI never opens the archive beyond streaming it, so
+  the server's validation is the only path into the companion.
 
 ## Federation identity
 
