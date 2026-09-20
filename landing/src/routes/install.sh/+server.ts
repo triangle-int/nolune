@@ -1,21 +1,11 @@
-import { track } from '@vercel/analytics/server';
 import type { RequestHandler } from './$types.js';
+import script from '../../../../scripts/install.sh?raw';
 
-const SCRIPT_URL = 'https://raw.githubusercontent.com/triangle-int/nolune/main/scripts/install.sh';
+// Prerendered from the repository at build time, so `curl -fsSL
+// https://nolune.dev/install.sh | bash` runs the script at the deployed commit.
+export const prerender = true;
 
-export const GET: RequestHandler = async ({ request }) => {
-	const res = await fetch(SCRIPT_URL);
-	if (!res.ok) {
-		return new Response('Failed to fetch install script', { status: 502 });
-	}
-
-	track('install_script_download', {}, { request }).catch(() => {});
-
-	const script = await res.text();
-	return new Response(script, {
-		headers: {
-			'Content-Type': 'text/plain; charset=utf-8',
-			'Cache-Control': 'public, max-age=300',
-		},
+export const GET: RequestHandler = () =>
+	new Response(script, {
+		headers: { 'Content-Type': 'text/plain; charset=utf-8' },
 	});
-};
