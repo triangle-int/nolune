@@ -12,7 +12,7 @@ use std::fs;
 use crate::{
     app::state::AppState,
     domain::memory::MemoryEntry,
-    services::{chat, memory, tools},
+    services::{chat, memory, profile_archive, tools},
 };
 
 /// Retired control-token resource namespace; always denies access.
@@ -811,60 +811,87 @@ async fn cancel_scheduled(
 // Export / Import
 // ---------------------------------------------------------------------------
 
-/// GET /api/instances/{slug}/export → tar.gz download of the entire instance directory.
-/// Streams the tar output directly so the client receives data immediately.
+/// GET /api/instances/{slug}/export → tar.gz download of the companion directory.
+/// The archive is written in-process by `services::profile_archive` (#74) on a
+/// blocking thread and streamed to the client as it is produced.
 async fn export_instance(
     Path(instance_slug): Path<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
+    use futures::StreamExt;
+
     let instance_dir = state.workspace_dir.join("instances").join(&instance_slug);
     if !instance_dir.is_dir() {
         return (StatusCode::NOT_FOUND, "instance not found").into_response();
     }
-
-    // Spawn tar and stream stdout directly to the response.
-    let child = tokio::process::Command::new("tar")
-        .arg("czf")
-        .arg("-") // stdout
-        .arg("--exclude=node_modules")
-        .arg("--exclude=.git")
-        .arg("--exclude=target")
-        .arg("--exclude=.venv")
-        .arg("--exclude=__pycache__")
-        .arg("--exclude=.next")
-        .arg("--exclude=dist")
-        .arg("--exclude=build")
-        .arg("-C")
-        .arg(state.workspace_dir.join("instances"))
-        .arg(&instance_slug)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn();
-
-    match child {
-        Ok(mut child) => {
-            let stdout = child.stdout.take().unwrap();
-            let stream = tokio_util::io::ReaderStream::new(stdout);
-            let body = Body::from_stream(stream);
-
-            // Reap the child process in the background to avoid zombies.
-            tokio::spawn(async move {
-                let _ = child.wait().await;
-            });
-
-            let headers = [
-                (axum::http::header::CONTENT_TYPE, "application/gzip"),
-                (
-                    axum::http::header::CONTENT_DISPOSITION,
-                    &format!("attachment; filename=\"{instance_slug}.tar.gz\""),
-                ),
-            ];
-            (headers, body).into_response()
-        }
+    let source = match profile_archive::open_companion_dir(&instance_dir) {
+        Ok(dir) => dir,
         Err(e) => {
-            log::error!("[export] failed to spawn tar: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "export failed").into_response()
+            log::error!("[export] failed to open companion directory: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "export failed").into_response();
         }
+    };
+
+    // The first chunk (or the first error) decides the status code; a failure
+    // after that aborts the body so the client never keeps a truncated file.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<std::io::Result<axum::body::Bytes>>(16);
+    tokio::task::spawn_blocking(move || {
+        let mut sink = ArchiveChunks { tx: tx.clone() };
+        if let Err(error) = profile_archive::write_archive(&source, &mut sink) {
+            log::error!("[export] failed to write archive: {error}");
+            let _ = tx.blocking_send(Err(std::io::Error::other(error.to_string())));
+        }
+    });
+    let first = match rx.recv().await {
+        Some(Ok(chunk)) => chunk,
+        Some(Err(_)) | None => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "export failed").into_response();
+        }
+    };
+    let rest = futures::stream::unfold(rx, |mut rx| async move {
+        rx.recv().await.map(|chunk| (chunk, rx))
+    });
+    let body = Body::from_stream(
+        futures::stream::once(async move { Ok::<_, std::io::Error>(first) }).chain(rest),
+    );
+
+    let headers = [
+        (
+            axum::http::header::CONTENT_TYPE,
+            profile_archive::ARCHIVE_CONTENT_TYPE,
+        ),
+        (
+            axum::http::header::CONTENT_DISPOSITION,
+            &format!(
+                "attachment; filename=\"{}\"",
+                profile_archive::ARCHIVE_FILE_NAME
+            ),
+        ),
+    ];
+    (headers, body).into_response()
+}
+
+/// `Write` sink that hands archive chunks from the blocking writer to the
+/// response stream and stops the writer once the client has gone away.
+struct ArchiveChunks {
+    tx: tokio::sync::mpsc::Sender<std::io::Result<axum::body::Bytes>>,
+}
+
+impl std::io::Write for ArchiveChunks {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        self.tx
+            .blocking_send(Ok(axum::body::Bytes::copy_from_slice(buf)))
+            .map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::BrokenPipe, "export client went away")
+            })?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -926,6 +953,97 @@ mod media_tests {
         );
         assert!(!workspace.path().join("instances/new").exists());
         assert_eq!(store.list_all("existing", 10).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn export_streams_an_in_process_archive_that_round_trips() {
+        use axum::{
+            body::{Body, to_bytes},
+            http::Request,
+        };
+        use cap_std::{ambient_authority, fs::Dir};
+        use tower::ServiceExt;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let companion = workspace.path().join("instances/companion");
+        std::fs::create_dir_all(companion.join("memory/notes")).unwrap();
+        std::fs::write(
+            companion.join("companion.json"),
+            serde_json::to_vec(&crate::domain::companion::CompanionIdentity::canonical()).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(companion.join("soul.md"), b"# soul\n").unwrap();
+        std::fs::write(companion.join("memory/notes/tea.md"), b"oolong").unwrap();
+        let mut state = AppState::new(crate::config::Config::default()).await;
+        state.workspace_dir = workspace.path().to_owned();
+        let app = router().with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/instances/companion/export")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[axum::http::header::CONTENT_TYPE],
+            "application/gzip"
+        );
+        assert_eq!(
+            response.headers()[axum::http::header::CONTENT_DISPOSITION],
+            "attachment; filename=\"companion.tar.gz\""
+        );
+        let archive = to_bytes(response.into_body(), 16 * 1024 * 1024)
+            .await
+            .unwrap();
+
+        let staging = workspace.path().join("staging");
+        std::fs::create_dir(&staging).unwrap();
+        let staging_dir = Dir::open_ambient_dir(&staging, ambient_authority()).unwrap();
+        let summary = profile_archive::extract_into(archive.as_ref(), &staging_dir).unwrap();
+        assert_eq!(summary.files, 3);
+        assert_eq!(
+            std::fs::read(staging.join("memory/notes/tea.md")).unwrap(),
+            b"oolong"
+        );
+        assert_eq!(std::fs::read(staging.join("soul.md")).unwrap(), b"# soul\n");
+    }
+
+    #[tokio::test]
+    async fn export_fails_before_streaming_when_the_marker_is_missing() {
+        use axum::{
+            body::{Body, to_bytes},
+            http::Request,
+        };
+        use tower::ServiceExt;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let companion = workspace.path().join("instances/companion");
+        std::fs::create_dir_all(&companion).unwrap();
+        std::fs::write(companion.join("soul.md"), b"# soul\n").unwrap();
+        let mut state = AppState::new(crate::config::Config::default()).await;
+        state.workspace_dir = workspace.path().to_owned();
+        let app = router().with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/instances/companion/export")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = to_bytes(response.into_body(), 4096).await.unwrap();
+        assert_eq!(&body[..], b"export failed");
     }
 
     #[tokio::test]
