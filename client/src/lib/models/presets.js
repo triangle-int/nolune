@@ -12,7 +12,18 @@
 export const PROVIDERS = Object.freeze([
 	{ id: "anthropic", label: "Anthropic" },
 	{ id: "openai", label: "OpenAI" },
+	{ id: "openrouter", label: "OpenRouter" },
 ]);
+
+/**
+ * OpenRouter names models `vendor/model`, optionally `vendor/model:variant`
+ * (#26). Mirrors `config::is_openrouter_model_id`.
+ * @param {string} model
+ */
+export function isOpenrouterModelId(model) {
+	const slash = model.indexOf("/");
+	return slash > 0 && slash < model.length - 1 && !/\s/.test(model);
+}
 
 /** @param {string} id */
 export function providerLabel(id) {
@@ -41,7 +52,9 @@ export function validatePresets(presets, slots, keyedProviders) {
 		const label = id || preset.name || "(unnamed)";
 		if (!(preset.name ?? "").trim()) errors.push(`Preset "${label}" needs a name.`);
 		if (!PROVIDERS.some((p) => p.id === preset.provider)) errors.push(`Preset "${label}" uses unknown provider "${preset.provider}".`);
-		if (!(preset.model ?? "").trim()) errors.push(`Preset "${label}" needs a model id.`);
+		const model = (preset.model ?? "").trim();
+		if (!model) errors.push(`Preset "${label}" needs a model id.`);
+		else if (preset.provider === "openrouter" && !isOpenrouterModelId(model)) errors.push(`Preset "${label}" needs an OpenRouter model id in vendor/model form.`);
 	}
 	if (presets.length === 0) return errors;
 	for (const [slot, label] of [["chat_preset", "Chat"], ["background_preset", "Background"]]) {
@@ -81,17 +94,19 @@ export function presetLabel(preset) {
 
 /**
  * A short human name for a raw model id, for the badge under a message.
- * Unknown ids are shown as they are.
+ * OpenRouter ids carry a vendor prefix and spell versions with dots
+ * (`anthropic/claude-sonnet-4.6`); unknown ids are shown as they are.
  * @param {string | null | undefined} model
  */
 export function modelShortLabel(model) {
 	if (!model) return "";
-	const claude = /^claude-(opus|sonnet|haiku)-(\d+)-(\d+)(?:-\d{8})?$/.exec(model);
+	const bare = model.includes("/") ? model.slice(model.indexOf("/") + 1) : model;
+	const claude = /^claude-(opus|sonnet|haiku)-(\d+)[.-](\d+)(?:-\d{8})?$/.exec(bare);
 	if (claude) {
 		const family = claude[1][0].toUpperCase() + claude[1].slice(1);
 		return `${family} ${claude[2]}.${claude[3]}`;
 	}
-	const gpt = /^gpt-(\d+(?:\.\d+)?)(?:-(mini|nano))?$/.exec(model);
+	const gpt = /^gpt-(\d+(?:\.\d+)?)(?:-(mini|nano))?$/.exec(bare);
 	if (gpt) return gpt[2] ? `GPT-${gpt[1]} ${gpt[2]}` : `GPT-${gpt[1]}`;
 	return model;
 }

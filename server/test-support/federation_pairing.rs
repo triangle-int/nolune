@@ -7,10 +7,11 @@
 
 use super::*;
 use crate::{
-    domain::federation::{FEDERATION_VERSION, PairingMessage, SignedEnvelope},
+    domain::federation::{FEDERATION_VERSION, PairingMessage, SignedEnvelope, TransportEnvelope},
     services::federation::{
-        identity,
+        envelope, identity,
         pairing::{FederationState, PeerTransport, sign_message},
+        peers::{Clock, system_clock},
     },
 };
 use axum::{
@@ -24,17 +25,59 @@ use std::{
 };
 use tower::ServiceExt;
 
-const TOKEN_A: &str = "issue-108-owner-token-for-a";
-const TOKEN_B: &str = "issue-108-owner-token-for-b";
-const ORIGIN_A: &str = "http://a.test";
-const ORIGIN_B: &str = "http://b.test";
-const MAX_BODY: usize = 64 * 1024;
+pub(super) const TOKEN_A: &str = "issue-108-owner-token-for-a";
+pub(super) const TOKEN_B: &str = "issue-108-owner-token-for-b";
+pub(super) const ORIGIN_A: &str = "http://a.test";
+pub(super) const ORIGIN_B: &str = "http://b.test";
+pub(super) const MAX_BODY: usize = 64 * 1024;
 
 /// The wire between the two servers: a base URL maps to the `AppState`
 /// listening there, and a POST is a `oneshot` through its router.
 #[derive(Default)]
-struct Wire {
-    servers: Mutex<HashMap<String, AppState>>,
+pub(super) struct Wire {
+    pub(super) servers: Mutex<HashMap<String, AppState>>,
+}
+
+impl Wire {
+    /// POSTs `json` to `path` on the server at `origin` and returns the
+    /// status and body, exactly as HTTP would.
+    async fn post_json(
+        &self,
+        url: &str,
+        json: Vec<u8>,
+    ) -> Result<(StatusCode, axum::body::Bytes), crate::domain::federation::FederationError> {
+        use crate::domain::federation::FederationError;
+        let at = url
+            .find("/federation/")
+            .expect("peer URL has a federation path");
+        let (origin, path) = (&url[..at], &url[at..]);
+        let state = self
+            .servers
+            .lock()
+            .unwrap()
+            .get(origin)
+            .cloned()
+            .ok_or_else(|| FederationError::Transport(format!("no route to {origin}")))?;
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(path)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(json))
+            .unwrap();
+        let response = build_router(state, None).oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), MAX_BODY)
+            .await
+            .unwrap();
+        if !status.is_success() {
+            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
+            return Err(FederationError::PeerRefused {
+                status: status.as_u16(),
+                error: body["error"].as_str().unwrap_or("unknown").to_owned(),
+            });
+        }
+        Ok((status, bytes))
+    }
 }
 
 impl PeerTransport for Wire {
@@ -43,73 +86,72 @@ impl PeerTransport for Wire {
         url: &'a str,
         envelope: &'a SignedEnvelope,
     ) -> BoxFuture<'a, Result<SignedEnvelope, crate::domain::federation::FederationError>> {
-        use crate::domain::federation::FederationError;
         Box::pin(async move {
-            let at = url
-                .find("/federation/")
-                .expect("peer URL has a federation path");
-            let (origin, path) = (&url[..at], &url[at..]);
-            let state = self
-                .servers
-                .lock()
-                .unwrap()
-                .get(origin)
-                .cloned()
-                .ok_or_else(|| FederationError::Transport(format!("no route to {origin}")))?;
-            let request = Request::builder()
-                .method(Method::POST)
-                .uri(path)
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(envelope).unwrap()))
-                .unwrap();
-            let response = build_router(state, None).oneshot(request).await.unwrap();
-            let status = response.status();
-            let bytes = axum::body::to_bytes(response.into_body(), MAX_BODY)
-                .await
-                .unwrap();
-            if !status.is_success() {
-                let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
-                return Err(FederationError::PeerRefused {
-                    status: status.as_u16(),
-                    error: body["error"].as_str().unwrap_or("unknown").to_owned(),
-                });
-            }
+            let (_, bytes) = self
+                .post_json(url, serde_json::to_vec(envelope).unwrap())
+                .await?;
             identity::parse_envelope(std::str::from_utf8(&bytes).unwrap())
+        })
+    }
+
+    fn post_transport<'a>(
+        &'a self,
+        url: &'a str,
+        envelope: &'a TransportEnvelope,
+    ) -> BoxFuture<'a, Result<TransportEnvelope, crate::domain::federation::FederationError>> {
+        Box::pin(async move {
+            let (_, bytes) = self
+                .post_json(url, serde_json::to_vec(envelope).unwrap())
+                .await?;
+            envelope::parse(std::str::from_utf8(&bytes).unwrap())
         })
     }
 }
 
-struct Server {
-    _workspace: tempfile::TempDir,
-    state: AppState,
-    token: &'static str,
+pub(super) struct Server {
+    pub(super) workspace: tempfile::TempDir,
+    pub(super) state: AppState,
+    pub(super) token: &'static str,
 }
 
 impl Server {
-    async fn start(wire: &Arc<Wire>, token: &'static str, origin: &'static str) -> Self {
+    pub(super) async fn start(wire: &Arc<Wire>, token: &'static str, origin: &'static str) -> Self {
         let workspace = tempfile::tempdir().unwrap();
+        Self::start_in(wire, token, origin, workspace, system_clock()).await
+    }
+
+    /// A server over an existing workspace (which may already hold a
+    /// federation identity) with an explicit clock.
+    pub(super) async fn start_in(
+        wire: &Arc<Wire>,
+        token: &'static str,
+        origin: &'static str,
+        workspace: tempfile::TempDir,
+        clock: Clock,
+    ) -> Self {
         let config = crate::config::Config {
             auth_token: token.into(),
             public_url: origin.into(),
             ..crate::config::Config::default()
         };
         let mut state = AppState::new_in(config, workspace.path().to_owned()).await;
-        state.federation = Arc::new(FederationState::with_transport(
+        state.federation = Arc::new(FederationState::with_transport_and_clock(
             workspace.path(),
             wire.clone(),
+            clock,
         ));
         wire.servers
             .lock()
             .unwrap()
             .insert(origin.to_owned(), state.clone());
         Self {
-            _workspace: workspace,
+            workspace,
             state,
             token,
         }
     }
 
-    fn companion_id(&self) -> String {
+    pub(super) fn companion_id(&self) -> String {
         self.state
             .federation
             .identity()
@@ -118,7 +160,7 @@ impl Server {
             .to_owned()
     }
 
-    fn public_key(&self) -> String {
+    pub(super) fn public_key(&self) -> String {
         self.state
             .federation
             .identity()
@@ -128,7 +170,7 @@ impl Server {
             .clone()
     }
 
-    fn ping(&self) -> SignedEnvelope {
+    pub(super) fn ping(&self) -> SignedEnvelope {
         self.state
             .federation
             .identity()
@@ -138,7 +180,7 @@ impl Server {
 
     /// Sends `request` through this server's router and asserts that neither
     /// owner token ever appears in the response.
-    async fn send(&self, request: Request<Body>) -> (StatusCode, serde_json::Value) {
+    pub(super) async fn send(&self, request: Request<Body>) -> (StatusCode, serde_json::Value) {
         let response = build_router(self.state.clone(), None)
             .oneshot(request)
             .await
@@ -163,7 +205,7 @@ impl Server {
     }
 
     /// An owner request with this server's bearer token.
-    async fn owner(
+    pub(super) async fn owner(
         &self,
         method: Method,
         uri: &str,
@@ -184,7 +226,7 @@ impl Server {
     }
 
     /// An anonymous request, as a peer (or anyone) would send it.
-    async fn anonymous(
+    pub(super) async fn anonymous(
         &self,
         method: Method,
         uri: &str,
@@ -206,14 +248,14 @@ impl Server {
     }
 }
 
-async fn two_servers() -> (Server, Server, Arc<Wire>) {
+pub(super) async fn two_servers() -> (Server, Server, Arc<Wire>) {
     let wire = Arc::new(Wire::default());
     let a = Server::start(&wire, TOKEN_A, ORIGIN_A).await;
     let b = Server::start(&wire, TOKEN_B, ORIGIN_B).await;
     (a, b, wire)
 }
 
-async fn mint_invite(server: &Server) -> serde_json::Value {
+pub(super) async fn mint_invite(server: &Server) -> serde_json::Value {
     let (status, invite) = server
         .owner(Method::POST, "/api/federation/invites", None)
         .await;
@@ -221,7 +263,7 @@ async fn mint_invite(server: &Server) -> serde_json::Value {
     invite
 }
 
-fn accept_body(invite: &serde_json::Value) -> serde_json::Value {
+pub(super) fn accept_body(invite: &serde_json::Value) -> serde_json::Value {
     serde_json::json!({
         "origin": invite["origin"],
         "secret": invite["secret"],
@@ -431,6 +473,7 @@ async fn owners_pair_two_companions_and_both_lists_bind_the_same_keys() {
     // The peer stores live beside the keystore, outside the companion export root.
     for server in [&a, &b] {
         let root = server.state.workspace_dir.clone();
+        assert_eq!(root, server.workspace.path());
         assert!(root.join("federation/peers.json").is_file());
         assert!(root.join("federation/identity.json").is_file());
         assert!(!root.join("instances/companion/federation").exists());

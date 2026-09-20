@@ -61,6 +61,11 @@ case "${1:-}" in
     printf 'port 26559 is already in use\n' >&2
     exit 1
     ;;
+  cua)
+    # The binary owns the driver download and its checksum (#20).
+    printf 'nolune %s\n' "$*" >> "${MOCK_CALLS:?}"
+    exit "${MOCK_CUA_STATUS:-0}"
+    ;;
   *) printf 'nolune %s\n' "$*" >> "${MOCK_CALLS:?}" ;;
 esac
 BIN
@@ -112,6 +117,18 @@ assert_absent() {
   local file=$1 unexpected=$2
   if grep -Fq -- "$unexpected" "$file"; then
     printf 'FAIL: unexpected: %s\n--- %s ---\n' "$unexpected" "$file" >&2
+    cat "$file" >&2
+    exit 1
+  fi
+}
+
+# `first` is recorded before `second`.
+assert_order() {
+  local file=$1 first=$2 second=$3 a b
+  a=$(grep -Fn -- "$first" "$file" | head -1 | cut -d: -f1)
+  b=$(grep -Fn -- "$second" "$file" | head -1 | cut -d: -f1)
+  if [[ -z "$a" || -z "$b" || "$a" -ge "$b" ]]; then
+    printf 'FAIL: expected %s before %s\n--- %s ---\n' "$first" "$second" "$file" >&2
     cat "$file" >&2
     exit 1
   fi
@@ -222,8 +239,29 @@ assert_absent "$tmp/unhealthy/calls" 'open http'
 assert_contains "$tmp/unhealthy/output" 'did not become ready'
 assert_absent "$tmp/unhealthy/output" 'nolune is ready'
 
-# The script contains no config or service logic of its own.
-for forbidden in 'auth_token' 'LaunchAgents' 'systemd/user' '<plist' '[Service]' 'launchctl' 'systemctl'; do
+# The pinned Cua Driver is opt-in (#20): nothing about it runs by default, and
+# when asked for, the binary does the verified download between onboard and
+# the gateway. A failed driver install warns and still starts the server.
+for name in macos linux macos-intel linux-arm; do
+  assert_absent "$tmp/$name/calls" 'nolune cua'
+done
+assert_absent "$tmp/macos/output" 'Cua Driver'
+NOLUNE_INSTALL_CUA_DRIVER=1 run_installer with-driver Darwin arm64
+assert_status with-driver 0
+assert_exact_call "$tmp/with-driver/calls" 'nolune cua install'
+assert_order "$tmp/with-driver/calls" 'nolune onboard' 'nolune cua install'
+assert_order "$tmp/with-driver/calls" 'nolune cua install' 'nolune gateway'
+assert_contains "$tmp/with-driver/output" 'nolune cua status'
+assert_contains "$tmp/with-driver/output" 'nolune is ready'
+NOLUNE_INSTALL_CUA_DRIVER=1 MOCK_CUA_STATUS=1 run_installer driver-fails Darwin arm64
+assert_status driver-fails 0
+assert_exact_call "$tmp/driver-fails/calls" 'nolune cua install'
+assert_contains "$tmp/driver-fails/output" 'nolune cua install'
+assert_contains "$tmp/driver-fails/output" 'nolune is ready'
+assert_contains "$root/scripts/install.sh" 'NOLUNE_INSTALL_CUA_DRIVER'
+
+# The script contains no config, service, or driver logic of its own.
+for forbidden in 'auth_token' 'LaunchAgents' 'systemd/user' '<plist' '[Service]' 'launchctl' 'systemctl' 'cua-driver' 'sha256'; do
   if grep -Fq -- "$forbidden" "$root/scripts/install.sh"; then
     printf 'FAIL: install.sh still contains %q; that belongs to the binary\n' "$forbidden" >&2
     exit 1

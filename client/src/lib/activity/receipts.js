@@ -123,3 +123,44 @@ export function relativeTime(unixSeconds, nowSeconds) {
 	if (diff < 7 * 86400) return `${Math.floor(diff / 86400)}d ago`;
 	return new Date(unixSeconds * 1000).toLocaleDateString([], { month: "short", day: "numeric" });
 }
+
+/** The trigger-condition summaries the evaluator states on a commitment run's reason (#85). */
+const COMMITMENT_CONDITIONS = ["dependency completed", "event observed", "snooze ended", "deadline arrived", "wait ended", "scheduled check"];
+
+/**
+ * Link a commitment check-in back to its commitment and the exact trigger
+ * condition (#85). The run's reason is `<condition>: <promise>`; only the
+ * leading known condition is split off, and an unknown shape is kept whole.
+ * @param {ProactiveRun} run
+ * @returns {{ commitmentId: string; condition: string; promise: string } | null}
+ */
+export function commitmentReceipt(run) {
+	if (run.trigger.kind !== "commitment") return null;
+	const commitmentId = String(run.trigger.commitment_id ?? "");
+	const sep = run.reason.indexOf(": ");
+	const head = sep === -1 ? "" : run.reason.slice(0, sep);
+	if (COMMITMENT_CONDITIONS.includes(head)) {
+		return { commitmentId, condition: head, promise: run.reason.slice(sep + 2) };
+	}
+	return { commitmentId, condition: "", promise: run.reason };
+}
+
+/** What changed and why the companion looked now, in the user's words. @param {string} condition */
+export function commitmentConditionLabel(condition) {
+	switch (condition) {
+		case "deadline arrived":
+			return "Its deadline arrived";
+		case "snooze ended":
+			return "The snooze you asked for ended";
+		case "wait ended":
+			return "The wait it was on ended";
+		case "event observed":
+			return "Something it was waiting for happened";
+		case "dependency completed":
+			return "A commitment it depended on was completed";
+		case "scheduled check":
+			return "A scheduled check came up; nothing else changed";
+		default:
+			return "It looked at this commitment";
+	}
+}

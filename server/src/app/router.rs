@@ -116,5 +116,9 @@ mod session_tests;
 mod federation_tests;
 
 #[cfg(test)]
+#[path = "../../test-support/federation_transport.rs"]
+mod federation_transport_tests;
+
+#[cfg(test)]
 #[path = "../../test-support/handoff_cards.rs"]
 mod handoff_tests;

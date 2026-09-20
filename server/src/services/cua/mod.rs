@@ -5,13 +5,18 @@
 //! The wire mapping (action to tool call, payload to result, health report to
 //! descriptor) lives in `cua_protocol::driver_mcp` so the desktop runtime
 //! shares it. Headless detection, per-run sessions and the `[cua]` config
-//! section wire this into `AppState` in the lifecycle slice.
+//! section wire this into `AppState` in the lifecycle slice. `install` and
+//! `host` back `nolune cua install|status` (#20): the verified install of
+//! the pinned driver under the workspace, and what this host can run.
 
 // Wired into `AppState` by the lifecycle slice (#16); until then only tests
-// construct these.
+// and the `nolune cua` commands construct these.
+pub mod daemon;
 #[allow(dead_code)]
 pub mod discovery;
 #[allow(dead_code)]
 pub mod driver;
+pub mod host;
+pub mod install;
 #[allow(dead_code)]
 pub mod transport;

@@ -8,8 +8,16 @@
 //! copying `federation/` too, and nothing about the old host, port, profile
 //! name, or path is part of the identity.
 //!
-//! Every function here is pure over a workspace root. Wiring into startup and
-//! routes arrives with the peer store. Nothing here logs.
+//! Rotation ([`rotate_at`]) is the one time the files change: the new key
+//! and document replace the old ones through temporary files and renames,
+//! after the rotation proof was appended to `federation/rotations.json`.
+//! The two renames are not one step: a process that dies between them
+//! leaves the new key beside the old document, and [`load`] completes that
+//! rotation from the recorded proof (which names both documents) instead of
+//! refusing a keystore nothing else could repair. Every other mismatch
+//! between the key and the document fails closed.
+//!
+//! Every function here is pure over a workspace root. Nothing here logs.
 
 use std::{
     fmt, io,
@@ -94,6 +102,12 @@ impl SigningIdentity {
     /// Signs `body` as this companion at the current wire version.
     pub fn sign_envelope(&self, body: &[u8]) -> SignedEnvelope {
         sign_envelope_with(&self.key, FEDERATION_VERSION, self.companion_id(), body)
+    }
+
+    /// Raw signature over already canonical bytes, for the transport
+    /// envelope and the rotation proof. Callers pass domain-tagged bytes.
+    pub(super) fn sign_raw(&self, message: &[u8]) -> [u8; SIGNATURE_BYTES] {
+        self.key.sign(message).to_bytes()
     }
 }
 
@@ -191,9 +205,67 @@ pub(crate) fn load_or_create_at(
     Ok(identity)
 }
 
+/// Rotates the identity on disk from `previous` to a fresh key: the rotation
+/// proof (signed by both keys) is appended to `federation/rotations.json`
+/// first, then the key file and the document are replaced. Fails closed
+/// with `KeyMismatch` when the identity on disk is not `previous` any more,
+/// so two rotations cannot race past each other.
+pub(crate) fn rotate_at(
+    workspace_root: &Path,
+    previous: &SigningIdentity,
+    now: u64,
+) -> Result<(SigningIdentity, crate::domain::federation::KeyRotation), FederationError> {
+    let on_disk = load(workspace_root)?
+        .ok_or_else(|| FederationError::SigningKeyMissing(signing_key_path(workspace_root)))?;
+    if on_disk.verified.public_key != previous.verified.public_key {
+        return Err(FederationError::KeyMismatch);
+    }
+
+    let mut seed = Zeroizing::new([0u8; SEED_BYTES]);
+    getrandom::fill(seed.as_mut()).map_err(|_| FederationError::RandomnessUnavailable)?;
+    let next = from_seed(&seed, now);
+    let rotation = super::rotation::endorse(previous, &next, now);
+
+    // The proof first: if the process dies before the key files change, the
+    // old key stays active and the entry only records an attempt; the other
+    // order could leave a live key that no peer can be told about.
+    super::rotation::append_rotation(workspace_root, &rotation)?;
+
+    let key_path = signing_key_path(workspace_root);
+    let stored = StoredSigningKey {
+        version: SIGNING_KEY_FORMAT_VERSION,
+        algorithm: SIGNING_KEY_ALGORITHM.to_owned(),
+        secret_key: encode(seed.as_ref()),
+    };
+    let mut key_json = serde_json::to_string_pretty(&stored).expect("signing key serializes");
+    key_json.push('\n');
+    let key_json = Zeroizing::new(key_json);
+    replace_private(&key_path, key_json.as_bytes()).map_err(|error| io_error(&key_path, error))?;
+
+    // The key is live from here on. Dying before the next rename leaves the
+    // old document beside it, which `load` completes from the proof.
+    write_document(workspace_root, next.document())?;
+
+    Ok((next, rotation))
+}
+
+/// Replaces `identity.json` with `document`, owner-readable only.
+fn write_document(
+    workspace_root: &Path,
+    document: &IdentityDocument,
+) -> Result<(), FederationError> {
+    let doc_path = identity_path(workspace_root);
+    let mut doc_json =
+        serde_json::to_string_pretty(document).expect("identity document serializes");
+    doc_json.push('\n');
+    replace_private(&doc_path, doc_json.as_bytes()).map_err(|error| io_error(&doc_path, error))
+}
+
 /// `Ok(None)` when no identity was created yet; `Err` when the files exist but
 /// cannot be trusted: missing halves, wrong permissions, a document that does
-/// not verify, or a document not signed by the stored key.
+/// not verify, or a document not signed by the stored key. The one mismatch
+/// that is repaired rather than refused is a rotation interrupted between
+/// its two renames (see [`complete_interrupted_rotation`]).
 pub fn load(workspace_root: &Path) -> Result<Option<SigningIdentity>, FederationError> {
     let key_path = signing_key_path(workspace_root);
     let doc_path = identity_path(workspace_root);
@@ -210,14 +282,51 @@ pub fn load(workspace_root: &Path) -> Result<Option<SigningIdentity>, Federation
         .map_err(|_| FederationError::Malformed("identity document is not UTF-8".into()))?;
     let document = parse_document(doc_json)?;
     let verified = verify_document(&document)?;
-    if verified.public_key != key.verifying_key() {
-        return Err(FederationError::KeyMismatch);
+    if verified.public_key == key.verifying_key() {
+        return Ok(Some(SigningIdentity {
+            key,
+            document,
+            verified,
+        }));
     }
+    let (document, verified) = complete_interrupted_rotation(workspace_root, &key, &document)?
+        .ok_or(FederationError::KeyMismatch)?;
     Ok(Some(SigningIdentity {
         key,
         document,
         verified,
     }))
+}
+
+/// [`rotate_at`] appends the proof, replaces the key file, then replaces the
+/// document. A process that dies between the last two leaves the new key
+/// beside the old document: the key on disk is the latest recorded
+/// rotation's new key and the document is that rotation's previous one. In
+/// exactly that state the document is rewritten from the proof (both
+/// documents in it were re-verified when the history was read) and the
+/// rotated identity is returned. Anything else, including a history that
+/// cannot be read, is `None` and left untouched: it is a mismatch, not an
+/// interrupted rotation.
+fn complete_interrupted_rotation(
+    workspace_root: &Path,
+    key: &SigningKey,
+    document: &IdentityDocument,
+) -> Result<Option<(IdentityDocument, VerifiedIdentity)>, FederationError> {
+    let Ok(rotations) = super::rotation::load_rotations(workspace_root) else {
+        return Ok(None);
+    };
+    let Some(latest) = rotations.last() else {
+        return Ok(None);
+    };
+    if latest.previous != *document {
+        return Ok(None);
+    }
+    let verified = verify_document(&latest.identity)?;
+    if verified.public_key != key.verifying_key() {
+        return Ok(None);
+    }
+    write_document(workspace_root, &latest.identity)?;
+    Ok(Some((latest.identity.clone(), verified)))
 }
 
 /// Parses an identity document, refusing unsupported versions before the
@@ -286,7 +395,7 @@ pub fn verify_envelope(
 }
 
 /// Builds an identity from a raw seed with a freshly signed document.
-fn from_seed(seed: &[u8; SEED_BYTES], created_at: u64) -> SigningIdentity {
+pub(super) fn from_seed(seed: &[u8; SEED_BYTES], created_at: u64) -> SigningIdentity {
     let key = SigningKey::from_bytes(seed);
     let companion_id = companion_id_for(&key.verifying_key().to_bytes());
     let document = sign_document(&key, FEDERATION_VERSION, &companion_id, created_at);
@@ -368,7 +477,7 @@ fn check_declared_version(json: &str, what: &str) -> Result<(), FederationError>
     check_version(versioned.version)
 }
 
-fn decode_public_key(encoded: &str) -> Result<VerifyingKey, FederationError> {
+pub(super) fn decode_public_key(encoded: &str) -> Result<VerifyingKey, FederationError> {
     let bytes = decode_exact(encoded, PUBLIC_KEY_BYTES)
         .ok_or_else(|| FederationError::Malformed("public key is not 32 base64url bytes".into()))?;
     let array: [u8; PUBLIC_KEY_BYTES] = bytes.try_into().expect("length checked");
@@ -384,7 +493,7 @@ fn decode_public_key(encoded: &str) -> Result<VerifyingKey, FederationError> {
     Ok(key)
 }
 
-fn decode_signature(encoded: &str) -> Result<Signature, FederationError> {
+pub(super) fn decode_signature(encoded: &str) -> Result<Signature, FederationError> {
     let bytes = decode_exact(encoded, SIGNATURE_BYTES)
         .ok_or_else(|| FederationError::Malformed("signature is not 64 base64url bytes".into()))?;
     let array: [u8; SIGNATURE_BYTES] = bytes.try_into().expect("length checked");
@@ -470,6 +579,27 @@ fn write_new_private(path: &Path, contents: &[u8]) -> io::Result<()> {
     use std::io::Write as _;
     handle.write_all(contents)?;
     handle.sync_all()
+}
+
+/// Replaces `path` owner-readable only, through a temporary file in the same
+/// directory and a rename, so a reader sees the old file or the new one.
+pub(super) fn replace_private(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| io::Error::other("keystore path has no directory"))?;
+    create_private_dir(dir)?;
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tmp.as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    use std::io::Write as _;
+    tmp.write_all(contents)?;
+    tmp.as_file().sync_all()?;
+    tmp.persist(path).map_err(|error| error.error)?;
+    Ok(())
 }
 
 fn io_error(path: &Path, error: io::Error) -> FederationError {

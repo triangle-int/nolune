@@ -671,6 +671,24 @@ impl Store {
         })
     }
 
+    /// Forget `slug`'s index without writing anything: the file is unlinked
+    /// and the cached copy replaced by an empty, not-backfilled index, so the
+    /// next load in this process or after a restart starts from nothing and
+    /// the startup backfill runs. For a `reset` whose persist failed, when
+    /// the records it was meant to drop must not keep being served. The
+    /// cached copy is replaced even when the unlink fails.
+    pub fn discard(&self, slug: &str) -> Result<(), String> {
+        let state = self.slug_state(slug);
+        let _write = state.write.lock().map_err(|error| error.to_string())?;
+        let unlinked = match std::fs::remove_file(self.index_path(slug)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.to_string()),
+        };
+        *state.index.write().map_err(|error| error.to_string())? = Some(self.empty_index());
+        unlinked
+    }
+
     pub fn needs_backfill(&self, slug: &str) -> Result<bool, String> {
         self.with_index(slug, |index| Ok(!index.backfilled))
     }

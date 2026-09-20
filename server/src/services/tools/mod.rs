@@ -248,12 +248,9 @@ fn secret_values() -> &'static Vec<String> {
             "OPENAI_API_KEY",
             "OPENROUTER_API_KEY",
             "BRAVE_SEARCH_API_KEY",
-            "DATABASE_URL",
             "NOLUNE_AUTH_TOKEN",
             "NOLUNE_RELEASE_TOKEN",
-            "STRIPE_SECRET_KEY",
             "GITHUB_TOKEN",
-            "GOOGLE_CLIENT_SECRET",
             "ELEVENLABS_API_KEY",
             "GOOGLE_AI_API_KEY",
         ];

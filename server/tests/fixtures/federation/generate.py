@@ -27,10 +27,24 @@ VERSION = 1
 CREATED_AT = 1789862400  # 2026-09-20T00:00:00Z
 BODY = b'{"kind":"ping"}'
 
+# Transport envelope (PR 3): the fixture identity pings a second fixture
+# identity, the recipient, with a fixed nonce and a 60 s lifetime.
+TRANSPORT_BODY = b'{"kind":"ping","version":1}'
+ISSUED_AT = CREATED_AT
+EXPIRES_AT = CREATED_AT + 60
+# Key rotation (PR 3): the fixture identity rotates to a third fixture key a
+# day later, endorsed by the old key and acknowledged by the new one.
+ROTATED_AT = CREATED_AT + 86400
+
 FIXTURE_SEED_LABEL = b"nolune/federation/fixture-seed/v1"
+PEER_SEED_LABEL = b"nolune/federation/fixture-seed/v1/peer"
+ROTATED_SEED_LABEL = b"nolune/federation/fixture-seed/v1/rotated"
+FIXTURE_NONCE_LABEL = b"nolune/federation/fixture-nonce/v1"
 COMPANION_ID_DOMAIN = b"nolune/federation/companion-id/v1\0"
 IDENTITY_SIGNING_DOMAIN = b"nolune/federation/identity/v1\0"
 ENVELOPE_SIGNING_DOMAIN = b"nolune/federation/envelope/v1\0"
+TRANSPORT_SIGNING_DOMAIN = b"nolune/federation/transport/v1\0"
+ROTATION_SIGNING_DOMAIN = b"nolune/federation/rotation/v1\0"
 
 # PKCS#8 DER prefix for an Ed25519 private key; the 32-byte seed follows.
 PKCS8_ED25519_PREFIX = bytes.fromhex("302e020100300506032b657004220420")
@@ -59,59 +73,128 @@ def run(args, stdin=None):
     return subprocess.run(args, input=stdin, check=True, capture_output=True).stdout
 
 
-def main():
-    seed = hashlib.sha256(FIXTURE_SEED_LABEL).digest()
-    with tempfile.TemporaryDirectory() as tmp:
-        key_der = os.path.join(tmp, "key.der")
-        with open(key_der, "wb") as handle:
+class Signer:
+    """One Ed25519 key derived from a public label, signed through OpenSSL."""
+
+    def __init__(self, tmp: str, label: bytes, name: str):
+        seed = hashlib.sha256(label).digest()
+        self.key_der = os.path.join(tmp, f"{name}.der")
+        with open(self.key_der, "wb") as handle:
             handle.write(PKCS8_ED25519_PREFIX + seed)
         public_der = run(
-            [OPENSSL, "pkey", "-inform", "DER", "-in", key_der, "-pubout", "-outform", "DER"]
+            [OPENSSL, "pkey", "-inform", "DER", "-in", self.key_der, "-pubout", "-outform", "DER"]
         )
-        public_key = public_der[-32:]
+        self.public_key = public_der[-32:]
+        self.companion_id = b64url(
+            hashlib.sha256(COMPANION_ID_DOMAIN + self.public_key).digest()
+        )
+        self.message_path = os.path.join(tmp, f"{name}-message.bin")
 
-        def sign(message: bytes) -> bytes:
-            message_path = os.path.join(tmp, "message.bin")
-            with open(message_path, "wb") as handle:
-                handle.write(message)
-            return run(
-                [
-                    OPENSSL, "pkeyutl", "-sign", "-rawin",
-                    "-inkey", key_der, "-keyform", "DER", "-in", message_path,
-                ]
-            )
+    def sign(self, message: bytes) -> bytes:
+        with open(self.message_path, "wb") as handle:
+            handle.write(message)
+        return run(
+            [
+                OPENSSL, "pkeyutl", "-sign", "-rawin",
+                "-inkey", self.key_der, "-keyform", "DER", "-in", self.message_path,
+            ]
+        )
 
-        companion_id = b64url(hashlib.sha256(COMPANION_ID_DOMAIN + public_key).digest())
-
-        identity_message = canonical(
+    def identity(self, created_at: int) -> dict:
+        message = canonical(
             IDENTITY_SIGNING_DOMAIN,
             ("u32", VERSION),
-            ("bytes", companion_id.encode("ascii")),
-            ("bytes", public_key),
-            ("u64", CREATED_AT),
+            ("bytes", self.companion_id.encode("ascii")),
+            ("bytes", self.public_key),
+            ("u64", created_at),
         )
-        identity = {
+        return {
             "version": VERSION,
-            "companion_id": companion_id,
-            "public_key": b64url(public_key),
-            "created_at": CREATED_AT,
-            "signature": b64url(sign(identity_message)),
+            "companion_id": self.companion_id,
+            "public_key": b64url(self.public_key),
+            "created_at": created_at,
+            "signature": b64url(self.sign(message)),
         }
+
+
+def main():
+    with tempfile.TemporaryDirectory() as tmp:
+        signer = Signer(tmp, FIXTURE_SEED_LABEL, "fixture")
+        peer = Signer(tmp, PEER_SEED_LABEL, "peer")
+        rotated = Signer(tmp, ROTATED_SEED_LABEL, "rotated")
+
+        identity = signer.identity(CREATED_AT)
+        peer_identity = peer.identity(CREATED_AT)
+        rotated_identity = rotated.identity(ROTATED_AT)
 
         envelope_message = canonical(
             ENVELOPE_SIGNING_DOMAIN,
             ("u32", VERSION),
-            ("bytes", companion_id.encode("ascii")),
+            ("bytes", signer.companion_id.encode("ascii")),
             ("bytes", hashlib.sha256(BODY).digest()),
         )
         envelope = {
             "version": VERSION,
-            "sender": companion_id,
+            "sender": signer.companion_id,
             "body": b64url(BODY),
-            "signature": b64url(sign(envelope_message)),
+            "signature": b64url(signer.sign(envelope_message)),
         }
 
-    for name, value in (("identity_v1.json", identity), ("envelope_v1.json", envelope)):
+        # The transport envelope signs over the body's digest, which it also
+        # carries, so a tampered body is caught by the hash and a tampered
+        # hash by the signature.
+        nonce = hashlib.sha256(FIXTURE_NONCE_LABEL).digest()[:16]
+        body_hash = hashlib.sha256(TRANSPORT_BODY).digest()
+        transport_message = canonical(
+            TRANSPORT_SIGNING_DOMAIN,
+            ("u32", VERSION),
+            ("bytes", signer.companion_id.encode("ascii")),
+            ("bytes", peer.companion_id.encode("ascii")),
+            ("bytes", nonce),
+            ("u64", ISSUED_AT),
+            ("u64", EXPIRES_AT),
+            ("bytes", body_hash),
+        )
+        transport = {
+            "version": VERSION,
+            "sender": signer.companion_id,
+            "recipient": peer.companion_id,
+            "nonce": b64url(nonce),
+            "issued_at": ISSUED_AT,
+            "expires_at": EXPIRES_AT,
+            "body_hash": b64url(body_hash),
+            "body": b64url(TRANSPORT_BODY),
+            "signature": b64url(signer.sign(transport_message)),
+        }
+
+        # The rotation binds the old identity to the new one: the old key
+        # endorses, the new key proves possession, over the same bytes.
+        rotation_message = canonical(
+            ROTATION_SIGNING_DOMAIN,
+            ("u32", VERSION),
+            ("bytes", signer.companion_id.encode("ascii")),
+            ("bytes", signer.public_key),
+            ("bytes", rotated.companion_id.encode("ascii")),
+            ("bytes", rotated.public_key),
+            ("u64", ROTATED_AT),
+        )
+        rotation = {
+            "version": VERSION,
+            "previous": identity,
+            "identity": rotated_identity,
+            "rotated_at": ROTATED_AT,
+            "endorsement": b64url(signer.sign(rotation_message)),
+            "signature": b64url(rotated.sign(rotation_message)),
+        }
+
+    for name, value in (
+        ("identity_v1.json", identity),
+        ("envelope_v1.json", envelope),
+        ("peer_identity_v1.json", peer_identity),
+        ("rotated_identity_v1.json", rotated_identity),
+        ("transport_v1.json", transport),
+        ("rotation_v1.json", rotation),
+    ):
         with open(os.path.join(HERE, name), "w", encoding="utf-8") as handle:
             json.dump(value, handle, indent=2)
             handle.write("\n")

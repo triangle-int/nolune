@@ -15,6 +15,10 @@ import type {
 	ContinuityListing,
 	ContinuityRecord,
 	ContinuityUpdate,
+	Commitment,
+	CommitmentListFilter,
+	CommitmentPatch,
+	CompletionEvidence,
 	ContinuationCheck,
 	ContinuationPreview,
 	HandoffAccepted,
@@ -263,11 +267,14 @@ export function fetchConfigStatus(): Promise<{
 	return json("/api/config/status");
 }
 
+/** The providers the server ships adapters for (#156, #26). */
+export type LlmProvider = "anthropic" | "openai" | "openrouter";
+
 /** A user-defined model choice (#156): provider plus model id, under a name. */
 export interface ModelPreset {
 	id: string;
 	name: string;
-	provider: "anthropic" | "openai";
+	provider: LlmProvider;
 	model: string;
 }
 
@@ -278,7 +285,7 @@ export interface ModelPresets {
 	/** Preset for memory extraction, titles, check-ins, and reflection. */
 	background_preset: string;
 	/** Providers that have an API key. */
-	keyed_providers: ("anthropic" | "openai")[];
+	keyed_providers: LlmProvider[];
 	setup_required: string | null;
 }
 
@@ -300,7 +307,7 @@ export function updateModelPresets(payload: {
 }
 
 /** Add a provider's default presets and fill empty slots. Safe to repeat. */
-export function seedModelPresets(provider: "anthropic" | "openai"): Promise<ModelPresets & { added: number }> {
+export function seedModelPresets(provider: LlmProvider): Promise<ModelPresets & { added: number }> {
 	return json("/api/config/models/seed", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
@@ -584,6 +591,57 @@ export function updateProactivePolicy(slug: string, policy: ProactivePolicy): Pr
 		method: "PUT",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(policy),
+	});
+}
+
+/** Commitments (#85): the record is the source of truth; every write answers with it. */
+export class CommitmentError extends Error {
+	constructor(public readonly body: string, public readonly status: number) {
+		super(body);
+		this.name = "CommitmentError";
+	}
+}
+
+/** Refusals are typed JSON (`{error, message}`); keep the body so the UI can explain them. */
+async function commitmentJson<T>(url: string, init?: RequestInit): Promise<T> {
+	const res = await authedFetch(url, init);
+	if (res.status === 401) throw new AuthError();
+	if (!res.ok) throw new CommitmentError(await res.text().catch(() => ""), res.status);
+	return res.json();
+}
+
+export function fetchCommitments(slug: string, status: CommitmentListFilter = "open"): Promise<Commitment[]> {
+	return commitmentJson(`/api/instances/${encodeURIComponent(slug)}/commitments?status=${status}`);
+}
+
+export function updateCommitment(slug: string, commitmentId: string, patch: CommitmentPatch): Promise<Commitment> {
+	return commitmentJson(`/api/instances/${encodeURIComponent(slug)}/commitments/${encodeURIComponent(commitmentId)}`, {
+		method: "PATCH",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(patch),
+	});
+}
+
+export function snoozeCommitment(slug: string, commitmentId: string, until: number): Promise<Commitment> {
+	return commitmentJson(`/api/instances/${encodeURIComponent(slug)}/commitments/${encodeURIComponent(commitmentId)}/snooze`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ until }),
+	});
+}
+
+/** The body is the evidence; the server refuses a completion without confirmation or evidence. */
+export function completeCommitment(slug: string, commitmentId: string, evidence: CompletionEvidence): Promise<Commitment> {
+	return commitmentJson(`/api/instances/${encodeURIComponent(slug)}/commitments/${encodeURIComponent(commitmentId)}/complete`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(evidence),
+	});
+}
+
+export function cancelCommitment(slug: string, commitmentId: string): Promise<Commitment> {
+	return commitmentJson(`/api/instances/${encodeURIComponent(slug)}/commitments/${encodeURIComponent(commitmentId)}/cancel`, {
+		method: "POST",
 	});
 }
 

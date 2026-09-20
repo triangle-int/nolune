@@ -11,12 +11,21 @@ Thanks for your interest in contributing! Here's how to get started.
 
 ### Server
 
+The server embeds `client/build`, so build the web client once first
+(`pnpm --dir client install && pnpm --dir client build`). Then:
+
 ```bash
-cd server
-cp config.example.toml config.toml
-# Edit config.toml with your API keys
-cargo run
+cargo run --manifest-path server/Cargo.toml -- onboard   # writes ~/.nolune/config.toml with a token
+cargo run --manifest-path server/Cargo.toml -- gateway   # runs the server in the foreground
+cargo run --manifest-path server/Cargo.toml -- pair      # second terminal: one-time code for the first browser
 ```
+
+`nolune onboard` is safe to rerun. Because it generates a token, the web client
+at `http://localhost:26559` opens on a pairing gate: enter the code that
+`nolune pair` printed, then add your model provider API key under
+**Settings → Connections**, or edit `~/.nolune/config.toml` by hand;
+`server/config.example.toml` documents every section. Point `NOLUNE_HOME` at a
+scratch directory to keep a development server away from your real data.
 
 ### Client
 
@@ -30,11 +39,12 @@ pnpm dev
 
 ```bash
 cd landing
-cp .env.example .env
-# Fill in environment variables
 pnpm install
 pnpm dev
 ```
+
+The site is fully static: no environment file, database, or credentials are
+needed to build or deploy it (see [landing/README.md](landing/README.md)).
 
 ### Desktop (Tauri)
 

@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "previous": {
+    "version": 1,
+    "companion_id": "_gNGE_IhVJx8y6mCBkyNM5_BhjuuTeIUwa6WQa8NZLs",
+    "public_key": "yob7BCJNccQgNdznxaQZ_Rxn1k5ACU12hxmKeBKNhL0",
+    "created_at": 1789862400,
+    "signature": "tKeA5xYaidSk1pRDXstoafayVx7ta5to_Jwpy466NPUoxpf3vowmceig_vb3i4MeKkXkbzQtN0hILvovpTrSCw"
+  },
+  "identity": {
+    "version": 1,
+    "companion_id": "rU1PQlLIei5r-2ifycehhXTi-qxXpV__QkOvFC1hiaU",
+    "public_key": "RFrXAlgkkviTLVh6uj7Y8-P-86VQIRLLSF_J3vPXpeA",
+    "created_at": 1789948800,
+    "signature": "0wQd_yr9h2S3BSec9cZx9nRyJSlLd5veF-PdTmCtV4Raz-26ATSuVFGMeNsRkx8qNSfOEejukzXfGJHVRC04AA"
+  },
+  "rotated_at": 1789948800,
+  "endorsement": "xz3Wzk5OeMIkYiJmWrCj33pF3fGNaSY4XmHODwHWzqIgKlGUhO-wiHGHIIMUhF__AsOlNyV3P0y4tJRXb6_2Aw",
+  "signature": "ISLCD4r9EVBL-wLRcsCW4ns-O-P_gZoaeOtBG-Wuemcs6n3hAn6ToMdAyoTYSzbSXURZB5LP2_cP4TTX4t2dCA"
+}

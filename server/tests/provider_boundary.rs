@@ -1,6 +1,6 @@
-//! Guard for #24 and #25: each provider's wire format lives in its adapter,
-//! and the rest of the server acts on typed `LlmError` variants rather than
-//! on status codes found in error strings.
+//! Guard for #24, #25 and #26: each provider's wire format lives in its
+//! adapter, and the rest of the server acts on typed `LlmError` variants
+//! rather than on status codes found in error strings.
 
 #[path = "../test-support/source_scan.rs"]
 mod source_scan;
@@ -13,7 +13,11 @@ use std::{
 
 const ANTHROPIC_ADAPTER: &str = "server/src/services/llm/anthropic.rs";
 const OPENAI_ADAPTER: &str = "server/src/services/llm/openai.rs";
+const OPENROUTER_ADAPTER: &str = "server/src/services/llm/openrouter.rs";
 const BACKEND_TYPES: &str = "server/src/services/llm/types.rs";
+
+/// Every adapter that turns a provider's answers into `LlmError` variants.
+const ADAPTERS: [&str; 3] = [ANTHROPIC_ADAPTER, OPENAI_ADAPTER, OPENROUTER_ADAPTER];
 
 fn files(root: &Path, extensions: &[&str]) -> Vec<PathBuf> {
     fn visit(dir: &Path, extensions: &[&str], out: &mut Vec<PathBuf>) {
@@ -133,27 +137,69 @@ fn openai_wire_format_lives_only_in_its_adapter() {
         &mut violations,
     );
 
-    // The OpenAI key travels as `Authorization: Bearer`. The server's own API
-    // token is a bearer token too (app/auth.rs); nothing else sends one.
+    // The OpenAI and OpenRouter keys travel as `Authorization: Bearer`. The
+    // server's own API token is a bearer token too (app/auth.rs); nothing
+    // else sends one.
     let bearer_line = |source: &str| {
         source
             .lines()
             .any(|line| line.contains("Authorization") && line.contains("Bearer"))
     };
-    if !bearer_line(source(&sources, OPENAI_ADAPTER)) {
-        violations.push(format!(
-            "{OPENAI_ADAPTER} no longer sends the key as an Authorization: Bearer header"
-        ));
+    for adapter in [OPENAI_ADAPTER, OPENROUTER_ADAPTER] {
+        if !bearer_line(source(&sources, adapter)) {
+            violations.push(format!(
+                "{adapter} no longer sends the key as an Authorization: Bearer header"
+            ));
+        }
     }
     for (relative, source) in &sources {
-        if relative == OPENAI_ADAPTER || relative == "server/src/app/auth.rs" {
+        if relative == OPENAI_ADAPTER
+            || relative == OPENROUTER_ADAPTER
+            || relative == "server/src/app/auth.rs"
+        {
             continue;
         }
         if bearer_line(source) {
             violations.push(format!(
-                "{relative} sends an Authorization: Bearer header; only {OPENAI_ADAPTER} carries the OpenAI key"
+                "{relative} sends an Authorization: Bearer header; only {OPENAI_ADAPTER} and {OPENROUTER_ADAPTER} carry a provider key"
             ));
         }
+    }
+
+    assert!(violations.is_empty(), "{}", violations.join("\n"));
+}
+
+/// OpenRouter (#26): the Chat Completions path, the model catalog path and
+/// the attribution header names live in the adapter; the host in types.rs.
+#[test]
+fn openrouter_wire_format_lives_only_in_its_adapter() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let sources = production_sources(repo);
+    let mut violations = Vec::new();
+
+    assert_owned(
+        &sources,
+        OPENROUTER_ADAPTER,
+        &[
+            "/api/v1/chat/completions",
+            "/api/v1/models",
+            "HTTP-Referer",
+            "X-Title",
+        ],
+        &mut violations,
+    );
+    assert_owned(
+        &sources,
+        BACKEND_TYPES,
+        &["\"https://openrouter.ai\""],
+        &mut violations,
+    );
+    // Attribution is opt-in: the adapter reads what `[llm.openrouter]`
+    // says and never the instance's own address.
+    if source(&sources, OPENROUTER_ADAPTER).contains("public_url") {
+        violations.push(format!(
+            "{OPENROUTER_ADAPTER} reads public_url; attribution comes from [llm.openrouter] only"
+        ));
     }
 
     assert!(violations.is_empty(), "{}", violations.join("\n"));
@@ -168,7 +214,7 @@ fn provider_errors_are_matched_by_variant_not_by_status_strings() {
     // Status codes and provider phrases are only read where the wire
     // format is: the adapters turn them into variants.
     for (relative, source) in &sources {
-        if relative == ANTHROPIC_ADAPTER || relative == OPENAI_ADAPTER {
+        if ADAPTERS.contains(&relative.as_str()) {
             continue;
         }
         for token in [
@@ -216,8 +262,8 @@ fn provider_errors_are_matched_by_variant_not_by_status_strings() {
         }
     }
 
-    // Both adapters produce every variant the callers act on.
-    for adapter in [ANTHROPIC_ADAPTER, OPENAI_ADAPTER] {
+    // Every adapter produces every variant the callers act on.
+    for adapter in ADAPTERS {
         let source = source(&sources, adapter);
         for variant in [
             "LlmError::Authentication",

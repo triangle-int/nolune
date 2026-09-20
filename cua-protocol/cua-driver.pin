@@ -1,0 +1,18 @@
+# The pinned Cua Driver release, as shell reads it: scripts/cua-driver.sh
+# fetches and verifies these assets for .github/workflows/release.yml.
+#
+# The source of truth is cua-protocol/src/cua_driver_pin.rs; the
+# cua-protocol test `the_pin_file_mirrors_the_rust_table_for_scripts`
+# fails whenever this file and the Rust table disagree, so move the pin in
+# both places at once.
+#
+# Lines: `<key> <value>` for the release, `asset <target triple> <asset name> <sha256> <size>` per target.
+version 0.28.2
+tag cua-driver-rs-v0.28.2
+repository trycua/cua
+commit fc188250b4ca8549b8e61f937fdb1fb560770e86
+asset aarch64-apple-darwin cua-driver-rs-0.28.2-darwin-universal.tar.gz e273181b26709c88b1d809474deb3c592b4efae3530b11d76318f1887fc3fbb1 70078129
+asset x86_64-apple-darwin cua-driver-rs-0.28.2-darwin-universal.tar.gz e273181b26709c88b1d809474deb3c592b4efae3530b11d76318f1887fc3fbb1 70078129
+asset x86_64-unknown-linux-gnu cua-driver-rs-0.28.2-linux-x86_64-binary.tar.gz a1d99fd04bb4927ef5ffdbe60eb91ed8b51a2bab60e10fc604a75bd59ce69c3e 30603028
+asset aarch64-unknown-linux-gnu cua-driver-rs-0.28.2-linux-arm64-binary.tar.gz 55e8a32839a4ac369a773df4dac87b345bd4567779221ade4a5e39223a45a2e8 30639613
+asset x86_64-pc-windows-msvc cua-driver-rs-0.28.2-windows-x86_64.zip 3c1fcf10ff9513b94e4af78ad6a216ab62aa95b2c9a3b70dfbdba9f04e021533 29086255
