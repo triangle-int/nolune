@@ -133,6 +133,47 @@ mod tests {
     }
 
     #[test]
+    fn capability_minted_under_one_control_secret_is_rejected_by_another() {
+        // Two server profiles on one host (#107) each derive their signing key from their
+        // own auth token, so a link minted by one cannot open anything on the other.
+        let molinka = ResourceAccess::new("molinka-control-secret");
+        let yuki = ResourceAccess::new("yuki-control-secret");
+        let resource = CapabilityResource::uploaded_file("shared-name.png").unwrap();
+        let url = molinka
+            .url(
+                "",
+                "companion",
+                resource.clone(),
+                CapabilityAudience::Browser,
+            )
+            .unwrap();
+        let uri: axum::http::Uri = url.parse().unwrap();
+
+        assert!(
+            molinka
+                .verify(
+                    "companion",
+                    resource.clone(),
+                    CapabilityAudience::Browser,
+                    &uri,
+                    "GET"
+                )
+                .is_ok()
+        );
+        assert_eq!(
+            yuki.verify(
+                "companion",
+                resource,
+                CapabilityAudience::Browser,
+                &uri,
+                "GET"
+            )
+            .unwrap_err(),
+            CapabilityError::InvalidMac
+        );
+    }
+
+    #[test]
     fn maximum_control_token_does_not_overflow_generation_key() {
         let access = ResourceAccess::new(&"x".repeat(4096));
         assert!(

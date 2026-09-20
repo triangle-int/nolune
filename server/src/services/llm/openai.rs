@@ -588,6 +588,10 @@ pub(super) const CAPABILITIES: Capabilities = Capabilities {
 };
 
 /// The transport implementation is private to this adapter.
+///
+/// `LlmRequest::scope` is accepted and ignored: the Responses API caches
+/// prompts on its own and offers no 5-minute / 1-hour lifetime to choose
+/// from, so only the Anthropic adapter turns the scope into a ttl (#137).
 pub(super) struct OpenaiAdapter(pub LlmBackend);
 impl ProviderAdapter for OpenaiAdapter {
     fn capabilities(&self) -> Capabilities {

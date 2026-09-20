@@ -119,6 +119,52 @@ export interface ProactiveRun {
 	outcome?: RunOutcome | null;
 }
 export interface QuietHours { start_hour: number; end_hour: number }
+
+/** A resumable task record (#81): links and provenance, never file contents. */
+export type ContinuityState = "active" | "waiting" | "ready_to_resume" | "completed" | "dismissed" | "failed";
+export type ProvenanceSource = "user" | "chat" | "tool" | "server";
+export interface Provenance { source: ProvenanceSource; at: number; note: string }
+export type ResourceRef =
+	| { kind: "upload"; id: string }
+	| { kind: "memory"; path: string }
+	| { kind: "machine_path"; machine_id: string; path: string };
+export interface ResourceLink { resource: ResourceRef; provenance: Provenance }
+export interface ContinuityStep { summary: string; provenance: Provenance }
+export type BlockerKind =
+	| { kind: "machine_unavailable"; machine_id: string }
+	| { kind: "resource_missing"; resource: ResourceRef }
+	| { kind: "other" };
+export interface ContinuityBlocker { kind: BlockerKind; detail: string; provenance: Provenance }
+export interface ContinuityRecord {
+	version: number;
+	id: string;
+	goal: string;
+	state: ContinuityState;
+	origin: { chat_id: string; message_id?: string };
+	machine_ids: string[];
+	resources: ResourceLink[];
+	completed_steps: ContinuityStep[];
+	blockers: ContinuityBlocker[];
+	next_step?: string;
+	created_at: number;
+	updated_at: number;
+	provenance: Provenance[];
+}
+/** Files under continuity/ that could not be read; surfaced, never deleted. */
+export interface ContinuityRecordError { file: string; reason: string }
+export interface ContinuityListing { records: ContinuityRecord[]; errors: ContinuityRecordError[] }
+/** One explicit change; lists are added to, never replaced. `note` is required provenance. */
+export interface ContinuityUpdate {
+	goal?: string;
+	state?: ContinuityState;
+	completed_step?: string;
+	blocker?: string;
+	clear_blockers?: boolean;
+	next_step?: string;
+	machine_ids?: string[];
+	resources?: ResourceRef[];
+	note: string;
+}
 export interface ProactivePolicy {
 	enabled: boolean;
 	quiet_hours: QuietHours | null;

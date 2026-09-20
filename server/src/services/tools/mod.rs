@@ -75,6 +75,7 @@ pub fn media_result_url(
 pub mod communication;
 pub mod companion;
 pub mod computer;
+pub mod continuity;
 pub mod files;
 pub mod image;
 pub mod memory_tools;
@@ -450,6 +451,7 @@ pub fn tool_summary(name: &str, args: &str) -> String {
         "update_config" => "updating config".into(),
         "create_drop" => format!("creating drop: {}", v["title"].as_str().unwrap_or("?")),
         "get_settings" => "reading current settings".into(),
+        "task_continuity_update" => "recording task progress".into(),
         "send_email" => {
             let to = v["to"].as_str().unwrap_or("?");
             format!("sending email to {to}")
@@ -811,6 +813,12 @@ pub fn build_tools(
         workspace_dir,
         instance_slug,
         events.clone(),
+    ))));
+    // Explicit task continuity (#81): the only tool that writes continuity records.
+    tools.push(wrap(Box::new(continuity::TaskContinuityUpdateTool::new(
+        workspace_dir,
+        instance_slug,
+        chat_id,
     ))));
     // Explicit schedules run through the proactive loop (#92, #93).
     tools.push(wrap(Box::new(communication::ScheduleAgentTool::new(

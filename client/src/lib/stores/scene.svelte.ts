@@ -10,6 +10,13 @@
 
 import { getContext, setContext } from "svelte";
 import type { RecalledMemory } from "$lib/api/types.js";
+import {
+	companionStatusText,
+	initialCompanionState,
+	reduceCompanion,
+	type CompanionEvent,
+	type CompanionState,
+} from "$lib/companion/state.js";
 
 const SCENE_KEY = Symbol("scene");
 
@@ -27,6 +34,10 @@ export interface SceneStore {
 	readonly voiceAmplitude: number;
 	presenting: boolean;
 	recalledMemories: RecalledMemory[];
+	/** What the companion is really doing, derived from runtime events (#86). */
+	readonly companion: CompanionState;
+	/** Accessible sentence for `companion`, e.g. "Nolune is working on studio-mac: opening Finder." */
+	readonly companionStatus: string;
 
 	enterHome(): void;
 	enterOnboarding(slug: string): void;
@@ -35,6 +46,8 @@ export interface SceneStore {
 	setMood(m: string): void;
 	setThinking(v: boolean): void;
 	setVoiceAmplitude(v: number): void;
+	/** Feed one runtime event through the companion-state reducer. */
+	companionEvent(event: CompanionEvent): void;
 	skipIntro(): void;
 	tick(): void;
 }
@@ -46,6 +59,8 @@ const SELECT_DURATION = 0.7;
 const INTRO_DURATION = 6.0;
 const PHASE_TRAVELING = 1.5;
 const PHASE_SETTLING = 3.5;
+/** How long "completed" is shown before the companion settles back to idle (ms). */
+const COMPLETED_HOLD_MS = 4000;
 
 export function createSceneStore(): SceneStore {
 	let mode = $state<SceneMode>("home");
@@ -58,9 +73,31 @@ export function createSceneStore(): SceneStore {
 	let voiceAmplitude = $state(0);
 	let presenting = $state(false);
 	let recalledMemories = $state<RecalledMemory[]>([]);
+	// The reducer returns frozen snapshots, replaced wholesale; no deep proxy needed.
+	let companion = $state.raw<CompanionState>(initialCompanionState());
+	const companionStatus = $derived(companionStatusText(companion));
+	let settleTimer: ReturnType<typeof setTimeout> | null = null;
 
 	let selectStartTime = 0;
 	let introStartTime = 0;
+
+	function companionEvent(event: CompanionEvent) {
+		const next = reduceCompanion(companion, event);
+		if (next === companion) return;
+		companion = next;
+		if (settleTimer) {
+			clearTimeout(settleTimer);
+			settleTimer = null;
+		}
+		// "completed" is the one transient state: it is time-boxed here, never
+		// inside the reducer, so the reducer stays deterministic.
+		if (next.kind === "completed") {
+			settleTimer = setTimeout(() => {
+				settleTimer = null;
+				companionEvent({ type: "settle" });
+			}, COMPLETED_HOLD_MS);
+		}
+	}
 
 	// ── Tick — called every frame by SharedScene ──
 	function tick() {
@@ -102,6 +139,8 @@ export function createSceneStore(): SceneStore {
 		set presenting(v) { presenting = v; },
 		get recalledMemories() { return recalledMemories; },
 		set recalledMemories(v) { recalledMemories = v; },
+		get companion() { return companion; },
+		get companionStatus() { return companionStatus; },
 
 		enterHome() {
 			if (mode === "selecting" || mode === "intro") return;
@@ -155,6 +194,7 @@ export function createSceneStore(): SceneStore {
 		setMood(m) { mood = m; },
 		setThinking(v) { thinking = v; },
 		setVoiceAmplitude(v) { voiceAmplitude = v; },
+		companionEvent,
 		skipIntro() {
 			mode = "chat";
 			introPhase = "done";
