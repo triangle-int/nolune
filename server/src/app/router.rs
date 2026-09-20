@@ -21,6 +21,7 @@ fn api_router(state: &AppState) -> Router<AppState> {
         .merge(routes::commitments::router())
         .merge(routes::continuity::router())
         .merge(routes::handoff::router())
+        .merge(routes::resume::router())
         .merge(routes::resources::issuance_router())
         .merge(routes::instances::router())
         .merge(routes::chat::router())
@@ -122,3 +123,7 @@ mod federation_transport_tests;
 #[cfg(test)]
 #[path = "../../test-support/handoff_cards.rs"]
 mod handoff_tests;
+
+#[cfg(test)]
+#[path = "../../test-support/resume_ritual.rs"]
+mod resume_ritual_tests;

@@ -55,6 +55,11 @@ pub enum ServerEvent {
         instance_slug: String,
         card: crate::domain::handoff::HandoffCard,
     },
+    /// The resume ritual's offer changed (#83): a new suggestion, or none (`null`).
+    ResumeUpdated {
+        instance_slug: String,
+        suggestion: Option<crate::services::resume_ritual::ResumeOffer>,
+    },
     ContextCompacting {
         instance_slug: String,
         chat_id: String,

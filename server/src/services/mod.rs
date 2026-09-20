@@ -28,6 +28,7 @@ pub mod profile_archive;
 pub mod profile_import;
 #[allow(dead_code)] // Foundation for route/producer migration in #116.
 pub(crate) mod resource_capability;
+pub mod resume_ritual;
 pub mod rhythm;
 pub mod scheduler;
 pub mod skills;

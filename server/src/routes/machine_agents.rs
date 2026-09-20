@@ -474,6 +474,9 @@ pub(crate) async fn on_machine_connected(
         );
     }
 
+    // Waiting work that names this computer may be offered for resumption (#83).
+    crate::services::resume_ritual::on_machine_connected(state, machine_id).await;
+
     // Reconnect bursts are deduplicated and rate-limited by the loop.
     let handle = match state.proactive.begin(
         Trigger::MachineConnected {

@@ -144,6 +144,12 @@ impl ProactiveLoop {
         }
     }
 
+    /// Whether the policy's quiet hours are active at `now`: the one clock
+    /// every spontaneous surface holds by, the resume ritual included (#83).
+    pub fn quiet_hours_now(&self, now: i64) -> bool {
+        self.in_quiet_hours(&self.policy(), now)
+    }
+
     // ── lifecycle ──────────────────────────────────────────────────────────
 
     pub fn begin(&self, trigger: Trigger, reason: &str, target: Target) -> Admission {
