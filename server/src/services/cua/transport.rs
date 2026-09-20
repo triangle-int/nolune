@@ -29,6 +29,10 @@ pub type TransportFuture<'a> = Pin<Box<dyn Future<Output = CallOutcome> + Send +
 pub trait DriverTransport: Send + Sync {
     /// Call one MCP tool by its driver name and return its structured payload.
     fn call_tool(&self, name: &str, arguments: Map<String, Value>) -> TransportFuture<'_>;
+
+    /// Stop the driver for good: later calls fail and the child, if any, is
+    /// killed. Idempotent, so a shutdown hook and a drop can both call it.
+    fn close(&self);
 }
 
 /// The structured payload of an MCP `tools/call` result.
@@ -168,7 +172,7 @@ impl StdioDriverTransport {
 
     /// Stop the driver child; the process is killed when the connection drops.
     pub fn shutdown(self) {
-        log::info!("[cua] driver stopped");
+        self.close();
         drop(self);
     }
 }
@@ -206,6 +210,10 @@ impl DriverTransport for StdioDriverTransport {
             payload_from_call_result(result)
         })
     }
+
+    fn close(&self) {
+        todo!("slice 3: close the driver child from the shutdown hook")
+    }
 }
 
 #[cfg(test)]
@@ -220,6 +228,7 @@ pub(crate) mod fake {
     pub struct FakeTransport {
         calls: Mutex<Vec<(String, Map<String, Value>)>>,
         outcomes: Mutex<VecDeque<CallOutcome>>,
+        closed: std::sync::atomic::AtomicBool,
     }
 
     impl FakeTransport {
@@ -227,6 +236,7 @@ pub(crate) mod fake {
             Self {
                 calls: Mutex::new(Vec::new()),
                 outcomes: Mutex::new(outcomes.into_iter().collect()),
+                closed: std::sync::atomic::AtomicBool::new(false),
             }
         }
 
@@ -234,10 +244,27 @@ pub(crate) mod fake {
         pub fn calls(&self) -> Vec<(String, Map<String, Value>)> {
             self.calls.lock().unwrap().clone()
         }
+
+        /// The tool names called, in order.
+        pub fn tools_called(&self) -> Vec<String> {
+            self.calls().into_iter().map(|(name, _)| name).collect()
+        }
+
+        /// Whether `close` was called: the stand-in for a killed child.
+        pub fn closed(&self) -> bool {
+            self.closed.load(std::sync::atomic::Ordering::SeqCst)
+        }
     }
 
     impl DriverTransport for FakeTransport {
         fn call_tool(&self, name: &str, arguments: Map<String, Value>) -> TransportFuture<'_> {
+            if self.closed() {
+                return Box::pin(async {
+                    Err(DriverCallFailure::Transport(
+                        "fake driver is closed".to_owned(),
+                    ))
+                });
+            }
             self.calls
                 .lock()
                 .unwrap()
@@ -253,6 +280,10 @@ pub(crate) mod fake {
                     )))
                 });
             Box::pin(async move { outcome })
+        }
+
+        fn close(&self) {
+            self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
         }
     }
 }
@@ -475,6 +506,51 @@ done
             "{again:?}"
         );
         transport.shutdown();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn close_kills_the_driver_child_and_fails_later_calls() {
+        use std::time::{Duration, Instant};
+
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        let stub = script(
+            dir.path(),
+            "closing-driver",
+            &format!(
+                "echo $$ > '{}'\n{HANDSHAKE_ONLY_SERVER}",
+                pid_file.display()
+            ),
+        );
+        let transport = StdioDriverTransport::spawn_with(
+            &stub,
+            DriverTimeouts {
+                handshake: Duration::from_secs(10),
+                call: Duration::from_millis(500),
+            },
+        )
+        .await
+        .expect("the stub completes the handshake");
+        let pid = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .to_owned();
+        assert!(process_exists(&pid), "the child runs after the handshake");
+
+        transport.close();
+        transport.close(); // idempotent
+
+        let gone_by = Instant::now() + Duration::from_secs(5);
+        while process_exists(&pid) && Instant::now() < gone_by {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(!process_exists(&pid), "child {pid} outlived close()");
+        let after = transport.call_tool("health_report", Map::new()).await;
+        assert!(
+            after.is_err(),
+            "a closed transport answers nothing: {after:?}"
+        );
     }
 
     #[test]

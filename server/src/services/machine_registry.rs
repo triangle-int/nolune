@@ -147,13 +147,40 @@ pub struct CuaTargets {
     targets: Arc<Mutex<BTreeMap<MachineId, Arc<CheckedCuaAdapter>>>>,
 }
 
+/// A server-local target as `GET /machines` lists it: the descriptor plus
+/// the labels a descriptor does not carry.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ServerLocalEntry {
+    pub descriptor: MachineDescriptor,
+    /// The host's name for display; the id is derived from it (#16).
+    pub hostname: String,
+    /// Unix seconds of the registration: `first_seen` for the row.
+    pub registered_at: i64,
+}
+
 impl CuaTargets {
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Add a server-local target with the hostname the API shows for it and
+    /// the time it registered. Fails when its machine id is already registered.
+    pub async fn register_server_local(
+        &self,
+        adapter: CheckedCuaAdapter,
+        hostname: &str,
+        registered_at: i64,
+    ) -> Result<(), CuaRegistrationError> {
+        let _ = (adapter, hostname, registered_at);
+        todo!("slice 3: server-local rows in GET /machines")
+    }
+
+    /// The server-local targets as the known-machines listing shows them.
+    pub async fn server_local_entries(&self) -> Vec<ServerLocalEntry> {
+        todo!("slice 3: server-local rows in GET /machines")
+    }
+
     /// Add a target. Fails when its machine id is already registered.
-    #[allow(dead_code)] // Registered by the driver runtime (#16, transport slice).
     pub async fn register(&self, adapter: CheckedCuaAdapter) -> Result<(), CuaRegistrationError> {
         let descriptor = adapter.descriptor();
         let id = descriptor.machine_id.clone();
@@ -173,7 +200,6 @@ impl CuaTargets {
     }
 
     /// Remove a target; returns whether it was registered.
-    #[allow(dead_code)] // Called when the driver runtime shuts down (#16, transport slice).
     pub async fn unregister(&self, machine_id: &MachineId) -> bool {
         let removed = self.targets.lock().await.remove(machine_id).is_some();
         if removed {
@@ -197,7 +223,7 @@ impl CuaTargets {
 
     /// Resolve a target through `cua_protocol::select_machine`: the requested
     /// id when given, otherwise the only target, never a guess between several.
-    #[allow(dead_code)] // Used by the typed machine tools (#16, transport slice).
+    #[allow(dead_code)] // Used by the typed machine tools (#17/#18).
     pub async fn select(
         &self,
         requested: Option<&MachineId>,
@@ -1314,6 +1340,76 @@ mod cua_targets_tests {
             targets.select(None).await.err(),
             Some(SelectionError::NoMachines)
         );
+    }
+
+    #[tokio::test]
+    async fn a_server_local_target_is_a_live_known_machine_row_without_a_record() {
+        let registry = MachineRegistry::new();
+        let advertised = descriptor("server-local:studio", MachineLocation::ServerLocal);
+        registry
+            .cua()
+            .register_server_local(
+                fake_adapter(advertised.clone()),
+                "studio.local",
+                1_700_000_000,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            registry.cua().server_local_entries().await,
+            vec![ServerLocalEntry {
+                descriptor: advertised.clone(),
+                hostname: "studio.local".into(),
+                registered_at: 1_700_000_000,
+            }]
+        );
+        // Registered like any other target: listed, selectable, duplicate-checked.
+        assert_eq!(registry.cua().list().await, vec![advertised.clone()]);
+        assert_eq!(
+            registry
+                .cua()
+                .register_server_local(fake_adapter(advertised.clone()), "again", 1)
+                .await,
+            Err(CuaRegistrationError::DuplicateMachineId(id(
+                "server-local:studio"
+            )))
+        );
+
+        let known = registry.known_at(1_700_000_600).await.unwrap();
+        assert_eq!(known.len(), 1, "{known:?}");
+        let row = &known[0];
+        assert_eq!(row.machine_id, "server-local:studio");
+        assert_eq!(row.location, MachineLocation::ServerLocal);
+        assert_eq!(row.hostname, "studio.local");
+        assert_eq!(row.display_name, "studio.local");
+        assert_eq!(row.os, "macos");
+        assert_eq!(row.platform, Some(Platform::Macos));
+        assert_eq!((row.screen_width, row.screen_height), (0, 0));
+        assert!(row.online);
+        assert_eq!(row.health, MachineHealth::Healthy);
+        assert_eq!(row.cua_health, Some(MachineHealth::Healthy));
+        assert_eq!(row.driver_version.as_deref(), Some("0.28.2"));
+        assert_eq!(row.capabilities, vec!["app_discovery".to_owned()]);
+        assert_eq!(row.first_seen, 1_700_000_000);
+        assert_eq!(row.last_seen, 1_700_000_600);
+        // Never written to the file: it is live state, not a desktop record.
+        assert!(
+            registry
+                .known
+                .with(&[], |records| (records.is_empty(), false))
+                .unwrap()
+                .0,
+            "no record was created for the server-local target"
+        );
+        assert_eq!(
+            registry.rename("server-local:studio", Some("Home")).await,
+            Err(MachineError::NotFound("server-local:studio".into())),
+            "a live row cannot be renamed like a record"
+        );
+
+        // Unregistered targets leave no row behind.
+        assert!(registry.cua().unregister(&id("server-local:studio")).await);
+        assert!(registry.known_at(1_700_000_600).await.unwrap().is_empty());
     }
 
     #[tokio::test]

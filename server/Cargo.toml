@@ -56,6 +56,7 @@ same-file = "1.0.6"
 tar = "0.4"
 flate2 = "1"
 cua-protocol = { path = "../cua-protocol" }
+gethostname = "1.1.0"
 
 [dev-dependencies]
 # Already in the tree under ed25519-dalek; used only to build forged signatures in tests.

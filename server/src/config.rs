@@ -28,6 +28,9 @@ pub struct Config {
     pub mcp_servers: Vec<McpServerConfig>,
     #[serde(default)]
     pub github: GithubConfig,
+    /// The server-local Cua Driver runtime (#16).
+    #[serde(default)]
+    pub cua: CuaConfig,
 }
 
 /// Independent text embedding configuration. Credentials stay in llm.tokens.OPEN_AI.
@@ -138,6 +141,58 @@ impl EmbeddingConfig {
 impl Config {
     pub fn embedding_status(&self) -> serde_json::Value {
         self.embedding.safe_status(&self.llm.tokens.open_ai)
+    }
+}
+
+/// The server-local Cua Driver runtime (#16): the machine the server itself
+/// runs on, registered as a computer-use target when a `cua-driver` binary
+/// and a display are there. A headless host registers nothing and stays
+/// healthy. Unknown keys are refused so a misspelt option is never a silent
+/// "no GUI target".
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CuaConfig {
+    /// `false` never looks for a driver, so the server never controls itself.
+    pub enabled: bool,
+    /// Path to the `cua-driver` binary. Empty means `NOLUNE_CUA_DRIVER`, then
+    /// an executable `cua-driver` on `PATH`.
+    pub driver_path: String,
+    /// Seconds `cua-driver mcp` may take to answer the MCP handshake at startup.
+    pub handshake_timeout_secs: u64,
+    /// Seconds one driver call may take before it is cancelled.
+    pub call_timeout_secs: u64,
+    /// Seconds one run may keep its driver session open before the session is
+    /// ended and the run reported as timed out.
+    pub run_timeout_secs: u64,
+}
+
+impl Default for CuaConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            driver_path: String::new(),
+            handshake_timeout_secs: 10,
+            call_timeout_secs: 30,
+            run_timeout_secs: 900,
+        }
+    }
+}
+
+impl CuaConfig {
+    /// The configured driver binary, `None` when the path is empty.
+    pub fn driver_path(&self) -> Option<&Path> {
+        todo!("slice 3: [cua] config")
+    }
+
+    /// The driver deadlines; a zero keeps the default so a stray `0` never
+    /// makes every call fail.
+    pub fn timeouts(&self) -> crate::services::cua::transport::DriverTimeouts {
+        todo!("slice 3: [cua] config")
+    }
+
+    /// How long one run may hold its session; zero keeps the default.
+    pub fn run_timeout(&self) -> std::time::Duration {
+        todo!("slice 3: [cua] config")
     }
 }
 
@@ -567,6 +622,7 @@ impl Default for Config {
             registry_url: default_registry_url(),
             mcp_servers: Vec::new(),
             github: GithubConfig::default(),
+            cua: CuaConfig::default(),
         }
     }
 }
@@ -1832,5 +1888,71 @@ mod profile_tests {
 
         let invalid = resolve_profile_in(home, None, Some("Molinka")).unwrap_err();
         assert!(invalid.contains("Molinka"), "{invalid}");
+    }
+}
+
+#[cfg(test)]
+mod cua_config_tests {
+    use super::{Config, CuaConfig};
+
+    #[test]
+    fn the_cua_section_is_optional_and_defaults_to_looking_for_a_driver() {
+        use std::time::Duration;
+
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.cua, CuaConfig::default());
+        assert!(
+            config.cua.enabled,
+            "a GUI host gets its target out of the box"
+        );
+        assert_eq!(config.cua.driver_path(), None, "empty means look it up");
+        let timeouts = config.cua.timeouts();
+        assert_eq!(timeouts.handshake, Duration::from_secs(10));
+        assert_eq!(timeouts.call, Duration::from_secs(30));
+        assert_eq!(config.cua.run_timeout(), Duration::from_secs(900));
+
+        // The default config file carries the section so users can find it.
+        let saved = toml::to_string_pretty(&Config::default()).unwrap();
+        assert!(saved.contains("[cua]"), "{saved}");
+        assert!(saved.contains("enabled = true"), "{saved}");
+    }
+
+    #[test]
+    fn the_cua_section_loads_every_option_and_refuses_unknown_keys() {
+        use std::path::Path;
+        use std::time::Duration;
+
+        let config: Config = toml::from_str(
+            r#"
+[cua]
+enabled = false
+driver_path = "/opt/cua/bin/cua-driver"
+handshake_timeout_secs = 3
+call_timeout_secs = 45
+run_timeout_secs = 120
+"#,
+        )
+        .unwrap();
+        assert!(!config.cua.enabled);
+        assert_eq!(
+            config.cua.driver_path(),
+            Some(Path::new("/opt/cua/bin/cua-driver"))
+        );
+        let timeouts = config.cua.timeouts();
+        assert_eq!(timeouts.handshake, Duration::from_secs(3));
+        assert_eq!(timeouts.call, Duration::from_secs(45));
+        assert_eq!(config.cua.run_timeout(), Duration::from_secs(120));
+
+        // A zero never makes every call fail; it keeps the default.
+        let zeros: Config = toml::from_str(
+            "[cua]\nhandshake_timeout_secs = 0\ncall_timeout_secs = 0\nrun_timeout_secs = 0",
+        )
+        .unwrap();
+        assert_eq!(zeros.cua.timeouts(), CuaConfig::default().timeouts());
+        assert_eq!(zeros.cua.run_timeout(), Duration::from_secs(900));
+
+        // A misspelt option is refused instead of silently meaning "no driver".
+        let typo = toml::from_str::<Config>("[cua]\ndriver_pth = \"/x\"");
+        assert!(typo.is_err(), "unknown [cua] keys must be refused");
     }
 }
