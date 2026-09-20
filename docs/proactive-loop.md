@@ -188,7 +188,28 @@ and further completion answer `closed`.
 Refusals are JSON `{error, message}` with `not_found` (404), `invalid`
 (400), `closed` (409), `evidence_required` (422), or `storage_error` (500).
 Every write is broadcast as a `commitment_updated` server event carrying the
-record. The client controls follow in a later change.
+record.
+
+### Client
+
+The Activity tab lists commitments above the activity receipts
+(`client/src/lib/components/commitments/CommitmentsSection.svelte`, helpers
+in `client/src/lib/commitments/commitments.js`): open ones first (due,
+then active, waiting, blocked, each by next check) with a history filter
+for completed, cancelled, and failed ones. Every card says who promised,
+where it came from, when it is due or what it waits on, whether it is
+snoozed, when the next check is, and what the last check concluded, with a
+link to that check-in's activity record. The user can inspect the record's
+details, edit the promise and deadline, snooze it (presets or a chosen
+time, in the future), complete it, or cancel it. Completing is never
+silent: the control asks for the user's confirmation or evidence text and
+sends exactly that as the evidence, so the server's rule above holds from
+the client as well. A commitment check-in in the activity list states its
+trigger condition in plain words ("Its deadline arrived", "A commitment it
+depended on was completed") and links back to the commitment, which is
+revealed even when it sits under the history filter. Records update live
+from `commitment_updated`. The quiet hours and messages-per-day controls
+on the Companion settings page are the ones commitment check-ins obey.
 
 ### Evaluation
 

@@ -165,6 +165,57 @@ export interface ContinuityUpdate {
 	resources?: ResourceRef[];
 	note: string;
 }
+/** A tracked promise (#85): a bounded record the server keeps, never model text. */
+export type CommitmentStatus = "active" | "waiting" | "blocked" | "due" | "completed" | "dismissed" | "failed";
+export type CommitmentOwner = "companion" | "user";
+export type CommitmentDeadline = { kind: "at"; at: number } | { kind: "window"; start: number; end: number };
+export type CommitmentWait = { kind: "until"; until: number } | { kind: "event"; event: string } | { kind: "user_reply" };
+export type CommitmentProvenance =
+	| { kind: "manual" }
+	| { kind: "chat"; chat_id: string; message_id?: string }
+	| { kind: "run"; run_id: string };
+/** Why it counts as done; the server refuses a completion with none of these. */
+export interface CompletionEvidence { confirmed_by_user?: boolean; summary?: string; run_id?: string; at?: number }
+export type CommitmentCheckOutcome =
+	| { kind: "unchanged" }
+	| { kind: "triggered" }
+	| { kind: "failed"; error: string; retryable: boolean }
+	| { kind: "observed"; event: string };
+export interface CommitmentCheck { at: number; outcome: CommitmentCheckOutcome; run_id?: string; pending_event?: string }
+export interface Commitment {
+	version: number;
+	id: string;
+	promise: string;
+	owner: CommitmentOwner;
+	status: CommitmentStatus;
+	deadline?: CommitmentDeadline | null;
+	dependencies: string[];
+	waiting_on?: CommitmentWait | null;
+	next_check?: number | null;
+	continuity_ids: string[];
+	provenance: CommitmentProvenance;
+	completion?: CompletionEvidence | null;
+	snoozed_until?: number | null;
+	snooze_count: number;
+	last_check?: CommitmentCheck | null;
+	created_at: number;
+	updated_at: number;
+	status_changed_at: number;
+}
+/** Absent fields are kept; the `clear_*` flags remove optional ones. */
+export interface CommitmentPatch {
+	promise?: string;
+	owner?: CommitmentOwner;
+	deadline?: CommitmentDeadline;
+	clear_deadline?: boolean;
+	dependencies?: string[];
+	waiting_on?: CommitmentWait;
+	clear_waiting_on?: boolean;
+	next_check?: number;
+	clear_next_check?: boolean;
+	continuity_ids?: string[];
+}
+export type CommitmentListFilter = "open" | "closed" | "all";
 export interface ProactivePolicy {
 	enabled: boolean;
 	quiet_hours: QuietHours | null;
@@ -352,6 +403,12 @@ export type ServerEvent =
 			type: "activity_updated";
 			instance_slug: string;
 			run: ProactiveRun;
+	  }
+	| {
+			/** A commitment was created or changed (#85): the whole record, no model text. */
+			type: "commitment_updated";
+			instance_slug: string;
+			commitment: Commitment;
 	  }
 	| {
 			type: "machine_updated";
