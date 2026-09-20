@@ -220,8 +220,9 @@ async fn run_agent_connection(
 
     let (mut write, mut read) = ws.split();
 
-    // Register this machine
-    let machine_id = hostname();
+    // Register this machine under its stable id (#80); the hostname is for display.
+    let machine_id = stable_machine_id(app)?;
+    let host = hostname();
     let os = std::env::consts::OS.to_string();
 
     // Get screen dimensions
@@ -238,21 +239,20 @@ async fn run_agent_connection(
     // Instance slug: only set explicitly via set_instance_slug.
     let instance_slug = INSTANCE_SLUG.lock().ok().and_then(|v| v.clone());
 
-    let register = serde_json::json!({
-        "type": "register",
-        "machine_id": machine_id,
-        "os": os,
-        "hostname": machine_id,
-        "screen_width": sw,
-        "screen_height": sh,
-        "instance_slug": instance_slug,
-    });
+    let register = register_message(
+        &machine_id,
+        &os,
+        &host,
+        (sw, sh),
+        instance_slug,
+        &crate::permissions::check_permissions(),
+    );
     write
         .send(Message::Text(register.to_string().into()))
         .await
         .map_err(|e| format!("send register: {e}"))?;
 
-    eprintln!("[agent] registered as '{machine_id}' ({os}, {sw}x{sh})");
+    eprintln!("[agent] registered as '{machine_id}' ({host}, {os}, {sw}x{sh})");
 
     // Emit server URL so overlay can build iframe src
     app.emit("server-url", instance_url.to_string()).ok();
@@ -917,6 +917,71 @@ fn hostname() -> String {
     gethostname::gethostname().to_string_lossy().to_string()
 }
 
+/// Settings store key for the id this computer registers under.
+const MACHINE_ID_KEY: &str = "machine_id";
+
+/// Every toolcall this agent executes (`execute_action`), reported at
+/// registration so the server can show what the computer can do.
+const CAPABILITIES: [&str; 15] = [
+    "screenshot",
+    "left_click",
+    "right_click",
+    "middle_click",
+    "double_click",
+    "mouse_move",
+    "type",
+    "key",
+    "scroll",
+    "switch_desktop",
+    "bash",
+    "file_read",
+    "file_write",
+    "file_list",
+    "upload_file",
+];
+
+/// The id this computer registers under: a UUID persisted in the settings
+/// store on first use, so reconnects, hostname changes, and reinstalls that
+/// keep the store update the same server-side record (#80).
+fn stable_machine_id(app: &tauri::AppHandle) -> Result<String, String> {
+    use tauri_plugin_store::StoreExt;
+    let store = app
+        .store("settings.json")
+        .map_err(|_| "Could not load settings".to_string())?;
+    let (machine_id, fresh) = machine_id_from_store(store.get(MACHINE_ID_KEY));
+    if fresh {
+        store.set(
+            MACHINE_ID_KEY,
+            serde_json::Value::String(machine_id.clone()),
+        );
+        store
+            .save()
+            .map_err(|_| "Could not save the machine id".to_string())?;
+    }
+    Ok(machine_id)
+}
+
+/// The stored id when it is a UUID, otherwise a fresh one and `true`.
+fn machine_id_from_store(stored: Option<serde_json::Value>) -> (String, bool) {
+    let _ = stored;
+    todo!("machine_id_from_store")
+}
+
+/// The registration the server expects: stable id, hostname for display,
+/// platform label, screen, the companion slug, permission state as the
+/// protocol names it, and what this agent can execute.
+fn register_message(
+    machine_id: &str,
+    os: &str,
+    hostname: &str,
+    screen: (u32, u32),
+    instance_slug: Option<String>,
+    permissions: &crate::permissions::PermissionStatus,
+) -> serde_json::Value {
+    let _ = (machine_id, os, hostname, screen, instance_slug, permissions);
+    todo!("register_message")
+}
+
 /// Upload a local file to the server via curl.
 /// Returns the upload_id on success.
 fn upload_file_to_server(
@@ -1004,6 +1069,120 @@ fn machine_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stored_uuid_is_reused_and_anything_else_is_replaced() {
+        let stored = "4f3c1c2e-9b5e-4d2b-8f0a-1c2d3e4f5a6b";
+        assert_eq!(
+            machine_id_from_store(Some(serde_json::Value::String(stored.into()))),
+            (stored.to_owned(), false)
+        );
+
+        let (fresh, minted) = machine_id_from_store(None);
+        assert!(minted);
+        assert!(uuid::Uuid::parse_str(&fresh).is_ok(), "{fresh}");
+        let (other, _) = machine_id_from_store(None);
+        assert_ne!(fresh, other, "every mint is a new id");
+
+        for bad in [
+            serde_json::Value::String("".into()),
+            serde_json::Value::String("not a uuid".into()),
+            serde_json::Value::String("../escape".into()),
+            serde_json::json!(42),
+            serde_json::json!({"machine_id": stored}),
+        ] {
+            let (replaced, minted) = machine_id_from_store(Some(bad.clone()));
+            assert!(minted, "{bad}");
+            assert!(uuid::Uuid::parse_str(&replaced).is_ok(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn registration_carries_the_stable_id_permissions_and_capabilities() {
+        let message = register_message(
+            "4f3c1c2e-9b5e-4d2b-8f0a-1c2d3e4f5a6b",
+            "macos",
+            "studio.local",
+            (2560, 1440),
+            None,
+            &crate::permissions::PermissionStatus {
+                screen_recording: false,
+                accessibility: true,
+            },
+        );
+        assert_eq!(message["type"], "register");
+        assert_eq!(
+            message["machine_id"],
+            "4f3c1c2e-9b5e-4d2b-8f0a-1c2d3e4f5a6b"
+        );
+        assert_eq!(
+            message["hostname"], "studio.local",
+            "hostname stays for display"
+        );
+        assert_eq!(message["os"], "macos");
+        assert_eq!(message["screen_width"], 2560);
+        assert_eq!(message["screen_height"], 1440);
+        assert_eq!(message["instance_slug"], serde_json::Value::Null);
+        assert_eq!(
+            message["permissions"],
+            serde_json::json!({"accessibility": "granted", "screen_capture": "denied"}),
+            "permissions use the protocol's names and states"
+        );
+        let capabilities: Vec<&str> = message["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(capabilities, CAPABILITIES);
+        for capability in CAPABILITIES {
+            assert!(
+                capability
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b == b'_'),
+                "{capability} must be a plain identifier"
+            );
+        }
+
+        let bound = register_message(
+            "id",
+            "linux",
+            "box",
+            (1, 1),
+            Some("companion".into()),
+            &crate::permissions::PermissionStatus {
+                screen_recording: true,
+                accessibility: false,
+            },
+        );
+        assert_eq!(bound["instance_slug"], "companion");
+        assert_eq!(bound["permissions"]["accessibility"], "denied");
+        assert_eq!(bound["permissions"]["screen_capture"], "granted");
+    }
+
+    /// Every action `execute_action` understands is advertised, and nothing else.
+    #[test]
+    fn advertised_capabilities_match_the_executed_actions() {
+        let source = include_str!("computer_use_bridge.rs");
+        let body = &source[source.find("fn execute_action(").unwrap()..];
+        let body = &body[..body.find("\nfn ").unwrap_or(body.len())];
+        let mut handled = std::collections::BTreeSet::new();
+        for line in body.lines() {
+            let line = line.trim();
+            if !line.ends_with("=> {") {
+                continue;
+            }
+            for arm in line.trim_end_matches("=> {").split('|') {
+                let arm = arm.trim();
+                if arm.starts_with('"') && arm.ends_with('"') {
+                    handled.insert(arm.trim_matches('"').to_owned());
+                }
+            }
+        }
+        let advertised: std::collections::BTreeSet<String> =
+            CAPABILITIES.iter().map(|s| (*s).to_owned()).collect();
+        assert_eq!(advertised, handled);
+    }
 
     #[test]
     fn concurrent_request_queue_preserves_text_binary_order_and_bounds() {

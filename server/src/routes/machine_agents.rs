@@ -227,6 +227,10 @@ async fn wait_for_registration(
                                 screen_height,
                                 last_seen: chrono::Utc::now().timestamp(),
                                 instance_slug: instance_slug.clone(),
+                                platform: None,
+                                location: cua_protocol::MachineLocation::Desktop,
+                                permissions: None,
+                                capabilities: Vec::new(),
                             };
                             state.machine_registry.register(info, tx).await;
 

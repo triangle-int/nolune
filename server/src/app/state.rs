@@ -42,7 +42,8 @@ pub struct AppState {
     pub http_client: reqwest::Client,
     /// Versioned local vector store for semantic memory search.
     pub vector_store: Arc<VectorStore>,
-    /// Registry of connected Tauri agent machines (for computer use).
+    /// Connected Tauri agent machines (for computer use) and every machine
+    /// that ever registered, persisted under the companion directory (#80).
     pub machine_registry: MachineRegistry,
     /// The one proactive companion loop (#92): every self-started run is admitted here.
     pub proactive: crate::services::proactive::ProactiveLoop,
@@ -93,6 +94,9 @@ impl AppState {
             crate::domain::companion::CANONICAL_SLUG,
         )
         .with_events(events.clone());
+        let machine_registry =
+            MachineRegistry::open(&workspace_dir, crate::domain::companion::CANONICAL_SLUG)
+                .with_events(events.clone());
 
         Self {
             resources: crate::services::resource_access::ResourceAccess::new(&config.auth_token),
@@ -106,7 +110,7 @@ impl AppState {
             mcp_registry,
             http_client,
             vector_store: Arc::new(vector_store),
-            machine_registry: MachineRegistry::new(),
+            machine_registry,
             proactive,
             commitments,
             browser_sessions: Arc::new(BrowserSessionStore::new()),

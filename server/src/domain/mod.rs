@@ -6,6 +6,7 @@ pub mod continuity;
 pub mod drop;
 pub mod events;
 pub mod federation;
+pub mod machine;
 pub mod memory;
 pub mod meta;
 pub mod mood;

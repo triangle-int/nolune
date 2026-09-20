@@ -36,6 +36,9 @@ async fn harness() -> Harness {
     state.proactive =
         crate::services::proactive::ProactiveLoop::new(workspace.path(), CANONICAL_SLUG)
             .with_events(state.events.clone());
+    state.machine_registry =
+        crate::services::machine_registry::MachineRegistry::open(workspace.path(), CANONICAL_SLUG)
+            .with_events(state.events.clone());
     Harness { workspace, state }
 }
 
@@ -468,6 +471,10 @@ async fn every_persisted_subsystem_is_owned_by_the_canonical_companion() {
                 screen_height: 1080,
                 last_seen: 0,
                 instance_slug: Some("alice".into()),
+                platform: None,
+                location: cua_protocol::MachineLocation::Desktop,
+                permissions: None,
+                capabilities: Vec::new(),
             },
             tx,
         )
@@ -914,6 +921,13 @@ async fn connected_computers_are_listed_for_the_one_companion_only() {
                 screen_height: 1440,
                 last_seen: 1_700_000_000,
                 instance_slug: None,
+                platform: Some(cua_protocol::Platform::Macos),
+                location: cua_protocol::MachineLocation::Desktop,
+                permissions: Some(cua_protocol::PermissionState {
+                    accessibility: cua_protocol::Permission::Granted,
+                    screen_capture: cua_protocol::Permission::Denied,
+                }),
+                capabilities: vec!["screenshot".into(), "bash".into()],
             },
             sender,
         )
@@ -927,11 +941,88 @@ async fn connected_computers_are_listed_for_the_one_companion_only() {
     assert_eq!(machines.len(), 1);
     assert_eq!(machines[0]["machine_id"], "mac-mini");
     assert_eq!(machines[0]["hostname"], "studio");
+    assert_eq!(machines[0]["display_name"], "studio");
+    assert_eq!(machines[0]["custom_name"], serde_json::Value::Null);
     assert_eq!(machines[0]["os"], "macos");
+    assert_eq!(machines[0]["platform"], "macos");
+    assert_eq!(machines[0]["location"], "desktop");
+    assert_eq!(machines[0]["screen_width"], 2560);
     assert_eq!(machines[0]["last_seen"], 1_700_000_000);
+    assert_eq!(machines[0]["first_seen"], 1_700_000_000);
+    assert_eq!(machines[0]["online"], true);
+    // The registration is far in the past against the wall clock: open socket, stale heartbeat.
+    assert_eq!(machines[0]["health"], "degraded");
+    assert_eq!(
+        machines[0]["permissions"],
+        serde_json::json!({"accessibility": "granted", "screen_capture": "denied"})
+    );
+    assert_eq!(
+        machines[0]["capabilities"],
+        serde_json::json!(["screenshot", "bash"])
+    );
+    assert_eq!(
+        machines[0]["driver_version"],
+        serde_json::Value::Null,
+        "reserved until the Cua driver reports"
+    );
+    assert_eq!(machines[0]["cua_health"], serde_json::Value::Null);
     assert_eq!(
         machines[0]["instance_slug"], CANONICAL_SLUG,
         "every computer is a context of the one companion"
+    );
+
+    // The user names it; the name is stored on the server.
+    let (status, renamed) = h
+        .json(
+            Method::PUT,
+            "/api/instances/companion/machines/mac-mini",
+            Some(serde_json::json!({"display_name": "Studio Mac"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{renamed}");
+    assert_eq!(renamed["display_name"], "Studio Mac");
+    assert_eq!(renamed["custom_name"], "Studio Mac");
+    assert_eq!(
+        renamed["hostname"], "studio",
+        "the hostname stays for display"
+    );
+
+    let (status, invalid) = h
+        .json(
+            Method::PUT,
+            "/api/instances/companion/machines/mac-mini",
+            Some(serde_json::json!({"display_name": "x".repeat(65)})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{invalid}");
+    assert_eq!(invalid["error"], "invalid");
+
+    let (status, missing) = h
+        .json(
+            Method::PUT,
+            "/api/instances/companion/machines/nobody",
+            Some(serde_json::json!({"display_name": "Ghost"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+    assert_eq!(missing["error"], "not_found");
+
+    // Disconnecting keeps the computer listed, offline, with its name and last-seen time.
+    h.state.machine_registry.unregister("mac-mini").await;
+    let (status, body) = h
+        .json(Method::GET, "/api/instances/companion/machines", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let machines = body["machines"].as_array().unwrap();
+    assert_eq!(machines.len(), 1, "a disconnected computer does not vanish");
+    assert_eq!(machines[0]["machine_id"], "mac-mini");
+    assert_eq!(machines[0]["online"], false);
+    assert_eq!(machines[0]["health"], "unavailable");
+    assert_eq!(machines[0]["display_name"], "Studio Mac");
+    assert!(machines[0]["last_seen"].as_i64().unwrap() > 1_700_000_000);
+    assert!(
+        h.companion().join("machines.json").is_file(),
+        "known machines live under the companion directory"
     );
 
     // Foreign slugs fail closed like every other companion route.
@@ -940,6 +1031,177 @@ async fn connected_computers_are_listed_for_the_one_companion_only() {
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     assert_eq!(body["error"], "unknown_companion");
+    let (status, body) = h
+        .json(
+            Method::PUT,
+            "/api/instances/alice/machines/mac-mini",
+            Some(serde_json::json!({"display_name": "Studio Mac"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "unknown_companion");
+}
+
+#[tokio::test]
+async fn a_broken_machines_file_answers_503_instead_of_an_empty_list() {
+    let h = harness().await;
+    companion::ensure_identity(h.workspace.path()).unwrap();
+    fs::write(h.companion().join("machines.json"), "{not json").unwrap();
+
+    let (status, body) = h
+        .json(Method::GET, "/api/instances/companion/machines", None)
+        .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"], "machines_format_unsupported");
+    assert_eq!(
+        fs::read_to_string(h.companion().join("machines.json")).unwrap(),
+        "{not json",
+        "the file is never rewritten"
+    );
+}
+
+#[tokio::test]
+async fn machine_hello_and_bye_never_guess_between_connected_computers() {
+    let h = harness().await;
+    companion::ensure_identity(h.workspace.path()).unwrap();
+
+    // Nobody connected: nothing to greet, nothing to report.
+    let (status, _) = h
+        .send(Method::POST, "/api/instances/companion/machine-hello", None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = h
+        .send(Method::POST, "/api/instances/companion/machine-bye", None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let mut receivers = Vec::new();
+    for id in ["mac-mini", "laptop"] {
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        receivers.push(receiver);
+        h.state
+            .machine_registry
+            .register(
+                MachineInfo {
+                    machine_id: id.into(),
+                    os: "macos".into(),
+                    hostname: id.into(),
+                    screen_width: 1440,
+                    screen_height: 900,
+                    last_seen: 1_700_000_000,
+                    instance_slug: None,
+                    platform: Some(cua_protocol::Platform::Macos),
+                    location: cua_protocol::MachineLocation::Desktop,
+                    permissions: None,
+                    capabilities: Vec::new(),
+                },
+                sender,
+            )
+            .await;
+    }
+
+    // Two online computers and no explicit target: ask, do not pick machines[0].
+    let (status, body) = h
+        .json(Method::POST, "/api/instances/companion/machine-hello", None)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "ambiguous_machine");
+    let mut offered: Vec<String> = body["machine_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_owned())
+        .collect();
+    offered.sort();
+    assert_eq!(offered, ["laptop", "mac-mini"]);
+
+    // An explicit target is addressed; an unknown or offline one is refused.
+    let (status, _) = h
+        .send(
+            Method::POST,
+            "/api/instances/companion/machine-hello",
+            Some(serde_json::json!({"machine_id": "laptop"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = h
+        .json(
+            Method::POST,
+            "/api/instances/companion/machine-hello",
+            Some(serde_json::json!({"machine_id": "ghost"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "not_found");
+    h.state.machine_registry.unregister("laptop").await;
+    let (status, body) = h
+        .json(
+            Method::POST,
+            "/api/instances/companion/machine-hello",
+            Some(serde_json::json!({"machine_id": "laptop"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "machine_offline");
+
+    // Bye names the computer the user chose, or every connected one; it never picks.
+    let (status, _) = h
+        .send(
+            Method::POST,
+            "/api/instances/companion/machine-bye",
+            Some(serde_json::json!({"machine_id": "mac-mini"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = h
+        .json(
+            Method::POST,
+            "/api/instances/companion/machine-bye",
+            Some(serde_json::json!({"machine_id": "ghost"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    receivers.push(receiver);
+    h.state
+        .machine_registry
+        .register(
+            MachineInfo {
+                machine_id: "laptop".into(),
+                os: "macos".into(),
+                hostname: "laptop".into(),
+                screen_width: 1440,
+                screen_height: 900,
+                last_seen: 1_700_000_000,
+                instance_slug: None,
+                platform: Some(cua_protocol::Platform::Macos),
+                location: cua_protocol::MachineLocation::Desktop,
+                permissions: None,
+                capabilities: Vec::new(),
+            },
+            sender,
+        )
+        .await;
+    let (status, _) = h
+        .send(Method::POST, "/api/instances/companion/machine-bye", None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let history =
+        crate::services::chat::load_messages(h.workspace.path(), CANONICAL_SLUG, "default")
+            .unwrap();
+    let system: Vec<String> = history
+        .messages
+        .iter()
+        .filter(|m| m.content.contains("user left"))
+        .map(|m| m.content.clone())
+        .collect();
+    assert_eq!(system.len(), 2, "{system:?}");
+    assert!(system[0].contains("'mac-mini'") && !system[0].contains("'laptop'"));
+    assert!(
+        system[1].contains("'laptop'") && system[1].contains("'mac-mini'"),
+        "{}",
+        system[1]
+    );
 }
 
 #[tokio::test]

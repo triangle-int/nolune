@@ -493,6 +493,10 @@ mod tests {
                     screen_height: 1080,
                     last_seen: T0,
                     instance_slug: Some(CANONICAL_SLUG.into()),
+                    platform: None,
+                    location: cua_protocol::MachineLocation::Desktop,
+                    permissions: None,
+                    capabilities: Vec::new(),
                 },
                 tx,
             )
