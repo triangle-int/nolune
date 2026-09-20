@@ -160,9 +160,10 @@ test('snooze presets are in the future and a custom time is validated', () => {
 	assert.deepEqual(validateSnooze(Number.NaN, T0), { ok: false, reason: 'Pick a time in the future.' });
 	assert.deepEqual(validateSnooze(null, T0), { ok: false, reason: 'Pick a time in the future.' });
 	// datetime-local round trip is exact to the minute in the browser's zone.
-	const value = localDateTimeValue(T0 + 90);
+	const minute = T0 - (T0 % 60);
+	const value = localDateTimeValue(minute + 90);
 	assert.match(value, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
-	assert.equal(parseLocalDateTime(value), T0 + 60);
+	assert.equal(parseLocalDateTime(value), minute + 60);
 	assert.equal(parseLocalDateTime(''), null);
 	assert.equal(parseLocalDateTime('not a date'), null);
 });
