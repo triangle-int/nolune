@@ -32,8 +32,13 @@ import type {
 	CorrectionResponse,
 	UploadMeta,
 	MachineInfo,
+	FederationOverview,
+	FederationPeer,
+	FederationRotationReport,
+	IssuedFederationInvite,
 } from "./types.js";
 export type { MachineInfo } from "./types.js";
+export type { FederationOverview, FederationPeer, FederationRotationReport, IssuedFederationInvite } from "./types.js";
 import { clearLegacyBrowserAuth } from "./legacy-auth-cleanup.js";
 
 const BASE = "";
@@ -1085,6 +1090,79 @@ export async function importInstance(slug: string, file: File): Promise<{ ok: bo
 		throw new Error(text || "import failed");
 	}
 	return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// Companion federation (#108)
+//
+// Owner routes behind the session. An invite is handed over as one line
+// (`invite`), never as a URL; it is posted back in a JSON body and the
+// browser keeps no copy once the panel that showed it is dismissed.
+// ---------------------------------------------------------------------------
+
+/** A typed refusal from `/api/federation/*`; `code` is the server's `error`. */
+export class FederationApiError extends Error {
+	constructor(
+		public readonly code: string,
+		public readonly status: number,
+		public readonly peerError?: string,
+	) {
+		super(code);
+		this.name = "FederationApiError";
+	}
+}
+
+async function federationJson<T>(url: string, init?: RequestInit): Promise<T> {
+	const res = await fetch(`${BASE}${url}`, init);
+	if (res.status === 401) throw new AuthError();
+	if (!res.ok) {
+		let code = "unknown";
+		let peerError: string | undefined;
+		try {
+			const body = await res.json();
+			if (typeof body?.error === "string") code = body.error;
+			if (typeof body?.peer_error === "string") peerError = body.peer_error;
+		} catch {
+			// no JSON body
+		}
+		throw new FederationApiError(code, res.status, peerError);
+	}
+	if (res.status === 204) return undefined as T;
+	return res.json();
+}
+
+export function fetchFederation(): Promise<FederationOverview> {
+	return federationJson("/api/federation/peers");
+}
+
+/** Mint a one-time invite; the response is the only one that ever carries it. */
+export function createFederationInvite(): Promise<IssuedFederationInvite> {
+	return federationJson("/api/federation/invites", { method: "POST" });
+}
+
+export function cancelFederationInvite(id: string): Promise<void> {
+	return federationJson(`/api/federation/invites/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+/** Redeem the one line another owner handed over; this server contacts the issuer. */
+export function acceptFederationInvite(line: string): Promise<{ peer: FederationPeer }> {
+	return federationJson("/api/federation/accept", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ invite: line }),
+	});
+}
+
+export function confirmFederationPeer(companionId: string): Promise<{ peer: FederationPeer; notified: boolean }> {
+	return federationJson(`/api/federation/peers/${encodeURIComponent(companionId)}/confirm`, { method: "POST" });
+}
+
+export function revokeFederationPeer(companionId: string): Promise<{ peer: FederationPeer; notified: boolean }> {
+	return federationJson(`/api/federation/peers/${encodeURIComponent(companionId)}/revoke`, { method: "POST" });
+}
+
+export function rotateFederationIdentity(): Promise<FederationRotationReport> {
+	return federationJson("/api/federation/rotate", { method: "POST" });
 }
 
 // ---------------------------------------------------------------------------

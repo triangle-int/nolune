@@ -19,6 +19,7 @@
 		type AuthKind,
 	} from "$lib/api/client.js";
 	import ConnectedComputers from "$lib/components/computers/ConnectedComputers.svelte";
+	import Companions from "$lib/components/federation/Companions.svelte";
 	import { PROVIDERS, suggestPresetId, validatePresets } from "$lib/models/presets.js";
 
 	// Connections (#98): what this server talks to. The provider and keys are
@@ -418,6 +419,21 @@
 			<ConnectedComputers {slug} compact />
 		{/key}
 		<div class="settings-links"><a class="nl-button-secondary" href={`/${slug}/computers`}>Open computers</a></div>
+	</div>
+</section>
+
+<!-- Companions (#108): peer companions this owner paired with -->
+<section class="settings-section">
+	<div class="section-header">
+		<div>
+			<h3 class="section-label">Companions</h3>
+			<p class="section-desc">Other companions this one is paired with, on this machine or elsewhere. Pairing is an invite both owners confirm; sharing a host grants nothing.</p>
+		</div>
+	</div>
+	<div class="section-body">
+		{#key slug}
+			<Companions />
+		{/key}
 	</div>
 </section>
 

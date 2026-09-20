@@ -180,7 +180,7 @@ test('the overview view carries ids, keys, counts, and views, never a secret', (
 	assert.equal(overview.invites[0].countdown, '9:00');
 	assert.deepEqual(overview.peers.map((p) => p.id), ['p1', 'p2']);
 	assert.equal(overview.paired, 1);
-	assert.equal(overview.waitingForYou, 0);
+	assert.equal(overview.waitingForYou, 1, 'p2 is pending and this server issued the invite');
 	const text = JSON.stringify(overview);
 	assert.ok(!text.includes('secret') && !text.includes('nolune-invite'), text);
 });
