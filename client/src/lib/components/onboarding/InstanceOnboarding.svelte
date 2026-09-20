@@ -389,7 +389,7 @@
 						</button>
 						<button onclick={() => pickProvider("openrouter")} class="ob-pill ob-pill-col ob-pill-soul">
 							<span class="ob-pill-label">OpenRouter</span>
-							<span class="ob-pill-note">many vendors, one key</span>
+							<span class="ob-pill-note">many models</span>
 						</button>
 					</div>
 				</div>
