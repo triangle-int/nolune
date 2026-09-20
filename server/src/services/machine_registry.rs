@@ -1,4 +1,6 @@
-use cua_protocol::{CheckedCuaAdapter, MachineDescriptor, MachineId, SelectionError};
+use cua_protocol::{
+    CheckedCuaAdapter, MachineDescriptor, MachineId, SelectionError, select_machine,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -91,27 +93,65 @@ impl CuaTargets {
     }
 
     /// Add a target. Fails when its machine id is already registered.
-    pub async fn register(&self, _adapter: CheckedCuaAdapter) -> Result<(), CuaRegistrationError> {
-        todo!("CuaTargets::register")
+    #[allow(dead_code)] // Registered by the driver runtime (#16, transport slice).
+    pub async fn register(&self, adapter: CheckedCuaAdapter) -> Result<(), CuaRegistrationError> {
+        let descriptor = adapter.descriptor();
+        let id = descriptor.machine_id.clone();
+        let mut targets = self.targets.lock().await;
+        if targets.contains_key(&id) {
+            return Err(CuaRegistrationError::DuplicateMachineId(id));
+        }
+        log::info!(
+            "[machines] cua target registered: {} ({:?}, {:?}, {:?})",
+            id.as_str(),
+            descriptor.location,
+            descriptor.platform,
+            descriptor.health
+        );
+        targets.insert(id, Arc::new(adapter));
+        Ok(())
     }
 
     /// Remove a target; returns whether it was registered.
-    pub async fn unregister(&self, _machine_id: &MachineId) -> bool {
-        todo!("CuaTargets::unregister")
+    #[allow(dead_code)] // Called when the driver runtime shuts down (#16, transport slice).
+    pub async fn unregister(&self, machine_id: &MachineId) -> bool {
+        let removed = self.targets.lock().await.remove(machine_id).is_some();
+        if removed {
+            log::info!(
+                "[machines] cua target unregistered: {}",
+                machine_id.as_str()
+            );
+        }
+        removed
     }
 
     /// Descriptors of every registered target, ordered by machine id.
     pub async fn list(&self) -> Vec<MachineDescriptor> {
-        todo!("CuaTargets::list")
+        self.targets
+            .lock()
+            .await
+            .values()
+            .map(|adapter| adapter.descriptor().clone())
+            .collect()
     }
 
     /// Resolve a target through `cua_protocol::select_machine`: the requested
     /// id when given, otherwise the only target, never a guess between several.
+    #[allow(dead_code)] // Used by the typed machine tools (#16, transport slice).
     pub async fn select(
         &self,
-        _requested: Option<&MachineId>,
+        requested: Option<&MachineId>,
     ) -> Result<Arc<CheckedCuaAdapter>, SelectionError> {
-        todo!("CuaTargets::select")
+        let targets = self.targets.lock().await;
+        let descriptors: Vec<MachineDescriptor> = targets
+            .values()
+            .map(|adapter| adapter.descriptor().clone())
+            .collect();
+        let chosen = select_machine(&descriptors, requested)?;
+        targets
+            .get(&chosen.machine_id)
+            .cloned()
+            .ok_or(SelectionError::NotFound)
     }
 }
 

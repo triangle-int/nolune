@@ -7,7 +7,7 @@ use crate::services::tool::{Tool, ToolDefinition};
 use crate::services::tools::{ToolExecError, openai_schema};
 
 // ═══════════════════════════════════════════════════════════════════════════
-// list_machines — returns connected Tauri agents
+// list_machines — returns connected Tauri agents and Cua targets
 // ═══════════════════════════════════════════════════════════════════════════
 
 pub struct ListMachinesTool {
@@ -32,34 +32,50 @@ impl Tool for ListMachinesTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "list_machines".into(),
-            description:
-                "List all connected desktop machines that you can control via computer use. \
-                Returns machine IDs, OS, hostname, and screen dimensions. \
-                Use a machine_id from this list when calling computer_use."
-                    .into(),
+            description: "List all machines you can control. Every entry has machine_id, location \
+                (desktop or server_local) and os. Connected desktop apps also carry hostname, \
+                screen dimensions and last_seen; use their machine_id with computer_use, \
+                remote_bash and remote_files. Cua targets also carry driver_version, health, \
+                permissions (accessibility, screen_capture) and capabilities; they only accept \
+                actions their capabilities and granted permissions allow."
+                .into(),
             parameters: openai_schema::<ListMachinesArgs>(),
         }
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let machines = self.registry.list().await;
-        if machines.is_empty() {
+        let agents = self.registry.list().await;
+        let targets = self.registry.cua().list().await;
+        if agents.is_empty() && targets.is_empty() {
             return Ok(
                 "No machines connected. The user needs to open the Nolune desktop app first."
                     .into(),
             );
         }
-        let info: Vec<serde_json::Value> = machines
+        let mut info: Vec<serde_json::Value> = agents
             .iter()
             .map(|m| {
                 serde_json::json!({
                     "machine_id": m.machine_id,
+                    "location": cua_protocol::MachineLocation::Desktop,
                     "os": m.os,
                     "hostname": m.hostname,
                     "screen": format!("{}x{}", m.screen_width, m.screen_height),
+                    "last_seen": m.last_seen,
                 })
             })
             .collect();
+        info.extend(targets.iter().map(|m| {
+            serde_json::json!({
+                "machine_id": m.machine_id,
+                "location": m.location,
+                "os": m.platform,
+                "driver_version": m.driver_version,
+                "health": m.health,
+                "permissions": m.permissions,
+                "capabilities": m.capabilities,
+            })
+        }));
         serde_json::to_string_pretty(&info).map_err(|e| ToolExecError(e.to_string()))
     }
 }
