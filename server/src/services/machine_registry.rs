@@ -7,9 +7,11 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{Mutex, oneshot};
 
 use crate::domain::machine::{KnownMachine, MachineRecord};
+use crate::services::cua::desktop::{Completion, DesktopLink};
 
 /// Info about a connected Tauri agent machine.
 #[derive(Clone, Debug, Serialize)]
@@ -123,6 +125,11 @@ pub enum CuaRegistrationError {
     /// No target with this machine id is registered, so there is nothing to
     /// replace.
     NotRegistered(MachineId),
+    /// The desktop the descriptor is for is not connected under the
+    /// connection that registered it (#17).
+    NoConnection(MachineId),
+    /// The checked boundary refused the descriptor.
+    Invalid(String),
 }
 
 impl fmt::Display for CuaRegistrationError {
@@ -134,6 +141,10 @@ impl fmt::Display for CuaRegistrationError {
             Self::NotRegistered(id) => {
                 write!(f, "cua machine '{}' is not registered", id.as_str())
             }
+            Self::NoConnection(id) => {
+                write!(f, "desktop '{}' is not connected", id.as_str())
+            }
+            Self::Invalid(message) => write!(f, "cua descriptor refused: {message}"),
         }
     }
 }
@@ -212,11 +223,26 @@ impl CuaTargets {
             .collect()
     }
 
-    /// Add a target. Fails when its machine id is already registered.
-    #[allow(dead_code)] // Desktop targets register here (#17).
+    /// The strict form for tests that need a target of any location:
+    /// production registers server-local targets (`register_server_local`)
+    /// or desktop targets (`register_desktop`).
+    #[cfg(test)]
     pub async fn register(&self, adapter: CheckedCuaAdapter) -> Result<(), CuaRegistrationError> {
         self.insert(adapter, None, chrono::Utc::now().timestamp())
             .await
+    }
+
+    /// Add a desktop target (#17), or replace the one an earlier connection
+    /// of the same desktop left behind: a reconnect under the stable id is
+    /// the same computer, never a second one. Refused when the id belongs to
+    /// a target that is not a desktop, so the server-local target is never
+    /// shadowed. Returns whether a previous desktop target was replaced.
+    pub async fn register_desktop(
+        &self,
+        adapter: CheckedCuaAdapter,
+    ) -> Result<bool, CuaRegistrationError> {
+        let _ = adapter;
+        todo!("slice 1 of #17")
     }
 
     async fn insert(
@@ -721,6 +747,9 @@ struct LiveAgent {
     /// The health clients last heard about, so the health watch and a
     /// recovering heartbeat each report one change once.
     announced_health: cua_protocol::MachineHealth,
+    /// The typed-frame link of a desktop that registered a Cua descriptor
+    /// (#17); `None` for a legacy-only desktop.
+    cua: Option<Arc<DesktopLink>>,
 }
 
 /// Registry of the machines this server can control: the connected Tauri
@@ -868,7 +897,7 @@ impl MachineRegistry {
         let connection = self
             .next_connection
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.agents.lock().await.insert(
+        let replaced = self.agents.lock().await.insert(
             id.clone(),
             LiveAgent {
                 info: info.clone(),
@@ -877,8 +906,15 @@ impl MachineRegistry {
                 registered_at: now,
                 last_persisted: now,
                 announced_health: cua_protocol::MachineHealth::Healthy,
+                cua: None,
             },
         );
+        // A reconnect starts from no typed target: the previous socket's
+        // waiting calls fail now, and its target is registered again only
+        // if this registration carries a descriptor (`attach_desktop_cua`).
+        if let Some(link) = replaced.and_then(|agent| agent.cua) {
+            self.detach_desktop_cua(&link).await;
+        }
 
         match validate_machine_id(&id) {
             // The record exists by now (`backfill_live` on this very access);
@@ -904,7 +940,7 @@ impl MachineRegistry {
 
     #[cfg(test)]
     pub async fn unregister_at(&self, machine_id: &str, now: i64) {
-        let removed = self.agents.lock().await.remove(machine_id).is_some();
+        let removed = self.agents.lock().await.remove(machine_id);
         self.mark_offline(machine_id, removed, now).await;
     }
 
@@ -916,20 +952,20 @@ impl MachineRegistry {
         let removed = {
             let mut agents = self.agents.lock().await;
             match agents.get(machine_id) {
-                Some(agent) if agent.connection == connection => {
-                    agents.remove(machine_id);
-                    true
-                }
-                _ => false,
+                Some(agent) if agent.connection == connection => agents.remove(machine_id),
+                _ => None,
             }
         };
         self.mark_offline(machine_id, removed, now).await;
     }
 
-    async fn mark_offline(&self, machine_id: &str, removed: bool, now: i64) {
-        if !removed {
+    async fn mark_offline(&self, machine_id: &str, removed: Option<LiveAgent>, now: i64) {
+        let Some(agent) = removed else {
             log::info!("[machines] '{machine_id}' socket closed; a newer connection stays");
             return;
+        };
+        if let Some(link) = agent.cua {
+            self.detach_desktop_cua(&link).await;
         }
         log::info!("[machines] unregistered: {machine_id}");
         self.persist(|records| match records.get_mut(machine_id) {
@@ -983,6 +1019,50 @@ impl MachineRegistry {
         if recovered {
             self.broadcast(machine_id, now).await;
         }
+    }
+
+    /// Attach a typed Cua target to a connected desktop (#17): the
+    /// descriptor it registered becomes a `CuaTargets` entry whose checked
+    /// adapter frames requests over this connection's socket, with
+    /// `call_timeout` as the deadline for each answer. A reconnect of the
+    /// same desktop replaces its previous target; the server-local target
+    /// is never shadowed. Fails when the desktop is no longer connected
+    /// under `connection`.
+    pub async fn attach_desktop_cua(
+        &self,
+        machine_id: &str,
+        connection: u64,
+        descriptor: MachineDescriptor,
+        call_timeout: Duration,
+    ) -> Result<Arc<DesktopLink>, CuaRegistrationError> {
+        let _ = (machine_id, connection, descriptor, call_timeout);
+        todo!("slice 1 of #17")
+    }
+
+    /// A `cua_response` frame from a connected desktop: resolve the call
+    /// waiting for it. Returns whether a call was resolved or failed by it;
+    /// a frame from a desktop without a typed target is dropped.
+    pub async fn complete_cua(&self, machine_id: &str, response: serde_json::Value) -> bool {
+        let _ = (machine_id, response);
+        todo!("slice 1 of #17")
+    }
+
+    /// The typed-frame link of a connected desktop, if it registered one.
+    #[cfg(test)]
+    pub async fn desktop_cua_link(&self, machine_id: &str) -> Option<Arc<DesktopLink>> {
+        self.agents
+            .lock()
+            .await
+            .get(machine_id)
+            .and_then(|agent| agent.cua.clone())
+    }
+
+    /// The desktop's socket is gone or was replaced: its waiting calls fail
+    /// now, the sessions it held are lost with it, and its target leaves
+    /// `CuaTargets`.
+    async fn detach_desktop_cua(&self, link: &DesktopLink) {
+        let _ = link;
+        todo!("slice 1 of #17")
     }
 
     /// The connected agents as the store needs them.
@@ -2470,5 +2550,377 @@ mod known_machines_tests {
                 .is_empty()
         );
         assert!(rx.try_recv().is_err());
+    }
+}
+
+#[cfg(test)]
+mod desktop_cua_tests {
+    //! Desktop targets over the machine WebSocket (#17), at the registry
+    //! level: the socket is a channel and the desktop is whatever reads it.
+
+    use super::*;
+    use crate::domain::companion::CANONICAL_SLUG;
+    use cua_protocol::{
+        AppsResult, Capability, CuaAction, CuaActionResult, CuaRequestEnvelope, CuaResponse,
+        CuaResponseEnvelope, DriverVersion, EmptyArgs, MachineHealth, Permission, PermissionState,
+        ProtocolVersion, RequestId, RuntimeErrorCode,
+    };
+    use serde_json::Value;
+
+    const T0: i64 = 1_767_603_600;
+    const STUDIO: &str = "4f3c1c2e-9b5e-4d2b-8f0a-1c2d3e4f5a6b";
+    const CALL_TIMEOUT: Duration = Duration::from_secs(30);
+
+    fn id(value: &str) -> MachineId {
+        MachineId::try_from(value).unwrap()
+    }
+
+    fn descriptor(machine_id: &str, location: MachineLocation) -> MachineDescriptor {
+        MachineDescriptor {
+            machine_id: id(machine_id),
+            location,
+            platform: Platform::Macos,
+            driver_version: DriverVersion::try_from("0.28.2").unwrap(),
+            health: MachineHealth::Healthy,
+            permissions: PermissionState {
+                accessibility: Permission::Granted,
+                screen_capture: Permission::Granted,
+            },
+            capabilities: vec![Capability::AppDiscovery, Capability::SessionLifecycle],
+        }
+    }
+
+    fn desktop(machine_id: &str, seen: i64) -> MachineInfo {
+        MachineInfo {
+            machine_id: machine_id.into(),
+            os: "macos".into(),
+            hostname: "studio".into(),
+            screen_width: 1440,
+            screen_height: 900,
+            last_seen: seen,
+            instance_slug: None,
+            platform: Some(Platform::Macos),
+            location: MachineLocation::Desktop,
+            permissions: None,
+            capabilities: vec![],
+        }
+    }
+
+    /// An in-memory adapter answering every request with an empty app list.
+    fn fake_adapter(descriptor: MachineDescriptor) -> CheckedCuaAdapter {
+        CheckedCuaAdapter::new(descriptor, |request| {
+            let response = CuaResponseEnvelope {
+                version: request.version,
+                request_id: request.request_id,
+                machine_id: request.machine_id,
+                action: request.action.kind(),
+                response: CuaResponse::Success {
+                    result: Box::new(CuaActionResult::ListApps(AppsResult { apps: vec![] })),
+                },
+            };
+            Box::pin(async move { response })
+        })
+        .unwrap()
+    }
+
+    fn list_apps(machine_id: &str, request_id: &str) -> CuaRequestEnvelope {
+        CuaRequestEnvelope {
+            version: ProtocolVersion::V1,
+            request_id: RequestId::try_from(request_id).unwrap(),
+            machine_id: id(machine_id),
+            action: CuaAction::ListApps(EmptyArgs {}),
+        }
+    }
+
+    fn answer(request: &CuaRequestEnvelope) -> Value {
+        serde_json::to_value(CuaResponseEnvelope {
+            version: request.version,
+            request_id: request.request_id.clone(),
+            machine_id: request.machine_id.clone(),
+            action: request.action.kind(),
+            response: CuaResponse::Success {
+                result: Box::new(CuaActionResult::ListApps(AppsResult { apps: vec![] })),
+            },
+        })
+        .unwrap()
+    }
+
+    /// Register a desktop over a channel and attach a Cua descriptor to it,
+    /// the way the WebSocket route does; returns the socket's receiver and
+    /// the connection number.
+    async fn connect_with_cua(
+        registry: &MachineRegistry,
+        machine_id: &str,
+        seen: i64,
+    ) -> (tokio::sync::mpsc::UnboundedReceiver<String>, u64) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let connection = registry.register(desktop(machine_id, seen), tx).await;
+        registry
+            .attach_desktop_cua(
+                machine_id,
+                connection,
+                descriptor(machine_id, MachineLocation::Desktop),
+                CALL_TIMEOUT,
+            )
+            .await
+            .unwrap();
+        (rx, connection)
+    }
+
+    async fn next_frame(rx: &mut tokio::sync::mpsc::UnboundedReceiver<String>) -> Value {
+        let text = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("a frame within 5s")
+            .expect("the registry still holds the sender");
+        serde_json::from_str(&text).unwrap()
+    }
+
+    #[tokio::test]
+    async fn register_desktop_replaces_a_desktop_and_never_the_server_local_target() {
+        let targets = CuaTargets::new();
+        let first = descriptor(STUDIO, MachineLocation::Desktop);
+        assert_eq!(
+            targets.register_desktop(fake_adapter(first.clone())).await,
+            Ok(false),
+            "a new desktop target replaces nothing"
+        );
+        let mut again = first.clone();
+        again.health = MachineHealth::Degraded;
+        assert_eq!(
+            targets.register_desktop(fake_adapter(again.clone())).await,
+            Ok(true),
+            "the same desktop reconnecting replaces its target"
+        );
+        assert_eq!(
+            targets.list().await,
+            vec![again.clone()],
+            "one target, the new one"
+        );
+
+        // The server-local target keeps its id whatever a desktop claims.
+        let local = descriptor("server-local:studio", MachineLocation::ServerLocal);
+        targets
+            .register_server_local(fake_adapter(local.clone()), "studio", T0)
+            .await
+            .unwrap();
+        let impostor = descriptor("server-local:studio", MachineLocation::Desktop);
+        assert_eq!(
+            targets.register_desktop(fake_adapter(impostor)).await,
+            Err(CuaRegistrationError::DuplicateMachineId(id(
+                "server-local:studio"
+            )))
+        );
+        assert_eq!(targets.list().await, vec![local, again]);
+    }
+
+    #[tokio::test]
+    async fn an_attached_desktop_executes_over_its_socket_and_fills_its_known_row() {
+        let registry = MachineRegistry::new();
+        let (mut rx, _connection) = connect_with_cua(&registry, STUDIO, T0).await;
+
+        // Listed as a Cua target and, on the known row, as the desktop with
+        // its driver: the row is the record, the driver fields are live.
+        assert_eq!(
+            registry.cua().list().await,
+            vec![descriptor(STUDIO, MachineLocation::Desktop)]
+        );
+        let known = registry.known_at(T0 + 5).await.unwrap();
+        assert_eq!(known.len(), 1, "{known:?}");
+        let row = &known[0];
+        assert_eq!(row.machine_id, STUDIO);
+        assert_eq!(row.location, MachineLocation::Desktop);
+        assert!(row.online);
+        assert_eq!(row.driver_version.as_deref(), Some("0.28.2"));
+        assert_eq!(row.cua_health, Some(MachineHealth::Healthy));
+        assert_eq!(
+            row.health,
+            MachineHealth::Healthy,
+            "heartbeat health is its own"
+        );
+        assert_eq!(row.hostname, "studio", "the record's labels are kept");
+
+        // A request travels as one typed frame and its answer resolves it.
+        let adapter = registry.cua().select(Some(&id(STUDIO))).await.unwrap();
+        let request = list_apps(STUDIO, "req-1");
+        let call = {
+            let request = request.clone();
+            tokio::spawn(async move { adapter.execute(&request).await })
+        };
+        let frame = next_frame(&mut rx).await;
+        assert_eq!(frame["type"], "cua_request");
+        assert_eq!(
+            CuaRequestEnvelope::from_json(&frame["request"].to_string()).unwrap(),
+            request
+        );
+        assert!(registry.complete_cua(STUDIO, answer(&request)).await);
+        let response = call.await.unwrap().unwrap();
+        assert!(matches!(response.response, CuaResponse::Success { .. }));
+
+        // A stray answer resolves nothing.
+        assert!(
+            !registry
+                .complete_cua(STUDIO, answer(&list_apps(STUDIO, "nobody")))
+                .await
+        );
+        assert!(
+            !registry.complete_cua("unknown", answer(&request)).await,
+            "a desktop without a typed target drops the frame"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_disconnect_forgets_the_desktop_target_and_fails_its_waiting_calls() {
+        let (ws, registry) = {
+            let ws = tempfile::tempdir().unwrap();
+            let registry = MachineRegistry::open(ws.path(), CANONICAL_SLUG);
+            (ws, registry)
+        };
+        let (mut rx, connection) = connect_with_cua(&registry, STUDIO, T0).await;
+        let link = registry.desktop_cua_link(STUDIO).await.unwrap();
+        let adapter = registry.cua().select(Some(&id(STUDIO))).await.unwrap();
+        let call = tokio::spawn(async move { adapter.execute(&list_apps(STUDIO, "req-1")).await });
+        next_frame(&mut rx).await;
+        assert_eq!(link.pending(), 1);
+
+        registry.unregister_connection(STUDIO, connection).await;
+
+        let response = tokio::time::timeout(Duration::from_secs(5), call)
+            .await
+            .expect("the waiting call fails at once")
+            .unwrap()
+            .unwrap();
+        let CuaResponse::Error { error } = response.response else {
+            panic!("expected an error");
+        };
+        assert_eq!(error.code, RuntimeErrorCode::RuntimeUnavailable);
+        assert!(
+            registry.cua().list().await.is_empty(),
+            "the target left with the socket"
+        );
+        assert!(registry.desktop_cua_link(STUDIO).await.is_none());
+        let known = registry.known_at(T0 + 5).await.unwrap();
+        assert_eq!(known.len(), 1);
+        assert!(!known[0].online);
+        assert_eq!(
+            known[0].driver_version, None,
+            "driver fields are live state"
+        );
+        assert_eq!(known[0].cua_health, None);
+        assert!(
+            ws.path()
+                .join("instances")
+                .join(CANONICAL_SLUG)
+                .join(crate::domain::machine::MACHINES_FILE)
+                .exists(),
+            "the desktop record itself is persisted as before"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_reconnect_replaces_the_target_and_a_stale_socket_never_removes_it() {
+        let registry = MachineRegistry::new();
+        let (mut first_rx, first) = connect_with_cua(&registry, STUDIO, T0).await;
+        let first_link = registry.desktop_cua_link(STUDIO).await.unwrap();
+        let adapter = registry.cua().select(Some(&id(STUDIO))).await.unwrap();
+        let stranded =
+            tokio::spawn(async move { adapter.execute(&list_apps(STUDIO, "old")).await });
+        next_frame(&mut first_rx).await;
+
+        // The same desktop registers again before the server noticed the
+        // first socket die: one target, and the stranded call fails now.
+        let (mut second_rx, second) = connect_with_cua(&registry, STUDIO, T0 + 1).await;
+        assert_ne!(first, second);
+        assert_eq!(registry.cua().list().await.len(), 1);
+        let response = tokio::time::timeout(Duration::from_secs(5), stranded)
+            .await
+            .expect("the stranded call fails when its socket is replaced")
+            .unwrap()
+            .unwrap();
+        assert!(matches!(response.response, CuaResponse::Error { .. }));
+        assert_eq!(first_link.pending(), 0);
+        let second_link = registry.desktop_cua_link(STUDIO).await.unwrap();
+        assert!(!Arc::ptr_eq(&first_link, &second_link));
+
+        // Requests now travel on the second socket.
+        let adapter = registry.cua().select(Some(&id(STUDIO))).await.unwrap();
+        let request = list_apps(STUDIO, "new");
+        let call = {
+            let request = request.clone();
+            tokio::spawn(async move { adapter.execute(&request).await })
+        };
+        let frame = next_frame(&mut second_rx).await;
+        assert_eq!(frame["request"]["request_id"], "new");
+        assert!(first_rx.try_recv().is_err(), "the old socket sees nothing");
+        assert!(registry.complete_cua(STUDIO, answer(&request)).await);
+        call.await.unwrap().unwrap();
+
+        // The first socket finally closes: the live target stays.
+        registry.unregister_connection(STUDIO, first).await;
+        assert_eq!(registry.cua().list().await.len(), 1);
+        assert!(registry.desktop_cua_link(STUDIO).await.is_some());
+        assert!(registry.known_at(T0 + 2).await.unwrap()[0].online);
+
+        // A registration without a descriptor after one with it: legacy-only.
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        registry.register(desktop(STUDIO, T0 + 3), tx).await;
+        assert!(registry.cua().list().await.is_empty());
+        assert!(registry.desktop_cua_link(STUDIO).await.is_none());
+        assert_eq!(
+            registry.known_at(T0 + 3).await.unwrap()[0].driver_version,
+            None
+        );
+
+        // Attaching to a connection that is gone registers nothing.
+        assert_eq!(
+            registry
+                .attach_desktop_cua(
+                    STUDIO,
+                    second,
+                    descriptor(STUDIO, MachineLocation::Desktop),
+                    CALL_TIMEOUT
+                )
+                .await
+                .err(),
+            Some(CuaRegistrationError::NoConnection(id(STUDIO)))
+        );
+        assert!(registry.cua().list().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_desktop_never_shadows_the_server_local_target() {
+        let registry = MachineRegistry::new();
+        let local = descriptor("server-local:studio", MachineLocation::ServerLocal);
+        registry
+            .cua()
+            .register_server_local(fake_adapter(local.clone()), "studio", T0)
+            .await
+            .unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let connection = registry
+            .register(desktop("server-local:studio", T0), tx)
+            .await;
+        assert_eq!(
+            registry
+                .attach_desktop_cua(
+                    "server-local:studio",
+                    connection,
+                    descriptor("server-local:studio", MachineLocation::Desktop),
+                    CALL_TIMEOUT
+                )
+                .await
+                .err(),
+            Some(CuaRegistrationError::DuplicateMachineId(id(
+                "server-local:studio"
+            )))
+        );
+        assert_eq!(registry.cua().list().await, vec![local]);
+        assert!(
+            registry
+                .desktop_cua_link("server-local:studio")
+                .await
+                .is_none()
+        );
+        // The legacy registration itself stands (remote_bash keeps working).
+        assert_eq!(registry.list().await.len(), 1);
     }
 }
