@@ -54,12 +54,37 @@ preset does which job:
   check-ins, and reflection. It never falls back to the chat preset; if it is
   unavailable, background work is skipped and logged.
 
-Presets carry their own provider, so Anthropic and OpenAI presets coexist;
-API keys stay per provider. `GET/PUT /api/config/models` reads and replaces
-presets plus slots atomically (validated: unique ids, known provider, non-empty
-model, slots pointing at presets whose provider has a key), and
+Presets carry their own provider, so Anthropic, OpenAI and OpenRouter presets
+coexist; API keys stay per provider. `GET/PUT /api/config/models` reads and
+replaces presets plus slots atomically (validated: unique ids, known provider,
+non-empty model, slots pointing at presets whose provider has a key), and
 `POST /api/config/models/seed` adds a provider's defaults, which onboarding
-calls after saving the first key.
+calls after saving the first key. A new key is checked with its provider
+before it is saved (`PUT /api/config/llm`, one-token completion); a rejected
+key answers 401 and stores nothing.
+
+### OpenRouter (#26)
+
+The `openrouter` provider sends OpenAI-style chat completions to
+`openrouter.ai` with the `OPENROUTER` token (`OPENROUTER_API_KEY` overrides
+it), streams answers and tool calls like the other adapters, and records the
+usage and cost OpenRouter returns. Model ids are `vendor/model`, for example
+`anthropic/claude-sonnet-4.6` or `openai/gpt-5.4-mini`; the seeded presets
+name both. The model catalog (`GET /api/v1/models`) is read once an hour and a
+preset whose model lacks tools, image input or reasoning controls is refused
+before the request goes out.
+
+Attribution and routing are off until `config.toml` names them; the
+server's `public_url` is never sent:
+
+```toml
+[llm.openrouter]
+site_url = "https://nolune.example"   # HTTP-Referer, listed on openrouter.ai app rankings
+app_name = "Nolune"                   # X-Title
+[llm.openrouter.routing]              # OpenRouter's `provider` object, sent as is
+order = ["anthropic", "google"]
+allow_fallbacks = false
+```
 
 ## Layout (#153)
 

@@ -205,6 +205,7 @@ Most settings are available through the interface. Advanced configuration lives 
 | `NOLUNE_PUBLIC_URL` | Public URL for the server. Defaults to `http://localhost:<port>`; set it when you reach Nolune through another address so shared file links work |
 | `ANTHROPIC_API_KEY` | Anthropic API key override |
 | `OPENAI_API_KEY` | OpenAI API key override |
+| `OPENROUTER_API_KEY` | OpenRouter API key override |
 | `RUST_LOG` | Logging level, defaults to `info` |
 
 <br>
