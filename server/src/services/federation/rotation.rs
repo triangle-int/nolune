@@ -18,10 +18,12 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Canonical, ROTATION_SIGNING_DOMAIN,
-    identity::{self, SigningIdentity, VerifiedIdentity},
+    Canonical, ROTATION_SIGNING_DOMAIN, check_version, encode,
+    identity::{self, SigningIdentity, VerifiedIdentity, decode_signature},
 };
-use crate::domain::federation::{FederationError, KeyRotation, PUBLIC_KEY_BYTES};
+use crate::domain::federation::{
+    FEDERATION_VERSION, FederationError, KeyRotation, PUBLIC_KEY_BYTES,
+};
 
 /// How long a retired key keeps verifying after a peer accepted the
 /// rotation. Longer than the longest envelope lifetime plus the skew
@@ -33,6 +35,8 @@ pub const ROTATIONS_FILE: &str = "rotations.json";
 pub const MAX_ROTATION_HISTORY: usize = 32;
 
 const ROTATIONS_FORMAT_VERSION: u32 = 1;
+/// Upper bound for the own history file; anything larger is not ours.
+const MAX_ROTATIONS_FILE_BYTES: u64 = 4 * 1024 * 1024;
 
 /// `workspace/federation/rotations.json`
 pub fn rotations_path(workspace_root: &Path) -> PathBuf {
@@ -64,8 +68,22 @@ pub(crate) fn endorse(
     next: &SigningIdentity,
     rotated_at: u64,
 ) -> KeyRotation {
-    let _ = (previous, next, rotated_at);
-    todo!("PR 3: endorse a rotation with both keys")
+    let message = rotation_signing_bytes(
+        FEDERATION_VERSION,
+        previous.companion_id(),
+        &previous.verified().public_key.to_bytes(),
+        next.companion_id(),
+        &next.verified().public_key.to_bytes(),
+        rotated_at,
+    );
+    KeyRotation {
+        version: FEDERATION_VERSION,
+        previous: previous.document().clone(),
+        identity: next.document().clone(),
+        rotated_at,
+        endorsement: encode(&previous.sign_raw(&message)),
+        signature: encode(&next.sign_raw(&message)),
+    }
 }
 
 /// Checks the version, both documents, that the keys differ, and both
@@ -73,14 +91,61 @@ pub(crate) fn endorse(
 pub fn verify_rotation(
     rotation: &KeyRotation,
 ) -> Result<(VerifiedIdentity, VerifiedIdentity), FederationError> {
-    let _ = rotation;
-    todo!("PR 3: verify a rotation")
+    check_version(rotation.version)?;
+    let previous = identity::verify_document(&rotation.previous)?;
+    let next = identity::verify_document(&rotation.identity)?;
+    if previous.public_key == next.public_key {
+        return Err(FederationError::RotationMismatch);
+    }
+    let endorsement = decode_signature(&rotation.endorsement)?;
+    let signature = decode_signature(&rotation.signature)?;
+    let message = rotation_signing_bytes(
+        rotation.version,
+        &previous.companion_id,
+        &previous.public_key.to_bytes(),
+        &next.companion_id,
+        &next.public_key.to_bytes(),
+        rotation.rotated_at,
+    );
+    previous
+        .public_key
+        .verify_strict(&message, &endorsement)
+        .map_err(|_| FederationError::SignatureMismatch)?;
+    next.public_key
+        .verify_strict(&message, &signature)
+        .map_err(|_| FederationError::SignatureMismatch)?;
+    Ok((previous, next))
 }
 
 /// This server's own rotations, oldest first; empty when none happened.
 pub fn load_rotations(workspace_root: &Path) -> Result<Vec<KeyRotation>, FederationError> {
-    let _ = workspace_root;
-    todo!("PR 3: load own rotations")
+    let path = rotations_path(workspace_root);
+    let len = match std::fs::metadata(&path) {
+        Ok(metadata) => metadata.len(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(io_error(&path, error)),
+    };
+    if len > MAX_ROTATIONS_FILE_BYTES {
+        return Err(FederationError::Malformed(format!(
+            "{} is larger than a rotation history can be",
+            path.display()
+        )));
+    }
+    let text = std::fs::read_to_string(&path).map_err(|error| io_error(&path, error))?;
+    let file: RotationsFile = serde_json::from_str(&text)
+        .map_err(|error| FederationError::Malformed(format!("rotation history: {error}")))?;
+    if file.version != ROTATIONS_FORMAT_VERSION {
+        return Err(FederationError::Malformed(format!(
+            "rotation history has unsupported version {}",
+            file.version
+        )));
+    }
+    // Every entry is re-verified: a history that no longer proves its
+    // transitions is reported, not trusted.
+    for rotation in &file.rotations {
+        verify_rotation(rotation)?;
+    }
+    Ok(file.rotations)
 }
 
 /// Appends `rotation` to the own history, owner-readable only.
@@ -88,8 +153,23 @@ pub(crate) fn append_rotation(
     workspace_root: &Path,
     rotation: &KeyRotation,
 ) -> Result<(), FederationError> {
-    let _ = (workspace_root, rotation);
-    todo!("PR 3: persist an own rotation")
+    let mut rotations = load_rotations(workspace_root)?;
+    rotations.push(rotation.clone());
+    let path = rotations_path(workspace_root);
+    let mut json = serde_json::to_string_pretty(&RotationsFile {
+        version: ROTATIONS_FORMAT_VERSION,
+        rotations,
+    })
+    .expect("rotations serialize");
+    json.push('\n');
+    identity::replace_private(&path, json.as_bytes()).map_err(|error| io_error(&path, error))
+}
+
+fn io_error(path: &Path, error: std::io::Error) -> FederationError {
+    FederationError::Io {
+        path: path.to_path_buf(),
+        message: error.to_string(),
+    }
 }
 
 #[derive(Serialize, Deserialize)]

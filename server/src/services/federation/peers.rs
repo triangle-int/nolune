@@ -32,12 +32,13 @@ use sha2::{Digest, Sha256};
 
 use ed25519_dalek::VerifyingKey;
 
+use super::rotation::{MAX_ROTATION_HISTORY, ROTATION_GRACE_SECS};
 use super::{
     INVITE_HASH_DOMAIN, encode,
     identity::{self, VerifiedIdentity},
 };
 use crate::domain::federation::{
-    FederationError, InviteSecret, InviteSummary, KeyRotation, PeerRecord, PeerState,
+    FederationError, InviteSecret, InviteSummary, KeyRotation, KeyTransition, PeerRecord, PeerState,
 };
 
 /// Peer records, under the keystore directory.
@@ -291,8 +292,46 @@ impl PeerStore {
     /// previous id past the window is `KeyRetired`; anything else is
     /// `UnknownPeer`.
     pub fn resolve_sender(&self, sender: &str) -> Result<ResolvedSender, FederationError> {
-        let _ = sender;
-        todo!("PR 3: resolve a sender id to a peer and a key")
+        let now = (self.clock)();
+        let mut inner = self.inner.lock().unwrap();
+        self.ensure_loaded(&mut inner);
+        if let Some(peer) = inner
+            .peers
+            .iter()
+            .find(|peer| peer.record.companion_id() == sender)
+        {
+            return Ok(ResolvedSender {
+                key: peer.verified.public_key,
+                peer: peer.clone(),
+                kind: SenderKey::Current,
+            });
+        }
+        let mut retired = false;
+        for peer in &inner.peers {
+            for transition in &peer.record.rotation_history {
+                if transition.previous_companion_id() != sender {
+                    continue;
+                }
+                if transition.accepted_at.saturating_add(ROTATION_GRACE_SECS) <= now {
+                    retired = true;
+                    continue;
+                }
+                // The transition was verified when it was accepted, so the
+                // previous document's key decodes; refuse rather than trust
+                // it if the file was edited since.
+                let key = identity::decode_public_key(&transition.rotation.previous.public_key)?;
+                return Ok(ResolvedSender {
+                    peer: peer.clone(),
+                    key,
+                    kind: SenderKey::Previous,
+                });
+            }
+        }
+        Err(if retired {
+            FederationError::KeyRetired
+        } else {
+            FederationError::UnknownPeer
+        })
     }
 
     /// Re-keys the record for `rotation.previous` to `rotation.identity`
@@ -306,13 +345,98 @@ impl PeerStore {
         rotation: &KeyRotation,
         next: VerifiedIdentity,
     ) -> Result<Option<Peer>, FederationError> {
-        let _ = (rotation, next);
-        todo!("PR 3: apply a peer rotation")
+        if next.companion_id != rotation.identity.companion_id
+            || next.public_key.as_bytes().as_slice()
+                != super::decode_exact(
+                    &rotation.identity.public_key,
+                    crate::domain::federation::PUBLIC_KEY_BYTES,
+                )
+                .ok_or_else(|| {
+                    FederationError::Malformed("public key is not 32 base64url bytes".into())
+                })?
+                .as_slice()
+        {
+            return Err(FederationError::CompanionIdMismatch);
+        }
+        let now = (self.clock)();
+        let mut inner = self.inner.lock().unwrap();
+        self.ensure_loaded(&mut inner);
+        self.refuse_if_unloadable(&inner)?;
+        // Already applied: the record carries the new identity and this very
+        // rotation as its latest transition. Anything else that already has
+        // the new identity is another record, and the rotation does not fit.
+        if let Some(peer) = inner
+            .peers
+            .iter()
+            .find(|peer| peer.record.companion_id() == rotation.identity.companion_id)
+        {
+            let applied = peer
+                .record
+                .rotation_history
+                .last()
+                .is_some_and(|transition| &transition.rotation == rotation);
+            return if applied {
+                Ok(Some(peer.clone()))
+            } else {
+                Err(FederationError::RotationMismatch)
+            };
+        }
+        let Some(index) = inner
+            .peers
+            .iter()
+            .position(|peer| peer.record.companion_id() == rotation.previous.companion_id)
+        else {
+            // A key some peer already rotated away from cannot rotate again;
+            // a key nobody knows fits no record.
+            let retired = inner.peers.iter().any(|peer| {
+                peer.record.rotation_history.iter().any(|transition| {
+                    transition.previous_companion_id() == rotation.previous.companion_id
+                })
+            });
+            return if retired {
+                Err(FederationError::RotationMismatch)
+            } else {
+                Ok(None)
+            };
+        };
+        let record = &inner.peers[index].record;
+        match record.state {
+            PeerState::Paired => {}
+            PeerState::Revoked => return Err(FederationError::PeerRevoked),
+            state => return Err(FederationError::PeerNotPaired { state }),
+        }
+        if record.identity != rotation.previous {
+            return Err(FederationError::RotationMismatch);
+        }
+        let mut record = record.clone();
+        record.identity = rotation.identity.clone();
+        record.rotation_history.push(KeyTransition {
+            rotation: rotation.clone(),
+            accepted_at: now,
+        });
+        if record.rotation_history.len() > MAX_ROTATION_HISTORY {
+            let excess = record.rotation_history.len() - MAX_ROTATION_HISTORY;
+            record.rotation_history.drain(..excess);
+        }
+        record.updated_at = now;
+        inner.peers[index] = Peer {
+            record,
+            verified: next,
+        };
+        self.persist(&inner)?;
+        Ok(Some(inner.peers[index].clone()))
     }
 
     /// Withdraws every outstanding invite; returns how many there were.
     pub fn cancel_all_invites(&self) -> usize {
-        todo!("PR 3: cancel every invite")
+        let removed = {
+            let mut inner = self.inner.lock().unwrap();
+            std::mem::take(&mut inner.invites).len()
+        };
+        if removed > 0 {
+            log::info!("[federation] {removed} outstanding invite(s) cancelled by the rotation");
+        }
+        removed
     }
 
     /// Every record, oldest first.
@@ -1126,7 +1250,13 @@ mod tests {
         let peer = store.get(current.companion_id()).unwrap();
         assert_eq!(peer.record.rotation_history.len(), MAX_ROTATION_HISTORY);
         assert_eq!(
-            peer.record.rotation_history.last().unwrap().companion_id(),
+            peer.record
+                .rotation_history
+                .last()
+                .unwrap()
+                .rotation
+                .identity
+                .companion_id,
             current.companion_id(),
             "the newest transitions are kept"
         );

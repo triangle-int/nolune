@@ -389,7 +389,7 @@ async fn a_moved_identity_verifies_from_a_new_origin_and_rotates_with_an_audit_t
     let notice = |from: &identity::SigningIdentity, rotation| {
         let body = serde_json::to_vec(&TransportMessage::KeyRotation {
             version: FEDERATION_VERSION,
-            rotation,
+            rotation: Box::new(rotation),
         })
         .unwrap();
         envelope::seal(from, &a_id, &body, T0 + 10 + ROTATION_GRACE_SECS).unwrap()

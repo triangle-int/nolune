@@ -8,11 +8,17 @@
 //! * `GET /api/federation/peers` lists this companion's identity, invites, and peers.
 //! * `POST /api/federation/peers/{companion_id}/confirm` pairs a pending peer.
 //! * `POST /api/federation/peers/{companion_id}/revoke` withdraws trust.
+//! * `POST /api/federation/rotate` replaces this companion's key and tells
+//!   every paired peer.
 //!
 //! Peer side, public, verified by signature only:
 //!
 //! * `POST /federation/v1/pair` redeems an invite with a signed pair request.
 //! * `POST /federation/v1/pair/confirm` and `/revoke` carry signed notices.
+//! * `POST /federation/v1/ping` takes a transport envelope from a paired
+//!   peer and answers with one (#108, PR 3).
+//! * `POST /federation/v1/rotate` takes a key rotation notice signed by the
+//!   retiring key and answers with an ack for the new identity.
 //!
 //! Every body is JSON and read whole under a size cap; nothing is taken from
 //! the query string, and parse failures never echo the body. There is no
@@ -31,10 +37,12 @@ use serde_json::json;
 
 use crate::{
     app::state::AppState,
-    domain::federation::{AcceptInvite, FederationError, SignedEnvelope},
+    domain::federation::{AcceptInvite, FederationError, SignedEnvelope, TransportEnvelope},
     services::federation::{
-        identity,
-        pairing::{CONFIRM_PATH, MAX_ENVELOPE_BYTES, PAIR_PATH, REVOKE_PATH},
+        envelope, identity,
+        pairing::{
+            CONFIRM_PATH, MAX_ENVELOPE_BYTES, PAIR_PATH, PING_PATH, REVOKE_PATH, ROTATE_PATH,
+        },
     },
 };
 
@@ -52,6 +60,7 @@ pub fn router() -> Router<AppState> {
             "/api/federation/peers/{companion_id}/revoke",
             post(revoke_peer),
         )
+        .route("/api/federation/rotate", post(rotate_identity))
 }
 
 /// Mounted outside the auth middleware: a peer has no owner credential and
@@ -61,6 +70,8 @@ pub fn public_router() -> Router<AppState> {
         .route(PAIR_PATH, post(pair))
         .route(CONFIRM_PATH, post(confirm_notice))
         .route(REVOKE_PATH, post(revoke_notice))
+        .route(PING_PATH, post(ping))
+        .route(ROTATE_PATH, post(rotation_notice))
 }
 
 /// Refusals as typed JSON. The message is the error's own text, which never
@@ -184,6 +195,17 @@ fn parse_envelope(bytes: &[u8]) -> Result<SignedEnvelope, ApiError> {
     })
 }
 
+/// Parses a transport envelope the same way.
+fn parse_transport(bytes: &[u8]) -> Result<TransportEnvelope, ApiError> {
+    let text = std::str::from_utf8(bytes).map_err(|_| ApiError::InvalidBody)?;
+    envelope::parse(text).map_err(|error| match error {
+        FederationError::Malformed(_) => ApiError::Federation(FederationError::Malformed(
+            "request body is not a transport envelope".into(),
+        )),
+        other => ApiError::Federation(other),
+    })
+}
+
 async fn create_invite(State(state): State<AppState>) -> Result<Response, ApiError> {
     let origin = state.config.read().await.public_url.clone();
     let invite = state.federation.create_invite(&origin)?;
@@ -229,6 +251,10 @@ async fn revoke_peer(
     Ok(Json(json!({ "peer": peer.summary(), "notified": notified })).into_response())
 }
 
+async fn rotate_identity(State(state): State<AppState>) -> Result<Response, ApiError> {
+    Ok(Json(state.federation.rotate_identity().await?).into_response())
+}
+
 async fn pair(State(state): State<AppState>, request: Request) -> Result<Response, ApiError> {
     let envelope = parse_envelope(&read_body(request).await?)?;
     Ok(Json(state.federation.receive_pair_request(&envelope)?).into_response())
@@ -248,4 +274,17 @@ async fn revoke_notice(
 ) -> Result<Response, ApiError> {
     let envelope = parse_envelope(&read_body(request).await?)?;
     Ok(Json(state.federation.receive_revoke(&envelope)?).into_response())
+}
+
+async fn ping(State(state): State<AppState>, request: Request) -> Result<Response, ApiError> {
+    let envelope = parse_transport(&read_body(request).await?)?;
+    Ok(Json(state.federation.receive_ping(&envelope)?).into_response())
+}
+
+async fn rotation_notice(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Response, ApiError> {
+    let envelope = parse_transport(&read_body(request).await?)?;
+    Ok(Json(state.federation.receive_rotation(&envelope)?).into_response())
 }

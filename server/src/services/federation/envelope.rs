@@ -15,10 +15,16 @@
 use std::collections::HashMap;
 
 use ed25519_dalek::VerifyingKey;
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use super::identity::SigningIdentity;
-use crate::domain::federation::{FederationError, NONCE_BYTES, TransportEnvelope};
+use super::{
+    Canonical, TRANSPORT_SIGNING_DOMAIN, check_version, decode, decode_exact, encode,
+    identity::{SigningIdentity, decode_signature},
+};
+use crate::domain::federation::{
+    BODY_HASH_BYTES, FEDERATION_VERSION, FederationError, NONCE_BYTES, TransportEnvelope,
+};
 
 /// How far a sender's clock may run ahead of or behind ours.
 pub const MAX_CLOCK_SKEW_SECS: u64 = 120;
@@ -47,8 +53,16 @@ pub fn seal(
     body: &[u8],
     now: u64,
 ) -> Result<TransportEnvelope, FederationError> {
-    let _ = (signer, recipient, body, now);
-    todo!("PR 3: seal a transport envelope")
+    let mut nonce = [0u8; NONCE_BYTES];
+    getrandom::fill(&mut nonce).map_err(|_| FederationError::RandomnessUnavailable)?;
+    Ok(seal_with(
+        signer,
+        recipient,
+        body,
+        nonce,
+        now,
+        now + ENVELOPE_LIFETIME_SECS,
+    ))
 }
 
 /// [`seal`] with every variable input fixed, for fixtures and tests.
@@ -60,15 +74,41 @@ pub(crate) fn seal_with(
     issued_at: u64,
     expires_at: u64,
 ) -> TransportEnvelope {
-    let _ = (signer, recipient, body, nonce, issued_at, expires_at);
-    todo!("PR 3: seal a transport envelope deterministically")
+    let hash = body_hash(body);
+    let message = signing_bytes(
+        FEDERATION_VERSION,
+        signer.companion_id(),
+        recipient,
+        &nonce,
+        issued_at,
+        expires_at,
+        &hash,
+    );
+    TransportEnvelope {
+        version: FEDERATION_VERSION,
+        sender: signer.companion_id().to_owned(),
+        recipient: recipient.to_owned(),
+        nonce: encode(&nonce),
+        issued_at,
+        expires_at,
+        body_hash: encode(&hash),
+        body: encode(body),
+        signature: encode(&signer.sign_raw(&message)),
+    }
 }
 
 /// Parses a transport envelope, refusing unsupported versions before the
 /// strict shape check so a downgrade is reported as such.
 pub fn parse(json: &str) -> Result<TransportEnvelope, FederationError> {
-    let _ = json;
-    todo!("PR 3: parse a transport envelope")
+    #[derive(Deserialize)]
+    struct Versioned {
+        version: u32,
+    }
+    let versioned: Versioned = serde_json::from_str(json)
+        .map_err(|error| FederationError::Malformed(format!("transport envelope: {error}")))?;
+    check_version(versioned.version)?;
+    serde_json::from_str(json)
+        .map_err(|error| FederationError::Malformed(format!("transport envelope: {error}")))
 }
 
 /// Verifies `envelope` as sent by the holder of `sender_key` to `recipient`
@@ -80,12 +120,88 @@ pub fn verify(
     recipient: &str,
     now: u64,
 ) -> Result<VerifiedTransport, FederationError> {
-    let _ = (envelope, sender_key, recipient, now);
-    todo!("PR 3: verify a transport envelope")
+    check_version(envelope.version)?;
+    if envelope.recipient != recipient {
+        return Err(FederationError::RecipientMismatch);
+    }
+    let nonce: [u8; NONCE_BYTES] = decode_exact(&envelope.nonce, NONCE_BYTES)
+        .ok_or_else(|| FederationError::Malformed("nonce is not 16 base64url bytes".into()))?
+        .try_into()
+        .expect("length checked");
+    let declared_hash: [u8; BODY_HASH_BYTES] = decode_exact(&envelope.body_hash, BODY_HASH_BYTES)
+        .ok_or_else(|| FederationError::Malformed("body hash is not 32 base64url bytes".into()))?
+        .try_into()
+        .expect("length checked");
+    let signature = decode_signature(&envelope.signature)?;
+    let body = decode(&envelope.body)
+        .ok_or_else(|| FederationError::Malformed("body is not canonical base64url".into()))?;
+    let message = signing_bytes(
+        envelope.version,
+        &envelope.sender,
+        &envelope.recipient,
+        &nonce,
+        envelope.issued_at,
+        envelope.expires_at,
+        &declared_hash,
+    );
+    sender_key
+        .verify_strict(&message, &signature)
+        .map_err(|_| FederationError::SignatureMismatch)?;
+    // Everything above was signed; the body is bound to it by its hash.
+    if body_hash(&body) != declared_hash {
+        return Err(FederationError::BodyHashMismatch);
+    }
+    if envelope.expires_at <= envelope.issued_at
+        || envelope.expires_at - envelope.issued_at > MAX_ENVELOPE_LIFETIME_SECS
+    {
+        return Err(FederationError::InvalidLifetime {
+            issued_at: envelope.issued_at,
+            expires_at: envelope.expires_at,
+        });
+    }
+    if envelope.issued_at > now.saturating_add(MAX_CLOCK_SKEW_SECS) {
+        return Err(FederationError::IssuedInFuture {
+            issued_at: envelope.issued_at,
+            now,
+        });
+    }
+    let retire_at = envelope.expires_at.saturating_add(MAX_CLOCK_SKEW_SECS);
+    if now >= retire_at {
+        return Err(FederationError::Expired {
+            expires_at: envelope.expires_at,
+            now,
+        });
+    }
+    Ok(VerifiedTransport {
+        body,
+        nonce,
+        retire_at,
+    })
+}
+
+/// The signed bytes: every header in order, then the body's digest.
+fn signing_bytes(
+    version: u32,
+    sender: &str,
+    recipient: &str,
+    nonce: &[u8; NONCE_BYTES],
+    issued_at: u64,
+    expires_at: u64,
+    body_hash: &[u8; BODY_HASH_BYTES],
+) -> Vec<u8> {
+    Canonical::new(TRANSPORT_SIGNING_DOMAIN)
+        .u32(version)
+        .str(sender)
+        .str(recipient)
+        .bytes(nonce)
+        .u64(issued_at)
+        .u64(expires_at)
+        .bytes(body_hash)
+        .finish()
 }
 
 /// SHA-256 of a body, as the envelope commits to it.
-pub(crate) fn body_hash(body: &[u8]) -> [u8; 32] {
+pub(crate) fn body_hash(body: &[u8]) -> [u8; BODY_HASH_BYTES] {
     Sha256::digest(body).into()
 }
 
@@ -121,14 +237,24 @@ impl ReplayGuard {
         retire_at: u64,
         now: u64,
     ) -> Result<(), FederationError> {
-        let _ = (sender, nonce, retire_at, now);
-        todo!("PR 3: reserve a nonce")
+        self.entries.retain(|_, retire| *retire > now);
+        let key = (sender.to_owned(), nonce);
+        if self.entries.contains_key(&key) {
+            return Err(FederationError::Replayed);
+        }
+        if self.entries.len() >= self.capacity {
+            return Err(FederationError::ReplayCapacity);
+        }
+        self.entries.insert(key, retire_at);
+        Ok(())
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -279,7 +405,7 @@ mod tests {
         assert_eq!(first.recipient, peer_id());
         assert_eq!(first.issued_at, now);
         assert_eq!(first.expires_at, now + ENVELOPE_LIFETIME_SECS);
-        assert!(ENVELOPE_LIFETIME_SECS <= MAX_ENVELOPE_LIFETIME_SECS);
+        const { assert!(ENVELOPE_LIFETIME_SECS <= MAX_ENVELOPE_LIFETIME_SECS) };
         assert_eq!(
             decode_exact(&first.nonce, NONCE_BYTES).unwrap().len(),
             NONCE_BYTES

@@ -210,8 +210,40 @@ pub(crate) fn rotate_at(
     previous: &SigningIdentity,
     now: u64,
 ) -> Result<(SigningIdentity, crate::domain::federation::KeyRotation), FederationError> {
-    let _ = (workspace_root, previous, now);
-    todo!("PR 3: rotate the keystore")
+    let on_disk = load(workspace_root)?
+        .ok_or_else(|| FederationError::SigningKeyMissing(signing_key_path(workspace_root)))?;
+    if on_disk.verified.public_key != previous.verified.public_key {
+        return Err(FederationError::KeyMismatch);
+    }
+
+    let mut seed = Zeroizing::new([0u8; SEED_BYTES]);
+    getrandom::fill(seed.as_mut()).map_err(|_| FederationError::RandomnessUnavailable)?;
+    let next = from_seed(&seed, now);
+    let rotation = super::rotation::endorse(previous, &next, now);
+
+    // The proof first: if the process dies before the key files change, the
+    // old key stays active and the entry only records an attempt; the other
+    // order could leave a live key that no peer can be told about.
+    super::rotation::append_rotation(workspace_root, &rotation)?;
+
+    let key_path = signing_key_path(workspace_root);
+    let stored = StoredSigningKey {
+        version: SIGNING_KEY_FORMAT_VERSION,
+        algorithm: SIGNING_KEY_ALGORITHM.to_owned(),
+        secret_key: encode(seed.as_ref()),
+    };
+    let mut key_json = serde_json::to_string_pretty(&stored).expect("signing key serializes");
+    key_json.push('\n');
+    let key_json = Zeroizing::new(key_json);
+    replace_private(&key_path, key_json.as_bytes()).map_err(|error| io_error(&key_path, error))?;
+
+    let doc_path = identity_path(workspace_root);
+    let mut doc_json =
+        serde_json::to_string_pretty(next.document()).expect("identity document serializes");
+    doc_json.push('\n');
+    replace_private(&doc_path, doc_json.as_bytes()).map_err(|error| io_error(&doc_path, error))?;
+
+    Ok((next, rotation))
 }
 
 /// `Ok(None)` when no identity was created yet; `Err` when the files exist but
@@ -493,6 +525,27 @@ fn write_new_private(path: &Path, contents: &[u8]) -> io::Result<()> {
     use std::io::Write as _;
     handle.write_all(contents)?;
     handle.sync_all()
+}
+
+/// Replaces `path` owner-readable only, through a temporary file in the same
+/// directory and a rename, so a reader sees the old file or the new one.
+pub(super) fn replace_private(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| io::Error::other("keystore path has no directory"))?;
+    create_private_dir(dir)?;
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tmp.as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    use std::io::Write as _;
+    tmp.write_all(contents)?;
+    tmp.as_file().sync_all()?;
+    tmp.persist(path).map_err(|error| error.error)?;
+    Ok(())
 }
 
 fn io_error(path: &Path, error: io::Error) -> FederationError {

@@ -131,7 +131,10 @@ pub enum TransportMessage {
     /// The sender rotated its key; sent inside an envelope signed by the
     /// key being retired.
     #[serde(rename = "key_rotation")]
-    KeyRotation { version: u32, rotation: KeyRotation },
+    KeyRotation {
+        version: u32,
+        rotation: Box<KeyRotation>,
+    },
     /// The recipient recorded the rotation and now knows the sender as
     /// `companion_id`.
     #[serde(rename = "rotation_ack")]
@@ -216,10 +219,6 @@ pub struct KeyTransition {
 impl KeyTransition {
     pub fn previous_companion_id(&self) -> &str {
         &self.rotation.previous.companion_id
-    }
-
-    pub fn companion_id(&self) -> &str {
-        &self.rotation.identity.companion_id
     }
 }
 
@@ -968,7 +967,7 @@ mod tests {
             accepted_at: 60,
         };
         assert_eq!(transition.previous_companion_id(), "cid");
-        assert_eq!(transition.companion_id(), "next");
+        assert_eq!(transition.rotation.identity.companion_id, "next");
         let json = serde_json::to_value(&transition).unwrap();
         let mut keys: Vec<&str> = json
             .as_object()

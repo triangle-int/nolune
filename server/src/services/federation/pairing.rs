@@ -56,7 +56,7 @@ use super::{
 use crate::domain::federation::{
     AcceptInvite, FEDERATION_VERSION, FederationError, IdentityDocument, InviteSummary,
     IssuedInvite, KeyRotation, PairingMessage, PairingRole, PeerRecord, PeerState, PeerSummary,
-    SignedEnvelope, TransportEnvelope,
+    SignedEnvelope, TransportEnvelope, TransportMessage,
 };
 
 /// Peer-side route for pair requests, relative to the peer's base URL.
@@ -105,6 +105,49 @@ impl HttpTransport {
     pub fn new(client: reqwest::Client) -> Self {
         Self { client }
     }
+
+    /// POSTs `envelope` as JSON and returns the answer's text once it is a
+    /// success under the size cap.
+    async fn post_json(
+        &self,
+        url: &str,
+        envelope: &impl Serialize,
+    ) -> Result<String, FederationError> {
+        let mut response = self
+            .client
+            .post(url)
+            .timeout(TRANSPORT_TIMEOUT)
+            .json(envelope)
+            .send()
+            .await
+            .map_err(|error| FederationError::Transport(error.to_string()))?;
+        let status = response.status();
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|error| FederationError::Transport(error.to_string()))?
+        {
+            if bytes.len() + chunk.len() > MAX_ENVELOPE_BYTES {
+                return Err(FederationError::Malformed(
+                    "peer answer exceeds the envelope size cap".into(),
+                ));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        if !status.is_success() {
+            let error = serde_json::from_slice::<serde_json::Value>(&bytes)
+                .ok()
+                .and_then(|value| value["error"].as_str().map(str::to_owned))
+                .unwrap_or_else(|| "unknown".to_owned());
+            return Err(FederationError::PeerRefused {
+                status: status.as_u16(),
+                error,
+            });
+        }
+        String::from_utf8(bytes)
+            .map_err(|_| FederationError::Malformed("peer answer is not UTF-8".into()))
+    }
 }
 
 impl PeerTransport for HttpTransport {
@@ -113,43 +156,7 @@ impl PeerTransport for HttpTransport {
         url: &'a str,
         envelope: &'a SignedEnvelope,
     ) -> BoxFuture<'a, Result<SignedEnvelope, FederationError>> {
-        Box::pin(async move {
-            let mut response = self
-                .client
-                .post(url)
-                .timeout(TRANSPORT_TIMEOUT)
-                .json(envelope)
-                .send()
-                .await
-                .map_err(|error| FederationError::Transport(error.to_string()))?;
-            let status = response.status();
-            let mut bytes = Vec::new();
-            while let Some(chunk) = response
-                .chunk()
-                .await
-                .map_err(|error| FederationError::Transport(error.to_string()))?
-            {
-                if bytes.len() + chunk.len() > MAX_ENVELOPE_BYTES {
-                    return Err(FederationError::Malformed(
-                        "peer answer exceeds the envelope size cap".into(),
-                    ));
-                }
-                bytes.extend_from_slice(&chunk);
-            }
-            if !status.is_success() {
-                let error = serde_json::from_slice::<serde_json::Value>(&bytes)
-                    .ok()
-                    .and_then(|value| value["error"].as_str().map(str::to_owned))
-                    .unwrap_or_else(|| "unknown".to_owned());
-                return Err(FederationError::PeerRefused {
-                    status: status.as_u16(),
-                    error,
-                });
-            }
-            let text = std::str::from_utf8(&bytes)
-                .map_err(|_| FederationError::Malformed("peer answer is not UTF-8".into()))?;
-            identity::parse_envelope(text)
-        })
+        Box::pin(async move { identity::parse_envelope(&self.post_json(url, envelope).await?) })
     }
 
     fn post_transport<'a>(
@@ -157,8 +164,7 @@ impl PeerTransport for HttpTransport {
         url: &'a str,
         envelope: &'a TransportEnvelope,
     ) -> BoxFuture<'a, Result<TransportEnvelope, FederationError>> {
-        let _ = (url, envelope);
-        Box::pin(async move { todo!("PR 3: post a transport envelope over HTTP") })
+        Box::pin(async move { envelope::parse(&self.post_json(url, envelope).await?) })
     }
 }
 
@@ -275,8 +281,18 @@ impl FederationState {
 
     /// Seals `body` for the peer `recipient` as this companion.
     pub fn seal(&self, recipient: &str, body: &[u8]) -> Result<TransportEnvelope, FederationError> {
-        let _ = (recipient, body);
-        todo!("PR 3: seal a transport envelope as this companion")
+        envelope::seal(&*self.identity()?, recipient, body, (self.clock)())
+    }
+
+    /// Seals `body` as an explicit identity: the retiring key signs the
+    /// rotation notices after the keystore already moved on.
+    fn seal_as(
+        &self,
+        signer: &SigningIdentity,
+        recipient: &str,
+        body: &[u8],
+    ) -> Result<TransportEnvelope, FederationError> {
+        envelope::seal(signer, recipient, body, (self.clock)())
     }
 
     /// Verifies a transport envelope from a paired peer: version, recipient,
@@ -285,8 +301,32 @@ impl FederationState {
     /// consumed only once everything else passed. Unknown, pending, revoked,
     /// and retired senders fail closed with distinct errors.
     pub fn open(&self, envelope: &TransportEnvelope) -> Result<Inbound, FederationError> {
-        let _ = envelope;
-        todo!("PR 3: open a transport envelope")
+        check_version(envelope.version)?;
+        let me = self.identity()?;
+        if envelope.recipient != me.companion_id() {
+            return Err(FederationError::RecipientMismatch);
+        }
+        let sender = self.peers.resolve_sender(&envelope.sender)?;
+        let now = (self.clock)();
+        let verified = envelope::verify(envelope, &sender.key, me.companion_id(), now)?;
+        match sender.peer.record.state {
+            PeerState::Paired => {}
+            PeerState::Revoked => return Err(FederationError::PeerRevoked),
+            state => return Err(FederationError::PeerNotPaired { state }),
+        }
+        // Last, so that nothing that failed above consumed the nonce and a
+        // stranger cannot fill the set with envelopes that never verified.
+        self.replay.lock().unwrap().reserve(
+            &envelope.sender,
+            verified.nonce,
+            verified.retire_at,
+            now,
+        )?;
+        Ok(Inbound {
+            peer: sender.peer.record,
+            key: sender.kind,
+            body: verified.body,
+        })
     }
 
     /// A ping from a paired peer, answered with a sealed pong.
@@ -294,8 +334,18 @@ impl FederationState {
         &self,
         envelope: &TransportEnvelope,
     ) -> Result<TransportEnvelope, FederationError> {
-        let _ = envelope;
-        todo!("PR 3: answer a ping")
+        let inbound = self.open(envelope)?;
+        let TransportMessage::Ping { version } = parse_transport_message(&inbound.body)? else {
+            return Err(FederationError::Malformed("expected a ping".into()));
+        };
+        check_version(version)?;
+        self.seal(
+            inbound.peer.companion_id(),
+            &serde_json::to_vec(&TransportMessage::Pong {
+                version: FEDERATION_VERSION,
+            })
+            .expect("transport messages serialize"),
+        )
     }
 
     /// Replaces this companion's key: the rotation proof is persisted and
@@ -304,7 +354,110 @@ impl FederationState {
     /// gets a notice signed by the old key. Peers that do not acknowledge
     /// are reported; the local rotation stands regardless.
     pub async fn rotate_identity(&self) -> Result<RotationReport, FederationError> {
-        todo!("PR 3: rotate this companion's identity")
+        // Under the identity lock from the check to the swap, so two
+        // rotations cannot both endorse from the same key.
+        let (previous, next, rotation) = {
+            let mut slot = self.identity.lock().unwrap();
+            let previous = match slot.as_ref() {
+                Some(identity) => identity.clone(),
+                None => Arc::new(identity::load_or_create(&self.root)?),
+            };
+            let (next, rotation) = identity::rotate_at(&self.root, &previous, (self.clock)())?;
+            let next = Arc::new(next);
+            *slot = Some(next.clone());
+            (previous, next, rotation)
+        };
+        self.peers.cancel_all_invites();
+        log::info!(
+            "[federation] identity rotated: companion {} is now companion {}",
+            previous.companion_id(),
+            next.companion_id()
+        );
+        let notice = serde_json::to_vec(&TransportMessage::KeyRotation {
+            version: FEDERATION_VERSION,
+            rotation: Box::new(rotation.clone()),
+        })
+        .expect("transport messages serialize");
+        let mut notified = Vec::new();
+        let mut unreachable = Vec::new();
+        for record in self.peers.list() {
+            if record.state != PeerState::Paired {
+                continue;
+            }
+            let acknowledged = self
+                .notify_rotation(&previous, &next, &record, &notice)
+                .await;
+            if acknowledged {
+                notified.push(record.identity.companion_id);
+            } else {
+                unreachable.push(record.identity.companion_id);
+            }
+        }
+        Ok(RotationReport {
+            identity: next.document().clone(),
+            rotation,
+            notified,
+            unreachable,
+        })
+    }
+
+    /// Posts the rotation notice, signed by the retiring key, to the peer's
+    /// approved origins until one answers with an ack for the new identity.
+    async fn notify_rotation(
+        &self,
+        previous: &SigningIdentity,
+        next: &SigningIdentity,
+        peer: &PeerRecord,
+        notice: &[u8],
+    ) -> bool {
+        for origin in &peer.approved_origins {
+            let url = format!("{origin}{ROTATE_PATH}");
+            let outcome = match self.seal_as(previous, peer.companion_id(), notice) {
+                Ok(outgoing) => match self.transport.post_transport(&url, &outgoing).await {
+                    Ok(answer) => self.check_rotation_ack(next, peer, &answer),
+                    Err(error) => Err(error),
+                },
+                Err(error) => Err(error),
+            };
+            match outcome {
+                Ok(()) => return true,
+                Err(error) => log::warn!(
+                    "[federation] companion {} at {origin} did not acknowledge the rotation: {error}",
+                    peer.companion_id()
+                ),
+            }
+        }
+        false
+    }
+
+    /// The ack is a transport envelope for the new identity; `open` verifies
+    /// it against the peer's current key and consumes its nonce.
+    fn check_rotation_ack(
+        &self,
+        next: &SigningIdentity,
+        peer: &PeerRecord,
+        answer: &TransportEnvelope,
+    ) -> Result<(), FederationError> {
+        let inbound = self.open(answer)?;
+        if inbound.peer.companion_id() != peer.companion_id() {
+            return Err(FederationError::SenderMismatch);
+        }
+        let TransportMessage::RotationAck {
+            version,
+            companion_id,
+            state,
+        } = parse_transport_message(&inbound.body)?
+        else {
+            return Err(FederationError::Malformed("expected a rotation ack".into()));
+        };
+        check_version(version)?;
+        if companion_id != next.companion_id() {
+            return Err(FederationError::RotationMismatch);
+        }
+        if state != PeerState::Paired {
+            return Err(FederationError::PeerNotPaired { state });
+        }
+        Ok(())
     }
 
     /// The peer's side of a rotation: the notice must be signed by the key
@@ -316,8 +469,41 @@ impl FederationState {
         &self,
         envelope: &TransportEnvelope,
     ) -> Result<TransportEnvelope, FederationError> {
-        let _ = envelope;
-        todo!("PR 3: apply a peer's rotation")
+        let inbound = self.open(envelope)?;
+        let TransportMessage::KeyRotation { version, rotation } =
+            parse_transport_message(&inbound.body)?
+        else {
+            return Err(FederationError::Malformed("expected a key rotation".into()));
+        };
+        check_version(version)?;
+        // The notice must come from the key it retires.
+        if rotation.previous.companion_id != envelope.sender {
+            return Err(FederationError::RotationMismatch);
+        }
+        let (_, next) = rotation::verify_rotation(&rotation)?;
+        let peer = self
+            .peers
+            .rotate(&rotation, next)?
+            .ok_or(FederationError::UnknownPeer)?;
+        // Signed by the peer's current key: the record was not re-keyed
+        // yet, so this notice applied it. A resend inside the grace window
+        // arrives under a previous key and changed nothing.
+        if inbound.key == SenderKey::Current {
+            log::info!(
+                "[federation] companion {} rotated its key and is now companion {}",
+                rotation.previous.companion_id,
+                peer.record.companion_id()
+            );
+        }
+        self.seal(
+            peer.record.companion_id(),
+            &serde_json::to_vec(&TransportMessage::RotationAck {
+                version: FEDERATION_VERSION,
+                companion_id: peer.record.identity.companion_id.clone(),
+                state: peer.record.state,
+            })
+            .expect("transport messages serialize"),
+        )
     }
 
     /// The accepting owner's step: redeem `accept` against the issuer at
@@ -808,6 +994,14 @@ impl FederationState {
 pub(crate) fn sign_message(signer: &SigningIdentity, message: &PairingMessage) -> SignedEnvelope {
     let body = Zeroizing::new(serde_json::to_vec(message).expect("pairing messages serialize"));
     signer.sign_envelope(&body)
+}
+
+/// Parses a verified transport body; no secret travels in one, but the
+/// detail is discarded all the same so no body is ever quoted back.
+fn parse_transport_message(body: &[u8]) -> Result<TransportMessage, FederationError> {
+    serde_json::from_slice(body).map_err(|_| {
+        FederationError::Malformed("transport message does not have the expected shape".into())
+    })
 }
 
 /// Parses a verified body. serde's detail is discarded on purpose: it could
@@ -1821,9 +2015,8 @@ mod tests {
         assert_eq!(overview.companion_id, new_b_id);
         assert_eq!(overview.rotations, vec![report.rotation.clone()]);
         assert!(overview.invites.is_empty());
-        assert_eq!(
-            b.cancel_invite(&outstanding.id),
-            false,
+        assert!(
+            !b.cancel_invite(&outstanding.id),
             "the invite was withdrawn by the rotation"
         );
 
@@ -1927,7 +2120,7 @@ mod tests {
         let notice = |from: &FederationState, rotation: &KeyRotation| {
             let body = serde_json::to_vec(&TransportMessage::KeyRotation {
                 version: FEDERATION_VERSION,
-                rotation: rotation.clone(),
+                rotation: Box::new(rotation.clone()),
             })
             .unwrap();
             from.seal(&a_id, &body).unwrap()
