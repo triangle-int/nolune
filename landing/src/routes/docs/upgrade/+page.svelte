@@ -6,7 +6,7 @@
 	<p class="docs-lede">Nolune checks for updates on its own and tells you when a newer release exists. Applying one is two steps: replace the binary, then restart the server the same way it was started. Your data is never touched by an update.</p>
 
 	<h2 id="apply">Apply an update</h2>
-	<p><strong>From the web interface.</strong> When a newer release is out, an <strong>Update available</strong> pill appears at the top of the companion pages. Click it: the server runs its update script and exits so it can come back on the new version. <strong>Settings → Advanced</strong> shows the installed version, what is new, and lets you switch the release channel between stable and nightly.</p>
+	<p><strong>From the web interface.</strong> When a newer release is out, an <strong>Update available</strong> pill appears in the web interface. Click it: the server runs its update script and exits so it can come back on the new version. <strong>Settings → Advanced</strong> shows the installed version, what is new, and lets you switch the release channel between stable and nightly.</p>
 	<p><strong>From a terminal on the server.</strong> The installer left an update script beside the binary:</p>
 	<pre><code>~/.nolune/bin/update</code></pre>
 	<p>It downloads the current release for your platform, replaces <code>~/.nolune/bin/nolune</code>, and prints <code>already at &lt;version&gt;</code> when there is nothing to do. It follows the channel you installed from; <code>NOLUNE_CHANNEL=nightly ~/.nolune/bin/update</code> switches a stable install to nightly for that run. Rerunning the <a href="/docs/install#one-liner">one-line installer</a> does the same and then starts the server again.</p>
