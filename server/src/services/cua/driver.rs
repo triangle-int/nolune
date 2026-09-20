@@ -292,12 +292,12 @@ mod tests {
             transport::{DriverTimeouts, StdioDriverTransport},
         };
 
-        let Some(driver) = discovery::discover(None).unwrap() else {
+        let Some(driver) = discovery::discover(None, None).unwrap() else {
             eprintln!("no cua-driver on this host; nothing to check");
             return;
         };
         let transport = Arc::new(
-            StdioDriverTransport::spawn_with(&driver, DriverTimeouts::default())
+            StdioDriverTransport::spawn_with(&driver.path, DriverTimeouts::default())
                 .await
                 .unwrap(),
         );

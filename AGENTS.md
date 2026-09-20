@@ -31,10 +31,6 @@ git push && git push origin vX.Y.Z
 
 Use `pnpm` (not npm) for client and landing.
 
-## Migrations
-
-Never write migrations manually — always use `drizzle-kit generate`.
-
 ## Avatar assets
 
 Little Moon uses SVG assets in `client/static/skins/moon/`. Keep the desktop overlay and landing copies consistent. Test expressions in `/design-system`; no video skin pipeline is needed.

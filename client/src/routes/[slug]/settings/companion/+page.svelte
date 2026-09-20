@@ -218,13 +218,13 @@
 					{#each HOURS as h (h)}<option value={String(h)}>until {h}:00</option>{/each}
 				</select>
 			</div>
-			<p class="setting-hint">No spontaneous check-ins or messages during quiet hours, in your companion's timezone.</p>
+			<p class="setting-hint">No spontaneous check-ins or messages during quiet hours, in your companion's timezone. A commitment that comes due then waits for the morning.</p>
 		</div>
 
 		<div class="setting-row">
 			<label class="setting-label" for="reach-out-budget">Messages per day</label>
 			<input id="reach-out-budget" class="setting-input" type="number" min="0" max="48" disabled={policySaving} value={policy.daily_reach_out_budget} onchange={(e) => policy && savePolicy({ ...policy, daily_reach_out_budget: Math.max(0, Math.min(48, Number((e.currentTarget as HTMLInputElement).value) || 0)) })} />
-			<p class="setting-hint">How many times a day your companion may message you first.</p>
+			<p class="setting-hint">How many times a day your companion may message you first, commitment check-ins included. See what it is holding under <a class="settings-link" href={`/${slug}/activity`}>Activity</a>.</p>
 		</div>
 
 		<div class="setting-row">

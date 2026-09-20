@@ -28,7 +28,7 @@ impl std::error::Error for McpToolError {}
 // Transport helpers
 // ---------------------------------------------------------------------------
 
-fn client_info() -> ClientInfo {
+pub(crate) fn client_info() -> ClientInfo {
     let mut info = ClientInfo::default();
     info.client_info = Implementation::new("nolune", env!("CARGO_PKG_VERSION"));
     info

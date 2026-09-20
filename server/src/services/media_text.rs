@@ -26,6 +26,10 @@ const MAX_LEGACY_OBSERVATION_BYTES: usize = 1024 * 1024;
 const MAX_LEGACY_CLEANUP_ENTRIES: usize = 10_000;
 const LEGACY_CLEANUP_TOMBSTONE_PREFIX: &str = ".legacy-screen-cleanup-";
 const LEGACY_CLEANUP_TOMBSTONE_SUFFIX: &str = ".json";
+/// Top-level directory a companion import stages in and parks the replaced
+/// tree under (#74). Never under `instances/`, whose siblings are reported
+/// as obsolete companions.
+pub(crate) const IMPORTS_DIR: &str = "imports";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectoryEntry {
@@ -47,7 +51,20 @@ pub struct MediaStore {
     #[cfg(test)]
     fail_next_write: std::sync::atomic::AtomicBool,
     #[cfg(test)]
+    fail_next_import_publish: std::sync::atomic::AtomicBool,
+    #[cfg(test)]
+    stash_pause: std::sync::Mutex<Option<StashPause>>,
+    #[cfg(test)]
     legacy_cleanup_failures: std::sync::Mutex<std::collections::HashSet<String>>,
+}
+
+/// Test-only rendezvous inside the import swap: `stash_companion` reports on
+/// `reached` once the live tree is parked and then blocks on `resume`, so a
+/// test can act in the window between the two renames.
+#[cfg(test)]
+pub(crate) struct StashPause {
+    pub reached: std::sync::mpsc::Sender<()>,
+    pub resume: std::sync::mpsc::Receiver<()>,
 }
 
 impl MediaStore {
@@ -61,6 +78,10 @@ impl MediaStore {
             upload_dirs: std::sync::Mutex::new(HashMap::new()),
             #[cfg(test)]
             fail_next_write: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            fail_next_import_publish: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            stash_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
             legacy_cleanup_failures: std::sync::Mutex::new(std::collections::HashSet::new()),
         })
@@ -263,6 +284,130 @@ impl MediaStore {
         let uploads = std::sync::Arc::new(uploads);
         cache.insert(slug.to_owned(), uploads.clone());
         Ok(uploads)
+    }
+
+    /// Drop the cached uploads handle for `slug` so the next upload read opens
+    /// the directory that is in place now. Called on both sides of the
+    /// import swap.
+    fn forget_upload_dir(&self, slug: &str) {
+        if let Ok(mut cache) = self.upload_dirs.lock() {
+            cache.remove(slug);
+        }
+    }
+
+    fn import_path(name: &str) -> io::Result<PathBuf> {
+        Ok(Path::new(IMPORTS_DIR).join(validate_single_component(name, "invalid import name")?))
+    }
+
+    /// Create `imports/<name>`, which must not exist yet, and hand back the
+    /// capability the archive reader extracts into (#74).
+    pub(crate) fn create_import(&self, name: &str) -> io::Result<Dir> {
+        let relative = Self::import_path(name)?;
+        let imports = Path::new(IMPORTS_DIR);
+        reject_symlinks(&self.root, imports, true)?;
+        self.root.create_dir_all(imports)?;
+        reject_symlinks(&self.root, imports, false)?;
+        self.root.create_dir(&relative)?;
+        let imports = open_real_child_dir(&self.root, IMPORTS_DIR)?
+            .ok_or_else(|| invalid_path("imports directory must be a real directory"))?;
+        open_real_child_dir(&imports, name)?
+            .ok_or_else(|| invalid_path("import directory must be a real directory"))
+    }
+
+    /// Remove `imports/<name>` and everything under it; a missing directory
+    /// is already-clean success. Symlinks and files at that name are left in
+    /// place and reported.
+    pub(crate) fn remove_import(&self, name: &str) -> io::Result<()> {
+        let relative = Self::import_path(name)?;
+        match self.root.symlink_metadata(&relative) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                Err(invalid_path("import entry is not a directory"))
+            }
+            Ok(_) => self.root.remove_dir_all(&relative),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// First half of the import swap: move the live companion tree to
+    /// `imports/<name>`. `Ok(false)` when there is no companion yet. A
+    /// rename is atomic, so a failure here leaves the companion untouched.
+    pub(crate) fn stash_companion(&self, slug: &str, name: &str) -> io::Result<bool> {
+        validate_slug(slug)?;
+        let target = Path::new("instances").join(slug);
+        let parked = Self::import_path(name)?;
+        reject_symlinks(&self.root, Path::new(IMPORTS_DIR), false)?;
+        match self.root.symlink_metadata(&target) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(invalid_path("companion path is not a real directory"));
+            }
+            Ok(_) => reject_symlinks(&self.root, &target, false)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        }
+        self.root.rename(&target, &self.root, &parked)?;
+        self.forget_upload_dir(slug);
+        #[cfg(test)]
+        if let Some(pause) = self
+            .stash_pause
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
+            let _ = pause.reached.send(());
+            let _ = pause.resume.recv();
+        }
+        Ok(true)
+    }
+
+    /// Second half of the import swap, and its rollback: move
+    /// `imports/<name>` into place as the companion tree. Refuses, without
+    /// touching anything, while a companion tree is already there.
+    pub(crate) fn publish_import(&self, slug: &str, name: &str) -> io::Result<()> {
+        validate_slug(slug)?;
+        let source = Self::import_path(name)?;
+        let target = Path::new("instances").join(slug);
+        reject_symlinks(&self.root, &source, false)?;
+        if !self.root.symlink_metadata(&source)?.is_dir() {
+            return Err(invalid_path("import source is not a directory"));
+        }
+        let instances = Path::new("instances");
+        reject_symlinks(&self.root, instances, true)?;
+        self.root.create_dir_all(instances)?;
+        reject_symlinks(&self.root, instances, false)?;
+        match self.root.symlink_metadata(&target) {
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "companion directory already exists",
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        #[cfg(test)]
+        if self
+            .fail_next_import_publish
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(io::Error::other("injected import publish failure"));
+        }
+        self.root.rename(&source, &self.root, &target)?;
+        self.forget_upload_dir(slug);
+        // The rename is done; durability of the directory entries is best
+        // effort and never turns a published import into a rollback.
+        for parent in ["instances", IMPORTS_DIR] {
+            match open_real_child_dir(&self.root, parent) {
+                Ok(Some(dir)) => {
+                    if let Err(error) = sync_capability_dir(&dir) {
+                        log::warn!("[import] could not fsync {parent}/: {error}");
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => log::warn!("[import] could not open {parent}/ to fsync: {error}"),
+            }
+        }
+        Ok(())
     }
 
     /// Remove unpublished passive-screen-capture artifacts through persistently
@@ -974,6 +1119,23 @@ impl MediaStore {
     pub(crate) fn inject_next_write_failure(&self) {
         self.fail_next_write
             .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Make the next `publish_import` rename fail before it runs, so a
+    /// restore exercises its rollback path.
+    pub(crate) fn inject_next_import_publish_failure(&self) {
+        self.fail_next_import_publish
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Make the next `stash_companion` block between the two renames of the
+    /// import swap until `pause.resume` receives, reporting on
+    /// `pause.reached` first.
+    pub(crate) fn pause_next_stash(&self, pause: StashPause) {
+        *self
+            .stash_pause
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(pause);
     }
 
     fn inject_legacy_cleanup_failure(&self, slug: &str, point: &str) {
@@ -1870,6 +2032,82 @@ mod tests {
                 .is_err()
         );
         assert_eq!(std::fs::read(outside.path()).unwrap(), b"outside sentinel");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn import_primitives_stay_inside_imports_and_refuse_links_and_occupied_targets() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("sentinel"), b"outside").unwrap();
+        let store = MediaStore::open(workspace.path()).unwrap();
+
+        // Names are single components under imports/.
+        for name in ["../escape", "a/b", "", ".", ".."] {
+            assert!(store.create_import(name).is_err(), "{name:?}");
+            assert!(store.remove_import(name).is_err(), "{name:?}");
+        }
+        let staging = store.create_import("staging-1").unwrap();
+        staging.write("marker", b"staged").unwrap();
+        assert!(workspace.path().join("imports/staging-1/marker").is_file());
+        assert!(
+            store.create_import("staging-1").is_err(),
+            "a staging name is never reused"
+        );
+
+        // A symlink parked under imports/ is refused, never followed or removed.
+        symlink(outside.path(), workspace.path().join("imports/linked")).unwrap();
+        assert!(store.remove_import("linked").is_err());
+        assert!(store.publish_import("companion", "linked").is_err());
+        assert!(workspace.path().join("imports/linked").is_symlink());
+        assert!(outside.path().join("sentinel").is_file());
+
+        // No companion yet: stash reports none, publish creates instances/.
+        assert!(!store.stash_companion("companion", "previous-1").unwrap());
+        store.publish_import("companion", "staging-1").unwrap();
+        assert_eq!(
+            std::fs::read(workspace.path().join("instances/companion/marker")).unwrap(),
+            b"staged"
+        );
+        assert!(!workspace.path().join("imports/staging-1").exists());
+
+        // An occupied target refuses without moving anything.
+        let second = store.create_import("staging-2").unwrap();
+        second.write("marker", b"second").unwrap();
+        assert_eq!(
+            store
+                .publish_import("companion", "staging-2")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert!(workspace.path().join("imports/staging-2/marker").is_file());
+        assert_eq!(
+            std::fs::read(workspace.path().join("instances/companion/marker")).unwrap(),
+            b"staged"
+        );
+
+        // A companion path that is a symlink is never stashed.
+        std::fs::rename(
+            workspace.path().join("instances/companion"),
+            workspace.path().join("instances/real"),
+        )
+        .unwrap();
+        symlink(
+            workspace.path().join("instances/real"),
+            workspace.path().join("instances/companion"),
+        )
+        .unwrap();
+        assert!(store.stash_companion("companion", "previous-2").is_err());
+        assert!(workspace.path().join("instances/companion").is_symlink());
+        assert!(!workspace.path().join("imports/previous-2").exists());
+
+        store.remove_import("staging-2").unwrap();
+        store.remove_import("staging-2").unwrap();
+        assert!(!workspace.path().join("imports/staging-2").exists());
+        assert!(workspace.path().join("imports/linked").is_symlink());
     }
 
     #[cfg(unix)]

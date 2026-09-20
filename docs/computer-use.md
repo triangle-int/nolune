@@ -11,23 +11,32 @@ on either kind of machine.
 ## When the target exists
 
 At startup the gateway looks for a driver and a desktop session, in this
-order:
+order (the same facts `nolune cua status` prints, see [the `nolune`
+command](../README.md#the-nolune-command)):
 
 1. `[cua].enabled = false` in `config.toml` never looks for a driver.
 2. `[cua].driver_path`, then the `NOLUNE_CUA_DRIVER` environment variable,
-   then an executable `cua-driver` on `PATH`. A path that is named
-   explicitly but cannot run is logged as an error; it is never treated as
-   "no driver", so a typo does not silently remove the target.
-3. A process inside a container (`/.dockerenv`, `/run/.containerenv`,
+   then the driver `nolune cua install` put under the workspace
+   (`cua-driver/install.json`), then an executable `cua-driver` on `PATH`.
+   A path that is named explicitly but cannot run is logged as an error; it
+   is never treated as "no driver", so a typo does not silently remove the
+   target.
+3. Nolune drives computers on macOS only for now: on Linux and Windows the
+   pinned driver installs but the server registers no target until a
+   release turns it on.
+4. A process inside a container (`/.dockerenv`, `/run/.containerenv`,
    `container=`, `KUBERNETES_SERVICE_HOST`) has no desktop session.
-4. A Linux session without `DISPLAY` or `WAYLAND_DISPLAY` is headless.
-5. No driver anywhere means no target.
+5. A host without a graphical session is headless: a Linux session without
+   `DISPLAY` or `WAYLAND_DISPLAY`, a macOS process outside an Aqua login
+   (`launchctl managername` answers `Background` or `System` over SSH and
+   for daemons), a Windows session without `SESSIONNAME`.
+6. No driver anywhere means no target.
 
-On a headless host the server logs one line saying why, registers nothing,
-and stays healthy: `list_machines` and the Computers page simply show no
-server-local entry, and nothing claims GUI control the host does not have.
-macOS and Windows sessions do not announce a display, so there the driver's
-own health report decides.
+On a headless or unsupported host the server logs one line saying why,
+registers nothing, and stays healthy: `list_machines` and the Computers page
+simply show no server-local entry, and nothing claims GUI control the host
+does not have. Where the session cannot be checked (macOS when `launchctl`
+cannot be asked) the driver's own health report decides.
 
 When a driver is found the server spawns one persistent `cua-driver mcp`
 child, completes the MCP handshake within `handshake_timeout_secs`, and asks
@@ -114,7 +123,7 @@ observation outside a run.
 ```toml
 [cua]
 enabled = true                 # false never looks for a driver
-driver_path = ""               # empty: NOLUNE_CUA_DRIVER, then cua-driver on PATH
+driver_path = ""               # empty: NOLUNE_CUA_DRIVER, the `nolune cua install` driver, then cua-driver on PATH
 handshake_timeout_secs = 10    # MCP handshake at startup
 call_timeout_secs = 30         # one driver call; a slow driver is cancelled, not waited on
 run_timeout_secs = 900         # one run's session; ended and reported as timed out after this
@@ -123,7 +132,8 @@ health_interval_secs = 60      # how often the running driver is asked for a fre
 
 Unknown keys in `[cua]` are refused at load. A zero timeout keeps the
 default. The environment variable `NOLUNE_CUA_DRIVER` names the driver
-binary when `driver_path` is empty.
+binary when `driver_path` is empty; with neither, the driver `nolune cua
+install` verified against the pin is used, and `cua-driver` on `PATH` last.
 
 ## Related
 

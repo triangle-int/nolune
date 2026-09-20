@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "sender": "_gNGE_IhVJx8y6mCBkyNM5_BhjuuTeIUwa6WQa8NZLs",
+  "recipient": "BoQmM6BzR2Zw7lfBZK_JAMOs7BVCX59sZytlrGwJ9_Y",
+  "nonce": "4o-mboeGB2IfNreQ2GHslQ",
+  "issued_at": 1789862400,
+  "expires_at": 1789862460,
+  "body_hash": "2i5iAah-0GZMJu44xFRUA-2PNrmVDn1i2lf38VJr2cM",
+  "body": "eyJraW5kIjoicGluZyIsInZlcnNpb24iOjF9",
+  "signature": "iQilIkjrYDw1U-unLZTvM_AfCHKLH93FpqmOCqocSj_psX7-xV2aQDXXv5xy8_o4gdC-xvkDhAY7gFrZorGSBQ"
+}

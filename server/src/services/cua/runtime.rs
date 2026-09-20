@@ -30,9 +30,10 @@ use cua_protocol::{
 };
 
 use super::{
-    discovery::DriverLookupError,
+    discovery::{self, DriverLookupError},
     driver::{checked_adapter, describe_machine},
     host::{HostProbe, Skip, server_local_machine_id, startup_plan},
+    install,
     session::{is_run_managed, with_session},
     transport::{DriverTransport, StdioDriverTransport},
 };
@@ -126,6 +127,9 @@ enum State {
 struct Inner {
     config: CuaConfig,
     targets: CuaTargets,
+    /// The workspace root, where `nolune cua install` records the driver it
+    /// put under `cua-driver/` (#20).
+    workspace_dir: PathBuf,
     state: tokio::sync::Mutex<State>,
     /// Labels of the sessions runs hold open right now; `shutdown` ends every
     /// one and a run that finishes afterwards finds its label gone.
@@ -141,12 +145,14 @@ pub struct CuaRuntime {
 
 impl CuaRuntime {
     /// A runtime that has not looked at the host yet. Registers into
-    /// `targets` once started.
-    pub fn new(config: CuaConfig, targets: CuaTargets) -> Self {
+    /// `targets` once started; `workspace_dir` is where `nolune cua install`
+    /// records the driver it installed, consulted only by `start`.
+    pub fn new(config: CuaConfig, targets: CuaTargets, workspace_dir: PathBuf) -> Self {
         Self {
             inner: Arc::new(Inner {
                 config,
                 targets,
+                workspace_dir,
                 state: tokio::sync::Mutex::new(State::NotStarted),
                 open: Arc::new(Mutex::new(BTreeSet::new())),
                 next_run: AtomicU64::new(1),
@@ -159,8 +165,39 @@ impl CuaRuntime {
     /// fails the server.
     pub async fn start(&self) {
         let host = HostProbe::current();
-        let driver = super::discovery::discover(self.inner.config.driver_path());
+        let driver = self.locate_driver();
         self.start_from(host, driver).await;
+    }
+
+    /// The driver the server would run, from the same lookup `nolune cua
+    /// status` reports: `[cua].driver_path`, `NOLUNE_CUA_DRIVER`, the
+    /// workspace's own install (#20), then `PATH`. A manifest that cannot be
+    /// read is logged and skipped rather than failing startup; `nolune cua
+    /// status` explains it.
+    fn locate_driver(&self) -> Result<Option<PathBuf>, DriverLookupError> {
+        let installed = match install::read_manifest(&self.inner.workspace_dir) {
+            Ok(installed) => installed,
+            Err(error) => {
+                log::warn!(
+                    "[cua] ignoring the driver install manifest: {error:#}; run `nolune cua install --force`"
+                );
+                None
+            }
+        };
+        let located = discovery::discover(
+            self.inner.config.driver_path(),
+            installed
+                .as_ref()
+                .map(|installed| installed.driver.as_path()),
+        )?;
+        Ok(located.map(|located| {
+            log::info!(
+                "[cua] driver: {} ({})",
+                located.path.display(),
+                located.source
+            );
+            located.path
+        }))
     }
 
     /// `start` with the host and the driver lookup supplied, so tests decide
@@ -641,7 +678,10 @@ impl RunSession {
 mod tests {
     use super::*;
     use crate::services::{
-        cua::{host::server_local_machine_id, transport::fake::FakeTransport},
+        cua::{
+            host::{DisplaySession, PlatformSupport, server_local_machine_id},
+            transport::fake::FakeTransport,
+        },
         machine_registry::{MachineInfo, MachineRegistry},
         tool::Tool as _,
         tools::computer::{ListMachinesArgs, ListMachinesTool},
@@ -724,7 +764,8 @@ mod tests {
     fn gui_host() -> HostProbe {
         HostProbe {
             os: "macos",
-            display: true,
+            support: PlatformSupport::Supported,
+            session: DisplaySession::Present("launchd session Aqua".into()),
             container: false,
             hostname: "studio".into(),
         }
@@ -736,7 +777,7 @@ mod tests {
 
     fn harness() -> (MachineRegistry, CuaRuntime) {
         let registry = MachineRegistry::new();
-        let runtime = CuaRuntime::new(config(), registry.cua().clone());
+        let runtime = CuaRuntime::new(config(), registry.cua().clone(), PathBuf::new());
         (registry, runtime)
     }
 
@@ -760,7 +801,7 @@ mod tests {
         let mut outcomes = vec![Ok(payload(report))];
         outcomes.extend(answers);
         let transport = Arc::new(FakeTransport::answering(outcomes));
-        let runtime = CuaRuntime::new(config(), registry.cua().clone());
+        let runtime = CuaRuntime::new(config(), registry.cua().clone(), PathBuf::new());
         runtime
             .attach(
                 transport.clone(),
@@ -816,17 +857,24 @@ mod tests {
         for (host, driver, expected) in [
             (
                 HostProbe {
-                    os: "linux",
-                    display: false,
+                    session: DisplaySession::Headless("no display session".into()),
                     ..gui_host()
                 },
                 Ok(Some(PathBuf::from("/usr/bin/cua-driver"))),
-                Skip::NoDisplay,
+                Skip::Headless("no display session".into()),
+            ),
+            (
+                HostProbe {
+                    os: "linux",
+                    support: PlatformSupport::Unsupported("macOS only for now".into()),
+                    ..gui_host()
+                },
+                Ok(Some(PathBuf::from("/usr/bin/cua-driver"))),
+                Skip::Unsupported("macOS only for now".into()),
             ),
             (
                 HostProbe {
                     container: true,
-                    os: "linux",
                     ..gui_host()
                 },
                 Ok(Some(PathBuf::from("/usr/bin/cua-driver"))),
@@ -898,6 +946,7 @@ mod tests {
                 ..CuaConfig::default()
             },
             registry.cua().clone(),
+            PathBuf::new(),
         );
         let started = std::time::Instant::now();
         runtime.start_from(gui_host(), Ok(Some(silent))).await;
@@ -1564,7 +1613,7 @@ mod tests {
     #[tokio::test]
     async fn a_driver_that_finishes_starting_after_shutdown_is_closed_not_registered() {
         let registry = MachineRegistry::new();
-        let runtime = CuaRuntime::new(config(), registry.cua().clone());
+        let runtime = CuaRuntime::new(config(), registry.cua().clone(), PathBuf::new());
         // The gateway stopped while `start` was still spawning the driver.
         runtime.shutdown().await;
         assert_eq!(runtime.status().await, RuntimeStatus::Stopped);
@@ -1598,7 +1647,7 @@ mod tests {
     #[ignore = "needs an installed cua-driver binary"]
     async fn live_server_local_target_round_trips_a_session() {
         let registry = MachineRegistry::new();
-        let runtime = CuaRuntime::new(config(), registry.cua().clone());
+        let runtime = CuaRuntime::new(config(), registry.cua().clone(), PathBuf::new());
         runtime.start().await;
         let RuntimeStatus::Running(id) = runtime.status().await else {
             eprintln!("no server-local target here: {:?}", runtime.status().await);

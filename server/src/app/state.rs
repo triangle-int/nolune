@@ -109,6 +109,7 @@ impl AppState {
         let cua = crate::services::cua::runtime::CuaRuntime::new(
             config.cua.clone(),
             machine_registry.cua().clone(),
+            workspace_dir.clone(),
         );
 
         Self {

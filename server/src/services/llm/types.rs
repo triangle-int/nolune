@@ -317,6 +317,7 @@ pub struct ToolChatResult {
 
 pub(crate) const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
 pub(crate) const OPENAI_BASE_URL: &str = "https://api.openai.com";
+pub(crate) const OPENROUTER_BASE_URL: &str = "https://openrouter.ai";
 
 #[derive(Clone)]
 pub struct LlmBackend {
@@ -329,6 +330,9 @@ pub struct LlmBackend {
     pub base_url: String,
     /// Provider identity, taken from the preset.
     pub provider: crate::config::LlmProvider,
+    /// OpenRouter attribution and routing preferences (#26); the defaults
+    /// for every other provider, which never read them.
+    pub openrouter: crate::config::OpenrouterConfig,
 }
 
 #[derive(Debug)]

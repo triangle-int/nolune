@@ -334,6 +334,7 @@ pub(crate) async fn openai_complete(
         output_tokens,
         cache_read_tokens: cached_tokens,
         cache_write_tokens: 0,
+        cost: None,
     };
     Ok(LlmResponse {
         ordered_content: vec![ContentBlock::text(&text)],
@@ -538,6 +539,7 @@ pub(crate) async fn openai_stream(
                                 output_tokens: output_t,
                                 cache_read_tokens: cached_t,
                                 cache_write_tokens: 0,
+                                cost: None,
                             };
                             // Normalize: cached input is ~50% cheaper on OpenAI
                             tokens_used =

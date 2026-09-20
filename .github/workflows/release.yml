@@ -157,15 +157,42 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
+            target: aarch64-apple-darwin
             args: '--target aarch64-apple-darwin'
           - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
             args: ''
           - platform: windows-latest
+            target: x86_64-pc-windows-msvc
             args: ''
 
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
+
+      # The pinned Cua Driver (#20): fetch the release asset for this target and
+      # verify it against cua-protocol/cua-driver.pin before the long build, so a
+      # pin that no longer matches upstream fails the release here. A real release
+      # then carries the verified archive beside the desktop bundle; the app and
+      # `nolune cua install` never update the driver on their own.
+      - name: Fetch and verify the pinned Cua Driver
+        shell: bash
+        run: bash scripts/cua-driver.sh fetch --target ${{ matrix.target }} --dest cua-driver-dist
+
+      - name: Upload the verified Cua Driver to the release
+        if: inputs.dry_run != true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" cua-driver-dist/* --clobber
+
+      - name: Upload the verified Cua Driver as a workflow artifact (dry run)
+        if: inputs.dry_run == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: cua-driver-${{ matrix.target }}
+          path: cua-driver-dist/
+          if-no-files-found: error
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
