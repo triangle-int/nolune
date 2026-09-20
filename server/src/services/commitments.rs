@@ -5,18 +5,21 @@
 //! dependencies, and snooze survive a restart as plain fields, so the
 //! evaluator never has to keep a schedule of its own and a restart cannot
 //! create a duplicate one. The store is written from several places at once
-//! (API handlers, dependents settled by a completion, the evaluator), so one
-//! writer at a time holds `writes` across each read-modify-write, and every
-//! write lands in its own temp file before it is renamed into place. Every
+//! (API handlers, dependents settled by a completion, the evaluator, the chat
+//! tools), so one writer at a time holds `writes` across each
+//! read-modify-write (the lock is shared by every store instance over the
+//! same directory in this process), and every write lands in its own temp
+//! file before it is renamed into place. Every
 //! read of one record goes through the `load` path guard. Reads re-derive an
 //! open status against the caller's clock and persist nothing. Callers pass
 //! `now` so tests run against a fixed clock.
 
 use std::{
+    collections::HashMap,
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard, OnceLock},
 };
 
 use serde::Deserialize;
@@ -142,17 +145,36 @@ pub struct CommitmentStore {
     slug: String,
     /// One writer at a time: every read-modify-write holds this, so two
     /// writers can never interleave on one record (mirrors `ProactiveLoop.active`).
+    /// Shared by every store over the same directory (see `writes_lock`).
     writes: Arc<Mutex<()>>,
     /// Record updates for connected clients. None in tests that do not care.
     events: Option<tokio::sync::broadcast::Sender<crate::domain::events::ServerEvent>>,
 }
 
+/// The one writer lock for a commitments directory, shared by every store
+/// instance in the process: the app state, the chat tools, and the evaluator
+/// each open their own store over the same files.
+fn writes_lock(dir: &Path) -> Arc<Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+    let mut locks = LOCKS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    locks.entry(dir.to_path_buf()).or_default().clone()
+}
+
 impl CommitmentStore {
     pub fn new(workspace_dir: &Path, slug: &str) -> Self {
+        let writes = writes_lock(
+            &workspace_dir
+                .join("instances")
+                .join(slug)
+                .join(COMMITMENTS_DIR),
+        );
         Self {
             workspace_dir: workspace_dir.to_path_buf(),
             slug: slug.to_owned(),
-            writes: Arc::new(Mutex::new(())),
+            writes,
             events: None,
         }
     }
@@ -333,16 +355,58 @@ impl CommitmentStore {
         retry_at: Option<i64>,
         now: i64,
     ) -> Result<Commitment, CommitmentError> {
-        let _ = (id, check, retry_at, now);
-        todo!("commitment evaluator (#85, PR B)")
+        let _writes = self.write_guard();
+        let mut commitment = self.open(id)?;
+        commitment.last_check = Some(check);
+        commitment.next_check = match (commitment.next_check_after(now), retry_at) {
+            (Some(own), Some(retry)) => Some(own.min(retry)),
+            (own, retry) => own.or(retry),
+        };
+        commitment.updated_at = now;
+        self.refresh_status(&mut commitment, now);
+        self.save(&commitment)?;
+        Ok(commitment)
     }
 
     /// A named event was observed (`machine_connected:<id>`, ...): every open
     /// commitment waiting on it stops waiting, notes the observation as its
     /// `last_check`, and asks for a check now. Returns the records changed.
     pub fn observe_event(&self, event: &str, now: i64) -> Vec<Commitment> {
-        let _ = (event, now);
-        todo!("commitment evaluator (#85, PR B)")
+        let event = event.trim();
+        if event.is_empty() {
+            return Vec::new();
+        }
+        let _writes = self.write_guard();
+        let mut observed = Vec::new();
+        for mut commitment in self.load_all() {
+            let waiting_on_it = matches!(
+                &commitment.waiting_on,
+                Some(WaitCondition::Event { event: waited }) if waited == event
+            );
+            if !commitment.is_open() || !waiting_on_it {
+                continue;
+            }
+            commitment.waiting_on = None;
+            self.ask_for_check(&mut commitment, event, now);
+            if self.save(&commitment).is_ok() {
+                observed.push(commitment);
+            }
+        }
+        observed
+    }
+
+    /// Note an observation on the record and ask for a check now.
+    fn ask_for_check(&self, commitment: &mut Commitment, event: &str, now: i64) {
+        commitment.last_check = Some(Check {
+            at: now,
+            outcome: CheckOutcome::Observed {
+                event: event.to_owned(),
+            },
+            run_id: None,
+        });
+        commitment.next_check = Some(now);
+        commitment.updated_at = now;
+        self.refresh_status(commitment, now);
     }
 
     /// The persisted record, for a caller about to change it.
@@ -440,7 +504,9 @@ impl CommitmentStore {
 
     /// Re-derive every open commitment that depended on `of`. Runs under the
     /// caller's write guard and compares against the persisted status, so a
-    /// transition the clock already implied is written down too.
+    /// transition the clock already implied is written down too. A dependent
+    /// whose status changed notes the completion as an observed event
+    /// (`commitment_completed:<id>`) and asks for a check now.
     fn settle_dependents(&self, of: &str, now: i64) {
         for mut dependent in self.load_all() {
             if !dependent.is_open() || !dependent.dependencies.iter().any(|id| id == of) {
@@ -449,7 +515,11 @@ impl CommitmentStore {
             let before = dependent.status;
             self.refresh_status(&mut dependent, now);
             if dependent.status != before {
-                dependent.updated_at = now;
+                self.ask_for_check(
+                    &mut dependent,
+                    &crate::services::commitment_evaluator::dependency_completed_event(of),
+                    now,
+                );
                 let _ = self.save(&dependent);
             }
         }
@@ -1515,6 +1585,19 @@ mod tests {
         let json = serde_json::to_string(&with_check).unwrap();
         let back: Commitment = serde_json::from_str(&json).unwrap();
         assert_eq!(back, with_check);
+    }
+
+    #[test]
+    fn every_store_over_one_directory_shares_the_writer_lock() {
+        let (ws, store) = harness();
+        let again = CommitmentStore::new(ws.path(), CANONICAL_SLUG);
+        assert!(
+            Arc::ptr_eq(&store.writes, &again.writes),
+            "the API, the chat tools, and the evaluator serialize on one lock"
+        );
+        let elsewhere = tempfile::tempdir().unwrap();
+        let other = CommitmentStore::new(elsewhere.path(), CANONICAL_SLUG);
+        assert!(!Arc::ptr_eq(&store.writes, &other.writes));
     }
 
     #[test]

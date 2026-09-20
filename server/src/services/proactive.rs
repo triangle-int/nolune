@@ -390,8 +390,20 @@ impl ProactiveLoop {
     /// budget or recording anything: the commitment evaluator holds a check
     /// until contact is possible instead of spending a run on a denial.
     pub fn reach_out_allowed(&self, now: i64) -> Result<(), Denied> {
-        let _ = now;
-        todo!("commitment evaluator (#85, PR B)")
+        let policy = self.policy();
+        if self.in_quiet_hours(&policy, now) {
+            return Err(Denied::QuietHours);
+        }
+        let recent = self
+            .ledger()
+            .reach_outs
+            .iter()
+            .filter(|at| now - *at < 86_400)
+            .count();
+        if recent >= policy.daily_reach_out_budget as usize {
+            return Err(Denied::AttentionBudget);
+        }
+        Ok(())
     }
 
     fn ledger(&self) -> Ledger {

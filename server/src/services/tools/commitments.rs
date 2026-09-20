@@ -15,7 +15,7 @@ use serde::Deserialize;
 use tokio::sync::broadcast;
 
 use crate::domain::commitment::{
-    Commitment, CommitmentStatus, CompletionEvidence, Deadline, Owner, Provenance, WaitCondition,
+    Commitment, CompletionEvidence, Deadline, Owner, Provenance, WaitCondition,
 };
 use crate::domain::events::ServerEvent;
 use crate::services::commitments::{CommitmentPatch, CommitmentStore, ListFilter, NewCommitment};
@@ -44,6 +44,73 @@ impl Context {
     fn when(&self, text: &str) -> Result<i64, ToolExecError> {
         parse_when(text, self.tz()).map_err(ToolExecError)
     }
+
+    fn when_opt(&self, text: Option<&str>) -> Result<Option<i64>, ToolExecError> {
+        text.map(|text| self.when(text)).transpose()
+    }
+
+    fn answer(&self, commitment: &Commitment) -> serde_json::Value {
+        summary(commitment, self.tz())
+    }
+}
+
+fn store_error(error: crate::services::commitments::CommitmentError) -> ToolExecError {
+    ToolExecError(error.to_string())
+}
+
+fn parse_owner(text: Option<&str>) -> Result<Option<Owner>, ToolExecError> {
+    match text.map(str::trim) {
+        None | Some("") => Ok(None),
+        Some("companion") => Ok(Some(Owner::Companion)),
+        Some("user") => Ok(Some(Owner::User)),
+        Some(other) => Err(ToolExecError(format!(
+            "unknown owner {other:?}; use companion or user"
+        ))),
+    }
+}
+
+/// A deadline from its start and optional end; an end alone is an error.
+fn parse_deadline(
+    context: &Context,
+    start: Option<&str>,
+    end: Option<&str>,
+) -> Result<Option<Deadline>, ToolExecError> {
+    match (context.when_opt(start)?, context.when_opt(end)?) {
+        (None, None) => Ok(None),
+        (Some(at), None) => Ok(Some(Deadline::At { at })),
+        (Some(start), Some(end)) => Ok(Some(Deadline::Window { start, end })),
+        (None, Some(_)) => Err(ToolExecError(
+            "deadline_end needs a deadline to start the window".into(),
+        )),
+    }
+}
+
+/// At most one wait: a moment, a named event, or the user's reply.
+fn parse_wait(
+    context: &Context,
+    until: Option<&str>,
+    event: Option<&str>,
+    user_reply: bool,
+) -> Result<Option<WaitCondition>, ToolExecError> {
+    let event = event.map(str::trim).filter(|event| !event.is_empty());
+    let mut waits = Vec::new();
+    if let Some(until) = context.when_opt(until)? {
+        waits.push(WaitCondition::Until { until });
+    }
+    if let Some(event) = event {
+        waits.push(WaitCondition::Event {
+            event: event.to_owned(),
+        });
+    }
+    if user_reply {
+        waits.push(WaitCondition::UserReply);
+    }
+    if waits.len() > 1 {
+        return Err(ToolExecError(
+            "a commitment waits on one thing: a moment, an event, or the user's reply".into(),
+        ));
+    }
+    Ok(waits.pop())
 }
 
 /// The six commitment tools, in registration order.
@@ -73,14 +140,95 @@ pub fn commitment_tools(
 /// time (`2026-01-06T09:00`, `2026-01-06 09:00`) or a date alone (the start
 /// of that day) in the companion's timezone.
 pub fn parse_when(text: &str, tz: chrono_tz::Tz) -> Result<i64, String> {
-    let _ = (text, tz);
-    todo!("commitment tools (#85, PR B)")
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("a moment is required (for example 2026-01-06T09:00)".into());
+    }
+    if let Ok(with_offset) = DateTime::parse_from_rfc3339(text) {
+        return Ok(with_offset.timestamp());
+    }
+    let local = ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"]
+        .iter()
+        .find_map(|format| NaiveDateTime::parse_from_str(text, format).ok())
+        .or_else(|| {
+            NaiveDate::parse_from_str(text, "%Y-%m-%d")
+                .ok()
+                .and_then(|date| date.and_hms_opt(0, 0, 0))
+        })
+        .ok_or_else(|| {
+            format!(
+                "cannot read {text:?} as a moment; use RFC 3339, a local date and time like 2026-01-06T09:00, or a date"
+            )
+        })?;
+    tz.from_local_datetime(&local)
+        .earliest()
+        .map(|moment| moment.timestamp())
+        .ok_or_else(|| format!("{text:?} does not exist in the companion's timezone"))
+}
+
+fn format_at(at: i64, tz: chrono_tz::Tz) -> String {
+    Utc.timestamp_opt(at, 0)
+        .single()
+        .map(|utc| {
+            utc.with_timezone(&tz)
+                .format("%Y-%m-%d %H:%M %Z")
+                .to_string()
+        })
+        .unwrap_or_else(|| at.to_string())
 }
 
 /// What the model gets back: enough to keep working, never the whole file.
 fn summary(commitment: &Commitment, tz: chrono_tz::Tz) -> serde_json::Value {
-    let _ = (commitment, tz);
-    todo!("commitment tools (#85, PR B)")
+    let deadline = commitment.deadline.map(|deadline| match deadline {
+        Deadline::At { at } => serde_json::json!({"kind": "at", "at": format_at(at, tz)}),
+        Deadline::Window { start, end } => serde_json::json!({
+            "kind": "window",
+            "start": format_at(start, tz),
+            "end": format_at(end, tz),
+        }),
+    });
+    let waiting_on = commitment.waiting_on.as_ref().map(|wait| match wait {
+        WaitCondition::Until { until } => {
+            serde_json::json!({"kind": "until", "until": format_at(*until, tz)})
+        }
+        WaitCondition::Event { event } => serde_json::json!({"kind": "event", "event": event}),
+        WaitCondition::UserReply => serde_json::json!({"kind": "user_reply"}),
+    });
+    let completion = commitment.completion.as_ref().map(|evidence| {
+        serde_json::json!({
+            "confirmed_by_user": evidence.confirmed_by_user,
+            "summary": evidence.summary,
+            "run_id": evidence.run_id,
+            "at": format_at(evidence.at, tz),
+        })
+    });
+    let last_check = commitment.last_check.as_ref().map(|check| {
+        let outcome = match &check.outcome {
+            crate::domain::commitment::CheckOutcome::Unchanged => "unchanged".to_owned(),
+            crate::domain::commitment::CheckOutcome::Triggered => "triggered".to_owned(),
+            crate::domain::commitment::CheckOutcome::Failed { error, .. } => {
+                format!("failed: {error}")
+            }
+            crate::domain::commitment::CheckOutcome::Observed { event } => {
+                format!("observed {event}")
+            }
+        };
+        serde_json::json!({"at": format_at(check.at, tz), "outcome": outcome})
+    });
+    serde_json::json!({
+        "id": commitment.id,
+        "promise": commitment.promise,
+        "owner": commitment.owner,
+        "status": commitment.status.as_str(),
+        "deadline": deadline,
+        "waiting_on": waiting_on,
+        "dependencies": commitment.dependencies,
+        "next_check": commitment.next_check.map(|at| format_at(at, tz)),
+        "snoozed_until": commitment.snoozed_until.map(|at| format_at(at, tz)),
+        "snooze_count": commitment.snooze_count,
+        "completion": completion,
+        "last_check": last_check,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -134,8 +282,34 @@ impl Tool for CommitmentCreateTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let _ = args;
-        todo!("commitment tools (#85, PR B)")
+        let context = &self.0;
+        let new = NewCommitment {
+            promise: args.promise,
+            owner: parse_owner(args.owner.as_deref())?.unwrap_or_default(),
+            deadline: parse_deadline(
+                context,
+                args.deadline.as_deref(),
+                args.deadline_end.as_deref(),
+            )?,
+            dependencies: args.dependencies,
+            waiting_on: parse_wait(
+                context,
+                args.wait_until.as_deref(),
+                args.wait_for_event.as_deref(),
+                args.wait_for_user_reply,
+            )?,
+            next_check: context.when_opt(args.next_check.as_deref())?,
+            continuity_ids: Vec::new(),
+            provenance: Provenance::Chat {
+                chat_id: context.chat_id.clone(),
+                message_id: None,
+            },
+        };
+        let commitment = context
+            .store
+            .create(new, Utc::now().timestamp())
+            .map_err(store_error)?;
+        Ok(context.answer(&commitment))
     }
 }
 
@@ -202,8 +376,35 @@ impl Tool for CommitmentUpdateTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let _ = args;
-        todo!("commitment tools (#85, PR B)")
+        let context = &self.0;
+        let waiting_on = parse_wait(
+            context,
+            args.wait_until.as_deref(),
+            args.wait_for_event.as_deref(),
+            args.wait_for_user_reply,
+        )?;
+        let patch = CommitmentPatch {
+            promise: args.promise,
+            owner: parse_owner(args.owner.as_deref())?,
+            deadline: parse_deadline(
+                context,
+                args.deadline.as_deref(),
+                args.deadline_end.as_deref(),
+            )?,
+            clear_deadline: args.clear_deadline,
+            dependencies: args.dependencies,
+            // A new wait replaces the old one; `clear_wait` alone removes it.
+            clear_waiting_on: args.clear_wait && waiting_on.is_none(),
+            waiting_on,
+            next_check: context.when_opt(args.next_check.as_deref())?,
+            clear_next_check: args.clear_next_check,
+            continuity_ids: None,
+        };
+        let commitment = context
+            .store
+            .update(&args.id, patch, Utc::now().timestamp())
+            .map_err(store_error)?;
+        Ok(context.answer(&commitment))
     }
 }
 
@@ -243,8 +444,20 @@ impl Tool for CommitmentCompleteTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let _ = args;
-        todo!("commitment tools (#85, PR B)")
+        let context = &self.0;
+        let evidence = CompletionEvidence {
+            confirmed_by_user: args.confirmed_by_user,
+            summary: args.summary,
+            run_id: args.run_id,
+            at: 0,
+        };
+        let commitment = context
+            .store
+            .complete(&args.id, evidence, Utc::now().timestamp(), |run_id| {
+                context.proactive.get(run_id).is_some()
+            })
+            .map_err(store_error)?;
+        Ok(context.answer(&commitment))
     }
 }
 
@@ -275,8 +488,12 @@ impl Tool for CommitmentCancelTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let _ = args;
-        todo!("commitment tools (#85, PR B)")
+        let context = &self.0;
+        let commitment = context
+            .store
+            .cancel(&args.id, Utc::now().timestamp())
+            .map_err(store_error)?;
+        Ok(context.answer(&commitment))
     }
 }
 
@@ -309,8 +526,13 @@ impl Tool for CommitmentSnoozeTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let _ = args;
-        todo!("commitment tools (#85, PR B)")
+        let context = &self.0;
+        let until = context.when(&args.until)?;
+        let commitment = context
+            .store
+            .snooze(&args.id, until, Utc::now().timestamp())
+            .map_err(store_error)?;
+        Ok(context.answer(&commitment))
     }
 }
 
@@ -345,14 +567,35 @@ impl Tool for CommitmentListTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let _ = args;
-        todo!("commitment tools (#85, PR B)")
+        let context = &self.0;
+        let filter = match args.status.as_deref().map(str::trim) {
+            None | Some("") | Some("open") => ListFilter::Open,
+            Some("closed") => ListFilter::Closed,
+            Some("all") => ListFilter::All,
+            Some(other) => {
+                return Err(ToolExecError(format!(
+                    "unknown status {other:?}; use open, closed, or all"
+                )));
+            }
+        };
+        let limit = args.limit.unwrap_or(DEFAULT_LIST).clamp(1, MAX_LIST);
+        let all = context.store.list(filter, Utc::now().timestamp());
+        let commitments: Vec<serde_json::Value> = all
+            .iter()
+            .take(limit)
+            .map(|commitment| context.answer(commitment))
+            .collect();
+        Ok(serde_json::json!({
+            "total": all.len(),
+            "commitments": commitments,
+        }))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::commitment::CommitmentStatus;
     use crate::domain::companion::CANONICAL_SLUG;
     use crate::domain::proactive::{Target, Trigger};
     use crate::services::proactive::Admission;
@@ -499,13 +742,17 @@ mod tests {
         );
 
         let listed = h.call("commitment_list", serde_json::json!({})).await;
-        let ids: Vec<&str> = listed["commitments"]
+        let mut ids: Vec<&str> = listed["commitments"]
             .as_array()
             .unwrap()
             .iter()
             .map(|c| c["id"].as_str().unwrap())
             .collect();
-        assert_eq!(ids, vec![held_id.as_str(), id.as_str()], "newest first");
+        ids.sort_unstable();
+        let mut expected = vec![held_id.as_str(), id.as_str()];
+        expected.sort_unstable();
+        assert_eq!(ids, expected, "both open commitments are listed");
+        assert_eq!(listed["total"], 2);
 
         let done = h
             .call(
@@ -530,15 +777,13 @@ mod tests {
             .call("commitment_list", serde_json::json!({"status": "closed"}))
             .await;
         assert_eq!(closed["commitments"].as_array().unwrap().len(), 2);
-        assert_eq!(
-            h.refused(
+        let refused = h
+            .refused(
                 "commitment_snooze",
-                serde_json::json!({"id": id, "until": "2099-02-01"})
+                serde_json::json!({"id": id, "until": "2099-02-01"}),
             )
-            .await
-            .contains("already completed"),
-            true
-        );
+            .await;
+        assert!(refused.contains("already completed"), "{refused}");
     }
 
     #[tokio::test]

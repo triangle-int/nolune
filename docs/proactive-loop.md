@@ -2,9 +2,9 @@
 
 Everything the companion starts on its own passes through one loop (#92):
 hourly check-ins, explicit schedules, connected-computer events, manual
-triggers, and the future commitment (#85) and handoff (#82) triggers. There is
-one execution record, one policy, and one place where duplicates, quiet hours,
-cooldowns, and the attention budget are enforced.
+triggers, commitment checks (#85), and the future handoff (#82) trigger.
+There is one execution record, one policy, and one place where duplicates,
+quiet hours, cooldowns, and the attention budget are enforced.
 
 ## Execution record
 
@@ -99,7 +99,9 @@ the whole prefix being sent uncached again.
 
 The next run of a routine is derived from its last finished activity record,
 so schedules survive restarts without marker files. A machine-connect event
-runs the check-in once with a connection task.
+runs the check-in once with a connection task, and a commitment whose check
+has come up runs it once with the commitment and its trigger condition as
+the task (#85, below).
 
 Retired child-agent state (`agents/`, `agent_runs/`) is removed from the
 companion directory once at startup; it is never executed.
@@ -127,10 +129,12 @@ following through never collapses into a timer. Each one is one JSON file
 under `instances/companion/commitments/{id}.json`, format version 1. The
 record is the source of truth: the evaluator reads it and keeps no schedule
 of its own, so a restart cannot create a duplicate one. The store has one
-writer at a time: a lock is held across every read-modify-write (edit,
-snooze, complete together with the dependents it settles, cancel), and each
-write goes to a temp file of its own before it is renamed over the record,
-so concurrent writers can neither interleave on one record nor share a temp
+writer at a time: a lock, shared by every store opened over the same
+directory in the process (the API, the chat tools, the evaluator), is held
+across every read-modify-write (edit, snooze, complete together with the
+dependents it settles, cancel, the evaluator's check), and each write goes
+to a temp file of its own before it is renamed over the record, so
+concurrent writers can neither interleave on one record nor share a temp
 file. A record that no longer parses is logged and skipped, not hidden.
 
 | Field | Meaning |
@@ -147,7 +151,7 @@ file. A record that no longer parses is logged and skipped, not hidden.
 | `provenance` | `manual`, `chat` (`chat_id`, `message_id`), or `run` (`run_id`) |
 | `completion` | evidence it was done: `confirmed_by_user`, `summary`, `run_id`, `at` |
 | `snoozed_until`, `snooze_count` | not surfaced before this moment; how often it was deferred |
-| `last_check` | what the last evaluation concluded (`unchanged`, `triggered`, or `failed` with `retryable`) and the run it produced |
+| `last_check` | what the last evaluation concluded (`unchanged`, `triggered`, `failed` with `retryable`, or `observed` with the event) and the run it produced |
 
 Status is derived from the record's own fields: a started deadline makes it
 `due` (unless snoozed), an unfinished dependency makes it `blocked`, an unmet
@@ -184,10 +188,84 @@ and further completion answer `closed`.
 Refusals are JSON `{error, message}` with `not_found` (404), `invalid`
 (400), `closed` (409), `evidence_required` (422), or `storage_error` (500).
 Every write is broadcast as a `commitment_updated` server event carrying the
-record. The evaluator that turns due commitments into `commitment`-triggered
-runs through this loop, the chat tools, and the client controls follow in
-later changes.
+record. The client controls follow in a later change.
+
+### Evaluation
+
+The evaluator (`services/commitment_evaluator.rs`) runs on the scheduler's
+30-second tick under the canonical companion. It keeps no schedule of its
+own: each tick asks the store for the open, unsnoozed commitments whose
+`next_check` has passed and offers each one to the loop with
+`begin(Trigger::Commitment {commitment_id})`, target `companion`, and a
+stated reason of the form `deadline arrived: <promise>`. Admission never
+moves `next_check`; the loop's dedupe key (`commitment:<id>`) is the
+duplicate suppression, so a second tick while a check runs is recorded as
+`skipped/duplicate` and starts nothing, and a restart cannot create a second
+schedule because the record is the only one. A run left `running` by a dead
+process is marked failed on startup like any other, and the record's
+unchanged `next_check` has the next tick check the commitment once.
+
+Checks are held, not spent, when contact is not possible: while `enabled`
+is off, during quiet hours, and once the rolling `daily_reach_out_budget` is
+used up (the loop's `reach_out_allowed` answers without consuming anything).
+Nothing is recorded for a hold; the commitment stays `due` and is checked on
+the first tick after contact becomes possible, and the check-in's own
+`reach_out` still goes through `approve_side_effect`. A denied reach-out is
+recorded on the run and the commitment is looked at again after a
+10-minute backoff.
+
+The check runs the companion check-in (its curated tools; `reach_out`
+gated by the run) with a task that states the commitment (promise, owner,
+status, deadline, what it waits on, dependencies, snoozes) and, under
+"what changed and why now", the exact trigger condition:
+
+| Condition | When | Stated as |
+| --- | --- | --- |
+| observed | `last_check` holds an observation (below) | `the event it waited for was observed: machine_connected:mac`, or `the commitment it depended on (<id>) was completed: "<promise>"` |
+| snooze ended | `snoozed_until` passed since the last check | `the snooze until <time> ended` |
+| deadline arrived | the deadline or window start has passed | `its deadline arrived at <time>` |
+| wait ended | a timed wait has passed | `the wait until <time> ended` |
+| scheduled check | only `next_check` came up | `the check scheduled for <time> came up; nothing else changed` |
+
+The check-in is told it may reach out once, saying which commitment, what
+changed, and why now, and that it can never complete, snooze, or cancel a
+commitment: only the user does that, in a conversation or through the API.
+
+When the check ends, what it concluded is written on the record as
+`last_check` (`triggered`, `unchanged` for a cancelled run, or `failed` with
+`retryable: true` and the error) together with the run id, so a failed
+evaluation stays inspectable on both the commitment and the activity record
+and can be retried through `POST .../activity/{id}/retry`. `next_check`
+moves to the earliest of the record's own next moment (a snooze end, a
+timed wait, the deadline start) and, for a failure or a denied reach-out,
+`now + 600`; a deadline with nothing later is therefore checked exactly
+once.
+
+Events are named observations. `machine_connected:<machine_id>` is observed
+when a computer connects: every open commitment waiting on that event stops
+waiting, notes `last_check: observed`, and asks for a check now.
+Completing a commitment observes `commitment_completed:<id>` on every open
+commitment that depended on it and changed status, so an unblocked
+dependent is checked once with the completion as its stated condition. A
+`user_reply` wait is cleared from the conversation (`commitment_update` with
+`clear_wait`). An observation that arrives while a check is running is left
+in place and gets a check of its own.
+
+### Chat tools
+
+Six bounded tools, registered for conversations only (the check-in and
+reflection routines never carry them), write through the same store as the
+API: `commitment_create` (promise, owner, deadline or window, a wait on a
+moment, a named event, or the user's reply, dependencies, `next_check`),
+`commitment_update`, `commitment_complete` (refused without
+`confirmed_by_user` or a `summary`, and a `run_id` must name an activity
+record), `commitment_cancel`, `commitment_snooze` (`until`, in the future),
+and `commitment_list` (`open` by default, `closed`, or `all`; at most 50).
+Moments are RFC 3339 or a local date and time in the companion's timezone;
+a date alone is the start of that day. Every write is broadcast as
+`commitment_updated` like a write through the API.
 
 ## Migration hooks
 
-#85 and #82 add the commitment and handoff triggers.
+#85 adds the commitment trigger and its evaluator; #82 adds the handoff
+trigger.

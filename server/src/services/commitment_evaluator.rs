@@ -57,21 +57,77 @@ pub enum TriggerCondition {
 
 impl TriggerCondition {
     /// Derived from the record as persisted and the clock, most recent
-    /// change first.
+    /// change first: a pending observation, then a snooze that ended since
+    /// the last check, then a started deadline, then an ended timed wait.
     pub fn for_commitment(commitment: &Commitment, now: i64) -> Self {
-        let _ = (commitment, now);
-        todo!("commitment evaluator (#85, PR B)")
+        if let Some(Check {
+            outcome: CheckOutcome::Observed { event },
+            ..
+        }) = &commitment.last_check
+        {
+            return Self::Observed {
+                event: event.clone(),
+            };
+        }
+        let last_check_at = commitment.last_check.as_ref().map(|check| check.at);
+        if let Some(until) = commitment.snoozed_until
+            && until <= now
+            && last_check_at.is_none_or(|at| at < until)
+        {
+            return Self::SnoozeEnded { until };
+        }
+        if let Some(deadline) = commitment.deadline
+            && deadline.has_started(now)
+        {
+            return Self::DeadlineArrived {
+                at: deadline.starts_at(),
+            };
+        }
+        if let Some(WaitCondition::Until { until }) = commitment.waiting_on
+            && until <= now
+        {
+            return Self::WaitEnded { until };
+        }
+        Self::ScheduledCheck {
+            at: commitment.next_check.unwrap_or(now),
+        }
     }
 
     /// Short label for the run's stated reason.
     pub fn summary(&self) -> &'static str {
-        todo!("commitment evaluator (#85, PR B)")
+        match self {
+            Self::Observed { event } if event.starts_with("commitment_completed:") => {
+                "dependency completed"
+            }
+            Self::Observed { .. } => "event observed",
+            Self::SnoozeEnded { .. } => "snooze ended",
+            Self::DeadlineArrived { .. } => "deadline arrived",
+            Self::WaitEnded { .. } => "wait ended",
+            Self::ScheduledCheck { .. } => "scheduled check",
+        }
     }
 
     /// One sentence for the check-in, with times in the companion's timezone.
     pub fn describe(&self, tz: chrono_tz::Tz) -> String {
-        let _ = tz;
-        todo!("commitment evaluator (#85, PR B)")
+        match self {
+            Self::Observed { event } => match event.strip_prefix("commitment_completed:") {
+                Some(id) => format!("the commitment it depended on ({id}) was completed"),
+                None => format!("the event it waited for was observed: {event}"),
+            },
+            Self::SnoozeEnded { until } => {
+                format!("the snooze until {} ended", format_at(*until, tz))
+            }
+            Self::DeadlineArrived { at } => {
+                format!("its deadline arrived at {}", format_at(*at, tz))
+            }
+            Self::WaitEnded { until } => {
+                format!("the wait until {} ended", format_at(*until, tz))
+            }
+            Self::ScheduledCheck { at } => format!(
+                "the check scheduled for {} came up; nothing else changed",
+                format_at(*at, tz)
+            ),
+        }
     }
 }
 
@@ -107,14 +163,123 @@ impl CommitmentEvaluator {
     /// is off, during quiet hours, or with the attention budget spent: the
     /// records stay as they are and are picked up when contact is possible.
     pub fn admit_due(&self, now: i64) -> Vec<CommitmentRun> {
-        let _ = now;
-        todo!("commitment evaluator (#85, PR B)")
+        let due = self.store.due_for_check(now);
+        if due.is_empty() {
+            return Vec::new();
+        }
+        if !self.proactive.policy().enabled {
+            log::debug!("[commitments] {} due, held: initiative is off", due.len());
+            return Vec::new();
+        }
+        if let Err(denied) = self.proactive.reach_out_allowed(now) {
+            log::debug!("[commitments] {} due, held: {denied}", due.len());
+            return Vec::new();
+        }
+        let mut admitted = Vec::new();
+        for commitment in due {
+            let condition = TriggerCondition::for_commitment(&commitment, now);
+            let reason = format!("{}: {}", condition.summary(), commitment.promise);
+            match self.proactive.begin_at(
+                Trigger::Commitment {
+                    commitment_id: commitment.id.clone(),
+                },
+                &reason,
+                Target::Companion,
+                now,
+            ) {
+                Admission::Admitted(handle) => admitted.push(CommitmentRun {
+                    commitment,
+                    condition,
+                    handle,
+                }),
+                Admission::Skipped(run) => {
+                    log::info!("[commitments] {} skipped ({:?})", commitment.id, run.status);
+                }
+            }
+        }
+        admitted
     }
 
     /// The check-in's task: the commitment, what changed, and why now.
     pub fn check_in_task(&self, run: &CommitmentRun, tz: chrono_tz::Tz, now: i64) -> String {
-        let _ = (run, tz, now);
-        todo!("commitment evaluator (#85, PR B)")
+        let commitment = &run.commitment;
+        let mut task = format!(
+            "current time: {}\ntriggered by: commitment {}\n\n",
+            format_at(now, tz),
+            commitment.id
+        );
+        task.push_str(
+            "you are following through on a commitment you track. this is a check, \
+             not a conversation: decide whether the user needs to hear from you \
+             about it right now.\n\n",
+        );
+        task.push_str("## the commitment\n");
+        task.push_str(&format!("- promise: {}\n", commitment.promise));
+        task.push_str(match commitment.owner {
+            Owner::Companion => "- owner: you promised the user this\n",
+            Owner::User => "- owner: the user asked you to hold them to this\n",
+        });
+        task.push_str(&format!("- status: {}\n", commitment.status.as_str()));
+        if let Some(deadline) = commitment.deadline {
+            task.push_str(&format!(
+                "- deadline: {}\n",
+                describe_deadline(deadline, tz)
+            ));
+        }
+        if let Some(waiting_on) = &commitment.waiting_on {
+            task.push_str(&format!(
+                "- waiting on: {}\n",
+                describe_wait(waiting_on, tz)
+            ));
+        }
+        if !commitment.dependencies.is_empty() {
+            let open = commitment
+                .dependencies
+                .iter()
+                .filter(|id| {
+                    self.store
+                        .get(id, now)
+                        .is_none_or(|dependency| dependency.is_open())
+                })
+                .count();
+            task.push_str(&format!(
+                "- depends on {} other commitment(s), {open} still open\n",
+                commitment.dependencies.len()
+            ));
+        }
+        if commitment.snooze_count > 0 {
+            task.push_str(&format!(
+                "- snoozed {} time{}\n",
+                commitment.snooze_count,
+                if commitment.snooze_count == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            ));
+        }
+        task.push_str("\n## what changed and why now\n");
+        let mut condition = run.condition.describe(tz);
+        if let TriggerCondition::Observed { event } = &run.condition
+            && let Some(id) = event.strip_prefix("commitment_completed:")
+            && let Some(dependency) = self.store.get(id, now)
+        {
+            condition.push_str(&format!(": \"{}\"", dependency.promise));
+        }
+        task.push_str(&condition);
+        task.push_str(".\n\n");
+        task.push_str(
+            "## how to respond\n\
+             - if the user should hear from you, call reach_out once: say which \
+             commitment this is about, what changed, and why you are bringing it up \
+             now. keep it short.\n\
+             - reach_out may be declined (quiet hours, or today's budget is spent); \
+             accept that, it will come up again.\n\
+             - never claim the commitment is done and never close it: only the user \
+             can complete, snooze, or cancel it, in a conversation.\n\
+             - if there is nothing the user needs right now, do nothing.\n",
+        );
+        task
     }
 
     /// End an admitted check and write what it concluded on the record. A
@@ -129,14 +294,74 @@ impl CommitmentEvaluator {
         result: Result<RunOutcome, String>,
         now: i64,
     ) -> ProactiveRun {
-        let _ = (run, result, now);
-        todo!("commitment evaluator (#85, PR B)")
+        let (finished, outcome, retry_at) = match result {
+            Ok(outcome) => {
+                let finished = run.handle.complete_at(outcome, now);
+                let denied = finished.approvals.iter().any(|approval| {
+                    approval.side_effect == SideEffect::ReachOut && !approval.allowed
+                });
+                let retry_at = denied.then_some(now + RETRY_BACKOFF_SECS);
+                (finished, CheckOutcome::Triggered, retry_at)
+            }
+            Err(error) => {
+                let finished = run.handle.fail_at(&error, true, now);
+                let outcome = CheckOutcome::Failed {
+                    error: error.chars().take(200).collect(),
+                    retryable: true,
+                };
+                (finished, outcome, Some(now + RETRY_BACKOFF_SECS))
+            }
+        };
+        self.record(&run.commitment, &finished.id, outcome, retry_at, now);
+        finished
     }
 
     /// The user cancelled the run: nothing changed for the commitment.
     pub fn cancel(&self, run: CommitmentRun, now: i64) -> ProactiveRun {
-        let _ = (run, now);
-        todo!("commitment evaluator (#85, PR B)")
+        let finished = run.handle.cancel_at(now);
+        self.record(
+            &run.commitment,
+            &finished.id,
+            CheckOutcome::Unchanged,
+            None,
+            now,
+        );
+        finished
+    }
+
+    fn record(
+        &self,
+        seen: &Commitment,
+        run_id: &str,
+        outcome: CheckOutcome,
+        retry_at: Option<i64>,
+        now: i64,
+    ) {
+        let fresh_observation = self.store.get(&seen.id, now).is_some_and(|current| {
+            matches!(
+                &current.last_check,
+                Some(Check {
+                    outcome: CheckOutcome::Observed { .. },
+                    ..
+                })
+            ) && current.last_check != seen.last_check
+        });
+        if fresh_observation {
+            log::info!(
+                "[commitments] {}: an observation arrived during the check; it asks for its own",
+                seen.id
+            );
+            return;
+        }
+        let check = Check {
+            at: now,
+            outcome,
+            run_id: Some(run_id.to_owned()),
+        };
+        match self.store.record_check(&seen.id, check, retry_at, now) {
+            Ok(_) => {}
+            Err(error) => log::info!("[commitments] {}: check not recorded: {error}", seen.id),
+        }
     }
 }
 
@@ -144,8 +369,122 @@ impl CommitmentEvaluator {
 /// commitment and run its check-in in the background. Held until the
 /// companion is onboarded and a background model is configured.
 pub(crate) async fn tick(state: &AppState, now: i64) {
-    let _ = (state, now);
-    todo!("commitment evaluator (#85, PR B)")
+    let instance_dir = companion::companion_dir(&state.workspace_dir);
+    if !instance_dir.join("soul.md").exists() {
+        return;
+    }
+    let llm = match state.background_llm.read().await.as_ref() {
+        Some(llm) => llm.clone(),
+        None => {
+            log::debug!("[commitments] held: background model preset not configured");
+            return;
+        }
+    };
+    let evaluator = CommitmentEvaluator::new(state.commitments.clone(), state.proactive.clone());
+    for run in evaluator.admit_due(now) {
+        let evaluator = evaluator.clone();
+        let instance_dir = instance_dir.clone();
+        let ws = state.workspace_dir.clone();
+        let events = state.events.clone();
+        let vector_store = state.vector_store.clone();
+        let resources = state.resources.clone();
+        let proactive = state.proactive.clone();
+        let llm = llm.clone();
+        tokio::spawn(async move {
+            run_check_in(
+                evaluator,
+                run,
+                &ws,
+                &instance_dir,
+                &llm,
+                &events,
+                &vector_store,
+                &resources,
+                &proactive,
+                now,
+            )
+            .await;
+        });
+    }
+}
+
+/// One admitted check: the companion check-in with the commitment as its task.
+#[allow(clippy::too_many_arguments)]
+async fn run_check_in(
+    evaluator: CommitmentEvaluator,
+    run: CommitmentRun,
+    workspace_dir: &Path,
+    instance_dir: &Path,
+    llm: &LlmBackend,
+    events: &tokio::sync::broadcast::Sender<crate::domain::events::ServerEvent>,
+    vector_store: &std::sync::Arc<crate::services::vector::VectorStore>,
+    resources: &crate::services::resource_access::ResourceAccess,
+    proactive: &ProactiveLoop,
+    now: i64,
+) {
+    let slug = crate::domain::companion::CANONICAL_SLUG;
+    let task = evaluator.check_in_task(&run, instance_timezone(instance_dir), now);
+    let run_id = run.id().to_owned();
+    let cancelled = run.handle.token();
+    log::info!(
+        "[commitments] checking {} ({run_id}): {}",
+        run.commitment.id,
+        run.condition.summary()
+    );
+    let work = companion_routine::run(
+        workspace_dir,
+        slug,
+        instance_dir,
+        llm,
+        events,
+        vector_store,
+        resources,
+        Routine::CheckIn,
+        Some(&task),
+        "commitment",
+        (proactive, run_id.as_str()),
+    );
+    let result = tokio::select! {
+        result = work => result,
+        _ = cancelled.cancelled() => {
+            log::info!("[commitments] {run_id}: cancelled");
+            evaluator.cancel(run, Utc::now().timestamp());
+            return;
+        }
+    };
+    let finished_at = Utc::now().timestamp();
+    match result {
+        Ok(r) => {
+            log::info!("[commitments] {run_id}: done ({} tokens)", r.tokens);
+            evaluator.finish(run, Ok(outcome_from_trace(&r.trace, r.tokens)), finished_at);
+        }
+        Err(e) => {
+            log::warn!("[commitments] {run_id}: failed: {e}");
+            evaluator.finish(run, Err(e.to_string()), finished_at);
+        }
+    }
+}
+
+fn describe_deadline(deadline: crate::domain::commitment::Deadline, tz: chrono_tz::Tz) -> String {
+    use crate::domain::commitment::Deadline;
+    match deadline {
+        Deadline::At { at } => format_at(at, tz),
+        Deadline::Window { start, end } => {
+            format!(
+                "between {} and {}",
+                format_at(start, tz),
+                format_at(end, tz)
+            )
+        }
+    }
+}
+
+fn describe_wait(waiting_on: &WaitCondition, tz: chrono_tz::Tz) -> String {
+    match waiting_on {
+        WaitCondition::Until { until } => format!("the clock reaching {}", format_at(*until, tz)),
+        WaitCondition::Event { event } => format!("the event {event}"),
+        WaitCondition::UserReply => "the user's reply".into(),
+    }
 }
 
 /// The companion's timezone for stated times, UTC when none is set.
@@ -562,7 +901,16 @@ mod tests {
         let run = one(h.evaluator.admit_due(T0 + 140));
         h.evaluator.finish(run, Ok(RunOutcome::default()), T0 + 150);
         assert_eq!(h.store.get(&on_mac.id, T0 + 150).unwrap().next_check, None);
-        assert_eq!(h.commitment_runs().len(), 2);
+        let completed = h
+            .commitment_runs()
+            .into_iter()
+            .filter(|run| run.status == RunStatus::Completed)
+            .count();
+        assert_eq!(
+            completed, 2,
+            "one check per observation, plus one recorded skip"
+        );
+        assert_eq!(h.commitment_runs().len(), 3);
     }
 
     #[test]
@@ -662,7 +1010,11 @@ mod tests {
             h.commitment_runs().is_empty(),
             "a hold spends no run and records nothing"
         );
-        assert_eq!(h.store.get(&laundry.id, night).unwrap(), laundry);
+        assert_eq!(
+            h.store.get(&laundry.id, T0).unwrap(),
+            laundry,
+            "the record is untouched"
+        );
 
         let run = one(h.evaluator.admit_due(morning));
         assert_eq!(
@@ -712,7 +1064,7 @@ mod tests {
             "held: budget spent"
         );
         assert!(h.commitment_runs().is_empty());
-        assert_eq!(h.store.get(&invoice.id, T0 + 60).unwrap(), invoice);
+        assert_eq!(h.store.get(&invoice.id, T0).unwrap(), invoice, "untouched");
 
         // The budget frees after 24 hours and the check is admitted.
         let tomorrow = T0 + 86_400;
@@ -744,7 +1096,11 @@ mod tests {
             .create(deadline_at("water the plants", tomorrow + 20), tomorrow)
             .unwrap();
         assert!(h.evaluator.admit_due(tomorrow + 20).is_empty());
-        assert_eq!(h.store.get(&plants.id, tomorrow + 20).unwrap(), plants);
+        assert_eq!(
+            h.store.get(&plants.id, tomorrow).unwrap(),
+            plants,
+            "untouched"
+        );
         assert_eq!(h.commitment_runs().len(), 1);
     }
 
@@ -861,6 +1217,10 @@ mod tests {
             state.proactive.list(usize::MAX).is_empty(),
             "no model, no run"
         );
-        assert_eq!(state.commitments.get(&draft.id, T0 + 60).unwrap(), draft);
+        assert_eq!(
+            state.commitments.get(&draft.id, T0).unwrap(),
+            draft,
+            "the record is untouched"
+        );
     }
 }
