@@ -220,3 +220,48 @@ fn connected_computers_have_a_read_route_and_the_split_is_documented() {
         );
     }
 }
+
+#[test]
+fn settings_pages_share_one_sectioned_panel() {
+    // #153: Settings is one panel per page, divided by borders, with each
+    // section's title beside its controls. No card grid, no uneven columns.
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+
+    let layout = read(repo, "client/src/routes/[slug]/settings/+layout.svelte");
+    assert!(
+        layout.contains("settings-panel") && !layout.contains("settings-grid"),
+        "the settings layout must render one .settings-panel, not a card grid"
+    );
+
+    let css = read(repo, "client/src/lib/settings/settings.css");
+    assert!(
+        css.contains(".settings-section + .settings-section"),
+        "sections are separated by a divider inside the panel, not by separate cards"
+    );
+    assert!(
+        !css.contains(".settings-grid") && !css.contains(".settings-wide"),
+        "the two-column card grid and its span helper are retired"
+    );
+
+    let mut violations = Vec::new();
+    let advanced = "client/src/routes/[slug]/settings/advanced/+page.svelte";
+    for page in CONSUMER_PAGES.iter().chain(std::iter::once(&advanced)) {
+        let source = read(repo, page);
+        for token in ["section-icon", "settings-wide"] {
+            if source.contains(token) {
+                violations.push(format!("{page} still uses the retired {token} markup"));
+            }
+        }
+    }
+    assert!(violations.is_empty(), "{}", violations.join("\n"));
+
+    let reference = read(repo, "client/src/routes/design-system/+page.svelte");
+    assert!(
+        reference.contains("settings-panel"),
+        "/design-system must show the settings form pattern"
+    );
+    assert!(
+        read(repo, "docs/settings.md").contains("#153"),
+        "docs/settings.md must describe the sectioned panel layout"
+    );
+}

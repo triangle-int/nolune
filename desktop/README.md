@@ -1,5 +1,34 @@
 # Nolune desktop
 
+## Installing the server from the app
+
+The first-run screen offers **Install on this computer** beside the connect form.
+The native side downloads the server binary for this platform from GitHub
+Releases into `~/.nolune/bin`, runs `nolune onboard --json` to prepare the
+workspace and read the generated token, starts `nolune gateway` as a child
+process the app owns, waits for its `nolune: ready` line (with `/healthz` as a
+fallback), validates and saves the connection, and opens the companion. Server
+output streams into a collapsible **Show logs** panel; a failed install expands
+it and offers **Retry install**. **Use nightly builds (advanced)** downloads the
+`nightly` release instead of `latest`.
+
+The app-managed gateway stops when the app exits and is started again on the
+next launch when a local install exists and nothing else holds the configured
+port. The app's **Run in background** setting hands it over: the app stops its child
+and runs `nolune gateway install`, which registers a user-level launchd agent
+(macOS) or systemd user unit (Linux). Turning it off runs `nolune gateway
+uninstall` and the app manages the gateway again. The connection screen says
+which mode is active. The app detects background mode by the definition file
+that `nolune gateway install` writes and never spawns its own gateway while one
+exists. Windows shows the option as unavailable until the server supports a
+Windows service.
+
+Installing again over the app's own gateway is an upgrade; anything else
+already listening on the port is refused with a message, so a foreground
+`nolune gateway` you started yourself is never shadowed.
+
+## Connecting to an existing server
+
 Enter the **root** HTTP(S) origin of your own Nolune server and its auth token.
 Localhost, IPv4, bracketed IPv6, hostnames, and explicit ports are supported.
 Base paths such as `/nolune` are rejected because the client uses root-relative

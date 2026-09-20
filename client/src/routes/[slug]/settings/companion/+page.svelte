@@ -1,7 +1,4 @@
 <script lang="ts">
-	import Moon from "@lucide/svelte/icons/moon";
-	import Clock from "@lucide/svelte/icons/clock";
-	import CalendarClock from "@lucide/svelte/icons/calendar-clock";
 	import * as Select from "$lib/components/ui/select/index.js";
 	import { page } from "$app/state";
 	import {
@@ -153,22 +150,22 @@
 <!-- Presence, rhythm, initiative -->
 <section class="settings-section">
 	<div class="section-header">
-		<div class="section-icon" aria-hidden="true"><Moon size={20} strokeWidth={1.75} /></div>
 		<div>
 			<h3 class="section-label">Companion</h3>
 			<p class="section-desc">Little Moon, your familiar presence across devices.</p>
 		</div>
 	</div>
-	<div class="model-mode-options">
-		{#each SKINS as skin (skin.id)}
-			<div class="mode-option skin-option mode-active">
-				<img src={skin.thumbnail} alt={skin.label} class="skin-thumb" />
-				<div>
-					<span class="mode-name">{skin.label}</span>
-					<span class="mode-desc">Little Moon companion</span>
+	<div class="section-body">
+		<div class="model-mode-options">
+			{#each SKINS as skin (skin.id)}
+				<div class="mode-option skin-option mode-active">
+					<img src={skin.thumbnail} alt={skin.label} class="skin-thumb" />
+					<div>
+						<span class="mode-name">{skin.label}</span>
+						<span class="mode-desc">Little Moon companion</span>
+					</div>
 				</div>
-			</div>
-		{/each}
+			{/each}
 	</div>
 
 	<div class="setting-row">
@@ -240,63 +237,66 @@
 			<p class="setting-hint">Every few days your companion writes a reflection into its memory. It can add and connect memories, never delete them.</p>
 		</div>
 	{/if}
+	</div>
 </section>
 
 <!-- Timezone -->
 <section class="settings-section">
 	<div class="section-header">
-		<div class="section-icon" aria-hidden="true"><Clock size={20} strokeWidth={1.75} /></div>
 		<div>
 			<h3 class="section-label">Timezone</h3>
 			<p class="section-desc">Set your local timezone so your companion knows the right time of day.</p>
 		</div>
 	</div>
+	<div class="section-body">
 
-	{#if tzLoading}
-		<div class="ext-loading"><div class="loading-dot"></div></div>
-	{:else}
-		<div class="tz-picker">
-			<Select.Root type="single" value={tzValue || "default"} disabled={tzSaving}
-				onValueChange={(value) => saveTimezone(value === "default" ? "" : value)}>
-				<Select.Trigger aria-label="Timezone" class="h-11 w-full min-w-0 border-input bg-card text-foreground dark:bg-card">
-					<span data-slot="select-value">{tzValue ? tzValue.replace(/_/g, " ") : "UTC (default)"}</span>
-				</Select.Trigger>
-				<Select.Content class="max-h-80">
-					<Select.Item value="default" label="UTC (default)" class="min-h-11">UTC (default)</Select.Item>
-					{#each COMMON_TIMEZONES as tz (tz)}
-						<Select.Item value={tz} label={tz.replace(/_/g, " ")} class="min-h-11">{tz.replace(/_/g, " ")}</Select.Item>
-					{/each}
-				</Select.Content>
-			</Select.Root>
-			{#if tzValue}
-				<span class="tz-current">{tzValue.replace(/_/g, " ")}</span>
-			{/if}
-		</div>
-	{/if}
+		{#if tzLoading}
+			<div class="ext-loading"><div class="loading-dot"></div></div>
+		{:else}
+			<div class="tz-picker">
+				<Select.Root type="single" value={tzValue || "default"} disabled={tzSaving}
+					onValueChange={(value) => saveTimezone(value === "default" ? "" : value)}>
+					<Select.Trigger aria-label="Timezone" class="h-11 w-full min-w-0 border-input bg-card text-foreground dark:bg-card">
+						<span data-slot="select-value">{tzValue ? tzValue.replace(/_/g, " ") : "UTC (default)"}</span>
+					</Select.Trigger>
+					<Select.Content class="max-h-80">
+						<Select.Item value="default" label="UTC (default)" class="min-h-11">UTC (default)</Select.Item>
+						{#each COMMON_TIMEZONES as tz (tz)}
+							<Select.Item value={tz} label={tz.replace(/_/g, " ")} class="min-h-11">{tz.replace(/_/g, " ")}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
+				{#if tzValue}
+					<span class="tz-current">{tzValue.replace(/_/g, " ")}</span>
+				{/if}
+			</div>
+		{/if}
+	</div>
 </section>
 
 <!-- Scheduled messages -->
 {#if !scheduledLoading && scheduledTasks.length > 0}
 	<section class="settings-section">
 		<div class="section-header">
-			<div class="section-icon" aria-hidden="true"><CalendarClock size={20} strokeWidth={1.75} /></div>
 			<div>
 				<h3 class="section-label">Scheduled</h3>
 				<p class="section-desc">{scheduledTasks.length} pending message{scheduledTasks.length === 1 ? "" : "s"} your companion will deliver later.</p>
 			</div>
 		</div>
-		<div class="sched-list">
-			{#each scheduledTasks as task (task.id)}
-				<div class="sched-item">
-					<div class="sched-content">
-						<span class="sched-text">{task.task.length > 80 ? task.task.slice(0, 80) + "…" : task.task}</span>
-						<span class="sched-time">{formatDeliverAt(task.deliver_at)}</span>
+		<div class="section-body">
+			<div class="sched-list">
+				{#each scheduledTasks as task (task.id)}
+					<div class="sched-item">
+						<div class="sched-content">
+							<span class="sched-text">{task.task.length > 80 ? task.task.slice(0, 80) + "…" : task.task}</span>
+							<span class="sched-time">{formatDeliverAt(task.deliver_at)}</span>
+						</div>
+						<button class="sched-cancel" disabled={cancellingId === task.id} onclick={() => cancelTask(task.id)}>
+							{cancellingId === task.id ? "…" : "Cancel"}
+						</button>
 					</div>
-					<button class="sched-cancel" disabled={cancellingId === task.id} onclick={() => cancelTask(task.id)}>
-						{cancellingId === task.id ? "…" : "Cancel"}
-					</button>
-				</div>
-			{/each}
+				{/each}
+		</div>
 		</div>
 	</section>
 {/if}

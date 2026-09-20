@@ -1,8 +1,4 @@
 <script lang="ts">
-	import Cpu from "@lucide/svelte/icons/cpu";
-	import KeyRound from "@lucide/svelte/icons/key-round";
-	import Monitor from "@lucide/svelte/icons/monitor";
-	import Globe from "@lucide/svelte/icons/globe";
 	import { page } from "$app/state";
 	import { embeddingStatusText } from "$lib/embedding-status.js";
 	import {
@@ -269,14 +265,14 @@
 </script>
 
 <!-- Model presets (#156) -->
-<section class="settings-section settings-wide">
+<section class="settings-section">
 	<div class="section-header">
-		<div class="section-icon" aria-hidden="true"><Cpu size={20} strokeWidth={1.75} /></div>
 		<div>
 			<h3 class="section-label">Models</h3>
 			<p class="section-desc">Presets name the models your companion may use. Pick one for conversations and one for background work; any chat can switch to another preset from its composer.</p>
 		</div>
 	</div>
+	<div class="section-body">
 	{#if setupRequired}<p class="setting-hint setting-warning">{setupRequired}</p>{/if}
 
 	{#if modelsLoading}
@@ -342,140 +338,144 @@
 			{#if modelsDirty && !modelsSaved}<span class="dim-text">Unsaved changes</span>{/if}
 		</div>
 	{/if}
+	</div>
 </section>
 
 <!-- API keys -->
 <section class="settings-section">
 	<div class="section-header">
-		<div class="section-icon" aria-hidden="true"><KeyRound size={20} strokeWidth={1.75} /></div>
 		<div>
 			<h3 class="section-label">API keys</h3>
 			<p class="section-desc">Your own keys, stored on this server. A preset can only be used once its provider has a key; OpenAI also unlocks semantic memory, ElevenLabs unlocks voice.</p>
 		</div>
 	</div>
-	<p class="section-desc">{embeddingStatusText(embeddingStatus)}</p>
-	<div class="keys-list">
-		{#each apiKeyDefs as key (key.id)}
-			{@const configured = configuredKeys.includes(key.configKey)}
-			<div class="key-row">
-				<div class="key-info">
-					<span class="key-name">{key.name}{key.required ? " *" : ""}</span>
-					<span class="key-hint">{key.hint}</span>
-				</div>
-				<div class="key-action">
-					{#if keyEditing === key.id}
-						<input
-							class="key-input"
-							aria-label={`${key.name} key`}
-							type="password"
-							placeholder="{key.name} key..."
-							bind:value={keyEditValue}
-							onkeydown={(e) => {
-								if (e.key === "Enter" && keyEditValue.trim()) {
-									saveKey(key.id, keyEditValue);
+	<div class="section-body">
+		<p class="section-desc">{embeddingStatusText(embeddingStatus)}</p>
+		<div class="keys-list">
+			{#each apiKeyDefs as key (key.id)}
+				{@const configured = configuredKeys.includes(key.configKey)}
+				<div class="key-row">
+					<div class="key-info">
+						<span class="key-name">{key.name}{key.required ? " *" : ""}</span>
+						<span class="key-hint">{key.hint}</span>
+					</div>
+					<div class="key-action">
+						{#if keyEditing === key.id}
+							<input
+								class="key-input"
+								aria-label={`${key.name} key`}
+								type="password"
+								placeholder="{key.name} key..."
+								bind:value={keyEditValue}
+								onkeydown={(e) => {
+									if (e.key === "Enter" && keyEditValue.trim()) {
+										saveKey(key.id, keyEditValue);
+										keyEditing = "";
+										keyEditValue = "";
+									}
+									if (e.key === "Escape") { keyEditing = ""; keyEditValue = ""; }
+								}}
+							/>
+							<button
+								class="key-change"
+								onclick={() => {
+									if (keyEditValue.trim()) saveKey(key.id, keyEditValue);
 									keyEditing = "";
 									keyEditValue = "";
-								}
-								if (e.key === "Escape") { keyEditing = ""; keyEditValue = ""; }
-							}}
-						/>
-						<button
-							class="key-change"
-							onclick={() => {
-								if (keyEditValue.trim()) saveKey(key.id, keyEditValue);
-								keyEditing = "";
-								keyEditValue = "";
-							}}
-							disabled={keySaving === key.id}
-						>{keySaving === key.id ? "Saving..." : "Save"}</button>
-						<button class="key-change" onclick={() => { keyEditing = ""; keyEditValue = ""; }}>Cancel</button>
-					{:else if configured}
-						<span class="key-badge key-badge-ok">Connected</span>
-						<button class="key-change" onclick={() => { keyEditing = key.id; keyEditValue = ""; }} disabled={keySaving === key.id}>Change</button>
-						<button class="key-change key-change-remove" onclick={() => saveKey(key.id, "")} disabled={keySaving === key.id}>Remove</button>
-					{:else}
-						<button class="key-change key-change-add" onclick={() => { keyEditing = key.id; keyEditValue = ""; }} disabled={keySaving === key.id}>{keySaving === key.id ? "Saving..." : "Add key"}</button>
-					{/if}
+								}}
+								disabled={keySaving === key.id}
+							>{keySaving === key.id ? "Saving..." : "Save"}</button>
+							<button class="key-change" onclick={() => { keyEditing = ""; keyEditValue = ""; }}>Cancel</button>
+						{:else if configured}
+							<span class="key-badge key-badge-ok">Connected</span>
+							<button class="key-change" onclick={() => { keyEditing = key.id; keyEditValue = ""; }} disabled={keySaving === key.id}>Change</button>
+							<button class="key-change key-change-remove" onclick={() => saveKey(key.id, "")} disabled={keySaving === key.id}>Remove</button>
+						{:else}
+							<button class="key-change key-change-add" onclick={() => { keyEditing = key.id; keyEditValue = ""; }} disabled={keySaving === key.id}>{keySaving === key.id ? "Saving..." : "Add key"}</button>
+						{/if}
+					</div>
 				</div>
-			</div>
-		{/each}
+			{/each}
 	</div>
 	{#if keyError}
 		<p class="key-error" role="alert">{keyError}</p>
 	{/if}
 	<p class="setting-hint" style="margin-top: 12px;">Changing the OpenAI key restarts semantic indexing on the next server start. Endpoint details live under <a class="settings-link" href={`/${slug}/settings/advanced`}>Advanced</a>.</p>
+	</div>
 </section>
 
 <!-- Connected computers -->
 <section class="settings-section">
 	<div class="section-header">
-		<div class="section-icon" aria-hidden="true"><Monitor size={20} strokeWidth={1.75} /></div>
 		<div>
 			<h3 class="section-label">Computers</h3>
 			<p class="section-desc">Desktops running the Nolune app that your companion can see and act on.</p>
 		</div>
 	</div>
-	{#key slug}
-		<ConnectedComputers {slug} compact />
-	{/key}
-	<div class="settings-links"><a class="nl-button-secondary" href={`/${slug}/computers`}>Open computers</a></div>
+	<div class="section-body">
+		{#key slug}
+			<ConnectedComputers {slug} compact />
+		{/key}
+		<div class="settings-links"><a class="nl-button-secondary" href={`/${slug}/computers`}>Open computers</a></div>
+	</div>
 </section>
 
 <!-- Paired browsers -->
 <section class="settings-section">
 	<div class="section-header">
-		<div class="section-icon" aria-hidden="true"><Globe size={20} strokeWidth={1.75} /></div>
 		<div>
 			<h3 class="section-label">Paired browsers</h3>
 			<p class="section-desc">Browsers that stay signed in to this server.</p>
 		</div>
 	</div>
-	{#if devicesLoading}
-		<p class="dim-text">Loading...</p>
-	{:else if sessionAuth === "disabled"}
-		<p class="setting-hint">This server accepts any browser. Set an API token under <a class="settings-link" href={`/${slug}/settings/advanced`}>Advanced</a> to require pairing.</p>
-	{:else}
-		{#if devices.length === 0}
-			<p class="setting-hint">No browsers are paired yet.</p>
+	<div class="section-body">
+		{#if devicesLoading}
+			<p class="dim-text">Loading...</p>
+		{:else if sessionAuth === "disabled"}
+			<p class="setting-hint">This server accepts any browser. Set an API token under <a class="settings-link" href={`/${slug}/settings/advanced`}>Advanced</a> to require pairing.</p>
 		{:else}
-			<ul class="device-list">
-				{#each devices as device (device.id)}
-					<li class="device-row">
-						<div class="device-info">
-							<span class="device-label">
-								{device.label}
-								{#if device.current}<span class="device-current">This browser</span>{/if}
-							</span>
-							<span class="device-meta">{device.host} · {pairedViaText(device)} · last seen {timeAgo(device.last_seen_at)}</span>
-						</div>
-						<button class="setting-btn setting-btn-danger" onclick={() => revokeDevice(device)} disabled={revokingId === device.id}>
-							{device.current ? "Sign out" : "Revoke"}
-						</button>
-					</li>
-				{/each}
-			</ul>
+			{#if devices.length === 0}
+				<p class="setting-hint">No browsers are paired yet.</p>
+			{:else}
+				<ul class="device-list">
+					{#each devices as device (device.id)}
+						<li class="device-row">
+							<div class="device-info">
+								<span class="device-label">
+									{device.label}
+									{#if device.current}<span class="device-current">This browser</span>{/if}
+								</span>
+								<span class="device-meta">{device.host} · {pairedViaText(device)} · last seen {timeAgo(device.last_seen_at)}</span>
+							</div>
+							<button class="setting-btn setting-btn-danger" onclick={() => revokeDevice(device)} disabled={revokingId === device.id}>
+								{device.current ? "Sign out" : "Revoke"}
+							</button>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+			{#if pairingCode}
+				<div class="pairing-panel" aria-live="polite">
+					<span class="pairing-code">{pairingCode.code}</span>
+					<p class="setting-hint">
+						Enter this code on the new device within {pairingCountdown(pairingSecondsLeft)}. It works once.
+						{#if pairingCode.bound_host}Open Nolune there at the same address, <strong>{pairingCode.bound_host}</strong>.{/if}
+					</p>
+					<button class="setting-btn" onclick={dismissPairingCode}>Done</button>
+				</div>
+			{:else}
+				<div class="setting-input-row">
+					<button class="setting-btn" onclick={startPairing} disabled={pairingBusy}>
+						{pairingBusy ? "..." : "Pair another browser"}
+					</button>
+					{#if sessionAuth === "session" && devices.length === 0}
+						<button class="setting-btn setting-btn-danger" onclick={signOut}>Sign out</button>
+					{/if}
+				</div>
+			{/if}
+			{#if devicesError}
+				<p class="setting-hint setting-warning">{devicesError}</p>
+			{/if}
 		{/if}
-		{#if pairingCode}
-			<div class="pairing-panel" aria-live="polite">
-				<span class="pairing-code">{pairingCode.code}</span>
-				<p class="setting-hint">
-					Enter this code on the new device within {pairingCountdown(pairingSecondsLeft)}. It works once.
-					{#if pairingCode.bound_host}Open Nolune there at the same address, <strong>{pairingCode.bound_host}</strong>.{/if}
-				</p>
-				<button class="setting-btn" onclick={dismissPairingCode}>Done</button>
-			</div>
-		{:else}
-			<div class="setting-input-row">
-				<button class="setting-btn" onclick={startPairing} disabled={pairingBusy}>
-					{pairingBusy ? "..." : "Pair another browser"}
-				</button>
-				{#if sessionAuth === "session" && devices.length === 0}
-					<button class="setting-btn setting-btn-danger" onclick={signOut}>Sign out</button>
-				{/if}
-			</div>
-		{/if}
-		{#if devicesError}
-			<p class="setting-hint setting-warning">{devicesError}</p>
-		{/if}
-	{/if}
+	</div>
 </section>

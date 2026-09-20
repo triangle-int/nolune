@@ -61,6 +61,20 @@ model, slots pointing at presets whose provider has a key), and
 `POST /api/config/models/seed` adds a provider's defaults, which onboarding
 calls after saving the first key.
 
+## Layout (#153)
+
+Each section page renders inside one `.settings-panel` from
+`client/src/lib/settings/settings.css`. A page is a stack of
+`.settings-section` rows divided by 1px borders; each row is a two-column grid
+with the `.section-header` (Fraunces title, one-line description, owner badge on
+Advanced) on the left and every other child in the controls column on the
+right. Below 768px the header stacks above the controls. There is no card grid
+and no `settings-wide` span helper, so sections of different heights cannot
+leave empty space. The section nav under the `Settings` heading is a segmented
+control with a lavender active pill and `aria-current`.
+`server/tests/navigation_settings_split.rs` guards the panel, the divider, and
+the retired icon and grid markup.
+
 ## Raw fields stay on Advanced
 
 Settings flagged `raw` in `sections.js` are server or protocol wiring: ports,
