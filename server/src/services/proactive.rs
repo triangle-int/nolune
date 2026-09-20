@@ -386,6 +386,14 @@ impl ProactiveLoop {
         decision
     }
 
+    /// Whether a reach-out would be allowed right now, without consuming
+    /// budget or recording anything: the commitment evaluator holds a check
+    /// until contact is possible instead of spending a run on a denial.
+    pub fn reach_out_allowed(&self, now: i64) -> Result<(), Denied> {
+        let _ = now;
+        todo!("commitment evaluator (#85, PR B)")
+    }
+
     fn ledger(&self) -> Ledger {
         fs::read_to_string(self.activity_dir().join(LEDGER_FILE))
             .ok()

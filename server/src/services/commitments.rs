@@ -22,8 +22,9 @@ use std::{
 use serde::Deserialize;
 
 use crate::domain::commitment::{
-    COMMITMENT_FORMAT_VERSION, Commitment, CommitmentStatus, CompletionEvidence, Deadline,
-    MAX_LINKS, MAX_NOTE_CHARS, MAX_PROMISE_CHARS, Owner, Provenance, WaitCondition,
+    COMMITMENT_FORMAT_VERSION, Check, CheckOutcome, Commitment, CommitmentStatus,
+    CompletionEvidence, Deadline, MAX_LINKS, MAX_NOTE_CHARS, MAX_PROMISE_CHARS, Owner, Provenance,
+    WaitCondition,
 };
 
 const COMMITMENTS_DIR: &str = "commitments";
@@ -318,6 +319,30 @@ impl CommitmentStore {
         commitment.updated_at = now;
         self.save(&commitment)?;
         Ok(commitment)
+    }
+
+    /// Write what an evaluation concluded and when to look again. The next
+    /// look is the earliest of the record's own next moment
+    /// (`next_check_after`) and `retry_at`, so a failed or held check comes
+    /// back without ever pre-empting a snooze end, a timed wait, or a
+    /// deadline. A closed record answers `Closed` and keeps its history.
+    pub fn record_check(
+        &self,
+        id: &str,
+        check: Check,
+        retry_at: Option<i64>,
+        now: i64,
+    ) -> Result<Commitment, CommitmentError> {
+        let _ = (id, check, retry_at, now);
+        todo!("commitment evaluator (#85, PR B)")
+    }
+
+    /// A named event was observed (`machine_connected:<id>`, ...): every open
+    /// commitment waiting on it stops waiting, notes the observation as its
+    /// `last_check`, and asks for a check now. Returns the records changed.
+    pub fn observe_event(&self, event: &str, now: i64) -> Vec<Commitment> {
+        let _ = (event, now);
+        todo!("commitment evaluator (#85, PR B)")
     }
 
     /// The persisted record, for a caller about to change it.
@@ -1490,5 +1515,220 @@ mod tests {
         let json = serde_json::to_string(&with_check).unwrap();
         let back: Commitment = serde_json::from_str(&json).unwrap();
         assert_eq!(back, with_check);
+    }
+
+    #[test]
+    fn the_evaluator_writes_its_check_and_the_next_look_on_the_record() {
+        let (ws, store) = harness();
+        let triggered = |run: &str| Check {
+            at: T0 + 60,
+            outcome: CheckOutcome::Triggered,
+            run_id: Some(run.into()),
+        };
+
+        // A checked deadline is not looked at again: nothing later is named.
+        let due = store
+            .create(
+                NewCommitment {
+                    deadline: Some(Deadline::At { at: T0 + 60 }),
+                    ..promise("send the draft")
+                },
+                T0,
+            )
+            .unwrap();
+        let checked = store
+            .record_check(&due.id, triggered("run_1"), None, T0 + 60)
+            .unwrap();
+        assert_eq!(checked.last_check, Some(triggered("run_1")));
+        assert_eq!(checked.next_check, None, "a deadline is checked once");
+        assert_eq!(checked.status, CommitmentStatus::Due, "still not done");
+        assert_eq!(checked.updated_at, T0 + 60);
+        assert_eq!(
+            checked.status_changed_at,
+            T0 + 60,
+            "the write records the transition the clock implied"
+        );
+
+        // A retry never pre-empts the record's own next moment, and a snooze
+        // that happened while the check ran keeps its end as the next look.
+        let waiting = store
+            .create(
+                NewCommitment {
+                    waiting_on: Some(WaitCondition::Until { until: T0 + 600 }),
+                    deadline: Some(Deadline::At { at: T0 + 900 }),
+                    ..promise("check the build")
+                },
+                T0,
+            )
+            .unwrap();
+        let after_wait = store
+            .record_check(
+                &waiting.id,
+                triggered("run_2"),
+                Some(T0 + 600 + 3600),
+                T0 + 600,
+            )
+            .unwrap();
+        assert_eq!(
+            after_wait.next_check,
+            Some(T0 + 900),
+            "the deadline is next"
+        );
+        store.snooze(&waiting.id, T0 + 1200, T0 + 900).unwrap();
+        let failed = Check {
+            at: T0 + 901,
+            outcome: CheckOutcome::Failed {
+                error: "provider offline".into(),
+                retryable: true,
+            },
+            run_id: Some("run_3".into()),
+        };
+        let snoozed = store
+            .record_check(&waiting.id, failed.clone(), Some(T0 + 901 + 600), T0 + 901)
+            .unwrap();
+        assert_eq!(snoozed.last_check, Some(failed));
+        assert_eq!(
+            snoozed.next_check,
+            Some(T0 + 1200),
+            "the snooze end comes before the retry"
+        );
+        let plain = store.create(promise("water the plants"), T0).unwrap();
+        let retry = store
+            .record_check(&plain.id, triggered("run_4"), Some(T0 + 660), T0 + 60)
+            .unwrap();
+        assert_eq!(retry.next_check, Some(T0 + 660), "only the retry is left");
+
+        // Closed records keep their history.
+        store.cancel(&plain.id, T0 + 70).unwrap();
+        assert_eq!(
+            store.record_check(&plain.id, triggered("run_5"), None, T0 + 80),
+            Err(CommitmentError::Closed {
+                id: plain.id.clone(),
+                status: CommitmentStatus::Dismissed
+            })
+        );
+        assert_eq!(
+            store.get(&plain.id, T0 + 80).unwrap().last_check,
+            Some(triggered("run_4"))
+        );
+        assert_eq!(
+            store.record_check("cmt_missing", triggered("run_6"), None, T0),
+            Err(CommitmentError::NotFound("cmt_missing".into()))
+        );
+
+        // Everything survives a fresh store.
+        let fresh = CommitmentStore::new(ws.path(), CANONICAL_SLUG);
+        assert_eq!(fresh.get(&waiting.id, T0 + 901).unwrap(), snoozed);
+    }
+
+    #[test]
+    fn observed_events_and_completed_dependencies_ask_for_one_check() {
+        let (_ws, store) = harness();
+        let on_mac = store
+            .create(
+                NewCommitment {
+                    waiting_on: Some(WaitCondition::Event {
+                        event: "machine_connected:mac".into(),
+                    }),
+                    ..promise("finish the export on the mac")
+                },
+                T0,
+            )
+            .unwrap();
+        let on_reply = store
+            .create(
+                NewCommitment {
+                    waiting_on: Some(WaitCondition::Event {
+                        event: "email_reply:thread-1".into(),
+                    }),
+                    deadline: Some(Deadline::At { at: T0 + 7200 }),
+                    ..promise("follow up once they answer")
+                },
+                T0,
+            )
+            .unwrap();
+        assert_eq!(on_mac.next_check, None);
+        assert_eq!(on_reply.next_check, Some(T0 + 7200));
+
+        assert!(
+            store
+                .observe_event("machine_connected:other", T0 + 5)
+                .is_empty(),
+            "an unrelated event changes nothing"
+        );
+        assert_eq!(store.get(&on_mac.id, T0 + 5).unwrap(), on_mac);
+
+        let observed = store.observe_event("machine_connected:mac", T0 + 10);
+        assert_eq!(observed.len(), 1);
+        let seen = &observed[0];
+        assert_eq!(seen.id, on_mac.id);
+        assert_eq!(
+            seen.waiting_on, None,
+            "the wait is cleared by whoever observes it"
+        );
+        assert_eq!(seen.status, CommitmentStatus::Active);
+        assert_eq!(seen.status_changed_at, T0 + 10);
+        assert_eq!(seen.next_check, Some(T0 + 10), "a check is asked for now");
+        assert_eq!(
+            seen.last_check,
+            Some(Check {
+                at: T0 + 10,
+                outcome: CheckOutcome::Observed {
+                    event: "machine_connected:mac".into()
+                },
+                run_id: None,
+            })
+        );
+        assert_eq!(store.get(&on_mac.id, T0 + 10).unwrap(), *seen);
+        assert!(
+            store
+                .observe_event("machine_connected:mac", T0 + 11)
+                .is_empty(),
+            "observed once; a repeat finds nothing waiting"
+        );
+        assert_eq!(
+            store.get(&on_reply.id, T0 + 11).unwrap(),
+            on_reply,
+            "other waits are untouched"
+        );
+
+        // Completing a dependency is the same kind of observation for dependents.
+        let export = store.create(promise("finish the export"), T0 + 20).unwrap();
+        let announce = store
+            .create(
+                NewCommitment {
+                    dependencies: vec![export.id.clone()],
+                    ..promise("announce it")
+                },
+                T0 + 21,
+            )
+            .unwrap();
+        assert_eq!(announce.status, CommitmentStatus::Blocked);
+        assert_eq!(announce.next_check, None);
+        store
+            .complete(&export.id, confirmed(), T0 + 30, |_| true)
+            .unwrap();
+        let unblocked = store.get(&announce.id, T0 + 30).unwrap();
+        assert_eq!(unblocked.status, CommitmentStatus::Active);
+        assert_eq!(unblocked.next_check, Some(T0 + 30));
+        assert_eq!(
+            unblocked.last_check,
+            Some(Check {
+                at: T0 + 30,
+                outcome: CheckOutcome::Observed {
+                    event: format!("commitment_completed:{}", export.id)
+                },
+                run_id: None,
+            })
+        );
+        assert_eq!(
+            store.due_for_check(T0 + 30).len(),
+            2,
+            "the observed wait and the unblocked dependent are due for one check each"
+        );
+        assert!(
+            store.observe_event("", T0 + 40).is_empty(),
+            "an empty event name observes nothing"
+        );
     }
 }

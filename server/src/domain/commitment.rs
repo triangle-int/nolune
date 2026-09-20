@@ -163,8 +163,10 @@ impl CompletionEvidence {
     }
 }
 
-/// What the last evaluation concluded. Written by the evaluator (#85, PR B);
-/// kept on the record so failed evaluations stay inspectable after a restart.
+/// What the last evaluation concluded. Written by the evaluator, and by the
+/// store when it observes a change that asks for a check; kept on the record
+/// so failed evaluations and pending observations stay inspectable after a
+/// restart.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CheckOutcome {
@@ -175,6 +177,13 @@ pub enum CheckOutcome {
     Failed {
         error: String,
         retryable: bool,
+    },
+    /// An event the record waited for (`machine_connected:<id>`) or the
+    /// completion of a dependency (`commitment_completed:<id>`) was observed
+    /// and a check was asked for; the next evaluation states it as the
+    /// trigger condition.
+    Observed {
+        event: String,
     },
 }
 
@@ -274,5 +283,25 @@ impl Commitment {
     /// record owns; the evaluator moves it forward after each check.
     pub fn needs_check(&self, now: i64) -> bool {
         self.is_open() && !self.is_snoozed(now) && self.next_check.is_some_and(|at| at <= now)
+    }
+
+    /// The next moment after `now` the record itself asks to be looked at:
+    /// the earliest future one of a snooze end, a timed wait, and the
+    /// deadline start. None once every moment it names has passed, so a
+    /// deadline is checked exactly once.
+    pub fn next_check_after(&self, now: i64) -> Option<i64> {
+        let until = match &self.waiting_on {
+            Some(WaitCondition::Until { until }) => Some(*until),
+            _ => None,
+        };
+        [
+            self.snoozed_until,
+            until,
+            self.deadline.map(|d| d.starts_at()),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|at| *at > now)
+        .min()
     }
 }
