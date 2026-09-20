@@ -222,6 +222,5 @@ export function presetTestCopy(outcome, preset) {
  * @returns {PickerPreset[]}
  */
 export function pickerPresets(models) {
-	void models;
-	return [];
+	return (models?.presets ?? []).map((preset) => ({ ...preset, warnings: capabilityWarnings(preset, presetCapabilities(models, preset.id)) }));
 }

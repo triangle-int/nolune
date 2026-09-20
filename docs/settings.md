@@ -78,9 +78,15 @@ provider rejected the key), `rate_limited` (429, the key works;
 `retry_after_seconds` when the provider said), `model_not_found` (404),
 `provider_rejected` (422, any other 4xx such as OpenRouter's "Insufficient
 credits"), `provider_unavailable` (502, a 5xx), `unreachable` (502),
-`timeout` (504), `invalid_response` (502), `unsupported` (422) and
-`unknown_preset` (404). Messages name the provider and arrive redacted
-from the adapters; saved keys never appear in any answer.
+`timeout` (504, no answer within the probe deadline of 30 seconds, which
+also bounds the key probe before a save), `invalid_response` (502),
+`unsupported` (422) and `unknown_preset` (404). Messages name the provider
+and arrive redacted from the adapters; the `authentication` answer is the
+sentence "`<provider> rejected the API key.`" alone, because a provider's
+own 401 text quotes the key it refused (OpenAI masks it as
+`sk-revie******-key`), and that text goes to the server log instead. Every
+other message is scrubbed of the configured key, whole or masked, so a
+saved key never appears in any answer.
 
 `GET /api/config/models` also carries `capabilities`, keyed by preset id:
 what the provider offers for that model (`vision`, `documents`, `tools`,
@@ -90,8 +96,11 @@ chips on the preset row (`no vision`, `no documents`, `no tools`, from
 `capabilityWarnings` in `client/src/lib/models/presets.js`), appends them
 to each option of the Chat and Background pickers, and repeats the sentence
 under the picker as soon as a preset with a limitation is selected, before
-Save. OpenRouter presets report the catalog's answer once it has loaded,
-and the adapter defaults until then.
+Save. The composer's model picker does the same (`pickerPresets`): each
+option carries its chips after the model id, and the sentence sits under
+the composer while such a model is the conversation's. OpenRouter presets
+report the catalog's answer once it has loaded, and the adapter defaults
+until then.
 
 Onboarding runs the same test after the first key is saved and its
 presets are seeded (`saveOnboardingProvider` in
@@ -99,9 +108,19 @@ presets are seeded (`saveOnboardingProvider` in
 runs on that provider, else the provider's first preset). "connected." is
 typed only after the model answered; a failure keeps the key step open
 with the outcome sentence, so onboarding cannot finish with a provider
-that does not reply. A provider that was already working is untouched: a
-new key is stored only when its probe passes, seeding never moves a slot
-that points at a usable preset, and the test itself saves nothing.
+that does not reply, and "choose another provider" leads back to the
+provider step. A key can pass the probe and still have no usable model (no
+credits, a rate limit, a retired id), and `llm_configured` then reads true
+on a reload; onboarding therefore tests the Chat preset again whenever the
+status says a provider is configured (`resumeOnboarding`) and skips to the
+first message only on an answer, otherwise typing the outcome and
+returning to the provider step. Once a preset answers, the slots follow it
+(`slotsAfterOnboardingTest`): the Chat slot moves to that preset, and the
+Background slot to the provider's second preset when it pointed at the
+provider being left, so the first message never goes through a provider
+that did not answer. A provider that was already working is untouched: a
+new key is stored only when its probe passes, its own presets are the ones
+tested, and the test itself saves nothing.
 
 ### OpenRouter (#26)
 

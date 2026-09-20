@@ -205,6 +205,18 @@ impl LlmBackend {
         self.adapter()?.complete(request).await
     }
 
+    /// `smallest_completion` bounded by `deadline`: past it the request is
+    /// dropped and the answer is `Timeout`, the variant the routes map to
+    /// 504, instead of waiting on a provider that never replies.
+    async fn smallest_completion_within(
+        &self,
+        deadline: Duration,
+    ) -> Result<types::LlmResponse, LlmError> {
+        tokio::time::timeout(deadline, self.smallest_completion())
+            .await
+            .unwrap_or(Err(LlmError::Timeout))
+    }
+
     /// Checks the key with a one-token completion through the adapter, the
     /// probe the key routes use for both providers (#28 builds on it).
     /// `Ok` means the provider accepted the key: a completion, a rate limit,
@@ -213,8 +225,7 @@ impl LlmBackend {
     /// errors are returned as they are: the key is unknown, not wrong.
     /// `deadline` bounds the wait for the answer; past it, `Timeout`.
     pub async fn probe_key(&self, deadline: Duration) -> Result<(), LlmError> {
-        let _ = deadline;
-        match self.smallest_completion().await {
+        match self.smallest_completion_within(deadline).await {
             Ok(_) => Ok(()),
             // Past authentication, whatever the provider then objected to.
             Err(
@@ -234,8 +245,7 @@ impl LlmBackend {
     /// never touches a conversation.
     /// `deadline` bounds the wait for the answer; past it, `Timeout`.
     pub async fn test_connection(&self, deadline: Duration) -> Result<contract::Usage, LlmError> {
-        let _ = deadline;
-        self.smallest_completion()
+        self.smallest_completion_within(deadline)
             .await
             .map(|response| response.usage)
     }

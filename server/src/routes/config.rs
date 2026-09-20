@@ -60,6 +60,7 @@ async fn get_status(State(state): State<AppState>) -> Json<serde_json::Value> {
                 crate::services::llm::provider_capabilities(preset.provider, &preset.model)
             }),
         "chat_preset": config.llm.chat_preset,
+        "chat_provider": config.llm.chat_preset().map(|preset| preset.provider),
         "background_preset": config.llm.background_preset,
         "model": config.llm.chat_model(),
         "configured_keys": keys,
@@ -140,6 +141,10 @@ fn key_probe_rejection(
         Err(LlmError::Transport(error)) => Some((
             StatusCode::BAD_GATEWAY,
             format!("failed to reach {}: {error}", provider.label()),
+        )),
+        Err(LlmError::Timeout) => Some((
+            StatusCode::GATEWAY_TIMEOUT,
+            format!("{} did not answer in time — try again", provider.label()),
         )),
         Err(_) => Some((
             StatusCode::BAD_GATEWAY,
@@ -740,6 +745,16 @@ async fn run_preset_test(
         Err(error @ PresetError::MissingKey(_)) => Err(LlmError::SetupRequired(error.to_string())),
         Err(error @ PresetError::Unknown(_)) => Err(LlmError::InvalidResponse(error.to_string())),
     };
+    // A provider's 401 text tends to quote the key it refused (OpenAI masks
+    // it, which no pattern catches); the browser gets the typed sentence
+    // alone and the text stays in the log, redacted by the adapter.
+    if let Err(LlmError::Authentication(detail)) = &outcome {
+        log::warn!(
+            "[llm] {} rejected the API key for preset {:?}: {detail}",
+            preset.provider.label(),
+            preset.id
+        );
+    }
     let mut answer = test_outcome(&preset, outcome);
     // The adapters redact key-shaped text already; a provider that echoes
     // the key in its refusal still never reaches the browser with it.
@@ -751,13 +766,33 @@ async fn run_preset_test(
     answer
 }
 
-/// `message` without `key`, whole or as a provider masks it.
+/// `message` without `key`: the key itself, and any run of text that
+/// starts with its first four characters and ends with its last four, the
+/// way OpenAI masks a rejected key (`sk-revie******-key`). A key shorter
+/// than eight characters is matched exactly only.
 fn scrub_key_echo(message: &str, key: &str) -> String {
     let key = key.trim();
     if key.is_empty() {
         return message.to_owned();
     }
-    message.replace(key, "[redacted]")
+    let scrubbed = message.replace(key, "[redacted]");
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() < 8 {
+        return scrubbed;
+    }
+    let prefix: String = chars[..4].iter().collect();
+    let suffix: String = chars[chars.len() - 4..].iter().collect();
+    // Between the two ends anything but a separator, so a masked echo ends
+    // at the punctuation that follows it and never swallows the sentence.
+    let pattern = format!(
+        r#"{}[^\s"'`<>,;()\[\]{{}}]*{}"#,
+        regex::escape(&prefix),
+        regex::escape(&suffix)
+    );
+    match regex::Regex::new(&pattern) {
+        Ok(masked) => masked.replace_all(&scrubbed, "[redacted]").into_owned(),
+        Err(_) => scrubbed,
+    }
 }
 
 /// How a connection test outcome answers (#28): a real answer is `ok` with
@@ -797,10 +832,12 @@ fn test_outcome(
             message,
             None,
         ),
-        Err(LlmError::Authentication(message)) => (
+        // The provider's text is logged by the caller, never answered: it
+        // can quote the key it refused.
+        Err(LlmError::Authentication(_)) => (
             StatusCode::UNAUTHORIZED,
             "authentication",
-            format!("{provider} rejected the API key: {message}"),
+            format!("{provider} rejected the API key."),
             None,
         ),
         Err(LlmError::RateLimited {
@@ -978,8 +1015,12 @@ mod embedding_status_tests {
     /// listing loads; without a Chat preset both are null.
     #[tokio::test]
     async fn status_names_the_chat_presets_provider() {
-        let Json(bare) = get_status(State(AppState::new(config::Config::default()).await)).await;
+        let mut bare = config::Config::default();
+        bare.llm.presets.clear();
+        bare.llm.chat_preset.clear();
+        let Json(bare) = get_status(State(AppState::new(bare).await)).await;
         assert!(bare["chat_provider"].is_null(), "{bare}");
+        assert!(bare["model"].is_null(), "{bare}");
         let mut cfg = config::Config::default();
         cfg.llm.tokens.open_ai = "secret-openai-key".into();
         cfg.llm.seed_presets(config::LlmProvider::Openai);
@@ -1765,7 +1806,11 @@ mod preset_test_tests {
                         "{label}: {message}"
                     );
                 } else if status == 400 {
-                    assert!(message.contains("[redacted]"), "{label}: {message}");
+                    // The adapter's own redaction may get there first.
+                    assert!(
+                        message.to_lowercase().contains("[redacted]"),
+                        "{label}: {message}"
+                    );
                 }
             }
 

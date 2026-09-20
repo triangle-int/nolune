@@ -56,7 +56,7 @@ Use the 4px spacing scale: 4, 8, 12, 16, 24, 32, 48. Typical panel padding 24px,
 
 - Primary action: lavender fill, plum text, minimum 44px height, 14px medium sans text.
 - Secondary action: panel fill with border and ivory text. Preserve disabled and pending states.
-- Selects: use the shared shadcn-svelte `Select` components, with a 44px trigger and option targets. Menus use popover tokens and visible selected/focus states. The composer model selector is the reference.
+- Selects: use the shared shadcn-svelte `Select` components, with a 44px trigger and option targets. Menus use popover tokens and visible selected/focus states. The composer model selector is the reference: each option is the preset name over a muted 11px line with the model id and, when the model lacks vision, documents or tools, the chips (`no documents`) after it; the same limitation is stated in a secondary-text sentence under the composer while that model is the conversation's (#28, see the Chat example in `/design-system`).
 - Inputs: visible label, 16px text, solid panel surface, focus outline. Placeholder text is not a label.
 - Chat: lavender-tinted user bubble, plum companion bubble. Keep text selection, file links, streaming, and tool interactions intact.
 - Navigation: clear active surface and lavender indicator; scroll horizontally when space is limited rather than hiding destinations.

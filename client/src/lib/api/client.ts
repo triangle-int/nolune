@@ -271,6 +271,8 @@ export function fetchConfigStatus(): Promise<{
 	setup_required?: string | null;
 	model?: string | null;
 	chat_preset?: string;
+	/** The Chat preset's provider (#28), so a failed test can be named before the presets load. */
+	chat_provider?: LlmProvider | null;
 	background_preset?: string;
 	configured_keys?: string[];
 }> {
