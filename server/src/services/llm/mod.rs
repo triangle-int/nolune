@@ -210,6 +210,11 @@ impl LlmBackend {
         }
     }
 
+    /// The connection test behind `POST /api/config/models/{id}/test` (#28).
+    pub async fn test_connection(&self) -> Result<contract::Usage, LlmError> {
+        Err(LlmError::InvalidResponse("not implemented".into()))
+    }
+
     /// Simple chat without tools. Returns (text, tokens_used).
     /// A subagent one-shot: its cache entries need only outlive the run.
     pub async fn chat(

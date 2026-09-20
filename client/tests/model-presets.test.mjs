@@ -2,9 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	PROVIDERS,
+	capabilityWarnings,
 	effectivePresetId,
 	modelShortLabel,
+	presetCapabilities,
 	presetLabel,
+	presetTestCopy,
 	presetsByProvider,
 	suggestPresetId,
 	validatePresets,
@@ -112,4 +115,73 @@ test('presets group by provider in provider order', () => {
 	assert.deepEqual(grouped[0].presets.map((p) => p.id), ['sonnet', 'haiku']);
 	assert.deepEqual(grouped[2].presets.map((p) => p.id), ['router']);
 	assert.deepEqual(presetsByProvider([]), []);
+});
+
+// --- capability warnings and connection tests (#28) ---
+
+const caps = {
+	sonnet: { vision: true, documents: true, tools: true, streaming: true, reasoning_controls: false, model_discovery: false, token_counting: true },
+	gpt: { vision: true, documents: false, tools: true, streaming: true, reasoning_controls: true, model_discovery: false, token_counting: false },
+	text: { vision: false, documents: false, tools: false, streaming: true, reasoning_controls: false, model_discovery: true, token_counting: false },
+};
+
+test('capability warnings name what a model cannot do, in chip and sentence form', () => {
+	assert.deepEqual(capabilityWarnings(presets[0], caps.sonnet), []);
+	const gpt = capabilityWarnings(presets[2], caps.gpt);
+	assert.deepEqual(gpt.map((w) => w.id), ['documents']);
+	assert.equal(gpt[0].chip, 'no documents');
+	assert.match(gpt[0].detail, /GPT-5\.4/);
+	assert.match(gpt[0].detail, /PDF|document/i);
+	const text = capabilityWarnings({ id: 'text', name: 'Plain text', provider: 'openrouter', model: 'vendor/text-only' }, caps.text);
+	assert.deepEqual(text.map((w) => w.id), ['vision', 'documents', 'tools']);
+	assert.deepEqual(text.map((w) => w.chip), ['no vision', 'no documents', 'no tools']);
+	assert.match(text[0].detail, /image|photo|screenshot/i);
+	assert.match(text[2].detail, /tool/i);
+	for (const w of text) assert.match(w.detail, /Plain text/);
+	// A model whose name is blank is called by its id.
+	assert.match(capabilityWarnings({ id: 'x', name: '  ', provider: 'openai', model: 'gpt-5.4' }, caps.gpt)[0].detail, /gpt-5\.4/);
+});
+
+test('unknown capabilities warn about nothing', () => {
+	assert.deepEqual(capabilityWarnings(presets[2], undefined), []);
+	assert.deepEqual(capabilityWarnings(presets[2], null), []);
+	assert.deepEqual(presetCapabilities({ capabilities: caps }, 'gpt'), caps.gpt);
+	assert.equal(presetCapabilities({ capabilities: caps }, 'missing'), undefined);
+	assert.equal(presetCapabilities({}, 'gpt'), undefined);
+	assert.equal(presetCapabilities(null, 'gpt'), undefined);
+});
+
+test('connection test outcomes read as one sentence each, typed by the server error', () => {
+	const gpt = presets[2];
+	const ok = presetTestCopy({ ok: true, preset: 'gpt', provider: 'openai', model: 'gpt-5.4', usage: { input_tokens: 8, output_tokens: 1 }, capabilities: caps.gpt }, gpt);
+	assert.equal(ok.tone, 'ok');
+	assert.match(ok.text, /gpt-5\.4/);
+	assert.match(ok.text, /answered/);
+	assert.match(ok.text, /9 tokens/);
+	const cases = [
+		['setup_required', /no OpenAI API key/i],
+		['authentication', /OpenAI rejected the API key/],
+		['rate_limited', /rate limit/i],
+		['model_not_found', /gpt-5\.4/],
+		['provider_rejected', /Insufficient credits/],
+		['provider_unavailable', /OpenAI/],
+		['unreachable', /reach OpenAI/],
+		['timeout', /OpenAI/],
+		['invalid_response', /OpenAI/],
+		['unsupported', /OpenAI/],
+		['unknown_preset', /save/i],
+	];
+	for (const [error, pattern] of cases) {
+		const copy = presetTestCopy({ ok: false, error, message: `OpenAI said: Insufficient credits`, status: 422 }, gpt);
+		assert.equal(copy.tone, 'error', error);
+		assert.match(copy.text, pattern, `${error}: ${copy.text}`);
+	}
+	// A rate limit means the key works; the copy says so and how long to wait.
+	const limited = presetTestCopy({ ok: false, error: 'rate_limited', message: 'slow down', status: 429, retry_after_seconds: 7 }, gpt);
+	assert.match(limited.text, /key works/i);
+	assert.match(limited.text, /7 s/);
+	// An error the client does not know still shows the server's message.
+	const other = presetTestCopy({ ok: false, error: 'something_new', message: 'the server said this', status: 500 }, gpt);
+	assert.equal(other.tone, 'error');
+	assert.match(other.text, /the server said this/);
 });

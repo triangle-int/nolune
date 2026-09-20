@@ -10,3 +10,10 @@ export async function saveOnboardingProvider(provider, key, api) {
 	await api.updateLlmConfig(payload);
 	await api.seedModelPresets(provider);
 }
+
+/** @param {unknown} models @param {string} provider */
+export function onboardingTestPreset(models, provider) {
+	void models;
+	void provider;
+	return null;
+}

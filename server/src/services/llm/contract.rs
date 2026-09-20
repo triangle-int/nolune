@@ -1800,6 +1800,88 @@ mod tests {
         }
     }
 
+    /// The connection test (#28) sends the same one-token request as the key
+    /// probe, but only a real answer counts: a rate limit or a missing model
+    /// comes back as its variant instead of passing as "past authentication".
+    #[tokio::test]
+    async fn connection_tests_only_accept_a_real_answer() {
+        for provider in PROVIDERS {
+            let success = match provider {
+                LlmProvider::Anthropic => END_TURN.to_string(),
+                LlmProvider::Openai => {
+                    json!({"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":10,"output_tokens":4}}).to_string()
+                }
+                LlmProvider::Openrouter => openrouter_completion(
+                    "ok",
+                    Value::Null,
+                    "stop",
+                    json!({"prompt_tokens":10,"completion_tokens":4}),
+                )
+                .to_string(),
+            };
+            let (url, requests, task) = mock_server_with(200, vec![], success).await;
+            let mut backend = LlmBackend::probe(reqwest::Client::new(), provider, "model-x", "k");
+            backend.base_url = url;
+            let usage = backend.test_connection().await.unwrap();
+            task.abort();
+            assert_eq!(
+                (usage.input_tokens, usage.output_tokens),
+                (10, 4),
+                "{provider:?}"
+            );
+            let requests = requests.lock().unwrap();
+            assert_eq!(
+                requests.len(),
+                1,
+                "{provider:?}: one completion, nothing else"
+            );
+            let body = &requests[0].1;
+            assert_eq!(body["model"], "model-x");
+            let (limit, smallest) = match provider {
+                LlmProvider::Anthropic => ("max_tokens", 1),
+                LlmProvider::Openai => ("max_output_tokens", 16),
+                LlmProvider::Openrouter => ("max_tokens", 16),
+            };
+            assert_eq!(
+                body[limit], smallest,
+                "{provider:?}: a test asks for the least"
+            );
+            assert!(
+                body["tools"].is_null(),
+                "{provider:?}: a test carries no tools"
+            );
+            drop(requests);
+
+            for (status, body, check) in [
+                (401, "nope", "authentication"),
+                (429, "slow down", "rate_limited"),
+                (404, "no such model", "http"),
+            ] {
+                let (url, _, task) = mock_server_with(status, vec![], body.to_string()).await;
+                let mut backend =
+                    LlmBackend::probe(reqwest::Client::new(), provider, "model-x", "k");
+                backend.base_url = url;
+                let result = backend.test_connection().await;
+                task.abort();
+                let label = format!("{provider:?} {status}: {result:?}");
+                match check {
+                    "authentication" => assert!(
+                        matches!(result, Err(LlmError::Authentication(_))),
+                        "{label}"
+                    ),
+                    "rate_limited" => assert!(
+                        matches!(result, Err(LlmError::RateLimited { .. })),
+                        "{label}"
+                    ),
+                    _ => assert!(
+                        matches!(result, Err(LlmError::Http { status: 404, .. })),
+                        "{label}"
+                    ),
+                }
+            }
+        }
+    }
+
     /// The `ttl` of every `cache_control` anywhere in a captured request
     /// body; `None` where a breakpoint carries no ttl.
     fn cache_ttls(value: &Value) -> Vec<Option<String>> {

@@ -17,6 +17,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/config/status", get(get_status))
         .route("/api/config/models", get(get_models).put(update_models))
         .route("/api/config/models/seed", post(seed_models))
+        .route("/api/config/models/{id}/test", post(test_model_preset))
         .route(
             "/api/config/embedding",
             get(get_embedding).put(update_embedding),
@@ -637,6 +638,45 @@ async fn seed_models(
     Ok(Json(body))
 }
 
+/// The route glue over `run_preset_test` (#28).
+async fn test_model_preset(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, ModelsError> {
+    run_preset_test(&state, &id, None).await
+}
+
+/// Runs the connection test for one preset; `probe_base_url` replaces the
+/// provider's endpoint (tests point it at a stub), the route passes `None`.
+async fn run_preset_test(
+    state: &AppState,
+    id: &str,
+    probe_base_url: Option<&str>,
+) -> Result<Json<serde_json::Value>, ModelsError> {
+    let _ = (state, id, probe_base_url);
+    Err(models_error(
+        StatusCode::NOT_IMPLEMENTED,
+        "not_implemented",
+        "not implemented".into(),
+    ))
+}
+
+/// How a connection test outcome answers (#28).
+fn test_outcome(
+    preset: &config::ModelPreset,
+    outcome: Result<
+        crate::services::llm::contract::Usage,
+        crate::services::llm::contract::LlmError,
+    >,
+) -> Result<Json<serde_json::Value>, ModelsError> {
+    let _ = (preset, outcome);
+    Err(models_error(
+        StatusCode::NOT_IMPLEMENTED,
+        "not_implemented",
+        "not implemented".into(),
+    ))
+}
+
 fn save_config(config: &config::Config) -> Result<(), (StatusCode, String)> {
     save_config_at(config, &config::config_path())
 }
@@ -934,7 +974,10 @@ mod llm_key_tests {
     }
 
     /// A provider that answers every request with `status` and `body`.
-    async fn provider_stub(status: u16, body: String) -> (String, tokio::task::JoinHandle<()>) {
+    pub(super) async fn provider_stub(
+        status: u16,
+        body: String,
+    ) -> (String, tokio::task::JoinHandle<()>) {
         let app = axum::Router::new().fallback(axum::routing::post(move || {
             let body = body.clone();
             async move { (StatusCode::from_u16(status).unwrap(), body) }
@@ -1037,6 +1080,337 @@ mod llm_key_tests {
                 "{provider:?}: the accepted key was not written"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod preset_test_tests {
+    use super::*;
+    use crate::services::llm::contract::{LlmError, Usage};
+    use axum::body::to_bytes;
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, SystemTime};
+    use tower::ServiceExt;
+
+    /// Every file under `root` with its size and mtime, so a test can prove a
+    /// call wrote nothing there.
+    fn tree(root: &Path) -> Vec<(PathBuf, u64, SystemTime)> {
+        fn visit(dir: &Path, out: &mut Vec<(PathBuf, u64, SystemTime)>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    visit(&path, out);
+                } else if let Ok(meta) = path.metadata() {
+                    out.push((path, meta.len(), meta.modified().unwrap()));
+                }
+            }
+        }
+        let mut out = Vec::new();
+        visit(root, &mut out);
+        out.sort();
+        out
+    }
+
+    /// No conversation was created or touched: the test never goes through
+    /// chat, so nothing under any `chats/` exists afterwards.
+    fn assert_no_chat_files(root: &Path) {
+        let chats: Vec<_> = tree(root)
+            .into_iter()
+            .filter(|(path, _, _)| path.components().any(|c| c.as_os_str() == "chats"))
+            .map(|(path, _, _)| path)
+            .collect();
+        assert!(chats.is_empty(), "the connection test wrote {chats:?}");
+    }
+
+    /// All three providers keyed and seeded; the Chat slot is Anthropic's.
+    fn configured() -> config::Config {
+        let mut cfg = config::Config::default();
+        cfg.llm.tokens.anthropic = "anthropic-secret".into();
+        cfg.llm.tokens.open_ai = "openai-secret".into();
+        cfg.llm.tokens.open_router = "openrouter-secret".into();
+        for provider in [
+            config::LlmProvider::Anthropic,
+            config::LlmProvider::Openai,
+            config::LlmProvider::Openrouter,
+        ] {
+            cfg.llm.seed_presets(provider);
+        }
+        cfg
+    }
+
+    async fn post_test(state: AppState, id: &str) -> (StatusCode, serde_json::Value) {
+        let response = router()
+            .with_state(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/config/models/{id}/test"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    /// The outcome mapping is by variant (#24, #25): each failure the person
+    /// can act on has its own `error`, and the message names the provider.
+    #[test]
+    fn test_outcomes_are_typed_by_variant() {
+        let preset = config::ModelPreset {
+            id: "gpt".into(),
+            name: "GPT-5.4".into(),
+            provider: config::LlmProvider::Openai,
+            model: "gpt-5.4".into(),
+        };
+        let Json(ok) = test_outcome(
+            &preset,
+            Ok(Usage {
+                input_tokens: 8,
+                output_tokens: 1,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+        assert_eq!(ok["ok"], true);
+        assert_eq!(ok["preset"], "gpt");
+        assert_eq!(ok["provider"], "openai");
+        assert_eq!(ok["model"], "gpt-5.4");
+        assert_eq!(ok["usage"]["input_tokens"], 8);
+        assert_eq!(ok["usage"]["output_tokens"], 1);
+        assert_eq!(ok["capabilities"]["documents"], false);
+        assert_eq!(ok["capabilities"]["tools"], true);
+
+        let cases: Vec<(LlmError, StatusCode, &str)> = vec![
+            (
+                LlmError::SetupRequired("no OpenAI API key is configured".into()),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "setup_required",
+            ),
+            (
+                LlmError::Authentication("Incorrect API key".into()),
+                StatusCode::UNAUTHORIZED,
+                "authentication",
+            ),
+            (
+                LlmError::RateLimited {
+                    retry_after: Some(Duration::from_secs(7)),
+                    message: "slow down".into(),
+                },
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limited",
+            ),
+            (
+                LlmError::Http {
+                    status: 404,
+                    message: "The model `gpt-5.4` does not exist".into(),
+                },
+                StatusCode::NOT_FOUND,
+                "model_not_found",
+            ),
+            (
+                LlmError::Http {
+                    status: 402,
+                    message: "Insufficient credits".into(),
+                },
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "provider_rejected",
+            ),
+            (
+                LlmError::Http {
+                    status: 503,
+                    message: "down".into(),
+                },
+                StatusCode::BAD_GATEWAY,
+                "provider_unavailable",
+            ),
+            (
+                LlmError::Transport("connection refused".into()),
+                StatusCode::BAD_GATEWAY,
+                "unreachable",
+            ),
+            (LlmError::Timeout, StatusCode::GATEWAY_TIMEOUT, "timeout"),
+            (
+                LlmError::InvalidResponse("no choices".into()),
+                StatusCode::BAD_GATEWAY,
+                "invalid_response",
+            ),
+            (
+                LlmError::UnsupportedCapability("tools"),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "unsupported",
+            ),
+        ];
+        for (error, expected_status, expected_error) in cases {
+            let label = format!("{error:?}");
+            let (status, Json(body)) = test_outcome(&preset, Err(error)).unwrap_err();
+            assert_eq!(status, expected_status, "{label}");
+            assert_eq!(body["ok"], false, "{label}");
+            assert_eq!(body["error"], expected_error, "{label}");
+            assert_eq!(body["preset"], "gpt", "{label}");
+            let message = body["message"].as_str().unwrap();
+            assert!(message.contains("OpenAI"), "{label}: {message}");
+            if expected_error == "rate_limited" {
+                assert_eq!(body["retry_after_seconds"], 7, "{label}");
+            }
+            if expected_error == "model_not_found" {
+                assert!(message.contains("gpt-5.4"), "{label}: {message}");
+            }
+            if expected_error == "provider_rejected" {
+                assert!(
+                    message.contains("Insufficient credits"),
+                    "{label}: {message}"
+                );
+            }
+        }
+    }
+
+    /// Unknown presets and presets without a key are answered before any
+    /// network, and the route neither writes config nor creates a chat.
+    #[tokio::test]
+    async fn the_route_reports_unknown_presets_and_missing_keys_without_a_network() {
+        let workspace = tempfile::tempdir().unwrap();
+        let mut cfg = configured();
+        cfg.llm.tokens.open_ai.clear();
+        let state = AppState::new_in(cfg, workspace.path().to_owned()).await;
+        let before = tree(workspace.path());
+
+        let (status, body) = post_test(state.clone(), "nope").await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["error"], "unknown_preset");
+
+        let (status, body) = post_test(state.clone(), "gpt").await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["error"], "setup_required");
+        assert_eq!(body["preset"], "gpt");
+        assert!(
+            body["message"].as_str().unwrap().contains("OpenAI"),
+            "{body}"
+        );
+
+        assert_eq!(tree(workspace.path()), before, "the route wrote a file");
+        assert_no_chat_files(workspace.path());
+        assert!(!workspace.path().join("config.toml").exists());
+    }
+
+    /// One completion per provider through its adapter, the outcome typed
+    /// by what the provider said, and nothing on disk either way (#28).
+    #[tokio::test]
+    async fn the_connection_test_runs_one_completion_per_provider_and_writes_nothing() {
+        for provider in [
+            config::LlmProvider::Anthropic,
+            config::LlmProvider::Openai,
+            config::LlmProvider::Openrouter,
+        ] {
+            let workspace = tempfile::tempdir().unwrap();
+            let state = AppState::new_in(configured(), workspace.path().to_owned()).await;
+            let before = tree(workspace.path());
+            let preset_id = config::default_presets(provider)[0].id.clone();
+            let model = config::default_presets(provider)[0].model.clone();
+            let name = match provider {
+                config::LlmProvider::Anthropic => "anthropic",
+                config::LlmProvider::Openai => "openai",
+                config::LlmProvider::Openrouter => "openrouter",
+            };
+            let answer = match provider {
+                config::LlmProvider::Anthropic => {
+                    r#"{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":8,"output_tokens":1}}"#.to_owned()
+                }
+                config::LlmProvider::Openai => {
+                    json!({"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":8,"output_tokens":1}}).to_string()
+                }
+                config::LlmProvider::Openrouter => {
+                    json!({"id":"gen-1","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":1}}).to_string()
+                }
+            };
+
+            let (url, task) = super::llm_key_tests::provider_stub(200, answer).await;
+            let Json(ok) = run_preset_test(&state, &preset_id, Some(&url))
+                .await
+                .unwrap_or_else(|(status, Json(body))| panic!("{provider:?}: {status} {body}"));
+            task.abort();
+            assert_eq!(ok["ok"], true, "{provider:?}");
+            assert_eq!(ok["preset"], preset_id, "{provider:?}");
+            assert_eq!(ok["provider"], name, "{provider:?}");
+            assert_eq!(ok["model"], model, "{provider:?}");
+            assert_eq!(ok["usage"]["input_tokens"], 8, "{provider:?}");
+            assert_eq!(ok["usage"]["output_tokens"], 1, "{provider:?}");
+            assert_eq!(
+                ok["capabilities"]["documents"],
+                provider == config::LlmProvider::Anthropic,
+                "{provider:?}"
+            );
+            assert!(!ok.to_string().contains("secret"), "{provider:?}: {ok}");
+
+            for (status, body, expected_status, expected_error) in [
+                (401, "nope", StatusCode::UNAUTHORIZED, "authentication"),
+                (
+                    404,
+                    "no such model",
+                    StatusCode::NOT_FOUND,
+                    "model_not_found",
+                ),
+                (
+                    429,
+                    "slow down",
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "rate_limited",
+                ),
+                (503, "down", StatusCode::BAD_GATEWAY, "provider_unavailable"),
+            ] {
+                let (url, task) = super::llm_key_tests::provider_stub(status, body.into()).await;
+                let (got, Json(body)) = run_preset_test(&state, &preset_id, Some(&url))
+                    .await
+                    .unwrap_err();
+                task.abort();
+                assert_eq!(got, expected_status, "{provider:?} {status}: {body}");
+                assert_eq!(body["ok"], false, "{provider:?} {status}");
+                assert_eq!(body["error"], expected_error, "{provider:?} {status}");
+                assert!(!body.to_string().contains("secret"), "{provider:?}: {body}");
+            }
+
+            let (got, Json(body)) = run_preset_test(&state, &preset_id, Some("http://127.0.0.1:1"))
+                .await
+                .unwrap_err();
+            assert_eq!(got, StatusCode::BAD_GATEWAY, "{provider:?}: {body}");
+            assert_eq!(body["error"], "unreachable", "{provider:?}");
+
+            assert_eq!(
+                tree(workspace.path()),
+                before,
+                "{provider:?}: the connection test wrote a file"
+            );
+            assert_no_chat_files(workspace.path());
+            assert!(!workspace.path().join("config.toml").exists());
+        }
+    }
+
+    /// `GET /api/config/models` says what each preset's provider offers for
+    /// its model, keyed by preset id, and still carries no key.
+    #[tokio::test]
+    async fn models_listing_carries_each_presets_capabilities_and_no_secrets() {
+        let workspace = tempfile::tempdir().unwrap();
+        let state = AppState::new_in(configured(), workspace.path().to_owned()).await;
+        let Json(models) = get_models(State(state)).await;
+        let capabilities = models["capabilities"].as_object().unwrap();
+        for preset in models["presets"].as_array().unwrap() {
+            let id = preset["id"].as_str().unwrap();
+            assert!(capabilities.contains_key(id), "no capabilities for {id}");
+        }
+        assert_eq!(capabilities["sonnet"]["documents"], true);
+        assert_eq!(capabilities["sonnet"]["vision"], true);
+        assert_eq!(capabilities["gpt"]["documents"], false);
+        assert_eq!(capabilities["gpt"]["tools"], true);
+        assert_eq!(capabilities["gpt"]["reasoning_controls"], true);
+        assert_eq!(capabilities["openrouter-sonnet"]["documents"], false);
+        assert!(!models.to_string().contains("secret"), "{models}");
     }
 }
 

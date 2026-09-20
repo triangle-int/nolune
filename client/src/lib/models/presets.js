@@ -138,3 +138,29 @@ export function presetsByProvider(presets) {
 		(group) => group.presets.length > 0,
 	);
 }
+
+/**
+ * What a preset's model cannot do (#28). Stub.
+ * @param {ModelPreset} preset
+ * @param {unknown} caps
+ * @returns {{ id: string, chip: string, detail: string }[]}
+ */
+export function capabilityWarnings(preset, caps) {
+	void preset;
+	void caps;
+	return [];
+}
+
+/** @param {unknown} models @param {string} id */
+export function presetCapabilities(models, id) {
+	void models;
+	void id;
+	return undefined;
+}
+
+/** @param {unknown} outcome @param {ModelPreset} preset */
+export function presetTestCopy(outcome, preset) {
+	void outcome;
+	void preset;
+	return { tone: "error", text: "" };
+}
