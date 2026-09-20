@@ -1103,8 +1103,10 @@ mod media_tests {
     use super::*;
     use crate::services::embedding::tests::{MockServer, response};
 
+    /// A body that is not a multipart archive is refused before the restore
+    /// runs: no companion directory appears and the index is untouched.
     #[tokio::test]
-    async fn import_endpoint_is_disabled_without_filesystem_or_index_mutation() {
+    async fn import_refuses_a_non_multipart_body_without_filesystem_or_index_mutation() {
         use axum::{
             body::{Body, to_bytes},
             http::Request,
@@ -1112,18 +1114,18 @@ mod media_tests {
         use tower::ServiceExt;
 
         let workspace = tempfile::tempdir().unwrap();
-        let store = std::sync::Arc::new(
-            crate::services::vector::VectorStore::connect(workspace.path()).await,
-        );
+        let state = AppState::new_in(
+            crate::config::Config::default(),
+            workspace.path().to_owned(),
+        )
+        .await;
+        let store = state.vector_store.clone();
         let mut vector = vec![0.; 768];
         vector[0] = 1.;
         store
             .upsert_text_memory("existing", "note.md", vec![("sentinel".into(), vector)])
             .await
             .unwrap();
-        let mut state = AppState::new(crate::config::Config::default()).await;
-        state.workspace_dir = workspace.path().to_owned();
-        state.vector_store = store.clone();
         let app = router().with_state(state);
 
         let response = app
@@ -1131,20 +1133,22 @@ mod media_tests {
                 Request::builder()
                     .method("POST")
                     .uri("/api/instances/new/import")
+                    .header("content-type", "application/octet-stream")
                     .body(Body::from(b"not an archive".as_slice()))
                     .unwrap(),
             )
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = to_bytes(response.into_body(), 4096).await.unwrap();
         assert!(
-            String::from_utf8_lossy(&body).contains("storage format stabilization"),
+            String::from_utf8_lossy(&body).contains("multipart"),
             "{}",
             String::from_utf8_lossy(&body)
         );
         assert!(!workspace.path().join("instances/new").exists());
+        assert!(!workspace.path().join("imports").exists());
         assert_eq!(store.list_all("existing", 10).await.unwrap().len(), 1);
     }
 

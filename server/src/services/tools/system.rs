@@ -1973,26 +1973,37 @@ mod create_backup_tests {
 }
 
 // ---------------------------------------------------------------------------
-// import_profile — disabled while the storage format stabilizes
+// restore_backup — replace the companion with an uploaded archive (#74)
 // ---------------------------------------------------------------------------
 
-pub struct ImportProfileTool;
+pub struct ImportProfileTool {
+    instance_slug: String,
+    chat_id: String,
+    vector_store: Arc<crate::services::vector::VectorStore>,
+    agent_tasks: Arc<tokio::sync::Mutex<HashMap<String, tokio_util::sync::CancellationToken>>>,
+}
 
 impl ImportProfileTool {
     pub fn new(
-        _workspace_dir: &Path,
-        _instance_slug: &str,
-        _vector_store: Arc<crate::services::vector::VectorStore>,
+        instance_slug: &str,
+        chat_id: &str,
+        vector_store: Arc<crate::services::vector::VectorStore>,
+        agent_tasks: Arc<tokio::sync::Mutex<HashMap<String, tokio_util::sync::CancellationToken>>>,
     ) -> Self {
-        Self
+        Self {
+            instance_slug: instance_slug.to_string(),
+            chat_id: chat_id.to_string(),
+            vector_store,
+            agent_tasks,
+        }
     }
 }
 
 #[derive(Deserialize, JsonSchema)]
 pub struct ImportProfileArgs {
-    /// Reserved source path or upload ID. Restore is currently unavailable.
-    #[serde(rename = "source")]
-    pub _source: String,
+    /// The upload id (`upload_<id>`) of a companion.tar.gz backup attached to
+    /// this chat or created with create_backup. Local paths are not accepted.
+    pub source: String,
 }
 
 impl Tool for ImportProfileTool {
@@ -2011,6 +2022,12 @@ impl Tool for ImportProfileTool {
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let _ = (
+            &self.instance_slug,
+            &self.chat_id,
+            &self.vector_store,
+            &self.agent_tasks,
+        );
         Err(ToolExecError(
             "restore is temporarily unavailable during storage format stabilization".into(),
         ))
@@ -2020,39 +2037,203 @@ impl Tool for ImportProfileTool {
 #[cfg(test)]
 mod restore_backup_tests {
     use super::*;
+    use crate::domain::companion::{CANONICAL_SLUG, CompanionIdentity, IDENTITY_FILE};
+    use tokio_util::sync::CancellationToken;
+
+    type Tasks = Arc<tokio::sync::Mutex<HashMap<String, CancellationToken>>>;
+
+    fn tasks(keys: &[&str]) -> Tasks {
+        Arc::new(tokio::sync::Mutex::new(
+            keys.iter()
+                .map(|key| ((*key).to_owned(), CancellationToken::new()))
+                .collect(),
+        ))
+    }
+
+    /// A companion tree under `workspace` with the marker and `files`.
+    fn write_companion(workspace: &Path, files: &[(&str, &[u8])]) -> PathBuf {
+        let dir = workspace.join("instances").join(CANONICAL_SLUG);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join(IDENTITY_FILE),
+            serde_json::to_vec_pretty(&CompanionIdentity::canonical()).unwrap(),
+        )
+        .unwrap();
+        for (path, bytes) in files {
+            let full = dir.join(path);
+            fs::create_dir_all(full.parent().unwrap()).unwrap();
+            fs::write(full, bytes).unwrap();
+        }
+        dir
+    }
+
+    /// A valid archive of `files`, produced by the production writer.
+    fn archive(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let scratch = tempfile::tempdir().unwrap();
+        let source = write_companion(scratch.path(), files);
+        let source = crate::services::profile_archive::open_companion_dir(&source).unwrap();
+        let mut bytes = Vec::new();
+        crate::services::profile_archive::write_archive(&source, &mut bytes).unwrap();
+        bytes
+    }
+
+    /// Names under `imports/`; empty when the directory is absent.
+    fn imports_entries(workspace: &Path) -> Vec<String> {
+        let Ok(entries) = fs::read_dir(workspace.join("imports")) else {
+            return Vec::new();
+        };
+        let mut names: Vec<_> = entries
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
 
     #[tokio::test]
-    async fn restore_is_disabled_before_path_resolution_or_mutation() {
+    async fn restore_accepts_only_upload_ids_and_never_resolves_paths() {
         let workspace = tempfile::tempdir().unwrap();
-        let instance = workspace.path().join("instances/one");
-        std::fs::create_dir_all(&instance).unwrap();
-        std::fs::write(instance.join("sentinel"), b"unchanged").unwrap();
+        let companion = write_companion(workspace.path(), &[("sentinel", b"unchanged")]);
+        let outside = workspace.path().join("outside.tar.gz");
+        fs::write(&outside, archive(&[("memory/new.md", b"escaped")])).unwrap();
         let store = Arc::new(crate::services::vector::VectorStore::connect(workspace.path()).await);
         let mut vector = vec![0.; 768];
         vector[0] = 1.;
         store
-            .upsert_text_memory("one", "note.md", vec![("sentinel".into(), vector)])
+            .upsert_text_memory(CANONICAL_SLUG, "note.md", vec![("sentinel".into(), vector)])
             .await
             .unwrap();
-        let tool = ImportProfileTool::new(workspace.path(), "one", store.clone());
+        let tool = ImportProfileTool::new(CANONICAL_SLUG, "default", store.clone(), tasks(&[]));
+
+        for source in [
+            "../../outside.tar.gz",
+            outside.to_str().unwrap(),
+            "/etc/passwd",
+            "instances/companion/uploads/upload_1.gz",
+            "companion.tar.gz",
+            "upload_1.gz/../../outside.tar.gz",
+            "uploads/upload_1.gz",
+            "",
+        ] {
+            let error = tool
+                .call(ImportProfileArgs {
+                    source: source.to_owned(),
+                })
+                .await
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("upload id"),
+                "{source:?}: {error}"
+            );
+        }
+
+        assert_eq!(fs::read(companion.join("sentinel")).unwrap(), b"unchanged");
+        assert!(!companion.join("memory/new.md").exists());
+        assert_eq!(store.list_all(CANONICAL_SLUG, 10).await.unwrap().len(), 1);
+        assert_eq!(imports_entries(workspace.path()), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn restore_from_an_upload_replaces_the_companion_while_its_own_chat_runs() {
+        let workspace = tempfile::tempdir().unwrap();
+        let companion = write_companion(workspace.path(), &[("memory/old.md", b"Orion")]);
+        let meta = crate::services::uploads::save_upload(
+            workspace.path(),
+            CANONICAL_SLUG,
+            "companion.tar.gz",
+            &archive(&[("memory/new.md", b"Andromeda"), ("soul.md", b"restored")]),
+        )
+        .unwrap();
+        assert!(meta.id.starts_with("upload_"), "{}", meta.id);
+        let store = Arc::new(crate::services::vector::VectorStore::connect(workspace.path()).await);
+        // The conversation running this tool is blocked on it and never counts as busy.
+        let tasks = tasks(&[&format!("{CANONICAL_SLUG}/default")]);
+        let tool = ImportProfileTool::new(CANONICAL_SLUG, "default", store.clone(), tasks);
+
+        let output = tool
+            .call(ImportProfileArgs {
+                source: meta.id.clone(),
+            })
+            .await
+            .unwrap();
+
+        assert!(output.contains("restored"), "{output}");
+        assert!(output.contains("3 files"), "{output}");
+        assert!(
+            output.contains("pending"),
+            "no embedding provider: the index rebuild must be reported as pending, not claimed: {output}"
+        );
+        assert_eq!(
+            fs::read(companion.join("memory/new.md")).unwrap(),
+            b"Andromeda"
+        );
+        assert_eq!(fs::read(companion.join("soul.md")).unwrap(), b"restored");
+        assert!(!companion.join("memory/old.md").exists());
+        assert!(
+            !companion.join("uploads").exists(),
+            "the archive upload belonged to the replaced tree"
+        );
+        assert_eq!(imports_entries(workspace.path()), Vec::<String>::new());
+        assert!(store.needs_backfill(CANONICAL_SLUG).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn restore_is_refused_while_another_conversation_runs() {
+        let workspace = tempfile::tempdir().unwrap();
+        let companion = write_companion(workspace.path(), &[("memory/old.md", b"Orion")]);
+        let meta = crate::services::uploads::save_upload(
+            workspace.path(),
+            CANONICAL_SLUG,
+            "companion.tar.gz",
+            &archive(&[("memory/new.md", b"Andromeda")]),
+        )
+        .unwrap();
+        let store = Arc::new(crate::services::vector::VectorStore::connect(workspace.path()).await);
+        let tasks = tasks(&[
+            &format!("{CANONICAL_SLUG}/default"),
+            &format!("{CANONICAL_SLUG}/other"),
+        ]);
+        let tool = ImportProfileTool::new(CANONICAL_SLUG, "default", store, tasks);
 
         let error = tool
-            .call(ImportProfileArgs {
-                _source: "../../outside.tar.gz".into(),
-            })
+            .call(ImportProfileArgs { source: meta.id })
             .await
             .unwrap_err();
 
-        assert!(
-            error
-                .to_string()
-                .contains("temporarily unavailable during storage format stabilization"),
-            "{error}"
-        );
-        assert_eq!(
-            std::fs::read(instance.join("sentinel")).unwrap(),
-            b"unchanged"
-        );
-        assert_eq!(store.list_all("one", 10).await.unwrap().len(), 1);
+        assert!(error.to_string().contains("busy"), "{error}");
+        assert_eq!(fs::read(companion.join("memory/old.md")).unwrap(), b"Orion");
+        assert!(!companion.join("memory/new.md").exists());
+        assert_eq!(imports_entries(workspace.path()), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn restore_reports_a_missing_or_refused_upload() {
+        let workspace = tempfile::tempdir().unwrap();
+        let companion = write_companion(workspace.path(), &[("memory/old.md", b"Orion")]);
+        let text = crate::services::uploads::save_upload(
+            workspace.path(),
+            CANONICAL_SLUG,
+            "notes.txt",
+            b"not an archive",
+        )
+        .unwrap();
+        let store = Arc::new(crate::services::vector::VectorStore::connect(workspace.path()).await);
+        let tool = ImportProfileTool::new(CANONICAL_SLUG, "default", store, tasks(&[]));
+
+        let error = tool
+            .call(ImportProfileArgs {
+                source: "upload_404.gz".into(),
+            })
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("not found"), "{error}");
+
+        let error = tool
+            .call(ImportProfileArgs { source: text.id })
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("archive"), "{error}");
+
+        assert_eq!(fs::read(companion.join("memory/old.md")).unwrap(), b"Orion");
+        assert_eq!(imports_entries(workspace.path()), Vec::<String>::new());
     }
 }

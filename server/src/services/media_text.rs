@@ -314,6 +314,19 @@ impl MediaStore {
             .ok_or_else(|| invalid_path("import directory must be a real directory"))
     }
 
+    /// Create `imports/<name>` as a new regular file the import route streams
+    /// a request body into (#74); the handle is read back by the restore.
+    pub(crate) fn create_import_upload(&self, _name: &str) -> io::Result<cap_std::fs::File> {
+        todo!("PR 3 of #74")
+    }
+
+    /// Remove the regular file `imports/<name>`; a missing file is
+    /// already-clean success. Symlinks and directories at that name are left
+    /// in place and reported.
+    pub(crate) fn remove_import_upload(&self, _name: &str) -> io::Result<()> {
+        todo!("PR 3 of #74")
+    }
+
     /// Remove `imports/<name>` and everything under it; a missing directory
     /// is already-clean success. Symlinks and files at that name are left in
     /// place and reported.
@@ -1941,6 +1954,9 @@ mod tests {
         assert!(companion.contains("store.instance_slugs()"));
         assert!(!companion.contains("fs::read_dir"));
 
+        // The import route (#74) streams the request body into imports/ through
+        // the store and hands it to the transactional restore; it never buffers
+        // the archive, resolves a path, or runs tar itself.
         let import_route = routes
             .split("async fn import_instance")
             .nth(1)
@@ -1948,13 +1964,38 @@ mod tests {
             .split("#[cfg(test)]")
             .next()
             .unwrap();
-        for forbidden in ["create_dir", "Command::new", "tar", "multipart", "read("] {
+        for forbidden in [
+            "create_dir",
+            "Command::new",
+            "\"tar\"",
+            "std::fs",
+            "tokio::fs::read",
+            ".bytes()",
+            "to_bytes(",
+            "read_to_end",
+            "workspace_dir",
+            "\"instances\"",
+            "open_ambient_dir",
+            "extract_into(",
+        ] {
             assert!(
                 !import_route.contains(forbidden),
-                "disabled import route contains unsafe operation {forbidden}"
+                "import route contains unsafe operation {forbidden}"
             );
         }
+        for required in ["create_import_upload(", ".chunk()", "restore_companion("] {
+            assert!(
+                import_route.contains(required),
+                "import route does not go through {required}"
+            );
+        }
+        assert!(
+            routes.contains("DefaultBodyLimit::max("),
+            "the import route must bound its request body"
+        );
 
+        // The restore tool (#74) takes an upload id only and opens it through
+        // the media store's held capability; a path never reaches it.
         let restore = include_str!("tools/system.rs")
             .split("impl Tool for ImportProfileTool")
             .nth(1)
@@ -1962,10 +2003,25 @@ mod tests {
             .split("#[cfg(test)]")
             .next()
             .unwrap();
-        for forbidden in ["fs::read", "Command::new", "archive_path", "instance_dir"] {
+        for forbidden in [
+            "fs::",
+            "Command::new",
+            "archive_path",
+            "instance_dir",
+            "workspace_dir",
+            "Path::new(",
+            "PathBuf::from(",
+            "extract_into(",
+        ] {
             assert!(
                 !restore.contains(forbidden),
-                "disabled restore tool contains unsafe operation {forbidden}"
+                "restore tool contains unsafe operation {forbidden}"
+            );
+        }
+        for required in ["open_upload_blob(", "restore_companion_from_agent("] {
+            assert!(
+                restore.contains(required),
+                "restore tool does not go through {required}"
             );
         }
     }
@@ -2108,6 +2164,68 @@ mod tests {
         store.remove_import("staging-2").unwrap();
         assert!(!workspace.path().join("imports/staging-2").exists());
         assert!(workspace.path().join("imports/linked").is_symlink());
+    }
+
+    /// The import route streams a request body into `imports/<name>` before
+    /// the restore reads it back (#74): the file is created new, opened
+    /// no-follow, read back through the same handle, and removed by name
+    /// without ever following a link or touching a directory.
+    #[cfg(unix)]
+    #[test]
+    fn import_uploads_are_regular_files_under_imports_that_links_cannot_redirect() {
+        use std::io::{Read as _, Seek as _, Write as _};
+        use std::os::unix::fs::symlink;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("sentinel"), b"outside").unwrap();
+        let store = MediaStore::open(workspace.path()).unwrap();
+
+        for name in ["../escape.tar.gz", "a/b.tar.gz", "", ".", ".."] {
+            assert!(store.create_import_upload(name).is_err(), "{name:?}");
+            assert!(store.remove_import_upload(name).is_err(), "{name:?}");
+        }
+
+        let mut upload = store.create_import_upload("upload-1.tar.gz").unwrap();
+        upload.write_all(b"archive bytes").unwrap();
+        upload.seek(io::SeekFrom::Start(0)).unwrap();
+        let mut back = Vec::new();
+        upload.read_to_end(&mut back).unwrap();
+        assert_eq!(back, b"archive bytes");
+        assert!(
+            workspace
+                .path()
+                .join("imports/upload-1.tar.gz")
+                .symlink_metadata()
+                .unwrap()
+                .is_file()
+        );
+        assert!(
+            store.create_import_upload("upload-1.tar.gz").is_err(),
+            "an upload name is never reused"
+        );
+
+        // A link at the name is refused on both sides and left in place.
+        symlink(
+            outside.path().join("sentinel"),
+            workspace.path().join("imports/linked.tar.gz"),
+        )
+        .unwrap();
+        assert!(store.create_import_upload("linked.tar.gz").is_err());
+        assert!(store.remove_import_upload("linked.tar.gz").is_err());
+        assert!(workspace.path().join("imports/linked.tar.gz").is_symlink());
+        assert_eq!(
+            std::fs::read(outside.path().join("sentinel")).unwrap(),
+            b"outside"
+        );
+        // A staging directory is not an upload.
+        store.create_import("staging-1").unwrap();
+        assert!(store.remove_import_upload("staging-1").is_err());
+        assert!(workspace.path().join("imports/staging-1").is_dir());
+
+        store.remove_import_upload("upload-1.tar.gz").unwrap();
+        store.remove_import_upload("upload-1.tar.gz").unwrap();
+        assert!(!workspace.path().join("imports/upload-1.tar.gz").exists());
     }
 
     #[cfg(unix)]

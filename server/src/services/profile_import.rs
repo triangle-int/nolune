@@ -188,6 +188,20 @@ pub async fn restore_companion<R: Read + Send + 'static>(
     .unwrap_or_else(|error| Err(RestoreError::Aborted(task_error(error))))
 }
 
+/// `restore_companion` for a caller that runs inside the agent loop `own_task`
+/// (an `agent_tasks` key): that loop is blocked on this call and cannot write
+/// during the swap, so it does not count as busy. The `restore_backup` tool
+/// passes its own conversation.
+pub async fn restore_companion_from_agent<R: Read + Send + 'static>(
+    _store: Arc<VectorStore>,
+    _agent_tasks: &tokio::sync::Mutex<HashMap<String, CancellationToken>>,
+    _own_task: &str,
+    _slug: &str,
+    _archive: R,
+) -> Result<RestoreOutcome, RestoreError> {
+    todo!("PR 3 of #74")
+}
+
 /// The import proper, run with the lifecycle gate held by the caller.
 async fn transaction<R: Read + Send + 'static>(
     store: &VectorStore,
@@ -953,6 +967,78 @@ mod tests {
                 .kind(),
             io::ErrorKind::NotFound
         );
+    }
+
+    /// The `restore_backup` tool runs inside an agent loop of its own, which
+    /// is blocked on the tool call and cannot write during the swap: that one
+    /// conversation is not busy, every other one still is.
+    #[tokio::test]
+    async fn an_import_from_a_conversation_discounts_that_conversation_only() {
+        let workspace = tempfile::tempdir().unwrap();
+        write_tree(
+            &companion_dir(workspace.path()),
+            &[("memory/old.md", b"old")],
+        );
+        let store = Arc::new(VectorStore::connect(workspace.path()).await);
+        let tree_before = snapshot(&companion_dir(workspace.path()));
+        let own = format!("{CANONICAL_SLUG}/default");
+        let tasks = tasks();
+        tasks
+            .lock()
+            .await
+            .insert(own.clone(), CancellationToken::new());
+        tasks
+            .lock()
+            .await
+            .insert(format!("{CANONICAL_SLUG}/other"), CancellationToken::new());
+
+        let error = restore_companion_from_agent(
+            store.clone(),
+            &tasks,
+            &own,
+            CANONICAL_SLUG,
+            archive(&[("memory/new.md", b"new")]),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, RestoreError::Busy { tasks: 1 }), "{error}");
+        assert_eq!(snapshot(&companion_dir(workspace.path())), tree_before);
+        assert_eq!(imports_entries(workspace.path()), Vec::<String>::new());
+
+        tasks
+            .lock()
+            .await
+            .remove(&format!("{CANONICAL_SLUG}/other"));
+        let outcome = restore_companion_from_agent(
+            store.clone(),
+            &tasks,
+            &own,
+            CANONICAL_SLUG,
+            archive(&[("memory/new.md", b"new")]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.files, 2);
+        assert!(
+            companion_dir(workspace.path())
+                .join("memory/new.md")
+                .is_file()
+        );
+        assert!(
+            !companion_dir(workspace.path())
+                .join("memory/old.md")
+                .exists()
+        );
+        // The plain entry point still counts the caller's own conversation.
+        let error = restore_companion(
+            store,
+            &tasks,
+            CANONICAL_SLUG,
+            archive(&[("memory/new.md", b"new")]),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, RestoreError::Busy { tasks: 1 }), "{error}");
     }
 
     #[tokio::test]

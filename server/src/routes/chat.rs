@@ -327,6 +327,7 @@ pub async fn run_agent_loop(
             &state.mcp_registry,
             voice_mode,
             state.vector_store.clone(),
+            state.agent_tasks.clone(),
             state.machine_registry.clone(),
             &public_url,
             &state.resources,
