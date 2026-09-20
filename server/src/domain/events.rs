@@ -1,7 +1,8 @@
 use serde::Serialize;
 
 use crate::domain::{
-    chat::ChatMessage, drop::Drop, proactive::ProactiveRun, receipt::RecalledMemory,
+    chat::ChatMessage, commitment::Commitment, drop::Drop, proactive::ProactiveRun,
+    receipt::RecalledMemory,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -32,6 +33,11 @@ pub enum ServerEvent {
     ActivityUpdated {
         instance_slug: String,
         run: ProactiveRun,
+    },
+    /// A commitment was created or changed (#85). Bounded record, no model text.
+    CommitmentUpdated {
+        instance_slug: String,
+        commitment: Commitment,
     },
     ContextCompacting {
         instance_slug: String,
