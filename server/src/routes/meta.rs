@@ -43,3 +43,24 @@ async fn server_meta(State(state): State<AppState>) -> Json<ServerMetaResponse> 
         },
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+
+    #[tokio::test]
+    async fn meta_reports_the_pinned_cua_driver_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = AppState::new_in(Config::default(), tmp.path().join("workspace")).await;
+
+        let Json(meta) = server_meta(State(state)).await;
+
+        let json = serde_json::to_value(&meta).unwrap();
+        assert_eq!(
+            json["cua_driver_pin"],
+            serde_json::json!(cua_protocol::cua_driver_pin::PINNED_VERSION),
+            "self-hosters read which Cua Driver this build expects from /api/meta"
+        );
+    }
+}
