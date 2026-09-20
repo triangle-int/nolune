@@ -32,7 +32,7 @@ async fn main() {
         .format(app::logging::format_record)
         .init();
 
-    let mut config = config::load_config().unwrap_or_else(|err| {
+    let config = config::load_config().unwrap_or_else(|err| {
         panic!(
             "failed to load config from {}: {err}",
             config::config_path().display()
@@ -54,13 +54,13 @@ async fn main() {
         }
     };
 
-    // Default public_url to localhost if not configured
-    if config.public_url.is_empty() {
-        config.public_url = format!("http://localhost:{port}");
+    // load_config already fills in the local default so every reader agrees;
+    // only the operator-facing hint lives here.
+    if config::uses_local_public_url(&config) {
         log::warn!(
-            "public_url not set — defaulting to {}. \
-             If running on a remote server, set public_url in config.toml \
-             or NOLUNE_PUBLIC_URL env var to your public address.",
+            "public_url not set — using {}. Shared file links and attachments \
+             only work from this machine. If you reach Nolune through another \
+             address, set public_url in config.toml or NOLUNE_PUBLIC_URL.",
             config.public_url
         );
     }
