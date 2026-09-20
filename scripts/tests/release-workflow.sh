@@ -146,6 +146,9 @@ cmp -s "$dest/$good_asset" "$assets/$good_asset"
 [[ $(cat "$dest/$good_asset.sha256") == "$good_sha  $good_asset" ]]
 grep -Fq -- "https://github.com/trycua/cua/releases/download/cua-driver-rs-v9.9.9/$good_asset" "$CALLS"
 grep -Fq -- '--connect-timeout' "$CALLS"
+# A stalled or endless mirror fails instead of hanging the release job or filling its disk.
+grep -Fq -- '--max-time' "$CALLS"
+grep -Fq -- "--max-filesize $good_size" "$CALLS"
 grep -Fq -- "$good_sha" "$tmp/log"
 [[ $(ls -A "$dest" | wc -l | tr -d ' ') -eq 2 ]]
 

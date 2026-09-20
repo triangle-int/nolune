@@ -56,40 +56,48 @@ pub fn platform_support_for(target: Option<Target>, os: &str, triple: &str) -> P
     }
 }
 
+/// What a host says about its session, gathered without starting anything.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SessionFacts<'a> {
+    /// Linux: `DISPLAY`.
+    pub display: Option<&'a OsStr>,
+    /// Linux: `WAYLAND_DISPLAY`.
+    pub wayland_display: Option<&'a OsStr>,
+    /// Windows: `SESSIONNAME` (`Console`, `RDP-Tcp#3`), which only an
+    /// interactive session has.
+    pub session_name: Option<&'a OsStr>,
+    /// macOS: what `launchctl managername` answers (`Aqua` in a graphical
+    /// login, `Background` over SSH, `System` for daemons); `None` when it
+    /// could not be asked.
+    pub launchd_manager: Option<&'a str>,
+}
+
 /// The display session of this process.
 pub fn display_session() -> DisplaySession {
+    let display = env::var_os("DISPLAY");
+    let wayland_display = env::var_os("WAYLAND_DISPLAY");
+    let session_name = env::var_os("SESSIONNAME");
+    let launchd_manager = launchd_manager_name();
     display_session_for(
         env::consts::OS,
-        env::var_os("DISPLAY").as_deref(),
-        env::var_os("WAYLAND_DISPLAY").as_deref(),
+        &SessionFacts {
+            display: display.as_deref(),
+            wayland_display: wayland_display.as_deref(),
+            session_name: session_name.as_deref(),
+            launchd_manager: launchd_manager.as_deref(),
+        },
     )
 }
 
-/// The display session for operating system `os` given its `DISPLAY` and
-/// `WAYLAND_DISPLAY` variables.
-pub fn display_session_for(
-    os: &str,
-    display: Option<&OsStr>,
-    wayland_display: Option<&OsStr>,
-) -> DisplaySession {
-    // macOS and Windows have no display variable to read; the driver's
-    // health report says whether it can reach a session.
-    if matches!(os, "macos" | "windows") {
-        return DisplaySession::NotChecked;
-    }
-    let set = |name: &str, value: Option<&OsStr>| {
-        value
-            .filter(|value| !value.is_empty())
-            .map(|value| format!("{name}={}", value.to_string_lossy()))
-    };
-    match set("WAYLAND_DISPLAY", wayland_display).or_else(|| set("DISPLAY", display)) {
-        Some(found) => DisplaySession::Present(found),
-        None => DisplaySession::Headless(
-            "no display session (DISPLAY and WAYLAND_DISPLAY are unset): a headless host, so \
-             the driver is never started"
-                .to_owned(),
-        ),
-    }
+/// The display session for operating system `os` given `facts` about it.
+pub fn display_session_for(os: &str, facts: &SessionFacts<'_>) -> DisplaySession {
+    let _ = (os, facts);
+    todo!("session facts per platform")
+}
+
+/// `launchctl managername` on macOS; `None` elsewhere or when it fails.
+fn launchd_manager_name() -> Option<String> {
+    todo!("launchctl managername")
 }
 
 /// The target triple of this build, for messages about hosts the pin does
@@ -150,39 +158,121 @@ mod tests {
         assert!(reason.contains("no Cua Driver"), "{reason}");
     }
 
+    fn linux(display: Option<&str>, wayland: Option<&str>) -> DisplaySession {
+        display_session_for(
+            "linux",
+            &SessionFacts {
+                display: display.map(OsStr::new),
+                wayland_display: wayland.map(OsStr::new),
+                ..SessionFacts::default()
+            },
+        )
+    }
+
     #[test]
     fn linux_without_a_display_is_headless() {
-        let session = display_session_for("linux", None, None);
+        let session = linux(None, None);
         let DisplaySession::Headless(reason) = session else {
             panic!("no DISPLAY and no WAYLAND_DISPLAY is headless, got {session:?}");
         };
         assert!(reason.contains("DISPLAY"), "{reason}");
         assert!(reason.contains("WAYLAND_DISPLAY"), "{reason}");
-
-        let empty = OsStr::new("");
-        assert!(display_session_for("linux", Some(empty), Some(empty)).is_headless());
+        assert!(linux(Some(""), Some("")).is_headless());
     }
 
     #[test]
     fn linux_with_a_display_names_it() {
         assert_eq!(
-            display_session_for("linux", Some(OsStr::new(":0")), None),
+            linux(Some(":0"), None),
             DisplaySession::Present("DISPLAY=:0".to_owned())
         );
         assert_eq!(
-            display_session_for("linux", None, Some(OsStr::new("wayland-1"))),
+            linux(None, Some("wayland-1")),
             DisplaySession::Present("WAYLAND_DISPLAY=wayland-1".to_owned())
         );
     }
 
+    fn macos(manager: Option<&str>) -> DisplaySession {
+        display_session_for(
+            "macos",
+            &SessionFacts {
+                launchd_manager: manager,
+                ..SessionFacts::default()
+            },
+        )
+    }
+
     #[test]
-    fn macos_and_windows_leave_the_check_to_the_driver() {
+    fn macos_is_graphical_only_in_an_aqua_session() {
+        let DisplaySession::Present(found) = macos(Some("Aqua")) else {
+            panic!("an Aqua session is a graphical login");
+        };
+        assert!(found.contains("Aqua"), "{found}");
+
+        for manager in ["Background", "System", "Unknown"] {
+            let session = macos(Some(manager));
+            let DisplaySession::Headless(reason) = session else {
+                panic!("launchd manager {manager} is no graphical session, got {session:?}");
+            };
+            assert!(reason.contains(manager), "{reason}");
+            assert!(reason.contains("SSH"), "explains the usual cause: {reason}");
+            assert!(
+                reason.contains("never started"),
+                "says the driver is not started: {reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn macos_leaves_the_check_to_the_driver_when_launchctl_cannot_be_asked() {
+        assert_eq!(macos(None), DisplaySession::NotChecked);
+        // The DISPLAY variables mean nothing on macOS.
         assert_eq!(
-            display_session_for("macos", None, None),
+            display_session_for(
+                "macos",
+                &SessionFacts {
+                    display: Some(OsStr::new(":0")),
+                    ..SessionFacts::default()
+                }
+            ),
             DisplaySession::NotChecked
         );
+    }
+
+    fn windows(session_name: Option<&str>) -> DisplaySession {
+        display_session_for(
+            "windows",
+            &SessionFacts {
+                session_name: session_name.map(OsStr::new),
+                ..SessionFacts::default()
+            },
+        )
+    }
+
+    #[test]
+    fn windows_is_headless_without_an_interactive_session() {
         assert_eq!(
-            display_session_for("windows", None, None),
+            windows(Some("Console")),
+            DisplaySession::Present("SESSIONNAME=Console".to_owned())
+        );
+        assert_eq!(
+            windows(Some("RDP-Tcp#3")),
+            DisplaySession::Present("SESSIONNAME=RDP-Tcp#3".to_owned())
+        );
+        for missing in [None, Some("")] {
+            let session = windows(missing);
+            let DisplaySession::Headless(reason) = session else {
+                panic!("no SESSIONNAME is a service or headless session, got {session:?}");
+            };
+            assert!(reason.contains("SESSIONNAME"), "{reason}");
+            assert!(reason.contains("never started"), "{reason}");
+        }
+    }
+
+    #[test]
+    fn other_platforms_are_not_checked() {
+        assert_eq!(
+            display_session_for("freebsd", &SessionFacts::default()),
             DisplaySession::NotChecked
         );
     }

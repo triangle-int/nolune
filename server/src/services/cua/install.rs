@@ -41,8 +41,31 @@ pub const RELEASE_URL_ENV: &str = "NOLUNE_CUA_RELEASE_URL";
 
 /// How long the extracted driver may take to answer `--version`.
 const VERSION_TIMEOUT: Duration = Duration::from_secs(15);
-/// How long connecting to the release host may take.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// The deadlines one asset download is held to, so a mirror that stalls or
+/// never stops sending fails instead of hanging `nolune cua install` or
+/// growing its memory without bound.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DownloadLimits {
+    /// Connecting to the release host.
+    pub connect: Duration,
+    /// Silence between two reads of the body.
+    pub read: Duration,
+    /// The whole download.
+    pub total: Duration,
+}
+
+impl Default for DownloadLimits {
+    fn default() -> Self {
+        Self {
+            connect: Duration::from_secs(15),
+            read: Duration::from_secs(60),
+            // The largest pinned asset is 70 MB; this is generous for a slow
+            // link and still finite.
+            total: Duration::from_secs(30 * 60),
+        }
+    }
+}
 /// How deep inside an extracted release the driver binary is looked for.
 const MAX_SEARCH_DEPTH: usize = 8;
 
@@ -144,25 +167,17 @@ pub fn asset_url(base: &str, asset: &PinnedAsset) -> String {
     format!("{}/{}", base.trim_end_matches('/'), asset.name)
 }
 
-/// Fetch `url` whole; the pinned assets are tens of megabytes.
-async fn download(url: &str) -> anyhow::Result<Vec<u8>> {
-    let client = reqwest::Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .build()?;
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .with_context(|| format!("cannot download {url}"))?;
-    let status = response.status();
-    if !status.is_success() {
-        anyhow::bail!("{url} answered HTTP {status}");
-    }
-    let bytes = response
-        .bytes()
-        .await
-        .with_context(|| format!("the download of {url} was interrupted"))?;
-    Ok(bytes.to_vec())
+/// Fetch `url`, which the pin says is `expected_size` bytes: an announced
+/// size that differs is refused before the body is read, the body is
+/// abandoned as soon as it exceeds the pin, and every phase runs under
+/// `limits`.
+async fn download(
+    url: &str,
+    expected_size: u64,
+    limits: DownloadLimits,
+) -> anyhow::Result<Vec<u8>> {
+    let _ = (url, expected_size, limits);
+    todo!("download with limits")
 }
 
 /// Unpack a downloaded `.tar.gz` or `.zip` asset into `dest`. Entries that
@@ -309,7 +324,7 @@ pub async fn install(
         url: url.clone(),
         size: asset.size,
     });
-    let bytes = download(&url).await?;
+    let bytes = download(&url, asset.size, DownloadLimits::default()).await?;
     // Nothing is written before the bytes are exactly the pinned asset.
     asset.verify(&bytes).map_err(|error| {
         anyhow::anyhow!(
@@ -582,5 +597,121 @@ mod tests {
 
         let missing = dir.path().join("missing");
         assert!(reported_version(&missing).await.is_err());
+    }
+
+    /// A one-shot HTTP/1.1 server answering the next connection with `head`
+    /// (status line and headers, no trailing blank line) and `body`, written
+    /// in `chunks` with `pause` between them, then holding the connection
+    /// open for `linger` before closing it.
+    fn one_shot_server(
+        head: &'static str,
+        body: Vec<u8>,
+        chunks: usize,
+        pause: Duration,
+        linger: Duration,
+    ) -> String {
+        use std::{io::Write as _, net::TcpListener};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 4096];
+            let _ = std::io::Read::read(&mut stream, &mut request);
+            let _ = stream.write_all(format!("{head}\r\n\r\n").as_bytes());
+            let _ = stream.flush();
+            let step = body.len().div_ceil(chunks.max(1)).max(1);
+            for chunk in body.chunks(step) {
+                let _ = stream.write_all(chunk);
+                let _ = stream.flush();
+                std::thread::sleep(pause);
+            }
+            std::thread::sleep(linger);
+        });
+        format!("http://127.0.0.1:{port}/asset.tar.gz")
+    }
+
+    fn quick_limits() -> DownloadLimits {
+        DownloadLimits {
+            connect: Duration::from_secs(5),
+            read: Duration::from_millis(400),
+            total: Duration::from_secs(5),
+        }
+    }
+
+    #[tokio::test]
+    async fn download_refuses_an_announced_size_that_is_not_the_pin_before_reading_the_body() {
+        let url = one_shot_server(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: 999",
+            vec![b'x'; 999],
+            1,
+            Duration::ZERO,
+            Duration::from_millis(100),
+        );
+        let error = download(&url, 64, quick_limits()).await.unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("999"),
+            "names the announced size: {message}"
+        );
+        assert!(message.contains("64"), "names the pinned size: {message}");
+        assert!(
+            message.contains("nothing was downloaded"),
+            "says the body was never read: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn download_stops_once_more_than_the_pinned_size_arrives() {
+        // No Content-Length, so only the running total can catch the excess:
+        // 4096 bytes of body against a 1024-byte pin, in several writes.
+        let url = one_shot_server(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nConnection: close",
+            vec![b'y'; 4096],
+            8,
+            Duration::from_millis(10),
+            Duration::from_secs(3),
+        );
+        let started = std::time::Instant::now();
+        let error = download(&url, 1024, quick_limits()).await.unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("more than") && message.contains("1024"),
+            "{message}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "the download is abandoned as soon as the pin is exceeded, took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn download_fails_when_the_mirror_stalls_instead_of_hanging() {
+        // Half the announced body, then silence far longer than the read
+        // deadline.
+        let url = one_shot_server(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: 2048",
+            vec![b'z'; 1024],
+            1,
+            Duration::ZERO,
+            Duration::from_secs(30),
+        );
+        let started = std::time::Instant::now();
+        let error = download(&url, 2048, quick_limits()).await.unwrap_err();
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "a stalled body fails within the deadlines, took {:?}",
+            started.elapsed()
+        );
+        let message = format!("{error:#}");
+        assert!(message.contains(&url), "names the URL: {message}");
+    }
+
+    #[test]
+    fn the_default_download_limits_are_finite() {
+        let limits = DownloadLimits::default();
+        assert!(limits.read >= Duration::from_secs(10));
+        assert!(limits.total >= Duration::from_secs(60));
+        assert!(limits.total <= Duration::from_secs(3600));
     }
 }

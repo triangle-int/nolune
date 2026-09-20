@@ -29,6 +29,9 @@ const BIN: &str = env!("CARGO_BIN_EXE_nolune");
 struct MockRelease {
     base_url: String,
     requests: Arc<Mutex<Vec<String>>>,
+    /// When set, every response announces this `Content-Length` instead of
+    /// the file's real size (the body is still the file).
+    announce: Arc<Mutex<Option<u64>>>,
 }
 
 impl MockRelease {
@@ -37,6 +40,8 @@ impl MockRelease {
         let port = listener.local_addr().unwrap().port();
         let requests = Arc::new(Mutex::new(Vec::new()));
         let log = requests.clone();
+        let announce = Arc::new(Mutex::new(None));
+        let announced = announce.clone();
         thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { break };
@@ -62,9 +67,9 @@ impl MockRelease {
                     .filter(|file| file.is_file());
                 let response = match file.and_then(|file| fs::read(file).ok()) {
                     Some(body) => {
+                        let length = announced.lock().unwrap().unwrap_or(body.len() as u64);
                         let mut response = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                            body.len()
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n"
                         )
                         .into_bytes();
                         response.extend_from_slice(&body);
@@ -81,11 +86,33 @@ impl MockRelease {
         Self {
             base_url: format!("http://127.0.0.1:{port}/release"),
             requests,
+            announce,
         }
     }
 
     fn requests(&self) -> Vec<String> {
         self.requests.lock().unwrap().clone()
+    }
+
+    /// Lie about the size of every asset from now on.
+    fn announce(&self, length: u64) {
+        *self.announce.lock().unwrap() = Some(length);
+    }
+}
+
+/// Whether the host running the tests has a graphical session for `nolune
+/// cua status` to probe a driver in: Linux tests set `DISPLAY` themselves,
+/// a Mac has one when launchd runs the test inside an Aqua session (a
+/// terminal), not over SSH.
+fn host_has_gui() -> bool {
+    if cfg!(target_os = "macos") {
+        Command::new("launchctl")
+            .arg("managername")
+            .output()
+            .map(|out| text(&out.stdout).trim() == "Aqua")
+            .unwrap_or(false)
+    } else {
+        true
     }
 }
 
@@ -122,6 +149,30 @@ while IFS= read -r line; do
 done
 "#,
         report = report_file.display()
+    )
+}
+
+/// A driver stand-in whose `mcp` explains itself on stderr and exits, the
+/// shape of the real driver when it cannot reach its app daemon.
+fn refusing_driver_script(version: &str, hint: &str) -> String {
+    format!(
+        r#"#!/bin/sh
+case "$1" in
+  --version) echo "cua-driver {version}"; exit 0 ;;
+  mcp) echo "mcp launched without CuaDriver.app's TCC grants" >&2; echo "{hint}" >&2; exit 1 ;;
+  *) exit 2 ;;
+esac
+"#
+    )
+}
+
+/// A driver stand-in that records every `mcp` start in `marker` and then
+/// behaves like [`fake_driver_script`].
+fn recording_driver_script(version: &str, report_file: &Path, marker: &Path) -> String {
+    fake_driver_script(version, report_file).replacen(
+        "  mcp) ;;",
+        &format!("  mcp) echo started >> '{}' ;;", marker.display()),
+        1,
     )
 }
 
@@ -273,6 +324,24 @@ impl Sandbox {
 
     fn run(&self, args: &[&str]) -> Output {
         self.command(args).output().unwrap()
+    }
+
+    /// The binary in a session that can run a driver: `DISPLAY` is set so
+    /// a Linux host (CI) probes instead of reporting headless; a Mac
+    /// answers from its own launchd session.
+    fn command_with_display(&self, args: &[&str]) -> Command {
+        let mut cmd = self.command(args);
+        cmd.env("DISPLAY", ":0");
+        cmd
+    }
+
+    fn run_with_display(&self, args: &[&str]) -> Output {
+        self.command_with_display(args).output().unwrap()
+    }
+
+    /// Replace what the fake driver answers `health_report` with.
+    fn set_health_report(&self, report: &serde_json::Value) {
+        fs::write(&self.report_file, serde_json::to_vec(report).unwrap()).unwrap();
     }
 
     /// Run with the test pin seam pointing at what `publish` returned.
@@ -443,6 +512,29 @@ fn install_refuses_a_wrong_checksum_and_leaves_nothing_installed() {
 }
 
 #[test]
+fn install_refuses_a_mirror_that_announces_another_size_before_downloading_it() {
+    let sb = Sandbox::new();
+    let pin = sb.publish_pinned_driver();
+    let announced = asset_for(host()).size + 1;
+    sb.release.announce(announced);
+
+    let out = sb.run_pinned(&pin, &["cua", "install"]);
+    let stderr = text(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "stderr: {stderr}");
+    assert_eq!(sb.release.requests(), vec![asset_path()]);
+    assert!(
+        stderr.contains(&announced.to_string()),
+        "names the announced size: {stderr}"
+    );
+    assert!(
+        stderr.contains("nothing was downloaded"),
+        "the body is never read: {stderr}"
+    );
+    assert!(stderr.contains("nothing was installed"), "{stderr}");
+    sb.assert_nothing_installed();
+}
+
+#[test]
 fn install_refuses_a_driver_that_reports_another_version() {
     let sb = Sandbox::new();
     let script = fake_driver_script("0.99.0", &sb.report_file);
@@ -539,7 +631,11 @@ fn status_reports_the_installed_driver_its_version_and_its_health() {
     assert!(sb.run_pinned(&pin, &["cua", "install"]).status.success());
     let driver = sb.manifest()["driver"].as_str().unwrap().to_owned();
 
-    let out = sb.run(&["cua", "status"]);
+    let out = sb
+        .command_with_display(&["cua", "status"])
+        .env("NOLUNE_CUA_TEST_PIN", &pin)
+        .output()
+        .unwrap();
     let stdout = text(&out.stdout);
     assert!(
         out.status.success(),
@@ -550,12 +646,16 @@ fn status_reports_the_installed_driver_its_version_and_its_health() {
         stdout.contains(&format!("installed: {PINNED_VERSION}")),
         "{stdout}"
     );
+    assert!(
+        stdout.contains("verified against the pin"),
+        "the manifest's digest is checked against the pin: {stdout}"
+    );
     assert!(stdout.contains(&driver), "names the driver path: {stdout}");
     assert!(
         stdout.contains("driver: ") && stdout.contains("Nolune install"),
         "says where the driver came from: {stdout}"
     );
-    if cfg!(target_os = "macos") {
+    if host_has_gui() {
         // A GUI host probes the driver: the fake answers the health report.
         assert!(
             stdout.contains(&format!("version: {PINNED_VERSION} matches the pin")),
@@ -564,11 +664,24 @@ fn status_reports_the_installed_driver_its_version_and_its_health() {
         assert!(stdout.contains("health: ok"), "{stdout}");
         assert!(stdout.contains("accessibility: granted"), "{stdout}");
         assert!(stdout.contains("screen recording: granted"), "{stdout}");
+        assert!(
+            !stdout.contains("answered by"),
+            "a report without a bundle identity names no daemon: {stdout}"
+        );
     } else {
-        // No display: the driver is never started.
         assert!(stdout.contains("health: not probed"), "{stdout}");
-        assert!(stdout.contains("headless"), "{stdout}");
     }
+
+    // Without the test seam the manifest's digest is not the real pin's,
+    // and status says so instead of calling the install verified.
+    let out = sb.run(&["cua", "status"]);
+    let stdout = text(&out.stdout);
+    assert!(
+        stdout.contains("its checksum is not the pinned one"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("--force"), "names the fix: {stdout}");
+    assert!(!stdout.contains("verified against the pin"), "{stdout}");
 }
 
 #[test]
@@ -578,15 +691,11 @@ fn status_fails_clearly_when_the_driver_reports_another_version() {
     assert!(sb.run_pinned(&pin, &["cua", "install"]).status.success());
     // The installed binary passed its `--version` check; what it reports
     // over MCP is what counts at runtime.
-    fs::write(
-        &sb.report_file,
-        serde_json::to_vec(&health_report("0.27.0")).unwrap(),
-    )
-    .unwrap();
+    sb.set_health_report(&health_report("0.27.0"));
 
-    let out = sb.run(&["cua", "status"]);
+    let out = sb.run_with_display(&["cua", "status"]);
     let stdout = text(&out.stdout);
-    if cfg!(target_os = "macos") {
+    if host_has_gui() {
         assert_eq!(out.status.code(), Some(1), "stdout: {stdout}");
         assert!(
             stdout.contains(&format!("0.27.0 is not the pinned {PINNED_VERSION}")),
@@ -599,6 +708,119 @@ fn status_fails_clearly_when_the_driver_reports_another_version() {
             "headless hosts do not probe: {stdout}"
         );
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn status_never_starts_the_driver_on_a_headless_host() {
+    let sb = Sandbox::new();
+    let marker = sb.home_dir.join("mcp-started");
+    let script = recording_driver_script(PINNED_VERSION, &sb.report_file, &marker);
+    let pin = sb.publish(&fake_archive(host(), &script));
+    assert!(sb.run_pinned(&pin, &["cua", "install"]).status.success());
+
+    // `command` unsets DISPLAY and WAYLAND_DISPLAY.
+    let out = sb.run(&["cua", "status"]);
+    let stdout = text(&out.stdout);
+    assert!(out.status.success(), "stdout: {stdout}");
+    assert!(stdout.contains("display: no display session"), "{stdout}");
+    assert!(stdout.contains("health: not probed"), "{stdout}");
+    assert!(stdout.contains("headless"), "{stdout}");
+    assert!(
+        !marker.exists(),
+        "the driver was started on a headless host: {stdout}"
+    );
+
+    // The same install, same host, with a display: probed.
+    let out = sb.run_with_display(&["cua", "status"]);
+    let stdout = text(&out.stdout);
+    assert!(out.status.success(), "stdout: {stdout}");
+    assert!(stdout.contains("display: DISPLAY=:0"), "{stdout}");
+    assert!(stdout.contains("health: ok"), "{stdout}");
+    assert!(marker.exists(), "the driver was probed: {stdout}");
+}
+
+#[test]
+fn status_repeats_what_the_driver_said_when_it_cannot_report() {
+    if !host_has_gui() {
+        eprintln!("skipped: no graphical session to probe in");
+        return;
+    }
+    let sb = Sandbox::new();
+    let hint =
+        "grant Accessibility + Screen Recording to CuaDriver.app in System Settings and retry";
+    let script = refusing_driver_script(PINNED_VERSION, hint);
+    let pin = sb.publish(&fake_archive(host(), &script));
+    assert!(sb.run_pinned(&pin, &["cua", "install"]).status.success());
+
+    let out = sb.run_with_display(&["cua", "status"]);
+    let stdout = text(&out.stdout);
+    assert_eq!(out.status.code(), Some(1), "stdout: {stdout}");
+    assert!(
+        stdout.contains("health: the driver could not report"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(hint),
+        "the driver's own hint is part of the status line, not only inherited stderr: {stdout}"
+    );
+}
+
+#[test]
+fn status_names_the_daemon_that_answered_when_it_is_not_the_installed_driver() {
+    if !host_has_gui() {
+        eprintln!("skipped: no graphical session to probe in");
+        return;
+    }
+    let sb = Sandbox::new();
+    let pin = sb.publish_pinned_driver();
+    assert!(sb.run_pinned(&pin, &["cua", "install"]).status.success());
+    let driver = sb.manifest()["driver"].as_str().unwrap().to_owned();
+
+    // The daemon that answered is the installed driver: named, no warning.
+    let mut report = health_report(PINNED_VERSION);
+    report["checks"].as_array_mut().unwrap().push(serde_json::json!({
+        "name": "bundle_identity", "status": "pass", "message": "Bundle is com.trycua.driver.",
+        "data": {"bundle_identifier": "com.trycua.driver", "executable_path": driver, "identity_source": "current_process"}
+    }));
+    sb.set_health_report(&report);
+    let out = sb.run_with_display(&["cua", "status"]);
+    let stdout = text(&out.stdout);
+    assert!(out.status.success(), "stdout: {stdout}");
+    assert!(
+        stdout.contains(&format!("answered by: {driver}")),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("not the driver above"), "{stdout}");
+
+    // Another CuaDriver.app owns the login session's daemon: the health is
+    // that daemon's, and status says so and how to get the installed one.
+    let foreign = "/Applications/CuaDriver.app/Contents/MacOS/cua-driver";
+    let mut report = health_report(PINNED_VERSION);
+    report["checks"].as_array_mut().unwrap().push(serde_json::json!({
+        "name": "bundle_identity", "status": "pass", "message": "Bundle is com.trycua.driver.",
+        "data": {"bundle_identifier": "com.trycua.driver", "executable_path": foreign, "identity_source": "current_process"}
+    }));
+    sb.set_health_report(&report);
+    let out = sb.run_with_display(&["cua", "status"]);
+    let stdout = text(&out.stdout);
+    assert!(
+        out.status.success(),
+        "a foreign daemon of the pinned version is a warning, not a failure: {stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("answered by: {foreign}")),
+        "{stdout}"
+    );
+    assert!(stdout.contains("not the driver above"), "{stdout}");
+    assert!(
+        stdout.contains(&format!("{foreign} stop")),
+        "says how to stop it: {stdout}"
+    );
+    assert!(
+        stdout.contains("nolune cua status"),
+        "and how to start the installed one: {stdout}"
+    );
 }
 
 #[test]

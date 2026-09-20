@@ -477,6 +477,66 @@ done
         transport.shutdown();
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failed_handshake_reports_what_the_driver_said_on_stderr() {
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().unwrap();
+        // The shape of the real driver on a fresh Mac: it explains itself on
+        // stderr, then never answers `initialize`.
+        let hinting = script(
+            dir.path(),
+            "hinting-driver",
+            "echo 'mcp launched without CuaDriver.app grants' >&2\n\
+             echo 'grant Accessibility + Screen Recording to CuaDriver.app in System Settings and retry' >&2\n\
+             exec sleep 60\n",
+        );
+        let timeouts = DriverTimeouts {
+            handshake: Duration::from_millis(500),
+            call: Duration::from_secs(1),
+        };
+        let error = StdioDriverTransport::spawn_with(&hinting, timeouts)
+            .await
+            .err()
+            .expect("the handshake never completes");
+        let message = format!("{error:#}");
+        assert!(message.contains("handshake"), "{message}");
+        assert!(
+            message.contains("grant Accessibility + Screen Recording to CuaDriver.app"),
+            "the driver's own hint is part of the error: {message}"
+        );
+        assert!(
+            message.contains("mcp launched without"),
+            "every stderr line is kept, in order: {message}"
+        );
+
+        // A driver that exits at once with a reason: the same hint, no wait.
+        let exiting = script(
+            dir.path(),
+            "exiting-driver",
+            "echo 'this host has no CuaDriver.app' >&2\nexit 3\n",
+        );
+        let error = StdioDriverTransport::spawn_with(&exiting, timeouts)
+            .await
+            .err()
+            .expect("a child that exits is not a driver");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("this host has no CuaDriver.app"),
+            "{message}"
+        );
+
+        // Silence stays silent: no empty "the driver said" suffix.
+        let mute = script(dir.path(), "mute-driver", "exit 3\n");
+        let error = StdioDriverTransport::spawn_with(&mute, timeouts)
+            .await
+            .err()
+            .unwrap();
+        let message = format!("{error:#}");
+        assert!(!message.contains("said"), "{message}");
+    }
+
     #[test]
     fn the_default_deadlines_are_generous_but_finite() {
         let defaults = DriverTimeouts::default();

@@ -11,6 +11,7 @@
 
 // Wired into `AppState` by the lifecycle slice (#16); until then only tests
 // and the `nolune cua` commands construct these.
+pub mod daemon;
 #[allow(dead_code)]
 pub mod discovery;
 #[allow(dead_code)]
