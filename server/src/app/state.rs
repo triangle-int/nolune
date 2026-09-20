@@ -51,6 +51,8 @@ pub struct AppState {
     /// Paired browsers and pending pairing codes (#112). In memory until
     /// `attach_storage` is called by the server entrypoint.
     pub browser_sessions: Arc<BrowserSessionStore>,
+    /// This companion's federation identity and peers (#108); the keystore under `workspace_dir` opens on first use.
+    pub federation: Arc<crate::services::federation::pairing::FederationState>,
 }
 
 // No hardcoded MCP servers — users add them via Settings UI or config.toml.
@@ -79,6 +81,10 @@ impl AppState {
         }
 
         let http_client = reqwest::Client::new();
+        let federation = crate::services::federation::pairing::FederationState::new(
+            &workspace_dir,
+            http_client.clone(),
+        );
 
         // Open the local derived vector index.
         let vector_store = VectorStore::connect_with_config(&workspace_dir, &config).await;
@@ -110,6 +116,7 @@ impl AppState {
             proactive,
             commitments,
             browser_sessions: Arc::new(BrowserSessionStore::new()),
+            federation: Arc::new(federation),
         }
     }
 

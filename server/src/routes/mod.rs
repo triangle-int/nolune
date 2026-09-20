@@ -5,6 +5,7 @@ pub mod companion;
 pub mod config;
 pub mod continuity;
 pub mod drops;
+pub mod federation;
 
 pub mod health;
 pub mod instances;
