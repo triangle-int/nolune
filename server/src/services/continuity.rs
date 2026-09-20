@@ -290,6 +290,13 @@ fn read_record(path: &Path) -> Result<ContinuityRecord, String> {
     let record: ContinuityRecord =
         serde_json::from_str(&raw).map_err(|error| format!("not a continuity record: {error}"))?;
     record.validate().map_err(|error| error.to_string())?;
+    let stem = path.file_stem().and_then(|stem| stem.to_str());
+    if stem != Some(record.id.as_str()) {
+        return Err(format!(
+            "record id {:?} does not match its file name",
+            record.id
+        ));
+    }
     Ok(record)
 }
 
@@ -659,6 +666,13 @@ mod tests {
             "g".repeat(MAX_RECORD_BYTES)
         );
         fs::write(dir.join("task_big.json"), &big).unwrap();
+        let mut renamed = store.get(&good.id).unwrap();
+        renamed.id = "task_elsewhere".into();
+        fs::write(
+            dir.join("task_renamed.json"),
+            serde_json::to_string(&renamed).unwrap(),
+        )
+        .unwrap();
         fs::write(dir.join("task_stale.tmp"), "half written").unwrap();
         fs::write(dir.join(".ledger.json"), "{}").unwrap();
 
@@ -679,7 +693,8 @@ mod tests {
                 "task_big.json",
                 "task_future.json",
                 "task_garbage.json",
-                "task_noprov.json"
+                "task_noprov.json",
+                "task_renamed.json",
             ],
             "{errors:#?}"
         );
@@ -690,6 +705,12 @@ mod tests {
             "{}",
             errors[3].reason
         );
+        assert!(
+            errors[4].reason.contains("file name"),
+            "{}",
+            errors[4].reason
+        );
+        assert!(store.get("task_renamed").is_none());
         for file in files {
             assert!(dir.join(file).is_file(), "{file} must not be deleted");
         }
