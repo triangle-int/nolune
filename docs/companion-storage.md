@@ -37,7 +37,9 @@ Unknown fields are rejected. A marker with any other `format_version` or
 ├── config.toml                  server configuration (global)
 ├── federation/                  companion signing identity (#108), see below
 │   ├── identity.json            public, self-signed identity document
-│   └── signing_key.json         private Ed25519 seed, mode 0600
+│   ├── signing_key.json         private Ed25519 seed, mode 0600
+│   ├── peers.json               paired companions and their key rotations
+│   └── rotations.json           this companion's own key rotations
 ├── skills/                      installed skills (global)
 ├── vectors/                     derived vector index, keyed by slug
 ├── imports/                     restore staging (see Restore below); empty between imports unless a crash left a tree behind
@@ -625,9 +627,14 @@ outside `instances/companion/`:
 | `federation/identity.json` | public, self-signed identity document | `0600` |
 | `federation/signing_key.json` | private Ed25519 seed: `{"version":1,"algorithm":"ed25519","secret_key":"…"}` | `0600` |
 
-Both files are created together on first use and never rewritten; a key
-without its document (or the reverse) fails closed rather than being repaired
-silently. The export archive is rooted at `companion/`, so it never contains
+Both files are created together on first use and rewritten only by a key
+rotation (below); a key without its document (or the reverse) fails closed
+rather than being repaired silently. A rotation replaces the key file and
+then the document, and its proof is in `federation/rotations.json` before
+either: a server that died between the two renames finds the new key beside
+the old document on the next start and completes the rotation from the
+proof, which names both; any other key that does not match its document
+fails closed. The export archive is rooted at `companion/`, so it never contains
 either file: an export carries the companion's memory and settings, not its
 federation identity. To move the companion to another host, copy `federation/`
 alongside `instances/`; the identity verifies there because nothing in it
@@ -735,8 +742,87 @@ stale, and a body of one kind is never read as another. Every transition is
 checked and applied under the store's lock against the record as it is at
 that moment, so a confirmation that races a revocation can never leave a
 revoked peer paired. Two profiles on one host go through exactly these steps
-over their own ports. The general signed transport (nonces, expiry, key
-rotation) builds on this store.
+over their own ports.
+
+### Transport envelope
+
+After pairing, companions talk through the transport envelope, version 1:
+
+```json
+{
+  "version": 1,
+  "sender": "<companion_id of the signer>",
+  "recipient": "<companion_id the envelope is for>",
+  "nonce": "<base64url, 16 random bytes>",
+  "issued_at": 1789862400,
+  "expires_at": 1789862460,
+  "body_hash": "<base64url sha256 of the body>",
+  "body": "<base64url body>",
+  "signature": "<base64url Ed25519 signature>"
+}
+```
+
+The signature covers the canonical bytes of every field but the body, which
+is bound to them by `body_hash`. The recipient checks, in this order, the
+version (a downgrade is refused before anything else), that it is the
+recipient, that the sender is a paired peer (its current key, or a key it
+rotated away from inside the grace window below), the signature with that
+key, the peer's state, the body hash, the times, and last the nonce. A body
+altered after signing fails on the hash, an altered header on the signature,
+a sender that is not paired, pending, or revoked with its own error, and an
+envelope for someone else on the recipient. Times are judged by the
+recipient's clock with a two-minute skew allowance in either direction: an
+envelope is refused as issued in the future beyond that, as expired once
+`expires_at` plus the allowance has passed, and outright when it claims a
+lifetime over five minutes (this server seals envelopes for sixty seconds).
+Each nonce is accepted once per sender and remembered until the envelope
+could no longer be accepted anyway, in a bounded replay set of 65 536
+entries that refuses new envelopes rather than forgetting old nonces; nothing
+that failed an earlier check consumes a nonce, so a stranger cannot fill the
+set. The set lives in memory: a restart forgets it, which is bounded by the
+same lifetime plus allowance. Message semantics beyond a ping arrive with
+later work; `POST /federation/v1/ping` takes an envelope from a paired peer
+and answers with one, addressed to the sender. Wire fixtures live beside the
+identity ones in `server/tests/fixtures/federation/`.
+
+### Key rotation
+
+`POST /api/federation/rotate` replaces this companion's key. A new key is
+generated, the rotation proof is appended to `federation/rotations.json`
+(mode `0600`) first, then `signing_key.json` and `identity.json` are replaced
+through temporary files and renames, outstanding invites (which carried the
+old document) are withdrawn, pending pairings are revoked, and every paired
+peer is posted a `key_rotation` notice at its approved origins, inside a
+transport envelope signed by the retiring key. The proof is the new
+self-signed document with two signatures over the same canonical bytes (both
+ids, both keys, and `rotated_at`): the old key's `endorsement` and the new
+key's `signature`. The response reports the new identity, the proof, and
+which peers acknowledged; a peer that could not be reached still needs the
+proof, which the history keeps. A pending pairing was started under the
+retired identity and cannot finish under the new one (this side would sign
+the confirmation with a key the peer does not know, and the peer would
+address its confirmation to an id this side no longer has), so the rotation
+marks every pending record `revoked`, whichever side issued the invite, and
+both owners pair again with a new invite; the peer is not told and keeps
+its pending record until then. The owner's confirmation and the rotation
+take the same lock, so a confirmation cannot slip in between the key change
+and the revocation. A proof whose new key equals the old, whose documents do
+not verify, or whose signatures fail is refused.
+
+A peer receives the notice at `POST /federation/v1/rotate`, verifies the
+envelope with the retiring key, checks that the notice comes from the key it
+retires, verifies the proof, and re-keys its record under the store's lock:
+the peer must be paired and its identity on record must still be the
+previous one, the record takes the new identity, and the rotation is appended
+to its `rotation_history` with the time it was accepted (the newest 32 are
+kept). Nothing else about the record changes: the pairing id, role, and
+approved origins stay. The retiring key keeps verifying for fifteen minutes
+after acceptance, so envelopes already in flight still land, and is then
+refused as retired; a rotation notice resent inside that window is
+acknowledged again without being applied twice. The peer answers with a
+`rotation_ack` addressed to the new identity. Companion ids are derived from
+keys, so a rotated companion has a new id; the transition record ties the
+two together, and both histories can be re-verified at any time.
 
 ## Changing this format
 

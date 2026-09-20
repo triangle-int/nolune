@@ -1,5 +1,7 @@
 //! Companion federation primitives (#108): canonical encoding, companion id
-//! derivation, and the Ed25519 identity keystore in [`identity`].
+//! derivation, the Ed25519 identity keystore in [`identity`], the peer store
+//! and pairing handshake in [`peers`] and [`pairing`], the signed transport
+//! envelope in [`envelope`], and key rotation in [`rotation`].
 //!
 //! Canonical bytes are what gets signed. Every signed shape starts with a
 //! NUL-terminated domain tag, then its fields in a fixed order: integers as
@@ -11,9 +13,11 @@
 //! Nothing in this module logs a secret. The invite secret leaves the process
 //! once, in the owner's invite response, and the signing key never does.
 
+pub mod envelope;
 pub mod identity;
 pub mod pairing;
 pub mod peers;
+pub mod rotation;
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use sha2::{Digest, Sha256};
@@ -30,6 +34,10 @@ pub(crate) const IDENTITY_SIGNING_DOMAIN: &[u8] = b"nolune/federation/identity/v
 pub(crate) const ENVELOPE_SIGNING_DOMAIN: &[u8] = b"nolune/federation/envelope/v1\0";
 /// Domain tag for the stored hash of an invite secret.
 pub(crate) const INVITE_HASH_DOMAIN: &[u8] = b"nolune/federation/invite/v1\0";
+/// Domain tag for a transport envelope.
+pub(crate) const TRANSPORT_SIGNING_DOMAIN: &[u8] = b"nolune/federation/transport/v1\0";
+/// Domain tag for the two signatures of a key rotation.
+pub(crate) const ROTATION_SIGNING_DOMAIN: &[u8] = b"nolune/federation/rotation/v1\0";
 
 /// Builder for canonical signing bytes; see the module docs for the layout.
 pub(crate) struct Canonical {
