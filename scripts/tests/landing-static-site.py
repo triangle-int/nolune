@@ -14,7 +14,11 @@ Runs after `pnpm --dir landing build` and inspects landing/.vercel/output:
   otherwise derives application/x-sh from the extension for a prerendered
   file, so a browser visit downloads the script instead of showing it);
 - landing/vercel.json rewrites nothing off-site: every route is built here;
-- the built /docs page names every section a self-hoster needs;
+- the built /docs page names every section a self-hoster needs, and the
+  upgrade page covers both install paths the install page presents: the
+  desktop app's "Install on this computer" (whose reinstall is the upgrade,
+  since that install writes no update script) and the one-line installer's
+  ~/.nolune/bin/update;
 - every internal href, src and hash anchor in the prerendered HTML points at a
   prerendered file, and a hash names an id on the page it targets.
 """
@@ -126,6 +130,17 @@ if docs is not None:
             failures.append(f"/docs does not mention {word!r}")
     if "update" not in text and "upgrade" not in text:
         failures.append("/docs does not mention 'update' or 'upgrade'")
+
+# The install page presents two ways to get a server; the upgrade page must
+# work for both. A desktop install has no ~/.nolune/bin/update, so the pill and
+# the script only apply to the one-liner, and the desktop path is to install
+# again from the app.
+upgrade = resolve("/docs/upgrade")
+if upgrade is not None:
+    text = upgrade.read_text().lower()
+    for phrase in ["install on this computer", "~/.nolune/bin/update", "nolune gateway restart"]:
+        if phrase not in text:
+            failures.append(f"/docs/upgrade does not cover {phrase!r}")
 
 # --- link check ------------------------------------------------------------
 
