@@ -193,6 +193,7 @@ pub(crate) fn tools_to_openai(
 }
 
 /// Non-streaming OpenAI Responses API call.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn openai_complete(
     http: &reqwest::Client,
     api_key: &str,
@@ -201,9 +202,11 @@ pub(crate) async fn openai_complete(
     tool_defs: &[ToolDefinition],
     messages: &[Message],
     max_tokens: u64,
+    reasoning: Option<&str>,
     base_url: &str,
     json_schema: Option<&serde_json::Value>,
 ) -> anyhow::Result<LlmResponse> {
+    let _ = reasoning;
     let (instructions, input) = messages_to_openai(system, messages);
     let tools = tools_to_openai(tool_defs, false);
 
@@ -317,6 +320,7 @@ pub(crate) async fn openai_complete(
 }
 
 /// Streaming OpenAI Responses API call.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn openai_stream(
     http: &reqwest::Client,
     api_key: &str,
@@ -325,9 +329,11 @@ pub(crate) async fn openai_stream(
     tool_defs: &[ToolDefinition],
     messages: &[Message],
     max_tokens: u64,
+    reasoning: Option<&str>,
     events: &EventSink<'_>,
     base_url: &str,
 ) -> anyhow::Result<LlmResponse> {
+    let _ = reasoning;
     let (instructions, input) = messages_to_openai(system, messages);
     let tools = tools_to_openai(tool_defs, true);
 
@@ -578,14 +584,21 @@ pub(crate) async fn openai_stream(
     })
 }
 
-pub(super) const CAPABILITIES: Capabilities = Capabilities {
+const CAPABILITIES: Capabilities = Capabilities {
     vision: true,
     documents: false,
     tools: true,
     streaming: true,
     reasoning_controls: false,
     model_discovery: false,
+    token_counting: false,
 };
+
+/// What the Responses API offers for one model id.
+pub(super) fn capabilities_for(model: &str) -> Capabilities {
+    let _ = model;
+    CAPABILITIES
+}
 
 /// The transport implementation is private to this adapter.
 ///
@@ -595,7 +608,7 @@ pub(super) const CAPABILITIES: Capabilities = Capabilities {
 pub(super) struct OpenaiAdapter(pub LlmBackend);
 impl ProviderAdapter for OpenaiAdapter {
     fn capabilities(&self) -> Capabilities {
-        CAPABILITIES
+        capabilities_for(&self.0.model)
     }
     fn complete<'a>(
         &'a self,
@@ -607,7 +620,7 @@ impl ProviderAdapter for OpenaiAdapter {
             tokio::select! {
                 biased;
                 _ = request.cancellation.cancelled() => Err(LlmError::Cancelled),
-                result = openai_complete(&b.http, &b.api_key, &b.model, request.system, request.tools, request.messages, request.max_tokens, &b.base_url, request.json_schema) => result.map_err(LlmError::from),
+                result = openai_complete(&b.http, &b.api_key, &b.model, request.system, request.tools, request.messages, request.max_tokens, request.reasoning, &b.base_url, request.json_schema) => result.map_err(LlmError::from),
             }
         })
     }
@@ -622,7 +635,7 @@ impl ProviderAdapter for OpenaiAdapter {
             tokio::select! {
                 biased;
                 _ = request.cancellation.cancelled() => Err(LlmError::Cancelled),
-                result = openai_stream(&b.http, &b.api_key, &b.model, request.system, request.tools, request.messages, request.max_tokens, events, &b.base_url) => result.map_err(LlmError::from),
+                result = openai_stream(&b.http, &b.api_key, &b.model, request.system, request.tools, request.messages, request.max_tokens, request.reasoning, events, &b.base_url) => result.map_err(LlmError::from),
             }
         })
     }

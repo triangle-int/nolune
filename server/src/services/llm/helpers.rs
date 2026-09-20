@@ -41,6 +41,94 @@ where
     }
 }
 
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+    use crate::services::llm::contract::LlmError;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    fn rate_limited(retry_after: Option<Duration>) -> anyhow::Error {
+        LlmError::RateLimited {
+            retry_after,
+            message: "slow down".into(),
+        }
+        .into()
+    }
+
+    /// Only the typed variant is retried, and a `Retry-After` the provider
+    /// sent replaces the default backoff.
+    #[tokio::test(start_paused = true)]
+    async fn retries_follow_the_typed_rate_limit_and_its_retry_after() {
+        let attempts = AtomicU32::new(0);
+        let started = tokio::time::Instant::now();
+        let result = retry_on_rate_limit(|| async {
+            let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+            if attempt < 2 {
+                Err(rate_limited(Some(Duration::from_secs(9))))
+            } else {
+                Ok(attempt)
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(result, 2);
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+        assert_eq!(started.elapsed(), Duration::from_secs(18), "two 9s waits");
+
+        // Without a Retry-After the backoff doubles from two seconds.
+        let attempts = AtomicU32::new(0);
+        let started = tokio::time::Instant::now();
+        retry_on_rate_limit(|| async {
+            if attempts.fetch_add(1, Ordering::SeqCst) < 2 {
+                Err(rate_limited(None))
+            } else {
+                Ok(())
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(started.elapsed(), Duration::from_secs(6), "2s then 4s");
+
+        // A provider that never lets up: the typed error comes back after the retries.
+        let attempts = AtomicU32::new(0);
+        let error = retry_on_rate_limit(|| async {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            Err::<(), _>(rate_limited(None))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(attempts.load(Ordering::SeqCst), 1 + MAX_RETRIES);
+        assert!(matches!(
+            error.downcast_ref::<LlmError>(),
+            Some(LlmError::RateLimited { .. })
+        ));
+
+        // Anything else is not retried, however much its text resembles a rate limit.
+        let others: Vec<Box<dyn Fn() -> anyhow::Error>> = vec![
+            Box::new(|| anyhow::anyhow!("429 Too Many Requests rate_limit overloaded 529")),
+            Box::new(|| {
+                LlmError::Http {
+                    status: 500,
+                    message: "upstream returned 429".into(),
+                }
+                .into()
+            }),
+            Box::new(|| LlmError::Authentication("bad key".into()).into()),
+            Box::new(|| LlmError::ContextLength("too long".into()).into()),
+        ];
+        for make in others {
+            let attempts = AtomicU32::new(0);
+            let error = retry_on_rate_limit(|| async {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                Err::<(), _>(make())
+            })
+            .await
+            .unwrap_err();
+            assert_eq!(attempts.load(Ordering::SeqCst), 1, "{error}");
+        }
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Real input token cache — populated from Anthropic API responses
 // ═══════════════════════════════════════════════════════════════════════════

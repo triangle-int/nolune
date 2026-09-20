@@ -645,6 +645,14 @@ impl LlmConfig {
         added
     }
 
+    /// Configs written before presets existed (#157) carry a key and no
+    /// `[[llm.presets]]`. Seeding the keyed providers' defaults on load keeps
+    /// those installs working without a click; presets a user has written
+    /// or edited are never touched. Returns how many presets were added.
+    pub fn seed_for_keys(&mut self) -> usize {
+        0
+    }
+
     /// Reject shapes the UI must never save: empty or duplicate ids, empty
     /// names or models, and slots that point nowhere or at a provider with
     /// no key.
@@ -1213,6 +1221,45 @@ custom_token = "retained"
         assert!(serialized.contains("[[llm.presets]]"), "{serialized}");
         let roundtrip: Config = toml::from_str(&serialized).unwrap();
         assert_eq!(roundtrip.llm.presets, config.llm.presets);
+    }
+
+    /// Upgrade path (#25): a config from before presets carries a key and no
+    /// `[[llm.presets]]`; loading seeds that provider instead of asking the
+    /// person to click "Add defaults".
+    #[test]
+    fn keys_without_presets_are_seeded_on_load_and_written_presets_are_kept() {
+        let mut config: Config = toml::from_str("[llm]\n[llm.tokens]\nOPEN_AI='k'").unwrap();
+        assert!(config.llm.presets.is_empty());
+        assert_eq!(config.llm.seed_for_keys(), 2);
+        assert_eq!(config.llm.chat_preset, "gpt");
+        assert_eq!(config.llm.background_preset, "gpt-mini");
+        assert!(config.llm.is_configured());
+        assert_eq!(config.llm.setup_required(), None);
+        assert_eq!(config.llm.seed_for_keys(), 0, "seeding is idempotent");
+
+        // Both keys: every keyed provider gets its presets, and Anthropic,
+        // the default provider, fills the slots.
+        let mut both: Config =
+            toml::from_str("[llm]\n[llm.tokens]\nOPEN_AI='k'\nANTHROPIC='a'").unwrap();
+        assert_eq!(both.llm.seed_for_keys(), 5);
+        assert_eq!(both.llm.chat_preset, "sonnet");
+        assert!(both.llm.is_configured());
+
+        // No provider key: nothing to seed, setup is still required.
+        let mut none: Config = toml::from_str("[llm]\n[llm.tokens]\nBRAVE_SEARCH='b'").unwrap();
+        assert_eq!(none.llm.seed_for_keys(), 0);
+        assert!(none.llm.presets.is_empty());
+        assert!(none.llm.setup_required().is_some());
+
+        // Presets a person wrote are never touched, even when another keyed
+        // provider has none.
+        let mut custom: Config = toml::from_str(
+            "[llm]\nchat_preset='mine'\nbackground_preset='mine'\n[llm.tokens]\nOPEN_AI='k'\nANTHROPIC='a'\n[[llm.presets]]\nid='mine'\nname='Mine'\nprovider='openai'\nmodel='gpt-custom'",
+        )
+        .unwrap();
+        assert_eq!(custom.llm.seed_for_keys(), 0);
+        assert_eq!(custom.llm.presets.len(), 1);
+        assert_eq!(custom.llm.chat_model(), Some("gpt-custom"));
     }
 
     #[test]

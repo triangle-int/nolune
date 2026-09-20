@@ -708,6 +708,7 @@ pub(super) const CAPABILITIES: Capabilities = Capabilities {
     streaming: true,
     reasoning_controls: false,
     model_discovery: false,
+    token_counting: false,
 };
 
 /// The transport implementation is private to this adapter.

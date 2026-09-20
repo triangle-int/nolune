@@ -31,11 +31,26 @@ use helpers::retry_on_rate_limit;
 pub(crate) use anthropic::messages_to_anthropic;
 use types::{ANTHROPIC_BASE_URL, OPENAI_BASE_URL};
 
-pub fn provider_capabilities(provider: crate::config::LlmProvider) -> contract::Capabilities {
+/// What a preset's provider offers for its model id; OpenAI's answer varies by model.
+pub fn provider_capabilities(
+    provider: crate::config::LlmProvider,
+    model: &str,
+) -> contract::Capabilities {
     match provider {
         crate::config::LlmProvider::Anthropic => anthropic::CAPABILITIES,
-        crate::config::LlmProvider::Openai => openai::CAPABILITIES,
+        crate::config::LlmProvider::Openai => openai::capabilities_for(model),
     }
+}
+
+/// The model a key probe for `provider` should name: the chat preset when it
+/// runs on that provider, else the provider's first preset, else the model
+/// its default chat preset would use (a first key has no presets yet).
+pub fn probe_model(
+    config: &crate::config::LlmConfig,
+    provider: crate::config::LlmProvider,
+) -> String {
+    let _ = (config, provider);
+    String::new()
 }
 
 /// Why a preset cannot become a backend (#156).
@@ -117,6 +132,40 @@ impl LlmBackend {
 
     pub fn model_name(&self) -> &str {
         &self.model
+    }
+
+    /// A backend for checking `api_key` against `provider` with `model`,
+    /// outside any preset; the key is not in config yet.
+    pub fn probe(
+        http: reqwest::Client,
+        provider: crate::config::LlmProvider,
+        model: &str,
+        api_key: &str,
+    ) -> Self {
+        Self {
+            preset: "probe".into(),
+            http,
+            api_key: api_key.to_owned(),
+            model: model.to_owned(),
+            base_url: match provider {
+                crate::config::LlmProvider::Anthropic => ANTHROPIC_BASE_URL.to_string(),
+                crate::config::LlmProvider::Openai => OPENAI_BASE_URL.to_string(),
+            },
+            provider,
+        }
+    }
+
+    /// Checks the key with a one-token completion through the adapter, the
+    /// probe the key routes use for both providers (#28 builds on it).
+    /// `Ok` means the provider accepted the key: a completion, a rate limit,
+    /// or any other answer that required authentication first.
+    /// `Err(Authentication)` means it rejected the key. Transport and server
+    /// errors are returned as they are: the key is unknown, not wrong.
+    pub async fn probe_key(&self) -> Result<(), LlmError> {
+        let messages = [Message::user("hi")];
+        let mut request = LlmRequest::new(ExecutionScope::Subagent, &[], &messages, &[]);
+        request.max_tokens = 1;
+        self.adapter()?.complete(request).await.map(|_| ())
     }
 
     /// Simple chat without tools. Returns (text, tokens_used).
@@ -322,6 +371,7 @@ mod tests {
             &[],
             &[],
             100,
+            None,
             &base,
             None,
         )
@@ -442,6 +492,31 @@ mod tests {
         assert_eq!(opus.model, "claude-opus-4-6");
         assert_eq!(opus.provider, LlmProvider::Anthropic);
         assert_eq!(opus.api_key, "test-key");
+    }
+
+    #[test]
+    fn probe_model_prefers_the_chat_preset_of_that_provider() {
+        let mut config = keyed_config(LlmProvider::Anthropic);
+        assert_eq!(
+            probe_model(&config.llm, LlmProvider::Anthropic),
+            "claude-sonnet-4-6"
+        );
+        // A first key: no preset for the provider yet, so its default chat model.
+        assert_eq!(probe_model(&config.llm, LlmProvider::Openai), "gpt-5.4");
+        // A preset for the provider that is not the chat slot.
+        config.llm.presets.push(crate::config::ModelPreset {
+            id: "custom".into(),
+            name: "Custom".into(),
+            provider: LlmProvider::Openai,
+            model: "gpt-custom".into(),
+        });
+        assert_eq!(probe_model(&config.llm, LlmProvider::Openai), "gpt-custom");
+        // The chat slot wins over other presets of the same provider.
+        config.llm.chat_preset = "opus".into();
+        assert_eq!(
+            probe_model(&config.llm, LlmProvider::Anthropic),
+            "claude-opus-4-6"
+        );
     }
 
     #[test]

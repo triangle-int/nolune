@@ -55,7 +55,9 @@ async fn get_status(State(state): State<AppState>) -> Json<serde_json::Value> {
         "capabilities": config
             .llm
             .chat_preset()
-            .map(|preset| crate::services::llm::provider_capabilities(preset.provider)),
+            .map(|preset| {
+                crate::services::llm::provider_capabilities(preset.provider, &preset.model)
+            }),
         "chat_preset": config.llm.chat_preset,
         "background_preset": config.llm.background_preset,
         "model": config.llm.chat_model(),
@@ -120,6 +122,18 @@ struct UpdateLlmKeyRequest {
     openrouter: Option<String>,
 }
 
+/// How a key probe outcome answers the save: `None` saves the key, `Some`
+/// rejects it. Only an authentication failure says the key is wrong; an
+/// unreachable or failing provider says nothing about the key and asks the
+/// person to retry instead of storing something unverified.
+fn key_probe_rejection(
+    provider: config::LlmProvider,
+    outcome: Result<(), crate::services::llm::contract::LlmError>,
+) -> Option<(StatusCode, String)> {
+    let _ = (provider, outcome);
+    None
+}
+
 async fn update_llm_key(
     State(state): State<AppState>,
     Json(req): Json<UpdateLlmKeyRequest>,
@@ -176,7 +190,7 @@ async fn update_llm_key(
             changes.push("openrouter");
         }
 
-        save_config(&cfg)?;
+        save_config_at(&cfg, &state.workspace_dir.join("config.toml"))?;
     }
 
     // Rebuild LLM backend after any key change.
@@ -827,6 +841,70 @@ mod embedding_status_tests {
         guard.auth_token = "new-token".into();
         drop(guard);
         assert_eq!(request.await.unwrap().status(), StatusCode::OK);
+    }
+}
+
+#[cfg(test)]
+mod llm_key_tests {
+    use super::*;
+    use crate::services::llm::contract::LlmError;
+
+    #[test]
+    fn key_probe_rejects_only_bad_keys_and_unanswered_probes() {
+        let openai = config::LlmProvider::Openai;
+        assert_eq!(key_probe_rejection(openai, Ok(())), None);
+        assert_eq!(
+            key_probe_rejection(
+                openai,
+                Err(LlmError::Authentication("Incorrect API key".into()))
+            ),
+            Some((StatusCode::UNAUTHORIZED, "invalid API key".into()))
+        );
+        let (status, message) = key_probe_rejection(
+            openai,
+            Err(LlmError::Transport("connection refused".into())),
+        )
+        .unwrap();
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert!(message.contains("OpenAI"), "{message}");
+        let (status, message) = key_probe_rejection(
+            config::LlmProvider::Anthropic,
+            Err(LlmError::Http {
+                status: 503,
+                message: "down".into(),
+            }),
+        )
+        .unwrap();
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert!(
+            message.contains("Anthropic") && message.contains("try again"),
+            "{message}"
+        );
+    }
+
+    /// Keys are saved into the workspace the state was opened for (#107),
+    /// and an empty key clears without probing anything.
+    #[tokio::test]
+    async fn clearing_a_key_saves_into_the_state_workspace_without_a_probe() {
+        let workspace = tempfile::tempdir().unwrap();
+        let mut cfg = config::Config::default();
+        cfg.llm.tokens.open_ai = "old-secret".into();
+        let state = AppState::new_in(cfg, workspace.path().to_owned()).await;
+        let Json(saved) = update_llm_key(
+            State(state.clone()),
+            Json(UpdateLlmKeyRequest {
+                api_key: None,
+                openai: Some("  ".into()),
+                elevenlabs: None,
+                openrouter: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(saved["updated"], json!(["openai"]));
+        assert!(state.config.read().await.llm.tokens.open_ai.is_empty());
+        let persisted = std::fs::read_to_string(workspace.path().join("config.toml")).unwrap();
+        assert!(!persisted.contains("old-secret"), "{persisted}");
     }
 }
 
