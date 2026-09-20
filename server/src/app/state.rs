@@ -51,7 +51,7 @@ pub struct AppState {
     /// Paired browsers and pending pairing codes (#112). In memory until
     /// `attach_storage` is called by the server entrypoint.
     pub browser_sessions: Arc<BrowserSessionStore>,
-    /// This companion's federation identity and peers (#108); the keystore under `workspace_dir` opens on first use.
+    /// Federation identity and peers (#108); the keystore under `workspace_dir` opens on first use.
     pub federation: Arc<crate::services::federation::pairing::FederationState>,
 }
 

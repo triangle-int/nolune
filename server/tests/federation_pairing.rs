@@ -104,7 +104,7 @@ fn pairing_code_never_logs_or_prints_a_secret() {
         "expose(",
         "InviteSecret",
         "AcceptInvite",
-        "PairRequest",
+        "PairingMessage",
         "IssuedInvite",
         "MintedInvite",
         "minted",

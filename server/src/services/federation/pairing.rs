@@ -30,14 +30,16 @@ use std::{
 
 use futures::future::BoxFuture;
 use serde::Serialize;
+use zeroize::Zeroizing;
 
 use super::{
+    check_version, decode,
     identity::{self, SigningIdentity},
-    peers::{Clock, PeerStore},
+    peers::{Clock, Peer, PeerStore},
 };
 use crate::domain::federation::{
-    AcceptInvite, FederationError, IdentityDocument, InviteSummary, IssuedInvite, PairingMessage,
-    PeerRecord, PeerSummary, SignedEnvelope,
+    AcceptInvite, FEDERATION_VERSION, FederationError, IdentityDocument, InviteSummary,
+    IssuedInvite, PairingMessage, PairingRole, PeerRecord, PeerState, PeerSummary, SignedEnvelope,
 };
 
 /// Peer-side route for pair requests, relative to the peer's base URL.
@@ -52,6 +54,8 @@ pub const MAX_ENVELOPE_BYTES: usize = 64 * 1024;
 const TRANSPORT_TIMEOUT: Duration = Duration::from_secs(15);
 /// Longest base URL accepted for a peer.
 const MAX_ORIGIN_LEN: usize = 255;
+/// Longest pairing id accepted from a peer (ours are 16 hex characters).
+const MAX_PAIRING_ID_LEN: usize = 64;
 
 /// Sends one signed envelope to a peer URL and returns the signed answer.
 /// Production uses HTTPS through [`HttpTransport`]; tests route into another
@@ -81,8 +85,43 @@ impl PeerTransport for HttpTransport {
         url: &'a str,
         envelope: &'a SignedEnvelope,
     ) -> BoxFuture<'a, Result<SignedEnvelope, FederationError>> {
-        let _ = (&self.client, url, envelope, TRANSPORT_TIMEOUT);
-        todo!("PR 2: transport")
+        Box::pin(async move {
+            let mut response = self
+                .client
+                .post(url)
+                .timeout(TRANSPORT_TIMEOUT)
+                .json(envelope)
+                .send()
+                .await
+                .map_err(|error| FederationError::Transport(error.to_string()))?;
+            let status = response.status();
+            let mut bytes = Vec::new();
+            while let Some(chunk) = response
+                .chunk()
+                .await
+                .map_err(|error| FederationError::Transport(error.to_string()))?
+            {
+                if bytes.len() + chunk.len() > MAX_ENVELOPE_BYTES {
+                    return Err(FederationError::Malformed(
+                        "peer answer exceeds the envelope size cap".into(),
+                    ));
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            if !status.is_success() {
+                let error = serde_json::from_slice::<serde_json::Value>(&bytes)
+                    .ok()
+                    .and_then(|value| value["error"].as_str().map(str::to_owned))
+                    .unwrap_or_else(|| "unknown".to_owned());
+                return Err(FederationError::PeerRefused {
+                    status: status.as_u16(),
+                    error,
+                });
+            }
+            let text = std::str::from_utf8(&bytes)
+                .map_err(|_| FederationError::Malformed("peer answer is not UTF-8".into()))?;
+            identity::parse_envelope(text)
+        })
     }
 }
 
@@ -121,30 +160,56 @@ impl FederationState {
         transport: Arc<dyn PeerTransport>,
         clock: Clock,
     ) -> Self {
-        let _ = (workspace_root, transport, clock);
-        todo!("PR 2: pairing")
+        Self {
+            root: workspace_root.to_path_buf(),
+            identity: Mutex::new(None),
+            peers: PeerStore::with_clock(workspace_root, clock.clone()),
+            transport,
+            clock,
+        }
     }
 
     /// This companion's signing identity, created under the workspace root
     /// on first use. Fails closed on an unusable keystore.
     pub fn identity(&self) -> Result<Arc<SigningIdentity>, FederationError> {
-        todo!("PR 2: pairing")
+        let mut slot = self.identity.lock().unwrap();
+        if let Some(identity) = slot.as_ref() {
+            return Ok(identity.clone());
+        }
+        let identity = Arc::new(identity::load_or_create(&self.root)?);
+        *slot = Some(identity.clone());
+        Ok(identity)
     }
 
     /// Mints an invite for the owner to hand to another owner. `origin` is
     /// this server's own base URL, which the accepter will post to.
     pub fn create_invite(&self, origin: &str) -> Result<IssuedInvite, FederationError> {
-        let _ = origin;
-        todo!("PR 2: pairing")
+        let origin = normalize_origin(origin)?;
+        let identity = self.identity()?;
+        let minted = self.peers.create_invite();
+        Ok(IssuedInvite {
+            id: minted.id,
+            secret: minted.secret,
+            created_at: minted.created_at,
+            expires_at: minted.expires_at,
+            expires_in_secs: minted.expires_at.saturating_sub(minted.created_at),
+            origin,
+            issuer: identity.document().clone(),
+        })
     }
 
     pub fn cancel_invite(&self, id: &str) -> bool {
-        let _ = id;
-        todo!("PR 2: pairing")
+        self.peers.cancel_invite(id)
     }
 
     pub fn overview(&self) -> Result<Overview, FederationError> {
-        todo!("PR 2: pairing")
+        let identity = self.identity()?;
+        Ok(Overview {
+            companion_id: identity.companion_id().to_owned(),
+            identity: identity.document().clone(),
+            invites: self.peers.invites(),
+            peers: self.peers.list().iter().map(PeerRecord::summary).collect(),
+        })
     }
 
     /// The accepting owner's step: redeem `accept` against the issuer at
@@ -156,8 +221,74 @@ impl FederationState {
         accept: AcceptInvite,
         own_origin: &str,
     ) -> Result<PeerRecord, FederationError> {
-        let _ = (accept, own_origin);
-        todo!("PR 2: pairing")
+        let AcceptInvite {
+            origin,
+            secret,
+            issuer: issuer_document,
+        } = accept;
+        let origin = normalize_origin(&origin)?;
+        let own_origin = normalize_origin(own_origin)?;
+        // Pin the issuer before anything goes over the wire: whatever answers
+        // at `origin` must sign with this key.
+        let issuer = identity::verify_document(&issuer_document)?;
+        let me = self.identity()?;
+        if issuer.public_key == me.verified().public_key {
+            return Err(FederationError::IssuerMismatch);
+        }
+        let outgoing = sign_message(
+            &me,
+            &PairingMessage::Request {
+                version: FEDERATION_VERSION,
+                secret,
+                issuer: issuer.companion_id.clone(),
+                accepter: me.document().clone(),
+                origin: own_origin,
+            },
+        );
+        let answer = self
+            .transport
+            .post(&format!("{origin}{PAIR_PATH}"), &outgoing)
+            .await?;
+        let body = identity::verify_envelope(&answer, &issuer)?;
+        let PairingMessage::Response {
+            version,
+            pairing_id,
+            issuer: answering_document,
+            accepter,
+            state,
+        } = parse_message(&body)?
+        else {
+            return Err(FederationError::Malformed(
+                "expected a pair response".into(),
+            ));
+        };
+        check_version(version)?;
+        if answering_document != issuer_document {
+            return Err(FederationError::IssuerMismatch);
+        }
+        if accepter != me.companion_id() {
+            return Err(FederationError::RecipientMismatch);
+        }
+        if state != PeerState::Pending {
+            return Err(FederationError::Malformed(
+                "pair response reports an unexpected state".into(),
+            ));
+        }
+        check_pairing_id(&pairing_id)?;
+        let record = self.fresh_record(
+            issuer_document,
+            PairingRole::Accepter,
+            pairing_id,
+            vec![origin],
+            None,
+        );
+        let record = self.peers.upsert(record, issuer)?;
+        log::info!(
+            "[federation] pairing {}: companion {} accepted, waiting for its owner",
+            record.pairing_id,
+            record.companion_id()
+        );
+        Ok(record)
     }
 
     /// The issuer's side of step 2: verifies a `pair_request`, redeems the
@@ -166,8 +297,57 @@ impl FederationState {
         &self,
         envelope: &SignedEnvelope,
     ) -> Result<SignedEnvelope, FederationError> {
-        let _ = envelope;
-        todo!("PR 2: pairing")
+        check_version(envelope.version)?;
+        // The sender is unknown by construction, so its document travels in
+        // the body: decode, verify the document, then verify the envelope
+        // against it before anything else is believed.
+        let body = decode(&envelope.body)
+            .map(Zeroizing::new)
+            .ok_or_else(|| FederationError::Malformed("body is not canonical base64url".into()))?;
+        let PairingMessage::Request {
+            version,
+            secret,
+            issuer,
+            accepter,
+            origin,
+        } = parse_message(&body)?
+        else {
+            return Err(FederationError::Malformed("expected a pair request".into()));
+        };
+        check_version(version)?;
+        let accepter_identity = identity::verify_document(&accepter)?;
+        identity::verify_envelope(envelope, &accepter_identity)?;
+        let me = self.identity()?;
+        if issuer != me.companion_id() || accepter_identity.public_key == me.verified().public_key {
+            return Err(FederationError::IssuerMismatch);
+        }
+        let origin = normalize_origin(&origin)?;
+        let redeemed = self.peers.redeem_invite(&secret)?;
+        // A companion that was pending, paired, or revoked before starts over:
+        // its owner redeemed a fresh invite, and ours confirms again.
+        let record = self.fresh_record(
+            accepter,
+            PairingRole::Issuer,
+            redeemed.id.clone(),
+            Vec::new(),
+            Some(origin),
+        );
+        let record = self.peers.upsert(record, accepter_identity)?;
+        log::info!(
+            "[federation] pairing {}: companion {} redeemed the invite, waiting for the owner",
+            record.pairing_id,
+            record.companion_id()
+        );
+        Ok(sign_message(
+            &me,
+            &PairingMessage::Response {
+                version: FEDERATION_VERSION,
+                pairing_id: redeemed.id,
+                issuer: me.document().clone(),
+                accepter: record.identity.companion_id.clone(),
+                state: PeerState::Pending,
+            },
+        ))
     }
 
     /// The issuing owner's confirmation. Returns the record and whether the
@@ -177,8 +357,47 @@ impl FederationState {
         &self,
         companion_id: &str,
     ) -> Result<(PeerRecord, bool), FederationError> {
-        let _ = companion_id;
-        todo!("PR 2: pairing")
+        let peer = self
+            .peers
+            .get(companion_id)
+            .ok_or(FederationError::UnknownPeer)?;
+        let record = match (peer.record.role, peer.record.state) {
+            (_, PeerState::Revoked) => return Err(FederationError::PeerRevoked),
+            (PairingRole::Issuer, PeerState::Pending) => {
+                let record = self
+                    .peers
+                    .update(companion_id, |record| {
+                        record.state = PeerState::Paired;
+                        record.approved_origins =
+                            record.pending_origin.take().into_iter().collect();
+                    })?
+                    .ok_or(FederationError::UnknownPeer)?;
+                log::info!(
+                    "[federation] pairing {}: companion {} paired by the owner",
+                    record.pairing_id,
+                    record.companion_id()
+                );
+                record
+            }
+            (PairingRole::Issuer, PeerState::Paired) => peer.record.clone(),
+            (PairingRole::Accepter, PeerState::Paired) => return Ok((peer.record, false)),
+            (_, state) => return Err(FederationError::PeerNotPaired { state }),
+        };
+        let me = self.identity()?;
+        let notice = PairingMessage::Confirm {
+            version: FEDERATION_VERSION,
+            pairing_id: record.pairing_id.clone(),
+            issuer: me.companion_id().to_owned(),
+            accepter: record.identity.companion_id.clone(),
+        };
+        let peer = Peer {
+            record: record.clone(),
+            verified: peer.verified,
+        };
+        let notified = self
+            .notify(&peer, &notice, CONFIRM_PATH, PeerState::Paired)
+            .await;
+        Ok((record, notified))
     }
 
     /// The accepter's side of step 3.
@@ -186,8 +405,49 @@ impl FederationState {
         &self,
         envelope: &SignedEnvelope,
     ) -> Result<SignedEnvelope, FederationError> {
-        let _ = envelope;
-        todo!("PR 2: pairing")
+        let (peer, body) = self.verify_known_sender(envelope)?;
+        let PairingMessage::Confirm {
+            version,
+            pairing_id,
+            issuer,
+            accepter,
+        } = parse_message(&body)?
+        else {
+            return Err(FederationError::Malformed(
+                "expected a pair confirmation".into(),
+            ));
+        };
+        check_version(version)?;
+        let me = self.identity()?;
+        if issuer != peer.record.companion_id() {
+            return Err(FederationError::SenderMismatch);
+        }
+        if accepter != me.companion_id() {
+            return Err(FederationError::RecipientMismatch);
+        }
+        if peer.record.state == PeerState::Revoked {
+            return Err(FederationError::PeerRevoked);
+        }
+        if pairing_id != peer.record.pairing_id {
+            return Err(FederationError::PairingMismatch);
+        }
+        if peer.record.role != PairingRole::Accepter {
+            return Err(FederationError::Malformed(
+                "only the issuing side confirms a pairing".into(),
+            ));
+        }
+        // Already paired: the notice was resent or replayed, and nothing changes.
+        if peer.record.state == PeerState::Pending {
+            self.peers.update(peer.record.companion_id(), |record| {
+                record.state = PeerState::Paired;
+            })?;
+            log::info!(
+                "[federation] pairing {}: companion {} confirmed the pairing",
+                peer.record.pairing_id,
+                peer.record.companion_id()
+            );
+        }
+        Ok(self.ack(&me, &peer, PeerState::Paired))
     }
 
     /// Withdraws trust locally and tells the peer. Returns the record and
@@ -197,8 +457,40 @@ impl FederationState {
         &self,
         companion_id: &str,
     ) -> Result<(PeerRecord, bool), FederationError> {
-        let _ = companion_id;
-        todo!("PR 2: pairing")
+        let peer = self
+            .peers
+            .get(companion_id)
+            .ok_or(FederationError::UnknownPeer)?;
+        if peer.record.state == PeerState::Revoked {
+            return Ok((peer.record, false));
+        }
+        let record = self
+            .peers
+            .update(companion_id, |record| {
+                record.state = PeerState::Revoked;
+                record.pending_origin = None;
+            })?
+            .ok_or(FederationError::UnknownPeer)?;
+        log::info!(
+            "[federation] pairing {}: companion {} revoked by the owner",
+            record.pairing_id,
+            record.companion_id()
+        );
+        let me = self.identity()?;
+        let notice = PairingMessage::Revoke {
+            version: FEDERATION_VERSION,
+            pairing_id: record.pairing_id.clone(),
+            sender: me.companion_id().to_owned(),
+            peer: record.identity.companion_id.clone(),
+        };
+        let peer = Peer {
+            record: record.clone(),
+            verified: peer.verified,
+        };
+        let notified = self
+            .notify(&peer, &notice, REVOKE_PATH, PeerState::Revoked)
+            .await;
+        Ok((record, notified))
     }
 
     /// The peer's side of step 4.
@@ -206,34 +498,233 @@ impl FederationState {
         &self,
         envelope: &SignedEnvelope,
     ) -> Result<SignedEnvelope, FederationError> {
-        let _ = envelope;
-        todo!("PR 2: pairing")
+        let (peer, body) = self.verify_known_sender(envelope)?;
+        let PairingMessage::Revoke {
+            version,
+            pairing_id,
+            sender,
+            peer: recipient,
+        } = parse_message(&body)?
+        else {
+            return Err(FederationError::Malformed(
+                "expected a pair revocation".into(),
+            ));
+        };
+        check_version(version)?;
+        let me = self.identity()?;
+        if sender != peer.record.companion_id() {
+            return Err(FederationError::SenderMismatch);
+        }
+        if recipient != me.companion_id() {
+            return Err(FederationError::RecipientMismatch);
+        }
+        if pairing_id != peer.record.pairing_id {
+            return Err(FederationError::PairingMismatch);
+        }
+        if peer.record.state != PeerState::Revoked {
+            self.peers.update(peer.record.companion_id(), |record| {
+                record.state = PeerState::Revoked;
+                record.pending_origin = None;
+            })?;
+            log::info!(
+                "[federation] pairing {}: companion {} revoked the pairing",
+                peer.record.pairing_id,
+                peer.record.companion_id()
+            );
+        }
+        Ok(self.ack(&me, &peer, PeerState::Revoked))
     }
 
     /// Verifies an envelope from a paired peer and returns the peer and the
     /// body. Unknown, pending, and revoked senders fail closed.
+    // The signed transport (#108, PR 3) is the first production caller.
+    #[allow(dead_code)]
     pub fn verify_from_peer(
         &self,
         envelope: &SignedEnvelope,
     ) -> Result<(PeerRecord, Vec<u8>), FederationError> {
-        let _ = envelope;
-        todo!("PR 2: pairing")
+        let (peer, body) = self.verify_known_sender(envelope)?;
+        match peer.record.state {
+            PeerState::Paired => Ok((peer.record, body)),
+            PeerState::Revoked => Err(FederationError::PeerRevoked),
+            state => Err(FederationError::PeerNotPaired { state }),
+        }
+    }
+
+    /// Looks the sender up in the peer store and verifies the signature with
+    /// the stored key, whatever the peer's state.
+    fn verify_known_sender(
+        &self,
+        envelope: &SignedEnvelope,
+    ) -> Result<(Peer, Vec<u8>), FederationError> {
+        let peer = self
+            .peers
+            .get(&envelope.sender)
+            .ok_or(FederationError::UnknownPeer)?;
+        let body = identity::verify_envelope(envelope, &peer.verified)?;
+        Ok((peer, body))
+    }
+
+    /// A record for a (re)started pairing. An earlier record for the same
+    /// companion keeps its creation time and rotation history.
+    fn fresh_record(
+        &self,
+        document: IdentityDocument,
+        role: PairingRole,
+        pairing_id: String,
+        approved_origins: Vec<String>,
+        pending_origin: Option<String>,
+    ) -> PeerRecord {
+        let now = (self.clock)();
+        let previous = self.peers.get(&document.companion_id);
+        PeerRecord {
+            identity: document,
+            state: PeerState::Pending,
+            role,
+            pairing_id,
+            approved_origins,
+            pending_origin,
+            created_at: previous
+                .as_ref()
+                .map_or(now, |previous| previous.record.created_at),
+            updated_at: now,
+            rotation_history: previous
+                .map(|previous| previous.record.rotation_history)
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Posts `notice` to the peer's approved origins until one acknowledges
+    /// it with a signed ack for this pairing. Failures are reported, never
+    /// fatal: the local state already changed.
+    async fn notify(
+        &self,
+        peer: &Peer,
+        notice: &PairingMessage,
+        path: &str,
+        expected: PeerState,
+    ) -> bool {
+        let Ok(me) = self.identity() else {
+            return false;
+        };
+        let outgoing = sign_message(&me, notice);
+        for origin in &peer.record.approved_origins {
+            let url = format!("{origin}{path}");
+            let outcome = match self.transport.post(&url, &outgoing).await {
+                Ok(answer) => self.check_ack(peer, &answer, expected),
+                Err(error) => Err(error),
+            };
+            match outcome {
+                Ok(()) => return true,
+                Err(error) => log::warn!(
+                    "[federation] pairing {}: companion {} at {origin} did not acknowledge: {error}",
+                    peer.record.pairing_id,
+                    peer.record.companion_id()
+                ),
+            }
+        }
+        false
+    }
+
+    fn check_ack(
+        &self,
+        peer: &Peer,
+        answer: &SignedEnvelope,
+        expected: PeerState,
+    ) -> Result<(), FederationError> {
+        let body = identity::verify_envelope(answer, &peer.verified)?;
+        let PairingMessage::Ack {
+            version,
+            pairing_id,
+            sender,
+            state,
+        } = parse_message(&body)?
+        else {
+            return Err(FederationError::Malformed("expected a pair ack".into()));
+        };
+        check_version(version)?;
+        if sender != peer.record.companion_id() {
+            return Err(FederationError::SenderMismatch);
+        }
+        if pairing_id != peer.record.pairing_id {
+            return Err(FederationError::PairingMismatch);
+        }
+        if state != expected {
+            return Err(FederationError::PeerNotPaired { state });
+        }
+        Ok(())
+    }
+
+    fn ack(&self, me: &SigningIdentity, peer: &Peer, state: PeerState) -> SignedEnvelope {
+        sign_message(
+            me,
+            &PairingMessage::Ack {
+                version: FEDERATION_VERSION,
+                pairing_id: peer.record.pairing_id.clone(),
+                sender: me.companion_id().to_owned(),
+                state,
+            },
+        )
     }
 }
 
 /// Signs a pairing message as `signer`.
 pub(crate) fn sign_message(signer: &SigningIdentity, message: &PairingMessage) -> SignedEnvelope {
-    let _ = (signer, message);
-    todo!("PR 2: pairing")
+    let body = Zeroizing::new(serde_json::to_vec(message).expect("pairing messages serialize"));
+    signer.sign_envelope(&body)
+}
+
+/// Parses a verified body. serde's detail is discarded on purpose: it could
+/// quote a field of the body, and one of them is the invite secret.
+fn parse_message(body: &[u8]) -> Result<PairingMessage, FederationError> {
+    serde_json::from_slice(body).map_err(|_| {
+        FederationError::Malformed("pairing message does not have the expected shape".into())
+    })
+}
+
+fn check_pairing_id(pairing_id: &str) -> Result<(), FederationError> {
+    if pairing_id.is_empty()
+        || pairing_id.len() > MAX_PAIRING_ID_LEN
+        || !pairing_id.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    {
+        return Err(FederationError::Malformed(
+            "pairing id is not a short alphanumeric token".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Accepts `http(s)://host[:port][/path]` and returns it without a trailing
 /// slash, with the scheme and host lower-cased. Userinfo, query strings, and
 /// fragments are refused: a base URL never carries anything secret.
 pub fn normalize_origin(input: &str) -> Result<String, FederationError> {
-    let _ = (input, MAX_ORIGIN_LEN, PAIR_PATH, CONFIRM_PATH, REVOKE_PATH);
-    let _ = identity::load;
-    todo!("PR 2: pairing")
+    let trimmed = input.trim();
+    let refuse = || FederationError::InvalidOrigin(trimmed.chars().take(MAX_ORIGIN_LEN).collect());
+    if trimmed.is_empty() || trimmed.len() > MAX_ORIGIN_LEN {
+        return Err(refuse());
+    }
+    let url = reqwest::Url::parse(trimmed).map_err(|_| refuse())?;
+    let host = url
+        .host_str()
+        .filter(|host| !host.is_empty())
+        .ok_or_else(refuse)?;
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(refuse());
+    }
+    let path = url.path().trim_end_matches('/');
+    if path.split('/').any(|segment| segment == "federation") {
+        return Err(refuse());
+    }
+    let port = url
+        .port()
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
+    Ok(format!("{}://{host}{port}{path}", url.scheme()))
 }
 
 #[cfg(test)]
@@ -595,7 +1086,7 @@ mod tests {
             // A stale confirmation cannot revive a revoked peer.
             let stale = sign_message(
                 &a.identity().unwrap(),
-                &PairingMessage::PairConfirm {
+                &PairingMessage::Confirm {
                     version: FEDERATION_VERSION,
                     pairing_id: revoked.pairing_id.clone(),
                     issuer: a_id.clone(),
@@ -629,7 +1120,7 @@ mod tests {
             // The old revocation notice names the old pairing and is stale.
             let old_revoke = sign_message(
                 &a.identity().unwrap(),
-                &PairingMessage::PairRevoke {
+                &PairingMessage::Revoke {
                     version: FEDERATION_VERSION,
                     pairing_id: revoked.pairing_id.clone(),
                     sender: a_id.clone(),
@@ -656,7 +1147,7 @@ mod tests {
         let invite = a.create_invite(ORIGIN_A).unwrap();
 
         let request = |secret: &str, issuer: &str, accepter: &IdentityDocument, origin: &str| {
-            PairingMessage::PairRequest {
+            PairingMessage::Request {
                 version: FEDERATION_VERSION,
                 secret: InviteSecret::new(secret.into()),
                 issuer: issuer.into(),
@@ -727,7 +1218,7 @@ mod tests {
         // Wrong kind of body, and a downgraded envelope.
         let wrong_kind = sign_message(
             &b_identity,
-            &PairingMessage::PairAck {
+            &PairingMessage::Ack {
                 version: FEDERATION_VERSION,
                 pairing_id: invite.id.clone(),
                 sender: b_identity.companion_id().to_owned(),
@@ -845,7 +1336,7 @@ mod tests {
         let confirm = |pairing_id: &str, accepter: &str| {
             sign_message(
                 &a_identity,
-                &PairingMessage::PairConfirm {
+                &PairingMessage::Confirm {
                     version: FEDERATION_VERSION,
                     pairing_id: pairing_id.into(),
                     issuer: a_identity.companion_id().to_owned(),
@@ -865,7 +1356,7 @@ mod tests {
         );
         let from_stranger = sign_message(
             &impostor.identity().unwrap(),
-            &PairingMessage::PairConfirm {
+            &PairingMessage::Confirm {
                 version: FEDERATION_VERSION,
                 pairing_id: invite.id.clone(),
                 issuer: impostor.identity().unwrap().companion_id().to_owned(),

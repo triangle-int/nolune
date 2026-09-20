@@ -83,7 +83,6 @@ struct Server {
     _workspace: tempfile::TempDir,
     state: AppState,
     token: &'static str,
-    origin: &'static str,
 }
 
 impl Server {
@@ -107,7 +106,6 @@ impl Server {
             _workspace: workspace,
             state,
             token,
-            origin,
         }
     }
 
@@ -352,7 +350,7 @@ async fn owners_pair_two_companions_and_both_lists_bind_the_same_keys() {
     let stranger = identity::load_or_create_at(tempfile::tempdir().unwrap().path(), 1).unwrap();
     let replay = sign_message(
         &stranger,
-        &PairingMessage::PairRequest {
+        &PairingMessage::Request {
             version: FEDERATION_VERSION,
             secret: crate::domain::federation::InviteSecret::new(secret.clone()),
             issuer: a_id.clone(),
@@ -555,7 +553,7 @@ async fn owner_routes_need_the_owner_and_peer_routes_need_a_signature() {
     let stranger = identity::load_or_create_at(tempfile::tempdir().unwrap().path(), 1).unwrap();
     let wrong = sign_message(
         &stranger,
-        &PairingMessage::PairRequest {
+        &PairingMessage::Request {
             version: FEDERATION_VERSION,
             secret: crate::domain::federation::InviteSecret::new("wrong".into()),
             issuer: a_id.clone(),
@@ -585,7 +583,7 @@ async fn owner_routes_need_the_owner_and_peer_routes_need_a_signature() {
     let other = identity::load_or_create_at(tempfile::tempdir().unwrap().path(), 1).unwrap();
     let spoofed = sign_message(
         &other,
-        &PairingMessage::PairRequest {
+        &PairingMessage::Request {
             version: FEDERATION_VERSION,
             secret: crate::domain::federation::InviteSecret::new(secret.clone()),
             issuer: a_id.clone(),
@@ -607,7 +605,7 @@ async fn owner_routes_need_the_owner_and_peer_routes_need_a_signature() {
     // A downgraded envelope is refused before anything else.
     let mut downgraded = sign_message(
         &stranger,
-        &PairingMessage::PairRequest {
+        &PairingMessage::Request {
             version: FEDERATION_VERSION,
             secret: crate::domain::federation::InviteSecret::new(secret.clone()),
             issuer: a_id.clone(),
@@ -630,7 +628,7 @@ async fn owner_routes_need_the_owner_and_peer_routes_need_a_signature() {
     // Notices from strangers are refused without touching the store.
     let notice = sign_message(
         &stranger,
-        &PairingMessage::PairConfirm {
+        &PairingMessage::Confirm {
             version: FEDERATION_VERSION,
             pairing_id: "0011223344556677".into(),
             issuer: stranger.companion_id().to_owned(),

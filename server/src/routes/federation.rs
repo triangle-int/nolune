@@ -20,7 +20,7 @@
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{Path, State},
+    extract::{Path, Request, State},
     http::{StatusCode, header},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
@@ -62,74 +62,188 @@ pub fn public_router() -> Router<AppState> {
         .route(REVOKE_PATH, post(revoke_notice))
 }
 
-/// Federation refusals as typed JSON. The message is the error's own text,
-/// which never carries a secret.
-struct ApiError(FederationError);
+/// Refusals as typed JSON. The message is the error's own text, which never
+/// carries a secret or a request body.
+enum ApiError {
+    Federation(FederationError),
+    /// The body is not the JSON shape the route takes. No detail on purpose.
+    InvalidBody,
+    PayloadTooLarge,
+}
 
 impl From<FederationError> for ApiError {
     fn from(error: FederationError) -> Self {
-        Self(error)
+        Self::Federation(error)
     }
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let _ = &self.0;
-        todo!("PR 2: routes")
+        let error = match self {
+            Self::InvalidBody => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": "invalid_body",
+                        "message": "request body does not have the expected shape",
+                    })),
+                )
+                    .into_response();
+            }
+            Self::PayloadTooLarge => {
+                return (
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    Json(json!({
+                        "error": "payload_too_large",
+                        "message": format!("request body exceeds {MAX_ENVELOPE_BYTES} bytes"),
+                    })),
+                )
+                    .into_response();
+            }
+            Self::Federation(error) => error,
+        };
+        let (status, code) = match &error {
+            FederationError::VersionTooOld { .. } => (StatusCode::BAD_REQUEST, "version_too_old"),
+            FederationError::VersionUnsupported { .. } => {
+                (StatusCode::BAD_REQUEST, "version_unsupported")
+            }
+            FederationError::Malformed(_) => (StatusCode::BAD_REQUEST, "malformed"),
+            FederationError::InvalidPublicKey => (StatusCode::BAD_REQUEST, "invalid_public_key"),
+            FederationError::InvalidOrigin(_) => (StatusCode::BAD_REQUEST, "invalid_origin"),
+            FederationError::SignatureMismatch => (StatusCode::FORBIDDEN, "signature_mismatch"),
+            FederationError::CompanionIdMismatch => {
+                (StatusCode::FORBIDDEN, "companion_id_mismatch")
+            }
+            FederationError::SenderMismatch => (StatusCode::FORBIDDEN, "sender_mismatch"),
+            FederationError::IssuerMismatch => (StatusCode::FORBIDDEN, "issuer_mismatch"),
+            FederationError::RecipientMismatch => (StatusCode::FORBIDDEN, "recipient_mismatch"),
+            FederationError::PairingMismatch => (StatusCode::FORBIDDEN, "pairing_mismatch"),
+            FederationError::PeerRevoked => (StatusCode::FORBIDDEN, "peer_revoked"),
+            FederationError::InviteInvalid => (StatusCode::UNAUTHORIZED, "invalid_invite"),
+            FederationError::RateLimited => (StatusCode::TOO_MANY_REQUESTS, "rate_limited"),
+            FederationError::UnknownPeer => (StatusCode::NOT_FOUND, "unknown_peer"),
+            FederationError::PeerNotPaired { .. } => (StatusCode::CONFLICT, "peer_not_paired"),
+            FederationError::Transport(_) => (StatusCode::BAD_GATEWAY, "peer_unreachable"),
+            FederationError::PeerRefused { .. } => (StatusCode::BAD_GATEWAY, "peer_refused"),
+            FederationError::KeyMismatch
+            | FederationError::SigningKeyMissing(_)
+            | FederationError::IdentityDocumentMissing(_)
+            | FederationError::InsecureKeyPermissions { .. }
+            | FederationError::RandomnessUnavailable
+            | FederationError::Io { .. } => {
+                (StatusCode::SERVICE_UNAVAILABLE, "federation_unavailable")
+            }
+        };
+        let mut body = json!({ "error": code, "message": error.to_string() });
+        match &error {
+            FederationError::PeerRefused { status, error } => {
+                body["peer_status"] = json!(status);
+                body["peer_error"] = json!(error);
+            }
+            FederationError::PeerNotPaired { state } => body["state"] = json!(state),
+            _ => {}
+        }
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            return (
+                status,
+                [(header::RETRY_AFTER, peers::FAILURE_WINDOW_SECS.to_string())],
+                Json(body),
+            )
+                .into_response();
+        }
+        (status, Json(body)).into_response()
     }
 }
 
+/// Reads the whole body under the envelope size cap.
+async fn read_body(request: Request) -> Result<Bytes, ApiError> {
+    let declared = request
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<usize>().ok());
+    if declared.is_some_and(|length| length > MAX_ENVELOPE_BYTES) {
+        return Err(ApiError::PayloadTooLarge);
+    }
+    axum::body::to_bytes(request.into_body(), MAX_ENVELOPE_BYTES)
+        .await
+        .map_err(|_| ApiError::PayloadTooLarge)
+}
+
+/// Parses a signed envelope, keeping the version-first refusal and replacing
+/// any shape complaint with one that does not quote the body.
+fn parse_envelope(bytes: &[u8]) -> Result<SignedEnvelope, ApiError> {
+    let text = std::str::from_utf8(bytes).map_err(|_| ApiError::InvalidBody)?;
+    identity::parse_envelope(text).map_err(|error| match error {
+        FederationError::Malformed(_) => ApiError::Federation(FederationError::Malformed(
+            "request body is not a signed envelope".into(),
+        )),
+        other => ApiError::Federation(other),
+    })
+}
+
 async fn create_invite(State(state): State<AppState>) -> Result<Response, ApiError> {
-    let _ = state;
-    todo!("PR 2: routes")
+    let origin = state.config.read().await.public_url.clone();
+    let invite = state.federation.create_invite(&origin)?;
+    Ok((StatusCode::CREATED, Json(invite)).into_response())
 }
 
 async fn cancel_invite(State(state): State<AppState>, Path(id): Path<String>) -> StatusCode {
-    let _ = (state, id);
-    todo!("PR 2: routes")
+    if state.federation.cancel_invite(&id) {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::NOT_FOUND
+    }
 }
 
-async fn accept_invite(State(state): State<AppState>, body: Bytes) -> Result<Response, ApiError> {
-    let _ = (state, body, MAX_ENVELOPE_BYTES);
-    let _: Option<AcceptInvite> = None;
-    todo!("PR 2: routes")
+async fn accept_invite(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Response, ApiError> {
+    let bytes = read_body(request).await?;
+    let accept: AcceptInvite = serde_json::from_slice(&bytes).map_err(|_| ApiError::InvalidBody)?;
+    let own_origin = state.config.read().await.public_url.clone();
+    let peer = state.federation.accept_invite(accept, &own_origin).await?;
+    Ok(Json(json!({ "peer": peer.summary() })).into_response())
 }
 
 async fn list_peers(State(state): State<AppState>) -> Result<Response, ApiError> {
-    let _ = state;
-    todo!("PR 2: routes")
+    Ok(Json(state.federation.overview()?).into_response())
 }
 
 async fn confirm_peer(
     State(state): State<AppState>,
     Path(companion_id): Path<String>,
 ) -> Result<Response, ApiError> {
-    let _ = (state, companion_id);
-    todo!("PR 2: routes")
+    let (peer, notified) = state.federation.confirm_peer(&companion_id).await?;
+    Ok(Json(json!({ "peer": peer.summary(), "notified": notified })).into_response())
 }
 
 async fn revoke_peer(
     State(state): State<AppState>,
     Path(companion_id): Path<String>,
 ) -> Result<Response, ApiError> {
-    let _ = (state, companion_id);
-    todo!("PR 2: routes")
+    let (peer, notified) = state.federation.revoke_peer(&companion_id).await?;
+    Ok(Json(json!({ "peer": peer.summary(), "notified": notified })).into_response())
 }
 
-async fn pair(State(state): State<AppState>, body: Bytes) -> Result<Response, ApiError> {
-    let _ = (state, body);
-    let _: Option<SignedEnvelope> = None;
-    let _ = (identity::parse_envelope, peers::FAILURE_WINDOW_SECS);
-    let _ = (header::RETRY_AFTER, Json(json!({})));
-    todo!("PR 2: routes")
+async fn pair(State(state): State<AppState>, request: Request) -> Result<Response, ApiError> {
+    let envelope = parse_envelope(&read_body(request).await?)?;
+    Ok(Json(state.federation.receive_pair_request(&envelope)?).into_response())
 }
 
-async fn confirm_notice(State(state): State<AppState>, body: Bytes) -> Result<Response, ApiError> {
-    let _ = (state, body);
-    todo!("PR 2: routes")
+async fn confirm_notice(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Response, ApiError> {
+    let envelope = parse_envelope(&read_body(request).await?)?;
+    Ok(Json(state.federation.receive_confirm(&envelope)?).into_response())
 }
 
-async fn revoke_notice(State(state): State<AppState>, body: Bytes) -> Result<Response, ApiError> {
-    let _ = (state, body);
-    todo!("PR 2: routes")
+async fn revoke_notice(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Response, ApiError> {
+    let envelope = parse_envelope(&read_body(request).await?)?;
+    Ok(Json(state.federation.receive_revoke(&envelope)?).into_response())
 }

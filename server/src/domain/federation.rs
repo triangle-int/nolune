@@ -17,10 +17,6 @@
 //! `services::federation::{peers, pairing}`; the on-disk location is
 //! documented in `docs/companion-storage.md`.
 
-// Foundation for federation pairing and transport (#108, later PRs); nothing
-// reaches these types from a route yet.
-#![allow(dead_code)]
-
 use std::{fmt, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -227,7 +223,7 @@ impl<'de> Deserialize<'de> for InviteSecret {
 
 impl fmt::Debug for InviteSecret {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!("PR 2: redact")
+        f.write_str("InviteSecret(<redacted>)")
     }
 }
 
@@ -247,13 +243,24 @@ pub struct IssuedInvite {
 
 impl fmt::Debug for IssuedInvite {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!("PR 2: redact")
+        f.debug_struct("IssuedInvite")
+            .field("id", &self.id)
+            .field("created_at", &self.created_at)
+            .field("expires_at", &self.expires_at)
+            .field("expires_in_secs", &self.expires_in_secs)
+            .field("origin", &self.origin)
+            .field("issuer", &self.issuer.companion_id)
+            .finish_non_exhaustive()
     }
 }
 
 impl fmt::Display for IssuedInvite {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!("PR 2: redact")
+        write!(
+            f,
+            "invite {} from {} at {} (expires in {}s)",
+            self.id, self.issuer.companion_id, self.origin, self.expires_in_secs
+        )
     }
 }
 
@@ -279,13 +286,20 @@ pub struct AcceptInvite {
 
 impl fmt::Debug for AcceptInvite {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!("PR 2: redact")
+        f.debug_struct("AcceptInvite")
+            .field("origin", &self.origin)
+            .field("issuer", &self.issuer.companion_id)
+            .finish_non_exhaustive()
     }
 }
 
 impl fmt::Display for AcceptInvite {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!("PR 2: redact")
+        write!(
+            f,
+            "invite from {} at {}",
+            self.issuer.companion_id, self.origin
+        )
     }
 }
 
@@ -294,11 +308,12 @@ impl fmt::Display for AcceptInvite {
 /// names the pairing it belongs to, so a body of one kind can never be read
 /// as another and a notice about an earlier pairing is stale.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "kind", deny_unknown_fields)]
 pub enum PairingMessage {
     /// Accepter to issuer: redeem the invite. Carries the accepter's own
     /// identity because the issuer has never seen it.
-    PairRequest {
+    #[serde(rename = "pair_request")]
+    Request {
         version: u32,
         secret: InviteSecret,
         /// `companion_id` the accepter expects to be talking to.
@@ -310,7 +325,8 @@ pub enum PairingMessage {
     },
     /// Issuer to accepter, in the same exchange: the invite was redeemed and
     /// the pairing now waits for the issuing owner.
-    PairResponse {
+    #[serde(rename = "pair_response")]
+    Response {
         version: u32,
         pairing_id: String,
         issuer: IdentityDocument,
@@ -318,21 +334,24 @@ pub enum PairingMessage {
         state: PeerState,
     },
     /// Issuer to accepter, after the issuing owner confirmed.
-    PairConfirm {
+    #[serde(rename = "pair_confirm")]
+    Confirm {
         version: u32,
         pairing_id: String,
         issuer: String,
         accepter: String,
     },
     /// Either side: trust withdrawn.
-    PairRevoke {
+    #[serde(rename = "pair_revoke")]
+    Revoke {
         version: u32,
         pairing_id: String,
         sender: String,
         peer: String,
     },
     /// Answer to a confirm or revoke notice.
-    PairAck {
+    #[serde(rename = "pair_ack")]
+    Ack {
         version: u32,
         pairing_id: String,
         sender: String,
@@ -605,7 +624,7 @@ mod tests {
             secret: InviteSecret::new(SECRET.into()),
             issuer: document(),
         };
-        let request = PairingMessage::PairRequest {
+        let request = PairingMessage::Request {
             version: FEDERATION_VERSION,
             secret: InviteSecret::new(SECRET.into()),
             issuer: "cid".into(),
@@ -644,7 +663,7 @@ mod tests {
 
     #[test]
     fn pairing_messages_are_kind_tagged_and_reject_unknown_fields() {
-        let confirm = PairingMessage::PairConfirm {
+        let confirm = PairingMessage::Confirm {
             version: FEDERATION_VERSION,
             pairing_id: "p".into(),
             issuer: "a".into(),
@@ -653,7 +672,7 @@ mod tests {
         let json = serde_json::to_value(&confirm).unwrap();
         assert_eq!(json["kind"], "pair_confirm");
         let parsed: PairingMessage = serde_json::from_value(json).unwrap();
-        assert!(matches!(parsed, PairingMessage::PairConfirm { .. }));
+        assert!(matches!(parsed, PairingMessage::Confirm { .. }));
 
         for bad in [
             // extra deployment metadata
