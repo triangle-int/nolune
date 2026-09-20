@@ -187,6 +187,7 @@ async fn save_llm_keys(
     for (provider, key) in [
         (config::LlmProvider::Anthropic, &req.api_key),
         (config::LlmProvider::Openai, &req.openai),
+        (config::LlmProvider::Openrouter, &req.openrouter),
     ] {
         if let Some(key) = key.as_deref().map(str::trim).filter(|key| !key.is_empty()) {
             verify_provider_key(state, provider, key, probe_base_url).await?;
@@ -947,35 +948,45 @@ mod llm_key_tests {
     }
 
     /// The save route probes a new key with its provider and stores nothing
-    /// the provider rejects (#24, #25), for Anthropic and OpenAI alike.
+    /// the provider rejects (#24, #25), for Anthropic, OpenAI and
+    /// OpenRouter (#26) alike.
     #[tokio::test]
     async fn a_rejected_key_is_not_saved_and_an_accepted_one_is() {
         fn token(cfg: &config::Config, provider: config::LlmProvider) -> String {
             match provider {
                 config::LlmProvider::Anthropic => cfg.llm.tokens.anthropic.clone(),
                 config::LlmProvider::Openai => cfg.llm.tokens.open_ai.clone(),
+                config::LlmProvider::Openrouter => cfg.llm.tokens.open_router.clone(),
             }
         }
-        for provider in [config::LlmProvider::Anthropic, config::LlmProvider::Openai] {
+        for provider in [
+            config::LlmProvider::Anthropic,
+            config::LlmProvider::Openai,
+            config::LlmProvider::Openrouter,
+        ] {
             let name = match provider {
                 config::LlmProvider::Anthropic => "anthropic",
                 config::LlmProvider::Openai => "openai",
+                config::LlmProvider::Openrouter => "openrouter",
             };
             let workspace = tempfile::tempdir().unwrap();
             let mut cfg = config::Config::default();
             cfg.llm.tokens.anthropic = "anthropic-before".into();
             cfg.llm.tokens.open_ai = "openai-before".into();
+            cfg.llm.tokens.open_router = "openrouter-before".into();
             let state = AppState::new_in(cfg, workspace.path().to_owned()).await;
             let request = || {
-                let (api_key, openai) = match provider {
-                    config::LlmProvider::Anthropic => (Some("new-secret".to_owned()), None),
-                    config::LlmProvider::Openai => (None, Some("new-secret".to_owned())),
+                let secret = Some("new-secret".to_owned());
+                let (api_key, openai, openrouter) = match provider {
+                    config::LlmProvider::Anthropic => (secret, None, None),
+                    config::LlmProvider::Openai => (None, secret, None),
+                    config::LlmProvider::Openrouter => (None, None, secret),
                 };
                 UpdateLlmKeyRequest {
                     api_key,
                     openai,
                     elevenlabs: None,
-                    openrouter: None,
+                    openrouter,
                 }
             };
             let persisted = || std::fs::read_to_string(workspace.path().join("config.toml"));
@@ -1007,6 +1018,9 @@ mod llm_key_tests {
                 }
                 config::LlmProvider::Openai => {
                     json!({"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1}}).to_string()
+                }
+                config::LlmProvider::Openrouter => {
+                    json!({"id":"gen-1","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}).to_string()
                 }
             };
             let (url, task) = provider_stub(200, accepted).await;

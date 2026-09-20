@@ -258,11 +258,14 @@ export function fetchConfigStatus(): Promise<{
 	return json("/api/config/status");
 }
 
+/** The providers the server ships adapters for (#156, #26). */
+export type LlmProvider = "anthropic" | "openai" | "openrouter";
+
 /** A user-defined model choice (#156): provider plus model id, under a name. */
 export interface ModelPreset {
 	id: string;
 	name: string;
-	provider: "anthropic" | "openai";
+	provider: LlmProvider;
 	model: string;
 }
 
@@ -273,7 +276,7 @@ export interface ModelPresets {
 	/** Preset for memory extraction, titles, check-ins, and reflection. */
 	background_preset: string;
 	/** Providers that have an API key. */
-	keyed_providers: ("anthropic" | "openai")[];
+	keyed_providers: LlmProvider[];
 	setup_required: string | null;
 }
 
@@ -295,7 +298,7 @@ export function updateModelPresets(payload: {
 }
 
 /** Add a provider's default presets and fill empty slots. Safe to repeat. */
-export function seedModelPresets(provider: "anthropic" | "openai"): Promise<ModelPresets & { added: number }> {
+export function seedModelPresets(provider: LlmProvider): Promise<ModelPresets & { added: number }> {
 	return json("/api/config/models/seed", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },

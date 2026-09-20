@@ -397,6 +397,7 @@ pub(crate) async fn anthropic_complete(
         output_tokens: raw["output_tokens"].as_u64().unwrap_or(0),
         cache_read_tokens: raw["cache_read_input_tokens"].as_u64().unwrap_or(0),
         cache_write_tokens: raw["cache_creation_input_tokens"].as_u64().unwrap_or(0),
+        cost: None,
     };
     Ok(LlmResponse {
         ordered_content: vec![ContentBlock::text(&text)],
@@ -731,6 +732,7 @@ pub(crate) async fn anthropic_stream(
         output_tokens,
         cache_read_tokens,
         cache_write_tokens,
+        cost: None,
     };
     events(LlmEvent::Usage(usage));
     Ok(LlmResponse {

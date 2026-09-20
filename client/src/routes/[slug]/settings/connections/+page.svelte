@@ -29,6 +29,7 @@
 	const apiKeyDefs = [
 		{ id: "api_key", name: "Anthropic", hint: "sk-ant-...", required: false, configKey: "anthropic" },
 		{ id: "openai", name: "OpenAI", hint: "Chat + semantic memory (independent of chat provider)", required: false, configKey: "openai" },
+		{ id: "openrouter", name: "OpenRouter", hint: "One key for many vendors; models are named vendor/model", required: false, configKey: "openrouter" },
 		{ id: "elevenlabs", name: "ElevenLabs", hint: "Text-to-speech voice", required: false, configKey: "elevenlabs" },
 	];
 	let embeddingStatus = $state<EmbeddingStatus | undefined>(undefined);
@@ -310,7 +311,7 @@
 						<li class="preset-row">
 							<label class="preset-field">Name<input class="ext-input" type="text" placeholder="Claude Sonnet" value={preset.name} oninput={(e) => renamePreset(index, (e.currentTarget as HTMLInputElement).value)} disabled={modelsSaving} /></label>
 							<label class="preset-field">Provider<select class="setting-input" bind:value={preset.provider} disabled={modelsSaving}>{#each PROVIDERS as provider (provider.id)}<option value={provider.id}>{provider.label}</option>{/each}</select></label>
-							<label class="preset-field preset-field-model">Model id<input class="ext-input" type="text" placeholder="claude-sonnet-4-6" bind:value={preset.model} disabled={modelsSaving} spellcheck="false" /></label>
+							<label class="preset-field preset-field-model">Model id<input class="ext-input" type="text" placeholder={preset.provider === "openrouter" ? "vendor/model" : "claude-sonnet-4-6"} bind:value={preset.model} disabled={modelsSaving} spellcheck="false" /></label>
 							<button class="setting-btn setting-btn-danger preset-remove" onclick={() => removePreset(index)} disabled={modelsSaving} title={inUse ? "In use by a slot; the slot moves to the first preset" : "Remove preset"}>Remove</button>
 						</li>
 					{/each}
@@ -346,7 +347,7 @@
 	<div class="section-header">
 		<div>
 			<h3 class="section-label">API keys</h3>
-			<p class="section-desc">Your own keys, stored on this server. A preset can only be used once its provider has a key; OpenAI also unlocks semantic memory, ElevenLabs unlocks voice.</p>
+			<p class="section-desc">Your own keys, stored on this server. A preset can only be used once its provider has a key; OpenAI also unlocks semantic memory, OpenRouter reaches many vendors with one key, ElevenLabs unlocks voice.</p>
 		</div>
 	</div>
 	<div class="section-body">

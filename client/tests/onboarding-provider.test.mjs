@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { saveOnboardingProvider } from '../src/lib/components/onboarding/provider.js';
 
-for (const [provider, field] of [['openai', 'openai'], ['anthropic', 'api_key']]) {
+for (const [provider, field] of [['openai', 'openai'], ['anthropic', 'api_key'], ['openrouter', 'openrouter']]) {
 	test(`${provider} onboarding saves only its own credential and seeds its presets afterward`, async () => {
 		const calls = [];
 		await saveOnboardingProvider(provider, 'test-only-key', {
