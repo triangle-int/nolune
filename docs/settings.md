@@ -14,7 +14,7 @@ Defined once in `client/src/lib/companion/navigation.js` and rendered by
 | Chat | `/{slug}/chat` | Talk with your companion. |
 | Activity | `/{slug}/activity` | What it did on its own, why, and what it made. Drops live here (`/{slug}/drops`), not as a tab. |
 | Memory | `/{slug}/memory` | What it remembers; inspect, correct, forget. |
-| Computers | `/{slug}/computers` | Desktops connected through the desktop app, from `GET /api/instances/{slug}/machines`. |
+| Computers | `/{slug}/computers` | Connected spaces (#80): the server home and every desktop that connected through the desktop app, from `GET /api/instances/{slug}/machines`, with state, permissions, capabilities, hints, and an inline rename (`PUT …/machines/{id}`). |
 | Settings | `/{slug}/settings` | How it behaves and what it may use. |
 
 There is no Agents, Thoughts, Stats, Skills, or Drops tab. Skills are a
@@ -34,7 +34,7 @@ one section and one scope:
 | Section | Route | Owns | Scope |
 |---------|-------|------|-------|
 | Companion | `settings/companion` | Little Moon presence, Learn my rhythm, Initiative (check-in, quiet hours, daily budget, reflection), Timezone, Scheduled messages | companion |
-| Connections | `settings/connections` | Model presets and slots (#156), API keys, Connected computers, Paired browsers | server |
+| Connections | `settings/connections` | Model presets and slots (#156), API keys, Connected computers (the compact Connected Spaces list, #80), Paired browsers | server |
 | Capabilities | `settings/capabilities` | Skills (registry), Extensions (curated MCP catalog, per-tool grants, custom servers behind the #97 acknowledgement) | server |
 | Data | `settings/data` | What the companion keeps, Export, Import | companion |
 | Advanced | `settings/advanced` | Server port and API token, Updates and release channel, ElevenLabs voice ID, Email (SMTP/IMAP), GitHub token | mixed; each control carries an owner badge |

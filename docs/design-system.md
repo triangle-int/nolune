@@ -99,6 +99,19 @@ Rules that keep animation honest:
 
 The `/design-system` page reduces one documented event sequence per state, so the gallery cannot drift from the reducer. Expressions and motion per state, and the desktop overlay port, follow in later slices of #86.
 
+## Connected spaces
+
+The Computers tab and the Computers section of Settings › Connections list every place the one companion can act (#80). The rows come from `GET /api/instances/{slug}/machines` viewed by the pure helpers in `client/src/lib/computers/spaces.js` (`client/tests/computers-spaces.test.mjs`) and rendered by `SpaceRow.svelte`; `ConnectedComputers.svelte` only loads, subscribes and renames.
+
+- The server home is the first row, on the elevated surface with a “This server” pill and the moon glyph. It is named after the companion (“Luna’s home”) and says where the companion runs; the desktops below are other places it can act, never separate companions. When the listing has no `server_local` record the row is synthesized from this browser’s connection, so a closed socket reads as “Reconnecting”, not as the server being offline.
+- Desktops follow, online by name and then offline by last seen. Each row pairs one state word with its color: Online (lavender), Not responding or Needs permission (destructive), Offline (muted). Offline beats not responding beats needing permission.
+- Facts are what the desktop reported at its last registration: each permission with its state (`denied` and `not asked yet` block; `not available here` does not), the number of actions it accepts, and the Cua driver (“not reported” until #18 ships). Nothing is inferred beyond the record.
+- Hints name the computer and the one thing to do: reopen the desktop app on an offline computer, check that a silent one is awake, grant a denied permission in System Settings, update an app that reports no actions. Informational hints (the Cua driver) are muted and hidden in the compact Settings copy.
+- Rename is inline: the name field is labeled, Enter saves, Escape cancels, blank shows the hostname again. A renamed row keeps its hostname in mono beside the name.
+- Rows update live from `machine_updated` and `machine_forgotten`; routine heartbeats are silent on the socket, so the list is also polled every 15 s (and when the tab becomes visible) and a 5 s clock re-derives health from `last_seen` with the server’s 45 s threshold. While a refresh fails the rows stay, a status line says how old they are, and the clock freezes so an unreachable server never reads as every computer going quiet.
+
+The `/design-system` page renders the same component from sample records at a fixed clock (home, renamed desktop, not responding, permission denied, offline); its rename applies the event locally and never reaches a server.
+
 ## Accessibility and responsive behavior
 
 Visible keyboard focus; semantic buttons/links; meaningful labels for icon-only controls; decorative SVGs hidden from assistive technology. Main controls have 44px targets. Do not disable browser zoom. Support 390px mobile widths without page overflow. Long commands can scroll inside their own container. Announce asynchronous errors and success without stealing focus.
