@@ -4,7 +4,12 @@
 use std::sync::Arc;
 
 use cua_protocol::{
-    CheckedCuaAdapter, HealthReportResult, MachineDescriptor, MachineId, ValidationError,
+    CheckedCuaAdapter, CuaAction, CuaActionResult, CuaRequestEnvelope, CuaResponse,
+    HealthReportArgs, HealthReportResult, MachineDescriptor, MachineId, MachineLocation,
+    ProtocolVersion, RequestId, ValidationError,
+    driver_mcp::{
+        DriverCallFailure, descriptor_from_health, error_response, response_for, tool_call,
+    },
 };
 
 use super::transport::DriverTransport;
@@ -15,24 +20,70 @@ pub async fn describe_machine(
     transport: &dyn DriverTransport,
     machine_id: MachineId,
 ) -> anyhow::Result<MachineDescriptor> {
-    let _ = (transport, machine_id);
-    todo!("slice 2: health_report -> MachineDescriptor")
+    let report = health_report(transport, &machine_id).await?;
+    Ok(descriptor_from_health(
+        machine_id,
+        MachineLocation::ServerLocal,
+        &report,
+    ))
 }
 
-/// The health report the driver last returned, typed.
-pub async fn health_report(transport: &dyn DriverTransport) -> anyhow::Result<HealthReportResult> {
-    let _ = transport;
-    todo!("slice 2: call health_report")
+/// The driver's unfiltered health report, decoded through the same envelope
+/// checks as any other action result.
+pub async fn health_report(
+    transport: &dyn DriverTransport,
+    machine_id: &MachineId,
+) -> anyhow::Result<HealthReportResult> {
+    let request = CuaRequestEnvelope {
+        version: ProtocolVersion::V1,
+        request_id: RequestId::try_from("health").expect("static id"),
+        machine_id: machine_id.clone(),
+        action: CuaAction::HealthReport(HealthReportArgs {
+            include: vec![],
+            skip: vec![],
+        }),
+    };
+    let call = tool_call(&request.action)?;
+    let outcome = transport.call_tool(call.name, call.arguments).await;
+    match response_for(&request, outcome).response {
+        CuaResponse::Success { result } => match *result {
+            CuaActionResult::HealthReport(report) => Ok(report),
+            other => anyhow::bail!("health_report answered with {:?}", other.kind()),
+        },
+        CuaResponse::Error { error } => anyhow::bail!(
+            "health_report failed ({:?}): {}",
+            error.code,
+            error.message.as_str()
+        ),
+    }
 }
 
 /// A checked adapter that executes every authorized request against the
 /// driver: action to tool call, payload to correlated envelope.
+///
+/// The adapter validates and authorizes before this callback runs and checks
+/// the correlation after it, so the callback only encodes, calls and decodes;
+/// a driver failure becomes a typed runtime error, never a panic.
 pub fn checked_adapter(
     transport: Arc<dyn DriverTransport>,
     descriptor: MachineDescriptor,
 ) -> Result<CheckedCuaAdapter, ValidationError> {
-    let _ = (transport, descriptor);
-    todo!("slice 2: CheckedCuaAdapter over a DriverTransport")
+    CheckedCuaAdapter::new(descriptor, move |request| {
+        let transport = transport.clone();
+        Box::pin(async move {
+            let call = match tool_call(&request.action) {
+                Ok(call) => call,
+                Err(error) => {
+                    return error_response(
+                        &request,
+                        &DriverCallFailure::Malformed(error.to_string()),
+                    );
+                }
+            };
+            let outcome = transport.call_tool(call.name, call.arguments).await;
+            response_for(&request, outcome)
+        })
+    })
 }
 
 #[cfg(test)]
@@ -148,7 +199,7 @@ mod tests {
 
         let report = FakeTransport::answering([Ok(payload(HEALTHY))]);
         assert_eq!(
-            health_report(&report)
+            health_report(&report, &id())
                 .await
                 .unwrap()
                 .driver_version
@@ -204,6 +255,51 @@ mod tests {
         assert_eq!(calls[0], ("list_apps".to_owned(), serde_json::Map::new()));
         assert_eq!(calls[1].0, "list_windows");
         assert_eq!(calls[1].1["on_screen_only"], false);
+    }
+
+    /// Round-trips through a real `cua-driver mcp` child. Run it by hand with
+    /// `--ignored` on a host that has the driver installed; it only reads.
+    #[tokio::test]
+    #[ignore = "needs an installed cua-driver binary"]
+    async fn live_driver_reports_health_and_lists_sessions_through_the_checked_boundary() {
+        use crate::services::cua::{discovery, transport::StdioDriverTransport};
+
+        let Some(driver) = discovery::discover(None).unwrap() else {
+            eprintln!("no cua-driver on this host; nothing to check");
+            return;
+        };
+        let transport = Arc::new(StdioDriverTransport::spawn(&driver).await.unwrap());
+        let machine = describe_machine(transport.as_ref(), id()).await.unwrap();
+        eprintln!("live descriptor: {machine:?}");
+        machine.validate().unwrap();
+        assert_ne!(machine.health, MachineHealth::Unavailable);
+
+        let adapter = checked_adapter(transport.clone(), machine).unwrap();
+        let response = adapter
+            .execute(&request(CuaAction::ListSessions(
+                cua_protocol::ListSessionsArgs {
+                    cursor: None,
+                    limit: None,
+                },
+            )))
+            .await
+            .unwrap();
+        match response.response {
+            CuaResponse::Success { result } => match *result {
+                cua_protocol::CuaActionResult::ListSessions(list) => {
+                    eprintln!("live sessions: {}", list.sessions.len());
+                }
+                other => panic!("unexpected result {other:?}"),
+            },
+            CuaResponse::Error { error } => panic!("live list_sessions failed: {error:?}"),
+        }
+        drop(adapter);
+        Arc::try_unwrap(transport)
+            .ok()
+            .expect("the adapter was the only other owner")
+            .shutdown();
+        // The child is killed asynchronously once the connection drops.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 
     #[tokio::test]

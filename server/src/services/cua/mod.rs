@@ -7,6 +7,11 @@
 //! shares it. Headless detection, per-run sessions and the `[cua]` config
 //! section wire this into `AppState` in the lifecycle slice.
 
+// Wired into `AppState` by the lifecycle slice (#16); until then only tests
+// construct these.
+#[allow(dead_code)]
 pub mod discovery;
+#[allow(dead_code)]
 pub mod driver;
+#[allow(dead_code)]
 pub mod transport;

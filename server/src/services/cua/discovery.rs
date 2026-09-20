@@ -47,18 +47,72 @@ impl fmt::Display for DriverLookupError {
 
 impl std::error::Error for DriverLookupError {}
 
+/// Whether `path` is a file this process could execute.
+fn is_executable(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+/// The driver binary's file name on this platform.
+fn binary_name() -> String {
+    format!("{DRIVER_BINARY}{}", std::env::consts::EXE_SUFFIX)
+}
+
 /// Resolve the driver binary from the given sources. `Ok(None)` means no
-/// driver is installed anywhere it was looked for.
+/// driver is installed anywhere it was looked for; a path that was named
+/// explicitly but cannot run is an error so a typo is never a silent
+/// "no GUI target".
 pub fn locate_driver(lookup: DriverLookup<'_>) -> Result<Option<PathBuf>, DriverLookupError> {
-    let _ = lookup;
-    todo!("slice 2: config path / env / PATH lookup")
+    let explicit = [
+        (
+            "[cua].driver_path",
+            lookup.configured.map(Path::to_path_buf),
+        ),
+        (DRIVER_ENV, lookup.env_override.map(PathBuf::from)),
+    ];
+    for (source, named) in explicit {
+        if let Some(path) = named {
+            return if is_executable(&path) {
+                Ok(Some(path))
+            } else {
+                Err(DriverLookupError::NotExecutable { source, path })
+            };
+        }
+    }
+    let name = binary_name();
+    let found = lookup
+        .path
+        .into_iter()
+        .flat_map(std::env::split_paths)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .map(|dir| dir.join(&name))
+        .find(|candidate| is_executable(candidate));
+    Ok(found)
 }
 
 /// Resolve the driver binary from the config value and this process's
 /// environment.
 pub fn discover(configured: Option<&Path>) -> Result<Option<PathBuf>, DriverLookupError> {
-    let _ = configured;
-    todo!("slice 2: locate_driver over the process environment")
+    let env_override = std::env::var_os(DRIVER_ENV);
+    let path = std::env::var_os("PATH");
+    locate_driver(DriverLookup {
+        configured,
+        env_override: env_override.as_deref(),
+        path: path.as_deref(),
+    })
 }
 
 #[cfg(test)]

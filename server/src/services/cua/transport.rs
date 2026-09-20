@@ -8,8 +8,13 @@
 use std::{future::Future, path::Path, pin::Pin};
 
 use cua_protocol::driver_mcp::DriverCallFailure;
-use rmcp::model::CallToolResult;
+use rmcp::{
+    model::{CallToolRequestParams, CallToolResult, RawContent},
+    service::ServerSink,
+};
 use serde_json::{Map, Value};
+
+use crate::config::McpServerConfig;
 
 /// The structured payload of one tool call, or why there is none.
 pub type CallOutcome = Result<Value, DriverCallFailure>;
@@ -29,32 +34,92 @@ pub trait DriverTransport: Send + Sync {
 /// itself JSON. An `isError` result carries the driver's structured `code`
 /// beside its text.
 pub(crate) fn payload_from_call_result(result: CallToolResult) -> CallOutcome {
-    let _ = result;
-    todo!("slice 2: CallToolResult -> payload")
+    let text = result
+        .content
+        .iter()
+        .filter_map(|content| match &content.raw {
+            RawContent::Text(raw) => Some(raw.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if result.is_error == Some(true) {
+        let code = result
+            .structured_content
+            .as_ref()
+            .and_then(|structured| structured.get("code"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        return Err(DriverCallFailure::Tool {
+            code,
+            message: text,
+        });
+    }
+    if let Some(structured) = result.structured_content {
+        return Ok(structured);
+    }
+    if text.trim_start().starts_with(['{', '['])
+        && let Ok(parsed) = serde_json::from_str::<Value>(&text)
+    {
+        return Ok(parsed);
+    }
+    Err(DriverCallFailure::Malformed(
+        "driver returned no structured payload".to_owned(),
+    ))
 }
 
 /// MCP over stdio to one persistent `cua-driver mcp` child process.
+///
+/// The child lives exactly as long as this transport: the keep-alive task
+/// owns the rmcp service, and dropping the transport aborts that task, which
+/// drops the service, closes the connection and kills the child.
 pub struct StdioDriverTransport {
-    _private: (),
+    sink: ServerSink,
+    keep_alive: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for StdioDriverTransport {
+    fn drop(&mut self) {
+        self.keep_alive.abort();
+    }
 }
 
 impl StdioDriverTransport {
     /// Spawn `<driver> mcp` and complete the MCP handshake.
     pub async fn spawn(driver: &Path) -> anyhow::Result<Self> {
-        let _ = driver;
-        todo!("slice 2: spawn cua-driver mcp over rmcp stdio")
+        let config = McpServerConfig {
+            name: "cua-driver".to_owned(),
+            url: None,
+            command: Some(driver.to_string_lossy().into_owned()),
+            args: vec!["mcp".to_owned()],
+            headers: Default::default(),
+            trust: Default::default(),
+            enabled_tools: Vec::new(),
+        };
+        let (sink, keep_alive) = crate::services::mcp::connect_stdio(&config).await?;
+        log::info!("[cua] driver started: {} mcp", driver.display());
+        Ok(Self { sink, keep_alive })
     }
 
     /// Stop the driver child; the process is killed when the connection drops.
     pub fn shutdown(self) {
-        todo!("slice 2: shut the child down")
+        log::info!("[cua] driver stopped");
+        drop(self);
     }
 }
 
 impl DriverTransport for StdioDriverTransport {
     fn call_tool(&self, name: &str, arguments: Map<String, Value>) -> TransportFuture<'_> {
-        let _ = (name, arguments);
-        todo!("slice 2: rmcp call_tool")
+        let mut params = CallToolRequestParams::new(name.to_owned());
+        params.arguments = Some(arguments);
+        Box::pin(async move {
+            let result = self
+                .sink
+                .call_tool(params)
+                .await
+                .map_err(|error| DriverCallFailure::Transport(error.to_string()))?;
+            payload_from_call_result(result)
+        })
     }
 }
 
