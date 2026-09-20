@@ -1,13 +1,13 @@
 <script lang="ts">
 	import { resourceMedia, resourceFromUrl, issueResource } from "$lib/api/resource-media.js";
-	import { deleteMemoryFile, fetchMemory, fetchMemoryContent, fetchMemoryGraph, searchMemory, type MemorySearchResult } from "$lib/api/client.js";
-	import type { MemoryEntry, MemoryGraph } from "$lib/api/types.js";
+	import { fetchChats, fetchCompanionName, fetchMemory, fetchMemoryContent, fetchMemoryGraph, fetchMemoryReceipts, searchMemory, type MemorySearchResult } from "$lib/api/client.js";
+	import type { MemoryEntry, MemoryGraph, MemoryReceipt } from "$lib/api/types.js";
 	import { displayName, filterEntries, formatSize, groupByFolder, mediaKind, relatedPaths } from "$lib/memory/library.js";
+	import { confidenceHint, confidenceLabel, flagBadges, reasonLabel, recalledWhen, recallsOf, receiptHeading } from "$lib/memory/receipts.js";
+	import MemoryControls, { type MemoryChange } from "./MemoryControls.svelte";
 	import { openFile } from "$lib/stores/fileviewer.svelte.js";
-	import { getToasts } from "$lib/stores/toast.svelte.js";
 
-	const toast = getToasts();
-	let { slug }: { slug: string } = $props();
+	let { slug, initialPath = "" }: { slug: string; initialPath?: string } = $props();
 
 	let entries = $state<MemoryEntry[]>([]);
 	let graph = $state<MemoryGraph>({ edges: [] });
@@ -23,22 +23,35 @@
 	let viewing = $state<MemoryEntry | null>(null);
 	let content = $state("");
 	let contentLoading = $state(false);
-	let confirmingDelete = $state(false);
-	let deleting = $state(false);
+	let companionName = $state("");
+
+	// Receipts of every conversation (#84), read once per visit so a memory
+	// can show when and why it was recalled. Never guessed: a failed read is
+	// reported as such, and a memory nobody recalled says so.
+	let receipts = $state<MemoryReceipt[]>([]);
+	let receiptsState = $state<"idle" | "loading" | "ready" | "error">("idle");
 
 	let groups = $derived(groupByFolder(filterEntries(entries, query)));
 	let totalSize = $derived(entries.reduce((sum, e) => sum + e.size, 0));
 	let related = $derived(viewing ? relatedPaths(graph, viewing.path) : []);
+	let recalls = $derived(viewing ? recallsOf(receipts, viewing.path).slice(0, 12) : []);
+	let openedInitial = false;
 
-	async function load() {
-		loading = true;
+	/** `quiet` re-reads the listing behind an open memory without replacing the page with the loading state. */
+	async function load(quiet = false) {
+		if (!quiet) loading = true;
 		loadError = "";
 		try {
 			const [e, g] = await Promise.all([fetchMemory(slug), fetchMemoryGraph(slug)]);
 			entries = e;
 			graph = g;
+			if (viewing) viewing = entries.find((entry) => entry.path === viewing?.path) ?? null;
+			if (initialPath && !openedInitial) {
+				openedInitial = true;
+				openByPath(initialPath);
+			}
 		} catch {
-			loadError = "Could not load memories. Please try again.";
+			if (!quiet) loadError = "Could not load memories. Please try again.";
 		} finally {
 			loading = false;
 		}
@@ -46,7 +59,28 @@
 
 	$effect(() => {
 		load();
+		fetchCompanionName(slug)
+			.then((res) => { if (res.name) companionName = res.name; })
+			.catch(() => {}); // name is non-critical
 	});
+
+	async function loadReceipts() {
+		receiptsState = "loading";
+		try {
+			const chats = await fetchChats(slug);
+			const ids = new Set(chats.map((chat) => chat.id));
+			ids.add("default");
+			const lists = await Promise.all([...ids].map((id) => fetchMemoryReceipts(slug, id)));
+			receipts = lists.flat();
+			receiptsState = "ready";
+		} catch {
+			receiptsState = "error";
+		}
+	}
+
+	function chatHref(chatId: string) {
+		return chatId === "default" ? `/${encodeURIComponent(slug)}/chat` : `/${encodeURIComponent(slug)}/chat/${encodeURIComponent(chatId)}`;
+	}
 
 	// Server-side search (keyword + semantic) for queries of two characters or more.
 	$effect(() => {
@@ -73,7 +107,7 @@
 
 	async function open(entry: MemoryEntry) {
 		viewing = entry;
-		confirmingDelete = false;
+		if (receiptsState === "idle") void loadReceipts();
 		if (mediaKind(entry.path) !== "text") {
 			content = "";
 			contentLoading = false;
@@ -108,21 +142,21 @@
 	function back() {
 		viewing = null;
 		content = "";
-		confirmingDelete = false;
 	}
 
-	async function forget() {
-		if (!viewing || deleting) return;
-		deleting = true;
-		try {
-			await deleteMemoryFile(slug, viewing.path);
-			toast.success("Forgotten");
+	/** Every control rewrites the canonical file, so re-read it rather than patching the view. */
+	async function onMemoryChange(change: MemoryChange) {
+		if (change.kind === "forgotten") {
 			back();
 			await load();
-		} catch {
-			toast.error("Could not delete that memory.");
-		} finally {
-			deleting = false;
+			if (receiptsState !== "idle") void loadReceipts();
+			return;
+		}
+		const current = viewing;
+		await load(true);
+		if (current) {
+			const fresh = entries.find((entry) => entry.path === current.path);
+			if (fresh) await open(fresh);
 		}
 	}
 </script>
@@ -131,12 +165,13 @@
 	{#if loading}
 		<p role="status" class="memory-center">Loading memories…</p>
 	{:else if loadError}
-		<div class="memory-center" role="alert"><p>{loadError}</p><button class="nl-button-secondary" onclick={load}>Try again</button></div>
+		<div class="memory-center" role="alert"><p>{loadError}</p><button class="nl-button-secondary" onclick={() => load()}>Try again</button></div>
 	{:else if viewing}
 		{@const kind = mediaKind(viewing.path)}
 		<header class="memory-toolbar">
 			<button class="nl-button-secondary" onclick={back}>← Library</button>
 			<span class="memory-path">{viewing.path}</span>
+			{#each flagBadges(viewing) as badge (badge)}<span class="memory-badge">{badge}</span>{/each}
 			<span class="memory-meta">{formatSize(viewing.size)}</span>
 		</header>
 		<article class="memory-doc">
@@ -164,16 +199,32 @@
 				</ul>
 			</section>
 		{/if}
-		<footer class="memory-danger">
-			{#if confirmingDelete}
-				<p class="memory-meta">Forget this memory permanently? Its file and search entries are removed.</p>
-				<div class="memory-actions">
-					<button class="nl-button-secondary" disabled={deleting} onclick={() => (confirmingDelete = false)}>Keep it</button>
-					<button class="nl-button nl-button-destructive" disabled={deleting} onclick={forget}>{deleting ? "Forgetting…" : "Forget"}</button>
-				</div>
+		<section class="memory-receipts" aria-labelledby="memory-receipts-heading">
+			<h3 id="memory-receipts-heading">{receiptHeading(companionName)}</h3>
+			{#if receiptsState === "loading" || receiptsState === "idle"}
+				<p role="status" class="memory-meta">Looking through your conversations…</p>
+			{:else if receiptsState === "error"}
+				<div class="memory-meta" role="alert"><p>Could not load recall receipts.</p><button class="nl-button-secondary" onclick={loadReceipts}>Try again</button></div>
+			{:else if recalls.length === 0}
+				<p class="memory-meta">This memory has not been recalled in a conversation yet. Pinned memories are recalled on every turn.</p>
 			{:else}
-				<button class="nl-button-secondary" onclick={() => (confirmingDelete = true)}>Forget this memory</button>
+				<ul class="memory-recalls">
+					{#each recalls as recall (recall.chat_id + recall.message_id)}
+						<li class="memory-recall">
+							{#if recall.memory.excerpt}<blockquote class="recall-excerpt">{recall.memory.excerpt}</blockquote>{/if}
+							<p class="recall-meta">
+								<span>{reasonLabel(recall.memory)}</span>
+								<span title={confidenceHint(recall.memory.confidence)}>{confidenceLabel(recall.memory.confidence)}</span>
+								<span>Recalled {recalledWhen(recall.memory.retrieved_at) || "at an unknown time"}</span>
+								<a class="recall-link" href={chatHref(recall.chat_id)}>Open conversation</a>
+							</p>
+						</li>
+					{/each}
+				</ul>
 			{/if}
+		</section>
+		<footer class="memory-danger">
+			<MemoryControls {slug} path={viewing.path} flags={kind === "text" ? { pinned: viewing.pinned, exclude_from_proactive: viewing.exclude_from_proactive } : null} excerpt={viewing.summary} onchange={onMemoryChange} />
 		</footer>
 	{:else}
 		<header class="memory-header">
@@ -226,7 +277,7 @@
 							{@const kind = mediaKind(entry.path)}
 							<li>
 								<button class="memory-row" onclick={() => open(entry)}>
-									<span class="memory-name">{displayName(entry.path)}{kind !== "text" ? ` · ${kind}` : ""}</span>
+									<span class="memory-name">{displayName(entry.path)}{kind !== "text" ? ` · ${kind}` : ""}{#each flagBadges(entry) as badge (badge)}<span class="memory-badge">{badge}</span>{/each}</span>
 									<span class="memory-summary">{entry.summary}</span>
 									<span class="memory-size">{formatSize(entry.size)}</span>
 								</button>
@@ -247,8 +298,15 @@
 	.memory-search { flex: 1 1 260px; max-width: 360px; }
 	.memory-search input { width: 100%; min-height: 44px; }
 	.memory-center { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: 220px; text-align: center; color: var(--foreground); font: 400 16px/1.6 var(--font-body); }
-	.memory-group, .memory-results, .memory-related, .memory-danger { max-width: 840px; margin: 0 auto 20px; }
+	.memory-group, .memory-results, .memory-related, .memory-receipts, .memory-danger { max-width: 840px; margin: 0 auto 20px; }
 	.memory-group h3, .memory-related h3 { font: 500 14px var(--font-body); color: var(--foreground); margin: 0 0 8px; text-transform: capitalize; }
+	.memory-receipts h3 { font: 500 14px var(--font-body); color: var(--foreground); margin: 0 0 8px; }
+	.memory-badge { display: inline-block; margin-left: 8px; font: 500 11px/1.4 var(--font-body); letter-spacing: 0.04em; text-transform: uppercase; color: var(--primary); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; vertical-align: middle; }
+	.memory-recalls { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+	.memory-recall { display: grid; gap: 6px; padding: 12px 14px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; }
+	.recall-excerpt { margin: 0; padding: 0 0 0 12px; border-left: 2px solid var(--primary); font: 400 14px/1.6 var(--font-body); color: var(--foreground); white-space: pre-wrap; overflow-wrap: anywhere; }
+	.recall-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; font: 400 12px/1.5 var(--font-body); color: var(--text-secondary); }
+	.recall-link { color: var(--primary); text-decoration: underline; text-underline-offset: 3px; }
 	.memory-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 	.memory-row { display: grid; grid-template-columns: minmax(120px, 1fr) 2fr auto; gap: 12px; align-items: baseline; width: 100%; min-height: 44px; padding: 10px 14px; text-align: left; background: var(--card); border: 1px solid var(--border); border-radius: 12px; color: var(--foreground); cursor: pointer; }
 	.memory-row:hover { background: var(--accent); }
@@ -264,7 +322,6 @@
 	.doc-pdf { width: 100%; height: 70vh; border: 0; border-radius: 12px; background: var(--background); }
 	.memory-related ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 	.link-btn { background: none; border: 0; padding: 6px 0; min-height: 44px; color: var(--primary); font: 400 14px var(--font-body); cursor: pointer; text-align: left; }
-	.memory-actions { display: flex; gap: 8px; margin-top: 8px; }
 	@media (max-width: 720px) {
 		.memory-page { padding: 16px 16px 40px; }
 		.memory-row { grid-template-columns: 1fr; gap: 4px; }
