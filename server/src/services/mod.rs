@@ -7,6 +7,7 @@ pub mod browser_sessions;
 pub mod companion;
 pub mod companion_routine;
 pub mod drops;
+pub mod federation;
 pub mod heartbeat;
 pub mod llm;
 pub mod machine_registry;
