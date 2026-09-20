@@ -201,7 +201,7 @@ Most settings are available through the interface. Advanced configuration lives 
 |----------------------|-------------|
 | `NOLUNE_HOME` | Data directory, defaults to `~/.nolune` |
 | `NOLUNE_AUTH_TOKEN` | API token override. The token is for automation, the CLI and the desktop app; browsers pair for a revocable session instead and are unaffected when it changes |
-| `NOLUNE_PUBLIC_URL` | Public URL for the server |
+| `NOLUNE_PUBLIC_URL` | Public URL for the server. Defaults to `http://localhost:<port>`; set it when you reach Nolune through another address so shared file links work |
 | `ANTHROPIC_API_KEY` | Anthropic API key override |
 | `OPENAI_API_KEY` | OpenAI API key override |
 | `RUST_LOG` | Logging level, defaults to `info` |

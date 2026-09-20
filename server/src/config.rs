@@ -884,7 +884,31 @@ pub fn load_config() -> anyhow::Result<Config> {
         }
     }
 
+    apply_public_url_default(&mut config);
+
     Ok(config)
+}
+
+/// The address a self-hosted server uses for its own links when no public
+/// URL is configured. It follows the effective port, so it is derived on every
+/// load instead of being written to config.toml.
+pub fn local_public_url(port: u16) -> String {
+    format!("http://localhost:{port}")
+}
+
+/// Whether the loaded `public_url` is the derived local default rather than a
+/// value the operator configured.
+pub fn uses_local_public_url(config: &Config) -> bool {
+    config.public_url == local_public_url(config.port)
+}
+
+/// Every reader of the config (startup, per-turn reloads, background routines)
+/// must see the same public URL, or tools that mint links flip between working
+/// and "no public URL configured" depending on which path loaded the file.
+fn apply_public_url_default(config: &mut Config) {
+    if config.public_url.trim().is_empty() {
+        config.public_url = local_public_url(config.port);
+    }
 }
 
 /// Merge updates into the existing document so unrelated/forward-compatible keys
@@ -938,8 +962,66 @@ pub fn serialize_config_preserving_keys(config: &Config, original: &str) -> anyh
             tokens.remove(retired);
         }
     }
-    merge(&mut document, toml::Value::try_from(config)?);
+    // The local default is derived from the port on load; persisting it would
+    // pin the old port after a port change and hide that nothing was configured.
+    let mut config = config.clone();
+    if uses_local_public_url(&config) {
+        config.public_url.clear();
+    }
+    merge(&mut document, toml::Value::try_from(&config)?);
     Ok(toml::to_string_pretty(&document)?)
+}
+
+#[cfg(test)]
+mod public_url_tests {
+    use super::*;
+
+    #[test]
+    fn empty_public_url_defaults_to_the_local_server_address() {
+        let mut config: Config = toml::from_str("port = 26559\npublic_url = \"\"").unwrap();
+        apply_public_url_default(&mut config);
+        assert_eq!(config.public_url, "http://localhost:26559");
+        assert!(uses_local_public_url(&config));
+
+        let mut blank: Config = toml::from_str("port = 4242\npublic_url = \"  \"").unwrap();
+        apply_public_url_default(&mut blank);
+        assert_eq!(blank.public_url, "http://localhost:4242");
+    }
+
+    #[test]
+    fn configured_public_url_is_kept() {
+        let mut config: Config =
+            toml::from_str("port = 26559\npublic_url = \"https://nolune.example\"").unwrap();
+        apply_public_url_default(&mut config);
+        assert_eq!(config.public_url, "https://nolune.example");
+        assert!(!uses_local_public_url(&config));
+    }
+
+    #[test]
+    fn derived_local_public_url_is_not_written_to_disk() {
+        let original = "port = 26559\npublic_url = \"\"\n";
+        let mut config: Config = toml::from_str(original).unwrap();
+        apply_public_url_default(&mut config);
+
+        let serialized = serialize_config_preserving_keys(&config, original).unwrap();
+        let value: toml::Value = toml::from_str(&serialized).unwrap();
+        assert_eq!(value["public_url"].as_str(), Some(""));
+
+        // A reload of the saved file still derives the default.
+        let mut reloaded: Config = toml::from_str(&serialized).unwrap();
+        apply_public_url_default(&mut reloaded);
+        assert_eq!(reloaded.public_url, "http://localhost:26559");
+    }
+
+    #[test]
+    fn explicit_public_url_survives_save() {
+        let original = "port = 26559\npublic_url = \"\"\n";
+        let mut config: Config = toml::from_str(original).unwrap();
+        config.public_url = "https://nolune.example".into();
+        let serialized = serialize_config_preserving_keys(&config, original).unwrap();
+        let value: toml::Value = toml::from_str(&serialized).unwrap();
+        assert_eq!(value["public_url"].as_str(), Some("https://nolune.example"));
+    }
 }
 
 #[cfg(test)]
