@@ -1,5 +1,6 @@
 mod agent_loop;
 mod anthropic;
+pub mod codex;
 pub mod contract;
 mod helpers;
 mod openai;
