@@ -512,11 +512,7 @@ import McpAppViewer from "./McpAppViewer.svelte";
 				play("drop_received");
 				hapticDouble();
 			} else if (event.type === "memory_recall") {
-				scene.recalledMemories = event.memories.map((m: any) => ({
-					path: m.path,
-					preview: m.preview,
-					score: m.score,
-				}));
+				scene.recalledMemories = event.memories;
 				// Auto-hide after agent finishes (handled by agent_stopped event);
 			} else if (event.type === "tool_output_chunk") {
 				// Append chunk to live output activity, or create one

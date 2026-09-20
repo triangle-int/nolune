@@ -129,6 +129,8 @@ is a derived record: `memory/` stays the source of truth. The shape:
 - `path` is the memory as the library shows it; `source` is the canonical
   file whose text was recalled. Media memories cite their bound text
   representation (`<media>.md`, see `media_text.rs`).
+- `excerpt` is a bounded slice of the memory body; the stamped
+  `created`/`updated` frontmatter is never part of it.
 - `reason` is `semantic` (vector index), `keyword` (BM25), `linked_to` (one
   graph hop from `linked_from`), or `matched` when hybrid search cannot say
   which channel found a media memory.

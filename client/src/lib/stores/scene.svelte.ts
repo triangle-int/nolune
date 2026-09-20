@@ -9,6 +9,7 @@
  */
 
 import { getContext, setContext } from "svelte";
+import type { RecalledMemory } from "$lib/api/types.js";
 
 const SCENE_KEY = Symbol("scene");
 
@@ -25,7 +26,7 @@ export interface SceneStore {
 	readonly thinking: boolean;
 	readonly voiceAmplitude: number;
 	presenting: boolean;
-	recalledMemories: {path: string; preview: string; score: number}[];
+	recalledMemories: RecalledMemory[];
 
 	enterHome(): void;
 	enterOnboarding(slug: string): void;
@@ -56,7 +57,7 @@ export function createSceneStore(): SceneStore {
 	let thinking = $state(false);
 	let voiceAmplitude = $state(0);
 	let presenting = $state(false);
-	let recalledMemories = $state<{path: string; preview: string; score: number}[]>([]);
+	let recalledMemories = $state<RecalledMemory[]>([]);
 
 	let selectStartTime = 0;
 	let introStartTime = 0;

@@ -143,10 +143,13 @@ pub async fn recall(vector_store: &VectorStore, instance_slug: &str, query: &str
         recall
             .prompt_lines
             .push(format!("- {}: {text}", candidate.hit.path));
+        // Search previews of direct hits start with the memory's stamped
+        // frontmatter; the receipt cites the body only.
+        let (_, body) = memory::parse_frontmatter(text);
         let mut entry = RecalledMemory {
             source: source_of(&candidate.hit.path),
             path: candidate.hit.path,
-            excerpt: text.chars().take(EXCERPT_CHARS).collect(),
+            excerpt: body.trim().chars().take(EXCERPT_CHARS).collect(),
             reason: candidate.reason,
             linked_from: candidate.linked_from,
             confidence: bucket(candidate.reason, candidate.hit.score),
@@ -407,19 +410,20 @@ mod tests {
         let mock = MockServer::new(vec![(200, response(vec![1., 0., 0.]))]).await;
         let workspace = tempfile::tempdir().unwrap();
         let dir = memory_dir(workspace.path());
-        fs::write(dir.join("note.md"), "Orion nebula").unwrap();
-        fs::write(dir.join("words.md"), "Pleiades cluster").unwrap();
-        fs::write(
-            dir.join("linked.md"),
-            "---\ncreated: 2026-01-01\nupdated: 2026-01-01\n---\nMoon phases",
-        )
-        .unwrap();
+        // Every memory written through the store is stamped with frontmatter,
+        // and both search channels preview the stamped text: the vector index
+        // embeds it, BM25 reads the raw file.
+        let stamped =
+            |body: &str| format!("---\ncreated: 2026-01-01\nupdated: 2026-01-01\n---\n{body}");
+        fs::write(dir.join("note.md"), stamped("Orion nebula")).unwrap();
+        fs::write(dir.join("words.md"), stamped("Pleiades cluster")).unwrap();
+        fs::write(dir.join("linked.md"), stamped("Moon phases")).unwrap();
         let store = VectorStore::connect_with_config(workspace.path(), &mock.config).await;
         store
             .upsert_text_memory(
                 "one",
                 "note.md",
-                vec![("Orion nebula".into(), vec![1., 0., 0.])],
+                vec![(stamped("Orion nebula"), vec![1., 0., 0.])],
             )
             .await
             .unwrap();
@@ -437,10 +441,10 @@ mod tests {
         let note = by_path("note.md");
         assert_eq!(note.reason, RecallReason::Semantic);
         assert_eq!(note.confidence, Confidence::High);
-        assert_eq!(note.excerpt, "Orion nebula");
+        assert_eq!(note.excerpt, "Orion nebula", "frontmatter is stripped");
         let words = by_path("words.md");
         assert_eq!(words.reason, RecallReason::Keyword);
-        assert_eq!(words.excerpt, "Pleiades cluster");
+        assert_eq!(words.excerpt, "Pleiades cluster", "frontmatter is stripped");
         let linked = by_path("linked.md");
         assert_eq!(linked.reason, RecallReason::LinkedTo);
         assert_eq!(linked.linked_from.as_deref(), Some("note.md"));
@@ -465,7 +469,14 @@ mod tests {
             block.starts_with("[system: auto-recalled memories"),
             "{block}"
         );
-        assert!(block.contains("- note.md: Orion nebula\n"), "{block}");
+        // The injected prompt is unchanged from the inline RAG block: direct
+        // hits carry the search preview as-is, graph neighbours the body.
+        assert!(
+            block.contains(
+                "- note.md: ---\ncreated: 2026-01-01\nupdated: 2026-01-01\n---\nOrion nebula\n"
+            ),
+            "{block}"
+        );
         assert!(block.contains("- linked.md: Moon phases\n"), "{block}");
         assert!(!block.contains("semantic"), "the prompt stays as before");
     }
@@ -649,6 +660,58 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    /// The client declares the `memory_recall` event by hand; keep it honest
+    /// about the wire shape (no stale `preview`/`score`, every key declared).
+    #[test]
+    fn memory_recall_event_matches_the_client_type() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let types = fs::read_to_string(repo.join("client/src/lib/api/types.ts")).unwrap();
+        let mut linked = recalled("linked.md", RecallReason::LinkedTo);
+        linked.linked_from = Some("note.md".into());
+        let event = crate::domain::events::ServerEvent::MemoryRecall {
+            instance_slug: "one".into(),
+            chat_id: "default".into(),
+            memories: vec![linked],
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        let entry = json["memories"][0].as_object().unwrap();
+
+        let declared = types
+            .split("export interface RecalledMemory {")
+            .nth(1)
+            .and_then(|rest| rest.split('}').next())
+            .expect("client/src/lib/api/types.ts declares RecalledMemory");
+        for key in entry.keys() {
+            assert!(
+                declared.contains(&format!("\n\t{key}: "))
+                    || declared.contains(&format!("\n\t{key}?: ")),
+                "client RecalledMemory does not declare {key:?}:{declared}"
+            );
+        }
+        for stale in ["preview", "score"] {
+            assert!(!entry.contains_key(stale), "{stale} is not sent");
+            assert!(
+                !declared.contains(&format!("\n\t{stale}: ")),
+                "client still declares {stale}"
+            );
+        }
+        let event_type = types
+            .split("type: \"memory_recall\";")
+            .nth(1)
+            .and_then(|rest| rest.split('}').next())
+            .expect("client declares the memory_recall event");
+        for field in [
+            "instance_slug: string;",
+            "chat_id: string;",
+            "memories: RecalledMemory[];",
+        ] {
+            assert!(
+                event_type.contains(field),
+                "memory_recall event lacks {field:?}:{event_type}"
+            );
+        }
     }
 
     #[test]
