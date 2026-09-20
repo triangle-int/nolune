@@ -286,12 +286,12 @@
 					</p>
 
 					<div class="cmt-controls">
-						<button class="cmt-btn" aria-expanded={isOpenPanel(c, "details")} onclick={() => toggle(c, "details")}>Details</button>
+						<button class="nl-button-secondary cmt-btn" aria-expanded={isOpenPanel(c, "details")} onclick={() => toggle(c, "details")}>Details</button>
 						{#if changeable}
-							<button class="cmt-btn" aria-expanded={isOpenPanel(c, "edit")} disabled={busy === c.id} onclick={() => toggle(c, "edit")}>Edit</button>
-							<button class="cmt-btn" aria-expanded={isOpenPanel(c, "snooze")} disabled={busy === c.id} onclick={() => toggle(c, "snooze")}>Snooze</button>
-							<button class="cmt-btn" aria-expanded={isOpenPanel(c, "complete")} disabled={busy === c.id} onclick={() => toggle(c, "complete")}>Complete</button>
-							<button class="cmt-btn" aria-expanded={isOpenPanel(c, "cancel")} disabled={busy === c.id} onclick={() => toggle(c, "cancel")}>Cancel</button>
+							<button class="nl-button-secondary cmt-btn" aria-expanded={isOpenPanel(c, "edit")} disabled={busy === c.id} onclick={() => toggle(c, "edit")}>Edit</button>
+							<button class="nl-button-secondary cmt-btn" aria-expanded={isOpenPanel(c, "snooze")} disabled={busy === c.id} onclick={() => toggle(c, "snooze")}>Snooze</button>
+							<button class="nl-button-secondary cmt-btn" aria-expanded={isOpenPanel(c, "complete")} disabled={busy === c.id} onclick={() => toggle(c, "complete")}>Complete</button>
+							<button class="nl-button-secondary cmt-btn" aria-expanded={isOpenPanel(c, "cancel")} disabled={busy === c.id} onclick={() => toggle(c, "cancel")}>Cancel</button>
 						{/if}
 					</div>
 
@@ -389,8 +389,9 @@
 	.cmt-head h3 { font: 400 22px/1.2 var(--font-display); letter-spacing: -0.02em; color: var(--foreground); margin: 0 0 6px; }
 	.cmt-head p { font: 400 14px/1.6 var(--font-body); color: var(--text-secondary); margin: 0; }
 	.cmt-filter { display: inline-flex; gap: 4px; padding: 4px; background: var(--card); border: 1px solid var(--border); border-radius: 999px; flex-shrink: 0; }
-	.cmt-filter-btn { min-height: 36px; padding: 0 14px; border: 0; border-radius: 999px; background: transparent; color: var(--text-secondary); font: 500 13px var(--font-body); cursor: pointer; }
-	.cmt-filter-active { background: var(--primary); color: var(--primary-foreground); }
+	.cmt-filter-btn { display: flex; align-items: center; justify-content: center; min-height: 44px; min-width: 44px; padding: 10px 18px; border: 0; border-radius: 999px; background: transparent; color: var(--text-secondary); font: 500 14px var(--font-body); white-space: nowrap; cursor: pointer; transition: background-color 160ms ease, color 160ms ease; }
+	.cmt-filter-btn:hover { background: var(--accent); color: var(--foreground); }
+	.cmt-filter-active, .cmt-filter-active:hover { background: var(--primary); color: var(--primary-foreground); }
 	.cmt-empty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 24px 16px; text-align: center; color: var(--text-secondary); font: 400 14px/1.6 var(--font-body); background: var(--card); border: 1px solid var(--border); border-radius: 16px; margin: 0; }
 	.cmt-empty p { margin: 0; }
 	.cmt-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
@@ -407,10 +408,8 @@
 	.cmt-link { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
 	.cmt-link-after { margin-left: 8px; }
 	.cmt-controls { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
-	.cmt-btn { min-height: 36px; padding: 0 12px; border: 1px solid var(--border); border-radius: var(--radius-control, 8px); background: var(--card); color: var(--foreground); font: 500 13px var(--font-body); cursor: pointer; }
-	.cmt-btn:hover:not(:disabled) { background: var(--accent); }
+	/* The shared 44px secondary button; the one whose panel is open is tinted. */
 	.cmt-btn[aria-expanded="true"] { background: var(--accent); border-color: var(--primary); }
-	.cmt-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 	.cmt-details { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 16px; margin: 8px 0 0; padding: 12px 0 0; border-top: 1px solid var(--border); font: 400 13px/1.5 var(--font-body); color: var(--text-secondary); }
 	.cmt-details dt { color: var(--text-muted); }
 	.cmt-details dd { margin: 0; overflow-wrap: anywhere; }

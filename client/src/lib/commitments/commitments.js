@@ -132,15 +132,19 @@ export function eventLabel(event) {
 }
 
 /**
- * What the commitment is held by right now: dependencies first (they block
- * before a wait is even looked at), then the waiting condition. "" once closed.
+ * What the commitment is held by right now. The dependency count is a wait
+ * only while the server says "blocked": completed dependency ids stay on the
+ * record, and the status is derived from whether any is still unfinished.
+ * Otherwise the waiting condition. "" once closed.
  * @param {Commitment} commitment
  * @param {number} now
  */
 export function waitLabel(commitment, now) {
 	if (!isOpen(commitment.status)) return "";
 	const deps = commitment.dependencies.length;
-	if (deps > 0) return `Waiting on ${deps} other commitment${deps === 1 ? "" : "s"}`;
+	if (commitment.status === "blocked" && deps > 0) {
+		return `Waiting on ${deps} other commitment${deps === 1 ? "" : "s"}`;
+	}
 	const wait = commitment.waiting_on;
 	if (!wait) return "";
 	switch (wait.kind) {

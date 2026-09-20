@@ -106,8 +106,20 @@ test('waiting, blocked, snooze, and next-check wording never invent facts', () =
 	assert.equal(waitLabel(commitment({ waiting_on: { kind: 'event', event: 'machine_connected:studio-mac' } }), T0), 'Waiting for studio-mac to connect');
 	assert.equal(waitLabel(commitment({ waiting_on: { kind: 'event', event: 'email_reply:thread-9' } }), T0), 'Waiting for email_reply:thread-9');
 	assert.equal(waitLabel(commitment({ waiting_on: { kind: 'user_reply' } }), T0), 'Waiting for your reply');
-	assert.equal(waitLabel(commitment({ dependencies: ['cmt_a'] }), T0), 'Waiting on 1 other commitment');
-	assert.equal(waitLabel(commitment({ dependencies: ['cmt_a', 'cmt_b'] }), T0), 'Waiting on 2 other commitments');
+	// The server keeps completed dependency ids on the record and says
+	// "blocked" only while one is unfinished, so the count is only a wait then.
+	assert.equal(waitLabel(commitment({ status: 'blocked', dependencies: ['cmt_a'] }), T0), 'Waiting on 1 other commitment');
+	assert.equal(waitLabel(commitment({ status: 'blocked', dependencies: ['cmt_a', 'cmt_b'] }), T0), 'Waiting on 2 other commitments');
+	const unblocked = commitment({
+		status: 'active',
+		dependencies: ['cmt_a'],
+		last_check: { at: T0 - 60, outcome: { kind: 'observed', event: 'commitment_completed:cmt_a' } },
+	});
+	assert.equal(waitLabel(unblocked, T0), '');
+	assert.equal(
+		waitLabel({ ...unblocked, status: 'waiting', waiting_on: { kind: 'user_reply' } }, T0),
+		'Waiting for your reply',
+	);
 	assert.equal(waitLabel(commitment({ status: 'dismissed', waiting_on: { kind: 'user_reply' } }), T0), '');
 
 	assert.equal(eventLabel('machine_connected:studio-mac'), 'studio-mac connected');
