@@ -511,6 +511,16 @@ impl PeerStore {
         Ok(Some(inner.peers[index].clone()))
     }
 
+    /// Records that something signed by `companion_id` verified now: stamps
+    /// `last_seen_at` under the store lock and persists. `updated_at` is
+    /// left alone, because nothing about the trust state changed. Unknown
+    /// peers are `Ok(false)`; an unloadable store fails closed like every
+    /// other write.
+    pub fn touch(&self, companion_id: &str) -> Result<bool, FederationError> {
+        let _ = companion_id;
+        todo!("#108 PR 4: stamp last_seen_at")
+    }
+
     /// Reads the store file once. Records whose document does not verify
     /// are dropped. A file that cannot be read or is not a store of this
     /// version leaves the store empty and marked unloadable: it is reported,
@@ -721,8 +731,73 @@ mod tests {
             pending_origin: None,
             created_at: T0,
             updated_at: T0,
+            last_seen_at: None,
             rotation_history: Vec::new(),
         }
+    }
+
+    #[test]
+    fn touching_a_peer_stamps_last_seen_without_changing_its_trust_state() {
+        let (tmp, now, store) = store();
+        let peer = identity("peer");
+        store
+            .upsert(record(&peer, PeerState::Paired), peer.verified().clone())
+            .unwrap();
+        assert_eq!(
+            store.get(peer.companion_id()).unwrap().record.last_seen_at,
+            None
+        );
+
+        now.store(T0 + 30, Ordering::SeqCst);
+        assert!(store.touch(peer.companion_id()).unwrap());
+        let seen = store.get(peer.companion_id()).unwrap().record;
+        assert_eq!(seen.last_seen_at, Some(T0 + 30));
+        assert_eq!(seen.updated_at, T0, "seeing a peer is not a trust change");
+        assert_eq!(seen.state, PeerState::Paired);
+
+        // Persisted, and reloaded as such.
+        let reopened = PeerStore::with_clock(tmp.path(), system_clock());
+        assert_eq!(
+            reopened
+                .get(peer.companion_id())
+                .unwrap()
+                .record
+                .last_seen_at,
+            Some(T0 + 30)
+        );
+
+        // Later sightings move it forward; a stranger is not recorded.
+        now.store(T0 + 90, Ordering::SeqCst);
+        assert!(store.touch(peer.companion_id()).unwrap());
+        assert_eq!(
+            store.get(peer.companion_id()).unwrap().record.last_seen_at,
+            Some(T0 + 90)
+        );
+        assert!(!store.touch("nobody").unwrap());
+        assert_eq!(store.list().len(), 1);
+
+        // A trust change afterwards keeps the sighting.
+        now.store(T0 + 120, Ordering::SeqCst);
+        let revoked = store
+            .update(peer.companion_id(), |record| {
+                record.state = PeerState::Revoked;
+                Ok(())
+            })
+            .unwrap()
+            .unwrap()
+            .record;
+        assert_eq!(revoked.last_seen_at, Some(T0 + 90));
+        assert_eq!(revoked.updated_at, T0 + 120);
+
+        // An unloadable store refuses the stamp like every other write.
+        let junk = tempfile::tempdir().unwrap();
+        let broken = PeerStore::with_clock(junk.path(), system_clock());
+        identity::create_private_dir(&identity::federation_dir(junk.path())).unwrap();
+        std::fs::write(broken.path(), b"{\"version\":2,\"peers\":[]}").unwrap();
+        assert!(matches!(
+            broken.touch(peer.companion_id()),
+            Err(FederationError::Io { .. })
+        ));
     }
 
     #[test]

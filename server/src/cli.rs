@@ -15,6 +15,8 @@ use cua_protocol::{
     driver_mcp::permissions_from_health,
 };
 
+mod federation;
+
 use crate::{
     config::{self, Profile},
     onboard, profiles, service,
@@ -94,6 +96,11 @@ pub enum CliCommand {
         #[command(subcommand)]
         action: CuaAction,
     },
+    /// Pair this companion with another one, on this host or elsewhere, through the running server
+    Federation {
+        #[command(subcommand)]
+        action: federation::FederationAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -151,6 +158,7 @@ pub fn run(cmd: CliCommand, profile: &Profile) -> i32 {
         CliCommand::Pair => pair(profile),
         CliCommand::Onboard { json, port } => onboard_cmd(json, port, profile),
         CliCommand::Cua { action } => cua(action, profile),
+        CliCommand::Federation { action } => federation::run(action, profile),
     }
 }
 

@@ -15,6 +15,7 @@
 
 pub mod envelope;
 pub mod identity;
+pub mod invite_token;
 pub mod pairing;
 pub mod peers;
 pub mod rotation;
