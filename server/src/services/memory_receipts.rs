@@ -34,6 +34,8 @@ pub const RECEIPTS_DIR: &str = "receipts";
 /// Hybrid search hits per turn; graph expansion may add a few more.
 const SEARCH_LIMIT: usize = 5;
 const RECALL_CAP: usize = 8;
+/// Pinned memories injected on top of the search results, by path order.
+const PINNED_CAP: usize = 8;
 /// Prompt text per memory (unchanged from the inline RAG block).
 const PROMPT_CHARS: usize = 500;
 /// Receipt excerpt bound.
@@ -134,6 +136,33 @@ pub async fn recall(vector_store: &VectorStore, instance_slug: &str, query: &str
             candidates.sort_by(|a, b| b.hit.score.total_cmp(&a.hit.score));
             candidates.truncate(RECALL_CAP);
         }
+    }
+
+    // Pinned memories (#84) are recalled on every turn: a search hit that is
+    // pinned reports that stronger reason, the rest ride along behind the
+    // hits with their body.
+    let pinned = memory::pinned_memories(&media, instance_slug);
+    for candidate in &mut candidates {
+        if pinned.iter().any(|(path, _)| *path == candidate.hit.path) {
+            candidate.reason = RecallReason::Pinned;
+            candidate.linked_from = None;
+        }
+    }
+    for (path, body) in pinned.into_iter().take(PINNED_CAP) {
+        if candidates.iter().any(|c| c.hit.path == path) {
+            continue;
+        }
+        candidates.push(Candidate {
+            hit: VectorSearchResult {
+                path,
+                content_preview: body.trim().chars().take(PROMPT_CHARS).collect(),
+                score: 0.,
+                source_type: "text_memory".to_string(),
+                upload_id: None,
+            },
+            reason: RecallReason::Pinned,
+            linked_from: None,
+        });
     }
 
     let retrieved_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);

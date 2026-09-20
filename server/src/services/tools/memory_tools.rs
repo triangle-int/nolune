@@ -116,6 +116,16 @@ impl Tool for MemoryWriteTool {
         if clean_path.is_empty() {
             return Err(ToolExecError("invalid path".into()));
         }
+        if !crate::services::memory::visible_to(
+            &self.vector_store.media_store(),
+            &self.instance_slug,
+            &clean_path,
+            self.access,
+        ) {
+            return Err(ToolExecError(format!(
+                "memory excluded from proactive use: {clean_path}"
+            )));
+        }
 
         // Editing a reserved media sidecar must preserve its versioned owner binding.
         if let Some(owner) = crate::services::media_text::media_path(&clean_path) {
@@ -222,7 +232,7 @@ impl Tool for MemoryReadTool {
             )
         };
         if clean_path.is_empty() || metadata.is_some_and(|metadata| metadata.is_dir) {
-            // List directory contents
+            // List directory contents, minus what this reader may not see.
             let items = self
                 .media
                 .list_memory_dir(
@@ -231,6 +241,19 @@ impl Tool for MemoryReadTool {
                 )
                 .map_err(|error| ToolExecError(error.to_string()))?
                 .into_iter()
+                .filter(|entry| {
+                    entry.is_dir
+                        || crate::services::memory::visible_to(
+                            &self.media,
+                            &self.instance_slug,
+                            &if clean_path.is_empty() {
+                                entry.name.clone()
+                            } else {
+                                format!("{clean_path}/{}", entry.name)
+                            },
+                            self.access,
+                        )
+                })
                 .map(|entry| {
                     if entry.is_dir {
                         format!("{}/", entry.name)
@@ -245,6 +268,16 @@ impl Tool for MemoryReadTool {
                 Ok(items.join("\n"))
             }
         } else if metadata.is_some_and(|metadata| metadata.is_file) {
+            if !crate::services::memory::visible_to(
+                &self.media,
+                &self.instance_slug,
+                clean_path,
+                self.access,
+            ) {
+                return Err(ToolExecError(format!(
+                    "memory excluded from proactive use: {clean_path}"
+                )));
+            }
             let ext = Path::new(clean_path)
                 .extension()
                 .and_then(|e| e.to_str())
@@ -349,7 +382,11 @@ impl Tool for MemoryListTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let entries = crate::services::memory::scan_library(&self.media, &self.instance_slug);
+        let entries = crate::services::memory::scan_library_for(
+            &self.media,
+            &self.instance_slug,
+            self.access,
+        );
 
         if entries.is_empty() {
             return Ok("(empty library — no memories yet)".into());
@@ -559,10 +596,21 @@ impl Tool for MemorySearchTool {
         }
         let limit = args.limit.unwrap_or(5).min(20);
 
-        let results = self
+        let media = self.vector_store.media_store();
+        let results: Vec<_> = self
             .vector_store
             .search_text(&self.instance_slug, query, limit)
-            .await;
+            .await
+            .into_iter()
+            .filter(|hit| {
+                crate::services::memory::visible_to(
+                    &media,
+                    &self.instance_slug,
+                    &hit.path,
+                    self.access,
+                )
+            })
+            .collect();
 
         if results.is_empty() {
             return Ok(format!("no memories matched \"{query}\""));

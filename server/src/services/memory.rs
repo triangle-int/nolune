@@ -39,6 +39,10 @@ pub fn parse_frontmatter(content: &str) -> (Frontmatter, &str) {
                 frontmatter.created = Some(val.trim().to_string());
             } else if let Some(val) = line.strip_prefix("updated:") {
                 frontmatter.updated = Some(val.trim().to_string());
+            } else if let Some(val) = line.strip_prefix("pinned:") {
+                frontmatter.flags.pinned = val.trim() == "true";
+            } else if let Some(val) = line.strip_prefix("exclude_from_proactive:") {
+                frontmatter.flags.exclude_from_proactive = val.trim() == "true";
             }
         }
 
@@ -51,25 +55,32 @@ pub fn parse_frontmatter(content: &str) -> (Frontmatter, &str) {
 /// Serialize frontmatter ahead of a body. Flag lines appear only when set,
 /// so a memory without flags is byte-identical to the pre-#84 layout.
 pub fn render_frontmatter(frontmatter: &Frontmatter, body: &str) -> String {
-    let _ = (frontmatter, body);
-    todo!("render frontmatter with flags")
+    let mut out = String::from("---\n");
+    if let Some(created) = &frontmatter.created {
+        out.push_str(&format!("created: {created}\n"));
+    }
+    if let Some(updated) = &frontmatter.updated {
+        out.push_str(&format!("updated: {updated}\n"));
+    }
+    if frontmatter.flags.pinned {
+        out.push_str("pinned: true\n");
+    }
+    if frontmatter.flags.exclude_from_proactive {
+        out.push_str("exclude_from_proactive: true\n");
+    }
+    out.push_str("---\n");
+    out.push_str(body);
+    out
 }
 
 /// Add or update frontmatter timestamps on memory content.
 /// For new files: adds created + updated. For existing: updates the updated
 /// field. User flags on the existing file are carried over (#84).
 pub fn stamp_content(content: &str, existing_content: Option<&str>) -> String {
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-
-    if let Some(existing) = existing_content {
-        // Updating existing file — preserve created, update updated
-        let (fm, _) = parse_frontmatter(existing);
-        let created = fm.created.unwrap_or_else(|| today.clone());
-        format!("---\ncreated: {created}\nupdated: {today}\n---\n{content}")
-    } else {
-        // New file
-        format!("---\ncreated: {today}\nupdated: {today}\n---\n{content}")
-    }
+    let flags = existing_content
+        .map(|existing| parse_frontmatter(existing).0.flags)
+        .unwrap_or_default();
+    stamp_content_with_flags(content, existing_content, flags)
 }
 
 /// [`stamp_content`] with the flags set explicitly instead of carried over.
@@ -78,8 +89,19 @@ pub fn stamp_content_with_flags(
     existing_content: Option<&str>,
     flags: MemoryFlags,
 ) -> String {
-    let _ = (content, existing_content, flags);
-    todo!("stamp content with explicit flags")
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    // Updating an existing file preserves created; a new file starts today.
+    let created = existing_content
+        .and_then(|existing| parse_frontmatter(existing).0.created)
+        .unwrap_or_else(|| today.clone());
+    render_frontmatter(
+        &Frontmatter {
+            created: Some(created),
+            updated: Some(today),
+            flags,
+        },
+        content,
+    )
 }
 
 /// Who is reading the library. Memories flagged `exclude_from_proactive`
@@ -101,8 +123,13 @@ pub fn memory_flags(
     instance_slug: &str,
     path: &str,
 ) -> MemoryFlags {
-    let _ = (media, instance_slug, path);
-    todo!("read memory flags")
+    if super::media_text::source_type(path).is_some() {
+        return MemoryFlags::default();
+    }
+    media
+        .read_memory_text(instance_slug, path)
+        .map(|content| parse_frontmatter(&content).0.flags)
+        .unwrap_or_default()
 }
 
 /// Whether `access` may see the memory at `path`.
@@ -121,8 +148,21 @@ pub fn pinned_memories(
     media: &super::media_text::MediaStore,
     instance_slug: &str,
 ) -> Vec<(String, String)> {
-    let _ = (media, instance_slug);
-    todo!("collect pinned memories")
+    let mut pinned = Vec::new();
+    for path in media.memory_files(instance_slug).unwrap_or_default() {
+        if super::media_text::source_type(&path).is_some() {
+            continue;
+        }
+        let Ok(content) = media.read_memory_text(instance_slug, &path) else {
+            continue;
+        };
+        let (frontmatter, body) = parse_frontmatter(&content);
+        if frontmatter.flags.pinned {
+            pinned.push((path, body.to_owned()));
+        }
+    }
+    pinned.sort();
+    pinned
 }
 
 /// Format a YYYY-MM-DD date as short display (Mar 28).
@@ -188,8 +228,9 @@ pub fn scan_library_checked(
         let (frontmatter, body) = parse_frontmatter(&content);
         let date_prefix = frontmatter
             .updated
-            .or(frontmatter.created)
-            .map(|date| format!("({}) ", format_date_short(&date)))
+            .as_deref()
+            .or(frontmatter.created.as_deref())
+            .map(|date| format!("({}) ", format_date_short(date)))
             .unwrap_or_default();
         let summary_text = body
             .lines()
@@ -203,7 +244,7 @@ pub fn scan_library_checked(
             path,
             summary: format!("{date_prefix}{summary_text}"),
             size: content.len(),
-            flags: MemoryFlags::default(),
+            flags: frontmatter.flags,
         });
     }
     Ok(entries)
@@ -223,8 +264,11 @@ pub fn scan_library_for(
     instance_slug: &str,
     access: MemoryAccess,
 ) -> Vec<MemoryEntry> {
-    let _ = (media, instance_slug, access);
-    todo!("scan the library for one access level")
+    let mut entries = scan_library(media, instance_slug);
+    if access == MemoryAccess::Proactive {
+        entries.retain(|entry| !entry.flags.exclude_from_proactive);
+    }
+    entries
 }
 
 /// Rebuild and persist the memory catalog snapshot to disk.

@@ -104,8 +104,194 @@ pub fn load_ledger(
     media: &media_text::MediaStore,
     instance_slug: &str,
 ) -> Result<CorrectionLedger, CorrectionError> {
-    let _ = (media, instance_slug, LEDGER_VERSION, MAX_LEDGER_BYTES);
-    todo!("load the corrections ledger")
+    let raw = match media.read_instance_text(instance_slug, LEDGER_FILE, MAX_LEDGER_BYTES) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(CorrectionLedger::default());
+        }
+        Err(error) => return Err(CorrectionError::Io(format!("read {LEDGER_FILE}: {error}"))),
+    };
+    let ledger: CorrectionLedger = serde_json::from_str(&raw).map_err(|error| {
+        CorrectionError::Invalid(format!("{LEDGER_FILE} is malformed: {error}"))
+    })?;
+    if ledger.version != LEDGER_VERSION {
+        return Err(CorrectionError::Invalid(format!(
+            "{LEDGER_FILE} version {} is unsupported (this server writes {LEDGER_VERSION})",
+            ledger.version
+        )));
+    }
+    Ok(ledger)
+}
+
+fn save_ledger(
+    media: &media_text::MediaStore,
+    instance_slug: &str,
+    ledger: &mut CorrectionLedger,
+) -> Result<(), CorrectionError> {
+    // Settled entries are the first to go once the ledger is full; entries
+    // in force or waiting on the user are never dropped.
+    while ledger.entries.len() > MAX_ENTRIES {
+        let Some(at) = ledger.entries.iter().position(|entry| {
+            matches!(
+                entry.status,
+                CorrectionStatus::Superseded | CorrectionStatus::Withdrawn
+            )
+        }) else {
+            break;
+        };
+        ledger.entries.remove(at);
+    }
+    let json = serde_json::to_string_pretty(ledger)
+        .map_err(|error| CorrectionError::Io(error.to_string()))?;
+    media
+        .write_instance_text(instance_slug, LEDGER_FILE, &json)
+        .map_err(|error| CorrectionError::Io(format!("write {LEDGER_FILE}: {error}")))
+}
+
+fn now() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+fn new_id() -> String {
+    format!(
+        "corr_{}_{}",
+        chrono::Utc::now().timestamp(),
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    )
+}
+
+fn excerpt(text: &str) -> String {
+    text.trim().chars().take(PREVIOUS_CHARS).collect()
+}
+
+/// The memory as it is on disk: the text the user sees and, for a text
+/// memory, the frontmatter around it.
+struct Current {
+    body: String,
+    /// `None` for a media memory (its bound text carries no frontmatter).
+    frontmatter: Option<memory::Frontmatter>,
+}
+
+fn io_error(error: std::io::Error) -> CorrectionError {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => CorrectionError::NotFound,
+        std::io::ErrorKind::InvalidInput => CorrectionError::Invalid(error.to_string()),
+        _ => CorrectionError::Io(error.to_string()),
+    }
+}
+
+fn read_current(
+    media: &media_text::MediaStore,
+    instance_slug: &str,
+    path: &str,
+) -> Result<Current, CorrectionError> {
+    if media_text::source_type(path).is_some() {
+        // A media memory: the owner must exist; missing bound text reads as empty.
+        if !media.memory_exists(instance_slug, path).map_err(io_error)? {
+            return Err(CorrectionError::NotFound);
+        }
+        return Ok(Current {
+            body: media.read(instance_slug, path).unwrap_or_default(),
+            frontmatter: None,
+        });
+    }
+    if media_text::media_path(path).is_some() {
+        return Err(CorrectionError::Invalid(
+            "correct the media memory itself, not its bound text".into(),
+        ));
+    }
+    let content = media
+        .read_memory_text(instance_slug, path)
+        .map_err(io_error)?;
+    let (frontmatter, body) = memory::parse_frontmatter(&content);
+    Ok(Current {
+        body: body.to_owned(),
+        frontmatter: Some(frontmatter),
+    })
+}
+
+/// Write `statement` as the memory's text, keeping the frontmatter flags,
+/// and reconcile the derived index.
+async fn rewrite(
+    store: &VectorStore,
+    instance_slug: &str,
+    path: &str,
+    current: &Current,
+    statement: &str,
+) -> Result<(), CorrectionError> {
+    let Some(frontmatter) = &current.frontmatter else {
+        // Media: the bound text is replaced and re-indexed under the lifecycle gate.
+        return store
+            .edit_media_text(instance_slug, path, statement, false)
+            .await
+            .map_err(CorrectionError::Io);
+    };
+    let existing = memory::render_frontmatter(frontmatter, &current.body);
+    let stamped = memory::stamp_content_with_flags(statement, Some(&existing), frontmatter.flags);
+    store
+        .media_store()
+        .write_memory_text(instance_slug, path, &stamped)
+        .map_err(io_error)?;
+    reindex(store, instance_slug, path, &stamped).await;
+    Ok(())
+}
+
+/// Derived state after the canonical file changed: the old entry goes first
+/// so a failed re-embedding can never leave the stale text searchable, then
+/// the new text is embedded. A provider failure leaves the file as the
+/// truth and the BM25 view fresh; the vector side waits for the next backfill.
+async fn reindex(store: &VectorStore, instance_slug: &str, path: &str, stamped: &str) {
+    if let Err(error) = store.delete_by_path(instance_slug, path).await {
+        log::warn!("[memory_corrections] stale index entry for {path} not removed: {error}");
+    }
+    if let Err(error) = store.index_text(instance_slug, path, stamped).await {
+        log::warn!("[memory_corrections] semantic re-index of {path} pending: {error}");
+    }
+}
+
+/// The entry in force for `path`, if the memory still reads as it wrote it.
+/// One whose text the memory no longer holds (the companion rewrote it, or
+/// it was forgotten and recreated) is marked superseded on the way.
+fn in_force<'a>(
+    ledger: &'a mut CorrectionLedger,
+    path: &str,
+    body: &str,
+) -> Option<&'a mut CorrectionEntry> {
+    let at = ledger
+        .entries
+        .iter()
+        .rposition(|entry| entry.path == path && entry.status == CorrectionStatus::Applied)?;
+    if ledger.entries[at].statement.trim() != body.trim() {
+        ledger.entries[at].status = CorrectionStatus::Superseded;
+        return None;
+    }
+    Some(&mut ledger.entries[at])
+}
+
+fn pending<'a>(ledger: &'a CorrectionLedger, path: &str) -> Option<&'a CorrectionEntry> {
+    ledger
+        .entries
+        .iter()
+        .find(|entry| entry.path == path && entry.status == CorrectionStatus::NeedsResolution)
+}
+
+fn conflict_of(ledger: &CorrectionLedger, proposed: &CorrectionEntry) -> CorrectionConflict {
+    let current = proposed
+        .conflicts_with
+        .as_deref()
+        .and_then(|id| ledger.entries.iter().find(|entry| entry.id == id))
+        .map(CorrectionStatement::from)
+        .unwrap_or_else(|| CorrectionStatement {
+            id: String::new(),
+            statement: String::new(),
+            corrected_at: String::new(),
+        });
+    CorrectionConflict {
+        conflict_id: proposed.id.clone(),
+        path: proposed.path.clone(),
+        current,
+        proposed: CorrectionStatement::from(proposed),
+    }
 }
 
 /// Rewrite a memory with the user's statement and record it.
@@ -115,17 +301,58 @@ pub async fn correct(
     path: &str,
     statement: &str,
 ) -> Result<CorrectionOutcome, CorrectionError> {
-    let _ = (
-        store,
-        instance_slug,
-        path,
-        statement,
-        PREVIOUS_CHARS,
-        MAX_ENTRIES,
-    );
-    let _ = (companion_lock, CorrectionStatus::Applied);
-    let _ = <CorrectionStatement as From<&CorrectionEntry>>::from;
-    todo!("apply a correction")
+    if statement.len() > MAX_STATEMENT_BYTES {
+        return Err(CorrectionError::TooLarge);
+    }
+    let statement = statement.trim();
+    if statement.is_empty() {
+        return Err(CorrectionError::Invalid("statement cannot be empty".into()));
+    }
+    let _guard = companion_lock(instance_slug).lock_owned().await;
+    let media = store.media_store();
+    let current = read_current(&media, instance_slug, path)?;
+    if current.body.trim() == statement {
+        return Ok(CorrectionOutcome::Unchanged);
+    }
+    let mut ledger = load_ledger(&media, instance_slug)?;
+
+    // One open question per memory: further statements point at it.
+    if let Some(parked) = pending(&ledger, path) {
+        return Ok(CorrectionOutcome::NeedsResolution(conflict_of(
+            &ledger, parked,
+        )));
+    }
+    if let Some(current_entry) = in_force(&mut ledger, path, &current.body) {
+        let proposed = CorrectionEntry {
+            id: new_id(),
+            path: path.to_owned(),
+            statement: statement.to_owned(),
+            previous: excerpt(&current.body),
+            status: CorrectionStatus::NeedsResolution,
+            corrected_at: now(),
+            resolved_at: None,
+            conflicts_with: Some(current_entry.id.clone()),
+        };
+        let conflict = conflict_of(&ledger, &proposed);
+        ledger.entries.push(proposed);
+        save_ledger(&media, instance_slug, &mut ledger)?;
+        return Ok(CorrectionOutcome::NeedsResolution(conflict));
+    }
+
+    rewrite(store, instance_slug, path, &current, statement).await?;
+    let entry = CorrectionEntry {
+        id: new_id(),
+        path: path.to_owned(),
+        statement: statement.to_owned(),
+        previous: excerpt(&current.body),
+        status: CorrectionStatus::Applied,
+        corrected_at: now(),
+        resolved_at: None,
+        conflicts_with: None,
+    };
+    ledger.entries.push(entry.clone());
+    save_ledger(&media, instance_slug, &mut ledger)?;
+    Ok(CorrectionOutcome::Applied(entry))
 }
 
 /// Settle a `needs_resolution` entry.
@@ -135,8 +362,46 @@ pub async fn resolve(
     conflict_id: &str,
     keep: Keep,
 ) -> Result<Resolution, CorrectionError> {
-    let _ = (store, instance_slug, conflict_id, keep);
-    todo!("resolve a conflict")
+    let _guard = companion_lock(instance_slug).lock_owned().await;
+    let media = store.media_store();
+    let mut ledger = load_ledger(&media, instance_slug)?;
+    let at = ledger
+        .entries
+        .iter()
+        .position(|entry| {
+            entry.id == conflict_id && entry.status == CorrectionStatus::NeedsResolution
+        })
+        .ok_or(CorrectionError::NotFound)?;
+    let path = ledger.entries[at].path.clone();
+    let resolved_at = now();
+    match keep {
+        Keep::Current => {
+            let entry = &mut ledger.entries[at];
+            entry.status = CorrectionStatus::Withdrawn;
+            entry.resolved_at = Some(resolved_at);
+        }
+        Keep::Proposed => {
+            let current = read_current(&media, instance_slug, &path)?;
+            let statement = ledger.entries[at].statement.clone();
+            rewrite(store, instance_slug, &path, &current, &statement).await?;
+            for entry in &mut ledger.entries {
+                if entry.path == path && entry.status == CorrectionStatus::Applied {
+                    entry.status = CorrectionStatus::Superseded;
+                }
+            }
+            let entry = &mut ledger.entries[at];
+            entry.status = CorrectionStatus::Applied;
+            entry.previous = excerpt(&current.body);
+            entry.resolved_at = Some(resolved_at);
+        }
+    }
+    let entry = ledger.entries[at].clone();
+    save_ledger(&media, instance_slug, &mut ledger)?;
+    Ok(Resolution {
+        kept: keep,
+        path,
+        entry,
+    })
 }
 
 /// Set `pinned` / `exclude_from_proactive` on a text memory and re-index it.
@@ -147,9 +412,36 @@ pub async fn set_flags(
     path: &str,
     update: FlagUpdate,
 ) -> Result<MemoryFlags, CorrectionError> {
-    let _ = (store, instance_slug, path, update);
-    let _ = memory::memory_flags;
-    todo!("set memory flags")
+    let _guard = companion_lock(instance_slug).lock_owned().await;
+    let media = store.media_store();
+    let current = read_current(&media, instance_slug, path)?;
+    let Some(mut frontmatter) = current.frontmatter else {
+        return Err(CorrectionError::Invalid(
+            "pinned and exclude_from_proactive apply to text memories only".into(),
+        ));
+    };
+    let flags = MemoryFlags {
+        pinned: update.pinned.unwrap_or(frontmatter.flags.pinned),
+        exclude_from_proactive: update
+            .exclude_from_proactive
+            .unwrap_or(frontmatter.flags.exclude_from_proactive),
+    };
+    if flags == frontmatter.flags {
+        return Ok(flags);
+    }
+    frontmatter.flags = flags;
+    // A flag is not a content change: created/updated stay as they are, and
+    // a legacy file without frontmatter is stamped as of today.
+    let stamped = if frontmatter.created.is_some() || frontmatter.updated.is_some() {
+        memory::render_frontmatter(&frontmatter, &current.body)
+    } else {
+        memory::stamp_content_with_flags(&current.body, None, flags)
+    };
+    media
+        .write_memory_text(instance_slug, path, &stamped)
+        .map_err(io_error)?;
+    reindex(store, instance_slug, path, &stamped).await;
+    Ok(flags)
 }
 
 #[cfg(test)]
@@ -448,7 +740,9 @@ mod tests {
             "---\ncreated: 2026-01-01\nupdated: 2026-01-02\npinned: true\nexclude_from_proactive: true\n---\nlikes tea\n",
             "flags are not a content change: updated stays"
         );
-        let flags = set_flags(&store, "one", "plain.md", pin).await.unwrap();
+        let flags = set_flags(&store, "one", "about/plain.md", pin)
+            .await
+            .unwrap();
         assert_eq!(
             flags,
             MemoryFlags {
@@ -469,7 +763,7 @@ mod tests {
         let store = VectorStore::connect(ws.path()).await;
         let media = store.media_store();
         assert!(memory::memory_flags(&media, "one", "about/tea.md").pinned);
-        assert!(memory::memory_flags(&media, "one", "plain.md").pinned);
+        assert!(memory::memory_flags(&media, "one", "about/plain.md").pinned);
         let flags = set_flags(
             &store,
             "one",
@@ -499,7 +793,7 @@ mod tests {
                 .iter()
                 .map(|entry| entry.path.as_str())
                 .collect::<Vec<_>>(),
-            ["about/tea.md", "plain.md"]
+            ["about/plain.md", "about/tea.md"]
         );
         // The BM25 view was refreshed with every rewrite.
         assert_eq!(store.search_text("one", "tea", 5).await.len(), 1);
