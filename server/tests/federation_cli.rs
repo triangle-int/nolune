@@ -765,10 +765,20 @@ fn companions_section_is_documented_and_never_keeps_an_invite() {
             assert!(!source.contains(forbidden), "{name} contains {forbidden:?}");
         }
     }
-    assert!(
-        !row.contains("invite") && !row.contains("secret"),
-        "a peer row never sees an invite"
-    );
+    for forbidden in [
+        "secret",
+        ".invite",
+        "invite:",
+        "inviteHandoff",
+        "IssuedFederationInvite",
+        "createFederationInvite",
+        "acceptFederationInvite",
+    ] {
+        assert!(
+            !row.contains(forbidden),
+            "a peer row never sees an invite: CompanionRow.svelte contains {forbidden:?}"
+        );
+    }
     for required in ["lastSeen", "approvedOrigins", "canConfirm", "canRevoke"] {
         assert!(
             helpers.contains(required),
