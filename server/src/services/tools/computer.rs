@@ -413,3 +413,123 @@ impl Tool for RemoteFilesTool {
         }
     }
 }
+
+#[cfg(test)]
+mod list_machines_tests {
+    use super::*;
+    use crate::services::machine_registry::MachineInfo;
+    use cua_protocol::{
+        AppsResult, Capability, CheckedCuaAdapter, CuaActionResult, CuaResponse,
+        CuaResponseEnvelope, DriverVersion, MachineDescriptor, MachineHealth, MachineId,
+        MachineLocation, Permission, PermissionState, Platform,
+    };
+
+    fn legacy_agent() -> MachineInfo {
+        MachineInfo {
+            machine_id: "studio".into(),
+            os: "macos".into(),
+            hostname: "studio".into(),
+            screen_width: 1440,
+            screen_height: 900,
+            last_seen: 1_700_000_000,
+            instance_slug: None,
+        }
+    }
+
+    fn server_local_target() -> CheckedCuaAdapter {
+        let descriptor = MachineDescriptor {
+            machine_id: MachineId::try_from("server-local:studio").unwrap(),
+            location: MachineLocation::ServerLocal,
+            platform: Platform::Linux,
+            driver_version: DriverVersion::try_from("0.28.2").unwrap(),
+            health: MachineHealth::Degraded,
+            permissions: PermissionState {
+                accessibility: Permission::Granted,
+                screen_capture: Permission::Denied,
+            },
+            capabilities: vec![Capability::AppDiscovery, Capability::Health],
+        };
+        CheckedCuaAdapter::new(descriptor, |request| {
+            let response = CuaResponseEnvelope {
+                version: request.version,
+                request_id: request.request_id,
+                machine_id: request.machine_id,
+                action: request.action.kind(),
+                response: CuaResponse::Success {
+                    result: Box::new(CuaActionResult::ListApps(AppsResult { apps: vec![] })),
+                },
+            };
+            Box::pin(async move { response })
+        })
+        .unwrap()
+    }
+
+    async fn listed(registry: &MachineRegistry) -> Vec<serde_json::Value> {
+        let output = ListMachinesTool::new(registry.clone())
+            .call(ListMachinesArgs {})
+            .await
+            .unwrap();
+        serde_json::from_str(&output).unwrap_or_else(|e| panic!("{e}: {output}"))
+    }
+
+    #[tokio::test]
+    async fn legacy_agents_keep_their_fields_and_gain_a_location() {
+        let registry = MachineRegistry::new();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        registry.register(legacy_agent(), tx).await;
+
+        let machines = listed(&registry).await;
+        assert_eq!(machines.len(), 1);
+        let agent = &machines[0];
+        assert_eq!(agent["machine_id"], "studio");
+        assert_eq!(agent["os"], "macos");
+        assert_eq!(agent["hostname"], "studio");
+        assert_eq!(agent["screen"], "1440x900");
+        assert_eq!(agent["last_seen"], 1_700_000_000);
+        assert_eq!(agent["location"], "desktop");
+    }
+
+    #[tokio::test]
+    async fn cua_targets_advertise_health_permissions_and_capabilities() {
+        let registry = MachineRegistry::new();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        registry.register(legacy_agent(), tx).await;
+        registry
+            .cua()
+            .register(server_local_target())
+            .await
+            .unwrap();
+
+        let machines = listed(&registry).await;
+        assert_eq!(machines.len(), 2, "{machines:?}");
+        let local = machines
+            .iter()
+            .find(|m| m["machine_id"] == "server-local:studio")
+            .expect("server-local target is listed");
+        assert_eq!(local["location"], "server_local");
+        assert_eq!(local["os"], "linux");
+        assert_eq!(local["driver_version"], "0.28.2");
+        assert_eq!(local["health"], "degraded");
+        assert_eq!(
+            local["permissions"],
+            serde_json::json!({ "accessibility": "granted", "screen_capture": "denied" })
+        );
+        assert_eq!(
+            local["capabilities"],
+            serde_json::json!(["app_discovery", "health"])
+        );
+        assert!(
+            local.get("hostname").is_none(),
+            "no hostname was advertised"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_targets_of_either_kind_reads_as_no_machines() {
+        let output = ListMachinesTool::new(MachineRegistry::new())
+            .call(ListMachinesArgs {})
+            .await
+            .unwrap();
+        assert!(output.starts_with("No machines connected"), "{output}");
+    }
+}

@@ -1,5 +1,7 @@
+use cua_protocol::{CheckedCuaAdapter, MachineDescriptor, MachineId, SelectionError};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::fmt;
 use std::sync::Arc;
 use tokio::sync::{Mutex, oneshot};
 
@@ -51,13 +53,78 @@ pub struct AgentToolCall {
 /// Channel to send toolcalls to a connected agent.
 type AgentSender = tokio::sync::mpsc::UnboundedSender<String>;
 
-/// Registry of connected Tauri agent machines.
+/// Why a Cua target could not be registered.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CuaRegistrationError {
+    /// A target with this machine id is already registered.
+    DuplicateMachineId(MachineId),
+}
+
+impl fmt::Display for CuaRegistrationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DuplicateMachineId(id) => {
+                write!(f, "cua machine '{}' is already registered", id.as_str())
+            }
+        }
+    }
+}
+
+impl std::error::Error for CuaRegistrationError {}
+
+/// Cua machine targets (#16): every machine the companion can drive through
+/// the shared `cua_protocol` boundary, keyed by machine id.
+///
+/// A target is the descriptor it advertised at registration plus the checked
+/// adapter that executes requests against it; the adapter owns the descriptor,
+/// so the two can never disagree. Server-local and desktop targets share one
+/// map, which is why duplicate ids are rejected at registration instead of
+/// surfacing later as `SelectionError::DuplicateMachineId`.
+#[derive(Clone, Default)]
+pub struct CuaTargets {
+    targets: Arc<Mutex<BTreeMap<MachineId, Arc<CheckedCuaAdapter>>>>,
+}
+
+impl CuaTargets {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a target. Fails when its machine id is already registered.
+    pub async fn register(&self, _adapter: CheckedCuaAdapter) -> Result<(), CuaRegistrationError> {
+        todo!("CuaTargets::register")
+    }
+
+    /// Remove a target; returns whether it was registered.
+    pub async fn unregister(&self, _machine_id: &MachineId) -> bool {
+        todo!("CuaTargets::unregister")
+    }
+
+    /// Descriptors of every registered target, ordered by machine id.
+    pub async fn list(&self) -> Vec<MachineDescriptor> {
+        todo!("CuaTargets::list")
+    }
+
+    /// Resolve a target through `cua_protocol::select_machine`: the requested
+    /// id when given, otherwise the only target, never a guess between several.
+    pub async fn select(
+        &self,
+        _requested: Option<&MachineId>,
+    ) -> Result<Arc<CheckedCuaAdapter>, SelectionError> {
+        todo!("CuaTargets::select")
+    }
+}
+
+/// Registry of the machines this server can control: the connected Tauri
+/// agents (legacy WebSocket toolcalls) and the Cua targets.
 #[derive(Clone)]
 pub struct MachineRegistry {
     /// Connected agents: machine_id → (info, sender)
     agents: Arc<Mutex<HashMap<String, (MachineInfo, AgentSender)>>>,
     /// Pending action requests: request_id → oneshot sender
     pending: Arc<Mutex<HashMap<String, PendingAction>>>,
+    /// Cua targets speaking the shared protocol.
+    cua: CuaTargets,
 }
 
 impl MachineRegistry {
@@ -65,7 +132,13 @@ impl MachineRegistry {
         Self {
             agents: Arc::new(Mutex::new(HashMap::new())),
             pending: Arc::new(Mutex::new(HashMap::new())),
+            cua: CuaTargets::new(),
         }
+    }
+
+    /// The Cua targets registered alongside the legacy agents.
+    pub fn cua(&self) -> &CuaTargets {
+        &self.cua
     }
 
     /// Register a new agent connection.
@@ -210,5 +283,211 @@ mod companion_boundary_tests {
                 "{provided:?} must bind to the canonical companion"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod cua_targets_tests {
+    use super::*;
+    use cua_protocol::{
+        AppsResult, Capability, CuaAction, CuaActionResult, CuaRequestEnvelope, CuaResponse,
+        CuaResponseEnvelope, DriverVersion, EmptyArgs, ListWindowsArgs, MachineHealth,
+        MachineLocation, Permission, PermissionState, Platform, ProtocolVersion, RequestId,
+    };
+
+    fn descriptor(machine_id: &str, location: MachineLocation) -> MachineDescriptor {
+        MachineDescriptor {
+            machine_id: MachineId::try_from(machine_id).unwrap(),
+            location,
+            platform: Platform::Macos,
+            driver_version: DriverVersion::try_from("0.28.2").unwrap(),
+            health: MachineHealth::Healthy,
+            permissions: PermissionState {
+                accessibility: Permission::Granted,
+                screen_capture: Permission::Granted,
+            },
+            capabilities: vec![Capability::AppDiscovery],
+        }
+    }
+
+    /// An in-memory adapter: no driver binary, every request is answered with
+    /// an empty app list correlated to the request it received.
+    fn fake_adapter(descriptor: MachineDescriptor) -> CheckedCuaAdapter {
+        CheckedCuaAdapter::new(descriptor, |request| {
+            let response = CuaResponseEnvelope {
+                version: request.version,
+                request_id: request.request_id,
+                machine_id: request.machine_id,
+                action: request.action.kind(),
+                response: CuaResponse::Success {
+                    result: Box::new(CuaActionResult::ListApps(AppsResult { apps: vec![] })),
+                },
+            };
+            Box::pin(async move { response })
+        })
+        .unwrap()
+    }
+
+    fn request(machine_id: &str, action: CuaAction) -> CuaRequestEnvelope {
+        CuaRequestEnvelope {
+            version: ProtocolVersion::V1,
+            request_id: RequestId::try_from("req-1").unwrap(),
+            machine_id: MachineId::try_from(machine_id).unwrap(),
+            action,
+        }
+    }
+
+    fn id(machine_id: &str) -> MachineId {
+        MachineId::try_from(machine_id).unwrap()
+    }
+
+    #[tokio::test]
+    async fn register_lists_the_descriptor_the_adapter_advertised() {
+        let targets = CuaTargets::new();
+        assert!(targets.list().await.is_empty());
+
+        let advertised = descriptor("server-local:studio", MachineLocation::ServerLocal);
+        targets
+            .register(fake_adapter(advertised.clone()))
+            .await
+            .unwrap();
+
+        assert_eq!(targets.list().await, vec![advertised]);
+    }
+
+    #[tokio::test]
+    async fn duplicate_machine_ids_are_rejected_at_registration() {
+        let targets = CuaTargets::new();
+        targets
+            .register(fake_adapter(descriptor("studio", MachineLocation::Desktop)))
+            .await
+            .unwrap();
+
+        let again = targets
+            .register(fake_adapter(descriptor("studio", MachineLocation::Desktop)))
+            .await;
+        assert_eq!(
+            again,
+            Err(CuaRegistrationError::DuplicateMachineId(id("studio")))
+        );
+        assert_eq!(targets.list().await.len(), 1, "the first target survives");
+    }
+
+    #[tokio::test]
+    async fn server_and_desktop_on_one_host_keep_distinct_ids_in_stable_order() {
+        let targets = CuaTargets::new();
+        // A desktop keyed by hostname and the server-local target on the same
+        // host must both fit; the list is sorted so callers see a stable order.
+        for (machine_id, location) in [
+            ("studio", MachineLocation::Desktop),
+            ("server-local:studio", MachineLocation::ServerLocal),
+        ] {
+            targets
+                .register(fake_adapter(descriptor(machine_id, location)))
+                .await
+                .unwrap();
+        }
+
+        let listed = targets.list().await;
+        let ids: Vec<&str> = listed.iter().map(|m| m.machine_id.as_str()).collect();
+        assert_eq!(ids, ["server-local:studio", "studio"]);
+    }
+
+    #[tokio::test]
+    async fn select_goes_through_the_protocol_selector() {
+        let targets = CuaTargets::new();
+        assert_eq!(
+            targets.select(None).await.err(),
+            Some(SelectionError::NoMachines)
+        );
+
+        targets
+            .register(fake_adapter(descriptor("studio", MachineLocation::Desktop)))
+            .await
+            .unwrap();
+        let only = targets.select(None).await.unwrap();
+        assert_eq!(only.descriptor().machine_id, id("studio"));
+
+        targets
+            .register(fake_adapter(descriptor(
+                "server-local:studio",
+                MachineLocation::ServerLocal,
+            )))
+            .await
+            .unwrap();
+        assert_eq!(
+            targets.select(None).await.err(),
+            Some(SelectionError::Ambiguous),
+            "two targets and no request must not guess"
+        );
+        let local = targets
+            .select(Some(&id("server-local:studio")))
+            .await
+            .unwrap();
+        assert_eq!(local.descriptor().location, MachineLocation::ServerLocal);
+        assert_eq!(
+            targets.select(Some(&id("elsewhere"))).await.err(),
+            Some(SelectionError::NotFound)
+        );
+    }
+
+    #[tokio::test]
+    async fn selected_adapters_execute_inside_the_checked_boundary() {
+        let targets = CuaTargets::new();
+        targets
+            .register(fake_adapter(descriptor("studio", MachineLocation::Desktop)))
+            .await
+            .unwrap();
+        let adapter = targets.select(Some(&id("studio"))).await.unwrap();
+
+        let allowed = request("studio", CuaAction::ListApps(EmptyArgs {}));
+        let response = adapter.execute(&allowed).await.unwrap();
+        assert_eq!(response.request_id, allowed.request_id);
+        assert!(matches!(response.response, CuaResponse::Success { .. }));
+
+        // The descriptor only advertises app discovery, so the checked adapter
+        // refuses window discovery before the fake ever sees it.
+        let denied = request(
+            "studio",
+            CuaAction::ListWindows(ListWindowsArgs {
+                pid: None,
+                on_screen_only: false,
+            }),
+        );
+        assert!(adapter.execute(&denied).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn unregister_forgets_the_target() {
+        let targets = CuaTargets::new();
+        targets
+            .register(fake_adapter(descriptor("studio", MachineLocation::Desktop)))
+            .await
+            .unwrap();
+
+        assert!(targets.unregister(&id("studio")).await);
+        assert!(!targets.unregister(&id("studio")).await, "already gone");
+        assert!(targets.list().await.is_empty());
+        assert_eq!(
+            targets.select(None).await.err(),
+            Some(SelectionError::NoMachines)
+        );
+    }
+
+    #[tokio::test]
+    async fn the_machine_registry_carries_the_cua_targets_beside_legacy_agents() {
+        let registry = MachineRegistry::new();
+        registry
+            .cua()
+            .register(fake_adapter(descriptor(
+                "server-local:studio",
+                MachineLocation::ServerLocal,
+            )))
+            .await
+            .unwrap();
+
+        assert!(registry.list().await.is_empty(), "legacy map is untouched");
+        assert_eq!(registry.cua().list().await.len(), 1);
+        assert_eq!(registry.clone().cua().list().await.len(), 1, "clones share");
     }
 }
