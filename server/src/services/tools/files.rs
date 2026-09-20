@@ -92,30 +92,42 @@ impl Tool for ReadFileTool {
             .unwrap_or("")
             .to_lowercase();
 
+        // Content blocks are consumed by the model provider, which cannot fetch
+        // a localhost URL; those installs inline the bytes instead.
+        let provider_url = crate::config::provider_reachable_public_url(&self.public_url);
+
         // Image files — return as content block
         if matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "webp" | "gif") {
             // Try URL if in uploads/
-            if let Some(upload_id) = Self::extract_upload_id(&target) {
-                if !self.public_url.is_empty() {
-                    let url = super::public_file_url(
-                        &self.public_url,
-                        &self.instance_slug,
-                        &upload_id,
-                        &self.resources,
-                    );
-                    return Ok(serde_json::to_string(&serde_json::json!([
-                        {"type": "image", "source": {"type": "url", "url": url},
-                         "resource_provenance": {"kind": "uploaded_file", "version": 1,
-                             "slug": self.instance_slug, "id": upload_id}}
-                    ]))
-                    .unwrap());
-                }
+            if let Some(upload_id) = Self::extract_upload_id(&target)
+                && let Some(base) = provider_url
+            {
+                let url =
+                    super::public_file_url(base, &self.instance_slug, &upload_id, &self.resources);
+                return Ok(serde_json::to_string(&serde_json::json!([
+                    {"type": "image", "source": {"type": "url", "url": url},
+                     "resource_provenance": {"kind": "uploaded_file", "version": 1,
+                         "slug": self.instance_slug, "id": upload_id}}
+                ]))
+                .unwrap());
             }
-            // Fallback — base64
+            // Fallback — base64, bounded so the encoded block survives the
+            // provider's 5 MiB inline image limit instead of being stripped.
+            let size = fs::metadata(&target)
+                .map_err(|e| ToolExecError(format!("{}: {e}", target.display())))?
+                .len();
+            if size > crate::services::llm::MAX_INLINE_IMAGE_BYTES as u64 {
+                return Err(ToolExecError(format!(
+                    "image too large to inline ({:.1} MB > {:.1} MB); \
+                     set public_url to a provider-reachable address to attach it by URL",
+                    size as f64 / (1024.0 * 1024.0),
+                    crate::services::llm::MAX_INLINE_IMAGE_BYTES as f64 / (1024.0 * 1024.0)
+                )));
+            }
             let bytes = fs::read(&target)
                 .map_err(|e| ToolExecError(format!("{}: {e}", target.display())))?;
-            if bytes.len() > 5 * 1024 * 1024 {
-                return Err(ToolExecError("image too large (>5MB)".into()));
+            if bytes.len() > crate::services::llm::MAX_INLINE_IMAGE_BYTES {
+                return Err(ToolExecError("image too large to inline".into()));
             }
             use base64::Engine;
             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
@@ -134,21 +146,17 @@ impl Tool for ReadFileTool {
         // PDF files — document content block
         if ext == "pdf" {
             // Try URL
-            if let Some(upload_id) = Self::extract_upload_id(&target) {
-                if !self.public_url.is_empty() {
-                    let url = super::public_file_url(
-                        &self.public_url,
-                        &self.instance_slug,
-                        &upload_id,
-                        &self.resources,
-                    );
-                    return Ok(serde_json::to_string(&serde_json::json!([
-                        {"type": "document", "source": {"type": "url", "url": url},
-                         "resource_provenance": {"kind": "uploaded_file", "version": 1,
-                             "slug": self.instance_slug, "id": upload_id}}
-                    ]))
-                    .unwrap());
-                }
+            if let Some(upload_id) = Self::extract_upload_id(&target)
+                && let Some(base) = provider_url
+            {
+                let url =
+                    super::public_file_url(base, &self.instance_slug, &upload_id, &self.resources);
+                return Ok(serde_json::to_string(&serde_json::json!([
+                    {"type": "document", "source": {"type": "url", "url": url},
+                     "resource_provenance": {"kind": "uploaded_file", "version": 1,
+                         "slug": self.instance_slug, "id": upload_id}}
+                ]))
+                .unwrap());
             }
             // Fallback — base64
             let bytes = fs::read(&target)
@@ -522,6 +530,137 @@ fn share_file_result(name: &str, url: &str, size: usize) -> String {
          to share it with the user, paste the markdown link above exactly as written; \
          never paste the bare URL."
     )
+}
+
+#[cfg(test)]
+mod read_file_provider_tests {
+    use super::ReadFileTool;
+    use crate::services::tool::Tool;
+    use crate::services::uploads::save_upload;
+
+    fn blocks(output: &str) -> Vec<serde_json::Value> {
+        serde_json::from_str::<serde_json::Value>(output)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn local_public_url_inlines_uploaded_images_as_base64() {
+        let workspace = tempfile::tempdir().unwrap();
+        let png = b"\x89PNG\r\n\x1a\nfake";
+        let upload = save_upload(workspace.path(), "moon", "photo.png", png).unwrap();
+        let resources = crate::services::resource_access::ResourceAccess::new("control-token");
+        for public_url in ["http://localhost:26559", "http://[::1]:26559", ""] {
+            let tool = ReadFileTool::new(workspace.path(), "moon", public_url, &resources);
+            let output = tool
+                .call(super::ReadFileArgs {
+                    path: format!("uploads/{}", upload.stored_name),
+                    offset: None,
+                    limit: None,
+                })
+                .await
+                .unwrap();
+            assert!(!output.contains("localhost"), "{public_url}: {output}");
+            assert!(!output.contains("::1"), "{public_url}: {output}");
+            let blocks = blocks(&output);
+            assert_eq!(blocks.len(), 1, "{output}");
+            assert_eq!(blocks[0]["type"], "image");
+            assert_eq!(blocks[0]["source"]["type"], "base64");
+            assert_eq!(blocks[0]["source"]["media_type"], "image/png");
+            assert!(blocks[0].get("resource_provenance").is_none(), "{output}");
+        }
+    }
+
+    #[tokio::test]
+    async fn local_public_url_inlines_uploaded_pdfs_as_base64() {
+        let workspace = tempfile::tempdir().unwrap();
+        let upload = save_upload(workspace.path(), "moon", "notes.pdf", b"%PDF-1.4 fake").unwrap();
+        let resources = crate::services::resource_access::ResourceAccess::new("control-token");
+        let tool = ReadFileTool::new(
+            workspace.path(),
+            "moon",
+            "http://127.0.0.1:26559",
+            &resources,
+        );
+        let output = tool
+            .call(super::ReadFileArgs {
+                path: format!("uploads/{}", upload.stored_name),
+                offset: None,
+                limit: None,
+            })
+            .await
+            .unwrap();
+        assert!(!output.contains("127.0.0.1"), "{output}");
+        let blocks = blocks(&output);
+        assert_eq!(blocks[0]["type"], "document");
+        assert_eq!(blocks[0]["source"]["type"], "base64");
+        assert_eq!(blocks[0]["source"]["media_type"], "application/pdf");
+    }
+
+    #[tokio::test]
+    async fn routable_public_url_still_hands_the_provider_a_url() {
+        let workspace = tempfile::tempdir().unwrap();
+        let png = b"\x89PNG\r\n\x1a\nfake";
+        let upload = save_upload(workspace.path(), "moon", "photo.png", png).unwrap();
+        let resources = crate::services::resource_access::ResourceAccess::new("control-token");
+        let tool = ReadFileTool::new(
+            workspace.path(),
+            "moon",
+            "https://public.invalid",
+            &resources,
+        );
+        let output = tool
+            .call(super::ReadFileArgs {
+                path: format!("uploads/{}", upload.stored_name),
+                offset: None,
+                limit: None,
+            })
+            .await
+            .unwrap();
+        let blocks = blocks(&output);
+        assert_eq!(blocks[0]["source"]["type"], "url");
+        let url = blocks[0]["source"]["url"].as_str().unwrap();
+        assert!(
+            url.starts_with("https://public.invalid/resources/model-provider/files/moon/"),
+            "{url}"
+        );
+        assert_eq!(blocks[0]["resource_provenance"]["kind"], "uploaded_file");
+    }
+
+    #[tokio::test]
+    async fn oversized_image_is_refused_before_it_is_read() {
+        let workspace = tempfile::tempdir().unwrap();
+        let upload = save_upload(workspace.path(), "moon", "huge.png", b"x").unwrap();
+        let blob = workspace
+            .path()
+            .join("instances/moon/uploads")
+            .join(&upload.stored_name);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&blob)
+            .unwrap()
+            .set_len((crate::services::llm::MAX_INLINE_IMAGE_BYTES + 1) as u64)
+            .unwrap();
+        let resources = crate::services::resource_access::ResourceAccess::new("control-token");
+        let tool = ReadFileTool::new(
+            workspace.path(),
+            "moon",
+            "http://localhost:26559",
+            &resources,
+        );
+        let error = tool
+            .call(super::ReadFileArgs {
+                path: format!("uploads/{}", upload.stored_name),
+                offset: None,
+                limit: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(error.0.contains("too large"), "{}", error.0);
+        assert!(error.0.contains("public_url"), "{}", error.0);
+    }
 }
 
 #[cfg(test)]

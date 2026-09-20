@@ -10,6 +10,16 @@ use super::contract::{
 use super::types::LlmBackend;
 use super::types::{ContentBlock, LlmResponse, Message, ToolCall};
 
+/// Anthropic rejects inline images whose base64 payload exceeds 5 MiB; larger
+/// blocks are stripped before the request is sent.
+pub const MAX_INLINE_IMAGE_BASE64_BYTES: usize = 5 * 1024 * 1024;
+
+/// Raw image bytes that still fit [`MAX_INLINE_IMAGE_BASE64_BYTES`] once encoded
+/// (base64 grows 3 bytes into 4). Provider-facing fallbacks check this before
+/// reading a blob so an oversized image degrades to a placeholder instead of a
+/// block the provider would drop.
+pub const MAX_INLINE_IMAGE_BYTES: usize = MAX_INLINE_IMAGE_BASE64_BYTES / 4 * 3;
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Anthropic API
 // ═══════════════════════════════════════════════════════════════════════════
@@ -97,7 +107,7 @@ pub(crate) fn build_anthropic_request(
                     // Strip oversized base64 images
                     if block_type == Some("image") {
                         if let Some(data) = block.pointer("/source/data").and_then(|d| d.as_str()) {
-                            if data.len() > 5 * 1024 * 1024 {
+                            if data.len() > MAX_INLINE_IMAGE_BASE64_BYTES {
                                 log::info!(
                                     "stripping oversized base64 image ({} bytes)",
                                     data.len()
