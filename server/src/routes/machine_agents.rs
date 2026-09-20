@@ -1,17 +1,18 @@
 use axum::{
-    Router,
+    Json, Router,
     extract::{
         Path, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::StatusCode,
-    response::Response,
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use serde::Deserialize;
 
 use crate::app::state::AppState;
-use crate::services::machine_registry::{ActionResult, MachineInfo};
+use crate::domain::machine::{KnownMachine, validate_machine_id};
+use crate::services::machine_registry::{ActionResult, MachineError, MachineInfo};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -28,69 +29,257 @@ pub fn router() -> Router<AppState> {
             "/api/instances/{instance_slug}/machines",
             get(list_machines),
         )
+        .route(
+            "/api/instances/{instance_slug}/machines/{machine_id}",
+            axum::routing::put(rename_machine).delete(forget_machine),
+        )
 }
 
-/// Connected computers (#98): the desktops currently attached to the one
-/// companion, for the Computers page and Settings › Connections.
+/// Store refusals as typed JSON so the client can explain them.
+struct ApiError(MachineError);
+
+impl From<MachineError> for ApiError {
+    fn from(error: MachineError) -> Self {
+        Self(error)
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        let status = match &self.0 {
+            MachineError::NotFound(_) => StatusCode::NOT_FOUND,
+            MachineError::Invalid(_) => StatusCode::BAD_REQUEST,
+            MachineError::Online(_) => StatusCode::CONFLICT,
+            MachineError::Unsupported(_) => StatusCode::SERVICE_UNAVAILABLE,
+            MachineError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        (
+            status,
+            Json(serde_json::json!({
+                "error": self.0.code(),
+                "message": self.0.to_string(),
+            })),
+        )
+            .into_response()
+    }
+}
+
+/// Known computers (#80): every desktop that ever attached to the one
+/// companion, online ones first, for the Computers page and Settings › Connections.
 async fn list_machines(
     State(state): State<AppState>,
     Path(_instance_slug): Path<String>,
-) -> axum::Json<serde_json::Value> {
-    let mut machines = state.machine_registry.list().await;
-    machines.sort_by_key(|machine| std::cmp::Reverse(machine.last_seen));
-    axum::Json(serde_json::json!({ "machines": machines }))
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let machines = state.machine_registry.known().await?;
+    Ok(Json(serde_json::json!({ "machines": machines })))
 }
 
-/// the companion that a desktop is connected (if any machines are online).
+#[derive(Deserialize)]
+struct RenameBody {
+    /// Blank or null shows the hostname again.
+    #[serde(default)]
+    display_name: Option<String>,
+}
+
+/// The user's name for a computer, kept on the server so every client shows it.
+async fn rename_machine(
+    State(state): State<AppState>,
+    Path((_instance_slug, machine_id)): Path<(String, String)>,
+    Json(body): Json<RenameBody>,
+) -> Result<Json<KnownMachine>, ApiError> {
+    let machine = state
+        .machine_registry
+        .rename(&machine_id, body.display_name.as_deref())
+        .await?;
+    Ok(Json(machine))
+}
+
+/// Forget an offline computer: its record and name are dropped and every
+/// client hears `machine_forgotten`. A connected one answers `409 machine_online`.
+async fn forget_machine(
+    State(state): State<AppState>,
+    Path((_instance_slug, machine_id)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    state.machine_registry.forget(&machine_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Which computer a hello or bye is about. Absent means "the connected one"
+/// when exactly one is; several connected computers are never guessed between.
+#[derive(Deserialize, Default)]
+struct MachineTarget {
+    #[serde(default)]
+    machine_id: Option<String>,
+}
+
+/// Why a hello or bye could not be addressed to one computer.
+enum TargetRefusal {
+    /// The named computer was never seen.
+    NotFound(String),
+    /// The named computer is known but not connected.
+    Offline(String),
+    /// Several are connected and none was named.
+    Ambiguous(Vec<String>),
+    Store(MachineError),
+}
+
+impl IntoResponse for TargetRefusal {
+    fn into_response(self) -> Response {
+        let (status, body) = match self {
+            Self::NotFound(id) => (
+                StatusCode::NOT_FOUND,
+                serde_json::json!({"error": "not_found", "message": format!("unknown machine {id}")}),
+            ),
+            Self::Offline(id) => (
+                StatusCode::CONFLICT,
+                serde_json::json!({"error": "machine_offline", "message": format!("machine {id} is not connected")}),
+            ),
+            Self::Ambiguous(ids) => (
+                StatusCode::CONFLICT,
+                serde_json::json!({
+                    "error": "ambiguous_machine",
+                    "message": "several computers are connected; choose one",
+                    "machine_ids": ids,
+                }),
+            ),
+            Self::Store(error) => return ApiError(error).into_response(),
+        };
+        (status, Json(body)).into_response()
+    }
+}
+
+/// The connected computers a hello or bye addresses: the named one, or the
+/// only one. `Ok(vec![])` means nobody is connected and there is nothing to do.
+async fn resolve_targets(
+    state: &AppState,
+    requested: Option<&str>,
+    all_when_unnamed: bool,
+) -> Result<Vec<KnownMachine>, TargetRefusal> {
+    let known = state
+        .machine_registry
+        .known()
+        .await
+        .map_err(TargetRefusal::Store)?;
+    if let Some(id) = requested {
+        return match known.into_iter().find(|machine| machine.machine_id == id) {
+            Some(machine) if machine.online => Ok(vec![machine]),
+            Some(_) => Err(TargetRefusal::Offline(id.to_owned())),
+            None => Err(TargetRefusal::NotFound(id.to_owned())),
+        };
+    }
+    let online: Vec<KnownMachine> = known.into_iter().filter(|machine| machine.online).collect();
+    if online.len() > 1 && !all_when_unnamed {
+        return Err(TargetRefusal::Ambiguous(
+            online
+                .into_iter()
+                .map(|machine| machine.machine_id)
+                .collect(),
+        ));
+    }
+    Ok(online)
+}
+
+/// The user opened the companion in a browser: run the connection check-in
+/// for the computer they named, or the only connected one. With several
+/// connected and none named the caller must choose; nothing is guessed.
 async fn machine_hello(
     State(state): State<AppState>,
     Path(instance_slug): Path<String>,
-) -> StatusCode {
-    let machines = state.machine_registry.list().await;
-    if machines.is_empty() {
-        return StatusCode::OK;
-    }
-
-    let machine = &machines[0];
-    let mid = machine.machine_id.clone();
+    body: Option<Json<MachineTarget>>,
+) -> Result<StatusCode, TargetRefusal> {
+    let requested = body.and_then(|Json(target)| target.machine_id);
+    let targets = resolve_targets(&state, requested.as_deref(), false).await?;
+    let Some(machine) = targets.into_iter().next() else {
+        return Ok(StatusCode::OK);
+    };
 
     tokio::spawn({
         let bg_state = state.clone();
         let slug = instance_slug.clone();
         async move {
-            on_machine_connected(&bg_state, &mid, Some(&slug)).await;
+            on_machine_connected(&bg_state, &machine.machine_id, Some(&slug)).await;
         }
     });
 
-    StatusCode::OK
+    Ok(StatusCode::OK)
 }
 
-/// Called when the user leaves an instance — logs disconnection.
+/// Called when the user leaves the companion in a browser: logs which
+/// connected computers stay attached, the named one or all of them.
 async fn machine_bye(
     State(state): State<AppState>,
     Path(instance_slug): Path<String>,
-) -> StatusCode {
-    let machines = state.machine_registry.list().await;
-    if machines.is_empty() {
-        return StatusCode::OK;
+    body: Option<Json<MachineTarget>>,
+) -> Result<StatusCode, TargetRefusal> {
+    let requested = body.and_then(|Json(target)| target.machine_id);
+    let targets = resolve_targets(&state, requested.as_deref(), true).await?;
+    if targets.is_empty() {
+        return Ok(StatusCode::OK);
     }
-
-    let machine_id = &machines[0].machine_id;
+    let names: Vec<String> = targets
+        .iter()
+        .map(|machine| format!("'{}'", machine.machine_id))
+        .collect();
+    let noun = if names.len() == 1 {
+        "desktop"
+    } else {
+        "desktops"
+    };
     let _ = crate::services::chat::save_system_message(
         &state.workspace_dir,
         &instance_slug,
         "default",
         &format!(
-            "[system] user left this instance. desktop '{}' still connected to server.",
-            machine_id
+            "[system] user left this instance. {noun} {} still connected to server.",
+            names.join(", ")
         ),
     );
 
-    StatusCode::OK
+    Ok(StatusCode::OK)
 }
 
 async fn upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
     ws.on_upgrade(move |socket| handle_agent(socket, state))
+}
+
+/// What a desktop sends first on its socket. `machine_id` is the desktop's
+/// persisted stable id (#80); older desktops send their hostname.
+#[derive(Deserialize)]
+struct Registration {
+    machine_id: String,
+    os: String,
+    hostname: String,
+    screen_width: u32,
+    screen_height: u32,
+    #[serde(default)]
+    instance_slug: Option<String>,
+    /// Desktop permission state, in the protocol's shape; absent from older desktops.
+    #[serde(default)]
+    permissions: Option<cua_protocol::PermissionState>,
+    /// Action names the agent executes; absent from older desktops (legacy set).
+    #[serde(default)]
+    capabilities: Vec<String>,
+}
+
+impl Registration {
+    /// The registry's view of this registration, seen at `now`. Labels and
+    /// capabilities are handed over as reported; the registry bounds and
+    /// normalizes them in one place.
+    fn into_info(self, now: i64) -> MachineInfo {
+        MachineInfo {
+            platform: crate::domain::machine::platform_from_os(&self.os),
+            machine_id: self.machine_id,
+            os: self.os,
+            hostname: self.hostname,
+            screen_width: self.screen_width,
+            screen_height: self.screen_height,
+            last_seen: now,
+            instance_slug: self.instance_slug,
+            location: cua_protocol::MachineLocation::Desktop,
+            permissions: self.permissions,
+            capabilities: self.capabilities,
+        }
+    }
 }
 
 /// Message types from the agent.
@@ -98,15 +287,7 @@ async fn upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> Respons
 #[serde(tag = "type", rename_all = "snake_case")]
 enum AgentMessage {
     /// Agent registers itself on connect.
-    Register {
-        machine_id: String,
-        os: String,
-        hostname: String,
-        screen_width: u32,
-        screen_height: u32,
-        #[serde(default)]
-        instance_slug: Option<String>,
-    },
+    Register(Registration),
     /// Agent sends back the result of a toolcall.
     ActionResult {
         request_id: String,
@@ -119,10 +300,11 @@ enum AgentMessage {
 
 async fn handle_agent(mut socket: WebSocket, state: AppState) {
     // The agent must send a Register message first.
-    let (machine_id, mut agent_rx) = match wait_for_registration(&mut socket, &state).await {
-        Some(v) => v,
-        None => return,
-    };
+    let (machine_id, connection, mut agent_rx) =
+        match wait_for_registration(&mut socket, &state).await {
+            Some(v) => v,
+            None => return,
+        };
 
     log::info!("[machine-ws] agent '{machine_id}' connected");
 
@@ -157,7 +339,7 @@ async fn handle_agent(mut socket: WebSocket, state: AppState) {
                                 AgentMessage::Heartbeat { machine_id: mid } => {
                                     state.machine_registry.heartbeat(&mid).await;
                                 }
-                                AgentMessage::Register { .. } => {
+                                AgentMessage::Register(_) => {
                                     // Already registered, ignore duplicate
                                 }
                             }
@@ -193,15 +375,19 @@ async fn handle_agent(mut socket: WebSocket, state: AppState) {
     }
 
     log::info!("[machine-ws] agent '{machine_id}' disconnected");
-    state.machine_registry.unregister(&machine_id).await;
+    state
+        .machine_registry
+        .unregister_connection(&machine_id, connection)
+        .await;
 }
 
 /// Wait for the agent to send a Register message.
-/// Returns the machine ID and receiver used to forward tool calls.
+/// Returns the machine ID, its connection number, and the receiver used to
+/// forward tool calls. A registration with an unusable machine id is refused.
 async fn wait_for_registration(
     socket: &mut WebSocket,
     state: &AppState,
-) -> Option<(String, tokio::sync::mpsc::UnboundedReceiver<String>)> {
+) -> Option<(String, u64, tokio::sync::mpsc::UnboundedReceiver<String>)> {
     // Give agent 10s to register
     let deadline = tokio::time::sleep(std::time::Duration::from_secs(10));
     tokio::pin!(deadline);
@@ -215,26 +401,25 @@ async fn wait_for_registration(
             incoming = socket.recv() => {
                 match incoming {
                     Some(Ok(Message::Text(text))) => {
-                        if let Ok(AgentMessage::Register { machine_id, os, hostname, screen_width, screen_height, instance_slug }) =
+                        if let Ok(AgentMessage::Register(registration)) =
                             serde_json::from_str::<AgentMessage>(&text)
                         {
+                            if let Err(error) = validate_machine_id(&registration.machine_id) {
+                                log::warn!("[machine-ws] registration refused: {error}");
+                                let refusal = serde_json::json!({"type": "error", "error": "invalid_machine_id", "message": error});
+                                let _ = socket.send(Message::Text(refusal.to_string().into())).await;
+                                return None;
+                            }
                             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-                            let info = MachineInfo {
-                                machine_id: machine_id.clone(),
-                                os: os.clone(),
-                                hostname,
-                                screen_width,
-                                screen_height,
-                                last_seen: chrono::Utc::now().timestamp(),
-                                instance_slug: instance_slug.clone(),
-                            };
-                            state.machine_registry.register(info, tx).await;
+                            let machine_id = registration.machine_id.clone();
+                            let info = registration.into_info(chrono::Utc::now().timestamp());
+                            let connection = state.machine_registry.register(info, tx).await;
 
                             // Send ack
                             let ack = serde_json::json!({"type": "registered", "machine_id": machine_id});
                             let _ = socket.send(Message::Text(serde_json::to_string(&ack).unwrap().into())).await;
 
-                            return Some((machine_id, rx));
+                            return Some((machine_id, connection, rx));
                         }
                     }
                     Some(Ok(Message::Ping(payload))) => {
@@ -374,4 +559,94 @@ pub(crate) async fn on_machine_connected(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod registration_tests {
+    use super::*;
+    use crate::domain::machine::LEGACY_DESKTOP_CAPABILITIES;
+    use crate::services::machine_registry::MachineRegistry;
+
+    const T0: i64 = 1_767_603_600;
+    const STABLE_ID: &str = "4f3c1c2e-9b5e-4d2b-8f0a-1c2d3e4f5a6b";
+
+    fn registration(extra: serde_json::Value) -> Registration {
+        let mut frame = serde_json::json!({
+            "type": "register",
+            "machine_id": STABLE_ID,
+            "os": "macos",
+            "hostname": "studio",
+            "screen_width": 1440,
+            "screen_height": 900,
+        });
+        frame
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let AgentMessage::Register(registration) =
+            serde_json::from_str(&frame.to_string()).unwrap()
+        else {
+            panic!("not a registration");
+        };
+        registration
+    }
+
+    /// Review finding: the route normalized capabilities and the registry did
+    /// it again, so a report with only invalid names became the legacy set.
+    #[tokio::test]
+    async fn capabilities_are_normalized_once_so_only_invalid_names_record_none() {
+        let info =
+            registration(serde_json::json!({"capabilities": ["Has Space", "UPPER"]})).into_info(T0);
+        assert_eq!(
+            info.capabilities,
+            vec!["Has Space".to_owned(), "UPPER".to_owned()],
+            "the route hands the report over untouched; the registry is the one normalizer"
+        );
+        assert_eq!(info.last_seen, T0);
+        assert_eq!(info.platform, Some(cua_protocol::Platform::Macos));
+        assert_eq!(info.location, cua_protocol::MachineLocation::Desktop);
+
+        let registry = MachineRegistry::new();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        registry.register(info, tx).await;
+        let known = registry.get_known(STABLE_ID, T0).await.unwrap();
+        assert_eq!(
+            known.capabilities,
+            Vec::<String>::new(),
+            "nothing valid reported: it reports nothing, not the legacy set"
+        );
+
+        // A desktop that predates capability reporting still gets the legacy set.
+        let legacy = registration(serde_json::json!({})).into_info(T0);
+        assert!(legacy.capabilities.is_empty());
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        registry.register(legacy, tx).await;
+        assert_eq!(
+            registry
+                .get_known(STABLE_ID, T0)
+                .await
+                .unwrap()
+                .capabilities,
+            LEGACY_DESKTOP_CAPABILITIES
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn labels_are_handed_over_untouched_and_bounded_by_the_registry() {
+        let info = registration(serde_json::json!({
+            "os": "o".repeat(5_000),
+            "hostname": "h".repeat(5_000),
+            "permissions": {"accessibility": "granted", "screen_capture": "denied"},
+        }))
+        .into_info(T0);
+        assert_eq!(info.os.len(), 5_000);
+        assert_eq!(info.hostname.len(), 5_000);
+        assert_eq!(
+            info.permissions.as_ref().unwrap().screen_capture,
+            cua_protocol::Permission::Denied
+        );
+    }
 }

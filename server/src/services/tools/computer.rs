@@ -544,6 +544,10 @@ mod list_machines_tests {
             screen_height: 900,
             last_seen: 1_700_000_000,
             instance_slug: None,
+            platform: Some(Platform::Macos),
+            location: MachineLocation::Desktop,
+            permissions: None,
+            capabilities: Vec::new(),
         }
     }
 

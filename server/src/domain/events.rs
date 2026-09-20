@@ -1,8 +1,8 @@
 use serde::Serialize;
 
 use crate::domain::{
-    chat::ChatMessage, commitment::Commitment, drop::Drop, proactive::ProactiveRun,
-    receipt::RecalledMemory,
+    chat::ChatMessage, commitment::Commitment, drop::Drop, machine::KnownMachine,
+    proactive::ProactiveRun, receipt::RecalledMemory,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -38,6 +38,16 @@ pub enum ServerEvent {
     CommitmentUpdated {
         instance_slug: String,
         commitment: Commitment,
+    },
+    /// A known machine registered, disconnected, went stale, or was renamed (#80).
+    MachineUpdated {
+        instance_slug: String,
+        machine: KnownMachine,
+    },
+    /// An offline known machine was forgotten (#80): clients drop its row.
+    MachineForgotten {
+        instance_slug: String,
+        machine_id: String,
     },
     ContextCompacting {
         instance_slug: String,

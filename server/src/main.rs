@@ -147,6 +147,9 @@ async fn main() {
     // Start background scheduler for scheduled messages
     services::scheduler::start(state.clone());
 
+    // Report a connected computer whose heartbeat goes stale (#80).
+    state.machine_registry.start_health_watch();
+
     // One proactive loop (#92): finish what a previous process left running,
     // then trim old receipts.
     {

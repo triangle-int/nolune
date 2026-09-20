@@ -267,6 +267,53 @@ export interface RecalledMemory {
 	source_status: "present" | "missing";
 }
 
+export type MachinePlatform = "macos" | "windows" | "linux";
+export type MachineLocation = "server_local" | "desktop";
+/** `healthy`, `degraded` (open socket, stale heartbeat), or `unavailable` (offline). */
+export type MachineHealth = "healthy" | "degraded" | "unavailable";
+export type MachinePermission = "granted" | "denied" | "prompt_required" | "unavailable";
+export interface MachinePermissions {
+	accessibility: MachinePermission;
+	screen_capture: MachinePermission;
+}
+
+/**
+ * A computer that has ever connected to the companion through the Nolune
+ * desktop app (#80). Disconnected computers stay listed as offline; a
+ * `machine_updated` server event carries the same shape on every change
+ * (including a heartbeat that goes stale), and `machine_forgotten` names a
+ * row to drop.
+ */
+export interface MachineInfo {
+	/** Stable id the desktop persists; survives reconnects and hostname changes. */
+	machine_id: string;
+	/** The user's name when set, otherwise the hostname. */
+	display_name: string;
+	/** The user's name, `null` while the hostname is shown. */
+	custom_name: string | null;
+	hostname: string;
+	os: string;
+	platform: MachinePlatform | null;
+	location: MachineLocation;
+	screen_width: number;
+	screen_height: number;
+	/** Reported at the last registration; `null` when the desktop did not report it. */
+	permissions: MachinePermissions | null;
+	/** Action names the desktop accepts. */
+	capabilities: string[];
+	/** Unix seconds of the first registration. */
+	first_seen: number;
+	/** Unix seconds of the last heartbeat or disconnect. */
+	last_seen: number;
+	instance_slug: string | null;
+	online: boolean;
+	health: MachineHealth;
+	/** Reserved for the Cua driver (#18); `null` means not reported. */
+	driver_version: string | null;
+	/** Reserved for the Cua driver's own health (#18); `null` means not reported. */
+	cua_health: MachineHealth | null;
+}
+
 export type ServerEvent =
 	| {
 			type: "chat_message_created";
@@ -305,6 +352,17 @@ export type ServerEvent =
 			type: "activity_updated";
 			instance_slug: string;
 			run: ProactiveRun;
+	  }
+	| {
+			type: "machine_updated";
+			instance_slug: string;
+			machine: MachineInfo;
+	  }
+	| {
+			/** An offline computer was forgotten, migrated into its stable id, or evicted: drop its row. */
+			type: "machine_forgotten";
+			instance_slug: string;
+			machine_id: string;
 	  }
 	| {
 			type: "context_compacting";
