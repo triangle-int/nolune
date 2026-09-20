@@ -199,7 +199,7 @@ impl Tool for ComputerUseTool {
             .registry
             .execute(&args.machine_id, call)
             .await
-            .map_err(|e| ToolExecError(e))?;
+            .map_err(ToolExecError)?;
 
         match result.result_type.as_str() {
             "screenshot" => {
@@ -340,7 +340,7 @@ impl Tool for RemoteBashTool {
             .registry
             .execute(&args.machine_id, call)
             .await
-            .map_err(|e| ToolExecError(e))?;
+            .map_err(ToolExecError)?;
 
         if result.success.unwrap_or(false) {
             Ok(result.error.unwrap_or_default()) // output in error field
@@ -417,7 +417,7 @@ impl Tool for RemoteFilesTool {
             .registry
             .execute(&args.machine_id, call)
             .await
-            .map_err(|e| ToolExecError(e))?;
+            .map_err(ToolExecError)?;
 
         if result.success.unwrap_or(false) {
             Ok(result.error.unwrap_or_default()) // output in error field
