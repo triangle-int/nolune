@@ -189,7 +189,10 @@ tracked by #74; until it lands, `POST /api/instances/companion/import` answers
 `501` and the `restore_backup` tool stays disabled.
 
 Exporting skips symlinks, special files, and retired layouts (they are
-counted, never followed), so a fresh export always imports.
+counted, never followed), so a fresh export always imports. An export that
+fails part-way never completes the archive: the tar end-of-archive blocks and
+the gzip trailer are withheld, so whatever a client kept of the download is
+refused as truncated rather than restored with files missing.
 
 ## Changing this format
 

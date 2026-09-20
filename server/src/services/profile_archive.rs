@@ -223,8 +223,9 @@ pub fn extract_into_with_limits(
 
 /// Open the companion directory as the capability [`write_archive`] reads
 /// from. This is the one place export turns an ambient path into authority,
-/// with the same real-directory check as `MediaStore::open`; the import work
-/// in #74 replaces it with a capability issued by the store itself.
+/// with the same real-directory check as `MediaStore::open`; a source scan in
+/// this module's tests pins it as the only ambient open here, and the import
+/// work in #74 replaces it with a capability issued by the store itself.
 pub fn open_companion_dir(companion_dir: &Path) -> io::Result<Dir> {
     let metadata = std::fs::symlink_metadata(companion_dir)?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -239,30 +240,21 @@ pub fn open_companion_dir(companion_dir: &Path) -> io::Result<Dir> {
 /// Write the companion directory `source` as an archive rooted at
 /// `companion/`, manifest first. Links, special files, and retired layouts are
 /// skipped and counted.
+///
+/// On error the sink holds at most a prefix of the archive that no reader
+/// accepts: the tar end-of-archive blocks and the gzip trailer are never
+/// written after a failure, so a client that keeps a partial download cannot
+/// mistake it for a complete backup.
 pub fn write_archive(source: &Dir, output: impl Write) -> Result<ArchiveSummary, ArchiveError> {
     let (marker, marker_mtime) = read_marker(source)?;
-    let encoder = GzEncoder::new(
-        BufWriter::with_capacity(WRITE_BUFFER_BYTES, output),
-        Compression::default(),
-    );
-    let mut writer = Writer {
-        builder: tar::Builder::new(encoder),
-        summary: ArchiveSummary::default(),
-    };
-    writer.append_file(
-        Path::new(IDENTITY_FILE),
-        marker.len() as u64,
-        marker_mtime,
-        marker.as_slice(),
-    )?;
-    writer.walk(source, &PathBuf::new())?;
-    let encoder = writer.builder.into_inner()?;
-    let mut output = encoder
-        .finish()?
-        .into_inner()
-        .map_err(|error| error.into_error())?;
-    output.flush()?;
-    Ok(writer.summary)
+    let mut writer = Writer::new(output);
+    match writer.write_source(source, &marker, marker_mtime) {
+        Ok(()) => Ok(writer.summary),
+        Err(error) => {
+            writer.poison();
+            Err(error)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -690,12 +682,82 @@ fn create_error(error: io::Error, display: &str) -> ArchiveError {
 // Writer
 // ---------------------------------------------------------------------------
 
+/// The sink at the bottom of the writer chain. Once poisoned it discards
+/// every write, so the `Drop` impls of `tar::Builder` (end-of-archive blocks),
+/// `GzEncoder` (gzip trailer), and `BufWriter` (buffered tail) cannot turn a
+/// failed export into a syntactically complete archive behind the error.
+struct Poisonable<W> {
+    inner: W,
+    poisoned: bool,
+}
+
+impl<W: Write> Write for Poisonable<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.poisoned {
+            return Ok(buf.len());
+        }
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if self.poisoned {
+            return Ok(());
+        }
+        self.inner.flush()
+    }
+}
+
 struct Writer<W: Write> {
-    builder: tar::Builder<W>,
+    builder: tar::Builder<GzEncoder<BufWriter<Poisonable<W>>>>,
     summary: ArchiveSummary,
 }
 
 impl<W: Write> Writer<W> {
+    fn new(output: W) -> Self {
+        let sink = Poisonable {
+            inner: output,
+            poisoned: false,
+        };
+        let encoder = GzEncoder::new(
+            BufWriter::with_capacity(WRITE_BUFFER_BYTES, sink),
+            Compression::default(),
+        );
+        Self {
+            builder: tar::Builder::new(encoder),
+            summary: ArchiveSummary::default(),
+        }
+    }
+
+    /// Manifest first, then the walk, then the tar end-of-archive blocks, the
+    /// gzip trailer, and the buffered tail. Every byte reaches the sink
+    /// through `self.builder`, so a failure at any step leaves the chain in
+    /// place for [`Writer::poison`].
+    fn write_source(
+        &mut self,
+        source: &Dir,
+        marker: &[u8],
+        marker_mtime: u64,
+    ) -> Result<(), ArchiveError> {
+        self.append_file(
+            Path::new(IDENTITY_FILE),
+            marker.len() as u64,
+            marker_mtime,
+            marker,
+        )?;
+        self.walk(source, &PathBuf::new())?;
+        self.builder.finish()?;
+        let encoder = self.builder.get_mut();
+        encoder.try_finish()?;
+        encoder.get_mut().flush()?;
+        Ok(())
+    }
+
+    /// Stop every later write from reaching the sink. Called after a failure,
+    /// before the chain drops.
+    fn poison(&mut self) {
+        self.builder.get_mut().get_mut().get_mut().poisoned = true;
+    }
+
     /// Emit `source`'s children in name order, directories before their
     /// contents, so two exports of an unchanged companion are identical.
     fn walk(&mut self, dir: &Dir, relative: &Path) -> Result<(), ArchiveError> {
@@ -1737,6 +1799,99 @@ mod tests {
         assert!(matches!(error, ArchiveError::InvalidIdentity(_)), "{error}");
     }
 
+    /// Bytes gzip cannot shrink, so the writer flushes real chunks to the sink
+    /// before it reaches a later entry.
+    #[cfg(unix)]
+    fn incompressible(len: usize) -> Vec<u8> {
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        (0..len)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (state >> 56) as u8
+            })
+            .collect()
+    }
+
+    /// Create `path` as a regular file the walk cannot read. `false` when the
+    /// process is root, for which permissions cannot make the read fail.
+    #[cfg(unix)]
+    fn make_unreadable(path: &Path) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::write(path, b"secret").unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o000)).unwrap();
+        fs::File::open(path).is_err()
+    }
+
+    /// A writer failure after chunks have already left the buffer must not be
+    /// followed by the tar end-of-archive blocks and the gzip trailer that the
+    /// `Drop` impls of the writer chain would otherwise emit: a client that
+    /// keeps the partial download must hold something the reader refuses,
+    /// never a well-formed archive that silently lacks files.
+    #[cfg(unix)]
+    #[test]
+    fn writer_failure_never_completes_the_archive() {
+        let source = tempfile::tempdir().unwrap();
+        populate_source(source.path());
+        fs::write(source.path().join("a.md"), incompressible(256 * 1024)).unwrap();
+        if !make_unreadable(&source.path().join("b_unreadable.md")) {
+            return;
+        }
+        fs::write(source.path().join("c.md"), b"after the failure").unwrap();
+
+        let mut sink = Vec::new();
+        let error = write_archive(&source_dir(source.path()), &mut sink).unwrap_err();
+        assert!(matches!(error, ArchiveError::Io(_)), "{error}");
+        assert!(
+            sink.len() >= WRITE_BUFFER_BYTES,
+            "fixture must flush chunks before failing, got {} bytes",
+            sink.len()
+        );
+
+        let mut decoded = Vec::new();
+        let decode = GzDecoder::new(sink.as_slice()).read_to_end(&mut decoded);
+        assert!(
+            decode.is_err(),
+            "gzip trailer reached the sink after the failure ({} bytes decoded)",
+            decoded.len()
+        );
+        assert!(
+            !decoded.ends_with(&[0_u8; 1024]),
+            "tar end-of-archive blocks reached the sink"
+        );
+
+        let sandbox = sandbox();
+        let error = sandbox.extract(&sink).unwrap_err();
+        assert!(matches!(error, ArchiveError::Malformed(_)), "{error}");
+        assert!(!sandbox.root.path().join("staging/c.md").exists());
+        sandbox.assert_confined();
+    }
+
+    /// A small companion fits the write buffer, so nothing has reached the
+    /// sink when the walk fails; the failure must not flush a complete
+    /// archive of the entries before it.
+    #[cfg(unix)]
+    #[test]
+    fn writer_failure_before_the_first_flush_writes_nothing() {
+        let source = tempfile::tempdir().unwrap();
+        populate_source(source.path());
+        if !make_unreadable(&source.path().join("b_unreadable.md")) {
+            return;
+        }
+        fs::write(source.path().join("c.md"), b"after the failure").unwrap();
+
+        let mut sink = Vec::new();
+        let error = write_archive(&source_dir(source.path()), &mut sink).unwrap_err();
+        assert!(matches!(error, ArchiveError::Io(_)), "{error}");
+        assert!(
+            sink.is_empty(),
+            "{} bytes reached the sink after the failure",
+            sink.len()
+        );
+    }
+
     #[test]
     fn writer_output_lists_with_the_system_tar() {
         let source = tempfile::tempdir().unwrap();
@@ -1777,6 +1932,39 @@ mod tests {
         assert!(open_companion_dir(&root.path().join("link")).is_err());
         assert!(open_companion_dir(&root.path().join("file")).is_err());
         assert!(open_companion_dir(&root.path().join("missing")).is_err());
+    }
+
+    /// `open_companion_dir` is the one ambient open this module makes, until
+    /// the store hands out the companion capability itself (#74, PR 2). The
+    /// `media_text` scan pins its own two and forbids the routes; this keeps a
+    /// fourth site from appearing here unnoticed.
+    #[test]
+    fn export_is_the_only_ambient_open_in_this_module() {
+        let production = include_str!("profile_archive.rs")
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap();
+        assert_eq!(
+            production.matches("Dir::open_ambient_dir(").count(),
+            1,
+            "profile_archive must open exactly one ambient directory (open_companion_dir)"
+        );
+        assert_eq!(
+            production.matches("ambient_authority()").count(),
+            1,
+            "profile_archive must claim ambient authority exactly once (open_companion_dir)"
+        );
+        let body = production
+            .split("pub fn open_companion_dir")
+            .nth(1)
+            .expect("open_companion_dir is defined")
+            .split("\n}\n")
+            .next()
+            .unwrap();
+        assert!(
+            body.contains("Dir::open_ambient_dir("),
+            "the ambient open must live in open_companion_dir"
+        );
     }
 
     #[test]

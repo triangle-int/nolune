@@ -832,8 +832,10 @@ async fn export_instance(
         }
     };
 
-    // The first chunk (or the first error) decides the status code; a failure
-    // after that aborts the body so the client never keeps a truncated file.
+    // The first chunk (or the first error) decides the status code. A failure
+    // after that aborts the body; the writer poisons its sink first, so the
+    // bytes already delivered lack the tar and gzip trailers and no reader
+    // accepts them as a complete backup.
     let (tx, mut rx) = tokio::sync::mpsc::channel::<std::io::Result<axum::body::Bytes>>(16);
     tokio::task::spawn_blocking(move || {
         let mut sink = ArchiveChunks { tx: tx.clone() };
@@ -1044,6 +1046,91 @@ mod media_tests {
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body = to_bytes(response.into_body(), 4096).await.unwrap();
         assert_eq!(&body[..], b"export failed");
+    }
+
+    /// A failure after the first chunk has left cannot change the status any
+    /// more, so the body is aborted instead; the bytes delivered up to then
+    /// must not form an archive the reader accepts, or a client that keeps
+    /// the partial download holds a backup that silently lacks files.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn export_aborts_without_a_complete_archive_when_a_file_is_unreadable() {
+        use axum::{body::Body, http::Request};
+        use cap_std::{ambient_authority, fs::Dir};
+        use futures::StreamExt;
+        use std::os::unix::fs::PermissionsExt;
+        use tower::ServiceExt;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let companion = workspace.path().join("instances/companion");
+        std::fs::create_dir_all(&companion).unwrap();
+        std::fs::write(
+            companion.join("companion.json"),
+            serde_json::to_vec(&crate::domain::companion::CompanionIdentity::canonical()).unwrap(),
+        )
+        .unwrap();
+        // Incompressible bytes so real chunks stream before the failure.
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        let noise: Vec<u8> = (0..256 * 1024)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (state >> 56) as u8
+            })
+            .collect();
+        std::fs::write(companion.join("a.md"), &noise).unwrap();
+        let unreadable = companion.join("b_unreadable.md");
+        std::fs::write(&unreadable, b"secret").unwrap();
+        std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::File::open(&unreadable).is_ok() {
+            // Running as root: permissions cannot make the read fail.
+            return;
+        }
+        std::fs::write(companion.join("c.md"), b"after the failure").unwrap();
+        let mut state = AppState::new(crate::config::Config::default()).await;
+        state.workspace_dir = workspace.path().to_owned();
+        let app = router().with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/instances/companion/export")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let mut chunks = response.into_body().into_data_stream();
+        let mut delivered = Vec::new();
+        let mut aborted = false;
+        while let Some(chunk) = chunks.next().await {
+            match chunk {
+                Ok(bytes) => delivered.extend_from_slice(&bytes),
+                Err(_) => {
+                    aborted = true;
+                    break;
+                }
+            }
+        }
+        assert!(aborted, "the body must end in an error, not a clean EOF");
+        assert!(
+            !delivered.is_empty(),
+            "the failure must come after the first chunk"
+        );
+
+        let staging = workspace.path().join("staging");
+        std::fs::create_dir(&staging).unwrap();
+        let staging_dir = Dir::open_ambient_dir(&staging, ambient_authority()).unwrap();
+        let error = profile_archive::extract_into(delivered.as_slice(), &staging_dir).unwrap_err();
+        assert!(
+            matches!(error, profile_archive::ArchiveError::Malformed(_)),
+            "the delivered prefix must be refused as truncated, got: {error}"
+        );
+        assert!(!staging.join("c.md").exists());
     }
 
     #[tokio::test]
