@@ -821,11 +821,19 @@ mod tests {
 
     #[test]
     fn port_probe_distinguishes_bound_from_free() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        assert!(port_is_listening(port));
-        drop(listener);
-        assert!(!port_is_listening(port));
+        // Other tests in this binary bind 127.0.0.1:0 concurrently, so a
+        // just-released ephemeral port can be taken again before the probe
+        // runs. Retry with a fresh port instead of asserting on one sample.
+        for _ in 0..5 {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            assert!(port_is_listening(port));
+            drop(listener);
+            if !port_is_listening(port) {
+                return;
+            }
+        }
+        panic!("a released port still reported as listening after five attempts");
     }
 
     #[tokio::test]
