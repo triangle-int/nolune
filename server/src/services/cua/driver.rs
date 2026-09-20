@@ -289,11 +289,11 @@ mod tests {
     async fn live_driver_reports_health_and_lists_sessions_through_the_checked_boundary() {
         use crate::services::cua::{discovery, transport::StdioDriverTransport};
 
-        let Some(driver) = discovery::discover(None).unwrap() else {
+        let Some(driver) = discovery::discover(None, None).unwrap() else {
             eprintln!("no cua-driver on this host; nothing to check");
             return;
         };
-        let transport = Arc::new(StdioDriverTransport::spawn(&driver).await.unwrap());
+        let transport = Arc::new(StdioDriverTransport::spawn(&driver.path).await.unwrap());
         let machine = describe_machine(transport.as_ref(), id()).await.unwrap();
         eprintln!("live descriptor: {machine:?}");
         machine.validate().unwrap();

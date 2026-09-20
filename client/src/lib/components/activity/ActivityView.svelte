@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { cancelActivity, fetchActivity, retryActivity } from "$lib/api/client.js";
 	import type { ProactiveRun, ServerEvent } from "$lib/api/types.js";
-	import { canCancel, canRetry, outcomeSummary, relativeTime, statusLabel, triggerLabel } from "$lib/activity/receipts.js";
+	import { canCancel, canRetry, commitmentConditionLabel, commitmentReceipt, outcomeSummary, relativeTime, statusLabel, triggerLabel } from "$lib/activity/receipts.js";
+	import CommitmentsSection from "$lib/components/commitments/CommitmentsSection.svelte";
 	import { getWebSocket } from "$lib/stores/websocket.svelte.js";
 	import { getToasts } from "$lib/stores/toast.svelte.js";
 	import { upsertRun } from "$lib/activity/receipts.js";
@@ -81,6 +82,8 @@
 		<a class="nl-button-secondary activity-drops-link" href={`/${slug}/drops`}>Things it made · Drops</a>
 	</header>
 
+	<CommitmentsSection {slug} {now} />
+
 	{#if loading}
 		<p role="status" class="activity-center">Loading activity…</p>
 	{:else if loadError}
@@ -94,12 +97,18 @@
 		<ul class="activity-list">
 			{#each runs as run (run.id)}
 				{@const status = run.status.kind}
-				<li class="activity-item" class:activity-running={status === "running"} class:activity-failed={status === "failed"} class:activity-skipped={status === "skipped"}>
+				{@const commitment = commitmentReceipt(run)}
+				<li id={`run-${run.id}`} class="activity-item" class:activity-running={status === "running"} class:activity-failed={status === "failed"} class:activity-skipped={status === "skipped"}>
 					<div class="activity-row">
 						<span class="activity-trigger">{triggerLabel(run.trigger)}</span>
 						<span class="activity-time">{relativeTime(run.started_at, now)}</span>
 					</div>
-					<p class="activity-reason">{run.reason}{run.attempt > 1 ? ` · attempt ${run.attempt}` : ""}</p>
+					{#if commitment}
+						<p class="activity-reason">{commitment.promise}{run.attempt > 1 ? ` · attempt ${run.attempt}` : ""}</p>
+						<p class="activity-note">{commitmentConditionLabel(commitment.condition)} · <a class="activity-link" href={`#commitment-${commitment.commitmentId}`}>View the commitment</a></p>
+					{:else}
+						<p class="activity-reason">{run.reason}{run.attempt > 1 ? ` · attempt ${run.attempt}` : ""}</p>
+					{/if}
 					<div class="activity-row">
 						<span class="activity-status">{statusLabel(run.status)}</span>
 						{#if run.outcome}<span class="activity-outcome">{outcomeSummary(run)}</span>{/if}
@@ -144,7 +153,9 @@
 	.empty-sub { font-size: 14px; }
 	.load-error { display: flex; flex-direction: column; align-items: center; gap: 16px; min-height: 220px; justify-content: center; color: var(--text-secondary); text-align: center; }
 	.activity-list { list-style: none; margin: 0 auto; padding: 0; max-width: 720px; display: flex; flex-direction: column; gap: 12px; }
-	.activity-item { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 16px 20px; display: flex; flex-direction: column; gap: 6px; }
+	.activity-item { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 16px 20px; display: flex; flex-direction: column; gap: 6px; scroll-margin-top: 16px; }
+	.activity-item:target { outline: 2px solid var(--ring); outline-offset: 2px; }
+	.activity-link { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
 	.activity-running { border-color: var(--primary); }
 	.activity-failed { border-color: var(--destructive); }
 	.activity-skipped { opacity: 0.8; }

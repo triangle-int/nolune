@@ -432,11 +432,12 @@ pub(crate) async fn stream_once(
         }
         LlmEvent::Usage(usage) => {
             log::debug!(
-                "LLM usage: input={} output={} cache_read={} cache_write={}",
+                "LLM usage: input={} output={} cache_read={} cache_write={} cost={:?}",
                 usage.input_tokens,
                 usage.output_tokens,
                 usage.cache_read_tokens,
-                usage.cache_write_tokens
+                usage.cache_write_tokens,
+                usage.cost
             );
             super::helpers::cache_real_input_tokens(instance_slug, chat_id, usage.input_tokens);
         }

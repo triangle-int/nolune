@@ -14,16 +14,38 @@ const presets = [
 	{ id: 'sonnet', name: 'Claude Sonnet', provider: 'anthropic', model: 'claude-sonnet-4-6' },
 	{ id: 'haiku', name: 'Claude Haiku', provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
 	{ id: 'gpt', name: 'GPT-5.4', provider: 'openai', model: 'gpt-5.4' },
+	{ id: 'router', name: 'Sonnet via OpenRouter', provider: 'openrouter', model: 'anthropic/claude-sonnet-4.6' },
 ];
 const slots = { chat_preset: 'sonnet', background_preset: 'haiku' };
 
-test('providers are the two adapters the server ships (#156)', () => {
-	assert.deepEqual(PROVIDERS.map((p) => p.id), ['anthropic', 'openai']);
+test('providers are the three adapters the server ships (#156, #26)', () => {
+	assert.deepEqual(PROVIDERS.map((p) => p.id), ['anthropic', 'openai', 'openrouter']);
 	for (const p of PROVIDERS) assert.ok(p.label);
+	assert.equal(PROVIDERS.find((p) => p.id === 'openrouter').label, 'OpenRouter');
 });
 
 test('valid presets and slots produce no errors', () => {
-	assert.deepEqual(validatePresets(presets, slots, ['anthropic', 'openai']), []);
+	assert.deepEqual(validatePresets(presets, slots, ['anthropic', 'openai', 'openrouter']), []);
+});
+
+test('an OpenRouter preset names its model as vendor/model (#26)', () => {
+	const bare = [{ id: 'router', name: 'Router', provider: 'openrouter', model: 'gpt-5.4' }];
+	const errors = validatePresets(bare, { chat_preset: 'router', background_preset: 'router' }, ['openrouter']);
+	assert.equal(errors.length, 1, errors.join('\n'));
+	assert.match(errors[0], /vendor\/model/);
+	for (const model of ['openai/gpt-5.4-mini', 'meta-llama/llama-4-maverick:free']) {
+		const ok = [{ id: 'router', name: 'Router', provider: 'openrouter', model }];
+		assert.deepEqual(validatePresets(ok, { chat_preset: 'router', background_preset: 'router' }, ['openrouter']), [], model);
+	}
+	// Other providers keep their plain ids.
+	assert.deepEqual(validatePresets([{ id: 'gpt', name: 'GPT', provider: 'openai', model: 'gpt-5.4' }], { chat_preset: 'gpt', background_preset: 'gpt' }, ['openai']), []);
+});
+
+test('a slot on an OpenRouter preset needs the OpenRouter key', () => {
+	const errors = validatePresets(presets, { chat_preset: 'router', background_preset: 'haiku' }, ['anthropic', 'openai']);
+	assert.equal(errors.length, 1);
+	assert.match(errors[0], /OpenRouter/);
+	assert.match(errors[0], /key/i);
 });
 
 test('validation names every problem: ids, names, providers, models, slots, keys', () => {
@@ -71,6 +93,10 @@ test('labels stay human: preset label and short model names', () => {
 	assert.equal(modelShortLabel('gpt-5.4'), 'GPT-5.4');
 	assert.equal(modelShortLabel('some-custom-model'), 'some-custom-model');
 	assert.equal(modelShortLabel(''), '');
+	// OpenRouter ids carry the vendor and spell versions with dots.
+	assert.equal(modelShortLabel('anthropic/claude-sonnet-4.6'), 'Sonnet 4.6');
+	assert.equal(modelShortLabel('openai/gpt-5.4-mini'), 'GPT-5.4 mini');
+	assert.equal(modelShortLabel('meta-llama/llama-4-maverick:free'), 'meta-llama/llama-4-maverick:free');
 });
 
 test('ids are derived from names and stay unique', () => {
@@ -82,7 +108,8 @@ test('ids are derived from names and stay unique', () => {
 
 test('presets group by provider in provider order', () => {
 	const grouped = presetsByProvider(presets);
-	assert.deepEqual(grouped.map((g) => g.provider.id), ['anthropic', 'openai']);
+	assert.deepEqual(grouped.map((g) => g.provider.id), ['anthropic', 'openai', 'openrouter']);
 	assert.deepEqual(grouped[0].presets.map((p) => p.id), ['sonnet', 'haiku']);
+	assert.deepEqual(grouped[2].presets.map((p) => p.id), ['router']);
 	assert.deepEqual(presetsByProvider([]), []);
 });

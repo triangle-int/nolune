@@ -8,7 +8,7 @@
 <div class="computers-page">
 	<header class="computers-header">
 		<h2>Computers</h2>
-		<p>Desktops your companion can see and act on. Each one is a place it can be, not a separate companion.</p>
+		<p>Every place your companion can act: the server it runs on and the desktops connected through the Nolune app. Each one is a place it can be, not a separate companion; a computer that goes offline stays listed until it is back.</p>
 	</header>
 
 	{#key slug}
