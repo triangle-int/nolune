@@ -21,14 +21,18 @@
  * 3. waiting — the companion asked the user for something (a secret, an
  *    approval) and has no answer. Beats working; only the answer clears it,
  *    even after the run stops.
- * 4. failed — the last run ended with an error. Never settles into idle on
- *    its own; the next message or run clears it.
+ * 4. failed — the run reported an error: the server's `[system] <label>`
+ *    assistant message (agent_stopped carries no error field), or an
+ *    agent_stopped that names one. Recorded before the stop arrives, so the
+ *    stop cannot turn it into completed. Never settles into idle on its own;
+ *    the next message or run clears it.
  * 5. working_remote / working — a tool call is in progress, on another
  *    computer when the event names one, otherwise on this one. A tool call,
  *    a recall and agent_running all prove the run is active.
  * 6. recalling — memories were recalled in this run and no action has
- *    started yet. Recalling never overrides working: once an action runs, a
- *    later recall only adds to the count.
+ *    started yet. Recalling never overrides working: once an action runs
+ *    (`acted`), a later recall only adds to the count and the phase between
+ *    actions is thinking, not a stale recall.
  * 7. thinking — the run is active with no recall or action yet, or the model
  *    replied after its last action.
  * 8. listening — the server accepted the user's message and no run has
@@ -60,6 +64,7 @@
  *   listening: boolean;
  *   runs: readonly string[];
  *   action: CompanionAction | null;
+ *   acted: boolean;
  *   recalled: number;
  *   waiting: CompanionRequest | null;
  *   blocker: CompanionBlocker | null;
@@ -74,6 +79,7 @@
  *   | { type: "user_message"; chatId?: string }
  *   | { type: "agent_running"; chatId?: string }
  *   | { type: "agent_stopped"; chatId?: string; error?: string | null }
+ *   | { type: "run_failed"; chatId?: string; error: string }
  *   | { type: "memory_recall"; chatId?: string; count: number }
  *   | { type: "action"; chatId?: string; tool: string; summary: string; machine?: string | null }
  *   | { type: "assistant_message"; chatId?: string }
@@ -96,6 +102,7 @@ const INITIAL_FACTS = Object.freeze({
 	listening: false,
 	runs: Object.freeze([]),
 	action: null,
+	acted: false,
 	recalled: 0,
 	waiting: null,
 	blocker: null,
@@ -121,7 +128,7 @@ function resolveKind(f) {
 	if (f.error) return "failed";
 	if (f.action) return f.action.machine ? "working_remote" : "working";
 	const running = f.runs.length > 0;
-	if (running && f.recalled > 0) return "recalling";
+	if (running && f.recalled > 0 && !f.acted) return "recalling";
 	if (running) return "thinking";
 	if (f.listening) return "listening";
 	if (f.completed) return "completed";
@@ -199,12 +206,23 @@ export function reduceCompanion(state, event) {
 			const started = startRun(state, chatId);
 			return next(started, {
 				action: Object.freeze({ chatId, tool: event.tool, summary: event.summary, machine: event.machine || null }),
+				acted: true,
 			});
 		}
 		case "assistant_message": {
 			const chatId = event.chatId ?? NO_CHAT;
 			if (!state.action || state.action.chatId !== chatId) return state;
 			return next(state, { action: null });
+		}
+		case "run_failed": {
+			// The turn is over: its action ended with the error, and the stop that
+			// follows must not claim success.
+			const chatId = event.chatId ?? NO_CHAT;
+			return next(state, {
+				error: event.error,
+				action: state.action && state.action.chatId === chatId ? null : state.action,
+				completed: false,
+			});
 		}
 		case "agent_stopped": {
 			const chatId = event.chatId ?? NO_CHAT;
@@ -216,6 +234,7 @@ export function reduceCompanion(state, event) {
 				runs,
 				listening: last ? false : state.listening,
 				action: state.action && state.action.chatId === chatId ? null : state.action,
+				acted: last ? false : state.acted,
 				recalled: last ? 0 : state.recalled,
 				error,
 				// Success is only claimed for a run the client saw, once the last
@@ -251,13 +270,13 @@ export function reduceCompanion(state, event) {
 export const COMPANION_KINDS = Object.freeze(
 	/** @type {readonly { kind: CompanionKind; label: string; source: string }[]} */ ([
 		{ kind: "offline", label: "Offline", source: "The websocket closed or has not opened yet." },
-		{ kind: "blocked", label: "Blocked by permissions", source: "A tool reported a permission or policy denial in this run." },
+		{ kind: "blocked", label: "Blocked by permissions", source: "A tool's output reported a permission or policy denial in this run." },
 		{ kind: "waiting", label: "Waiting for approval", source: "A secret_request or approval is open and unanswered." },
-		{ kind: "failed", label: "Failed", source: "The run stopped with an error." },
+		{ kind: "failed", label: "Failed", source: "The server reported the run failed ([system] line) before agent_stopped." },
 		{ kind: "working_remote", label: "Working on another computer", source: "The current tool call names another machine." },
 		{ kind: "working", label: "Working locally", source: "A tool call is in progress on this computer." },
 		{ kind: "recalling", label: "Recalling", source: "memory_recall arrived and no action has started yet." },
-		{ kind: "thinking", label: "Thinking", source: "agent_running with no recall or action yet." },
+		{ kind: "thinking", label: "Thinking", source: "agent_running with no recall or action yet, or a reply after the last action." },
 		{ kind: "listening", label: "Listening", source: "The server accepted your message; the run has not started." },
 		{ kind: "completed", label: "Completed", source: "agent_stopped without an error, blocker or open request." },
 		{ kind: "idle", label: "Idle", source: "Connected, nothing in progress." },
@@ -308,16 +327,65 @@ export function companionStatusText(state, name = "Nolune") {
 	}
 }
 
+/** An errno code for a permission denial; never prose, so a diagnostic line carrying it is a denial. */
+const ERRNO_DENIAL = /\bEACCES\b|\bEPERM\b|\[Errno (?:1|13)\]/;
+/** What an OS or runtime says when it refuses an action for lack of permission. */
+const DENIAL = new RegExp(`permission denied|operation not permitted|${ERRNO_DENIAL.source}`, "i");
+/** A tool-level refusal; only trusted on an explicit `error:` line, where the text is the tool's own. */
+const POLICY_DENIAL = /not permitted|not allowed/i;
+/** A diagnostic line: `<program or path>: …`. */
+const DIAGNOSTIC = /^[^\s:][^:]*:\s/;
 /**
- * A tool error line that means the runtime refused the action for lack of
- * permission. Returns the reason without the `error:` prefix, or null.
+ * A raw diagnostic line whose denial phrase either ends the line
+ * (`ls: /root: Permission denied`, `…: Permission denied (publickey).`) or
+ * follows the program name (`zsh: permission denied: ./x`). Prose that
+ * merely mentions permissions has neither shape.
+ */
+const RAW_DENIAL = /^[^\s:][^:]*:\s+(?:(?:permission denied|operation not permitted)\b|(?:.*:\s*)?(?:permission denied|operation not permitted)\b(?:\s*\([^)]*\))?[.!]?\s*$)/i;
+
+/**
+ * The reason a tool output reports a permission denial, or null.
+ * `run_command` (with `interactive_session` the only tool whose output is
+ * broadcast live) has three shapes: the tool itself failed (`error:
+ * <reason>`); a non-PTY run returned a non-zero exit as `stdout…\nstderr:
+ * <text>`; a PTY run (the default) returned the raw terminal text with no
+ * marker at all. Ordinary output is never a blocker: outside an `error:` or
+ * `stderr:` marker a line must look like a diagnostic.
  * @param {string} text
  */
 export function permissionDenial(text) {
-	const match = /^error:\s*(.+)$/s.exec(text.trim());
+	const trimmed = text.trim();
+	const error = /^error:\s*(.+)$/s.exec(trimmed);
+	if (error) {
+		const reason = error[1].trim();
+		return DENIAL.test(reason) || POLICY_DENIAL.test(reason) ? reason : null;
+	}
+	const lines = trimmed.split(/\r?\n/).map((line) => line.trim());
+	const stderrAt = lines.findIndex((line) => /^stderr:/.test(line));
+	if (stderrAt >= 0) {
+		const stderr = lines.slice(stderrAt);
+		stderr[0] = stderr[0].replace(/^stderr:\s*/, "");
+		return stderr.find((line) => line && DENIAL.test(line)) ?? null;
+	}
+	return lines.find((line) => RAW_DENIAL.test(line) || (DIAGNOSTIC.test(line) && ERRNO_DENIAL.test(line))) ?? null;
+}
+
+/** Status lines the server writes as `[system] …` assistant messages; none is a run's outcome. */
+const SYSTEM_STATUS = /^(?:mood →|rhythm update|routine '.*' ran|desktop '.*' connected|user left this instance)/;
+
+/**
+ * Classifies a `[system]` assistant message. The server has no error field on
+ * agent_stopped: a failed turn is reported as `[system] <error label>`
+ * (`something went wrong`, `no API key configured — …`, `request timed
+ * out`, …) right before the stop. Returns that text for a failure, "" for a
+ * status line, or null when the content is not a system line at all.
+ * @param {string} content
+ */
+export function systemFailure(content) {
+	const match = /^\[system\]\s*([\s\S]*)$/.exec(content.trim());
 	if (!match) return null;
-	const reason = match[1].trim();
-	return /permission denied|not permitted|not allowed|\bEACCES\b|\bEPERM\b/i.test(reason) ? reason : null;
+	const text = match[1].trim();
+	return SYSTEM_STATUS.test(text) ? "" : text;
 }
 
 /**
@@ -339,7 +407,10 @@ export function companionEventFromServer(event) {
 				return reason ? { type: "permission_denied", chatId, tool: msg.tool_name ?? "tool", reason } : null;
 			}
 			if (msg.kind && msg.kind !== "message") return null;
-			return msg.role === "user" ? { type: "user_message", chatId } : { type: "assistant_message", chatId };
+			if (msg.role === "user") return { type: "user_message", chatId };
+			const failure = systemFailure(msg.content);
+			if (failure === null) return { type: "assistant_message", chatId };
+			return failure ? { type: "run_failed", chatId, error: failure } : null;
 		}
 		case "tool_activity":
 			return { type: "action", chatId: event.chat_id, tool: event.tool_name, summary: event.summary, machine: null };
@@ -375,9 +446,9 @@ export const STATE_EXAMPLES = Object.freeze(
 		/** @type {readonly { kind: CompanionKind; events: readonly CompanionEvent[] }[]} */
 		const examples = [
 			{ kind: "offline", events: [online, running, reading, { type: "connection", connected: false, reconnecting: true, attempt: 2 }] },
-			{ kind: "blocked", events: [online, running, { type: "action", chatId: "example", tool: "run_command", summary: "running command" }, { type: "permission_denied", chatId: "example", reason: "operation not permitted" }] },
+			{ kind: "blocked", events: [online, running, { type: "action", chatId: "example", tool: "run_command", summary: "running command" }, { type: "permission_denied", chatId: "example", reason: "ls: /root: Permission denied" }] },
 			{ kind: "waiting", events: [online, running, { type: "approval_requested", id: "example", prompt: "a GitHub token for gh", target: "GITHUB_TOKEN" }] },
-			{ kind: "failed", events: [online, running, { type: "agent_stopped", chatId: "example", error: "the provider returned 500" }] },
+			{ kind: "failed", events: [online, running, reading, { type: "run_failed", chatId: "example", error: "something went wrong" }, { type: "agent_stopped", chatId: "example" }] },
 			{ kind: "working_remote", events: [online, running, { type: "action", chatId: "example", tool: "computer_use", summary: "opening Finder", machine: "studio-mac" }] },
 			{ kind: "working", events: [online, running, reading] },
 			{ kind: "recalling", events: [online, running, { type: "memory_recall", chatId: "example", count: 3 }] },

@@ -16,6 +16,16 @@ function run(events, state = initialCompanionState()) {
 	return events.reduce((s, e) => reduceCompanion(s, e), state);
 }
 
+const slug = 'companion';
+/** A `chat_message_created` websocket event as the server sends it. */
+function serverMessage(id, role, content, extra = {}) {
+	return { type: 'chat_message_created', instance_slug: slug, chat_id: 'c', message: { id, role, content, created_at: '1', ...extra } };
+}
+/** Replays raw server events through the adapter, dropping the ones that say nothing. */
+function replay(serverEvents, state = run([online])) {
+	return run(serverEvents.map(companionEventFromServer).filter((e) => e !== null), state);
+}
+
 const online = { type: 'connection', connected: true, reconnecting: false, attempt: 0 };
 const dropped = { type: 'connection', connected: false, reconnecting: true, attempt: 3 };
 const running = { type: 'agent_running', chatId: 'chat-a' };
@@ -53,6 +63,14 @@ test('recalling shows before the first action and never overrides working', () =
 	const recalledAgain = run([{ type: 'memory_recall', chatId: 'chat-a', count: 2 }], working);
 	assert.equal(recalledAgain.kind, 'working', 'a later recall does not hide the action in progress');
 	assert.equal(recalledAgain.recalled, 5, 'recalls in the run still add up for the status detail');
+	const replied = run([{ type: 'assistant_message', chatId: 'chat-a' }], recalledAgain);
+	assert.equal(replied.kind, 'thinking', 'a reply after an action is thinking, not a stale recall phase');
+	assert.equal(companionStatusText(replied), 'Nolune is thinking.');
+	const secondCycle = run([reading, { type: 'assistant_message', chatId: 'chat-a' }], replied);
+	assert.equal(secondCycle.kind, 'thinking', 'nor after a second tool cycle');
+	assert.equal(run([{ type: 'memory_recall', chatId: 'chat-a', count: 1 }], secondCycle).kind, 'thinking', 'a recall after the first action only adds to the count');
+	const nextRun = run([stopped, running, { type: 'memory_recall', chatId: 'chat-a', count: 2 }], secondCycle);
+	assert.equal(nextRun.kind, 'recalling', 'the next run starts its own recall phase');
 });
 
 test('working locally names the action and the computer it runs on', () => {
@@ -127,6 +145,44 @@ test('completed only after agent_stopped without error, and only for a run that 
 	assert.equal(run([{ type: 'user_message', chatId: 'chat-a' }], done).kind, 'listening', 'a message after completion starts listening');
 });
 
+test('a run the server reports as failed is never shown as completed', () => {
+	// The exact production sequence: there is no error field on agent_stopped;
+	// a failed turn is a `[system] <label>` assistant message followed by the stop.
+	const failedRun = [
+		serverMessage('u1', 'user', 'hi'),
+		{ type: 'agent_running', instance_slug: slug, chat_id: 'c' },
+		serverMessage('t1', 'assistant', 'running command', { kind: 'tool_call', tool_name: 'run_command' }),
+		serverMessage('s1', 'assistant', '[system] something went wrong', { kind: 'message' }),
+		{ type: 'agent_stopped', instance_slug: slug, chat_id: 'c' },
+	];
+	const failed = replay(failedRun);
+	assert.equal(failed.kind, 'failed');
+	assert.equal(failed.completed, false);
+	assert.equal(failed.action, null, 'the failed turn ended the action');
+	assert.equal(companionStatusText(failed), 'Nolune stopped with an error: something went wrong.');
+	assert.equal(run([{ type: 'settle' }], failed).kind, 'failed', 'a failure never settles into idle on its own');
+	assert.equal(run([{ type: 'user_message', chatId: 'c' }], failed).kind, 'listening', 'the next message starts clean');
+	const noKey = replay([
+		serverMessage('u1', 'user', 'hi'),
+		{ type: 'agent_running', instance_slug: slug, chat_id: 'c' },
+		serverMessage('s1', 'assistant', '[system] no API key configured — add one in Settings'),
+		{ type: 'agent_stopped', instance_slug: slug, chat_id: 'c' },
+	]);
+	assert.equal(noKey.kind, 'failed');
+	assert.equal(companionStatusText(noKey), 'Nolune stopped with an error: no API key configured — add one in Settings.');
+	assert.equal(replay(failedRun.slice(0, 4)).kind, 'failed', 'the failure shows as soon as it is reported, before the stop arrives');
+	// Status lines are also `[system]` assistant messages but say nothing about the run.
+	const working = replay(failedRun.slice(0, 3));
+	assert.equal(working.kind, 'working');
+	assert.equal(replay([serverMessage('s2', 'assistant', '[system] mood → curious')], working), working, 'a mood line is not a reply and not a failure');
+	assert.equal(replay([serverMessage('s2', 'assistant', '[system] mood → curious'), { type: 'agent_stopped', instance_slug: slug, chat_id: 'c' }], working).kind, 'completed');
+	assert.deepEqual(companionEventFromServer(serverMessage('s1', 'assistant', '[system] something went wrong', { kind: 'message' })), { type: 'run_failed', chatId: 'c', error: 'something went wrong' });
+	assert.deepEqual(companionEventFromServer(serverMessage('s1', 'assistant', '[system] request timed out')), { type: 'run_failed', chatId: 'c', error: 'request timed out' });
+	for (const line of ['[system] mood → calm', '[system] rhythm update\nmornings are busy', "[system] routine 'check-in' ran (120 tokens)", "[system] desktop 'studio-mac' connected.", "[system] user left this instance. desktop 'studio-mac' still connected to server."]) {
+		assert.equal(companionEventFromServer(serverMessage('s', 'assistant', line)), null, `${line} is a status line, not a failure`);
+	}
+});
+
 test('one companion, several chats: completed only when the last run stops', () => {
 	const both = run([online, running, { type: 'agent_running', chatId: 'chat-b' }, reading]);
 	assert.equal(both.kind, 'working');
@@ -187,13 +243,57 @@ test('server events map onto the reducer vocabulary without inventing state', ()
 });
 
 test('permission denials are recognised from tool output, everything else is not a blocker', () => {
+	// The tool itself failed (spawn error, policy refusal): `error: <reason>`.
 	assert.equal(permissionDenial('error: bash: /etc/hosts: Permission denied'), 'bash: /etc/hosts: Permission denied');
 	assert.equal(permissionDenial('error: rm: /System: Operation not permitted'), 'rm: /System: Operation not permitted');
 	assert.equal(permissionDenial('error: reach_out is not allowed right now: quiet hours'), 'reach_out is not allowed right now: quiet hours');
 	assert.equal(permissionDenial('error: EACCES: permission denied, open /var/log'), 'EACCES: permission denied, open /var/log');
+	assert.equal(permissionDenial('error: failed to execute command: Permission denied (os error 13)'), 'failed to execute command: Permission denied (os error 13)');
 	assert.equal(permissionDenial('error: command not found'), null);
-	assert.equal(permissionDenial('permission denied'), null, 'only a tool error line counts, not text that merely mentions permissions');
+	// run_command without a PTY returns a non-zero exit as Ok: stdout, then `stderr: …`.
+	assert.equal(permissionDenial('stderr: ls: /root: Permission denied'), 'ls: /root: Permission denied');
+	assert.equal(permissionDenial('total 4\ndrwxr-xr-x  notes\nstderr: cat: /etc/shadow: Permission denied'), 'cat: /etc/shadow: Permission denied');
+	assert.equal(permissionDenial('stderr: warning: unused variable\nrm: /System: Operation not permitted\n'), 'rm: /System: Operation not permitted', 'the denial may be on a later stderr line');
+	assert.equal(permissionDenial('stderr: warning: unused variable'), null, 'stderr without a denial is not a blocker');
+	// run_command with a PTY (the default) returns the raw terminal output: no marker at all.
+	assert.equal(permissionDenial('ls: /root: Permission denied\r\n'), 'ls: /root: Permission denied');
+	assert.equal(permissionDenial('zsh: permission denied: ./deploy.sh'), 'zsh: permission denied: ./deploy.sh');
+	assert.equal(permissionDenial("mkdir: cannot create directory '/srv/x': Permission denied"), "mkdir: cannot create directory '/srv/x': Permission denied");
+	assert.equal(permissionDenial('git@github.com: Permission denied (publickey).\r\nfatal: Could not read from remote repository.'), 'git@github.com: Permission denied (publickey).');
+	assert.equal(permissionDenial("Error: EACCES: permission denied, open '/var/log/app.log'"), "Error: EACCES: permission denied, open '/var/log/app.log'");
+	assert.equal(permissionDenial("PermissionError: [Errno 13] Permission denied: '/etc/shadow'"), "PermissionError: [Errno 13] Permission denied: '/etc/shadow'");
+	assert.equal(permissionDenial('docker: permission denied while trying to connect to the Docker daemon socket'), 'docker: permission denied while trying to connect to the Docker daemon socket');
+	// Ordinary output that merely mentions permissions is not a blocker.
+	assert.equal(permissionDenial('permission denied'), null, 'only a diagnostic line counts, not text that merely mentions permissions');
+	assert.equal(permissionDenial('Note: if you see permission denied, run chmod +x first'), null);
+	assert.equal(permissionDenial('# Troubleshooting\nEACCES errors mean the socket is owned by root.'), null, 'prose about error codes is not a diagnostic');
+	assert.equal(permissionDenial('total 4\ndrwxr-xr-x'), null);
+	assert.equal(permissionDenial('command completed with exit code 1'), null);
 	assert.equal(permissionDenial(''), null);
+});
+
+test('a real run_command denial reduces to blocked and outlives the stop', () => {
+	const denied = replay([
+		{ type: 'agent_running', instance_slug: slug, chat_id: 'c' },
+		serverMessage('t1', 'assistant', 'running command', { kind: 'tool_call', tool_name: 'run_command' }),
+		serverMessage('t2', 'assistant', 'stderr: ls: /root: Permission denied', { kind: 'tool_output', tool_name: 'run_command' }),
+	]);
+	assert.equal(denied.kind, 'blocked');
+	assert.equal(companionStatusText(denied), 'Nolune is blocked by permissions: running command (ls: /root: Permission denied).');
+	const ended = replay([{ type: 'agent_stopped', instance_slug: slug, chat_id: 'c' }], denied);
+	assert.equal(ended.kind, 'blocked');
+	assert.equal(ended.completed, false);
+	const pty = replay([
+		{ type: 'agent_running', instance_slug: slug, chat_id: 'c' },
+		serverMessage('t1', 'assistant', 'running command', { kind: 'tool_call', tool_name: 'run_command' }),
+		serverMessage('t2', 'assistant', 'zsh: permission denied: ./deploy.sh\r\n', { kind: 'tool_output', tool_name: 'run_command' }),
+	]);
+	assert.equal(pty.kind, 'blocked', 'the PTY path (the default) has no stderr marker');
+	assert.equal(companionStatusText(pty), 'Nolune is blocked by permissions: running command (zsh: permission denied: ./deploy.sh).');
+	assert.deepEqual(
+		companionEventFromServer(serverMessage('t2', 'assistant', 'stderr: ls: /root: Permission denied', { kind: 'tool_output', tool_name: 'run_command' })),
+		{ type: 'permission_denied', chatId: 'c', tool: 'run_command', reason: 'ls: /root: Permission denied' },
+	);
 });
 
 test('the design-system gallery is produced by the reducer and covers every state once', () => {
