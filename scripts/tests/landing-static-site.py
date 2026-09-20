@@ -7,9 +7,14 @@ Runs after `pnpm --dir landing build` and inspects landing/.vercel/output:
   may leave under functions/ is its internal `![-]` 404 catch-all, which
   adapter-vercel always emits so SvelteKit renders the error page for unknown
   paths, and config.json may route nothing else to a function;
-- every page and both installer scripts are prerendered files;
+- every page and both installer scripts are prerendered files, including the
+  self-hosting docs index and its six sections;
 - /install.sh and /uninstall.sh are byte-for-byte the repository scripts at the
-  built commit;
+  built commit, and landing/vercel.json serves them as text/plain (Vercel
+  otherwise derives application/x-sh from the extension for a prerendered
+  file, so a browser visit downloads the script instead of showing it);
+- landing/vercel.json rewrites nothing off-site: every route is built here;
+- the built /docs page names every section a self-hoster needs;
 - every internal href, src and hash anchor in the prerendered HTML points at a
   prerendered file, and a hash names an id on the page it targets.
 """
@@ -74,7 +79,10 @@ def resolve(path: str) -> Path | None:
     return None
 
 
-for page in ["/", "/skills", "/privacy", "/terms", "/install.sh", "/uninstall.sh"]:
+DOCS_SECTIONS = ["prerequisites", "install", "upgrade", "backup", "uninstall", "troubleshooting"]
+DOCS_PAGES = ["/docs"] + [f"/docs/{section}" for section in DOCS_SECTIONS]
+
+for page in ["/", "/skills", "/privacy", "/terms", "/install.sh", "/uninstall.sh", *DOCS_PAGES]:
     if resolve(page) is None:
         failures.append(f"{page} is not prerendered")
 
@@ -82,6 +90,42 @@ for served, script in [("/install.sh", "scripts/install.sh"), ("/uninstall.sh", 
     built = resolve(served)
     if built is not None and built.read_bytes() != (root / script).read_bytes():
         failures.append(f"{served} differs from {script}")
+
+# --- vercel.json: scripts are text/plain, nothing is rewritten off-site ------
+
+vercel = json.loads((root / "landing" / "vercel.json").read_text())
+
+for rewrite in vercel.get("rewrites", []):
+    destination = rewrite.get("destination", "")
+    if urlsplit(destination).netloc:
+        failures.append(f"vercel.json rewrites {rewrite.get('source')!r} off-site to {destination}")
+
+
+def content_type(path: str) -> str | None:
+    """The Content-Type header vercel.json sets for exactly this path, if any."""
+    for rule in vercel.get("headers", []):
+        if rule.get("source") != path:
+            continue
+        for header in rule.get("headers", []):
+            if header.get("key", "").lower() == "content-type":
+                return header.get("value")
+    return None
+
+
+for served in ["/install.sh", "/uninstall.sh"]:
+    if content_type(served) != "text/plain; charset=utf-8":
+        failures.append(f"vercel.json must serve {served} as text/plain; charset=utf-8")
+
+# --- the docs index covers the self-hosting lifecycle ----------------------
+
+docs = resolve("/docs")
+if docs is not None:
+    text = docs.read_text().lower()
+    for word in ["prerequisites", "install", "backup", "uninstall", "troubleshooting"]:
+        if word not in text:
+            failures.append(f"/docs does not mention {word!r}")
+    if "update" not in text and "upgrade" not in text:
+        failures.append("/docs does not mention 'update' or 'upgrade'")
 
 # --- link check ------------------------------------------------------------
 
