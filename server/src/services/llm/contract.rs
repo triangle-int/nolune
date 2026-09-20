@@ -1829,28 +1829,29 @@ mod tests {
                 (10, 4),
                 "{provider:?}"
             );
-            let requests = requests.lock().unwrap();
-            assert_eq!(
-                requests.len(),
-                1,
-                "{provider:?}: one completion, nothing else"
-            );
-            let body = &requests[0].1;
-            assert_eq!(body["model"], "model-x");
-            let (limit, smallest) = match provider {
-                LlmProvider::Anthropic => ("max_tokens", 1),
-                LlmProvider::Openai => ("max_output_tokens", 16),
-                LlmProvider::Openrouter => ("max_tokens", 16),
-            };
-            assert_eq!(
-                body[limit], smallest,
-                "{provider:?}: a test asks for the least"
-            );
-            assert!(
-                body["tools"].is_null(),
-                "{provider:?}: a test carries no tools"
-            );
-            drop(requests);
+            {
+                let requests = requests.lock().unwrap();
+                assert_eq!(
+                    requests.len(),
+                    1,
+                    "{provider:?}: one completion, nothing else"
+                );
+                let body = &requests[0].1;
+                assert_eq!(body["model"], "model-x");
+                let (limit, smallest) = match provider {
+                    LlmProvider::Anthropic => ("max_tokens", 1),
+                    LlmProvider::Openai => ("max_output_tokens", 16),
+                    LlmProvider::Openrouter => ("max_tokens", 16),
+                };
+                assert_eq!(
+                    body[limit], smallest,
+                    "{provider:?}: a test asks for the least"
+                );
+                assert!(
+                    body["tools"].is_null(),
+                    "{provider:?}: a test carries no tools"
+                );
+            }
 
             for (status, body, check) in [
                 (401, "nope", "authentication"),

@@ -182,13 +182,10 @@ impl LlmBackend {
         }
     }
 
-    /// Checks the key with a one-token completion through the adapter, the
-    /// probe the key routes use for both providers (#28 builds on it).
-    /// `Ok` means the provider accepted the key: a completion, a rate limit,
-    /// or any other answer that required authentication first.
-    /// `Err(Authentication)` means it rejected the key. Transport and server
-    /// errors are returned as they are: the key is unknown, not wrong.
-    pub async fn probe_key(&self) -> Result<(), LlmError> {
+    /// The smallest completion the provider accepts, through the adapter:
+    /// one user word, no system prompt, no tools. Behind both the key probe
+    /// and the connection test.
+    async fn smallest_completion(&self) -> Result<types::LlmResponse, LlmError> {
         let messages = [Message::user("hi")];
         let mut request = LlmRequest::new(ExecutionScope::Subagent, &[], &messages, &[]);
         // The smallest completion each API accepts; OpenRouter passes the
@@ -197,7 +194,17 @@ impl LlmBackend {
             crate::config::LlmProvider::Anthropic => 1,
             crate::config::LlmProvider::Openai | crate::config::LlmProvider::Openrouter => 16,
         };
-        match self.adapter()?.complete(request).await {
+        self.adapter()?.complete(request).await
+    }
+
+    /// Checks the key with a one-token completion through the adapter, the
+    /// probe the key routes use for both providers (#28 builds on it).
+    /// `Ok` means the provider accepted the key: a completion, a rate limit,
+    /// or any other answer that required authentication first.
+    /// `Err(Authentication)` means it rejected the key. Transport and server
+    /// errors are returned as they are: the key is unknown, not wrong.
+    pub async fn probe_key(&self) -> Result<(), LlmError> {
+        match self.smallest_completion().await {
             Ok(_) => Ok(()),
             // Past authentication, whatever the provider then objected to.
             Err(
@@ -210,9 +217,15 @@ impl LlmBackend {
         }
     }
 
-    /// The connection test behind `POST /api/config/models/{id}/test` (#28).
+    /// The connection test behind `POST /api/config/models/{id}/test` (#28):
+    /// the same one-token completion as the key probe, but only a real
+    /// answer counts. A wrong model id, an exhausted quota or a rate limit
+    /// comes back as its variant, so the person learns what to fix. It
+    /// never touches a conversation.
     pub async fn test_connection(&self) -> Result<contract::Usage, LlmError> {
-        Err(LlmError::InvalidResponse("not implemented".into()))
+        self.smallest_completion()
+            .await
+            .map(|response| response.usage)
     }
 
     /// Simple chat without tools. Returns (text, tokens_used).

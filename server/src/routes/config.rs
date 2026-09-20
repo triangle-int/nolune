@@ -548,15 +548,32 @@ async fn update_server(
     })))
 }
 
-/// Write the current config back to disk.
-/// Model presets and slots (#156), plus which providers can back them.
+/// Model presets and slots (#156), which providers can back them, and what
+/// each preset's provider offers for its model, keyed by preset id (#28),
+/// so the client can warn before a slot or a chat picks a model that
+/// cannot see images, read documents or call tools.
 fn models_json(config: &config::Config) -> serde_json::Value {
+    let capabilities: serde_json::Map<String, serde_json::Value> = config
+        .llm
+        .presets
+        .iter()
+        .map(|preset| {
+            (
+                preset.id.clone(),
+                json!(crate::services::llm::provider_capabilities(
+                    preset.provider,
+                    &preset.model
+                )),
+            )
+        })
+        .collect();
     json!({
         "presets": config.llm.presets,
         "chat_preset": config.llm.chat_preset,
         "background_preset": config.llm.background_preset,
         "keyed_providers": config.llm.keyed_providers(),
         "setup_required": config.llm.setup_required(),
+        "capabilities": capabilities,
     })
 }
 
@@ -638,7 +655,13 @@ async fn seed_models(
     Ok(Json(body))
 }
 
-/// The route glue over `run_preset_test` (#28).
+// ---------------------------------------------------------------------------
+// Connection test (#28)
+// ---------------------------------------------------------------------------
+
+/// `POST /api/config/models/{id}/test`: one completion through the preset's
+/// adapter, answered with a typed outcome. Nothing is saved and no chat
+/// message is created; the route glue over `run_preset_test`.
 async fn test_model_preset(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
@@ -653,15 +676,50 @@ async fn run_preset_test(
     id: &str,
     probe_base_url: Option<&str>,
 ) -> Result<Json<serde_json::Value>, ModelsError> {
-    let _ = (state, id, probe_base_url);
-    Err(models_error(
-        StatusCode::NOT_IMPLEMENTED,
-        "not_implemented",
-        "not implemented".into(),
-    ))
+    use crate::services::llm::{LlmBackend, PresetError, contract::LlmError};
+    let (preset, backend) = {
+        let cfg = state.config.read().await;
+        let Some(preset) = cfg.llm.preset(id.trim()) else {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "ok": false,
+                    "error": "unknown_preset",
+                    "preset": id,
+                    "message": format!("model preset {id:?} does not exist"),
+                })),
+            ));
+        };
+        let backend = LlmBackend::for_preset(&cfg, state.http_client.clone(), &preset.id);
+        (preset.clone(), backend)
+    };
+    let key = backend.as_ref().ok().map(|backend| backend.api_key.clone());
+    let outcome = match backend {
+        Ok(mut backend) => {
+            if let Some(base_url) = probe_base_url {
+                backend.base_url = base_url.to_owned();
+            }
+            backend.test_connection().await
+        }
+        Err(error @ PresetError::MissingKey(_)) => Err(LlmError::SetupRequired(error.to_string())),
+        Err(error @ PresetError::Unknown(_)) => Err(LlmError::InvalidResponse(error.to_string())),
+    };
+    let mut answer = test_outcome(&preset, outcome);
+    // The adapters redact key-shaped text already; a provider that echoes
+    // the exact key in its refusal still never reaches the browser with it.
+    if let (Some(key), Err((_, Json(body)))) = (key.filter(|key| !key.is_empty()), &mut answer)
+        && let Some(message) = body["message"].as_str()
+        && message.contains(key.as_str())
+    {
+        body["message"] = json!(message.replace(key.as_str(), "[redacted]"));
+    }
+    answer
 }
 
-/// How a connection test outcome answers (#28).
+/// How a connection test outcome answers (#28): a real answer is `ok` with
+/// the model and its usage; every failure the person can act on has its
+/// own `error`, matched by variant (#24, #25), with a message that names
+/// the provider. Provider messages arrive redacted from the adapters.
 fn test_outcome(
     preset: &config::ModelPreset,
     outcome: Result<
@@ -669,11 +727,110 @@ fn test_outcome(
         crate::services::llm::contract::LlmError,
     >,
 ) -> Result<Json<serde_json::Value>, ModelsError> {
-    let _ = (preset, outcome);
-    Err(models_error(
-        StatusCode::NOT_IMPLEMENTED,
-        "not_implemented",
-        "not implemented".into(),
+    use crate::services::llm::contract::LlmError;
+    let provider = preset.provider.label();
+    let model = preset.model.as_str();
+    let (status, error, message, retry_after) = match outcome {
+        Ok(usage) => {
+            return Ok(Json(json!({
+                "ok": true,
+                "preset": preset.id,
+                "provider": preset.provider,
+                "model": preset.model,
+                "usage": {
+                    "input_tokens": usage.input_tokens,
+                    "output_tokens": usage.output_tokens,
+                },
+                "capabilities": crate::services::llm::provider_capabilities(
+                    preset.provider,
+                    &preset.model
+                ),
+            })));
+        }
+        Err(LlmError::SetupRequired(message)) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "setup_required",
+            message,
+            None,
+        ),
+        Err(LlmError::Authentication(message)) => (
+            StatusCode::UNAUTHORIZED,
+            "authentication",
+            format!("{provider} rejected the API key: {message}"),
+            None,
+        ),
+        Err(LlmError::RateLimited {
+            retry_after,
+            message,
+        }) => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            format!("{provider} accepted the key but is rate limiting: {message}"),
+            retry_after.map(|wait| wait.as_secs()),
+        ),
+        Err(LlmError::Http {
+            status: 404,
+            message,
+        }) => (
+            StatusCode::NOT_FOUND,
+            "model_not_found",
+            format!("{provider} has no model {model:?}: {message}"),
+            None,
+        ),
+        Err(LlmError::Http { status, message }) if status < 500 => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "provider_rejected",
+            format!("{provider} rejected the request ({status}): {message}"),
+            None,
+        ),
+        Err(LlmError::Http { status, message }) => (
+            StatusCode::BAD_GATEWAY,
+            "provider_unavailable",
+            format!("{provider} answered {status}: {message} — try again"),
+            None,
+        ),
+        Err(LlmError::Transport(message)) => (
+            StatusCode::BAD_GATEWAY,
+            "unreachable",
+            format!("failed to reach {provider}: {message}"),
+            None,
+        ),
+        Err(LlmError::Timeout) => (
+            StatusCode::GATEWAY_TIMEOUT,
+            "timeout",
+            format!("{provider} did not answer in time"),
+            None,
+        ),
+        Err(LlmError::UnsupportedCapability(capability)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "unsupported",
+            format!("{provider} does not support {capability} for {model:?}"),
+            None,
+        ),
+        Err(LlmError::ContextLength(message)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "provider_rejected",
+            format!("{provider} rejected the request: {message}"),
+            None,
+        ),
+        Err(error @ (LlmError::InvalidResponse(_) | LlmError::Cancelled)) => (
+            StatusCode::BAD_GATEWAY,
+            "invalid_response",
+            format!("{provider} answered with something unexpected: {error}"),
+            None,
+        ),
+    };
+    Err((
+        status,
+        Json(json!({
+            "ok": false,
+            "error": error,
+            "preset": preset.id,
+            "provider": preset.provider,
+            "model": preset.model,
+            "message": message,
+            "retry_after_seconds": retry_after,
+        })),
     ))
 }
 
@@ -1349,6 +1506,9 @@ mod preset_test_tests {
             );
             assert!(!ok.to_string().contains("secret"), "{provider:?}: {ok}");
 
+            // A provider that echoes the key in its refusal: the answer
+            // names the refusal, never the key.
+            let echoed = format!("rejected: key {name}-secret is not allowed");
             for (status, body, expected_status, expected_error) in [
                 (401, "nope", StatusCode::UNAUTHORIZED, "authentication"),
                 (
@@ -1364,6 +1524,12 @@ mod preset_test_tests {
                     "rate_limited",
                 ),
                 (503, "down", StatusCode::BAD_GATEWAY, "provider_unavailable"),
+                (
+                    400,
+                    echoed.as_str(),
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "provider_rejected",
+                ),
             ] {
                 let (url, task) = super::llm_key_tests::provider_stub(status, body.into()).await;
                 let (got, Json(body)) = run_preset_test(&state, &preset_id, Some(&url))
