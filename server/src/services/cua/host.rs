@@ -18,12 +18,6 @@ pub enum PlatformSupport {
     Unsupported(String),
 }
 
-impl PlatformSupport {
-    pub fn is_supported(&self) -> bool {
-        matches!(self, Self::Supported)
-    }
-}
-
 /// Whether a graphical session exists for a driver to act in.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DisplaySession {
@@ -50,8 +44,16 @@ pub fn platform_support() -> PlatformSupport {
 /// Support for a `target` (`None` when Nolune ships no driver for the host)
 /// on operating system `os`, naming `triple` in the reason.
 pub fn platform_support_for(target: Option<Target>, os: &str, triple: &str) -> PlatformSupport {
-    let _ = (target, os, triple);
-    todo!("platform support")
+    match (target, os) {
+        (None, _) => PlatformSupport::Unsupported(format!(
+            "Nolune ships no Cua Driver for {triple}; computer use is unavailable here"
+        )),
+        (Some(_), "macos") => PlatformSupport::Supported,
+        (Some(_), _) => PlatformSupport::Unsupported(format!(
+            "Nolune drives computers on macOS only for now; on {triple} the pinned driver \
+             still installs, so a later release can turn it on without changing the pin"
+        )),
+    }
 }
 
 /// The display session of this process.
@@ -70,8 +72,24 @@ pub fn display_session_for(
     display: Option<&OsStr>,
     wayland_display: Option<&OsStr>,
 ) -> DisplaySession {
-    let _ = (os, display, wayland_display);
-    todo!("display session")
+    // macOS and Windows have no display variable to read; the driver's
+    // health report says whether it can reach a session.
+    if matches!(os, "macos" | "windows") {
+        return DisplaySession::NotChecked;
+    }
+    let set = |name: &str, value: Option<&OsStr>| {
+        value
+            .filter(|value| !value.is_empty())
+            .map(|value| format!("{name}={}", value.to_string_lossy()))
+    };
+    match set("WAYLAND_DISPLAY", wayland_display).or_else(|| set("DISPLAY", display)) {
+        Some(found) => DisplaySession::Present(found),
+        None => DisplaySession::Headless(
+            "no display session (DISPLAY and WAYLAND_DISPLAY are unset): a headless host, so \
+             the driver is never started"
+                .to_owned(),
+        ),
+    }
 }
 
 /// The target triple of this build, for messages about hosts the pin does

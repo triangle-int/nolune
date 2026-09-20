@@ -113,8 +113,48 @@ pub fn locate_driver(lookup: DriverLookup<'_>) -> Result<Option<PathBuf>, Driver
 
 /// [`locate_driver`], also saying which source the driver came from.
 pub fn locate(lookup: DriverLookup<'_>) -> Result<Option<LocatedDriver>, DriverLookupError> {
-    let _ = (lookup, is_executable, binary_name);
-    todo!("locate with source")
+    let explicit = [
+        (
+            "[cua].driver_path",
+            DriverSource::Configured,
+            lookup.configured.map(Path::to_path_buf),
+        ),
+        (
+            DRIVER_ENV,
+            DriverSource::Environment,
+            lookup.env_override.map(PathBuf::from),
+        ),
+    ];
+    for (name, source, named) in explicit {
+        if let Some(path) = named {
+            return if is_executable(&path) {
+                Ok(Some(LocatedDriver { path, source }))
+            } else {
+                Err(DriverLookupError::NotExecutable { source: name, path })
+            };
+        }
+    }
+    // The workspace's own install (#20) is skipped when it no longer runs;
+    // `nolune cua status` reports the stale manifest instead.
+    if let Some(installed) = lookup.installed.filter(|path| is_executable(path)) {
+        return Ok(Some(LocatedDriver {
+            path: installed.to_path_buf(),
+            source: DriverSource::Installed,
+        }));
+    }
+    let name = binary_name();
+    let found = lookup
+        .path
+        .into_iter()
+        .flat_map(std::env::split_paths)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .map(|dir| dir.join(&name))
+        .find(|candidate| is_executable(candidate))
+        .map(|path| LocatedDriver {
+            path,
+            source: DriverSource::SearchPath,
+        });
+    Ok(found)
 }
 
 /// Resolve the driver binary from the config value, the workspace install

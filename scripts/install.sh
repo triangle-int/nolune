@@ -8,8 +8,11 @@
 #   curl -fsSL https://nolune.dev/install.sh | bash
 #
 # Options (env vars):
-#   NOLUNE_CHANNEL=nightly    Install nightly instead of stable
-#   NOLUNE_DIR=/custom/path   Install to custom directory (default: ~/.nolune)
+#   NOLUNE_CHANNEL=nightly         Install nightly instead of stable
+#   NOLUNE_DIR=/custom/path        Install to custom directory (default: ~/.nolune)
+#   NOLUNE_INSTALL_CUA_DRIVER=1    Also install the pinned Cua Driver for computer
+#                                  use (off by default; `nolune cua install` verifies
+#                                  its checksum, and nothing ever updates it on its own)
 #
 set -e
 
@@ -287,6 +290,20 @@ export NOLUNE_HOME="$NOLUNE_DIR"
 export PATH="$BIN_DIR:$PATH"
 
 "$BIN" onboard || fail "nolune onboard failed"
+
+# ─── Optional: the pinned Cua Driver ─────────────────────────────────────────
+# Off by default: computer use needs it, headless servers do not. The binary
+# downloads the exact release this version of Nolune was built against and
+# verifies its checksum before anything is installed (#20). A failure here is
+# not fatal: Nolune runs without the driver.
+if [ "${NOLUNE_INSTALL_CUA_DRIVER:-0}" = 1 ]; then
+    step "installing the pinned Cua Driver"
+    if "$BIN" cua install; then
+        log "Cua Driver installed (check it any time with ${BOLD}nolune cua status${NC})"
+    else
+        warn "Cua Driver install failed; nolune works without it. Retry later with ${BOLD}nolune cua install${NC}"
+    fi
+fi
 
 # Read port from config (default 26559)
 NOLUNE_PORT=26559

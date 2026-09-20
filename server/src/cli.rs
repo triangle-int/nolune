@@ -1,14 +1,30 @@
 use std::{
+    future::Future,
     io::{self, IsTerminal},
     path::PathBuf,
     process::Command,
 };
 
 use clap::{Parser, Subcommand};
+use cua_protocol::{
+    HealthOverall, HealthReportResult, MachineId, Permission,
+    cua_driver_pin::{
+        self, PINNED_VERSION, PinnedAsset, RELEASE_REPOSITORY, RELEASE_TAG, Target,
+        check_driver_version,
+    },
+    driver_mcp::permissions_from_health,
+};
 
 use crate::{
     config::{self, Profile},
-    onboard, profiles, service, uninstall,
+    onboard, profiles, service,
+    services::cua::{
+        discovery, driver,
+        host::{self, DisplaySession, PlatformSupport},
+        install::{self, InstallOutcome, InstallRequest, InstallStep},
+        transport::StdioDriverTransport,
+    },
+    uninstall,
 };
 
 #[derive(Parser)]
@@ -71,6 +87,11 @@ pub enum CliCommand {
         #[arg(long, short = 'y')]
         yes: bool,
     },
+    /// Install or inspect the pinned Cua Driver that computer use runs on
+    Cua {
+        #[command(subcommand)]
+        action: CuaAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -91,6 +112,19 @@ pub enum GatewayAction {
     Status,
     /// Stream service logs
     Logs,
+}
+
+#[derive(Subcommand)]
+pub enum CuaAction {
+    /// Download the pinned Cua Driver release for this host, verify its checksum, and
+    /// install it under the workspace
+    Install {
+        /// Install again even when the pinned driver is already present
+        #[arg(long)]
+        force: bool,
+    },
+    /// Show the pinned version, the installed and discovered driver, and its health
+    Status,
 }
 
 /// Run a subcommand for `profile`, whose root the entrypoint has already selected as the
@@ -114,6 +148,7 @@ pub fn run(cmd: CliCommand, profile: &Profile) -> i32 {
         }
         CliCommand::Pair => pair(profile),
         CliCommand::Onboard { json, port } => onboard_cmd(json, port, profile),
+        CliCommand::Cua { action } => cua(action, profile),
     }
 }
 
@@ -575,6 +610,290 @@ If the service was started with NOLUNE_AUTH_TOKEN, run `nolune pair{flag}` with 
             println!();
             0
         }
+    }
+}
+
+// ── Cua Driver (#20) ────────────────────────────────────────────────────
+
+fn cua(action: CuaAction, profile: &Profile) -> i32 {
+    match action {
+        CuaAction::Install { force } => cua_install(force, profile),
+        CuaAction::Status => cua_status(profile),
+    }
+}
+
+/// Run `work` on a thread with its own runtime: `main` already sits inside tokio, and
+/// these steps (a download, a driver handshake) have to block.
+fn on_own_runtime<T, F>(work: impl FnOnce() -> F + Send + 'static) -> Result<T, String>
+where
+    F: Future<Output = T>,
+    T: Send + 'static,
+{
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| error.to_string())?;
+        Ok(runtime.block_on(work()))
+    })
+    .join()
+    .unwrap_or_else(|_| Err("the driver step panicked".to_owned()))
+}
+
+/// The asset `nolune cua install` fetches for this host: the pinned one.
+fn host_asset(target: Target) -> &'static PinnedAsset {
+    #[cfg(debug_assertions)]
+    if let Some(overridden) = test_pin_override(target) {
+        return overridden;
+    }
+    cua_driver_pin::asset_for(target)
+}
+
+/// Test seam of debug builds only: `NOLUNE_CUA_TEST_PIN=<sha256>:<size>` replaces the
+/// pinned digest and size of this host's asset so the CLI tests can serve a small
+/// stand-in archive from a local server. Release binaries carry no such knob.
+#[cfg(debug_assertions)]
+fn test_pin_override(target: Target) -> Option<&'static PinnedAsset> {
+    let value = std::env::var("NOLUNE_CUA_TEST_PIN").ok()?;
+    let (sha256, size) = value.split_once(':')?;
+    let size = size.parse().ok()?;
+    let pinned = cua_driver_pin::asset_for(target);
+    eprintln!(
+        "warning: NOLUNE_CUA_TEST_PIN replaces the pinned checksum of {}; this seam exists in debug builds only",
+        pinned.name
+    );
+    Some(Box::leak(Box::new(PinnedAsset {
+        name: pinned.name,
+        sha256: Box::leak(sha256.to_owned().into_boxed_str()),
+        size,
+    })))
+}
+
+fn cua_install(force: bool, profile: &Profile) -> i32 {
+    let flag = profile_flag(profile);
+    let Some(target) = Target::current() else {
+        eprintln!(
+            "cannot install Cua Driver: Nolune ships no driver for this host; nothing was installed"
+        );
+        return 1;
+    };
+    if let PlatformSupport::Unsupported(reason) = host::platform_support() {
+        eprintln!("note: {reason}");
+    }
+    let asset = host_asset(target);
+    let release_url = install::release_url(std::env::var(install::RELEASE_URL_ENV).ok().as_deref());
+    let root = profile.root.clone();
+    let outcome = on_own_runtime(move || async move {
+        let request = InstallRequest {
+            root: &root,
+            target,
+            asset,
+            release_url: &release_url,
+            force,
+        };
+        install::install(&request, &mut |step| match step {
+            InstallStep::Downloading { url, size } => {
+                println!("downloading Cua Driver {PINNED_VERSION} for {target}");
+                println!("  {url} ({:.1} MB)", size as f64 / 1_000_000.0);
+            }
+            InstallStep::Verified { sha256 } => println!("verified sha256 {sha256}"),
+            InstallStep::VersionChecked { version } => {
+                println!("the driver reports {version}, which is the pin");
+            }
+        })
+        .await
+    });
+    match outcome {
+        Err(error) => {
+            eprintln!("cannot install Cua Driver: {error}; nothing was installed");
+            1
+        }
+        Ok(Err(error)) => {
+            eprintln!("cannot install Cua Driver: {error:#}; nothing was installed");
+            1
+        }
+        Ok(Ok(InstallOutcome::AlreadyInstalled(installed))) => {
+            println!(
+                "Cua Driver {} is already installed at {}; `nolune cua install{flag} --force` reinstalls it",
+                installed.version,
+                installed.driver.display()
+            );
+            0
+        }
+        Ok(Ok(InstallOutcome::Installed(installed))) => {
+            println!(
+                "installed Cua Driver {} at {}",
+                installed.version,
+                installed.driver.display()
+            );
+            println!("  status: nolune cua status{flag}");
+            println!(
+                "  Nolune never updates the driver on its own; a new Nolune release moves the pin."
+            );
+            0
+        }
+    }
+}
+
+/// Start the driver, take its health report, stop it.
+async fn probe_driver(driver: PathBuf) -> anyhow::Result<HealthReportResult> {
+    let transport = StdioDriverTransport::spawn(&driver).await?;
+    let machine_id = MachineId::try_from("server-local").expect("static id");
+    let report = driver::health_report(&transport, &machine_id).await;
+    transport.shutdown();
+    report
+}
+
+fn permission_word(permission: Permission) -> &'static str {
+    match permission {
+        Permission::Granted => "granted",
+        Permission::Denied => "denied",
+        Permission::PromptRequired => "not granted yet (prompt required)",
+        Permission::Unavailable => "unavailable",
+    }
+}
+
+fn cua_status(profile: &Profile) -> i32 {
+    let flag = profile_flag(profile);
+    println!(
+        "Cua Driver status{}",
+        if profile.is_default() {
+            String::new()
+        } else {
+            format!(" for profile {}", profile.name)
+        }
+    );
+    println!(
+        "  pinned: {PINNED_VERSION} ({RELEASE_TAG} from {RELEASE_REPOSITORY}); Nolune never updates the driver on its own"
+    );
+    let target = Target::current();
+    let triple = target.map_or("this host", Target::triple);
+    match host::platform_support() {
+        PlatformSupport::Supported => println!("  platform: supported ({triple})"),
+        PlatformSupport::Unsupported(reason) => {
+            println!("  platform: unsupported ({triple}): {reason}");
+        }
+    }
+    let display = host::display_session();
+    match &display {
+        DisplaySession::Present(found) => println!("  display: {found}"),
+        DisplaySession::Headless(reason) => println!("  display: {reason}"),
+        DisplaySession::NotChecked => {}
+    }
+
+    // What `nolune cua install` recorded, checked against the pin.
+    let manifest = match install::read_manifest(&profile.root) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            println!("  installed: unreadable ({error:#}); run `nolune cua install{flag} --force`");
+            None
+        }
+    };
+    match &manifest {
+        None => println!("  installed: none (run `nolune cua install{flag}`)"),
+        Some(installed) if !installed.driver.is_file() => println!(
+            "  installed: {} at {}, but the binary is missing; run `nolune cua install{flag} --force`",
+            installed.version,
+            installed.driver.display()
+        ),
+        Some(installed) => {
+            let pinned_sha256 = target.map(|target| cua_driver_pin::asset_for(target).sha256);
+            let verdict = if installed.version != PINNED_VERSION {
+                format!("not the pinned version; run `nolune cua install{flag}`")
+            } else if pinned_sha256.is_some_and(|sha256| sha256 != installed.sha256) {
+                format!(
+                    "its checksum is not the pinned one; run `nolune cua install{flag} --force`"
+                )
+            } else {
+                "verified against the pin".to_owned()
+            };
+            println!(
+                "  installed: {} at {} ({verdict})",
+                installed.version,
+                installed.driver.display()
+            );
+        }
+    }
+
+    // The driver the server would actually run, from the same lookup the runtime uses.
+    let installed_driver = manifest
+        .as_ref()
+        .map(|installed| installed.driver.as_path());
+    let located = match discovery::discover(None, installed_driver) {
+        Ok(located) => located,
+        Err(error) => {
+            println!("  driver: {error}");
+            return 1;
+        }
+    };
+    let Some(located) = located else {
+        println!(
+            "  driver: none found (run `nolune cua install{flag}`, or put cua-driver on PATH)"
+        );
+        return 0;
+    };
+    println!("  driver: {} ({})", located.path.display(), located.source);
+    if display.is_headless() {
+        println!("  health: not probed (headless host)");
+        return 0;
+    }
+
+    let report = match on_own_runtime(move || probe_driver(located.path)) {
+        Ok(Ok(report)) => report,
+        Ok(Err(error)) => {
+            println!("  health: the driver could not report ({error:#})");
+            return 1;
+        }
+        Err(error) => {
+            println!("  health: the driver could not report ({error})");
+            return 1;
+        }
+    };
+    let version_ok = match check_driver_version(&report.driver_version) {
+        Ok(()) => {
+            println!(
+                "  version: {} matches the pin",
+                report.driver_version.as_str()
+            );
+            true
+        }
+        Err(incompatible) => {
+            println!(
+                "  version: {incompatible} (`nolune cua install{flag}` installs the pinned release)"
+            );
+            false
+        }
+    };
+    let overall = match report.overall {
+        HealthOverall::Ok => "ok",
+        HealthOverall::Degraded => "degraded",
+        HealthOverall::Failed => "failed",
+    };
+    let permissions = permissions_from_health(&report);
+    println!(
+        "  health: {overall}; accessibility: {}, screen recording: {}",
+        permission_word(permissions.accessibility),
+        permission_word(permissions.screen_capture)
+    );
+    for check in report
+        .checks
+        .iter()
+        .filter(|check| check.status == cua_protocol::HealthCheckStatus::Fail)
+    {
+        match &check.hint {
+            Some(hint) => println!(
+                "    {}: {} ({})",
+                check.name.as_str(),
+                check.message.as_str(),
+                hint.as_str()
+            ),
+            None => println!("    {}: {}", check.name.as_str(), check.message.as_str()),
+        }
+    }
+    if version_ok && report.overall != HealthOverall::Failed {
+        0
+    } else {
+        1
     }
 }
 

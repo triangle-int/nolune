@@ -120,7 +120,8 @@ chmod +x "$tmp/curl"
 good_asset='cua-driver-rs-9.9.9-darwin-universal.tar.gz'
 linux_asset='cua-driver-rs-9.9.9-linux-x86_64-binary.tar.gz'
 printf 'pretend this is a driver tarball\n' > "$assets/$good_asset"
-printf 'and this one was tampered with\n' > "$assets/$linux_asset"
+# Same size, one byte flipped: only the digest can tell.
+printf 'pretend this is a driver tarbalL\n' > "$assets/$linux_asset"
 good_sha=$(sha256_of "$assets/$good_asset")
 good_size=$(wc -c < "$assets/$good_asset" | tr -d ' ')
 pin="$tmp/test.pin"
@@ -158,6 +159,16 @@ grep -Fq -- "$good_sha" "$tmp/log"
 grep -Fq -- "$(sha256_of "$assets/$linux_asset")" "$tmp/log"
 [[ ! -e "$dest/$linux_asset" ]]
 [[ ! -e "$dest/$linux_asset.sha256" ]]
+[[ -z "$(ls -A "$dest" 2>/dev/null)" ]]
+
+# A truncated download fails on its size before any digest is computed.
+printf 'pretend' > "$assets/$linux_asset"
+dest="$tmp/sidecar-short"
+if bash "$root/scripts/cua-driver.sh" fetch --target x86_64-unknown-linux-gnu --dest "$dest" --pin-file "$pin" > "$tmp/log" 2>&1; then
+  echo 'FAIL: a truncated download must fail the fetch' >&2
+  exit 1
+fi
+grep -Fq -- "expects $good_size" "$tmp/log"
 [[ -z "$(ls -A "$dest" 2>/dev/null)" ]]
 
 # A target the pin does not cover, and a mirror override.
@@ -216,11 +227,12 @@ assert set(desktop_targets) <= pinned_targets, (desktop_targets, pinned_targets)
 fetch = "bash scripts/cua-driver.sh fetch --target ${{ matrix.target }}"
 assert desktop.count(fetch) == 1
 assert desktop.index(fetch) < desktop.index("tauri-apps/tauri-action"), "fetch and verify before the build"
-upload = desktop[desktop.index(fetch):]
-assert "gh release upload" in upload and "cua-driver" in upload
-upload_step = upload[upload.index("gh release upload") - 400:upload.index("gh release upload")]
+steps = desktop.split("      - name: ")
+fetch_step = next(step for step in steps if fetch in step)
+assert "cua-driver-dist" in fetch_step
+upload_step = next(step for step in steps if "gh release upload" in step and "cua-driver-dist" in step)
 assert "if: inputs.dry_run != true" in upload_step, "only a real release uploads the driver"
-assert "update --apply" not in workflow
+assert steps.index(fetch_step) < steps.index(upload_step)
 CHECK
 
 printf 'All release workflow shell tests passed.\n'
