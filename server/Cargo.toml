@@ -53,6 +53,7 @@ clap = { version = "4", features = ["derive"] }
 cap-std = "4.0.3"
 cap-fs-ext = "4.0.3"
 same-file = "1.0.6"
+cua-protocol = { path = "../cua-protocol" }
 
 [dev-dependencies]
 # Already in the tree under ed25519-dalek; used only to build forged signatures in tests.
