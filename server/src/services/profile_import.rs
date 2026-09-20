@@ -906,7 +906,18 @@ mod tests {
             "caches the uploads directory handle"
         );
 
-        // Build the archive from a tree that carries its own upload.
+        // Build the archive from a tree that carries its own upload. Upload ids
+        // are minted from the millisecond clock, so let it move past the first
+        // upload's: a fast runner can otherwise mint both uploads as one id.
+        let minted: u128 = old.uploaded_at.parse().unwrap();
+        while std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            <= minted
+        {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         let scratch = tempfile::tempdir().unwrap();
         write_tree(&scratch.path().join("instances/companion"), &[]);
         let new = crate::services::uploads::save_upload(
@@ -916,6 +927,7 @@ mod tests {
             b"new upload bytes",
         )
         .unwrap();
+        assert_ne!(new.id, old.id, "the two uploads must be distinct records");
         let source =
             profile_archive::open_companion_dir(&scratch.path().join("instances/companion"))
                 .unwrap();

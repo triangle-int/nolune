@@ -6,6 +6,7 @@ pub mod config;
 pub mod continuity;
 pub mod drops;
 pub mod federation;
+pub mod handoff;
 
 pub mod health;
 pub mod instances;

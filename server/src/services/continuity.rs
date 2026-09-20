@@ -21,7 +21,8 @@ use tokio::sync::Mutex;
 
 use crate::domain::continuity::{
     Blocker, BlockerKind, ContinuityError, ContinuityRecord, ContinuityState, ContinuityUpdate,
-    MAX_BLOCKERS, MAX_RECORD_BYTES, Origin, Provenance, ProvenanceSource, ResourceRef, is_valid_id,
+    HandoffDecision, HandoffOutcome, MAX_BLOCKERS, MAX_RECORD_BYTES, Origin, Provenance,
+    ProvenanceSource, ResourceRef, is_valid_id,
 };
 use crate::services::{machine_registry::MachineRegistry, uploads};
 
@@ -136,6 +137,40 @@ impl ContinuityStore {
     ) -> Result<ContinuityRecord, ContinuityError> {
         self.set_state(id, ContinuityState::Dismissed, provenance, now)
             .await
+    }
+
+    /// Record the user's handoff decision (#82) on what is on disk now.
+    /// Written by the handoff API only; the decision itself is validated
+    /// by the record (`ContinuityRecord::decide_handoff`).
+    pub async fn decide_handoff(
+        &self,
+        id: &str,
+        decision: HandoffDecision,
+        provenance: Provenance,
+        now: i64,
+    ) -> Result<ContinuityRecord, ContinuityError> {
+        let _guard = self.lock.lock().await;
+        let mut record = self.get(id).ok_or(ContinuityError::NotFound)?;
+        record.decide_handoff(decision, provenance, now)?;
+        self.write(&record)?;
+        Ok(record)
+    }
+
+    /// Append the receipt of the finished continuation `run_id` (#82) to the
+    /// accepted handoff on disk.
+    pub async fn record_handoff_outcome(
+        &self,
+        id: &str,
+        run_id: &str,
+        outcome: HandoffOutcome,
+        provenance: Provenance,
+        now: i64,
+    ) -> Result<ContinuityRecord, ContinuityError> {
+        let _guard = self.lock.lock().await;
+        let mut record = self.get(id).ok_or(ContinuityError::NotFound)?;
+        record.record_handoff_outcome(run_id, outcome, provenance, now)?;
+        self.write(&record)?;
+        Ok(record)
     }
 
     async fn set_state(
@@ -1181,5 +1216,163 @@ mod tests {
                 .await,
             Err(ContinuityError::NotFound)
         );
+    }
+
+    #[tokio::test]
+    async fn handoff_decisions_and_outcomes_persist_under_the_lock() {
+        use crate::domain::continuity::HandoffOutcomeStatus;
+
+        let (ws, store) = harness();
+        let task = start(&store, "rename the trip photos", T0).await;
+        let accepted = HandoffDecision::Accepted {
+            machine_id: "mac-b".into(),
+            run_id: "run_1767603700_0badcafe".into(),
+            at: T0 + 100,
+            outcome: None,
+        };
+
+        // The decision lands on disk with provenance and binds the computer.
+        let bound = store
+            .decide_handoff(
+                &task.id,
+                accepted.clone(),
+                by(ProvenanceSource::User, "continue on mac-b"),
+                T0 + 100,
+            )
+            .await
+            .unwrap();
+        assert_eq!(bound.handoff, Some(accepted.clone()));
+        assert_eq!(bound.machine_ids, vec!["mac-b"]);
+        let on_disk = store.get(&task.id).unwrap();
+        assert_eq!(on_disk, bound);
+        assert_eq!(on_disk.provenance.last().unwrap().note, "continue on mac-b");
+
+        // A reference check in between (mac-b is not connected) never drops
+        // the decision, and a reopened store reads it back.
+        let registry = MachineRegistry::new();
+        let checked = store
+            .validate_references(&task.id, &registry, T0 + 150)
+            .await
+            .unwrap();
+        assert_eq!(checked.handoff, Some(accepted.clone()));
+        assert!(checked.blockers.iter().any(|blocker| matches!(
+            &blocker.kind,
+            BlockerKind::MachineUnavailable { machine_id } if machine_id == "mac-b"
+        )));
+        let reopened = ContinuityStore::new(ws.path(), CANONICAL_SLUG);
+        assert_eq!(reopened.get(&task.id).unwrap().handoff, Some(accepted));
+
+        // The outcome is appended once.
+        let outcome = HandoffOutcome {
+            status: HandoffOutcomeStatus::Completed,
+            finished_at: T0 + 200,
+            summary: "2 actions".into(),
+        };
+        let finished = store
+            .record_handoff_outcome(
+                &task.id,
+                "run_1767603700_0badcafe",
+                outcome.clone(),
+                by(ProvenanceSource::Server, "continuation on mac-b completed"),
+                T0 + 200,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            finished.handoff,
+            Some(HandoffDecision::Accepted { outcome: Some(ref got), .. }) if got == &outcome
+        ));
+        assert_eq!(store.get(&task.id).unwrap(), finished);
+        assert!(
+            store
+                .record_handoff_outcome(
+                    &task.id,
+                    "run_1767603700_0badcafe",
+                    outcome.clone(),
+                    by(ProvenanceSource::Server, "again"),
+                    T0 + 201,
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            store.get(&task.id).unwrap(),
+            finished,
+            "a refused write changes nothing"
+        );
+
+        // Unknown records and invalid decisions are refused; nothing is written.
+        assert_eq!(
+            store
+                .decide_handoff(
+                    "task_missing",
+                    HandoffDecision::Dismissed { at: T0 },
+                    by(ProvenanceSource::User, "x"),
+                    T0,
+                )
+                .await,
+            Err(ContinuityError::NotFound)
+        );
+        assert!(matches!(
+            store
+                .decide_handoff(
+                    &task.id,
+                    HandoffDecision::Accepted {
+                        machine_id: "a/b".into(),
+                        run_id: "run_1".into(),
+                        at: T0,
+                        outcome: None,
+                    },
+                    by(ProvenanceSource::User, "x"),
+                    T0,
+                )
+                .await,
+            Err(ContinuityError::Invalid(_))
+        ));
+        assert!(
+            store
+                .record_handoff_outcome(
+                    &task.id,
+                    "run_1767603700_0badcafe",
+                    HandoffOutcome {
+                        summary: "   ".into(),
+                        ..outcome
+                    },
+                    by(ProvenanceSource::Server, "x"),
+                    T0,
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(store.get(&task.id).unwrap(), finished);
+        assert!(temp_files(&ws).is_empty());
+
+        // Dismissing hides the card; the tool's next explicit write brings it back.
+        let other = start(&store, "file the taxes", T0 + 1).await;
+        let dismissed = store
+            .decide_handoff(
+                &other.id,
+                HandoffDecision::Dismissed { at: T0 + 300 },
+                by(ProvenanceSource::User, "dismissed"),
+                T0 + 300,
+            )
+            .await
+            .unwrap();
+        assert!(!dismissed.handoff_offered());
+        assert_eq!(dismissed.state, ContinuityState::Active);
+        let resumed = store
+            .update(
+                &other.id,
+                &ContinuityUpdate {
+                    completed_step: Some("gathered the receipts".into()),
+                    ..Default::default()
+                },
+                by(ProvenanceSource::Tool, "progress"),
+                T0 + 400,
+            )
+            .await
+            .unwrap();
+        assert!(resumed.handoff_offered());
+        assert_eq!(resumed.handoff, None);
     }
 }

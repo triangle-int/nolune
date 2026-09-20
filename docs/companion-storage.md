@@ -91,6 +91,7 @@ or memories it points at.
 | `completed_steps` | what already happened, each with provenance |
 | `blockers` | `machine_unavailable`, `resource_missing` (added and cleared by the server's reference check), or `other` (stated by the user or the tool), each with a detail and provenance |
 | `next_step` | the suggested next step |
+| `handoff` | the user's handoff decision, if any (see [Handoff cards](#handoff-cards)) |
 | `created_at`, `updated_at` | unix seconds |
 | `provenance` | every write: `source` (`user`, `chat`, `tool`, `server`), `at`, and a note |
 
@@ -124,6 +125,123 @@ reference is back.
 | `PUT /api/instances/companion/continuity/{id}` | apply `goal`, `state`, `completed_step`, `blocker`, `clear_blockers`, `next_step`, `machine_ids`, `resources` with a required `note` |
 | `POST /api/instances/companion/continuity/{id}/complete` | mark done (optional `note`) |
 | `POST /api/instances/companion/continuity/{id}/dismiss` | dismiss (optional `note`) |
+
+### Handoff cards
+
+A resumable continuity record is offered to the user as a handoff card
+(#82): a review of the unfinished task and a deliberate choice of where to
+continue it. The card is derived on every read from the record and the
+[known machines](#known-machines) list, never from model text, so it stays
+useful while the computer the task started on is offline: the origin is
+named with its last known state, the finished steps, linked resources,
+blockers, and proposed next step are the record's own, and nothing is
+copied between computers.
+
+| Card field | Meaning |
+| --- | --- |
+| `record_id`, `goal`, `state`, `origin_chat_id` | the record and the conversation the task came from, where a continuation runs |
+| `origin` | the first computer the record names, as a computer summary: `machine_id`, `display_name`, `known`, `online`, `health`, `platform`, `last_seen` (`null` fields when the machine list has never heard of it) |
+| `completed_steps`, `blockers`, `next_step` | the record's, as plain text |
+| `resources` | each link with a `label` and `available` (`false` while the reference check reports it missing) |
+| `required` | `capabilities` the destination's desktop must offer (screen and input actions, plus file actions when the record links a file on a computer) and the desktop `permissions` computer use needs (`screen_capture`, `accessibility`) |
+| `decision`, `bound_to` | the record's `handoff` decision and, after acceptance, the computer it is bound to |
+| `offered` | whether the card is shown: the record is resumable and was not kept or dismissed since the last explicit update |
+
+The record's `handoff` field is written only by the routes below:
+
+| `kind` | Fields | Meaning |
+| --- | --- | --- |
+| `accepted` | `machine_id`, `run_id`, `at`, optional `outcome` | continue on the computer with that stable id; `run_id` is the activity run in the same trail |
+| `kept` | optional `machine_id`, `at` | leave the task on the origin computer |
+| `dismissed` | `at` | stop offering the card |
+
+`kept` and `dismissed` hide the card until new explicit work (the chat tool
+or a `PUT`) updates the record, which clears the decision; the server's
+reference check is not explicit work and never brings a card back. An
+acceptance survives the progress the continuation records. Its `outcome`
+(`status` `completed`, `failed`, or `cancelled`, `finished_at`, and a
+`summary` no longer than a note) is recorded exactly once, for the bound
+run only, with `server` provenance, so a run can never be written onto a
+later acceptance.
+
+**Continue here** and **Continue on…** are the same acceptance with the
+stable id of the chosen computer; the client only differs in how it picked
+it (the remembered or only connected desktop, or a picker over
+`GET /machines`). The preview and the acceptance run the same checks
+against that computer at that moment, each with a `kind`, a `severity`,
+and a sentence the user can read:
+
+| Severity | Checks |
+| --- | --- |
+| `blocking` (continuation refused) | `record_closed`, `model_unavailable`, `initiative_off`, `machine_unknown`, `machine_offline`, `machine_not_responding` (stale heartbeat), `capability_missing`, `permission_denied`, `resource_missing` (an upload or memory note the reference check cannot find, or a file the destination was asked for at acceptance and does not have), `resource_elsewhere` (a file on a computer that is not connected) |
+| `approval` (the desktop will ask before the first action) | `permission_prompt`, `permissions_unknown` |
+| `note` | `resource_elsewhere` while that computer is connected; `resource_unverified` for a file on the destination itself, which is looked for when the user confirms |
+
+Missing files, unavailable apps, and insufficient permissions are therefore
+reported before continuation and never silently skipped. No computer-use
+action starts before the user accepts: the card and the preview are reads,
+and the desktops' toolcall channels stay untouched by a refusal. The one
+toolcall acceptance itself sends is a read-only `file_list` of the folder
+of each file the record places on the destination (`~` and a root list
+themselves), answered within 30 seconds; a file that is not listed, a
+folder the desktop cannot read, or a desktop that does not answer refuses
+the acceptance as `resource_missing` with the desktop's own reason, before
+anything is bound or admitted. Files on other computers are never probed
+through the destination.
+
+Accepting binds the record to the chosen machine id (added to
+`machine_ids`, the task active again), admits one run through the
+[proactive loop](proactive-loop.md) under the `handoff` trigger with
+`Target::Machine` (dedupe key `handoff:{id}`), and hands the task to its
+conversation as an explicit `[handoff]` request naming the one computer to
+act on and the record to report progress to. The conversation's own tools
+do the work under the user's normal approvals. Acceptance is idempotent:
+accepting again while that run is going, whichever computer is named,
+answers the same run with `already_running: true` and starts nothing.
+Acceptances of one record are serialized (a lock per record, held from the
+checks through the binding), so two that arrive together, from a double
+click or two clients, start one run and put one request in the
+conversation; the loop's dedupe key stays as a backstop. Once the run has
+finished, accepting again is new explicit work and a new run. When the
+conversation stops, the run is closed from what the agent loop itself
+reports (its exit is on record under the conversation's key before the key
+is released; chat text is never read for this, since mood lines, rhythm
+updates, and desktop connections write `[system]` lines into the same
+conversation): `failed` with the loop's own error label and retryable,
+`cancelled` when the conversation was stopped, otherwise `completed` with
+the receipts from the trace after the request, or `failed` and retryable
+when no turn took the request up. The request is found by its message id;
+when a server-side compaction rewrote the history since, a summary written
+after the request means everything that survived came after it, so a long
+continuation keeps its receipts. The outcome lands on the record, so the
+activity trail and the record tell one story. Cancelling the run from the
+activity view stops the conversation; retrying it from there re-runs the
+checks on the bound computer and links the attempt (`retry_of`). A restart
+fails the interrupted run like any other, and at startup every acceptance
+whose run died with the previous process is closed on its record with that
+run's outcome (broadcast as `handoff_updated`); the record stays bound and
+offered, so the card offers the task again instead of waiting on a run
+that no longer exists. The client reloads its cards on every reconnect for
+the same reason.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/instances/companion/handoffs` | `{handoffs, errors}`: the cards offered right now, most recently updated first, after the reference check |
+| `GET /api/instances/companion/continuity/{id}/handoff` | one record's card, whether or not it is offered |
+| `GET /api/instances/companion/continuity/{id}/handoff/preview?machine_id=` | `{card, destination, checks, ready}` for continuing there; nothing started |
+| `POST /api/instances/companion/continuity/{id}/handoff/accept` | `{machine_id}` → `{card, run, already_running}`, or `409 handoff_not_ready` with `message` and `checks` |
+| `POST /api/instances/companion/continuity/{id}/handoff/keep` | **Keep there**: bound to the origin, hidden until explicit work |
+| `POST /api/instances/companion/continuity/{id}/handoff/dismiss` | **Dismiss**: hidden until explicit work; the record stays resumable |
+
+Errors are `404 not_found`, `400 invalid`, `409 handoff_not_ready`, or
+`500 handoff`, each with a `message`; a foreign slug fails closed with
+`unknown_companion` like every other companion route. Every decision and
+every finished continuation is broadcast as `handoff_updated`
+(`instance_slug`, `card`), so the client replaces the card in place. The
+client renders the card in the Activity view with **Continue here**,
+**Continue on…**, **Keep there**, and **Dismiss**, and shows the preview
+(the destination computer and the checks, grouped into stops, approvals,
+and notes) before the user confirms a continuation.
 
 ### Known machines
 

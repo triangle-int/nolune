@@ -34,6 +34,10 @@ pub struct AppState {
     pub background_llm: Arc<RwLock<Option<LlmBackend>>>,
     /// Active agent tasks per instance slug — cancellation tokens.
     pub agent_tasks: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    /// How the last agent loop of each conversation ended, keyed like
+    /// `agent_tasks`; written by the loop right before it releases its key,
+    /// so a follower learns the reason instead of guessing it from chat text.
+    pub agent_exits: Arc<Mutex<HashMap<String, crate::domain::chat::AgentLoopExit>>>,
     /// Pending secret requests awaiting user input.
     pub pending_secrets: Arc<Mutex<HashMap<String, PendingSecret>>>,
     /// Connected MCP servers and their tools.
@@ -120,6 +124,7 @@ impl AppState {
             llm: Arc::new(RwLock::new(llm)),
             background_llm: Arc::new(RwLock::new(background_llm)),
             agent_tasks: Arc::new(Mutex::new(HashMap::new())),
+            agent_exits: Arc::new(Mutex::new(HashMap::new())),
             pending_secrets: Arc::new(Mutex::new(HashMap::new())),
             mcp_registry,
             http_client,

@@ -33,11 +33,15 @@ fn files(root: &Path, extensions: &[&str]) -> Vec<PathBuf> {
     out
 }
 
-/// The only production files that may touch the store or its writes.
+/// The only production files that may touch the store or its writes. The
+/// handoff API (#82) records the user's explicit decision on a record and
+/// the receipt of the continuation they accepted; see `handoff_cards.rs`.
 const WRITERS: &[&str] = &[
     "server/src/services/continuity.rs",
     "server/src/routes/continuity.rs",
     "server/src/services/tools/continuity.rs",
+    "server/src/services/handoff.rs",
+    "server/src/routes/handoff.rs",
 ];
 
 /// Module declarations and tool registration, which name the type but never write.

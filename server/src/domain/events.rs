@@ -49,6 +49,12 @@ pub enum ServerEvent {
         instance_slug: String,
         machine_id: String,
     },
+    /// A handoff card changed (#82): a decision was recorded or a
+    /// continuation finished. The card is derived from the record, no model text.
+    HandoffUpdated {
+        instance_slug: String,
+        card: crate::domain::handoff::HandoffCard,
+    },
     ContextCompacting {
         instance_slug: String,
         chat_id: String,

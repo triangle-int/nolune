@@ -146,6 +146,8 @@ export interface ContinuityRecord {
 	completed_steps: ContinuityStep[];
 	blockers: ContinuityBlocker[];
 	next_step?: string;
+	/** The user's handoff decision (#82), absent until one is made. */
+	handoff?: HandoffDecision | null;
 	created_at: number;
 	updated_at: number;
 	provenance: Provenance[];
@@ -153,6 +155,58 @@ export interface ContinuityRecord {
 /** Files under continuity/ that could not be read; surfaced, never deleted. */
 export interface ContinuityRecordError { file: string; reason: string }
 export interface ContinuityListing { records: ContinuityRecord[]; errors: ContinuityRecordError[] }
+
+/**
+ * A reviewable handoff (#82): the card is derived by the server from a
+ * continuity record and the known machines, never from model text, and
+ * stays useful while the origin computer is offline.
+ */
+export interface ComputerSummary {
+	machine_id: string;
+	/** The user's name, the hostname, or the id when the machine is unknown. */
+	display_name: string;
+	known: boolean;
+	online: boolean;
+	health: MachineHealth;
+	platform: MachinePlatform | null;
+	last_seen: number | null;
+}
+export type HandoffOutcomeStatus = "completed" | "failed" | "cancelled";
+/** The receipt of a finished continuation: the run's status and a short summary. */
+export interface HandoffOutcome { status: HandoffOutcomeStatus; finished_at: number; summary: string }
+export type HandoffDecision =
+	| { kind: "accepted"; machine_id: string; run_id: string; at: number; outcome?: HandoffOutcome | null }
+	| { kind: "kept"; machine_id?: string | null; at: number }
+	| { kind: "dismissed"; at: number };
+export interface HandoffResource { resource: ResourceRef; label: string; available: boolean }
+export type HandoffPermission = "screen_capture" | "accessibility";
+export interface HandoffRequirements { capabilities: string[]; permissions: HandoffPermission[] }
+export interface HandoffCard {
+	record_id: string;
+	goal: string;
+	state: ContinuityState;
+	origin_chat_id: string;
+	origin: ComputerSummary | null;
+	completed_steps: string[];
+	resources: HandoffResource[];
+	blockers: string[];
+	next_step: string | null;
+	required: HandoffRequirements;
+	decision: HandoffDecision | null;
+	bound_to: ComputerSummary | null;
+	/** Resumable and not kept or dismissed since the last explicit update. */
+	offered: boolean;
+	created_at: number;
+	updated_at: number;
+}
+export interface HandoffListing { handoffs: HandoffCard[]; errors: ContinuityRecordError[] }
+/** `blocking` refuses the continuation; `approval` means the desktop will ask; `note` is information. */
+export type CheckSeverity = "blocking" | "approval" | "note";
+export interface ContinuationCheck { kind: Tagged; severity: CheckSeverity; detail: string }
+/** The pre-continuation preview: the destination and every check, nothing started. */
+export interface ContinuationPreview { card: HandoffCard; destination: ComputerSummary; checks: ContinuationCheck[]; ready: boolean }
+/** An accepted handoff; `already_running` when a continuation was already going and nothing new started. */
+export interface HandoffAccepted { card: HandoffCard; run: ProactiveRun; already_running: boolean }
 /** One explicit change; lists are added to, never replaced. `note` is required provenance. */
 export interface ContinuityUpdate {
 	goal?: string;
@@ -475,6 +529,12 @@ export type ServerEvent =
 			type: "machine_forgotten";
 			instance_slug: string;
 			machine_id: string;
+	  }
+	| {
+			/** A handoff card changed (#82): a decision was recorded or a continuation finished. */
+			type: "handoff_updated";
+			instance_slug: string;
+			card: HandoffCard;
 	  }
 	| {
 			type: "context_compacting";
