@@ -28,7 +28,6 @@ use agent_loop::{agent_loop, collect_tool_defs, streaming_agent_loop};
 use contract::{ExecutionScope, LlmError, LlmRequest, ProviderAdapter};
 use helpers::retry_on_rate_limit;
 
-pub(crate) use anthropic::messages_to_anthropic;
 use types::{ANTHROPIC_BASE_URL, OPENAI_BASE_URL};
 
 /// What a preset's provider offers for its model id; OpenAI's answer varies by model.
@@ -49,8 +48,23 @@ pub fn probe_model(
     config: &crate::config::LlmConfig,
     provider: crate::config::LlmProvider,
 ) -> String {
-    let _ = (config, provider);
-    String::new()
+    config
+        .chat_preset()
+        .filter(|preset| preset.provider == provider)
+        .or_else(|| {
+            config
+                .presets
+                .iter()
+                .find(|preset| preset.provider == provider)
+        })
+        .map(|preset| preset.model.clone())
+        .or_else(|| {
+            crate::config::default_presets(provider)
+                .into_iter()
+                .next()
+                .map(|preset| preset.model)
+        })
+        .unwrap_or_default()
 }
 
 /// Why a preset cannot become a backend (#156).
@@ -164,8 +178,22 @@ impl LlmBackend {
     pub async fn probe_key(&self) -> Result<(), LlmError> {
         let messages = [Message::user("hi")];
         let mut request = LlmRequest::new(ExecutionScope::Subagent, &[], &messages, &[]);
-        request.max_tokens = 1;
-        self.adapter()?.complete(request).await.map(|_| ())
+        // The smallest completion each API accepts.
+        request.max_tokens = match self.provider {
+            crate::config::LlmProvider::Anthropic => 1,
+            crate::config::LlmProvider::Openai => 16,
+        };
+        match self.adapter()?.complete(request).await {
+            Ok(_) => Ok(()),
+            // Past authentication, whatever the provider then objected to.
+            Err(
+                LlmError::RateLimited { .. }
+                | LlmError::ContextLength(_)
+                | LlmError::InvalidResponse(_),
+            ) => Ok(()),
+            Err(LlmError::Http { status, .. }) if status < 500 => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 
     /// Simple chat without tools. Returns (text, tokens_used).
@@ -378,9 +406,23 @@ mod tests {
         .await
         .err()
         .unwrap();
+        let count = anthropic::anthropic_count_tokens(
+            &http,
+            "provider-key",
+            "model",
+            &[],
+            &[],
+            &[],
+            contract::ExecutionScope::Subagent,
+            &base,
+        )
+        .await
+        .err()
+        .unwrap();
         task.abort();
         assert!(!a.to_string().contains(SECRET));
         assert!(!o.to_string().contains(SECRET));
+        assert!(!count.to_string().contains(SECRET));
     }
 
     #[test]

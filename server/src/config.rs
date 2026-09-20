@@ -650,7 +650,13 @@ impl LlmConfig {
     /// those installs working without a click; presets a user has written
     /// or edited are never touched. Returns how many presets were added.
     pub fn seed_for_keys(&mut self) -> usize {
-        0
+        if !self.presets.is_empty() {
+            return 0;
+        }
+        self.keyed_providers()
+            .into_iter()
+            .map(|provider| self.seed_presets(provider))
+            .sum()
     }
 
     /// Reject shapes the UI must never save: empty or duplicate ids, empty
@@ -701,11 +707,6 @@ impl LlmConfig {
         Ok(())
     }
 
-    /// The Anthropic API key, or None if not configured.
-    pub fn api_key(&self) -> Option<&str> {
-        self.key_for(LlmProvider::Anthropic)
-    }
-
     /// List of service names that have API keys set.
     pub fn configured_providers(&self) -> Vec<&'static str> {
         let mut out = Vec::new();
@@ -722,16 +723,6 @@ impl LlmConfig {
             out.push("brave_search");
         }
         out
-    }
-
-    /// Anthropic API key + the chat model, for the count_tokens API. None
-    /// when chat runs on another provider.
-    pub fn anthropic_credentials(&self) -> Option<(&str, &str)> {
-        let chat = self.chat_preset()?;
-        if chat.provider != LlmProvider::Anthropic {
-            return None;
-        }
-        Some((self.api_key()?, chat.model.as_str()))
     }
 }
 
@@ -999,6 +990,11 @@ pub fn load_config() -> anyhow::Result<Config> {
     }
 
     apply_public_url_default(&mut config);
+    // Installs from before presets (#157): a key without [[llm.presets]].
+    let seeded = config.llm.seed_for_keys();
+    if seeded > 0 {
+        log::info!("seeded {seeded} default model presets for the configured provider keys");
+    }
 
     Ok(config)
 }
@@ -1302,16 +1298,8 @@ custom_token = "retained"
             config.llm.background_preset().unwrap().model,
             "claude-haiku-4-5-20251001"
         );
-        assert_eq!(
-            config.llm.anthropic_credentials(),
-            None,
-            "chat is on OpenAI"
-        );
         config.llm.chat_preset = "opus".into();
-        assert_eq!(
-            config.llm.anthropic_credentials(),
-            Some(("a", "claude-opus-4-6"))
-        );
+        assert_eq!(config.llm.chat_model(), Some("claude-opus-4-6"));
         // A dangling background slot is reported, never silently replaced by chat.
         config.llm.background_preset = "gone".into();
         assert!(config.llm.background_preset().is_none());
