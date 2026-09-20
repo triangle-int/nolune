@@ -5,7 +5,8 @@ use futures::StreamExt;
 use crate::services::tool::ToolDefinition;
 
 use super::contract::{
-    Capabilities, EventSink, LlmError, LlmEvent, LlmRequest, ProviderAdapter, StopReason, Usage,
+    Capabilities, EventSink, ExecutionScope, LlmError, LlmEvent, LlmRequest, ProviderAdapter,
+    StopReason, Usage,
 };
 use super::types::LlmBackend;
 use super::types::{ContentBlock, LlmResponse, Message, ToolCall};
@@ -33,12 +34,14 @@ pub(crate) fn anthropic_headers(api_key: &str) -> Result<reqwest::header::Header
     Ok(headers)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_anthropic_request(
     model: &str,
     system: &[&str],
     tool_defs: &[ToolDefinition],
     messages: &[Message],
     max_tokens: u64,
+    _scope: ExecutionScope,
     stream: bool,
     _api_key: &str,
 ) -> serde_json::Value {
@@ -233,6 +236,7 @@ pub(crate) fn build_anthropic_request(
 }
 
 /// Non-streaming Anthropic call. Returns (text, tool_calls, stop_reason, tokens_used).
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn anthropic_complete(
     http: &reqwest::Client,
     api_key: &str,
@@ -241,11 +245,12 @@ pub(crate) async fn anthropic_complete(
     tool_defs: &[ToolDefinition],
     messages: &[Message],
     max_tokens: u64,
+    scope: ExecutionScope,
     base_url: &str,
     json_schema: Option<&serde_json::Value>,
 ) -> anyhow::Result<LlmResponse> {
     let mut body = build_anthropic_request(
-        model, system, tool_defs, messages, max_tokens, false, api_key,
+        model, system, tool_defs, messages, max_tokens, scope, false, api_key,
     );
     if let Some(schema) = json_schema {
         body["output_config"] =
@@ -361,6 +366,7 @@ pub(crate) async fn anthropic_complete(
 }
 
 /// Streaming Anthropic call. Broadcasts text deltas, returns (text, tool_calls, stop_reason, tokens_used, ordered_content).
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn anthropic_stream(
     http: &reqwest::Client,
     api_key: &str,
@@ -369,11 +375,12 @@ pub(crate) async fn anthropic_stream(
     tool_defs: &[ToolDefinition],
     messages: &[Message],
     max_tokens: u64,
+    scope: ExecutionScope,
     events: &EventSink<'_>,
     base_url: &str,
 ) -> anyhow::Result<LlmResponse> {
     let body = build_anthropic_request(
-        model, system, tool_defs, messages, max_tokens, true, api_key,
+        model, system, tool_defs, messages, max_tokens, scope, true, api_key,
     );
 
     let headers = anthropic_headers(api_key)?;
@@ -714,7 +721,7 @@ impl ProviderAdapter for AnthropicAdapter {
             tokio::select! {
                 biased;
                 _ = request.cancellation.cancelled() => Err(LlmError::Cancelled),
-                result = anthropic_complete(&b.http, &b.api_key, &b.model, request.system, request.tools, request.messages, request.max_tokens, &b.base_url, request.json_schema) => result.map_err(LlmError::from),
+                result = anthropic_complete(&b.http, &b.api_key, &b.model, request.system, request.tools, request.messages, request.max_tokens, request.scope, &b.base_url, request.json_schema) => result.map_err(LlmError::from),
             }
         })
     }
@@ -729,7 +736,7 @@ impl ProviderAdapter for AnthropicAdapter {
             tokio::select! {
                 biased;
                 _ = request.cancellation.cancelled() => Err(LlmError::Cancelled),
-                result = anthropic_stream(&b.http, &b.api_key, &b.model, request.system, request.tools, request.messages, request.max_tokens, events, &b.base_url) => result.map_err(LlmError::from),
+                result = anthropic_stream(&b.http, &b.api_key, &b.model, request.system, request.tools, request.messages, request.max_tokens, request.scope, events, &b.base_url) => result.map_err(LlmError::from),
             }
         })
     }
