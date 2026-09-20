@@ -456,8 +456,8 @@ fn two_profiles_on_one_host_pair_through_the_wire_only() {
     assert!(stdout.contains(&molinka_id), "{stdout}");
     assert!(stdout.contains("pending"), "{stdout}");
     assert!(
-        stdout.contains("--profile molinka") && stdout.contains("confirm"),
-        "tells the other owner what to do:\n{stdout}"
+        stdout.contains("--profile yuki") && stdout.contains("confirm"),
+        "says what happens next and how to watch it:\n{stdout}"
     );
     assert!(
         !stdout.contains(&secret) && !stderr.contains(&secret) && !stdout.contains(&token),

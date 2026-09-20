@@ -517,8 +517,23 @@ impl PeerStore {
     /// peers are `Ok(false)`; an unloadable store fails closed like every
     /// other write.
     pub fn touch(&self, companion_id: &str) -> Result<bool, FederationError> {
-        let _ = companion_id;
-        todo!("#108 PR 4: stamp last_seen_at")
+        let now = (self.clock)();
+        let mut inner = self.inner.lock().unwrap();
+        self.ensure_loaded(&mut inner);
+        self.refuse_if_unloadable(&inner)?;
+        let Some(peer) = inner
+            .peers
+            .iter_mut()
+            .find(|peer| peer.record.companion_id() == companion_id)
+        else {
+            return Ok(false);
+        };
+        if peer.record.last_seen_at == Some(now) {
+            return Ok(true);
+        }
+        peer.record.last_seen_at = Some(now);
+        self.persist(&inner)?;
+        Ok(true)
     }
 
     /// Reads the store file once. Records whose document does not verify

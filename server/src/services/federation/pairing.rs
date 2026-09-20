@@ -40,6 +40,12 @@
 //! under the identity lock the rotation holds (`with_identity`), so no
 //! pending record is ever confirmed under an identity other than the one
 //! it was started with.
+//!
+//! Every time something signed by a peer verifies here (a pairing step, a
+//! notice or its acknowledgement, a transport envelope) the peer's record
+//! is stamped as seen (`PeerStore::touch`), which is what the owner list
+//! reports as `last_seen_at`; nothing that failed verification and nothing
+//! the owner does locally counts as a sighting.
 
 use std::{
     path::{Path, PathBuf},
@@ -344,11 +350,21 @@ impl FederationState {
             verified.retire_at,
             now,
         )?;
+        self.seen(sender.peer.record.companion_id());
         Ok(Inbound {
             peer: sender.peer.record,
             key: sender.kind,
             body: verified.body,
         })
+    }
+
+    /// Stamps a peer as seen after something it signed verified. A store
+    /// that cannot take the stamp does not undo the verification: the
+    /// sighting is informational, the trust decision was already made.
+    fn seen(&self, companion_id: &str) {
+        if let Err(error) = self.peers.touch(companion_id) {
+            log::warn!("[federation] companion {companion_id} sighting not recorded: {error}");
+        }
     }
 
     /// A ping from a paired peer, answered with a sealed pong.
@@ -937,6 +953,7 @@ impl FederationState {
             .get(&envelope.sender)
             .ok_or(FederationError::UnknownPeer)?;
         let body = identity::verify_envelope(envelope, &peer.verified)?;
+        self.seen(peer.record.companion_id());
         Ok((peer, body))
     }
 
@@ -963,7 +980,9 @@ impl FederationState {
                 .as_ref()
                 .map_or(now, |previous| previous.record.created_at),
             updated_at: now,
-            last_seen_at: None,
+            // A record is created only after something the peer signed
+            // verified (its request, or its answer to ours).
+            last_seen_at: Some(now),
             rotation_history: previous
                 .map(|previous| previous.record.rotation_history)
                 .unwrap_or_default(),
@@ -1009,6 +1028,7 @@ impl FederationState {
         expected: PeerState,
     ) -> Result<(), FederationError> {
         let body = identity::verify_envelope(answer, &peer.verified)?;
+        self.seen(peer.record.companion_id());
         let PairingMessage::Ack {
             version,
             pairing_id,

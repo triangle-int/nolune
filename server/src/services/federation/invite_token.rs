@@ -15,6 +15,7 @@
 //! Nothing here logs.
 
 use serde::Serialize;
+use zeroize::Zeroizing;
 
 use super::{decode, encode};
 use crate::domain::federation::{AcceptInvite, FederationError, IdentityDocument, InviteSecret};
@@ -36,24 +37,23 @@ struct InviteBody<'a> {
 
 /// Packs an invite's origin, secret, and issuer document into one line.
 pub fn encode_invite(origin: &str, secret: &InviteSecret, issuer: &IdentityDocument) -> String {
-    let _ = (
-        origin,
-        secret,
-        issuer,
-        InviteBody {
-            origin: "",
+    let body = Zeroizing::new(
+        serde_json::to_vec(&InviteBody {
+            origin,
             secret,
             issuer,
-        },
+        })
+        .expect("invite bodies serialize"),
     );
-    todo!("#108 PR 4: encode the invite token")
+    format!("{INVITE_TOKEN_PREFIX}{}", encode(&body))
 }
 
-/// Whether `text` is shaped like a URL (a scheme or an `http` prefix): such
-/// input is refused outright, whatever else it contains.
+/// Whether `text` is shaped like a URL (a scheme, or an `http` prefix in
+/// any case): such input is refused outright, whatever else it contains.
 pub fn looks_like_url(text: &str) -> bool {
-    let _ = text;
-    todo!("#108 PR 4: detect URL-shaped input")
+    let trimmed = text.trim();
+    let lowered = trimmed.to_ascii_lowercase();
+    lowered.starts_with("http://") || lowered.starts_with("https://") || trimmed.contains("://")
 }
 
 /// Unpacks a token. Surrounding whitespace is ignored. A URL, a line without
@@ -61,8 +61,26 @@ pub fn looks_like_url(text: &str) -> bool {
 /// accept body is `Malformed` with a fixed message that never quotes the
 /// input.
 pub fn decode_invite(text: &str) -> Result<AcceptInvite, FederationError> {
-    let _ = (text, decode(""), encode(b""));
-    todo!("#108 PR 4: decode the invite token")
+    let refuse = |message: &str| FederationError::Malformed(message.to_owned());
+    let trimmed = text.trim();
+    if looks_like_url(trimmed) {
+        return Err(refuse(
+            "an invite is never a URL; paste the nolune-invite line itself",
+        ));
+    }
+    if trimmed.len() > MAX_INVITE_TOKEN_LEN {
+        return Err(refuse("invite line is too long to be an invite"));
+    }
+    let Some(payload) = trimmed.strip_prefix(INVITE_TOKEN_PREFIX) else {
+        return Err(refuse(
+            "not an invite line: it should start with nolune-invite-v1.",
+        ));
+    };
+    let body = decode(payload)
+        .map(Zeroizing::new)
+        .ok_or_else(|| refuse("invite line does not decode"))?;
+    // serde's detail is discarded on purpose: it could quote the secret.
+    serde_json::from_slice(&body).map_err(|_| refuse("invite line does not have the invite shape"))
 }
 
 #[cfg(test)]
@@ -176,7 +194,7 @@ mod tests {
             ("prefix only", INVITE_TOKEN_PREFIX.to_owned()),
             (
                 "standard base64",
-                format!("{INVITE_TOKEN_PREFIX}{}", payload.replace('_', "/")),
+                format!("{INVITE_TOKEN_PREFIX}{}+", &payload[..payload.len() - 1]),
             ),
             ("padded base64", format!("{token}=")),
             ("truncated", token[..token.len() - 10].to_owned()),
@@ -196,7 +214,10 @@ mod tests {
                 format!("{INVITE_TOKEN_PREFIX}{}", "A".repeat(MAX_INVITE_TOKEN_LEN)),
             ),
         ] {
-            let error = decode_invite(&text).unwrap_err();
+            let error = match decode_invite(&text) {
+                Err(error) => error,
+                Ok(_) => panic!("{case} decoded as an invite"),
+            };
             assert!(
                 matches!(error, FederationError::Malformed(_)),
                 "{case}: {error}"
