@@ -11,8 +11,8 @@ use std::fs;
 
 use crate::{
     app::state::AppState,
-    domain::memory::MemoryEntry,
-    services::{chat, memory, tools},
+    domain::{memory::MemoryEntry, receipt::MemoryReceipt},
+    services::{chat, memory, memory_receipts, tools},
 };
 
 /// Retired control-token resource namespace; always denies access.
@@ -65,6 +65,14 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/instances/{instance_slug}/memory/{*path}",
             get(read_memory_file).delete(delete_memory_file),
+        )
+        .route(
+            "/api/instances/{instance_slug}/{chat_id}/receipts",
+            get(list_memory_receipts),
+        )
+        .route(
+            "/api/instances/{instance_slug}/{chat_id}/receipts/{message_id}",
+            get(get_memory_receipt),
         )
         .route(
             "/api/instances/{instance_slug}/email",
@@ -671,6 +679,50 @@ async fn delete_memory_file(
 }
 
 // ---------------------------------------------------------------------------
+// Memory recall receipts (#84) — read-only provenance per assistant message
+// ---------------------------------------------------------------------------
+
+/// GET /api/instances/{slug}/{chat_id}/receipts — every receipt of one chat.
+async fn list_memory_receipts(
+    State(state): State<AppState>,
+    Path((instance_slug, chat_id)): Path<(String, String)>,
+) -> Result<Json<Vec<MemoryReceipt>>, StatusCode> {
+    let media = state.vector_store.media_store();
+    let workspace = state.workspace_dir.clone();
+    tokio::task::spawn_blocking(move || {
+        memory_receipts::list_receipts(&workspace, &media, &instance_slug, &chat_id)
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .map(Json)
+    .map_err(|error| {
+        log::warn!("[receipts] listing failed: {error}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })
+}
+
+/// GET /api/instances/{slug}/{chat_id}/receipts/{message_id} — one receipt,
+/// with deleted sources reported as missing; 404 only when no receipt exists.
+async fn get_memory_receipt(
+    State(state): State<AppState>,
+    Path((instance_slug, chat_id, message_id)): Path<(String, String, String)>,
+) -> Result<Json<MemoryReceipt>, StatusCode> {
+    let media = state.vector_store.media_store();
+    let workspace = state.workspace_dir.clone();
+    tokio::task::spawn_blocking(move || {
+        memory_receipts::read_receipt(&workspace, &media, &instance_slug, &chat_id, &message_id)
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .map_err(|error| {
+        log::warn!("[receipts] read failed: {error}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?
+    .map(Json)
+    .ok_or(StatusCode::NOT_FOUND)
+}
+
+// ---------------------------------------------------------------------------
 // Email config (per-instance SMTP/IMAP)
 // ---------------------------------------------------------------------------
 
@@ -1142,5 +1194,111 @@ mod media_tests {
             state.vector_store.list_all("one", 10).await.unwrap().len(),
             3
         );
+    }
+}
+
+#[cfg(test)]
+mod receipt_tests {
+    use super::*;
+    use crate::domain::receipt::{Confidence, RecallReason, RecalledMemory, SourceStatus};
+    use axum::{
+        body::{Body, to_bytes},
+        http::Request,
+    };
+    use tower::ServiceExt;
+
+    async fn state_with_receipt(ws: &std::path::Path) -> AppState {
+        let memory = ws.join("instances/one/memory");
+        std::fs::create_dir_all(&memory).unwrap();
+        std::fs::write(memory.join("note.md"), "Orion nebula").unwrap();
+        let message = crate::domain::chat::ChatMessage {
+            id: "msg_1".into(),
+            role: crate::domain::chat::ChatRole::Assistant,
+            content: "hi".into(),
+            created_at: "1".into(),
+            kind: Default::default(),
+            tool_name: None,
+            mcp_app_html: None,
+            mcp_app_input: None,
+            model: None,
+        };
+        let memories = vec![
+            RecalledMemory {
+                path: "note.md".into(),
+                source: "note.md".into(),
+                excerpt: "Orion nebula".into(),
+                reason: RecallReason::Semantic,
+                linked_from: None,
+                confidence: Confidence::High,
+                retrieved_at: "2026-09-20T12:00:00Z".into(),
+                source_status: SourceStatus::Present,
+            },
+            RecalledMemory {
+                path: "gone.md".into(),
+                source: "gone.md".into(),
+                excerpt: "deleted later".into(),
+                reason: RecallReason::Keyword,
+                linked_from: None,
+                confidence: Confidence::Low,
+                retrieved_at: "2026-09-20T12:00:00Z".into(),
+                source_status: SourceStatus::Present,
+            },
+        ];
+        memory_receipts::write_receipts(ws, "one", "default", &[message], &memories).unwrap();
+        let mut state = AppState::new(crate::config::Config::default()).await;
+        state.workspace_dir = ws.to_owned();
+        state.vector_store =
+            std::sync::Arc::new(crate::services::vector::VectorStore::connect(ws).await);
+        state
+    }
+
+    async fn get_json(state: &AppState, uri: &str) -> (StatusCode, serde_json::Value) {
+        let response = router()
+            .with_state(state.clone())
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let value = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, value)
+    }
+
+    #[tokio::test]
+    async fn receipt_routes_serve_one_chat_and_report_missing_sources() {
+        let ws = tempfile::tempdir().unwrap();
+        let state = state_with_receipt(ws.path()).await;
+
+        let (status, receipt) = get_json(&state, "/api/instances/one/default/receipts/msg_1").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(receipt["message_id"], "msg_1");
+        assert_eq!(receipt["chat_id"], "default");
+        assert_eq!(receipt["memories"][0]["path"], "note.md");
+        assert_eq!(receipt["memories"][0]["reason"], "semantic");
+        assert_eq!(receipt["memories"][0]["confidence"], "high");
+        assert_eq!(receipt["memories"][0]["source_status"], "present");
+        assert!(receipt["memories"][0].get("score").is_none());
+        assert_eq!(receipt["memories"][1]["path"], "gone.md");
+        assert_eq!(
+            receipt["memories"][1]["source_status"], "missing",
+            "a deleted source never fails the receipt"
+        );
+
+        let (status, listed) = get_json(&state, "/api/instances/one/default/receipts").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(listed.as_array().map(Vec::len), Some(1));
+        assert_eq!(listed[0]["message_id"], "msg_1");
+
+        for uri in [
+            "/api/instances/one/default/receipts/msg_2",
+            "/api/instances/one/other/receipts/msg_1",
+            "/api/instances/one/default/receipts/..%2Fmsg_1",
+        ] {
+            let (status, _) = get_json(&state, uri).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
+        }
+        let (status, listed) = get_json(&state, "/api/instances/one/other/receipts").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(listed, serde_json::json!([]));
     }
 }

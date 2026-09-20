@@ -1014,3 +1014,91 @@ async fn scheduled_tasks_and_machine_connects_route_through_the_proactive_loop()
         "{statuses:?}"
     );
 }
+
+#[tokio::test]
+async fn memory_receipts_are_readable_only_through_the_canonical_companion() {
+    use crate::domain::receipt::{Confidence, RecallReason, RecalledMemory, SourceStatus};
+    use crate::services::memory_receipts;
+
+    let h = harness().await;
+    companion::ensure_identity(h.workspace.path()).unwrap();
+    h.seed_obsolete("alice");
+    let message = crate::domain::chat::ChatMessage {
+        id: "msg_1".into(),
+        role: crate::domain::chat::ChatRole::Assistant,
+        content: "remembered".into(),
+        created_at: "1".into(),
+        kind: Default::default(),
+        tool_name: None,
+        mcp_app_html: None,
+        mcp_app_input: None,
+        model: None,
+    };
+    for slug in [CANONICAL_SLUG, "alice"] {
+        let memories = vec![RecalledMemory {
+            path: "memory/facts.md".into(),
+            source: "memory/facts.md".into(),
+            excerpt: format!("secret of {slug}"),
+            reason: RecallReason::Keyword,
+            linked_from: None,
+            confidence: Confidence::Medium,
+            retrieved_at: "2026-09-20T12:00:00Z".into(),
+            source_status: SourceStatus::Present,
+        }];
+        memory_receipts::write_receipts(
+            h.workspace.path(),
+            slug,
+            "default",
+            std::slice::from_ref(&message),
+            &memories,
+        )
+        .unwrap();
+    }
+
+    let (status, receipt) = h
+        .json(
+            Method::GET,
+            &format!("/api/instances/{CANONICAL_SLUG}/default/receipts/msg_1"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(receipt["memories"][0]["excerpt"], "secret of companion");
+    let (status, listed) = h
+        .json(
+            Method::GET,
+            &format!("/api/instances/{CANONICAL_SLUG}/default/receipts"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed[0]["memories"][0]["excerpt"], "secret of companion");
+
+    for uri in [
+        "/api/instances/alice/default/receipts",
+        "/api/instances/alice/default/receipts/msg_1",
+        "/api/instances/Companion/default/receipts/msg_1",
+    ] {
+        let (status, value) = h.json(Method::GET, uri, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
+        assert_eq!(value["error"], "unknown_companion", "{uri}");
+    }
+    // Path segments can never reach another directory's receipts.
+    for uri in [
+        "/api/instances/companion/default/receipts/..%2F..%2F..%2Falice%2Fchats%2Fdefault%2Freceipts%2Fmsg_1",
+        "/api/instances/companion/..%2F..%2Falice%2Fchats%2Fdefault/receipts/msg_1",
+        "/api/instances/companion/..%2F..%2Falice%2Fchats%2Fdefault/receipts",
+    ] {
+        let (status, bytes) = h.send(Method::GET, uri, None).await;
+        let body = String::from_utf8_lossy(&bytes);
+        assert!(
+            !body.contains("secret of alice"),
+            "{uri} leaked another directory: {body}"
+        );
+        assert!(
+            status == StatusCode::NOT_FOUND || body == "[]",
+            "{uri}: {status} {body}"
+        );
+    }
+    h.assert_obsolete_untouched("alice");
+}
