@@ -170,6 +170,11 @@ struct CuaTarget {
     /// The host's name, known for the server-local target only.
     hostname: Option<String>,
     registered_at: i64,
+    /// The socket link a desktop target executes over (#17): the identity
+    /// `unregister_desktop` checks, so a late detach of a replaced link
+    /// never removes the target its successor registered. `None` for the
+    /// server-local target.
+    link: Option<Arc<DesktopLink>>,
 }
 
 /// A server-local target as `GET /machines` lists it: the descriptor plus
@@ -232,13 +237,15 @@ impl CuaTargets {
             .await
     }
 
-    /// Add a desktop target (#17), or replace the one an earlier connection
-    /// of the same desktop left behind: a reconnect under the stable id is
-    /// the same computer, never a second one. Refused when the id belongs to
-    /// a target that is not a desktop, so the server-local target is never
-    /// shadowed. Returns whether a previous desktop target was replaced.
+    /// Add a desktop target (#17) executing over `link`, or replace the one
+    /// an earlier connection of the same desktop left behind: a reconnect
+    /// under the stable id is the same computer, never a second one. Refused
+    /// when the id belongs to a target that is not a desktop, so the
+    /// server-local target is never shadowed. Returns whether a previous
+    /// desktop target was replaced.
     pub async fn register_desktop(
         &self,
+        link: &Arc<DesktopLink>,
         adapter: CheckedCuaAdapter,
     ) -> Result<bool, CuaRegistrationError> {
         let descriptor = adapter.descriptor();
@@ -267,9 +274,31 @@ impl CuaTargets {
                 adapter: Arc::new(adapter),
                 hostname: None,
                 registered_at: chrono::Utc::now().timestamp(),
+                link: Some(link.clone()),
             },
         );
         Ok(replaced)
+    }
+
+    /// Remove the desktop target `link` registered, and only that one: a
+    /// target the same desktop's later connection registered under the id
+    /// is left alone. Returns whether a target was removed.
+    pub async fn unregister_desktop(&self, link: &Arc<DesktopLink>) -> bool {
+        let machine_id = link.machine_id();
+        let mut targets = self.targets.lock().await;
+        let owned = targets
+            .get(machine_id)
+            .and_then(|target| target.link.as_ref())
+            .is_some_and(|registered| Arc::ptr_eq(registered, link));
+        if !owned {
+            return false;
+        }
+        targets.remove(machine_id);
+        log::info!(
+            "[machines] desktop cua target unregistered: {}",
+            machine_id.as_str()
+        );
+        true
     }
 
     /// The descriptors of the desktop targets, by machine id: what the
@@ -315,6 +344,7 @@ impl CuaTargets {
                 adapter: Arc::new(adapter),
                 hostname,
                 registered_at,
+                link: None,
             },
         );
         Ok(())
@@ -942,23 +972,27 @@ impl MachineRegistry {
         let connection = self
             .next_connection
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let replaced = self.agents.lock().await.insert(
-            id.clone(),
-            LiveAgent {
-                info: info.clone(),
-                sender,
-                connection,
-                registered_at: now,
-                last_persisted: now,
-                announced_health: cua_protocol::MachineHealth::Healthy,
-                cua: None,
-            },
-        );
-        // A reconnect starts from no typed target: the previous socket's
-        // waiting calls fail now, and its target is registered again only
-        // if this registration carries a descriptor (`attach_desktop_cua`).
-        if let Some(link) = replaced.and_then(|agent| agent.cua) {
-            self.detach_desktop_cua(&link).await;
+        {
+            let mut agents = self.agents.lock().await;
+            let replaced = agents.insert(
+                id.clone(),
+                LiveAgent {
+                    info: info.clone(),
+                    sender,
+                    connection,
+                    registered_at: now,
+                    last_persisted: now,
+                    announced_health: cua_protocol::MachineHealth::Healthy,
+                    cua: None,
+                },
+            );
+            // A reconnect starts from no typed target: the previous socket's
+            // waiting calls fail now, and its target is registered again only
+            // if this registration carries a descriptor (`attach_desktop_cua`).
+            // Detached under the agents lock, as one step with the replacement.
+            if let Some(link) = replaced.and_then(|agent| agent.cua) {
+                self.detach_desktop_cua(&link).await;
+            }
         }
 
         match validate_machine_id(&id) {
@@ -985,7 +1019,7 @@ impl MachineRegistry {
 
     #[cfg(test)]
     pub async fn unregister_at(&self, machine_id: &str, now: i64) {
-        let removed = self.agents.lock().await.remove(machine_id);
+        let removed = self.take_connection(machine_id, None).await;
         self.mark_offline(machine_id, removed, now).await;
     }
 
@@ -994,23 +1028,41 @@ impl MachineRegistry {
     /// leaves the live entry alone but is logged.
     pub async fn unregister_connection(&self, machine_id: &str, connection: u64) {
         let now = chrono::Utc::now().timestamp();
-        let removed = {
-            let mut agents = self.agents.lock().await;
-            match agents.get(machine_id) {
-                Some(agent) if agent.connection == connection => agents.remove(machine_id),
-                _ => None,
-            }
-        };
+        let removed = self.take_connection(machine_id, Some(connection)).await;
         self.mark_offline(machine_id, removed, now).await;
     }
 
+    /// The first half of a disconnect: remove the agent under `machine_id`
+    /// when `connection` is still its socket (any socket when `None`) and,
+    /// under the same lock, the typed target its link registered (#17).
+    /// Agent and target leave as one step, the mirror of
+    /// `attach_desktop_cua`, so a reconnect that registers and attaches
+    /// meanwhile finds neither and its own target is never the one removed.
+    async fn take_connection(
+        &self,
+        machine_id: &str,
+        connection: Option<u64>,
+    ) -> Option<LiveAgent> {
+        let mut agents = self.agents.lock().await;
+        let removed = match agents.get(machine_id) {
+            Some(agent) if connection.is_none_or(|connection| agent.connection == connection) => {
+                agents.remove(machine_id)
+            }
+            _ => None,
+        };
+        if let Some(link) = removed.as_ref().and_then(|agent| agent.cua.as_ref()) {
+            self.detach_desktop_cua(link).await;
+        }
+        removed
+    }
+
+    /// The second half of a disconnect: the record goes offline, seen now,
+    /// and clients hear about it. Nothing to do when a newer connection
+    /// kept the live entry.
     async fn mark_offline(&self, machine_id: &str, removed: Option<LiveAgent>, now: i64) {
-        let Some(agent) = removed else {
+        if removed.is_none() {
             log::info!("[machines] '{machine_id}' socket closed; a newer connection stays");
             return;
-        };
-        if let Some(link) = agent.cua {
-            self.detach_desktop_cua(&link).await;
         }
         log::info!("[machines] unregistered: {machine_id}");
         self.persist(|records| match records.get_mut(machine_id) {
@@ -1084,7 +1136,8 @@ impl MachineRegistry {
         // Held across the registration so a registration or disconnect of
         // the same desktop lands wholly before or wholly after: the target
         // is registered and the link stored as one step, and whoever comes
-        // next finds both or neither.
+        // next finds both or neither. The other side (`register`,
+        // `take_connection`) detaches under the same lock.
         let mut agents = self.agents.lock().await;
         let agent = agents
             .get_mut(machine_id)
@@ -1094,7 +1147,7 @@ impl MachineRegistry {
         let adapter = link
             .checked_adapter(descriptor)
             .map_err(|error| CuaRegistrationError::Invalid(error.to_string()))?;
-        self.cua.register_desktop(adapter).await?;
+        self.cua.register_desktop(&link, adapter).await?;
         agent.cua = Some(link.clone());
         Ok(link)
     }
@@ -1150,17 +1203,24 @@ impl MachineRegistry {
     }
 
     /// The desktop's socket is gone or was replaced: its waiting calls fail
-    /// now, the sessions it held are lost with it, and its target leaves
-    /// `CuaTargets`.
-    async fn detach_desktop_cua(&self, link: &DesktopLink) {
+    /// now, the sessions it held are lost with it, and the target this link
+    /// registered leaves `CuaTargets`. Only that one: a target a later
+    /// connection of the same desktop registered is not this link's, so a
+    /// detach that arrives after a reconnect leaves it alone.
+    async fn detach_desktop_cua(&self, link: &Arc<DesktopLink>) {
         let dropped = link.disconnect();
-        self.cua.unregister(link.machine_id()).await;
+        let removed = self.cua.unregister_desktop(link).await;
         log::info!(
-            "[machines] desktop cua target {} detached: {} waiting call(s) failed, {} open \
-             session(s) lost with the socket",
+            "[machines] desktop cua link {} detached: {} waiting call(s) failed, {} open \
+             session(s) lost with the socket, target {}",
             link.machine_id().as_str(),
             dropped.pending,
-            dropped.sessions.len()
+            dropped.sessions.len(),
+            if removed {
+                "removed"
+            } else {
+                "already replaced"
+            }
         );
     }
 
@@ -2731,6 +2791,12 @@ mod desktop_cua_tests {
         .unwrap()
     }
 
+    /// A link over a socket nobody reads: enough to register a target under.
+    fn dangling_link(machine_id: &str) -> Arc<DesktopLink> {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        DesktopLink::new(id(machine_id), tx, CALL_TIMEOUT)
+    }
+
     fn list_apps(machine_id: &str, request_id: &str) -> CuaRequestEnvelope {
         CuaRequestEnvelope {
             version: ProtocolVersion::V1,
@@ -2787,15 +2853,21 @@ mod desktop_cua_tests {
     async fn register_desktop_replaces_a_desktop_and_never_the_server_local_target() {
         let targets = CuaTargets::new();
         let first = descriptor(STUDIO, MachineLocation::Desktop);
+        let first_link = dangling_link(STUDIO);
         assert_eq!(
-            targets.register_desktop(fake_adapter(first.clone())).await,
+            targets
+                .register_desktop(&first_link, fake_adapter(first.clone()))
+                .await,
             Ok(false),
             "a new desktop target replaces nothing"
         );
         let mut again = first.clone();
         again.health = MachineHealth::Degraded;
+        let again_link = dangling_link(STUDIO);
         assert_eq!(
-            targets.register_desktop(fake_adapter(again.clone())).await,
+            targets
+                .register_desktop(&again_link, fake_adapter(again.clone()))
+                .await,
             Ok(true),
             "the same desktop reconnecting replaces its target"
         );
@@ -2805,6 +2877,14 @@ mod desktop_cua_tests {
             "one target, the new one"
         );
 
+        // Removal is by the link that registered the target, never by id
+        // alone: the replaced link finds nothing of its own to remove.
+        assert!(
+            !targets.unregister_desktop(&first_link).await,
+            "the first link's target was already replaced"
+        );
+        assert_eq!(targets.list().await, vec![again.clone()]);
+
         // The server-local target keeps its id whatever a desktop claims.
         let local = descriptor("server-local:studio", MachineLocation::ServerLocal);
         targets
@@ -2813,16 +2893,29 @@ mod desktop_cua_tests {
             .unwrap();
         let impostor = descriptor("server-local:studio", MachineLocation::Desktop);
         assert_eq!(
-            targets.register_desktop(fake_adapter(impostor)).await,
+            targets
+                .register_desktop(
+                    &dangling_link("server-local:studio"),
+                    fake_adapter(impostor)
+                )
+                .await,
             Err(CuaRegistrationError::DuplicateMachineId(id(
                 "server-local:studio"
             )))
         );
         assert_eq!(
             targets.list().await,
-            vec![again, local],
+            vec![again, local.clone()],
             "both targets, in id order"
         );
+
+        // The live link removes its own target and nothing else.
+        assert!(targets.unregister_desktop(&again_link).await);
+        assert!(
+            !targets.unregister_desktop(&again_link).await,
+            "already gone"
+        );
+        assert_eq!(targets.list().await, vec![local]);
     }
 
     #[tokio::test]
@@ -2996,6 +3089,71 @@ mod desktop_cua_tests {
             Some(CuaRegistrationError::NoConnection(id(STUDIO)))
         );
         assert!(registry.cua().list().await.is_empty());
+    }
+
+    /// Review finding on #196: a stale socket's disconnect removed the
+    /// `LiveAgent` under the agents lock but unregistered the `CuaTargets`
+    /// entry by machine id only after that lock was released, so a reconnect
+    /// that registered and attached in that window lost its target: the new
+    /// agent held a link, `cua().select(id)` was `NotFound`, and the row
+    /// showed no driver until the next reconnect.
+    #[tokio::test]
+    async fn a_stale_disconnect_landing_after_a_reconnect_never_removes_the_live_target() {
+        let registry = MachineRegistry::new();
+        let (_first_rx, first) = connect_with_cua(&registry, STUDIO, T0).await;
+        let first_link = registry.desktop_cua_link(STUDIO).await.unwrap();
+
+        // The first socket dies: its agent is taken. Before the rest of the
+        // disconnect runs, the desktop's new socket registers and attaches.
+        let taken = registry.take_connection(STUDIO, Some(first)).await;
+        assert!(taken.is_some(), "the stale connection was the live one");
+        let (mut second_rx, second) = connect_with_cua(&registry, STUDIO, T0 + 1).await;
+        assert_ne!(first, second);
+        let second_link = registry.desktop_cua_link(STUDIO).await.unwrap();
+        assert!(!Arc::ptr_eq(&first_link, &second_link));
+
+        // The stale disconnect finishes.
+        registry.mark_offline(STUDIO, taken, T0 + 2).await;
+        // And however late the stale link's detach arrives, it is not the
+        // live target's.
+        registry.detach_desktop_cua(&first_link).await;
+
+        // The live target survives: selectable, executing over the second
+        // socket, and on the row with its driver.
+        assert_eq!(
+            registry.cua().list().await,
+            vec![descriptor(STUDIO, MachineLocation::Desktop)],
+            "the second connection's target is still registered"
+        );
+        let adapter = registry
+            .cua()
+            .select(Some(&id(STUDIO)))
+            .await
+            .expect("the live target is selectable");
+        let request = list_apps(STUDIO, "after-race");
+        let call = {
+            let request = request.clone();
+            tokio::spawn(async move { adapter.execute(&request).await })
+        };
+        let frame = next_frame(&mut second_rx).await;
+        assert_eq!(frame["request"]["request_id"], "after-race");
+        assert!(registry.complete_cua(STUDIO, answer(&request)).await);
+        let response = call.await.unwrap().unwrap();
+        assert!(matches!(response.response, CuaResponse::Success { .. }));
+        assert!(
+            Arc::ptr_eq(
+                &registry.desktop_cua_link(STUDIO).await.unwrap(),
+                &second_link
+            ),
+            "the agent still holds the second link"
+        );
+        let row = &registry.known_at(T0 + 2).await.unwrap()[0];
+        assert!(row.online);
+        assert_eq!(row.driver_version.as_deref(), Some("0.28.2"));
+        assert_eq!(row.cua_health, Some(MachineHealth::Healthy));
+
+        // The stale link itself is closed: nothing is sent for it any more.
+        assert_eq!(first_link.pending(), 0);
     }
 
     #[tokio::test]
