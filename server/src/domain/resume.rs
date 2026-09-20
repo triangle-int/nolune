@@ -40,13 +40,27 @@ impl RitualTrigger {
     /// Spontaneous triggers wait for quiet hours, the cooldown, and a snooze
     /// to end; an explicit request does not.
     pub fn is_spontaneous(&self) -> bool {
-        todo!("#83")
+        !matches!(self, Self::Manual)
     }
 
     /// Why the suggestion appeared now, as one sentence naming the trigger.
     pub fn why_now(&self, machines: &[KnownMachine]) -> String {
-        let _ = machines;
-        todo!("#83")
+        match self {
+            Self::Manual => "You asked to resume your work.".to_owned(),
+            Self::OpenedAfterBreak { away_secs } => {
+                format!(
+                    "You opened Nolune after {} away.",
+                    humanize_secs(*away_secs)
+                )
+            }
+            Self::MachineConnected { machine_id } => {
+                let name = machines
+                    .iter()
+                    .find(|m| &m.machine_id == machine_id)
+                    .map_or(machine_id.as_str(), |m| m.display_name.as_str());
+                format!("{name} reconnected, and this task names it.")
+            }
+        }
     }
 }
 
@@ -80,8 +94,7 @@ impl Default for ResumeRitualPolicy {
 
 impl ResumeRitualPolicy {
     pub fn is_snoozed(&self, now: i64) -> bool {
-        let _ = now;
-        todo!("#83")
+        self.snooze_until.is_some_and(|until| now < until)
     }
 }
 
@@ -127,13 +140,147 @@ pub struct RankContext<'a> {
     pub only_naming: Option<&'a str>,
 }
 
-/// Pick at most one record to offer. Closed, kept, dismissed, snoozed-away,
-/// stale, and unreachable work never qualifies; among the rest, explicit
-/// priority, the deadline, the state, stated blockers, a ready destination
-/// the record names, and recency decide, in that order of weight.
+/// Pick at most one record to offer. Closed, kept, dismissed, stale, and
+/// unreachable work never qualifies; among the rest, explicit priority, the
+/// deadline, the state, stated blockers, a ready destination the record
+/// names, and recency decide, in that order of weight. Deterministic: ties
+/// go to the most recently updated record, then the smaller id.
 pub fn rank(records: &[ContinuityRecord], ctx: &RankContext<'_>) -> Option<Candidate> {
-    let _ = (records, ctx);
-    todo!("#83")
+    records
+        .iter()
+        .filter(|record| record.handoff_offered())
+        .filter(|record| !ctx.dismissed.iter().any(|id| id == &record.id))
+        .filter(|record| ctx.now - record.updated_at <= STALE_AFTER_SECS)
+        .filter(|record| {
+            ctx.only_naming
+                .is_none_or(|machine_id| record.machine_ids.iter().any(|id| id == machine_id))
+        })
+        .filter_map(|record| {
+            let destination = ready_destinations(record, ctx.machines)
+                .into_iter()
+                .next()?;
+            Some(score(record, destination, ctx.now))
+        })
+        .max_by(|a, b| {
+            a.score
+                .cmp(&b.score)
+                .then_with(|| a.updated_at.cmp(&b.updated_at))
+                .then_with(|| b.record_id.cmp(&a.record_id))
+        })
+        .map(|scored| Candidate {
+            record_id: scored.record_id,
+            goal: scored.goal,
+            why_this: scored.why_this,
+            destination_id: scored.destination_id,
+            score: scored.score,
+        })
+}
+
+/// One record's score and the reasons behind it.
+struct Scored {
+    record_id: String,
+    goal: String,
+    why_this: String,
+    destination_id: String,
+    score: i64,
+    updated_at: i64,
+}
+
+/// Weigh one qualifying record. Each factor adds to the score and, when it
+/// says something about this record, to the stated reason.
+fn score(record: &ContinuityRecord, destination: &KnownMachine, now: i64) -> Scored {
+    let mut score = 0;
+    let mut reasons: Vec<String> = Vec::new();
+
+    match record.priority.unwrap_or_default() {
+        Priority::High => {
+            score += 300;
+            reasons.push("high priority".into());
+        }
+        Priority::Normal => {}
+        Priority::Low => {
+            score -= 150;
+            reasons.push("low priority".into());
+        }
+    }
+
+    if let Some(due_at) = record.due_at {
+        let left = due_at - now;
+        if left < 0 {
+            score += 250;
+            reasons.push(format!("overdue by {}", humanize_secs(-left)));
+        } else {
+            score += if left <= 86_400 {
+                200
+            } else if left <= 7 * 86_400 {
+                100
+            } else {
+                25
+            };
+            reasons.push(format!("due in {}", humanize_secs(left)));
+        }
+    }
+
+    match record.state {
+        ContinuityState::ReadyToResume => {
+            score += 80;
+            reasons.push("ready to resume".into());
+        }
+        ContinuityState::Active => score += 40,
+        ContinuityState::Waiting => reasons.push("waiting".into()),
+        ContinuityState::Completed | ContinuityState::Dismissed | ContinuityState::Failed => {}
+    }
+
+    let stated = record
+        .blockers
+        .iter()
+        .filter(|blocker| matches!(blocker.kind, BlockerKind::Other))
+        .count();
+    let reference = record.blockers.len() - stated;
+    score -= 120 * stated.min(3) as i64 + 60 * reference.min(3) as i64;
+    if stated > 0 {
+        reasons.push(if stated == 1 {
+            "1 stated blocker".into()
+        } else {
+            format!("{stated} stated blockers")
+        });
+    }
+
+    let age = now - record.updated_at;
+    score += if age < 3_600 {
+        60
+    } else if age < 86_400 {
+        40
+    } else if age < 7 * 86_400 {
+        20
+    } else {
+        0
+    };
+    reasons.push(format!("updated {} ago", humanize_secs(age)));
+
+    let named = record
+        .machine_ids
+        .iter()
+        .any(|id| id == &destination.machine_id);
+    if named {
+        score += 100;
+        reasons.push(format!(
+            "{} can take it, where it started",
+            destination.display_name
+        ));
+    } else {
+        reasons.push(format!("{} can take it", destination.display_name));
+    }
+
+    let why_this: String = reasons.join(", ").chars().take(MAX_REASON_CHARS).collect();
+    Scored {
+        record_id: record.id.clone(),
+        goal: record.goal.clone(),
+        why_this,
+        destination_id: destination.machine_id.clone(),
+        score,
+        updated_at: record.updated_at,
+    }
 }
 
 /// The computers on which continuing `record` would not be refused right
@@ -143,27 +290,45 @@ pub fn ready_destinations<'a>(
     record: &ContinuityRecord,
     machines: &'a [KnownMachine],
 ) -> Vec<&'a KnownMachine> {
-    let _ = (
-        record,
-        machines,
-        Environment {
-            model_ready: true,
-            initiative_on: true,
-        },
-    );
-    let _ = (Severity::Blocking, continuation_checks);
-    todo!("#83")
+    let environment = Environment {
+        model_ready: true,
+        initiative_on: true,
+    };
+    let ready = |machine: &&'a KnownMachine| {
+        continuation_checks(record, &machine.machine_id, machines, environment)
+            .iter()
+            .all(|check| check.severity != Severity::Blocking)
+    };
+    let named: Vec<&KnownMachine> = record
+        .machine_ids
+        .iter()
+        .filter_map(|id| machines.iter().find(|m| &m.machine_id == id))
+        .filter(ready)
+        .collect();
+    let others = machines
+        .iter()
+        .filter(|m| !record.machine_ids.contains(&m.machine_id))
+        .filter(ready);
+    named.into_iter().chain(others).collect()
 }
 
 /// A duration in words: "45 minutes", "3 hours", "2 days".
 pub fn humanize_secs(secs: i64) -> String {
-    let _ = secs;
-    todo!("#83")
-}
-
-#[allow(dead_code)]
-fn unused(_: BlockerKind, _: ContinuityState, _: Priority, _: usize) -> usize {
-    MAX_REASON_CHARS
+    let secs = secs.max(0);
+    let (count, unit) = if secs < 60 {
+        return "less than a minute".into();
+    } else if secs < 3_600 {
+        (secs / 60, "minute")
+    } else if secs < 86_400 {
+        (secs / 3_600, "hour")
+    } else {
+        (secs / 86_400, "day")
+    };
+    if count == 1 {
+        format!("1 {unit}")
+    } else {
+        format!("{count} {unit}s")
+    }
 }
 
 #[cfg(test)]

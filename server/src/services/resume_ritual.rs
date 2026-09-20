@@ -25,6 +25,7 @@ use crate::{
     app::state::AppState,
     domain::{
         companion::CANONICAL_SLUG,
+        continuity::HandoffDecision,
         events::ServerEvent,
         handoff::HandoffCard,
         machine::KnownMachine,
@@ -172,13 +173,30 @@ impl ResumeRitual {
     }
 
     fn read(&self) -> RitualFile {
-        let _ = &self.workspace_dir;
-        todo!("#83")
+        fs::read_to_string(self.path())
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default()
     }
 
     fn write(&self, file: &RitualFile) -> io::Result<()> {
-        let _ = (file, write_atomic as fn(&Path, &str) -> io::Result<()>);
-        todo!("#83")
+        let path = self.path();
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        write_atomic(
+            &path,
+            &serde_json::to_string_pretty(file).map_err(io::Error::other)?,
+        )
+    }
+
+    /// Read, change, and write the file under the lock.
+    async fn modify<T>(&self, change: impl FnOnce(&mut RitualFile) -> T) -> io::Result<T> {
+        let _guard = self.lock.lock().await;
+        let mut file = self.read();
+        let out = change(&mut file);
+        self.write(&file)?;
+        Ok(out)
     }
 
     pub fn policy(&self) -> ResumeRitualPolicy {
@@ -192,48 +210,94 @@ impl ResumeRitual {
     /// Apply the settings page's edit. Turning the ritual off drops the
     /// current suggestion; returns whether one was dropped.
     pub async fn set_policy(&self, edit: &PolicyEdit) -> io::Result<(ResumeRitualPolicy, bool)> {
-        let _ = (edit, &self.lock);
-        todo!("#83")
+        self.modify(|file| {
+            file.policy.enabled = edit.enabled;
+            file.policy.break_minutes = edit.break_minutes;
+            file.policy.cooldown_secs = edit.cooldown_secs;
+            let dropped = !edit.enabled && file.state.suggestion.take().is_some();
+            (file.policy.clone(), dropped)
+        })
+        .await
     }
 
     /// Snooze until `until`, dropping the current suggestion, or clear the
     /// snooze with `None`. Returns the policy and whether a suggestion was dropped.
     pub async fn snooze(&self, until: Option<i64>) -> io::Result<(ResumeRitualPolicy, bool)> {
-        let _ = (until, MAX_DISMISSED);
-        todo!("#83")
+        self.modify(|file| {
+            file.policy.snooze_until = until;
+            let dropped = until.is_some() && file.state.suggestion.take().is_some();
+            (file.policy.clone(), dropped)
+        })
+        .await
     }
 
     /// Never suggest `record_id` again; drops the current suggestion when
     /// it is that record. Returns the policy and whether one was dropped.
     pub async fn dismiss(&self, record_id: &str) -> io::Result<(ResumeRitualPolicy, bool)> {
-        let _ = record_id;
-        todo!("#83")
+        self.modify(|file| {
+            let ids = &mut file.policy.dismissed_record_ids;
+            if !ids.iter().any(|id| id == record_id) {
+                ids.push(record_id.to_owned());
+            }
+            if ids.len() > MAX_DISMISSED {
+                let excess = ids.len() - MAX_DISMISSED;
+                ids.drain(..excess);
+            }
+            let dropped = file
+                .state
+                .suggestion
+                .as_ref()
+                .is_some_and(|suggestion| suggestion.record_id == record_id)
+                && file.state.suggestion.take().is_some();
+            (file.policy.clone(), dropped)
+        })
+        .await
     }
 
     /// "Not now": drop the current suggestion and start the cooldown.
     /// Returns whether there was one.
     pub async fn refuse(&self, now: i64) -> io::Result<bool> {
-        let _ = now;
-        todo!("#83")
+        self.modify(|file| {
+            let had = file.state.suggestion.take().is_some();
+            if had {
+                file.state.last_refused_at = Some(now);
+            }
+            had
+        })
+        .await
     }
 
     /// Drop the suggestion with this id (its card was decided or is gone).
     pub async fn resolve(&self, suggestion_id: &str) -> io::Result<bool> {
-        let _ = suggestion_id;
-        todo!("#83")
+        self.modify(|file| {
+            let matches = file
+                .state
+                .suggestion
+                .as_ref()
+                .is_some_and(|suggestion| suggestion.id == suggestion_id);
+            matches && file.state.suggestion.take().is_some()
+        })
+        .await
     }
 
     /// Note that Nolune was opened or brought back at `now`; answers how
     /// long it was away, or `None` the first time.
     pub async fn record_opened(&self, now: i64) -> io::Result<Option<i64>> {
-        let _ = now;
-        todo!("#83")
+        self.modify(|file| {
+            let away = file.state.last_opened_at.map(|last| now - last);
+            file.state.last_opened_at = Some(now);
+            away
+        })
+        .await
     }
 
     /// Persist a new suggestion; starts the cooldown.
     pub async fn offer(&self, suggestion: ResumeSuggestion) -> io::Result<()> {
-        let _ = suggestion;
-        todo!("#83")
+        self.modify(|file| {
+            file.state.last_suggested_at = Some(suggestion.suggested_at);
+            file.state.suggestion = Some(suggestion);
+        })
+        .await
     }
 }
 
@@ -248,8 +312,28 @@ pub fn admission(
     quiet_hours: bool,
     now: i64,
 ) -> Result<(), Held> {
-    let _ = (policy, state, trigger, quiet_hours, now);
-    todo!("#83")
+    if !policy.enabled {
+        return Err(Held::Disabled);
+    }
+    if !trigger.is_spontaneous() {
+        return Ok(());
+    }
+    if quiet_hours {
+        return Err(Held::QuietHours);
+    }
+    if let Some(until) = policy.snooze_until
+        && policy.is_snoozed(now)
+    {
+        return Err(Held::Snoozed { until });
+    }
+    let since = state.last_suggested_at.max(state.last_refused_at);
+    if let Some(until) = since
+        .map(|since| since + policy.cooldown_secs as i64)
+        .filter(|until| now < *until)
+    {
+        return Err(Held::Cooldown { until });
+    }
+    Ok(())
 }
 
 fn ritual(state: &AppState) -> ResumeRitual {
@@ -273,6 +357,12 @@ fn broadcast(state: &AppState, offer: Option<&ResumeOffer>) {
     });
 }
 
+fn storage(error: io::Error) -> Held {
+    Held::Storage {
+        message: error.to_string(),
+    }
+}
+
 /// The ritual as the API reports it: the policy and the current offer.
 pub async fn status(state: &AppState, now: i64) -> ResumeStatus {
     ResumeStatus {
@@ -285,8 +375,32 @@ pub async fn status(state: &AppState, now: i64) -> ResumeStatus {
 /// The current suggestion with its card, or nothing. A suggestion whose
 /// record is gone, no longer offered, or already accepted is resolved here.
 pub async fn current(state: &AppState, now: i64) -> Option<ResumeOffer> {
-    let _ = (state, now, handoff::card as fn(_, _, _) -> _);
-    todo!("#83")
+    let ritual = ritual(state);
+    let suggestion = ritual.state().suggestion?;
+    let card = match handoff::card(state, &suggestion.record_id, now).await {
+        Ok(card) if card.offered && !card.decision.as_ref().is_some_and(is_accepted) => card,
+        Ok(_) | Err(handoff::HandoffError::NotFound) => {
+            if let Err(error) = ritual.resolve(&suggestion.id).await {
+                log::warn!(
+                    "[resume] could not resolve suggestion {}: {error}",
+                    suggestion.id
+                );
+            }
+            return None;
+        }
+        Err(error) => {
+            log::warn!(
+                "[resume] card for {} unavailable: {error}",
+                suggestion.record_id
+            );
+            return None;
+        }
+    };
+    Some(ResumeOffer { suggestion, card })
+}
+
+fn is_accepted(decision: &HandoffDecision) -> bool {
+    matches!(decision, HandoffDecision::Accepted { .. })
 }
 
 /// Look for work on behalf of `trigger`: admit it, rank the offered
@@ -297,47 +411,122 @@ pub async fn invoke(
     trigger: RitualTrigger,
     now: i64,
 ) -> Result<ResumeOffer, Held> {
-    let _ = (state, trigger, now);
-    let _ = (
-        rank as fn(&[_], &RankContext<'_>) -> _,
-        handoff::offered_records as fn(_, _) -> _,
-        machines as fn(_, _) -> _,
-    );
-    todo!("#83")
+    let ritual = ritual(state);
+    let file = ritual.read();
+    admission(
+        &file.policy,
+        &file.state,
+        &trigger,
+        state.proactive.quiet_hours_now(now),
+        now,
+    )?;
+
+    let records = handoff::offered_records(state, now).await;
+    let machines = machines(state, now).await;
+    let only_naming = match &trigger {
+        RitualTrigger::MachineConnected { machine_id } => Some(machine_id.as_str()),
+        RitualTrigger::Manual | RitualTrigger::OpenedAfterBreak { .. } => None,
+    };
+    let candidate = rank(
+        &records,
+        &RankContext {
+            now,
+            machines: &machines,
+            dismissed: &file.policy.dismissed_record_ids,
+            only_naming,
+        },
+    )
+    .ok_or(Held::NothingToResume)?;
+
+    let card = handoff::card(state, &candidate.record_id, now)
+        .await
+        .map_err(|error| Held::Storage {
+            message: error.to_string(),
+        })?;
+    let suggestion = ResumeSuggestion {
+        id: new_suggestion_id(now),
+        record_id: candidate.record_id,
+        goal: candidate.goal,
+        why_now: trigger.why_now(&machines),
+        trigger,
+        why_this: candidate.why_this,
+        destination_id: candidate.destination_id,
+        suggested_at: now,
+    };
+    ritual.offer(suggestion.clone()).await.map_err(storage)?;
+    let offer = ResumeOffer { suggestion, card };
+    broadcast(state, Some(&offer));
+    Ok(offer)
 }
 
 /// The client reported Nolune being opened or brought back: note the
 /// moment and, when the configured break has passed, look for work.
 pub async fn opened(state: &AppState, now: i64) -> Result<ResumeOffer, Held> {
-    let _ = (state, now);
-    todo!("#83")
+    let ritual = ritual(state);
+    let policy = ritual.policy();
+    if !policy.enabled {
+        return Err(Held::Disabled);
+    }
+    let away = ritual.record_opened(now).await.map_err(storage)?;
+    match away {
+        Some(away_secs) if away_secs >= i64::from(policy.break_minutes) * 60 => {
+            invoke(state, RitualTrigger::OpenedAfterBreak { away_secs }, now).await
+        }
+        _ => Err(Held::NoBreak),
+    }
 }
 
 /// A computer connected: offer waiting work that names it, if any. Called
 /// beside the connect check-in; nothing here touches the computer.
 pub async fn on_machine_connected(state: &AppState, machine_id: &str) {
-    let _ = (state, machine_id);
-    todo!("#83")
+    let now = chrono::Utc::now().timestamp();
+    match invoke(
+        state,
+        RitualTrigger::MachineConnected {
+            machine_id: machine_id.to_owned(),
+        },
+        now,
+    )
+    .await
+    {
+        Ok(offer) => log::info!(
+            "[resume] '{machine_id}' connected: offered {}",
+            offer.suggestion.record_id
+        ),
+        Err(Held::Disabled | Held::NothingToResume) => {}
+        Err(held) => log::info!("[resume] '{machine_id}' connected: held ({held})"),
+    }
 }
 
 pub async fn refuse(state: &AppState, now: i64) -> io::Result<()> {
-    let _ = (state, now, broadcast as fn(_, _));
-    todo!("#83")
+    if ritual(state).refuse(now).await? {
+        broadcast(state, None);
+    }
+    Ok(())
 }
 
 pub async fn snooze(state: &AppState, until: Option<i64>) -> io::Result<ResumeRitualPolicy> {
-    let _ = (state, until);
-    todo!("#83")
+    let (policy, dropped) = ritual(state).snooze(until).await?;
+    if dropped {
+        broadcast(state, None);
+    }
+    Ok(policy)
 }
 
 pub async fn dismiss(state: &AppState, record_id: &str) -> io::Result<ResumeRitualPolicy> {
-    let _ = (state, record_id);
-    todo!("#83")
+    let (policy, dropped) = ritual(state).dismiss(record_id).await?;
+    if dropped {
+        broadcast(state, None);
+    }
+    Ok(policy)
 }
 
 pub async fn set_policy(state: &AppState, edit: &PolicyEdit) -> io::Result<ResumeRitualPolicy> {
-    let _ = (state, edit);
-    todo!("#83")
+    let (policy, dropped) = ritual(state).set_policy(edit).await?;
+    if dropped {
+        broadcast(state, None);
+    }
+    Ok(policy)
 }
 
 fn new_suggestion_id(now: i64) -> String {
@@ -349,11 +538,6 @@ fn write_atomic(path: &Path, content: &str) -> io::Result<()> {
     let tmp = path.with_extension("tmp");
     fs::write(&tmp, content)?;
     fs::rename(&tmp, path)
-}
-
-#[allow(dead_code)]
-fn unused() -> String {
-    new_suggestion_id(0)
 }
 
 #[cfg(test)]
