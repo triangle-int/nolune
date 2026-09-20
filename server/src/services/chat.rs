@@ -554,16 +554,16 @@ pub async fn run_single_turn(
 
     // One recall receipt per assistant message of this turn (#84); an empty
     // recall is recorded too, so "no memories were used" is stated, not guessed.
-    if !rag_query.is_empty() {
-        if let Err(e) = memory_receipts::write_receipts(
+    if !rag_query.is_empty()
+        && let Err(e) = memory_receipts::write_receipts(
             workspace_dir,
             &instance_slug,
             &chat_id,
             &assistant_messages,
             &recall.memories,
-        ) {
-            log::warn!("[receipts] failed to persist memory receipts: {e}");
-        }
+        )
+    {
+        log::warn!("[receipts] failed to persist memory receipts: {e}");
     }
 
     // If compaction fired, rebuild the memory catalog snapshot

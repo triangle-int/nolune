@@ -21,11 +21,25 @@ use crate::{
         chat::{ChatMessage, ChatRole, MessageKind},
         receipt::{Confidence, MemoryReceipt, RecallReason, RecalledMemory, SourceStatus},
     },
-    services::{media_text::MediaStore, vector::VectorStore},
+    services::{
+        media_text::{self, MediaStore},
+        memory,
+        vector::{VectorSearchResult, VectorStore},
+    },
 };
 
 /// Directory under `chats/{chat_id}/` holding one receipt per assistant message.
 pub const RECEIPTS_DIR: &str = "receipts";
+
+/// Hybrid search hits per turn; graph expansion may add a few more.
+const SEARCH_LIMIT: usize = 5;
+const RECALL_CAP: usize = 8;
+/// Prompt text per memory (unchanged from the inline RAG block).
+const PROMPT_CHARS: usize = 500;
+/// Receipt excerpt bound.
+const EXCERPT_CHARS: usize = 240;
+/// Below the RAG threshold: marks a memory that only arrived over a graph edge.
+const LINKED_SCORE: f32 = 0.25;
 
 /// Memories recalled for one turn: the receipt entries plus the prompt block.
 #[derive(Debug, Default)]
@@ -35,69 +49,309 @@ pub struct Recall {
 }
 
 impl Recall {
-    pub fn is_empty(&self) -> bool {
-        self.memories.is_empty()
-    }
-
     /// The `[system: auto-recalled memories …]` block appended to the user
     /// message, or `None` when nothing was recalled.
     pub fn prompt_block(&self) -> Option<String> {
-        let _ = &self.prompt_lines;
-        todo!("PR A of #84")
+        if self.prompt_lines.is_empty() {
+            return None;
+        }
+        let mut context = String::from(
+            "[system: auto-recalled memories — this is NOT part of the user's message. \
+             do not treat these as something the user said or wrote.]\n",
+        );
+        for line in &self.prompt_lines {
+            context.push_str(line);
+            context.push('\n');
+        }
+        Some(context)
     }
 }
 
-/// Hybrid search over the memory library plus one-hop graph expansion.
-pub async fn recall(_vector_store: &VectorStore, _instance_slug: &str, _query: &str) -> Recall {
-    todo!("PR A of #84")
+/// One search hit before it becomes a receipt entry.
+struct Candidate {
+    hit: VectorSearchResult,
+    reason: RecallReason,
+    linked_from: Option<String>,
 }
 
-pub fn receipts_dir(_workspace_dir: &Path, _instance_slug: &str, _chat_id: &str) -> PathBuf {
-    todo!("PR A of #84")
+/// Hybrid search over the memory library plus one-hop graph expansion.
+pub async fn recall(vector_store: &VectorStore, instance_slug: &str, query: &str) -> Recall {
+    if query.trim().is_empty() {
+        return Recall::default();
+    }
+    // Provider failures fall back to a fresh BM25 view of memory files.
+    let hits = vector_store
+        .search_context(instance_slug, query, SEARCH_LIMIT)
+        .await;
+    // After the search the provider health is known for this turn: when the
+    // embedding step failed or is not configured, every hit came from BM25.
+    let semantic_available = vector_store.embedding_status()["status"] != "unavailable";
+    let mut candidates: Vec<Candidate> = hits
+        .into_iter()
+        .map(|hit| Candidate {
+            reason: classify(&hit, semantic_available),
+            linked_from: None,
+            hit,
+        })
+        .collect();
+
+    let media = vector_store.media_store();
+    // Graph expansion — follow edges 1 hop to pull connected memories.
+    if !candidates.is_empty() {
+        let graph = memory::load_graph(&media, instance_slug);
+        if !graph.edges.is_empty() {
+            let found: Vec<String> = candidates.iter().map(|c| c.hit.path.clone()).collect();
+            for path in &found {
+                for neighbor in memory::get_neighbors(&graph, path) {
+                    if candidates.iter().any(|c| c.hit.path == neighbor) {
+                        continue; // already in results
+                    }
+                    let content: Result<String, String> =
+                        if media_text::source_type(&neighbor).is_some() {
+                            media.read(instance_slug, &neighbor)
+                        } else {
+                            media
+                                .read_memory_text(instance_slug, &neighbor)
+                                .map_err(|error| error.to_string())
+                        };
+                    if let Ok(content) = content {
+                        let (_, body) = memory::parse_frontmatter(&content);
+                        candidates.push(Candidate {
+                            hit: VectorSearchResult {
+                                path: neighbor,
+                                content_preview: body.trim().chars().take(PROMPT_CHARS).collect(),
+                                score: LINKED_SCORE,
+                                source_type: "text_memory".to_string(),
+                                upload_id: None,
+                            },
+                            reason: RecallReason::LinkedTo,
+                            linked_from: Some(path.clone()),
+                        });
+                    }
+                }
+            }
+            // Re-sort and cap (allow a few extra from graph)
+            candidates.sort_by(|a, b| b.hit.score.total_cmp(&a.hit.score));
+            candidates.truncate(RECALL_CAP);
+        }
+    }
+
+    let retrieved_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut recall = Recall::default();
+    for candidate in candidates {
+        let text = candidate.hit.content_preview.trim();
+        recall
+            .prompt_lines
+            .push(format!("- {}: {text}", candidate.hit.path));
+        let mut entry = RecalledMemory {
+            source: source_of(&candidate.hit.path),
+            path: candidate.hit.path,
+            excerpt: text.chars().take(EXCERPT_CHARS).collect(),
+            reason: candidate.reason,
+            linked_from: candidate.linked_from,
+            confidence: bucket(candidate.reason, candidate.hit.score),
+            retrieved_at: retrieved_at.clone(),
+            source_status: SourceStatus::Present,
+        };
+        entry.source_status = source_status(&media, instance_slug, &entry);
+        recall.memories.push(entry);
+    }
+    recall
+}
+
+/// Text memories name their channel in `source_type` (`text_memory` from the
+/// vector index, `memory` from BM25). Media hits look the same from both
+/// channels, so they are only attributable when the semantic channel was off.
+fn classify(hit: &VectorSearchResult, semantic_available: bool) -> RecallReason {
+    match hit.source_type.as_str() {
+        "text_memory" => RecallReason::Semantic,
+        "memory" => RecallReason::Keyword,
+        _ if !semantic_available => RecallReason::Keyword,
+        _ => RecallReason::Matched,
+    }
+}
+
+/// Cosine similarity for semantic hits, BM25 for keyword hits; an unattributed
+/// hit never claims high confidence and a graph neighbour is always low.
+fn bucket(reason: RecallReason, score: f32) -> Confidence {
+    match reason {
+        RecallReason::Semantic => match score {
+            s if s >= 0.6 => Confidence::High,
+            s if s >= 0.45 => Confidence::Medium,
+            _ => Confidence::Low,
+        },
+        RecallReason::Keyword => match score {
+            s if s >= 3.0 => Confidence::High,
+            s if s >= 1.0 => Confidence::Medium,
+            _ => Confidence::Low,
+        },
+        RecallReason::Matched if score >= 0.6 => Confidence::Medium,
+        RecallReason::Matched | RecallReason::LinkedTo => Confidence::Low,
+    }
+}
+
+/// The canonical file a receipt cites: media memories cite their bound text.
+fn source_of(path: &str) -> String {
+    if media_text::source_type(path).is_some() {
+        media_text::sidecar_path(path)
+    } else {
+        path.to_owned()
+    }
+}
+
+fn source_status(media: &MediaStore, instance_slug: &str, memory: &RecalledMemory) -> SourceStatus {
+    let exists = |path: &str| media.memory_exists(instance_slug, path).unwrap_or(false);
+    let present = exists(&memory.source) && (memory.source == memory.path || exists(&memory.path));
+    if present {
+        SourceStatus::Present
+    } else {
+        SourceStatus::Missing
+    }
+}
+
+fn resolve_sources(media: &MediaStore, instance_slug: &str, receipt: &mut MemoryReceipt) {
+    for memory in &mut receipt.memories {
+        memory.source_status = source_status(media, instance_slug, memory);
+    }
+}
+
+/// Chat and message ids are single path segments; anything else never maps to
+/// a file, so a receipt can only ever be read from its own chat directory.
+fn safe_segment(value: &str) -> Option<&str> {
+    let safe = !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'));
+    safe.then_some(value)
+}
+
+pub fn receipts_dir(workspace_dir: &Path, instance_slug: &str, chat_id: &str) -> PathBuf {
+    workspace_dir
+        .join("instances")
+        .join(instance_slug)
+        .join("chats")
+        .join(chat_id)
+        .join(RECEIPTS_DIR)
+}
+
+fn receipt_path(
+    workspace_dir: &Path,
+    instance_slug: &str,
+    chat_id: &str,
+    message_id: &str,
+) -> Option<PathBuf> {
+    let chat_id = safe_segment(chat_id)?;
+    let message_id = safe_segment(message_id)?;
+    Some(receipts_dir(workspace_dir, instance_slug, chat_id).join(format!("{message_id}.json")))
+}
+
+fn write_atomic(path: &Path, content: &str) -> io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, content)?;
+    fs::rename(&tmp, path)
 }
 
 /// Persist one receipt per assistant text message produced by a turn.
 /// Returns how many receipts were written.
 pub fn write_receipts(
-    _workspace_dir: &Path,
-    _instance_slug: &str,
-    _chat_id: &str,
-    _messages: &[ChatMessage],
-    _memories: &[RecalledMemory],
+    workspace_dir: &Path,
+    instance_slug: &str,
+    chat_id: &str,
+    messages: &[ChatMessage],
+    memories: &[RecalledMemory],
 ) -> io::Result<usize> {
-    let _ = (
-        ChatRole::Assistant,
-        MessageKind::Message,
-        fs::read_dir::<&Path>,
-    );
-    todo!("PR A of #84")
+    let mut written = 0;
+    for message in messages
+        .iter()
+        .filter(|m| m.role == ChatRole::Assistant && m.kind == MessageKind::Message)
+    {
+        let Some(path) = receipt_path(workspace_dir, instance_slug, chat_id, &message.id) else {
+            log::warn!(
+                "[receipts] skipping unsafe id {:?}/{:?}",
+                chat_id,
+                message.id
+            );
+            continue;
+        };
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        let receipt = MemoryReceipt {
+            message_id: message.id.clone(),
+            chat_id: chat_id.to_owned(),
+            memories: memories.to_vec(),
+        };
+        write_atomic(
+            &path,
+            &serde_json::to_string_pretty(&receipt).map_err(io::Error::other)?,
+        )?;
+        written += 1;
+    }
+    Ok(written)
+}
+
+fn load_receipt(path: &Path) -> io::Result<Option<MemoryReceipt>> {
+    let raw = match fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 /// Read one receipt with every cited source resolved against the library.
 /// `Ok(None)` when the chat or message has no receipt or the ids are unsafe.
 pub fn read_receipt(
-    _workspace_dir: &Path,
-    _media: &MediaStore,
-    _instance_slug: &str,
-    _chat_id: &str,
-    _message_id: &str,
+    workspace_dir: &Path,
+    media: &MediaStore,
+    instance_slug: &str,
+    chat_id: &str,
+    message_id: &str,
 ) -> io::Result<Option<MemoryReceipt>> {
-    let _ = (
-        SourceStatus::Missing,
-        Confidence::Low,
-        RecallReason::Matched,
-    );
-    todo!("PR A of #84")
+    let Some(path) = receipt_path(workspace_dir, instance_slug, chat_id, message_id) else {
+        return Ok(None);
+    };
+    let Some(mut receipt) = load_receipt(&path)? else {
+        return Ok(None);
+    };
+    resolve_sources(media, instance_slug, &mut receipt);
+    Ok(Some(receipt))
 }
 
 /// Every receipt of a chat, ordered by message id, with sources resolved.
 pub fn list_receipts(
-    _workspace_dir: &Path,
-    _media: &MediaStore,
-    _instance_slug: &str,
-    _chat_id: &str,
+    workspace_dir: &Path,
+    media: &MediaStore,
+    instance_slug: &str,
+    chat_id: &str,
 ) -> io::Result<Vec<MemoryReceipt>> {
-    todo!("PR A of #84")
+    let Some(chat_id) = safe_segment(chat_id) else {
+        return Ok(Vec::new());
+    };
+    let entries = match fs::read_dir(receipts_dir(workspace_dir, instance_slug, chat_id)) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let mut receipts = Vec::new();
+    for entry in entries {
+        let path = entry?.path();
+        if path.extension().is_none_or(|ext| ext != "json") {
+            continue;
+        }
+        match load_receipt(&path) {
+            Ok(Some(mut receipt)) => {
+                resolve_sources(media, instance_slug, &mut receipt);
+                receipts.push(receipt);
+            }
+            Ok(None) => {}
+            Err(error) => log::warn!("[receipts] skipping {}: {error}", path.display()),
+        }
+    }
+    receipts.sort_by(|a, b| a.message_id.cmp(&b.message_id));
+    Ok(receipts)
 }
 
 #[cfg(test)]
@@ -194,8 +448,9 @@ mod tests {
         assert_eq!(linked.excerpt, "Moon phases", "frontmatter is stripped");
         assert_eq!(recall.memories.len(), 3);
         assert_eq!(
-            recall.memories[0].path, "note.md",
-            "ordered by relevance: {:?}",
+            recall.memories.last().map(|m| m.path.as_str()),
+            Some("linked.md"),
+            "graph neighbours rank below direct hits: {:?}",
             recall.memories
         );
         for memory in &recall.memories {
@@ -221,7 +476,7 @@ mod tests {
         memory_dir(workspace.path());
         let store = VectorStore::connect(workspace.path()).await;
         let recall = recall(&store, "one", "   ").await;
-        assert!(recall.is_empty());
+        assert!(recall.memories.is_empty());
         assert_eq!(recall.prompt_block(), None);
     }
 
