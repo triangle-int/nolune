@@ -2015,21 +2015,72 @@ impl Tool for ImportProfileTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "restore_backup".into(),
-            description: "Restore is temporarily unavailable during storage format stabilization."
+            description: "Replace this companion with a companion.tar.gz backup the user \
+                attached to the chat (or one create_backup made). Its memory, personality, \
+                drops, and chat history are replaced by the archive's; the current data is \
+                not kept. Pass the upload id from the [attached: name (upload_...)] marker. \
+                Only call this after the user confirmed they want the replacement."
                 .into(),
             parameters: openai_schema::<ImportProfileArgs>(),
         }
     }
 
-    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let _ = (
-            &self.instance_slug,
-            &self.chat_id,
-            &self.vector_store,
+    /// The only source is an upload id: the archive is opened through the
+    /// media store's held capability (no path from the model ever reaches the
+    /// filesystem) and handed to the transactional restore, which counts
+    /// every other conversation as busy but not this one.
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let source = args.source.trim();
+        if !source.starts_with("upload_") || source.contains('/') || source.contains('\\') {
+            return Err(ToolExecError(format!(
+                "restore_backup takes an upload id (upload_...), not a path: {source:?}. \
+                 Ask the user to attach the backup archive to the chat, or to run \
+                 `nolune restore <archive>` on the server for a local file."
+            )));
+        }
+        let media = self.vector_store.media_store();
+        let (meta, blob) = tokio::task::spawn_blocking({
+            let slug = self.instance_slug.clone();
+            let id = source.to_owned();
+            move || media.open_upload_blob(&slug, &id)
+        })
+        .await
+        .map_err(|e| ToolExecError(format!("failed to open upload: {e}")))?
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => {
+                ToolExecError(format!("upload {source} not found in this chat's uploads"))
+            }
+            _ => ToolExecError(format!("failed to open upload {source}: {e}")),
+        })?;
+
+        let own_task = crate::routes::chat::task_key(&self.instance_slug, &self.chat_id);
+        let outcome = crate::services::profile_import::restore_companion_from_agent(
+            self.vector_store.clone(),
             &self.agent_tasks,
-        );
-        Err(ToolExecError(
-            "restore is temporarily unavailable during storage format stabilization".into(),
+            &own_task,
+            &self.instance_slug,
+            blob.into_std(),
+        )
+        .await
+        .map_err(|e| ToolExecError(format!("restore of {} failed: {e}", meta.original_name)))?;
+
+        let index = match outcome.derived_index {
+            crate::services::profile_import::DerivedIndex::Rebuilt => {
+                format!("search index rebuilt ({} chunks)", outcome.indexed_chunks)
+            }
+            crate::services::profile_import::DerivedIndex::Pending => format!(
+                "search index pending{}; it is rebuilt at the next start",
+                outcome
+                    .pending_reason
+                    .as_deref()
+                    .map(|reason| format!(" ({reason})"))
+                    .unwrap_or_default()
+            ),
+        };
+        Ok(format!(
+            "restored the companion from {} ({} files, {} bytes); {index}. Memory, \
+             personality, drops, and chat history now come from the archive.",
+            meta.original_name, outcome.files, outcome.bytes
         ))
     }
 }

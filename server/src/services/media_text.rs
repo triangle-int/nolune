@@ -315,16 +315,38 @@ impl MediaStore {
     }
 
     /// Create `imports/<name>` as a new regular file the import route streams
-    /// a request body into (#74); the handle is read back by the restore.
-    pub(crate) fn create_import_upload(&self, _name: &str) -> io::Result<cap_std::fs::File> {
-        todo!("PR 3 of #74")
+    /// a request body into (#74). The handle is opened read-write and
+    /// no-follow, so a name that already exists (a link parked there, an
+    /// earlier upload) is refused rather than reused, and the restore reads
+    /// the archive back through this same handle.
+    pub(crate) fn create_import_upload(&self, name: &str) -> io::Result<cap_std::fs::File> {
+        let relative = Self::import_path(name)?;
+        let imports = Path::new(IMPORTS_DIR);
+        reject_symlinks(&self.root, imports, true)?;
+        self.root.create_dir_all(imports)?;
+        reject_symlinks(&self.root, imports, false)?;
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .follow(FollowSymlinks::No);
+        self.root.open_with(&relative, &options)
     }
 
     /// Remove the regular file `imports/<name>`; a missing file is
     /// already-clean success. Symlinks and directories at that name are left
     /// in place and reported.
-    pub(crate) fn remove_import_upload(&self, _name: &str) -> io::Result<()> {
-        todo!("PR 3 of #74")
+    pub(crate) fn remove_import_upload(&self, name: &str) -> io::Result<()> {
+        let relative = Self::import_path(name)?;
+        match self.root.symlink_metadata(&relative) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                Err(invalid_path("import upload is not a regular file"))
+            }
+            Ok(_) => self.root.remove_file(&relative),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 
     /// Remove `imports/<name>` and everything under it; a missing directory
@@ -1968,8 +1990,11 @@ mod tests {
             "create_dir",
             "Command::new",
             "\"tar\"",
-            "std::fs",
-            "tokio::fs::read",
+            "fs::read",
+            "fs::write",
+            "fs::remove",
+            "File::open(",
+            "File::create(",
             ".bytes()",
             "to_bytes(",
             "read_to_end",

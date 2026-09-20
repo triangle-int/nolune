@@ -153,6 +153,30 @@ pub async fn restore_companion<R: Read + Send + 'static>(
     slug: &str,
     archive: R,
 ) -> Result<RestoreOutcome, RestoreError> {
+    restore(store, agent_tasks, None, slug, archive).await
+}
+
+/// `restore_companion` for a caller that runs inside the agent loop `own_task`
+/// (an `agent_tasks` key): that loop is blocked on this call and cannot write
+/// during the swap, so it does not count as busy. The `restore_backup` tool
+/// passes its own conversation; every other loop still refuses the import.
+pub async fn restore_companion_from_agent<R: Read + Send + 'static>(
+    store: Arc<VectorStore>,
+    agent_tasks: &tokio::sync::Mutex<HashMap<String, CancellationToken>>,
+    own_task: &str,
+    slug: &str,
+    archive: R,
+) -> Result<RestoreOutcome, RestoreError> {
+    restore(store, agent_tasks, Some(own_task), slug, archive).await
+}
+
+async fn restore<R: Read + Send + 'static>(
+    store: Arc<VectorStore>,
+    agent_tasks: &tokio::sync::Mutex<HashMap<String, CancellationToken>>,
+    own_task: Option<&str>,
+    slug: &str,
+    archive: R,
+) -> Result<RestoreOutcome, RestoreError> {
     let gate = store.lifecycle_lock(slug).lock_owned().await;
 
     // Chat and scheduler agents write the companion through ambient paths
@@ -163,7 +187,10 @@ pub async fn restore_companion<R: Read + Send + 'static>(
     let running = {
         let prefix = format!("{slug}/");
         let tasks = agent_tasks.lock().await;
-        tasks.keys().filter(|key| key.starts_with(&prefix)).count()
+        tasks
+            .keys()
+            .filter(|key| key.starts_with(&prefix) && own_task != Some(key.as_str()))
+            .count()
     };
     if running > 0 {
         return Err(RestoreError::Busy { tasks: running });
@@ -186,20 +213,6 @@ pub async fn restore_companion<R: Read + Send + 'static>(
     })
     .await
     .unwrap_or_else(|error| Err(RestoreError::Aborted(task_error(error))))
-}
-
-/// `restore_companion` for a caller that runs inside the agent loop `own_task`
-/// (an `agent_tasks` key): that loop is blocked on this call and cannot write
-/// during the swap, so it does not count as busy. The `restore_backup` tool
-/// passes its own conversation.
-pub async fn restore_companion_from_agent<R: Read + Send + 'static>(
-    _store: Arc<VectorStore>,
-    _agent_tasks: &tokio::sync::Mutex<HashMap<String, CancellationToken>>,
-    _own_task: &str,
-    _slug: &str,
-    _archive: R,
-) -> Result<RestoreOutcome, RestoreError> {
-    todo!("PR 3 of #74")
 }
 
 /// The import proper, run with the lifecycle gate held by the caller.

@@ -1899,26 +1899,23 @@ fn archive_of(files: &[(&str, &[u8])]) -> (Vec<u8>, Vec<(String, Vec<u8>)>) {
     (archive, expected)
 }
 
-/// A gzip tar whose one entry escapes the companion root.
+/// A gzip tar whose one entry escapes the companion root, with the raw name
+/// `tar::Builder` itself would refuse to write.
 fn hostile_archive() -> Vec<u8> {
     use std::io::Write as _;
-    let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
-        Vec::new(),
-        flate2::Compression::fast(),
-    ));
+    let name = b"companion/../escaped.md";
+    let data = b"escaped\n";
     let mut header = tar::Header::new_gnu();
-    header.set_size(9);
+    header.as_gnu_mut().unwrap().name[..name.len()].copy_from_slice(name);
+    header.set_entry_type(tar::EntryType::Regular);
     header.set_mode(0o644);
+    header.set_size(data.len() as u64);
     header.set_cksum();
-    builder
-        .append_data(
-            &mut header,
-            "companion/../escaped.md",
-            b"escaped\n".as_slice(),
-        )
-        .unwrap();
-    let mut encoder = builder.into_inner().unwrap();
-    encoder.flush().unwrap();
+    let mut builder = tar::Builder::new(Vec::new());
+    builder.append(&header, data.as_slice()).unwrap();
+    let tar = builder.into_inner().unwrap();
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    encoder.write_all(&tar).unwrap();
     encoder.finish().unwrap()
 }
 
@@ -2172,7 +2169,10 @@ async fn import_refuses_a_hostile_archive_and_keeps_the_companion_byte_identical
 
 #[tokio::test]
 async fn import_answers_409_while_an_agent_task_runs_for_the_companion() {
-    let h = harness().await;
+    use crate::services::embedding::tests::{MockServer, response};
+
+    let mock = MockServer::new(vec![(200, response(vec![1., 0., 0.])); 2]).await;
+    let h = harness_with(mock.config.clone()).await;
     h.seed_indexed_companion().await;
     let before = tree(&h.companion());
     h.state.agent_tasks.lock().await.insert(

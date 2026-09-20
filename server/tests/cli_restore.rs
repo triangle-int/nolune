@@ -65,6 +65,8 @@ fn tar_archive(dir: &Path, entries: &[(&str, &str)]) -> std::path::PathBuf {
     }
     let archive = dir.join("backup.tar.gz");
     let status = Command::new("tar")
+        // macOS bsdtar would otherwise add `._*` AppleDouble entries.
+        .env("COPYFILE_DISABLE", "1")
         .arg("-czf")
         .arg(&archive)
         .arg("-C")

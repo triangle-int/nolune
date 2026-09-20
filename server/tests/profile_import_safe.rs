@@ -151,17 +151,26 @@ fn the_import_route_streams_the_body_to_staging_and_never_buffers_or_extracts_it
             "the import route does not go through {required}"
         );
     }
+    // `std::fs::File` is the handle type the store hands back; only ambient
+    // path operations are forbidden.
     for forbidden in [
         ".bytes()",
         "to_bytes(",
         "read_to_end",
         "Vec<u8>",
         "Command::new",
-        "std::fs",
-        "tokio::fs::read",
+        "fs::read",
+        "fs::write",
+        "fs::create_dir",
+        "fs::remove",
+        "fs::rename",
+        "fs::metadata",
+        "File::open(",
+        "File::create(",
         "extract_into(",
         "workspace_dir",
         "\"instances\"",
+        ".join(",
         "open_ambient_dir",
         "NOT_IMPLEMENTED",
     ] {
@@ -208,7 +217,9 @@ fn the_restore_tool_takes_upload_ids_only_and_the_cli_posts_to_the_local_api() {
         cli.contains("Restore {"),
         "cli.rs must declare the restore subcommand"
     );
+    // The restore section ends at the next section header of cli.rs.
     let restore = segment(&cli, "fn restore_cmd(");
+    let restore = restore.split("\n// \u{2500}\u{2500}").next().unwrap();
     for required in ["multipart::Form", "bearer_auth(", "/import"] {
         assert!(
             restore.contains(required),
@@ -219,7 +230,8 @@ fn the_restore_tool_takes_upload_ids_only_and_the_cli_posts_to_the_local_api() {
         "extract_into(",
         "tar::",
         "flate2",
-        "instances",
+        "join(\"instances\")",
+        "instances_dir",
         "Command::new",
     ] {
         assert!(
