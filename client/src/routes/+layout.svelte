@@ -6,6 +6,7 @@
 	import { getWebSocket } from "$lib/stores/websocket.svelte.js";
 	import { createSceneStore, setSceneStore } from "$lib/stores/scene.svelte.js";
 	import { createSkinStore, setSkinStore } from "$lib/stores/skin.svelte.js";
+	import { companionEventFromServer } from "$lib/companion/state.js";
 	import { AuthError } from "$lib/api/client.js";
 	import type { ServerEvent } from "$lib/api/types.js";
 	import { onMount } from "svelte";
@@ -60,6 +61,9 @@
 			needsAuth = true;
 		});
 		const unsub = ws.subscribe((event: ServerEvent) => {
+			// Little Moon's state is derived from the same events, for every chat.
+			const companionEvent = companionEventFromServer(event);
+			if (companionEvent) sceneStore.companionEvent(companionEvent);
 			if (event.type === "secret_request") {
 				secretRequest = {
 					instanceSlug: event.instance_slug,
@@ -76,6 +80,22 @@
 			ws.disconnect();
 		};
 	});
+
+	// Connection state feeds the companion reducer: offline beats everything.
+	$effect(() => {
+		if (isDesignSystem) return;
+		sceneStore.companionEvent({
+			type: "connection",
+			connected: ws.connected,
+			reconnecting: ws.reconnecting,
+			attempt: ws.retryCount,
+		});
+	});
+
+	function closeSecretRequest() {
+		if (secretRequest) sceneStore.companionEvent({ type: "approval_resolved", id: secretRequest.id });
+		secretRequest = null;
+	}
 
 	function handleAuth() {
 		// The browser now holds a session cookie; reconnect with it.
@@ -109,7 +129,7 @@
 			requestId={secretRequest.id}
 			prompt={secretRequest.prompt}
 			target={secretRequest.target}
-			onclose={() => (secretRequest = null)}
+			onclose={closeSecretRequest}
 		/>
 	{/if}
 
