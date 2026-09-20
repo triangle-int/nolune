@@ -11,6 +11,7 @@ import {
 	flagBadges,
 	flagControls,
 	isMediaMemory,
+	memoryBody,
 	reasonLabel,
 	recalledWhen,
 	recallsOf,
@@ -126,6 +127,13 @@ test('a conflicting correction is put to the user as two statements to choose fr
 	assert.equal(outcome.conflict.conflict_id, 'corr_2_b');
 	assert.equal(correctionOutcome({ status: 'needs_resolution', path: 'about/tea.md' }).kind, 'error');
 	assert.equal(correctionOutcome(null).kind, 'error');
+});
+
+test('the correction editor starts from the body, never the stamped frontmatter', () => {
+	assert.equal(memoryBody('---\ncreated: 2026-09-20\nupdated: 2026-09-20\npinned: true\n---\nlikes oolong\n'), 'likes oolong');
+	assert.equal(memoryBody('likes oolong'), 'likes oolong');
+	assert.equal(memoryBody('---\nunterminated'), '---\nunterminated');
+	assert.equal(memoryBody('  \n---\ncreated: x\n---\n\nbody line 1\nbody line 2\n'), 'body line 1\nbody line 2');
 });
 
 test('pin and exclude controls follow the flags and only exist for text memories', () => {

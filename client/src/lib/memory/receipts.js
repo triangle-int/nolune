@@ -133,12 +133,13 @@ export function recalledWhen(iso, now = Date.now()) {
 /**
  * Receipts keyed by message id. Only receipts of `chatId` are kept, so a
  * bubble can never show provenance from another conversation.
- * @param {MemoryReceipt[]} receipts
+ * @template M
+ * @param {{ message_id: string; chat_id: string; memories: M[] }[]} receipts
  * @param {string} chatId
- * @returns {Map<string, RecalledMemory[]>}
+ * @returns {Map<string, M[]>}
  */
 export function receiptsByMessage(receipts, chatId) {
-	/** @type {Map<string, RecalledMemory[]>} */
+	/** @type {Map<string, M[]>} */
 	const map = new Map();
 	if (!chatId) return map;
 	for (const receipt of receipts) {
@@ -151,11 +152,13 @@ export function receiptsByMessage(receipts, chatId) {
 /**
  * Every recall of one memory (by library path or canonical source), newest
  * first, with the conversation it happened in.
- * @param {MemoryReceipt[]} receipts
+ * @template {{ path: string; source: string; retrieved_at: string }} M
+ * @param {{ message_id: string; chat_id: string; memories: M[] }[]} receipts
  * @param {string} path
- * @returns {{ chat_id: string; message_id: string; memory: RecalledMemory }[]}
+ * @returns {{ chat_id: string; message_id: string; memory: M }[]}
  */
 export function recallsOf(receipts, path) {
+	/** @type {{ chat_id: string; message_id: string; memory: M }[]} */
 	const recalls = [];
 	for (const receipt of receipts) {
 		for (const memory of receipt.memories ?? []) {
@@ -228,6 +231,20 @@ function isStatement(value) {
 	if (!value || typeof value !== "object") return false;
 	const statement = /** @type {Record<string, unknown>} */ (value);
 	return typeof statement.id === "string" && typeof statement.statement === "string" && typeof statement.corrected_at === "string";
+}
+
+/**
+ * The body of a memory file without its stamped `created` / `updated` /
+ * flag frontmatter, mirroring the server's `parse_frontmatter`: this is what
+ * a correction replaces, so the editor starts from it.
+ * @param {string} raw
+ */
+export function memoryBody(raw) {
+	const trimmed = raw.trimStart();
+	if (!trimmed.startsWith("---")) return raw.trim();
+	const end = trimmed.indexOf("\n---", 3);
+	if (end === -1) return raw.trim();
+	return trimmed.slice(end + 4).trim();
 }
 
 /**
