@@ -7,7 +7,7 @@ Use this guide before changing the client, landing, onboarding, or brand assets.
 - Client color tokens: `client/src/lib/styles/tokens.css`.
 - Shared application CSS primitives: `client/src/routes/layout.css` (`nl-button`, `nl-button-secondary`, `nl-panel`, `nl-input`, `nl-eyebrow`).
 - Interactive examples: client route `/design-system`, including the real message, composer, and tool components. Examples are explicitly sample content and do not require a backend.
-- Landing: `landing/src/app.css` and `landing/src/lib/components/`.
+- Landing: `landing/src/app.css` and `landing/src/lib/components/`. The self-hosting docs under `landing/src/routes/docs/` reuse `.section-shell`, `.eyebrow` and `.section-title`; their section nav and long-form prose rules (headings divided by 1px borders, mono code and tables that scroll in their own container) live in `docs/+layout.svelte`, and every section page is wrapped in `DocsPage.svelte`.
 - Desktop (Tauri): `desktop/src/app.css` mirrors the client tokens and `nl-*` primitives; fonts are bundled from Fontsource because the app CSP only allows same-origin assets. Desktop avatar: `desktop/src/lib/components/Moon.svelte`.
 - Avatar: `client/static/skins/moon/character.svg`; thinking expression beside it. Landing copy: `landing/static/assets/nolune-moon.svg`. Desktop copy: the inline `Moon.svelte` component and the app icon source generated from the same path.
 - Animated marketing avatar: `landing/src/lib/components/MoonCompanion.svelte`.
