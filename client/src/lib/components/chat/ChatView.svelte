@@ -3,8 +3,9 @@
 	import ConversationContent from "$lib/components/ai-elements/conversation/conversation-content.svelte";
 	import { untrack } from "svelte";
 	import { goto } from "$app/navigation";
-	import { clearContext, fetchChats, fetchCompanionName, fetchMessages, fetchMood, sendMessage, stopAgent, uploadFile } from "$lib/api/client.js";
-	import type { ChatMessage, ChatSummary, ServerEvent } from "$lib/api/types.js";
+	import { clearContext, fetchChats, fetchCompanionName, fetchMemoryReceipts, fetchMessages, fetchMood, sendMessage, stopAgent, uploadFile } from "$lib/api/client.js";
+	import type { ChatMessage, ChatSummary, RecalledMemory, ServerEvent } from "$lib/api/types.js";
+	import { receiptsByMessage } from "$lib/memory/receipts.js";
 	import { getWebSocket } from "$lib/stores/websocket.svelte.js";
 	import MessageBubble from "./MessageBubble.svelte";
 	import ChatInput from "./ChatInput.svelte";
@@ -51,6 +52,8 @@ import McpAppViewer from "./McpAppViewer.svelte";
 	let historyRequest = 0;
 	let sending = $state(false);
 	let agentRunning = $state(false);
+	/** Memory receipts of this chat by assistant message id (#84); missing while not loaded. */
+	let receipts = $state<Map<string, RecalledMemory[]>>(new Map());
 
 	const savedMood = typeof localStorage !== "undefined" ? localStorage.getItem("mood:" + untrack(() => slug)) : null;
 	let mood = $state(savedMood || "calm");
@@ -359,6 +362,17 @@ import McpAppViewer from "./McpAppViewer.svelte";
 		refreshChatList();
 	}
 
+	/** Receipts are read from the server, never guessed from the transient recall event. */
+	async function loadReceipts(currentSlug = slug, currentChat = chatId) {
+		try {
+			const list = await fetchMemoryReceipts(currentSlug, currentChat);
+			if (currentSlug !== slug || currentChat !== chatId) return;
+			receipts = receiptsByMessage(list, currentChat);
+		} catch {
+			// Receipts are additive: a failed read leaves the bubbles without a panel.
+		}
+	}
+
 	async function loadHistory(currentSlug = slug, currentChat = chatId) {
 		const request = ++historyRequest;
 		loading = true;
@@ -371,6 +385,7 @@ import McpAppViewer from "./McpAppViewer.svelte";
 			agentRunning = res.agent_running;
 			if (agentRunning) pushActivity("state", "thinking...");
 			scrollToBottom();
+			void loadReceipts(currentSlug, currentChat);
 		} catch (error) {
 			if (request !== historyRequest || currentSlug !== slug || currentChat !== chatId) return;
 			historyError = error instanceof Error && error.message === "unauthorized"
@@ -387,6 +402,7 @@ import McpAppViewer from "./McpAppViewer.svelte";
 		untrack(() => {
 			messages = [];
 			stream = [];
+			receipts = new Map();
 			loading = true;
 			isConnected = false;
 			streamingMessageId = "";
@@ -487,6 +503,7 @@ import McpAppViewer from "./McpAppViewer.svelte";
 				agentRunning = false;
 				sending = false;
 				clearStreaming();
+				void loadReceipts(currentSlug, currentChat);
 				// Fade out recalled memories after a delay
 				setTimeout(() => { scene.recalledMemories = []; }, 6000);
 				// Don't clear turnMessageIds immediately — TTS audio may still be
@@ -814,7 +831,7 @@ import McpAppViewer from "./McpAppViewer.svelte";
 					{:else}
 						{#each stream as item, i (streamKey(item))}
 							{#if item.type === "message"}
-								<MessageBubble message={item.data} {slug} index={i} prevMessage={getPrev(item, i)} nextMessage={getNext(item, i)} speaking={isVoiceMessage(item.data.id)} revealProgress={getMessageRevealProgress(item.data.id)} streaming={item.data.id === streamingMessageId} />
+								<MessageBubble message={item.data} {slug} chatId={activeChatId} receipt={receipts.get(item.data.id)} {companionName} index={i} prevMessage={getPrev(item, i)} nextMessage={getNext(item, i)} speaking={isVoiceMessage(item.data.id)} revealProgress={getMessageRevealProgress(item.data.id)} streaming={item.data.id === streamingMessageId} />
 							{:else if item.type === "mcp_app"}
 								<McpAppViewer
 									html={item.html}
