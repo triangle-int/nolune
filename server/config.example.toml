@@ -1,11 +1,16 @@
 # Example ~/.nolune/config.toml for a self-hosted Nolune server.
-# `nolune onboard` writes the same shape with a generated auth token; copy this
-# file only when you want to start from a hand-edited configuration.
+# `nolune onboard` writes the same shape, listening on every interface behind a
+# generated auth token; copy this file only when you want to start from a
+# hand-edited configuration.
 
-host = "0.0.0.0"
+# Where the server listens. This example is reachable from this computer only.
+# To reach it from other devices set host = "0.0.0.0", and set auth_token first:
+# with an empty token every browser on the network could open your companion.
+host = "127.0.0.1"
 port = 26559
 
-# API token for automation, the CLI and the desktop app (leave empty for no auth).
+# API token for automation, the CLI and the desktop app. Empty means no
+# authentication at all, which is only acceptable on a loopback host.
 # Browsers never use it: they pair with a one-time code from `nolune pair`.
 auth_token = ""
 
