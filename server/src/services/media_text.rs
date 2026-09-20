@@ -53,7 +53,18 @@ pub struct MediaStore {
     #[cfg(test)]
     fail_next_import_publish: std::sync::atomic::AtomicBool,
     #[cfg(test)]
+    stash_pause: std::sync::Mutex<Option<StashPause>>,
+    #[cfg(test)]
     legacy_cleanup_failures: std::sync::Mutex<std::collections::HashSet<String>>,
+}
+
+/// Test-only rendezvous inside the import swap: `stash_companion` reports on
+/// `reached` once the live tree is parked and then blocks on `resume`, so a
+/// test can act in the window between the two renames.
+#[cfg(test)]
+pub(crate) struct StashPause {
+    pub reached: std::sync::mpsc::Sender<()>,
+    pub resume: std::sync::mpsc::Receiver<()>,
 }
 
 impl MediaStore {
@@ -69,6 +80,8 @@ impl MediaStore {
             fail_next_write: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
             fail_next_import_publish: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            stash_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
             legacy_cleanup_failures: std::sync::Mutex::new(std::collections::HashSet::new()),
         })
@@ -334,6 +347,16 @@ impl MediaStore {
         }
         self.root.rename(&target, &self.root, &parked)?;
         self.forget_upload_dir(slug);
+        #[cfg(test)]
+        if let Some(pause) = self
+            .stash_pause
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
+            let _ = pause.reached.send(());
+            let _ = pause.resume.recv();
+        }
         Ok(true)
     }
 
@@ -1103,6 +1126,16 @@ impl MediaStore {
     pub(crate) fn inject_next_import_publish_failure(&self) {
         self.fail_next_import_publish
             .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Make the next `stash_companion` block between the two renames of the
+    /// import swap until `pause.resume` receives, reporting on
+    /// `pause.reached` first.
+    pub(crate) fn pause_next_stash(&self, pause: StashPause) {
+        *self
+            .stash_pause
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(pause);
     }
 
     fn inject_legacy_cleanup_failure(&self, slug: &str, point: &str) {

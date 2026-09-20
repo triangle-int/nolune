@@ -132,7 +132,7 @@ impl std::error::Error for RestoreError {}
 /// in `profile_archive`, so nothing but the staging directory is written
 /// before validation succeeds.
 pub async fn restore_companion<R: Read + Send + 'static>(
-    store: &VectorStore,
+    store: Arc<VectorStore>,
     agent_tasks: &tokio::sync::Mutex<HashMap<String, CancellationToken>>,
     slug: &str,
     archive: R,
@@ -337,6 +337,7 @@ mod tests {
     use super::*;
     use crate::domain::companion::{CANONICAL_SLUG, CompanionIdentity, IDENTITY_FILE};
     use crate::services::embedding::tests::{MockServer, response};
+    use crate::services::media_text::StashPause;
     use std::{
         collections::BTreeMap,
         fs,
@@ -451,7 +452,8 @@ mod tests {
                 ("uploads/keep.txt", b"kept"),
             ],
         );
-        let store = VectorStore::connect_with_config(workspace.path(), &mock.config).await;
+        let store =
+            Arc::new(VectorStore::connect_with_config(workspace.path(), &mock.config).await);
         store
             .backfill_text_memories(workspace.path(), CANONICAL_SLUG)
             .await
@@ -463,7 +465,7 @@ mod tests {
         store.media_store().inject_next_import_publish_failure();
 
         let error = restore_companion(
-            &store,
+            store.clone(),
             &tasks(),
             CANONICAL_SLUG,
             archive(&[("memory/new.md", b"Andromeda"), ("soul.md", b"new soul")]),
@@ -493,6 +495,177 @@ mod tests {
         );
     }
 
+    /// An HTTP client that disconnects drops the handler future. The swap
+    /// must not be left half done: once the live tree is parked the
+    /// transaction runs to completion on its own, so the companion is the
+    /// imported tree (never missing, never a fresh bogus one) and `imports/`
+    /// is clean.
+    #[tokio::test]
+    async fn dropping_the_restore_future_between_the_renames_completes_the_import() {
+        let mock = MockServer::new(vec![(200, response(vec![1., 0., 0.])); 4]).await;
+        let workspace = tempfile::tempdir().unwrap();
+        write_tree(
+            &companion_dir(workspace.path()),
+            &[("memory/old.md", b"Orion nebula")],
+        );
+        let store =
+            Arc::new(VectorStore::connect_with_config(workspace.path(), &mock.config).await);
+        store
+            .backfill_text_memories(workspace.path(), CANONICAL_SLUG)
+            .await
+            .unwrap();
+        let (reached, reached_rx) = std::sync::mpsc::channel();
+        let (resume, resume_rx) = std::sync::mpsc::channel();
+        store.media_store().pause_next_stash(StashPause {
+            reached,
+            resume: resume_rx,
+        });
+
+        let tasks = tasks();
+        let restore = restore_companion(
+            store.clone(),
+            &tasks,
+            CANONICAL_SLUG,
+            archive(&[("memory/new.md", b"Andromeda")]),
+        );
+        let mut restore = Box::pin(restore);
+        let parked = tokio::task::spawn_blocking(move || reached_rx.recv());
+        tokio::select! {
+            outcome = &mut restore => panic!("restore finished before the swap paused: {outcome:?}"),
+            parked = parked => parked.unwrap().unwrap(),
+        }
+        // The live tree is parked and the client goes away right now.
+        assert!(!companion_dir(workspace.path()).exists());
+        assert_eq!(
+            imports_entries(workspace.path()).len(),
+            2,
+            "staging and previous"
+        );
+        drop(restore);
+        resume.send(()).unwrap();
+
+        // The gate is released only once the detached transaction is done.
+        let gate = store.lifecycle_lock(CANONICAL_SLUG).lock_owned().await;
+        drop(gate);
+        let memory = companion_dir(workspace.path()).join("memory");
+        assert!(memory.join("new.md").is_file(), "the imported tree is live");
+        assert!(!memory.join("old.md").exists());
+        assert_eq!(
+            fs::read(companion_dir(workspace.path()).join(IDENTITY_FILE)).unwrap(),
+            marker()
+        );
+        assert_eq!(
+            imports_entries(workspace.path()),
+            Vec::<String>::new(),
+            "neither the staging nor the previous tree is left behind"
+        );
+        assert_eq!(
+            listing(&store).await,
+            vec![(
+                "new.md".to_owned(),
+                "text_memory".to_owned(),
+                "Andromeda".to_owned()
+            )],
+            "derived state was rebuilt after the swap"
+        );
+        assert!(!store.needs_backfill(CANONICAL_SLUG).await.unwrap());
+        store
+            .write_text_memory(
+                CANONICAL_SLUG,
+                "later.md",
+                "after the dropped import",
+                false,
+            )
+            .await
+            .unwrap();
+        assert!(memory.join("later.md").is_file());
+    }
+
+    /// The reset of the vector collection is the one derived-state step that
+    /// can fail after the swap. When its persist fails, nothing of the
+    /// replaced tree may keep being served and the startup backfill must
+    /// run: `derived_index: pending` always implies `needs_backfill()`.
+    #[tokio::test]
+    async fn a_reset_that_cannot_be_persisted_still_marks_the_collection_for_backfill() {
+        let mock = MockServer::new(vec![(200, response(vec![1., 0., 0.])); 4]).await;
+        let workspace = tempfile::tempdir().unwrap();
+        write_tree(
+            &companion_dir(workspace.path()),
+            &[("memory/old.md", b"Orion nebula")],
+        );
+        let store =
+            Arc::new(VectorStore::connect_with_config(workspace.path(), &mock.config).await);
+        store
+            .backfill_text_memories(workspace.path(), CANONICAL_SLUG)
+            .await
+            .unwrap();
+        assert_eq!(listing(&store).await.len(), 1);
+        let index_files = || {
+            let vectors = workspace.path().join("vectors");
+            let mut names: Vec<_> = fs::read_dir(&vectors)
+                .map(|entries| {
+                    entries
+                        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                        .filter(|name| name.ends_with(".bin"))
+                        .collect()
+                })
+                .unwrap_or_default();
+            names.sort();
+            names
+        };
+        assert_eq!(index_files().len(), 1);
+        store.inject_next_persist_failure();
+
+        let outcome = restore_companion(
+            store.clone(),
+            &tasks(),
+            CANONICAL_SLUG,
+            archive(&[("memory/new.md", b"Andromeda")]),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.derived_index, DerivedIndex::Pending);
+        assert!(
+            outcome
+                .pending_reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("injected failure"),
+            "{outcome:?}"
+        );
+        assert!(
+            store.needs_backfill(CANONICAL_SLUG).await.unwrap(),
+            "pending always implies the startup backfill runs"
+        );
+        assert!(
+            listing(&store).await.is_empty(),
+            "no record of the replaced tree survives"
+        );
+        assert_eq!(
+            index_files(),
+            Vec::<String>::new(),
+            "the stale index file is unlinked so a restart does not reload it"
+        );
+        assert!(
+            !hit_paths(&store, "Orion")
+                .await
+                .contains(&"old.md".to_owned())
+        );
+        assert_eq!(hit_paths(&store, "Andromeda").await, vec!["new.md"]);
+        assert_eq!(imports_entries(workspace.path()), Vec::<String>::new());
+        // The next backfill repairs it in place.
+        assert_eq!(
+            store
+                .backfill_text_memories(workspace.path(), CANONICAL_SLUG)
+                .await
+                .unwrap(),
+            1
+        );
+        assert!(!store.needs_backfill(CANONICAL_SLUG).await.unwrap());
+        assert_eq!(listing(&store).await[0].0, "new.md");
+    }
+
     #[tokio::test]
     async fn a_concurrent_memory_write_lands_after_the_import() {
         let mock = MockServer::new(vec![(200, response(vec![1., 0., 0.])); 4]).await;
@@ -511,7 +684,7 @@ mod tests {
             let tasks = tasks();
             let archive = archive(&[("memory/imported.md", b"imported")]);
             tokio::spawn(
-                async move { restore_companion(&store, &tasks, CANONICAL_SLUG, archive).await },
+                async move { restore_companion(store, &tasks, CANONICAL_SLUG, archive).await },
             )
         };
         tokio::task::yield_now().await;
@@ -564,7 +737,8 @@ mod tests {
                 ("memory_graph.json", br#"{"edges":[["gone.md","old.md"]]}"#),
             ],
         );
-        let store = VectorStore::connect_with_config(workspace.path(), &mock.config).await;
+        let store =
+            Arc::new(VectorStore::connect_with_config(workspace.path(), &mock.config).await);
         store
             .backfill_text_memories(workspace.path(), CANONICAL_SLUG)
             .await
@@ -575,7 +749,7 @@ mod tests {
         assert!(memory::load_catalog_snapshot(&media, CANONICAL_SLUG).contains("old.md"));
 
         let outcome = restore_companion(
-            &store,
+            store.clone(),
             &tasks(),
             CANONICAL_SLUG,
             archive(&[
@@ -627,10 +801,10 @@ mod tests {
             &companion_dir(workspace.path()),
             &[("memory/old.md", b"old")],
         );
-        let store = VectorStore::connect(workspace.path()).await;
+        let store = Arc::new(VectorStore::connect(workspace.path()).await);
 
         let outcome = restore_companion(
-            &store,
+            store.clone(),
             &tasks(),
             CANONICAL_SLUG,
             archive(&[("memory/new.md", b"new")]),
@@ -672,7 +846,7 @@ mod tests {
             b"old bytes",
         )
         .unwrap();
-        let store = VectorStore::connect(workspace.path()).await;
+        let store = Arc::new(VectorStore::connect(workspace.path()).await);
         let media = store.media_store();
         assert_eq!(
             media
@@ -699,7 +873,7 @@ mod tests {
         let mut bytes = Vec::new();
         profile_archive::write_archive(&source, &mut bytes).unwrap();
 
-        restore_companion(&store, &tasks(), CANONICAL_SLUG, Cursor::new(bytes))
+        restore_companion(store.clone(), &tasks(), CANONICAL_SLUG, Cursor::new(bytes))
             .await
             .unwrap();
 
@@ -727,7 +901,7 @@ mod tests {
             &companion_dir(workspace.path()),
             &[("memory/old.md", b"old")],
         );
-        let store = VectorStore::connect(workspace.path()).await;
+        let store = Arc::new(VectorStore::connect(workspace.path()).await);
         let tree_before = snapshot(&companion_dir(workspace.path()));
         let tasks = tasks();
         tasks.lock().await.insert(
@@ -740,7 +914,7 @@ mod tests {
             .insert("alice/default".to_owned(), CancellationToken::new());
 
         let error = restore_companion(
-            &store,
+            store.clone(),
             &tasks,
             CANONICAL_SLUG,
             archive(&[("memory/new.md", b"new")]),
@@ -762,7 +936,7 @@ mod tests {
             .await
             .remove(&format!("{CANONICAL_SLUG}/default"));
         restore_companion(
-            &store,
+            store.clone(),
             &tasks,
             CANONICAL_SLUG,
             archive(&[("memory/new.md", b"new")]),
@@ -783,7 +957,7 @@ mod tests {
             &companion_dir(workspace.path()),
             &[("memory/old.md", b"old")],
         );
-        let store = VectorStore::connect(workspace.path()).await;
+        let store = Arc::new(VectorStore::connect(workspace.path()).await);
         let tree_before = snapshot(&companion_dir(workspace.path()));
 
         // Wrong root: the writer refuses to build it, so hand-roll a tar.
@@ -800,7 +974,7 @@ mod tests {
         std::io::Write::write_all(&mut encoder, &tar).unwrap();
         let hostile = Cursor::new(encoder.finish().unwrap());
 
-        let error = restore_companion(&store, &tasks(), CANONICAL_SLUG, hostile)
+        let error = restore_companion(store.clone(), &tasks(), CANONICAL_SLUG, hostile)
             .await
             .unwrap_err();
 
@@ -816,10 +990,10 @@ mod tests {
     #[tokio::test]
     async fn an_import_creates_the_companion_when_none_exists_yet() {
         let workspace = tempfile::tempdir().unwrap();
-        let store = VectorStore::connect(workspace.path()).await;
+        let store = Arc::new(VectorStore::connect(workspace.path()).await);
 
         let outcome = restore_companion(
-            &store,
+            store.clone(),
             &tasks(),
             CANONICAL_SLUG,
             archive(&[("memory/new.md", b"new"), ("soul.md", b"soul")]),
