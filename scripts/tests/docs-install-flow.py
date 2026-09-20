@@ -5,6 +5,10 @@ Required: both install paths, the CLI the installers delegate to, the opt-in
 background service, and the update and uninstall stories. Forbidden: copy from
 the old flow where the script registered a service and users copied tokens out
 of config.toml.
+
+CONTRIBUTING's server walkthrough must reach the web client: `onboard` writes a
+token, so the first browser pairs (`pair`, while `gateway` runs) before it can
+open Settings.
 """
 from pathlib import Path
 import sys
@@ -12,6 +16,7 @@ import sys
 root = Path(__file__).resolve().parents[2]
 readme = (root / "README.md").read_text()
 desktop = (root / "desktop" / "README.md").read_text()
+contributing = (root / "CONTRIBUTING.md").read_text()
 landing = (root / "landing" / "src" / "lib" / "components" / "Install.svelte").read_text()
 failures: list[str] = []
 
@@ -68,6 +73,21 @@ require(install_section, "README.md Install section", [
     "nolune gateway install",
     "foreground",
 ])
+
+# The contributor walkthrough: onboard, gateway, pair, then Settings.
+server_section = contributing.split("### Server", 1)[1].split("\n### ", 1)[0]
+require(server_section, "CONTRIBUTING.md Server section", [
+    "cargo run --manifest-path server/Cargo.toml -- onboard",
+    "cargo run --manifest-path server/Cargo.toml -- gateway",
+    "cargo run --manifest-path server/Cargo.toml -- pair",
+    "Settings → Connections",
+])
+for earlier, later in [("-- gateway", "-- pair"), ("-- pair", "Settings → Connections")]:
+    first, second = server_section.find(earlier), server_section.find(later)
+    if first == -1 or second == -1 or first > second:
+        failures.append(
+            f"CONTRIBUTING.md Server section: {earlier!r} must come before {later!r}"
+        )
 
 if failures:
     print("\n".join(failures), file=sys.stderr)
