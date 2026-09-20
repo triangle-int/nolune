@@ -536,6 +536,20 @@ impl VectorStore {
         instance_slug: &str,
     ) -> Result<usize, String> {
         let _lifecycle_guard = self.lifecycle_lock(instance_slug).lock_owned().await;
+        self.backfill_no_lifecycle(instance_slug).await
+    }
+
+    /// Drop every derived record for `slug` and rebuild from the memory files
+    /// now on disk, under a lifecycle gate the caller already holds (the
+    /// companion restore in `profile_import`). The collection is emptied
+    /// first so no record of the replaced tree survives; a provider failure
+    /// then leaves it marked for the startup backfill.
+    pub(crate) async fn rebuild_derived_no_lifecycle(&self, slug: &str) -> Result<usize, String> {
+        self.reset_collection(slug).await?;
+        self.backfill_no_lifecycle(slug).await
+    }
+
+    async fn backfill_no_lifecycle(&self, instance_slug: &str) -> Result<usize, String> {
         let mutation = self.store.mutation_lock(instance_slug);
         let _guard = mutation.lock_owned().await;
         let slug = instance_slug.to_owned();
