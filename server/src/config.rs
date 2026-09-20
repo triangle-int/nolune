@@ -462,6 +462,11 @@ pub struct LlmConfig {
     pub background_preset: String,
     #[serde(flatten)]
     pub extra: std::collections::BTreeMap<String, toml::Value>,
+    /// The `provider` a config from before presets (#157) named. Read on
+    /// load so `seed_for_keys` puts that provider in the slots; never
+    /// written back.
+    #[serde(skip)]
+    retired_provider: Option<LlmProvider>,
 }
 
 /// `[llm]` keys from the tiered-model era. Dropped on load and on save.
@@ -489,6 +494,11 @@ struct RawLlmConfig {
 
 impl From<RawLlmConfig> for LlmConfig {
     fn from(mut raw: RawLlmConfig) -> Self {
+        let retired_provider = raw
+            .extra
+            .get("provider")
+            .and_then(toml::Value::as_str)
+            .and_then(LlmProvider::parse);
         for key in RETIRED_LLM_KEYS {
             raw.extra.remove(*key);
         }
@@ -498,6 +508,7 @@ impl From<RawLlmConfig> for LlmConfig {
             chat_preset: raw.chat_preset,
             background_preset: raw.background_preset,
             extra: raw.extra,
+            retired_provider,
         }
     }
 }
@@ -648,12 +659,22 @@ impl LlmConfig {
     /// Configs written before presets existed (#157) carry a key and no
     /// `[[llm.presets]]`. Seeding the keyed providers' defaults on load keeps
     /// those installs working without a click; presets a user has written
-    /// or edited are never touched. Returns how many presets were added.
+    /// or edited are never touched. The provider such a config named fills
+    /// the slots when it has a key, so an OpenAI user stays on OpenAI (#25).
+    /// Returns how many presets were added.
     pub fn seed_for_keys(&mut self) -> usize {
         if !self.presets.is_empty() {
             return 0;
         }
-        self.keyed_providers()
+        let mut providers = self.keyed_providers();
+        if let Some(named) = self
+            .retired_provider
+            .and_then(|named| providers.iter().position(|p| *p == named))
+        {
+            let named = providers.remove(named);
+            providers.insert(0, named);
+        }
+        providers
             .into_iter()
             .map(|provider| self.seed_presets(provider))
             .sum()
@@ -734,6 +755,7 @@ impl Default for LlmConfig {
             chat_preset: String::new(),
             background_preset: String::new(),
             extra: Default::default(),
+            retired_provider: None,
         };
         config.seed_presets(LlmProvider::default());
         config
@@ -1240,6 +1262,37 @@ custom_token = "retained"
         assert_eq!(both.llm.seed_for_keys(), 5);
         assert_eq!(both.llm.chat_preset, "sonnet");
         assert!(both.llm.is_configured());
+
+        // A config from before presets named its provider (`provider =`,
+        // retired since). An OpenAI user with both keys stays on OpenAI.
+        let mut openai_user: Config =
+            toml::from_str("[llm]\nprovider='openai'\n[llm.tokens]\nOPEN_AI='k'\nANTHROPIC='a'")
+                .unwrap();
+        assert_eq!(openai_user.llm.seed_for_keys(), 5);
+        assert_eq!(openai_user.llm.chat_preset, "gpt");
+        assert_eq!(openai_user.llm.background_preset, "gpt-mini");
+        assert!(
+            !openai_user.llm.extra.contains_key("provider"),
+            "the retired key must not be written back"
+        );
+        let serialized: toml::Value =
+            toml::from_str(&toml::to_string(&openai_user).unwrap()).unwrap();
+        assert!(serialized["llm"].get("provider").is_none());
+
+        // The legacy spellings of the Anthropic provider still mean Anthropic.
+        let mut api_user: Config =
+            toml::from_str("[llm]\nprovider='api'\n[llm.tokens]\nOPEN_AI='k'\nANTHROPIC='a'")
+                .unwrap();
+        assert_eq!(api_user.llm.seed_for_keys(), 5);
+        assert_eq!(api_user.llm.chat_preset, "sonnet");
+
+        // A named provider without a key cannot fill the slots: the keyed
+        // provider does, and the person is not stuck at setup.
+        let mut unkeyed: Config =
+            toml::from_str("[llm]\nprovider='openai'\n[llm.tokens]\nANTHROPIC='a'").unwrap();
+        assert_eq!(unkeyed.llm.seed_for_keys(), 3);
+        assert_eq!(unkeyed.llm.chat_preset, "sonnet");
+        assert!(unkeyed.llm.is_configured());
 
         // No provider key: nothing to seed, setup is still required.
         let mut none: Config = toml::from_str("[llm]\n[llm.tokens]\nBRAVE_SEARCH='b'").unwrap();

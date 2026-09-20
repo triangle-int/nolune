@@ -149,18 +149,23 @@ fn key_probe_rejection(
 
 /// Checks a key with its provider before it is saved: a one-token
 /// completion through the adapter, with the model the person's presets
-/// name for that provider (#24, #25).
+/// name for that provider (#24, #25). `base_url` replaces the provider's
+/// endpoint; tests point it at a stub.
 async fn verify_provider_key(
     state: &AppState,
     provider: config::LlmProvider,
     key: &str,
+    base_url: Option<&str>,
 ) -> Result<(), (StatusCode, String)> {
     let model = {
         let cfg = state.config.read().await;
         crate::services::llm::probe_model(&cfg.llm, provider)
     };
-    let backend =
+    let mut backend =
         crate::services::llm::LlmBackend::probe(state.http_client.clone(), provider, &model, key);
+    if let Some(base_url) = base_url {
+        backend.base_url = base_url.to_owned();
+    }
     key_probe_rejection(provider, backend.probe_key().await).map_or(Ok(()), Err)
 }
 
@@ -168,13 +173,23 @@ async fn update_llm_key(
     State(state): State<AppState>,
     Json(req): Json<UpdateLlmKeyRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    save_llm_keys(&state, req, None).await
+}
+
+/// Probes and saves the keys in `req`. `probe_base_url` is where the probes
+/// go instead of each provider's own endpoint; the route passes `None`.
+async fn save_llm_keys(
+    state: &AppState,
+    req: UpdateLlmKeyRequest,
+    probe_base_url: Option<&str>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     // A new provider key is checked before it is saved; clearing one is not.
     for (provider, key) in [
         (config::LlmProvider::Anthropic, &req.api_key),
         (config::LlmProvider::Openai, &req.openai),
     ] {
         if let Some(key) = key.as_deref().map(str::trim).filter(|key| !key.is_empty()) {
-            verify_provider_key(&state, provider, key).await?;
+            verify_provider_key(state, provider, key, probe_base_url).await?;
         }
     }
 
@@ -213,7 +228,7 @@ async fn update_llm_key(
 
     let cfg = state.config.read().await;
     Ok(Json(json!({ "status": "ok", "updated": changes,
-        "embedding": embedding_status(&state, &cfg),
+        "embedding": embedding_status(state, &cfg),
         "needs_restart": state.vector_store.embedding_needs_restart(&cfg),
     })))
 }
@@ -915,6 +930,99 @@ mod llm_key_tests {
         assert!(state.config.read().await.llm.tokens.open_ai.is_empty());
         let persisted = std::fs::read_to_string(workspace.path().join("config.toml")).unwrap();
         assert!(!persisted.contains("old-secret"), "{persisted}");
+    }
+
+    /// A provider that answers every request with `status` and `body`.
+    async fn provider_stub(status: u16, body: String) -> (String, tokio::task::JoinHandle<()>) {
+        let app = axum::Router::new().fallback(axum::routing::post(move || {
+            let body = body.clone();
+            async move { (StatusCode::from_u16(status).unwrap(), body) }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (url, task)
+    }
+
+    /// The save route probes a new key with its provider and stores nothing
+    /// the provider rejects (#24, #25), for Anthropic and OpenAI alike.
+    #[tokio::test]
+    async fn a_rejected_key_is_not_saved_and_an_accepted_one_is() {
+        fn token(cfg: &config::Config, provider: config::LlmProvider) -> String {
+            match provider {
+                config::LlmProvider::Anthropic => cfg.llm.tokens.anthropic.clone(),
+                config::LlmProvider::Openai => cfg.llm.tokens.open_ai.clone(),
+            }
+        }
+        for provider in [config::LlmProvider::Anthropic, config::LlmProvider::Openai] {
+            let name = match provider {
+                config::LlmProvider::Anthropic => "anthropic",
+                config::LlmProvider::Openai => "openai",
+            };
+            let workspace = tempfile::tempdir().unwrap();
+            let mut cfg = config::Config::default();
+            cfg.llm.tokens.anthropic = "anthropic-before".into();
+            cfg.llm.tokens.open_ai = "openai-before".into();
+            let state = AppState::new_in(cfg, workspace.path().to_owned()).await;
+            let request = || {
+                let (api_key, openai) = match provider {
+                    config::LlmProvider::Anthropic => (Some("new-secret".to_owned()), None),
+                    config::LlmProvider::Openai => (None, Some("new-secret".to_owned())),
+                };
+                UpdateLlmKeyRequest {
+                    api_key,
+                    openai,
+                    elevenlabs: None,
+                    openrouter: None,
+                }
+            };
+            let persisted = || std::fs::read_to_string(workspace.path().join("config.toml"));
+
+            // The provider rejects the key: nothing is saved anywhere.
+            let (url, task) = provider_stub(401, "invalid key".into()).await;
+            let (status, message) = save_llm_keys(&state, request(), Some(&url))
+                .await
+                .unwrap_err();
+            task.abort();
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{provider:?}: {message}");
+            assert_eq!(message, "invalid API key");
+            assert_eq!(
+                token(&*state.config.read().await, provider),
+                format!("{name}-before"),
+                "{provider:?}: a rejected key replaced the stored one"
+            );
+            if let Ok(text) = persisted() {
+                assert!(
+                    !text.contains("new-secret"),
+                    "{provider:?}: a rejected key reached config.toml"
+                );
+            }
+
+            // The provider accepts it: the key is saved to the workspace.
+            let accepted = match provider {
+                config::LlmProvider::Anthropic => {
+                    r#"{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#.to_owned()
+                }
+                config::LlmProvider::Openai => {
+                    json!({"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1}}).to_string()
+                }
+            };
+            let (url, task) = provider_stub(200, accepted).await;
+            let Json(saved) = save_llm_keys(&state, request(), Some(&url)).await.unwrap();
+            task.abort();
+            assert_eq!(saved["updated"], json!([name]));
+            assert_eq!(
+                token(&*state.config.read().await, provider),
+                "new-secret",
+                "{provider:?}"
+            );
+            assert!(
+                persisted().unwrap().contains("new-secret"),
+                "{provider:?}: the accepted key was not written"
+            );
+        }
     }
 }
 
