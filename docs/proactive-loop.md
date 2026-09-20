@@ -114,6 +114,63 @@ record shape as the API. Initiative controls (on/off, check-in interval,
 quiet hours, daily message budget, reflection) live under Settings →
 Companion.
 
+## Commitments (#85)
+
+A commitment is a promise the companion tracks as first-class state, so
+following through never collapses into a timer. Each one is one JSON file
+under `instances/companion/commitments/{id}.json`, format version 1. The
+record is the source of truth: the evaluator reads it and keeps no schedule
+of its own, so a restart cannot create a duplicate one.
+
+| Field | Meaning |
+| --- | --- |
+| `id` | `cmt_<unix seconds>_<8 hex>` |
+| `promise` | what was promised, at most 500 characters |
+| `owner` | `companion` (it promised the user) or `user` (they asked it to hold them to it) |
+| `status` | `active`, `waiting`, `blocked`, `due`, `completed`, `dismissed`, or `failed` |
+| `deadline` | `{kind: at, at}` or `{kind: window, start, end}`; optional |
+| `dependencies` | ids of commitments that must complete first |
+| `waiting_on` | `{kind: until, until}`, `{kind: event, event}`, or `{kind: user_reply}`; optional |
+| `next_check` | when the evaluator next looks at it: the one schedule the record owns |
+| `continuity_ids` | linked continuity record ids (#81), plain strings |
+| `provenance` | `manual`, `chat` (`chat_id`, `message_id`), or `run` (`run_id`) |
+| `completion` | evidence it was done: `confirmed_by_user`, `summary`, `run_id`, `at` |
+| `snoozed_until`, `snooze_count` | not surfaced before this moment; how often it was deferred |
+| `last_check` | what the last evaluation concluded (`unchanged`, `triggered`, or `failed` with `retryable`) and the run it produced |
+
+Status is derived from the record's own fields: a started deadline makes it
+`due` (unless snoozed), an unfinished dependency makes it `blocked`, an unmet
+waiting condition makes it `waiting`, otherwise it is `active`. Completing a
+commitment re-derives every open commitment that depended on it; a dismissed
+dependency never finishes. On creation `next_check` defaults to the earliest
+of a timed wait and the deadline start; moving either moves it along unless
+the edit sets `next_check` itself. A snooze sets `next_check` to its end and
+turns a `due` commitment back to `active` until then.
+
+A commitment cannot be marked complete without explicit user confirmation
+(`confirmed_by_user`) or recorded evidence (a non-empty `summary`, or the
+`run_id` of the activity record that shows the work): the store answers
+`evidence_required` and changes nothing. Completed, dismissed, and failed
+commitments are history; edits, snoozes, and further completion answer
+`closed`.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/instances/companion/commitments?status=` | newest first; `open` (default), `closed`, or `all` |
+| `POST /api/instances/companion/commitments` | create; `201` with the record |
+| `GET /api/instances/companion/commitments/{id}` | one record |
+| `PATCH /api/instances/companion/commitments/{id}` | edit fields; `clear_deadline`, `clear_waiting_on`, `clear_next_check` remove optional ones |
+| `POST /api/instances/companion/commitments/{id}/snooze` | `{until}`, which must be in the future |
+| `POST /api/instances/companion/commitments/{id}/complete` | body is the evidence; `422 evidence_required` without confirmation or evidence |
+| `POST /api/instances/companion/commitments/{id}/cancel` | dismiss |
+
+Refusals are JSON `{error, message}` with `not_found` (404), `invalid`
+(400), `closed` (409), `evidence_required` (422), or `storage_error` (500).
+Every write is broadcast as a `commitment_updated` server event carrying the
+record. The evaluator that turns due commitments into `commitment`-triggered
+runs through this loop, the chat tools, and the client controls follow in
+later changes.
+
 ## Migration hooks
 
 #85 and #82 add the commitment and handoff triggers.

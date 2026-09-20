@@ -47,6 +47,7 @@ Unknown fields are rejected. A marker with any other `format_version` or
         ├── chats/{chat_id}/     conversation history and agent markers
         ├── scheduled/*.json     scheduled tasks
         ├── activity/*.json      proactive run records (docs/proactive-loop.md)
+        ├── commitments/*.json   promises the companion follows through on (docs/proactive-loop.md)
         ├── proactive_policy.json quiet hours, budget, routine intervals
         ├── heartbeat.md         optional guidance for check-ins
         ├── uploads/             user-uploaded files
