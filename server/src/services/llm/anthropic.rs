@@ -41,10 +41,15 @@ pub(crate) fn build_anthropic_request(
     tool_defs: &[ToolDefinition],
     messages: &[Message],
     max_tokens: u64,
-    _scope: ExecutionScope,
+    scope: ExecutionScope,
     stream: bool,
     _api_key: &str,
 ) -> serde_json::Value {
+    // One breakpoint value for the whole request. The ttl is always written:
+    // omitted, the API silently defaults to 5m, and a conversation's prefix
+    // must survive the pause between a person's turns (#137).
+    let cache_control = serde_json::json!({"type": "ephemeral", "ttl": scope.cache_ttl()});
+
     // System blocks — all blocks are stable now (time moved to user message).
     // Each block gets cache_control to maximize prefix caching.
     let system_blocks: Vec<serde_json::Value> = system
@@ -64,7 +69,7 @@ pub(crate) fn build_anthropic_request(
             serde_json::json!({
                 "type": "text",
                 "text": *s,
-                "cache_control": {"type": "ephemeral"},
+                "cache_control": cache_control,
             })
         })
         .collect();
@@ -82,7 +87,7 @@ pub(crate) fn build_anthropic_request(
             });
             // Cache breakpoint on last tool — caches all tools as one prefix
             if i == tool_count - 1 {
-                tool["cache_control"] = serde_json::json!({"type": "ephemeral"});
+                tool["cache_control"] = cache_control.clone();
             }
             tool
         })
@@ -199,7 +204,7 @@ pub(crate) fn build_anthropic_request(
     let mut req = serde_json::json!({
         "model": model,
         "max_tokens": max_tokens,
-        "cache_control": {"type": "ephemeral"},
+        "cache_control": cache_control,
         "system": system_blocks,
         "messages": msgs,
         "context_management": {

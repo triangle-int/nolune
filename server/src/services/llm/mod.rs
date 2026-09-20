@@ -120,6 +120,7 @@ impl LlmBackend {
     }
 
     /// Simple chat without tools. Returns (text, tokens_used).
+    /// A subagent one-shot: its cache entries need only outlive the run.
     pub async fn chat(
         &self,
         system_prompt: &str,
@@ -171,7 +172,8 @@ impl LlmBackend {
         .await
     }
 
-    /// Streaming chat with tools.
+    /// Streaming chat with tools: the conversation loop, so its prompt cache
+    /// outlives the pause between a person's turns (#137).
     pub async fn chat_with_tools_streaming(
         &self,
         system_prompt: &[&str],
@@ -195,7 +197,7 @@ impl LlmBackend {
 
         let result = streaming_agent_loop(
             self,
-            ExecutionScope::Subagent,
+            ExecutionScope::Conversation,
             system_prompt,
             &tool_defs,
             &tools,
@@ -249,7 +251,8 @@ impl LlmBackend {
         .await
     }
 
-    /// Like `chat_with_tools_only` but returns the full message trace.
+    /// Like `chat_with_tools_only` but returns the full message trace. The
+    /// companion routines run here, in subagent scope.
     pub async fn chat_with_tools_traced(
         &self,
         system_prompt: &str,

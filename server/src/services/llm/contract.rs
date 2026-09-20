@@ -108,7 +108,8 @@ impl ExecutionScope {
     /// scope. The only place these literals live (#137).
     pub fn cache_ttl(self) -> &'static str {
         match self {
-            Self::Conversation | Self::Subagent => "5m",
+            Self::Conversation => "1h",
+            Self::Subagent => "5m",
         }
     }
 }
