@@ -48,7 +48,7 @@ use crate::{
         llm::{ContentBlock, Message},
         proactive::{Admission, RunHandle, outcome_from_trace},
         tool::Tool,
-        tools::computer::{RemoteFilesArgs, RemoteFilesTool},
+        tools::computer::{MachineTarget, RemoteFilesArgs, RemoteFilesTool, TargetSelection},
     },
 };
 
@@ -538,8 +538,12 @@ async fn look_for(state: &AppState, machine_id: &str, path: &str) -> Result<(), 
     log::info!("[handoff] looking for '{path}' on '{machine_id}'");
     let listing = tokio::time::timeout(
         std::time::Duration::from_secs(LISTING_WAIT_SECS),
-        RemoteFilesTool::new(state.machine_registry.clone()).call(RemoteFilesArgs {
-            machine_id: machine_id.to_owned(),
+        RemoteFilesTool::new(
+            state.machine_registry.clone(),
+            MachineTarget::new(TargetSelection::Machine(machine_id.to_owned())),
+        )
+        .call(RemoteFilesArgs {
+            machine_id: Some(machine_id.to_owned()),
             operation: "list".into(),
             path: folder.clone(),
             content: None,

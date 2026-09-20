@@ -954,6 +954,7 @@ async fn observable_tool_errors_and_activity_redact_control_tokens() {
         "moon".into(),
         "default".into(),
         None,
+        std::sync::Arc::default(),
     );
     let error = tool
         .call(serde_json::json!({"path":SEEDED_AUTH_TOKEN}).to_string())

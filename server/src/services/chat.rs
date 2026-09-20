@@ -481,6 +481,7 @@ pub async fn run_single_turn(
         github_token,
         vector_store.clone(),
         machine_registry,
+        tools::MachineTarget::default(),
         &public_url,
         resources,
     );

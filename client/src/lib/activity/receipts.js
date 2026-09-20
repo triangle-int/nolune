@@ -43,6 +43,18 @@ export function triggerLabel(trigger) {
 	}
 }
 
+/**
+ * Where a run acted (#80): the target machine by the name the Computers tab
+ * shows, or nothing for a run that did not act on a computer.
+ * @param {Tagged} target
+ * @param {{ machine_id: string; display_name: string }[]} [machines]
+ */
+export function targetLabel(target, machines = []) {
+	void target;
+	void machines;
+	throw new Error("targetLabel not implemented");
+}
+
 /** @param {Tagged} status */
 export function statusLabel(status) {
 	switch (status.kind) {
