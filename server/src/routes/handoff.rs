@@ -61,9 +61,32 @@ struct AcceptBody {
 
 type ApiError = (StatusCode, Json<serde_json::Value>);
 
+/// A refusal lists every check so the client can show the reasons; the
+/// message is the same reasons as one sentence.
 fn api_error(error: HandoffError) -> ApiError {
-    let _ = error;
-    todo!("#82: map handoff errors to responses")
+    let message = error.to_string();
+    match error {
+        HandoffError::NotFound => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "not_found", "message": message })),
+        ),
+        HandoffError::NotReady(checks) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "handoff_not_ready",
+                "message": message,
+                "checks": checks,
+            })),
+        ),
+        HandoffError::Invalid(_) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid", "message": message })),
+        ),
+        HandoffError::Storage(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "handoff", "message": message })),
+        ),
+    }
 }
 
 async fn list_handoffs(

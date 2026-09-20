@@ -530,7 +530,7 @@ async fn a_task_started_on_one_computer_is_reviewed_and_continued_on_another() {
     h.play_conversation(CHAT, MAC_B);
     h.conversation_stopped(CHAT).await;
     let card = h.wait_for_outcome(&task.id).await;
-    assert_eq!(card["decision"]["outcome"]["status"], "completed");
+    assert_eq!(card["decision"]["outcome"]["status"], "completed", "{card}");
     assert_eq!(card["decision"]["outcome"]["summary"], "1 action");
     let (status, run) = h
         .json(Method::GET, &api(&format!("activity/{run_id}")), None)
@@ -1034,16 +1034,19 @@ async fn a_cancelled_or_interrupted_continuation_is_closed_on_the_trail_and_can_
     assert_eq!(run["status"]["kind"], "failed");
     assert_eq!(run["status"]["retryable"], true);
 
-    // A retry is refused with the reason when the computer is gone.
+    // A retry is refused with the reason when the computer is gone (the
+    // activity route answers conflicts as text, like every other retry).
     h.disconnect(MAC_B, &b).await;
     let (status, refused) = h
-        .json(
+        .send(
             Method::POST,
             &api(&format!("activity/{retry_id}/retry")),
             None,
         )
         .await;
+    let refused = String::from_utf8(refused).unwrap();
     assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert!(refused.contains("laptop is offline"), "{refused}");
     assert!(
         h.state
             .proactive

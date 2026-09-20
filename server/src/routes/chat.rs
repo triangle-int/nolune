@@ -47,7 +47,8 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-fn task_key(slug: &str, chat_id: &str) -> String {
+/// The `agent_tasks` key of one conversation's agent loop.
+pub(crate) fn task_key(slug: &str, chat_id: &str) -> String {
     format!("{slug}/{chat_id}")
 }
 

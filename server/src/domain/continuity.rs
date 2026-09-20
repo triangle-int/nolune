@@ -385,17 +385,31 @@ impl ContinuityRecord {
                 });
             }
         }
-        next.updated_at = now;
-        next.provenance.push(provenance);
-        if next.provenance.len() > MAX_PROVENANCE {
-            // Keep the creating entry and the most recent ones.
-            let excess = next.provenance.len() - MAX_PROVENANCE;
-            next.provenance.drain(1..1 + excess);
+        // Explicit work brings a kept or dismissed handoff card back (#82);
+        // an acceptance stays bound through the progress it records.
+        if next
+            .handoff
+            .as_ref()
+            .is_some_and(HandoffDecision::hides_card)
+        {
+            next.handoff = None;
         }
+        next.touch(provenance, now);
 
         next.validate()?;
         *self = next;
         Ok(())
+    }
+
+    /// Stamp one write: the time and its provenance, bounded.
+    fn touch(&mut self, provenance: Provenance, now: i64) {
+        self.updated_at = now;
+        self.provenance.push(provenance);
+        if self.provenance.len() > MAX_PROVENANCE {
+            // Keep the creating entry and the most recent ones.
+            let excess = self.provenance.len() - MAX_PROVENANCE;
+            self.provenance.drain(1..1 + excess);
+        }
     }
 
     /// Every invariant a stored record must hold.
@@ -485,26 +499,71 @@ impl ContinuityRecord {
         provenance: Provenance,
         now: i64,
     ) -> Result<(), ContinuityError> {
-        let _ = (decision, provenance, now);
-        todo!("#82: record the handoff decision")
+        let provenance = checked_provenance(provenance)?;
+        if !self.state.is_resumable() {
+            return Err(invalid("only a resumable task can be handed off"));
+        }
+        decision.validate()?;
+        let mut next = self.clone();
+        if let HandoffDecision::Accepted { machine_id, .. } = &decision {
+            if !next.machine_ids.contains(machine_id) {
+                next.machine_ids.push(machine_id.clone());
+            }
+            next.state = ContinuityState::Active;
+        }
+        next.handoff = Some(decision);
+        next.touch(provenance, now);
+        next.validate()?;
+        *self = next;
+        Ok(())
     }
 
-    /// Append what the continuation did. Only an accepted handoff without an
-    /// outcome takes one, so a run is recorded on the record exactly once.
+    /// Append what the continuation `run_id` did. Only the accepted handoff
+    /// bound to that run, and without an outcome yet, takes one, so a run is
+    /// recorded on the record exactly once and never on a later acceptance.
     pub fn record_handoff_outcome(
         &mut self,
+        run_id: &str,
         outcome: HandoffOutcome,
         provenance: Provenance,
         now: i64,
     ) -> Result<(), ContinuityError> {
-        let _ = (outcome, provenance, now);
-        todo!("#82: record the continuation outcome")
+        let provenance = checked_provenance(provenance)?;
+        let outcome = HandoffOutcome {
+            summary: required(&outcome.summary, MAX_NOTE_CHARS, "outcome summary")?,
+            ..outcome
+        };
+        let mut next = self.clone();
+        match &mut next.handoff {
+            Some(HandoffDecision::Accepted {
+                run_id: bound,
+                outcome: slot @ None,
+                ..
+            }) if bound == run_id => *slot = Some(outcome),
+            Some(HandoffDecision::Accepted { run_id: bound, .. }) if bound == run_id => {
+                return Err(invalid("the continuation's outcome is already recorded"));
+            }
+            Some(HandoffDecision::Accepted { .. }) => {
+                return Err(invalid(format!(
+                    "the task is bound to another continuation than {run_id}"
+                )));
+            }
+            _ => return Err(invalid("no accepted handoff to record an outcome for")),
+        }
+        next.touch(provenance, now);
+        next.validate()?;
+        *self = next;
+        Ok(())
     }
 
     /// Whether a handoff card is offered for this record: resumable and not
     /// kept or dismissed since the last explicit update.
     pub fn handoff_offered(&self) -> bool {
-        todo!("#82: decide whether the card is offered")
+        self.state.is_resumable()
+            && !self
+                .handoff
+                .as_ref()
+                .is_some_and(HandoffDecision::hides_card)
     }
 }
 
@@ -1231,6 +1290,7 @@ mod tests {
         let before = record.clone();
         assert!(matches!(
             record.record_handoff_outcome(
+                "run_1767603700_0badcafe",
                 outcome.clone(),
                 by(ProvenanceSource::Server, "finished"),
                 T0 + 200
@@ -1246,8 +1306,20 @@ mod tests {
                 T0 + 100,
             )
             .unwrap();
+        let before = record.clone();
+        assert!(matches!(
+            record.record_handoff_outcome(
+                "run_1767603700_00000000",
+                outcome.clone(),
+                by(ProvenanceSource::Server, "finished"),
+                T0 + 200
+            ),
+            Err(ContinuityError::Invalid(_))
+        ));
+        assert_eq!(record, before, "an outcome from another run never lands");
         record
             .record_handoff_outcome(
+                "run_1767603700_0badcafe",
                 outcome.clone(),
                 by(
                     ProvenanceSource::Server,
@@ -1276,6 +1348,7 @@ mod tests {
         assert!(
             record
                 .record_handoff_outcome(
+                    "run_1767603700_0badcafe",
                     HandoffOutcome {
                         status: HandoffOutcomeStatus::Failed,
                         finished_at: T0 + 300,
@@ -1288,7 +1361,7 @@ mod tests {
         );
         assert_eq!(record, before);
 
-        // A summary longer than a note is refused like every other text.
+        // A summary is bounded like every other note, and never empty.
         let mut fresh = self::record();
         fresh
             .decide_handoff(
@@ -1300,15 +1373,36 @@ mod tests {
         assert!(
             fresh
                 .record_handoff_outcome(
+                    "run_1767603700_0badcafe",
                     HandoffOutcome {
-                        summary: "x".repeat(MAX_NOTE_CHARS + 1),
-                        ..outcome
+                        summary: "   ".into(),
+                        ..outcome.clone()
                     },
                     by(ProvenanceSource::Server, "finished"),
                     T0 + 200,
                 )
                 .is_err()
         );
+        fresh
+            .record_handoff_outcome(
+                "run_1767603700_0badcafe",
+                HandoffOutcome {
+                    summary: "x".repeat(MAX_NOTE_CHARS + 1),
+                    ..outcome
+                },
+                by(ProvenanceSource::Server, "finished"),
+                T0 + 200,
+            )
+            .unwrap();
+        let Some(HandoffDecision::Accepted {
+            outcome: Some(stored),
+            ..
+        }) = &fresh.handoff
+        else {
+            panic!("outcome recorded");
+        };
+        assert_eq!(stored.summary.chars().count(), MAX_NOTE_CHARS);
+        fresh.validate().unwrap();
     }
 
     #[test]

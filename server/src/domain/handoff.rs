@@ -14,7 +14,7 @@ use cua_protocol::{MachineHealth, Permission, PermissionKind, PermissionState, P
 use serde::Serialize;
 
 use crate::domain::{
-    continuity::{ContinuityRecord, ContinuityState, HandoffDecision, ResourceRef},
+    continuity::{BlockerKind, ContinuityRecord, ContinuityState, HandoffDecision, ResourceRef},
     machine::KnownMachine,
 };
 
@@ -161,20 +161,102 @@ pub struct ContinuationPreview {
 
 /// One computer for the card, from the machine list or just its id.
 pub fn computer_summary(machine_id: &str, machines: &[KnownMachine]) -> ComputerSummary {
-    let _ = (machine_id, machines);
-    todo!("#82: summarize a computer for the card")
+    match machines.iter().find(|m| m.machine_id == machine_id) {
+        Some(machine) => ComputerSummary {
+            machine_id: machine.machine_id.clone(),
+            display_name: machine.display_name.clone(),
+            known: true,
+            online: machine.online,
+            health: machine.health,
+            platform: machine.platform,
+            last_seen: Some(machine.last_seen),
+        },
+        None => ComputerSummary {
+            machine_id: machine_id.to_owned(),
+            display_name: machine_id.to_owned(),
+            known: false,
+            online: false,
+            health: MachineHealth::Unavailable,
+            platform: None,
+            last_seen: None,
+        },
+    }
 }
 
 /// What the destination must be able to do for this record.
 pub fn requirements(record: &ContinuityRecord) -> Requirements {
-    let _ = record;
-    todo!("#82: derive the required capabilities and permissions")
+    let mut capabilities: Vec<String> = COMPUTER_USE_CAPABILITIES
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+    if record
+        .resources
+        .iter()
+        .any(|link| matches!(link.resource, ResourceRef::MachinePath { .. }))
+    {
+        capabilities.extend(FILE_CAPABILITIES.iter().map(|s| (*s).to_owned()));
+    }
+    Requirements {
+        capabilities,
+        permissions: REQUIRED_PERMISSIONS.to_vec(),
+    }
+}
+
+/// Whether the record's reference check found this resource missing.
+fn resource_missing(record: &ContinuityRecord, resource: &ResourceRef) -> bool {
+    record.blockers.iter().any(|blocker| {
+        matches!(&blocker.kind, BlockerKind::ResourceMissing { resource: missing } if missing == resource)
+    })
 }
 
 /// The card for one record against the current machine list.
 pub fn build_card(record: &ContinuityRecord, machines: &[KnownMachine]) -> HandoffCard {
-    let _ = (record, machines);
-    todo!("#82: build the handoff card")
+    let summary = |machine_id: &str| computer_summary(machine_id, machines);
+    HandoffCard {
+        record_id: record.id.clone(),
+        goal: record.goal.clone(),
+        state: record.state,
+        origin_chat_id: record.origin.chat_id.clone(),
+        origin: record.machine_ids.first().map(|id| summary(id)),
+        completed_steps: record
+            .completed_steps
+            .iter()
+            .map(|step| step.summary.clone())
+            .collect(),
+        resources: record
+            .resources
+            .iter()
+            .map(|link| CardResource {
+                resource: link.resource.clone(),
+                label: link.resource.describe(),
+                available: !resource_missing(record, &link.resource),
+            })
+            .collect(),
+        blockers: record
+            .blockers
+            .iter()
+            .map(|blocker| blocker.detail.clone())
+            .collect(),
+        next_step: record.next_step.clone(),
+        required: requirements(record),
+        decision: record.handoff.clone(),
+        bound_to: record
+            .handoff
+            .as_ref()
+            .and_then(HandoffDecision::bound_machine)
+            .map(summary),
+        offered: record.handoff_offered(),
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+    }
+}
+
+fn check(kind: CheckKind, severity: Severity, detail: impl Into<String>) -> ContinuationCheck {
+    ContinuationCheck {
+        kind,
+        severity,
+        detail: detail.into(),
+    }
 }
 
 /// Every reason continuing this record on `machine_id` would stop, or
@@ -185,8 +267,147 @@ pub fn continuation_checks(
     machines: &[KnownMachine],
     environment: Environment,
 ) -> Vec<ContinuationCheck> {
-    let _ = (record, machine_id, machines, environment);
-    todo!("#82: check the destination")
+    use Severity::{Approval, Blocking, Note};
+    let mut checks = Vec::new();
+    let destination = computer_summary(machine_id, machines);
+    let name = destination.display_name.as_str();
+
+    if !record.state.is_resumable() {
+        checks.push(check(
+            CheckKind::RecordClosed,
+            Blocking,
+            "this task is closed and cannot be continued",
+        ));
+    }
+    if !environment.model_ready {
+        checks.push(check(
+            CheckKind::ModelUnavailable,
+            Blocking,
+            "no chat model is configured; add one in Settings before continuing",
+        ));
+    }
+    if !environment.initiative_on {
+        checks.push(check(
+            CheckKind::InitiativeOff,
+            Blocking,
+            "initiative is off; turn it on in Settings so the companion may continue work",
+        ));
+    }
+
+    let machine = machines.iter().find(|m| m.machine_id == machine_id);
+    match machine {
+        None => checks.push(check(
+            CheckKind::MachineUnknown,
+            Blocking,
+            format!("{name} has never connected to this companion"),
+        )),
+        Some(m) if !m.online => checks.push(check(
+            CheckKind::MachineOffline,
+            Blocking,
+            format!("{name} is offline"),
+        )),
+        Some(m) if m.health == MachineHealth::Degraded => checks.push(check(
+            CheckKind::MachineNotResponding,
+            Blocking,
+            format!("{name} is connected but not responding"),
+        )),
+        Some(_) => {}
+    }
+
+    if let Some(m) = machine {
+        let required = requirements(record);
+        for capability in required.capabilities {
+            if !m.capabilities.contains(&capability) {
+                checks.push(check(
+                    CheckKind::CapabilityMissing {
+                        capability: capability.clone(),
+                    },
+                    Blocking,
+                    format!("{name} cannot {capability}; its desktop app does not offer it"),
+                ));
+            }
+        }
+        match &m.permissions {
+            Some(state) => {
+                for kind in required.permissions {
+                    let label = permission_label(kind);
+                    match permission(state, kind) {
+                        Permission::Granted => {}
+                        Permission::PromptRequired => checks.push(check(
+                            CheckKind::PermissionPrompt { permission: kind },
+                            Approval,
+                            format!("{name} will ask for {label} before the first action"),
+                        )),
+                        Permission::Denied | Permission::Unavailable => checks.push(check(
+                            CheckKind::PermissionDenied { permission: kind },
+                            Blocking,
+                            format!("{label} is not granted on {name}; allow it in its desktop settings"),
+                        )),
+                    }
+                }
+            }
+            None => checks.push(check(
+                CheckKind::PermissionsUnknown,
+                Approval,
+                format!("{name} did not report its permissions; it may ask for Screen Recording or Accessibility"),
+            )),
+        }
+    }
+
+    for link in &record.resources {
+        let resource = &link.resource;
+        let ResourceRef::MachinePath {
+            machine_id: on,
+            path,
+        } = resource
+        else {
+            // An upload or memory note the reference check could not find.
+            if resource_missing(record, resource) {
+                checks.push(check(
+                    CheckKind::ResourceMissing {
+                        resource: resource.clone(),
+                    },
+                    Blocking,
+                    format!("{} cannot be found", resource.describe()),
+                ));
+            }
+            continue;
+        };
+        // A file on the destination itself is reachable exactly when the
+        // destination is, which the machine checks above already say; and
+        // whether a file elsewhere is reachable is a question about the
+        // destination, which an unknown one has already answered.
+        if on == machine_id || machine.is_none() {
+            continue;
+        }
+        // The reference check marks a file on a computer that is not
+        // connected as missing; the machine list says that more precisely.
+        let holder = computer_summary(on, machines);
+        let holder_name = holder.display_name.as_str();
+        if holder.online && holder.health != MachineHealth::Degraded {
+            checks.push(check(
+                CheckKind::ResourceElsewhere {
+                    resource: resource.clone(),
+                    machine_id: on.clone(),
+                },
+                Note,
+                format!("{path} is on {holder_name}; it stays reachable there while {holder_name} is connected"),
+            ));
+        } else {
+            checks.push(check(
+                CheckKind::ResourceElsewhere {
+                    resource: resource.clone(),
+                    machine_id: on.clone(),
+                },
+                Blocking,
+                format!(
+                    "{path} is on {holder_name}, which is not connected; {name} cannot reach it"
+                ),
+            ));
+        }
+    }
+
+    checks
 }
 
 /// The preview for continuing `record` on `machine_id`.
@@ -196,8 +417,15 @@ pub fn preview(
     machines: &[KnownMachine],
     environment: Environment,
 ) -> ContinuationPreview {
-    let _ = (record, machine_id, machines, environment);
-    todo!("#82: build the preview")
+    let checks = continuation_checks(record, machine_id, machines, environment);
+    ContinuationPreview {
+        card: build_card(record, machines),
+        destination: computer_summary(machine_id, machines),
+        ready: !checks
+            .iter()
+            .any(|check| check.severity == Severity::Blocking),
+        checks,
+    }
 }
 
 /// The human name of a permission, for check details.
@@ -313,7 +541,7 @@ mod tests {
             )
             .unwrap();
         record.blockers.push(crate::domain::continuity::Blocker {
-            kind: crate::domain::continuity::BlockerKind::ResourceMissing {
+            kind: BlockerKind::ResourceMissing {
                 resource: ResourceRef::Upload {
                     id: "upload_1".into(),
                 },

@@ -149,21 +149,28 @@ impl ContinuityStore {
         provenance: Provenance,
         now: i64,
     ) -> Result<ContinuityRecord, ContinuityError> {
-        let _ = (id, decision, provenance, now);
-        todo!("#82: persist the handoff decision under the lock")
+        let _guard = self.lock.lock().await;
+        let mut record = self.get(id).ok_or(ContinuityError::NotFound)?;
+        record.decide_handoff(decision, provenance, now)?;
+        self.write(&record)?;
+        Ok(record)
     }
 
-    /// Append the receipt of a finished continuation (#82) to the accepted
-    /// handoff on disk.
+    /// Append the receipt of the finished continuation `run_id` (#82) to the
+    /// accepted handoff on disk.
     pub async fn record_handoff_outcome(
         &self,
         id: &str,
+        run_id: &str,
         outcome: HandoffOutcome,
         provenance: Provenance,
         now: i64,
     ) -> Result<ContinuityRecord, ContinuityError> {
-        let _ = (id, outcome, provenance, now);
-        todo!("#82: persist the continuation outcome under the lock")
+        let _guard = self.lock.lock().await;
+        let mut record = self.get(id).ok_or(ContinuityError::NotFound)?;
+        record.record_handoff_outcome(run_id, outcome, provenance, now)?;
+        self.write(&record)?;
+        Ok(record)
     }
 
     async fn set_state(
@@ -1213,7 +1220,7 @@ mod tests {
 
     #[tokio::test]
     async fn handoff_decisions_and_outcomes_persist_under_the_lock() {
-        use crate::domain::continuity::{HandoffOutcomeStatus, MAX_NOTE_CHARS};
+        use crate::domain::continuity::HandoffOutcomeStatus;
 
         let (ws, store) = harness();
         let task = start(&store, "rename the trip photos", T0).await;
@@ -1264,6 +1271,7 @@ mod tests {
         let finished = store
             .record_handoff_outcome(
                 &task.id,
+                "run_1767603700_0badcafe",
                 outcome.clone(),
                 by(ProvenanceSource::Server, "continuation on mac-b completed"),
                 T0 + 200,
@@ -1279,6 +1287,7 @@ mod tests {
             store
                 .record_handoff_outcome(
                     &task.id,
+                    "run_1767603700_0badcafe",
                     outcome.clone(),
                     by(ProvenanceSource::Server, "again"),
                     T0 + 201,
@@ -1324,8 +1333,9 @@ mod tests {
             store
                 .record_handoff_outcome(
                     &task.id,
+                    "run_1767603700_0badcafe",
                     HandoffOutcome {
-                        summary: "x".repeat(MAX_NOTE_CHARS + 1),
+                        summary: "   ".into(),
                         ..outcome
                     },
                     by(ProvenanceSource::Server, "x"),

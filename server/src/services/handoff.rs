@@ -28,11 +28,11 @@ use crate::{
         },
         events::ServerEvent,
         handoff::{
-            ComputerSummary, ContinuationCheck, ContinuationPreview, Environment, HandoffCard,
-            build_card, computer_summary,
+            CheckKind, ComputerSummary, ContinuationCheck, ContinuationPreview, Environment,
+            HandoffCard, Severity, build_card, computer_summary,
         },
         machine::KnownMachine,
-        proactive::{ProactiveRun, RunOutcome, Target, Trigger},
+        proactive::{ProactiveRun, RunOutcome, RunStatus, SkipReason, Target, Trigger},
     },
     services::{
         chat,
@@ -46,6 +46,8 @@ use crate::{
 /// before the run is closed anyway (the chat loop itself is bounded by its
 /// turn timeout and iteration cap well inside this).
 const CONTINUATION_WAIT_SECS: u64 = 3600;
+/// How long a cancelled continuation waits for the conversation to wind down.
+const CANCEL_WAIT_SECS: u64 = 30;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HandoffError {
@@ -158,14 +160,33 @@ fn broadcast(state: &AppState, card: &HandoffCard) {
 /// The cards offered right now: resumable records the user has not kept or
 /// dismissed since their last explicit update, after the reference check.
 pub async fn list(state: &AppState, now: i64) -> Listing {
-    let _ = (state, now);
-    todo!("#82: list the offered handoff cards")
+    let machines = machines(state, now).await;
+    let (records, errors) = store(state)
+        .list_validated(&state.machine_registry, now, true)
+        .await;
+    Listing {
+        handoffs: records
+            .iter()
+            .filter(|record| record.handoff_offered())
+            .map(|record| build_card(record, &machines))
+            .collect(),
+        errors,
+    }
+}
+
+/// The record after the reference check, so the card and the checks see
+/// the same blockers the continuity API reports.
+async fn validated(state: &AppState, id: &str, now: i64) -> Result<ContinuityRecord, HandoffError> {
+    store(state)
+        .validate_references(id, &state.machine_registry, now)
+        .await
+        .ok_or(HandoffError::NotFound)
 }
 
 /// One record's card, whether or not it is offered.
 pub async fn card(state: &AppState, id: &str, now: i64) -> Result<HandoffCard, HandoffError> {
-    let _ = (state, id, now);
-    todo!("#82: build one card")
+    let record = validated(state, id, now).await?;
+    Ok(build_card(&record, &machines(state, now).await))
 }
 
 /// The pre-continuation preview for `machine_id`: the destination and
@@ -176,8 +197,22 @@ pub async fn preview(
     machine_id: &str,
     now: i64,
 ) -> Result<ContinuationPreview, HandoffError> {
-    let _ = (state, id, machine_id, now);
-    todo!("#82: preview a continuation")
+    let (record, preview) = checked(state, id, machine_id, now).await?;
+    drop(record);
+    Ok(preview)
+}
+
+async fn checked(
+    state: &AppState,
+    id: &str,
+    machine_id: &str,
+    now: i64,
+) -> Result<(ContinuityRecord, ContinuationPreview), HandoffError> {
+    let record = validated(state, id, now).await?;
+    let machines = machines(state, now).await;
+    let environment = environment(state).await;
+    let preview = crate::domain::handoff::preview(&record, machine_id, &machines, environment);
+    Ok((record, preview))
 }
 
 /// Continue the task on `machine_id`. Re-validates at this moment, binds
@@ -189,36 +224,402 @@ pub async fn accept(
     machine_id: &str,
     now: i64,
 ) -> Result<Accepted, HandoffError> {
-    let _ = (state, id, machine_id, now);
-    todo!("#82: accept a handoff")
+    continue_on(state, id, machine_id, now, None).await
 }
 
 /// Retry a failed or cancelled continuation from the activity view: the
 /// same checks, the bound computer, and a linked attempt (`retry_of`).
 pub async fn retry(state: &AppState, run_id: &str, now: i64) -> Result<Accepted, HandoffError> {
-    let _ = (state, run_id, now);
-    todo!("#82: retry a continuation")
+    let previous = state
+        .proactive
+        .get(run_id)
+        .ok_or_else(|| HandoffError::Invalid(format!("unknown run {run_id}")))?;
+    let Trigger::Handoff { handoff_id } = &previous.trigger else {
+        return Err(HandoffError::Invalid(format!(
+            "run {run_id} is not a handoff continuation"
+        )));
+    };
+    let record = store(state).get(handoff_id).ok_or(HandoffError::NotFound)?;
+    let Some(machine_id) = record
+        .handoff
+        .as_ref()
+        .and_then(HandoffDecision::bound_machine)
+    else {
+        return Err(HandoffError::Invalid(
+            "the task is no longer bound to a computer; accept it again from its card".into(),
+        ));
+    };
+    continue_on(state, handoff_id, machine_id, now, Some(run_id)).await
+}
+
+/// The one path that starts work: checks, admission, binding, hand-over.
+async fn continue_on(
+    state: &AppState,
+    id: &str,
+    machine_id: &str,
+    now: i64,
+    retry_of: Option<&str>,
+) -> Result<Accepted, HandoffError> {
+    let (record, preview) = checked(state, id, machine_id, now).await?;
+
+    // Idempotent: a continuation that is still running is the answer, whatever
+    // computer this acceptance named.
+    if let Some(HandoffDecision::Accepted { run_id, .. }) = &record.handoff
+        && let Some(run) = state.proactive.get(run_id)
+        && !run.status.is_finished()
+    {
+        return Ok(Accepted {
+            card: preview.card,
+            run,
+            already_running: true,
+        });
+    }
+    if !preview.ready {
+        return Err(HandoffError::NotReady(preview.checks));
+    }
+
+    let destination = preview.destination;
+    let trigger = Trigger::Handoff {
+        handoff_id: id.to_owned(),
+    };
+    let reason = format!("continue on {}: {}", destination.display_name, record.goal);
+    let target = Target::Machine {
+        machine_id: machine_id.to_owned(),
+    };
+    let admission = match retry_of {
+        Some(previous) => state
+            .proactive
+            .retry(previous, now)
+            .map_err(HandoffError::Invalid)?,
+        None => state.proactive.begin_at(trigger, &reason, target, now),
+    };
+    let handle = match admission {
+        Admission::Admitted(handle) => handle,
+        Admission::Skipped(skipped) => {
+            // The loop's dedupe key is the backstop for two acceptances that
+            // raced past the record: the first one's run is the answer.
+            if let RunStatus::Skipped {
+                reason: SkipReason::Duplicate { of },
+            } = &skipped.status
+                && let Some(run) = state.proactive.get(of)
+            {
+                return Ok(Accepted {
+                    card: card(state, id, now).await?,
+                    run,
+                    already_running: true,
+                });
+            }
+            return Err(HandoffError::NotReady(vec![ContinuationCheck {
+                kind: CheckKind::InitiativeOff,
+                severity: Severity::Blocking,
+                detail: "the companion loop did not admit the continuation; initiative may be off"
+                    .into(),
+            }]));
+        }
+    };
+    let run_id = handle.id().to_owned();
+
+    // Bind the record to the chosen computer and this run. The write is the
+    // record's own validation; a failure closes the run and starts nothing.
+    let record = match store(state)
+        .decide_handoff(
+            id,
+            HandoffDecision::Accepted {
+                machine_id: machine_id.to_owned(),
+                run_id: run_id.clone(),
+                at: now,
+                outcome: None,
+            },
+            by_user(
+                format!("continue on {} ({})", destination.display_name, run_id),
+                now,
+            ),
+            now,
+        )
+        .await
+    {
+        Ok(record) => record,
+        Err(error) => {
+            handle.fail_at(&format!("could not bind the handoff: {error}"), false, now);
+            return Err(error.into());
+        }
+    };
+
+    // Hand the task to the conversation it came from, as the user's explicit
+    // request naming the one computer. Its tools do the work from here.
+    let chat_id = record.origin.chat_id.clone();
+    let message = continuation_message(&record, &destination);
+    let saved =
+        match chat::save_user_message(&state.workspace_dir, CANONICAL_SLUG, &chat_id, &message) {
+            Ok(saved) => saved,
+            Err(error) => {
+                handle.fail_at(
+                    &format!("could not reach the task's conversation: {error}"),
+                    true,
+                    now,
+                );
+                return Err(HandoffError::Storage(error.to_string()));
+            }
+        };
+    let _ = state.events.send(ServerEvent::ChatMessageCreated {
+        instance_slug: CANONICAL_SLUG.to_owned(),
+        chat_id: chat_id.clone(),
+        message: saved.clone(),
+    });
+    // The acceptance itself decides whether the conversation needs a turn
+    // started or is already running and will pick the request up; the
+    // follower spawned below only waits for it to stop.
+    let own_loop = ensure_agent_loop(state, &chat_id).await;
+    log::info!(
+        "[handoff] {id}: continuing on '{}' as {run_id} in {chat_id} ({})",
+        destination.machine_id,
+        if own_loop.is_some() {
+            "turn started"
+        } else {
+            "queued on the running conversation"
+        }
+    );
+    spawn_continuation(
+        state.clone(),
+        Continuation {
+            record_id: id.to_owned(),
+            chat_id,
+            destination_name: destination.display_name.clone(),
+            message_id: saved.id,
+        },
+        handle,
+        own_loop,
+    );
+
+    let card = build_card(&record, &machines(state, now).await);
+    broadcast(state, &card);
+    let run = state
+        .proactive
+        .get(&run_id)
+        .ok_or_else(|| HandoffError::Storage(format!("run {run_id} vanished")))?;
+    Ok(Accepted {
+        card,
+        run,
+        already_running: false,
+    })
 }
 
 /// Leave the task on its origin computer and stop offering the card until
 /// explicit work updates the record.
 pub async fn keep(state: &AppState, id: &str, now: i64) -> Result<HandoffCard, HandoffError> {
-    let _ = (state, id, now);
-    todo!("#82: keep the task where it is")
+    let record = validated(state, id, now).await?;
+    let machines = machines(state, now).await;
+    let origin = record
+        .machine_ids
+        .first()
+        .map(|machine_id| computer_summary(machine_id, &machines));
+    let note = match &origin {
+        Some(origin) => format!("kept on {}", origin.display_name),
+        None => "kept where it is".to_owned(),
+    };
+    let record = store(state)
+        .decide_handoff(
+            id,
+            HandoffDecision::Kept {
+                machine_id: origin.map(|origin| origin.machine_id),
+                at: now,
+            },
+            by_user(note, now),
+            now,
+        )
+        .await?;
+    let card = build_card(&record, &machines);
+    broadcast(state, &card);
+    Ok(card)
 }
 
 /// Stop offering the card until explicit work updates the record. The
 /// record itself stays resumable.
 pub async fn dismiss(state: &AppState, id: &str, now: i64) -> Result<HandoffCard, HandoffError> {
-    let _ = (state, id, now);
-    todo!("#82: dismiss the card")
+    let record = store(state)
+        .decide_handoff(
+            id,
+            HandoffDecision::Dismissed { at: now },
+            by_user("handoff dismissed".into(), now),
+            now,
+        )
+        .await?;
+    let card = build_card(&record, &machines(state, now).await);
+    broadcast(state, &card);
+    Ok(card)
 }
 
 /// The explicit request the continuation puts into the task's conversation:
 /// the record as it stands and the one computer to act on.
 pub fn continuation_message(record: &ContinuityRecord, destination: &ComputerSummary) -> String {
-    let _ = (record, destination);
-    todo!("#82: state the handoff to the conversation")
+    let mut message = format!(
+        "[handoff] continue the task \"{}\" on {} (machine_id {}).\n",
+        record.goal, destination.display_name, destination.machine_id
+    );
+    if !record.completed_steps.is_empty() {
+        message.push_str("done so far:\n");
+        for step in &record.completed_steps {
+            message.push_str(&format!("- {}\n", step.summary));
+        }
+    }
+    if let Some(next_step) = &record.next_step {
+        message.push_str(&format!("next step: {next_step}\n"));
+    }
+    if !record.blockers.is_empty() {
+        message.push_str("known blockers:\n");
+        for blocker in &record.blockers {
+            message.push_str(&format!("- {}\n", blocker.detail));
+        }
+    }
+    if !record.resources.is_empty() {
+        message.push_str("resources (links, nothing was copied):\n");
+        for link in &record.resources {
+            message.push_str(&format!("- {}\n", link.resource.describe()));
+        }
+    }
+    message.push_str(&format!(
+        "rules: use machine_id \"{}\" for every computer_use, remote_bash, and remote file call; \
+         do not act on any other computer. record progress with task_continuity_update \
+         (id {}). ask before anything that needs approval or goes beyond the task above.",
+        destination.machine_id, record.id
+    ));
+    message
+}
+
+/// One accepted continuation being followed to its end.
+struct Continuation {
+    record_id: String,
+    chat_id: String,
+    destination_name: String,
+    /// The handoff request in the conversation; receipts come from what follows it.
+    message_id: String,
+}
+
+/// Follow the conversation until it stops (or the run is cancelled), then
+/// close the run with receipts and put the outcome on the record. `own_loop`
+/// is the turn the acceptance started, or `None` when the conversation was
+/// already running and the request is queued on it.
+fn spawn_continuation(
+    state: AppState,
+    continuation: Continuation,
+    handle: RunHandle,
+    own_loop: Option<tokio::task::JoinHandle<()>>,
+) {
+    tokio::spawn(async move {
+        let key = crate::routes::chat::task_key(CANONICAL_SLUG, &continuation.chat_id);
+        let cancelled = handle.token();
+        let follow = async {
+            match own_loop {
+                Some(join) => {
+                    let _ = join.await;
+                }
+                None => wait_for_conversation(&state, &key, CONTINUATION_WAIT_SECS).await,
+            }
+        };
+        let was_cancelled = tokio::select! {
+            _ = follow => false,
+            _ = cancelled.cancelled() => {
+                if let Some(token) = state.agent_tasks.lock().await.get(&key) {
+                    token.cancel();
+                }
+                wait_for_conversation(&state, &key, CANCEL_WAIT_SECS).await;
+                true
+            }
+        };
+        finalize(&state, &continuation, handle, was_cancelled).await;
+    });
+}
+
+/// Start the conversation's agent loop when none is running, exactly as a
+/// sent message does; `None` when one is already running and will pick the
+/// handoff up on its next turn.
+async fn ensure_agent_loop(state: &AppState, chat_id: &str) -> Option<tokio::task::JoinHandle<()>> {
+    let key = crate::routes::chat::task_key(CANONICAL_SLUG, chat_id);
+    let cancel = CancellationToken::new();
+    {
+        let mut tasks = state.agent_tasks.lock().await;
+        if tasks.contains_key(&key) {
+            return None;
+        }
+        tasks.insert(key, cancel.clone());
+    }
+    Some(tokio::spawn(crate::routes::chat::run_agent_loop(
+        state.clone(),
+        CANONICAL_SLUG.to_owned(),
+        chat_id.to_owned(),
+        cancel,
+        false,
+    )))
+}
+
+/// Wait until no agent loop runs for `key`, or `max_secs` pass.
+async fn wait_for_conversation(state: &AppState, key: &str, max_secs: u64) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(max_secs);
+    loop {
+        if !state.agent_tasks.lock().await.contains_key(key) {
+            return;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            log::warn!("[handoff] {key}: the conversation did not stop in time");
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+async fn finalize(
+    state: &AppState,
+    continuation: &Continuation,
+    handle: RunHandle,
+    cancelled: bool,
+) {
+    let trace = trace_after(
+        &state.workspace_dir,
+        CANONICAL_SLUG,
+        &continuation.chat_id,
+        &continuation.message_id,
+    );
+    let result = continuation_result(&trace, cancelled);
+    let now = Utc::now().timestamp();
+    let run_id = handle.id().to_owned();
+    match &result {
+        ContinuationResult::Completed(outcome) => {
+            handle.complete_at(outcome.clone(), now);
+        }
+        ContinuationResult::Failed { error, retryable } => {
+            handle.fail_at(error, *retryable, now);
+        }
+        ContinuationResult::Cancelled => {
+            handle.cancel_at(now);
+        }
+    }
+    let outcome = handoff_outcome(&result, now);
+    let verb = match outcome.status {
+        HandoffOutcomeStatus::Completed => "completed",
+        HandoffOutcomeStatus::Failed => "failed",
+        HandoffOutcomeStatus::Cancelled => "cancelled",
+    };
+    let note = format!(
+        "continuation on {} {verb}: {}",
+        continuation.destination_name, outcome.summary
+    );
+    log::info!("[handoff] {}: {run_id} {note}", continuation.record_id);
+    match store(state)
+        .record_handoff_outcome(
+            &continuation.record_id,
+            &run_id,
+            outcome,
+            by_server(note, now),
+            now,
+        )
+        .await
+    {
+        Ok(record) => broadcast(state, &build_card(&record, &machines(state, now).await)),
+        Err(error) => log::warn!(
+            "[handoff] {}: could not record the outcome of {run_id}: {error}",
+            continuation.record_id
+        ),
+    }
 }
 
 /// The conversation's messages after `message_id`, for receipts.
@@ -228,42 +629,74 @@ pub fn trace_after(
     chat_id: &str,
     message_id: &str,
 ) -> Vec<Message> {
-    let _ = (workspace_dir, slug, chat_id, message_id);
-    todo!("#82: read the trace after the handoff message")
+    let entries = chat::load_rig_history(&chat::rig_history_path(workspace_dir, slug, chat_id))
+        .unwrap_or_default();
+    let Some(at) = entries
+        .iter()
+        .position(|entry| entry.id.as_deref() == Some(message_id))
+    else {
+        return Vec::new();
+    };
+    entries
+        .into_iter()
+        .skip(at + 1)
+        .map(|entry| entry.message)
+        .collect()
 }
 
 /// What the trace says about the continuation: receipts when a turn ran,
 /// the server's own `[system]` line when it stopped with an error, and a
 /// retryable failure when no turn ran at all.
 pub fn continuation_result(trace: &[Message], cancelled: bool) -> ContinuationResult {
-    let _ = (trace, cancelled);
-    todo!("#82: derive the continuation result")
+    use crate::services::llm::ContentBlock;
+    if cancelled {
+        return ContinuationResult::Cancelled;
+    }
+    let last_reply = trace.iter().rev().find_map(|message| match message {
+        Message::Assistant { content } => Some(content),
+        Message::User { .. } => None,
+    });
+    let Some(last_reply) = last_reply else {
+        return ContinuationResult::Failed {
+            error: "the conversation stopped before taking the task up".into(),
+            retryable: true,
+        };
+    };
+    let system_line = last_reply.iter().rev().find_map(|block| match block {
+        ContentBlock::Text { text } => text.strip_prefix("[system] "),
+        _ => None,
+    });
+    if let Some(error) = system_line {
+        return ContinuationResult::Failed {
+            error: error.trim().to_owned(),
+            retryable: true,
+        };
+    }
+    ContinuationResult::Completed(outcome_from_trace(trace, 0))
 }
 
 /// The record's receipt of a finished run.
 pub fn handoff_outcome(result: &ContinuationResult, finished_at: i64) -> HandoffOutcome {
-    let _ = (result, finished_at);
-    todo!("#82: summarize the result for the record")
-}
-
-#[allow(dead_code)]
-fn unused(_: RunHandle, _: CancellationToken, _: i64) -> Option<(Target, Trigger, Admission)> {
-    let _ = (Utc::now(), MAX_NOTE_CHARS, HandoffOutcomeStatus::Completed);
-    let _ = (
-        outcome_from_trace,
-        chat::save_user_message,
-        build_card,
-        computer_summary,
-        HandoffDecision::Dismissed { at: 0 },
-        CONTINUATION_WAIT_SECS,
-        by_user,
-        by_server,
-        broadcast,
-        environment,
-        machines,
-        store,
-    );
-    None
+    let (status, summary) = match result {
+        ContinuationResult::Completed(outcome) => (
+            HandoffOutcomeStatus::Completed,
+            match outcome.actions.len() {
+                0 => "no actions".to_owned(),
+                1 => "1 action".to_owned(),
+                n => format!("{n} actions"),
+            },
+        ),
+        ContinuationResult::Failed { error, .. } => (
+            HandoffOutcomeStatus::Failed,
+            error.chars().take(MAX_NOTE_CHARS).collect(),
+        ),
+        ContinuationResult::Cancelled => (HandoffOutcomeStatus::Cancelled, "cancelled".to_owned()),
+    };
+    HandoffOutcome {
+        status,
+        finished_at,
+        summary,
+    }
 }
 
 #[cfg(test)]
