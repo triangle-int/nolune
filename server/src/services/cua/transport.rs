@@ -5,12 +5,16 @@
 //! speaks MCP over stdio to a `cua-driver mcp` child; tests use an in-memory
 //! fake so no driver binary is ever required.
 
-use std::{future::Future, path::Path, pin::Pin};
+use std::{future::Future, path::Path, pin::Pin, time::Duration};
 
+use anyhow::Context as _;
 use cua_protocol::driver_mcp::DriverCallFailure;
 use rmcp::{
-    model::{CallToolRequestParams, CallToolResult, RawContent},
-    service::ServerSink,
+    model::{
+        CallToolRequest, CallToolRequestParams, CallToolResult, ClientRequest, RawContent,
+        ServerResult,
+    },
+    service::{PeerRequestOptions, ServerSink, ServiceError},
 };
 use serde_json::{Map, Value};
 
@@ -68,6 +72,33 @@ pub(crate) fn payload_from_call_result(result: CallToolResult) -> CallOutcome {
     ))
 }
 
+/// The deadlines one driver process is held to.
+///
+/// Without them an executable that never speaks MCP (a wrapper script, the
+/// wrong binary) wedges the `initialize` handshake, and a driver blocked on
+/// a TCC prompt wedges every later tool call, silently and forever.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverTimeouts {
+    /// How long `<driver> mcp` may take to answer the MCP `initialize`
+    /// handshake before `spawn` gives up and kills the child.
+    pub handshake: Duration,
+    /// How long one tool call may take before the request is cancelled and
+    /// the call fails as a retryable [`DriverCallFailure::Timeout`].
+    pub call: Duration,
+}
+
+impl Default for DriverTimeouts {
+    fn default() -> Self {
+        Self {
+            handshake: Duration::from_secs(10),
+            // The longest legitimate single action is a `verify_state` wait
+            // (at most 10 s by the protocol) or an app launch; anything past
+            // this is a stuck driver, not a slow one.
+            call: Duration::from_secs(30),
+        }
+    }
+}
+
 /// MCP over stdio to one persistent `cua-driver mcp` child process.
 ///
 /// The child lives exactly as long as this transport: the keep-alive task
@@ -76,6 +107,7 @@ pub(crate) fn payload_from_call_result(result: CallToolResult) -> CallOutcome {
 pub struct StdioDriverTransport {
     sink: ServerSink,
     keep_alive: tokio::task::JoinHandle<()>,
+    timeouts: DriverTimeouts,
 }
 
 impl Drop for StdioDriverTransport {
@@ -85,8 +117,16 @@ impl Drop for StdioDriverTransport {
 }
 
 impl StdioDriverTransport {
-    /// Spawn `<driver> mcp` and complete the MCP handshake.
+    /// Spawn `<driver> mcp` and complete the MCP handshake with the default
+    /// [`DriverTimeouts`].
     pub async fn spawn(driver: &Path) -> anyhow::Result<Self> {
+        Self::spawn_with(driver, DriverTimeouts::default()).await
+    }
+
+    /// Spawn `<driver> mcp` and complete the MCP handshake within
+    /// `timeouts.handshake`; a child that has not answered by then is killed
+    /// and the error names the driver.
+    pub async fn spawn_with(driver: &Path, timeouts: DriverTimeouts) -> anyhow::Result<Self> {
         let config = McpServerConfig {
             name: "cua-driver".to_owned(),
             url: None,
@@ -96,9 +136,34 @@ impl StdioDriverTransport {
             trust: Default::default(),
             enabled_tools: Vec::new(),
         };
-        let (sink, keep_alive) = crate::services::mcp::connect_stdio(&config).await?;
+        // On expiry the connect future is dropped with the child process
+        // still inside it, which kills the child.
+        let connected = tokio::time::timeout(
+            timeouts.handshake,
+            crate::services::mcp::connect_stdio(&config),
+        )
+        .await;
+        let (sink, keep_alive) = match connected {
+            Ok(connection) => {
+                connection.with_context(|| format!("could not start {} mcp", driver.display()))?
+            }
+            Err(_elapsed) => anyhow::bail!(
+                "{} mcp did not complete the MCP handshake within {:?}",
+                driver.display(),
+                timeouts.handshake
+            ),
+        };
         log::info!("[cua] driver started: {} mcp", driver.display());
-        Ok(Self { sink, keep_alive })
+        Ok(Self {
+            sink,
+            keep_alive,
+            timeouts,
+        })
+    }
+
+    /// The deadlines this transport holds the driver to.
+    pub fn timeouts(&self) -> DriverTimeouts {
+        self.timeouts
     }
 
     /// Stop the driver child; the process is killed when the connection drops.
@@ -108,16 +173,36 @@ impl StdioDriverTransport {
     }
 }
 
+/// One `tools/call` that rmcp cancels (with a `notifications/cancelled` to
+/// the driver) when `deadline` passes.
+async fn call_tool_within(
+    sink: &ServerSink,
+    params: CallToolRequestParams,
+    deadline: Duration,
+) -> Result<CallToolResult, ServiceError> {
+    let request = ClientRequest::CallToolRequest(CallToolRequest::new(params));
+    let options = PeerRequestOptions::with_timeout(deadline);
+    let handle = sink.send_request_with_option(request, options).await?;
+    match handle.await_response().await? {
+        ServerResult::CallToolResult(result) => Ok(result),
+        _ => Err(ServiceError::UnexpectedResponse),
+    }
+}
+
 impl DriverTransport for StdioDriverTransport {
     fn call_tool(&self, name: &str, arguments: Map<String, Value>) -> TransportFuture<'_> {
         let mut params = CallToolRequestParams::new(name.to_owned());
         params.arguments = Some(arguments);
+        let name = name.to_owned();
         Box::pin(async move {
-            let result = self
-                .sink
-                .call_tool(params)
+            let result = call_tool_within(&self.sink, params, self.timeouts.call)
                 .await
-                .map_err(|error| DriverCallFailure::Transport(error.to_string()))?;
+                .map_err(|error| match error {
+                    ServiceError::Timeout { timeout } => DriverCallFailure::Timeout(format!(
+                        "{name} did not answer within {timeout:?}; the request was cancelled"
+                    )),
+                    other => DriverCallFailure::Transport(other.to_string()),
+                })?;
             payload_from_call_result(result)
         })
     }
@@ -243,6 +328,160 @@ mod tests {
             .block_on(StdioDriverTransport::spawn(&missing))
             .err()
             .expect("a missing binary cannot be spawned");
-        assert!(!error.to_string().is_empty());
+        assert!(
+            error.to_string().contains("nolune-no-such-cua-driver"),
+            "names the driver: {error}"
+        );
+    }
+
+    /// An executable shell script standing in for a driver binary.
+    ///
+    /// It is run once before it is returned: macOS scans a freshly written
+    /// executable on its first run, which takes one to two seconds on this
+    /// host and must not count against the deadlines under test.
+    #[cfg(unix)]
+    fn script(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(name);
+        std::fs::write(
+            &path,
+            format!("#!/bin/sh\n[ \"$1\" = warm-up ] && exit 0\n{body}"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let warmed = std::process::Command::new(&path)
+            .arg("warm-up")
+            .status()
+            .unwrap();
+        assert!(warmed.success(), "{}", path.display());
+        path
+    }
+
+    /// A stdio MCP server that completes the `initialize` handshake and then
+    /// never answers another request: the shape of a driver stuck behind a
+    /// TCC prompt.
+    #[cfg(unix)]
+    const HANDSHAKE_ONLY_SERVER: &str = r#"
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"stub","version":"0"}}}\n' "$id"
+      ;;
+  esac
+done
+"#;
+
+    /// Whether a process with this id still exists (a reaped one does not).
+    #[cfg(unix)]
+    fn process_exists(pid: &str) -> bool {
+        std::process::Command::new("kill")
+            .args(["-0", pid])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_driver_that_never_speaks_mcp_fails_the_handshake_within_the_deadline() {
+        use std::time::{Duration, Instant};
+
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        let silent = script(
+            dir.path(),
+            "silent-driver",
+            &format!("echo $$ > '{}'\nexec sleep 60\n", pid_file.display()),
+        );
+        let timeouts = DriverTimeouts {
+            handshake: Duration::from_millis(500),
+            call: Duration::from_secs(1),
+        };
+
+        let started = Instant::now();
+        let error = StdioDriverTransport::spawn_with(&silent, timeouts)
+            .await
+            .err()
+            .expect("a child that never answers initialize is not a driver");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the handshake deadline bounds spawn, took {:?}",
+            started.elapsed()
+        );
+        let message = error.to_string();
+        assert!(message.contains("handshake"), "{message}");
+        assert!(
+            message.contains("silent-driver"),
+            "names the driver: {message}"
+        );
+
+        // The child does not outlive the failed handshake.
+        let pid = loop {
+            if let Ok(pid) = std::fs::read_to_string(&pid_file) {
+                break pid.trim().to_owned();
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "the child never reached its first line"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        assert!(!pid.is_empty());
+        let gone_by = Instant::now() + Duration::from_secs(5);
+        while process_exists(&pid) && Instant::now() < gone_by {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(!process_exists(&pid), "child {pid} was left running");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_tool_call_the_driver_never_answers_fails_as_a_timeout() {
+        use std::time::{Duration, Instant};
+
+        let dir = tempfile::tempdir().unwrap();
+        let stub = script(dir.path(), "stub-driver", HANDSHAKE_ONLY_SERVER);
+        let timeouts = DriverTimeouts {
+            handshake: Duration::from_secs(10),
+            call: Duration::from_millis(500),
+        };
+        let transport = StdioDriverTransport::spawn_with(&stub, timeouts)
+            .await
+            .expect("the stub completes the handshake");
+        assert_eq!(transport.timeouts(), timeouts);
+
+        let started = Instant::now();
+        let outcome = transport.call_tool("health_report", Map::new()).await;
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the call deadline bounds call_tool, took {:?}",
+            started.elapsed()
+        );
+        match outcome {
+            Err(DriverCallFailure::Timeout(message)) => {
+                assert!(message.contains("health_report"), "{message}");
+                assert!(message.contains("500ms"), "{message}");
+            }
+            other => panic!("expected a timeout, got {other:?}"),
+        }
+
+        // A cancelled call does not wedge the connection: the next call gets
+        // its own deadline instead of waiting behind the first.
+        let again = transport.call_tool("list_apps", Map::new()).await;
+        assert!(
+            matches!(again, Err(DriverCallFailure::Timeout(_))),
+            "{again:?}"
+        );
+        transport.shutdown();
+    }
+
+    #[test]
+    fn the_default_deadlines_are_generous_but_finite() {
+        let defaults = DriverTimeouts::default();
+        assert!(defaults.handshake >= std::time::Duration::from_secs(5));
+        assert!(defaults.call >= std::time::Duration::from_secs(15));
+        assert!(defaults.call <= std::time::Duration::from_secs(120));
     }
 }

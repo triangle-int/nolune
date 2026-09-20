@@ -257,6 +257,31 @@ mod tests {
         assert_eq!(calls[1].1["on_screen_only"], false);
     }
 
+    #[tokio::test]
+    async fn a_call_the_transport_cancelled_surfaces_as_a_retryable_timeout() {
+        let transport = Arc::new(FakeTransport::answering([Err(DriverCallFailure::Timeout(
+            "list_apps did not answer within 30s".into(),
+        ))]));
+        let adapter = checked_adapter(
+            transport.clone(),
+            descriptor(vec![Capability::AppDiscovery]),
+        )
+        .unwrap();
+
+        let apps = request(CuaAction::ListApps(EmptyArgs {}));
+        let response = adapter.execute(&apps).await.unwrap();
+        assert_eq!(response.request_id, apps.request_id);
+        match response.response {
+            CuaResponse::Error { error } => {
+                assert_eq!(error.code, RuntimeErrorCode::Timeout);
+                assert!(error.retryable, "a slow driver is worth another try");
+                assert!(error.message.as_str().contains("30s"));
+            }
+            other => panic!("a cancelled call is a typed timeout, got {other:?}"),
+        }
+        assert_eq!(transport.calls().len(), 1);
+    }
+
     /// Round-trips through a real `cua-driver mcp` child. Run it by hand with
     /// `--ignored` on a host that has the driver installed; it only reads.
     #[tokio::test]

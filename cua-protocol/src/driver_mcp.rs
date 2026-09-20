@@ -39,6 +39,9 @@ pub struct DriverToolCall {
 pub enum DriverCallFailure {
     /// The driver could not be reached or the RPC itself failed.
     Transport(String),
+    /// The driver did not answer within the transport's deadline and the
+    /// request was cancelled; the driver itself is still there.
+    Timeout(String),
     /// The driver answered `isError: true`; `code` is its structured error
     /// code when it sent one.
     Tool {
@@ -365,6 +368,7 @@ fn tool_error_code(text: &str) -> Option<(RuntimeErrorCode, bool)> {
 fn classify(failure: &DriverCallFailure) -> (RuntimeErrorCode, bool) {
     match failure {
         DriverCallFailure::Transport(_) => (RuntimeErrorCode::RuntimeUnavailable, true),
+        DriverCallFailure::Timeout(_) => (RuntimeErrorCode::Timeout, true),
         DriverCallFailure::Malformed(_) => (RuntimeErrorCode::DriverFailure, false),
         DriverCallFailure::Tool { code, message } => code
             .as_deref()
@@ -402,6 +406,7 @@ pub fn error_response(
     let (code, retryable) = classify(failure);
     let raw = match failure {
         DriverCallFailure::Transport(message)
+        | DriverCallFailure::Timeout(message)
         | DriverCallFailure::Tool { message, .. }
         | DriverCallFailure::Malformed(message) => message,
     };

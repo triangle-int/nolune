@@ -765,6 +765,21 @@ fn driver_failures_become_typed_runtime_errors() {
     ));
     assert_eq!(error.code, RuntimeErrorCode::DriverFailure);
     assert!(!error.retryable);
+
+    // A call the transport cancelled at its deadline is a retryable timeout,
+    // not an unavailable runtime: the driver is still there, it was slow.
+    let envelope = error_response(
+        &req,
+        &DriverCallFailure::Timeout("get_window_state did not answer within 30s".into()),
+    );
+    envelope.validate_response_for(&req).unwrap();
+    let error = runtime_error(envelope);
+    assert_eq!(error.code, RuntimeErrorCode::Timeout);
+    assert!(error.retryable);
+    assert_eq!(
+        error.message.as_str(),
+        "get_window_state did not answer within 30s"
+    );
 }
 
 #[test]
@@ -805,6 +820,9 @@ fn response_for_decodes_successes_and_wraps_every_failure() {
         runtime_error(failed).code,
         RuntimeErrorCode::RuntimeUnavailable
     );
+
+    let late = response_for(&req, Err(DriverCallFailure::Timeout("slow".into())));
+    assert_eq!(runtime_error(late).code, RuntimeErrorCode::Timeout);
 }
 
 #[test]
