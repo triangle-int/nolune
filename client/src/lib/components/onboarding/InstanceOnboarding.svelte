@@ -57,11 +57,15 @@
 	let revealed = $state(false);
 	let firstMessage = $state("");
 	let companionNameInput = $state("");
-	let selectedProvider = $state<"anthropic" | "openai">("anthropic");
-	const providerLabel = $derived(selectedProvider === "openai" ? "OpenAI" : "Anthropic");
-	const providerKeyUrl = $derived(selectedProvider === "openai"
-		? "https://platform.openai.com/api-keys"
-		: "https://console.anthropic.com/settings/keys");
+	type OnboardingProvider = "anthropic" | "openai" | "openrouter";
+	const providerInfo: Record<OnboardingProvider, { label: string; keyUrl: string; placeholder: string }> = {
+		anthropic: { label: "Anthropic", keyUrl: "https://console.anthropic.com/settings/keys", placeholder: "sk-ant-..." },
+		openai: { label: "OpenAI", keyUrl: "https://platform.openai.com/api-keys", placeholder: "sk-..." },
+		openrouter: { label: "OpenRouter", keyUrl: "https://openrouter.ai/settings/keys", placeholder: "sk-or-..." },
+	};
+	let selectedProvider = $state<OnboardingProvider>("anthropic");
+	const providerLabel = $derived(providerInfo[selectedProvider].label);
+	const providerKeyUrl = $derived(providerInfo[selectedProvider].keyUrl);
 	let apiKeyInput = $state("");
 	let apiKeyError = $state("");
 	let messageInput: HTMLTextAreaElement | undefined = $state();
@@ -225,7 +229,7 @@
 		stage = "picking-provider";
 	}
 
-	async function pickProvider(provider: "anthropic" | "openai") {
+	async function pickProvider(provider: OnboardingProvider) {
 		selectedProvider = provider;
 		apiKeyInput = "";
 		apiKeyError = "";
@@ -374,7 +378,7 @@
 
 			{#if stage === "picking-provider"}
 				<div class="ob-enter">
-					<div class="ob-pills ob-pills-soul">
+					<div class="ob-pills ob-pills-soul ob-pills-providers">
 						<button onclick={() => pickProvider("anthropic")} class="ob-pill ob-pill-col ob-pill-soul">
 							<span class="ob-pill-label">Anthropic</span>
 							<span class="ob-pill-note">pay-per-use</span>
@@ -382,6 +386,10 @@
 						<button onclick={() => pickProvider("openai")} class="ob-pill ob-pill-col ob-pill-soul">
 							<span class="ob-pill-label">OpenAI</span>
 							<span class="ob-pill-note">pay-per-use</span>
+						</button>
+						<button onclick={() => pickProvider("openrouter")} class="ob-pill ob-pill-col ob-pill-soul">
+							<span class="ob-pill-label">OpenRouter</span>
+							<span class="ob-pill-note">many vendors, one key</span>
 						</button>
 					</div>
 				</div>
@@ -397,7 +405,7 @@
                             bind:this={apiKeyInputEl}
 							bind:value={apiKeyInput}
 							onkeydown={handleKeyKeydown}
-							placeholder={selectedProvider === "openai" ? "sk-..." : "sk-ant-..."}
+							placeholder={providerInfo[selectedProvider].placeholder}
 							class="ob-input ob-input-mono"
 							type="password"
 							autofocus
@@ -520,6 +528,7 @@
 	.ob-pills { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 	.ob-pills-lang { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.375rem; }
 	.ob-pills-soul { display: grid; grid-template-columns: repeat(2, 1fr); }
+	.ob-pills-providers { grid-template-columns: repeat(3, 1fr); }
 
 	.ob-pill {
 		min-height: 44px;
