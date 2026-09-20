@@ -771,9 +771,34 @@ async fn a_descriptor_for_another_machine_or_the_server_location_refuses_the_reg
     assert!(h.list_machines().await.contains("No machines connected"));
 }
 
+/// Review finding on #196: the server-local target registers in the
+/// background after the listener is up, so a desktop claiming its id could
+/// connect first and block it for the life of the process. The prefix is
+/// reserved: such a registration is refused whether the target is there
+/// yet or not, and the runtime registers as if nothing happened.
 #[tokio::test]
-async fn a_desktop_claiming_the_server_local_id_keeps_the_legacy_registration_only() {
+async fn a_desktop_claiming_the_server_local_id_is_refused_before_and_after_the_target_registers() {
     let h = harness().await;
+    let claim = || {
+        register(
+            "server-local:studio",
+            Some(cua_field("server-local:studio", MachineLocation::Desktop)),
+        )
+    };
+
+    // Before the runtime got there: refused like any bad descriptor.
+    let (mut desktop, first) = FakeDesktop::connect(h.addr, claim()).await;
+    assert_eq!(first["type"], "error", "{first}");
+    assert_eq!(first["error"], "invalid_cua_registration");
+    assert!(first["message"].as_str().unwrap().contains("reserved"));
+    assert!(desktop.closed().await);
+    assert!(h.state.machine_registry.cua().list().await.is_empty());
+    assert!(
+        h.state.machine_registry.list().await.is_empty(),
+        "nothing registered, legacy included"
+    );
+
+    // The runtime registers the real target under that id.
     let local = descriptor("server-local:studio", MachineLocation::ServerLocal);
     let adapter = CheckedCuaAdapter::new(local.clone(), |request| {
         let response = CuaResponseEnvelope {
@@ -793,27 +818,22 @@ async fn a_desktop_claiming_the_server_local_id_keeps_the_legacy_registration_on
         .cua()
         .register_server_local(adapter, "studio", 1_700_000_000)
         .await
-        .unwrap();
+        .expect("the desktop that came first never took the id");
 
-    let (desktop, ack) = FakeDesktop::connect(
-        h.addr,
-        register(
-            "server-local:studio",
-            Some(cua_field("server-local:studio", MachineLocation::Desktop)),
-        ),
-    )
-    .await;
-    assert_eq!(ack["type"], "registered");
-    assert_eq!(ack["cua"], false, "the typed target was refused: {ack}");
+    // After: refused the same way, the target untouched.
+    let (mut desktop, again) = FakeDesktop::connect(h.addr, claim()).await;
+    assert_eq!(again["type"], "error", "{again}");
+    assert_eq!(again["error"], "invalid_cua_registration");
+    assert!(desktop.closed().await);
     assert_eq!(
         h.state.machine_registry.cua().list().await,
         vec![local],
         "the server-local target is never shadowed"
     );
-    assert_eq!(
-        h.state.machine_registry.list().await.len(),
-        1,
-        "the legacy registration stands"
+    assert!(h.state.machine_registry.list().await.is_empty());
+    let listing = h.list_machines().await;
+    assert!(
+        listing.contains("server-local:studio") && listing.contains("server_local"),
+        "{listing}"
     );
-    desktop.close().await;
 }

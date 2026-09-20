@@ -40,9 +40,14 @@ pub enum DesktopFrame {
 }
 
 /// The descriptor a registration's `cua` field carries, accepted only when
-/// it names the machine the socket registered as and a desktop location:
-/// the descriptor is bound to the authenticated socket, never the other way
-/// round, and a desktop never registers as the server machine.
+/// it names the machine the socket registered as, a desktop location, and
+/// an id outside the server machine's reserved prefix: the descriptor is
+/// bound to the authenticated socket, never the other way round, and a
+/// desktop never registers as the server machine, nor under its id. The
+/// prefix is refused whether or not the server-local target is registered
+/// yet, because it registers in the background after the listener is up
+/// and a desktop that took its id first would block it for the life of the
+/// process.
 pub fn accept_registration(machine_id: &str, cua: &Value) -> Result<MachineDescriptor, String> {
     let envelope =
         CuaRegistrationEnvelope::from_json(&cua.to_string()).map_err(|error| error.to_string())?;
@@ -56,7 +61,24 @@ pub fn accept_registration(machine_id: &str, cua: &Value) -> Result<MachineDescr
     if descriptor.location != MachineLocation::Desktop {
         return Err("a desktop registers as a desktop target, never as the server machine".into());
     }
+    if let Some(reason) = reserved_machine_id(&descriptor.machine_id) {
+        return Err(reason);
+    }
     Ok(descriptor)
+}
+
+/// Why a desktop may not register a target under `machine_id`: the
+/// `server-local:` prefix names the machine the server runs on (#16).
+pub fn reserved_machine_id(machine_id: &MachineId) -> Option<String> {
+    machine_id
+        .as_str()
+        .starts_with(crate::services::cua::host::SERVER_LOCAL_PREFIX)
+        .then(|| {
+            format!(
+                "machine id '{}' is reserved for the server-local target",
+                machine_id.as_str()
+            )
+        })
 }
 
 /// What one `cua_response` frame did.
@@ -466,6 +488,19 @@ mod tests {
             accept_registration(STUDIO, &registration(STUDIO, MachineLocation::ServerLocal))
                 .unwrap_err();
         assert!(local.to_string().contains("desktop"), "{local}");
+
+        // The `server-local:` prefix is the server machine's own (#16), so a
+        // desktop claiming it is refused whether or not that target is
+        // registered yet: registering first must never block or shadow it.
+        let reserved = accept_registration(
+            "server-local:studio",
+            &registration("server-local:studio", MachineLocation::Desktop),
+        )
+        .unwrap_err();
+        assert!(
+            reserved.contains("server-local:") && reserved.contains("reserved"),
+            "{reserved}"
+        );
 
         // The protocol's own checks still apply: shape, unknown fields, bounds.
         let mut unknown = registration(STUDIO, MachineLocation::Desktop);

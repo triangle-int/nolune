@@ -450,9 +450,11 @@ async fn wait_for_registration(
                             }
                             let connection = state.machine_registry.register(info, tx).await;
 
-                            // The typed target (#17) beside the legacy registration:
-                            // a refusal (the id belongs to the server-local target)
-                            // keeps the legacy toolcalls working and is logged.
+                            // The typed target (#17) beside the legacy registration.
+                            // A refusal here (the socket was replaced between the
+                            // two steps) keeps the legacy toolcalls working and is
+                            // logged; a descriptor under the server-local prefix
+                            // never gets this far (`cua_descriptor`).
                             let mut cua = false;
                             if let Some(descriptor) = descriptor {
                                 let call_timeout = state.config.read().await.cua.timeouts().call;
@@ -734,6 +736,13 @@ mod registration_tests {
             "cua": cua_envelope(STABLE_ID, cua_protocol::MachineLocation::ServerLocal),
         }));
         assert!(local.cua_descriptor().is_err());
+        // The server machine's id prefix is reserved even for a desktop
+        // descriptor that is otherwise its own (review finding on #196).
+        let reserved = registration(serde_json::json!({
+            "machine_id": "server-local:studio",
+            "cua": cua_envelope("server-local:studio", cua_protocol::MachineLocation::Desktop),
+        }));
+        assert!(reserved.cua_descriptor().unwrap_err().contains("reserved"));
         let garbage = registration(serde_json::json!({"cua": {"version": "v1"}}));
         assert!(garbage.cua_descriptor().is_err());
     }

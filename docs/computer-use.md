@@ -77,7 +77,9 @@ the protocol's identifier grammar (letters, digits, `-`, `_`, `.`), at most
 hostname before #80), so the server and a desktop app on the same physical
 machine never share an id, and a request that names one of them can never
 mean the other. A desktop registration that claims the `server-local:`
-prefix does not shadow the real target in the listing.
+prefix does not shadow the real target in the listing, and a desktop Cua
+descriptor under that prefix is refused outright (below), so the target
+registers whether the desktop connected before or after it.
 
 ## How it appears
 
@@ -136,9 +138,13 @@ registers over the authenticated machine WebSocket
 
 `cua` is a `CuaRegistrationEnvelope`, decoded through the protocol's bounds.
 It is accepted only when its `machine_id` is the id the socket registered
-as and its `location` is `desktop`; anything else refuses the whole
-registration with `{"type": "error", "error": "invalid_cua_registration"}`,
-like an unusable machine id. Without the field the desktop is a legacy-only
+as, its `location` is `desktop`, and the id is not under the reserved
+`server-local:` prefix; anything else refuses the whole registration with
+`{"type": "error", "error": "invalid_cua_registration"}`, like an unusable
+machine id. The prefix is refused whether or not the server-local target
+has registered yet: it registers in the background after the listener is
+up, and a desktop that took its id first would block it for the life of
+the process. Without the field the desktop is a legacy-only
 computer: `remote_bash`, `remote_files` and coordinate `computer_use` work
 as they always did and it never sees a typed frame. The ack
 `{"type": "registered", "machine_id": ..., "cua": true|false}` says which.
@@ -151,8 +157,9 @@ beside the server-local one: `list_machines` lists it with
 carries `driver_version` and `cua_health` while it is connected. When the
 registration reports no `permissions`, the descriptor's are recorded.
 A desktop reconnecting under its stable id replaces its target; it never
-becomes a second one. A descriptor that claims the server-local target's id
-is refused (logged, `"cua": false`), and the legacy registration stands.
+becomes a second one. The ack's `"cua": false` after a descriptor was sent
+means the socket was replaced between the legacy registration and the
+typed one (logged); the legacy registration stands.
 
 Every authorized request is one frame on the desktop's socket, the envelope
 carried whole so the desktop decodes it with `CuaRequestEnvelope::from_json`

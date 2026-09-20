@@ -240,9 +240,11 @@ impl CuaTargets {
     /// Add a desktop target (#17) executing over `link`, or replace the one
     /// an earlier connection of the same desktop left behind: a reconnect
     /// under the stable id is the same computer, never a second one. Refused
-    /// when the id belongs to a target that is not a desktop, so the
-    /// server-local target is never shadowed. Returns whether a previous
-    /// desktop target was replaced.
+    /// under the server machine's reserved id prefix, registered or not yet
+    /// (the runtime registers in the background; a desktop that took the id
+    /// first would block it), and when the id belongs to a target that is
+    /// not a desktop, so the server-local target is never shadowed. Returns
+    /// whether a previous desktop target was replaced.
     pub async fn register_desktop(
         &self,
         link: &Arc<DesktopLink>,
@@ -250,6 +252,9 @@ impl CuaTargets {
     ) -> Result<bool, CuaRegistrationError> {
         let descriptor = adapter.descriptor();
         let id = descriptor.machine_id.clone();
+        if let Some(reason) = crate::services::cua::desktop::reserved_machine_id(&id) {
+            return Err(CuaRegistrationError::Invalid(reason));
+        }
         let mut targets = self.targets.lock().await;
         let replaced = match targets.get(&id) {
             Some(existing)
@@ -2899,10 +2904,29 @@ mod desktop_cua_tests {
                     fake_adapter(impostor)
                 )
                 .await,
-            Err(CuaRegistrationError::DuplicateMachineId(id(
-                "server-local:studio"
-            )))
+            Err(CuaRegistrationError::Invalid(
+                "machine id 'server-local:studio' is reserved for the server-local target".into()
+            ))
         );
+        // A target of another location under an ordinary id (only the test
+        // registration can make one) is a duplicate, not reserved.
+        targets
+            .register(fake_adapter(descriptor(
+                "elsewhere",
+                MachineLocation::ServerLocal,
+            )))
+            .await
+            .unwrap();
+        assert_eq!(
+            targets
+                .register_desktop(
+                    &dangling_link("elsewhere"),
+                    fake_adapter(descriptor("elsewhere", MachineLocation::Desktop))
+                )
+                .await,
+            Err(CuaRegistrationError::DuplicateMachineId(id("elsewhere")))
+        );
+        assert!(targets.unregister(&id("elsewhere")).await);
         assert_eq!(
             targets.list().await,
             vec![again, local.clone()],
@@ -3156,15 +3180,22 @@ mod desktop_cua_tests {
         assert_eq!(first_link.pending(), 0);
     }
 
+    /// Review finding on #196: the server-local target registers in the
+    /// background after the listener is up, seconds after a desktop can
+    /// connect, and `CuaTargets::insert` refuses a duplicate id. A desktop
+    /// claiming `server-local:<host>` before the runtime got there used to
+    /// take the id and fail the runtime for the life of the process. The
+    /// prefix is reserved: refused before and after, whatever the order.
     #[tokio::test]
     async fn a_desktop_never_shadows_the_server_local_target() {
         let registry = MachineRegistry::new();
         let local = descriptor("server-local:studio", MachineLocation::ServerLocal);
-        registry
-            .cua()
-            .register_server_local(fake_adapter(local.clone()), "studio", T0)
-            .await
-            .unwrap();
+        let reserved = CuaRegistrationError::Invalid(
+            "machine id 'server-local:studio' is reserved for the server-local target".into(),
+        );
+
+        // The desktop is first: its typed target is refused, nothing is
+        // registered under the id...
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let connection = registry
             .register(desktop("server-local:studio", T0), tx)
@@ -3179,18 +3210,62 @@ mod desktop_cua_tests {
                 )
                 .await
                 .err(),
-            Some(CuaRegistrationError::DuplicateMachineId(id(
-                "server-local:studio"
-            )))
+            Some(reserved.clone())
         );
-        assert_eq!(registry.cua().list().await, vec![local]);
+        assert!(registry.cua().list().await.is_empty());
         assert!(
             registry
                 .desktop_cua_link("server-local:studio")
                 .await
                 .is_none()
         );
-        // The legacy registration itself stands (remote_bash keeps working).
+        // ...so the runtime registers its target as if nothing happened.
+        registry
+            .cua()
+            .register_server_local(fake_adapter(local.clone()), "studio", T0)
+            .await
+            .expect("a desktop registering first never blocks the server-local target");
+        assert_eq!(registry.cua().list().await, vec![local.clone()]);
+
+        // The desktop tries again with the target present: refused the same
+        // way, and the target is untouched.
+        assert_eq!(
+            registry
+                .attach_desktop_cua(
+                    "server-local:studio",
+                    connection,
+                    descriptor("server-local:studio", MachineLocation::Desktop),
+                    CALL_TIMEOUT
+                )
+                .await
+                .err(),
+            Some(reserved.clone())
+        );
+        assert_eq!(registry.cua().list().await, vec![local.clone()]);
+        assert!(
+            registry
+                .desktop_cua_link("server-local:studio")
+                .await
+                .is_none()
+        );
+        // The legacy registration itself stands (remote_bash keeps working);
+        // the listing already keeps such a record from shadowing the target.
         assert_eq!(registry.list().await.len(), 1);
+
+        // The rule is the registry's own, not only the route's: a desktop
+        // target under the prefix is refused at `CuaTargets` too.
+        assert_eq!(
+            registry
+                .cua()
+                .register_desktop(
+                    &dangling_link("server-local:other"),
+                    fake_adapter(descriptor("server-local:other", MachineLocation::Desktop))
+                )
+                .await,
+            Err(CuaRegistrationError::Invalid(
+                "machine id 'server-local:other' is reserved for the server-local target".into()
+            ))
+        );
+        assert_eq!(registry.cua().list().await, vec![local]);
     }
 }
