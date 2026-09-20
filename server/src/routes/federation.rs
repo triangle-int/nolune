@@ -8,8 +8,8 @@
 //! * `GET /api/federation/peers` lists this companion's identity, invites, and peers.
 //! * `POST /api/federation/peers/{companion_id}/confirm` pairs a pending peer.
 //! * `POST /api/federation/peers/{companion_id}/revoke` withdraws trust.
-//! * `POST /api/federation/rotate` replaces this companion's key and tells
-//!   every paired peer.
+//! * `POST /api/federation/rotate` replaces this companion's key, withdraws
+//!   invites and pending pairings, and tells every paired peer.
 //!
 //! Peer side, public, verified by signature only:
 //!

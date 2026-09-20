@@ -12,7 +12,9 @@
 //! A rotation (`rotate`) re-keys a record to the peer's new identity under
 //! the same lock and keeps the rotation in the record's history; a sender id
 //! that was rotated away resolves to the record for a grace window and then
-//! retires (`resolve_sender`).
+//! retires (`resolve_sender`). This server's own rotation revokes every
+//! pending record in one write (`revoke_pending`): those handshakes were
+//! started under the identity being retired.
 //!
 //! Invites live in memory only: an invite is a short-lived, one-time secret
 //! that the issuing owner sees exactly once, and the store keeps just a
@@ -425,6 +427,32 @@ impl PeerStore {
         };
         self.persist(&inner)?;
         Ok(Some(inner.peers[index].clone()))
+    }
+
+    /// Marks every pending record revoked under the store lock, in one
+    /// write; returns how many there were. Paired and revoked records are
+    /// untouched. A rotation calls this: a pending handshake was started
+    /// under the identity being retired and cannot finish under the new
+    /// one. Fails closed over a store file this build could not load.
+    pub fn revoke_pending(&self) -> Result<usize, FederationError> {
+        let now = (self.clock)();
+        let mut inner = self.inner.lock().unwrap();
+        self.ensure_loaded(&mut inner);
+        self.refuse_if_unloadable(&inner)?;
+        let mut revoked = 0;
+        for peer in &mut inner.peers {
+            if peer.record.state != PeerState::Pending {
+                continue;
+            }
+            peer.record.state = PeerState::Revoked;
+            peer.record.pending_origin = None;
+            peer.record.updated_at = now;
+            revoked += 1;
+        }
+        if revoked > 0 {
+            self.persist(&inner)?;
+        }
+        Ok(revoked)
     }
 
     /// Withdraws every outstanding invite; returns how many there were.
@@ -1261,6 +1289,84 @@ mod tests {
             "the newest transitions are kept"
         );
         assert_eq!(store.list().len(), 1);
+    }
+
+    /// A rotation revokes every pending pairing under one lock and one
+    /// write; paired and revoked records are untouched, and a store with
+    /// nothing pending is not rewritten.
+    #[test]
+    fn revoking_every_pending_record_leaves_the_others_alone() {
+        let (tmp, now, store) = store();
+        let issuing = identity("issuing");
+        let accepting = identity("accepting");
+        let paired = identity("paired");
+        let revoked = identity("revoked");
+        let mut pending_issuer = record(&issuing, PeerState::Pending);
+        pending_issuer.approved_origins.clear();
+        pending_issuer.pending_origin = Some("https://issuing.example".into());
+        let mut pending_accepter = record(&accepting, PeerState::Pending);
+        pending_accepter.role = PairingRole::Accepter;
+        for (record, identity) in [
+            (pending_issuer.clone(), &issuing),
+            (pending_accepter.clone(), &accepting),
+            (record(&paired, PeerState::Paired), &paired),
+            (record(&revoked, PeerState::Revoked), &revoked),
+        ] {
+            store.upsert(record, identity.verified().clone()).unwrap();
+        }
+
+        now.store(T0 + 50, Ordering::SeqCst);
+        assert_eq!(store.revoke_pending().unwrap(), 2);
+        for (identity, role) in [
+            (&issuing, PairingRole::Issuer),
+            (&accepting, PairingRole::Accepter),
+        ] {
+            let record = store.get(identity.companion_id()).unwrap().record;
+            assert_eq!(record.state, PeerState::Revoked);
+            assert_eq!(record.role, role, "the role is kept for the listing");
+            assert_eq!(record.pending_origin, None, "nothing left to approve");
+            assert_eq!(record.updated_at, T0 + 50);
+            assert_eq!(record.created_at, T0);
+        }
+        let untouched = store.get(paired.companion_id()).unwrap().record;
+        assert_eq!(untouched, record(&paired, PeerState::Paired));
+        let untouched = store.get(revoked.companion_id()).unwrap().record;
+        assert_eq!(untouched, record(&revoked, PeerState::Revoked));
+
+        // Persisted in one write, and reloaded verified.
+        let reloaded = PeerStore::with_clock(tmp.path(), system_clock());
+        let states: Vec<_> = reloaded
+            .list()
+            .into_iter()
+            .map(|record| record.state)
+            .collect();
+        assert_eq!(
+            states,
+            vec![
+                PeerState::Revoked,
+                PeerState::Revoked,
+                PeerState::Paired,
+                PeerState::Revoked
+            ]
+        );
+        assert!(reloaded.get(issuing.companion_id()).is_some());
+
+        // Nothing pending: nothing changes and the file is not rewritten.
+        let before = std::fs::metadata(store.path()).unwrap().modified().unwrap();
+        assert_eq!(store.revoke_pending().unwrap(), 0);
+        assert_eq!(
+            std::fs::metadata(store.path()).unwrap().modified().unwrap(),
+            before
+        );
+
+        // An unloadable store fails closed here too.
+        std::fs::write(store.path(), "not json").unwrap();
+        let unloadable = PeerStore::with_clock(tmp.path(), system_clock());
+        assert!(matches!(
+            unloadable.revoke_pending().unwrap_err(),
+            FederationError::Io { .. }
+        ));
+        assert_eq!(std::fs::read_to_string(store.path()).unwrap(), "not json");
     }
 
     #[test]

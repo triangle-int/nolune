@@ -31,10 +31,15 @@
 //! (`seal`/`open`, `services::federation::envelope`): addressed, single-use
 //! by nonce, time-bounded, and verified with the key the peer store holds
 //! for the sender, which may be a key the peer rotated away from inside its
-//! grace window. `rotate_identity` replaces this server's key and tells
-//! every paired peer with a notice signed by the old key; `receive_rotation`
-//! verifies such a notice and re-keys the peer's record with an audited
-//! transition.
+//! grace window. `rotate_identity` replaces this server's key, withdraws
+//! its invites, revokes its pending pairings (started under the old key,
+//! they could not finish under the new one), and tells every paired peer
+//! with a notice signed by the old key; `receive_rotation` verifies such a
+//! notice and re-keys the peer's record with an audited transition. The
+//! issuer-side steps choose their signing key and change the peer store
+//! under the identity lock the rotation holds (`with_identity`), so no
+//! pending record is ever confirmed under an identity other than the one
+//! it was started with.
 
 use std::{
     path::{Path, PathBuf},
@@ -238,13 +243,30 @@ impl FederationState {
     /// This companion's signing identity, created under the workspace root
     /// on first use. Fails closed on an unusable keystore.
     pub fn identity(&self) -> Result<Arc<SigningIdentity>, FederationError> {
+        self.with_identity(|identity| Ok(identity.clone()))
+    }
+
+    /// Runs `step` with the current identity while the identity lock is
+    /// held, so a rotation cannot land between choosing the signing key and
+    /// the peer-store change `step` makes with it. The issuer-side pairing
+    /// steps use this: a record they create or confirm is always tied to
+    /// the identity that signs the answer, and `rotate_identity` revokes
+    /// pending records under the same lock. Lock order is identity, then
+    /// the peer store; nothing takes them the other way round.
+    fn with_identity<T>(
+        &self,
+        step: impl FnOnce(&Arc<SigningIdentity>) -> Result<T, FederationError>,
+    ) -> Result<T, FederationError> {
         let mut slot = self.identity.lock().unwrap();
-        if let Some(identity) = slot.as_ref() {
-            return Ok(identity.clone());
-        }
-        let identity = Arc::new(identity::load_or_create(&self.root)?);
-        *slot = Some(identity.clone());
-        Ok(identity)
+        let identity = match slot.as_ref() {
+            Some(identity) => identity.clone(),
+            None => {
+                let identity = Arc::new(identity::load_or_create(&self.root)?);
+                *slot = Some(identity.clone());
+                identity
+            }
+        };
+        step(&identity)
     }
 
     /// Mints an invite for the owner to hand to another owner. `origin` is
@@ -350,13 +372,17 @@ impl FederationState {
 
     /// Replaces this companion's key: the rotation proof is persisted and
     /// the keystore rewritten before anything is sent, outstanding invites
-    /// (which carried the old document) are withdrawn, and every paired peer
-    /// gets a notice signed by the old key. Peers that do not acknowledge
-    /// are reported; the local rotation stands regardless.
+    /// (which carried the old document) are withdrawn, pending pairings
+    /// (started under the old document, on either role) are revoked, and
+    /// every paired peer gets a notice signed by the old key. Peers that do
+    /// not acknowledge are reported; the local rotation stands regardless.
     pub async fn rotate_identity(&self) -> Result<RotationReport, FederationError> {
         // Under the identity lock from the check to the swap, so two
-        // rotations cannot both endorse from the same key.
-        let (previous, next, rotation) = {
+        // rotations cannot both endorse from the same key, and through the
+        // withdrawal of everything the old identity left half done, so no
+        // issuer-side step can confirm a pending record under the new key
+        // (`with_identity`).
+        let (previous, next, rotation, revoked) = {
             let mut slot = self.identity.lock().unwrap();
             let previous = match slot.as_ref() {
                 Some(identity) => identity.clone(),
@@ -365,9 +391,23 @@ impl FederationState {
             let (next, rotation) = identity::rotate_at(&self.root, &previous, (self.clock)())?;
             let next = Arc::new(next);
             *slot = Some(next.clone());
-            (previous, next, rotation)
+            self.peers.cancel_all_invites();
+            // The rotation already stands; a store this build cannot load
+            // refuses every pairing write anyway, so nothing pending in it
+            // can be confirmed either.
+            let revoked = self.peers.revoke_pending().unwrap_or_else(|error| {
+                log::warn!(
+                    "[federation] pending pairings could not be revoked by the rotation: {error}"
+                );
+                0
+            });
+            (previous, next, rotation, revoked)
         };
-        self.peers.cancel_all_invites();
+        if revoked > 0 {
+            log::info!(
+                "[federation] {revoked} pending pairing(s) revoked by the rotation: they were started under the retired identity and must be paired again"
+            );
+        }
         log::info!(
             "[federation] identity rotated: companion {} is now companion {}",
             previous.companion_id(),
@@ -611,22 +651,29 @@ impl FederationState {
         check_version(version)?;
         let accepter_identity = identity::verify_document(&accepter)?;
         identity::verify_envelope(envelope, &accepter_identity)?;
-        let me = self.identity()?;
-        if issuer != me.companion_id() || accepter_identity.public_key == me.verified().public_key {
-            return Err(FederationError::IssuerMismatch);
-        }
-        let origin = normalize_origin(&origin)?;
-        let redeemed = self.peers.redeem_invite(&secret)?;
-        // A companion that was pending, paired, or revoked before starts over:
-        // its owner redeemed a fresh invite, and ours confirms again.
-        let record = self.fresh_record(
-            accepter,
-            PairingRole::Issuer,
-            redeemed.id.clone(),
-            Vec::new(),
-            Some(origin),
-        );
-        let record = self.peers.upsert(record, accepter_identity)?;
+        // Under the identity lock: the record is created under the identity
+        // that answers, and a rotation landing meanwhile either finds it
+        // (and revokes it) or has already withdrawn the invite.
+        let (me, record, redeemed) = self.with_identity(|me| {
+            if issuer != me.companion_id()
+                || accepter_identity.public_key == me.verified().public_key
+            {
+                return Err(FederationError::IssuerMismatch);
+            }
+            let origin = normalize_origin(&origin)?;
+            let redeemed = self.peers.redeem_invite(&secret)?;
+            // A companion that was pending, paired, or revoked before starts
+            // over: its owner redeemed a fresh invite, and ours confirms again.
+            let record = self.fresh_record(
+                accepter,
+                PairingRole::Issuer,
+                redeemed.id.clone(),
+                Vec::new(),
+                Some(origin),
+            );
+            let record = self.peers.upsert(record, accepter_identity)?;
+            Ok((me.clone(), record, redeemed))
+        })?;
         log::info!(
             "[federation] pairing {}: companion {} redeemed the invite, waiting for the owner",
             record.pairing_id,
@@ -650,31 +697,38 @@ impl FederationState {
     ///
     /// The state check and the transition run under the store lock, so a
     /// revoke that lands meanwhile wins: the confirmation then fails with
-    /// `PeerRevoked` and nothing is sent.
+    /// `PeerRevoked` and nothing is sent. They also run under the identity
+    /// lock, with the key that signs the notice chosen there, so a rotation
+    /// that lands meanwhile wins the same way: it revokes the pending record
+    /// first, or the record is paired and told under the key the peer knows.
     pub async fn confirm_peer(
         &self,
         companion_id: &str,
     ) -> Result<(PeerRecord, bool), FederationError> {
         let mut paired_now = false;
         let mut notify = true;
-        let peer = self
-            .peers
-            .update(companion_id, |record| match (record.role, record.state) {
-                (_, PeerState::Revoked) => Err(FederationError::PeerRevoked),
-                (PairingRole::Issuer, PeerState::Pending) => {
-                    record.state = PeerState::Paired;
-                    record.approved_origins = record.pending_origin.take().into_iter().collect();
-                    paired_now = true;
-                    Ok(())
-                }
-                (PairingRole::Issuer, PeerState::Paired) => Ok(()),
-                (PairingRole::Accepter, PeerState::Paired) => {
-                    notify = false;
-                    Ok(())
-                }
-                (_, state) => Err(FederationError::PeerNotPaired { state }),
-            })?
-            .ok_or(FederationError::UnknownPeer)?;
+        let (me, peer) = self.with_identity(|me| {
+            let peer = self
+                .peers
+                .update(companion_id, |record| match (record.role, record.state) {
+                    (_, PeerState::Revoked) => Err(FederationError::PeerRevoked),
+                    (PairingRole::Issuer, PeerState::Pending) => {
+                        record.state = PeerState::Paired;
+                        record.approved_origins =
+                            record.pending_origin.take().into_iter().collect();
+                        paired_now = true;
+                        Ok(())
+                    }
+                    (PairingRole::Issuer, PeerState::Paired) => Ok(()),
+                    (PairingRole::Accepter, PeerState::Paired) => {
+                        notify = false;
+                        Ok(())
+                    }
+                    (_, state) => Err(FederationError::PeerNotPaired { state }),
+                })?
+                .ok_or(FederationError::UnknownPeer)?;
+            Ok((me.clone(), peer))
+        })?;
         if paired_now {
             log::info!(
                 "[federation] pairing {}: companion {} paired by the owner",
@@ -685,7 +739,6 @@ impl FederationState {
         if !notify {
             return Ok((peer.record, false));
         }
-        let me = self.identity()?;
         let notice = PairingMessage::Confirm {
             version: FEDERATION_VERSION,
             pairing_id: peer.record.pairing_id.clone(),
@@ -693,7 +746,7 @@ impl FederationState {
             accepter: peer.record.identity.companion_id.clone(),
         };
         let notified = self
-            .notify(&peer, &notice, CONFIRM_PATH, PeerState::Paired)
+            .notify(&me, &peer, &notice, CONFIRM_PATH, PeerState::Paired)
             .await;
         Ok((peer.record, notified))
     }
@@ -801,7 +854,7 @@ impl FederationState {
             peer: peer.record.identity.companion_id.clone(),
         };
         let notified = self
-            .notify(&peer, &notice, REVOKE_PATH, PeerState::Revoked)
+            .notify(&me, &peer, &notice, REVOKE_PATH, PeerState::Revoked)
             .await;
         Ok((peer.record, notified))
     }
@@ -916,20 +969,20 @@ impl FederationState {
         }
     }
 
-    /// Posts `notice` to the peer's approved origins until one acknowledges
-    /// it with a signed ack for this pairing. Failures are reported, never
-    /// fatal: the local state already changed.
+    /// Posts `notice`, signed as `me`, to the peer's approved origins until
+    /// one acknowledges it with a signed ack for this pairing. `me` is the
+    /// identity the caller made its change under, not whatever is current
+    /// by now. Failures are reported, never fatal: the local state already
+    /// changed.
     async fn notify(
         &self,
+        me: &SigningIdentity,
         peer: &Peer,
         notice: &PairingMessage,
         path: &str,
         expected: PeerState,
     ) -> bool {
-        let Ok(me) = self.identity() else {
-            return false;
-        };
-        let outgoing = sign_message(&me, notice);
+        let outgoing = sign_message(me, notice);
         for origin in &peer.record.approved_origins {
             let url = format!("{origin}{path}");
             let outcome = match self.transport.post(&url, &outgoing).await {
@@ -2249,5 +2302,204 @@ mod tests {
             d.open(&transport_ping(&b, &d)).unwrap_err(),
             FederationError::UnknownPeer
         );
+    }
+
+    /// A pending pairing was started under the identity being retired: the
+    /// peer holds the old document, so this side would sign the
+    /// confirmation with a key the peer does not know, and the peer would
+    /// address its confirmation to an id this side no longer has. Neither
+    /// owner may finish it: the rotation revokes every pending record, on
+    /// both roles, and both owners pair again with a new invite.
+    #[tokio::test]
+    async fn rotation_revokes_pending_pairings_so_none_can_finish_one_sided() {
+        let mut network = Network::new();
+        let (a, b) = paired(&mut network).await;
+        let a_id = a.identity().unwrap().companion_id().to_owned();
+        let old_b_id = b.identity().unwrap().companion_id().to_owned();
+        // C redeemed B's invite: pending on B (issuer) and on C (accepter).
+        let c = network.server("https://c.example");
+        let c_id = c.identity().unwrap().companion_id().to_owned();
+        let invite = b.create_invite(ORIGIN_B).unwrap();
+        c.accept_invite(accept_for(&invite), "https://c.example")
+            .await
+            .unwrap();
+        // B redeemed D's invite: pending on D (issuer) and on B (accepter).
+        let d = network.server("https://d.example");
+        let d_id = d.identity().unwrap().companion_id().to_owned();
+        let invite = d.create_invite("https://d.example").unwrap();
+        b.accept_invite(accept_for(&invite), ORIGIN_B)
+            .await
+            .unwrap();
+        let on_b = b.overview().unwrap().peers;
+        assert_eq!(on_b.len(), 3);
+        assert_eq!(
+            on_b.iter()
+                .filter(|peer| peer.state == PeerState::Pending)
+                .count(),
+            2
+        );
+
+        network.now.store(T0 + 100, Ordering::SeqCst);
+        let report = b.rotate_identity().await.unwrap();
+        let new_b_id = b.identity().unwrap().companion_id().to_owned();
+        assert_eq!(report.notified, vec![a_id.clone()], "paired peers only");
+        assert!(report.unreachable.is_empty());
+
+        // On B both pending records are revoked, with their role and
+        // history kept; A is paired as before.
+        let on_b = b.overview().unwrap().peers;
+        let find = |id: &str| on_b.iter().find(|peer| peer.companion_id == id).unwrap();
+        assert_eq!(find(&a_id).state, PeerState::Paired);
+        assert_eq!(find(&c_id).state, PeerState::Revoked);
+        assert_eq!(find(&c_id).role, PairingRole::Issuer);
+        assert_eq!(find(&c_id).pending_origin, None);
+        assert_eq!(find(&c_id).updated_at, T0 + 100);
+        assert_eq!(find(&d_id).state, PeerState::Revoked);
+        assert_eq!(find(&d_id).role, PairingRole::Accepter);
+
+        // B's owner cannot confirm C any more, and C never hears a
+        // confirmation: its record for the old B stays pending.
+        assert_eq!(
+            b.confirm_peer(&c_id).await.unwrap_err(),
+            FederationError::PeerRevoked
+        );
+        let on_c = c.overview().unwrap().peers;
+        assert_eq!(on_c.len(), 1);
+        assert_eq!(on_c[0].companion_id, old_b_id);
+        assert_eq!(on_c[0].state, PeerState::Pending);
+        assert_eq!(
+            b.open(&c.seal(&old_b_id, PING).unwrap()).unwrap_err(),
+            FederationError::RecipientMismatch
+        );
+
+        // D's owner confirming lands on B as a refusal, so D learns the
+        // pairing did not complete; B trusts nothing from D.
+        let (on_d, notified) = d.confirm_peer(&old_b_id).await.unwrap();
+        assert_eq!(
+            on_d.state,
+            PeerState::Paired,
+            "D's local confirmation stands"
+        );
+        assert!(!notified, "B refused the confirmation");
+        assert_eq!(
+            b.peers.get(&d_id).unwrap().record.state,
+            PeerState::Revoked,
+            "the refused confirmation changed nothing on B"
+        );
+        assert_eq!(
+            b.open(&d.seal(&old_b_id, PING).unwrap()).unwrap_err(),
+            FederationError::RecipientMismatch
+        );
+        assert_eq!(
+            b.verify_from_peer(&ping(&d)).unwrap_err(),
+            FederationError::PeerRevoked
+        );
+
+        // Both pair again with a new invite under the new identity: the
+        // revoked records are replaced and keep their creation time.
+        let invite = b.create_invite(ORIGIN_B).unwrap();
+        assert_eq!(&invite.issuer, b.identity().unwrap().document());
+        c.accept_invite(accept_for(&invite), "https://c.example")
+            .await
+            .unwrap();
+        let (record, notified) = b.confirm_peer(&c_id).await.unwrap();
+        assert!(notified);
+        assert_eq!(record.state, PeerState::Paired);
+        assert_eq!(record.created_at, T0, "the earlier record's creation time");
+        let on_c = c.overview().unwrap().peers;
+        let on_c_new = on_c
+            .iter()
+            .find(|peer| peer.companion_id == new_b_id)
+            .expect("C paired with the rotated B");
+        assert_eq!(on_c_new.state, PeerState::Paired);
+        assert!(c.open(&transport_ping(&b, &c)).is_ok());
+        assert!(b.open(&transport_ping(&c, &b)).is_ok());
+
+        let invite = d.create_invite("https://d.example").unwrap();
+        b.accept_invite(accept_for(&invite), ORIGIN_B)
+            .await
+            .unwrap();
+        let (_, notified) = d.confirm_peer(&new_b_id).await.unwrap();
+        assert!(notified);
+        assert!(d.open(&transport_ping(&b, &d)).is_ok());
+        assert!(b.open(&transport_ping(&d, &b)).is_ok());
+
+        // A restart of B sees the same.
+        let b_again = FederationState::with_transport_and_clock(
+            &b.root,
+            network.direct.clone(),
+            Arc::new(|| T0 + 100),
+        );
+        let on_b = b_again.overview().unwrap().peers;
+        assert_eq!(on_b.len(), 3);
+        assert!(on_b.iter().all(|peer| peer.state == PeerState::Paired));
+    }
+
+    /// The owner's confirmation and the owner's rotation race: whichever
+    /// wins, no pending record is confirmed under the retired identity,
+    /// because the confirmation picks its signing key and flips the record
+    /// under the identity lock that the rotation revokes pending records
+    /// under. The peer either heard the confirmation from the old key (and
+    /// the rotation notice after it, or is reported unreachable when the
+    /// notice overtook the confirmation), or nothing at all.
+    #[test]
+    fn a_confirm_racing_a_rotation_never_pairs_under_the_retired_identity() {
+        use futures::executor::block_on;
+        const ROUNDS: usize = 16;
+
+        for round in 0..ROUNDS {
+            let mut network = Network::new();
+            let b = network.server(ORIGIN_B);
+            let c = network.server("https://c.example");
+            let old_b_id = b.identity().unwrap().companion_id().to_owned();
+            let c_id = c.identity().unwrap().companion_id().to_owned();
+            let invite = b.create_invite(ORIGIN_B).unwrap();
+            block_on(c.accept_invite(accept_for(&invite), "https://c.example")).unwrap();
+
+            let (confirmed, rotated) = race(
+                || block_on(b.confirm_peer(&c_id)),
+                || block_on(b.rotate_identity()),
+            );
+            let report = rotated.unwrap();
+            let new_b_id = report.identity.companion_id.clone();
+            let on_b = b.overview().unwrap().peers;
+            assert_eq!(on_b.len(), 1, "round {round}");
+            let on_c = c.overview().unwrap().peers;
+            match confirmed {
+                // The rotation won: the record was revoked before the owner
+                // could confirm it, and C heard nothing.
+                Err(error) => {
+                    assert_eq!(error, FederationError::PeerRevoked, "round {round}");
+                    assert_eq!(on_b[0].state, PeerState::Revoked, "round {round}");
+                    assert_eq!(on_c.len(), 1);
+                    assert_eq!(on_c[0].companion_id, old_b_id, "round {round}");
+                    assert_eq!(on_c[0].state, PeerState::Pending, "round {round}");
+                    assert!(report.notified.is_empty() && report.unreachable.is_empty());
+                }
+                // The confirmation won under the old key: C is paired on B
+                // and was told with the old key. The rotation notice then
+                // either re-keyed C or overtook the confirmation, in which
+                // case C is reported unreachable and keeps the old id until
+                // it hears the proof again.
+                Ok((record, notified)) => {
+                    assert_eq!(record.state, PeerState::Paired, "round {round}");
+                    assert!(
+                        notified,
+                        "round {round}: C refused the old key's confirmation"
+                    );
+                    assert_eq!(on_b[0].state, PeerState::Paired, "round {round}");
+                    assert_eq!(on_c.len(), 1);
+                    assert_eq!(on_c[0].state, PeerState::Paired, "round {round}");
+                    if report.notified == [c_id.clone()] {
+                        assert_eq!(on_c[0].companion_id, new_b_id, "round {round}");
+                        assert!(c.open(&transport_ping(&b, &c)).is_ok(), "round {round}");
+                    } else {
+                        assert_eq!(report.unreachable, vec![c_id.clone()], "round {round}");
+                        assert_eq!(on_c[0].companion_id, old_b_id, "round {round}");
+                    }
+                }
+            }
+            assert_ne!(on_b[0].state, PeerState::Pending, "round {round}");
+        }
     }
 }

@@ -400,6 +400,130 @@ mod tests {
         );
     }
 
+    /// `rotate_at` replaces the key file and then the document. A crash
+    /// between the two leaves the new key beside the old document, which
+    /// would otherwise be a `KeyMismatch` that only hand-editing repairs.
+    /// The proof in the history was written first and names both, so the
+    /// next load completes the rotation from it.
+    #[test]
+    fn a_rotation_interrupted_between_the_two_renames_is_completed_on_load() {
+        use crate::services::federation::identity::{identity_path, signing_key_path};
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let first = identity::load_or_create_at(root, FIXTURE_CREATED_AT).unwrap();
+        let key_path = signing_key_path(root);
+        let doc_path = identity_path(root);
+        let old_key = std::fs::read(&key_path).unwrap();
+        let old_doc = std::fs::read(&doc_path).unwrap();
+        let (second, rotation) = identity::rotate_at(root, &first, FIXTURE_ROTATED_AT).unwrap();
+        let new_key = std::fs::read(&key_path).unwrap();
+        let new_doc = std::fs::read(&doc_path).unwrap();
+        let history = std::fs::read(rotations_path(root)).unwrap();
+
+        // The process died after `signing_key.json` was replaced and before
+        // `identity.json` was: the keystore loads as the rotated identity
+        // and the document is rewritten from the recorded rotation.
+        std::fs::write(&doc_path, &old_doc).unwrap();
+        let loaded = identity::load(root).unwrap().expect("identity exists");
+        assert_eq!(loaded.companion_id(), second.companion_id());
+        assert_eq!(loaded.document(), second.document());
+        assert_eq!(
+            std::fs::read(&doc_path).unwrap(),
+            new_doc,
+            "identity.json is completed from the rotation history"
+        );
+        assert_eq!(std::fs::read(&key_path).unwrap(), new_key, "key untouched");
+        assert_eq!(
+            std::fs::read(rotations_path(root)).unwrap(),
+            history,
+            "the history is not touched"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&doc_path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        assert_eq!(load_rotations(root).unwrap(), vec![rotation.clone()]);
+        // A second load is an ordinary one; `load_or_create` sees the same;
+        // and the next rotation chains from the completed identity.
+        std::fs::write(&doc_path, &old_doc).unwrap();
+        assert_eq!(
+            identity::load_or_create_at(root, FIXTURE_ROTATED_AT + 1)
+                .unwrap()
+                .companion_id(),
+            second.companion_id()
+        );
+        assert_eq!(std::fs::read(&doc_path).unwrap(), new_doc);
+        assert_eq!(
+            identity::rotate_at(root, &first, FIXTURE_ROTATED_AT + 2).unwrap_err(),
+            FederationError::KeyMismatch,
+            "a handle to the retired identity is stale after the completion too"
+        );
+        let (third, next) = identity::rotate_at(root, &second, FIXTURE_ROTATED_AT + 3).unwrap();
+        assert_eq!(&next.previous, second.document());
+        assert_eq!(&next.identity, third.document());
+        assert_eq!(load_rotations(root).unwrap(), vec![rotation.clone(), next]);
+
+        // The other interruption, after the proof and before the key file:
+        // the old key is still the active one and the entry only records an
+        // attempt, as before. Nothing is rewritten.
+        std::fs::write(&key_path, &old_key).unwrap();
+        std::fs::write(&doc_path, &old_doc).unwrap();
+        std::fs::write(
+            rotations_path(root),
+            serde_json::to_string(&RotationsFile {
+                version: ROTATIONS_FORMAT_VERSION,
+                rotations: vec![rotation.clone()],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let loaded = identity::load(root).unwrap().unwrap();
+        assert_eq!(loaded.companion_id(), first.companion_id());
+        assert_eq!(std::fs::read(&doc_path).unwrap(), old_doc);
+        assert_eq!(load_rotations(root).unwrap(), vec![rotation.clone()]);
+
+        // A mismatch that is not an interrupted rotation still fails closed
+        // and rewrites nothing: the document is not the rotation's previous
+        // one, the key is not the rotation's new one, the history is
+        // unreadable, or there is no history at all.
+        let stranger = from_seed(&seed(PEER_SEED_LABEL), FIXTURE_CREATED_AT);
+        let stranger_doc = serde_json::to_string_pretty(stranger.document()).unwrap() + "\n";
+        for (key, doc, history) in [
+            (&new_key, stranger_doc.as_bytes(), Some(&history)),
+            (&old_key, new_doc.as_slice(), Some(&history)),
+            (&new_key, old_doc.as_slice(), None),
+        ] {
+            std::fs::write(&key_path, key).unwrap();
+            std::fs::write(&doc_path, doc).unwrap();
+            match history {
+                Some(history) => std::fs::write(rotations_path(root), history).unwrap(),
+                None => std::fs::remove_file(rotations_path(root)).unwrap(),
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))
+                    .unwrap();
+            }
+            assert_eq!(
+                identity::load(root).unwrap_err(),
+                FederationError::KeyMismatch
+            );
+            assert_eq!(std::fs::read(&doc_path).unwrap(), doc, "nothing rewritten");
+            assert_eq!(std::fs::read(&key_path).unwrap(), *key, "nothing rewritten");
+        }
+        std::fs::write(&key_path, &new_key).unwrap();
+        std::fs::write(&doc_path, &old_doc).unwrap();
+        std::fs::write(rotations_path(root), "junk").unwrap();
+        assert_eq!(
+            identity::load(root).unwrap_err(),
+            FederationError::KeyMismatch
+        );
+        assert_eq!(std::fs::read(&doc_path).unwrap(), old_doc);
+    }
+
     #[test]
     fn own_rotation_history_fails_closed_on_junk() {
         let tmp = tempfile::tempdir().unwrap();

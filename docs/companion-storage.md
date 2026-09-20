@@ -564,7 +564,12 @@ outside `instances/companion/`:
 
 Both files are created together on first use and rewritten only by a key
 rotation (below); a key without its document (or the reverse) fails closed
-rather than being repaired silently. The export archive is rooted at `companion/`, so it never contains
+rather than being repaired silently. A rotation replaces the key file and
+then the document, and its proof is in `federation/rotations.json` before
+either: a server that died between the two renames finds the new key beside
+the old document on the next start and completes the rotation from the
+proof, which names both; any other key that does not match its document
+fails closed. The export archive is rooted at `companion/`, so it never contains
 either file: an export carries the companion's memory and settings, not its
 federation identity. To move the companion to another host, copy `federation/`
 alongside `instances/`; the identity verifies there because nothing in it
@@ -721,16 +726,23 @@ identity ones in `server/tests/fixtures/federation/`.
 generated, the rotation proof is appended to `federation/rotations.json`
 (mode `0600`) first, then `signing_key.json` and `identity.json` are replaced
 through temporary files and renames, outstanding invites (which carried the
-old document) are withdrawn, and every paired peer is posted a
-`key_rotation` notice at its approved origins, inside a transport envelope
-signed by the retiring key. The proof is the new self-signed document with
-two signatures over the same canonical bytes (both ids, both keys, and
-`rotated_at`): the old key's `endorsement` and the new key's `signature`. The
-response reports the new identity, the proof, and which peers acknowledged;
-a peer that could not be reached still needs the proof, which the history
-keeps. Pending peers are not told and must pair again; a proof whose new key
-equals the old, whose documents do not verify, or whose signatures fail is
-refused.
+old document) are withdrawn, pending pairings are revoked, and every paired
+peer is posted a `key_rotation` notice at its approved origins, inside a
+transport envelope signed by the retiring key. The proof is the new
+self-signed document with two signatures over the same canonical bytes (both
+ids, both keys, and `rotated_at`): the old key's `endorsement` and the new
+key's `signature`. The response reports the new identity, the proof, and
+which peers acknowledged; a peer that could not be reached still needs the
+proof, which the history keeps. A pending pairing was started under the
+retired identity and cannot finish under the new one (this side would sign
+the confirmation with a key the peer does not know, and the peer would
+address its confirmation to an id this side no longer has), so the rotation
+marks every pending record `revoked`, whichever side issued the invite, and
+both owners pair again with a new invite; the peer is not told and keeps
+its pending record until then. The owner's confirmation and the rotation
+take the same lock, so a confirmation cannot slip in between the key change
+and the revocation. A proof whose new key equals the old, whose documents do
+not verify, or whose signatures fail is refused.
 
 A peer receives the notice at `POST /federation/v1/rotate`, verifies the
 envelope with the retiring key, checks that the notice comes from the key it

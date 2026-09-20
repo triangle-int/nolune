@@ -11,6 +11,11 @@
 //! Rotation ([`rotate_at`]) is the one time the files change: the new key
 //! and document replace the old ones through temporary files and renames,
 //! after the rotation proof was appended to `federation/rotations.json`.
+//! The two renames are not one step: a process that dies between them
+//! leaves the new key beside the old document, and [`load`] completes that
+//! rotation from the recorded proof (which names both documents) instead of
+//! refusing a keystore nothing else could repair. Every other mismatch
+//! between the key and the document fails closed.
 //!
 //! Every function here is pure over a workspace root. Nothing here logs.
 
@@ -237,18 +242,30 @@ pub(crate) fn rotate_at(
     let key_json = Zeroizing::new(key_json);
     replace_private(&key_path, key_json.as_bytes()).map_err(|error| io_error(&key_path, error))?;
 
-    let doc_path = identity_path(workspace_root);
-    let mut doc_json =
-        serde_json::to_string_pretty(next.document()).expect("identity document serializes");
-    doc_json.push('\n');
-    replace_private(&doc_path, doc_json.as_bytes()).map_err(|error| io_error(&doc_path, error))?;
+    // The key is live from here on. Dying before the next rename leaves the
+    // old document beside it, which `load` completes from the proof.
+    write_document(workspace_root, next.document())?;
 
     Ok((next, rotation))
 }
 
+/// Replaces `identity.json` with `document`, owner-readable only.
+fn write_document(
+    workspace_root: &Path,
+    document: &IdentityDocument,
+) -> Result<(), FederationError> {
+    let doc_path = identity_path(workspace_root);
+    let mut doc_json =
+        serde_json::to_string_pretty(document).expect("identity document serializes");
+    doc_json.push('\n');
+    replace_private(&doc_path, doc_json.as_bytes()).map_err(|error| io_error(&doc_path, error))
+}
+
 /// `Ok(None)` when no identity was created yet; `Err` when the files exist but
 /// cannot be trusted: missing halves, wrong permissions, a document that does
-/// not verify, or a document not signed by the stored key.
+/// not verify, or a document not signed by the stored key. The one mismatch
+/// that is repaired rather than refused is a rotation interrupted between
+/// its two renames (see [`complete_interrupted_rotation`]).
 pub fn load(workspace_root: &Path) -> Result<Option<SigningIdentity>, FederationError> {
     let key_path = signing_key_path(workspace_root);
     let doc_path = identity_path(workspace_root);
@@ -265,14 +282,51 @@ pub fn load(workspace_root: &Path) -> Result<Option<SigningIdentity>, Federation
         .map_err(|_| FederationError::Malformed("identity document is not UTF-8".into()))?;
     let document = parse_document(doc_json)?;
     let verified = verify_document(&document)?;
-    if verified.public_key != key.verifying_key() {
-        return Err(FederationError::KeyMismatch);
+    if verified.public_key == key.verifying_key() {
+        return Ok(Some(SigningIdentity {
+            key,
+            document,
+            verified,
+        }));
     }
+    let (document, verified) = complete_interrupted_rotation(workspace_root, &key, &document)?
+        .ok_or(FederationError::KeyMismatch)?;
     Ok(Some(SigningIdentity {
         key,
         document,
         verified,
     }))
+}
+
+/// [`rotate_at`] appends the proof, replaces the key file, then replaces the
+/// document. A process that dies between the last two leaves the new key
+/// beside the old document: the key on disk is the latest recorded
+/// rotation's new key and the document is that rotation's previous one. In
+/// exactly that state the document is rewritten from the proof (both
+/// documents in it were re-verified when the history was read) and the
+/// rotated identity is returned. Anything else, including a history that
+/// cannot be read, is `None` and left untouched: it is a mismatch, not an
+/// interrupted rotation.
+fn complete_interrupted_rotation(
+    workspace_root: &Path,
+    key: &SigningKey,
+    document: &IdentityDocument,
+) -> Result<Option<(IdentityDocument, VerifiedIdentity)>, FederationError> {
+    let Ok(rotations) = super::rotation::load_rotations(workspace_root) else {
+        return Ok(None);
+    };
+    let Some(latest) = rotations.last() else {
+        return Ok(None);
+    };
+    if latest.previous != *document {
+        return Ok(None);
+    }
+    let verified = verify_document(&latest.identity)?;
+    if verified.public_key != key.verifying_key() {
+        return Ok(None);
+    }
+    write_document(workspace_root, &latest.identity)?;
+    Ok(Some((latest.identity.clone(), verified)))
 }
 
 /// Parses an identity document, refusing unsupported versions before the
