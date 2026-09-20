@@ -4,6 +4,7 @@ pub mod embedding;
 pub mod keyword_search;
 // rate_limit removed — all instances are BYOK with no rate limits
 pub mod browser_sessions;
+pub mod commitments;
 pub mod companion;
 pub mod companion_routine;
 pub mod continuity;
