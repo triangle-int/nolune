@@ -271,3 +271,46 @@ export function flagBadges(flags) {
 	if (flags?.exclude_from_proactive) badges.push("Not used proactively");
 	return badges;
 }
+
+/**
+ * One row per memory: the vector index cites a long memory once per chunk
+ * that ranked, all with the same path and reason.
+ * @template {{ path: string }} M
+ * @param {M[]} memories
+ * @returns {M[]}
+ */
+export function uniqueMemories(memories) {
+	void memories;
+	throw new Error("not implemented");
+}
+
+/**
+ * Whether a `needs_resolution` answer is about the statement just sent or an
+ * earlier correction still parked for the memory.
+ * @param {CorrectionConflict} conflict
+ * @param {string} draft
+ */
+export function conflictIsPending(conflict, draft) {
+	void conflict;
+	void draft;
+	throw new Error("not implemented");
+}
+
+/**
+ * The file a correction of `path` rewrites: the memory itself, or a media
+ * memory's bound text.
+ * @param {string} path
+ */
+export function boundTextPath(path) {
+	void path;
+	throw new Error("not implemented");
+}
+
+/**
+ * The description inside a media memory's bound-text file.
+ * @param {string} raw
+ */
+export function mediaBoundText(raw) {
+	void raw;
+	throw new Error("not implemented");
+}

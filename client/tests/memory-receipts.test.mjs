@@ -3,13 +3,16 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
+	boundTextPath,
 	canFlag,
+	conflictIsPending,
 	conflictPrompt,
 	confidenceLabel,
 	correctionOutcome,
 	flagBadges,
 	flagControls,
 	isMediaMemory,
+	mediaBoundText,
 	memoryBody,
 	reasonLabel,
 	recalledWhen,
@@ -19,6 +22,7 @@ import {
 	receiptsByMessage,
 	sourceLabel,
 	sourceStatusCopy,
+	uniqueMemories,
 } from '../src/lib/memory/receipts.js';
 
 const tea = {
@@ -147,6 +151,82 @@ test('pin and exclude controls follow the flags and only exist for text memories
 	assert.deepEqual(flagBadges({ pinned: true, exclude_from_proactive: false }), ['Pinned']);
 	assert.deepEqual(flagBadges({ pinned: true, exclude_from_proactive: true }), ['Pinned', 'Not used proactively']);
 	assert.deepEqual(flagBadges(undefined), []);
+});
+
+test('a memory cited once per vector chunk is shown once, as its best-ranked chunk', () => {
+	// A memory longer than 600 bytes is indexed as several chunks; every
+	// chunk that ranks is its own hit with the same path and reason.
+	const first = { ...tea, path: 'about/runs.md', source: 'about/runs.md', excerpt: 'runs at dawn, 5 km', confidence: 'high' };
+	const second = { ...first, excerpt: 'ran a half marathon in April', confidence: 'medium' };
+	assert.deepEqual(uniqueMemories([first, second, sky]), [first, sky]);
+	assert.deepEqual(uniqueMemories([]), []);
+
+	const receipts = [
+		{ message_id: 'msg_1', chat_id: 'default', memories: [first, second] },
+		{ message_id: 'msg_2', chat_id: 'default', memories: [second, tea, first] },
+	];
+	const byMessage = receiptsByMessage(receipts, 'default');
+	assert.deepEqual(byMessage.get('msg_1'), [first]);
+	assert.equal(receiptSummary(byMessage.get('msg_1')), '1 memory shaped this reply');
+	assert.deepEqual(byMessage.get('msg_2').map((m) => m.path), ['about/runs.md', 'about/tea.md']);
+	assert.equal(byMessage.get('msg_2')[0].excerpt, 'ran a half marathon in April');
+
+	// The library lists one recall per reply, so a chunked memory cannot key
+	// the same conversation twice.
+	const recalls = recallsOf(receipts, 'about/runs.md');
+	assert.deepEqual(recalls.map((r) => r.message_id), ['msg_1', 'msg_2']);
+	assert.equal(recalls[0].memory.excerpt, 'runs at dawn, 5 km');
+	const keys = recalls.map((r) => `${r.chat_id}/${r.message_id}`);
+	assert.equal(new Set(keys).size, keys.length);
+});
+
+test('a conflict that is still pending from an earlier correction is named as such, and the draft is kept', () => {
+	const parked = {
+		conflict_id: 'corr_2_b',
+		path: 'about/tea.md',
+		current: { id: 'corr_1_a', statement: 'likes oolong', corrected_at: '2026-09-20T09:00:00Z' },
+		proposed: { id: 'corr_2_b', statement: 'likes matcha', corrected_at: '2026-09-20T10:00:00Z' },
+	};
+	// The server answers every further correction of a memory with the pair
+	// it already parked, so the statement just typed is not in the prompt.
+	assert.equal(conflictIsPending(parked, 'likes matcha'), false);
+	assert.equal(conflictIsPending(parked, '  likes matcha \n'), false);
+	assert.equal(conflictIsPending(parked, 'prefers herbal tea in the evening'), true);
+
+	const fresh = conflictPrompt(parked, 'likes matcha');
+	assert.equal(fresh.pending, false);
+	assert.equal(fresh.question, 'Two of your corrections to tea disagree. Which one should stay?');
+	assert.deepEqual(fresh.options.map((o) => o.title), ['Keep the current statement', 'Use the new statement']);
+	assert.equal(fresh.note, 'Nothing is merged: the memory keeps the current statement until you choose.');
+	assert.deepEqual(conflictPrompt(parked), fresh);
+
+	const pending = conflictPrompt(parked, 'prefers herbal tea in the evening');
+	assert.equal(pending.pending, true);
+	assert.equal(pending.conflictId, 'corr_2_b');
+	assert.equal(pending.question, 'An earlier correction of tea is still waiting for your decision. Settle it first, then save your new statement.');
+	assert.equal(pending.note, 'Nothing is merged, and your new statement below is not applied yet: it stays in the editor until you save it again.');
+	assert.deepEqual(pending.options.map((o) => [o.keep, o.title, o.statement]), [
+		['current', 'Keep the current statement', 'likes oolong'],
+		['proposed', 'Use the earlier correction', 'likes matcha'],
+	]);
+});
+
+test('a media correction starts from the bound text, never the listing summary or the receipt excerpt', () => {
+	assert.equal(boundTextPath('about/tea.md'), 'about/tea.md');
+	assert.equal(boundTextPath('photos/sky.png'), 'photos/sky.png.md');
+	assert.equal(boundTextPath('docs/brief.pdf'), 'docs/brief.pdf.md');
+
+	const sidecar = 'NOLUNE_MEDIA_TEXT {"version":1,"sha256":"ab12"}\nSky over Lisbon at dusk.\nTaken from the balcony.\n';
+	assert.equal(mediaBoundText(sidecar), 'Sky over Lisbon at dusk.\nTaken from the balcony.');
+	assert.equal(mediaBoundText('NOLUNE_MEDIA_TEXT {"version":1}\n'), '');
+	assert.equal(mediaBoundText('plain description'), 'plain description');
+	assert.equal(mediaBoundText(''), '');
+
+	for (const file of ['MemoryControls.svelte', 'MemoryReceiptPanel.svelte', 'MemoryLibraryView.svelte']) {
+		const source = readFileSync(fileURLToPath(new URL(`../src/lib/components/memory/${file}`, import.meta.url)), 'utf8');
+		assert.ok(!source.includes('excerpt={'), `${file} must not prefill a correction from an excerpt`);
+		assert.ok(!/draft\s*=\s*(excerpt|summary)/.test(source), `${file} must not seed the editor from a summary or excerpt`);
+	}
 });
 
 test('receipt and correction requests stay inside the current companion scope', () => {
