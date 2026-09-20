@@ -1132,7 +1132,7 @@ async fn import_instance(
     let media = state.vector_store.media_store();
     let (upload, archive) = match ImportUpload::receive(media, multipart).await {
         Ok(received) => received,
-        Err(response) => return response,
+        Err(rejection) => return rejection.into_response(),
     };
     let result = profile_import::restore_companion(
         state.vector_store.clone(),
@@ -1171,12 +1171,12 @@ impl ImportUpload {
     async fn receive(
         media: std::sync::Arc<MediaStore>,
         mut multipart: Multipart,
-    ) -> Result<(Self, std::fs::File), Response> {
+    ) -> Result<(Self, std::fs::File), ImportRejection> {
         loop {
             let mut field = match multipart.next_field().await {
                 Ok(Some(field)) => field,
                 Ok(None) => {
-                    return Err(import_error(
+                    return Err(ImportRejection::new(
                         StatusCode::BAD_REQUEST,
                         "missing_archive",
                         "the multipart body has no `file` field holding the archive",
@@ -1205,11 +1205,7 @@ impl ImportUpload {
                 Ok(file) => file,
                 Err(error) => {
                     log::error!("[import] could not create the upload file: {error}");
-                    return Err(import_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "import_failed",
-                        "could not stage the uploaded archive",
-                    ));
+                    return Err(ImportRejection::staging_failed());
                 }
             };
             let upload = Self { media, name };
@@ -1223,20 +1219,12 @@ impl ImportUpload {
                 };
                 if let Err(error) = tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await {
                     log::error!("[import] could not write the uploaded archive: {error}");
-                    return Err(import_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "import_failed",
-                        "could not stage the uploaded archive",
-                    ));
+                    return Err(ImportRejection::staging_failed());
                 }
             }
             if let Err(error) = tokio::io::AsyncWriteExt::flush(&mut file).await {
                 log::error!("[import] could not write the uploaded archive: {error}");
-                return Err(import_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "import_failed",
-                    "could not stage the uploaded archive",
-                ));
+                return Err(ImportRejection::staging_failed());
             }
             let file = file.into_std().await;
             let rewound = tokio::task::spawn_blocking(move || {
@@ -1253,11 +1241,7 @@ impl ImportUpload {
                 Ok(archive) => Ok((upload, archive)),
                 Err(error) => {
                     log::error!("[import] could not finish the uploaded archive: {error}");
-                    Err(import_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "import_failed",
-                        "could not stage the uploaded archive",
-                    ))
+                    Err(ImportRejection::staging_failed())
                 }
             };
         }
@@ -1269,6 +1253,37 @@ impl Drop for ImportUpload {
         if let Err(error) = self.media.remove_import_upload(&self.name) {
             log::warn!("[import] could not remove imports/{}: {error}", self.name);
         }
+    }
+}
+
+/// Why the request body was not accepted, before the restore ran.
+struct ImportRejection {
+    status: StatusCode,
+    code: &'static str,
+    message: String,
+}
+
+impl ImportRejection {
+    fn new(status: StatusCode, code: &'static str, message: impl ToString) -> Self {
+        Self {
+            status,
+            code,
+            message: message.to_string(),
+        }
+    }
+
+    fn staging_failed() -> Self {
+        Self::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "import_failed",
+            "could not stage the uploaded archive",
+        )
+    }
+}
+
+impl IntoResponse for ImportRejection {
+    fn into_response(self) -> Response {
+        import_error(self.status, self.code, self.message)
     }
 }
 
@@ -1284,14 +1299,14 @@ fn import_error(status: StatusCode, code: &'static str, message: impl ToString) 
 }
 
 /// A body that is not well-formed multipart, or one over the limit.
-fn multipart_error(error: axum::extract::multipart::MultipartError) -> Response {
+fn multipart_error(error: axum::extract::multipart::MultipartError) -> ImportRejection {
     let status = error.status();
     let code = if status == StatusCode::PAYLOAD_TOO_LARGE {
         "archive_too_large"
     } else {
         "invalid_upload"
     };
-    import_error(
+    ImportRejection::new(
         status,
         code,
         format!(

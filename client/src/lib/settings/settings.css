@@ -322,6 +322,10 @@
 		background: var(--accent);
 		border-color: var(--border);
 	}
+	.settings-page .data-btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
 	
 	.settings-page .sched-list {
 		display: flex;
