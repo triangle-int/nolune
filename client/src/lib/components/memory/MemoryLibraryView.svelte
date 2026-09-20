@@ -209,7 +209,7 @@
 				<p class="memory-meta">This memory has not been recalled in a conversation yet. Pinned memories are recalled on every turn.</p>
 			{:else}
 				<ul class="memory-recalls">
-					{#each recalls as recall (recall.chat_id + recall.message_id)}
+					{#each recalls as recall (`${recall.chat_id}/${recall.message_id}`)}
 						<li class="memory-recall">
 							{#if recall.memory.excerpt}<blockquote class="recall-excerpt">{recall.memory.excerpt}</blockquote>{/if}
 							<p class="recall-meta">
@@ -224,7 +224,7 @@
 			{/if}
 		</section>
 		<footer class="memory-danger">
-			<MemoryControls {slug} path={viewing.path} flags={kind === "text" ? { pinned: viewing.pinned, exclude_from_proactive: viewing.exclude_from_proactive } : null} excerpt={viewing.summary} onchange={onMemoryChange} />
+			<MemoryControls {slug} path={viewing.path} flags={kind === "text" ? { pinned: viewing.pinned, exclude_from_proactive: viewing.exclude_from_proactive } : null} onchange={onMemoryChange} />
 		</footer>
 	{:else}
 		<header class="memory-header">

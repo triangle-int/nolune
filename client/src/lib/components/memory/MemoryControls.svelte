@@ -19,7 +19,7 @@
 	 */
 	import { correctMemoryFile, deleteMemoryFile, fetchMemoryContent, resolveMemoryCorrection, setMemoryFlags } from "$lib/api/client.js";
 	import type { CorrectionConflict } from "$lib/api/types.js";
-	import { canFlag, conflictPrompt, correctionOutcome, flagControls, memoryBody, recalledWhen } from "$lib/memory/receipts.js";
+	import { boundTextPath, canFlag, conflictPrompt, correctionOutcome, flagControls, mediaBoundText, memoryBody, recalledWhen } from "$lib/memory/receipts.js";
 	import { getToasts } from "$lib/stores/toast.svelte.js";
 	import Pencil from "@lucide/svelte/icons/pencil";
 	import Pin from "@lucide/svelte/icons/pin";
@@ -35,7 +35,6 @@
 		slug,
 		path,
 		flags = null,
-		excerpt = "",
 		inspectHref = "",
 		onchange,
 	}: {
@@ -43,8 +42,6 @@
 		path: string;
 		/** Current flags of a text memory; `null` while unknown or for media. */
 		flags?: MemoryFlags | null;
-		/** Prefill for a media memory's correction (its bound text cannot be read as a file). */
-		excerpt?: string;
 		/** Library link; omitted when the controls already sit in the library. */
 		inspectHref?: string;
 		onchange?: (change: MemoryChange) => void;
@@ -58,28 +55,38 @@
 	let draftLoading = $state(false);
 	let saving = $state(false);
 	let editError = $state("");
+	/** A non-error state of the editor (an empty start, a settled conflict). */
+	let editNotice = $state("");
 	let conflict = $state<CorrectionConflict | null>(null);
 	let resolving = $state<"current" | "proposed" | null>(null);
 	let flagBusy = $state<string | null>(null);
 	let confirmingForget = $state(false);
 	let forgetting = $state(false);
 
-	const prompt = $derived(conflict ? conflictPrompt(conflict) : null);
+	// The statement the user sent decides whether a 409 is about it or about
+	// an earlier correction the server is still holding for this memory.
+	const prompt = $derived(conflict ? conflictPrompt(conflict, draft) : null);
 
+	/**
+	 * The editor always starts from the text a correction replaces: the
+	 * memory body, or a media memory's bound text. A listing summary or a
+	 * receipt excerpt is never a prefill (one is a placeholder, the other is
+	 * cut at 240 characters), so a failed read starts empty and says so.
+	 */
 	async function startEditing() {
 		editing = true;
 		editError = "";
+		editNotice = "";
 		conflict = null;
-		if (!isText) {
-			draft = excerpt;
-			return;
-		}
+		draft = "";
 		draftLoading = true;
 		try {
-			draft = memoryBody(await fetchMemoryContent(slug, path));
+			const raw = await fetchMemoryContent(slug, boundTextPath(path));
+			draft = isText ? memoryBody(raw) : mediaBoundText(raw);
 		} catch {
-			draft = excerpt;
-			editError = "Could not load the current text; starting from the excerpt.";
+			editNotice = isText
+				? "The current text could not be loaded. What you save here replaces the whole memory."
+				: "This file has no description yet, or it could not be loaded. What you save here becomes its whole description.";
 		} finally {
 			draftLoading = false;
 		}
@@ -89,6 +96,7 @@
 		editing = false;
 		conflict = null;
 		editError = "";
+		editNotice = "";
 	}
 
 	async function saveCorrection() {
@@ -99,6 +107,7 @@
 		}
 		saving = true;
 		editError = "";
+		editNotice = "";
 		try {
 			const outcome = correctionOutcome(await correctMemoryFile(slug, path, draft));
 			if (outcome.kind === "applied") {
@@ -121,13 +130,17 @@
 	}
 
 	async function resolve(keep: "current" | "proposed") {
-		if (!conflict || resolving) return;
+		if (!conflict || !prompt || resolving) return;
+		const pending = prompt.pending;
 		resolving = keep;
 		try {
 			await resolveMemoryCorrection(slug, conflict.conflict_id, keep);
-			toast.success(keep === "proposed" ? "New statement applied" : "Current statement kept");
+			toast.success(keep === "current" ? "Current statement kept" : pending ? "Earlier correction applied" : "New statement applied");
 			conflict = null;
-			editing = false;
+			// A settled earlier conflict leaves the user's own statement unsent:
+			// the editor stays open with it so it can be saved now.
+			editing = pending;
+			editNotice = pending ? "Settled. Your statement below is not applied yet; save it to correct the memory." : "";
 			onchange?.({ kind: "resolved", keep });
 		} catch {
 			editError = "Could not settle the conflict. Both statements are still recorded; try again.";
@@ -179,11 +192,12 @@
 				<textarea class="nl-input editor-text" bind:value={draft} rows="4" disabled={draftLoading || saving || !!conflict} aria-busy={draftLoading}></textarea>
 			</label>
 			{#if draftLoading}<p class="hint" role="status">Loading the current text…</p>{/if}
+			{#if editNotice}<p class="hint" role="status">{editNotice}</p>{/if}
 			{#if editError}<p class="hint error" role="alert">{editError}</p>{/if}
 			{#if prompt}
-				<div class="conflict" role="group" aria-label="Conflicting corrections">
+				<div class="conflict" role="group" aria-label={prompt.pending ? "An earlier correction is waiting" : "Conflicting corrections"}>
 					<p class="conflict-question">{prompt.question}</p>
-					<p class="hint">Nothing is merged: the memory keeps the current statement until you choose.</p>
+					<p class="hint">{prompt.note}</p>
 					<div class="conflict-options">
 						{#each prompt.options as option (option.keep)}
 							<div class="conflict-option">

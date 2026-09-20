@@ -30,6 +30,8 @@ import { displayName, mediaKind } from "./library.js";
 /** @typedef {{ pinned?: boolean; exclude_from_proactive?: boolean }} MemoryFlags */
 
 const PRODUCT_NAME = "Nolune";
+/** First line of a media memory's bound-text file (`media_text.rs`). */
+const MEDIA_TEXT_HEADER = "NOLUNE_MEDIA_TEXT ";
 
 /** @param {string | null | undefined} companionName */
 export function receiptHeading(companionName) {
@@ -117,9 +119,10 @@ export function recalledWhen(iso, now = Date.now()) {
 }
 
 /**
- * Receipts keyed by message id. Only receipts of `chatId` are kept, so a
- * bubble can never show provenance from another conversation.
- * @template M
+ * Receipts keyed by message id, one row per memory. Only receipts of
+ * `chatId` are kept, so a bubble can never show provenance from another
+ * conversation.
+ * @template {{ path: string }} M
  * @param {{ message_id: string; chat_id: string; memories: M[] }[]} receipts
  * @param {string} chatId
  * @returns {Map<string, M[]>}
@@ -130,14 +133,16 @@ export function receiptsByMessage(receipts, chatId) {
 	if (!chatId) return map;
 	for (const receipt of receipts) {
 		if (receipt.chat_id !== chatId) continue;
-		map.set(receipt.message_id, receipt.memories ?? []);
+		map.set(receipt.message_id, uniqueMemories(receipt.memories ?? []));
 	}
 	return map;
 }
 
 /**
  * Every recall of one memory (by library path or canonical source), newest
- * first, with the conversation it happened in.
+ * first, with the conversation it happened in. One recall per reply: a
+ * receipt that cites the memory once per chunk counts as one recall, by
+ * its best-ranked chunk.
  * @template {{ path: string; source: string; retrieved_at: string }} M
  * @param {{ message_id: string; chat_id: string; memories: M[] }[]} receipts
  * @param {string} path
@@ -147,11 +152,8 @@ export function recallsOf(receipts, path) {
 	/** @type {{ chat_id: string; message_id: string; memory: M }[]} */
 	const recalls = [];
 	for (const receipt of receipts) {
-		for (const memory of receipt.memories ?? []) {
-			if (memory.path === path || memory.source === path) {
-				recalls.push({ chat_id: receipt.chat_id, message_id: receipt.message_id, memory });
-			}
-		}
+		const memory = (receipt.memories ?? []).find((m) => m.path === path || m.source === path);
+		if (memory) recalls.push({ chat_id: receipt.chat_id, message_id: receipt.message_id, memory });
 	}
 	recalls.sort((a, b) => (Date.parse(b.memory.retrieved_at) || 0) - (Date.parse(a.memory.retrieved_at) || 0));
 	return recalls;
@@ -159,14 +161,25 @@ export function recallsOf(receipts, path) {
 
 /**
  * The question shown when two corrections of one memory disagree: both
- * statements, in full, and which one each option keeps.
+ * statements, in full, and which one each option keeps. When the pair is
+ * an earlier conflict still waiting (see `conflictIsPending`), the prompt
+ * says so and never presents the parked statement as the one just typed.
  * @param {CorrectionConflict} conflict
+ * @param {string} [draft] the statement the user just sent
  */
-export function conflictPrompt(conflict) {
+export function conflictPrompt(conflict, draft = conflict.proposed.statement) {
+	const pending = conflictIsPending(conflict, draft);
+	const name = displayName(conflict.path);
 	return {
 		conflictId: conflict.conflict_id,
 		path: conflict.path,
-		question: `Two of your corrections to ${displayName(conflict.path)} disagree. Which one should stay?`,
+		pending,
+		question: pending
+			? `An earlier correction of ${name} is still waiting for your decision. Settle it first, then save your new statement.`
+			: `Two of your corrections to ${name} disagree. Which one should stay?`,
+		note: pending
+			? "Nothing is merged, and your new statement below is not applied yet: it stays in the editor until you save it again."
+			: "Nothing is merged: the memory keeps the current statement until you choose.",
 		options: [
 			{
 				keep: /** @type {const} */ ("current"),
@@ -176,7 +189,7 @@ export function conflictPrompt(conflict) {
 			},
 			{
 				keep: /** @type {const} */ ("proposed"),
-				title: "Use the new statement",
+				title: pending ? "Use the earlier correction" : "Use the new statement",
 				statement: conflict.proposed.statement,
 				corrected_at: conflict.proposed.corrected_at,
 			},
@@ -280,20 +293,27 @@ export function flagBadges(flags) {
  * @returns {M[]}
  */
 export function uniqueMemories(memories) {
-	void memories;
-	throw new Error("not implemented");
+	const seen = new Set();
+	/** @type {M[]} */
+	const unique = [];
+	for (const memory of memories) {
+		if (seen.has(memory.path)) continue;
+		seen.add(memory.path);
+		unique.push(memory);
+	}
+	return unique;
 }
 
 /**
  * Whether a `needs_resolution` answer is about the statement just sent or an
- * earlier correction still parked for the memory.
+ * earlier correction still parked for the memory: the server keeps one open
+ * question per memory and answers every further correction with that pair,
+ * so a proposed statement that is not the draft was typed earlier.
  * @param {CorrectionConflict} conflict
  * @param {string} draft
  */
 export function conflictIsPending(conflict, draft) {
-	void conflict;
-	void draft;
-	throw new Error("not implemented");
+	return conflict.proposed.statement.trim() !== draft.trim();
 }
 
 /**
@@ -302,15 +322,17 @@ export function conflictIsPending(conflict, draft) {
  * @param {string} path
  */
 export function boundTextPath(path) {
-	void path;
-	throw new Error("not implemented");
+	return canFlag(path) ? path : `${path}.md`;
 }
 
 /**
- * The description inside a media memory's bound-text file.
+ * The description inside a media memory's bound-text file, which the server
+ * stores behind one `NOLUNE_MEDIA_TEXT {…}` header line. A file without the
+ * header is taken as the description itself.
  * @param {string} raw
  */
 export function mediaBoundText(raw) {
-	void raw;
-	throw new Error("not implemented");
+	if (!raw.startsWith(MEDIA_TEXT_HEADER)) return raw.trim();
+	const newline = raw.indexOf("\n");
+	return newline === -1 ? "" : raw.slice(newline + 1).trim();
 }

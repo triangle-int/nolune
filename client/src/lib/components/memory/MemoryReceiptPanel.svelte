@@ -12,7 +12,7 @@
 	import { fetchMemory, fetchMemoryReceipt } from "$lib/api/client.js";
 	import type { MemoryFlags, RecalledMemory } from "$lib/api/types.js";
 	import { displayName } from "$lib/memory/library.js";
-	import { confidenceLabel, flagBadges, isMediaMemory, reasonLabel, recalledWhen, receiptHeading, receiptSummary, sourceStatusCopy } from "$lib/memory/receipts.js";
+	import { confidenceLabel, flagBadges, isMediaMemory, reasonLabel, recalledWhen, receiptHeading, receiptSummary, sourceStatusCopy, uniqueMemories } from "$lib/memory/receipts.js";
 	import MemoryControls, { type MemoryChange } from "./MemoryControls.svelte";
 	import ChevronDown from "@lucide/svelte/icons/chevron-down";
 
@@ -41,7 +41,9 @@
 	let flagsKnown = $state(false);
 	let refreshError = $state("");
 
-	const shown = $derived(refreshed ?? memories);
+	// One row per memory: a long memory is cited once per vector chunk that
+	// ranked, and the re-read receipt comes straight from the server.
+	const shown = $derived(uniqueMemories(refreshed ?? memories));
 	const heading = $derived(receiptHeading(companionName));
 
 	// A new receipt from the chat (a reload) replaces whatever this panel re-read.
@@ -99,7 +101,7 @@
 		</button>
 		{#if open}
 			<ul class="receipt-list" id={`receipt-${messageId}`}>
-				{#each shown as memory (memory.path + memory.reason)}
+				{#each shown as memory (memory.path)}
 					{@const missing = memory.source_status === "missing"}
 					{@const media = isMediaMemory(memory)}
 					{@const flags = flagsFor(memory)}
@@ -122,7 +124,7 @@
 						{#if missing}
 							<p class="receipt-status">{sourceStatusCopy(memory)}</p>
 						{:else if !readonly}
-							<MemoryControls {slug} path={memory.path} {flags} excerpt={memory.excerpt} inspectHref={`/${encodeURIComponent(slug)}/memory?open=${encodeURIComponent(memory.path)}`} {onchange} />
+							<MemoryControls {slug} path={memory.path} {flags} inspectHref={`/${encodeURIComponent(slug)}/memory?open=${encodeURIComponent(memory.path)}`} {onchange} />
 						{/if}
 					</li>
 				{/each}
