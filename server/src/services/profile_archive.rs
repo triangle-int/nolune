@@ -189,7 +189,6 @@ impl From<io::Error> for ArchiveError {
 
 /// Stream `archive` into `staging` with the default [`Limits`]. On error the
 /// caller discards `staging`; nothing else has been written.
-#[allow(dead_code)] // The import route and restore tool adopt the reader in #74's next slice.
 pub fn extract_into(archive: impl Read, staging: &Dir) -> Result<ArchiveSummary, ArchiveError> {
     extract_into_with_limits(archive, staging, &Limits::default())
 }
@@ -590,7 +589,9 @@ fn read_bounded<R: Read>(
     Ok(Some(bytes))
 }
 
-fn parse_identity(bytes: &[u8]) -> Result<CompanionIdentity, ArchiveError> {
+/// Parse and validate a manifest. `profile_import` re-runs it on the staged
+/// marker right before the swap.
+pub(crate) fn parse_identity(bytes: &[u8]) -> Result<CompanionIdentity, ArchiveError> {
     let identity: CompanionIdentity = serde_json::from_slice(bytes)
         .map_err(|error| ArchiveError::InvalidIdentity(error.to_string()))?;
     if identity.format_version != ARCHIVE_FORMAT_VERSION {

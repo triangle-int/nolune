@@ -40,6 +40,7 @@ Unknown fields are rejected. A marker with any other `format_version` or
 │   └── signing_key.json         private Ed25519 seed, mode 0600
 ├── skills/                      installed skills (global)
 ├── vectors/                     derived vector index, keyed by slug
+├── imports/                     restore staging (see Archive format below); empty between imports
 └── instances/
     └── companion/               the one companion
         ├── companion.json       identity marker (see above)
@@ -538,16 +539,57 @@ before it can fill disk or memory:
 The reader writes only into a staging directory handed to it as a capability:
 every file is created with `create_new`, symlinks are never followed, and
 files and directories are fsynced before the reader reports success. It never
-touches `instances/companion/` itself. Publishing the staged tree under the
-lifecycle gate and rebuilding derived state is the remaining import work
-tracked by #74; until it lands, `POST /api/instances/companion/import` answers
-`501` and the `restore_backup` tool stays disabled.
+touches `instances/companion/` itself; publishing the staged tree is the
+restore described next.
 
 Exporting skips symlinks, special files, and retired layouts (they are
 counted, never followed), so a fresh export always imports. An export that
 fails part-way never completes the archive: the tar end-of-archive blocks and
 the gzip trailer are withheld, so whatever a client kept of the download is
 refused as truncated rather than restored with files missing.
+
+### Restore
+
+`services/profile_import.rs` (#74) replaces the companion with an archive in
+one transaction under the companion's lifecycle gate, the same
+`VectorStore::lifecycle_lock` every memory write, delete, media replacement,
+and backfill holds. A memory write that arrives during an import waits and
+then lands in the imported tree; two imports serialize the same way.
+
+1. **Refuse while busy.** While chat or scheduler agent tasks exist for the
+   companion (they write through ambient paths the gate does not cover) the
+   restore returns a typed `busy` error before anything is staged; the route
+   maps it to `409`.
+2. **Stage.** The archive is extracted into `imports/staging-<id>/` through
+   the workspace capability. `imports/` is a top-level directory, never a
+   sibling under `instances/`, so a half-extracted tree is never mistaken
+   for an obsolete companion. A refused archive is discarded here and the
+   companion is untouched.
+3. **Validate.** The staged marker is re-read and validated right before
+   the swap.
+4. **Swap.** `instances/companion` is renamed to `imports/previous-<id>`,
+   then the staged tree is renamed to `instances/companion`. If the second
+   rename fails, the previous tree is renamed back and the error says so;
+   the tree and the derived index are exactly what they were. If that
+   rollback also fails, the previous companion is left intact at
+   `imports/previous-<id>` and the error names it. The cached uploads
+   directory handle is dropped on both sides of the swap.
+5. **Rebuild derived state.** The vector collection is reset (which also
+   invalidates BM25) and backfilled from the imported `memory/`; the catalog
+   snapshot is rebuilt and the memory graph is loaded from the imported
+   file. When the embedding provider is unconfigured or unreachable the
+   result reports `derived_index: pending`, the collection stays marked for
+   the startup backfill (`needs_backfill`), and BM25 rebuilds on the next
+   search; otherwise `derived_index: rebuilt`.
+6. **Discard the previous tree.** `imports/previous-<id>` is removed only
+   after the new tree is in place and derived state has been handled.
+
+If the process dies between the two renames, the previous companion is at
+`imports/previous-<id>`; move it back to `instances/companion` by hand.
+Wiring the multipart route, the `restore_backup` tool, and the `nolune
+restore` CLI to this restore is the last #74 slice; until it lands,
+`POST /api/instances/companion/import` answers `501` and the tool stays
+disabled.
 
 ## Federation identity
 

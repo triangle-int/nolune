@@ -20,7 +20,8 @@ use std::{
     sync::Arc,
 };
 
-use cap_std::fs::Dir;
+use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt};
+use cap_std::fs::{Dir, OpenOptions};
 use tokio_util::sync::CancellationToken;
 
 use super::{
@@ -80,7 +81,7 @@ pub enum RestoreError {
     Busy { tasks: usize },
     /// The archive was refused; the staging directory has been discarded.
     Archive(ArchiveError),
-    /// Creating or discarding the staging directory failed.
+    /// Creating the staging directory failed; nothing was extracted.
     Staging(io::Error),
     /// A rename in the swap failed and the previous companion is in place.
     PublishFailed(io::Error),
@@ -136,17 +137,199 @@ pub async fn restore_companion<R: Read + Send + 'static>(
     slug: &str,
     archive: R,
 ) -> Result<RestoreOutcome, RestoreError> {
-    let _ = (store, agent_tasks, slug, archive);
-    let _ = (
-        STAGING_PREFIX,
-        PREVIOUS_PREFIX,
-        MAX_IDENTITY_BYTES,
-        IDENTITY_FILE,
+    let _gate = store.lifecycle_lock(slug).lock_owned().await;
+
+    // Chat and scheduler agents write the companion through ambient paths
+    // that the gate does not cover, so an import while one runs would race
+    // the swap. Refuse before anything is staged; the route answers 409.
+    let running = {
+        let prefix = format!("{slug}/");
+        let tasks = agent_tasks.lock().await;
+        tasks.keys().filter(|key| key.starts_with(&prefix)).count()
+    };
+    if running > 0 {
+        return Err(RestoreError::Busy { tasks: running });
+    }
+
+    let media = store.media_store();
+    let id = uuid::Uuid::new_v4();
+    let staging_name = format!("{STAGING_PREFIX}{id}");
+    let previous_name = format!("{PREVIOUS_PREFIX}{id}");
+
+    // Stage and validate. The extractor writes only through the staging
+    // capability; the marker is re-read from what actually landed on disk.
+    let staging = blocking({
+        let media = media.clone();
+        let name = staging_name.clone();
+        move || media.create_import(&name)
+    })
+    .await
+    .map_err(RestoreError::Staging)?;
+    let extracted = tokio::task::spawn_blocking(move || {
+        let summary = profile_archive::extract_into(archive, &staging)?;
+        validate_staged(&staging)?;
+        Ok::<_, ArchiveError>(summary)
+    })
+    .await
+    .unwrap_or_else(|error| Err(ArchiveError::Io(task_error(error))));
+    let summary = match extracted {
+        Ok(summary) => summary,
+        Err(error) => {
+            discard(&media, &staging_name).await;
+            return Err(RestoreError::Archive(error));
+        }
+    };
+
+    // Swap: park the live tree, move the staged tree into place, and move
+    // the parked tree back if that second rename fails.
+    let had_previous = match blocking({
+        let media = media.clone();
+        let name = previous_name.clone();
+        let slug = slug.to_owned();
+        move || media.stash_companion(&slug, &name)
+    })
+    .await
+    {
+        Ok(had_previous) => had_previous,
+        Err(error) => {
+            discard(&media, &staging_name).await;
+            return Err(RestoreError::PublishFailed(error));
+        }
+    };
+    let published = blocking({
+        let media = media.clone();
+        let name = staging_name.clone();
+        let slug = slug.to_owned();
+        move || media.publish_import(&slug, &name)
+    })
+    .await;
+    if let Err(error) = published {
+        let rollback = if had_previous {
+            blocking({
+                let media = media.clone();
+                let name = previous_name.clone();
+                let slug = slug.to_owned();
+                move || media.publish_import(&slug, &name)
+            })
+            .await
+        } else {
+            Ok(())
+        };
+        discard(&media, &staging_name).await;
+        return Err(match rollback {
+            Ok(()) => RestoreError::PublishFailed(error),
+            Err(rollback) => {
+                log::error!(
+                    "[import] rollback failed; the previous companion is at imports/{previous_name}: {rollback}"
+                );
+                RestoreError::PublishStranded {
+                    error,
+                    rollback,
+                    previous: previous_name,
+                }
+            }
+        });
+    }
+    log::info!(
+        "[import] published {} files ({} bytes) for {slug}",
+        summary.files,
+        summary.bytes
     );
-    let _: Option<(Arc<MediaStore>, &Dir)> = None;
-    let _ = memory::load_graph;
-    let _ = profile_archive::ARCHIVE_ROOT;
-    todo!("implemented after the tests below are red")
+
+    // Derived state: vectors and BM25 are emptied and rebuilt from the
+    // imported memory files. A provider that cannot embed leaves the
+    // collection marked for the startup backfill; BM25 rebuilds lazily.
+    let (derived_index, pending_reason, indexed_chunks) =
+        match store.rebuild_derived_no_lifecycle(slug).await {
+            Ok(chunks) => (DerivedIndex::Rebuilt, None, chunks),
+            Err(reason) => {
+                log::warn!("[import] semantic index pending for {slug}: {reason}");
+                (DerivedIndex::Pending, Some(reason), 0)
+            }
+        };
+    // The catalog snapshot and the memory graph are read from the companion
+    // directory on demand, so the swap already made them current; rebuild the
+    // snapshot now and load the graph once so a malformed file shows up here.
+    let _ = blocking({
+        let media = media.clone();
+        let slug = slug.to_owned();
+        move || {
+            memory::rebuild_catalog_snapshot(&slug, &media);
+            let graph = memory::load_graph(&media, &slug);
+            log::info!(
+                "[import] memory graph reloaded for {slug}: {} edges",
+                graph.edges.len()
+            );
+            Ok(())
+        }
+    })
+    .await;
+
+    if had_previous {
+        discard(&media, &previous_name).await;
+    }
+    Ok(RestoreOutcome {
+        files: summary.files,
+        directories: summary.directories,
+        bytes: summary.bytes,
+        derived_index,
+        pending_reason,
+        indexed_chunks,
+    })
+}
+
+/// Re-read the staged marker before the swap: the extractor already refused
+/// an archive without a valid one, so this only guards the publication step
+/// against a regression in the reader.
+fn validate_staged(staging: &Dir) -> Result<(), ArchiveError> {
+    let mut options = OpenOptions::new();
+    options.read(true).follow(FollowSymlinks::No);
+    let mut file = match staging.open_with(IDENTITY_FILE, &options) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(ArchiveError::MissingIdentity);
+        }
+        Err(error) => return Err(ArchiveError::Io(error)),
+    };
+    if !file.metadata()?.is_file() {
+        return Err(ArchiveError::MissingIdentity);
+    }
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take(MAX_IDENTITY_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_IDENTITY_BYTES {
+        return Err(ArchiveError::InvalidIdentity(
+            "staged identity marker is too large".into(),
+        ));
+    }
+    profile_archive::parse_identity(&bytes).map(|_| ())
+}
+
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> io::Result<T> + Send + 'static,
+) -> io::Result<T> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .unwrap_or_else(|error| Err(task_error(error)))
+}
+
+fn task_error(error: tokio::task::JoinError) -> io::Error {
+    io::Error::other(format!("restore task failed: {error}"))
+}
+
+/// Remove `imports/<name>`; a failure is logged, never fatal, because the
+/// companion itself is already in its final state by the time this runs.
+async fn discard(media: &Arc<MediaStore>, name: &str) {
+    let result = blocking({
+        let media = media.clone();
+        let name = name.to_owned();
+        move || media.remove_import(&name)
+    })
+    .await;
+    if let Err(error) = result {
+        log::warn!("[import] could not remove imports/{name}: {error}");
+    }
 }
 
 #[cfg(test)]
@@ -658,10 +841,12 @@ mod tests {
 
     #[test]
     fn restore_stages_under_imports_and_never_resolves_ambient_paths() {
+        // `cap_std::fs::Dir` is the capability type; only ambient `std::fs` is forbidden.
         let production = include_str!("profile_import.rs")
             .split("#[cfg(test)]\nmod tests")
             .next()
-            .unwrap();
+            .unwrap()
+            .replace("cap_std::fs::", "");
         for forbidden in [
             "std::fs::",
             "fs::read",
