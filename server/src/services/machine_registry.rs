@@ -1129,7 +1129,9 @@ impl MachineRegistry {
     /// `call_timeout` as the deadline for each answer. A reconnect of the
     /// same desktop replaces its previous target; the server-local target
     /// is never shadowed. Fails when the desktop is no longer connected
-    /// under `connection`.
+    /// under `connection`. Clients hear `machine_updated` with the row's
+    /// driver fields filled: the legacy registration announced the row
+    /// before the target existed.
     pub async fn attach_desktop_cua(
         &self,
         machine_id: &str,
@@ -1138,22 +1140,27 @@ impl MachineRegistry {
         call_timeout: Duration,
     ) -> Result<Arc<DesktopLink>, CuaRegistrationError> {
         let id = descriptor.machine_id.clone();
-        // Held across the registration so a registration or disconnect of
-        // the same desktop lands wholly before or wholly after: the target
-        // is registered and the link stored as one step, and whoever comes
-        // next finds both or neither. The other side (`register`,
-        // `take_connection`) detaches under the same lock.
-        let mut agents = self.agents.lock().await;
-        let agent = agents
-            .get_mut(machine_id)
-            .filter(|agent| agent.connection == connection)
-            .ok_or_else(|| CuaRegistrationError::NoConnection(id.clone()))?;
-        let link = DesktopLink::new(id, agent.sender.clone(), call_timeout);
-        let adapter = link
-            .checked_adapter(descriptor)
-            .map_err(|error| CuaRegistrationError::Invalid(error.to_string()))?;
-        self.cua.register_desktop(&link, adapter).await?;
-        agent.cua = Some(link.clone());
+        let (link, now) = {
+            // Held across the registration so a registration or disconnect
+            // of the same desktop lands wholly before or wholly after: the
+            // target is registered and the link stored as one step, and
+            // whoever comes next finds both or neither. The other side
+            // (`register`, `take_connection`) detaches under the same lock.
+            let mut agents = self.agents.lock().await;
+            let agent = agents
+                .get_mut(machine_id)
+                .filter(|agent| agent.connection == connection)
+                .ok_or_else(|| CuaRegistrationError::NoConnection(id.clone()))?;
+            let link = DesktopLink::new(id, agent.sender.clone(), call_timeout);
+            let adapter = link
+                .checked_adapter(descriptor)
+                .map_err(|error| CuaRegistrationError::Invalid(error.to_string()))?;
+            self.cua.register_desktop(&link, adapter).await?;
+            agent.cua = Some(link.clone());
+            (link, agent.info.last_seen)
+        };
+        // Outside the lock: the row is read back through `live_snapshot`.
+        self.broadcast(machine_id, now).await;
         Ok(link)
     }
 
@@ -2944,7 +2951,9 @@ mod desktop_cua_tests {
 
     #[tokio::test]
     async fn an_attached_desktop_executes_over_its_socket_and_fills_its_known_row() {
-        let registry = MachineRegistry::new();
+        use crate::domain::events::ServerEvent;
+        let (events, mut updates) = tokio::sync::broadcast::channel(16);
+        let registry = MachineRegistry::new().with_events(events);
         let (mut rx, _connection) = connect_with_cua(&registry, STUDIO, T0).await;
 
         // Listed as a Cua target and, on the known row, as the desktop with
@@ -2953,6 +2962,27 @@ mod desktop_cua_tests {
             registry.cua().list().await,
             vec![descriptor(STUDIO, MachineLocation::Desktop)]
         );
+
+        // Review finding on #196: the legacy registration broadcast the row
+        // before the target was attached, and the attach broadcast nothing,
+        // so clients showed the driver as not reported until the next poll.
+        // The last `machine_updated` of a connect carries the driver fields.
+        let mut last = None;
+        while let Ok(event) = updates.try_recv() {
+            let ServerEvent::MachineUpdated { machine, .. } = event else {
+                panic!("unexpected event");
+            };
+            last = Some(machine);
+        }
+        let announced = last.expect("a machine_updated for the connect");
+        assert_eq!(announced.machine_id, STUDIO);
+        assert!(announced.online);
+        assert_eq!(
+            announced.driver_version.as_deref(),
+            Some("0.28.2"),
+            "the attach announces the row with its driver"
+        );
+        assert_eq!(announced.cua_health, Some(MachineHealth::Healthy));
         let known = registry.known_at(T0 + 5).await.unwrap();
         assert_eq!(known.len(), 1, "{known:?}");
         let row = &known[0];

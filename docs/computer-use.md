@@ -154,8 +154,10 @@ beside the server-local one: `list_machines` lists it with
 `location: "desktop"` and the driver's `driver_version`, `health`,
 `permissions` and `capabilities` (the legacy entry with `hostname` and
 `screen` stays), and its row in `GET /api/instances/companion/machines`
-carries `driver_version` and `cua_health` while it is connected. When the
-registration reports no `permissions`, the descriptor's are recorded.
+carries `driver_version` and `cua_health` while it is connected; clients
+hear that row as `machine_updated` once the target is attached, after the
+one the registration itself announces. When the registration reports no
+`permissions`, the descriptor's are recorded.
 A desktop reconnecting under its stable id replaces its target; it never
 becomes a second one. The ack's `"cua": false` after a descriptor was sent
 means the socket was replaced between the legacy registration and the
