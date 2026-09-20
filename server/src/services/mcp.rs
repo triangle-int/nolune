@@ -62,7 +62,7 @@ async fn connect_http(
 }
 
 /// Connect via stdio (child process) transport.
-async fn connect_stdio(
+pub(crate) async fn connect_stdio(
     config: &McpServerConfig,
 ) -> anyhow::Result<(ServerSink, tokio::task::JoinHandle<()>)> {
     let cmd = config

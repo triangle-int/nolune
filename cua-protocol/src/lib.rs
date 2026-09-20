@@ -6,6 +6,7 @@
 //! foreground escalation, arbitrary command arguments, URLs, or file paths.
 
 pub mod cua_driver_pin;
+pub mod driver_mcp;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use serde::{Deserialize, Deserializer, Serialize};
