@@ -46,6 +46,8 @@ pub struct AppState {
     pub machine_registry: MachineRegistry,
     /// The one proactive companion loop (#92): every self-started run is admitted here.
     pub proactive: crate::services::proactive::ProactiveLoop,
+    /// Commitments the companion follows through on (#85); the record is the source of truth.
+    pub commitments: crate::services::commitments::CommitmentStore,
     /// Paired browsers and pending pairing codes (#112). In memory until
     /// `attach_storage` is called by the server entrypoint.
     pub browser_sessions: Arc<BrowserSessionStore>,
@@ -79,6 +81,11 @@ impl AppState {
             crate::domain::companion::CANONICAL_SLUG,
         )
         .with_events(events.clone());
+        let commitments = crate::services::commitments::CommitmentStore::new(
+            &config::workspace_root(),
+            crate::domain::companion::CANONICAL_SLUG,
+        )
+        .with_events(events.clone());
 
         Self {
             resources: crate::services::resource_access::ResourceAccess::new(&config.auth_token),
@@ -94,6 +101,7 @@ impl AppState {
             vector_store: Arc::new(vector_store),
             machine_registry: MachineRegistry::new(),
             proactive,
+            commitments,
             browser_sessions: Arc::new(BrowserSessionStore::new()),
         }
     }

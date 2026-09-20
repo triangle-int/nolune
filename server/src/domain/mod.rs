@@ -1,4 +1,5 @@
 pub mod chat;
+pub mod commitment;
 pub mod companion;
 pub mod config;
 pub mod drop;
