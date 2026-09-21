@@ -207,7 +207,10 @@ for its health report before the socket opens, and the descriptor that
 report yields is what the `cua` field carries; a reconnect re-reads the
 health of the same child rather than starting a second one, a child that
 exits on its own is restarted on the next request, and quitting the app
-ends the open sessions and kills it. Every inbound `cua_request` is decoded
+ends the open sessions and kills it: the stop is terminal (nothing starts
+again, and a driver still in its handshake or its first report lets go at
+once) and a stop the exit grace cuts short still ends with the child
+killed and waited for. Every inbound `cua_request` is decoded
 with `CuaRequestEnvelope::from_json` and authorized against that descriptor
 before the driver sees it: a tool the protocol does not name, a request for
 another machine, or an action whose capability or permission the descriptor
@@ -215,7 +218,8 @@ lacks is answered with a `capability_denied` error without touching the
 driver, whatever the server asked. Admitted requests go through the same
 `driver_mcp` mapping the server uses, and the driver's structured result is
 forwarded unchanged. When the socket closes, the desktop sends `end_session`
-for every session it confirmed open for the server.
+for every session it confirmed open for the server, one at a time, and
+forgets each only once the driver answered.
 
 ## Configuration
 
