@@ -1250,6 +1250,22 @@ pub(crate) mod fake {
 
     use super::*;
 
+    /// The live driver's health report for a fully granted machine: what
+    /// the fake answers the registration's `health_report` with.
+    pub const HEALTHY: &str = r#"{
+        "schema_version":"1","platform":"darwin","driver_version":"0.28.2","overall":"ok",
+        "checks":[
+            {"name":"binary_version","status":"pass","message":"cua-driver 0.28.2"},
+            {"name":"platform_supported","status":"pass","message":"macOS 27.0 (arm64)","data":{"architecture":"arm64","os_version":"27.0"}},
+            {"name":"session_active","status":"pass","message":"MCP session is active."},
+            {"name":"bundle_identity","status":"pass","message":"Bundle is com.trycua.driver.","data":{"bundle_identifier":"com.trycua.driver","executable_path":"/Applications/CuaDriver.app/Contents/MacOS/cua-driver","identity_source":"current_process"}},
+            {"name":"tcc_accessibility","status":"pass","message":"Accessibility is granted.","data":{"bundle_identifier":"com.trycua.driver"}},
+            {"name":"tcc_screen_recording","status":"pass","message":"Screen Recording is granted.","data":{"bundle_identifier":"com.trycua.driver"}},
+            {"name":"ax_capability","status":"pass","message":"AX is trusted and reachable."},
+            {"name":"screen_capture_capability","status":"skip","message":"Direct capture was not probed."}
+        ]
+    }"#;
+
     /// What the fake does with one call.
     enum Canned {
         Answer(CallOutcome),
@@ -1367,31 +1383,21 @@ pub(crate) mod fake {
 
 #[cfg(test)]
 mod tests {
-    use super::fake::FakeTransport;
+    use super::fake::{FakeTransport, HEALTHY};
     use super::*;
     use cua_protocol::{
-        driver_mcp::HEALTH_REPORT_TOOL, ActionDelivery, ActionEffect, ActionOutcome, ActionRoute,
-        Capability, CaptureScope, ClickAction, ClickActionResult, ClickArgs, DeliveryMode,
-        ElementAddress, EmptyArgs, EndSessionResult, LaunchAppArgs, MachineHealth, MouseButton,
-        Permission, StartSessionArgs, StartSessionResult, TypeTextArgs, WindowPoint, WindowTarget,
+        driver_mcp::HEALTH_REPORT_TOOL, AccessibilityElement, ActionDelivery, ActionEffect,
+        ActionOutcome, ActionRoute, AppDisplayName, Base64Image, Capability, CaptureScope,
+        ClickAction, ClickActionResult, ClickArgs, DeliveryMode, ElementAddress, ElementToken,
+        EmptyArgs, EmptyTitleText, EndSessionResult, GetWindowStateArgs, ImageMediaType,
+        LaunchAppArgs, MachineHealth, MouseButton, Permission, PredicateEvaluation,
+        PredicateStatus, Rect, Screenshot, SnapshotId, StartSessionArgs, StartSessionResult,
+        TreeMarkdown, TypeTextArgs, VerificationResult, VerifyPredicate, VerifyStateArgs,
+        WindowPoint, WindowStateResult, WindowTarget,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     const STUDIO: &str = "4f3c1c2e-9b5e-4d2b-8f0a-1c2d3e4f5a6b";
-
-    const HEALTHY: &str = r#"{
-        "schema_version":"1","platform":"darwin","driver_version":"0.28.2","overall":"ok",
-        "checks":[
-            {"name":"binary_version","status":"pass","message":"cua-driver 0.28.2"},
-            {"name":"platform_supported","status":"pass","message":"macOS 27.0 (arm64)","data":{"architecture":"arm64","os_version":"27.0"}},
-            {"name":"session_active","status":"pass","message":"MCP session is active."},
-            {"name":"bundle_identity","status":"pass","message":"Bundle is com.trycua.driver.","data":{"bundle_identifier":"com.trycua.driver","executable_path":"/Applications/CuaDriver.app/Contents/MacOS/cua-driver","identity_source":"current_process"}},
-            {"name":"tcc_accessibility","status":"pass","message":"Accessibility is granted.","data":{"bundle_identifier":"com.trycua.driver"}},
-            {"name":"tcc_screen_recording","status":"pass","message":"Screen Recording is granted.","data":{"bundle_identifier":"com.trycua.driver"}},
-            {"name":"ax_capability","status":"pass","message":"AX is trusted and reachable."},
-            {"name":"screen_capture_capability","status":"skip","message":"Direct capture was not probed."}
-        ]
-    }"#;
 
     const ACCESSIBILITY_DENIED: &str = r#"{
         "schema_version":"1","platform":"darwin","driver_version":"0.28.2","overall":"degraded",
@@ -1718,6 +1724,217 @@ mod tests {
         });
         let unreadable = error_of(&runtime.handle(&request("req-3", STUDIO, windows)).await);
         assert_eq!(unreadable.code, RuntimeErrorCode::DriverFailure);
+    }
+
+    /// The protocol's own 1x1 PNG fixture, as a driver returns a capture.
+    fn tiny_png() -> Screenshot {
+        use base64::Engine as _;
+        Screenshot {
+            media_type: ImageMediaType::Png,
+            base64: Base64Image::try_from(base64::engine::general_purpose::STANDARD.encode(
+                include_bytes!("../../../cua-protocol/tests/fixtures/tiny.png"),
+            ))
+            .unwrap(),
+            width: 1,
+            height: 1,
+        }
+    }
+
+    fn get_window_state() -> CuaAction {
+        CuaAction::GetWindowState(GetWindowStateArgs {
+            target: target(),
+            session: None,
+            include_accessibility_tree: true,
+            include_screenshot: true,
+            max_elements: Some(50),
+            max_depth: Some(4),
+            max_dimension: Some(1280),
+            query: None,
+        })
+    }
+
+    /// The driver's payload for a window snapshot with every modality: the
+    /// element tree, its markdown rendering and the image.
+    fn window_state() -> Value {
+        serde_json::to_value(WindowStateResult {
+            target: target(),
+            snapshot_id: Some(SnapshotId::try_from("s0a1b2c3d").unwrap()),
+            elements: vec![
+                AccessibilityElement {
+                    element_index: 0,
+                    element_token: ElementToken::try_from("tok-window").unwrap(),
+                    role: BoundedText::try_from("AXWindow").unwrap(),
+                    label: Some(BoundedText::try_from("Untitled").unwrap()),
+                    value: None,
+                    actions: vec![],
+                    enabled: Some(true),
+                    selected: None,
+                    frame: Some(Rect::new(0.0, 0.0, 800.0, 600.0).unwrap()),
+                    parent_index: None,
+                    depth: 0,
+                },
+                AccessibilityElement {
+                    element_index: 1,
+                    element_token: ElementToken::try_from("tok-save").unwrap(),
+                    role: BoundedText::try_from("AXButton").unwrap(),
+                    label: Some(BoundedText::try_from("Save").unwrap()),
+                    value: None,
+                    actions: vec![BoundedText::try_from("AXPress").unwrap()],
+                    enabled: Some(true),
+                    selected: Some(false),
+                    frame: Some(Rect::new(10.0, 20.0, 80.0, 24.0).unwrap()),
+                    parent_index: Some(0),
+                    depth: 1,
+                },
+            ],
+            tree_markdown: Some(
+                TreeMarkdown::try_from("- AXWindow \"Untitled\"\n  - AXButton \"Save\"").unwrap(),
+            ),
+            screenshot: Some(tiny_png()),
+            window_bounds: Some(Rect::new(0.0, 0.0, 800.0, 600.0).unwrap()),
+            screenshot_scale: Some(2.0),
+            truncated: false,
+            degraded: false,
+            degraded_reason: None,
+            app_name: Some(AppDisplayName::try_from("Notes").unwrap()),
+            window_title: Some(EmptyTitleText::try_from("Untitled").unwrap()),
+            elements_complete: Some(true),
+            element_count: Some(2),
+            returned_element_count: Some(2),
+            total_element_count: Some(2),
+            background_input: None,
+            escalation: None,
+        })
+        .unwrap()
+    }
+
+    fn verify_state() -> CuaAction {
+        CuaAction::VerifyState(VerifyStateArgs {
+            target: target(),
+            session: None,
+            expect: vec![
+                VerifyPredicate::WindowExists(true),
+                VerifyPredicate::WindowBounds {
+                    bounds: Rect::new(0.0, 0.0, 800.0, 600.0).unwrap(),
+                    tolerance_px: 2.0,
+                },
+            ],
+            include_screenshot: true,
+            stable_samples: 2,
+            timeout_ms: 1_500,
+        })
+    }
+
+    fn verified() -> Value {
+        serde_json::to_value(VerificationResult {
+            overall: PredicateStatus::Unsatisfied,
+            predicates: vec![
+                PredicateEvaluation {
+                    predicate_index: 0,
+                    status: PredicateStatus::Satisfied,
+                },
+                PredicateEvaluation {
+                    predicate_index: 1,
+                    status: PredicateStatus::Unsatisfied,
+                },
+            ],
+            screenshot: Some(tiny_png()),
+        })
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn window_state_and_verification_results_survive_the_runtime_unchanged() {
+        // The results with the large fields (an image, an element tree):
+        // what the driver returns is what the server gets, byte for byte,
+        // and the call the driver saw is the shared mapping's.
+        let fake =
+            FakeTransport::answering([Ok(payload(HEALTHY)), Ok(window_state()), Ok(verified())]);
+        let (runtime, _) = runtime_over(vec![fake.clone()]);
+        runtime.start(STUDIO).await.unwrap();
+
+        for (request_id, action, result) in [
+            ("obs-1", get_window_state(), window_state()),
+            ("verify-1", verify_state(), verified()),
+        ] {
+            let sent = request(request_id, STUDIO, action.clone());
+            let frame = runtime.handle(&sent).await;
+            let expected = tool_call(&action).unwrap();
+            assert_eq!(
+                fake.calls().last().unwrap(),
+                &(expected.name.to_owned(), expected.arguments),
+                "{request_id}: the driver saw the shared mapping's call"
+            );
+            assert_eq!(frame["type"], "cua_response", "{frame}");
+            assert_eq!(frame["response"]["request_id"], request_id);
+            assert_eq!(frame["response"]["machine_id"], STUDIO);
+            assert_eq!(frame["response"]["action"], action_name(action.kind()));
+            assert_eq!(frame["response"]["response"]["status"], "success");
+            assert_eq!(
+                frame["response"]["response"]["result"]["result"], result,
+                "{request_id}: the driver's payload is forwarded unchanged"
+            );
+            let envelope = answer(&frame);
+            let sent = CuaRequestEnvelope::from_json(&sent.to_string()).unwrap();
+            envelope.validate_response_for(&sent).unwrap();
+            let CuaResponse::Success { result } = envelope.response else {
+                unreachable!()
+            };
+            match *result {
+                CuaActionResult::GetWindowState(state) => {
+                    assert_eq!(state.elements.len(), 2);
+                    assert_eq!(state.screenshot, Some(tiny_png()));
+                    assert!(state.tree_markdown.is_some());
+                }
+                CuaActionResult::VerifyState(verification) => {
+                    assert_eq!(verification.overall, PredicateStatus::Unsatisfied);
+                    assert_eq!(verification.predicates.len(), 2);
+                    assert_eq!(verification.screenshot, Some(tiny_png()));
+                }
+                other => panic!("{request_id}: unexpected result {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn after_a_restart_the_desktop_authorizes_against_the_fresh_descriptor() {
+        // The server registered the descriptor of the driver that died
+        // (healthy, pointer allowed) and is not told about the restart
+        // until the next reconnect. The restarted driver reports
+        // accessibility denied: what the server still believes allowed is
+        // refused here, so the stricter side wins.
+        let first = FakeTransport::answering([Ok(payload(HEALTHY))]);
+        let second =
+            FakeTransport::answering([Ok(payload(ACCESSIBILITY_DENIED)), Ok(json!({"apps": []}))]);
+        let (runtime, spawns) = runtime_over(vec![first.clone(), second.clone()]);
+        let registered = runtime.start(STUDIO).await.unwrap();
+        assert!(registered.authorize(&click()).is_ok());
+
+        first.crash();
+        let refused = runtime.handle(&request("req-1", STUDIO, click())).await;
+        assert_eq!(spawns.load(Ordering::SeqCst), 2, "restarted on the request");
+        let error = error_of(&refused);
+        assert_eq!(error.code, RuntimeErrorCode::CapabilityDenied);
+        assert!(!error.retryable);
+        assert_eq!(
+            second.tools_called(),
+            vec![HEALTH_REPORT_TOOL.to_owned()],
+            "the click the stale descriptor allows never reaches the driver"
+        );
+
+        // What the fresh descriptor allows runs; the next reconnect
+        // re-registers with it.
+        let listed = runtime.handle(&request("req-2", STUDIO, list_apps())).await;
+        assert_eq!(listed["response"]["response"]["status"], "success");
+        second.also_answering([Ok(payload(ACCESSIBILITY_DENIED))]);
+        let reconnected = runtime.start(STUDIO).await.unwrap();
+        assert_eq!(reconnected.health, MachineHealth::Degraded);
+        assert_eq!(reconnected.permissions.accessibility, Permission::Denied);
+        assert_eq!(
+            spawns.load(Ordering::SeqCst),
+            2,
+            "the reconnect keeps the restarted driver"
+        );
     }
 
     #[tokio::test]
