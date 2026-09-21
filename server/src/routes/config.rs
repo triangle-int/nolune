@@ -17,6 +17,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/config/status", get(get_status))
         .route("/api/config/models", get(get_models).put(update_models))
         .route("/api/config/models/seed", post(seed_models))
+        .route("/api/config/models/{id}/test", post(test_model_preset))
         .route(
             "/api/config/embedding",
             get(get_embedding).put(update_embedding),
@@ -59,6 +60,7 @@ async fn get_status(State(state): State<AppState>) -> Json<serde_json::Value> {
                 crate::services::llm::provider_capabilities(preset.provider, &preset.model)
             }),
         "chat_preset": config.llm.chat_preset,
+        "chat_provider": config.llm.chat_preset().map(|preset| preset.provider),
         "background_preset": config.llm.background_preset,
         "model": config.llm.chat_model(),
         "configured_keys": keys,
@@ -140,6 +142,10 @@ fn key_probe_rejection(
             StatusCode::BAD_GATEWAY,
             format!("failed to reach {}: {error}", provider.label()),
         )),
+        Err(LlmError::Timeout) => Some((
+            StatusCode::GATEWAY_TIMEOUT,
+            format!("{} did not answer in time — try again", provider.label()),
+        )),
         Err(_) => Some((
             StatusCode::BAD_GATEWAY,
             format!("{} API error — try again", provider.label()),
@@ -147,15 +153,51 @@ fn key_probe_rejection(
     }
 }
 
+/// Where a key probe or connection test goes and how long it waits for the
+/// answer. The routes use each provider's own endpoint and
+/// [`PROBE_TIMEOUT`](crate::services::llm::PROBE_TIMEOUT); tests point a
+/// probe at a stub with a short deadline.
+#[derive(Clone, Copy)]
+struct Probe<'a> {
+    base_url: Option<&'a str>,
+    deadline: std::time::Duration,
+}
+
+impl Probe<'static> {
+    /// The provider's own endpoint, with the live deadline.
+    const LIVE: Self = Self {
+        base_url: None,
+        deadline: crate::services::llm::PROBE_TIMEOUT,
+    };
+}
+
+#[cfg(test)]
+impl<'a> Probe<'a> {
+    /// A stub that answers at once; the deadline only guards a broken test.
+    fn at(base_url: &'a str) -> Self {
+        Self {
+            base_url: Some(base_url),
+            deadline: std::time::Duration::from_secs(5),
+        }
+    }
+
+    /// A stub that never answers; the deadline is what the test measures.
+    fn stalled(base_url: &'a str) -> Self {
+        Self {
+            base_url: Some(base_url),
+            deadline: std::time::Duration::from_millis(200),
+        }
+    }
+}
+
 /// Checks a key with its provider before it is saved: a one-token
 /// completion through the adapter, with the model the person's presets
-/// name for that provider (#24, #25). `base_url` replaces the provider's
-/// endpoint; tests point it at a stub.
+/// name for that provider (#24, #25), within the probe's deadline.
 async fn verify_provider_key(
     state: &AppState,
     provider: config::LlmProvider,
     key: &str,
-    base_url: Option<&str>,
+    probe: Probe<'_>,
 ) -> Result<(), (StatusCode, String)> {
     let model = {
         let cfg = state.config.read().await;
@@ -163,25 +205,25 @@ async fn verify_provider_key(
     };
     let mut backend =
         crate::services::llm::LlmBackend::probe(state.http_client.clone(), provider, &model, key);
-    if let Some(base_url) = base_url {
+    if let Some(base_url) = probe.base_url {
         backend.base_url = base_url.to_owned();
     }
-    key_probe_rejection(provider, backend.probe_key().await).map_or(Ok(()), Err)
+    key_probe_rejection(provider, backend.probe_key(probe.deadline).await).map_or(Ok(()), Err)
 }
 
 async fn update_llm_key(
     State(state): State<AppState>,
     Json(req): Json<UpdateLlmKeyRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    save_llm_keys(&state, req, None).await
+    save_llm_keys(&state, req, Probe::LIVE).await
 }
 
-/// Probes and saves the keys in `req`. `probe_base_url` is where the probes
-/// go instead of each provider's own endpoint; the route passes `None`.
+/// Probes and saves the keys in `req`; `probe` says where the probes go
+/// and how long they wait.
 async fn save_llm_keys(
     state: &AppState,
     req: UpdateLlmKeyRequest,
-    probe_base_url: Option<&str>,
+    probe: Probe<'_>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     // A new provider key is checked before it is saved; clearing one is not.
     for (provider, key) in [
@@ -190,7 +232,7 @@ async fn save_llm_keys(
         (config::LlmProvider::Openrouter, &req.openrouter),
     ] {
         if let Some(key) = key.as_deref().map(str::trim).filter(|key| !key.is_empty()) {
-            verify_provider_key(state, provider, key, probe_base_url).await?;
+            verify_provider_key(state, provider, key, probe).await?;
         }
     }
 
@@ -547,15 +589,32 @@ async fn update_server(
     })))
 }
 
-/// Write the current config back to disk.
-/// Model presets and slots (#156), plus which providers can back them.
+/// Model presets and slots (#156), which providers can back them, and what
+/// each preset's provider offers for its model, keyed by preset id (#28),
+/// so the client can warn before a slot or a chat picks a model that
+/// cannot see images, read documents or call tools.
 fn models_json(config: &config::Config) -> serde_json::Value {
+    let capabilities: serde_json::Map<String, serde_json::Value> = config
+        .llm
+        .presets
+        .iter()
+        .map(|preset| {
+            (
+                preset.id.clone(),
+                json!(crate::services::llm::provider_capabilities(
+                    preset.provider,
+                    &preset.model
+                )),
+            )
+        })
+        .collect();
     json!({
         "presets": config.llm.presets,
         "chat_preset": config.llm.chat_preset,
         "background_preset": config.llm.background_preset,
         "keyed_providers": config.llm.keyed_providers(),
         "setup_required": config.llm.setup_required(),
+        "capabilities": capabilities,
     })
 }
 
@@ -635,6 +694,225 @@ async fn seed_models(
     let mut body = models_json(&*state.config.read().await);
     body["added"] = json!(added);
     Ok(Json(body))
+}
+
+// ---------------------------------------------------------------------------
+// Connection test (#28)
+// ---------------------------------------------------------------------------
+
+/// `POST /api/config/models/{id}/test`: one completion through the preset's
+/// adapter, answered with a typed outcome. Nothing is saved and no chat
+/// message is created; the route glue over `run_preset_test`.
+async fn test_model_preset(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, ModelsError> {
+    run_preset_test(&state, &id, Probe::LIVE).await
+}
+
+/// Runs the connection test for one preset; `probe` says where it goes and
+/// how long it waits.
+async fn run_preset_test(
+    state: &AppState,
+    id: &str,
+    probe: Probe<'_>,
+) -> Result<Json<serde_json::Value>, ModelsError> {
+    use crate::services::llm::{LlmBackend, PresetError, contract::LlmError};
+    let (preset, backend) = {
+        let cfg = state.config.read().await;
+        let Some(preset) = cfg.llm.preset(id.trim()) else {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "ok": false,
+                    "error": "unknown_preset",
+                    "preset": id,
+                    "message": format!("model preset {id:?} does not exist"),
+                })),
+            ));
+        };
+        let backend = LlmBackend::for_preset(&cfg, state.http_client.clone(), &preset.id);
+        (preset.clone(), backend)
+    };
+    let key = backend.as_ref().ok().map(|backend| backend.api_key.clone());
+    let outcome = match backend {
+        Ok(mut backend) => {
+            if let Some(base_url) = probe.base_url {
+                backend.base_url = base_url.to_owned();
+            }
+            backend.test_connection(probe.deadline).await
+        }
+        Err(error @ PresetError::MissingKey(_)) => Err(LlmError::SetupRequired(error.to_string())),
+        Err(error @ PresetError::Unknown(_)) => Err(LlmError::InvalidResponse(error.to_string())),
+    };
+    // A provider's 401 text tends to quote the key it refused (OpenAI masks
+    // it, which no pattern catches); the browser gets the typed sentence
+    // alone and the text stays in the log, redacted by the adapter.
+    if let Err(LlmError::Authentication(detail)) = &outcome {
+        log::warn!(
+            "[llm] {} rejected the API key for preset {:?}: {detail}",
+            preset.provider.label(),
+            preset.id
+        );
+    }
+    let mut answer = test_outcome(&preset, outcome);
+    // The adapters redact key-shaped text already; a provider that echoes
+    // the key in its refusal still never reaches the browser with it.
+    if let (Some(key), Err((_, Json(body)))) = (key.filter(|key| !key.is_empty()), &mut answer)
+        && let Some(message) = body["message"].as_str()
+    {
+        body["message"] = json!(scrub_key_echo(message, &key));
+    }
+    answer
+}
+
+/// `message` without `key`: the key itself, and any run of text that
+/// starts with its first four characters and ends with its last four, the
+/// way OpenAI masks a rejected key (`sk-revie******-key`). A key shorter
+/// than eight characters is matched exactly only.
+fn scrub_key_echo(message: &str, key: &str) -> String {
+    let key = key.trim();
+    if key.is_empty() {
+        return message.to_owned();
+    }
+    let scrubbed = message.replace(key, "[redacted]");
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() < 8 {
+        return scrubbed;
+    }
+    let prefix: String = chars[..4].iter().collect();
+    let suffix: String = chars[chars.len() - 4..].iter().collect();
+    // Between the two ends anything but a separator, so a masked echo ends
+    // at the punctuation that follows it and never swallows the sentence.
+    let pattern = format!(
+        r#"{}[^\s"'`<>,;()\[\]{{}}]*{}"#,
+        regex::escape(&prefix),
+        regex::escape(&suffix)
+    );
+    match regex::Regex::new(&pattern) {
+        Ok(masked) => masked.replace_all(&scrubbed, "[redacted]").into_owned(),
+        Err(_) => scrubbed,
+    }
+}
+
+/// How a connection test outcome answers (#28): a real answer is `ok` with
+/// the model and its usage; every failure the person can act on has its
+/// own `error`, matched by variant (#24, #25), with a message that names
+/// the provider. Provider messages arrive redacted from the adapters.
+fn test_outcome(
+    preset: &config::ModelPreset,
+    outcome: Result<
+        crate::services::llm::contract::Usage,
+        crate::services::llm::contract::LlmError,
+    >,
+) -> Result<Json<serde_json::Value>, ModelsError> {
+    use crate::services::llm::contract::LlmError;
+    let provider = preset.provider.label();
+    let model = preset.model.as_str();
+    let (status, error, message, retry_after) = match outcome {
+        Ok(usage) => {
+            return Ok(Json(json!({
+                "ok": true,
+                "preset": preset.id,
+                "provider": preset.provider,
+                "model": preset.model,
+                "usage": {
+                    "input_tokens": usage.input_tokens,
+                    "output_tokens": usage.output_tokens,
+                },
+                "capabilities": crate::services::llm::provider_capabilities(
+                    preset.provider,
+                    &preset.model
+                ),
+            })));
+        }
+        Err(LlmError::SetupRequired(message)) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "setup_required",
+            message,
+            None,
+        ),
+        // The provider's text is logged by the caller, never answered: it
+        // can quote the key it refused.
+        Err(LlmError::Authentication(_)) => (
+            StatusCode::UNAUTHORIZED,
+            "authentication",
+            format!("{provider} rejected the API key."),
+            None,
+        ),
+        Err(LlmError::RateLimited {
+            retry_after,
+            message,
+        }) => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            format!("{provider} accepted the key but is rate limiting: {message}"),
+            retry_after.map(|wait| wait.as_secs()),
+        ),
+        Err(LlmError::Http {
+            status: 404,
+            message,
+        }) => (
+            StatusCode::NOT_FOUND,
+            "model_not_found",
+            format!("{provider} has no model {model:?}: {message}"),
+            None,
+        ),
+        Err(LlmError::Http { status, message }) if status < 500 => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "provider_rejected",
+            format!("{provider} rejected the request ({status}): {message}"),
+            None,
+        ),
+        Err(LlmError::Http { status, message }) => (
+            StatusCode::BAD_GATEWAY,
+            "provider_unavailable",
+            format!("{provider} answered {status}: {message}"),
+            None,
+        ),
+        Err(LlmError::Transport(message)) => (
+            StatusCode::BAD_GATEWAY,
+            "unreachable",
+            format!("failed to reach {provider}: {message}"),
+            None,
+        ),
+        Err(LlmError::Timeout) => (
+            StatusCode::GATEWAY_TIMEOUT,
+            "timeout",
+            format!("{provider} did not answer in time"),
+            None,
+        ),
+        Err(LlmError::UnsupportedCapability(capability)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "unsupported",
+            format!("{provider} does not support {capability} for {model:?}"),
+            None,
+        ),
+        Err(LlmError::ContextLength(message)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "provider_rejected",
+            format!("{provider} rejected the request: {message}"),
+            None,
+        ),
+        Err(error @ (LlmError::InvalidResponse(_) | LlmError::Cancelled)) => (
+            StatusCode::BAD_GATEWAY,
+            "invalid_response",
+            format!("{provider} answered with something unexpected: {error}"),
+            None,
+        ),
+    };
+    Err((
+        status,
+        Json(json!({
+            "ok": false,
+            "error": error,
+            "preset": preset.id,
+            "provider": preset.provider,
+            "model": preset.model,
+            "message": message,
+            "retry_after_seconds": retry_after,
+        })),
+    ))
 }
 
 fn save_config(config: &config::Config) -> Result<(), (StatusCode, String)> {
@@ -729,6 +1007,28 @@ mod embedding_status_tests {
         assert_eq!(status["embedding"]["dimensions"], 768);
         assert_eq!(status["embedding"]["fallback"], "bm25");
         assert_eq!(status["embedding"]["update_semantics"], "full_replacement");
+        assert!(!status.to_string().contains("secret-"));
+    }
+
+    /// The status names the Chat preset's provider next to its model (#28),
+    /// so onboarding can say who did not answer even before the presets
+    /// listing loads; without a Chat preset both are null.
+    #[tokio::test]
+    async fn status_names_the_chat_presets_provider() {
+        let mut bare = config::Config::default();
+        bare.llm.presets.clear();
+        bare.llm.chat_preset.clear();
+        let Json(bare) = get_status(State(AppState::new(bare).await)).await;
+        assert!(bare["chat_provider"].is_null(), "{bare}");
+        assert!(bare["model"].is_null(), "{bare}");
+        let mut cfg = config::Config::default();
+        cfg.llm.tokens.open_ai = "secret-openai-key".into();
+        cfg.llm.seed_presets(config::LlmProvider::Openai);
+        cfg.llm.chat_preset = "gpt".into();
+        let Json(status) = get_status(State(AppState::new(cfg).await)).await;
+        assert_eq!(status["llm_configured"], true, "{status}");
+        assert_eq!(status["chat_provider"], "openai", "{status}");
+        assert_eq!(status["chat_preset"], "gpt", "{status}");
         assert!(!status.to_string().contains("secret-"));
     }
 
@@ -874,6 +1174,7 @@ mod embedding_status_tests {
 mod llm_key_tests {
     use super::*;
     use crate::services::llm::contract::LlmError;
+    use std::time::Duration;
 
     #[test]
     fn key_probe_rejects_only_bad_keys_and_unanswered_probes() {
@@ -906,6 +1207,51 @@ mod llm_key_tests {
             message.contains("Anthropic") && message.contains("try again"),
             "{message}"
         );
+        // A provider that never answers says nothing about the key either.
+        let (status, message) =
+            key_probe_rejection(config::LlmProvider::Openrouter, Err(LlmError::Timeout)).unwrap();
+        assert_eq!(status, StatusCode::GATEWAY_TIMEOUT);
+        assert!(
+            message.contains("OpenRouter") && message.contains("did not answer in time"),
+            "{message}"
+        );
+    }
+
+    /// A connection the provider accepts but never answers ends at the probe
+    /// deadline instead of holding the save open, and stores nothing.
+    #[tokio::test]
+    async fn a_stalled_provider_ends_the_key_save_at_the_deadline_without_saving() {
+        let workspace = tempfile::tempdir().unwrap();
+        let mut cfg = config::Config::default();
+        cfg.llm.tokens.open_ai = "openai-before".into();
+        let state = AppState::new_in(cfg, workspace.path().to_owned()).await;
+        let (url, task) = stalled_stub().await;
+        let started = std::time::Instant::now();
+        let (status, message) = save_llm_keys(
+            &state,
+            UpdateLlmKeyRequest {
+                api_key: None,
+                openai: Some("new-secret".into()),
+                elevenlabs: None,
+                openrouter: None,
+            },
+            Probe::stalled(&url),
+        )
+        .await
+        .unwrap_err();
+        task.abort();
+        assert_eq!(status, StatusCode::GATEWAY_TIMEOUT, "{message}");
+        assert!(message.contains("OpenAI"), "{message}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the save waited {:?} for a provider that never answers",
+            started.elapsed()
+        );
+        assert_eq!(
+            state.config.read().await.llm.tokens.open_ai,
+            "openai-before"
+        );
+        assert!(!workspace.path().join("config.toml").exists());
     }
 
     /// Keys are saved into the workspace the state was opened for (#107),
@@ -934,7 +1280,10 @@ mod llm_key_tests {
     }
 
     /// A provider that answers every request with `status` and `body`.
-    async fn provider_stub(status: u16, body: String) -> (String, tokio::task::JoinHandle<()>) {
+    pub(super) async fn provider_stub(
+        status: u16,
+        body: String,
+    ) -> (String, tokio::task::JoinHandle<()>) {
         let app = axum::Router::new().fallback(axum::routing::post(move || {
             let body = body.clone();
             async move { (StatusCode::from_u16(status).unwrap(), body) }
@@ -943,6 +1292,20 @@ mod llm_key_tests {
         let url = format!("http://{}", listener.local_addr().unwrap());
         let task = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
+        });
+        (url, task)
+    }
+
+    /// A provider that accepts every connection and never answers on it.
+    pub(super) async fn stalled_stub() -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            let mut held = Vec::new();
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                held.push(socket);
+            }
         });
         (url, task)
     }
@@ -993,7 +1356,7 @@ mod llm_key_tests {
 
             // The provider rejects the key: nothing is saved anywhere.
             let (url, task) = provider_stub(401, "invalid key".into()).await;
-            let (status, message) = save_llm_keys(&state, request(), Some(&url))
+            let (status, message) = save_llm_keys(&state, request(), Probe::at(&url))
                 .await
                 .unwrap_err();
             task.abort();
@@ -1024,7 +1387,9 @@ mod llm_key_tests {
                 }
             };
             let (url, task) = provider_stub(200, accepted).await;
-            let Json(saved) = save_llm_keys(&state, request(), Some(&url)).await.unwrap();
+            let Json(saved) = save_llm_keys(&state, request(), Probe::at(&url))
+                .await
+                .unwrap();
             task.abort();
             assert_eq!(saved["updated"], json!([name]));
             assert_eq!(
@@ -1036,6 +1401,484 @@ mod llm_key_tests {
                 persisted().unwrap().contains("new-secret"),
                 "{provider:?}: the accepted key was not written"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod preset_test_tests {
+    use super::*;
+    use crate::services::llm::contract::{LlmError, Usage};
+    use axum::body::to_bytes;
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, SystemTime};
+    use tower::ServiceExt;
+
+    /// Every file under `root` with its size and mtime, so a test can prove a
+    /// call wrote nothing there.
+    fn tree(root: &Path) -> Vec<(PathBuf, u64, SystemTime)> {
+        fn visit(dir: &Path, out: &mut Vec<(PathBuf, u64, SystemTime)>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    visit(&path, out);
+                } else if let Ok(meta) = path.metadata() {
+                    out.push((path, meta.len(), meta.modified().unwrap()));
+                }
+            }
+        }
+        let mut out = Vec::new();
+        visit(root, &mut out);
+        out.sort();
+        out
+    }
+
+    /// No conversation was created or touched: the test never goes through
+    /// chat, so nothing under any `chats/` exists afterwards.
+    fn assert_no_chat_files(root: &Path) {
+        let chats: Vec<_> = tree(root)
+            .into_iter()
+            .filter(|(path, _, _)| path.components().any(|c| c.as_os_str() == "chats"))
+            .map(|(path, _, _)| path)
+            .collect();
+        assert!(chats.is_empty(), "the connection test wrote {chats:?}");
+    }
+
+    /// The key `configured()` stores for `provider`, shaped like a real one
+    /// so an echo of it, masked or not, looks the way a provider writes it.
+    fn key_for(provider: config::LlmProvider) -> &'static str {
+        match provider {
+            config::LlmProvider::Anthropic => "sk-ant-test-anthropic-key-7f3a",
+            config::LlmProvider::Openai => "sk-test-openai-key-9c1d",
+            config::LlmProvider::Openrouter => "sk-or-test-openrouter-key-2b8e",
+        }
+    }
+
+    /// How OpenAI echoes a rejected key: its first eight and last four
+    /// characters around a mask. Neither `redact_secrets` (which wants a
+    /// long run of key characters) nor an exact match catches it.
+    fn masked(key: &str) -> String {
+        format!("{}******{}", &key[..8], &key[key.len() - 4..])
+    }
+
+    /// No part of `key` a person could recognise it by reaches `body`: not
+    /// the key, not its first eight characters, not the masked echo.
+    fn assert_no_key(body: &serde_json::Value, key: &str, label: &str) {
+        let text = body.to_string();
+        assert!(
+            !text.contains(key),
+            "{label}: the key reached the browser: {text}"
+        );
+        assert!(
+            !text.contains(&key[..8]),
+            "{label}: the key's prefix reached the browser: {text}"
+        );
+        assert!(
+            !text.contains(&masked(key)),
+            "{label}: the masked key reached the browser: {text}"
+        );
+    }
+
+    /// All three providers keyed and seeded; the Chat slot is Anthropic's.
+    fn configured() -> config::Config {
+        let mut cfg = config::Config::default();
+        cfg.llm.tokens.anthropic = key_for(config::LlmProvider::Anthropic).into();
+        cfg.llm.tokens.open_ai = key_for(config::LlmProvider::Openai).into();
+        cfg.llm.tokens.open_router = key_for(config::LlmProvider::Openrouter).into();
+        for provider in [
+            config::LlmProvider::Anthropic,
+            config::LlmProvider::Openai,
+            config::LlmProvider::Openrouter,
+        ] {
+            cfg.llm.seed_presets(provider);
+        }
+        cfg
+    }
+
+    async fn post_test(state: AppState, id: &str) -> (StatusCode, serde_json::Value) {
+        let response = router()
+            .with_state(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/config/models/{id}/test"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    /// The outcome mapping is by variant (#24, #25): each failure the person
+    /// can act on has its own `error`, and the message names the provider.
+    #[test]
+    fn test_outcomes_are_typed_by_variant() {
+        let preset = config::ModelPreset {
+            id: "gpt".into(),
+            name: "GPT-5.4".into(),
+            provider: config::LlmProvider::Openai,
+            model: "gpt-5.4".into(),
+        };
+        let Json(ok) = test_outcome(
+            &preset,
+            Ok(Usage {
+                input_tokens: 8,
+                output_tokens: 1,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+        assert_eq!(ok["ok"], true);
+        assert_eq!(ok["preset"], "gpt");
+        assert_eq!(ok["provider"], "openai");
+        assert_eq!(ok["model"], "gpt-5.4");
+        assert_eq!(ok["usage"]["input_tokens"], 8);
+        assert_eq!(ok["usage"]["output_tokens"], 1);
+        assert_eq!(ok["capabilities"]["documents"], false);
+        assert_eq!(ok["capabilities"]["tools"], true);
+
+        let cases: Vec<(LlmError, StatusCode, &str)> = vec![
+            (
+                LlmError::SetupRequired("no OpenAI API key is configured".into()),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "setup_required",
+            ),
+            (
+                LlmError::Authentication("Incorrect API key".into()),
+                StatusCode::UNAUTHORIZED,
+                "authentication",
+            ),
+            (
+                LlmError::RateLimited {
+                    retry_after: Some(Duration::from_secs(7)),
+                    message: "slow down".into(),
+                },
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limited",
+            ),
+            (
+                LlmError::Http {
+                    status: 404,
+                    message: "The model `gpt-5.4` does not exist".into(),
+                },
+                StatusCode::NOT_FOUND,
+                "model_not_found",
+            ),
+            (
+                LlmError::Http {
+                    status: 402,
+                    message: "Insufficient credits".into(),
+                },
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "provider_rejected",
+            ),
+            (
+                LlmError::Http {
+                    status: 503,
+                    message: "down".into(),
+                },
+                StatusCode::BAD_GATEWAY,
+                "provider_unavailable",
+            ),
+            (
+                LlmError::Transport("connection refused".into()),
+                StatusCode::BAD_GATEWAY,
+                "unreachable",
+            ),
+            (LlmError::Timeout, StatusCode::GATEWAY_TIMEOUT, "timeout"),
+            (
+                LlmError::InvalidResponse("no choices".into()),
+                StatusCode::BAD_GATEWAY,
+                "invalid_response",
+            ),
+            (
+                LlmError::UnsupportedCapability("tools"),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "unsupported",
+            ),
+        ];
+        for (error, expected_status, expected_error) in cases {
+            let label = format!("{error:?}");
+            let (status, Json(body)) = test_outcome(&preset, Err(error)).unwrap_err();
+            assert_eq!(status, expected_status, "{label}");
+            assert_eq!(body["ok"], false, "{label}");
+            assert_eq!(body["error"], expected_error, "{label}");
+            assert_eq!(body["preset"], "gpt", "{label}");
+            let message = body["message"].as_str().unwrap();
+            assert!(message.contains("OpenAI"), "{label}: {message}");
+            if expected_error == "authentication" {
+                // The provider's own 401 text can echo the key; the answer
+                // is the typed sentence alone, the body goes to the log.
+                assert_eq!(message, "OpenAI rejected the API key.", "{label}");
+            }
+            if expected_error == "rate_limited" {
+                assert_eq!(body["retry_after_seconds"], 7, "{label}");
+            }
+            if expected_error == "model_not_found" {
+                assert!(message.contains("gpt-5.4"), "{label}: {message}");
+            }
+            if expected_error == "provider_rejected" {
+                assert!(
+                    message.contains("Insufficient credits"),
+                    "{label}: {message}"
+                );
+            }
+        }
+    }
+
+    /// A provider's refusal can quote the key it refused, whole or masked
+    /// the way OpenAI does (`sk-revie******-key`); neither form survives.
+    #[test]
+    fn key_echoes_are_scrubbed_whole_and_masked() {
+        let key = "sk-test-openai-key-9c1d";
+        assert_eq!(
+            scrub_key_echo("Incorrect API key provided: sk-test-openai-key-9c1d.", key),
+            "Incorrect API key provided: [redacted]."
+        );
+        assert_eq!(
+            scrub_key_echo(
+                "Incorrect API key provided: sk-test-******9c1d. You can find your key at https://platform.openai.com.",
+                key
+            ),
+            "Incorrect API key provided: [redacted]. You can find your key at https://platform.openai.com."
+        );
+        assert_eq!(
+            scrub_key_echo(r#"{"message":"key sk-t…9c1d is not valid"}"#, key),
+            r#"{"message":"key [redacted] is not valid"}"#
+        );
+        // Text that merely shares letters with the key is left alone.
+        assert_eq!(
+            scrub_key_echo("The model `gpt-5.4` does not exist", key),
+            "The model `gpt-5.4` does not exist"
+        );
+        assert_eq!(
+            scrub_key_echo("sk-test is a prefix, 9c1d a suffix", key),
+            "sk-test is a prefix, 9c1d a suffix"
+        );
+        // A short key is only ever matched exactly.
+        assert_eq!(
+            scrub_key_echo("abc…xyz and abcdxyz", "abcdxyz"),
+            "abc…xyz and [redacted]"
+        );
+        assert_eq!(scrub_key_echo("nothing here", ""), "nothing here");
+    }
+
+    /// Unknown presets and presets without a key are answered before any
+    /// network, and the route neither writes config nor creates a chat.
+    #[tokio::test]
+    async fn the_route_reports_unknown_presets_and_missing_keys_without_a_network() {
+        let workspace = tempfile::tempdir().unwrap();
+        let mut cfg = configured();
+        cfg.llm.tokens.open_ai.clear();
+        let state = AppState::new_in(cfg, workspace.path().to_owned()).await;
+        let before = tree(workspace.path());
+
+        let (status, body) = post_test(state.clone(), "nope").await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["error"], "unknown_preset");
+
+        let (status, body) = post_test(state.clone(), "gpt").await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["error"], "setup_required");
+        assert_eq!(body["preset"], "gpt");
+        assert!(
+            body["message"].as_str().unwrap().contains("OpenAI"),
+            "{body}"
+        );
+
+        assert_eq!(tree(workspace.path()), before, "the route wrote a file");
+        assert_no_chat_files(workspace.path());
+        assert!(!workspace.path().join("config.toml").exists());
+    }
+
+    /// One completion per provider through its adapter, the outcome typed
+    /// by what the provider said, and nothing on disk either way (#28).
+    #[tokio::test]
+    async fn the_connection_test_runs_one_completion_per_provider_and_writes_nothing() {
+        for provider in [
+            config::LlmProvider::Anthropic,
+            config::LlmProvider::Openai,
+            config::LlmProvider::Openrouter,
+        ] {
+            let workspace = tempfile::tempdir().unwrap();
+            let state = AppState::new_in(configured(), workspace.path().to_owned()).await;
+            let before = tree(workspace.path());
+            let preset_id = config::default_presets(provider)[0].id.clone();
+            let model = config::default_presets(provider)[0].model.clone();
+            let name = match provider {
+                config::LlmProvider::Anthropic => "anthropic",
+                config::LlmProvider::Openai => "openai",
+                config::LlmProvider::Openrouter => "openrouter",
+            };
+            let answer = match provider {
+                config::LlmProvider::Anthropic => {
+                    r#"{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":8,"output_tokens":1}}"#.to_owned()
+                }
+                config::LlmProvider::Openai => {
+                    json!({"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":8,"output_tokens":1}}).to_string()
+                }
+                config::LlmProvider::Openrouter => {
+                    json!({"id":"gen-1","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":1}}).to_string()
+                }
+            };
+
+            let (url, task) = super::llm_key_tests::provider_stub(200, answer).await;
+            let Json(ok) = run_preset_test(&state, &preset_id, Probe::at(&url))
+                .await
+                .unwrap_or_else(|(status, Json(body))| panic!("{provider:?}: {status} {body}"));
+            task.abort();
+            assert_eq!(ok["ok"], true, "{provider:?}");
+            assert_eq!(ok["preset"], preset_id, "{provider:?}");
+            assert_eq!(ok["provider"], name, "{provider:?}");
+            assert_eq!(ok["model"], model, "{provider:?}");
+            assert_eq!(ok["usage"]["input_tokens"], 8, "{provider:?}");
+            assert_eq!(ok["usage"]["output_tokens"], 1, "{provider:?}");
+            assert_eq!(
+                ok["capabilities"]["documents"],
+                provider == config::LlmProvider::Anthropic,
+                "{provider:?}"
+            );
+            assert_no_key(&ok, key_for(provider), name);
+
+            // A provider that echoes the key in its refusal, whole or masked
+            // the way OpenAI writes it: the answer names the refusal, never
+            // the key, and a 401 carries the typed sentence alone.
+            let key = key_for(provider);
+            let echoed = format!("rejected: key {key} is not allowed");
+            let masked_401 = format!("Incorrect API key provided: {}.", masked(key));
+            let masked_400 = format!("bad request for key {}", masked(key));
+            for (status, body, expected_status, expected_error) in [
+                (401, "nope", StatusCode::UNAUTHORIZED, "authentication"),
+                (
+                    401,
+                    masked_401.as_str(),
+                    StatusCode::UNAUTHORIZED,
+                    "authentication",
+                ),
+                (
+                    404,
+                    "no such model",
+                    StatusCode::NOT_FOUND,
+                    "model_not_found",
+                ),
+                (
+                    429,
+                    "slow down",
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "rate_limited",
+                ),
+                (503, "down", StatusCode::BAD_GATEWAY, "provider_unavailable"),
+                (
+                    400,
+                    echoed.as_str(),
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "provider_rejected",
+                ),
+                (
+                    400,
+                    masked_400.as_str(),
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "provider_rejected",
+                ),
+            ] {
+                let (url, task) = super::llm_key_tests::provider_stub(status, body.into()).await;
+                let (got, Json(body)) = run_preset_test(&state, &preset_id, Probe::at(&url))
+                    .await
+                    .unwrap_err();
+                task.abort();
+                let label = format!("{provider:?} {status} {expected_error}");
+                assert_eq!(got, expected_status, "{label}: {body}");
+                assert_eq!(body["ok"], false, "{label}");
+                assert_eq!(body["error"], expected_error, "{label}");
+                assert_no_key(&body, key, &label);
+                let message = body["message"].as_str().unwrap();
+                if expected_error == "authentication" {
+                    assert!(
+                        message.ends_with("rejected the API key."),
+                        "{label}: {message}"
+                    );
+                } else if status == 400 {
+                    // The adapter's own redaction may get there first.
+                    assert!(
+                        message.to_lowercase().contains("[redacted]"),
+                        "{label}: {message}"
+                    );
+                }
+            }
+
+            let (got, Json(body)) =
+                run_preset_test(&state, &preset_id, Probe::at("http://127.0.0.1:1"))
+                    .await
+                    .unwrap_err();
+            assert_eq!(got, StatusCode::BAD_GATEWAY, "{provider:?}: {body}");
+            assert_eq!(body["error"], "unreachable", "{provider:?}");
+
+            // A provider that accepts the connection and never answers ends
+            // at the deadline as `timeout`, instead of holding the Test
+            // button forever.
+            let (url, task) = super::llm_key_tests::stalled_stub().await;
+            let started = std::time::Instant::now();
+            let (got, Json(body)) = run_preset_test(&state, &preset_id, Probe::stalled(&url))
+                .await
+                .unwrap_err();
+            task.abort();
+            assert_eq!(got, StatusCode::GATEWAY_TIMEOUT, "{provider:?}: {body}");
+            assert_eq!(body["error"], "timeout", "{provider:?}");
+            assert!(
+                body["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("did not answer in time"),
+                "{provider:?}: {body}"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "{provider:?}: the test waited {:?}",
+                started.elapsed()
+            );
+
+            assert_eq!(
+                tree(workspace.path()),
+                before,
+                "{provider:?}: the connection test wrote a file"
+            );
+            assert_no_chat_files(workspace.path());
+            assert!(!workspace.path().join("config.toml").exists());
+        }
+    }
+
+    /// `GET /api/config/models` says what each preset's provider offers for
+    /// its model, keyed by preset id, and still carries no key.
+    #[tokio::test]
+    async fn models_listing_carries_each_presets_capabilities_and_no_secrets() {
+        let workspace = tempfile::tempdir().unwrap();
+        let state = AppState::new_in(configured(), workspace.path().to_owned()).await;
+        let Json(models) = get_models(State(state)).await;
+        let capabilities = models["capabilities"].as_object().unwrap();
+        for preset in models["presets"].as_array().unwrap() {
+            let id = preset["id"].as_str().unwrap();
+            assert!(capabilities.contains_key(id), "no capabilities for {id}");
+        }
+        assert_eq!(capabilities["sonnet"]["documents"], true);
+        assert_eq!(capabilities["sonnet"]["vision"], true);
+        assert_eq!(capabilities["gpt"]["documents"], false);
+        assert_eq!(capabilities["gpt"]["tools"], true);
+        assert_eq!(capabilities["gpt"]["reasoning_controls"], true);
+        assert_eq!(capabilities["openrouter-sonnet"]["documents"], false);
+        for provider in [
+            config::LlmProvider::Anthropic,
+            config::LlmProvider::Openai,
+            config::LlmProvider::Openrouter,
+        ] {
+            assert_no_key(&models, key_for(provider), "models listing");
         }
     }
 }

@@ -272,6 +272,7 @@ pub trait ProviderAdapter: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::super::{
+        PROBE_TIMEOUT,
         anthropic::messages_to_anthropic,
         openai::messages_to_openai,
         types::{DocumentSource, HistoryEntry, ImageSource, LlmBackend, ToolOutputContent},
@@ -1760,7 +1761,7 @@ mod tests {
                     "key-under-test",
                 );
                 backend.base_url = url;
-                let result = backend.probe_key().await;
+                let result = backend.probe_key(PROBE_TIMEOUT).await;
                 task.abort();
                 let requests = requests.lock().unwrap();
                 let body = &requests[0].1;
@@ -1794,10 +1795,136 @@ mod tests {
             let mut backend = LlmBackend::probe(reqwest::Client::new(), provider, "model-x", "k");
             backend.base_url = "http://127.0.0.1:1".into();
             assert!(matches!(
-                backend.probe_key().await,
+                backend.probe_key(PROBE_TIMEOUT).await,
                 Err(LlmError::Transport(_))
             ));
         }
+    }
+
+    /// The connection test (#28) sends the same one-token request as the key
+    /// probe, but only a real answer counts: a rate limit or a missing model
+    /// comes back as its variant instead of passing as "past authentication".
+    #[tokio::test]
+    async fn connection_tests_only_accept_a_real_answer() {
+        for provider in PROVIDERS {
+            let success = match provider {
+                LlmProvider::Anthropic => END_TURN.to_string(),
+                LlmProvider::Openai => {
+                    json!({"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":10,"output_tokens":4}}).to_string()
+                }
+                LlmProvider::Openrouter => openrouter_completion(
+                    "ok",
+                    Value::Null,
+                    "stop",
+                    json!({"prompt_tokens":10,"completion_tokens":4}),
+                )
+                .to_string(),
+            };
+            let (url, requests, task) = mock_server_with(200, vec![], success).await;
+            let mut backend = LlmBackend::probe(reqwest::Client::new(), provider, "model-x", "k");
+            backend.base_url = url;
+            let usage = backend.test_connection(PROBE_TIMEOUT).await.unwrap();
+            task.abort();
+            assert_eq!(
+                (usage.input_tokens, usage.output_tokens),
+                (10, 4),
+                "{provider:?}"
+            );
+            {
+                let requests = requests.lock().unwrap();
+                assert_eq!(
+                    requests.len(),
+                    1,
+                    "{provider:?}: one completion, nothing else"
+                );
+                let body = &requests[0].1;
+                assert_eq!(body["model"], "model-x");
+                let (limit, smallest) = match provider {
+                    LlmProvider::Anthropic => ("max_tokens", 1),
+                    LlmProvider::Openai => ("max_output_tokens", 16),
+                    LlmProvider::Openrouter => ("max_tokens", 16),
+                };
+                assert_eq!(
+                    body[limit], smallest,
+                    "{provider:?}: a test asks for the least"
+                );
+                assert!(
+                    body["tools"].is_null(),
+                    "{provider:?}: a test carries no tools"
+                );
+            }
+
+            for (status, body, check) in [
+                (401, "nope", "authentication"),
+                (429, "slow down", "rate_limited"),
+                (404, "no such model", "http"),
+            ] {
+                let (url, _, task) = mock_server_with(status, vec![], body.to_string()).await;
+                let mut backend =
+                    LlmBackend::probe(reqwest::Client::new(), provider, "model-x", "k");
+                backend.base_url = url;
+                let result = backend.test_connection(PROBE_TIMEOUT).await;
+                task.abort();
+                let label = format!("{provider:?} {status}: {result:?}");
+                match check {
+                    "authentication" => assert!(
+                        matches!(result, Err(LlmError::Authentication(_))),
+                        "{label}"
+                    ),
+                    "rate_limited" => assert!(
+                        matches!(result, Err(LlmError::RateLimited { .. })),
+                        "{label}"
+                    ),
+                    _ => assert!(
+                        matches!(result, Err(LlmError::Http { status: 404, .. })),
+                        "{label}"
+                    ),
+                }
+            }
+        }
+    }
+
+    /// A provider that accepts the connection and never answers ends both
+    /// probes at the deadline as `Timeout` (#28): the shared client has no
+    /// timeout of its own, so without one a key save or a connection test
+    /// would wait forever.
+    #[tokio::test]
+    async fn probes_give_up_on_a_provider_that_never_answers() {
+        for provider in PROVIDERS {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let task = tokio::spawn(async move {
+                let mut held = Vec::new();
+                loop {
+                    let (socket, _) = listener.accept().await.unwrap();
+                    held.push(socket);
+                }
+            });
+            let mut backend = LlmBackend::probe(reqwest::Client::new(), provider, "model-x", "k");
+            backend.base_url = url;
+            let deadline = Duration::from_millis(200);
+            let started = std::time::Instant::now();
+            let test = backend.test_connection(deadline).await;
+            let probe = backend.probe_key(deadline).await;
+            task.abort();
+            assert!(
+                matches!(test, Err(LlmError::Timeout)),
+                "{provider:?}: connection test answered {test:?}"
+            );
+            assert!(
+                matches!(probe, Err(LlmError::Timeout)),
+                "{provider:?}: key probe answered {probe:?}"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "{provider:?}: the probes waited {:?}",
+                started.elapsed()
+            );
+        }
+        assert!(
+            PROBE_TIMEOUT >= Duration::from_secs(10),
+            "a live probe must outwait a slow first token"
+        );
     }
 
     /// The `ttl` of every `cache_control` anywhere in a captured request

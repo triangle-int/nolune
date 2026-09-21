@@ -1,13 +1,15 @@
 <script lang="ts">
  import { play } from '$lib/sounds.js';
  import { hapticLight, hapticMedium } from '$lib/haptics.js';
- import { fetchChatPreset, fetchModelPresets, updateChatPreset, type ModelPreset } from '$lib/api/client.js';
- import { effectivePresetId } from '$lib/models/presets.js';
+ import { fetchChatPreset, fetchModelPresets, updateChatPreset } from '$lib/api/client.js';
+ import { effectivePresetId, pickerPresets, type PickerPreset } from '$lib/models/presets.js';
  import PromptComposer from './PromptComposer.svelte';
  let { slug, chatId, onSend, onStop, disabled = false, agentRunning = false, mood = 'calm', uploadProgress = null }:
  { slug: string; chatId: string; onSend: (content: string, files?: File[]) => void | boolean | Promise<void | boolean>; onStop: () => void; disabled?: boolean; agentRunning?: boolean; mood?: string; uploadProgress?: { fileIndex: number; fileCount: number; loaded: number; total: number } | null } = $props();
  // Per-conversation model preset (#156): the pin when set, else the Chat slot.
- let presets = $state<ModelPreset[]>([]);
+ // Each row carries what its model cannot do (#28), for the picker's chips
+ // and the sentence under the composer once such a model is chosen.
+ let presets = $state<PickerPreset[]>([]);
  let presetId = $state<string | null>(null);
  let modelError = $state('');
  let changingPreset = false;
@@ -17,7 +19,7 @@
   Promise.all([fetchModelPresets(), fetchChatPreset(currentSlug, currentChat)])
    .then(([models, pin]) => {
     if (currentSlug !== slug || currentChat !== chatId) return;
-    presets = models.presets;
+    presets = pickerPresets(models);
     presetId = effectivePresetId(pin.preset, { chat_preset: pin.default_preset, background_preset: models.background_preset }, models.presets);
    })
    .catch(() => {});

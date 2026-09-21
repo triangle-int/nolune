@@ -8,6 +8,7 @@ mod openrouter;
 mod types;
 
 use std::path::Path;
+use std::time::Duration;
 
 use tokio::sync::broadcast;
 
@@ -32,6 +33,13 @@ use contract::{ExecutionScope, LlmError, LlmRequest, ProviderAdapter};
 use helpers::retry_on_rate_limit;
 
 use types::{ANTHROPIC_BASE_URL, OPENAI_BASE_URL, OPENROUTER_BASE_URL};
+
+/// How long a key probe or connection test waits for the provider's answer
+/// (#28). The shared `reqwest::Client` sets no timeout, so without one a
+/// provider that accepts the connection and never answers would hold a key
+/// save or a Test button open forever. Well above a slow first token for a
+/// one-token completion.
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// What a preset's provider offers for its model id; OpenAI's and
 /// OpenRouter's answers vary by model.
@@ -183,13 +191,10 @@ impl LlmBackend {
         }
     }
 
-    /// Checks the key with a one-token completion through the adapter, the
-    /// probe the key routes use for both providers (#28 builds on it).
-    /// `Ok` means the provider accepted the key: a completion, a rate limit,
-    /// or any other answer that required authentication first.
-    /// `Err(Authentication)` means it rejected the key. Transport and server
-    /// errors are returned as they are: the key is unknown, not wrong.
-    pub async fn probe_key(&self) -> Result<(), LlmError> {
+    /// The smallest completion the provider accepts, through the adapter:
+    /// one user word, no system prompt, no tools. Behind both the key probe
+    /// and the connection test.
+    async fn smallest_completion(&self) -> Result<types::LlmResponse, LlmError> {
         let messages = [Message::user("hi")];
         let mut request = LlmRequest::new(ExecutionScope::Subagent, &[], &messages, &[]);
         // The smallest completion each API accepts; OpenRouter passes the
@@ -198,7 +203,30 @@ impl LlmBackend {
             crate::config::LlmProvider::Anthropic => 1,
             crate::config::LlmProvider::Openai | crate::config::LlmProvider::Openrouter => 16,
         };
-        match self.adapter()?.complete(request).await {
+        self.adapter()?.complete(request).await
+    }
+
+    /// `smallest_completion` bounded by `deadline`: past it the request is
+    /// dropped and the answer is `Timeout`, the variant the routes map to
+    /// 504, instead of waiting on a provider that never replies.
+    async fn smallest_completion_within(
+        &self,
+        deadline: Duration,
+    ) -> Result<types::LlmResponse, LlmError> {
+        tokio::time::timeout(deadline, self.smallest_completion())
+            .await
+            .unwrap_or(Err(LlmError::Timeout))
+    }
+
+    /// Checks the key with a one-token completion through the adapter, the
+    /// probe the key routes use for both providers (#28 builds on it).
+    /// `Ok` means the provider accepted the key: a completion, a rate limit,
+    /// or any other answer that required authentication first.
+    /// `Err(Authentication)` means it rejected the key. Transport and server
+    /// errors are returned as they are: the key is unknown, not wrong.
+    /// `deadline` bounds the wait for the answer; past it, `Timeout`.
+    pub async fn probe_key(&self, deadline: Duration) -> Result<(), LlmError> {
+        match self.smallest_completion_within(deadline).await {
             Ok(_) => Ok(()),
             // Past authentication, whatever the provider then objected to.
             Err(
@@ -209,6 +237,18 @@ impl LlmBackend {
             Err(LlmError::Http { status, .. }) if status < 500 => Ok(()),
             Err(error) => Err(error),
         }
+    }
+
+    /// The connection test behind `POST /api/config/models/{id}/test` (#28):
+    /// the same one-token completion as the key probe, but only a real
+    /// answer counts. A wrong model id, an exhausted quota or a rate limit
+    /// comes back as its variant, so the person learns what to fix. It
+    /// never touches a conversation.
+    /// `deadline` bounds the wait for the answer; past it, `Timeout`.
+    pub async fn test_connection(&self, deadline: Duration) -> Result<contract::Usage, LlmError> {
+        self.smallest_completion_within(deadline)
+            .await
+            .map(|response| response.usage)
     }
 
     /// Simple chat without tools. Returns (text, tokens_used).
