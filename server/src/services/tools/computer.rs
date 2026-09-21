@@ -420,12 +420,15 @@ impl Tool for ListMachinesTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "list_machines".into(),
-            description: "List all machines you can control. Every entry has machine_id, location \
-                (desktop or server_local) and os. Connected desktop apps also carry hostname, \
+            description: "List all machines you can control, one entry per machine_id with its \
+                location (desktop or server_local) and os. Connected desktop apps carry hostname, \
                 screen dimensions and last_seen; use their machine_id with computer_use, \
-                remote_bash and remote_files. Cua targets also carry driver_version, health, \
-                permissions (accessibility, screen_capture) and capabilities; they only accept \
-                actions their capabilities and granted permissions allow."
+                remote_bash and remote_files. Machines with a Cua driver also carry \
+                driver_version, health, permissions (accessibility, screen_capture) and \
+                capabilities: those are the ones discover_windows, get_window_state, act and \
+                verify_state drive, and they only accept actions their capabilities and granted \
+                permissions allow. The user's choice in the composer decides which machine the \
+                tools act on; this list is for reading, not for picking."
                 .into(),
             parameters: openai_schema::<ListMachinesArgs>(),
         }
@@ -440,30 +443,40 @@ impl Tool for ListMachinesTool {
                     .into(),
             );
         }
-        let mut info: Vec<serde_json::Value> = agents
+        // One entry per machine id: a desktop that registered a Cua
+        // descriptor (#17) shows its legacy fields and its driver together.
+        let mut info: BTreeMap<String, serde_json::Value> = agents
             .iter()
             .map(|m| {
-                serde_json::json!({
-                    "machine_id": m.machine_id,
-                    "location": cua_protocol::MachineLocation::Desktop,
-                    "os": m.os,
-                    "hostname": m.hostname,
-                    "screen": format!("{}x{}", m.screen_width, m.screen_height),
-                    "last_seen": m.last_seen,
-                })
+                (
+                    m.machine_id.clone(),
+                    serde_json::json!({
+                        "machine_id": m.machine_id,
+                        "location": cua_protocol::MachineLocation::Desktop,
+                        "os": m.os,
+                        "hostname": m.hostname,
+                        "screen": format!("{}x{}", m.screen_width, m.screen_height),
+                        "last_seen": m.last_seen,
+                    }),
+                )
             })
             .collect();
-        info.extend(targets.iter().map(|m| {
-            serde_json::json!({
-                "machine_id": m.machine_id,
-                "location": m.location,
-                "os": m.platform,
-                "driver_version": m.driver_version,
-                "health": m.health,
-                "permissions": m.permissions,
-                "capabilities": m.capabilities,
-            })
-        }));
+        for m in &targets {
+            let entry = info
+                .entry(m.machine_id.as_str().to_owned())
+                .or_insert_with(|| {
+                    serde_json::json!({
+                        "machine_id": m.machine_id,
+                        "location": m.location,
+                        "os": m.platform,
+                    })
+                });
+            entry["driver_version"] = serde_json::json!(m.driver_version);
+            entry["health"] = serde_json::json!(m.health);
+            entry["permissions"] = serde_json::json!(m.permissions);
+            entry["capabilities"] = serde_json::json!(m.capabilities);
+        }
+        let info: Vec<serde_json::Value> = info.into_values().collect();
         serde_json::to_string_pretty(&info).map_err(|e| ToolExecError(e.to_string()))
     }
 }

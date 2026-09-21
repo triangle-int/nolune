@@ -56,11 +56,12 @@ pub enum LedgerRefusal {
         latest: SnapshotId,
         superseded: Option<SnapshotId>,
     },
-    /// The latest snapshot was taken before the last action on this window,
-    /// which may have changed what it showed.
+    /// The latest observation was taken before the last action on this
+    /// window, which may have changed what it showed. `snapshot` is the
+    /// id it issued, when it carried a tree.
     SnapshotConsumed {
         target: WindowTarget,
-        snapshot: SnapshotId,
+        snapshot: Option<SnapshotId>,
         action: CuaActionKind,
     },
     /// A point address while the window's accessibility route is usable and
@@ -83,8 +84,78 @@ impl LedgerRefusal {
 
 impl fmt::Display for LedgerRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!("slice 1: the ledger refusal message")
+        write!(f, "{}: ", self.code())?;
+        match self {
+            Self::NoSnapshot { target } => write!(
+                f,
+                "window {} of pid {} has not been observed on this computer; call \
+                 get_window_state for it first, then act with an element_token it returns",
+                target.window_id, target.pid
+            ),
+            Self::NoAccessibilityTree { target } => write!(
+                f,
+                "the latest get_window_state of window {} (pid {}) issued no element tokens: no \
+                 accessibility tree was requested, or the window's accessibility surface could \
+                 not be resolved; observe it again with include_accessibility_tree, or use a \
+                 point address if pixel_addresses allows it",
+                target.window_id, target.pid
+            ),
+            Self::StaleSnapshot {
+                target,
+                latest,
+                superseded,
+            } => {
+                write!(
+                    f,
+                    "the address is not from snapshot {}, the latest of window {} (pid {}); ",
+                    latest.as_str(),
+                    target.window_id,
+                    target.pid
+                )?;
+                match superseded {
+                    Some(old) => write!(
+                        f,
+                        "snapshot {} was replaced by it and its tokens are void. ",
+                        old.as_str()
+                    )?,
+                    None => f.write_str("no snapshot of this window issued it. ")?,
+                }
+                f.write_str("Use only tokens from the latest get_window_state of the window")
+            }
+            Self::SnapshotConsumed {
+                target,
+                snapshot,
+                action,
+            } => write!(
+                f,
+                "{} of window {} (pid {}) was taken before the last action there ({}), which \
+                 may have changed the window; call get_window_state again before the next \
+                 action",
+                match snapshot {
+                    Some(id) => format!("snapshot {}", id.as_str()),
+                    None => "the latest observation".to_owned(),
+                },
+                target.window_id,
+                target.pid,
+                kind_name(*action)
+            ),
+            Self::PixelRefused { target } => write!(
+                f,
+                "a point address on window {} (pid {}) is not allowed while its accessibility \
+                 route works and no verification there has failed; act with an element_token \
+                 from the latest get_window_state instead",
+                target.window_id, target.pid
+            ),
+        }
     }
+}
+
+/// The snake_case name of a protocol enum value, as the wire spells it.
+pub(crate) fn kind_name<T: serde::Serialize>(value: T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default()
 }
 
 /// Whether a point address may be forwarded for a window, and why.
@@ -101,7 +172,7 @@ struct WindowLedger {
     snapshot: Option<Snapshot>,
     /// The snapshot before it, so a stale token can be named.
     superseded: Option<Snapshot>,
-    /// The kind of the action taken since the latest snapshot, if any.
+    /// The kind of the action taken since the latest observation, if any.
     acted: Option<CuaActionKind>,
     /// The latest observation could not resolve the window's accessibility
     /// surface (degraded, AX unresolved, or a tree with no elements).
@@ -111,6 +182,12 @@ struct WindowLedger {
     fallback: bool,
 }
 
+impl WindowLedger {
+    fn pixels_allowed(&self) -> bool {
+        self.fallback || self.ax_unavailable
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Snapshot {
     id: SnapshotId,
@@ -118,61 +195,247 @@ struct Snapshot {
     indices: HashSet<u32>,
 }
 
+/// How one action addresses the window, as far as the ledger is concerned.
+enum Address<'a> {
+    Token(&'a str),
+    Index {
+        index: u32,
+        snapshot: &'a SnapshotId,
+    },
+    Point,
+}
+
+impl<'a> From<&'a ElementAddress> for Address<'a> {
+    fn from(address: &'a ElementAddress) -> Self {
+        match address {
+            ElementAddress::ElementToken { element_token } => Self::Token(element_token.as_str()),
+            ElementAddress::ElementIndex {
+                element_index,
+                snapshot_id,
+            } => Self::Index {
+                index: *element_index,
+                snapshot: snapshot_id,
+            },
+            ElementAddress::Point(_) => Self::Point,
+        }
+    }
+}
+
+impl<'a> From<&'a ElementRef> for Address<'a> {
+    fn from(element: &'a ElementRef) -> Self {
+        match element {
+            ElementRef::ElementToken { element_token } => Self::Token(element_token.as_str()),
+            ElementRef::ElementIndex {
+                element_index,
+                snapshot_id,
+            } => Self::Index {
+                index: *element_index,
+                snapshot: snapshot_id,
+            },
+        }
+    }
+}
+
+/// The window an action acts in and the addresses the ledger checks for
+/// it. Menu and frame actions name a window but address nothing in it;
+/// discovery, session and health calls name no window.
+fn addressing(action: &CuaAction) -> Option<(WindowTarget, Vec<Address<'_>>)> {
+    Some(match action {
+        CuaAction::Click(args) => (args.target, vec![(&args.address).into()]),
+        CuaAction::DoubleClick(args) => (args.target, vec![(&args.address).into()]),
+        CuaAction::RightClick(args) => (args.target, vec![(&args.address).into()]),
+        CuaAction::Scroll(args) => (args.target, vec![(&args.address).into()]),
+        CuaAction::TypeText(args) => (args.target, vec![(&args.address).into()]),
+        CuaAction::PressKey(args) => (args.target, vec![(&args.address).into()]),
+        CuaAction::Hotkey(args) => (args.target, vec![(&args.address).into()]),
+        CuaAction::MoveCursor(args) => (args.target, vec![Address::Point]),
+        CuaAction::Drag(args) => (args.target, vec![Address::Point]),
+        CuaAction::SetValue(args) => (args.target, vec![(&args.element).into()]),
+        CuaAction::InvokeMenu(args) => (args.target, vec![]),
+        CuaAction::SetWindowFrame(args) => (args.target, vec![]),
+        CuaAction::ListApps(_)
+        | CuaAction::LaunchApp(_)
+        | CuaAction::ListWindows(_)
+        | CuaAction::GetWindowState(_)
+        | CuaAction::VerifyState(_)
+        | CuaAction::StartSession(_)
+        | CuaAction::GetSession(_)
+        | CuaAction::ListSessions(_)
+        | CuaAction::EndSession(_)
+        | CuaAction::HealthReport(_) => return None,
+    })
+}
+
+type Key = (MachineId, u32, u64);
+
+fn key(machine: &MachineId, target: WindowTarget) -> Key {
+    (machine.clone(), target.pid, target.window_id)
+}
+
 /// Per machine and window: which snapshot is current and whether pixels
 /// may be used. One ledger serves one chat run.
 #[derive(Default)]
 pub struct SnapshotLedger {
-    windows: Mutex<BTreeMap<(MachineId, u32, u64), WindowLedger>>,
+    windows: Mutex<BTreeMap<Key, WindowLedger>>,
 }
 
 impl SnapshotLedger {
-    pub fn new() -> Self {
-        Self::default()
+    /// A poisoned lock only means a task panicked mid-update; the map
+    /// itself is still consistent.
+    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<Key, WindowLedger>> {
+        self.windows
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Record what `get_window_state` returned for a window: the snapshot it
     /// issued (or that it issued none) and whether accessibility is usable
-    /// there. Replaces the previous snapshot of the same machine and window.
+    /// there. Replaces the previous snapshot of the same machine and window
+    /// and clears the action taken since; a failed verification stays on
+    /// record, because the pixel action it allows needs this fresh
+    /// screenshot.
     pub fn observed(
         &self,
         machine: &MachineId,
         args: &GetWindowStateArgs,
         state: &WindowStateResult,
     ) {
-        let _ = (machine, args, state);
-        todo!("slice 1: record the snapshot")
+        let tree_requested = args.include_accessibility_tree;
+        let snapshot = match &state.snapshot_id {
+            Some(id) if tree_requested => Some(Snapshot {
+                id: id.clone(),
+                tokens: state
+                    .elements
+                    .iter()
+                    .map(|element| element.element_token.as_str().to_owned())
+                    .collect(),
+                indices: state
+                    .elements
+                    .iter()
+                    .map(|element| element.element_index)
+                    .collect(),
+            }),
+            _ => None,
+        };
+        let ax_unresolved = state.background_input.as_ref().is_some_and(|background| {
+            background.exact_window.status == ExactWindowStatus::AxUnresolved
+        });
+        let mut windows = self.lock();
+        let entry = windows.entry(key(machine, state.target)).or_default();
+        entry.ax_unavailable =
+            state.degraded || ax_unresolved || (tree_requested && state.elements.is_empty());
+        if let Some(previous) = entry.snapshot.take() {
+            entry.superseded = Some(previous);
+        }
+        entry.snapshot = snapshot;
+        entry.acted = None;
     }
 
     /// Check every address the action carries against the ledger. Actions
     /// without a window address (discovery, menus) pass.
     pub fn check(&self, machine: &MachineId, action: &CuaAction) -> Result<(), LedgerRefusal> {
-        let _ = (machine, action);
-        todo!("slice 1: fail closed on stale tokens")
+        let Some((target, addresses)) = addressing(action) else {
+            return Ok(());
+        };
+        if addresses.is_empty() {
+            return Ok(());
+        }
+        let windows = self.lock();
+        let entry = windows
+            .get(&key(machine, target))
+            .ok_or(LedgerRefusal::NoSnapshot { target })?;
+        if let Some(action) = entry.acted {
+            return Err(LedgerRefusal::SnapshotConsumed {
+                target,
+                snapshot: entry.snapshot.as_ref().map(|snapshot| snapshot.id.clone()),
+                action,
+            });
+        }
+        for address in addresses {
+            match address {
+                Address::Point => {
+                    if !entry.pixels_allowed() {
+                        return Err(LedgerRefusal::PixelRefused { target });
+                    }
+                }
+                Address::Token(_) | Address::Index { .. } => {
+                    let snapshot = entry
+                        .snapshot
+                        .as_ref()
+                        .ok_or(LedgerRefusal::NoAccessibilityTree { target })?;
+                    let issued = match address {
+                        Address::Token(token) => snapshot.tokens.contains(token),
+                        Address::Index {
+                            index,
+                            snapshot: id,
+                        } => snapshot.id == *id && snapshot.indices.contains(&index),
+                        Address::Point => unreachable!("matched above"),
+                    };
+                    if !issued {
+                        return Err(LedgerRefusal::StaleSnapshot {
+                            target,
+                            latest: snapshot.id.clone(),
+                            superseded: entry
+                                .superseded
+                                .as_ref()
+                                .map(|snapshot| snapshot.id.clone()),
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
-    /// An action reached the driver: the window's snapshot is consumed, and
-    /// when the action did not land, pixels are allowed next.
+    /// An action reached the driver: whatever it did to the window, the
+    /// latest observation no longer describes it, so the next address
+    /// there needs a fresh `get_window_state`.
     pub fn acted(&self, machine: &MachineId, target: WindowTarget, kind: CuaActionKind) {
-        let _ = (machine, target, kind);
-        todo!("slice 1: consume the snapshot")
+        self.lock().entry(key(machine, target)).or_default().acted = Some(kind);
     }
 
-    /// A verification of the window finished, satisfied or not.
+    /// A verification of the window finished. Unsatisfied (or an action
+    /// that did not land) opens the pixel route there; satisfied closes it.
     pub fn verified(&self, machine: &MachineId, target: WindowTarget, satisfied: bool) {
-        let _ = (machine, target, satisfied);
-        todo!("slice 2: record the verification")
+        self.lock()
+            .entry(key(machine, target))
+            .or_default()
+            .fallback = !satisfied;
     }
 
-    /// The driver itself called the window's snapshot stale: forget it.
+    /// The driver itself called the window's snapshot stale: forget it, so
+    /// the next address there is refused until a fresh observation.
     pub fn forget(&self, machine: &MachineId, target: WindowTarget) {
-        let _ = (machine, target);
-        todo!("slice 2: drop the entry")
+        self.lock().remove(&key(machine, target));
     }
 
     /// Whether a point address would be forwarded for the window right now.
     pub fn pixel_policy(&self, machine: &MachineId, target: WindowTarget) -> PixelPolicy {
-        let _ = (machine, target);
-        todo!("slice 2: the pixel policy")
+        let windows = self.lock();
+        let Some(entry) = windows.get(&key(machine, target)) else {
+            return PixelPolicy {
+                allowed: false,
+                reason: "the window has not been observed; call get_window_state first",
+            };
+        };
+        if entry.fallback {
+            PixelPolicy {
+                allowed: true,
+                reason: "the last verification on this window failed or an action did not \
+                         land; a point address is allowed until an action there is verified",
+            }
+        } else if entry.ax_unavailable {
+            PixelPolicy {
+                allowed: true,
+                reason: "the window's accessibility surface is unavailable or empty; a point \
+                         address read from the screenshot is the only route",
+            }
+        } else {
+            PixelPolicy {
+                allowed: false,
+                reason: "the accessibility route works; address elements by element_token",
+            }
+        }
     }
 }
 
@@ -182,7 +445,6 @@ impl SnapshotLedger {
 
 /// One request's execution against a target, inside its session policy.
 pub trait ActionExecutor: Send + Sync {
-    fn descriptor(&self) -> &MachineDescriptor;
     fn execute<'a>(
         &'a self,
         action: CuaAction,
@@ -190,10 +452,6 @@ pub trait ActionExecutor: Send + Sync {
 }
 
 impl ActionExecutor for RunSession {
-    fn descriptor(&self) -> &MachineDescriptor {
-        RunSession::descriptor(self)
-    }
-
     fn execute<'a>(
         &'a self,
         action: CuaAction,
@@ -225,10 +483,6 @@ impl AdapterExecutor {
 }
 
 impl ActionExecutor for AdapterExecutor {
-    fn descriptor(&self) -> &MachineDescriptor {
-        self.adapter.descriptor()
-    }
-
     fn execute<'a>(
         &'a self,
         action: CuaAction,
@@ -312,6 +566,8 @@ pub enum Failure {
     Unverified { verification: VerificationResult },
     /// The run or the transport failed.
     Exec(String),
+    /// The driver's answer did not pass the protocol boundary.
+    Protocol(String),
     /// The orchestrator was handed an action it does not orchestrate.
     Unsupported(CuaActionKind),
 }
@@ -334,6 +590,7 @@ impl Failure {
                 _ => "unverified".to_owned(),
             },
             Self::Exec(_) => "run_failed".to_owned(),
+            Self::Protocol(_) => "protocol_error".to_owned(),
             Self::Unsupported(_) => "unsupported_action".to_owned(),
         }
     }
@@ -341,8 +598,182 @@ impl Failure {
 
 impl fmt::Display for Failure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!("slice 2: the failure message")
+        match self {
+            Self::Ledger(refusal) => return refusal.fmt(f),
+            _ => write!(f, "{}: ", self.code())?,
+        }
+        match self {
+            Self::Ledger(_) => unreachable!("written above"),
+            Self::Refused(reason) => write!(f, "the target refuses the action: {reason}"),
+            Self::PermissionDenied { permission, state } => {
+                let permission = match permission {
+                    PermissionKind::Accessibility => "Accessibility",
+                    PermissionKind::ScreenCapture => "Screen recording",
+                };
+                let state = match state {
+                    Permission::Denied => "denied",
+                    Permission::PromptRequired => "not been allowed yet",
+                    Permission::Unavailable => "unavailable",
+                    Permission::Granted => "granted",
+                };
+                write!(
+                    f,
+                    "{permission} is {state} for the driver on this computer, so the action \
+                     cannot be delivered; ask the user to grant it to the driver there \
+                     (`nolune cua status` on the server machine, the Computers page for a \
+                     desktop)"
+                )
+            }
+            Self::Driver(error) => {
+                write!(f, "the driver answered: {}", error.message.as_str())?;
+                if error.retryable {
+                    f.write_str(" (retryable)")?;
+                }
+                if error.code == cua_protocol::RuntimeErrorCode::StaleSnapshot {
+                    f.write_str("; call get_window_state again and use its tokens")?;
+                }
+                Ok(())
+            }
+            Self::ActionRefused { outcome } => {
+                write!(
+                    f,
+                    "the driver refused the action on its {} route",
+                    kind_name(outcome.route)
+                )?;
+                if let Some(escalation) = &outcome.escalation {
+                    write!(
+                        f,
+                        " (reason: {}); it recommends escalating to {} control, which Nolune \
+                         never does: delivery stays background",
+                        kind_name(escalation.reason),
+                        kind_name(escalation.target)
+                    )?;
+                }
+                f.write_str(
+                    "; observe the window again and act with an element_token, or a point \
+                     address if pixel_addresses allows it",
+                )
+            }
+            Self::Unconfirmed { outcome } => {
+                if outcome.effect == ActionEffect::Confirmed {
+                    write!(
+                        f,
+                        "the driver reports the action delivered (evidence: {}) but read \
+                         nothing back that confirms its effect",
+                        evidence_names(outcome)
+                    )?;
+                } else {
+                    write!(
+                        f,
+                        "the driver reports the effect as {} (evidence: {})",
+                        kind_name(outcome.effect),
+                        evidence_names(outcome)
+                    )?;
+                    if let Some(escalation) = &outcome.escalation {
+                        write!(
+                            f,
+                            "; it recommends escalating to {} control ({}), which Nolune never \
+                             does",
+                            kind_name(escalation.target),
+                            kind_name(escalation.reason)
+                        )?;
+                    }
+                }
+                f.write_str(
+                    "; not reported as done. Pass verify.expect predicates for what the action \
+                     must change, or observe the window again to see what happened",
+                )
+            }
+            Self::Unverified { verification } => {
+                let unsatisfied: Vec<String> = verification
+                    .predicates
+                    .iter()
+                    .filter(|predicate| predicate.status == PredicateStatus::Unsatisfied)
+                    .map(|predicate| predicate.predicate_index.to_string())
+                    .collect();
+                let unknown: Vec<String> = verification
+                    .predicates
+                    .iter()
+                    .filter(|predicate| predicate.status == PredicateStatus::Unknown)
+                    .map(|predicate| predicate.predicate_index.to_string())
+                    .collect();
+                if !unsatisfied.is_empty() {
+                    write!(
+                        f,
+                        "predicate(s) {} of {} unsatisfied: the action did not land as \
+                         expected",
+                        unsatisfied.join(", "),
+                        verification.predicates.len()
+                    )?;
+                } else {
+                    write!(
+                        f,
+                        "predicate(s) {} of {} could not be evaluated: the effect is unknown",
+                        unknown.join(", "),
+                        verification.predicates.len()
+                    )?;
+                }
+                f.write_str(
+                    "; not reported as done. Observe the window again; a point address is \
+                     allowed there now if the accessibility route failed you",
+                )
+            }
+            Self::Exec(message) => f.write_str(message),
+            Self::Protocol(message) => f.write_str(message),
+            Self::Unsupported(kind) => write!(
+                f,
+                "{} is not something the typed machine tools perform",
+                kind_name(*kind)
+            ),
+        }
     }
+}
+
+fn evidence_names(outcome: &ActionOutcome) -> String {
+    if outcome.evidence.is_empty() {
+        return "none".to_owned();
+    }
+    outcome
+        .evidence
+        .iter()
+        .map(|evidence| kind_name(*evidence))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The driver confirmed the effect by reading it back, not merely by
+/// delivering the input.
+fn confirmed_by_readback(outcome: &ActionOutcome) -> bool {
+    outcome.effect == ActionEffect::Confirmed
+        && outcome.evidence.iter().any(|evidence| {
+            matches!(
+                evidence,
+                ActionEvidence::AccessibilityReadback
+                    | ActionEvidence::WindowReadback
+                    | ActionEvidence::Snapshot
+                    | ActionEvidence::Screenshot
+            )
+        })
+}
+
+/// The outcome an action result carries.
+fn outcome_of(result: &CuaActionResult) -> Option<&ActionOutcome> {
+    Some(match result {
+        CuaActionResult::Click(result) => &result.outcome,
+        CuaActionResult::DoubleClick(result) | CuaActionResult::RightClick(result) => {
+            &result.outcome
+        }
+        CuaActionResult::MoveCursor(result) => &result.outcome,
+        CuaActionResult::Drag(result) => &result.outcome,
+        CuaActionResult::Scroll(result) => &result.outcome,
+        CuaActionResult::TypeText(result) => &result.outcome,
+        CuaActionResult::PressKey(result) => &result.outcome,
+        CuaActionResult::Hotkey(result) => &result.outcome,
+        CuaActionResult::SetValue(result) => &result.outcome,
+        CuaActionResult::InvokeMenu(result) => &result.outcome,
+        CuaActionResult::SetWindowFrame(result) => &result.outcome,
+        _ => return None,
+    })
 }
 
 impl std::error::Error for Failure {}
@@ -394,8 +825,18 @@ impl Orchestrator {
         target: &Target,
         action: CuaAction,
     ) -> Result<CuaActionResult, Failure> {
-        let _ = (target, action);
-        todo!("slice 1: discovery")
+        if !matches!(
+            action,
+            CuaAction::ListApps(_) | CuaAction::ListWindows(_) | CuaAction::LaunchApp(_)
+        ) {
+            return Err(Failure::Unsupported(action.kind()));
+        }
+        authorize(target.descriptor(), &action)?;
+        let purpose = format!("discover_windows ({})", kind_name(action.kind()));
+        self.with_executor(target, &purpose, |executor| async move {
+            execute(executor.as_ref(), action).await
+        })
+        .await
     }
 
     /// `get_window_state`: the observation is recorded in the ledger before
@@ -405,8 +846,20 @@ impl Orchestrator {
         target: &Target,
         args: GetWindowStateArgs,
     ) -> Result<Box<WindowStateResult>, Failure> {
-        let _ = (target, args);
-        todo!("slice 1: observe")
+        let action = CuaAction::GetWindowState(args.clone());
+        authorize(target.descriptor(), &action)?;
+        let result = self
+            .with_executor(target, "get_window_state", |executor| async move {
+                execute(executor.as_ref(), action).await
+            })
+            .await?;
+        let CuaActionResult::GetWindowState(state) = result else {
+            return Err(Failure::Protocol(
+                "get_window_state answered with another kind of result".into(),
+            ));
+        };
+        self.ledger.observed(target.machine_id(), &args, &state);
+        Ok(state)
     }
 
     /// One action, checked against the ledger, delivered in the background,
@@ -417,8 +870,105 @@ impl Orchestrator {
         action: CuaAction,
         verify: Option<VerifySpec>,
     ) -> Result<ActReport, Failure> {
-        let _ = (target, action, verify);
-        todo!("slice 2: the verification gate")
+        let kind = action.kind();
+        let Some((window, _)) = addressing(&action) else {
+            return Err(Failure::Unsupported(kind));
+        };
+        let machine = target.machine_id().clone();
+        authorize(target.descriptor(), &action)?;
+        self.ledger.check(&machine, &action)?;
+        // The verification is built and authorized before the action goes
+        // out, so a predicate the protocol or the target refuses stops the
+        // action instead of leaving it unverified.
+        let verification = verify
+            .map(|spec| {
+                let action = CuaAction::VerifyState(VerifyStateArgs {
+                    target: window,
+                    session: None,
+                    expect: spec.expect,
+                    include_screenshot: false,
+                    stable_samples: spec.stable_samples,
+                    timeout_ms: spec.timeout_ms,
+                });
+                action
+                    .validate()
+                    .map_err(|error| Failure::Refused(format!("verification refused: {error}")))?;
+                authorize(target.descriptor(), &action)?;
+                Ok::<_, Failure>(action)
+            })
+            .transpose()?;
+
+        let purpose = format!("act ({})", kind_name(kind));
+        let outcome = self
+            .with_executor(target, &purpose, |executor| async move {
+                let result = execute(executor.as_ref(), action).await?;
+                let outcome = outcome_of(&result)
+                    .ok_or_else(|| {
+                        Failure::Protocol("the action's result carries no outcome".into())
+                    })?
+                    .clone();
+                if outcome.effect == ActionEffect::Refused {
+                    return Ok((outcome, None));
+                }
+                let verification = match verification {
+                    Some(action) => {
+                        let CuaActionResult::VerifyState(verification) =
+                            execute(executor.as_ref(), action).await?
+                        else {
+                            return Err(Failure::Protocol(
+                                "verify_state answered with another kind of result".into(),
+                            ));
+                        };
+                        Some(verification)
+                    }
+                    None => None,
+                };
+                Ok((outcome, verification))
+            })
+            .await;
+
+        // The action was sent, so the latest observation no longer describes
+        // the window, whatever the driver answered. A driver that calls the
+        // snapshot stale is believed: the window is forgotten outright.
+        match &outcome {
+            Err(Failure::Driver(error))
+                if error.code == cua_protocol::RuntimeErrorCode::StaleSnapshot =>
+            {
+                self.ledger.forget(&machine, window);
+            }
+            _ => self.ledger.acted(&machine, window, kind),
+        }
+        let (outcome, verification) = outcome?;
+
+        if outcome.effect == ActionEffect::Refused {
+            self.ledger.verified(&machine, window, false);
+            return Err(Failure::ActionRefused { outcome });
+        }
+        match verification {
+            Some(verification) => {
+                let satisfied = verification.overall == PredicateStatus::Satisfied;
+                self.ledger.verified(&machine, window, satisfied);
+                if satisfied {
+                    Ok(ActReport {
+                        outcome,
+                        verification: Some(verification),
+                    })
+                } else {
+                    Err(Failure::Unverified { verification })
+                }
+            }
+            None if confirmed_by_readback(&outcome) => {
+                self.ledger.verified(&machine, window, true);
+                Ok(ActReport {
+                    outcome,
+                    verification: None,
+                })
+            }
+            None => {
+                self.ledger.verified(&machine, window, false);
+                Err(Failure::Unconfirmed { outcome })
+            }
+        }
     }
 
     /// `verify_state` on its own; an unsatisfied or unknown result is an
@@ -428,21 +978,102 @@ impl Orchestrator {
         target: &Target,
         args: VerifyStateArgs,
     ) -> Result<VerificationResult, Failure> {
-        let _ = (target, args);
-        todo!("slice 2: verification")
+        let window = args.target;
+        let action = CuaAction::VerifyState(args);
+        authorize(target.descriptor(), &action)?;
+        let result = self
+            .with_executor(target, "verify_state", |executor| async move {
+                execute(executor.as_ref(), action).await
+            })
+            .await?;
+        let CuaActionResult::VerifyState(verification) = result else {
+            return Err(Failure::Protocol(
+                "verify_state answered with another kind of result".into(),
+            ));
+        };
+        let satisfied = verification.overall == PredicateStatus::Satisfied;
+        self.ledger.verified(target.machine_id(), window, satisfied);
+        if satisfied {
+            Ok(verification)
+        } else {
+            Err(Failure::Unverified { verification })
+        }
+    }
+
+    /// Run `body` with the executor the target's kind calls for: one run
+    /// of the runtime on the server machine, the adapter itself on a
+    /// desktop.
+    async fn with_executor<T, F, Fut>(
+        &self,
+        target: &Target,
+        purpose: &str,
+        body: F,
+    ) -> Result<T, Failure>
+    where
+        F: FnOnce(Arc<dyn ActionExecutor>) -> Fut,
+        Fut: Future<Output = Result<T, Failure>>,
+    {
+        match &target.runs {
+            Some(runtime) => {
+                let outcome = runtime
+                    .run(purpose, |session| async move {
+                        let executor: Arc<dyn ActionExecutor> = session;
+                        Ok(body(executor).await)
+                    })
+                    .await;
+                match outcome {
+                    Ok(result) => result,
+                    Err(error) => Err(Failure::Exec(error.to_string())),
+                }
+            }
+            None => body(Arc::new(AdapterExecutor::new(target.adapter.clone()))).await,
+        }
     }
 }
 
-// Silence the unused-import lints on the stubs; the implementation uses them.
-#[allow(dead_code)]
-fn _uses(
-    _: ActionEffect,
-    _: ActionEvidence,
-    _: ElementAddress,
-    _: ElementRef,
-    _: ExactWindowStatus,
-    _: CuaResponse,
-) {
+/// The target's own say before anything is sent: an unavailable machine, a
+/// permission the action needs but the driver does not hold, a capability
+/// it does not advertise.
+fn authorize(descriptor: &MachineDescriptor, action: &CuaAction) -> Result<(), Failure> {
+    if descriptor.health == cua_protocol::MachineHealth::Unavailable {
+        return Err(Failure::Refused(
+            "the driver reports the machine unavailable".into(),
+        ));
+    }
+    for permission in action.required_permissions() {
+        let state = match permission {
+            PermissionKind::Accessibility => descriptor.permissions.accessibility,
+            PermissionKind::ScreenCapture => descriptor.permissions.screen_capture,
+        };
+        if state != Permission::Granted {
+            return Err(Failure::PermissionDenied { permission, state });
+        }
+    }
+    descriptor
+        .authorize(action)
+        .map_err(|error| Failure::Refused(error.to_string()))
+}
+
+/// One request through the executor: a driver error envelope is the typed
+/// failure, a successful envelope its result.
+async fn execute(
+    executor: &dyn ActionExecutor,
+    action: CuaAction,
+) -> Result<CuaActionResult, Failure> {
+    let envelope = executor
+        .execute(action)
+        .await
+        .map_err(|error| match error {
+            ExecError::Refused(reason) => Failure::Refused(reason),
+            ExecError::SessionFailed(reason) => {
+                Failure::Exec(format!("the driver session could not start: {reason}"))
+            }
+            ExecError::Protocol(error) => Failure::Protocol(error.to_string()),
+        })?;
+    match envelope.response {
+        CuaResponse::Success { result } => Ok(*result),
+        CuaResponse::Error { error } => Err(Failure::Driver(error)),
+    }
 }
 
 #[cfg(test)]
@@ -744,7 +1375,7 @@ mod tests {
 
         for action in [
             click_token("tok/1"),
-            click_index(0, "s0000001"),
+            click_index(0, "s00000001"),
             set_value("tok/1"),
         ] {
             let error = orchestrator.act(&target, action, None).await.unwrap_err();
@@ -779,11 +1410,11 @@ mod tests {
             desktop(),
             vec![
                 Answer::Payload(state(
-                    "s0000001",
+                    "s00000001",
                     vec![element(0, "tok/a", "AXButton", "Save")],
                 )),
                 Answer::Payload(state(
-                    "s0000002",
+                    "s00000002",
                     vec![element(0, "tok/b", "AXButton", "Save")],
                 )),
             ],
@@ -791,8 +1422,8 @@ mod tests {
         observe(&orchestrator, &target, true).await;
         observe(&orchestrator, &target, true).await;
         let machine = target.machine_id().clone();
-        let s1 = SnapshotId::try_from("s0000001").unwrap();
-        let s2 = SnapshotId::try_from("s0000002").unwrap();
+        let s1 = SnapshotId::try_from("s00000001").unwrap();
+        let s2 = SnapshotId::try_from("s00000002").unwrap();
 
         // The token s1 issued is stale now that s2 replaced it.
         let error = orchestrator
@@ -810,8 +1441,8 @@ mod tests {
         let text = error.to_string();
         assert!(
             text.starts_with("stale_snapshot: ")
-                && text.contains("s0000001")
-                && text.contains("s0000002"),
+                && text.contains("s00000001")
+                && text.contains("s00000002"),
             "{text}"
         );
 
@@ -821,7 +1452,7 @@ mod tests {
         assert_eq!(
             orchestrator
                 .ledger()
-                .check(&machine, &click_index(0, "s0000001")),
+                .check(&machine, &click_index(0, "s00000001")),
             Err(LedgerRefusal::StaleSnapshot {
                 target: window(),
                 latest: s2.clone(),
@@ -831,7 +1462,7 @@ mod tests {
         assert_eq!(
             orchestrator
                 .ledger()
-                .check(&machine, &click_index(7, "s0000002")),
+                .check(&machine, &click_index(7, "s00000002")),
             Err(LedgerRefusal::StaleSnapshot {
                 target: window(),
                 latest: s2.clone(),
@@ -862,11 +1493,11 @@ mod tests {
             desktop(),
             vec![
                 Answer::Payload(state(
-                    "s0000001",
+                    "s00000001",
                     vec![element(0, "tok/a", "AXButton", "Save")],
                 )),
                 Answer::Payload(state(
-                    "s0000002",
+                    "s00000002",
                     vec![
                         element(0, "tok/b", "AXButton", "Save"),
                         element(1, "tok/c", "AXTextField", "Name"),
@@ -874,7 +1505,7 @@ mod tests {
                 )),
                 Answer::Outcome(confirmed(&["accessibility_readback"])),
                 Answer::Payload(state(
-                    "s0000003",
+                    "s00000003",
                     vec![element(1, "tok/d", "AXTextField", "Name")],
                 )),
                 Answer::Outcome(confirmed(&["accessibility_readback"])),
@@ -893,7 +1524,7 @@ mod tests {
         // An index from the latest snapshot is forwarded as well.
         observe(&orchestrator, &target, true).await;
         orchestrator
-            .act(&target, click_index(1, "s0000003"), None)
+            .act(&target, click_index(1, "s00000003"), None)
             .await
             .unwrap();
 
@@ -930,7 +1561,7 @@ mod tests {
         let (laptop, _) = fake(
             desktop(),
             vec![Answer::Payload(state(
-                "s0000001",
+                "s00000001",
                 vec![element(0, "tok/a", "AXButton", "Save")],
             ))],
         );
@@ -977,7 +1608,7 @@ mod tests {
             desktop(),
             vec![
                 Answer::Payload(state(
-                    "s0000001",
+                    "s00000001",
                     vec![element(0, "tok/a", "AXButton", "Save")],
                 )),
                 Answer::Payload(json!({
@@ -1018,7 +1649,7 @@ mod tests {
             desktop(),
             vec![
                 Answer::Payload(state(
-                    "s0000001",
+                    "s00000001",
                     vec![
                         element(0, "tok/a", "AXButton", "Save"),
                         element(1, "tok/b", "AXTextField", "Name"),
@@ -1026,7 +1657,7 @@ mod tests {
                 )),
                 Answer::Outcome(confirmed(&["accessibility_readback"])),
                 Answer::Payload(state(
-                    "s0000002",
+                    "s00000002",
                     vec![element(1, "tok/c", "AXTextField", "Name")],
                 )),
                 Answer::Outcome(confirmed(&["accessibility_readback"])),
@@ -1048,7 +1679,7 @@ mod tests {
             error,
             Failure::Ledger(LedgerRefusal::SnapshotConsumed {
                 target: window(),
-                snapshot: SnapshotId::try_from("s0000001").unwrap(),
+                snapshot: Some(SnapshotId::try_from("s00000001").unwrap()),
                 action: CuaActionKind::Click,
             })
         );
@@ -1078,6 +1709,7 @@ mod tests {
             vec![
                 Answer::Payload(json!({"apps": []})),
                 Answer::Payload(json!({"windows": [], "current_space_id": 3})),
+                Answer::Outcome(confirmed(&["accessibility_readback"])),
             ],
         );
         let apps = orchestrator
@@ -1108,6 +1740,27 @@ mod tests {
             .unwrap_err();
         assert_eq!(error, Failure::Unsupported(CuaActionKind::Click));
         assert_eq!(kinds(&log).len(), 2);
+
+        // A menu path addresses nothing inside the window, so it needs no
+        // snapshot; it still consumes whatever the window's next action
+        // would have relied on.
+        let menu = CuaAction::InvokeMenu(cua_protocol::InvokeMenuArgs {
+            target: window(),
+            session: None,
+            path: vec![
+                cua_protocol::BoundedText::try_from("File").unwrap(),
+                cua_protocol::BoundedText::try_from("Save").unwrap(),
+            ],
+        });
+        let report = orchestrator.act(&target, menu, None).await.unwrap();
+        assert_eq!(report.outcome.effect, ActionEffect::Confirmed);
+        assert_eq!(kinds(&log).len(), 3);
+        assert!(matches!(
+            orchestrator
+                .ledger()
+                .check(target.machine_id(), &click_token("tok/a")),
+            Err(LedgerRefusal::SnapshotConsumed { .. })
+        ));
     }
 
     // ── Slice 2: the verification gate ─────────────────────────────────
@@ -1123,7 +1776,7 @@ mod tests {
                 desktop(),
                 vec![
                     Answer::Payload(state(
-                        "s0000001",
+                        "s00000001",
                         vec![element(1, "tok/b", "AXTextField", "Name")],
                     )),
                     Answer::Outcome(confirmed(&["accessibility_readback"])),
@@ -1174,7 +1827,7 @@ mod tests {
             desktop(),
             vec![
                 Answer::Payload(state(
-                    "s0000001",
+                    "s00000001",
                     vec![element(0, "tok/a", "AXButton", "Save")],
                 )),
                 Answer::Outcome(json!({
@@ -1225,7 +1878,7 @@ mod tests {
                 desktop(),
                 vec![
                     Answer::Payload(state(
-                        "s0000001",
+                        "s00000001",
                         vec![element(0, "tok/a", "AXButton", "Save")],
                     )),
                     Answer::Outcome(outcome(effect, None)),
@@ -1257,7 +1910,7 @@ mod tests {
             desktop(),
             vec![
                 Answer::Payload(state(
-                    "s0000001",
+                    "s00000001",
                     vec![element(0, "tok/a", "AXButton", "Save")],
                 )),
                 Answer::Outcome(confirmed(&["delivery_receipt"])),
@@ -1279,14 +1932,14 @@ mod tests {
             desktop(),
             vec![
                 Answer::Payload(state(
-                    "s0000001",
+                    "s00000001",
                     vec![element(1, "tok/b", "AXTextField", "Name")],
                 )),
                 // Delivered but not read back: the predicates decide.
                 Answer::Outcome(outcome("unverifiable", None)),
                 Answer::Verification("satisfied"),
                 Answer::Payload(state(
-                    "s0000002",
+                    "s00000002",
                     vec![element(0, "tok/a", "AXButton", "Save")],
                 )),
                 // Read back by the driver: verified without predicates.
@@ -1341,25 +1994,25 @@ mod tests {
             desktop(),
             vec![
                 Answer::Payload(state(
-                    "s0000001",
+                    "s00000001",
                     vec![element(0, "tok/a", "AXButton", "Save")],
                 )),
                 Answer::Payload(degraded_state()),
                 Answer::Outcome(confirmed(&["screenshot"])),
                 Answer::Payload(state(
-                    "s0000002",
+                    "s00000002",
                     vec![element(1, "tok/b", "AXTextField", "Name")],
                 )),
                 Answer::Outcome(confirmed(&["accessibility_readback"])),
                 Answer::Verification("unsatisfied"),
                 Answer::Payload(state(
-                    "s0000003",
+                    "s00000003",
                     vec![element(1, "tok/c", "AXTextField", "Name")],
                 )),
                 Answer::Outcome(confirmed(&["screenshot"])),
                 Answer::Verification("satisfied"),
                 Answer::Payload(state(
-                    "s0000004",
+                    "s00000004",
                     vec![element(1, "tok/d", "AXTextField", "Name")],
                 )),
             ],
@@ -1466,7 +2119,7 @@ mod tests {
             desktop(),
             vec![Answer::Payload(json!({
                 "target": {"pid": 42, "window_id": 99},
-                "snapshot_id": "s0000009",
+                "snapshot_id": "s00000009",
                 "elements": [],
                 "truncated": false,
             }))],
@@ -1485,15 +2138,15 @@ mod tests {
             desktop(),
             vec![
                 Answer::Payload(state(
-                    "s0000001",
+                    "s00000001",
                     vec![element(0, "tok/a", "AXButton", "Save")],
                 )),
                 Answer::Fail(DriverCallFailure::Tool {
                     code: Some("stale_snapshot".into()),
-                    message: "snapshot s0000001 was superseded".into(),
+                    message: "snapshot s00000001 was superseded".into(),
                 }),
                 Answer::Payload(state(
-                    "s0000002",
+                    "s00000002",
                     vec![element(0, "tok/b", "AXButton", "Save")],
                 )),
                 Answer::Fail(DriverCallFailure::Timeout(
@@ -1608,7 +2261,7 @@ mod tests {
             desktop(),
             vec![
                 Answer::Payload(state(
-                    "s0000001",
+                    "s00000001",
                     vec![element(0, "tok/a", "AXButton", "Save")],
                 )),
                 Answer::Verification("satisfied"),
@@ -1724,12 +2377,12 @@ mod tests {
             desktop(),
             vec![
                 Answer::Payload(state(
-                    "s0000001",
+                    "s00000001",
                     vec![element(0, "tok/a", "AXButton", "Save")],
                 )),
                 Answer::Outcome(confirmed(&["accessibility_readback"])),
                 Answer::Payload(state(
-                    "s0000002",
+                    "s00000002",
                     vec![element(0, "tok/b", "AXButton", "Save")],
                 )),
             ],
@@ -1742,7 +2395,7 @@ mod tests {
             Ok(serde_json::from_str(HEALTHY).unwrap()),
             Ok(started(1)),
             Ok(state(
-                "s0000001",
+                "s00000001",
                 vec![element(0, "tok/a", "AXButton", "Save")],
             )),
             Ok(ended(1)),
@@ -1751,7 +2404,7 @@ mod tests {
             Ok(ended(2)),
             Ok(started(3)),
             Ok(state(
-                "s0000002",
+                "s00000002",
                 vec![element(0, "tok/b", "AXButton", "Save")],
             )),
             Ok(ended(3)),
@@ -1798,7 +2451,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 state.snapshot_id.as_ref().map(SnapshotId::as_str),
-                Some("s0000001"),
+                Some("s00000001"),
                 "{name}"
             );
 
@@ -1872,7 +2525,7 @@ mod tests {
 
     #[test]
     fn move_cursor_and_double_click_are_addressed_like_clicks() {
-        let ledger = SnapshotLedger::new();
+        let ledger = SnapshotLedger::default();
         let machine = MachineId::try_from(LAPTOP).unwrap();
         let double = CuaAction::DoubleClick(AddressedActionArgs {
             target: window(),

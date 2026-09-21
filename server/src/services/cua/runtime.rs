@@ -607,11 +607,6 @@ impl RunSession {
         &self.label
     }
 
-    /// The descriptor the run's actions are authorized against.
-    pub fn descriptor(&self) -> &MachineDescriptor {
-        self.adapter.descriptor()
-    }
-
     /// Execute one action inside this run's session. The action is
     /// authorized against the target's descriptor before the session is
     /// opened, so a refused action never reaches the driver and never opens

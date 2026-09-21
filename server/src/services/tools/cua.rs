@@ -13,26 +13,24 @@
 use std::{fmt, sync::Arc};
 
 use cua_protocol::{
-    CuaAction, CuaActionResult, GetWindowStateArgs as ProtocolWindowStateArgs, MachineDescriptor,
-    MachineHealth, MachineId, MachineLocation, VerificationResult, VerifyPredicate,
+    CuaAction, CuaActionResult, GetWindowStateArgs as ProtocolWindowStateArgs, MachineHealth,
+    MachineId, MachineLocation, VerificationResult, VerifyPredicate,
     VerifyStateArgs as ProtocolVerifyArgs, WindowStateResult, WindowTarget,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::services::cua::orchestrator::{
-    ActReport, Failure, Orchestrator, PixelPolicy, Target, VerifySpec,
+    ActReport, Failure, Orchestrator, PixelPolicy, Target, VerifySpec, kind_name,
 };
 use crate::services::machine_registry::MachineRegistry;
 use crate::services::tool::{Tool, ToolDefinition};
-use crate::services::tools::computer::{
-    MachineTarget, SERVER_HOME_TARGET, TargetRefusal, TargetSelection,
-};
+use crate::services::tools::computer::{MachineTarget, TargetRefusal, TargetSelection};
 use crate::services::tools::{ToolExecError, openai_schema};
 
 /// How many accessibility elements one `get_window_state` result shows the
 /// model; the rest is counted and reachable through `query`.
-pub const MAX_RENDERED_ELEMENTS: usize = 60;
+pub const MAX_RENDERED_ELEMENTS: usize = 50;
 
 /// The driver's verification bounds when the model gives none.
 const DEFAULT_VERIFY_TIMEOUT_MS: u16 = 2_000;
@@ -154,8 +152,111 @@ impl CuaTools {
     /// exactly; with nothing chosen, the only registered target is used and
     /// several are refused. Never a pick, never a fallback.
     pub async fn resolve(&self, requested: Option<&str>) -> Result<Resolved, CuaRefusal> {
-        let _ = requested;
-        todo!("slice 1: resolve the chosen computer to a Cua target")
+        let cua = self.registry.cua();
+        let descriptors = cua.list().await;
+        let requested = requested.map(str::trim).filter(|id| !id.is_empty());
+        // The model naming the home or a server-local id means the server
+        // machine either way, as it does for the composer's choice.
+        let names_home = matches!(
+            TargetSelection::from_request(requested),
+            TargetSelection::ServerHome
+        );
+        let requested_label = |id: &str| {
+            if names_home {
+                "the server home".to_owned()
+            } else {
+                self.target.label(id)
+            }
+        };
+
+        let chosen: MachineId = match self.target.selection() {
+            TargetSelection::ServerHome => {
+                if let Some(id) = requested
+                    && !names_home
+                {
+                    return Err(TargetRefusal::Mismatch {
+                        chosen: "the server home".to_owned(),
+                        requested: self.target.label(id),
+                    }
+                    .into());
+                }
+                descriptors
+                    .iter()
+                    .find(|descriptor| descriptor.location == MachineLocation::ServerLocal)
+                    .map(|descriptor| descriptor.machine_id.clone())
+                    .ok_or(CuaRefusal::NoServerLocalTarget)?
+            }
+            TargetSelection::Machine(chosen) => {
+                if let Some(id) = requested
+                    && id != chosen
+                {
+                    return Err(TargetRefusal::Mismatch {
+                        chosen: self.target.label(chosen),
+                        requested: requested_label(id),
+                    }
+                    .into());
+                }
+                MachineId::try_from(chosen.as_str()).map_err(|_| TargetRefusal::Unavailable {
+                    label: self.target.label(chosen),
+                })?
+            }
+            TargetSelection::Unselected => match descriptors.as_slice() {
+                [] => return Err(CuaRefusal::NoTargets),
+                [only] => {
+                    if let Some(id) = requested {
+                        let names_it = id == only.machine_id.as_str()
+                            || (names_home && only.location == MachineLocation::ServerLocal);
+                        if !names_it {
+                            return Err(TargetRefusal::Unavailable {
+                                label: requested_label(id),
+                            }
+                            .into());
+                        }
+                    }
+                    only.machine_id.clone()
+                }
+                several => {
+                    // The model naming one of them is not the user choosing it.
+                    let mut labels: Vec<String> = several
+                        .iter()
+                        .map(|descriptor| self.target.label(descriptor.machine_id.as_str()))
+                        .collect();
+                    labels.sort();
+                    return Err(TargetRefusal::ChooseAComputer { labels }.into());
+                }
+            },
+        };
+
+        let label = self.target.label(chosen.as_str());
+        let Ok(adapter) = cua.select(Some(&chosen)).await else {
+            // Connected without a descriptor, or not connected at all.
+            let connected = self
+                .registry
+                .list()
+                .await
+                .iter()
+                .any(|machine| machine.machine_id == chosen.as_str());
+            return Err(if connected {
+                CuaRefusal::NoCuaDriver { label }
+            } else {
+                TargetRefusal::Unavailable { label }.into()
+            });
+        };
+        let descriptor = adapter.descriptor();
+        if descriptor.health == MachineHealth::Unavailable {
+            return Err(CuaRefusal::DriverUnavailable { label });
+        }
+        let target = if descriptor.location == MachineLocation::ServerLocal {
+            // Every operation on the server machine is one run of its
+            // runtime; without the runtime there is no target to run on.
+            let runtime = cua
+                .server_local_runtime()
+                .ok_or(CuaRefusal::NoServerLocalTarget)?;
+            Target::server_local(adapter, runtime)
+        } else {
+            Target::direct(adapter)
+        };
+        Ok(Resolved { target, label })
     }
 
     fn failure(&self, label: &str, failure: Failure) -> ToolExecError {
@@ -510,51 +611,377 @@ pub struct VerifyWindowArgs {
 // Conversion to the protocol
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// A user-facing argument error, typed like the refusals.
+fn invalid(error: String) -> ToolExecError {
+    ToolExecError(format!("invalid_arguments: {error}"))
+}
+
+/// The action the JSON describes, through the protocol's own decoder so
+/// every bound and shape rule applies before anything is sent.
+fn protocol_action(tool: &str, args: serde_json::Value) -> Result<CuaAction, String> {
+    let action = serde_json::json!({"tool": tool, "args": args});
+    CuaAction::from_json(&action.to_string()).map_err(|error| error.to_string())
+}
+
 /// The discovery action the arguments describe, validated by the protocol.
 pub fn discovery_action(args: &DiscoverWindowsArgs) -> Result<CuaAction, String> {
-    let _ = args;
-    todo!("slice 1: discovery arguments")
+    match args.mode {
+        DiscoverMode::ListApps => protocol_action("list_apps", serde_json::json!({})),
+        DiscoverMode::ListWindows => {
+            if args.pid == Some(0) {
+                return Err("pid must be positive".into());
+            }
+            protocol_action(
+                "list_windows",
+                serde_json::json!({
+                    "pid": args.pid,
+                    "on_screen_only": args.on_screen_only.unwrap_or(true),
+                }),
+            )
+        }
+        DiscoverMode::LaunchApp => protocol_action(
+            "launch_app",
+            serde_json::json!({
+                "bundle_id": args.bundle_id,
+                "name": args.name,
+                "creates_new_application_instance":
+                    args.creates_new_application_instance.unwrap_or(false),
+            }),
+        ),
+    }
 }
 
 /// The observation the arguments describe, validated by the protocol.
 pub fn window_state_action(args: &WindowStateArgs) -> Result<ProtocolWindowStateArgs, String> {
-    let _ = args;
-    todo!("slice 1: window state arguments")
+    let action = protocol_action(
+        "get_window_state",
+        serde_json::json!({
+            "target": args.target,
+            "include_accessibility_tree": args.include_accessibility_tree.unwrap_or(true),
+            "include_screenshot": args.include_screenshot.unwrap_or(false),
+            "max_elements": args.max_elements,
+            "max_depth": args.max_depth,
+            "query": args.query,
+        }),
+    )?;
+    match action {
+        CuaAction::GetWindowState(args) => Ok(args),
+        _ => Err("not a window state".into()),
+    }
 }
 
 /// The typed action the arguments describe: the target and background
 /// delivery filled in, defaults applied, validated by the protocol.
 pub fn typed_action(target: WindowTargetArgs, action: &ActionArgs) -> Result<CuaAction, String> {
-    let _ = (target, action);
-    todo!("slice 1: action arguments")
+    use serde_json::json;
+    let (tool, mut args) = match action {
+        ActionArgs::Click {
+            address,
+            button,
+            action,
+            count,
+        } => (
+            "click",
+            json!({
+                "address": address,
+                "button": button.unwrap_or(ButtonArg::Left),
+                "action": action.unwrap_or(ClickActionArg::Press),
+                "modifiers": [],
+                "count": count,
+            }),
+        ),
+        ActionArgs::DoubleClick { address } => ("double_click", json!({"address": address})),
+        ActionArgs::RightClick { address } => {
+            ("right_click", json!({"address": address, "modifiers": []}))
+        }
+        ActionArgs::Drag {
+            from,
+            to,
+            duration_ms,
+            steps,
+            button,
+        } => (
+            "drag",
+            json!({
+                "from": from,
+                "to": to,
+                "duration_ms": duration_ms.unwrap_or(300),
+                "steps": steps.unwrap_or(20),
+                "button": button.unwrap_or(ButtonArg::Left),
+                "modifiers": [],
+            }),
+        ),
+        ActionArgs::Scroll {
+            address,
+            direction,
+            by,
+            amount,
+        } => (
+            "scroll",
+            json!({
+                "address": address,
+                "direction": direction,
+                "by": by.unwrap_or(ScrollByArg::Line),
+                "amount": amount.unwrap_or(3),
+            }),
+        ),
+        ActionArgs::TypeText {
+            address,
+            text,
+            delay_ms,
+        } => (
+            "type_text",
+            json!({"address": address, "text": text, "delay_ms": delay_ms.unwrap_or(0)}),
+        ),
+        ActionArgs::PressKey {
+            address,
+            key,
+            modifiers,
+        } => (
+            "press_key",
+            json!({
+                "address": address,
+                "key": key,
+                "modifiers": modifiers.clone().unwrap_or_default(),
+            }),
+        ),
+        ActionArgs::Hotkey { address, keys } => {
+            ("hotkey", json!({"address": address, "keys": keys}))
+        }
+        ActionArgs::SetValue { element, value } => {
+            ("set_value", json!({"element": element, "value": value}))
+        }
+        ActionArgs::InvokeMenu { path } => ("invoke_menu", json!({"path": path})),
+    };
+    args["target"] = json!(target);
+    // Every delivered action goes out in the background; set_value and
+    // invoke_menu are accessibility calls with no delivery at all.
+    if !matches!(tool, "set_value" | "invoke_menu") {
+        args["delivery_mode"] = json!(DeliveryModeArg::Background);
+    }
+    protocol_action(tool, args)
 }
 
 /// The predicates as the protocol carries them.
 pub fn predicates(expect: &[PredicateArgs]) -> Result<Vec<VerifyPredicate>, String> {
-    let _ = expect;
-    todo!("slice 2: predicate arguments")
+    use serde_json::json;
+    expect
+        .iter()
+        .map(|predicate| {
+            let value = match predicate {
+                PredicateArgs::WindowExists { value } => {
+                    json!({"predicate": "window_exists", "value": value})
+                }
+                PredicateArgs::WindowBounds {
+                    x,
+                    y,
+                    width,
+                    height,
+                    tolerance_px,
+                } => json!({
+                    "predicate": "window_bounds",
+                    "value": {
+                        "bounds": {"x": x, "y": y, "width": width, "height": height},
+                        "tolerance_px": tolerance_px.unwrap_or(2.0),
+                    },
+                }),
+                PredicateArgs::Element {
+                    role,
+                    label_contains,
+                    condition,
+                    expected,
+                } => {
+                    if role.is_none() && label_contains.is_none() {
+                        return Err(
+                            "an element predicate needs a selector: role and/or label_contains"
+                                .to_owned(),
+                        );
+                    }
+                    let condition = match (condition, expected) {
+                        (ConditionArg::Exists, _) => json!({"condition": "exists"}),
+                        (ConditionArg::Enabled, Some(ExpectedArg::Flag(flag))) => {
+                            json!({"condition": "enabled", "expected": flag})
+                        }
+                        (ConditionArg::Selected, Some(ExpectedArg::Flag(flag))) => {
+                            json!({"condition": "selected", "expected": flag})
+                        }
+                        (ConditionArg::ValueEquals, Some(ExpectedArg::Text(text))) => {
+                            json!({"condition": "value_equals", "expected": text})
+                        }
+                        (ConditionArg::Enabled | ConditionArg::Selected, _) => {
+                            return Err(
+                                "enabled and selected need expected: true or false".to_owned()
+                            );
+                        }
+                        (ConditionArg::ValueEquals, _) => {
+                            return Err("value_equals needs expected: the text".to_owned());
+                        }
+                    };
+                    json!({
+                        "predicate": "element",
+                        "value": {
+                            "selector": {"role": role, "label_contains": label_contains},
+                            "condition": condition,
+                        },
+                    })
+                }
+            };
+            serde_json::from_value::<VerifyPredicate>(value)
+                .map_err(|error| format!("invalid predicate: {error}"))
+        })
+        .collect()
+}
+
+/// A verification checked by the protocol's rules (predicate count, timing).
+fn checked_verification(
+    target: WindowTargetArgs,
+    expect: Vec<VerifyPredicate>,
+    timeout_ms: Option<u16>,
+    stable_samples: Option<u8>,
+) -> Result<ProtocolVerifyArgs, String> {
+    let args = ProtocolVerifyArgs {
+        target: target.into(),
+        session: None,
+        expect,
+        include_screenshot: false,
+        stable_samples: stable_samples.unwrap_or(DEFAULT_STABLE_SAMPLES),
+        timeout_ms: timeout_ms.unwrap_or(DEFAULT_VERIFY_TIMEOUT_MS),
+    };
+    CuaAction::VerifyState(args.clone())
+        .validate()
+        .map_err(|error| error.to_string())?;
+    Ok(args)
 }
 
 /// The verification the `act` arguments ask for, validated by the protocol.
 pub fn verify_spec(target: WindowTargetArgs, verify: &VerifyArgs) -> Result<VerifySpec, String> {
-    let _ = (target, verify);
-    todo!("slice 2: verification arguments")
+    let args = checked_verification(
+        target,
+        predicates(&verify.expect)?,
+        verify.timeout_ms,
+        verify.stable_samples,
+    )?;
+    Ok(VerifySpec {
+        expect: args.expect,
+        timeout_ms: args.timeout_ms,
+        stable_samples: args.stable_samples,
+    })
 }
 
 /// The standalone verification the arguments describe.
 pub fn verify_action(args: &VerifyWindowArgs) -> Result<ProtocolVerifyArgs, String> {
-    let _ = args;
-    todo!("slice 2: verify_state arguments")
+    checked_verification(
+        args.target,
+        predicates(&args.expect)?,
+        args.timeout_ms,
+        args.stable_samples,
+    )
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Rendering
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// How many windows a discovery result lists; the rest is counted.
+const MAX_RENDERED_WINDOWS: usize = 80;
+
+fn rect_json(rect: &cua_protocol::Rect) -> serde_json::Value {
+    serde_json::json!([rect.x, rect.y, rect.width, rect.height])
+}
+
+fn window_json(window: &cua_protocol::WindowRecord) -> serde_json::Value {
+    let mut value = serde_json::json!({
+        "pid": window.target.pid,
+        "window_id": window.target.window_id,
+        "app_name": window.app_name.as_str(),
+        "bounds": rect_json(&window.bounds),
+        "is_on_screen": window.is_on_screen,
+    });
+    if let Some(title) = &window.title {
+        value["title"] = serde_json::json!(title.as_str());
+    }
+    if let Some(on_current_space) = window.on_current_space {
+        value["on_current_space"] = serde_json::json!(on_current_space);
+    }
+    value
+}
+
+/// Up to `MAX_RENDERED_WINDOWS` windows and how many there were.
+fn windows_json(
+    windows: &[cua_protocol::WindowRecord],
+    budget: &mut usize,
+) -> (Vec<serde_json::Value>, usize) {
+    let shown: Vec<serde_json::Value> = windows.iter().take(*budget).map(window_json).collect();
+    *budget -= shown.len();
+    (shown, windows.len())
+}
+
 /// A discovery result as the model reads it.
 pub fn render_discovery(result: &CuaActionResult, label: &str) -> serde_json::Value {
-    let _ = (result, label);
-    todo!("slice 1: render discovery")
+    use serde_json::json;
+    let mut budget = MAX_RENDERED_WINDOWS;
+    match result {
+        CuaActionResult::ListApps(apps) => {
+            let rendered: Vec<serde_json::Value> = apps
+                .apps
+                .iter()
+                .map(|app| {
+                    let (windows, total) = windows_json(&app.windows, &mut budget);
+                    let mut value = json!({
+                        "pid": app.pid,
+                        "bundle_id": app.bundle_id.as_str(),
+                        "name": app.name.as_str(),
+                        "running": app.running,
+                        "active": app.active,
+                        "windows": windows,
+                    });
+                    if windows.len() < total {
+                        value["windows_total"] = json!(total);
+                    }
+                    value
+                })
+                .collect();
+            let mut value = json!({"machine": label, "apps": rendered});
+            if budget == 0 {
+                value["note"] = json!(format!(
+                    "window lists are cut at {MAX_RENDERED_WINDOWS} in total; list_windows \
+                     with a pid shows one app's windows"
+                ));
+            }
+            value
+        }
+        CuaActionResult::ListWindows(windows) => {
+            let (rendered, total) = windows_json(&windows.windows, &mut budget);
+            let mut value = json!({
+                "machine": label,
+                "current_space_id": windows.current_space_id,
+                "windows": rendered,
+                "windows_total": total,
+            });
+            if rendered.len() < total {
+                value["note"] = json!(format!(
+                    "{} more windows not shown; list_windows with a pid narrows the list",
+                    total - rendered.len()
+                ));
+            }
+            value
+        }
+        CuaActionResult::LaunchApp(launched) => {
+            let (windows, total) = windows_json(&launched.windows, &mut budget);
+            json!({
+                "machine": label,
+                "launched": {
+                    "pid": launched.pid,
+                    "bundle_id": launched.bundle_id.as_str(),
+                    "name": launched.name.as_str(),
+                    "launch_state": launched.launch_state,
+                    "windows": windows,
+                    "windows_total": total,
+                },
+            })
+        }
+        other => json!({"machine": label, "result": other}),
+    }
 }
 
 /// A window state as the model reads it: the snapshot id, a bounded list
@@ -566,20 +993,165 @@ pub fn render_window_state(
     policy: &PixelPolicy,
     label: &str,
 ) -> serde_json::Value {
-    let _ = (state, policy, label);
-    todo!("slice 1: render the window state")
+    use serde_json::json;
+    let elements: Vec<serde_json::Value> = state
+        .elements
+        .iter()
+        .take(MAX_RENDERED_ELEMENTS)
+        .map(|element| {
+            let mut value = json!({
+                "element_index": element.element_index,
+                "element_token": element.element_token.as_str(),
+                "role": element.role.as_str(),
+            });
+            if let Some(text) = &element.label {
+                value["label"] = json!(text.as_str());
+            }
+            if let Some(text) = &element.value
+                && !text.as_str().is_empty()
+            {
+                value["value"] = json!(text.as_str());
+            }
+            if let Some(enabled) = element.enabled {
+                value["enabled"] = json!(enabled);
+            }
+            if let Some(selected) = element.selected {
+                value["selected"] = json!(selected);
+            }
+            if let Some(frame) = &element.frame {
+                value["frame"] = rect_json(frame);
+            }
+            if !element.actions.is_empty() {
+                value["actions"] = json!(
+                    element
+                        .actions
+                        .iter()
+                        .map(|action| action.as_str())
+                        .collect::<Vec<_>>()
+                );
+            }
+            value
+        })
+        .collect();
+    let shown = elements.len();
+    let returned = state.elements.len();
+    let mut value = json!({
+        "machine": label,
+        "target": {"pid": state.target.pid, "window_id": state.target.window_id},
+        "app_name": state.app_name.as_ref().map(|name| name.as_str()),
+        "window_title": state.window_title.as_ref().map(|title| title.as_str()),
+        "snapshot_id": state.snapshot_id.as_ref().map(|id| id.as_str()),
+        "degraded": state.degraded,
+        "degraded_reason": state.degraded_reason.as_ref().map(|reason| reason.as_str()),
+        "elements": elements,
+        "elements_shown": shown,
+        "elements_returned": returned,
+        "elements_total": state.total_element_count.or(state.element_count),
+        "truncated": state.truncated,
+        "pixel_addresses": {"allowed": policy.allowed, "reason": policy.reason},
+    });
+    if shown < returned {
+        value["note"] = json!(format!(
+            "{} more elements not shown; narrow with query or max_depth, or use \
+             element_index + snapshot_id for an element you already know",
+            returned - shown
+        ));
+    }
+    if let Some(bounds) = &state.window_bounds {
+        value["window_bounds"] = rect_json(bounds);
+    }
+    if let Some(background) = &state.background_input {
+        value["background_input"] = json!({
+            "exact_window": background.exact_window.status,
+            "routes": background
+                .routes
+                .iter()
+                .map(|route| json!({
+                    "route": route.route,
+                    "status": route.status,
+                    "reason": route.reason.as_ref().map(|reason| reason.as_str()),
+                }))
+                .collect::<Vec<_>>(),
+        });
+    }
+    if let Some(escalation) = &state.escalation {
+        value["escalation"] = json!(format!(
+            "the driver recommends {} ({}); Nolune never applies it: delivery stays \
+             background, a point address is the fallback when pixel_addresses allows it",
+            kind_name(escalation.recommended),
+            escalation.reason.as_str()
+        ));
+    }
+    if let Some(screenshot) = &state.screenshot {
+        value["screenshot"] = json!({
+            "media_type": screenshot.media_type,
+            "width": screenshot.width,
+            "height": screenshot.height,
+            "scale": state.screenshot_scale,
+            "shown": false,
+            "note": "captured one-shot; the image is not shown to you yet",
+        });
+    }
+    value
+}
+
+fn outcome_json(outcome: &cua_protocol::ActionOutcome) -> serde_json::Value {
+    use serde_json::json;
+    let mut value = json!({
+        "effect": outcome.effect,
+        "route": outcome.route,
+        "delivery": "background",
+        "delivered_count": outcome.delivery.as_ref().and_then(|delivery| delivery.delivered_count),
+        "evidence": outcome.evidence,
+    });
+    if let Some(escalation) = &outcome.escalation {
+        value["escalation"] = json!(format!(
+            "the driver recommends {} ({}); not applied",
+            kind_name(escalation.target),
+            kind_name(escalation.reason)
+        ));
+    }
+    value
+}
+
+fn verification_json(verification: &VerificationResult) -> serde_json::Value {
+    use serde_json::json;
+    let mut value = json!({
+        "overall": verification.overall,
+        "predicates": verification
+            .predicates
+            .iter()
+            .map(|predicate| json!({"index": predicate.predicate_index, "status": predicate.status}))
+            .collect::<Vec<_>>(),
+    });
+    if let Some(screenshot) = &verification.screenshot {
+        value["screenshot"] = json!({
+            "media_type": screenshot.media_type,
+            "width": screenshot.width,
+            "height": screenshot.height,
+            "shown": false,
+        });
+    }
+    value
 }
 
 /// A verified action as the model reads it.
 pub fn render_act(report: &ActReport, label: &str) -> serde_json::Value {
-    let _ = (report, label);
-    todo!("slice 2: render the act report")
+    serde_json::json!({
+        "machine": label,
+        "verified": true,
+        "outcome": outcome_json(&report.outcome),
+        "verification": report.verification.as_ref().map(verification_json),
+        "next": "the window may have changed: call get_window_state again before the next \
+                 action there",
+    })
 }
 
 /// A verification as the model reads it.
 pub fn render_verification(verification: &VerificationResult, label: &str) -> serde_json::Value {
-    let _ = (verification, label);
-    todo!("slice 2: render the verification")
+    let mut value = verification_json(verification);
+    value["machine"] = serde_json::json!(label);
+    value
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -617,8 +1189,21 @@ impl Tool for DiscoverWindowsTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let _ = args;
-        todo!("slice 1: discover_windows")
+        let resolved = self.0.resolve(args.machine_id.as_deref()).await?;
+        let action = discovery_action(&args).map_err(invalid)?;
+        log::info!(
+            "[discover_windows] {} on '{}' ({})",
+            kind_name(action.kind()),
+            resolved.target.machine_id().as_str(),
+            resolved.label
+        );
+        let result = self
+            .0
+            .orchestrator
+            .discover(&resolved.target, action)
+            .await
+            .map_err(|failure| self.0.failure(&resolved.label, failure))?;
+        Ok(render_discovery(&result, &resolved.label).to_string())
     }
 }
 
@@ -654,8 +1239,25 @@ impl Tool for GetWindowStateTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let _ = args;
-        todo!("slice 1: get_window_state")
+        let resolved = self.0.resolve(args.machine_id.as_deref()).await?;
+        let observation = window_state_action(&args).map_err(invalid)?;
+        let window = observation.target;
+        log::info!(
+            "[get_window_state] pid {} window {} on '{}' ({})",
+            window.pid,
+            window.window_id,
+            resolved.target.machine_id().as_str(),
+            resolved.label
+        );
+        let orchestrator = self.0.orchestrator();
+        let state = orchestrator
+            .window_state(&resolved.target, observation)
+            .await
+            .map_err(|failure| self.0.failure(&resolved.label, failure))?;
+        let policy = orchestrator
+            .ledger()
+            .pixel_policy(resolved.target.machine_id(), window);
+        Ok(render_window_state(&state, &policy, &resolved.label).to_string())
     }
 }
 
@@ -694,8 +1296,36 @@ impl Tool for ActTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let _ = args;
-        todo!("slice 2: act")
+        let resolved = self.0.resolve(args.machine_id.as_deref()).await?;
+        let action = typed_action(args.target, &args.action).map_err(invalid)?;
+        let verify = args
+            .verify
+            .as_ref()
+            .map(|verify| verify_spec(args.target, verify))
+            .transpose()
+            .map_err(invalid)?;
+        // `delivery_mode` admits background only; the action above already
+        // carries it.
+        let DeliveryModeArg::Background = args.delivery_mode.unwrap_or(DeliveryModeArg::Background);
+        log::info!(
+            "[act] {} in pid {} window {} on '{}' ({}, {})",
+            kind_name(action.kind()),
+            args.target.pid,
+            args.target.window_id,
+            resolved.target.machine_id().as_str(),
+            resolved.label,
+            match &verify {
+                Some(spec) => format!("{} predicate(s)", spec.expect.len()),
+                None => "no predicates".to_owned(),
+            }
+        );
+        let report = self
+            .0
+            .orchestrator
+            .act(&resolved.target, action, verify)
+            .await
+            .map_err(|failure| self.0.failure(&resolved.label, failure))?;
+        Ok(render_act(&report, &resolved.label).to_string())
     }
 }
 
@@ -728,24 +1358,25 @@ impl Tool for VerifyStateTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let _ = args;
-        todo!("slice 2: verify_state")
+        let resolved = self.0.resolve(args.machine_id.as_deref()).await?;
+        let verification = verify_action(&args).map_err(invalid)?;
+        log::info!(
+            "[verify_state] {} predicate(s) on pid {} window {} on '{}' ({})",
+            verification.expect.len(),
+            args.target.pid,
+            args.target.window_id,
+            resolved.target.machine_id().as_str(),
+            resolved.label
+        );
+        let result = self
+            .0
+            .orchestrator
+            .verify(&resolved.target, verification)
+            .await
+            .map_err(|failure| self.0.failure(&resolved.label, failure))?;
+        Ok(render_verification(&result, &resolved.label).to_string())
     }
 }
-
-// Names the stubs leave unused until the implementation lands.
-#[allow(dead_code)]
-fn _uses(
-    _: &MachineDescriptor,
-    _: MachineHealth,
-    _: &MachineId,
-    _: MachineLocation,
-    _: &str,
-) -> &'static str {
-    SERVER_HOME_TARGET
-}
-#[allow(dead_code)]
-fn _uses_selection(_: &TargetSelection) {}
 
 #[cfg(test)]
 mod schema_tests {
@@ -1066,7 +1697,7 @@ mod conversion_tests {
             &ActionArgs::TypeText {
                 address: AddressArgs::ElementIndex {
                     element_index: 3,
-                    snapshot_id: "s0000001".into(),
+                    snapshot_id: "s00000001".into(),
                 },
                 text: "hello".into(),
                 delay_ms: None,
@@ -1401,9 +2032,10 @@ mod tool_tests {
     use super::*;
     use crate::services::cua::{runtime::CuaRuntime, transport::fake::FakeTransport};
     use crate::services::machine_registry::MachineInfo;
+    use crate::services::tools::computer::SERVER_HOME_TARGET;
     use cua_protocol::{
         Capability, CheckedCuaAdapter, CuaRequestEnvelope, CuaResponseEnvelope, DriverVersion,
-        Permission, PermissionState, Platform,
+        MachineDescriptor, Permission, PermissionState, Platform,
         driver_mcp::{DriverCallFailure, response_for},
     };
     use serde_json::{Value, json};
@@ -1700,7 +2332,7 @@ mod tool_tests {
             descriptor(LAPTOP, MachineLocation::Desktop),
             vec![
                 json!({"apps": []}),
-                state("s0000001", vec![element(0, "tok/a", "AXButton", "Save")]),
+                state("s00000001", vec![element(0, "tok/a", "AXButton", "Save")]),
                 confirmed(),
             ],
         );
@@ -1718,7 +2350,7 @@ mod tool_tests {
             "the result names the computer: {apps}"
         );
         let state = tools.state.call(observe(Some(LAPTOP))).await.unwrap();
-        assert!(state.contains("s0000001"), "{state}");
+        assert!(state.contains("s00000001"), "{state}");
         let acted = tools.act.call(click(None, "tok/a")).await.unwrap();
         assert!(
             acted.contains("confirmed") && acted.contains("Laptop"),
@@ -1744,7 +2376,7 @@ mod tool_tests {
                 json!({"apps": []}),
                 ended(1),
                 started(2),
-                state("s0000001", vec![element(0, "tok/a", "AXButton", "Save")]),
+                state("s00000001", vec![element(0, "tok/a", "AXButton", "Save")]),
                 ended(2),
             ],
         )
@@ -1761,7 +2393,7 @@ mod tool_tests {
         // naming that id is fine.
         let by_id = tools_for(&registry, Some(STUDIO)).await;
         let state = by_id.state.call(observe(Some(STUDIO))).await.unwrap();
-        assert!(state.contains("s0000001"), "{state}");
+        assert!(state.contains("s00000001"), "{state}");
         assert!(laptop_log.lock().unwrap().is_empty());
 
         // With the home chosen and no driver there, the typed tools say so.
@@ -1837,7 +2469,7 @@ mod tool_tests {
         degraded["background_input"]["exact_window"]["window_id"] = json!(99);
         let (laptop, _) = scripted(
             descriptor(LAPTOP, MachineLocation::Desktop),
-            vec![state("s0000001", many), degraded],
+            vec![state("s00000001", many), degraded],
         );
         registry.cua().register(laptop).await.unwrap();
         let tools = tools_for(&registry, None).await;
@@ -1845,7 +2477,7 @@ mod tool_tests {
         let output = tools.state.call(observe(None)).await.unwrap();
         let rendered: Value =
             serde_json::from_str(&output).unwrap_or_else(|e| panic!("{e}: {output}"));
-        assert_eq!(rendered["snapshot_id"], "s0000001");
+        assert_eq!(rendered["snapshot_id"], "s00000001");
         assert_eq!(rendered["target"], json!({"pid": 42, "window_id": 99}));
         assert_eq!(rendered["app_name"], "Notes");
         let elements = rendered["elements"].as_array().unwrap();
@@ -1897,7 +2529,10 @@ mod tool_tests {
         let (laptop, log) = scripted(
             descriptor(LAPTOP, MachineLocation::Desktop),
             vec![
-                state("s0000001", vec![element(1, "tok/b", "AXTextField", "Name")]),
+                state(
+                    "s00000001",
+                    vec![element(1, "tok/b", "AXTextField", "Name")],
+                ),
                 json!({"outcome": {
                     "effect": "unverifiable", "route": "accessibility",
                     "delivery": {"requested": "background", "delivered_count": 1},
@@ -1956,13 +2591,182 @@ mod tool_tests {
         assert_eq!(log.lock().unwrap().len(), 4);
     }
 
+    /// Read-only against the driver installed on this machine, like the
+    /// runtime's live test: `cargo test --manifest-path server/Cargo.toml
+    /// --bin nolune -- live_typed_tools --ignored --nocapture`. Discovers
+    /// the apps and windows, observes the first on-screen window with a
+    /// bounded tree, and verifies that it exists; nothing is clicked or
+    /// typed and no screenshot is taken. The driver's answers go through
+    /// the checked adapter, the orchestrator's ledger and the renderers
+    /// directly (`Target::direct`), without a run session: on a machine
+    /// where another gateway already holds the runtime's `nolune-run-<n>`
+    /// label the driver refuses that session to a second transport, which
+    /// is the runtime's label scheme (#192), not the tools'.
+    #[tokio::test]
+    #[ignore]
+    async fn live_typed_tools_observe_a_window_on_the_server_machine() {
+        use crate::services::cua::orchestrator::Orchestrator;
+        use cua_protocol::EmptyArgs;
+
+        let registry = MachineRegistry::new();
+        let runtime = CuaRuntime::new(
+            crate::config::CuaConfig::default(),
+            registry.cua().clone(),
+            std::path::PathBuf::new(),
+        );
+        runtime.start().await;
+        let descriptors = registry.cua().list().await;
+        let local = &descriptors[0];
+        let adapter = registry
+            .cua()
+            .select(Some(&local.machine_id))
+            .await
+            .unwrap();
+        let target = Target::direct(adapter);
+        let orchestrator = Orchestrator::new();
+        let label = local.machine_id.as_str();
+
+        let apps = orchestrator
+            .discover(&target, CuaAction::ListApps(EmptyArgs {}))
+            .await
+            .unwrap();
+        let rendered = render_discovery(&apps, label);
+        println!(
+            "{} apps on {label}",
+            rendered["apps"].as_array().unwrap().len()
+        );
+
+        let windows = orchestrator
+            .discover(
+                &target,
+                discovery_action(&DiscoverWindowsArgs {
+                    mode: DiscoverMode::ListWindows,
+                    on_screen_only: Some(true),
+                    ..discover(None)
+                })
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let rendered = render_discovery(&windows, label);
+        let listed = rendered["windows"].as_array().unwrap();
+        println!("{} on-screen windows; first: {}", listed.len(), listed[0]);
+
+        // Observe on-screen windows until one resolves its accessibility
+        // surface (Electron windows often come back degraded), so real
+        // tokens flow through the ledger; the degraded ones exercise the
+        // pixel policy on the way.
+        let mut target_args = None;
+        for window in listed.iter().take(8) {
+            let candidate = WindowTargetArgs {
+                pid: window["pid"].as_u64().unwrap() as u32,
+                window_id: window["window_id"].as_u64().unwrap(),
+            };
+            let observation = window_state_action(&WindowStateArgs {
+                target: candidate,
+                max_elements: Some(40),
+                ..observe(None)
+            })
+            .unwrap();
+            let window_target = observation.target;
+            let state = orchestrator
+                .window_state(&target, observation)
+                .await
+                .unwrap();
+            let policy = orchestrator
+                .ledger()
+                .pixel_policy(target.machine_id(), window_target);
+            let rendered = render_window_state(&state, &policy, label).to_string();
+            let value: Value = serde_json::from_str(&rendered).unwrap();
+            println!(
+                "{:?} ({}/{}): snapshot {}, {} elements shown of {}, degraded {}, pixels {} \
+                 ({} chars)",
+                value["app_name"],
+                candidate.pid,
+                candidate.window_id,
+                value["snapshot_id"],
+                value["elements_shown"],
+                value["elements_returned"],
+                value["degraded"],
+                value["pixel_addresses"]["allowed"],
+                rendered.len()
+            );
+            assert!(!rendered.contains("base64"));
+            assert!(rendered.len() < 12_000, "fits the tool result bound");
+            if !state.elements.is_empty() {
+                assert!(!policy.allowed, "a resolved tree keeps pixels closed");
+                let token = state.elements[0].element_token.as_str();
+                let click = typed_action(
+                    candidate,
+                    &ActionArgs::Click {
+                        address: AddressArgs::ElementToken {
+                            element_token: token.into(),
+                        },
+                        button: None,
+                        action: None,
+                        count: None,
+                    },
+                )
+                .unwrap();
+                assert_eq!(
+                    orchestrator.ledger().check(target.machine_id(), &click),
+                    Ok(()),
+                    "a live token from the latest snapshot would be forwarded"
+                );
+                target_args = Some(candidate);
+                break;
+            }
+        }
+        let target_args = target_args.expect("an on-screen window with a resolved tree");
+
+        // A capture-only observation of the same window: the one-shot
+        // screenshot reaches the renderer as its dimensions, never its bytes.
+        let capture = window_state_action(&WindowStateArgs {
+            target: target_args,
+            include_accessibility_tree: Some(false),
+            include_screenshot: Some(true),
+            ..observe(None)
+        })
+        .unwrap();
+        let window = capture.target;
+        let state = orchestrator.window_state(&target, capture).await.unwrap();
+        let policy = orchestrator
+            .ledger()
+            .pixel_policy(target.machine_id(), window);
+        let rendered = render_window_state(&state, &policy, label).to_string();
+        let value: Value = serde_json::from_str(&rendered).unwrap();
+        println!(
+            "capture: {}x{} scale {} ({} chars)",
+            value["screenshot"]["width"],
+            value["screenshot"]["height"],
+            value["screenshot"]["scale"],
+            rendered.len()
+        );
+        assert!(!rendered.contains("base64"));
+        assert!(rendered.len() < 2_000, "dimensions only");
+
+        let verified = orchestrator
+            .verify(
+                &target,
+                verify_action(&VerifyWindowArgs {
+                    target: target_args,
+                    ..verify(None)
+                })
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        println!("{}", render_verification(&verified, label));
+        runtime.shutdown().await;
+    }
+
     #[tokio::test]
     async fn the_orchestrator_is_shared_by_the_four_tools_of_a_turn() {
         let registry = MachineRegistry::new();
         let (laptop, _) = scripted(
             descriptor(LAPTOP, MachineLocation::Desktop),
             vec![state(
-                "s0000001",
+                "s00000001",
                 vec![element(0, "tok/a", "AXButton", "Save")],
             )],
         );
