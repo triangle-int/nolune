@@ -51,15 +51,18 @@ pub fn provider_capabilities(
         crate::config::LlmProvider::Anthropic => anthropic::CAPABILITIES,
         crate::config::LlmProvider::Openai => openai::capabilities_for(model),
         crate::config::LlmProvider::Openrouter => openrouter::capabilities_for(model),
+        crate::config::LlmProvider::Codex => codex::CAPABILITIES,
     }
 }
 
-/// The base URL each provider's adapter posts to.
+/// The base URL each provider's adapter posts to; none for Codex, whose
+/// app-server is a local child process (#27).
 fn provider_base_url(provider: crate::config::LlmProvider) -> String {
     match provider {
         crate::config::LlmProvider::Anthropic => ANTHROPIC_BASE_URL,
         crate::config::LlmProvider::Openai => OPENAI_BASE_URL,
         crate::config::LlmProvider::Openrouter => OPENROUTER_BASE_URL,
+        crate::config::LlmProvider::Codex => "",
     }
     .to_string()
 }
@@ -120,10 +123,13 @@ impl LlmBackend {
             crate::config::LlmProvider::Openrouter => {
                 Ok(Box::new(openrouter::OpenrouterAdapter(self.clone())))
             }
+            crate::config::LlmProvider::Codex => Ok(Box::new(codex::CodexAdapter(self.clone()))),
         }
     }
 
     /// Build the backend for one named preset, sharing the given HTTP client.
+    /// A key provider needs its key; a login provider (Codex, #27) carries
+    /// none and is checked for a login when a turn starts.
     pub fn for_preset(
         config: &Config,
         http: reqwest::Client,
@@ -133,11 +139,14 @@ impl LlmBackend {
             .llm
             .preset(preset_id)
             .ok_or_else(|| PresetError::Unknown(preset_id.to_owned()))?;
-        let api_key = config
-            .llm
-            .key_for(preset.provider)
-            .ok_or(PresetError::MissingKey(preset.provider))?
-            .to_owned();
+        let api_key = match preset.provider.auth() {
+            crate::config::ProviderAuth::ApiKey => config
+                .llm
+                .key_for(preset.provider)
+                .ok_or(PresetError::MissingKey(preset.provider))?
+                .to_owned(),
+            crate::config::ProviderAuth::Login => String::new(),
+        };
         Ok(Self {
             preset: preset.id.clone(),
             http,
@@ -146,6 +155,7 @@ impl LlmBackend {
             base_url: provider_base_url(preset.provider),
             provider: preset.provider,
             openrouter: config.llm.openrouter.clone(),
+            codex: codex::Runtime::shared(),
         })
     }
 
@@ -188,6 +198,7 @@ impl LlmBackend {
             base_url: provider_base_url(provider),
             provider,
             openrouter: Default::default(),
+            codex: codex::Runtime::shared(),
         }
     }
 
@@ -201,7 +212,9 @@ impl LlmBackend {
         // limit on to vendors whose floor is OpenAI's.
         request.max_tokens = match self.provider {
             crate::config::LlmProvider::Anthropic => 1,
-            crate::config::LlmProvider::Openai | crate::config::LlmProvider::Openrouter => 16,
+            crate::config::LlmProvider::Openai
+            | crate::config::LlmProvider::Openrouter
+            | crate::config::LlmProvider::Codex => 16,
         };
         self.adapter()?.complete(request).await
     }
@@ -523,6 +536,10 @@ mod tests {
         assert!(!serde_json::to_string(&input).unwrap().contains(secret));
         let router = openrouter::messages_to_openrouter(&[secret], &messages);
         assert!(!serde_json::to_string(&router).unwrap().contains(secret));
+        let instructions = codex::adapter::developer_instructions(&[secret], None);
+        assert!(!instructions.contains(secret));
+        let input = codex::adapter::turn_input(&messages, true);
+        assert!(!serde_json::to_string(&input).unwrap().contains(secret));
     }
 
     use super::*;
@@ -544,6 +561,8 @@ mod tests {
             (LlmProvider::Openai, _) => "gpt",
             (LlmProvider::Openrouter, "cheap") => "openrouter-gpt-mini",
             (LlmProvider::Openrouter, _) => "openrouter-sonnet",
+            (LlmProvider::Codex, "cheap") => "codex-luna",
+            (LlmProvider::Codex, _) => "codex-astra",
         };
         crate::config::default_presets(provider)
             .into_iter()
@@ -566,6 +585,7 @@ mod tests {
             LlmProvider::Anthropic => "sonnet",
             LlmProvider::Openai => "gpt",
             LlmProvider::Openrouter => "openrouter-sonnet",
+            LlmProvider::Codex => "codex-astra",
         };
         LlmBackend::for_preset(&keyed_config(provider), reqwest::Client::new(), id).unwrap()
     }
@@ -584,6 +604,41 @@ mod tests {
                 "{preset:?}"
             );
         }
+        for preset in crate::config::default_presets(LlmProvider::Codex) {
+            assert!(preset.model.starts_with("gpt-"), "{preset:?}");
+        }
+    }
+
+    /// A Codex backend needs no key (#27): the login lives in the local
+    /// app-server. It carries the shared runtime, no base URL, and its
+    /// adapter advertises tools without vision, documents or counting.
+    #[test]
+    fn backend_codex_needs_no_key_and_runs_on_the_local_app_server() {
+        let mut config = Config::default();
+        config.llm.seed_presets(LlmProvider::Codex);
+        assert_eq!(config.llm.key_for(LlmProvider::Codex), None);
+        let b = LlmBackend::for_preset(&config, reqwest::Client::new(), "codex-astra").unwrap();
+        assert_eq!(b.provider, LlmProvider::Codex);
+        assert_eq!(b.model, "gpt-6-astra");
+        assert_eq!(b.api_key, "", "no key is stored or sent for a login");
+        assert_eq!(b.base_url, "", "no HTTP endpoint");
+        let capabilities = b.adapter().unwrap().capabilities();
+        assert!(capabilities.tools);
+        assert!(capabilities.streaming);
+        assert!(!capabilities.vision);
+        assert!(!capabilities.documents);
+        assert!(!capabilities.token_counting);
+        assert!(!capabilities.reasoning_controls);
+        assert_eq!(probe_model(&config.llm, LlmProvider::Codex), "gpt-6-astra");
+        // The chat slot works without any token at all.
+        config.llm.chat_preset = "codex-astra".into();
+        assert!(LlmBackend::from_config(&config).is_some());
+        // Every other preset still needs its key.
+        config.llm.seed_presets(LlmProvider::Openai);
+        assert_eq!(
+            LlmBackend::for_preset(&config, reqwest::Client::new(), "gpt").err(),
+            Some(PresetError::MissingKey(LlmProvider::Openai))
+        );
     }
 
     #[test]
@@ -1076,6 +1131,7 @@ mod tests {
             LlmProvider::Anthropic,
             LlmProvider::Openai,
             LlmProvider::Openrouter,
+            LlmProvider::Codex,
         ] {
             let heavy = seed(provider, "heavy");
             let cheap = seed(provider, "cheap");
@@ -1221,6 +1277,7 @@ mod tests {
             base_url: ANTHROPIC_BASE_URL.to_string(),
             provider: LlmProvider::Anthropic,
             openrouter: Default::default(),
+            codex: codex::Runtime::shared(),
         })
     }
 
@@ -1236,6 +1293,7 @@ mod tests {
             base_url: OPENAI_BASE_URL.to_string(),
             provider: LlmProvider::Openai,
             openrouter: Default::default(),
+            codex: codex::Runtime::shared(),
         })
     }
 
@@ -1439,6 +1497,7 @@ mod tests {
             base_url: OPENROUTER_BASE_URL.to_string(),
             provider: LlmProvider::Openrouter,
             openrouter: Default::default(),
+            codex: codex::Runtime::shared(),
         })
     }
 

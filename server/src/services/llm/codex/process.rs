@@ -1060,7 +1060,8 @@ mod tests {
         assert_eq!(recorded_pids(&pid_file), vec![pid]);
 
         let models = server.request("model/list", json!({})).await.unwrap();
-        assert_eq!(models["data"][0]["id"], "gpt-5.5");
+        assert_eq!(models["data"][0]["id"], "gpt-6-astra");
+        assert_eq!(models["data"][0]["isDefault"], true);
         let account = server.request("account/read", json!({})).await.unwrap();
         assert_eq!(account["account"]["type"], "chatgpt");
         let thread = server
@@ -1234,6 +1235,7 @@ mod tests {
             "item/agentMessage/delta",
             "item/agentMessage/delta",
             "item/completed",
+            "thread/tokenUsage/updated",
             "turn/completed",
         ];
         for events in [&mut first, &mut second] {

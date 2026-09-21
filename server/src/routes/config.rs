@@ -1320,6 +1320,7 @@ mod llm_key_tests {
                 config::LlmProvider::Anthropic => cfg.llm.tokens.anthropic.clone(),
                 config::LlmProvider::Openai => cfg.llm.tokens.open_ai.clone(),
                 config::LlmProvider::Openrouter => cfg.llm.tokens.open_router.clone(),
+                config::LlmProvider::Codex => unreachable!("no key (#27)"),
             }
         }
         for provider in [
@@ -1331,6 +1332,7 @@ mod llm_key_tests {
                 config::LlmProvider::Anthropic => "anthropic",
                 config::LlmProvider::Openai => "openai",
                 config::LlmProvider::Openrouter => "openrouter",
+                config::LlmProvider::Codex => unreachable!("no key (#27)"),
             };
             let workspace = tempfile::tempdir().unwrap();
             let mut cfg = config::Config::default();
@@ -1344,6 +1346,7 @@ mod llm_key_tests {
                     config::LlmProvider::Anthropic => (secret, None, None),
                     config::LlmProvider::Openai => (None, secret, None),
                     config::LlmProvider::Openrouter => (None, None, secret),
+                    config::LlmProvider::Codex => unreachable!("no key (#27)"),
                 };
                 UpdateLlmKeyRequest {
                     api_key,
@@ -1385,6 +1388,7 @@ mod llm_key_tests {
                 config::LlmProvider::Openrouter => {
                     json!({"id":"gen-1","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}).to_string()
                 }
+                config::LlmProvider::Codex => unreachable!("no key (#27)"),
             };
             let (url, task) = provider_stub(200, accepted).await;
             let Json(saved) = save_llm_keys(&state, request(), Probe::at(&url))
@@ -1454,6 +1458,7 @@ mod preset_test_tests {
             config::LlmProvider::Anthropic => "sk-ant-test-anthropic-key-7f3a",
             config::LlmProvider::Openai => "sk-test-openai-key-9c1d",
             config::LlmProvider::Openrouter => "sk-or-test-openrouter-key-2b8e",
+            config::LlmProvider::Codex => unreachable!("no key (#27)"),
         }
     }
 
@@ -1717,6 +1722,7 @@ mod preset_test_tests {
                 config::LlmProvider::Anthropic => "anthropic",
                 config::LlmProvider::Openai => "openai",
                 config::LlmProvider::Openrouter => "openrouter",
+                config::LlmProvider::Codex => unreachable!("no key (#27)"),
             };
             let answer = match provider {
                 config::LlmProvider::Anthropic => {
@@ -1728,6 +1734,7 @@ mod preset_test_tests {
                 config::LlmProvider::Openrouter => {
                     json!({"id":"gen-1","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":1}}).to_string()
                 }
+                config::LlmProvider::Codex => unreachable!("no key (#27)"),
             };
 
             let (url, task) = super::llm_key_tests::provider_stub(200, answer).await;

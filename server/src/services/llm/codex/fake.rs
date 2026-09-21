@@ -6,26 +6,37 @@
 //! tests run.
 //!
 //! The fixture (`fixtures/codex-<pin>.jsonl`) is one JSON object per line.
-//! Lines with `on` script one method: `reply` (the result), `echo` (the
-//! request params as the result) or `error` (an error object); `notify`
-//! events emitted before the answer and `then` events after it; `delay_ms`
-//! before answering; `exit` to die without answering; `ask` to send the
-//! client a request and answer only once the client answered that; `raw`
-//! to write a verbatim line with `$ID` replaced by the request id; `stdin`
-//! to stop serving stdin after this request while stdout stays open, the
-//! way a wedged app-server does: `ignore` leaves the pipe unread so the
-//! client's writes block once it is full, `close` closes the read end so
-//! they fail at once. Other lines are comments. Requests are served
-//! concurrently, so answers come
-//! back out of order like the real app-server's do. `initialize` must come
-//! first (`-32600 Not initialized` otherwise) and an unscripted method is
+//! Lines with `on` script one method; several lines may script the same
+//! method, and the first one whose `when` (a subset of the request params:
+//! every key given must be present and equal, arrays element by element at
+//! the same length) and `env` (a subset of the fake's environment) both
+//! match is the one played, so a scenario is picked by what the client
+//! sent. Anywhere in an entry a string `$params.<path>` is replaced by that
+//! part of the request params (`$params.threadId`), so an answer can echo
+//! what it was asked. An entry then plays either `steps`, in order, each
+//! one of `notify` (an event), `reply` (the result), `error` (an error
+//! object), `ask` (a request the client must answer before the next step),
+//! `delay_ms`, `exit` (die), or `raw` (a verbatim line with `$ID` replaced
+//! by the request id); or, without `steps`, the older shape: `reply` |
+//! `echo` (the request params as the result) | `error`; `notify` events
+//! before the answer and `then` events after it; `delay_ms` before
+//! answering; `exit`; `ask` (answer only once the client answered that);
+//! `raw`. `stdin` on either shape stops serving stdin after this request
+//! while stdout stays open, the way a wedged app-server does: `ignore`
+//! leaves the pipe unread so the client's writes block once it is full,
+//! `close` closes the read end so they fail at once. Other lines are
+//! comments. Requests are served concurrently, so answers come back out of
+//! order like the real app-server's do. `initialize` must come first
+//! (`-32600 Not initialized` otherwise) and an unscripted method is
 //! `-32600 Invalid request: unknown variant`, the live error shapes.
 //!
 //! The environment steers the process: [`FIXTURE_ENV`] names the fixture
 //! and turns the entry point into the server, [`MODE_ENV`] is `serve`
 //! (default), `silent` (never answer) or `exit:<code>` (die at once),
-//! [`PID_FILE_ENV`] gets the pid appended at every start, and
-//! [`STDERR_ENV`] is a line written to stderr at start.
+//! [`PID_FILE_ENV`] gets the pid appended at every start, [`STDERR_ENV`] is
+//! a line written to stderr at start, and [`LOG_ENV`] names a file every
+//! frame the client wrote is appended to, one JSON object per line, so a
+//! test can read the wire the way the HTTP mocks capture their requests.
 
 use std::{
     collections::HashMap,
@@ -50,6 +61,9 @@ pub const FIXTURE_ENV: &str = "NOLUNE_FAKE_APP_SERVER_FIXTURE";
 pub const MODE_ENV: &str = "NOLUNE_FAKE_APP_SERVER_MODE";
 pub const PID_FILE_ENV: &str = "NOLUNE_FAKE_APP_SERVER_PID_FILE";
 pub const STDERR_ENV: &str = "NOLUNE_FAKE_APP_SERVER_STDERR";
+pub const LOG_ENV: &str = "NOLUNE_FAKE_APP_SERVER_LOG";
+/// Set to `none` to play the fixture's logged-out `account/read` answer.
+pub const ACCOUNT_ENV: &str = "NOLUNE_FAKE_APP_SERVER_ACCOUNT";
 
 /// How long an `ask` waits for the client's answer.
 const ASK_TIMEOUT: Duration = Duration::from_secs(10);
@@ -90,6 +104,51 @@ pub fn launch(pid_file: Option<&Path>) -> Launch {
     launch
 }
 
+/// [`launch`] with every frame the client writes appended to `log`.
+pub fn launch_logged(log: &Path) -> Launch {
+    let mut launch = launch(None);
+    launch
+        .env
+        .push((LOG_ENV.into(), log.as_os_str().to_owned()));
+    launch
+}
+
+/// The frames a [`launch_logged`] fake received so far, in order.
+pub fn wire_log(log: &Path) -> Vec<Value> {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect(line))
+        .collect()
+}
+
+/// The params of every request for `method` in a wire log.
+pub fn sent(log: &Path, method: &str) -> Vec<Value> {
+    wire_log(log)
+        .into_iter()
+        .filter(|frame| frame["method"] == method && frame.get("id").is_some())
+        .map(|frame| frame["params"].clone())
+        .collect()
+}
+
+/// The client's answers to the fake's own requests, `(id, result | error)`
+/// in the order they were written.
+pub fn answers(log: &Path) -> Vec<(Value, Result<Value, Value>)> {
+    wire_log(log)
+        .into_iter()
+        .filter(|frame| frame.get("method").is_none() && frame.get("id").is_some())
+        .map(|frame| {
+            let outcome = match (frame.get("result"), frame.get("error")) {
+                (Some(result), _) => Ok(result.clone()),
+                (None, Some(error)) => Err(error.clone()),
+                (None, None) => Err(Value::Null),
+            };
+            (frame["id"].clone(), outcome)
+        })
+        .collect()
+}
+
 /// The test that is the fake: a no-op in a normal run, the server when
 /// [`FIXTURE_ENV`] is set. It never returns in that case.
 #[test]
@@ -115,9 +174,34 @@ struct Ask {
     params: Value,
 }
 
+/// One step of a scripted answer, played in order.
+#[derive(Clone, Deserialize)]
+struct Step {
+    #[serde(default)]
+    notify: Option<Event>,
+    #[serde(default)]
+    reply: Option<Value>,
+    #[serde(default)]
+    error: Option<Value>,
+    #[serde(default)]
+    ask: Option<Ask>,
+    #[serde(default)]
+    delay_ms: Option<u64>,
+    #[serde(default)]
+    exit: Option<i32>,
+    #[serde(default)]
+    raw: Option<String>,
+}
+
 #[derive(Clone, Deserialize)]
 struct Entry {
     on: String,
+    #[serde(default)]
+    when: Option<Value>,
+    #[serde(default)]
+    env: Option<HashMap<String, String>>,
+    #[serde(default)]
+    steps: Option<Vec<Step>>,
     #[serde(default)]
     reply: Option<Value>,
     #[serde(default)]
@@ -140,18 +224,93 @@ struct Entry {
     stdin: Option<String>,
 }
 
-fn load(fixture: &Path) -> HashMap<String, Entry> {
+/// Every scripted line, in file order; the raw JSON is kept so the
+/// `$params.` references can be filled in per request.
+type Script = Vec<(String, Value)>;
+
+fn load(fixture: &Path) -> Script {
     let text = std::fs::read_to_string(fixture)
         .unwrap_or_else(|error| panic!("{}: {error}", fixture.display()));
     text.lines()
         .filter(|line| !line.trim().is_empty())
         .filter_map(|line| {
             let value: Value = serde_json::from_str(line).expect(line);
-            value.get("on")?;
-            let entry: Entry = serde_json::from_value(value).expect(line);
-            Some((entry.on.clone(), entry))
+            let on = value.get("on")?.as_str()?.to_owned();
+            // Validate the shape now, so a typo fails loudly at start.
+            let _: Entry = serde_json::from_value(value.clone()).expect(line);
+            Some((on, value))
         })
         .collect()
+}
+
+/// Whether `params` contains `when`: every object key given must be
+/// present and match, arrays match element by element at the same length,
+/// everything else must be equal.
+fn matches(when: &Value, params: &Value) -> bool {
+    match (when, params) {
+        (Value::Object(want), Value::Object(have)) => want
+            .iter()
+            .all(|(key, value)| have.get(key).is_some_and(|got| matches(value, got))),
+        (Value::Array(want), Value::Array(have)) => {
+            want.len() == have.len() && want.iter().zip(have).all(|(w, h)| matches(w, h))
+        }
+        _ => when == params,
+    }
+}
+
+/// Whether the fake's environment holds every variable in `env` with that value.
+fn env_matches(env: &Value) -> bool {
+    env.as_object().is_some_and(|env| {
+        env.iter().all(|(name, value)| {
+            value
+                .as_str()
+                .is_some_and(|value| std::env::var(name).is_ok_and(|got| got == value))
+        })
+    })
+}
+
+/// `value` with every `$params.<path>` string replaced by that part of `params`.
+fn substitute(value: Value, params: &Value) -> Value {
+    match value {
+        Value::String(text) => match text.strip_prefix("$params.") {
+            Some(path) => path
+                .split('.')
+                .try_fold(params, |current, segment| match current {
+                    Value::Array(items) => segment.parse::<usize>().ok().and_then(|i| items.get(i)),
+                    other => other.get(segment),
+                })
+                .cloned()
+                .unwrap_or(Value::Null),
+            None => Value::String(text),
+        },
+        Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .map(|item| substitute(item, params))
+                .collect(),
+        ),
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(key, item)| (key, substitute(item, params)))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+/// The first entry for `method` whose selectors accept `params`, with its
+/// `$params.` references filled in.
+fn select(script: &Script, method: &str, params: &Value) -> Option<Entry> {
+    script
+        .iter()
+        .filter(|(on, _)| on == method)
+        .find(|(_, raw)| {
+            raw.get("when").is_none_or(|when| matches(when, params))
+                && raw.get("env").is_none_or(env_matches)
+        })
+        .map(|(_, raw)| {
+            serde_json::from_value(substitute(raw.clone(), params)).expect("validated at load")
+        })
 }
 
 /// Write one frame as one line; the lock keeps concurrent handlers from
@@ -183,8 +342,22 @@ fn error_frame(id: &Value, code: i64, message: String) -> Value {
 
 type Asks = Arc<Mutex<HashMap<String, mpsc::Sender<Result<Value, Value>>>>>;
 
+/// Send the client a request and wait for its answer.
+fn ask_client(asks: &Asks, ask: &Ask) -> Result<Result<Value, Value>, mpsc::RecvTimeoutError> {
+    let (tx, rx) = mpsc::channel();
+    asks.lock().unwrap().insert(ask.id.to_string(), tx);
+    emit(json!({"id": ask.id, "method": ask.method, "params": ask.params}));
+    rx.recv_timeout(ASK_TIMEOUT)
+}
+
+fn write_raw(raw: &str, id: &Value) {
+    let mut out = std::io::stdout().lock();
+    writeln!(out, "{}", raw.replace("$ID", &id.to_string())).expect("stdout");
+    out.flush().expect("stdout");
+}
+
 fn handle(
-    script: Arc<HashMap<String, Entry>>,
+    script: Arc<Script>,
     initialized: Arc<AtomicBool>,
     asks: Asks,
     id: Value,
@@ -197,7 +370,7 @@ fn handle(
         emit(error_frame(&id, -32600, "Not initialized".into()));
         return;
     }
-    let Some(entry) = script.get(&method) else {
+    let Some(entry) = select(&script, &method, &params) else {
         emit(error_frame(
             &id,
             -32600,
@@ -205,6 +378,33 @@ fn handle(
         ));
         return;
     };
+    if let Some(steps) = &entry.steps {
+        for step in steps {
+            if let Some(event) = &step.notify {
+                emit(notification(event));
+            }
+            if let Some(ms) = step.delay_ms {
+                thread::sleep(Duration::from_millis(ms));
+            }
+            if let Some(reply) = &step.reply {
+                emit(json!({"id": id, "result": reply}));
+            }
+            if let Some(error) = &step.error {
+                emit(json!({"id": id, "error": error}));
+            }
+            if let Some(raw) = &step.raw {
+                write_raw(raw, &id);
+            }
+            if let Some(ask) = &step.ask {
+                // Whatever the client answered, or did not, the script goes on.
+                let _ = ask_client(&asks, ask);
+            }
+            if let Some(code) = step.exit {
+                std::process::exit(code);
+            }
+        }
+        return;
+    }
     for event in &entry.notify {
         emit(notification(event));
     }
@@ -215,16 +415,11 @@ fn handle(
         std::process::exit(code);
     }
     if let Some(raw) = &entry.raw {
-        let mut out = std::io::stdout().lock();
-        writeln!(out, "{}", raw.replace("$ID", &id.to_string())).expect("stdout");
-        out.flush().expect("stdout");
+        write_raw(raw, &id);
         return;
     }
     if let Some(ask) = &entry.ask {
-        let (tx, rx) = mpsc::channel();
-        asks.lock().unwrap().insert(ask.id.to_string(), tx);
-        emit(json!({"id": ask.id, "method": ask.method, "params": ask.params}));
-        match rx.recv_timeout(ASK_TIMEOUT) {
+        match ask_client(&asks, ask) {
             Ok(Ok(result)) => emit(json!({"id": id, "result": {"answered": result}})),
             Ok(Err(error)) => emit(json!({"id": id, "result": {"refused": error}})),
             Err(_) => emit(error_frame(&id, -32000, "the client never answered".into())),
@@ -283,6 +478,13 @@ fn serve(fixture: &Path) -> ! {
         }
         _ => {}
     }
+    let mut log = std::env::var_os(LOG_ENV).map(|path| {
+        std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(path)
+            .expect("wire log")
+    });
 
     let script = Arc::new(load(fixture));
     let initialized = Arc::new(AtomicBool::new(false));
@@ -293,6 +495,9 @@ fn serve(fixture: &Path) -> ! {
         let Ok(Value::Object(mut frame)) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
+        if let Some(log) = log.as_mut() {
+            writeln!(log, "{}", Value::Object(frame.clone())).expect("wire log");
+        }
         let method = frame
             .get("method")
             .and_then(Value::as_str)
@@ -301,7 +506,7 @@ fn serve(fixture: &Path) -> ! {
         match (method, id) {
             (Some(method), Some(id)) => {
                 let params = frame.remove("params").unwrap_or(Value::Object(Map::new()));
-                let stdin_after = script.get(&method).and_then(|entry| entry.stdin.clone());
+                let stdin_after = select(&script, &method, &params).and_then(|entry| entry.stdin);
                 let (script, initialized, asks) =
                     (script.clone(), initialized.clone(), asks.clone());
                 thread::spawn(move || handle(script, initialized, asks, id, method, params));
@@ -324,4 +529,71 @@ fn serve(fixture: &Path) -> ! {
         }
     }
     std::process::exit(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn when_is_a_subset_match_with_arrays_compared_at_the_same_length() {
+        let params =
+            json!({"threadId": "t", "input": [{"type": "text", "text": "hi"}], "extra": 1});
+        assert!(matches(&json!({}), &params));
+        assert!(matches(&json!({"threadId": "t"}), &params));
+        assert!(matches(&json!({"input": [{"text": "hi"}]}), &params));
+        assert!(!matches(&json!({"input": []}), &params));
+        assert!(!matches(&json!({"input": [{"text": "bye"}]}), &params));
+        assert!(!matches(&json!({"missing": true}), &params));
+        assert!(matches(&json!({"input": []}), &json!({"input": []})));
+    }
+
+    #[test]
+    fn params_references_are_filled_in_anywhere_in_an_entry() {
+        let params = json!({"threadId": "thr_9", "turnId": "turn_2", "input": [{"text": "x"}]});
+        let filled = substitute(
+            json!({"reply": {"thread": {"id": "$params.threadId"}}, "then": [{"params": {"turn": {"id": "$params.turnId"}, "first": "$params.input.0.text", "gone": "$params.nope"}}], "plain": "$other"}),
+            &params,
+        );
+        assert_eq!(filled["reply"]["thread"]["id"], "thr_9");
+        assert_eq!(filled["then"][0]["params"]["turn"]["id"], "turn_2");
+        assert_eq!(filled["then"][0]["params"]["first"], "x");
+        assert_eq!(filled["then"][0]["params"]["gone"], Value::Null);
+        assert_eq!(filled["plain"], "$other");
+    }
+
+    #[test]
+    fn the_first_matching_entry_wins_and_its_answer_echoes_the_request() {
+        let script = load(&fixture_path());
+        let ephemeral = select(
+            &script,
+            "thread/start",
+            &json!({"ephemeral": true, "model": "m"}),
+        )
+        .unwrap();
+        assert_eq!(
+            ephemeral.reply.unwrap()["thread"]["id"],
+            "thr_fixture_ephemeral"
+        );
+        let durable = select(&script, "thread/start", &json!({"model": "m"})).unwrap();
+        assert_eq!(durable.reply.unwrap()["thread"]["id"], "thr_fixture_1");
+        let resumed = select(
+            &script,
+            "thread/resume",
+            &json!({"threadId": "thr_saved_7"}),
+        )
+        .unwrap();
+        assert_eq!(resumed.reply.unwrap()["thread"]["id"], "thr_saved_7");
+        assert!(
+            select(
+                &script,
+                "thread/resume",
+                &json!({"threadId": "thr_missing"})
+            )
+            .unwrap()
+            .error
+            .is_some()
+        );
+        assert!(select(&script, "no/such", &json!({})).is_none());
+    }
 }

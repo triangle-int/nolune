@@ -92,6 +92,11 @@ pub struct ChatMeta {
     /// Preset this chat pins (#156); None follows the Chat slot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<String>,
+    /// The codex app-server thread this conversation continues in (#27),
+    /// so a restart resumes it instead of starting over. Absent until a
+    /// Codex preset has run a turn here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_thread_id: Option<String>,
 }
 
 /// Why a conversation's agent loop stopped, as the loop itself reports it.

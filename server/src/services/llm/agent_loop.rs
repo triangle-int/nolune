@@ -6,7 +6,7 @@ use crate::domain::chat::{ChatMessage, ChatRole};
 use crate::domain::events::ServerEvent;
 use crate::services::tool::{ToolDefinition, ToolDyn};
 
-use super::contract::{ExecutionScope, LlmEvent, LlmRequest, StopReason};
+use super::contract::{ConversationRef, ExecutionScope, LlmEvent, LlmRequest, StopReason};
 use super::helpers::strip_context_blocks;
 
 use super::types::{ContentBlock, HistoryEntry, LlmBackend, LlmResponse, Message, ToolCall};
@@ -119,6 +119,7 @@ pub(crate) async fn streaming_agent_loop(
             events,
             instance_slug,
             chat_id,
+            workspace_dir,
             &current_message_id,
             mcp_snapshot,
         )
@@ -387,7 +388,9 @@ pub(crate) async fn complete_once(
     ))
 }
 
-/// Streaming dispatch: route to provider-specific streaming.
+/// Streaming dispatch: route to provider-specific streaming. The request
+/// names the conversation, so a provider that keeps a thread per chat
+/// (Codex, #27) continues the right one.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn stream_once(
     backend: &LlmBackend,
@@ -398,6 +401,7 @@ pub(crate) async fn stream_once(
     events: &broadcast::Sender<ServerEvent>,
     instance_slug: &str,
     chat_id: &str,
+    workspace_dir: &Path,
     message_id: &str,
     mcp_snapshot: Option<&crate::services::mcp::McpAppSnapshot>,
 ) -> anyhow::Result<LlmResponse> {
@@ -462,10 +466,13 @@ pub(crate) async fn stream_once(
             super::helpers::cache_real_input_tokens(instance_slug, chat_id, usage.input_tokens);
         }
     };
-    Ok(backend
-        .adapter()?
-        .stream(LlmRequest::new(scope, system, messages, tool_defs), &sink)
-        .await?)
+    let mut request = LlmRequest::new(scope, system, messages, tool_defs);
+    request.conversation = Some(ConversationRef {
+        instance_slug,
+        chat_id,
+        workspace_dir,
+    });
+    Ok(backend.adapter()?.stream(request, &sink).await?)
 }
 
 #[cfg(test)]
