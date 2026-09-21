@@ -331,11 +331,16 @@
 			</div>
 
 			<div class="setting-row">
-				<label class="setting-label" for="resume-snooze">Snooze</label>
+				{#if snoozeStatus(resume, resumeNow)}
+					<!-- The select is not rendered while snoozed, so the label must not point at it. -->
+					<span class="setting-label" id="resume-snooze-label">Snooze</span>
+				{:else}
+					<label class="setting-label" for="resume-snooze">Snooze</label>
+				{/if}
 				<div class="setting-input-row">
 					{#if snoozeStatus(resume, resumeNow)}
 						<span class="setting-hint" role="status">{snoozeStatus(resume, resumeNow)}</span>
-						<button class="setting-btn" disabled={resumeSaving} onclick={() => snoozeRitual(null)}>End snooze</button>
+						<button class="setting-btn" aria-describedby="resume-snooze-label" disabled={resumeSaving} onclick={() => snoozeRitual(null)}>End snooze</button>
 					{:else}
 						<select id="resume-snooze" class="setting-input" disabled={!resume.enabled || resumeSaving} value="" onchange={(e) => { const v = (e.currentTarget as HTMLSelectElement).value; if (v) snoozeRitual(Number(v)); }}>
 							<option value="">Not snoozed</option>
