@@ -420,6 +420,28 @@ impl Default for PolicyDocument {
 }
 
 impl PolicyDocument {
+    /// Whether every value is one the engine can judge by: quiet hours are
+    /// hours (0-23), so `QuietHoursPolicy::contains` and the end-of-window
+    /// arithmetic agree. The store refuses a change or a file that fails
+    /// this, so no evaluation ever sees such a document.
+    pub fn validate(&self) -> Result<(), FederationError> {
+        if let Some(quiet) = &self.quiet_hours {
+            for (name, hour) in [
+                ("start_hour", quiet.start_hour),
+                ("end_hour", quiet.end_hour),
+            ] {
+                if hour > 23 {
+                    return Err(FederationError::Malformed(format!(
+                        "quiet hours {name} {hour} is not an hour (0-23)"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl PolicyDocument {
     /// The rules for `companion_id`; empty when the owner wrote none.
     pub fn peer(&self, companion_id: &str) -> PeerPolicy {
         self.peers.get(companion_id).cloned().unwrap_or_default()
@@ -776,6 +798,35 @@ mod tests {
             timezone: None,
         };
         assert!(!none.contains(5));
+    }
+
+    #[test]
+    fn quiet_hours_must_be_hours() {
+        let mut document = PolicyDocument::default();
+        assert_eq!(document.validate(), Ok(()));
+        for (start, end) in [(22, 7), (0, 23), (23, 0), (9, 9)] {
+            document.quiet_hours = Some(QuietHoursPolicy {
+                start_hour: start,
+                end_hour: end,
+                timezone: None,
+            });
+            assert_eq!(document.validate(), Ok(()), "{start}-{end}");
+        }
+        // Out of range, `contains` and the end-of-window arithmetic would
+        // disagree (22-30 is quiet at 22 and 23 but ends at 06:00), so the
+        // document is refused before either is asked.
+        for (start, end) in [(22, 30), (24, 7), (255, 255)] {
+            document.quiet_hours = Some(QuietHoursPolicy {
+                start_hour: start,
+                end_hour: end,
+                timezone: None,
+            });
+            let error = document.validate().unwrap_err();
+            assert!(
+                matches!(&error, FederationError::Malformed(message) if message.contains("0-23")),
+                "{start}-{end}: {error:?}"
+            );
+        }
     }
 
     #[test]

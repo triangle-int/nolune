@@ -58,8 +58,9 @@ impl PolicyStore {
 
     /// Applies `change` under the store lock and persists; a change that
     /// leaves the document as it was is not written. Fails closed, changing
-    /// nothing, over a file this build could not load or when `change`
-    /// refuses. The owner API (#109, PR 3) is the first production caller.
+    /// nothing, over a file this build could not load, when `change`
+    /// refuses, or when it leaves a document that does not validate. The
+    /// owner API (#109, PR 3) is the first production caller.
     #[allow(dead_code)]
     pub fn update(
         &self,
@@ -70,6 +71,7 @@ impl PolicyStore {
         self.refuse_if_unloadable(&inner)?;
         let mut document = inner.document.clone();
         change(&mut document)?;
+        document.validate()?;
         if document == inner.document {
             return Ok(document);
         }
@@ -80,8 +82,9 @@ impl PolicyStore {
     }
 
     /// Reads the file once. A missing file is the default document. A file
-    /// that cannot be read or is not a policy of this version leaves the
-    /// store marked unloadable: reported, never repaired, never overwritten.
+    /// that cannot be read, is not a policy of this version, or does not
+    /// validate leaves the store marked unloadable: reported, never
+    /// repaired, never overwritten.
     fn ensure_loaded(&self, inner: &mut Inner) {
         if inner.loaded {
             return;
@@ -107,7 +110,10 @@ impl PolicyStore {
             .ok()
             .map(|file| file.version);
         match serde_json::from_str::<PolicyDocument>(&contents) {
-            Ok(document) if document.version == POLICY_VERSION => inner.document = document,
+            Ok(document) if document.version == POLICY_VERSION => match document.validate() {
+                Ok(()) => inner.document = document,
+                Err(error) => self.mark_unloadable(inner, format!("is not a policy ({error})")),
+            },
             _ => {
                 let reason = match version {
                     Some(version) if version != POLICY_VERSION => {
@@ -300,6 +306,20 @@ mod tests {
         assert_eq!(error, FederationError::Malformed("no".into()));
         assert_eq!(std::fs::read_to_string(store.path()).unwrap(), before);
         assert!(store.document().unwrap().peers.contains_key("peer-a"));
+        // A change that leaves the document invalid is refused the same way.
+        let error = store
+            .update(|document| {
+                document.quiet_hours = Some(QuietHoursPolicy {
+                    start_hour: 22,
+                    end_hour: 30,
+                    timezone: None,
+                });
+                Ok(())
+            })
+            .unwrap_err();
+        assert!(matches!(error, FederationError::Malformed(_)), "{error:?}");
+        assert_eq!(std::fs::read_to_string(store.path()).unwrap(), before);
+        assert!(store.document().unwrap().quiet_hours.is_none());
     }
 
     #[test]
@@ -310,6 +330,7 @@ mod tests {
             "not json at all",
             r#"{"version": 1, "peers": {"p": {"rules": [{"intent": "shell"}]}}}"#,
             r#"{"version": 1, "peers": {"p": {"tools": ["*"]}}}"#,
+            r#"{"version": 1, "quiet_hours": {"start_hour": 22, "end_hour": 30}}"#,
         ] {
             let dir = tempfile::tempdir().unwrap();
             let store = store(dir.path());
