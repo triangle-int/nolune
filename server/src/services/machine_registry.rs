@@ -27,9 +27,11 @@ pub struct MachineInfo {
     pub platform: Option<Platform>,
     /// Every WebSocket agent is a desktop; the server home is a Cua target (#16).
     pub location: MachineLocation,
-    /// Desktop permission state as reported at registration; `None` when not reported.
+    /// The grants of the Cua driver the desktop registered, from its
+    /// descriptor; `None` for a desktop without one. The desktop app's own
+    /// grants are not taken (#19: nothing inside the app uses them).
     pub permissions: Option<PermissionState>,
-    /// Legacy action names the agent accepts (`normalize_capabilities`).
+    /// Toolcall names the agent executes (`normalize_capabilities`).
     pub capabilities: Vec<String>,
 }
 
@@ -1341,8 +1343,9 @@ impl MachineRegistry {
             .map(|entry| server_local_view(entry, now, &self.known.slug))
             .collect();
         // A connected desktop that registered a Cua descriptor (#17) shows
-        // its driver on its own row; the fields are live state like the
-        // socket, never written to the record.
+        // its driver on its own row; the driver fields are live state like
+        // the socket, never written to the record, and the grants are the
+        // descriptor's (the same ones the registration recorded).
         let desktop_cua = self.cua.desktop_descriptors().await;
         let mut machines: Vec<KnownMachine> = records
             .values()
@@ -1361,6 +1364,7 @@ impl MachineRegistry {
                 if let Some(descriptor) = desktop_cua.get(&row.machine_id).filter(|_| row.online) {
                     row.driver_version = Some(descriptor.driver_version.as_str().to_owned());
                     row.cua_health = Some(descriptor.health);
+                    row.permissions = Some(descriptor.permissions.clone());
                 }
                 row
             })

@@ -131,7 +131,7 @@ registers over the authenticated machine WebSocket
 
 ```json
 {"type": "register", "machine_id": "<stable id>", "os": "macos", "hostname": "studio",
- "permissions": {...}, "capabilities": ["bash", "file_read", "file_write", "file_list", "upload_file"],
+ "capabilities": ["bash", "file_read", "file_write", "file_list", "upload_file"],
  "cua": {"version": "v1", "machine": {"machine_id": "<stable id>", "location": "desktop",
          "platform": "macos", "driver_version": "0.28.2", "health": "healthy",
          "permissions": {"accessibility": "granted", "screen_capture": "granted"},
@@ -160,8 +160,12 @@ beside the server-local one: `list_machines` lists it with
 `last_seen` stays), and its row in `GET /api/instances/companion/machines`
 carries `driver_version` and `cua_health` while it is connected; clients
 hear that row as `machine_updated` once the target is attached, after the
-one the registration itself announces. When the registration reports no
-`permissions`, the descriptor's are recorded.
+one the registration itself announces. The `permissions` the record keeps,
+and the row reports, are the descriptor's: the driver's own grants, which
+are the ones that decide what it can see and do. A desktop without a
+descriptor records none. The desktop app sends no grants of its own since
+#19, and a `permissions` field an older desktop still sends on the
+registration is ignored.
 A desktop reconnecting under its stable id replaces its target; it never
 becomes a second one. The ack's `"cua": false` after a descriptor was sent
 means the socket was replaced between the legacy registration and the
@@ -235,12 +239,14 @@ grants belong to that bundle: not to the Nolune server, and not to the
 desktop app. Both runtimes therefore read the state from the driver itself.
 Its health report carries `tcc_accessibility` and `tcc_screen_recording`
 under the driver's bundle identity, and `driver_mcp::permissions_from_health`
-maps them to `granted`, `denied` or `prompt_required` (never asked). The
-desktop app's own grants (`AXIsProcessTrusted`,
-`CGPreflightScreenCaptureAccess`) still ride on the legacy `permissions`
-field and show on the Computers tab; since #19 nothing inside the app uses
-them (see [What the desktop app executes](#what-the-desktop-app-executes-19)),
-and they say nothing about what the driver can do.
+maps them to `granted`, `denied` or `prompt_required` (never asked). Those
+are the grants the machine record keeps, the Computers tab shows, and a
+handoff or the resume ritual checks a destination on (below). The desktop
+app's own grants (`AXIsProcessTrusted`, `CGPreflightScreenCaptureAccess`)
+are shown in its Settings window only: since #19 nothing inside the app
+uses them (see [What the desktop app executes](#what-the-desktop-app-executes-19)),
+they say nothing about what the driver can do, and they are not reported
+to the companion.
 
 The desktop app's Settings window (`desktop/src/routes/settings/+page.svelte`,
 fed by the `cua_permissions` command in
@@ -394,6 +400,19 @@ closes) and hides only for the window snapshot a typed `get_window_state`
 takes, the one capture the desktop takes part in. `nolune cua install` on
 the desktop machine, or a `cua-driver` on its `PATH`, is what turns window
 actions on there; the Computers tab says so for a desktop without a driver.
+
+What a computer must offer to continue a task there follows from this
+(`server/src/domain/handoff.rs`, the checks behind a handoff card's
+preview and acceptance and the resume ritual's choice of destination, see
+[companion-storage.md](companion-storage.md#handoff-cards)): a
+Cua driver (`driver_missing` otherwise; `driver_unavailable` when its
+health says so, `driver_degraded` as a note), that driver's Screen
+Recording and Accessibility grants (`permission_denied`, `permission_prompt`
+when its report did not cover one), and the `file_read` and `file_list`
+toolcalls when the task links a file on a computer (`capability_missing`).
+No coordinate action name is required of a destination: the desktop app
+advertises none, and a desktop that predates #19 advertising them is no
+more able to see or act in a window than one that does not.
 
 ## Typed machine tools (#18)
 

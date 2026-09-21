@@ -203,13 +203,14 @@ export function groupChecks(checks) {
 }
 
 /**
- * What the destination must offer, as one sentence.
+ * What the destination must offer, as one sentence: the permissions are the
+ * Cua driver's, so needing them is needing a driver there (#19).
  * @param {Requirements} required
  */
 export function requiredSummary(required) {
 	const parts = [];
+	if (required.permissions.length > 0) parts.push(`a Cua driver with ${required.permissions.map(permissionLabel).join(" and ")}`);
 	if (required.capabilities.length > 0) parts.push(required.capabilities.join(", "));
-	if (required.permissions.length > 0) parts.push(`${required.permissions.map(permissionLabel).join(" and ")} permissions`);
 	return parts.length === 0 ? "" : `Needs ${parts.join(" · ")}`;
 }
 

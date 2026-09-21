@@ -8,7 +8,7 @@
   type GrantOutcome = import("$lib/cua-permissions").GrantOutcome;
   type PermissionKey = "accessibility" | "screen_recording";
 
-  /** This app's own grants: reported to the companion beside the driver's, used by nothing inside the app (#19). */
+  /** This app's own grants: used by nothing inside the app and not reported to the companion (#19). */
   type AppPermissions = {
     screen_recording: boolean;
     accessibility: boolean;
@@ -238,7 +238,7 @@
       <section class="section section-secondary" aria-labelledby="app-permissions-title">
         <h3 id="app-permissions-title" class="subsection-title">This app's own grants</h3>
         <p class="section-desc">
-          What macOS has granted this app itself, reported to your companion beside the driver's. Nothing inside this app captures the screen or moves the pointer; every window action runs through the driver above.
+          What macOS has granted this app itself. Nothing inside this app captures the screen or moves the pointer, and your companion is not told about these grants; every window action runs through the driver above, under the driver's own grants.
         </p>
 
         {#if appError}

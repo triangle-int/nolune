@@ -277,15 +277,16 @@ fn cua_field(machine_id: &str, location: MachineLocation) -> Value {
     .unwrap()
 }
 
-/// The register message a desktop sends, with or without a descriptor.
+/// The register message a desktop from this release sends, with or without
+/// a descriptor: the toolcalls the app executes (#19, exactly
+/// `computer_use_bridge.rs::CAPABILITIES`) and no grants of the app's own.
 fn register(machine_id: &str, cua: Option<Value>) -> Value {
     let mut frame = json!({
         "type": "register",
         "machine_id": machine_id,
         "os": "macos",
         "hostname": "studio",
-        "permissions": {"accessibility": "granted", "screen_capture": "granted"},
-        "capabilities": ["screenshot", "left_click", "bash"],
+        "capabilities": crate::domain::machine::DESKTOP_TOOLCALLS,
     });
     if let Some(cua) = cua {
         frame["cua"] = cua;
@@ -403,16 +404,21 @@ async fn a_desktop_with_a_cua_descriptor_is_a_typed_target_and_a_known_machine()
         json!(["app_discovery", "pointer", "session_lifecycle", "health"])
     );
 
-    // The known row is the desktop's record with the driver's live fields.
+    // The known row is the desktop's record with the driver's live fields,
+    // and its grants are the driver's (the registration sent none of the
+    // app's own, #19).
     let row = h.known_row(STUDIO).await;
     assert_eq!(row["location"], "desktop");
     assert_eq!(row["online"], true);
     assert_eq!(row["health"], "healthy");
     assert_eq!(row["hostname"], "studio");
-    assert_eq!(row["permissions"]["accessibility"], "granted");
+    assert_eq!(
+        row["permissions"],
+        json!({"accessibility": "granted", "screen_capture": "granted"})
+    );
     assert_eq!(
         row["capabilities"],
-        json!(["screenshot", "left_click", "bash"])
+        json!(crate::domain::machine::DESKTOP_TOOLCALLS)
     );
     assert_eq!(row["driver_version"], "0.28.2");
     assert_eq!(row["cua_health"], "healthy");
@@ -545,6 +551,11 @@ async fn a_registration_without_cua_keeps_the_legacy_toolcalls_working() {
     assert_eq!(row["online"], true);
     assert_eq!(row["driver_version"], Value::Null);
     assert_eq!(row["cua_health"], Value::Null);
+    assert_eq!(
+        row["permissions"],
+        Value::Null,
+        "no driver, no grants: the app's own are never recorded (#19)"
+    );
 
     // The legacy toolcall (a shell command, #19: the only toolcalls left
     // are the shell and file ones) is the flat message it always was, and

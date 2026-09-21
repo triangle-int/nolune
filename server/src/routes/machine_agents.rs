@@ -251,10 +251,9 @@ struct Registration {
     hostname: String,
     #[serde(default)]
     instance_slug: Option<String>,
-    /// Desktop permission state, in the protocol's shape; absent from older desktops.
-    #[serde(default)]
-    permissions: Option<cua_protocol::PermissionState>,
     /// Action names the agent executes; absent from older desktops (legacy set).
+    /// (Older desktops also send their app's own `permissions`; the field is
+    /// ignored since #19: the record keeps the driver's grants, below.)
     #[serde(default)]
     capabilities: Vec<String>,
     /// A `CuaRegistrationEnvelope` (#17): the desktop runs a Cua driver and
@@ -276,8 +275,14 @@ impl Registration {
 
     /// The registry's view of this registration, seen at `now`. Labels and
     /// capabilities are handed over as reported; the registry bounds and
-    /// normalizes them in one place.
-    fn into_info(self, now: i64) -> MachineInfo {
+    /// normalizes them in one place. The grants are the Cua driver's from
+    /// `descriptor` (the app's own gate nothing, #19), so a desktop without
+    /// a driver records none.
+    fn into_info(
+        self,
+        descriptor: Option<&cua_protocol::MachineDescriptor>,
+        now: i64,
+    ) -> MachineInfo {
         MachineInfo {
             platform: crate::domain::machine::platform_from_os(&self.os),
             machine_id: self.machine_id,
@@ -286,7 +291,7 @@ impl Registration {
             last_seen: now,
             instance_slug: self.instance_slug,
             location: cua_protocol::MachineLocation::Desktop,
-            permissions: self.permissions,
+            permissions: descriptor.map(|d| d.permissions.clone()),
             capabilities: self.capabilities,
         }
     }
@@ -442,10 +447,7 @@ async fn wait_for_registration(
                             };
                             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
                             let machine_id = registration.machine_id.clone();
-                            let mut info = registration.into_info(chrono::Utc::now().timestamp());
-                            if info.permissions.is_none() {
-                                info.permissions = descriptor.as_ref().map(|d| d.permissions.clone());
-                            }
+                            let info = registration.into_info(descriptor.as_ref(), chrono::Utc::now().timestamp());
                             let connection = state.machine_registry.register(info, tx).await;
 
                             // The typed target (#17) beside the legacy registration.
@@ -646,8 +648,8 @@ mod registration_tests {
     /// it again, so a report with only invalid names became the legacy set.
     #[tokio::test]
     async fn capabilities_are_normalized_once_so_only_invalid_names_record_none() {
-        let info =
-            registration(serde_json::json!({"capabilities": ["Has Space", "UPPER"]})).into_info(T0);
+        let info = registration(serde_json::json!({"capabilities": ["Has Space", "UPPER"]}))
+            .into_info(None, T0);
         assert_eq!(
             info.capabilities,
             vec!["Has Space".to_owned(), "UPPER".to_owned()],
@@ -668,7 +670,7 @@ mod registration_tests {
         );
 
         // A desktop that predates capability reporting still gets the legacy set.
-        let legacy = registration(serde_json::json!({})).into_info(T0);
+        let legacy = registration(serde_json::json!({})).into_info(None, T0);
         assert!(legacy.capabilities.is_empty());
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         registry.register(legacy, tx).await;
@@ -786,14 +788,36 @@ mod registration_tests {
         let info = registration(serde_json::json!({
             "os": "o".repeat(5_000),
             "hostname": "h".repeat(5_000),
-            "permissions": {"accessibility": "granted", "screen_capture": "denied"},
         }))
-        .into_info(T0);
+        .into_info(None, T0);
         assert_eq!(info.os.len(), 5_000);
         assert_eq!(info.hostname.len(), 5_000);
+    }
+
+    /// The grants a registration records are the Cua driver's, from its
+    /// descriptor; the desktop app's own grants, which older desktops still
+    /// send as `permissions`, are never taken (#19: nothing inside the app
+    /// uses them), so a desktop without a driver records none.
+    #[test]
+    fn the_recorded_grants_are_the_drivers_never_the_apps_own() {
+        let app_grants = serde_json::json!({
+            "permissions": {"accessibility": "granted", "screen_capture": "granted"},
+        });
+        let driverless = registration(app_grants.clone());
+        let descriptor = driverless.cua_descriptor().unwrap();
+        assert_eq!(descriptor, None);
         assert_eq!(
-            info.permissions.as_ref().unwrap().screen_capture,
-            cua_protocol::Permission::Denied
+            driverless.into_info(descriptor.as_ref(), T0).permissions,
+            None
         );
+
+        let mut typed = app_grants.clone();
+        typed["cua"] = cua_envelope(STABLE_ID, cua_protocol::MachineLocation::Desktop);
+        let typed = registration(typed);
+        let descriptor = typed.cua_descriptor().unwrap();
+        let info = typed.into_info(descriptor.as_ref(), T0);
+        let recorded = info.permissions.expect("the driver's grants");
+        assert_eq!(recorded, descriptor.unwrap().permissions);
+        assert_eq!(recorded.screen_capture, cua_protocol::Permission::Denied);
     }
 }

@@ -62,6 +62,24 @@ fn lists_crate(table: &str, name: &str) -> bool {
     })
 }
 
+/// The string literals of `const NAME: [&str; N] = [ ... ];` in `source`.
+fn string_array_const(source: &str, name: &str) -> Vec<String> {
+    let head = format!("const {name}: [&str; ");
+    let start = source
+        .find(&head)
+        .unwrap_or_else(|| panic!("no `{head}` in the source"));
+    let body = &source[start..];
+    let open = body.find('[').unwrap() + 1;
+    let open = body[open..].find('[').unwrap() + open + 1;
+    let close = body[open..].find(']').unwrap() + open;
+    body[open..close]
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(|item| item.trim_matches('"').to_owned())
+        .collect()
+}
+
 #[test]
 fn the_legacy_desktop_executor_is_gone() {
     let repo = repo();
@@ -158,6 +176,79 @@ fn the_legacy_desktop_executor_is_gone() {
         violations.is_empty(),
         "the legacy desktop executor remains:\n{}",
         violations.join("\n")
+    );
+}
+
+/// Review finding on #19: the desktop advertises only its toolcalls, so
+/// readiness for a handoff or a resume-ritual destination cannot key on the
+/// coordinate names the deleted executor answered. The server's vocabulary
+/// for what the desktop app executes is the desktop's own list, and what a
+/// continuation needs of a computer is judged on the Cua descriptor.
+#[test]
+fn the_desktop_toolcalls_are_one_list_and_readiness_keys_on_the_cua_driver() {
+    let bridge = production("desktop/src-tauri/src/computer_use_bridge.rs");
+    let advertised = string_array_const(&bridge, "CAPABILITIES");
+    let machine = production("server/src/domain/machine.rs");
+    let expected = string_array_const(&machine, "DESKTOP_TOOLCALLS");
+    assert_eq!(
+        advertised, expected,
+        "desktop/src-tauri/src/computer_use_bridge.rs::CAPABILITIES and \
+         server/src/domain/machine.rs::DESKTOP_TOOLCALLS must be the same list"
+    );
+    assert!(
+        !advertised.is_empty()
+            && advertised
+                .iter()
+                .all(|name| name == "bash" || name.starts_with("file_") || name == "upload_file"),
+        "the desktop app executes shell and file toolcalls only: {advertised:?}"
+    );
+
+    // The register frame carries the driver's descriptor, not the app's
+    // own grants: nothing inside the app uses them, so the server records
+    // the descriptor's and a desktop without a driver records none.
+    let register = bridge
+        .split("fn register_message(")
+        .nth(1)
+        .expect("the bridge builds the register message");
+    let register = &register[..register.find("\n}\n").unwrap()];
+    assert!(
+        !register.contains("\"permissions\""),
+        "the register frame must not report the app's own grants"
+    );
+    assert!(
+        register.contains("registration_envelope("),
+        "the register frame must carry the Cua descriptor"
+    );
+    let route = production("server/src/routes/machine_agents.rs");
+    assert!(
+        !route.contains("permissions: self.permissions"),
+        "the route must record the descriptor's grants, never the registration's own"
+    );
+
+    // Readiness: no coordinate name is required of a destination, the
+    // driver is, and the grants checked are the driver's.
+    let handoff = production("server/src/domain/handoff.rs");
+    assert!(
+        !handoff.contains("COMPUTER_USE_CAPABILITIES")
+            && !handoff.contains("\"screenshot\"")
+            && !handoff.contains("\"left_click\""),
+        "domain/handoff.rs still requires the deleted executor's capability names"
+    );
+    for required in [
+        "DriverMissing",
+        "DriverUnavailable",
+        "driver_version.is_none()",
+        "FILE_CAPABILITIES",
+    ] {
+        assert!(
+            handoff.contains(required),
+            "domain/handoff.rs must judge the destination on the Cua driver ({required:?} missing)"
+        );
+    }
+    let resume = production("server/src/domain/resume.rs");
+    assert!(
+        resume.contains("continuation_checks("),
+        "domain/resume.rs must rank destinations on the same checks"
     );
 }
 

@@ -104,18 +104,27 @@ function isSynthesizedHome(machine) {
 /**
  * The words a hint uses for the program that connects a machine: the Nolune
  * desktop app on a desktop, the Cua driver beside the server for a listed
- * server-local record.
+ * server-local record. `grant` is where the driver's grants are made: the
+ * desktop app's Settings window runs the driver's grant flow on a desktop;
+ * beside the server it is the driver's own command.
  *
  * @param {MachineInfo} machine
  */
 function agentCopy(machine) {
 	return isHome(machine)
-		? { app: "the Cua driver", there: "on the server", host: "the server", restart: "Restart it on the server." }
+		? {
+				app: "the Cua driver",
+				there: "on the server",
+				host: "the server",
+				restart: "Restart it on the server.",
+				grant: "run cua-driver permissions grant on the server",
+			}
 		: {
 				app: "the Nolune desktop app",
 				there: "there",
 				host: "the computer",
 				restart: "Restart the Nolune desktop app there.",
+				grant: "grant it from the Nolune desktop app's Settings there",
 			};
 }
 
@@ -135,9 +144,10 @@ export function deriveHealth(machine, nowSeconds) {
 }
 
 /**
- * Permissions the desktop reported, in the order the surface shows them.
- * A machine that reported nothing has no rows: an older desktop app is not
- * four unknowns.
+ * The Cua driver's grants on this machine, in the order the surface shows
+ * them. A machine without a driver has no rows: nothing there sees or acts
+ * in windows (#19), so there is nothing to grant, and the desktop app's own
+ * grants are never reported.
  *
  * @param {MachineInfo} machine
  * @returns {PermissionRow[]}
@@ -160,7 +170,8 @@ export function permissionRows(machine) {
 }
 
 /**
- * Offline beats not responding beats needing permission beats online.
+ * Offline beats not responding beats needing permission (the Cua driver's,
+ * never the desktop app's own) beats online.
  *
  * @param {MachineInfo} machine
  * @param {number} nowSeconds
@@ -269,7 +280,7 @@ export function spaceHints(machine, nowSeconds) {
 		return hints;
 	}
 
-	const { app, there, host, restart } = agentCopy(machine);
+	const { app, there, host, restart, grant } = agentCopy(machine);
 	const home = isHome(machine);
 
 	if (health === "unavailable") {
@@ -287,18 +298,18 @@ export function spaceHints(machine, nowSeconds) {
 		});
 	}
 
+	// The grants are the Cua driver's (#19): the one thing to do is to
+	// grant the driver, never the desktop app.
 	for (const permission of permissionRows(machine)) {
 		if (permission.state === "denied") {
 			hints.push({
 				level: "warn",
-				text: `${permission.label} is denied on ${name}. Grant it to ${app} in System Settings, then reconnect.`,
+				text: `${permission.label} is denied to the Cua driver on ${name}. To allow it, ${grant}, then reconnect.`,
 			});
 		} else if (permission.state === "prompt_required") {
 			hints.push({
 				level: "warn",
-				text: home
-					? `${permission.label} has not been allowed on ${name} yet. Allow it for ${app} ${there}.`
-					: `${permission.label} has not been allowed on ${name} yet. Open ${app} ${there} to allow it.`,
+				text: `${permission.label} has not been granted to the Cua driver on ${name} yet. To allow it, ${grant}.`,
 			});
 		}
 	}

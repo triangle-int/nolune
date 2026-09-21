@@ -356,6 +356,8 @@ mod tests {
     const STUDIO: &str = "studio-id";
     const LAPTOP: &str = "laptop-id";
 
+    /// A desktop from this release: the five toolcalls the app executes,
+    /// and while it is connected, a healthy Cua driver holding both grants.
     fn machine(id: &str, name: &str, online: bool) -> KnownMachine {
         KnownMachine {
             machine_id: id.into(),
@@ -365,11 +367,11 @@ mod tests {
             os: "macos".into(),
             platform: Some(Platform::Macos),
             location: MachineLocation::Desktop,
-            permissions: Some(PermissionState {
+            permissions: online.then_some(PermissionState {
                 accessibility: Permission::Granted,
                 screen_capture: Permission::Granted,
             }),
-            capabilities: crate::domain::machine::LEGACY_DESKTOP_CAPABILITIES
+            capabilities: crate::domain::machine::DESKTOP_TOOLCALLS
                 .iter()
                 .map(|s| (*s).to_owned())
                 .collect(),
@@ -382,8 +384,8 @@ mod tests {
             } else {
                 MachineHealth::Unavailable
             },
-            driver_version: None,
-            cua_health: None,
+            driver_version: online.then(|| "0.28.2".to_owned()),
+            cua_health: online.then_some(MachineHealth::Healthy),
         }
     }
 
@@ -537,10 +539,29 @@ mod tests {
         // No computer at all.
         assert_eq!(rank(std::slice::from_ref(&task), &ctx(&[], &[])), None);
 
-        // A connected computer that lacks a required capability cannot take it.
+        // A connected computer without a Cua driver cannot take it (#19: the
+        // desktop app alone cannot see or act in windows), however many
+        // toolcalls it executes; neither can one whose driver is unavailable.
         let mut blind = machine(LAPTOP, "laptop", true);
-        blind.capabilities.retain(|c| c != "screenshot");
+        blind.driver_version = None;
+        blind.cua_health = None;
+        blind.permissions = None;
         assert_eq!(rank(std::slice::from_ref(&task), &ctx(&[blind], &[])), None);
+        let mut legacy = machine(LAPTOP, "laptop", true);
+        legacy.capabilities = crate::domain::machine::LEGACY_DESKTOP_CAPABILITIES
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        legacy.driver_version = None;
+        legacy.cua_health = None;
+        assert_eq!(
+            rank(std::slice::from_ref(&task), &ctx(&[legacy], &[])),
+            None,
+            "the coordinate names the deleted executor answered satisfy nothing"
+        );
+        let mut down = machine(LAPTOP, "laptop", true);
+        down.cua_health = Some(MachineHealth::Unavailable);
+        assert_eq!(rank(std::slice::from_ref(&task), &ctx(&[down], &[])), None);
 
         // A connected computer whose heartbeat is stale is not ready either.
         let mut silent = machine(LAPTOP, "laptop", true);

@@ -23,7 +23,11 @@ import {
 const NOW = 1_800_000_000;
 const slug = 'companion';
 
-/** A desktop as `GET /machines` lists it after #179; overrides pick the case. */
+/**
+ * A desktop as `GET /machines` lists it after #179 and #19: the toolcalls
+ * the desktop app executes, and no driver (so no grants) unless an
+ * override adds one; the grants on a row are always the Cua driver's.
+ */
 function desktop(overrides = {}) {
 	return {
 		machine_id: '8d3c2f4e-1111-4a2b-9c3d-000000000001',
@@ -33,8 +37,8 @@ function desktop(overrides = {}) {
 		os: 'macOS 15.1',
 		platform: 'macos',
 		location: 'desktop',
-		permissions: { accessibility: 'granted', screen_capture: 'granted' },
-		capabilities: ['screenshot', 'left_click', 'type', 'bash'],
+		permissions: null,
+		capabilities: ['bash', 'file_read', 'file_write', 'file_list', 'upload_file'],
 		first_seen: NOW - 86400,
 		last_seen: NOW - 5,
 		instance_slug: slug,
@@ -46,9 +50,14 @@ function desktop(overrides = {}) {
 	};
 }
 
+/** The same desktop with a Cua driver holding `permissions`. */
+function withDriver(permissions = { accessibility: 'granted', screen_capture: 'granted' }, overrides = {}) {
+	return desktop({ driver_version: '0.28.2', cua_health: 'healthy', permissions, ...overrides });
+}
+
 const offline = desktop({ machine_id: 'off-1', hostname: 'laptop', display_name: 'laptop', online: false, health: 'unavailable', last_seen: NOW - 7200 });
 const stale = desktop({ machine_id: 'stale-1', hostname: 'den', display_name: 'den', last_seen: NOW - STALE_HEARTBEAT_SECS - 5, health: 'degraded' });
-const denied = desktop({ machine_id: 'denied-1', hostname: 'kiosk', display_name: 'kiosk', permissions: { accessibility: 'denied', screen_capture: 'granted' } });
+const denied = withDriver({ accessibility: 'denied', screen_capture: 'granted' }, { machine_id: 'denied-1', hostname: 'kiosk', display_name: 'kiosk' });
 
 test('health is re-derived from last_seen with the server threshold, never better than the server said', () => {
 	assert.equal(STALE_HEARTBEAT_SECS, 45, 'mirrors STALE_HEARTBEAT_SECS in server/src/domain/machine.rs');
@@ -61,15 +70,16 @@ test('health is re-derived from last_seen with the server threshold, never bette
 });
 
 test('a space is online, not responding, needing permission or offline, in that priority', () => {
-	assert.equal(spaceStatus(desktop(), NOW), 'online');
+	assert.equal(spaceStatus(desktop(), NOW), 'online', 'a desktop without a driver has no grants to need (#19)');
 	assert.equal(stateLabel(desktop(), NOW), 'Online');
+	assert.equal(spaceStatus(withDriver(), NOW), 'online');
 	assert.equal(spaceStatus(stale, NOW), 'unhealthy');
 	assert.equal(stateLabel(stale, NOW), 'Not responding');
-	assert.equal(spaceStatus(denied, NOW), 'restricted');
+	assert.equal(spaceStatus(denied, NOW), 'restricted', "the Cua driver's grants decide");
 	assert.equal(stateLabel(denied, NOW), 'Needs permission');
-	assert.equal(spaceStatus(desktop({ permissions: { accessibility: 'prompt_required', screen_capture: 'granted' } }), NOW), 'restricted', 'a permission the user has not been asked for blocks too');
-	assert.equal(spaceStatus(desktop({ permissions: { accessibility: 'unavailable', screen_capture: 'unavailable' } }), NOW), 'online', 'a platform that cannot report permissions is not restricted');
-	assert.equal(spaceStatus(desktop({ permissions: null }), NOW), 'online', 'an older desktop app that reports nothing is not restricted');
+	assert.equal(spaceStatus(withDriver({ accessibility: 'prompt_required', screen_capture: 'granted' }), NOW), 'restricted', 'a grant the driver has not been asked for blocks too');
+	assert.equal(spaceStatus(withDriver({ accessibility: 'unavailable', screen_capture: 'unavailable' }), NOW), 'online', 'a platform that cannot report permissions is not restricted');
+	assert.equal(spaceStatus(desktop({ permissions: null }), NOW), 'online', 'no driver, no grants, not restricted');
 	assert.equal(spaceStatus(offline, NOW), 'offline');
 	assert.equal(stateLabel(offline, NOW), 'Offline');
 	assert.equal(spaceStatus(desktop({ ...denied, last_seen: NOW - 100 }), NOW), 'unhealthy', 'not responding beats needing permission');
@@ -101,12 +111,12 @@ test('permissions, capabilities and the Cua driver are summarized without guessi
 			['screen_capture', 'Screen recording', 'granted', 'granted', false],
 		],
 	);
-	const askFirst = permissionRows(desktop({ permissions: { accessibility: 'prompt_required', screen_capture: 'unavailable' } }));
+	const askFirst = permissionRows(withDriver({ accessibility: 'prompt_required', screen_capture: 'unavailable' }));
 	assert.deepEqual(askFirst.map((p) => [p.stateLabel, p.blocking]), [['not asked yet', true], ['not available here', false]]);
-	assert.deepEqual(permissionRows(desktop({ permissions: null })), [], 'nothing reported means no rows, not four unknowns');
+	assert.deepEqual(permissionRows(desktop()), [], 'no driver means no rows, not four unknowns: the app has no grants of its own to show (#19)');
 
-	assert.equal(capabilitySummary(desktop()), '4 actions');
-	assert.equal(capabilitySummary(desktop({ capabilities: ['screenshot'] })), '1 action');
+	assert.equal(capabilitySummary(desktop()), '5 actions');
+	assert.equal(capabilitySummary(desktop({ capabilities: ['bash'] })), '1 action');
 	assert.equal(capabilitySummary(desktop({ capabilities: [] })), 'No actions reported');
 
 	assert.equal(cuaLabel(desktop()), 'Cua driver not reported');
@@ -133,20 +143,28 @@ test('hints name the computer and the one thing to do about it', () => {
 		level: 'warn',
 		text: `den has not answered for ${STALE_HEARTBEAT_SECS + 5} s. Check that the computer is awake and the desktop app is still running.`,
 	});
-	assert.deepEqual(spaceHints(denied, NOW)[0], {
-		level: 'warn',
-		text: 'Accessibility is denied on kiosk. Grant it to the Nolune desktop app in System Settings, then reconnect.',
-	});
-	assert.deepEqual(spaceHints(desktop({ permissions: { accessibility: 'granted', screen_capture: 'prompt_required' } }), NOW)[0], {
-		level: 'warn',
-		text: 'Screen recording has not been allowed on studio yet. Open the Nolune desktop app there to allow it.',
-	});
-	const renamed = desktop({ ...denied, custom_name: 'Front desk', display_name: 'Front desk' });
-	assert.match(spaceHints(renamed, NOW)[0].text, /^Accessibility is denied on Front desk\./, 'hints use the name the user gave');
-	assert.deepEqual(spaceHints(desktop({ capabilities: [] }), NOW)[0], {
-		level: 'warn',
-		text: 'studio reported no actions it can perform. Update the Nolune desktop app there.',
-	});
+	// The grants are the Cua driver's, and the one thing to do is to grant
+	// the driver from the desktop app's Settings: never to grant the app.
+	assert.deepEqual(spaceHints(denied, NOW), [
+		{
+			level: 'warn',
+			text: "Accessibility is denied to the Cua driver on kiosk. To allow it, grant it from the Nolune desktop app's Settings there, then reconnect.",
+		},
+	]);
+	assert.deepEqual(spaceHints(withDriver({ accessibility: 'granted', screen_capture: 'prompt_required' }), NOW), [
+		{
+			level: 'warn',
+			text: "Screen recording has not been granted to the Cua driver on studio yet. To allow it, grant it from the Nolune desktop app's Settings there.",
+		},
+	]);
+	for (const hint of [...spaceHints(denied, NOW), ...spaceHints(withDriver({ accessibility: 'prompt_required', screen_capture: 'prompt_required' }), NOW)]) {
+		assert.doesNotMatch(hint.text, /Grant it to the Nolune desktop app/, 'nothing asks the user to grant the app itself');
+	}
+	const renamed = withDriver({ accessibility: 'denied', screen_capture: 'granted' }, { ...denied, custom_name: 'Front desk', display_name: 'Front desk' });
+	assert.match(spaceHints(renamed, NOW)[0].text, /^Accessibility is denied to the Cua driver on Front desk\./, 'hints use the name the user gave');
+	assert.deepEqual(spaceHints(withDriver(undefined, { capabilities: [] }), NOW), [
+		{ level: 'warn', text: 'studio reported no actions it can perform. Update the Nolune desktop app there.' },
+	]);
 	assert.deepEqual(spaceHints(desktop({ driver_version: '0.28.2', cua_health: 'healthy' }), NOW), [], 'a reported driver needs no hint');
 	assert.deepEqual(spaceHints(desktop({ driver_version: '0.28.2', cua_health: 'degraded' }), NOW), [
 		{ level: 'warn', text: 'The Cua driver on studio is degraded. Restart the Nolune desktop app there.' },
@@ -242,7 +260,7 @@ test('a listed server-local record is the home row but keeps its own state, fact
 	]);
 	assert.equal(deniedView.capabilities, 'No actions reported');
 	assert.deepEqual(deniedView.hints, [
-		{ level: 'warn', text: 'Accessibility is denied on srv. Grant it to the Cua driver in System Settings, then reconnect.' },
+		{ level: 'warn', text: 'Accessibility is denied to the Cua driver on srv. To allow it, run cua-driver permissions grant on the server, then reconnect.' },
 		{ level: 'warn', text: 'srv reported no actions it can perform. Update the Cua driver on the server.' },
 	]);
 	assert.equal(deniedView.lastSeen, 'Online now');
@@ -299,10 +317,19 @@ test('a desktop view carries every fact the surface shows', () => {
 	assert.equal(view.health, 'healthy');
 	assert.equal(view.meta, 'macOS · Desktop', 'platform and location only: no screen size is reported (#19)');
 	assert.equal(view.lastSeen, 'Online now');
-	assert.equal(view.capabilities, '4 actions');
+	assert.deepEqual(view.permissions, [], 'no driver: no grants to show, and none of the app\'s own (#19)');
+	assert.equal(view.capabilities, '5 actions');
 	assert.equal(view.cua, 'Cua driver not reported');
 	assert.equal(view.canRename, true);
 	assert.equal(view.note, '');
+
+	const driven = spaceView(withDriver({ accessibility: 'granted', screen_capture: 'denied' }), NOW);
+	assert.equal(driven.status, 'restricted');
+	assert.deepEqual(driven.permissions.map((p) => [p.key, p.state, p.blocking]), [
+		['accessibility', 'granted', false],
+		['screen_capture', 'denied', true],
+	], "the rows are the Cua driver's grants");
+	assert.equal(driven.cua, 'Cua driver 0.28.2 · healthy');
 });
 
 test('machine events upsert one row by stable id and forget drops it; others are ignored', () => {

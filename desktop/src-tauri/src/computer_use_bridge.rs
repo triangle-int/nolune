@@ -244,14 +244,7 @@ async fn run_agent_connection(
     // Instance slug: only set explicitly via set_instance_slug.
     let instance_slug = INSTANCE_SLUG.lock().ok().and_then(|v| v.clone());
 
-    let register = register_message(
-        &machine_id,
-        &os,
-        &host,
-        instance_slug,
-        &crate::permissions::check_permissions(),
-        cua.as_ref(),
-    );
+    let register = register_message(&machine_id, &os, &host, instance_slug, cua.as_ref());
     write
         .send(Message::Text(register.to_string().into()))
         .await
@@ -938,28 +931,25 @@ fn machine_id_from_store(stored: Option<serde_json::Value>) -> (String, bool) {
 }
 
 /// The registration the server expects: stable id, hostname for display,
-/// platform label, the companion slug, permission state as the protocol
-/// names it, what this agent can execute, and the Cua descriptor of the
-/// driver this desktop runs (#17), absent when there is none.
+/// platform label, the companion slug, what this agent can execute, and
+/// the Cua descriptor of the driver this desktop runs (#17), absent when
+/// there is none. The app's own Accessibility and Screen Recording grants
+/// are not reported: nothing inside the app uses them (#19), and the grants
+/// that matter for seeing and acting in windows are the driver's, inside
+/// the descriptor.
 fn register_message(
     machine_id: &str,
     os: &str,
     hostname: &str,
     instance_slug: Option<String>,
-    permissions: &crate::permissions::PermissionStatus,
     cua: Option<&cua_protocol::MachineDescriptor>,
 ) -> serde_json::Value {
-    let state = |granted: bool| if granted { "granted" } else { "denied" };
     let mut message = serde_json::json!({
         "type": "register",
         "machine_id": machine_id,
         "os": os,
         "hostname": hostname,
         "instance_slug": instance_slug,
-        "permissions": {
-            "accessibility": state(permissions.accessibility),
-            "screen_capture": state(permissions.screen_recording),
-        },
         "capabilities": CAPABILITIES,
     });
     if let Some(descriptor) = cua {
@@ -1084,16 +1074,12 @@ mod tests {
     }
 
     #[test]
-    fn registration_carries_the_stable_id_permissions_and_capabilities() {
+    fn registration_carries_the_stable_id_and_capabilities_but_no_grants_of_its_own() {
         let message = register_message(
             "4f3c1c2e-9b5e-4d2b-8f0a-1c2d3e4f5a6b",
             "macos",
             "studio.local",
             None,
-            &crate::permissions::PermissionStatus {
-                screen_recording: false,
-                accessibility: true,
-            },
             None,
         );
         assert_eq!(message["type"], "register");
@@ -1111,10 +1097,9 @@ mod tests {
             "no screen size: the desktop captures nothing on its own (#19)"
         );
         assert_eq!(message["instance_slug"], serde_json::Value::Null);
-        assert_eq!(
-            message["permissions"],
-            serde_json::json!({"accessibility": "granted", "screen_capture": "denied"}),
-            "permissions use the protocol's names and states"
+        assert!(
+            message.get("permissions").is_none(),
+            "the app's own grants are not reported: nothing inside the app uses them (#19)"
         );
         let capabilities: Vec<&str> = message["capabilities"]
             .as_array()
@@ -1139,20 +1124,9 @@ mod tests {
             );
         }
 
-        let bound = register_message(
-            "id",
-            "linux",
-            "box",
-            Some("companion".into()),
-            &crate::permissions::PermissionStatus {
-                screen_recording: true,
-                accessibility: false,
-            },
-            None,
-        );
+        let bound = register_message("id", "linux", "box", Some("companion".into()), None);
         assert_eq!(bound["instance_slug"], "companion");
-        assert_eq!(bound["permissions"]["accessibility"], "denied");
-        assert_eq!(bound["permissions"]["screen_capture"], "granted");
+        assert!(bound.get("permissions").is_none());
     }
 
     /// Every action `execute_action` understands is advertised, and nothing else.
@@ -1205,18 +1179,7 @@ mod tests {
             },
             capabilities: vec![Capability::AppDiscovery, Capability::Pointer],
         };
-        let permissions = crate::permissions::PermissionStatus {
-            screen_recording: true,
-            accessibility: true,
-        };
-        let message = register_message(
-            &first,
-            "macos",
-            "studio.local",
-            None,
-            &permissions,
-            Some(&descriptor),
-        );
+        let message = register_message(&first, "macos", "studio.local", None, Some(&descriptor));
         let cua = CuaRegistrationEnvelope::from_json(&message["cua"].to_string())
             .expect("the cua field is the registration envelope the server decodes");
         assert_eq!(cua.version, ProtocolVersion::V1);
@@ -1227,14 +1190,19 @@ mod tests {
             message["machine_id"].as_str().unwrap()
         );
         assert_eq!(cua.machine.location, MachineLocation::Desktop);
-        // The legacy fields are untouched beside it.
+        // The legacy fields are untouched beside it; the only grants on the
+        // frame are the driver's, inside the descriptor.
         assert_eq!(
             message["capabilities"].as_array().unwrap().len(),
             CAPABILITIES.len()
         );
-        assert_eq!(message["permissions"]["accessibility"], "granted");
+        assert!(message.get("permissions").is_none());
+        assert_eq!(
+            message["cua"]["machine"]["permissions"]["accessibility"],
+            "granted"
+        );
 
-        let legacy = register_message(&first, "macos", "studio.local", None, &permissions, None);
+        let legacy = register_message(&first, "macos", "studio.local", None, None);
         assert!(
             legacy.get("cua").is_none(),
             "no driver, no cua field: {legacy}"

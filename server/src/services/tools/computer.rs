@@ -619,10 +619,19 @@ impl Tool for RemoteFilesTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        // The desktop app executes a fixed set of toolcalls (#19); an
+        // operation outside it is refused here, before any round trip.
+        let action = format!("file_{}", args.operation);
+        if !crate::domain::machine::DESKTOP_TOOLCALLS.contains(&action.as_str()) {
+            return Err(ToolExecError(format!(
+                "unknown operation '{}': use read, write or list",
+                args.operation
+            )));
+        }
         let request_id = uuid::Uuid::new_v4().to_string();
         let call = AgentToolCall {
             request_id: request_id.clone(),
-            action: format!("file_{}", args.operation),
+            action,
             params: serde_json::json!({
                 "path": args.path,
                 "content": args.content,
@@ -1240,6 +1249,36 @@ mod target_tests {
                 *seen.lock().unwrap(),
                 ["bash", "file_list"],
                 "{permissions:?}"
+            );
+        }
+    }
+
+    /// The file operations are the desktop app's `file_*` toolcalls
+    /// (`DESKTOP_TOOLCALLS`, #19); one it does not execute is refused
+    /// before anything reaches the desktop.
+    #[tokio::test]
+    async fn remote_files_refuses_an_operation_the_desktop_does_not_execute() {
+        let registry = MachineRegistry::new();
+        let mut studio = connect(&registry, desktop(STUDIO, "studio", now(), None)).await;
+        let tools = harness(
+            &registry,
+            MachineTarget::resolve(&registry, Some(STUDIO)).await,
+        );
+        for operation in ["delete", "move", "", "read; rm -rf"] {
+            let mut args = files(None);
+            args.operation = operation.into();
+            let error = tools.files.call(args).await.unwrap_err().0;
+            assert!(
+                error.contains("unknown operation") && error.contains("read, write or list"),
+                "{operation:?}: {error}"
+            );
+        }
+        assert!(nothing_received(&mut studio));
+        for operation in ["read", "write", "list"] {
+            assert!(
+                crate::domain::machine::DESKTOP_TOOLCALLS
+                    .contains(&format!("file_{operation}").as_str()),
+                "{operation} is one the desktop executes"
             );
         }
     }
