@@ -246,6 +246,7 @@ async fn run_agent_connection(
         (sw, sh),
         instance_slug,
         &crate::permissions::check_permissions(),
+        None,
     );
     write
         .send(Message::Text(register.to_string().into()))
@@ -976,7 +977,8 @@ fn machine_id_from_store(stored: Option<serde_json::Value>) -> (String, bool) {
 
 /// The registration the server expects: stable id, hostname for display,
 /// platform label, screen, the companion slug, permission state as the
-/// protocol names it, and what this agent can execute.
+/// protocol names it, what this agent can execute, and the Cua descriptor
+/// of the driver this desktop runs (#17), absent when there is none.
 fn register_message(
     machine_id: &str,
     os: &str,
@@ -984,7 +986,9 @@ fn register_message(
     screen: (u32, u32),
     instance_slug: Option<String>,
     permissions: &crate::permissions::PermissionStatus,
+    cua: Option<&cua_protocol::MachineDescriptor>,
 ) -> serde_json::Value {
+    let _ = cua;
     let state = |granted: bool| if granted { "granted" } else { "denied" };
     serde_json::json!({
         "type": "register",
@@ -1129,6 +1133,7 @@ mod tests {
                 screen_recording: false,
                 accessibility: true,
             },
+            None,
         );
         assert_eq!(message["type"], "register");
         assert_eq!(
@@ -1174,6 +1179,7 @@ mod tests {
                 screen_recording: true,
                 accessibility: false,
             },
+            None,
         );
         assert_eq!(bound["instance_slug"], "companion");
         assert_eq!(bound["permissions"]["accessibility"], "denied");
@@ -1202,6 +1208,77 @@ mod tests {
         let advertised: std::collections::BTreeSet<String> =
             CAPABILITIES.iter().map(|s| (*s).to_owned()).collect();
         assert_eq!(advertised, handled);
+    }
+
+    /// The descriptor rides on the register message under the same stable
+    /// id the socket registers as, so the server binds it to this socket; a
+    /// desktop without a driver sends no `cua` field and stays legacy-only.
+    #[test]
+    fn registration_carries_the_cua_descriptor_under_the_same_stable_id() {
+        use cua_protocol::*;
+
+        // The id survives a second run against the same store.
+        let (first, minted) = machine_id_from_store(None);
+        assert!(minted);
+        let (again, minted) = machine_id_from_store(Some(serde_json::Value::String(first.clone())));
+        assert!(!minted);
+        assert_eq!(again, first, "the persisted id is what every run registers");
+
+        let descriptor = MachineDescriptor {
+            machine_id: MachineId::try_from(first.as_str()).unwrap(),
+            location: MachineLocation::Desktop,
+            platform: Platform::Macos,
+            driver_version: DriverVersion::try_from("0.28.2").unwrap(),
+            health: MachineHealth::Healthy,
+            permissions: PermissionState {
+                accessibility: Permission::Granted,
+                screen_capture: Permission::Granted,
+            },
+            capabilities: vec![Capability::AppDiscovery, Capability::Pointer],
+        };
+        let permissions = crate::permissions::PermissionStatus {
+            screen_recording: true,
+            accessibility: true,
+        };
+        let message = register_message(
+            &first,
+            "macos",
+            "studio.local",
+            (2560, 1440),
+            None,
+            &permissions,
+            Some(&descriptor),
+        );
+        let cua = CuaRegistrationEnvelope::from_json(&message["cua"].to_string())
+            .expect("the cua field is the registration envelope the server decodes");
+        assert_eq!(cua.version, ProtocolVersion::V1);
+        assert_eq!(cua.machine, descriptor);
+        assert_eq!(message["machine_id"], first);
+        assert_eq!(
+            cua.machine.machine_id.as_str(),
+            message["machine_id"].as_str().unwrap()
+        );
+        assert_eq!(cua.machine.location, MachineLocation::Desktop);
+        // The legacy fields are untouched beside it.
+        assert_eq!(
+            message["capabilities"].as_array().unwrap().len(),
+            CAPABILITIES.len()
+        );
+        assert_eq!(message["permissions"]["accessibility"], "granted");
+
+        let legacy = register_message(
+            &first,
+            "macos",
+            "studio.local",
+            (2560, 1440),
+            None,
+            &permissions,
+            None,
+        );
+        assert!(
+            legacy.get("cua").is_none(),
+            "no driver, no cua field: {legacy}"
+        );
     }
 
     #[test]

@@ -3968,6 +3968,7 @@ version = "0.36.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "cua-protocol",
  "dirs",
  "enigo",
  "futures-util",
@@ -3977,6 +3978,7 @@ dependencies = [
  "keyring",
  "libc",
  "reqwest",
+ "rmcp",
  "screenshots",
  "serde",
  "serde_json",

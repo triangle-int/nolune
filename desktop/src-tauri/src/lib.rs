@@ -2,6 +2,7 @@ mod companion_relay;
 mod computer_use;
 mod computer_use_bridge;
 mod credentials;
+mod cua_runtime;
 mod local_server;
 mod overlay;
 mod permissions;

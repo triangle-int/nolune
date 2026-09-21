@@ -44,6 +44,8 @@ keyring = { version = "4.2", features = ["v1"] }
 uuid = { version = "1", features = ["v4"] }
 axum = { version = "0.8", features = ["ws"] }
 html-escape = "0.2.15"
+cua-protocol = { path = "../../cua-protocol" }
+rmcp = { version = "1.2", features = ["client", "transport-child-process"] }
 
 
 [dev-dependencies]
