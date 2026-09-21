@@ -351,7 +351,7 @@ a refusal hold across restarts.
 | --- | --- | --- |
 | `manual` | `POST /api/instances/companion/resume` ("Resume my work", "Suggest now") | only the ritual being off (`409 resume_disabled`) |
 | `opened_after_break` | `POST .../resume/opened`, sent by the client when the companion opens and when its tab comes back into view; the server measures the gap since the last report and triggers only when it is at least `break_minutes` (`no_break` otherwise) | quiet hours, snooze, cooldown |
-| `machine_connected` | the connect hook beside the connection check-in in `routes/machine_agents.rs`; only records that name that computer are considered | quiet hours, snooze, cooldown |
+| `machine_connected` | a desktop registering on the machine socket (`routes/machine_agents.rs`, once its registration is accepted): the computer really came back, so the suggestion can say so; only records that name that computer are considered. The browser's `machine-hello` check-in on a page load is not a reconnect and never reaches the ritual; a page load is the `opened_after_break` trigger's business | quiet hours, snooze, cooldown |
 
 A held trigger records nothing and changes nothing. The manual trigger
 re-ranks every time and replaces the current suggestion; there is never

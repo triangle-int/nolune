@@ -307,6 +307,8 @@ async fn handle_agent(mut socket: WebSocket, state: AppState) {
         };
 
     log::info!("[machine-ws] agent '{machine_id}' connected");
+    // Waiting work that names this computer may be offered for resumption (#83).
+    crate::services::resume_ritual::on_machine_connected(&state, &machine_id).await;
 
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(15));
     ping_interval.tick().await; // skip first immediate tick
@@ -473,9 +475,6 @@ pub(crate) async fn on_machine_connected(
             observed.len()
         );
     }
-
-    // Waiting work that names this computer may be offered for resumption (#83).
-    crate::services::resume_ritual::on_machine_connected(state, machine_id).await;
 
     // Reconnect bursts are deduplicated and rate-limited by the loop.
     let handle = match state.proactive.begin(

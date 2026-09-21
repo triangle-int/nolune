@@ -1,10 +1,13 @@
 //! Router-level tests for the Resume my work ritual (#83).
 //!
 //! Included from `app/router.rs`, so every request goes through
-//! `build_router` with the real auth and companion middleware. Desktops
-//! register through the registry exactly as the WebSocket route does; their
-//! toolcall channels stay empty throughout, which is how these tests prove
-//! that a suggestion never touches a computer. Records are written the way
+//! `build_router` with the real auth and companion middleware. Most
+//! desktops register through the registry exactly as the WebSocket route
+//! does; the reconnect tests instead serve the router on a local port and
+//! connect a desktop over the machine socket itself, so the connect hook is
+//! reached the way a real desktop reaches it. Either way their toolcall
+//! channels stay empty throughout, which is how these tests prove that a
+//! suggestion never touches a computer. Records are written the way
 //! explicit task activity writes them; the ritual only reads them.
 
 use super::*;
@@ -32,7 +35,11 @@ use axum::{
 };
 use chrono::Timelike;
 use cua_protocol::{MachineLocation, Permission, PermissionState, Platform};
-use std::fs;
+use std::{fs, net::SocketAddr, time::Duration};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+};
 use tower::ServiceExt;
 
 const TOKEN: &str = "issue-83-resume-token";
@@ -118,6 +125,164 @@ impl Desktop {
             self.calls.try_recv().is_err(),
             "{label}: a toolcall reached the desktop"
         );
+    }
+}
+
+/// A desktop attached over the machine socket (`/api/agents/ws/machine`),
+/// the way the desktop app attaches: a WebSocket handshake with the API
+/// token, then the registration message. Frames are the RFC 6455 wire
+/// format written by hand, so the test has no client library between it
+/// and the route.
+struct SocketDesktop {
+    stream: TcpStream,
+}
+
+impl SocketDesktop {
+    async fn connect(addr: SocketAddr, machine_id: &str, hostname: &str) -> Self {
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let request = format!(
+            "GET /api/agents/ws/machine HTTP/1.1\r\nHost: {addr}\r\nUpgrade: websocket\r\n\
+             Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+             Sec-WebSocket-Version: 13\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut response = Vec::new();
+        let mut byte = [0u8; 1];
+        while !response.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).await.unwrap();
+            response.push(byte[0]);
+        }
+        let response = String::from_utf8_lossy(&response);
+        assert!(response.starts_with("HTTP/1.1 101"), "{response}");
+
+        let mut desktop = Self { stream };
+        desktop
+            .send_text(
+                &serde_json::json!({
+                    "type": "register",
+                    "machine_id": machine_id,
+                    "os": "macos",
+                    "hostname": hostname,
+                    "screen_width": 2560,
+                    "screen_height": 1440,
+                    "permissions": granted(),
+                    "capabilities": full_capabilities(),
+                })
+                .to_string(),
+            )
+            .await;
+        let ack = desktop.next_text(Duration::from_secs(5)).await.unwrap();
+        assert_eq!(ack["type"], "registered", "{ack}");
+        assert_eq!(ack["machine_id"], machine_id);
+        desktop
+    }
+
+    /// One masked text frame, as a client must send it.
+    async fn send_text(&mut self, text: &str) {
+        let payload = text.as_bytes();
+        let key = [0x12u8, 0x34, 0x56, 0x78];
+        let mut frame = vec![0x81u8];
+        if payload.len() < 126 {
+            frame.push(0x80 | payload.len() as u8);
+        } else {
+            frame.push(0x80 | 126);
+            frame.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+        }
+        frame.extend_from_slice(&key);
+        frame.extend(payload.iter().enumerate().map(|(i, b)| b ^ key[i % 4]));
+        self.stream.write_all(&frame).await.unwrap();
+    }
+
+    /// The next frame from the server: its opcode and payload.
+    async fn next_frame(&mut self) -> (u8, Vec<u8>) {
+        let mut head = [0u8; 2];
+        self.stream.read_exact(&mut head).await.unwrap();
+        assert_eq!(head[1] & 0x80, 0, "server frames are never masked");
+        let mut len = usize::from(head[1] & 0x7F);
+        if len == 126 {
+            let mut ext = [0u8; 2];
+            self.stream.read_exact(&mut ext).await.unwrap();
+            len = usize::from(u16::from_be_bytes(ext));
+        } else if len == 127 {
+            let mut ext = [0u8; 8];
+            self.stream.read_exact(&mut ext).await.unwrap();
+            len = usize::try_from(u64::from_be_bytes(ext)).unwrap();
+        }
+        let mut payload = vec![0u8; len];
+        self.stream.read_exact(&mut payload).await.unwrap();
+        (head[0] & 0x0F, payload)
+    }
+
+    /// The next text frame within `wait`, or `None`. Control frames are skipped.
+    async fn next_text(&mut self, wait: Duration) -> Option<serde_json::Value> {
+        tokio::time::timeout(wait, async {
+            loop {
+                let (opcode, payload) = self.next_frame().await;
+                if opcode == 0x1 {
+                    return serde_json::from_slice(&payload).unwrap();
+                }
+            }
+        })
+        .await
+        .ok()
+    }
+
+    /// Nothing but the registration ack ever reaches the desktop.
+    async fn assert_untouched(&mut self, label: &str) {
+        assert_eq!(
+            self.next_text(Duration::from_millis(200)).await,
+            None,
+            "{label}: a toolcall reached the desktop"
+        );
+    }
+
+    /// Drop the connection the way a closed laptop lid does: no close frame.
+    async fn disconnect(self) {
+        drop(self.stream);
+        tokio::task::yield_now().await;
+    }
+}
+
+impl Harness {
+    /// The router served on a local port, for a desktop on the machine socket.
+    async fn serve(&self) -> SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = build_router(self.state.clone(), None);
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        addr
+    }
+
+    /// The current suggestion once one appears, within a few seconds.
+    async fn wait_for_suggestion(&self) -> serde_json::Value {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let status = self.status().await;
+            if !status["suggestion"].is_null() {
+                return status["suggestion"].clone();
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "no suggestion appeared: {status}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// Whether `machine_id` is listed as connected right now.
+    async fn is_online(&self, machine_id: &str) -> bool {
+        let (_, machines) = self.json(Method::GET, &api("machines"), None).await;
+        machines["machines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["machine_id"] == machine_id && m["online"] == true)
+    }
+
+    /// Give a spawned hook every chance to run, then read the status.
+    async fn settled_status(&self) -> serde_json::Value {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        self.status().await
     }
 }
 
@@ -452,8 +617,10 @@ async fn opening_after_a_break_offers_one_suggestion_but_not_within_the_break_or
 }
 
 #[tokio::test]
-async fn a_reconnect_offers_only_work_naming_that_computer_and_never_touches_it() {
+async fn a_reconnect_over_the_machine_socket_offers_only_work_naming_that_computer_and_never_touches_it()
+ {
     let h = harness().await;
+    let mut rx = h.state.events.subscribe();
     h.onboarded();
     h.enable(120, 0).await;
     let on_a = h
@@ -466,20 +633,17 @@ async fn a_reconnect_offers_only_work_naming_that_computer_and_never_touches_it(
         .await;
     h.task("notes in chat", &[], 60, ContinuityUpdate::default())
         .await;
+    let addr = h.serve().await;
 
     // A computer no waiting work names connects: nothing is offered.
-    let mut laptop = h.connect_ready(MAC_B, "laptop").await;
-    crate::routes::machine_agents::on_machine_connected(&h.state, MAC_B, Some(CANONICAL_SLUG))
-        .await;
-    assert!(h.status().await["suggestion"].is_null());
+    let mut laptop = SocketDesktop::connect(addr, MAC_B, "laptop").await;
+    assert!(h.settled_status().await["suggestion"].is_null());
 
-    // The computer the task names reconnects: exactly that task is offered.
-    let mut studio = h.connect_ready(MAC_A, "studio").await;
-    crate::routes::machine_agents::on_machine_connected(&h.state, MAC_A, Some(CANONICAL_SLUG))
-        .await;
-    let status = h.status().await;
-    let suggestion = &status["suggestion"];
-    assert_eq!(suggestion["record_id"], on_a.id, "{status}");
+    // The computer the task names connects over its socket: exactly that
+    // task is offered, and the suggestion says which computer came back.
+    let mut studio = SocketDesktop::connect(addr, MAC_A, "studio").await;
+    let suggestion = h.wait_for_suggestion().await;
+    assert_eq!(suggestion["record_id"], on_a.id, "{suggestion}");
     assert_eq!(suggestion["trigger"]["kind"], "machine_connected");
     assert_eq!(suggestion["trigger"]["machine_id"], MAC_A);
     assert_eq!(
@@ -488,9 +652,50 @@ async fn a_reconnect_offers_only_work_naming_that_computer_and_never_touches_it(
     );
     assert_eq!(suggestion["destination_id"], MAC_A);
     assert_eq!(suggestion["card"]["origin"]["online"], true);
+    assert_eq!(resume_events(&mut rx), vec![Some(on_a.id.clone())]);
+    studio.assert_untouched("a reconnect").await;
+    laptop.assert_untouched("a reconnect").await;
 
-    studio.assert_untouched("a reconnect");
-    laptop.assert_untouched("a reconnect");
+    // The browser's own check-in (machine-hello on every page load) is not a
+    // reconnect: with the desktop connected the whole time it offers nothing.
+    let (status, _) = h.send(Method::POST, &api("resume/refuse"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = h
+        .send(
+            Method::POST,
+            &api("machine-hello"),
+            Some(serde_json::json!({ "machine_id": MAC_A })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        h.settled_status().await["suggestion"].is_null(),
+        "opening the companion in a browser is not a reconnect"
+    );
+    assert_eq!(resume_events(&mut rx), vec![None]);
+
+    // The desktop drops off and comes back: that is a reconnect, and the
+    // ritual speaks up again (the cooldown is off here).
+    studio.disconnect().await;
+    let gone = tokio::time::Instant::now() + Duration::from_secs(5);
+    while h.is_online(MAC_A).await {
+        assert!(
+            tokio::time::Instant::now() < gone,
+            "studio never went offline"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let mut studio = SocketDesktop::connect(addr, MAC_A, "studio").await;
+    let again = h.wait_for_suggestion().await;
+    assert_eq!(again["record_id"], on_a.id);
+    assert_ne!(
+        again["id"], suggestion["id"],
+        "a new suggestion for the new connection"
+    );
+    assert_eq!(again["trigger"]["kind"], "machine_connected");
+    assert_eq!(resume_events(&mut rx), vec![Some(on_a.id.clone())]);
+    studio.assert_untouched("a second reconnect").await;
+    laptop.assert_untouched("a second reconnect").await;
 }
 
 #[tokio::test]
@@ -654,7 +859,6 @@ async fn refusal_snooze_and_dismiss_are_enforced_across_restarts() {
 async fn quiet_hours_hold_the_spontaneous_triggers_but_not_the_manual_one() {
     let h = harness().await;
     h.onboarded();
-    h.connect_ready(MAC_A, "studio").await;
     h.enable(30, 0).await;
     let task = h
         .task(
@@ -681,9 +885,10 @@ async fn quiet_hours_hold_the_spontaneous_triggers_but_not_the_manual_one() {
 
     h.last_opened(3_600).await;
     assert_eq!(held(&h.opened().await), "quiet_hours");
-    crate::routes::machine_agents::on_machine_connected(&h.state, MAC_A, Some(CANONICAL_SLUG))
-        .await;
-    assert!(h.status().await["suggestion"].is_null());
+    let addr = h.serve().await;
+    let mut studio = SocketDesktop::connect(addr, MAC_A, "studio").await;
+    assert!(h.settled_status().await["suggestion"].is_null());
+    studio.assert_untouched("quiet hours").await;
 
     let (status, body) = h.resume_now().await;
     assert_eq!(status, StatusCode::OK);
