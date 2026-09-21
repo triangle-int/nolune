@@ -13,16 +13,19 @@ use super::federation_tests::{
 };
 use crate::{
     app::state::AppState,
+    domain::federation::FederationError,
     domain::federation::{FEDERATION_VERSION, TransportEnvelope},
     domain::federation_policy::{
-        Access, AuditReceipt, DecisionReason, DisclosureClass, IntentClass, PolicyRule,
-        RateLimitPolicy, ReceiptSide, Verdict,
+        Access, AuditReceipt, Decision, DecisionReason, DisclosureClass, IntentClass,
+        ONCE_APPROVAL_TTL_SECS, PENDING_APPROVAL_TTL_SECS, PolicyRule, RateLimitPolicy,
+        ReceiptSide, Verdict,
     },
     services::federation::{
         gate::FederationGate, identity, pairing::FederationState, peers::Clock,
     },
 };
 use axum::http::{Method, StatusCode};
+use serde_json::json;
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -427,4 +430,474 @@ async fn policy_refusals_are_typed_over_the_wire_and_never_echo_the_body() {
 
     // The version stays what the transport speaks.
     assert_eq!(pong.version, FEDERATION_VERSION);
+}
+
+/// Judges a content intent from `peer` at `server` through the gate, as
+/// the dispatch of #110 will once the wire carries one.
+fn admit(
+    server: &Server,
+    peer: &str,
+    intent: &str,
+    disclosure: &str,
+) -> Result<Decision, FederationError> {
+    let me = server.companion_id();
+    let peer = server
+        .state
+        .federation
+        .overview()
+        .unwrap()
+        .peers
+        .into_iter()
+        .find(|p| p.companion_id == peer)
+        .expect("a peer on record");
+    server
+        .state
+        .federation_gate
+        .admit(&me, &peer, intent, disclosure)
+}
+
+fn refused(result: Result<Decision, FederationError>) -> Decision {
+    match result {
+        Err(FederationError::PolicyRefused(decision)) => decision,
+        other => panic!("expected a policy refusal, got {other:?}"),
+    }
+}
+
+async fn approvals(server: &Server) -> Vec<serde_json::Value> {
+    let (status, body) = server
+        .owner(Method::GET, "/api/federation/approvals", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    body["approvals"].as_array().expect("a list").clone()
+}
+
+#[tokio::test]
+async fn owners_see_pending_approvals_and_decide_them_over_the_api() {
+    let now = Arc::new(AtomicU64::new(T0));
+    let (a, b, _wire) = paired(&now).await;
+    let (a_id, b_id) = (a.companion_id(), b.companion_id());
+    assert!(approvals(&a).await.is_empty());
+
+    // B's companion asks A's owner to deliver a message: queued, and the
+    // peer is told only that approval is required.
+    let asked = refused(admit(&a, &b_id, "message", "none"));
+    assert_eq!(asked, Decision::ask(DecisionReason::Default));
+    let listed = approvals(&a).await;
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    let entry = &listed[0];
+    assert_eq!(entry["requester"], b_id);
+    assert_eq!(entry["intent"], "message");
+    assert_eq!(entry["disclosure"], "none");
+    assert_eq!(entry["status"], "pending");
+    assert_eq!(entry["requested_at"], T0);
+    assert_eq!(entry["expires_at"], T0 + PENDING_APPROVAL_TTL_SECS);
+    assert_eq!(entry["version"], 1);
+    let id = entry["id"].as_str().unwrap().to_owned();
+    assert_eq!(id.len(), 16);
+    assert!(entry.get("body").is_none() && entry.get("text").is_none());
+
+    // The owner routes need this owner.
+    let (status, _) = a
+        .anonymous(Method::GET, "/api/federation/approvals", None, &[])
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = a
+        .anonymous(
+            Method::GET,
+            "/api/federation/approvals",
+            None,
+            &[("authorization", &format!("Bearer {TOKEN_B}"))],
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = a
+        .anonymous(
+            Method::POST,
+            &format!("/api/federation/approvals/{id}/approve"),
+            Some(br#"{"scope":"once"}"#.to_vec()),
+            &[],
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Bodies are strict; unknown ids are 404; a past deadline is refused.
+    for (body, code) in [
+        (None, "invalid_body"),
+        (Some(json!({"scope": "always"})), "invalid_body"),
+        (
+            Some(json!({"scope": "once", "intent": "message"})),
+            "invalid_body",
+        ),
+        (
+            Some(json!({"scope": "until", "expires_at": T0})),
+            "malformed",
+        ),
+    ] {
+        let (status, answer) = a
+            .owner(
+                Method::POST,
+                &format!("/api/federation/approvals/{id}/approve"),
+                body.clone(),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body:?}: {answer}");
+        assert_eq!(answer["error"], code, "{body:?}");
+    }
+    let (status, answer) = a
+        .owner(
+            Method::POST,
+            "/api/federation/approvals/0123456789abcdef/approve",
+            Some(json!({"scope": "once"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+    assert_eq!(answer["error"], "unknown_approval");
+    assert_eq!(
+        approvals(&a).await[0]["status"],
+        "pending",
+        "nothing changed"
+    );
+
+    // Approve once: the next matching intent is allowed, the one after asks.
+    now.store(T0 + 60, Ordering::SeqCst);
+    let (status, answer) = a
+        .owner(
+            Method::POST,
+            &format!("/api/federation/approvals/{id}/approve"),
+            Some(json!({"scope": "once"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["approval"]["status"], "approved");
+    assert_eq!(answer["approval"]["id"], id);
+    assert_eq!(answer["approval"]["decided_at"], T0 + 60);
+    assert_eq!(
+        answer["approval"]["expires_at"],
+        T0 + 60 + ONCE_APPROVAL_TTL_SECS
+    );
+    assert!(answer.get("rule").is_none(), "{answer}");
+    assert_eq!(
+        admit(&a, &b_id, "message", "none").unwrap(),
+        Decision::allow(DecisionReason::OwnerApproved)
+    );
+    assert!(approvals(&a).await.is_empty());
+    assert_eq!(
+        refused(admit(&a, &b_id, "message", "none")),
+        Decision::ask(DecisionReason::Default)
+    );
+    let id = approvals(&a).await[0]["id"].as_str().unwrap().to_owned();
+
+    // Approve until a deadline: a rule, visible in the policy listing.
+    let (status, answer) = a
+        .owner(
+            Method::POST,
+            &format!("/api/federation/approvals/{id}/approve"),
+            Some(json!({"scope": "until", "expires_at": T0 + 3600})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert!(answer.get("approval").is_none(), "{answer}");
+    assert_eq!(answer["rule"]["access"], "allow");
+    assert_eq!(answer["rule"]["expires_at"], T0 + 3600);
+    assert_eq!(answer["rule"]["granted_at"], T0 + 60);
+    assert!(approvals(&a).await.is_empty());
+    let (status, policy) = a.owner(Method::GET, "/api/federation/policy", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        policy["document"]["peers"][&b_id]["rules"][0]["intent"],
+        "message"
+    );
+    assert_eq!(
+        policy["document"]["peers"][&b_id]["rules"][0]["access"],
+        "allow"
+    );
+    assert_eq!(
+        admit(&a, &b_id, "message", "none").unwrap(),
+        Decision::allow(DecisionReason::Rule)
+    );
+
+    // Rules written directly, replaced, and revoked one capability at a time.
+    let (status, answer) = a
+        .owner(
+            Method::POST,
+            &format!("/api/federation/peers/{b_id}/rules"),
+            Some(json!({"intent": "availability", "disclosure": "availability", "access": "deny"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let rules = answer["policy"]["rules"].as_array().unwrap();
+    assert_eq!(rules.len(), 2, "{answer}");
+    assert_eq!(
+        refused(admit(&a, &b_id, "availability", "availability")),
+        Decision::deny(DecisionReason::Rule)
+    );
+    for (body, status, code) in [
+        (
+            json!({"intent": "shell", "disclosure": "none", "access": "allow"}),
+            StatusCode::BAD_REQUEST,
+            "invalid_body",
+        ),
+        (
+            json!({"intent": "message", "disclosure": "none", "access": "allow", "uses": 1}),
+            StatusCode::BAD_REQUEST,
+            "invalid_body",
+        ),
+        (
+            json!({"intent": "ping", "disclosure": "personal", "access": "allow"}),
+            StatusCode::BAD_REQUEST,
+            "malformed",
+        ),
+        (
+            json!({"intent": "message", "disclosure": "none", "access": "allow", "expires_at": T0}),
+            StatusCode::BAD_REQUEST,
+            "malformed",
+        ),
+    ] {
+        let (got, answer) = a
+            .owner(
+                Method::POST,
+                &format!("/api/federation/peers/{b_id}/rules"),
+                Some(body.clone()),
+            )
+            .await;
+        assert_eq!(got, status, "{body}: {answer}");
+        assert_eq!(answer["error"], code, "{body}");
+    }
+    let (status, answer) = a
+        .owner(
+            Method::POST,
+            "/api/federation/peers/nobody/rules",
+            Some(json!({"intent": "message", "disclosure": "none", "access": "allow"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+    assert_eq!(answer["error"], "unknown_peer");
+    let availability = json!({"intent": "availability", "disclosure": "availability"});
+    let (status, answer) = a
+        .owner(
+            Method::POST,
+            &format!("/api/federation/peers/{b_id}/rules/revoke"),
+            Some(availability.clone()),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["policy"]["rules"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        refused(admit(&a, &b_id, "availability", "availability")),
+        Decision::ask(DecisionReason::Default)
+    );
+    // The pair travels in the body, matched against the closed classes;
+    // the path names the companion and nothing else.
+    for (uri, body, status, code) in [
+        (
+            format!("/api/federation/peers/{b_id}/rules/revoke"),
+            Some(availability.clone()),
+            StatusCode::NOT_FOUND,
+            "unknown_rule",
+        ),
+        (
+            format!("/api/federation/peers/{b_id}/rules/revoke"),
+            Some(json!({"intent": "shell", "disclosure": "none"})),
+            StatusCode::BAD_REQUEST,
+            "invalid_body",
+        ),
+        (
+            format!("/api/federation/peers/{b_id}/rules/revoke"),
+            None,
+            StatusCode::BAD_REQUEST,
+            "invalid_body",
+        ),
+        (
+            "/api/federation/peers/nobody/rules/revoke".to_owned(),
+            Some(json!({"intent": "message", "disclosure": "none"})),
+            StatusCode::NOT_FOUND,
+            "unknown_peer",
+        ),
+    ] {
+        let (got, answer) = a.owner(Method::POST, &uri, body.clone()).await;
+        assert_eq!(got, status, "{uri} {body:?}: {answer}");
+        assert_eq!(answer["error"], code, "{uri} {body:?}");
+    }
+    let (status, _) = a
+        .owner(
+            Method::POST,
+            &format!("/api/federation/peers/{b_id}/rules/revoke"),
+            Some(json!({"intent": "message", "disclosure": "none"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        refused(admit(&a, &b_id, "message", "none")),
+        Decision::ask(DecisionReason::Default)
+    );
+
+    // Deny once, then withdraw the denial.
+    let id = approvals(&a).await[0]["id"].as_str().unwrap().to_owned();
+    let (status, answer) = a
+        .owner(
+            Method::POST,
+            &format!("/api/federation/approvals/{id}/deny"),
+            Some(json!({"scope": "once"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["approval"]["status"], "denied");
+    // The peer is told what it was told while the request was open; the
+    // denial is on the owner's side of the log only.
+    assert_eq!(
+        refused(admit(&a, &b_id, "message", "none")),
+        Decision::ask(DecisionReason::Default)
+    );
+    let latest = &receipts(&a).await[0];
+    assert_eq!(latest.side, ReceiptSide::Answering);
+    assert_eq!(latest.decision, Decision::deny(DecisionReason::OwnerDenied));
+    let (status, _) = a
+        .owner(
+            Method::DELETE,
+            &format!("/api/federation/approvals/{id}"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, answer) = a
+        .owner(
+            Method::DELETE,
+            &format!("/api/federation/approvals/{id}"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+    assert_eq!(answer["error"], "unknown_approval");
+    assert_eq!(
+        refused(admit(&a, &b_id, "message", "none")),
+        Decision::ask(DecisionReason::Default)
+    );
+
+    // Every owner decision is a receipt of its own, naming who and what
+    // and never a text.
+    let all = receipts(&a).await;
+    let owner: Vec<&AuditReceipt> = all
+        .iter()
+        .filter(|r| r.side == ReceiptSide::Owner)
+        .collect();
+    assert!(owner.len() >= 7, "{owner:?}");
+    for reason in [
+        DecisionReason::OwnerApproved,
+        DecisionReason::OwnerDenied,
+        DecisionReason::OwnerRevoked,
+        DecisionReason::Rule,
+    ] {
+        assert!(
+            owner.iter().any(|r| r.decision.reason == reason),
+            "no owner receipt with {reason:?}: {owner:?}"
+        );
+    }
+    for receipt in &owner {
+        assert_eq!(receipt.requester, b_id);
+        assert_eq!(receipt.responder, a_id);
+        assert!(receipt.summary.starts_with("owner"), "{}", receipt.summary);
+    }
+    let (status, body) = a.owner(Method::GET, "/api/federation/receipts", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.to_string().contains("\"owner\""));
+
+    // Revoking the peer over the route drops what it asked for and what it
+    // had, and the revocation is recorded.
+    now.store(T0 + 120, Ordering::SeqCst);
+    let (status, answer) = a
+        .owner(
+            Method::POST,
+            &format!("/api/federation/peers/{b_id}/rules"),
+            Some(json!({"intent": "message", "disclosure": "none", "access": "allow"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let (status, answer) = a
+        .owner(
+            Method::POST,
+            &format!("/api/federation/peers/{b_id}/revoke"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert!(
+        approvals(&a).await.is_empty(),
+        "a revoked peer's pending approvals are dropped"
+    );
+    let (_, policy) = a.owner(Method::GET, "/api/federation/policy", None).await;
+    assert!(
+        policy["document"]["peers"].get(&b_id).is_none(),
+        "a revoked peer keeps no rules: {policy}"
+    );
+    let latest = &receipts(&a).await[0];
+    assert_eq!(latest.side, ReceiptSide::Owner);
+    assert_eq!(latest.intent, "revocation");
+    assert_eq!(latest.requester, b_id);
+    assert_eq!(latest.decision.reason, DecisionReason::PeerRevoked);
+    assert_eq!(latest.at, T0 + 120);
+    let (status, answer) = a
+        .owner(
+            Method::POST,
+            &format!("/api/federation/peers/{b_id}/rules"),
+            Some(json!({"intent": "message", "disclosure": "none", "access": "allow"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{answer}");
+    assert_eq!(answer["error"], "peer_revoked");
+
+    let dir = identity::federation_dir(a.workspace.path());
+    assert!(dir.join("approvals.json").is_file());
+    #[cfg(unix)]
+    assert_eq!(mode(&dir.join("approvals.json")), 0o600);
+    let text = std::fs::read_to_string(dir.join("approvals.json")).unwrap();
+    assert!(!text.contains(TOKEN_A) && !text.contains(TOKEN_B));
+}
+
+#[tokio::test]
+async fn a_peers_own_revocation_drops_what_it_asked_for() {
+    let now = Arc::new(AtomicU64::new(T0));
+    let (a, b, _wire) = paired(&now).await;
+    let (a_id, b_id) = (a.companion_id(), b.companion_id());
+    refused(admit(&a, &b_id, "message", "none"));
+    a.state
+        .federation_gate
+        .set_rule(
+            &a.state.federation,
+            &b_id,
+            crate::domain::federation_policy::RuleRequest {
+                intent: IntentClass::Availability,
+                disclosure: DisclosureClass::Availability,
+                access: Access::Allow,
+                expires_at: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(approvals(&a).await.len(), 1);
+
+    // B's owner revokes A; the notice reaches A over the public route.
+    let (status, answer) = b
+        .owner(
+            Method::POST,
+            &format!("/api/federation/peers/{a_id}/revoke"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["notified"], true);
+    assert!(
+        approvals(&a).await.is_empty(),
+        "the peer's request went with it"
+    );
+    let (_, policy) = a.owner(Method::GET, "/api/federation/policy", None).await;
+    assert!(policy["document"]["peers"].get(&b_id).is_none(), "{policy}");
+    let latest = &receipts(&a).await[0];
+    assert_eq!(latest.side, ReceiptSide::Answering);
+    assert_eq!(latest.intent, "revocation");
+    assert_eq!(latest.requester, b_id);
+    assert_eq!(latest.decision, Decision::deny(DecisionReason::PeerRevoked));
+    assert_eq!(
+        refused(admit(&a, &b_id, "message", "none")),
+        Decision::deny(DecisionReason::PeerRevoked)
+    );
+    assert!(approvals(&a).await.is_empty());
 }

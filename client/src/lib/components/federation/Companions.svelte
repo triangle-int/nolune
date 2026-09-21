@@ -6,15 +6,28 @@
 	// body; Confirm and Revoke act on a row; Rotate asks once, inline. The
 	// listing is refreshed after every action and polled while shown, since
 	// the other owner's confirmation lands on their server, not here.
+	// Requests that asked the owner (#109) sit above the rows with Allow and
+	// Deny within one bounded scope, and each paired row folds out what the
+	// peer may do, one rule per pair, from GET /api/federation/policy and
+	// GET /api/federation/approvals.
 	import {
 		acceptFederationInvite,
+		approveFederationRequest,
 		cancelFederationInvite,
 		confirmFederationPeer,
 		createFederationInvite,
+		denyFederationRequest,
 		fetchFederation,
+		fetchFederationApprovals,
+		fetchFederationPolicy,
 		revokeFederationPeer,
+		revokeFederationRule,
 		rotateFederationIdentity,
+		setFederationRule,
+		withdrawFederationApproval,
+		type FederationApproval,
 		type FederationOverview,
+		type FederationPolicyView,
 	} from "$lib/api/client.js";
 	import {
 		acceptErrorText,
@@ -26,11 +39,17 @@
 		shortId,
 		type InviteHandoff,
 	} from "$lib/federation/companions.js";
+	import { capabilityRows, decidedApprovals, pendingApprovals, scopeBody, type CapabilityRow } from "$lib/federation/policy.js";
 	import CompanionRow from "./CompanionRow.svelte";
+	import PeerCapabilities from "./PeerCapabilities.svelte";
+	import PendingApprovals from "./PendingApprovals.svelte";
 
 	const POLL_SECS = 30;
 
 	let overview = $state<FederationOverview | null>(null);
+	let policy = $state<FederationPolicyView | null>(null);
+	let approvals = $state<FederationApproval[]>([]);
+	let policyError = $state("");
 	let loading = $state(true);
 	let loadError = $state("");
 	let now = $state(nowSeconds());
@@ -59,6 +78,11 @@
 	}
 
 	const view = $derived(overview ? overviewView(overview, now) : null);
+	const pending = $derived(pendingApprovals(approvals, now));
+	const decided = $derived(decidedApprovals(approvals, now));
+	function rowsFor(peerId: string): CapabilityRow[] {
+		return policy ? capabilityRows(policy.defaults, policy.document.peers[peerId], now) : [];
+	}
 	const handoffLeft = $derived(handoff ? inviteCountdown(handoff.expiresAt, now) : "");
 	const acceptLooksLikeUrl = $derived(looksLikeUrl(acceptDraft));
 
@@ -75,6 +99,44 @@
 		} finally {
 			loading = false;
 		}
+		await loadPolicy();
+	}
+
+	/** The rules and the queue, beside the listing; a failure here keeps the rows. */
+	async function loadPolicy() {
+		try {
+			const [nextPolicy, queue] = await Promise.all([fetchFederationPolicy(), fetchFederationApprovals()]);
+			policy = nextPolicy;
+			approvals = queue.approvals ?? [];
+			policyError = "";
+		} catch {
+			policyError = "Could not load what companions may do; the rows show the pairing only.";
+		}
+	}
+
+	async function approveRequest(id: string, scope: string) {
+		await approveFederationRequest(id, scopeBody(scope, nowSeconds()));
+		await loadPolicy();
+	}
+
+	async function denyRequest(id: string, scope: string) {
+		await denyFederationRequest(id, scopeBody(scope, nowSeconds()));
+		await loadPolicy();
+	}
+
+	async function withdrawRequest(id: string) {
+		await withdrawFederationApproval(id);
+		await loadPolicy();
+	}
+
+	async function setRule(peerId: string, row: CapabilityRow, access: "allow" | "ask" | "deny") {
+		await setFederationRule(peerId, { intent: row.intent, disclosure: row.disclosure, access });
+		await loadPolicy();
+	}
+
+	async function revokeRule(peerId: string, row: CapabilityRow) {
+		await revokeFederationRule(peerId, row.intent, row.disclosure);
+		await loadPolicy();
 	}
 
 	async function invite() {
@@ -196,12 +258,22 @@
 {:else}
 	<p class="setting-hint">This companion is <code class="companions-id" title={view.companionId}>{shortId(view.companionId)}</code>{#if view.rotations > 0}{" "}(its key was rotated {view.rotations === 1 ? "once" : `${view.rotations} times`}){/if}. Peers trust that id and its key, never this address or profile.</p>
 
+	{#if pending.length > 0}
+		<p class="setting-hint">A paired companion may only check that it can reach this one. Anything else asks you first, here; allow it once, for a while, or for that kind of request, or deny it. Nothing it sent is shown or kept.</p>
+	{/if}
+	<PendingApprovals {pending} {decided} onapprove={approveRequest} ondeny={denyRequest} onwithdraw={withdrawRequest} />
+	{#if policyError}<p class="key-error" role="alert">{policyError}</p>{/if}
+
 	{#if view.peers.length === 0}
 		<p class="setting-hint">No companions are paired yet. Invite one, or accept an invite another owner gave you.</p>
 	{:else}
 		<ul class="companions-list" aria-label="Paired companions">
 			{#each view.peers as peer (peer.id)}
-				<CompanionRow {peer} onconfirm={peer.canConfirm ? () => confirmPeer(peer.id) : undefined} onrevoke={peer.canRevoke ? () => revokePeer(peer.id) : undefined} />
+				<CompanionRow {peer} onconfirm={peer.canConfirm ? () => confirmPeer(peer.id) : undefined} onrevoke={peer.canRevoke ? () => revokePeer(peer.id) : undefined}>
+					{#if peer.state === "paired" && policy}
+						<PeerCapabilities peerShortId={peer.shortId} rows={rowsFor(peer.id)} onset={(row, access) => setRule(peer.id, row, access)} onrevoke={(row) => revokeRule(peer.id, row)} />
+					{/if}
+				</CompanionRow>
 			{/each}
 		</ul>
 	{/if}

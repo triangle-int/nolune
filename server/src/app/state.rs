@@ -70,6 +70,10 @@ pub struct AppState {
     /// The server-local computer-use target (#16): idle until the gateway calls `start`,
     /// so building a state never spawns a driver.
     pub cua: crate::services::cua::runtime::CuaRuntime,
+    /// The codex login and its app-server child (#27): found and started on first use,
+    /// so building a state never runs the binary. It is the shared runtime's, so the
+    /// login routes and the provider's turns speak to one child.
+    pub codex_auth: crate::services::llm::codex::auth::Auth,
 }
 
 // No hardcoded MCP servers — users add them via Settings UI or config.toml.
@@ -151,6 +155,9 @@ impl AppState {
             federation: Arc::new(federation),
             federation_gate: Arc::new(federation_gate),
             cua,
+            codex_auth: crate::services::llm::codex::Runtime::shared()
+                .auth()
+                .clone(),
         }
     }
 
@@ -254,6 +261,20 @@ mod tests {
         assert!(
             !tmp.path().join(".nolune").exists(),
             "nothing may fall back to a home-relative root"
+        );
+    }
+
+    /// The login routes and the provider's turns must share one codex
+    /// app-server child: the state's login handle is the shared runtime's.
+    #[tokio::test]
+    async fn the_codex_login_is_the_shared_runtimes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = AppState::new_in(Config::default(), tmp.path().join("root")).await;
+        assert!(
+            state
+                .codex_auth
+                .is_same(crate::services::llm::codex::Runtime::shared().auth()),
+            "a login and a turn would speak to two children"
         );
     }
 }

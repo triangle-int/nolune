@@ -114,10 +114,17 @@ import McpAppViewer from "./McpAppViewer.svelte";
 	}
 
 	// ── Sync state to shared 3D scene ──
-	// Keep mood/thinking/voice synced to scene store
+	// Keep mood/voice synced to scene store. What the companion is doing
+	// (thinking, working, blocked…) reaches the scene through the reducer,
+	// fed by the root layout from the websocket; this view adds the persisted
+	// `agent_running` of each snapshot it loads (initial load, reconnect,
+	// resync), so a run the socket missed still shows and one that ended
+	// while away is over without being claimed. The `chat_snapshot` the server
+	// broadcasts is not loaded state: it precedes `agent_stopped` in the stop
+	// sequence, which the layout already feeds, so it is not fed here.
 	$effect(() => { scene.setMood(mood); });
-	$effect(() => { scene.setThinking(sending || agentRunning); });
 	$effect(() => { scene.setVoiceAmplitude(voice.amplitude); });
+	$effect(() => { if (companionName) scene.setCompanionName(companionName); });
 	// Sync presentation mode to scene (camera targets blob)
 	$effect(() => { scene.presenting = presentation.active; });
 
@@ -141,6 +148,7 @@ import McpAppViewer from "./McpAppViewer.svelte";
 					messages = res.messages.filter((m) => !isToolActivity(m));
 					stream = messagesToStream(res.messages);
 					agentRunning = res.agent_running;
+					scene.companionEvent({ type: "snapshot", chatId, running: res.agent_running });
 					if (agentRunning) pushActivity("state", "thinking...");
 					scrollToBottomIfNear();
 				})
@@ -383,6 +391,7 @@ import McpAppViewer from "./McpAppViewer.svelte";
 			messages = res.messages.filter((m) => !isToolActivity(m));
 			stream = messagesToStream(res.messages);
 			agentRunning = res.agent_running;
+			scene.companionEvent({ type: "snapshot", chatId: currentChat, running: res.agent_running });
 			if (agentRunning) pushActivity("state", "thinking...");
 			scrollToBottom();
 			void loadReceipts(currentSlug, currentChat);
@@ -430,6 +439,8 @@ import McpAppViewer from "./McpAppViewer.svelte";
 				fetchMessages(currentSlug, currentChat)
 					.then((res) => {
 						reconcileSnapshot(res.messages, res.agent_running);
+						// Loaded state: the run may have started or ended while events were missed.
+						scene.companionEvent({ type: "snapshot", chatId: currentChat, running: res.agent_running });
 					})
 					.catch(() => {});
 				return;
@@ -649,7 +660,11 @@ import McpAppViewer from "./McpAppViewer.svelte";
 	}
 
 	async function handleStop() {
-		await stopAgent(slug, activeChatId);
+		const stoppedChat = activeChatId;
+		await stopAgent(slug, stoppedChat);
+		// The server stops a cancelled turn the way it stops a finished one, so
+		// the reducer hears it from here: over, nothing finished.
+		scene.companionEvent({ type: "run_cancelled", chatId: stoppedChat });
 	}
 
 	async function handleClear() {

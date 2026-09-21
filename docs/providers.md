@@ -42,10 +42,9 @@ keeps its output open, fails the requests in flight with a transport error
 and is started again on the next request after a bounded exponential
 backoff; a request the app-server sends while nobody is listening for it is
 refused rather than left waiting; shutting the gateway down kills the
-child. Nothing in
-codex's own tool surface (shell, file edits, MCP servers) is exposed: only
-tools from Nolune's capability and approval layer will run, once the
-provider adapter lands.
+child. Nothing in codex's own tool surface (shell, file edits, MCP
+servers) is exposed: only tools from Nolune's capability and approval
+layer run, as the provider section below says.
 
 ### The provider
 
@@ -110,5 +109,10 @@ authentication, upstream status). The Codex model cannot be sent images or
 documents through Nolune yet (its capabilities say so), and codex keeps its
 own conversation history, so only the new message goes out per turn.
 
-The login routes (status, device-code login, logout) and the Settings →
-Connections tile follow in the remaining slices of #27.
+The login routes, `GET /api/config/codex/status`,
+`POST /api/config/codex/login` (the managed browser flow, or a device code
+for a headless server) and `POST /api/config/codex/logout`, are described
+in [settings.md](settings.md); they ask the same app-server child the
+provider's turns run on, over the same protocol, and hand out an account's
+label and what a person needs to finish a login, never a token. The
+Settings → Connections tile follows in the remaining slice of #27.

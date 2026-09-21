@@ -7,20 +7,22 @@
 //! that it is exactly the release the protocol fixtures were recorded
 //! against, the frames on the wire, and the supervised process with its
 //! handshake, request correlation, streamed events, crash restart and
-//! shutdown. [`adapter`] is the provider on top of it: one thread per
-//! conversation, turns streamed into the provider-neutral events, Nolune's
-//! tools bridged through `dynamicTools`; [`runtime`] holds the one process
-//! and the thread bookkeeping for the whole gateway. The login routes and
-//! the settings tile build on the runtime in the following slices.
+//! shutdown. [`auth`] holds the login state and the one process; [`runtime`]
+//! adds the adapter's thread bookkeeping on top of it, and [`adapter`] is
+//! the provider: one thread per conversation, turns streamed into the
+//! provider-neutral events, Nolune's tools bridged through `dynamicTools`.
+//! The login routes read the same [`auth::Auth`] the runtime's turns run
+//! on, so a login and a turn speak to one child.
 
 pub mod adapter;
+pub mod auth;
 pub mod discovery;
 pub mod process;
 pub mod protocol;
 pub mod runtime;
 
 #[cfg(test)]
-pub(super) mod fake;
+pub(crate) mod fake;
 
 pub use adapter::{CAPABILITIES, CodexAdapter};
 #[allow(unused_imports)]

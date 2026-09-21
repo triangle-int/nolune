@@ -22,6 +22,12 @@ class NoContinuousScreenRecordingTest(unittest.TestCase):
                 "start_recording",
                 "stop_recording",
             ),
+            "desktop/src-tauri/src/cua_runtime.rs": (
+                "ScreenFrame",
+                '"screen_frame"',
+                "start_recording",
+                "stop_recording",
+            ),
             "desktop/src-tauri/src/lib.rs": ("screen_recorder",),
             "server/src/services/machine_registry.rs": (
                 "ScreenFrame",
@@ -70,8 +76,16 @@ class NoContinuousScreenRecordingTest(unittest.TestCase):
 
     def test_explicit_computer_use_and_remote_tools_remain(self) -> None:
         desktop_bridge = (ROOT / "desktop/src-tauri/src/computer_use_bridge.rs").read_text()
+        desktop_cua = (ROOT / "desktop/src-tauri/src/cua_runtime.rs").read_text()
         server_tools = (ROOT / "server/src/services/tools/mod.rs").read_text()
         self.assertIn('"screenshot" =>', desktop_bridge)
+        # The desktop's Cua driver (#17) is the driver's one-shot MCP surface:
+        # the only subcommand it ever runs is `mcp`, and every capture is a
+        # window snapshot the server asked for by name.
+        self.assertIn('.arg("mcp")', desktop_cua)
+        for subcommand in ('"serve"', '"record"', '"stream"', '"watch"'):
+            self.assertNotIn(f".arg({subcommand})", desktop_cua)
+        self.assertIn("get_window_state", desktop_cua)
         self.assertIn("ComputerUseTool::new", server_tools)
         self.assertIn("RemoteBashTool::new", server_tools)
         self.assertIn("RemoteFilesTool::new", server_tools)

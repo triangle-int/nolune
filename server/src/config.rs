@@ -495,7 +495,7 @@ pub fn default_presets(provider: LlmProvider) -> Vec<ModelPreset> {
                 "openai/gpt-5.4-mini",
             ),
         ],
-        // Codex (#27) names the models the pinned app-server lists; a
+        // Codex (#27) names the models the pinned codex release lists; a
         // ChatGPT login pays for none of them per token.
         LlmProvider::Codex => vec![
             ModelPreset::seeded(
@@ -543,9 +543,9 @@ pub enum LlmProvider {
     /// OpenRouter (requires API key): one key, models from many vendors.
     /// Format: OpenAI Chat Completions at openrouter.ai (#26).
     Openrouter,
-    /// A ChatGPT/Codex login held by the local `codex app-server` (#27):
-    /// no API key, and never the OpenAI API in disguise. Format: the
-    /// app-server's stdio JSONL protocol, under `services/llm/codex/`.
+    /// A ChatGPT/Codex login held by the local `codex` process (#27): no
+    /// API key, and never the OpenAI API in disguise. Format: that
+    /// process's stdio JSONL protocol, under `services/llm/codex/`.
     Codex,
 }
 
@@ -561,7 +561,7 @@ pub enum ProviderAuth {
 /// What the config knows about a provider's authentication (#27). For a
 /// key provider that is whether the key is there; for a login provider the
 /// config only knows the kind, because the login itself (and whether it is
-/// still valid) belongs to the local app-server and is read at runtime.
+/// still valid) belongs to the local codex process and is read at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthState {
@@ -1579,7 +1579,7 @@ custom_token = "retained"
     // ── Codex (#27) ──────────────────────────────────────────────────────
 
     /// Codex is a provider without an API key: it authenticates by a login
-    /// the local app-server holds. The config knows the kind of
+    /// the local codex process holds. The config knows the kind of
     /// authentication each provider uses and never a login's state, so a
     /// Codex slot is complete as far as the config is concerned, and the
     /// OpenAI key is never borrowed for it (the pre-#157 shape).

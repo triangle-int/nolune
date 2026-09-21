@@ -27,6 +27,7 @@ fn api_router(state: &AppState) -> Router<AppState> {
         .merge(routes::chat::router())
         .merge(routes::drops::router())
         .merge(routes::config::router())
+        .merge(routes::codex::router())
         .merge(routes::soul::router())
         .merge(routes::uploads::router())
         .merge(routes::skills::router())

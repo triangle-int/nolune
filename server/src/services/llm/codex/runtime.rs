@@ -1,19 +1,18 @@
 //! The one codex app-server per gateway, and what every Codex turn shares:
-//! the supervised process, started on the first turn and replaced by the
-//! supervisor when it dies; the login state read from it (never the login
-//! itself); and the thread bookkeeping the adapter keeps per conversation.
+//! the login state and the supervised process ([`Auth`], the same handle
+//! the login routes hold, so a login and a turn speak to one child, which
+//! the supervisor replaces when it dies); the login state read from it
+//! (never the login itself); the thread bookkeeping the adapter keeps per
+//! conversation; and the scratch directory one-shot threads run in.
 //!
 //! [`Runtime::shared`] is the process-wide instance every backend built
-//! from config carries. A test builds its own with [`Runtime::for_launch`]
-//! and the fake app-server, so the real binary is never started by a test
-//! that did not ask for it.
+//! from config carries, and whose [`Auth`] the app state holds. A test
+//! builds its own with [`Runtime::for_launch`] and the fake app-server,
+//! so the real binary is never started by a test that did not ask for it.
 
 use std::{
     path::PathBuf,
-    sync::{
-        Arc, Mutex, OnceLock,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Mutex, OnceLock},
 };
 
 use serde_json::{Value, json};
@@ -21,7 +20,7 @@ use serde_json::{Value, json};
 use super::{
     AppServerError,
     adapter::Threads,
-    discovery,
+    auth::Auth,
     process::{AppServer, Launch},
 };
 
@@ -46,29 +45,20 @@ impl AccountState {
     }
 }
 
-/// Where the binary comes from.
-enum Source {
-    /// [`discovery::discover`] from the environment, at first use.
-    Discover,
-    /// A launch handed in, for tests.
-    #[cfg_attr(not(test), allow(dead_code))]
-    Launch(Launch),
-}
-
 struct Inner {
-    source: Source,
-    /// The supervisor once a child was started; a failed discovery leaves
-    /// it empty so the next turn tries again (the user may install codex
-    /// or log in meanwhile).
-    server: tokio::sync::Mutex<Option<AppServer>>,
+    /// The login state and the one app-server child, started on first use;
+    /// a failed discovery is asked again next time (the user may install
+    /// codex or log in meanwhile).
+    auth: Auth,
+    /// Whether `auth` finds the real binary in this process's environment
+    /// (the shared runtime), which a test must never start by accident.
+    discovers: bool,
     /// The adapter's threads and open turns.
     threads: Mutex<Threads>,
     /// An empty directory of this runtime's own, where the threads of
     /// one-shot runs are placed; made on first use, removed with the
     /// runtime.
     scratch: Mutex<Option<tempfile::TempDir>>,
-    /// Set by `close`: nothing starts again.
-    closed: AtomicBool,
 }
 
 /// The shared codex state. Cheap to clone; every clone is the same process.
@@ -82,62 +72,49 @@ impl Runtime {
     pub fn shared() -> Runtime {
         static SHARED: OnceLock<Runtime> = OnceLock::new();
         SHARED
-            .get_or_init(|| Self::with_source(Source::Discover))
+            .get_or_init(|| Self::with_auth(Auth::new(), true))
             .clone()
     }
 
     /// A runtime of its own that starts `launch`: the fake in tests.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn for_launch(launch: Launch) -> Runtime {
-        Self::with_source(Source::Launch(launch))
+        Self::with_auth(Auth::with_launch(launch), false)
     }
 
-    fn with_source(source: Source) -> Runtime {
+    fn with_auth(auth: Auth, discovers: bool) -> Runtime {
         Runtime {
             inner: Arc::new(Inner {
-                source,
-                server: tokio::sync::Mutex::new(None),
+                auth,
+                discovers,
                 threads: Mutex::new(Threads::default()),
                 scratch: Mutex::new(None),
-                closed: AtomicBool::new(false),
             }),
         }
+    }
+
+    /// The login state this runtime's child serves: what the app state
+    /// holds for the login routes, so their status, login and logout ask
+    /// the same child the turns run on.
+    pub fn auth(&self) -> &Auth {
+        &self.inner.auth
     }
 
     /// The supervised app-server, started now if it is not running yet.
     /// Discovery failures come back typed and are retried on the next call.
     pub(crate) async fn app_server(&self) -> Result<AppServer, AppServerError> {
-        if self.inner.closed.load(Ordering::SeqCst) {
-            return Err(AppServerError::Closed);
+        // A test that reaches the shared runtime by accident must never
+        // start the real binary, or spend a login on a turn.
+        if self.inner.discovers && cfg!(test) && std::env::var_os(super::LIVE_ENV).is_none() {
+            return Err(AppServerError::Unusable {
+                path: "codex".into(),
+                reason: format!(
+                    "the shared runtime does not start the real binary under test (set {} for a live test)",
+                    super::LIVE_ENV
+                ),
+            });
         }
-        let mut server = self.inner.server.lock().await;
-        if let Some(server) = server.as_ref() {
-            return Ok(server.clone());
-        }
-        let launch = match &self.inner.source {
-            Source::Launch(launch) => launch.clone(),
-            Source::Discover => {
-                // A test that reaches the shared runtime by accident must
-                // never start the real binary, or spend a login on a turn.
-                if cfg!(test) && std::env::var_os(super::LIVE_ENV).is_none() {
-                    return Err(AppServerError::Unusable {
-                        path: "codex".into(),
-                        reason: format!(
-                            "the shared runtime does not start the real binary under test (set {} for a live test)",
-                            super::LIVE_ENV
-                        ),
-                    });
-                }
-                Launch::new(discovery::discover().await?.path)
-            }
-        };
-        let started = AppServer::start(launch).await?;
-        if self.inner.closed.load(Ordering::SeqCst) {
-            started.close();
-            return Err(AppServerError::Closed);
-        }
-        *server = Some(started.clone());
-        Ok(started)
+        self.inner.auth.app_server().await
     }
 
     /// Who the app-server is logged in as, from `account/read`. Nothing but
@@ -175,17 +152,7 @@ impl Runtime {
     /// closed when the test is done with it.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn close(&self) {
-        // The lock is held only while a child starts; a start that sees the
-        // flag afterwards closes its own child.
-        self.inner.closed.store(true, Ordering::SeqCst);
-        let server = match self.inner.server.try_lock() {
-            Ok(mut server) => server.take(),
-            Err(_) => None,
-        };
-        match server {
-            Some(server) => server.close(),
-            None => log::debug!("[codex] close: nothing running"),
-        }
+        self.inner.auth.close();
         self.inner.threads.lock().unwrap().clear();
     }
 }

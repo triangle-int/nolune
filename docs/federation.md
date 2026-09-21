@@ -71,6 +71,51 @@ that failed consumes a nonce. The public routes verify signatures and
 nothing else: no owner token, cookie, remote address, `Host` header, or
 profile is consulted.
 
+## Intents
+
+What paired companions ask each other is bounded to four structured
+intents (#110): deliver a `message`, answer an `availability` query for a
+window, set a `reminder`, and put a `proposal` to the owner. Every intent
+carries the same header: a `version`, a `correlation_id` the sender chose
+(with the sender's companion id it identifies the request, so a redelivery
+is recognised), the `sender`, the `represented_owner` the sender speaks
+for, the `purpose` in one line, the `disclosure` class it asks for
+(`none`, `availability`, `personal`, or `sensitive`, the classes the
+policy in [companion-storage.md](companion-storage.md) judges by), and an
+`issued_at`/`expires_at` lifetime of at most a week. The typed payload sits
+under `intent` with its `type`.
+
+Decoding fails closed and each fault is reported on its own: a version
+outside the supported range (checked before anything about the shape),
+an unknown intent `type`, an unknown disclosure class, a field no shape
+has at any depth, a missing correlation id, sender, represented owner,
+purpose, disclosure, or lifetime, an expired or future-dated intent past
+a two-minute skew allowance, an inverted or over-long window, and a
+label that is empty, over 120 characters, or carries a control
+character, a line or paragraph separator, or an invisible format
+character (a bidi override, a zero-width character, the byte order
+mark), so it can neither show a second line nor read backwards. Free
+text inside a payload (a message body, a reminder text, a proposal
+description) is peer content: it is bounded, never printed in a log or
+an error, and only ever shown inside a block marked as untrusted data
+from that companion, never as instructions.
+
+The answer is typed too: `accepted` (with what was disclosed, never
+above the class asked for), `denied` (with the policy reason and, for a
+rate limit, how long to wait), or `needs_owner` (the owner has to
+answer; a peer is told why it waits, never when quiet hours end). Either
+side keeps a receipt of the exchange naming who asked whom for what, on
+whose behalf and to what end, the class requested and the class granted,
+and why: the policy reason and the rule that applied, or the owner's own
+approval. A receipt has no field for the payload, and it is only ever
+written for a response that answers its intent (the same correlation id,
+an answer of the intent's class, a class granted no higher than the one
+asked for), so the record can never say more was disclosed than was
+requested. The wire shapes are pinned by the fixtures under
+`server/tests/fixtures/federation/intents/`; the inbound handling,
+delivery, and the companion tools that send intents arrive with the rest
+of #110.
+
 ## Revocation and rotation
 
 `nolune federation revoke <companion id>` or **Revoke** on the row
@@ -100,6 +145,64 @@ but the answer never arrived, the command says so and points at
 `nolune gateway`: the work may have been done, and a rotation must not be
 repeated on the strength of a wrong message.
 
+## Policy, approvals, and audit (#109)
+
+A paired peer companion has no implicit access to anything. Every verified
+envelope is classified into an intent (`ping`, `message`, `availability`,
+`reminder`, `proposal`) and a disclosure class (`none`, `availability`,
+`personal`, `sensitive`: what an answer would reveal about this owner) and
+judged against the owner's policy before anything is dispatched; a kind or
+class the server does not know is denied. Memory and tool access have no
+intent class at all: there is nothing to grant. By default only a `ping`
+at `none` is allowed (pairing is the consent to be reachable); a message, a
+reminder, a proposal, and a query for whether you are free ask the owner,
+and the `sensitive` class is denied until the owner writes a rule. A rule
+is `allow`, `ask`, or `deny` for one intent at one class, optionally until
+a deadline (`expires_at`), and matches exactly. Before the rules, a
+revoked or unpaired peer is denied whatever they say and a peer past its
+rate limit (60 requests a minute unless the owner sets otherwise) is told
+to retry later; after them, inside the owner's quiet hours anything that
+would land in front of the owner is deferred, and the peer is told only
+that, never when the quiet hours end.
+
+When the answer is `ask`, the request lands in the owner's queue and the
+peer is told `approval_required`, the same way on every retry, whether the
+owner has not looked yet or has denied it once: nothing about whether the
+owner has looked, decided, or when, crosses the wire until the intent is
+allowed. Under Settings → Connections → Companions the owner sees "wants
+to send you a message" with when it asked and when it lapses (a day),
+picks one bounded scope, and allows or denies it: **once** (the next
+matching request goes through and uses the approval up; unused, it lapses
+after an hour; a denial once holds until the request would have lapsed,
+without asking again, and shows only in this owner's receipts), **until**
+a deadline (a day, a week), or for that **kind of request** for good (both
+as a rule). Under each paired row, what the peer may do is listed one line
+per intent and class with the rule it is under, and a select writes or
+revokes one rule at a time; the very next request is judged by it.
+Revoking a peer, by this owner or by the peer's own notice, drops every
+rule and pending request it had, under every pairing and id it has had. A
+request belongs to the pairing it was made under: a companion that starts
+over with a fresh invite asks afresh, and whatever its earlier pairing
+asked or was granted admits nothing.
+
+Every decision leaves a human-readable audit receipt on both sides: the
+answering companion records what it was asked and what it decided, the
+requesting companion what it asked and what came back, and the owner's own
+approvals, denials, rule changes, and revocations are recorded too. A
+receipt names the companion ids, the intent and class, the verdict and
+reason, and the time; it never contains what the peer sent. Receipts are
+kept bounded (the newest thousand, two hundred per pairing for the peer's
+traffic and two hundred more for the owner's own decisions about it, so a
+peer's retries never push out the record of what the owner decided, thirty
+days)
+and are listed by `GET /api/federation/receipts`. Peer text, when the
+structured intents carry some, is data and never instructions: it can only
+reach the model inside a delimited block that names it as untrusted
+content from a named companion, and never becomes a tool argument. The
+files (`policy.json`, `approvals.json`, `audit.jsonl`, all `0600` beside
+`peers.json`), the defaults table, and the exact check order are in
+[companion-storage.md](companion-storage.md) "Policy and audit".
+
 ## No implicit trust on a shared host
 
 Profiles on the same host (`nolune gateway run --profile molinka` beside
@@ -128,8 +231,9 @@ the wire alone to keep it that way.
 | `nolune federation revoke <COMPANION_ID>` | Withdraws trust and tells the peer |
 | `nolune federation rotate [--yes] [--json]` | Replaces the signing key and reports which peers were told |
 | `--profile <name>` | Any of the above for that profile's server |
-| Settings → Connections → Companions | The same actions in the browser: rows with Confirm and Revoke, Invite a companion, Accept an invite, Rotate signing key |
+| Settings → Connections → Companions | The same actions in the browser: rows with Confirm and Revoke, Invite a companion, Accept an invite, Rotate signing key; requests waiting for you with Allow and Deny within one scope; what each paired companion may do, one rule per request kind |
 | `POST /api/federation/invites`, `/accept`, `GET /api/federation/peers`, `POST …/peers/{id}/confirm`, `…/revoke`, `/api/federation/rotate` | Owner routes behind the API token or session |
+| `GET /api/federation/policy`, `GET /api/federation/approvals`, `POST …/approvals/{id}/approve`, `…/deny` (`{"scope": "once" \| "until" + "expires_at" \| "class"}`), `DELETE …/approvals/{id}`, `POST …/peers/{id}/rules`, `POST …/peers/{id}/rules/revoke` (`{"intent", "disclosure"}`), `GET /api/federation/receipts` | Owner routes for the policy, the queue, and the audit log (#109) |
 | `POST /federation/v1/pair`, `…/pair/confirm`, `…/pair/revoke`, `…/ping`, `…/rotate` | Peer routes, public, verified by signature only |
 
 The CLI talks to the running server of the selected profile with its API

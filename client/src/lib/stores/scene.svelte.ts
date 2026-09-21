@@ -30,22 +30,23 @@ export interface SceneStore {
 	readonly introPhase: IntroPhase;
 	readonly selectProgress: number;
 	readonly mood: string;
-	readonly thinking: boolean;
 	readonly voiceAmplitude: number;
 	presenting: boolean;
 	recalledMemories: RecalledMemory[];
 	/** What the companion is really doing, derived from runtime events (#86). */
 	readonly companion: CompanionState;
-	/** Accessible sentence for `companion`, e.g. "Nolune is working on studio-mac: opening Finder." */
+	/** Accessible sentence for `companion`, e.g. "Luna is working on studio-mac: opening Finder." */
 	readonly companionStatus: string;
+	/** The companion's name for the status text; the product name until it is known. */
+	readonly companionName: string;
 
 	enterHome(): void;
 	enterOnboarding(slug: string): void;
 	finishOnboarding(): void;
 	enterChat(slug: string): void;
 	setMood(m: string): void;
-	setThinking(v: boolean): void;
 	setVoiceAmplitude(v: number): void;
+	setCompanionName(name: string): void;
 	/** Feed one runtime event through the companion-state reducer. */
 	companionEvent(event: CompanionEvent): void;
 	skipIntro(): void;
@@ -69,13 +70,13 @@ export function createSceneStore(): SceneStore {
 	let introPhase = $state<IntroPhase>("idle");
 	let selectProgress = $state(0);
 	let mood = $state("calm");
-	let thinking = $state(false);
 	let voiceAmplitude = $state(0);
 	let presenting = $state(false);
 	let recalledMemories = $state<RecalledMemory[]>([]);
 	// The reducer returns frozen snapshots, replaced wholesale; no deep proxy needed.
 	let companion = $state.raw<CompanionState>(initialCompanionState());
-	const companionStatus = $derived(companionStatusText(companion));
+	let companionName = $state("");
+	const companionStatus = $derived(companionStatusText(companion, companionName || undefined));
 	let settleTimer: ReturnType<typeof setTimeout> | null = null;
 
 	let selectStartTime = 0;
@@ -133,7 +134,6 @@ export function createSceneStore(): SceneStore {
 		get introPhase() { return introPhase; },
 		get selectProgress() { return selectProgress; },
 		get mood() { return mood; },
-		get thinking() { return thinking; },
 		get voiceAmplitude() { return voiceAmplitude; },
 		get presenting() { return presenting; },
 		set presenting(v) { presenting = v; },
@@ -141,6 +141,7 @@ export function createSceneStore(): SceneStore {
 		set recalledMemories(v) { recalledMemories = v; },
 		get companion() { return companion; },
 		get companionStatus() { return companionStatus; },
+		get companionName() { return companionName; },
 
 		enterHome() {
 			if (mode === "selecting" || mode === "intro") return;
@@ -192,8 +193,8 @@ export function createSceneStore(): SceneStore {
 		},
 
 		setMood(m) { mood = m; },
-		setThinking(v) { thinking = v; },
 		setVoiceAmplitude(v) { voiceAmplitude = v; },
+		setCompanionName(name) { companionName = name; },
 		companionEvent,
 		skipIntro() {
 			mode = "chat";

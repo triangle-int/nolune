@@ -575,6 +575,10 @@ pub enum FederationError {
     /// The owner's federation policy did not allow the intent (#109); the
     /// decision says whether it was denied, needs the owner, or waits.
     PolicyRefused(crate::domain::federation_policy::Decision),
+    /// No pending approval has that id: it was decided, withdrawn, or lapsed.
+    UnknownApproval,
+    /// The peer has no rule for that intent at that disclosure class.
+    UnknownRule,
 }
 
 impl fmt::Display for FederationError {
@@ -665,6 +669,12 @@ impl fmt::Display for FederationError {
                 f.write_str("federation rotation does not fit the peer on record")
             }
             Self::PolicyRefused(decision) => write!(f, "federation policy: {decision}"),
+            Self::UnknownApproval => {
+                f.write_str("federation approval is not pending: decided, withdrawn, or lapsed")
+            }
+            Self::UnknownRule => {
+                f.write_str("federation peer has no rule for that intent and disclosure class")
+            }
         }
     }
 }
@@ -758,6 +768,8 @@ mod tests {
             FederationError::ReplayCapacity,
             FederationError::KeyRetired,
             FederationError::RotationMismatch,
+            FederationError::UnknownApproval,
+            FederationError::UnknownRule,
             FederationError::PolicyRefused(crate::domain::federation_policy::Decision::ask(
                 crate::domain::federation_policy::DecisionReason::Default,
             )),

@@ -1,46 +1,52 @@
 <script lang="ts">
-	import { page } from "$app/stores";
-	import { onMount } from "svelte";
-	import { fetchSkin } from "$lib/api/client.js";
+	/**
+	 * Browser overlay: Little Moon in a corner, showing what the companion is
+	 * really doing (#86). The root layout already feeds every websocket
+	 * event through the companion-state reducer, so this page reads the
+	 * scene store: the same face, motion and status text as the chat. What
+	 * the socket cannot carry, the persisted `agent_running` of the default
+	 * conversation, it loads itself on every connection, as ChatView does.
+	 */
+	import { untrack } from "svelte";
+	import { page } from "$app/state";
+	import { fetchMessages } from "$lib/api/client.js";
+	import { getSceneStore } from "$lib/stores/scene.svelte.js";
+	import { getWebSocket } from "$lib/stores/websocket.svelte.js";
+	import { companionExpression } from "$lib/companion/expressions.js";
+	import MoonExpression from "$lib/components/companion/MoonExpression.svelte";
+	import CompanionStatus from "$lib/components/companion/CompanionStatus.svelte";
 
-	const slug = $derived($page.params.slug!);
+	const slug = $derived(page.params.slug!);
+	const scene = getSceneStore();
+	const ws = getWebSocket();
 
-	import { SKINS } from "$lib/stores/skin.svelte.js";
-
-	let skinId = $state("moon");
-	let thinking = $state(false);
-	const skin = $derived(SKINS.find(s => s.id === skinId) ?? SKINS[0]);
-
-	onMount(() => {
-		let mounted = true;
-		// Fetch skin from server
-		void fetchSkin(slug).then((res) => {
-			if (mounted && res.skin && SKINS.some(s => s.id === res.skin)) skinId = res.skin;
-		}).catch(() => {});
-
-		// Listen for SSE/WebSocket events for thinking state
-		// For now, poll the agent_running status
-		const poll = setInterval(async () => {
-			try {
-				const res = await fetch(`/api/instances/${slug}/chat/default`);
-				if (res.ok) {
-					const data = await res.json();
-					if (mounted) thinking = data.agent_running ?? false;
-				}
-			} catch {}
-		}, 2000);
-
-		return () => {
-			mounted = false;
-			clearInterval(poll);
-		};
+	// Persisted state, read once per connection (mount and every reconnect):
+	// an overlay opened mid-run shows the run before the next live event, and
+	// a run that ended while away is over without being claimed. The socket
+	// sends nothing on connect, and only the conversation endpoint knows.
+	$effect(() => {
+		const connected = ws.connected;
+		const currentSlug = slug;
+		untrack(() => {
+			if (!connected) return;
+			fetchMessages(currentSlug, "default")
+				.then((res) => {
+					if (currentSlug !== slug) return;
+					scene.companionEvent({ type: "snapshot", chatId: "default", running: res.agent_running });
+				})
+				.catch(() => {}); // the overlay still follows the live events
+		});
 	});
+	// The pip breathes only while the companion is at rest or listening; every
+	// other state is carried by the moon's own expression and motion.
+	const restful = $derived(companionExpression(scene.companion.kind).motion === "breathe");
 </script>
 
 <div class="overlay">
-	<div class="pip">
-		<img class="pip-video" src={thinking ? skin.avatar.thinking : skin.avatar.idle} alt={thinking ? "Nolune is thinking" : "Nolune"} />
+	<div class="pip" class:pip-restful={restful} data-kind={scene.companion.kind}>
+		<MoonExpression kind={scene.companion.kind} class="pip-moon" />
 	</div>
+	<CompanionStatus class="overlay-status" state={scene.companion} name={scene.companionName} {slug} />
 </div>
 
 <style>
@@ -67,7 +73,12 @@
 		overflow: hidden;
 		background: var(--card);
 		border: 2px solid var(--primary);
-		box-shadow:none;
+		box-shadow: none;
+	}
+	.pip[data-kind="blocked"], .pip[data-kind="failed"] { border-color: var(--destructive); }
+	.pip[data-kind="offline"] { border-color: var(--border); }
+
+	.pip-restful {
 		animation: breathe 4s ease-in-out infinite;
 	}
 
@@ -76,9 +87,25 @@
 		50% { transform: scale(1.03); }
 	}
 
-	.pip-video {
+	.pip :global(.pip-moon) {
 		width: 100%;
 		height: 100%;
-		object-fit: contain;
+	}
+
+	/* The words, beside the pip, for a screen reader and a reduced-motion viewer alike. */
+	.overlay :global(.overlay-status) {
+		position: absolute;
+		right: 84px;
+		bottom: 24px;
+		max-width: calc(100vw - 116px);
+		padding: 6px 12px;
+		border-radius: var(--radius-control, 8px);
+		background: var(--card);
+		border: 1px solid var(--border);
+		pointer-events: auto;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.pip-restful { animation: none; }
 	}
 </style>

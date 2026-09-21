@@ -7,8 +7,9 @@
 	import { createSceneStore, setSceneStore } from "$lib/stores/scene.svelte.js";
 	import { createSkinStore, setSkinStore } from "$lib/stores/skin.svelte.js";
 	import { companionEventFromServer } from "$lib/companion/state.js";
+	import { applyMachineEvent } from "$lib/computers/spaces.js";
 	import { AuthError } from "$lib/api/client.js";
-	import type { ServerEvent } from "$lib/api/types.js";
+	import type { MachineInfo, ServerEvent } from "$lib/api/types.js";
 	import { onMount } from "svelte";
 	import AuthGate from "$lib/components/auth/AuthGate.svelte";
 	import Toast from "$lib/components/layout/Toast.svelte";
@@ -37,6 +38,15 @@
 
 	let needsAuth = $state(false);
 
+	// Known computers as the socket reports them, so a proactive run's target
+	// reads by the name the Computers tab shows (#80); ids until then.
+	let machines: MachineInfo[] = [];
+
+	// The companion's name for the status text ("Luna is thinking.").
+	$effect(() => {
+		sceneStore.setCompanionName(companion.context?.companion_name ?? "");
+	});
+
 	// Secret request state
 	let secretRequest = $state<{
 		instanceSlug: string;
@@ -61,8 +71,9 @@
 			needsAuth = true;
 		});
 		const unsub = ws.subscribe((event: ServerEvent) => {
+			if (event.type === "machine_updated" || event.type === "machine_forgotten") machines = applyMachineEvent(machines, event);
 			// Little Moon's state is derived from the same events, for every chat.
-			const companionEvent = companionEventFromServer(event);
+			const companionEvent = companionEventFromServer(event, machines);
 			if (companionEvent) sceneStore.companionEvent(companionEvent);
 			if (event.type === "secret_request") {
 				secretRequest = {

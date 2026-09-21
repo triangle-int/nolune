@@ -1,0 +1,22 @@
+{
+  "outcome": "accepted",
+  "version": 1,
+  "correlation_id": "corr-availability-0001",
+  "responder": "_gNGE_IhVJx8y6mCBkyNM5_BhjuuTeIUwa6WQa8NZLs",
+  "disclosure": "availability",
+  "answer": {
+    "kind": "availability",
+    "windows": [
+      {
+        "from": 1800432000,
+        "to": 1800468000,
+        "state": "busy"
+      },
+      {
+        "from": 1800468000,
+        "to": 1800518400,
+        "state": "free"
+      }
+    ]
+  }
+}

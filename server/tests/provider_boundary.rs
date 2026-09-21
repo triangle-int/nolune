@@ -268,7 +268,10 @@ fn codex_wire_format_lives_only_under_its_module() {
         }
     }
     // Nolune never touches the login: no path into codex's home, no token
-    // field, and the OpenAI key never stands in for a login.
+    // field, and the OpenAI key never stands in for a login (`api_key` as
+    // an account kind's label is what `account/read` calls a key the
+    // app-server holds, not a key Nolune reads: the field access and the
+    // member are what is forbidden).
     for (relative, source) in &sources {
         if !relative.starts_with(CODEX_MODULE) {
             continue;
@@ -280,7 +283,8 @@ fn codex_wire_format_lives_only_under_its_module() {
             "id_token",
             "OPENAI_API_KEY",
             "tokens.open_ai",
-            "api_key",
+            ".api_key",
+            "api_key:",
         ] {
             if source.contains(token) {
                 violations.push(format!(

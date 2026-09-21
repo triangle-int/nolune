@@ -234,6 +234,7 @@ async fn main() {
     }
 
     let cua = state.cua.clone();
+    let codex_auth = state.codex_auth.clone();
     let app = app::router::build_router(state, static_dir);
 
     info!("Starting server on http://{addr}");
@@ -273,6 +274,7 @@ async fn main() {
             // End every open driver session and stop the driver child before
             // connections drain; the grace timer still bounds the whole exit.
             cua.shutdown().await;
+            codex_auth.shutdown().await;
         })
         .await
         .expect("server exited unexpectedly");

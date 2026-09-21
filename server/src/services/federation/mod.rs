@@ -13,6 +13,7 @@
 //! Nothing in this module logs a secret. The invite secret leaves the process
 //! once, in the owner's invite response, and the signing key never does.
 
+pub mod approvals;
 pub mod audit;
 pub mod envelope;
 pub mod gate;

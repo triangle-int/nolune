@@ -7,11 +7,18 @@
 //!
 //! The fixture (`fixtures/codex-<pin>.jsonl`) is one JSON object per line.
 //! Lines with `on` script one method; several lines may script the same
-//! method, and the first one whose `when` (a subset of the request params:
-//! every key given must be present and equal, arrays element by element at
-//! the same length) and `env` (a subset of the fake's environment) both
-//! match is the one played, so a scenario is picked by what the client
-//! sent. Anywhere in an entry a string `$params.<path>` is replaced by that
+//! method, and the first one whose conditions hold is the one played, so a
+//! scenario is picked by what the client sent and by what happened before:
+//! `when` (a subset of the request params: every key given must be present
+//! and equal, arrays element by element at the same length), `env` (a
+//! subset of the fake's environment) and `if` (a subset of the fake's
+//! state, a flat object that starts as [`STATE_ENV`] says, empty by
+//! default, a member never set reading as `null`, and that an entry's
+//! `set` rewrites: before the answer, or, when `then_delay_ms` is set,
+//! after that delay and before the `then` events; that is how a logout
+//! changes what `account/read` says next, and a login only once its
+//! completion fires, without teaching the fake the protocol's meaning).
+//! Anywhere in an entry a string `$params.<path>` is replaced by that
 //! part of the request params (`$params.threadId`), so an answer can echo
 //! what it was asked. An entry then plays either `steps`, in order, each
 //! one of `notify` (an event; `repeat` plays it that many times, for a
@@ -21,24 +28,26 @@
 //! verbatim line with `$ID` replaced by the request id); or, without
 //! `steps`, the older shape: `reply` |
 //! `echo` (the request params as the result) | `error`; `notify` events
-//! before the answer and `then` events after it; `delay_ms` before
-//! answering; `exit`; `ask` (answer only once the client answered that);
-//! `raw`. `stdin` on either shape stops serving stdin after this request
-//! while stdout stays open, the way a wedged app-server does: `ignore`
-//! leaves the pipe unread so the client's writes block once it is full,
-//! `close` closes the read end so they fail at once. Other lines are
-//! comments. Requests are served concurrently, so answers come back out of
-//! order like the real app-server's do. `initialize` must come first
-//! (`-32600 Not initialized` otherwise) and an unscripted method is
-//! `-32600 Invalid request: unknown variant`, the live error shapes.
+//! before the answer and `then` events after it, after `then_delay_ms`
+//! when that is set; `delay_ms` before answering; `exit`; `ask` (answer
+//! only once the client answered that); `raw`. `stdin` on either shape
+//! stops serving stdin after this request while stdout stays open, the
+//! way a wedged app-server does: `ignore` leaves the pipe unread so the
+//! client's writes block once it is full, `close` closes the read end so
+//! they fail at once. Other lines are comments. Requests are served
+//! concurrently, so answers come back out of order like the real
+//! app-server's do. `initialize` must come first (`-32600 Not
+//! initialized` otherwise) and an unscripted method is `-32600 Invalid
+//! request: unknown variant`, the live error shapes.
 //!
 //! The environment steers the process: [`FIXTURE_ENV`] names the fixture
 //! and turns the entry point into the server, [`MODE_ENV`] is `serve`
 //! (default), `silent` (never answer) or `exit:<code>` (die at once),
 //! [`PID_FILE_ENV`] gets the pid appended at every start, [`STDERR_ENV`] is
-//! a line written to stderr at start, and [`LOG_ENV`] names a file every
-//! frame the client wrote is appended to, one JSON object per line, so a
-//! test can read the wire the way the HTTP mocks capture their requests.
+//! a line written to stderr at start, [`STATE_ENV`] is the initial state
+//! as a JSON object, and [`LOG_ENV`] names a file every frame the client
+//! wrote is appended to, one JSON object per line, so a test can read the
+//! wire the way the HTTP mocks capture their requests.
 
 use std::{
     collections::HashMap,
@@ -63,6 +72,7 @@ pub const FIXTURE_ENV: &str = "NOLUNE_FAKE_APP_SERVER_FIXTURE";
 pub const MODE_ENV: &str = "NOLUNE_FAKE_APP_SERVER_MODE";
 pub const PID_FILE_ENV: &str = "NOLUNE_FAKE_APP_SERVER_PID_FILE";
 pub const STDERR_ENV: &str = "NOLUNE_FAKE_APP_SERVER_STDERR";
+pub const STATE_ENV: &str = "NOLUNE_FAKE_APP_SERVER_STATE";
 pub const LOG_ENV: &str = "NOLUNE_FAKE_APP_SERVER_LOG";
 /// Set to `none` to play the fixture's logged-out `account/read` answer.
 pub const ACCOUNT_ENV: &str = "NOLUNE_FAKE_APP_SERVER_ACCOUNT";
@@ -92,6 +102,12 @@ fn entry_point() -> String {
 /// A [`Launch`] that starts this fake instead of codex, with the default
 /// deadlines and restart policy.
 pub fn launch(pid_file: Option<&Path>) -> Launch {
+    launch_with_state(pid_file, None)
+}
+
+/// [`launch`] with the fake's initial state, for the entries that answer
+/// by `if`.
+pub fn launch_with_state(pid_file: Option<&Path>, state: Option<Value>) -> Launch {
     let mut launch = Launch::new(std::env::current_exe().expect("the test binary has a path"));
     launch.args = vec![
         OsString::from(entry_point()),
@@ -106,6 +122,11 @@ pub fn launch(pid_file: Option<&Path>) -> Launch {
         launch
             .env
             .push((PID_FILE_ENV.into(), pid_file.as_os_str().to_owned()));
+    }
+    if let Some(state) = state {
+        launch
+            .env
+            .push((STATE_ENV.into(), state.to_string().into()));
     }
     launch
 }
@@ -207,8 +228,9 @@ struct Step {
     raw: Option<String>,
 }
 
-/// One scripted line. `on`, `when` and `env` are read from the raw JSON
-/// when an entry is selected; they are here so a fixture typo fails at load.
+/// One scripted line. `on`, `when`, `env` and `if` are read from the raw
+/// JSON when an entry is selected; they are here so a fixture typo fails
+/// at load.
 #[derive(Clone, Deserialize)]
 struct Entry {
     #[serde(rename = "on")]
@@ -217,6 +239,12 @@ struct Entry {
     _when: Option<Value>,
     #[serde(default, rename = "env")]
     _env: Option<HashMap<String, String>>,
+    #[serde(default, rename = "if")]
+    _only_if: Option<Map<String, Value>>,
+    /// State members rewritten before the answer, or after `then_delay_ms`
+    /// and before the `then` events when that is set.
+    #[serde(default)]
+    set: Option<Map<String, Value>>,
     #[serde(default)]
     steps: Option<Vec<Step>>,
     #[serde(default)]
@@ -232,6 +260,8 @@ struct Entry {
     #[serde(default)]
     delay_ms: Option<u64>,
     #[serde(default)]
+    then_delay_ms: Option<u64>,
+    #[serde(default)]
     exit: Option<i32>,
     #[serde(default)]
     ask: Option<Ask>,
@@ -239,6 +269,37 @@ struct Entry {
     raw: Option<String>,
     #[serde(default)]
     stdin: Option<String>,
+}
+
+/// The fake's state: what `if` reads and `set` writes.
+type FakeState = Arc<Mutex<Value>>;
+
+/// The initial state from [`STATE_ENV`]: a JSON object, or empty.
+fn initial_state() -> Value {
+    std::env::var(STATE_ENV)
+        .ok()
+        .map(|text| serde_json::from_str(&text).expect("the initial state is a JSON object"))
+        .unwrap_or_else(|| Value::Object(Map::new()))
+}
+
+/// Rewrite the members `set` names in the fake's state.
+fn rewrite(state: &FakeState, set: Option<&Map<String, Value>>) {
+    let Some(set) = set else { return };
+    let mut state = state.lock().unwrap();
+    let members = state.as_object_mut().expect("the state is an object");
+    for (key, value) in set {
+        members.insert(key.clone(), value.clone());
+    }
+}
+
+/// Whether the state holds every member `only_if` names with that value;
+/// a member never set reads as `null`.
+fn state_matches(only_if: &Value, state: &Value) -> bool {
+    only_if.as_object().is_some_and(|only_if| {
+        only_if
+            .iter()
+            .all(|(key, value)| state.get(key).unwrap_or(&Value::Null) == value)
+    })
 }
 
 /// Every scripted line, in file order; the raw JSON is kept so the
@@ -315,15 +376,19 @@ fn substitute(value: Value, params: &Value) -> Value {
     }
 }
 
-/// The first entry for `method` whose selectors accept `params`, with its
-/// `$params.` references filled in.
-fn select(script: &Script, method: &str, params: &Value) -> Option<Entry> {
+/// The first entry for `method` whose selectors accept `params`, the
+/// environment and the state right now, with its `$params.` references
+/// filled in.
+fn select(script: &Script, method: &str, params: &Value, state: &Value) -> Option<Entry> {
     script
         .iter()
         .filter(|(on, _)| on == method)
         .find(|(_, raw)| {
             raw.get("when").is_none_or(|when| matches(when, params))
                 && raw.get("env").is_none_or(env_matches)
+                && raw
+                    .get("if")
+                    .is_none_or(|only_if| state_matches(only_if, state))
         })
         .map(|(_, raw)| {
             serde_json::from_value(substitute(raw.clone(), params)).expect("validated at load")
@@ -374,7 +439,8 @@ fn write_raw(raw: &str, id: &Value) {
 }
 
 fn handle(
-    script: Arc<Script>,
+    entry: Option<Entry>,
+    state: FakeState,
     initialized: Arc<AtomicBool>,
     asks: Asks,
     id: Value,
@@ -387,7 +453,7 @@ fn handle(
         emit(error_frame(&id, -32600, "Not initialized".into()));
         return;
     }
-    let Some(entry) = select(&script, &method, &params) else {
+    let Some(entry) = entry else {
         emit(error_frame(
             &id,
             -32600,
@@ -445,12 +511,26 @@ fn handle(
         }
         return;
     }
+    // The state changes when the entry's outcome lands: with the delayed
+    // events when there is a delay (a login is complete only once its
+    // completion fires), else before the answer, so a request the client
+    // sends on the answer reads the new state, the way codex has logged
+    // out by the time it answers `account/logout`. The reader thread
+    // selects the entry for the next request, so a state rewritten after
+    // the answer would race it.
+    if entry.then_delay_ms.is_none() {
+        rewrite(&state, entry.set.as_ref());
+    }
     if entry.echo {
         emit(json!({"id": id, "result": params}));
     } else if let Some(error) = &entry.error {
         emit(json!({"id": id, "error": error}));
     } else if let Some(reply) = &entry.reply {
         emit(json!({"id": id, "result": reply}));
+    }
+    if let Some(ms) = entry.then_delay_ms {
+        thread::sleep(Duration::from_millis(ms));
+        rewrite(&state, entry.set.as_ref());
     }
     for event in &entry.then {
         emit(notification(event));
@@ -505,7 +585,8 @@ fn serve(fixture: &Path) -> ! {
             .expect("wire log")
     });
 
-    let script = Arc::new(load(fixture));
+    let script = load(fixture);
+    let state: FakeState = Arc::new(Mutex::new(initial_state()));
     let initialized = Arc::new(AtomicBool::new(false));
     let asks: Asks = Arc::default();
     let stdin = std::io::stdin();
@@ -528,10 +609,13 @@ fn serve(fixture: &Path) -> ! {
         match (method, id) {
             (Some(method), Some(id)) => {
                 let params = frame.remove("params").unwrap_or(Value::Object(Map::new()));
-                let stdin_after = select(&script, &method, &params).and_then(|entry| entry.stdin);
-                let (script, initialized, asks) =
-                    (script.clone(), initialized.clone(), asks.clone());
-                thread::spawn(move || handle(script, initialized, asks, id, method, params));
+                let entry = {
+                    let state = state.lock().unwrap();
+                    select(&script, &method, &params, &state)
+                };
+                let stdin_after = entry.as_ref().and_then(|entry| entry.stdin.clone());
+                let (state, initialized, asks) = (state.clone(), initialized.clone(), asks.clone());
+                thread::spawn(move || handle(entry, state, initialized, asks, id, method, params));
                 if let Some(how) = stdin_after {
                     stop_reading(&how);
                 }
@@ -587,13 +671,14 @@ mod tests {
     #[test]
     fn the_first_matching_entry_wins_and_its_answer_echoes_the_request() {
         let script = load(&fixture_path());
+        let none = Value::Object(Map::new());
+        let select = |method: &str, params: &Value| select(&script, method, params, &none);
         // The thread entries model the live merge of the config overrides:
         // only a start that disables every server `config/read` lists by
         // name gets a thread without MCP servers; anything else (an empty
         // table included) gets the thread the servers start for.
         let disabled = json!({"mcp_servers": {"filesystem": {"enabled": false}, "github": {"enabled": false}}});
         let ephemeral = select(
-            &script,
             "thread/start",
             &json!({"ephemeral": true, "model": "m", "config": disabled}),
         )
@@ -602,12 +687,7 @@ mod tests {
             ephemeral.reply.unwrap()["thread"]["id"],
             "thr_fixture_ephemeral"
         );
-        let durable = select(
-            &script,
-            "thread/start",
-            &json!({"model": "m", "config": disabled}),
-        )
-        .unwrap();
+        let durable = select("thread/start", &json!({"model": "m", "config": disabled})).unwrap();
         assert_eq!(durable.reply.unwrap()["thread"]["id"], "thr_fixture_1");
         for config in [
             json!({"mcp_servers": {}}),
@@ -615,7 +695,6 @@ mod tests {
             json!({}),
         ] {
             let leaky = select(
-                &script,
                 "thread/start",
                 &json!({"ephemeral": true, "model": "m", "config": config}),
             )
@@ -634,14 +713,12 @@ mod tests {
             );
         }
         let resumed = select(
-            &script,
             "thread/resume",
             &json!({"threadId": "thr_saved_7", "config": disabled}),
         )
         .unwrap();
         assert_eq!(resumed.reply.unwrap()["thread"]["id"], "thr_saved_7");
         let leaky = select(
-            &script,
             "thread/resume",
             &json!({"threadId": "thr_saved_7", "config": {"mcp_servers": {}}}),
         )
@@ -654,16 +731,12 @@ mod tests {
             "a resume starts them before it answers"
         );
         assert!(
-            select(
-                &script,
-                "thread/resume",
-                &json!({"threadId": "thr_missing"})
-            )
-            .unwrap()
-            .error
-            .is_some()
+            select("thread/resume", &json!({"threadId": "thr_missing"}))
+                .unwrap()
+                .error
+                .is_some()
         );
-        let hidden = select(&script, "config/read", &json!({})).unwrap();
+        let hidden = select("config/read", &json!({})).unwrap();
         assert_eq!(
             hidden.reply.unwrap()["config"]["mcp_servers"]
                 .as_object()
@@ -672,6 +745,6 @@ mod tests {
             2,
             "the config lists two servers unless the environment hides them"
         );
-        assert!(select(&script, "no/such", &json!({})).is_none());
+        assert!(select("no/such", &json!({})).is_none());
     }
 }
