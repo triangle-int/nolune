@@ -82,10 +82,77 @@ impl PlatformState {
     }
 }
 
-/// The platform state of a host with `facts`.
+/// The platform state of a host with `facts`: the same rules as the
+/// server's `services::cua::host`, worded for the page.
 pub fn platform_state(facts: &HostFacts<'_>) -> PlatformState {
-    let _ = facts;
-    todo!("platform_state")
+    let os = facts.os.to_owned();
+    let triple = facts.target.map_or("this host", Target::triple).to_owned();
+    let Some(_) = facts.target else {
+        return PlatformState::Unsupported {
+            os,
+            reason: format!(
+                "Nolune ships no Cua Driver for {triple}, so computer use is unavailable on \
+                 this computer and there is nothing to grant."
+            ),
+            triple,
+        };
+    };
+    let set = |name: &str, value: Option<&OsStr>| {
+        value
+            .filter(|value| !value.is_empty())
+            .map(|value| format!("{name}={}", value.to_string_lossy()))
+    };
+    let named = match facts.os {
+        "linux" => "Linux",
+        "windows" => "Windows",
+        other => other,
+    };
+    // A session without a display comes first: nothing runs there, whatever
+    // the platform policy says.
+    let headless = match facts.os {
+        "linux" => set("WAYLAND_DISPLAY", facts.wayland_display)
+            .or_else(|| set("DISPLAY", facts.display))
+            .is_none()
+            .then(|| "No display session (DISPLAY and WAYLAND_DISPLAY are unset)".to_owned()),
+        // A graphical login runs its processes under launchd's Aqua manager;
+        // SSH sessions and daemons run under Background or System, where no
+        // window server is reachable. When launchctl cannot be asked, the
+        // driver's own report decides.
+        "macos" => match facts.launchd_manager.map(str::trim) {
+            Some("Aqua") | None => None,
+            Some(manager) => Some(format!(
+                "No graphical session (launchctl managername reports {manager}, an SSH or \
+                 background session, not Aqua)"
+            )),
+        },
+        "windows" => set("SESSIONNAME", facts.session_name)
+            .is_none()
+            .then(|| "No interactive session (SESSIONNAME is unset)".to_owned()),
+        _ => None,
+    };
+    if let Some(why) = headless {
+        return PlatformState::Headless {
+            os,
+            triple,
+            reason: format!(
+                "{why}: the driver is never started here and there is nothing to grant. \
+                 Headless installs need nothing from this page."
+            ),
+        };
+    }
+    if facts.os == "macos" {
+        return PlatformState::Supported { os, triple };
+    }
+    PlatformState::Unsupported {
+        os,
+        triple,
+        reason: format!(
+            "Computer use is not available on {named} yet: Nolune drives computers on macOS \
+             only for now. The pinned driver still installs with `{INSTALL_COMMAND}` so a \
+             later release can turn it on without changing the pin; there is nothing to \
+             grant here."
+        ),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -108,10 +175,50 @@ pub enum InstallState {
     Unreadable { detail: String },
 }
 
-/// The install recorded under `workspace` (`cua-driver/install.json`).
+/// The install recorded under `workspace` (`cua-driver/install.json`, the
+/// manifest `nolune cua install` writes), checked against the pin.
 pub fn install_state(workspace: &Path) -> InstallState {
-    let _ = workspace;
-    todo!("install_state")
+    let manifest = workspace.join(cua_runtime::INSTALL_MANIFEST);
+    let raw = match std::fs::read_to_string(&manifest) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return InstallState::None,
+        Err(error) => {
+            return InstallState::Unreadable {
+                detail: format!("cannot read {}: {error}", manifest.display()),
+            };
+        }
+    };
+    let parsed = serde_json::from_str::<serde_json::Value>(&raw).ok();
+    let (version, driver) = match parsed.as_ref().and_then(|manifest| {
+        Some((
+            manifest.get("version")?.as_str()?.to_owned(),
+            PathBuf::from(manifest.get("driver")?.as_str()?),
+        ))
+    }) {
+        Some(found) => found,
+        None => {
+            return InstallState::Unreadable {
+                detail: format!("{} is not a driver manifest", manifest.display()),
+            };
+        }
+    };
+    let driver_shown = driver.display().to_string();
+    if !driver.is_file() {
+        InstallState::Missing {
+            version,
+            driver: driver_shown,
+        }
+    } else if version != PINNED_VERSION {
+        InstallState::Stale {
+            version,
+            driver: driver_shown,
+        }
+    } else {
+        InstallState::Pinned {
+            version,
+            driver: driver_shown,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -171,14 +278,67 @@ pub struct DriverPermissions {
 
 /// The driver at `path` and what it reported, or why it could not.
 pub fn driver_state(path: &Path, probe: Result<&HealthReportResult, String>) -> DriverState {
-    let _ = (path, probe);
-    todo!("driver_state")
+    let path = path.display().to_string();
+    let report = match probe {
+        Ok(report) => report,
+        Err(error) => return DriverState::Unreachable { path, error },
+    };
+    let incompatibility = check_driver_version(&report.driver_version)
+        .err()
+        .map(|incompatible| {
+            format!("{incompatible} (`{INSTALL_COMMAND}` installs the pinned release)")
+        });
+    let health = match report.overall {
+        HealthOverall::Ok => Health::Ok,
+        HealthOverall::Degraded => Health::Degraded,
+        HealthOverall::Failed => Health::Failed,
+    };
+    // The bundle the TCC checks name; the identity check when they carry none.
+    let bundle = report
+        .checks
+        .iter()
+        .find_map(|check| match &check.data {
+            Some(HealthCheckData::BundlePermission(data)) => {
+                Some(data.bundle_identifier.as_str().to_owned())
+            }
+            _ => None,
+        })
+        .or_else(|| {
+            report.checks.iter().find_map(|check| match &check.data {
+                Some(HealthCheckData::BundleIdentity(data)) => {
+                    Some(data.bundle_identifier.as_str().to_owned())
+                }
+                _ => None,
+            })
+        });
+    let failed_checks = report
+        .checks
+        .iter()
+        .filter(|check| check.status == HealthCheckStatus::Fail)
+        .map(|check| FailedCheck {
+            name: check.name.as_str().to_owned(),
+            message: check.message.as_str().to_owned(),
+            hint: check.hint.as_ref().map(|hint| hint.as_str().to_owned()),
+        })
+        .collect();
+    DriverState::Reported {
+        path,
+        version: report.driver_version.as_str().to_owned(),
+        compatible: incompatibility.is_none(),
+        incompatibility,
+        health,
+        bundle,
+        failed_checks,
+    }
 }
 
 /// The permissions a report proves, under the page's names.
 pub fn driver_permissions(report: &HealthReportResult) -> DriverPermissions {
-    let _ = report;
-    todo!("driver_permissions")
+    let permissions = permissions_from_health(report);
+    DriverPermissions {
+        accessibility: permissions.accessibility,
+        screen_recording: permissions.screen_capture,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -211,8 +371,84 @@ pub fn assemble(
     driver: DriverState,
     permissions: Option<DriverPermissions>,
 ) -> CuaPermissionsReport {
-    let _ = (platform, install, driver, permissions);
-    todo!("assemble")
+    let summary = summary(&platform, &driver, permissions.as_ref());
+    CuaPermissionsReport {
+        platform,
+        pinned_version: PINNED_VERSION,
+        install_command: INSTALL_COMMAND,
+        driver_bundle: DRIVER_BUNDLE,
+        install,
+        driver,
+        permissions,
+        summary,
+    }
+}
+
+/// The one line: the platform's reason when there is nothing to grant,
+/// else where the driver stands and what to do.
+fn summary(
+    platform: &PlatformState,
+    driver: &DriverState,
+    permissions: Option<&DriverPermissions>,
+) -> String {
+    match platform {
+        PlatformState::Unsupported { reason, .. } | PlatformState::Headless { reason, .. } => {
+            return reason.clone();
+        }
+        PlatformState::Supported { .. } => {}
+    }
+    match driver {
+        DriverState::Skipped => "The driver was not probed.".to_owned(),
+        DriverState::Absent => format!(
+            "No Cua Driver is installed on this computer; run `{INSTALL_COMMAND}`, then check \
+             again."
+        ),
+        DriverState::Unreachable { path, error } => {
+            format!("The driver at {path} could not report: {error}")
+        }
+        DriverState::Reported {
+            incompatibility: Some(incompatibility),
+            ..
+        } => incompatibility.clone(),
+        DriverState::Reported {
+            version,
+            health: Health::Failed,
+            failed_checks,
+            ..
+        } => {
+            let failed = failed_checks
+                .iter()
+                .map(|check| check.message.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("CuaDriver {version} reports a failed check: {failed}")
+        }
+        DriverState::Reported { version, .. } => {
+            let missing = permissions
+                .map(|permissions| {
+                    [
+                        (permissions.accessibility, "Accessibility"),
+                        (permissions.screen_recording, "Screen Recording"),
+                    ]
+                    .into_iter()
+                    .filter(|(state, _)| *state != Permission::Granted)
+                    .map(|(_, name)| name)
+                    .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            match missing.as_slice() {
+                [] => format!(
+                    "CuaDriver {version} holds Accessibility and Screen Recording; computer \
+                     use is ready."
+                ),
+                [one] => format!("CuaDriver {version} is missing {one}; grant it below."),
+                [first, second] => format!(
+                    "CuaDriver {version} is missing {first} and {second}; grant them below."
+                ),
+                _ => unreachable!("two permissions"),
+            }
+        }
+    }
 }
 
 /// The report for this host: the platform decides whether the driver is
@@ -227,8 +463,18 @@ pub async fn gather(
     runtime: &CuaRuntime,
     machine_id: &str,
 ) -> CuaPermissionsReport {
-    let _ = (facts, workspace, located, runtime, machine_id);
-    todo!("gather")
+    let platform = platform_state(facts);
+    let install = install_state(workspace);
+    if !platform.probes() {
+        return assemble(platform, install, DriverState::Skipped, None);
+    }
+    let Some(driver) = located else {
+        return assemble(platform, install, DriverState::Absent, None);
+    };
+    let probe = runtime.probe(machine_id).await;
+    let permissions = probe.as_ref().ok().map(driver_permissions);
+    let driver = driver_state(&driver, probe.as_ref().map_err(Clone::clone));
+    assemble(platform, install, driver, permissions)
 }
 
 // ---------------------------------------------------------------------------
@@ -237,8 +483,15 @@ pub async fn gather(
 
 /// The System Settings pane a permission is granted in.
 pub fn settings_pane_url(permission: &str) -> Option<&'static str> {
-    let _ = permission;
-    todo!("settings_pane_url")
+    match permission {
+        "accessibility" => {
+            Some("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        }
+        "screen_recording" => {
+            Some("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+        }
+        _ => None,
+    }
 }
 
 /// What a grant does on this host: run the driver's own grant flow (so
@@ -256,8 +509,73 @@ pub struct GrantPlan {
 /// driver the runtime would run: an error names why there is nothing to
 /// grant (another platform, no driver).
 pub fn grant_plan(os: &str, permission: &str, driver: Option<&Path>) -> Result<GrantPlan, String> {
-    let _ = (os, permission, driver);
-    todo!("grant_plan")
+    let settings_url =
+        settings_pane_url(permission).ok_or_else(|| format!("unknown permission: {permission}"))?;
+    if os != "macos" {
+        return Err(
+            "Nolune drives computers on macOS only for now; there is nothing to grant on this \
+             computer."
+                .to_owned(),
+        );
+    }
+    let driver = driver.ok_or_else(|| {
+        format!(
+            "No Cua Driver is installed on this computer; run `{INSTALL_COMMAND}` first, so \
+             the grant goes to the driver's own bundle."
+        )
+    })?;
+    Ok(GrantPlan {
+        driver_grant: Some(driver.to_path_buf()),
+        settings_url,
+    })
+}
+
+/// Carry out `plan`: start the driver's own grant flow, detached and
+/// without a terminal (it launches the driver's app through LaunchServices
+/// so the prompts name the driver's bundle, then asks macOS for the grants;
+/// its terminal text has no reader here), and open the pane where the
+/// driver is enabled when no prompt appears.
+fn run_grant_plan(permission: &str, plan: &GrantPlan) -> GrantOutcome {
+    let driver_grant = plan.driver_grant.as_ref().is_some_and(|driver| {
+        match std::process::Command::new(driver)
+            .arg("permissions")
+            .arg("grant")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(_) => {
+                eprintln!(
+                    "[cua] {} permissions grant started for {permission}",
+                    driver.display()
+                );
+                true
+            }
+            Err(error) => {
+                eprintln!(
+                    "[cua] {} permissions grant could not start: {error}",
+                    driver.display()
+                );
+                false
+            }
+        }
+    });
+    let opened_settings = match std::process::Command::new("open")
+        .arg(plan.settings_url)
+        .spawn()
+    {
+        Ok(_) => true,
+        Err(error) => {
+            eprintln!("[cua] System Settings could not be opened: {error}");
+            false
+        }
+    };
+    GrantOutcome {
+        permission: permission.to_owned(),
+        driver_grant,
+        opened_settings,
+    }
 }
 
 /// What the grant action did.
@@ -274,18 +592,69 @@ pub struct GrantOutcome {
 // Tauri commands
 // ---------------------------------------------------------------------------
 
-/// The permission report the settings window renders (#20).
-#[tauri::command]
-pub async fn cua_permissions(app: tauri::AppHandle) -> Result<CuaPermissionsReport, String> {
-    let _ = app;
-    todo!("cua_permissions")
+/// `launchctl managername` on macOS; `None` elsewhere or when it fails.
+fn launchd_manager_name() -> Option<String> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let output = std::process::Command::new("launchctl")
+        .arg("managername")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (!name.is_empty()).then_some(name)
 }
 
-/// Grant `permission` (`accessibility` or `screen_recording`) to the driver.
+/// The driver the runtime would run, from the same lookup.
+fn located_driver(workspace: &Path) -> Option<PathBuf> {
+    cua_runtime::locate_driver(
+        workspace,
+        std::env::var_os(cua_runtime::DRIVER_ENV).as_deref(),
+        std::env::var_os("PATH").as_deref(),
+    )
+}
+
+/// The permission report the settings window renders (#20): the host's
+/// facts, the workspace install, and the driver the app's runtime runs
+/// asked for its own report under this computer's stable id.
+#[tauri::command]
+pub async fn cua_permissions(app: tauri::AppHandle) -> Result<CuaPermissionsReport, String> {
+    let machine_id = crate::computer_use_bridge::stable_machine_id(&app)?;
+    let workspace = crate::local_server::nolune_home();
+    let display = std::env::var_os("DISPLAY");
+    let wayland_display = std::env::var_os("WAYLAND_DISPLAY");
+    let session_name = std::env::var_os("SESSIONNAME");
+    let launchd_manager = launchd_manager_name();
+    let facts = HostFacts {
+        os: std::env::consts::OS,
+        target: Target::current(),
+        display: display.as_deref(),
+        wayland_display: wayland_display.as_deref(),
+        session_name: session_name.as_deref(),
+        launchd_manager: launchd_manager.as_deref(),
+    };
+    let located = located_driver(&workspace);
+    Ok(gather(
+        &facts,
+        &workspace,
+        located,
+        cua_runtime::runtime(),
+        &machine_id,
+    )
+    .await)
+}
+
+/// Grant `permission` (`accessibility` or `screen_recording`) to the
+/// driver: its own grant flow, then the System Settings pane.
 #[tauri::command]
 pub async fn cua_grant_permission(permission: String) -> Result<GrantOutcome, String> {
-    let _ = permission;
-    todo!("cua_grant_permission")
+    let workspace = crate::local_server::nolune_home();
+    let located = located_driver(&workspace);
+    let plan = grant_plan(std::env::consts::OS, &permission, located.as_deref())?;
+    Ok(run_grant_plan(&permission, &plan))
 }
 
 #[cfg(test)]

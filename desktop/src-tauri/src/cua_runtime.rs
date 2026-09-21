@@ -435,22 +435,6 @@ pub async fn health_report(
     }
 }
 
-/// The descriptor this desktop registers: the driver's health report under
-/// this machine's stable id, at the desktop location. The driver acts under
-/// its own bundle's grants, so its report decides the permissions and the
-/// capabilities; the app's own grants stay on the legacy `permissions`.
-pub async fn describe_machine(
-    transport: &dyn DriverTransport,
-    machine_id: MachineId,
-) -> Result<MachineDescriptor, String> {
-    let report = health_report(transport, &machine_id).await?;
-    Ok(descriptor_from_health(
-        machine_id,
-        MachineLocation::Desktop,
-        &report,
-    ))
-}
-
 /// The `cua` field of the register message: the descriptor in the
 /// registration envelope the server decodes.
 pub fn registration_envelope(descriptor: &MachineDescriptor) -> Value {
@@ -635,29 +619,39 @@ struct Driver {
     transport: Arc<dyn DriverTransport>,
     machine_id: MachineId,
     descriptor: MachineDescriptor,
+    /// The health report the descriptor came from: what the settings
+    /// window shows about the driver's own grants (#20).
+    report: HealthReportResult,
     adapter: CheckedCuaAdapter,
 }
 
 impl Driver {
-    /// A driver described from `transport`'s health report; a transport that
-    /// cannot be described is closed.
+    /// A driver described from `transport`'s health report: the descriptor
+    /// this desktop registers is that report under this machine's stable
+    /// id, at the desktop location. The driver acts under its own bundle's
+    /// grants, so its report decides the permissions and the capabilities;
+    /// the app's own grants stay on the legacy `permissions`. A transport
+    /// that cannot be described is closed.
     async fn describe(
         transport: Arc<dyn DriverTransport>,
         machine_id: MachineId,
     ) -> Result<Arc<Self>, String> {
-        let descriptor = match describe_machine(&*transport, machine_id.clone()).await {
-            Ok(descriptor) => descriptor,
+        let report = match health_report(&*transport, &machine_id).await {
+            Ok(report) => report,
             Err(error) => {
                 transport.close();
                 return Err(error);
             }
         };
+        let descriptor =
+            descriptor_from_health(machine_id.clone(), MachineLocation::Desktop, &report);
         let adapter = checked_adapter(transport.clone(), descriptor.clone())
             .map_err(|error| format!("descriptor: {error}"))?;
         Ok(Arc::new(Self {
             transport,
             machine_id,
             descriptor,
+            report,
             adapter,
         }))
     }
@@ -748,8 +742,12 @@ impl CuaRuntime {
     /// granted since shows. The report is the driver's own, so the grants
     /// in it are the ones macOS gave the driver's bundle.
     pub async fn probe(&self, machine_id: &str) -> Result<HealthReportResult, String> {
-        let _ = machine_id;
-        todo!("probe")
+        self.start(machine_id).await?;
+        let slot = self.driver.lock().await;
+        match &*slot {
+            Slot::Running(driver) => Ok(driver.report.clone()),
+            _ => Err("no driver is running on this desktop".to_owned()),
+        }
     }
 
     /// Whether a driver is running (spawned and not gone).

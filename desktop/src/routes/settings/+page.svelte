@@ -2,15 +2,25 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { local, background, canToggleBackground, refreshLocalStatus, refreshBackgroundStatus, setBackgroundService } from "$lib/local.svelte";
+  import { DRIVER_BUNDLE, grantOutcomeText, intro, pageState, permissionRows, statusLines } from "$lib/cua-permissions";
 
-  type Permissions = {
+  type CuaReport = import("$lib/cua-permissions").CuaPermissionsReport;
+  type GrantOutcome = import("$lib/cua-permissions").GrantOutcome;
+  type PermissionKey = "accessibility" | "screen_recording";
+
+  /** This app's own grants, for the older coordinate tools that run inside it. */
+  type AppPermissions = {
     screen_recording: boolean;
     accessibility: boolean;
   };
 
-  let permissions = $state<Permissions | null>(null);
+  let report = $state<CuaReport | null>(null);
   let checking = $state(false);
   let error = $state<string | null>(null);
+  let grantNote = $state<string | null>(null);
+  let granting = $state<PermissionKey | null>(null);
+  let appPermissions = $state<AppPermissions | null>(null);
+  let appError = $state<string | null>(null);
 
   onMount(async () => {
     refresh();
@@ -30,36 +40,70 @@
     : "Turn on",
   );
 
+  /** The driver's own report: the grants macOS gave CuaDriver, never this app. */
   async function refresh() {
     checking = true;
     error = null;
     try {
-      permissions = await invoke<Permissions>("check_permissions");
+      report = await invoke<CuaReport>("cua_permissions");
     } catch (e) {
-      console.error("check_permissions failed", e);
-      error = "Could not read permission status. Retry, or check System Settings directly.";
+      console.error("cua_permissions failed", e);
+      error = "Could not read the driver's permission status. Retry, or run `nolune cua status` in a terminal.";
     } finally {
       checking = false;
     }
+    await refreshApp();
   }
 
-  async function openSettings(permission: string) {
+  async function refreshApp() {
+    appError = null;
+    try {
+      appPermissions = await invoke<AppPermissions>("check_permissions");
+    } catch (e) {
+      console.error("check_permissions failed", e);
+      appError = "Could not read this app's own permission status.";
+    }
+  }
+
+  /** The driver asks macOS itself, so the prompt and the pane entry name CuaDriver. */
+  async function grant(permission: PermissionKey) {
+    if (!report) return;
+    granting = permission;
+    grantNote = null;
+    try {
+      const outcome = await invoke<GrantOutcome>("cua_grant_permission", { permission });
+      grantNote = grantOutcomeText(outcome, report);
+    } catch (e) {
+      grantNote = typeof e === "string" ? e : "The grant could not be started.";
+    } finally {
+      granting = null;
+    }
+    setTimeout(refresh, 4000);
+  }
+
+  async function openAppSettings(permission: PermissionKey) {
     await invoke("open_permission_settings", { permission });
-    setTimeout(refresh, 3000);
+    setTimeout(refreshApp, 3000);
   }
 
-  const items = $derived([
+  const kind = $derived(report ? pageState(report) : null);
+  const lines = $derived(report ? statusLines(report) : []);
+  const rows = $derived(report ? permissionRows(report) : []);
+  const lead = $derived(intro(report ?? { driver_bundle: DRIVER_BUNDLE }));
+  const onMacos = $derived(report?.platform.os === "macos");
+
+  const appItems = $derived([
     {
-      key: "screen_recording",
+      key: "screen_recording" as const,
       name: "Screen recording",
-      desc: "Take screenshots of your screen",
-      granted: permissions?.screen_recording ?? false,
+      desc: "One-shot screenshots for the older tools that run inside this app.",
+      granted: appPermissions?.screen_recording ?? false,
     },
     {
-      key: "accessibility",
+      key: "accessibility" as const,
       name: "Accessibility",
-      desc: "Control the mouse and keyboard",
-      granted: permissions?.accessibility ?? false,
+      desc: "Mouse and keyboard for the older tools that run inside this app.",
+      granted: appPermissions?.accessibility ?? false,
     },
   ]);
 </script>
@@ -124,45 +168,61 @@
     </section>
 
     <section class="section" aria-labelledby="permissions-title">
-      <p class="nl-eyebrow">macOS</p>
+      <p class="nl-eyebrow">Computer use</p>
       <h2 id="permissions-title" class="section-title">Permissions</h2>
-      <p class="section-desc">
-        Nolune needs these permissions to control your computer when you ask it to.
-      </p>
+      <p class="section-desc">{lead}</p>
 
       {#if error}
         <p class="section-error" role="alert">{error}</p>
       {/if}
 
-      {#if permissions}
-        <ul class="perm-list">
-          {#each items as item (item.key)}
-            <li class="perm-row">
-              <div class="perm-icon" aria-hidden="true">
-                {#if item.key === "screen_recording"}
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" />
-                  </svg>
-                {:else}
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                  </svg>
-                {/if}
-              </div>
-              <div class="perm-info">
-                <span class="perm-name">{item.name}</span>
-                <span class="perm-desc">{item.desc}</span>
-              </div>
-              <div class="perm-status">
-                {#if item.granted}
-                  <span class="badge">Granted</span>
-                {:else}
-                  <button class="nl-button perm-grant" onclick={() => openSettings(item.key)}>Grant</button>
-                {/if}
-              </div>
-            </li>
+      {#if report}
+        <ul class="status-list" aria-label="Driver status">
+          {#each lines as line, index (index)}
+            <li class="status-line" class:status-ok={line.tone === "ok"} class:status-muted={line.tone === "muted"} class:status-error={line.tone === "error"} role={line.tone === "error" ? "alert" : undefined}>{line.text}</li>
           {/each}
         </ul>
+
+        {#if rows.length > 0}
+          <ul class="perm-list">
+            {#each rows as row (row.key)}
+              <li class="perm-row">
+                <div class="perm-icon" aria-hidden="true">
+                  {#if row.key === "screen_recording"}
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                      <rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" />
+                    </svg>
+                  {:else}
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                    </svg>
+                  {/if}
+                </div>
+                <div class="perm-info">
+                  <span class="perm-name">{row.name}</span>
+                  <span class="perm-desc">{row.desc}</span>
+                  {#if row.state !== "granted" && row.hint}
+                    <span class="perm-hint">{row.hint}</span>
+                  {/if}
+                </div>
+                <div class="perm-status" class:perm-status-stacked={row.canGrant}>
+                  <span class="badge" class:badge-off={row.state !== "granted"}>{row.stateText}</span>
+                  {#if row.canGrant}
+                    <button class="nl-button perm-grant" onclick={() => grant(row.key)} disabled={granting !== null}>
+                      {granting === row.key ? "Asking…" : "Grant"}
+                    </button>
+                  {/if}
+                </div>
+              </li>
+            {/each}
+          </ul>
+        {:else if kind === "incompatible" || kind === "absent" || kind === "unreachable"}
+          <p class="section-hint">Nothing can be granted until the pinned driver reports; the lines above say what to run.</p>
+        {/if}
+
+        {#if grantNote}
+          <p class="section-hint" role="status">{grantNote}</p>
+        {/if}
 
         <button class="nl-button-secondary refresh" onclick={refresh} disabled={checking}>
           {checking ? "Checking…" : "Refresh status"}
@@ -170,9 +230,42 @@
       {:else if error}
         <button class="nl-button-secondary refresh" onclick={refresh} disabled={checking}>Retry</button>
       {:else}
-        <p class="loading" role="status"><span class="spinner" aria-hidden="true"></span>Checking permissions…</p>
+        <p class="loading" role="status"><span class="spinner" aria-hidden="true"></span>Asking the driver…</p>
       {/if}
     </section>
+
+    {#if onMacos}
+      <section class="section section-secondary" aria-labelledby="app-permissions-title">
+        <h3 id="app-permissions-title" class="subsection-title">This app's own grants</h3>
+        <p class="section-desc">
+          The older coordinate tools run inside this app and use its own grants; the driver above does not.
+        </p>
+
+        {#if appError}
+          <p class="section-error" role="alert">{appError}</p>
+        {/if}
+
+        {#if appPermissions}
+          <ul class="perm-list">
+            {#each appItems as item (item.key)}
+              <li class="perm-row">
+                <div class="perm-info">
+                  <span class="perm-name">{item.name}</span>
+                  <span class="perm-desc">{item.desc}</span>
+                </div>
+                <div class="perm-status">
+                  {#if item.granted}
+                    <span class="badge">Granted</span>
+                  {:else}
+                    <button class="nl-button-secondary perm-grant" onclick={() => openAppSettings(item.key)}>Open System Settings</button>
+                  {/if}
+                </div>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </section>
+    {/if}
   </main>
 </div>
 
@@ -317,6 +410,12 @@
     gap: 8px;
   }
 
+  .perm-status-stacked {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+  }
+
   .badge-off {
     background: var(--card);
     color: var(--text-muted);
@@ -331,6 +430,71 @@
     line-height: 1.6;
     color: var(--text-muted);
     margin: 0 0 32px;
+  }
+
+  .section-secondary {
+    margin-top: 32px;
+  }
+
+  .subsection-title {
+    font: 500 16px/1.3 var(--font-body);
+    color: var(--foreground);
+    margin: 0 0 6px;
+  }
+
+  .status-list {
+    list-style: none;
+    margin: 0 0 16px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .status-line {
+    font-size: 13px;
+    line-height: 1.6;
+    padding-left: 16px;
+    position: relative;
+    overflow-wrap: anywhere;
+  }
+
+  .status-line::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 8px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--border);
+  }
+
+  .status-ok {
+    color: var(--text-secondary);
+  }
+
+  .status-ok::before {
+    background: var(--primary);
+  }
+
+  .status-muted {
+    color: var(--text-muted);
+  }
+
+  .status-error {
+    color: var(--destructive);
+  }
+
+  .status-error::before {
+    background: var(--destructive);
+  }
+
+  .perm-hint {
+    display: block;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 4px;
   }
 
   .section-hint code,
