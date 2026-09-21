@@ -1772,6 +1772,7 @@ mod tests {
                     frame: Some(Rect::new(0.0, 0.0, 800.0, 600.0).unwrap()),
                     parent_index: None,
                     depth: 0,
+                    in_web_content: None,
                 },
                 AccessibilityElement {
                     element_index: 1,
@@ -1785,6 +1786,7 @@ mod tests {
                     frame: Some(Rect::new(10.0, 20.0, 80.0, 24.0).unwrap()),
                     parent_index: Some(0),
                     depth: 1,
+                    in_web_content: None,
                 },
             ],
             tree_markdown: Some(
