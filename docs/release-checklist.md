@@ -1,0 +1,93 @@
+# Release checklist: model defaults and the Codex pin
+
+`scripts/bump-version.sh` moves the version number; it knows nothing about
+which models Nolune seeds or which `codex` release it speaks to. Those are
+source constants with tests and docs around them, so a release that changes
+either walks this list before the tag. [providers.md](providers.md) is the
+page the entries below keep true.
+
+## Model defaults
+
+Where a default model id lives:
+
+- `default_presets` in `server/src/config.rs`: the presets seeded when a
+  provider is first set up, and `default_slots` next to it (which seeded
+  preset fills the chat and background slots).
+- `server/src/onboard.rs` (the `config.toml` template `nolune onboard`
+  writes) and `server/config.example.toml`: the Anthropic defaults again.
+- `client/src/lib/components/chat/ChatExample.svelte` and the Model id
+  placeholder in the Connections settings page: display examples only.
+
+To change one:
+
+1. Change the id in `default_presets` (and `default_slots` if the seeded
+   preset ids change), then the onboarding template and the example config
+   when the Anthropic defaults moved.
+2. Run the ignored network test for that provider with a real key so the
+   new id answers: `ANTHROPIC_API_KEY=... cargo test --manifest-path
+   server/Cargo.toml --bin nolune -- --ignored network_anthropic`, and the
+   same for `network_openai` / `network_openrouter` with their keys. The
+   seeded ids are also what `probe_model` uses for a first key's probe, so
+   a retired id would break onboarding, not only the chat.
+3. Update the seeded-models table and the per-provider setup sections in
+   `docs/providers.md`; `server/tests/provider_docs.rs` fails until every
+   seeded id appears there.
+4. Existing installs are not touched: seeding only runs for a provider with
+   no presets, so a person's `config.toml` keeps its ids. Say so in the
+   release notes when a default is retired upstream, so people know to edit
+   their presets.
+
+## The pinned Codex release
+
+Nolune speaks to one `codex` release, `0.155.0`, pinned as `CODEX_VERSION`
+in `server/src/services/llm/codex/mod.rs`, and the fake app-server the
+tests use plays `server/src/services/llm/fixtures/codex-<version>.jsonl`.
+A newer codex on the machine is refused by discovery until the pin moves.
+
+To move it:
+
+1. Install the new release locally (`codex --version` must print it) and
+   read its protocol changes: `codex app-server generate-json-schema
+   --experimental --out <dir>` with a scratch `CODEX_HOME` writes the v2
+   schema; diff `ClientRequest`, `ServerRequest`, `ServerNotification`,
+   `CodexErrorInfo` and the `thread/start` params against the previous
+   release. Anything the adapter sends or reads that changed shape is an
+   adapter change first.
+2. Set `CODEX_VERSION`, rename the fixture to `codex-<new>.jsonl` and
+   update its `pin` header line; `fake::fixture_path()` follows the
+   constant.
+3. Re-record the live shapes with a scratch `CODEX_HOME` and no login (the
+   fixture header lists which entries are captures and which follow the
+   published schema): `initialize`, `model/list`, `account/read`,
+   `config/read`, `thread/start`, `thread/resume`, `turn/start`, the turn
+   events, `turn/interrupt`, the failed and interrupted `turn/completed`,
+   the pre-initialize and unknown-method errors. Nothing under `~/.codex`
+   is read or written when `CODEX_HOME` points elsewhere.
+4. If `model/list` changed, update the seeded Codex presets in
+   `default_presets` (the Model defaults list above applies).
+5. Run the fixture-driven suite, then the live tests against the new
+   binary: `cargo test --locked --manifest-path server/Cargo.toml -- codex`
+   without credentials; `NOLUNE_CODEX_LIVE=1 cargo test --locked
+   --manifest-path server/Cargo.toml --bin nolune -- --ignored
+   services::llm::codex` for the handshake, discovery, the smoke test with a
+   scratch home and, with a login in codex's home, the tool round trip
+   through the real app-server. Check that no `codex app-server` child is
+   left running afterwards.
+6. Update the pinned version wherever the docs name it: the Codex setup
+   step and the process section in `docs/providers.md`, and this page;
+   `server/tests/provider_docs.rs` fails when either page names another
+   release. `docs/settings.md` describes the login routes and needs a change
+   only when their shapes did.
+7. Say in the release notes which codex release is now required: people
+   who installed the previous one see `codex_incompatible` from
+   `GET /api/config/codex/status` until they upgrade.
+
+## Before the tag
+
+- `cargo test --locked --manifest-path server/Cargo.toml --all-targets`
+  green, including `tests/provider_docs.rs`, `tests/provider_boundary.rs`,
+  `tests/model_presets.rs` and `tests/codex_auth.rs`.
+- `./scripts/bump-version.sh <version>`, then commit, tag and push as
+  `CLAUDE.md` says.
+- The Cua Driver has a pin of its own (`docs/computer-use.md`); a release
+  that moves it follows that page.
