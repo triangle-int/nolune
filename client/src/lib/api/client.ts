@@ -35,6 +35,7 @@ import type {
 } from "./types.js";
 export type { MachineInfo } from "./types.js";
 import { clearLegacyBrowserAuth } from "./legacy-auth-cleanup.js";
+import { importReply } from "../settings/import-status.js";
 
 const BASE = "";
 
@@ -1097,16 +1098,17 @@ export class ImportError extends Error {
 
 /**
  * Replace the companion with an archive. The browser streams the upload and
- * reports it through `onProgress` (bytes sent, bytes total); once it is
- * complete the server validates the archive, swaps it in, and rebuilds the
- * index before answering, so the promise stays pending through that too.
+ * reports it through `onProgress` (bytes sent, bytes total, and whether the
+ * upload is complete); once it is complete the server validates the
+ * archive, swaps it in, and rebuilds the index before answering, so the
+ * promise stays pending through that too.
  * XMLHttpRequest is used for its upload progress; the session cookie travels
  * the same way as with fetch.
  */
 export function importInstance(
 	slug: string,
 	file: File,
-	onProgress?: (sentBytes: number, totalBytes: number) => void,
+	onProgress?: (sentBytes: number, totalBytes: number, uploaded: boolean) => void,
 ): Promise<ImportOutcome> {
 	return new Promise((resolve, reject) => {
 		const form = new FormData();
@@ -1114,9 +1116,15 @@ export function importInstance(
 		const xhr = new XMLHttpRequest();
 		xhr.open("POST", `${BASE}/api/instances/${encodeURIComponent(slug)}/import`);
 		xhr.responseType = "text";
+		let total = 0;
 		xhr.upload.onprogress = (event) => {
-			if (event.lengthComputable) onProgress?.(event.loaded, event.total);
+			if (!event.lengthComputable) return;
+			total = event.total;
+			onProgress?.(event.loaded, event.total, false);
 		};
+		// The browser has sent the whole body: from here the server is
+		// validating and restoring, whatever the byte counts said.
+		xhr.upload.onload = () => onProgress?.(total, total, true);
 		xhr.onerror = () => reject(new ImportError("unreachable", "the server could not be reached; nothing was changed"));
 		xhr.onabort = () => reject(new ImportError("aborted", "the upload was interrupted; nothing was changed"));
 		xhr.onload = () => {
@@ -1124,17 +1132,11 @@ export function importInstance(
 				reject(new AuthError());
 				return;
 			}
-			let body: Partial<ImportOutcome & { error: string; message: string }> = {};
-			try {
-				body = JSON.parse(xhr.responseText);
-			} catch {
-				body = {};
-			}
-			if (xhr.status < 200 || xhr.status >= 300) {
-				reject(new ImportError(body.error ?? `http_${xhr.status}`, body.message ?? xhr.responseText ?? "import failed"));
-				return;
-			}
-			resolve(body as ImportOutcome);
+			// Only the route's own `ok: true` is a restore; a 2xx without it
+			// (a proxy's page, an empty body) is an error, never a success.
+			const reply = importReply(xhr.status, xhr.responseText);
+			if (reply.ok) resolve(reply.outcome as unknown as ImportOutcome);
+			else reject(new ImportError(reply.code, reply.message));
 		};
 		xhr.send(form);
 	});

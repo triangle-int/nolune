@@ -230,6 +230,87 @@ fn restore_refuses_without_confirmation_off_a_terminal_and_without_the_archive()
     assert!(stderr.contains("nolune gateway"), "{stderr}");
 }
 
+/// Something on the port answers 2xx without the import's own JSON (a
+/// proxy's page, an empty body): that is not a restore, and the CLI must not
+/// print one.
+#[test]
+fn restore_never_reports_success_for_a_2xx_that_is_not_the_imports_answer() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    onboard(&home);
+    let archive = valid_archive(tmp.path());
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        // Read the whole request (headers, then Content-Length bytes) so the
+        // upload completes before the reply.
+        let mut request = Vec::new();
+        let mut buf = [0u8; 4096];
+        let header_end = loop {
+            let n = stream.read(&mut buf).unwrap();
+            assert!(n > 0, "request ended before its headers");
+            request.extend_from_slice(&buf[..n]);
+            if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                break end + 4;
+            }
+        };
+        let headers = String::from_utf8_lossy(&request[..header_end]).to_string();
+        let length: usize = headers
+            .lines()
+            .find_map(|line| line.strip_prefix("content-length: "))
+            .or_else(|| {
+                headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("Content-Length: "))
+            })
+            .expect("content-length")
+            .trim()
+            .parse()
+            .unwrap();
+        while request.len() < header_end + length {
+            let n = stream.read(&mut buf).unwrap();
+            assert!(n > 0, "request ended before its body");
+            request.extend_from_slice(&buf[..n]);
+        }
+        let body = "<html>ok</html>";
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        headers
+    });
+
+    let out = nolune(&home)
+        .args(["restore", "--yes"])
+        .arg(&archive)
+        .env("PORT", port.to_string())
+        .output()
+        .unwrap();
+    let headers = server.join().unwrap();
+    assert!(
+        headers.starts_with("POST /api/instances/companion/import "),
+        "{headers}"
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(!stdout.contains("restored"), "{stdout}");
+    assert!(stderr.contains("unexpected reply"), "{stderr}");
+    assert!(stderr.contains("HTTP 200"), "{stderr}");
+}
+
 #[cfg(unix)]
 #[test]
 fn restore_posts_the_archive_to_the_running_server_which_serves_the_restored_companion() {

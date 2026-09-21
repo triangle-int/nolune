@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 const path = new URL('../src/lib/api/client.ts', import.meta.url);
-const source = ts.transpile(readFileSync(path, 'utf8'), { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext }).replace('./legacy-auth-cleanup.js', new URL('../src/lib/api/legacy-auth-cleanup.js', import.meta.url).href);
+// The transpiled module is loaded from a data: URL, so its relative imports
+// are rewritten to the files they name.
+const source = ts.transpile(readFileSync(path, 'utf8'), { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext })
+	.replace('./legacy-auth-cleanup.js', new URL('../src/lib/api/legacy-auth-cleanup.js', import.meta.url).href)
+	.replace('../settings/import-status.js', new URL('../src/lib/settings/import-status.js', import.meta.url).href);
 const api = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 // Since #112 the browser holds no credential: the HttpOnly session cookie is
 // attached by the browser itself, so no request may add an Authorization

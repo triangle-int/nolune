@@ -727,6 +727,15 @@ If the service was started with NOLUNE_AUTH_TOKEN, run `nolune restore{flag}` wi
             eprintln!("{verb}: HTTP {status} {message}");
             1
         }
+        // A 2xx that is not the import's own answer (a proxy page, an empty
+        // body) is not a restore: never print one that did not happen.
+        Ok((status, body)) if body["ok"] != serde_json::Value::Bool(true) => {
+            eprintln!(
+                "unexpected reply from the server (HTTP {status}): cannot tell whether {} was restored; check the server log",
+                display(profile)
+            );
+            1
+        }
         Ok((_, body)) => {
             let files = body["files"].as_u64().unwrap_or(0);
             let bytes = body["bytes"].as_u64().unwrap_or(0);
@@ -789,7 +798,7 @@ fn cua(action: CuaAction, profile: &Profile) -> i32 {
 }
 
 /// Run `work` on a thread with its own runtime: `main` already sits inside tokio, and
-/// these steps (a download, a driver handshake) have to block.
+/// these steps (a download, a driver handshake, an archive upload) have to block.
 fn on_own_runtime<T, F>(work: impl FnOnce() -> F + Send + 'static) -> Result<T, String>
 where
     F: Future<Output = T>,
@@ -803,7 +812,7 @@ where
         Ok(runtime.block_on(work()))
     })
     .join()
-    .unwrap_or_else(|_| Err("the driver step panicked".to_owned()))
+    .unwrap_or_else(|_| Err("the request thread panicked".to_owned()))
 }
 
 /// The asset `nolune cua install` fetches for this host: the pinned one.
