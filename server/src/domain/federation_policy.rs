@@ -686,18 +686,6 @@ pub enum ApprovalStatus {
     Denied,
 }
 
-impl ApprovalStatus {
-    pub const ALL: [ApprovalStatus; 3] = [Self::Pending, Self::Approved, Self::Denied];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Approved => "approved",
-            Self::Denied => "denied",
-        }
-    }
-}
-
 /// One request that asked the owner, as `federation/approvals.json` keeps
 /// it and `GET /api/federation/approvals` lists it: who asked for which
 /// intent at which disclosure class, when, until when, and what the owner
@@ -1312,10 +1300,13 @@ mod tests {
                 "a pending approval accepted a {field} field"
             );
         }
-        assert_eq!(
-            ApprovalStatus::ALL.map(ApprovalStatus::name),
-            ["pending", "approved", "denied"]
-        );
+        for (status, name) in [
+            (ApprovalStatus::Pending, "\"pending\""),
+            (ApprovalStatus::Approved, "\"approved\""),
+            (ApprovalStatus::Denied, "\"denied\""),
+        ] {
+            assert_eq!(serde_json::to_string(&status).unwrap(), name);
+        }
     }
 
     #[test]
