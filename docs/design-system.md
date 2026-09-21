@@ -9,7 +9,7 @@ Use this guide before changing the client, landing, onboarding, or brand assets.
 - Interactive examples: client route `/design-system`, including the real message, composer, and tool components. Examples are explicitly sample content and do not require a backend.
 - Landing: `landing/src/app.css` and `landing/src/lib/components/`. The self-hosting docs under `landing/src/routes/docs/` reuse `.section-shell`, `.eyebrow` and `.section-title`; their section nav and long-form prose rules (headings divided by 1px borders, mono code and tables that scroll in their own container) live in `docs/+layout.svelte`, and every section page is wrapped in `DocsPage.svelte`.
 - Desktop (Tauri): `desktop/src/app.css` mirrors the client tokens and `nl-*` primitives; fonts are bundled from Fontsource because the app CSP only allows same-origin assets. Desktop avatar: `desktop/src/lib/components/Moon.svelte`.
-- Avatar: `client/static/skins/moon/character.svg`; thinking expression beside it. Landing copy: `landing/static/assets/nolune-moon.svg`. Desktop copy: the inline `Moon.svelte` component and the app icon source generated from the same path.
+- Avatar: `client/static/skins/moon/character.svg`; the other expressions beside it (`thinking.svg`, `listening.svg`, `recalling.svg`, `working.svg`, `waiting.svg`, `blocked.svg`, `failed.svg`, `offline.svg`, `completed.svg`), all the same crescent with different eyes, drawn from the table in `client/src/lib/companion/expressions.js`. Landing copy: `landing/static/assets/nolune-moon.svg`. Desktop copy: the inline `Moon.svelte` component, which draws the same eyes from the same table, and the app icon source generated from the same path.
 - Animated marketing avatar: `landing/src/lib/components/MoonCompanion.svelte`.
 
 Update the guide and reference page when intentionally changing this system. Reuse existing components and tokens before inventing another variant. Do not automatically create a new palette for each feature.
@@ -65,39 +65,45 @@ Use the 4px spacing scale: 4, 8, 12, 16, 24, 32, 48. Typical panel padding 24px,
 
 ## Avatar and motion
 
-Use the approved lavender crescent path and small dark eyes. Keep the face minimal. Use the thinking SVG for actual thinking state, never an unrelated randomized video.
+Use the approved lavender crescent path and small dark eyes. Keep the face minimal. Every expression is the state the companion is really in (see Companion state below), never an unrelated randomized video.
 
 On the landing, the moon can float, blink, glance, and change expression on activation. Keep motion gentle and avoid changing animation duration on hover (this shifts phase and visibly snaps). Supply pause for continuous decorative motion and honor `prefers-reduced-motion`. Essential UI must remain usable without animation. Do not hide the avatar in reduced-motion mode.
 
 ## Companion state
 
-Little Moon reflects what Nolune is really doing, never a decorative mood. The state comes from the pure reducer in `client/src/lib/companion/state.js`, held by the scene store (`scene.companion`, `scene.companionStatus`) and fed by the root layout from websocket events only. Every state has an accessible sentence that names the related action, computer, request, or blocker, so it reads without motion; when several facts hold at once the highest row wins.
+Little Moon reflects what Nolune is really doing, never a decorative mood. The state comes from the pure reducer in `client/src/lib/companion/state.js`, held by the scene store (`scene.companion`, `scene.companionStatus`) and fed from runtime events only: the root layout passes every websocket event through `companionEventFromServer` (and the answered secret request), and `ChatView` adds the persisted `agent_running` of each conversation snapshot it loads (initial load, reconnect, resync), so a run the socket missed still shows and one that ended while the client was away is over without being claimed. The `chat_snapshot` the server broadcasts is not loaded state: it precedes `agent_stopped` in the stop sequence and is not fed. Every state has an accessible sentence that names the related action, computer, request, or blocker, so it reads without motion; when several facts hold at once the highest row wins.
 
-| Priority | State | Derived from | Status text |
-| --- | --- | --- | --- |
-| 1 | Offline | Socket closed or not open yet | “Nolune is offline, reconnecting (attempt 3).” / “Nolune is connecting.” |
-| 2 | Blocked by permissions | `run_command` output reporting a permission denial, in any shape it produces: `error: …`, `stderr: …`, or a raw PTY diagnostic line | “Nolune is blocked by permissions: running command (ls: /root: Permission denied).” |
-| 3 | Waiting for approval | An unanswered `secret_request` or approval | “Nolune is waiting for you: a GitHub token for gh.” |
-| 4 | Failed | The server’s `[system] <error>` assistant message that precedes `agent_stopped` (which carries no error field), or an `agent_stopped` that names one | “Nolune stopped with an error: something went wrong.” |
-| 5 | Working on another computer | A tool call that names another machine (from #80’s trail) | “Nolune is working on studio-mac: opening Finder.” |
-| 6 | Working locally | A tool call on this computer | “Nolune is working on this computer: reading notes/tea.md.” |
-| 7 | Recalling | `memory_recall` before the first action of the run | “Nolune is recalling 3 memories.” |
-| 8 | Thinking | `agent_running` with no recall or action yet, or a reply after the last action | “Nolune is thinking.” |
-| 9 | Listening | The server accepted your message; no run yet | “Nolune is listening.” |
-| 10 | Completed | `agent_stopped` without error, blocker, or open request | “Nolune finished.” |
-| 11 | Idle | Connected, nothing in progress | “Nolune is idle.” |
+| Priority | State | Derived from | Status text | Face · motion |
+| --- | --- | --- | --- | --- |
+| 1 | Offline | Socket closed or not open yet | “Nolune is offline, reconnecting (attempt 3).” / “Nolune is connecting.” | `offline.svg` (eyes closed, dimmed) · still |
+| 2 | Blocked by permissions | `run_command` output reporting a permission denial, in any shape it produces: `error: …`, `stderr: …`, or a raw PTY diagnostic line | “Nolune is blocked by permissions: running command (ls: /root: Permission denied).” | `blocked.svg` (flat eyes) · still |
+| 3 | Waiting for approval | An unanswered `secret_request` or approval, in the conversation the `request_secret` call came from | “Nolune is waiting for you: a GitHub token for gh.” (the prompt links to that conversation) | `waiting.svg` (glancing up at you) · hold (soft pulse) |
+| 4 | Failed | The server’s `[system] <error>` assistant message that precedes `agent_stopped` (which carries no error field), an `agent_stopped` that names one, or a proactive run’s failed receipt once nothing else runs | “Nolune stopped with an error: something went wrong.” | `failed.svg` (eyes down) · still |
+| 5 | Working on another computer | A `computer_use`, `remote_bash` or `remote_files` call whose trail line names another computer (“screenshot on Studio Mac”, #80); “on the server home” is this computer | “Nolune is working on Studio Mac: screenshot.” | `working.svg` (narrowed eyes) · nod |
+| 6 | Working locally | A tool call on this computer | “Nolune is working on this computer: reading notes/tea.md.” | `working.svg` · nod |
+| 7 | Recalling | `memory_recall` before the first action of the run | “Nolune is recalling 3 memories.” | `recalling.svg` (looking up and away) · drift |
+| 8 | Thinking | `agent_running` or a proactive run (`activity_updated`, running) with no recall or action yet, or a reply after the last action | “Nolune is thinking.” / “Nolune is thinking: Check-in.” | `thinking.svg` (round eyes) · float |
+| 9 | Listening | The server accepted your message; no run yet | “Nolune is listening.” | `listening.svg` (wide eyes) · breathe |
+| 10 | Completed | `agent_stopped` or a completed receipt, without error, blocker, or open request | “Nolune finished.” / “Nolune finished: Check-in.” | `completed.svg` (happy eyes) · settle (one bounce) |
+| 11 | Idle | Connected, nothing in progress | “Nolune is idle.” | `character.svg` · breathe |
 
 Rules that keep animation honest:
 
 - Offline beats everything and keeps the facts underneath, so reconnecting restores the state the runtime is still in.
 - Blocked and waiting beat working. Both outlast `agent_stopped`: a blocked run or an open request is never shown as completed. A blocker clears when the next message or run starts; a request clears only when answered.
-- Completed is claimed only for a run the client saw start, once its last run stops without an error. It is the one transient state: the scene store returns it to idle after a short hold; the reducer itself has no timers.
+- Completed is claimed only for a run the client saw start, once its last run stops without an error. It is the one transient state: the scene store returns it to idle after a short hold; the reducer itself has no timers. A snapshot that says nothing is running, a cancelled receipt, or the desktop overlay’s idle signal end a run without claiming success. The server snapshots a conversation right before it stops, so a run a snapshot ended is remembered (`ended`) until the `agent_stopped` that follows, which may still claim it; the next run of that chat forgets it.
 - A failure is recorded the moment the server reports it, so the `agent_stopped` that follows cannot claim completed. `[system]` status lines (mood, rhythm, routine, desktop connected) are neither replies nor failures and change nothing.
+- A failure belongs to the run that reported it. A chat turn’s failure is the companion’s own and outlives any proactive receipt; a proactive run’s failed receipt (such as a heartbeat or `machine_connected` run with no background preset) is recorded only once nothing else runs, so it never overrides a chat turn in progress and that turn’s clean stop still reads as completed. The receipt is in the Activity view either way.
+- The request, the blocker and the failure each remember their conversation, so the status keeps linking to it after the run stopped, which is when blocked and failed are most visible.
 - Recalling never overrides working: once an action runs, later recalls only add to the count, and the pause between actions is thinking, not a stale recall.
-- A message sent to a companion that is already working is heard without interrupting the work. One companion may run several chats; it is working while any run is active.
+- A message sent to a companion that is already working is heard without interrupting the work. One companion may run several chats and proactive runs; it is working while any run is active.
 - Pass the companion’s name to `companionStatusText` when it is known; the product name is the fallback.
 
-The `/design-system` page reduces one documented event sequence per state, so the gallery cannot drift from the reducer. Expressions and motion per state, and the desktop overlay port, follow in later slices of #86.
+The face and motion come from the pure table in `client/src/lib/companion/expressions.js` (`companionExpression(kind, { reducedMotion })`): one still SVG per expression under `client/static/skins/moon`, a named motion per state, and under `prefers-reduced-motion` the same face held still (`none`). Approval, permission, degraded and failure states never borrow the completed or idle face, and a companion that is offline, blocked or stopped with an error does not move even when motion is allowed. `MoonExpression.svelte` renders the table (the CSS motions live there and are switched off by the media query as well as by the table); `CompanionStatus.svelte` renders the sentence as a polite live region (`role="status"`, `aria-live="polite"`) whose focus links to the related surface through `companionStatusSegments`: the Computers tab for a machine, the conversation an action, request, blocker or chat failure belongs to (the chat tab itself for the default conversation or when none is known), the Activity entry of a proactive run, or its handoff card. `SharedScene.svelte` shows both under the moon at desktop width; on phones the moon is a faded backdrop and the status stays in the accessibility tree while the chat bar carries the words. Reduced-motion mode therefore keeps the face and the text and loses nothing but movement.
+
+The same model runs in both overlays: the browser overlay route (`/overlay/[slug]`) reads the scene store the root layout feeds and loads the default conversation’s persisted `agent_running` on every connection (the socket sends nothing on connect), so an overlay opened mid-run shows the run; the desktop overlay (`desktop/src/routes/overlay/+page.svelte`) maps the Tauri events it already receives through `desktop/src/lib/overlay-state.js` (`computer-use-action` is work on this computer; `computer-use-idle` ends the run without claiming success) into the client’s reducer, imported from the client source rather than copied, and `desktop/src/lib/components/Moon.svelte` draws the expression’s eyes from the shared table.
+
+The `/design-system` page reduces one documented event sequence per state, renders each with its expression, motion and linked status, and has a reduced-motion toggle that holds every moon still while the words stay.
 
 ## Connected spaces
 

@@ -1,10 +1,20 @@
 <script lang="ts">
-  /** Little Moon avatar. Same path as client/static/skins/moon/character.svg. */
+  /**
+   * Little Moon avatar. Same path as client/static/skins/moon/character.svg;
+   * the eyes of each expression come from the shared table
+   * (client/src/lib/companion/expressions.js), so the overlay's face matches
+   * the static SVG the client shows for the same state.
+   */
+  import { MOON_BODY, eyesMarkup } from "../../../../client/src/lib/companion/expressions.js";
+
   let {
     size = 32,
     label = "",
+    expression = "idle",
     class: className = "",
-  }: { size?: number | string; label?: string; class?: string } = $props();
+  }: { size?: number | string; label?: string; expression?: string; class?: string } = $props();
+
+  const eyes = $derived(eyesMarkup(expression, "var(--primary-foreground)"));
 </script>
 
 <svg
@@ -16,16 +26,10 @@
   role={label ? "img" : undefined}
   aria-label={label || undefined}
   aria-hidden={label ? undefined : "true"}
+  data-expression={expression}
 >
-  <path
-    class="moon-body"
-    d="M155 24C161 23 164 29 160 34C127 74 130 129 157 168C183 207 228 224 277 210C284 208 289 214 285 221C262 266 217 292 170 290C93 287 36 230 36 157C36 91 85 34 155 24Z"
-    fill="var(--primary)"
-  />
-  <g class="moon-eyes" fill="var(--primary-foreground)">
-    <ellipse cx="81" cy="164" rx="6" ry="9" />
-    <ellipse cx="110" cy="164" rx="6" ry="9" />
-  </g>
+  <path class="moon-body" d={MOON_BODY} fill="var(--primary)" />
+  <g class="moon-eyes">{@html eyes}</g>
 </svg>
 
 <style>

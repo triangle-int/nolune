@@ -2,6 +2,9 @@
   import { listen } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
   import Moon from "$lib/components/Moon.svelte";
+  import { overlayEvent, overlayInitialState } from "$lib/overlay-state.js";
+  import { companionStatusText, reduceCompanion, type CompanionState } from "../../../../client/src/lib/companion/state.js";
+  import { companionExpression } from "../../../../client/src/lib/companion/expressions.js";
 
   type Flash = { id: number; text: string; icon: string };
 
@@ -9,6 +12,15 @@
   let actionQueue = $state<Flash[]>([]);
   let idCounter = 0;
   let hideTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // What the companion is doing on this computer, through the same reducer
+  // as the client (#86): working while actions arrive, over when the relay
+  // connection ends. The face and motion follow the shared expression table;
+  // under prefers-reduced-motion the face stays and the moon holds still.
+  let companion = $state.raw<CompanionState>(overlayInitialState());
+  let reducedMotion = $state(false);
+  const look = $derived(companionExpression(companion.kind, { reducedMotion }));
+  const status = $derived(companionStatusText(companion));
 
   function resetHideTimer() {
     if (hideTimer) clearTimeout(hideTimer);
@@ -36,40 +48,41 @@
     bash: "command", switch_desktop: "desktop",
   };
 
-  const actionLabels: Record<string, string> = {
-    screenshot: "Screenshot", left_click: "Click", right_click: "Right click",
-    middle_click: "Middle click", double_click: "Double click", mouse_move: "Move",
-    scroll: "Scroll", type: "Typing", key: "Key", bash: "Command",
-    switch_desktop: "Switch space",
-  };
-
-  function flashAction(name: string, detail: string) {
+  function flashAction(name: string, text: string) {
     const id = ++idCounter;
     const icon = icons[actionIcons[name] ?? "action"] ?? icons.action;
-    const label = actionLabels[name] ?? name;
-    const text = detail ? `${label}: ${detail}` : label;
     actionQueue = [...actionQueue, { id, text, icon }];
     setTimeout(() => { actionQueue = actionQueue.filter(a => a.id !== id); }, 3000);
   }
 
   onMount(() => {
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    reducedMotion = query.matches;
+    const onMotion = (e: MediaQueryListEvent) => (reducedMotion = e.matches);
+    query.addEventListener("change", onMotion);
+
     const unlistenAction = listen<string>("computer-use-action", (e) => {
+      const event = overlayEvent("computer-use-action", e.payload);
+      if (event) companion = reduceCompanion(companion, event);
+      let name = "";
       try {
-        const data = JSON.parse(e.payload);
-        visible = true;
-        flashAction(data.action ?? "", data.detail ?? "");
+        name = String(JSON.parse(e.payload).action ?? "");
       } catch {
-        visible = true;
-        flashAction(e.payload, "");
+        // Not JSON: no icon to pick.
       }
+      visible = true;
+      flashAction(name, event && event.type === "action" ? event.summary : e.payload);
       resetHideTimer();
     });
 
     const unlistenDone = listen("computer-use-idle", () => {
+      const event = overlayEvent("computer-use-idle", undefined);
+      if (event) companion = reduceCompanion(companion, event);
       visible = false;
     });
 
     return () => {
+      query.removeEventListener("change", onMotion);
       unlistenAction.then(fn => fn());
       unlistenDone.then(fn => fn());
     };
@@ -77,9 +90,11 @@
 </script>
 
 <div class="overlay" class:overlay-visible={visible}>
-  <div class="pip">
-    <Moon size={48} label="Nolune is working" />
+  <div class="pip" data-motion={look.motion} data-kind={companion.kind}>
+    <Moon size={48} expression={look.expression} />
   </div>
+
+  <p class="status" role="status" aria-live="polite">{status}</p>
 
   <div class="flash-stack" aria-live="polite">
     {#each actionQueue as flash (flash.id)}
@@ -127,14 +142,27 @@
     animation: pip-in 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
   }
 
+  /* Motion per state, from the shared table: the moon nods while it works,
+     breathes at rest, holds still when stopped or when the viewer asked. */
   .pip :global(.moon-body) {
     transform-origin: 160px 165px;
+  }
+  .pip[data-motion="nod"] :global(.moon-body) {
+    animation: nod 1.2s ease-in-out infinite;
+  }
+  .pip[data-motion="breathe"] :global(.moon-body),
+  .pip[data-motion="float"] :global(.moon-body) {
     animation: float 6s ease-in-out infinite;
+  }
+  .pip[data-motion="settle"] :global(.moon-body) {
+    animation: settle 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) 1;
   }
 
   .pip :global(.moon-eyes) {
     transform-box: fill-box;
     transform-origin: center;
+  }
+  .pip:not([data-motion="none"]) :global(.moon-eyes) {
     animation: blink 6.5s ease-in-out infinite;
   }
 
@@ -148,9 +176,40 @@
     50% { transform: translateY(-6px) rotate(2deg); }
   }
 
+  @keyframes nod {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(5px); }
+  }
+
+  @keyframes settle {
+    0% { transform: scale(1); }
+    40% { transform: scale(1.06); }
+    100% { transform: scale(1); }
+  }
+
   @keyframes blink {
     0%, 42%, 46%, 73%, 77%, 100% { transform: scaleY(1); }
     44%, 75% { transform: scaleY(0.08); }
+  }
+
+  /* The words: what the companion is doing here, for a screen reader and for
+     anyone who turned motion off. Visually it sits beside the pip. */
+  .status {
+    position: absolute;
+    right: 92px;
+    bottom: 34px;
+    margin: 0;
+    max-width: calc(100vw - 124px);
+    padding: 6px 12px;
+    border-radius: var(--radius-control);
+    background: var(--card);
+    border: 1px solid var(--border);
+    box-shadow: 0 4px 16px rgb(0 0 0 / 30%);
+    font: 500 12px/1.4 var(--font-body);
+    color: var(--foreground);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .flash-stack {
@@ -196,9 +255,14 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
+    .pip,
     .pip :global(.moon-body),
-    .pip :global(.moon-eyes) {
+    .pip :global(.moon-eyes),
+    .flash {
       animation: none;
+    }
+    .overlay {
+      transition: none;
     }
   }
 </style>
