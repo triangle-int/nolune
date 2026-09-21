@@ -6,6 +6,10 @@
  * @typedef {{ id: string, label: string }} Provider
  * @typedef {{ id: string, name: string, provider: string, model: string }} ModelPreset
  * @typedef {{ chat_preset: string, background_preset: string }} Slots
+ * @typedef {{ vision: boolean, documents: boolean, tools: boolean }} Capabilities
+ * @typedef {{ id: 'vision' | 'documents' | 'tools', chip: string, detail: string }} CapabilityWarning
+ * @typedef {{ ok: true, preset: string, provider: string, model: string, usage: { input_tokens: number, output_tokens: number } }} PresetTestOk
+ * @typedef {{ ok: false, error: string, message: string, status: number, retry_after_seconds?: number | null }} PresetTestFailure
  */
 
 /** @type {readonly Provider[]} */
@@ -137,4 +141,86 @@ export function presetsByProvider(presets) {
 	return PROVIDERS.map((provider) => ({ provider, presets: presets.filter((p) => p.provider === provider.id) })).filter(
 		(group) => group.presets.length > 0,
 	);
+}
+
+/**
+ * What a preset's model cannot do (#28), as a chip for the row and a
+ * sentence for the warning shown before the model is selected. Unknown
+ * capabilities (a preset not saved yet) warn about nothing.
+ *
+ * @param {ModelPreset} preset
+ * @param {Capabilities | null | undefined} caps what the server reports for this preset
+ * @returns {CapabilityWarning[]}
+ */
+export function capabilityWarnings(preset, caps) {
+	if (!caps) return [];
+	const name = (preset?.name ?? "").trim() || preset?.model || "This model";
+	/** @type {CapabilityWarning[]} */
+	const warnings = [];
+	if (!caps.vision) warnings.push({ id: "vision", chip: "no vision", detail: `${name} cannot see images: screenshots and photos sent to it are refused.` });
+	if (!caps.documents) warnings.push({ id: "documents", chip: "no documents", detail: `${name} cannot read PDFs and other documents; share them as text instead.` });
+	if (!caps.tools) warnings.push({ id: "tools", chip: "no tools", detail: `${name} cannot call tools, so with it the companion cannot act on computers, search, or use extensions.` });
+	return warnings;
+}
+
+/**
+ * The capabilities `GET /api/config/models` reports for one preset id.
+ * @param {{ capabilities?: Record<string, Capabilities> } | null | undefined} models
+ * @param {string} id
+ * @returns {Capabilities | undefined}
+ */
+export function presetCapabilities(models, id) {
+	return models?.capabilities?.[id];
+}
+
+/**
+ * One sentence for a connection test outcome (#28), keyed on the typed
+ * `error` the server answers with. The server's message already names the
+ * provider and what it said; the copy here adds what to do about it, and
+ * an error the client does not know shows the message as it is.
+ *
+ * @param {PresetTestOk | PresetTestFailure} outcome
+ * @param {ModelPreset} preset
+ * @returns {{ tone: 'ok' | 'error', text: string }}
+ */
+export function presetTestCopy(outcome, preset) {
+	const provider = providerLabel(preset?.provider);
+	const model = preset?.model || "the model";
+	if (outcome.ok) {
+		const tokens = (outcome.usage?.input_tokens ?? 0) + (outcome.usage?.output_tokens ?? 0);
+		return { tone: "ok", text: `${outcome.model || model} answered · ${tokens} tokens used.` };
+	}
+	const said = outcome.message?.trim() || `${provider} did not answer.`;
+	const wait = outcome.retry_after_seconds ? `in ${outcome.retry_after_seconds} s` : "in a moment";
+	/** @type {Record<string, string>} */
+	const copy = {
+		setup_required: `No ${provider} API key yet. Add one under API keys, then test again.`,
+		authentication: `${provider} rejected the API key. Change it under API keys.`,
+		rate_limited: `${provider} accepted the key but is rate limiting right now; the key works, try again ${wait}.`,
+		model_not_found: `${provider} has no model "${model}". Check the model id.`,
+		provider_rejected: said,
+		provider_unavailable: `${said}. Try again in a moment.`,
+		unreachable: `${said}. Check that this server can reach the internet.`,
+		timeout: `${provider} did not answer in time. Try again.`,
+		invalid_response: said,
+		unsupported: said,
+		unknown_preset: "Save the preset first, then test it.",
+	};
+	return { tone: "error", text: copy[outcome.error] ?? said };
+}
+
+/**
+ * @typedef {ModelPreset & { warnings: CapabilityWarning[] }} PickerPreset
+ */
+
+/**
+ * The presets the composer picker offers (#28): each row with what its
+ * model cannot do, so the chips show before a model is chosen and the
+ * sentence under the composer once it is. A listing without capabilities
+ * (an older server) warns about nothing.
+ * @param {{ presets?: ModelPreset[], capabilities?: Record<string, Capabilities> } | null | undefined} models
+ * @returns {PickerPreset[]}
+ */
+export function pickerPresets(models) {
+	return (models?.presets ?? []).map((preset) => ({ ...preset, warnings: capabilityWarnings(preset, presetCapabilities(models, preset.id)) }));
 }

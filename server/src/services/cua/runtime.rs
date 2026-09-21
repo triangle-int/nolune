@@ -12,11 +12,10 @@
 //! permission granted or revoked after startup into the descriptor.
 
 use std::{
-    collections::BTreeSet,
     future::Future,
     path::PathBuf,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
@@ -34,7 +33,7 @@ use super::{
     driver::{checked_adapter, describe_machine},
     host::{HostProbe, Skip, server_local_machine_id, startup_plan},
     install,
-    session::{is_run_managed, with_session},
+    session::{OpenSessions, is_run_managed, with_session},
     transport::{DriverTransport, StdioDriverTransport},
 };
 use crate::{config::CuaConfig, services::machine_registry::CuaTargets};
@@ -133,7 +132,7 @@ struct Inner {
     state: tokio::sync::Mutex<State>,
     /// Labels of the sessions runs hold open right now; `shutdown` ends every
     /// one and a run that finishes afterwards finds its label gone.
-    open: Arc<Mutex<BTreeSet<SessionLabel>>>,
+    open: Arc<OpenSessions>,
     next_run: AtomicU64,
 }
 
@@ -154,7 +153,7 @@ impl CuaRuntime {
                 targets,
                 workspace_dir,
                 state: tokio::sync::Mutex::new(State::NotStarted),
-                open: Arc::new(Mutex::new(BTreeSet::new())),
+                open: Arc::new(OpenSessions::new()),
                 next_run: AtomicU64::new(1),
             }),
         }
@@ -356,7 +355,7 @@ impl CuaRuntime {
                 _ => unreachable!("matched Running above"),
             }
         };
-        let lost = std::mem::take(&mut *lock_open(&self.inner.open)).len();
+        let lost = self.inner.open.take().len();
         self.inner.targets.unregister(&target.machine_id).await;
         target.transport.close();
         log::error!(
@@ -496,9 +495,7 @@ impl CuaRuntime {
             }
         };
         target.watch.abort();
-        let open: Vec<SessionLabel> = std::mem::take(&mut *lock_open(&self.inner.open))
-            .into_iter()
-            .collect();
+        let open = self.inner.open.take();
         for label in &open {
             end_session(&target.adapter, &target.machine_id, label).await;
         }
@@ -545,14 +542,6 @@ async fn watch_driver(
     }
 }
 
-/// The open-session set; a poisoned lock only means a run panicked, and the
-/// set itself is still consistent.
-fn lock_open(
-    open: &Mutex<BTreeSet<SessionLabel>>,
-) -> std::sync::MutexGuard<'_, BTreeSet<SessionLabel>> {
-    open.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
 /// End one driver session; a failure is logged, never propagated, because
 /// the run is over either way and the child dies with the runtime.
 async fn end_session(adapter: &CheckedCuaAdapter, machine_id: &MachineId, label: &SessionLabel) {
@@ -590,7 +579,7 @@ pub struct RunSession {
     adapter: Arc<CheckedCuaAdapter>,
     /// Set once `start_session` succeeded.
     started: tokio::sync::Mutex<bool>,
-    open: Arc<Mutex<BTreeSet<SessionLabel>>>,
+    open: Arc<OpenSessions>,
     next_request: AtomicU64,
 }
 
@@ -642,7 +631,7 @@ impl RunSession {
         match envelope.response {
             CuaResponse::Success { .. } => {
                 *started = true;
-                lock_open(&self.open).insert(self.label.clone());
+                self.open.insert(self.label.clone());
                 log::info!("[cua] session {} started", self.label.as_str());
                 Ok(())
             }
@@ -656,7 +645,7 @@ impl RunSession {
 
     /// End the session if this run opened it and nothing ended it already.
     async fn finish(&self) {
-        if !lock_open(&self.open).remove(&self.label) {
+        if !self.open.remove(&self.label) {
             return;
         }
         end_session(&self.adapter, &self.machine_id, &self.label).await;
