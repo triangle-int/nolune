@@ -891,6 +891,15 @@ impl AppServer {
         self.inner.events.subscribe()
     }
 
+    /// How many receivers from [`subscribe`](Self::subscribe) are alive
+    /// right now. A subscriber that only listens (the login watcher) asks
+    /// so it can refuse a request from the app-server when it is the one
+    /// that heard it, and leave it alone when a subscriber that answers
+    /// requests is there too.
+    pub fn subscribers(&self) -> usize {
+        self.inner.events.receiver_count()
+    }
+
     /// The live child's pid, if there is one.
     pub fn pid(&self) -> Option<u32> {
         self.live()

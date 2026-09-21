@@ -15,12 +15,13 @@
 // lands; until then the module is only exercised by its tests.
 #![allow(dead_code)]
 
+pub mod auth;
 pub mod discovery;
 pub mod process;
 pub mod protocol;
 
 #[cfg(test)]
-pub(super) mod fake;
+pub(crate) mod fake;
 
 use std::path::PathBuf;
 use std::time::Duration;

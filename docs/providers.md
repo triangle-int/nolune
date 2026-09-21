@@ -47,6 +47,11 @@ codex's own tool surface (shell, file edits, MCP servers) is exposed: only
 tools from Nolune's capability and approval layer will run, once the
 provider adapter lands.
 
-What ships today is this process layer. The provider itself, with presets
-naming a codex model and login status in Settings → Connections, follows in
-later slices of #27.
+What ships today is this process layer and the login behind it:
+`GET /api/config/codex/status`, `POST /api/config/codex/login` (the managed
+browser flow, or a device code for a headless server) and
+`POST /api/config/codex/logout`, described in [settings.md](settings.md);
+they ask the app-server over the same protocol and hand out an account's
+label and what a person needs to finish a login, never a token. The
+provider itself, with presets naming a codex model and a login tile in
+Settings → Connections, follows in later slices of #27.
