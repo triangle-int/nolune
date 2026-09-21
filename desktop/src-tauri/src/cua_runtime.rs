@@ -742,6 +742,16 @@ impl CuaRuntime {
         }
     }
 
+    /// The driver's health report as of now, for the settings window
+    /// (#20): the driver is started when none runs, as on a first
+    /// connection, and the one that runs is asked again, so a permission
+    /// granted since shows. The report is the driver's own, so the grants
+    /// in it are the ones macOS gave the driver's bundle.
+    pub async fn probe(&self, machine_id: &str) -> Result<HealthReportResult, String> {
+        let _ = machine_id;
+        todo!("probe")
+    }
+
     /// Whether a driver is running (spawned and not gone).
     #[cfg(test)]
     pub async fn is_running(&self) -> bool {

@@ -90,6 +90,44 @@ class NoContinuousScreenRecordingTest(unittest.TestCase):
         self.assertIn("RemoteBashTool::new", server_tools)
         self.assertIn("RemoteFilesTool::new", server_tools)
 
+    def test_permission_onboarding_asks_for_one_shot_capture_only(self) -> None:
+        # The desktop's permission onboarding (#20) reads the driver's own
+        # report and runs the driver's grant flow; it never starts anything
+        # that captures on its own.
+        onboarding = (ROOT / "desktop/src-tauri/src/cua_permissions.rs").read_text()
+        self.assertIn('.arg("permissions")', onboarding)
+        self.assertIn('.arg("grant")', onboarding)
+        for subcommand in ('"serve"', '"record"', '"recording"', '"stream"', '"watch"', '"update"'):
+            self.assertNotIn(f".arg({subcommand})", onboarding)
+        self.assert_tokens_absent(
+            "desktop/src-tauri/src/cua_permissions.rs",
+            ("ScreenFrame", "start_recording", "stop_recording", "CGDisplayStream"),
+        )
+        # The copy: one-shot capture during an action, in every state.
+        for path in (
+            "desktop/src/lib/cua-permissions.js",
+            "desktop/src/routes/settings/+page.svelte",
+        ):
+            copy = (ROOT / path).read_text().lower()
+            with self.subTest(path=path):
+                self.assertIn("one-shot", copy)
+                for phrase in (
+                    "continuous",
+                    "always on",
+                    "always-on",
+                    "records your screen",
+                    "record your screen",
+                    "watches your screen",
+                    "live screen",
+                ):
+                    self.assertNotIn(phrase, copy)
+        docs = (ROOT / "docs/computer-use.md").read_text()
+        self.assertIn("## Permissions (#20)", docs)
+        permissions = docs.split("## Permissions (#20)", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("com.trycua.driver", permissions)
+        self.assertIn("one-shot", permissions)
+        self.assertNotIn("continuous capture", permissions.replace("no continuous capture", ""))
+
 
 if __name__ == "__main__":
     unittest.main()
