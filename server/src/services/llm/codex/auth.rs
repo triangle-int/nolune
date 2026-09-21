@@ -210,15 +210,24 @@ pub struct Account {
 }
 
 impl Account {
-    /// The `account` member of an `account/read` answer; `None` when it is
-    /// `null` (nobody is logged in).
-    fn from_read(reply: &Value) -> Option<Self> {
-        let account = reply.get("account")?.as_object()?;
-        let kind = match account.get("type").and_then(Value::as_str)? {
-            "apiKey" => "api_key".to_owned(),
-            other => other.to_owned(),
+    /// The `account` member of an `account/read` answer: `None` when it is
+    /// `null` (nobody is logged in); an answer without it, or with one of
+    /// another shape, is out of protocol.
+    fn from_read(reply: &Value) -> Result<Option<Self>, AppServerError> {
+        let out_of_protocol =
+            |why: &str| AppServerError::Protocol(format!("{ACCOUNT_READ} answered {why}"));
+        let account = match reply.get("account") {
+            None => return Err(out_of_protocol("without account")),
+            Some(Value::Null) => return Ok(None),
+            Some(Value::Object(account)) => account,
+            Some(_) => return Err(out_of_protocol("with an account of another shape")),
         };
-        Some(Self {
+        let kind = match account.get("type").and_then(Value::as_str) {
+            Some("apiKey") => "api_key".to_owned(),
+            Some(other) => other.to_owned(),
+            None => return Err(out_of_protocol("with an account without a type")),
+        };
+        Ok(Some(Self {
             kind,
             email: account
                 .get("email")
@@ -228,7 +237,7 @@ impl Account {
                 .get("planType")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
-        })
+        }))
     }
 }
 
@@ -296,6 +305,41 @@ struct Inner {
     closed: AtomicBool,
 }
 
+impl Inner {
+    /// The pending login `id` ended this way. A login that was replaced,
+    /// or already ended, is left as it is.
+    fn finish(&self, id: &str, outcome: Result<(), String>) {
+        let mut login = self.login.lock().unwrap();
+        let Some(login) = login
+            .as_mut()
+            .filter(|login| login.status.id == id && login.status.state == LoginState::Pending)
+        else {
+            return;
+        };
+        match &outcome {
+            Ok(()) => log::info!("[codex] login completed ({})", login.status.method),
+            Err(why) => log::warn!("[codex] login failed ({}): {why}", login.status.method),
+        }
+        login.status.finish(outcome);
+        login.watcher = None;
+    }
+
+    /// The pending login, if there is one, is over for this reason; its
+    /// watcher is stopped and its id handed back so the app-server can be
+    /// told.
+    fn give_up_pending(&self, why: &str) -> Option<String> {
+        let mut login = self.login.lock().unwrap();
+        let login = login
+            .as_mut()
+            .filter(|login| login.status.state == LoginState::Pending)?;
+        if let Some(watcher) = login.watcher.take() {
+            watcher.abort();
+        }
+        login.status.finish(Err(why.to_owned()));
+        Some(login.status.id.clone())
+    }
+}
+
 /// The login state and the shared app-server; clones share one state.
 #[derive(Clone)]
 pub struct Auth {
@@ -321,9 +365,12 @@ impl Auth {
     }
 
     /// How long a login may stay pending; [`LOGIN_DEADLINE`] by default.
-    pub fn login_deadline(self, deadline: Duration) -> Self {
-        let _ = deadline;
-        todo!("27d: login deadline")
+    /// Set before the handle is shared.
+    pub fn login_deadline(mut self, deadline: Duration) -> Self {
+        Arc::get_mut(&mut self.inner)
+            .expect("the deadline is set before the handle is shared")
+            .login_deadline = deadline;
+        self
     }
 
     fn from_binary(binary: Binary) -> Self {
@@ -341,7 +388,26 @@ impl Auth {
 
     /// The binary, found and verified; cached once it was.
     async fn locate(&self) -> Result<LocatedBinary, AppServerError> {
-        todo!("27d: locate")
+        if let Some(located) = self.inner.located.lock().unwrap().clone() {
+            return Ok(located);
+        }
+        let located = match &self.inner.binary {
+            Binary::Environment => discovery::discover().await?,
+            Binary::Lookup { env_override, path } => {
+                discovery::discover_with(BinaryLookup {
+                    env_override: env_override.as_deref(),
+                    path: path.as_deref(),
+                })
+                .await?
+            }
+            Binary::Launch(launch) => LocatedBinary {
+                path: launch.binary.clone(),
+                source: BinarySource::Environment,
+                version: CODEX_VERSION.to_owned(),
+            },
+        };
+        *self.inner.located.lock().unwrap() = Some(located.clone());
+        Ok(located)
     }
 
     /// The one app-server child, started now when it was not yet: the
@@ -349,14 +415,61 @@ impl Auth {
     /// the same process. A binary that is missing or another release is a
     /// discovery error, never a start.
     pub async fn app_server(&self) -> Result<AppServer, AppServerError> {
-        todo!("27d: app_server")
+        if self.inner.closed.load(Ordering::SeqCst) {
+            return Err(AppServerError::Closed);
+        }
+        let mut server = self.inner.server.lock().await;
+        if let Some(server) = server.as_ref() {
+            return Ok(server.clone());
+        }
+        let located = self.locate().await?;
+        let launch = match &self.inner.binary {
+            Binary::Launch(launch) => launch.clone(),
+            _ => Launch::new(located.path),
+        };
+        log::info!(
+            "[codex] starting the app-server: {}",
+            launch.binary.display()
+        );
+        let started = AppServer::start(launch).await?;
+        // Shut down while the child was starting: it must not outlive that.
+        if self.inner.closed.load(Ordering::SeqCst) {
+            started.close();
+            return Err(AppServerError::Closed);
+        }
+        *server = Some(started.clone());
+        Ok(started)
     }
 
     /// Whether the binary is there, who codex is logged in as, and the
     /// login in flight. Never fails: a binary that is not there, or an
     /// app-server that could not answer, is what the status says.
     pub async fn status(&self) -> Status {
-        todo!("27d: status")
+        let binary = match self.locate().await {
+            Ok(located) => BinaryStatus::ready(&located),
+            Err(error) => {
+                return Status::from_binary(BinaryStatus::from_error(&error), self.login_status());
+            }
+        };
+        let mut status = Status::from_binary(binary, self.login_status());
+        match self.read_account().await {
+            Ok(account) => {
+                status.logged_in = account.is_some();
+                status.account = account;
+            }
+            Err(error) => status.error = Some(error.to_string()),
+        }
+        status
+    }
+
+    /// `account/read`: who codex is logged in as, or nobody.
+    async fn read_account(&self) -> Result<Option<Account>, AppServerError> {
+        let reply = self
+            .app_server()
+            .await?
+            .request(ACCOUNT_READ, json!({}))
+            .await?;
+        Account::from_read(&reply)
     }
 
     /// Start a login. A login that was still pending is cancelled first.
@@ -364,19 +477,73 @@ impl Auth {
     /// [`status`](Self::status) with; the completion arrives as an event,
     /// which a task watches for until [`LOGIN_DEADLINE`].
     pub async fn login(&self, method: LoginMethod) -> Result<LoginStatus, AppServerError> {
-        let _ = method;
-        todo!("27d: login")
+        let server = self.app_server().await?;
+        // Subscribed before asking, so the completion cannot slip past.
+        let events = server.subscribe();
+        self.cancel_pending(&server, "replaced by a new login")
+            .await;
+        let reply = server.request(ACCOUNT_LOGIN_START, method.params()).await?;
+        let status = LoginStatus::from_reply(method, &reply)?;
+        let id = status.id.clone();
+        *self.inner.login.lock().unwrap() = Some(Login {
+            status: status.clone(),
+            watcher: None,
+        });
+        let watcher = tokio::spawn(watch(
+            Arc::downgrade(&self.inner),
+            server,
+            events,
+            id.clone(),
+            self.inner.login_deadline,
+        ));
+        if let Some(login) = self
+            .inner
+            .login
+            .lock()
+            .unwrap()
+            .as_mut()
+            .filter(|login| login.status.id == id)
+        {
+            login.watcher = Some(watcher.abort_handle());
+        }
+        log::info!("[codex] login started ({method}); waiting for the person to finish it");
+        Ok(status)
+    }
+
+    /// A pending login is given up on for this reason, and the app-server
+    /// told so it stops waiting; that it already ended is no failure.
+    async fn cancel_pending(&self, server: &AppServer, why: &str) {
+        let Some(id) = self.inner.give_up_pending(why) else {
+            return;
+        };
+        if let Err(error) = server
+            .request(ACCOUNT_LOGIN_CANCEL, json!({"loginId": id}))
+            .await
+        {
+            log::warn!("[codex] could not cancel the pending login: {error}");
+        }
     }
 
     /// Forget the login: a pending login is cancelled, `account/logout` is
     /// sent, and the status afterwards is answered.
     pub async fn logout(&self) -> Result<Status, AppServerError> {
-        todo!("27d: logout")
+        let server = self.app_server().await?;
+        self.cancel_pending(&server, "logged out").await;
+        server.request(ACCOUNT_LOGOUT, Value::Null).await?;
+        *self.inner.login.lock().unwrap() = None;
+        log::info!("[codex] logged out");
+        Ok(self.status().await)
     }
 
-    /// Stop the app-server child and refuse to start another.
+    /// Stop the app-server child and refuse to start another; a pending
+    /// login ends with it.
     pub async fn shutdown(&self) {
-        todo!("27d: shutdown")
+        self.inner.closed.store(true, Ordering::SeqCst);
+        self.inner.give_up_pending("codex app-server was shut down");
+        if let Some(server) = self.inner.server.lock().await.take() {
+            server.close();
+            log::info!("[codex] app-server stopped");
+        }
     }
 
     /// The login on record, as a status reports it.
@@ -396,10 +563,169 @@ impl Default for Auth {
     }
 }
 
-/// What an event says about the login `id`: nothing, or how it ended.
+impl LoginMethod {
+    /// The `account/login/start` params.
+    fn params(self) -> Value {
+        json!({"type": self.wire_type()})
+    }
+
+    /// The `type` of the login on the wire, in the params and the answer.
+    fn wire_type(self) -> &'static str {
+        match self {
+            Self::Browser => "chatgpt",
+            Self::DeviceCode => "chatgptDeviceCode",
+        }
+    }
+}
+
+impl LoginStatus {
+    /// The answer to `account/login/start` for `method`: its `loginId` and
+    /// either the `authUrl` to open or the `verificationUrl` and `userCode`
+    /// to type there. An answer of another type or without them is out of
+    /// protocol.
+    fn from_reply(method: LoginMethod, reply: &Value) -> Result<Self, AppServerError> {
+        let member = |name: &str| {
+            reply
+                .get(name)
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    AppServerError::Protocol(format!(
+                        "{ACCOUNT_LOGIN_START} answered without {name}"
+                    ))
+                })
+        };
+        let kind = reply.get("type").and_then(Value::as_str).unwrap_or("");
+        if kind != method.wire_type() {
+            return Err(AppServerError::Protocol(format!(
+                "{ACCOUNT_LOGIN_START} answered a {kind:?} login to a {method} login"
+            )));
+        }
+        let id = member("loginId")?;
+        let (auth_url, verification_url, user_code) = match method {
+            LoginMethod::Browser => (Some(member("authUrl")?), None, None),
+            LoginMethod::DeviceCode => (
+                None,
+                Some(member("verificationUrl")?),
+                Some(member("userCode")?),
+            ),
+        };
+        Ok(Self {
+            id,
+            method,
+            state: LoginState::Pending,
+            auth_url,
+            verification_url,
+            user_code,
+            error: None,
+        })
+    }
+
+    /// The login ended: what a person needed to finish it is of no use now.
+    fn finish(&mut self, outcome: Result<(), String>) {
+        self.state = match outcome {
+            Ok(()) => LoginState::Completed,
+            Err(_) => LoginState::Failed,
+        };
+        self.error = outcome.err();
+        self.auth_url = None;
+        self.verification_url = None;
+        self.user_code = None;
+    }
+}
+
+/// Wait for the login `id` to end, then record how. Past `deadline`
+/// nobody is going to finish it: the app-server is told to stop waiting
+/// and the login fails.
+async fn watch(
+    inner: Weak<Inner>,
+    server: AppServer,
+    mut events: broadcast::Receiver<Incoming>,
+    id: String,
+    deadline: Duration,
+) {
+    let outcome = match tokio::time::timeout(deadline, ended(&server, &mut events, &id)).await {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            if let Err(error) = server
+                .request(ACCOUNT_LOGIN_CANCEL, json!({"loginId": &id}))
+                .await
+            {
+                log::warn!("[codex] could not cancel the expired login: {error}");
+            }
+            Err(format!(
+                "nobody finished the login within {deadline:?}; start it again"
+            ))
+        }
+    };
+    if let Some(inner) = inner.upgrade() {
+        inner.finish(&id, outcome);
+    }
+}
+
+/// How the login `id` ended, from the events. A subscriber told it lagged
+/// may have missed the completion among a turn's events; the account then
+/// says whether the login went through.
+async fn ended(
+    server: &AppServer,
+    events: &mut broadcast::Receiver<Incoming>,
+    id: &str,
+) -> Result<(), String> {
+    loop {
+        match events.recv().await {
+            Ok(event) => {
+                if let Some(outcome) = login_outcome(&event, id) {
+                    return outcome;
+                }
+            }
+            Err(RecvError::Lagged(_)) => match server.request(ACCOUNT_READ, json!({})).await {
+                Ok(reply)
+                    if reply
+                        .get("account")
+                        .is_some_and(|account| !account.is_null()) =>
+                {
+                    return Ok(());
+                }
+                Ok(_) => continue,
+                Err(error) => return Err(error.to_string()),
+            },
+            Err(RecvError::Closed) => {
+                return Err("the app-server supervisor was dropped".to_owned());
+            }
+        }
+    }
+}
+
+/// What an event says about the login `id`: nothing, or how it ended. A
+/// completion that names another login is another login's; one that names
+/// none is about the only login there is.
 fn login_outcome(event: &Incoming, id: &str) -> Option<Result<(), String>> {
-    let _ = (event, id);
-    todo!("27d: login_outcome")
+    match event {
+        Incoming::Notification { method, params } if method == ACCOUNT_LOGIN_COMPLETED => {
+            let named = params.get("loginId").and_then(Value::as_str);
+            if named.is_some_and(|named| named != id) {
+                return None;
+            }
+            let success = params
+                .get("success")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if success {
+                return Some(Ok(()));
+            }
+            let error = params
+                .get("error")
+                .and_then(Value::as_str)
+                .filter(|error| !error.is_empty())
+                .unwrap_or("the app-server reported the login failed without saying why");
+            Some(Err(error.to_owned()))
+        }
+        Incoming::Exited { reason, .. } => {
+            Some(Err(format!("{reason} before the login completed")))
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]

@@ -145,6 +145,30 @@ order = ["anthropic", "google"]
 allow_fallbacks = false
 ```
 
+### Codex (#27)
+
+A ChatGPT login through the local `codex` binary is not an OpenAI API key
+and never becomes one: `tokens.OPEN_AI` stays empty, and the login lives in
+codex's own home, where Nolune never reads it. `GET /api/config/codex/status`
+says whether the binary is installed and the pinned release (`binary.state`:
+`ready`, `not_installed`, `incompatible` with both versions, `unusable`),
+whether codex holds a login and its label (`account.kind`, `email`, `plan`),
+and the login in flight. `POST /api/config/codex/login` starts one: the
+ChatGPT managed flow when this host has a display (`auth_url` to open in a
+browser on the same machine, since codex takes the callback on its own
+localhost port) and a device code on a headless server (`verification_url`
+to open anywhere plus `user_code` to type there); the body may force either
+with `{"method": "browser" | "device_code"}`. The answer is only that and
+the login `id` to poll the status with; `login.state` goes `pending` →
+`completed` or `failed` (with the app-server's reason, or after fifteen
+minutes without an answer). `POST /api/config/codex/logout` forgets the
+login. A missing or mismatched binary answers 503 with `codex_not_installed`,
+`codex_incompatible` or `codex_unusable` and the message names the path and
+both versions; an app-server that could not answer is 502
+`codex_unavailable`. No response, log line or state type carries a token;
+`server/tests/codex_auth.rs` keeps it so. The settings tile for this follows
+in a later slice of #27.
+
 ## Layout (#153)
 
 Each section page renders inside one `.settings-panel` from

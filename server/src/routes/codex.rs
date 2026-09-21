@@ -35,13 +35,27 @@ type ApiError = (StatusCode, Json<serde_json::Value>);
 /// run is setup (`503`); an app-server that did not start, died, refused or
 /// answered out of protocol is unavailable right now (`502`).
 fn api_error(error: AppServerError) -> ApiError {
-    let _ = error;
-    todo!("27d: api_error")
+    let (status, name) = match &error {
+        AppServerError::NotInstalled => (StatusCode::SERVICE_UNAVAILABLE, "codex_not_installed"),
+        AppServerError::Incompatible { .. } => {
+            (StatusCode::SERVICE_UNAVAILABLE, "codex_incompatible")
+        }
+        AppServerError::Unusable { .. } => (StatusCode::SERVICE_UNAVAILABLE, "codex_unusable"),
+        AppServerError::Handshake(_)
+        | AppServerError::Timeout { .. }
+        | AppServerError::Exited(_)
+        | AppServerError::Closed
+        | AppServerError::Protocol(_) => (StatusCode::BAD_GATEWAY, "codex_unavailable"),
+        AppServerError::Rpc(_) => (StatusCode::BAD_GATEWAY, "codex_refused"),
+    };
+    (
+        status,
+        Json(json!({ "error": name, "message": error.to_string() })),
+    )
 }
 
 async fn get_status(State(state): State<AppState>) -> Json<Status> {
-    let _ = state;
-    todo!("27d: get_status")
+    Json(state.codex_auth.status().await)
 }
 
 #[derive(Default, Deserialize)]
@@ -57,13 +71,18 @@ async fn start_login(
     State(state): State<AppState>,
     body: Option<Json<LoginBody>>,
 ) -> Result<Json<LoginStatus>, ApiError> {
-    let _ = (state, body);
-    todo!("27d: start_login")
+    let choice = body.map(|Json(body)| body.method).unwrap_or_default();
+    let method = choice.resolve(&crate::services::cua::host::display_session());
+    state
+        .codex_auth
+        .login(method)
+        .await
+        .map(Json)
+        .map_err(api_error)
 }
 
 async fn logout(State(state): State<AppState>) -> Result<Json<Status>, ApiError> {
-    let _ = state;
-    todo!("27d: logout")
+    state.codex_auth.logout().await.map(Json).map_err(api_error)
 }
 
 #[cfg(test)]
