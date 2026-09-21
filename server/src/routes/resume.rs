@@ -85,11 +85,19 @@ async fn get_resume(
     Json(resume_ritual::status(&state, now).await)
 }
 
+/// The settings page's edit. Out-of-bounds values are refused with `400`
+/// and change nothing, like the proactive policy's.
 async fn put_policy(
     State(state): State<AppState>,
     Path(_instance_slug): Path<String>,
     Json(edit): Json<PolicyEdit>,
 ) -> Result<Json<ResumeRitualPolicy>, ApiError> {
+    if let Err(message) = edit.check() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid", "message": message })),
+        ));
+    }
     resume_ritual::set_policy(&state, &edit)
         .await
         .map(Json)

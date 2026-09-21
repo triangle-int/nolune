@@ -19,8 +19,14 @@ pub const RESUME_FORMAT_VERSION: u32 = 1;
 pub const STALE_AFTER_SECS: i64 = 30 * 86_400;
 /// Away for at least this long counts as a break.
 pub const DEFAULT_BREAK_MINUTES: u32 = 120;
+/// The longest break the settings accept: 30 days. A break must be at
+/// least a minute, or every open would count as coming back.
+pub const MAX_BREAK_MINUTES: u32 = 30 * 24 * 60;
 /// Minimum gap between two spontaneous suggestions, or after a refusal.
 pub const DEFAULT_COOLDOWN_SECS: u64 = 3_600;
+/// The longest cooldown the settings accept: 30 days. Bounded so that the
+/// moment the cooldown ends is always a moment, never a wrapped clock.
+pub const MAX_COOLDOWN_SECS: u64 = 30 * 86_400;
 /// Most dismissed record ids kept; the oldest makes room.
 pub const MAX_DISMISSED: usize = 200;
 

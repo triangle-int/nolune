@@ -22,6 +22,7 @@ use crate::{
         events::ServerEvent,
         handoff::{COMPUTER_USE_CAPABILITIES, FILE_CAPABILITIES},
         proactive::{ProactivePolicy, QuietHours},
+        resume::{MAX_BREAK_MINUTES, MAX_COOLDOWN_SECS},
     },
     services::{
         companion,
@@ -572,6 +573,54 @@ async fn a_disabled_ritual_answers_conflict_and_has_no_side_effects() {
     assert!(resume_events(&mut rx).is_empty());
     assert!(h.status().await["suggestion"].is_null());
     studio.assert_untouched("a disabled ritual");
+}
+
+#[tokio::test]
+async fn the_settings_edit_is_bounded_and_a_refused_edit_changes_nothing() {
+    let h = harness().await;
+    h.enable(120, 3_600).await;
+    let before = h.status().await["policy"].clone();
+
+    for (label, break_minutes, cooldown_secs) in [
+        ("no break at all", 0, 3_600),
+        ("a break of more than 30 days", MAX_BREAK_MINUTES + 1, 3_600),
+        (
+            "a cooldown of more than 30 days",
+            120,
+            MAX_COOLDOWN_SECS + 1,
+        ),
+        // Would wrap `since + cooldown` negative and silently end the cooldown.
+        ("a cooldown past the end of time", 120, u64::MAX),
+    ] {
+        let (status, body) = h
+            .json(
+                Method::PUT,
+                &api("resume"),
+                Some(serde_json::json!({
+                    "enabled": true,
+                    "break_minutes": break_minutes,
+                    "cooldown_secs": cooldown_secs,
+                })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{label}: {body}");
+        assert_eq!(body["error"], "invalid", "{label}: {body}");
+        assert_eq!(
+            h.status().await["policy"],
+            before,
+            "{label}: a refused edit changed the policy"
+        );
+    }
+
+    // The bounds themselves are accepted, as is no cooldown at all ("None").
+    h.enable(MAX_BREAK_MINUTES, 0).await;
+    let policy = h.status().await["policy"].clone();
+    assert_eq!(policy["break_minutes"], MAX_BREAK_MINUTES);
+    assert_eq!(policy["cooldown_secs"], 0);
+    h.enable(1, MAX_COOLDOWN_SECS).await;
+    let policy = h.status().await["policy"].clone();
+    assert_eq!(policy["break_minutes"], 1);
+    assert_eq!(policy["cooldown_secs"], MAX_COOLDOWN_SECS);
 }
 
 #[tokio::test]

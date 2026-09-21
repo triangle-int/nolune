@@ -31,8 +31,8 @@ use crate::{
         handoff::HandoffCard,
         machine::KnownMachine,
         resume::{
-            MAX_DISMISSED, RESUME_FORMAT_VERSION, RankContext, ResumeRitualPolicy,
-            ResumeSuggestion, RitualTrigger, rank,
+            MAX_BREAK_MINUTES, MAX_COOLDOWN_SECS, MAX_DISMISSED, RESUME_FORMAT_VERSION,
+            RankContext, ResumeRitualPolicy, ResumeSuggestion, RitualTrigger, rank,
         },
     },
     services::handoff,
@@ -82,6 +82,24 @@ pub struct PolicyEdit {
     pub enabled: bool,
     pub break_minutes: u32,
     pub cooldown_secs: u64,
+}
+
+impl PolicyEdit {
+    /// Whether the edit is within bounds: a break of a minute to 30 days,
+    /// a cooldown of none to 30 days. Says what is wrong otherwise.
+    pub fn check(&self) -> Result<(), String> {
+        if self.break_minutes == 0 || self.break_minutes > MAX_BREAK_MINUTES {
+            return Err(format!(
+                "break_minutes must be between 1 and {MAX_BREAK_MINUTES} (30 days)"
+            ));
+        }
+        if self.cooldown_secs > MAX_COOLDOWN_SECS {
+            return Err(format!(
+                "cooldown_secs must be at most {MAX_COOLDOWN_SECS} (30 days)"
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Why a trigger produced no suggestion.
@@ -666,6 +684,56 @@ mod tests {
         assert_eq!(
             ids.last().unwrap(),
             &format!("task_{}_cccccccc", MAX_DISMISSED + 4)
+        );
+    }
+
+    #[test]
+    fn an_edit_is_bounded_to_a_break_of_a_minute_to_30_days_and_a_cooldown_of_none_to_30_days() {
+        let bounded = |break_minutes, cooldown_secs| {
+            PolicyEdit {
+                enabled: true,
+                break_minutes,
+                cooldown_secs,
+            }
+            .check()
+        };
+        assert_eq!(bounded(1, 0), Ok(()));
+        assert_eq!(bounded(MAX_BREAK_MINUTES, MAX_COOLDOWN_SECS), Ok(()));
+        assert_eq!(bounded(45, 900), Ok(()));
+        assert!(bounded(0, 900).unwrap_err().contains("break_minutes"));
+        assert!(
+            bounded(MAX_BREAK_MINUTES + 1, 900)
+                .unwrap_err()
+                .contains("break_minutes")
+        );
+        assert!(
+            bounded(45, MAX_COOLDOWN_SECS + 1)
+                .unwrap_err()
+                .contains("cooldown_secs")
+        );
+        // The cooldown's end is `since + cooldown_secs as i64`: past the
+        // bound it could wrap negative and end the cooldown at once.
+        assert!(bounded(45, u64::MAX).is_err());
+        let state = RitualState {
+            last_suggested_at: Some(T0),
+            ..RitualState::default()
+        };
+        let policy = ResumeRitualPolicy {
+            enabled: true,
+            cooldown_secs: MAX_COOLDOWN_SECS,
+            ..ResumeRitualPolicy::default()
+        };
+        assert_eq!(
+            admission(
+                &policy,
+                &state,
+                &RitualTrigger::OpenedAfterBreak { away_secs: 7_200 },
+                false,
+                T0 + 1
+            ),
+            Err(Held::Cooldown {
+                until: T0 + MAX_COOLDOWN_SECS as i64
+            })
         );
     }
 

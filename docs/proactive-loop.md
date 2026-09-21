@@ -330,8 +330,8 @@ written atomically (a temp file renamed over the record), format version 1:
 | Field | Default | Effect |
 | --- | --- | --- |
 | `policy.enabled` | `false` | opt-in; while off, nothing is suggested and the "opened" report is not even recorded |
-| `policy.break_minutes` | 120 | opening Nolune after at least this long away counts as coming back |
-| `policy.cooldown_secs` | 3600 | least gap after a suggestion, or after the user says not now, before the next spontaneous one |
+| `policy.break_minutes` | 120 | opening Nolune after at least this long away counts as coming back; 1 to 43 200 (30 days) |
+| `policy.cooldown_secs` | 3600 | least gap after a suggestion, or after the user says not now, before the next spontaneous one; 0 (none) to 2 592 000 (30 days) |
 | `policy.snooze_until` | none | no spontaneous suggestion before this moment |
 | `policy.dismissed_record_ids` | `[]` | records never suggested again (at most 200; the oldest makes room); the records themselves are untouched |
 | `state.last_opened_at` | | when the client last reported Nolune being opened or brought back |
@@ -408,7 +408,7 @@ ritual is off, `GET` reports no suggestion whatever the file holds.
 | Route | Purpose |
 | --- | --- |
 | `GET /api/instances/companion/resume` | `{policy, suggestion, quiet_hours_active}` |
-| `PUT /api/instances/companion/resume` | `{enabled, break_minutes, cooldown_secs}`; turning the ritual off drops the suggestion |
+| `PUT /api/instances/companion/resume` | `{enabled, break_minutes, cooldown_secs}`; turning the ritual off drops the suggestion; a value outside the bounds above is `400 invalid` and changes nothing |
 | `POST /api/instances/companion/resume` | the manual trigger: `{suggestion}` or `{suggestion: null, held}`; `409 resume_disabled` while off |
 | `POST /api/instances/companion/resume/opened` | the client's open report: the same shape, `held: disabled` while off |
 | `POST /api/instances/companion/resume/refuse` | not now: drops the suggestion and starts the cooldown; `204` |
