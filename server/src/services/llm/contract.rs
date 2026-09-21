@@ -1492,6 +1492,14 @@ mod tests {
                     answers.len() == 1 && answers[0].1.is_err(),
                     "Codex {prompt}: refused on the wire: {answers:?}"
                 );
+                harness.close();
+                // A fake of its own for the agent boundary: the fake plays a
+                // scenario with the same thread and turn ids every time,
+                // and the refused play above still emits its remaining
+                // events once its handler wakes, which a second play on
+                // the same process could hear as its own (the real
+                // app-server never reuses an id).
+                let harness = codex_harness();
                 let tools: Vec<Box<dyn crate::services::tool::ToolDyn>> =
                     vec![Box::new(MustNotExecute)];
                 let result = if streaming {
