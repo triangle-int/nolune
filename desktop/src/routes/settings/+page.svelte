@@ -8,7 +8,7 @@
   type GrantOutcome = import("$lib/cua-permissions").GrantOutcome;
   type PermissionKey = "accessibility" | "screen_recording";
 
-  /** This app's own grants, for the older coordinate tools that run inside it. */
+  /** This app's own grants: reported to the companion beside the driver's, used by nothing inside the app (#19). */
   type AppPermissions = {
     screen_recording: boolean;
     accessibility: boolean;
@@ -96,13 +96,13 @@
     {
       key: "screen_recording" as const,
       name: "Screen recording",
-      desc: "One-shot screenshots for the older tools that run inside this app.",
+      desc: "This app takes no screenshots of its own; every one-shot window snapshot is the driver's.",
       granted: appPermissions?.screen_recording ?? false,
     },
     {
       key: "accessibility" as const,
       name: "Accessibility",
-      desc: "Mouse and keyboard for the older tools that run inside this app.",
+      desc: "This app moves no pointer or keyboard of its own; every window action is the driver's.",
       granted: appPermissions?.accessibility ?? false,
     },
   ]);
@@ -238,7 +238,7 @@
       <section class="section section-secondary" aria-labelledby="app-permissions-title">
         <h3 id="app-permissions-title" class="subsection-title">This app's own grants</h3>
         <p class="section-desc">
-          The older coordinate tools run inside this app and use its own grants; the driver above does not.
+          What macOS has granted this app itself, reported to your companion beside the driver's. Nothing inside this app captures the screen or moves the pointer; every window action runs through the driver above.
         </p>
 
         {#if appError}

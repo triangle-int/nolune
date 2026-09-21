@@ -3,7 +3,6 @@ use std::sync::Mutex;
 use tauri::Emitter;
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
 
-use crate::computer_use;
 use crate::cua_runtime;
 use crate::overlay;
 
@@ -242,17 +241,6 @@ async fn run_agent_connection(
 
     let (mut write, mut read) = ws.split();
 
-    // Get screen dimensions
-    let screen = screenshots::Screen::all()
-        .ok()
-        .and_then(|s| s.into_iter().next());
-    let (sw, sh) = screen
-        .map(|s| {
-            let info = s.display_info;
-            (info.width, info.height)
-        })
-        .unwrap_or((1920, 1080));
-
     // Instance slug: only set explicitly via set_instance_slug.
     let instance_slug = INSTANCE_SLUG.lock().ok().and_then(|v| v.clone());
 
@@ -260,7 +248,6 @@ async fn run_agent_connection(
         &machine_id,
         &os,
         &host,
-        (sw, sh),
         instance_slug,
         &crate::permissions::check_permissions(),
         cua.as_ref(),
@@ -271,7 +258,7 @@ async fn run_agent_connection(
         .map_err(|e| format!("send register: {e}"))?;
 
     eprintln!(
-        "[agent] registered as '{machine_id}' ({host}, {os}, {sw}x{sh}, cua driver: {})",
+        "[agent] registered as '{machine_id}' ({host}, {os}, cua driver: {})",
         cua.as_ref()
             .map(|descriptor| format!(
                 "{} {:?}",
@@ -283,9 +270,6 @@ async fn run_agent_connection(
 
     // Emit server URL so overlay can build iframe src
     app.emit("server-url", instance_url.to_string()).ok();
-
-    // Scale cache from last screenshot (shared with spawn_blocking tasks)
-    let cached_scale = std::sync::Arc::new(std::sync::Mutex::new(1.0f64));
 
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(20));
     ping_interval.tick().await;
@@ -349,11 +333,10 @@ async fn run_agent_connection(
             continue;
         };
 
-        // Temporarily hide the action overlay so it does not appear in
-        // explicit screenshots, nor in the window snapshot a typed
-        // `get_window_state` may take.
-        let hide_for_screenshot = inbound.hides_overlay();
-        if hide_for_screenshot {
+        // Temporarily hide the action overlay so it does not appear in the
+        // window snapshot a typed `get_window_state` may take.
+        let hide_for_snapshot = inbound.hides_overlay();
+        if hide_for_snapshot {
             overlay::set_visible(app, false);
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
@@ -362,22 +345,6 @@ async fn run_agent_connection(
             Inbound::Legacy { request_id, action } => (request_id.clone(), action.clone()),
             Inbound::Cua(_) => (String::new(), String::new()),
         };
-
-        // Input actions (keyboard, mouse) must run on main thread on macOS
-        // because enigo calls HIToolbox APIs that assert main queue.
-        // Other actions (screenshot, bash, file I/O) use spawn_blocking.
-        let is_input_action = matches!(
-            action.as_str(),
-            "key"
-                | "type"
-                | "left_click"
-                | "right_click"
-                | "middle_click"
-                | "double_click"
-                | "mouse_move"
-                | "scroll"
-                | "switch_desktop"
-        );
 
         let action_future: std::pin::Pin<Box<dyn std::future::Future<Output = Executed> + Send>> =
             match inbound {
@@ -391,6 +358,9 @@ async fn run_agent_connection(
                         Executed::Cua(answer_typed(cua_runtime::runtime(), &request, &token).await)
                     })
                 }
+                // A shell or file toolcall blocks on the process or the
+                // filesystem, so it runs off the async loop under the
+                // session's work permit.
                 Inbound::Legacy { .. } => {
                     let permit = session
                         .work
@@ -407,30 +377,12 @@ async fn run_agent_connection(
                     };
                     let action_call = call.clone();
                     let action_name = action.clone();
-                    let action_scale = cached_scale.clone();
-                    let action_app = app.clone();
                     Box::pin(async move {
-                        let result = if is_input_action {
-                            let (tx, rx) = tokio::sync::oneshot::channel();
-                            let _ = action_app.run_on_main_thread(move || {
-                                let result = work.run(|session| {
-                                    let mut scale = action_scale.lock().unwrap();
-                                    execute_action(&action_call, &action_name, &mut scale, session)
-                                });
-                                let _ = tx.send(result);
-                            });
-                            rx.await
-                                .unwrap_or_else(|error| Err(format!("main thread recv: {error}")))
-                        } else {
-                            tokio::task::spawn_blocking(move || {
-                                work.run(|session| {
-                                    let mut scale = action_scale.lock().unwrap();
-                                    execute_action(&action_call, &action_name, &mut scale, session)
-                                })
-                            })
-                            .await
-                            .unwrap_or_else(|error| Err(format!("task panic: {error}")))
-                        };
+                        let result = tokio::task::spawn_blocking(move || {
+                            work.run(|session| execute_action(&action_call, &action_name, session))
+                        })
+                        .await
+                        .unwrap_or_else(|error| Err(format!("task panic: {error}")));
                         Executed::Legacy(result)
                     })
                 }
@@ -481,9 +433,9 @@ async fn run_agent_connection(
             break;
         }
 
-        // Show overlay after any action (restore if hidden for screenshot)
+        // Show overlay after any action (restore if hidden for a snapshot)
         overlay::show(app);
-        if hide_for_screenshot {
+        if hide_for_snapshot {
             overlay::set_visible(app, true);
         }
 
@@ -508,29 +460,6 @@ async fn run_agent_connection(
 
         // Build human-readable detail for the overlay
         let detail = match action.as_str() {
-            "key" => call
-                .get("key")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            "type" => {
-                let t = call.get("text").and_then(|v| v.as_str()).unwrap_or("");
-                let preview: String = t.chars().take(30).collect();
-                if t.chars().count() > 30 {
-                    format!("{preview}...")
-                } else {
-                    preview
-                }
-            }
-            "left_click" | "right_click" | "double_click" | "middle_click" => {
-                let (x, y) = parse_coordinate(&call);
-                format!("{x}, {y}")
-            }
-            "scroll" => call
-                .get("scroll_direction")
-                .and_then(|v| v.as_str())
-                .unwrap_or("down")
-                .to_string(),
             "bash" => {
                 let c = call.get("command").and_then(|v| v.as_str()).unwrap_or("");
                 let preview: String = c.chars().take(40).collect();
@@ -548,39 +477,18 @@ async fn run_agent_connection(
             &crate::companion_relay::redact_secret(&detail, auth_token),
         );
 
+        // The `action_result` frame as it always was: the output rides in
+        // the `error` field on success, the failure text on an error.
         let response = match &result {
-            Ok(AgentResult::Screenshot {
-                image,
-                width,
-                height,
-                scale,
-            }) => serde_json::json!({
+            Ok(text) => serde_json::json!({
                 "type": "action_result",
                 "request_id": request_id,
-                "result_type": "screenshot",
-                "image": image,
-                "width": width,
-                "height": height,
-                "scale": scale,
                 "success": true,
-            }),
-            Ok(AgentResult::Action) => serde_json::json!({
-                "type": "action_result",
-                "request_id": request_id,
-                "result_type": "action",
-                "success": true,
-            }),
-            Ok(AgentResult::Output(text)) => serde_json::json!({
-                "type": "action_result",
-                "request_id": request_id,
-                "result_type": "output",
-                "success": true,
-                "error": text, // reuse error field for output text
+                "error": text,
             }),
             Err(e) => serde_json::json!({
                 "type": "action_result",
                 "request_id": request_id,
-                "result_type": "action",
                 "success": false,
                 "error": e,
             }),
@@ -603,7 +511,8 @@ async fn run_agent_connection(
 }
 
 /// One frame the server sent: a legacy toolcall (flat `request_id` and
-/// `action`) or a typed Cua request (#17), told apart by its shape.
+/// `action`: a shell or file operation) or a typed Cua request (#17), told
+/// apart by its shape.
 #[derive(Debug, PartialEq)]
 enum Inbound {
     Legacy { request_id: String, action: String },
@@ -639,12 +548,12 @@ impl Inbound {
         }
     }
 
-    /// Whether the overlay hides while this runs, so it appears in neither
-    /// an explicit screenshot nor the window snapshot a typed
-    /// `get_window_state` may take.
+    /// Whether the overlay hides while this runs, so it does not appear in
+    /// the window snapshot a typed `get_window_state` may take; a shell or
+    /// file toolcall captures nothing.
     fn hides_overlay(&self) -> bool {
         match self {
-            Self::Legacy { action, .. } => action == "screenshot",
+            Self::Legacy { .. } => false,
             Self::Cua(request) => request["action"]["tool"] == "get_window_state",
         }
     }
@@ -680,95 +589,24 @@ async fn answer_typed(
     TypedAnswer { frame, overlay }
 }
 
-/// What executing one frame produced: the legacy result, or the typed
-/// answer the runtime built.
+/// What executing one frame produced: the legacy toolcall's text output
+/// (bash stdout, file content, a directory listing, an upload id), or the
+/// typed answer the runtime built.
 enum Executed {
-    Legacy(Result<AgentResult, String>),
+    Legacy(Result<String, String>),
     Cua(TypedAnswer),
 }
 
-enum AgentResult {
-    Screenshot {
-        image: String,
-        width: u32,
-        height: u32,
-        scale: f64,
-    },
-    Action,
-    /// Text output (bash stdout, file content, directory listing).
-    Output(String),
-}
-
+/// The shell and file toolcalls this desktop executes (`remote_bash`,
+/// `remote_files` and the upload behind a file the companion asked for).
+/// Seeing and acting in a window is the Cua driver's (#19): no toolcall
+/// here touches the screen, the pointer or the keyboard.
 fn execute_action(
     call: &serde_json::Value,
     action: &str,
-    cached_scale: &mut f64,
     session: &Session,
-) -> Result<AgentResult, String> {
+) -> Result<String, String> {
     match action {
-        "screenshot" => {
-            let result = computer_use::computer_screenshot()?;
-            *cached_scale = result.scale;
-            Ok(AgentResult::Screenshot {
-                image: result.image,
-                width: result.width,
-                height: result.height,
-                scale: result.scale,
-            })
-        }
-        "left_click" | "right_click" | "middle_click" => {
-            let (x, y) = parse_coordinate(call);
-            let button = action.trim_end_matches("_click").to_string();
-            computer_use::computer_click(x, y, *cached_scale, button)?;
-            Ok(AgentResult::Action)
-        }
-        "double_click" => {
-            let (x, y) = parse_coordinate(call);
-            computer_use::computer_double_click(x, y, *cached_scale)?;
-            Ok(AgentResult::Action)
-        }
-        "mouse_move" => {
-            let (x, y) = parse_coordinate(call);
-            computer_use::computer_mouse_move(x, y, *cached_scale)?;
-            Ok(AgentResult::Action)
-        }
-        "type" => {
-            let text = call["text"].as_str().unwrap_or("").to_string();
-            computer_use::computer_type(text)?;
-            Ok(AgentResult::Action)
-        }
-        "key" => {
-            let key = call["key"].as_str().unwrap_or("").to_string();
-            computer_use::computer_key(key)?;
-            Ok(AgentResult::Action)
-        }
-        "scroll" => {
-            let (x, y) = parse_coordinate(call);
-            let direction = call["scroll_direction"].as_str().unwrap_or("down");
-            let amount = call["scroll_amount"].as_i64().unwrap_or(3) as i32;
-            let (dx, dy) = match direction {
-                "up" => (0, amount),
-                "down" => (0, -amount),
-                "left" => (-amount, 0),
-                "right" => (amount, 0),
-                _ => (0, -amount),
-            };
-            computer_use::computer_scroll(x, y, *cached_scale, dx, dy)?;
-            Ok(AgentResult::Action)
-        }
-        // ── Switch desktop (macOS Spaces) ──
-        "switch_desktop" => {
-            let direction = call["scroll_direction"].as_str().unwrap_or("right");
-            let key = match direction {
-                "left" => "ctrl+left",
-                "right" => "ctrl+right",
-                _ => "ctrl+right",
-            };
-            computer_use::computer_key(key.to_string())?;
-            // Wait for animation to complete
-            std::thread::sleep(std::time::Duration::from_millis(700));
-            Ok(AgentResult::Action)
-        }
         // ── Bash ──
         "bash" => {
             let command = call["command"].as_str().unwrap_or("").to_string();
@@ -779,7 +617,7 @@ fn execute_action(
         "file_read" => {
             let path = expand_path(call["path"].as_str().unwrap_or(""));
             match std::fs::read_to_string(&path) {
-                Ok(content) => Ok(AgentResult::Output(content)),
+                Ok(content) => Ok(content),
                 Err(e) => Err(format!("read {path}: {e}")),
             }
         }
@@ -797,10 +635,7 @@ fn execute_action(
                 let _ = std::fs::create_dir_all(parent);
             }
             match std::fs::write(&path, content) {
-                Ok(_) => Ok(AgentResult::Output(format!(
-                    "written {} bytes to {path}",
-                    content.len()
-                ))),
+                Ok(_) => Ok(format!("written {} bytes to {path}", content.len())),
                 Err(e) => Err(format!("write {path}: {e}")),
             }
         }
@@ -821,7 +656,7 @@ fn execute_action(
                         }
                     }
                     lines.sort();
-                    Ok(AgentResult::Output(lines.join("\n")))
+                    Ok(lines.join("\n"))
                 }
                 Err(e) => Err(format!("list {path}: {e}")),
             }
@@ -995,11 +830,7 @@ fn cancellable_output(
     })
 }
 
-fn execute_bash(
-    command: &str,
-    cwd: Option<&str>,
-    session: &Session,
-) -> Result<AgentResult, String> {
+fn execute_bash(command: &str, cwd: Option<&str>, session: &Session) -> Result<String, String> {
     use std::process::Command;
 
     let mut cmd = if cfg!(target_os = "windows") {
@@ -1035,7 +866,7 @@ fn execute_bash(
                 result = format!("(exit code: {})", output.status.code().unwrap_or(-1));
             }
             if output.status.success() {
-                Ok(AgentResult::Output(result))
+                Ok(result)
             } else {
                 Err(result)
             }
@@ -1053,13 +884,6 @@ fn expand_path(path: &str) -> String {
     path.to_string()
 }
 
-fn parse_coordinate(call: &serde_json::Value) -> (i32, i32) {
-    let coord = &call["coordinate"];
-    let x = coord.get(0).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-    let y = coord.get(1).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-    (x, y)
-}
-
 fn hostname() -> String {
     gethostname::gethostname().to_string_lossy().to_string()
 }
@@ -1068,18 +892,10 @@ fn hostname() -> String {
 const MACHINE_ID_KEY: &str = "machine_id";
 
 /// Every toolcall this agent executes (`execute_action`), reported at
-/// registration so the server can show what the computer can do.
-const CAPABILITIES: [&str; 15] = [
-    "screenshot",
-    "left_click",
-    "right_click",
-    "middle_click",
-    "double_click",
-    "mouse_move",
-    "type",
-    "key",
-    "scroll",
-    "switch_desktop",
+/// registration so the server can show what the computer can do. Window
+/// actions are not toolcalls: the Cua descriptor beside this list says
+/// what the driver offers.
+const CAPABILITIES: [&str; 5] = [
     "bash",
     "file_read",
     "file_write",
@@ -1122,14 +938,13 @@ fn machine_id_from_store(stored: Option<serde_json::Value>) -> (String, bool) {
 }
 
 /// The registration the server expects: stable id, hostname for display,
-/// platform label, screen, the companion slug, permission state as the
-/// protocol names it, what this agent can execute, and the Cua descriptor
-/// of the driver this desktop runs (#17), absent when there is none.
+/// platform label, the companion slug, permission state as the protocol
+/// names it, what this agent can execute, and the Cua descriptor of the
+/// driver this desktop runs (#17), absent when there is none.
 fn register_message(
     machine_id: &str,
     os: &str,
     hostname: &str,
-    screen: (u32, u32),
     instance_slug: Option<String>,
     permissions: &crate::permissions::PermissionStatus,
     cua: Option<&cua_protocol::MachineDescriptor>,
@@ -1140,8 +955,6 @@ fn register_message(
         "machine_id": machine_id,
         "os": os,
         "hostname": hostname,
-        "screen_width": screen.0,
-        "screen_height": screen.1,
         "instance_slug": instance_slug,
         "permissions": {
             "accessibility": state(permissions.accessibility),
@@ -1162,7 +975,7 @@ fn upload_file_to_server(
     upload_url: &str,
     auth_token: &str,
     session: &Session,
-) -> Result<AgentResult, String> {
+) -> Result<String, String> {
     // Check file exists and has content
     let size = match std::fs::metadata(path) {
         Ok(m) => m.len(),
@@ -1208,7 +1021,7 @@ fn upload_file_to_server(
             return Err(format!("server returned no id: {body}"));
         }
 
-        Ok(AgentResult::Output(upload_id))
+        Ok(upload_id)
     } else {
         Err(format!("unexpected response: {body}"))
     }
@@ -1276,7 +1089,6 @@ mod tests {
             "4f3c1c2e-9b5e-4d2b-8f0a-1c2d3e4f5a6b",
             "macos",
             "studio.local",
-            (2560, 1440),
             None,
             &crate::permissions::PermissionStatus {
                 screen_recording: false,
@@ -1294,8 +1106,10 @@ mod tests {
             "hostname stays for display"
         );
         assert_eq!(message["os"], "macos");
-        assert_eq!(message["screen_width"], 2560);
-        assert_eq!(message["screen_height"], 1440);
+        assert!(
+            message.get("screen_width").is_none() && message.get("screen_height").is_none(),
+            "no screen size: the desktop captures nothing on its own (#19)"
+        );
         assert_eq!(message["instance_slug"], serde_json::Value::Null);
         assert_eq!(
             message["permissions"],
@@ -1316,13 +1130,19 @@ mod tests {
                     .all(|b| b.is_ascii_lowercase() || b == b'_'),
                 "{capability} must be a plain identifier"
             );
+            assert!(
+                !matches!(
+                    capability,
+                    "screenshot" | "type" | "key" | "scroll" | "mouse_move"
+                ) && !capability.ends_with("_click"),
+                "{capability}: window actions are the Cua driver's, never a toolcall (#19)"
+            );
         }
 
         let bound = register_message(
             "id",
             "linux",
             "box",
-            (1, 1),
             Some("companion".into()),
             &crate::permissions::PermissionStatus {
                 screen_recording: true,
@@ -1393,7 +1213,6 @@ mod tests {
             &first,
             "macos",
             "studio.local",
-            (2560, 1440),
             None,
             &permissions,
             Some(&descriptor),
@@ -1415,15 +1234,7 @@ mod tests {
         );
         assert_eq!(message["permissions"]["accessibility"], "granted");
 
-        let legacy = register_message(
-            &first,
-            "macos",
-            "studio.local",
-            (2560, 1440),
-            None,
-            &permissions,
-            None,
-        );
+        let legacy = register_message(&first, "macos", "studio.local", None, &permissions, None);
         assert!(
             legacy.get("cua").is_none(),
             "no driver, no cua field: {legacy}"
@@ -1432,12 +1243,12 @@ mod tests {
 
     /// The socket loop's typed-frame turn, against the fake driver: the
     /// server's frames are told apart by shape (the `registered` ack
-    /// executes nothing, a legacy toolcall keeps its path), a typed
+    /// executes nothing, a shell toolcall keeps its path), a typed
     /// request is answered on the runtime with the driver's result inside
     /// the `cua_response` frame unchanged and the overlay told the kind and
     /// a redacted detail, a frame the protocol cannot read is refused and
-    /// shows nothing, and the overlay hides for a window snapshot as it
-    /// does for a legacy screenshot.
+    /// shows nothing, and the overlay hides for a window snapshot, the one
+    /// capture this desktop takes part in (#19).
     #[tokio::test]
     async fn typed_frames_are_answered_on_the_runtime_and_labelled_for_the_overlay() {
         use crate::cua_runtime::fake::{FakeTransport, HEALTHY};
@@ -1510,16 +1321,17 @@ mod tests {
             None,
             "the ack executes nothing"
         );
-        let screenshot = Inbound::from_frame(&json!({"request_id": "abc", "action": "screenshot"}))
-            .expect("a legacy toolcall");
+        let shell =
+            Inbound::from_frame(&json!({"request_id": "abc", "action": "bash", "command": "ls"}))
+                .expect("a legacy toolcall");
         assert_eq!(
-            screenshot,
+            shell,
             Inbound::Legacy {
                 request_id: "abc".into(),
-                action: "screenshot".into()
+                action: "bash".into()
             }
         );
-        assert!(screenshot.hides_overlay());
+        assert!(!shell.hides_overlay(), "a shell toolcall captures nothing");
         let snapshot = Inbound::from_frame(&typed(
             "obs-1",
             CuaAction::GetWindowState(GetWindowStateArgs {
@@ -1537,7 +1349,7 @@ mod tests {
         assert!(matches!(snapshot, Inbound::Cua(_)));
         assert!(
             snapshot.hides_overlay(),
-            "a window snapshot hides the overlay like a screenshot"
+            "a window snapshot hides the overlay so the capture does not show it"
         );
 
         // The typed request's turn: the driver's result rides back inside
