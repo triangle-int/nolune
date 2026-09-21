@@ -12,7 +12,7 @@ use axum::{
     body::Body,
     http::{Method, Request, StatusCode, header},
 };
-use std::{fs, path::PathBuf, sync::Arc};
+use std::{fs, path::PathBuf};
 use tower::ServiceExt;
 
 const TOKEN: &str = "issue-103-control-token";
@@ -24,21 +24,18 @@ struct Harness {
 }
 
 async fn harness() -> Harness {
+    harness_with(crate::config::Config::default()).await
+}
+
+/// Every store opens under a fresh tempdir (`AppState::new_in`), never under
+/// the process default root; `config` carries anything beyond the token.
+async fn harness_with(config: crate::config::Config) -> Harness {
     let workspace = tempfile::tempdir().unwrap();
     let config = crate::config::Config {
         auth_token: TOKEN.into(),
-        ..Default::default()
+        ..config
     };
-    let mut state = AppState::new(config).await;
-    state.workspace_dir = workspace.path().to_owned();
-    state.vector_store =
-        Arc::new(crate::services::vector::VectorStore::connect(workspace.path()).await);
-    state.proactive =
-        crate::services::proactive::ProactiveLoop::new(workspace.path(), CANONICAL_SLUG)
-            .with_events(state.events.clone());
-    state.machine_registry =
-        crate::services::machine_registry::MachineRegistry::open(workspace.path(), CANONICAL_SLUG)
-            .with_events(state.events.clone());
+    let state = AppState::new_in(config, workspace.path().to_owned()).await;
     Harness { workspace, state }
 }
 
@@ -725,6 +722,18 @@ async fn proactive_activity_api_lists_cancels_retries_and_exposes_policy() {
     assert_eq!(retried["attempt"], 2);
     assert_eq!(retried["retry_of"], failed.id);
     let retry_id = retried["id"].as_str().unwrap().to_owned();
+    // The pending retry is left recorded as running on purpose, but its
+    // hold on the import gate (#74) is not kept: an import afterwards is
+    // not refused as busy.
+    assert!(
+        h.state
+            .vector_store
+            .media_store()
+            .import_gate()
+            .try_import()
+            .is_some(),
+        "the retry route leaked its hold on the import gate"
+    );
     h.state.proactive.cancel(&retry_id);
     let (status, _) = h
         .send(Method::POST, &api("activity/run_missing/retry"), None)
@@ -1854,4 +1863,544 @@ async fn continuity_api_lists_inspects_updates_completes_and_dismisses_records()
         assert_eq!(value["error"], "unknown_companion", "{uri}");
     }
     assert_eq!(h.instance_dirs(), vec![CANONICAL_SLUG]);
+}
+
+// ---------------------------------------------------------------------------
+// Companion import (#74): POST /api/instances/{slug}/import
+// ---------------------------------------------------------------------------
+
+const IMPORT_BOUNDARY: &str = "nolune-import-boundary-74";
+
+/// One `multipart/form-data` body whose `file` field carries `archive`.
+fn multipart_archive(archive: &[u8]) -> (String, Vec<u8>) {
+    let mut body = Vec::new();
+    body.extend_from_slice(
+        format!(
+            "--{IMPORT_BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"companion.tar.gz\"\r\nContent-Type: application/gzip\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(archive);
+    body.extend_from_slice(format!("\r\n--{IMPORT_BOUNDARY}--\r\n").as_bytes());
+    (
+        format!("multipart/form-data; boundary={IMPORT_BOUNDARY}"),
+        body,
+    )
+}
+
+/// A valid archive of `files` (plus the identity marker) written by the
+/// production writer, and the source tree it was written from.
+fn archive_of(files: &[(&str, &[u8])]) -> (Vec<u8>, Vec<(String, Vec<u8>)>) {
+    let scratch = tempfile::tempdir().unwrap();
+    let source = scratch.path().join(CANONICAL_SLUG);
+    fs::create_dir_all(&source).unwrap();
+    let marker =
+        serde_json::to_vec_pretty(&crate::domain::companion::CompanionIdentity::canonical())
+            .unwrap();
+    fs::write(source.join(IDENTITY_FILE), &marker).unwrap();
+    let mut expected = vec![(IDENTITY_FILE.to_owned(), marker)];
+    for (path, bytes) in files {
+        let full = source.join(path);
+        fs::create_dir_all(full.parent().unwrap()).unwrap();
+        fs::write(&full, bytes).unwrap();
+        expected.push(((*path).to_owned(), bytes.to_vec()));
+    }
+    let dir = crate::services::profile_archive::open_companion_dir(&source).unwrap();
+    let mut archive = Vec::new();
+    crate::services::profile_archive::write_archive(&dir, &mut archive).unwrap();
+    (archive, expected)
+}
+
+/// A gzip tar whose one entry escapes the companion root, with the raw name
+/// `tar::Builder` itself would refuse to write.
+fn hostile_archive() -> Vec<u8> {
+    use std::io::Write as _;
+    let name = b"companion/../escaped.md";
+    let data = b"escaped\n";
+    let mut header = tar::Header::new_gnu();
+    header.as_gnu_mut().unwrap().name[..name.len()].copy_from_slice(name);
+    header.set_entry_type(tar::EntryType::Regular);
+    header.set_mode(0o644);
+    header.set_size(data.len() as u64);
+    header.set_cksum();
+    let mut builder = tar::Builder::new(Vec::new());
+    builder.append(&header, data.as_slice()).unwrap();
+    let tar = builder.into_inner().unwrap();
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    encoder.write_all(&tar).unwrap();
+    encoder.finish().unwrap()
+}
+
+/// Every path under `root` with file contents (`None` for directories).
+fn tree(root: &std::path::Path) -> std::collections::BTreeMap<String, Option<Vec<u8>>> {
+    fn visit(
+        root: &std::path::Path,
+        dir: &std::path::Path,
+        out: &mut std::collections::BTreeMap<String, Option<Vec<u8>>>,
+    ) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let relative = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            if path.symlink_metadata().unwrap().is_dir() {
+                out.insert(relative, None);
+                visit(root, &path, out);
+            } else {
+                out.insert(relative, Some(fs::read(&path).unwrap()));
+            }
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    if root.is_dir() {
+        visit(root, root, &mut out);
+    }
+    out
+}
+
+impl Harness {
+    /// Names under `imports/`; empty when the directory is absent.
+    fn imports_entries(&self) -> Vec<String> {
+        let imports = self.workspace.path().join("imports");
+        let Ok(entries) = fs::read_dir(imports) else {
+            return Vec::new();
+        };
+        let mut names: Vec<_> = entries
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    async fn send_raw(
+        &self,
+        method: Method,
+        uri: &str,
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> (StatusCode, serde_json::Value) {
+        let request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+            .header(header::CONTENT_TYPE, content_type)
+            .body(Body::from(body))
+            .unwrap();
+        let response = build_router(self.state.clone(), None)
+            .oneshot(request)
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), MAX_BODY)
+            .await
+            .unwrap();
+        let value = serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+            panic!(
+                "{uri}: expected JSON body, got {error}: {}",
+                String::from_utf8_lossy(&bytes)
+            )
+        });
+        (status, value)
+    }
+
+    async fn post_archive(&self, uri: &str, archive: &[u8]) -> (StatusCode, serde_json::Value) {
+        let (content_type, body) = multipart_archive(archive);
+        self.send_raw(Method::POST, uri, &content_type, body).await
+    }
+
+    /// A live companion holding `memory/old.md`, indexed and BM25-searchable.
+    async fn seed_indexed_companion(&self) {
+        let (status, _) = self
+            .send(
+                Method::PUT,
+                &format!("/api/instances/{CANONICAL_SLUG}/soul"),
+                Some(serde_json::json!({"content": "old soul"})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        let media = self.state.vector_store.media_store();
+        media
+            .write_instance_text(CANONICAL_SLUG, "memory/old.md", "Orion nebula")
+            .unwrap();
+        self.state
+            .vector_store
+            .backfill_text_memories(self.workspace.path(), CANONICAL_SLUG)
+            .await
+            .unwrap();
+        assert!(
+            !self
+                .state
+                .vector_store
+                .needs_backfill(CANONICAL_SLUG)
+                .await
+                .unwrap()
+        );
+    }
+
+    async fn indexed_paths(&self) -> Vec<String> {
+        let mut paths: Vec<_> = self
+            .state
+            .vector_store
+            .list_all(CANONICAL_SLUG, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|record| record.path)
+            .collect();
+        paths.sort();
+        paths
+    }
+}
+
+#[tokio::test]
+async fn import_replaces_the_companion_and_rebuilds_the_derived_index() {
+    use crate::services::embedding::tests::{MockServer, response};
+
+    let mock = MockServer::new(vec![(200, response(vec![1., 0., 0.])); 4]).await;
+    let h = harness_with(mock.config.clone()).await;
+    h.seed_indexed_companion().await;
+    assert_eq!(h.indexed_paths().await, vec!["old.md"]);
+    let (archive, expected) = archive_of(&[
+        ("memory/new.md", b"Andromeda galaxy"),
+        ("soul.md", b"restored soul"),
+        ("uploads/keep.txt", b"kept"),
+    ]);
+    let payload: u64 = expected.iter().map(|(_, bytes)| bytes.len() as u64).sum();
+
+    let (status, value) = h
+        .post_archive(&format!("/api/instances/{CANONICAL_SLUG}/import"), &archive)
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{value}");
+    assert_eq!(value["ok"], true, "{value}");
+    assert_eq!(value["files"], expected.len(), "{value}");
+    assert_eq!(value["bytes"], payload, "{value}");
+    assert_eq!(value["derived_index"], "rebuilt", "{value}");
+    // Every archived file is in place byte for byte; the replaced tree is gone.
+    for (path, bytes) in &expected {
+        assert_eq!(
+            fs::read(h.companion().join(path)).unwrap(),
+            *bytes,
+            "{path} differs from the archive"
+        );
+    }
+    assert!(!h.companion().join("memory/old.md").exists());
+    assert_eq!(h.instance_dirs(), vec![CANONICAL_SLUG]);
+    assert_eq!(
+        h.imports_entries(),
+        Vec::<String>::new(),
+        "the request body, staging, and the parked tree are all gone"
+    );
+    assert_eq!(h.indexed_paths().await, vec!["new.md"]);
+    assert!(
+        !h.state
+            .vector_store
+            .needs_backfill(CANONICAL_SLUG)
+            .await
+            .unwrap()
+    );
+    let hits = h
+        .state
+        .vector_store
+        .search_text(CANONICAL_SLUG, "Andromeda", 5)
+        .await;
+    assert_eq!(
+        hits.iter().map(|hit| hit.path.as_str()).collect::<Vec<_>>(),
+        vec!["new.md"]
+    );
+    // The companion answers again from the imported tree.
+    let (status, soul) = h
+        .json(
+            Method::GET,
+            &format!("/api/instances/{CANONICAL_SLUG}/soul"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(soul["content"], "restored soul");
+}
+
+#[tokio::test]
+async fn import_refuses_a_hostile_archive_and_keeps_the_companion_byte_identical() {
+    use crate::services::embedding::tests::{MockServer, response};
+
+    let mock = MockServer::new(vec![(200, response(vec![1., 0., 0.])); 2]).await;
+    let h = harness_with(mock.config.clone()).await;
+    h.seed_indexed_companion().await;
+    let before = tree(&h.companion());
+    let uri = format!("/api/instances/{CANONICAL_SLUG}/import");
+
+    let (status, value) = h.post_archive(&uri, &hostile_archive()).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{value}");
+    assert_eq!(value["error"], "archive_refused", "{value}");
+    assert!(
+        value["message"].as_str().unwrap_or("").contains("escaped"),
+        "{value}"
+    );
+
+    // Not an archive at all, and not multipart at all.
+    let (status, value) = h.post_archive(&uri, b"not an archive").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{value}");
+    assert_eq!(value["error"], "archive_refused", "{value}");
+    let (status, value) = h
+        .send_raw(
+            Method::POST,
+            &uri,
+            "application/octet-stream",
+            b"not multipart".to_vec(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{value}");
+    let (status, value) = h
+        .send_raw(
+            Method::POST,
+            &uri,
+            "multipart/form-data; boundary=x",
+            b"--x\r\nContent-Disposition: form-data; name=\"other\"\r\n\r\nno file\r\n--x--\r\n"
+                .to_vec(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{value}");
+    assert_eq!(value["error"], "missing_archive", "{value}");
+
+    assert_eq!(tree(&h.companion()), before, "the companion tree changed");
+    assert!(!h.workspace.path().join("escaped.md").exists());
+    assert_eq!(h.instance_dirs(), vec![CANONICAL_SLUG]);
+    assert_eq!(h.imports_entries(), Vec::<String>::new());
+    assert_eq!(h.indexed_paths().await, vec!["old.md"]);
+    assert!(
+        !h.state
+            .vector_store
+            .needs_backfill(CANONICAL_SLUG)
+            .await
+            .unwrap()
+    );
+}
+
+/// One request against a fresh router, usable from a spawned task.
+async fn request(
+    state: AppState,
+    method: Method,
+    uri: &str,
+    content_type: &str,
+    body: Body,
+) -> (StatusCode, serde_json::Value) {
+    let request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+        .header(header::CONTENT_TYPE, content_type)
+        .body(body)
+        .unwrap();
+    let response = build_router(state, None).oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), MAX_BODY)
+        .await
+        .unwrap();
+    let value = serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+        panic!(
+            "{uri}: expected JSON body, got {error}: {}",
+            String::from_utf8_lossy(&bytes)
+        )
+    });
+    (status, value)
+}
+
+/// The busy answer comes before the request body is read: a multi-gigabyte
+/// archive is never streamed to `imports/` only to be refused.
+#[tokio::test]
+async fn import_answers_409_while_an_agent_task_runs_for_the_companion() {
+    use crate::services::embedding::tests::{MockServer, response};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let mock = MockServer::new(vec![(200, response(vec![1., 0., 0.])); 2]).await;
+    let h = harness_with(mock.config.clone()).await;
+    h.seed_indexed_companion().await;
+    let before = tree(&h.companion());
+    h.state.agent_tasks.lock().await.insert(
+        crate::routes::chat::task_key(CANONICAL_SLUG, "default"),
+        tokio_util::sync::CancellationToken::new(),
+    );
+    let (archive, _) = archive_of(&[("memory/new.md", b"Andromeda")]);
+    let (content_type, body) = multipart_archive(&archive);
+    let polled = std::sync::Arc::new(AtomicBool::new(false));
+    let stream = futures::stream::poll_fn({
+        let polled = polled.clone();
+        let mut chunks = vec![axum::body::Bytes::from(body)];
+        move |_| {
+            polled.store(true, Ordering::SeqCst);
+            std::task::Poll::Ready(chunks.pop().map(Ok::<_, std::io::Error>))
+        }
+    });
+
+    let (status, value) = request(
+        h.state.clone(),
+        Method::POST,
+        &format!("/api/instances/{CANONICAL_SLUG}/import"),
+        &content_type,
+        Body::from_stream(stream),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "{value}");
+    assert_eq!(value["error"], "companion_busy", "{value}");
+    assert!(
+        !polled.load(Ordering::SeqCst),
+        "the request body was read before the busy answer"
+    );
+    assert_eq!(tree(&h.companion()), before);
+    assert_eq!(h.imports_entries(), Vec::<String>::new());
+    assert_eq!(h.indexed_paths().await, vec!["old.md"]);
+}
+
+/// A mutating request that arrives while the import is between its two
+/// renames waits on the import gate instead of recreating the companion
+/// directory, and lands in the imported tree afterwards; a proactive run
+/// that would start then is skipped without writing a record.
+#[tokio::test]
+async fn writes_arriving_during_an_import_wait_for_it_and_land_in_the_imported_tree() {
+    use crate::domain::proactive::{RunStatus, SkipReason, Target, Trigger};
+    use crate::services::embedding::tests::{MockServer, response};
+    use crate::services::media_text::StashPause;
+    use crate::services::proactive::Admission;
+
+    let mock = MockServer::new(vec![(200, response(vec![1., 0., 0.])); 4]).await;
+    let h = harness_with(mock.config.clone()).await;
+    h.seed_indexed_companion().await;
+    let (archive, _) = archive_of(&[
+        ("memory/new.md", b"Andromeda"),
+        ("soul.md", b"restored soul"),
+    ]);
+    let (reached, reached_rx) = std::sync::mpsc::channel();
+    let (resume, resume_rx) = std::sync::mpsc::channel();
+    h.state
+        .vector_store
+        .media_store()
+        .pause_next_stash(StashPause {
+            reached,
+            resume: resume_rx,
+        });
+    let uri = format!("/api/instances/{CANONICAL_SLUG}/import");
+    let import = {
+        let state = h.state.clone();
+        let (content_type, body) = multipart_archive(&archive);
+        tokio::spawn(async move {
+            request(state, Method::POST, &uri, &content_type, Body::from(body)).await
+        })
+    };
+    tokio::task::spawn_blocking(move || reached_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        !h.companion().exists(),
+        "the live tree is parked between the renames"
+    );
+
+    let write = {
+        let state = h.state.clone();
+        let uri = format!("/api/instances/{CANONICAL_SLUG}/soul");
+        let body = serde_json::to_vec(&serde_json::json!({"content": "written during the import"}))
+            .unwrap();
+        tokio::spawn(async move {
+            request(
+                state,
+                Method::PUT,
+                &uri,
+                "application/json",
+                Body::from(body),
+            )
+            .await
+        })
+    };
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    assert!(!write.is_finished(), "the write waits for the import");
+    assert!(
+        !h.companion().exists(),
+        "the write recreated the companion between the renames"
+    );
+    let trigger = Trigger::Heartbeat {
+        agent: "companion".into(),
+    };
+    match h
+        .state
+        .proactive
+        .begin(trigger.clone(), "check-in", Target::Companion)
+    {
+        Admission::Skipped(run) => assert!(
+            matches!(
+                run.status,
+                RunStatus::Skipped {
+                    reason: SkipReason::Import
+                }
+            ),
+            "{:?}",
+            run.status
+        ),
+        Admission::Admitted(_) => panic!("a proactive run was admitted during the import"),
+    }
+    assert!(!h.companion().exists(), "the skipped run wrote a record");
+    let parked = h.imports_entries();
+    for prefix in ["previous-", "staging-", "upload-"] {
+        assert_eq!(
+            parked
+                .iter()
+                .filter(|name| name.starts_with(prefix))
+                .count(),
+            1,
+            "{prefix}: {parked:?}"
+        );
+    }
+
+    resume.send(()).unwrap();
+    let (status, value) = import.await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{value}");
+    assert_eq!(value["derived_index"], "rebuilt", "{value}");
+    let (status, soul) = write.await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{soul}");
+    assert_eq!(
+        fs::read(h.companion().join("soul.md")).unwrap(),
+        b"written during the import",
+        "the write landed on the imported tree, after the swap"
+    );
+    assert!(h.companion().join("memory/new.md").is_file());
+    assert!(!h.companion().join("memory/old.md").exists());
+    assert_eq!(h.instance_dirs(), vec![CANONICAL_SLUG]);
+    assert_eq!(h.imports_entries(), Vec::<String>::new());
+    assert_eq!(h.indexed_paths().await, vec!["new.md"]);
+    // Runs are admitted again once the import is done.
+    match h
+        .state
+        .proactive
+        .begin(trigger, "check-in", Target::Companion)
+    {
+        Admission::Admitted(handle) => {
+            handle.cancel();
+        }
+        Admission::Skipped(run) => panic!("still skipped after the import: {:?}", run.status),
+    }
+}
+
+#[tokio::test]
+async fn import_of_a_foreign_slug_is_unknown_companion_without_side_effects() {
+    let h = harness().await;
+    h.seed_obsolete("alice");
+    let (archive, _) = archive_of(&[("memory/new.md", b"Andromeda")]);
+
+    for slug in ["alice", "luna", "Companion"] {
+        let (status, value) = h
+            .post_archive(&format!("/api/instances/{slug}/import"), &archive)
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{slug}: {value}");
+        assert_eq!(value["error"], "unknown_companion", "{slug}: {value}");
+    }
+
+    assert_eq!(h.instance_dirs(), vec!["alice"]);
+    h.assert_obsolete_untouched("alice");
+    assert!(!h.companion().exists());
+    assert_eq!(h.imports_entries(), Vec::<String>::new());
 }

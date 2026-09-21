@@ -14,6 +14,7 @@ pub mod drops;
 pub mod federation;
 pub mod handoff;
 pub mod heartbeat;
+pub mod import_gate;
 pub mod llm;
 pub mod machine_registry;
 pub mod mcp;
@@ -23,8 +24,6 @@ pub mod memory_corrections;
 pub mod memory_receipts;
 pub mod proactive;
 pub mod profile_archive;
-#[allow(dead_code)]
-// The import route, restore tool, and CLI adopt the restore in #74's final slice.
 pub mod profile_import;
 #[allow(dead_code)] // Foundation for route/producer migration in #116.
 pub(crate) mod resource_capability;

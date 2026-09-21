@@ -44,6 +44,7 @@ import type {
 export type { MachineInfo } from "./types.js";
 export type { FederationOverview, FederationPeer, FederationRotationReport, IssuedFederationInvite } from "./types.js";
 import { clearLegacyBrowserAuth } from "./legacy-auth-cleanup.js";
+import { importReply } from "../settings/import-status.js";
 
 const BASE = "";
 
@@ -1218,18 +1219,72 @@ export async function exportInstance(
 	return new Blob(chunks, { type: "application/gzip" });
 }
 
-export async function importInstance(slug: string, file: File): Promise<{ ok: boolean }> {
-	const form = new FormData();
-	form.append("file", file);
-	const res = await fetch(
-		`${BASE}/api/instances/${encodeURIComponent(slug)}/import`,
-		{ method: "POST", body: form },
-	);
-	if (!res.ok) {
-		const text = await res.text();
-		throw new Error(text || "import failed");
+/** What the server did with an archive (#74). */
+export interface ImportOutcome {
+	ok: boolean;
+	/** Regular files restored, the identity marker included. */
+	files: number;
+	directories: number;
+	/** Payload bytes of those files. */
+	bytes: number;
+	/** `rebuilt` when the search index was rebuilt from the archive; `pending` when it is left for the next start. */
+	derived_index: "rebuilt" | "pending";
+	pending_reason?: string;
+	indexed_chunks: number;
+}
+
+/** A refused import: `code` is the server's error name (`companion_busy`, `archive_refused`, ...). */
+export class ImportError extends Error {
+	constructor(public code: string, message: string) {
+		super(message);
+		this.name = "ImportError";
 	}
-	return res.json();
+}
+
+/**
+ * Replace the companion with an archive. The browser streams the upload and
+ * reports it through `onProgress` (bytes sent, bytes total, and whether the
+ * upload is complete); once it is complete the server validates the
+ * archive, swaps it in, and rebuilds the index before answering, so the
+ * promise stays pending through that too.
+ * XMLHttpRequest is used for its upload progress; the session cookie travels
+ * the same way as with fetch.
+ */
+export function importInstance(
+	slug: string,
+	file: File,
+	onProgress?: (sentBytes: number, totalBytes: number, uploaded: boolean) => void,
+): Promise<ImportOutcome> {
+	return new Promise((resolve, reject) => {
+		const form = new FormData();
+		form.append("file", file, file.name);
+		const xhr = new XMLHttpRequest();
+		xhr.open("POST", `${BASE}/api/instances/${encodeURIComponent(slug)}/import`);
+		xhr.responseType = "text";
+		let total = 0;
+		xhr.upload.onprogress = (event) => {
+			if (!event.lengthComputable) return;
+			total = event.total;
+			onProgress?.(event.loaded, event.total, false);
+		};
+		// The browser has sent the whole body: from here the server is
+		// validating and restoring, whatever the byte counts said.
+		xhr.upload.onload = () => onProgress?.(total, total, true);
+		xhr.onerror = () => reject(new ImportError("unreachable", "the server could not be reached; nothing was changed"));
+		xhr.onabort = () => reject(new ImportError("aborted", "the upload was interrupted; nothing was changed"));
+		xhr.onload = () => {
+			if (xhr.status === 401) {
+				reject(new AuthError());
+				return;
+			}
+			// Only the route's own `ok: true` is a restore; a 2xx without it
+			// (a proxy's page, an empty body) is an error, never a success.
+			const reply = importReply(xhr.status, xhr.responseText);
+			if (reply.ok) resolve(reply.outcome as unknown as ImportOutcome);
+			else reject(new ImportError(reply.code, reply.message));
+		};
+		xhr.send(form);
+	});
 }
 
 // ---------------------------------------------------------------------------

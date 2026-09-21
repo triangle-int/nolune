@@ -64,9 +64,16 @@ pub enum Target {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SkipReason {
     QuietHours,
-    Cooldown { until: i64 },
-    Duplicate { of: String },
+    Cooldown {
+        until: i64,
+    },
+    Duplicate {
+        of: String,
+    },
     Disabled,
+    /// A companion import is replacing the tree (#74); the run is not
+    /// recorded, because nothing may be written until the import is done.
+    Import,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -11,6 +11,7 @@ Scope: HTTP resource URLs. `/api/ws` query authentication is tracked separately 
 | Browser uploads | `api/client.ts`, `MessageBubble.svelte`, file previews | Authenticated issuance, refresh before expiry |
 | Browser memory | `MemoryMapView.svelte`, memory search | Authenticated exact-resource issuance |
 | Export | `api/client.ts`, settings | Bearer fetch, downloaded blob |
+| Import | `api/client.ts`, settings, `nolune restore` | Authenticated multipart upload (session cookie in the browser, Bearer from the CLI); the archive streams to `imports/` and is restored by `services/profile_import.rs`, never a query token or a path |
 | Native relay | `companion_relay.rs` | Fixed upstream, native-relay audience, no forwarded control-token query |
 | Upload API | `routes/uploads.rs`, desktop upload bridge | Bearer headers; resource verifier is separate |
 | Resource handlers | upload and memory readers | Verify method/audience/instance/resource/canonical URI before filesystem access |
@@ -23,7 +24,7 @@ Scope: HTTP resource URLs. `/api/ws` query authentication is tracked separately 
 - Browser issuance is authenticated POST to `/api/instances/{slug}/resource-capabilities/{files|memory}`. Native issuance uses `/api/native-relay/instances/{slug}/resource-capabilities/{files|memory}`. Inputs are one `id` or one `path`, bounded by a 2 KiB body limit and the primitive's identity limits; unknown fields (including audience) are rejected.
 - Model-provider grants are reusable for at most 15 minutes. Browsers renew after 10 minutes, retry failed issuance, and renew persisted links on load. Provider attachment history is renewed for the configured origin and current instance before a new turn.
 - The native relay exchanges exact resource identities for NativeRelay grants using its native Bearer credential; the resource GET carries only the scoped capability.
-- Legacy `/public/files` and `/public/memory` server routes deny access. Client saved-link handling converts legacy public/API resource identities to fresh browser grants. Authenticated API readers continue to require Bearer headers. Export uses authenticated fetch and a blob.
+- Legacy `/public/files` and `/public/memory` server routes deny access. Client saved-link handling converts legacy public/API resource identities to fresh browser grants. Authenticated API readers continue to require Bearer headers. Export uses authenticated fetch and a blob. Import (#74) is an authenticated multipart `POST /api/instances/{slug}/import` with a `DefaultBodyLimit`; the body streams into `imports/` through the workspace capability and the restore tool accepts only upload ids, so no resource URL or host path is ever part of an import.
 - The only remaining query-control-token producer is the explicitly marked `/api/ws` handshake (#112). Recursive scans exempt only that function/block, preserving production code after inline test modules.
 - Control tokens are registered for redaction at configuration time and rotation. Tool results/errors/activity, provider payloads/errors, and server log formatting redact them.
 

@@ -1,8 +1,8 @@
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Path, State},
+    extract::{DefaultBodyLimit, Multipart, Path, State},
     http::StatusCode,
     routing::{delete, get, post, put},
 };
@@ -17,11 +17,27 @@ use crate::{
         receipt::MemoryReceipt,
     },
     services::{
-        chat, memory,
+        chat,
+        media_text::MediaStore,
+        memory,
         memory_corrections::{self, CorrectionError, CorrectionOutcome, FlagUpdate},
-        memory_receipts, profile_archive, tools,
+        memory_receipts,
+        profile_archive::{self, ArchiveError},
+        profile_import::{self, RestoreError, RestoreOutcome},
+        tools,
     },
 };
+
+/// Upper bound on one import request body (#74). The archive reader caps the
+/// payload it extracts at 8 GiB (`profile_archive::Limits`); this leaves room
+/// for the gzip and multipart framing around it. Anything larger is refused
+/// with `413` before it is read.
+const MAX_IMPORT_BODY_BYTES: usize = 8 * 1024 * 1024 * 1024 + 64 * 1024 * 1024;
+
+/// The import route as the router matches it. The companion boundary holds
+/// the import gate shared for every other mutating request; this one takes
+/// the exclusive side inside its handler.
+pub(crate) const IMPORT_ROUTE: &str = "/api/instances/{instance_slug}/import";
 
 /// Retired control-token resource namespace; always denies access.
 pub fn public_memory_router() -> Router<AppState> {
@@ -130,8 +146,8 @@ pub fn router() -> Router<AppState> {
             get(export_instance),
         )
         .route(
-            "/api/instances/{instance_slug}/import",
-            post(import_instance),
+            IMPORT_ROUTE,
+            post(import_instance).layer(DefaultBodyLimit::max(MAX_IMPORT_BODY_BYTES)),
         )
 }
 
@@ -1088,14 +1104,257 @@ impl std::io::Write for ArchiveChunks {
     }
 }
 
-/// POST /api/instances/{slug}/import is disabled until a capability-safe
-/// importer exists for the stabilized storage format.
-async fn import_instance(Path(_instance_slug): Path<String>) -> impl IntoResponse {
+/// POST /api/instances/{slug}/import → replace the companion with the archive
+/// in the multipart `file` field (#74).
+///
+/// The body streams into `imports/<upload>` through the workspace capability
+/// as it arrives, so a multi-gigabyte archive never sits in memory, and
+/// `profile_import::restore_companion` then stages, validates, swaps, and
+/// rebuilds derived state under the companion's lifecycle gate and the
+/// process-wide import gate. The answer is `200 {ok, files, directories,
+/// bytes, derived_index, ...}`; `409 companion_busy` while an agent task runs
+/// for the companion (answered before the body is read, so a large archive
+/// is not streamed to disk only to be refused; the restore repeats the check
+/// under the gates) or while ambient writers outlast the import's wait for
+/// them; `400 archive_refused` or `413 archive_too_large` for an archive the
+/// reader rejects, with the companion exactly as it was; `500` when the swap
+/// itself failed (the message says where the previous tree is).
+async fn import_instance(
+    State(state): State<AppState>,
+    Path(instance_slug): Path<String>,
+    multipart: Result<Multipart, axum::extract::multipart::MultipartRejection>,
+) -> Response {
+    let multipart = match multipart {
+        Ok(multipart) => multipart,
+        Err(rejection) => {
+            return import_error(
+                rejection.status(),
+                "invalid_upload",
+                format!(
+                    "the archive must be sent as a multipart `file` field: {}",
+                    rejection.body_text()
+                ),
+            );
+        }
+    };
+    let running =
+        profile_import::running_agent_tasks(&state.agent_tasks, &instance_slug, None).await;
+    if running > 0 {
+        return import_failure(RestoreError::Busy { tasks: running });
+    }
+    let media = state.vector_store.media_store();
+    let (upload, archive) = match ImportUpload::receive(media, multipart).await {
+        Ok(received) => received,
+        Err(rejection) => return rejection.into_response(),
+    };
+    let result = profile_import::restore_companion(
+        state.vector_store.clone(),
+        &state.agent_tasks,
+        &instance_slug,
+        archive,
+    )
+    .await;
+    // The restore has read the archive to the end (or refused it); the
+    // request body leaves imports/ either way.
+    drop(upload);
+    match result {
+        Ok(outcome) => (StatusCode::OK, Json(ImportResponse { ok: true, outcome })).into_response(),
+        Err(error) => import_failure(error),
+    }
+}
+
+#[derive(Serialize)]
+struct ImportResponse {
+    ok: bool,
+    #[serde(flatten)]
+    outcome: RestoreOutcome,
+}
+
+/// The request body of one import, streamed to `imports/<name>` through the
+/// media store; the file is removed when this is dropped, whether the
+/// restore ran or the client went away mid-upload.
+struct ImportUpload {
+    media: std::sync::Arc<MediaStore>,
+    name: String,
+}
+
+impl ImportUpload {
+    /// Read the multipart `file` field into a fresh upload file chunk by
+    /// chunk and hand back the file positioned at its start.
+    async fn receive(
+        media: std::sync::Arc<MediaStore>,
+        mut multipart: Multipart,
+    ) -> Result<(Self, std::fs::File), ImportRejection> {
+        loop {
+            let mut field = match multipart.next_field().await {
+                Ok(Some(field)) => field,
+                Ok(None) => {
+                    return Err(ImportRejection::new(
+                        StatusCode::BAD_REQUEST,
+                        "missing_archive",
+                        "the multipart body has no `file` field holding the archive",
+                    ));
+                }
+                Err(error) => return Err(multipart_error(error)),
+            };
+            if field.name() != Some("file") {
+                continue;
+            }
+
+            let name = format!(
+                "{}{}.{}",
+                profile_import::UPLOAD_PREFIX,
+                uuid::Uuid::new_v4(),
+                profile_archive::ARCHIVE_FILE_NAME
+            );
+            let created = tokio::task::spawn_blocking({
+                let media = media.clone();
+                let name = name.clone();
+                move || media.create_import_upload(&name)
+            })
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))
+            .and_then(|created| created);
+            let file = match created {
+                Ok(file) => file,
+                Err(error) => {
+                    log::error!("[import] could not create the upload file: {error}");
+                    return Err(ImportRejection::staging_failed());
+                }
+            };
+            let upload = Self { media, name };
+            let mut file = tokio::fs::File::from_std(file.into_std());
+
+            loop {
+                let chunk = match field.chunk().await {
+                    Ok(Some(chunk)) => chunk,
+                    Ok(None) => break,
+                    Err(error) => return Err(multipart_error(error)),
+                };
+                if let Err(error) = tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await {
+                    log::error!("[import] could not write the uploaded archive: {error}");
+                    return Err(ImportRejection::staging_failed());
+                }
+            }
+            if let Err(error) = tokio::io::AsyncWriteExt::flush(&mut file).await {
+                log::error!("[import] could not write the uploaded archive: {error}");
+                return Err(ImportRejection::staging_failed());
+            }
+            let file = file.into_std().await;
+            let rewound = tokio::task::spawn_blocking(move || {
+                use std::io::Seek as _;
+                let mut file = file;
+                file.sync_all()?;
+                file.seek(std::io::SeekFrom::Start(0))?;
+                Ok::<_, std::io::Error>(file)
+            })
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))
+            .and_then(|rewound| rewound);
+            return match rewound {
+                Ok(archive) => Ok((upload, archive)),
+                Err(error) => {
+                    log::error!("[import] could not finish the uploaded archive: {error}");
+                    Err(ImportRejection::staging_failed())
+                }
+            };
+        }
+    }
+}
+
+impl Drop for ImportUpload {
+    fn drop(&mut self) {
+        if let Err(error) = self.media.remove_import_upload(&self.name) {
+            log::warn!("[import] could not remove imports/{}: {error}", self.name);
+        }
+    }
+}
+
+/// Why the request body was not accepted, before the restore ran.
+struct ImportRejection {
+    status: StatusCode,
+    code: &'static str,
+    message: String,
+}
+
+impl ImportRejection {
+    fn new(status: StatusCode, code: &'static str, message: impl ToString) -> Self {
+        Self {
+            status,
+            code,
+            message: message.to_string(),
+        }
+    }
+
+    fn staging_failed() -> Self {
+        Self::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "import_failed",
+            "could not stage the uploaded archive",
+        )
+    }
+}
+
+impl IntoResponse for ImportRejection {
+    fn into_response(self) -> Response {
+        import_error(self.status, self.code, self.message)
+    }
+}
+
+fn import_error(status: StatusCode, code: &'static str, message: impl ToString) -> Response {
     (
-        StatusCode::NOT_IMPLEMENTED,
-        "profile import is temporarily unavailable during storage format stabilization",
+        status,
+        Json(serde_json::json!({
+            "error": code,
+            "message": message.to_string(),
+        })),
     )
         .into_response()
+}
+
+/// A body that is not well-formed multipart, or one over the limit.
+fn multipart_error(error: axum::extract::multipart::MultipartError) -> ImportRejection {
+    let status = error.status();
+    let code = if status == StatusCode::PAYLOAD_TOO_LARGE {
+        "archive_too_large"
+    } else {
+        "invalid_upload"
+    };
+    ImportRejection::new(
+        status,
+        code,
+        format!(
+            "the archive must be sent as a multipart `file` field: {}",
+            error.body_text()
+        ),
+    )
+}
+
+/// Map a refused or failed restore to a status the client can act on. Every
+/// 4xx leaves the companion exactly as it was.
+fn import_failure(error: RestoreError) -> Response {
+    let (status, code) = match &error {
+        RestoreError::Busy { .. } | RestoreError::WritersInFlight => {
+            (StatusCode::CONFLICT, "companion_busy")
+        }
+        RestoreError::Archive(archive) => match archive {
+            ArchiveError::TooManyEntries { .. }
+            | ArchiveError::FileTooLarge { .. }
+            | ArchiveError::TotalTooLarge { .. }
+            | ArchiveError::DecompressedTooLarge { .. } => {
+                (StatusCode::PAYLOAD_TOO_LARGE, "archive_too_large")
+            }
+            ArchiveError::Io(_) => (StatusCode::INTERNAL_SERVER_ERROR, "import_failed"),
+            _ => (StatusCode::BAD_REQUEST, "archive_refused"),
+        },
+        RestoreError::PublishStranded { .. } => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "import_stranded")
+        }
+        RestoreError::Staging(_) | RestoreError::PublishFailed(_) | RestoreError::Aborted(_) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "import_failed")
+        }
+    };
+    import_error(status, code, error)
 }
 
 #[cfg(test)]
@@ -1103,8 +1362,10 @@ mod media_tests {
     use super::*;
     use crate::services::embedding::tests::{MockServer, response};
 
+    /// A body that is not a multipart archive is refused before the restore
+    /// runs: no companion directory appears and the index is untouched.
     #[tokio::test]
-    async fn import_endpoint_is_disabled_without_filesystem_or_index_mutation() {
+    async fn import_refuses_a_non_multipart_body_without_filesystem_or_index_mutation() {
         use axum::{
             body::{Body, to_bytes},
             http::Request,
@@ -1112,18 +1373,18 @@ mod media_tests {
         use tower::ServiceExt;
 
         let workspace = tempfile::tempdir().unwrap();
-        let store = std::sync::Arc::new(
-            crate::services::vector::VectorStore::connect(workspace.path()).await,
-        );
+        let state = AppState::new_in(
+            crate::config::Config::default(),
+            workspace.path().to_owned(),
+        )
+        .await;
+        let store = state.vector_store.clone();
         let mut vector = vec![0.; 768];
         vector[0] = 1.;
         store
             .upsert_text_memory("existing", "note.md", vec![("sentinel".into(), vector)])
             .await
             .unwrap();
-        let mut state = AppState::new(crate::config::Config::default()).await;
-        state.workspace_dir = workspace.path().to_owned();
-        state.vector_store = store.clone();
         let app = router().with_state(state);
 
         let response = app
@@ -1131,20 +1392,22 @@ mod media_tests {
                 Request::builder()
                     .method("POST")
                     .uri("/api/instances/new/import")
+                    .header("content-type", "application/octet-stream")
                     .body(Body::from(b"not an archive".as_slice()))
                     .unwrap(),
             )
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = to_bytes(response.into_body(), 4096).await.unwrap();
         assert!(
-            String::from_utf8_lossy(&body).contains("storage format stabilization"),
+            String::from_utf8_lossy(&body).contains("multipart"),
             "{}",
             String::from_utf8_lossy(&body)
         );
         assert!(!workspace.path().join("instances/new").exists());
+        assert!(!workspace.path().join("imports").exists());
         assert_eq!(store.list_all("existing", 10).await.unwrap().len(), 1);
     }
 

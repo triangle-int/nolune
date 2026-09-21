@@ -96,6 +96,14 @@ pub enum CliCommand {
         #[command(subcommand)]
         action: CuaAction,
     },
+    /// Replace the companion with a backup archive, sent to the running server
+    Restore {
+        /// A companion.tar.gz from Export in Settings or from create_backup
+        archive: PathBuf,
+        /// Replace without asking (required when not running in a terminal)
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
     /// Pair this companion with another one, on this host or elsewhere, through the running server
     Federation {
         #[command(subcommand)]
@@ -158,6 +166,7 @@ pub fn run(cmd: CliCommand, profile: &Profile) -> i32 {
         CliCommand::Pair => pair(profile),
         CliCommand::Onboard { json, port } => onboard_cmd(json, port, profile),
         CliCommand::Cua { action } => cua(action, profile),
+        CliCommand::Restore { archive, yes } => restore_cmd(&archive, yes, profile),
         CliCommand::Federation { action } => federation::run(action, profile),
     }
 }
@@ -521,6 +530,17 @@ fn onboard_cmd(json: bool, port: Option<u16>, profile: &Profile) -> i32 {
 
 // ── Browser pairing ─────────────────────────────────────────────────────
 
+/// Where this process reaches the running server: the configured port on the
+/// loopback address the listen host implies.
+fn local_api_url(config: &config::Config, path: &str) -> String {
+    let connect_host = match config.host.as_str() {
+        "" | "0.0.0.0" => "127.0.0.1".to_string(),
+        "::" | "[::]" => "[::1]".to_string(),
+        other => other.to_string(),
+    };
+    format!("http://{connect_host}:{}{path}", config.port)
+}
+
 /// Ask the running server for a pairing code and print it. This is the local
 /// owner surface for #112: the code is short-lived and single-use, and the
 /// API token itself never leaves this process.
@@ -540,12 +560,7 @@ fn pair(profile: &Profile) -> i32 {
         return 0;
     }
 
-    let connect_host = match config.host.as_str() {
-        "" | "0.0.0.0" => "127.0.0.1".to_string(),
-        "::" | "[::]" => "[::1]".to_string(),
-        other => other.to_string(),
-    };
-    let url = format!("http://{connect_host}:{}/api/session/pairing", config.port);
+    let url = local_api_url(&config, "/api/session/pairing");
     let open_url = if config.public_url.is_empty() {
         format!("http://localhost:{}", config.port)
     } else {
@@ -623,6 +638,164 @@ If the service was started with NOLUNE_AUTH_TOKEN, run `nolune pair{flag}` with 
     }
 }
 
+// ── Restore (#74) ───────────────────────────────────────────────────────
+
+/// Send a backup archive from an operator-chosen local path to the running
+/// server, which validates and restores it (`POST /api/instances/companion/import`)
+/// under the same rules as an upload from the browser. The CLI never opens
+/// the archive itself beyond streaming its bytes, and the API token never
+/// leaves this process.
+fn restore_cmd(archive: &std::path::Path, yes: bool, profile: &Profile) -> i32 {
+    let size = match std::fs::metadata(archive) {
+        Ok(metadata) if metadata.is_file() => metadata.len(),
+        Ok(_) => {
+            eprintln!("{} is not a file", archive.display());
+            return 1;
+        }
+        Err(error) => {
+            eprintln!("cannot read {}: {error}", archive.display());
+            return 1;
+        }
+    };
+    if !yes && !confirm_restore(archive, profile) {
+        return 1;
+    }
+    let config = match config::load_config() {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("cannot read {}: {error}", config::config_path().display());
+            return 1;
+        }
+    };
+    let url = local_api_url(
+        &config,
+        &format!(
+            "/api/instances/{}/import",
+            crate::domain::companion::CANONICAL_SLUG
+        ),
+    );
+    let flag = profile_flag(profile);
+
+    // `main` is already inside the tokio runtime, so drive the upload on a
+    // thread with its own runtime. No overall timeout: a large archive and
+    // the index rebuild behind it take as long as they take.
+    let auth_token = config.auth_token.clone();
+    let request_url = url.clone();
+    let path = archive.to_path_buf();
+    let response = on_own_runtime(move || async move {
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .build()
+            .map_err(|e| e.to_string())?;
+        let file = tokio::fs::File::open(&path)
+            .await
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        let part = reqwest::multipart::Part::stream_with_length(reqwest::Body::from(file), size)
+            .file_name("companion.tar.gz")
+            .mime_str("application/gzip")
+            .map_err(|e| e.to_string())?;
+        let form = reqwest::multipart::Form::new().part("file", part);
+        let mut request = client.post(&request_url).multipart(form);
+        if !auth_token.is_empty() {
+            request = request.bearer_auth(&auth_token);
+        }
+        let response = request.send().await.map_err(|e| e.to_string())?;
+        let status = response.status();
+        let body: serde_json::Value = response.json().await.unwrap_or_default();
+        Ok::<_, String>((status, body))
+    })
+    .and_then(|result| result);
+
+    match response {
+        Err(error) => {
+            eprintln!(
+                "{} is not reachable at {url} ({error}).
+Start it with `nolune gateway{flag}` and try again; nothing was changed.",
+                display(profile)
+            );
+            1
+        }
+        Ok((status, _)) if status == reqwest::StatusCode::UNAUTHORIZED => {
+            eprintln!(
+                "The running server rejected the token from {}.
+If the service was started with NOLUNE_AUTH_TOKEN, run `nolune restore{flag}` with the same value; nothing was changed.",
+                config::config_path().display()
+            );
+            1
+        }
+        Ok((status, body)) if !status.is_success() => {
+            let message = body["message"].as_str().unwrap_or("");
+            let verb = match body["error"].as_str() {
+                Some("companion_busy") => "restore refused while the companion is busy",
+                Some("archive_refused") | Some("archive_too_large") | Some("invalid_upload") => {
+                    "restore refused"
+                }
+                _ => "restore failed",
+            };
+            eprintln!("{verb}: HTTP {status} {message}");
+            1
+        }
+        // A 2xx that is not the import's own answer (a proxy page, an empty
+        // body) is not a restore: never print one that did not happen.
+        Ok((status, body)) if body["ok"] != serde_json::Value::Bool(true) => {
+            eprintln!(
+                "unexpected reply from the server (HTTP {status}): cannot tell whether {} was restored; check the server log",
+                display(profile)
+            );
+            1
+        }
+        Ok((_, body)) => {
+            let files = body["files"].as_u64().unwrap_or(0);
+            let bytes = body["bytes"].as_u64().unwrap_or(0);
+            let index = match body["derived_index"].as_str() {
+                Some("rebuilt") => format!(
+                    "search index rebuilt ({} chunks)",
+                    body["indexed_chunks"].as_u64().unwrap_or(0)
+                ),
+                _ => format!(
+                    "search index pending{}; it is rebuilt at the next start",
+                    body["pending_reason"]
+                        .as_str()
+                        .map(|reason| format!(" ({reason})"))
+                        .unwrap_or_default()
+                ),
+            };
+            println!(
+                "restored {} from {}: {files} files, {bytes} bytes; {index}",
+                display(profile),
+                archive.display()
+            );
+            0
+        }
+    }
+}
+
+fn confirm_restore(archive: &std::path::Path, profile: &Profile) -> bool {
+    if !io::stdin().is_terminal() {
+        eprintln!(
+            "refusing to replace {} without confirmation: pass --yes to restore {}; nothing was changed",
+            display(profile),
+            archive.display()
+        );
+        return false;
+    }
+    eprint!(
+        "This replaces {}'s memory, personality, drops, and chat history with {}; the current data is not kept. Continue? [y/N] ",
+        display(profile),
+        archive.display()
+    );
+    let mut answer = String::new();
+    if io::stdin().read_line(&mut answer).is_err() {
+        return false;
+    }
+    if matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        true
+    } else {
+        eprintln!("aborted; nothing was changed");
+        false
+    }
+}
+
 // ── Cua Driver (#20) ────────────────────────────────────────────────────
 
 fn cua(action: CuaAction, profile: &Profile) -> i32 {
@@ -633,7 +806,7 @@ fn cua(action: CuaAction, profile: &Profile) -> i32 {
 }
 
 /// Run `work` on a thread with its own runtime: `main` already sits inside tokio, and
-/// these steps (a download, a driver handshake) have to block.
+/// these steps (a download, a driver handshake, an archive upload) have to block.
 fn on_own_runtime<T, F>(work: impl FnOnce() -> F + Send + 'static) -> Result<T, String>
 where
     F: Future<Output = T>,
@@ -647,7 +820,7 @@ where
         Ok(runtime.block_on(work()))
     })
     .join()
-    .unwrap_or_else(|_| Err("the driver step panicked".to_owned()))
+    .unwrap_or_else(|_| Err("the request thread panicked".to_owned()))
 }
 
 /// The asset `nolune cua install` fetches for this host: the pinned one.

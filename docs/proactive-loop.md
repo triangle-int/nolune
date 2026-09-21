@@ -18,23 +18,32 @@ format version 1:
 | `reason` | stated, user-readable reason, at most 200 characters |
 | `target` | `companion`, `chat` (with `chat_id`), or `machine` (with `machine_id`) |
 | `dedupe_key` | derived from the trigger; runs sharing a key never execute concurrently |
-| `status` | `running`, `completed`, `failed` (`error`, `retryable`), `cancelled`, or `skipped` (`quiet_hours`, `cooldown`, `duplicate`, `disabled`) |
+| `status` | `running`, `completed`, `failed` (`error`, `retryable`), `cancelled`, or `skipped` (`quiet_hours`, `cooldown`, `duplicate`, `disabled`, `import`) |
 | `attempt`, `retry_of` | attempt number and the id this attempt retries |
 | `approvals` | each side-effect decision: `reach_out`, allowed or not, reason, time |
 | `outcome` | receipts only: tool names with short summaries, `messages_sent`, `tokens` |
 
 Records never contain model text, hidden reasoning, or tool traces. Skips are
-recorded too, so a quiet or rate-limited period stays explainable.
+recorded too, so a quiet or rate-limited period stays explainable. The one
+exception is `skipped/import`: while a companion import (#74) is replacing
+the tree nothing may be written into it, so that skip is returned to the
+caller and logged but not saved; the scheduler leaves the schedule in place
+for a later tick.
 
 ## Lifecycle
 
-1. A trigger calls `begin`. The loop admits or skips it under the policy:
-   disabled → `skipped/disabled`; same `dedupe_key` already running →
+1. A trigger calls `begin`. The loop first takes the process-wide import
+   gate shared (a companion import holding it → `skipped/import`, nothing
+   written), then admits or skips under the policy: disabled →
+   `skipped/disabled`; same `dedupe_key` already running →
    `skipped/duplicate`; spontaneous trigger inside quiet hours →
    `skipped/quiet_hours`; event trigger within `cooldown_secs` of its last
    finish → `skipped/cooldown`.
 2. The worker holds a handle with a cancellation token and ends the run with
-   exactly one of `complete`, `fail`, or `cancel`.
+   exactly one of `complete`, `fail`, or `cancel`. The handle keeps the
+   import gate until then, so an import waits for the run (a bounded time,
+   after which it reports the companion busy) instead of interleaving with
+   the receipts and messages the run writes.
 3. Side effects that leave companion storage (today: `reach_out`) call
    `approve_side_effect`, which denies during quiet hours or once the rolling
    24-hour `daily_reach_out_budget` is spent, and records the decision on the
