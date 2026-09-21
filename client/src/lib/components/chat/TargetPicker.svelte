@@ -18,7 +18,7 @@
 <label class="sr-only" for={id}>Computer for this conversation</label>
 <Select.Root type="single" {items} {disabled}
  bind:value={() => value, next => { if (next !== undefined && next !== value) onChange(next); }}>
- <Select.Trigger {id} aria-label="Computer for this conversation" {title} data-status={summary.status} class="picker min-w-0 flex-[3] basis-0 gap-2 border-border bg-card px-3 text-[13px] text-secondary-foreground shadow-none data-[size=default]:h-11 dark:bg-card dark:hover:bg-accent md:max-w-48">
+ <Select.Trigger {id} aria-label="Computer for this conversation" {title} data-status={summary.status} class="picker min-w-0 flex-[3] basis-0 gap-2 border-border bg-card px-3 text-[13px] text-secondary-foreground shadow-none data-[size=default]:h-11 dark:bg-card dark:hover:bg-accent md:max-w-56">
   <Monitor size={15} aria-hidden="true" class="shrink-0" />
   <span class="min-w-0 flex-1 truncate text-left">{summary.name}</span>
  </Select.Trigger>

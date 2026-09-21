@@ -72,6 +72,39 @@ test('a stale choice is dropped, a known one is kept', () => {
 	assert.equal(normalizeTarget(undefined, rows), NO_TARGET);
 });
 
+test('a remembered computer is kept as it is until the first listing arrives', () => {
+	// No listing yet (`null`): not listed is not forgotten. The request carries
+	// the remembered id, so a computer that turns out to be offline is refused
+	// by the server by name instead of being replaced by the only connected one.
+	assert.equal(normalizeTarget('laptop-id', null), 'laptop-id');
+	assert.equal(normalizeTarget('server-home', null), 'server-home');
+	assert.equal(normalizeTarget(NO_TARGET, null), NO_TARGET);
+	assert.equal(normalizeTarget(null, null), NO_TARGET);
+	assert.equal(requestTarget(normalizeTarget('laptop-id', null)), 'laptop-id');
+	assert.deepEqual(targetOptions(null), []);
+	// The trigger says the choice is kept while the listing is on its way.
+	assert.deepEqual(targetSummary('laptop-id', null), {
+		name: 'Remembered computer',
+		detail: 'Checking which computers are connected',
+		status: 'pending',
+		ambiguous: false,
+	});
+	assert.deepEqual(targetSummary(NO_TARGET, null), {
+		name: 'Ask me',
+		detail: 'Checking which computers are connected',
+		status: 'pending',
+		ambiguous: false,
+	});
+	// Nothing is certain enough for the chat bar to name.
+	assert.equal(runningLabel('laptop-id', null), '');
+	assert.equal(runningLabel(NO_TARGET, null), '');
+	// Once a listing arrived, a computer it lacks reads like no choice.
+	assert.equal(normalizeTarget('laptop-id', spaces(studio)), NO_TARGET);
+	// An offline computer is still listed, so the choice stays and is refused by name.
+	assert.equal(normalizeTarget('den-id', spaces(studio, den)), 'den-id');
+	assert.equal(requestTarget(normalizeTarget('den-id', spaces(studio, den))), 'den-id');
+});
+
 test('the summary says what the tools will act on', () => {
 	// Nothing chosen: the only connected desktop is what the tools use.
 	assert.deepEqual(targetSummary(NO_TARGET, spaces(studio, den)), {

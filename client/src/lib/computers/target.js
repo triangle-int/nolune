@@ -7,6 +7,12 @@
  * synthesized home's id (`HOME_SPACE_ID`, which the server reads as the
  * server home) or `NO_TARGET`, which leaves the choice open: the server then
  * uses the only connected desktop and refuses to pick between several.
+ *
+ * The rows are `null` until the first listing for the companion arrived (or
+ * while every attempt failed): not listed is not forgotten, so a remembered
+ * computer is sent as it is and the server refuses it by name when it is not
+ * connected (`machine_unavailable`) instead of acting on the only connected
+ * one. Once listed, a computer the listing no longer has reads like no choice.
  */
 
 import { HOME_SPACE_ID } from "./spaces.js";
@@ -28,10 +34,14 @@ export const NO_TARGET = "";
  * @typedef {{
  *   name: string;
  *   detail: string;
- *   status: SpaceStatus | "ambiguous";
+ *   status: SpaceStatus | "ambiguous" | "pending";
  *   ambiguous: boolean;
  * }} TargetSummary
+ * @typedef {SpaceView[] | null} Listing  the rows, or `null` before the first listing arrived
  */
+
+/** What the trigger says while the listing is on its way. */
+const PENDING_DETAIL = "Checking which computers are connected";
 
 /** @param {SpaceView} space */
 function detailOf(space) {
@@ -40,13 +50,14 @@ function detailOf(space) {
 
 /**
  * The rows as selectable options, in the order the Computers tab lists them:
- * the home first, then desktops with their state word.
+ * the home first, then desktops with their state word; none before the
+ * first listing arrived.
  *
- * @param {SpaceView[]} spaces
+ * @param {Listing} spaces
  * @returns {TargetOption[]}
  */
 export function targetOptions(spaces) {
-	return spaces.map((space) => ({
+	return (spaces ?? []).map((space) => ({
 		value: space.id,
 		label: space.name,
 		detail: detailOf(space),
@@ -57,13 +68,16 @@ export function targetOptions(spaces) {
 
 /**
  * A remembered choice that the listing no longer has (a forgotten computer)
- * reads like no choice; anything listed is kept as it is.
+ * reads like no choice; anything listed is kept as it is, and so is
+ * anything remembered while no listing has arrived yet: not listed is not
+ * forgotten, and the server answers for a computer it cannot reach.
  *
  * @param {string | null | undefined} value
- * @param {SpaceView[]} spaces
+ * @param {Listing} spaces
  */
 export function normalizeTarget(value, spaces) {
 	if (!value) return NO_TARGET;
+	if (spaces === null) return value;
 	return spaces.some((space) => space.id === value) ? value : NO_TARGET;
 }
 
@@ -75,14 +89,23 @@ function connectedDesktops(spaces) {
 /**
  * What the desktop tools will act on, in the words the trigger shows: the
  * chosen row, else the only connected desktop, else the fact that there is
- * a choice to make or nothing to choose from.
+ * a choice to make or nothing to choose from. Before the first listing the
+ * trigger says the choice is kept while the listing is on its way.
  *
  * @param {string | null | undefined} value
- * @param {SpaceView[]} spaces
+ * @param {Listing} spaces
  * @returns {TargetSummary}
  */
 export function targetSummary(value, spaces) {
 	const chosen = normalizeTarget(value, spaces);
+	if (spaces === null) {
+		return {
+			name: chosen === NO_TARGET ? "Ask me" : "Remembered computer",
+			detail: PENDING_DETAIL,
+			status: "pending",
+			ambiguous: false,
+		};
+	}
 	if (chosen !== NO_TARGET) {
 		const space = /** @type {SpaceView} */ (spaces.find((row) => row.id === chosen));
 		return { name: space.name, detail: detailOf(space), status: space.status, ambiguous: false };
@@ -110,12 +133,14 @@ export function requestTarget(value) {
 
 /**
  * Where the running action is, for the chat bar: named only when one
- * computer is certain, so an open choice between several says nothing.
+ * computer is certain, so an open choice between several, or a listing
+ * that has not arrived, says nothing.
  *
  * @param {string | null | undefined} value
- * @param {SpaceView[]} spaces
+ * @param {Listing} spaces
  */
 export function runningLabel(value, spaces) {
+	if (spaces === null) return "";
 	const chosen = normalizeTarget(value, spaces);
 	if (chosen === HOME_SPACE_ID || spaces.some((space) => space.id === chosen && space.kind === "home")) return "at home";
 	const summary = targetSummary(chosen, spaces);
