@@ -169,7 +169,7 @@ landing/    SvelteKit — public website and documentation
 | Layer | Technology |
 |-------|------------|
 | Server | Rust, Axum, Tokio |
-| LLM | Anthropic or OpenAI API |
+| LLM | Anthropic, OpenAI or OpenRouter API key, or a ChatGPT login through the local Codex binary ([docs/providers.md](docs/providers.md)) |
 | Web client | SvelteKit 5, Tailwind CSS |
 | Desktop | Tauri 2 |
 | Memory | File-based storage with keyword and vector search |
@@ -214,6 +214,7 @@ Most settings are available through the interface. Advanced configuration lives 
 | `OPENROUTER_API_KEY` | OpenRouter API key override |
 | `BRAVE_SEARCH_API_KEY` | Brave Search API key override (the web search tool) |
 | `ELEVENLABS_API_KEY` | ElevenLabs API key override (voice) |
+| `NOLUNE_CODEX_BIN` | Path of the `codex` binary for the Codex provider, instead of the one on `PATH`; it must be the release Nolune pins (Settings › Connections names it). Codex logs in with ChatGPT and holds no API key |
 | `RUST_LOG` | Logging level, defaults to `info` |
 
 <br>

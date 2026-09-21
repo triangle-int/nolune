@@ -3,7 +3,8 @@
  * say which preset handles conversations and which does background work, and
  * a chat can pin its own. This module is pure so its rules are testable.
  *
- * @typedef {{ id: string, label: string }} Provider
+ * @typedef {'key' | 'login'} ProviderAuth
+ * @typedef {{ id: string, label: string, auth: ProviderAuth }} Provider
  * @typedef {{ id: string, name: string, provider: string, model: string }} ModelPreset
  * @typedef {{ chat_preset: string, background_preset: string }} Slots
  * @typedef {{ vision: boolean, documents: boolean, tools: boolean }} Capabilities
@@ -12,12 +13,61 @@
  * @typedef {{ ok: false, error: string, message: string, status: number, retry_after_seconds?: number | null }} PresetTestFailure
  */
 
-/** @type {readonly Provider[]} */
+/**
+ * The providers the server ships adapters for, in the order the UI lists
+ * them. `auth` mirrors `LlmProvider::auth()`: the three API providers hold
+ * a key in the server's config; Codex (#27) logs in through the local
+ * `codex` binary and has no key field anywhere.
+ * @type {readonly Provider[]}
+ */
 export const PROVIDERS = Object.freeze([
-	{ id: "anthropic", label: "Anthropic" },
-	{ id: "openai", label: "OpenAI" },
-	{ id: "openrouter", label: "OpenRouter" },
+	{ id: "anthropic", label: "Anthropic", auth: "key" },
+	{ id: "openai", label: "OpenAI", auth: "key" },
+	{ id: "openrouter", label: "OpenRouter", auth: "key" },
+	{ id: "codex", label: "Codex", auth: "login" },
 ]);
+
+/**
+ * The models the pinned codex release lists (`model/list`, recorded in
+ * `server/src/services/llm/fixtures/codex-<version>.jsonl`), the default
+ * first; the seeded presets use the first and the last but one. Offered
+ * as hints in the preset editor, since Codex has no model discovery.
+ * @type {readonly string[]}
+ */
+export const CODEX_MODELS = Object.freeze(["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"]);
+
+/**
+ * How a provider authenticates; a provider the client does not know is
+ * treated as a key provider, so validation still asks for one.
+ * @param {string} id
+ * @returns {ProviderAuth}
+ */
+export function providerAuth(id) {
+	return PROVIDERS.find((p) => p.id === id)?.auth ?? "key";
+}
+
+/**
+ * Known model ids for the editor's datalist: only Codex has a fixed list.
+ * @param {string} provider
+ * @returns {readonly string[]}
+ */
+export function modelHints(provider) {
+	return provider === "codex" ? CODEX_MODELS : [];
+}
+
+/** An example model id for the editor's placeholder. @param {string} provider */
+export function modelPlaceholder(provider) {
+	switch (provider) {
+		case "openrouter":
+			return "vendor/model";
+		case "codex":
+			return CODEX_MODELS[0];
+		case "openai":
+			return "gpt-5.4";
+		default:
+			return "claude-sonnet-4-6";
+	}
+}
 
 /**
  * OpenRouter names models `vendor/model`, optionally `vendor/model:variant`
@@ -68,7 +118,9 @@ export function validatePresets(presets, slots, keyedProviders) {
 			errors.push(`${label} points at missing preset "${id}".`);
 			continue;
 		}
-		if (!keyedProviders.includes(preset.provider)) {
+		// A login provider is complete as far as the config goes (`provider_ready`);
+		// whether codex holds a login is runtime state the Codex tile shows.
+		if (providerAuth(preset.provider) === "key" && !keyedProviders.includes(preset.provider)) {
 			errors.push(`${label} uses ${preset.name}, but no ${providerLabel(preset.provider)} API key is configured.`);
 		}
 	}
@@ -110,8 +162,13 @@ export function modelShortLabel(model) {
 		const family = claude[1][0].toUpperCase() + claude[1].slice(1);
 		return `${family} ${claude[2]}.${claude[3]}`;
 	}
-	const gpt = /^gpt-(\d+(?:\.\d+)?)(?:-(mini|nano))?$/.exec(bare);
-	if (gpt) return gpt[2] ? `GPT-${gpt[1]} ${gpt[2]}` : `GPT-${gpt[1]}`;
+	// `mini`/`nano` are size suffixes; the codex models carry a name (#27).
+	const gpt = /^gpt-(\d+(?:\.\d+)?)(?:-(mini|nano|[a-z]+))?$/.exec(bare);
+	if (gpt) {
+		if (!gpt[2]) return `GPT-${gpt[1]}`;
+		const suffix = gpt[2] === "mini" || gpt[2] === "nano" ? gpt[2] : gpt[2][0].toUpperCase() + gpt[2].slice(1);
+		return `GPT-${gpt[1]} ${suffix}`;
+	}
 	return model;
 }
 
@@ -192,11 +249,17 @@ export function presetTestCopy(outcome, preset) {
 	}
 	const said = outcome.message?.trim() || `${provider} did not answer.`;
 	const wait = outcome.retry_after_seconds ? `in ${outcome.retry_after_seconds} s` : "in a moment";
+	// A login provider (#27) has no key to add or change: its setup sentence
+	// is the server's own (a missing binary, another release, no login), and
+	// a refusal means the login, not a key.
+	const login = providerAuth(preset?.provider) === "login";
 	/** @type {Record<string, string>} */
 	const copy = {
-		setup_required: `No ${provider} API key yet. Add one under API keys, then test again.`,
-		authentication: `${provider} rejected the API key. Change it under API keys.`,
-		rate_limited: `${provider} accepted the key but is rate limiting right now; the key works, try again ${wait}.`,
+		setup_required: login ? said : `No ${provider} API key yet. Add one under API keys, then test again.`,
+		authentication: login ? `${provider} rejected the login. Log out and log in again under ${provider}.` : `${provider} rejected the API key. Change it under API keys.`,
+		rate_limited: login
+			? `${provider} is rate limiting right now; try again ${wait}.`
+			: `${provider} accepted the key but is rate limiting right now; the key works, try again ${wait}.`,
 		model_not_found: `${provider} has no model "${model}". Check the model id.`,
 		provider_rejected: said,
 		provider_unavailable: `${said}. Try again in a moment.`,

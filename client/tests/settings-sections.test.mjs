@@ -54,6 +54,8 @@ test('raw server and protocol fields are owned by Advanced only', () => {
 	assert.equal(byKey['model-mode'], undefined, 'model routing is gone (#156)');
 	assert.equal(byKey['computers'].section, 'connections');
 	assert.equal(byKey['paired-browsers'].section, 'connections');
+	assert.equal(byKey['codex'].section, 'connections', 'the Codex login lives beside the API keys (#27)');
+	assert.equal(byKey['codex'].scope, 'server');
 	assert.equal(byKey['skills'].section, 'capabilities');
 	assert.equal(byKey['extensions'].section, 'capabilities');
 	assert.equal(byKey['export'].section, 'data');

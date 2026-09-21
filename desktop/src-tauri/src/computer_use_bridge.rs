@@ -1090,7 +1090,7 @@ const CAPABILITIES: [&str; 15] = [
 /// The id this computer registers under: a UUID persisted in the settings
 /// store on first use, so reconnects, hostname changes, and reinstalls that
 /// keep the store update the same server-side record (#80).
-fn stable_machine_id(app: &tauri::AppHandle) -> Result<String, String> {
+pub(crate) fn stable_machine_id(app: &tauri::AppHandle) -> Result<String, String> {
     use tauri_plugin_store::StoreExt;
     let store = app
         .store("settings.json")

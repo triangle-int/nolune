@@ -16,7 +16,7 @@
 /** @type {readonly Section[]} */
 export const SETTINGS_SECTIONS = Object.freeze([
 	{ id: "companion", label: "Companion", description: "Presence, rhythm, initiative, and time." },
-	{ id: "connections", label: "Connections", description: "Model presets, API keys, your computers, and paired browsers." },
+	{ id: "connections", label: "Connections", description: "Model presets, API keys, the Codex login, your computers, and paired browsers." },
 	{ id: "capabilities", label: "Capabilities", description: "Skills and reviewed extensions it may use." },
 	{ id: "data", label: "Data", description: "What Nolune keeps, and how to take it with you." },
 	{ id: "advanced", label: "Advanced", description: "Server, updates, and integration details for self-hosters." },
@@ -32,6 +32,7 @@ export const SETTINGS = Object.freeze([
 
 	{ key: "models", label: "Model presets", section: "connections", scope: "server" },
 	{ key: "api-keys", label: "API keys", section: "connections", scope: "server" },
+	{ key: "codex", label: "Codex login", section: "connections", scope: "server" },
 	{ key: "computers", label: "Connected computers", section: "connections", scope: "server" },
 	{ key: "paired-browsers", label: "Paired browsers", section: "connections", scope: "server" },
 

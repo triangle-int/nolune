@@ -64,7 +64,9 @@ To move it:
    the pre-initialize and unknown-method errors. Nothing under `~/.codex`
    is read or written when `CODEX_HOME` points elsewhere.
 4. If `model/list` changed, update the seeded Codex presets in
-   `default_presets` (the Model defaults list above applies).
+   `default_presets` (the Model defaults list above applies) and the
+   `CODEX_MODELS` catalog in `client/src/lib/models/presets.js` that the
+   preset editor and onboarding offer.
 5. Run the fixture-driven suite, then the live tests against the new
    binary: `cargo test --locked --manifest-path server/Cargo.toml -- codex`
    without credentials; the smoke test with a scratch home,
@@ -80,7 +82,11 @@ To move it:
    `server/tests/provider_docs.rs` fails when either page names another
    release. `docs/settings.md` describes the login routes and needs a change
    only when their shapes did.
-7. Say in the release notes which codex release is now required: people
+7. Smoke the Codex section of Settings → Connections and the Codex
+   choice in onboarding with the real binary (`docs/settings.md` lists the
+   states), and the incompatible state with the previous release still
+   installed.
+8. Say in the release notes which codex release is now required: people
    who installed the previous one see `codex_incompatible` from
    `GET /api/config/codex/status` until they upgrade.
 

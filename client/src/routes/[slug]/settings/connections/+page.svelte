@@ -21,7 +21,8 @@
 	} from "$lib/api/client.js";
 	import ConnectedComputers from "$lib/components/computers/ConnectedComputers.svelte";
 	import Companions from "$lib/components/federation/Companions.svelte";
-	import { PROVIDERS, capabilityWarnings, presetCapabilities, presetTestCopy, suggestPresetId, validatePresets } from "$lib/models/presets.js";
+	import CodexLogin from "$lib/components/settings/CodexLogin.svelte";
+	import { PROVIDERS, capabilityWarnings, modelHints, modelPlaceholder, presetCapabilities, presetTestCopy, suggestPresetId, validatePresets } from "$lib/models/presets.js";
 
 	// Connections (#98): what this server talks to. The provider and keys are
 	// server-global; computers and browsers are the places the companion is.
@@ -353,7 +354,7 @@
 						<li class="preset-row">
 							<label class="preset-field">Name<input class="ext-input" type="text" placeholder="Claude Sonnet" value={preset.name} oninput={(e) => renamePreset(index, (e.currentTarget as HTMLInputElement).value)} disabled={modelsSaving} /></label>
 							<label class="preset-field">Provider<select class="setting-input" bind:value={preset.provider} disabled={modelsSaving}>{#each PROVIDERS as provider (provider.id)}<option value={provider.id}>{provider.label}</option>{/each}</select></label>
-							<label class="preset-field preset-field-model">Model id<input class="ext-input" type="text" placeholder={preset.provider === "openrouter" ? "vendor/model" : "claude-sonnet-4-6"} bind:value={preset.model} disabled={modelsSaving} spellcheck="false" /></label>
+							<label class="preset-field preset-field-model">Model id<input class="ext-input" type="text" placeholder={modelPlaceholder(preset.provider)} list={modelHints(preset.provider).length ? `models-${preset.provider}` : undefined} bind:value={preset.model} disabled={modelsSaving} spellcheck="false" /></label>
 							<button class="setting-btn setting-btn-danger preset-remove" onclick={() => removePreset(index)} disabled={modelsSaving} title={inUse ? "In use by a slot; the slot moves to the first preset" : "Remove preset"}>Remove</button>
 							<div class="preset-foot">
 								{#each warningsFor(preset) as warning (warning.id)}
@@ -372,6 +373,8 @@
 					{/each}
 				</ul>
 			{/if}
+			<!-- The models the pinned codex release lists (#27); the other providers take any id. -->
+			<datalist id="models-codex">{#each modelHints("codex") as model (model)}<option value={model}></option>{/each}</datalist>
 			<div class="settings-links">
 				<button class="nl-button-secondary" onclick={() => addPreset()} disabled={modelsSaving}>Add preset</button>
 				{#each PROVIDERS as provider (provider.id)}
@@ -402,7 +405,7 @@
 	<div class="section-header">
 		<div>
 			<h3 class="section-label">API keys</h3>
-			<p class="section-desc">Your own keys, stored on this server. A preset can only be used once its provider has a key; OpenAI also unlocks semantic memory, OpenRouter reaches many vendors with one key, ElevenLabs unlocks voice.</p>
+			<p class="section-desc">Your own keys, stored on this server. A preset can only be used once its provider has a key (Codex logs in below instead); OpenAI also unlocks semantic memory, OpenRouter reaches many vendors with one key, ElevenLabs unlocks voice.</p>
 		</div>
 	</div>
 	<div class="section-body">
@@ -457,6 +460,19 @@
 		<p class="key-error" role="alert">{keyError}</p>
 	{/if}
 	<p class="setting-hint" style="margin-top: 12px;">Changing the OpenAI key restarts semantic indexing on the next server start. Endpoint details live under <a class="settings-link" href={`/${slug}/settings/advanced`}>Advanced</a>.</p>
+	</div>
+</section>
+
+<!-- Codex (#27): a ChatGPT login held by the local codex binary, no key -->
+<section class="settings-section">
+	<div class="section-header">
+		<div>
+			<h3 class="section-label">Codex</h3>
+			<p class="section-desc">Your ChatGPT login, held by the codex binary on this server: Codex presets need no API key. Log in here, or run <code>codex login</code> on the server.</p>
+		</div>
+	</div>
+	<div class="section-body">
+		<CodexLogin onchange={() => { testResults = {}; }} />
 	</div>
 </section>
 

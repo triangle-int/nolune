@@ -294,10 +294,13 @@ own conversation history, so only the new message goes out per turn.
 The login routes, `GET /api/config/codex/status`,
 `POST /api/config/codex/login` (the managed browser flow, or a device code
 for a headless server) and `POST /api/config/codex/logout`, are described
-in [settings.md](settings.md#codex-27); they ask the same app-server child
-the provider's turns run on, over the same protocol, and hand out an
-account's label and what a person needs to finish a login, never a token.
-The Settings → Connections tile follows in the remaining slice of #27.
+in [settings.md](settings.md); they ask the same app-server child the
+provider's turns run on, over the same protocol, and hand out an account's
+label and what a person needs to finish a login, never a token. The Codex
+section of Settings → Connections and the Codex choice in onboarding are
+built on them (settings.md says what each state shows and how the
+onboarding gate works). Moving the pin is a release step, walked in
+[release-checklist.md](release-checklist.md).
 
 ## Capabilities per provider
 
