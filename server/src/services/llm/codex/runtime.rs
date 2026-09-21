@@ -8,9 +8,12 @@
 //! and the fake app-server, so the real binary is never started by a test
 //! that did not ask for it.
 
-use std::sync::{
-    Arc, Mutex, OnceLock,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use serde_json::{Value, json};
@@ -60,6 +63,10 @@ struct Inner {
     server: tokio::sync::Mutex<Option<AppServer>>,
     /// The adapter's threads and open turns.
     threads: Mutex<Threads>,
+    /// An empty directory of this runtime's own, where the threads of
+    /// one-shot runs are placed; made on first use, removed with the
+    /// runtime.
+    scratch: Mutex<Option<tempfile::TempDir>>,
     /// Set by `close`: nothing starts again.
     closed: AtomicBool,
 }
@@ -91,6 +98,7 @@ impl Runtime {
                 source,
                 server: tokio::sync::Mutex::new(None),
                 threads: Mutex::new(Threads::default()),
+                scratch: Mutex::new(None),
                 closed: AtomicBool::new(false),
             }),
         }
@@ -146,6 +154,21 @@ impl Runtime {
     /// The adapter's per-conversation bookkeeping.
     pub(super) fn threads(&self) -> &Mutex<Threads> {
         &self.inner.threads
+    }
+
+    /// An empty directory of this runtime's own, for the threads of
+    /// one-shot runs, which have no conversation and so no workspace: a
+    /// thread has to run somewhere, and nowhere Nolune keeps anything.
+    pub(super) fn scratch_dir(&self) -> std::io::Result<PathBuf> {
+        let mut scratch = self.inner.scratch.lock().unwrap();
+        if scratch.is_none() {
+            *scratch = Some(tempfile::Builder::new().prefix("nolune-codex-").tempdir()?);
+        }
+        Ok(scratch
+            .as_ref()
+            .expect("made just above")
+            .path()
+            .to_path_buf())
     }
 
     /// Kill the child and refuse restarts; a runtime built for a test is

@@ -66,17 +66,41 @@ conversation so far. One-shot runs (titles, memory extraction, the
 connection test) use ephemeral threads.
 
 A thread is started read-only (`sandbox: read-only`), with no approvals
-(`approvalPolicy: never`), with codex's own shell, file, browser, MCP,
-plugin, hook and sub-agent surfaces switched off in the thread's config,
-and with Nolune's tool definitions as `dynamicTools`: the only tools the
-model can call. When codex asks `item/tool/call`, the adapter hands the
-call to the agent loop as an ordinary tool call and leaves the turn open;
-the loop runs the tool through Nolune's capability and approval layer and
-the adapter answers codex with the result. Codex itself executes nothing:
-any approval it asks for is declined, and a command or file change it
-starts on its own fails the turn. Dynamic tools are fixed when a thread
-starts, so a conversation whose tool set changes continues in a fresh
-thread.
+(`approvalPolicy: never`), with codex's own shell, file, browser, plugin,
+hook and sub-agent surfaces switched off in the thread's config, and with
+Nolune's tool definitions as `dynamicTools`: the only tools the model can
+call. The MCP servers in the user's own codex config need more than a
+switch: the app-server merges the thread's config overrides into
+`config.toml` per key, so an empty `mcp_servers` table disables nothing
+(verified against the pinned release: every configured server still
+started for the thread). Before a start or a resume the adapter therefore
+reads the effective config (`config/read`) and disables every server it
+lists by name (`mcp_servers.<name>.enabled = false`), and before every
+turn it lists the thread's servers (`mcpServerStatus/list`) and refuses
+the thread if any stands other than disabled; a server the app-server
+announces for the thread mid-turn (`mcpServer/startupStatus/updated`)
+interrupts and fails the turn. A refused conversation thread is attached
+anew on the next turn, overrides re-applied and checked again. Threads run
+in an empty directory of Nolune's own (`<workspace>/codex/cwd` for a
+conversation, a scratch directory of the runtime's for a one-shot), never
+in the workspace itself, so nothing rooted at the thread's directory (a
+project doc, a skill, a file mention) reaches Nolune's config, chats or
+memory.
+
+When codex asks `item/tool/call`, the adapter hands the call to the agent
+loop as an ordinary tool call and leaves the turn open; the loop runs the
+tool through Nolune's capability and approval layer and the adapter
+answers codex with the result. While the turn waits, a task of its own
+keeps reading the app-server's event stream and queues only that thread's
+events, so a second conversation or a background routine streaming
+meanwhile never overruns it. Codex itself executes nothing: any approval
+it asks for is declined, and a command, file change, web search, image
+read or MCP call it starts on its own fails the turn. Dynamic tools are
+fixed when a thread starts, so a conversation whose tool set changes
+continues in a fresh thread. A one-shot's ephemeral thread is
+unsubscribed (`thread/unsubscribe`) once its turn is over, and the
+app-server unloads it after its own delay; `thread/archive` and
+`thread/delete` do not apply to an ephemeral thread (it has no rollout).
 
 Cancellation sends `turn/interrupt`. A child that dies mid-turn fails that
 turn with a transport error and the next turn resumes the thread in the

@@ -14,10 +14,12 @@
 //! sent. Anywhere in an entry a string `$params.<path>` is replaced by that
 //! part of the request params (`$params.threadId`), so an answer can echo
 //! what it was asked. An entry then plays either `steps`, in order, each
-//! one of `notify` (an event), `reply` (the result), `error` (an error
-//! object), `ask` (a request the client must answer before the next step),
-//! `delay_ms`, `exit` (die), or `raw` (a verbatim line with `$ID` replaced
-//! by the request id); or, without `steps`, the older shape: `reply` |
+//! one of `notify` (an event; `repeat` plays it that many times, for a
+//! turn that streams more than a subscriber's buffer), `reply` (the
+//! result), `error` (an error object), `ask` (a request the client must
+//! answer before the next step), `delay_ms`, `exit` (die), or `raw` (a
+//! verbatim line with `$ID` replaced by the request id); or, without
+//! `steps`, the older shape: `reply` |
 //! `echo` (the request params as the result) | `error`; `notify` events
 //! before the answer and `then` events after it; `delay_ms` before
 //! answering; `exit`; `ask` (answer only once the client answered that);
@@ -64,6 +66,10 @@ pub const STDERR_ENV: &str = "NOLUNE_FAKE_APP_SERVER_STDERR";
 pub const LOG_ENV: &str = "NOLUNE_FAKE_APP_SERVER_LOG";
 /// Set to `none` to play the fixture's logged-out `account/read` answer.
 pub const ACCOUNT_ENV: &str = "NOLUNE_FAKE_APP_SERVER_ACCOUNT";
+/// Set to `hidden` to play a `config/read` that lists no MCP server while
+/// the thread entries still start the configured ones: a server the
+/// effective config did not show.
+pub const MCP_ENV: &str = "NOLUNE_FAKE_APP_SERVER_MCP";
 
 /// How long an `ask` waits for the client's answer.
 const ASK_TIMEOUT: Duration = Duration::from_secs(10);
@@ -184,6 +190,9 @@ struct Ask {
 struct Step {
     #[serde(default)]
     notify: Option<Event>,
+    /// How many times `notify` is emitted; once when absent.
+    #[serde(default)]
+    repeat: Option<u32>,
     #[serde(default)]
     reply: Option<Value>,
     #[serde(default)]
@@ -389,7 +398,9 @@ fn handle(
     if let Some(steps) = &entry.steps {
         for step in steps {
             if let Some(event) = &step.notify {
-                emit(notification(event));
+                for _ in 0..step.repeat.unwrap_or(1) {
+                    emit(notification(event));
+                }
             }
             if let Some(ms) = step.delay_ms {
                 thread::sleep(Duration::from_millis(ms));
@@ -576,25 +587,72 @@ mod tests {
     #[test]
     fn the_first_matching_entry_wins_and_its_answer_echoes_the_request() {
         let script = load(&fixture_path());
+        // The thread entries model the live merge of the config overrides:
+        // only a start that disables every server `config/read` lists by
+        // name gets a thread without MCP servers; anything else (an empty
+        // table included) gets the thread the servers start for.
+        let disabled = json!({"mcp_servers": {"filesystem": {"enabled": false}, "github": {"enabled": false}}});
         let ephemeral = select(
             &script,
             "thread/start",
-            &json!({"ephemeral": true, "model": "m"}),
+            &json!({"ephemeral": true, "model": "m", "config": disabled}),
         )
         .unwrap();
         assert_eq!(
             ephemeral.reply.unwrap()["thread"]["id"],
             "thr_fixture_ephemeral"
         );
-        let durable = select(&script, "thread/start", &json!({"model": "m"})).unwrap();
+        let durable = select(
+            &script,
+            "thread/start",
+            &json!({"model": "m", "config": disabled}),
+        )
+        .unwrap();
         assert_eq!(durable.reply.unwrap()["thread"]["id"], "thr_fixture_1");
+        for config in [
+            json!({"mcp_servers": {}}),
+            json!({"mcp_servers": {"filesystem": {"enabled": false}}}),
+            json!({}),
+        ] {
+            let leaky = select(
+                &script,
+                "thread/start",
+                &json!({"ephemeral": true, "model": "m", "config": config}),
+            )
+            .unwrap();
+            assert_eq!(
+                leaky.reply.unwrap()["thread"]["id"],
+                "thr_fixture_leaky",
+                "{config}"
+            );
+            assert!(
+                leaky
+                    .then
+                    .iter()
+                    .any(|event| event.method == "mcpServer/startupStatus/updated"),
+                "{config}: the servers start for the thread"
+            );
+        }
         let resumed = select(
             &script,
             "thread/resume",
-            &json!({"threadId": "thr_saved_7"}),
+            &json!({"threadId": "thr_saved_7", "config": disabled}),
         )
         .unwrap();
         assert_eq!(resumed.reply.unwrap()["thread"]["id"], "thr_saved_7");
+        let leaky = select(
+            &script,
+            "thread/resume",
+            &json!({"threadId": "thr_saved_7", "config": {"mcp_servers": {}}}),
+        )
+        .unwrap();
+        assert!(
+            leaky
+                .notify
+                .iter()
+                .any(|event| event.method == "mcpServer/startupStatus/updated"),
+            "a resume starts them before it answers"
+        );
         assert!(
             select(
                 &script,
@@ -604,6 +662,15 @@ mod tests {
             .unwrap()
             .error
             .is_some()
+        );
+        let hidden = select(&script, "config/read", &json!({})).unwrap();
+        assert_eq!(
+            hidden.reply.unwrap()["config"]["mcp_servers"]
+                .as_object()
+                .unwrap()
+                .len(),
+            2,
+            "the config lists two servers unless the environment hides them"
         );
         assert!(select(&script, "no/such", &json!({})).is_none());
     }

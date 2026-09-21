@@ -6,10 +6,16 @@
 //! (`thread/start`) and the id is kept in the chat's `meta.json`; after a
 //! restart the next turn resumes it (`thread/resume`). The thread is
 //! started read-only (`sandbox: read-only`), with no approvals
-//! (`approvalPolicy: never`), with codex's own shell, file, browser, MCP
-//! and plugin surfaces switched off, and with Nolune's tool definitions as
-//! `dynamicTools`: the only tools the model can call. A one-shot run (a
-//! title, a memory extraction, a connection test) gets an ephemeral thread.
+//! (`approvalPolicy: never`), with codex's own shell, file, browser and
+//! plugin surfaces switched off, with every MCP server codex's effective
+//! config lists disabled by name (the app-server merges the thread's
+//! config overrides per key, so an empty `mcp_servers` table disables
+//! nothing), in an empty directory of Nolune's own, and with Nolune's tool
+//! definitions as `dynamicTools`: the only tools the model can call. Before
+//! every turn the thread's MCP servers are listed, and a thread any server
+//! stands for is refused before its turn begins. A one-shot run (a title,
+//! a memory extraction, a connection test) gets an ephemeral thread,
+//! unsubscribed once its turn is over so the app-server unloads it.
 //!
 //! A turn sends the trailing user content as `turn/start` input (codex
 //! keeps the earlier turns itself) and reads the stream: agent message
@@ -19,8 +25,11 @@
 //! `ToolCall` and returns with `StopReason::ToolCalls`, the turn left open.
 //! The loop runs the tool through Nolune's capability and approval layer
 //! and calls again with the result; the adapter finds the open turn by the
-//! call id, answers codex, and reads on. Any approval codex asks for is
-//! declined, and a command or file change codex runs on its own fails the
+//! call id, answers codex, and reads on. While the turn waits, a task of
+//! its own keeps draining the supervisor's event stream and queues only
+//! this thread's events, so the other threads' streams never overrun it.
+//! Any approval codex asks for is declined, and a command, file change,
+//! web search, image read or MCP server codex runs on its own fails the
 //! turn: nothing executes but Nolune's tools.
 //!
 //! Cancellation sends `turn/interrupt`; a child that dies mid-turn fails
@@ -30,12 +39,12 @@
 
 use std::collections::HashMap;
 use std::hash::{Hash as _, Hasher as _};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use futures::future::BoxFuture;
 use serde_json::{Value, json};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
@@ -51,6 +60,7 @@ use super::super::types::{
 use super::AppServerError;
 use super::process::{AppServer, Incoming};
 use super::protocol::RpcError;
+use super::runtime::Runtime;
 
 pub const CAPABILITIES: Capabilities = Capabilities {
     vision: false,
@@ -93,6 +103,16 @@ impl Threads {
         self.by_conversation.clear();
         self.open.clear();
         self.pending.clear();
+    }
+
+    /// Let go of a thread in this process: the next turn of its
+    /// conversation attaches it again, with the overrides applied anew and
+    /// its MCP servers checked, instead of carrying on in a thread that
+    /// ran something of its own.
+    fn forget_thread(&mut self, thread_id: &str) {
+        self.by_conversation
+            .retain(|_, state| state.thread_id != thread_id);
+        self.take_open(thread_id);
     }
 
     /// The open turn that `call_ids` answer, taken out of the books.
@@ -138,12 +158,91 @@ struct ThreadState {
 struct OpenTurn {
     thread_id: String,
     turn_id: String,
-    events: broadcast::Receiver<Incoming>,
+    events: ThreadEvents,
     /// The calls handed to the agent loop, by call id: the app-server's
     /// request id to answer with.
     calls: HashMap<String, Value>,
     /// The child the turn runs in; a replacement child never heard of it.
     generation: u64,
+    /// A one-shot's thread, to release once the turn ends.
+    ephemeral: bool,
+}
+
+/// What a turn hears: the child's events that concern its thread, and
+/// whether the receiver that carried them fell behind.
+enum TurnEvent {
+    Incoming(Incoming),
+    /// The forwarder missed this many events of the supervisor's stream;
+    /// a request the app-server waits on may be among them.
+    Lagged(u64),
+}
+
+/// A turn's ear on the child. A task of its own drains the
+/// supervisor's broadcast and queues only this thread's events (and the
+/// child's starts and exits), so a turn parked on a tool call while the
+/// agent loop runs it is never overrun by what the other threads stream
+/// meanwhile: the broadcast keeps a fixed number of events for every
+/// subscriber, and a parked receiver would be told it lagged once another
+/// turn streamed that many. The queue is unbounded: codex sends a thread
+/// nothing while it waits on a tool answer, so what queues up is what its
+/// own turn streams faster than it is read, which the reader drains, and
+/// never a budget a slow moment could exhaust.
+struct ThreadEvents {
+    queue: mpsc::UnboundedReceiver<TurnEvent>,
+}
+
+impl ThreadEvents {
+    /// Start forwarding `thread_id`'s events from `events`, which was
+    /// subscribed before the thread was attached, so nothing the attach
+    /// itself provoked is missed.
+    fn start(events: broadcast::Receiver<Incoming>, thread_id: String) -> Self {
+        let (tx, queue) = mpsc::unbounded_channel();
+        tokio::spawn(forward(events, thread_id, tx));
+        Self { queue }
+    }
+
+    /// The next event, or `None` once the child's stream is closed.
+    async fn recv(&mut self) -> Option<TurnEvent> {
+        self.queue.recv().await
+    }
+}
+
+/// Whether an event is about `thread_id`; a start or an exit of the
+/// child concerns every thread.
+fn concerns(incoming: &Incoming, thread_id: &str) -> bool {
+    match incoming {
+        Incoming::Notification { params, .. } | Incoming::Request { params, .. } => {
+            params["threadId"] == thread_id
+        }
+        Incoming::Started { .. } | Incoming::Exited { .. } => true,
+    }
+}
+
+/// Drain `events` into `queue` for as long as the turn holds the other
+/// end. This task does nothing but receive and forward, so it falls behind
+/// the broadcast only when it is not scheduled for a whole buffer's worth
+/// of events, and reports that as [`TurnEvent::Lagged`] when it reads on.
+async fn forward(
+    mut events: broadcast::Receiver<Incoming>,
+    thread_id: String,
+    queue: mpsc::UnboundedSender<TurnEvent>,
+) {
+    loop {
+        let next = tokio::select! {
+            biased;
+            _ = queue.closed() => return,
+            next = events.recv() => next,
+        };
+        let event = match next {
+            Ok(incoming) if concerns(&incoming, &thread_id) => TurnEvent::Incoming(incoming),
+            Ok(_other_thread) => continue,
+            Err(broadcast::error::RecvError::Lagged(missed)) => TurnEvent::Lagged(missed),
+            Err(broadcast::error::RecvError::Closed) => return,
+        };
+        if queue.send(event).is_err() {
+            return;
+        }
+    }
 }
 
 pub struct CodexAdapter(pub LlmBackend);
@@ -168,13 +267,22 @@ pub(super) fn dynamic_tools(tools: &[ToolDefinition]) -> Vec<Value> {
         .collect()
 }
 
-/// The config overrides every thread is started with: no project docs, no
-/// MCP servers, and codex's own tool surface switched off, so the model
-/// has Nolune's tools and nothing else.
-pub(super) fn thread_config() -> Value {
+/// The config overrides every thread is started or resumed with: no
+/// project docs, every MCP server the effective config lists disabled by
+/// name, and codex's own tool surface switched off, so the model has
+/// Nolune's tools and nothing else. The app-server deep-merges the
+/// overrides into the user's `config.toml`, per key: `mcp_servers = {}`
+/// removes nothing (verified against the pinned release: every configured
+/// server still started for the thread), `mcp_servers.<name>.enabled =
+/// false` does.
+pub(super) fn thread_config(mcp_servers: &[String]) -> Value {
+    let disabled: serde_json::Map<String, Value> = mcp_servers
+        .iter()
+        .map(|name| (name.clone(), json!({"enabled": false})))
+        .collect();
     json!({
         "project_doc_max_bytes": 0,
-        "mcp_servers": {},
+        "mcp_servers": disabled,
         "features": {
             "shell_tool": false,
             "unified_exec": false,
@@ -198,6 +306,34 @@ pub(super) fn thread_config() -> Value {
             "view_image": false,
         },
     })
+}
+
+/// The MCP servers a `config/read` answer lists, sorted: the names the
+/// thread config has to disable. A server that is not in the table cannot
+/// be disabled by name, which is what the status check after the start is
+/// for.
+pub(super) fn mcp_server_names(reply: &Value) -> Vec<String> {
+    let mut names: Vec<String> = reply["config"]["mcp_servers"]
+        .as_object()
+        .map(|servers| servers.keys().cloned().collect())
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// The MCP servers that stand for a thread according to a
+/// `mcpServerStatus/list` page: every server whose runtime status is
+/// anything but `disabled`, a status that is missing included (the
+/// app-server reports `null` when the configuration changed under it).
+fn standing_mcp_servers(page: &Value) -> Vec<String> {
+    page["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|server| server["runtimeStatus"] != "disabled")
+        .filter_map(|server| server["name"].as_str())
+        .map(str::to_owned)
+        .collect()
 }
 
 /// The system blocks as the thread's developer instructions, with the
@@ -427,18 +563,26 @@ fn parse_usage(last: &Value) -> Usage {
     }
 }
 
+/// Where a thread runs and which MCP servers its config has to disable:
+/// read from the app-server right before a start or a resume, so a server
+/// added to codex's config since is disabled too.
+struct Placement {
+    cwd: PathBuf,
+    mcp_servers: Vec<String>,
+}
+
 /// The `thread/start` params: read-only, no approvals, codex's surfaces
 /// off, Nolune's tools, on the preset's model.
 fn thread_start_params(
     backend: &LlmBackend,
     request: &LlmRequest<'_>,
-    cwd: &Path,
+    placement: &Placement,
     ephemeral: bool,
 ) -> Value {
     json!({
         "approvalPolicy": "never",
-        "config": thread_config(),
-        "cwd": cwd.to_string_lossy(),
+        "config": thread_config(&placement.mcp_servers),
+        "cwd": placement.cwd.to_string_lossy(),
         "developerInstructions": developer_instructions(request.system, request.json_schema),
         "dynamicTools": dynamic_tools(request.tools),
         "ephemeral": ephemeral,
@@ -453,18 +597,89 @@ fn thread_resume_params(
     backend: &LlmBackend,
     request: &LlmRequest<'_>,
     thread_id: &str,
-    cwd: &Path,
+    placement: &Placement,
 ) -> Value {
     json!({
         "threadId": thread_id,
         "approvalPolicy": "never",
-        "config": thread_config(),
-        "cwd": cwd.to_string_lossy(),
+        "config": thread_config(&placement.mcp_servers),
+        "cwd": placement.cwd.to_string_lossy(),
         "developerInstructions": developer_instructions(request.system, request.json_schema),
         "excludeTurns": true,
         "model": backend.model,
         "sandbox": "read-only",
     })
+}
+
+/// The empty directory a conversation's thread runs in: Nolune's own,
+/// under the workspace but holding nothing, so no thread-rooted surface
+/// of codex (project docs, skills, `@file` mentions, a file search) is
+/// rooted at Nolune's config, chats and memory. A one-shot's thread runs
+/// in the runtime's scratch directory instead.
+fn durable_cwd(workspace_dir: &Path) -> Result<PathBuf, LlmError> {
+    let cwd = workspace_dir.join("codex").join("cwd");
+    std::fs::create_dir_all(&cwd)
+        .map_err(|error| LlmError::Transport(format!("creating {}: {error}", cwd.display())))?;
+    Ok(cwd)
+}
+
+/// Where a thread runs and what its config must disable: the effective
+/// config as seen from `cwd`, which is how the thread will see it.
+async fn placement(server: &AppServer, cwd: PathBuf) -> Result<Placement, LlmError> {
+    let reply = server
+        .request("config/read", json!({"cwd": cwd.to_string_lossy()}))
+        .await?;
+    Ok(Placement {
+        cwd,
+        mcp_servers: mcp_server_names(&reply),
+    })
+}
+
+/// Refuse a thread any MCP server stands for. `mcpServerStatus/list` names
+/// every server the thread's runtime knows and how each stands, without
+/// starting one that is disabled; a server that is not disabled is a tool
+/// surface the model could call outside Nolune's capability layer.
+async fn refuse_mcp_servers(server: &AppServer, thread_id: &str) -> Result<(), LlmError> {
+    let mut standing = Vec::new();
+    let mut cursor = Value::Null;
+    loop {
+        let mut params = json!({"threadId": thread_id, "detail": "toolsAndAuthOnly"});
+        if !cursor.is_null() {
+            params["cursor"] = cursor.clone();
+        }
+        let page = server.request("mcpServerStatus/list", params).await?;
+        standing.extend(standing_mcp_servers(&page));
+        cursor = page["nextCursor"].clone();
+        if cursor.is_null() {
+            break;
+        }
+    }
+    if standing.is_empty() {
+        return Ok(());
+    }
+    log::error!(
+        "[codex] the app-server started MCP server(s) {standing:?} for thread {thread_id}; refusing the thread"
+    );
+    Err(LlmError::InvalidResponse(format!(
+        "codex started MCP server(s) {standing:?} for the thread; Nolune allows none"
+    )))
+}
+
+/// Let the app-server drop an ephemeral thread: `thread/unsubscribe` ends
+/// this client's interest and the app-server unloads the thread after its
+/// own delay (`thread/closed`). A child that is gone took the thread with
+/// it, and is not started again for this. Errors are logged: the thread
+/// may be gone already, and either way nothing more is sent to it.
+async fn release_ephemeral(server: &AppServer, thread_id: &str) {
+    if server.pid().is_none() {
+        return;
+    }
+    if let Err(error) = server
+        .request("thread/unsubscribe", json!({"threadId": thread_id}))
+        .await
+    {
+        log::debug!("[codex] thread/unsubscribe for {thread_id}: {error}");
+    }
 }
 
 /// A digest of what a thread is configured with, to know when to
@@ -515,7 +730,8 @@ fn thread_id_of(reply: &Value) -> Result<String, LlmError> {
 }
 
 /// Items codex must never produce on its own: anything that executes,
-/// edits or delegates outside Nolune's tools.
+/// edits, reads a file, reaches the web, makes an image or delegates
+/// outside Nolune's tools.
 fn is_forbidden_item(kind: &str) -> bool {
     matches!(
         kind,
@@ -524,6 +740,9 @@ fn is_forbidden_item(kind: &str) -> bool {
             | "mcpToolCall"
             | "collabAgentToolCall"
             | "subAgentActivity"
+            | "webSearch"
+            | "imageView"
+            | "imageGeneration"
     )
 }
 
@@ -533,10 +752,11 @@ fn is_forbidden_item(kind: &str) -> bool {
 
 /// The thread a request runs in, attached to the live child, and whether
 /// it is new to the conversation (a recap of the earlier messages goes in
-/// its first turn).
+/// its first turn) or a one-shot's (released once the turn is over).
 struct Attached {
     thread_id: String,
     fresh: bool,
+    ephemeral: bool,
 }
 
 /// How one turn ended.
@@ -551,10 +771,13 @@ enum Outcome {
 
 /// One turn being read: what streamed so far and where it came from.
 struct Turn<'a> {
+    runtime: Runtime,
     server: AppServer,
     thread_id: String,
     turn_id: String,
-    events: broadcast::Receiver<Incoming>,
+    events: ThreadEvents,
+    /// A one-shot's thread, released once the turn ends.
+    ephemeral: bool,
     sink: &'a EventSink<'a>,
     cancel: &'a CancellationToken,
     text: String,
@@ -580,12 +803,12 @@ impl Turn<'_> {
                         self.interrupt().await;
                         return Err(LlmError::Timeout);
                     }
-                    Ok(Err(broadcast::error::RecvError::Closed)) => {
+                    Ok(None) => {
                         return Err(LlmError::Transport(
                             "codex app-server event stream closed".into(),
                         ));
                     }
-                    Ok(Err(broadcast::error::RecvError::Lagged(missed))) => {
+                    Ok(Some(TurnEvent::Lagged(missed))) => {
                         // A request the app-server waits on may be among
                         // the missed events: the turn cannot go on.
                         self.interrupt().await;
@@ -593,7 +816,7 @@ impl Turn<'_> {
                             "fell {missed} events behind the codex app-server"
                         )));
                     }
-                    Ok(Ok(incoming)) => incoming,
+                    Ok(Some(TurnEvent::Incoming(incoming))) => incoming,
                 }
             };
             match incoming {
@@ -628,6 +851,21 @@ impl Turn<'_> {
             return Ok(None);
         }
         match method {
+            // An MCP server the app-server starts for this thread, at any
+            // point: a tool surface outside Nolune's, however it got there.
+            "mcpServer/startupStatus/updated" => {
+                let name = params["name"].as_str().unwrap_or("");
+                let status = params["status"].as_str().unwrap_or("");
+                log::error!(
+                    "[codex] the app-server started MCP server {name:?} for thread {} ({status}); interrupting the turn",
+                    self.thread_id
+                );
+                self.interrupt().await;
+                self.forget();
+                return Err(LlmError::InvalidResponse(format!(
+                    "codex started MCP server {name:?} for the thread ({status}); Nolune allows none"
+                )));
+            }
             "item/agentMessage/delta" if self.is_ours(params) => {
                 if let Some(delta) = params["delta"].as_str() {
                     if let Some(item) = params["itemId"].as_str() {
@@ -651,6 +889,7 @@ impl Turn<'_> {
                         "[codex] the app-server started a {kind} item on its own ({detail}); interrupting the turn"
                     );
                     self.interrupt().await;
+                    self.forget();
                     return Err(LlmError::InvalidResponse(format!(
                         "codex ran a {kind} item outside Nolune's tools: {detail}"
                     )));
@@ -795,6 +1034,17 @@ impl Turn<'_> {
         )
         .await;
     }
+
+    /// Let go of the thread in this process after it ran something of its
+    /// own: the next turn attaches it anew, overrides re-applied and MCP
+    /// servers checked, rather than carrying on in it.
+    fn forget(&self) {
+        self.runtime
+            .threads()
+            .lock()
+            .unwrap()
+            .forget_thread(&self.thread_id);
+    }
 }
 
 /// Send `turn/interrupt` and drain `events` until that turn completes, or
@@ -804,7 +1054,7 @@ async fn interrupt_turn(
     server: &AppServer,
     thread_id: &str,
     turn_id: &str,
-    events: &mut broadcast::Receiver<Incoming>,
+    events: &mut ThreadEvents,
 ) {
     if let Err(error) = server
         .request(
@@ -819,13 +1069,13 @@ async fn interrupt_turn(
     let deadline = Instant::now() + INTERRUPT_GRACE;
     loop {
         match tokio::time::timeout_at(deadline, events.recv()).await {
-            Ok(Ok(Incoming::Notification { method, params }))
+            Ok(Some(TurnEvent::Incoming(Incoming::Notification { method, params })))
                 if method == "turn/completed" && params["turn"]["id"] == turn_id =>
             {
                 return;
             }
-            Ok(Ok(Incoming::Exited { .. })) | Ok(Err(_)) | Err(_) => return,
-            Ok(Ok(_)) => {}
+            Ok(Some(TurnEvent::Incoming(Incoming::Exited { .. }))) | Ok(None) | Err(_) => return,
+            Ok(Some(_)) => {}
         }
     }
 }
@@ -883,17 +1133,23 @@ impl CodexAdapter {
                     let _ = server.respond(&request_id, Err(refusal)).await;
                 }
                 let turn = Turn {
-                    server,
-                    thread_id: open.thread_id,
+                    runtime: runtime.clone(),
+                    server: server.clone(),
+                    thread_id: open.thread_id.clone(),
                     turn_id: open.turn_id,
                     events: open.events,
+                    ephemeral: open.ephemeral,
                     sink: events,
                     cancel: &request.cancellation,
                     text: String::new(),
                     usage: Usage::default(),
                     streamed: Default::default(),
                 };
-                return self.finish(request, turn).await;
+                let outcome = self.finish(request, turn).await;
+                if open.ephemeral && !leaves_thread_open(&outcome) {
+                    release_ephemeral(&server, &open.thread_id).await;
+                }
+                return outcome;
             }
         }
 
@@ -903,12 +1159,40 @@ impl CodexAdapter {
         if !runtime.account().await?.is_logged_in() {
             return Err(LlmError::SetupRequired(LOGIN_REQUIRED.into()));
         }
-        let Attached { thread_id, fresh } = self.attach(request, &server).await?;
+        // Subscribe before the thread is attached: an MCP server the
+        // app-server starts for the thread announces itself right after
+        // `thread/start`, or before the `thread/resume` answer.
+        let listener = server.subscribe();
+        let attached = self.attach(request, &server).await?;
+        let turn_events = ThreadEvents::start(listener, attached.thread_id.clone());
+        let thread_id = attached.thread_id.clone();
+        let ephemeral = attached.ephemeral;
+        let outcome = self
+            .start(request, events, &server, attached, turn_events)
+            .await;
+        if ephemeral && !leaves_thread_open(&outcome) {
+            release_ephemeral(&server, &thread_id).await;
+        }
+        outcome
+    }
+
+    /// Start the turn on an attached thread and read it.
+    async fn start(
+        &self,
+        request: &LlmRequest<'_>,
+        events: &EventSink<'_>,
+        server: &AppServer,
+        attached: Attached,
+        turn_events: ThreadEvents,
+    ) -> Result<LlmResponse, LlmError> {
+        let Attached {
+            thread_id,
+            fresh,
+            ephemeral,
+        } = attached;
         if request.cancellation.is_cancelled() {
             return Err(LlmError::Cancelled);
         }
-        // Subscribe before the turn starts, so its first events are heard.
-        let events_rx = server.subscribe();
         let mut params = json!({
             "threadId": thread_id,
             "input": turn_input(request.messages, fresh),
@@ -923,10 +1207,12 @@ impl CodexAdapter {
             .map(str::to_owned)
             .ok_or_else(|| LlmError::InvalidResponse("turn/start named no turn id".into()))?;
         let turn = Turn {
-            server,
+            runtime: self.0.codex.clone(),
+            server: server.clone(),
             thread_id,
             turn_id,
-            events: events_rx,
+            events: turn_events,
+            ephemeral,
             sink: events,
             cancel: &request.cancellation,
             text: String::new(),
@@ -936,7 +1222,9 @@ impl CodexAdapter {
         self.finish(request, turn).await
     }
 
-    /// Read the turn to its end, or to a tool call left open.
+    /// Read the turn to its end, or to a tool call left open; a turn that
+    /// asked for a tool is left open in the books, its receiver kept
+    /// for the answer.
     async fn finish(
         &self,
         request: &LlmRequest<'_>,
@@ -955,6 +1243,7 @@ impl CodexAdapter {
                     events: turn.events,
                     calls,
                     generation: turn.server.generation(),
+                    ephemeral: turn.ephemeral,
                 });
                 (vec![call], StopReason::ToolCalls)
             }
@@ -978,24 +1267,55 @@ impl CodexAdapter {
     /// conversation's thread from the books or its `meta.json`, resumed
     /// after a restart or reconfigured when the instructions or model
     /// changed, started fresh when it is new, lost, or its tools changed;
-    /// an ephemeral thread for a one-shot run.
+    /// an ephemeral thread for a one-shot run. Every start or resume reads
+    /// codex's effective config first, to disable its MCP servers by name,
+    /// and every attach checks the thread's MCP servers after: a thread
+    /// any server stands for is refused before a turn is sent, released
+    /// when it is a one-shot's, and let go of in this process otherwise,
+    /// so the next turn attaches it anew.
     async fn attach(
+        &self,
+        request: &LlmRequest<'_>,
+        server: &AppServer,
+    ) -> Result<Attached, LlmError> {
+        let attached = self.attach_unchecked(request, server).await?;
+        if let Err(refused) = refuse_mcp_servers(server, &attached.thread_id).await {
+            if attached.ephemeral {
+                release_ephemeral(server, &attached.thread_id).await;
+            } else {
+                self.0
+                    .codex
+                    .threads()
+                    .lock()
+                    .unwrap()
+                    .forget_thread(&attached.thread_id);
+            }
+            return Err(refused);
+        }
+        Ok(attached)
+    }
+
+    async fn attach_unchecked(
         &self,
         request: &LlmRequest<'_>,
         server: &AppServer,
     ) -> Result<Attached, LlmError> {
         let backend = &self.0;
         let Some(conversation) = request.conversation else {
-            let cwd = std::env::temp_dir();
+            let cwd = backend.codex.scratch_dir().map_err(|error| {
+                LlmError::Transport(format!("creating a scratch directory: {error}"))
+            })?;
+            let placement = placement(server, cwd).await?;
             let reply = server
                 .request(
                     "thread/start",
-                    thread_start_params(backend, request, &cwd, true),
+                    thread_start_params(backend, request, &placement, true),
                 )
                 .await?;
             return Ok(Attached {
                 thread_id: thread_id_of(&reply)?,
                 fresh: true,
+                ephemeral: true,
             });
         };
         let ConversationRef {
@@ -1047,10 +1367,11 @@ impl CodexAdapter {
                     .await;
             }
             if state.generation != generation || state.configured != configured {
+                let placement = placement(server, durable_cwd(workspace_dir)?).await?;
                 match server
                     .request(
                         "thread/resume",
-                        thread_resume_params(backend, request, &state.thread_id, workspace_dir),
+                        thread_resume_params(backend, request, &state.thread_id, &placement),
                     )
                     .await
                 {
@@ -1077,10 +1398,16 @@ impl CodexAdapter {
                     }
                     Err(error) => return Err(error.into()),
                 }
+                return Ok(Attached {
+                    thread_id: state.thread_id,
+                    fresh: false,
+                    ephemeral: false,
+                });
             }
             return Ok(Attached {
                 thread_id: state.thread_id,
                 fresh: false,
+                ephemeral: false,
             });
         }
 
@@ -1092,10 +1419,11 @@ impl CodexAdapter {
                     LlmError::Transport(format!("reading the chat's thread: {error}"))
                 })?;
         if let Some(thread_id) = remembered {
+            let placement = placement(server, durable_cwd(workspace_dir)?).await?;
             match server
                 .request(
                     "thread/resume",
-                    thread_resume_params(backend, request, &thread_id, workspace_dir),
+                    thread_resume_params(backend, request, &thread_id, &placement),
                 )
                 .await
             {
@@ -1118,6 +1446,7 @@ impl CodexAdapter {
                     return Ok(Attached {
                         thread_id,
                         fresh: false,
+                        ephemeral: false,
                     });
                 }
                 Err(AppServerError::Rpc(error)) => {
@@ -1145,10 +1474,11 @@ impl CodexAdapter {
         configured: u64,
     ) -> Result<Attached, LlmError> {
         let backend = &self.0;
+        let placement = placement(server, durable_cwd(workspace_dir)?).await?;
         let reply = server
             .request(
                 "thread/start",
-                thread_start_params(backend, request, workspace_dir, false),
+                thread_start_params(backend, request, &placement, false),
             )
             .await?;
         let thread_id = thread_id_of(&reply)?;
@@ -1178,8 +1508,15 @@ impl CodexAdapter {
         Ok(Attached {
             thread_id,
             fresh: true,
+            ephemeral: false,
         })
     }
+}
+
+/// Whether the turn stays open on a tool call, its thread needed for the
+/// answer: the one outcome that does not release a one-shot's thread.
+fn leaves_thread_open(outcome: &Result<LlmResponse, LlmError>) -> bool {
+    matches!(outcome, Ok(response) if response.stop_reason == StopReason::ToolCalls)
 }
 
 impl ProviderAdapter for CodexAdapter {
@@ -1283,6 +1620,22 @@ mod tests {
         fn remembered_thread(&self) -> Option<String> {
             get_chat_codex_thread(self.dir.path(), "moon", "chat-1").unwrap()
         }
+
+        /// Where a durable thread of this workspace runs.
+        fn durable_cwd(&self) -> PathBuf {
+            self.dir.path().join("codex").join("cwd")
+        }
+    }
+
+    /// The servers the fixture's `config/read` lists, disabled the way the
+    /// thread config must carry them.
+    fn fixture_mcp_servers() -> Vec<String> {
+        vec!["filesystem".into(), "github".into()]
+    }
+
+    /// Whether `path` is an existing directory with nothing in it.
+    fn is_empty_dir(path: &Path) -> bool {
+        std::fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_none())
     }
 
     fn tool(name: &str) -> ToolDefinition {
@@ -1319,11 +1672,15 @@ mod tests {
             .collect()
     }
 
-    /// The exact wire params: a fresh conversation starts a durable thread
-    /// on the preset's model, read-only, never asking for approvals, with
-    /// codex's own surfaces off and Nolune's tools as the dynamic tools,
-    /// then a turn with the user's text; the thread id is remembered in
-    /// the chat's meta.json.
+    /// The exact wire params: a fresh conversation reads codex's effective
+    /// config, starts a durable thread on the preset's model, read-only,
+    /// never asking for approvals, with codex's own surfaces off, every
+    /// MCP server the config lists disabled by name (the app-server merges
+    /// the overrides per key, so an empty table disables nothing), in an
+    /// empty directory of Nolune's own, with Nolune's tools as the dynamic
+    /// tools; checks that no MCP server stands for the thread; then sends
+    /// a turn with the user's text. The thread id is remembered in the
+    /// chat's meta.json and the thread is kept, never unsubscribed.
     #[tokio::test]
     async fn a_thread_starts_read_only_with_no_approvals_and_only_nolunes_tools() {
         let harness = Harness::new();
@@ -1351,18 +1708,31 @@ mod tests {
                 "initialize",
                 "initialized",
                 "account/read",
+                "config/read",
                 "thread/start",
+                "mcpServerStatus/list",
                 "turn/start"
             ],
-            "the login is checked, the thread started, the turn sent; nothing else"
+            "the login is checked, the config read, the thread started and checked, the turn sent; nothing else"
+        );
+        let cwd = harness.durable_cwd();
+        assert!(
+            is_empty_dir(&cwd),
+            "the thread runs in an empty directory of Nolune's own: {}",
+            cwd.display()
+        );
+        assert_eq!(
+            harness.sent("config/read"),
+            [json!({"cwd": cwd.to_string_lossy()})],
+            "the effective config as the thread will see it"
         );
         let started = harness.sent("thread/start");
         assert_eq!(
             started[0],
             json!({
                 "approvalPolicy": "never",
-                "config": thread_config(),
-                "cwd": harness.workspace().to_string_lossy(),
+                "config": thread_config(&fixture_mcp_servers()),
+                "cwd": cwd.to_string_lossy(),
                 "developerInstructions": "system one\n\nsystem two",
                 "dynamicTools": [{
                     "type": "function",
@@ -1377,7 +1747,20 @@ mod tests {
         );
         let config = &started[0]["config"];
         assert_eq!(config["project_doc_max_bytes"], 0);
-        assert_eq!(config["mcp_servers"], json!({}));
+        assert_eq!(
+            config["mcp_servers"],
+            json!({"filesystem": {"enabled": false}, "github": {"enabled": false}}),
+            "every server the config lists, disabled by name"
+        );
+        assert_eq!(
+            harness.sent("mcpServerStatus/list"),
+            [json!({"threadId": "thr_fixture_1", "detail": "toolsAndAuthOnly"})],
+            "the thread's MCP servers are checked before the turn"
+        );
+        assert!(
+            harness.sent("thread/unsubscribe").is_empty(),
+            "a conversation's thread is kept"
+        );
         for feature in [
             "shell_tool",
             "unified_exec",
@@ -1435,13 +1818,19 @@ mod tests {
             json!({
                 "threadId": "thr_saved_7",
                 "approvalPolicy": "never",
-                "config": thread_config(),
-                "cwd": harness.workspace().to_string_lossy(),
+                "config": thread_config(&fixture_mcp_servers()),
+                "cwd": harness.durable_cwd().to_string_lossy(),
                 "developerInstructions": "soul",
                 "excludeTurns": true,
                 "model": "gpt-6-astra",
                 "sandbox": "read-only",
             })
+        );
+        // A resume reads the config and checks the thread like a start.
+        assert_eq!(harness.sent("config/read").len(), 1);
+        assert_eq!(
+            harness.sent("mcpServerStatus/list"),
+            [json!({"threadId": "thr_saved_7", "detail": "toolsAndAuthOnly"})]
         );
         // Codex holds the earlier turns: only the new message is sent,
         // no recap.
@@ -1473,6 +1862,17 @@ mod tests {
             "unchanged: no resume"
         );
         assert_eq!(harness.sent("turn/start").len(), 3);
+        assert_eq!(
+            harness.sent("config/read").len(),
+            2,
+            "the config is read for a start or a resume, not for every turn"
+        );
+        assert_eq!(
+            harness.sent("mcpServerStatus/list").len(),
+            3,
+            "the thread's MCP servers are checked before every turn"
+        );
+        assert!(harness.sent("thread/unsubscribe").is_empty());
         harness.runtime.close();
     }
 
@@ -1510,6 +1910,11 @@ mod tests {
         harness.runtime.close();
     }
 
+    /// A one-shot (a title, a memory extraction, the connection test) runs
+    /// in an ephemeral thread, in an empty scratch directory of the
+    /// runtime's own, and the thread is unsubscribed once the turn is
+    /// over, so the app-server can unload it instead of keeping every
+    /// one-shot loaded until it exits.
     #[tokio::test]
     async fn a_one_shot_gets_an_ephemeral_thread_and_writes_nothing() {
         let harness = Harness::new();
@@ -1528,6 +1933,28 @@ mod tests {
         assert_eq!(started["dynamicTools"], json!([]));
         assert_eq!(started["developerInstructions"], "extract");
         assert_eq!(
+            started["config"]["mcp_servers"],
+            json!({"filesystem": {"enabled": false}, "github": {"enabled": false}})
+        );
+        let cwd = PathBuf::from(started["cwd"].as_str().unwrap());
+        assert!(
+            is_empty_dir(&cwd),
+            "an empty directory of the runtime's own: {}",
+            cwd.display()
+        );
+        assert!(
+            !cwd.starts_with(harness.workspace()),
+            "never Nolune's workspace: {}",
+            cwd.display()
+        );
+        assert!(
+            cwd.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("nolune-codex-")),
+            "{}",
+            cwd.display()
+        );
+        assert_eq!(
             harness.sent("turn/start")[0]["threadId"],
             "thr_fixture_ephemeral"
         );
@@ -1535,6 +1962,25 @@ mod tests {
             !harness.workspace().join("instances").exists(),
             "no chat directory appears for a one-shot"
         );
+        assert!(
+            !harness.workspace().join("codex").exists(),
+            "no thread directory appears under the workspace for a one-shot"
+        );
+        assert_eq!(
+            harness.sent("thread/unsubscribe"),
+            [json!({"threadId": "thr_fixture_ephemeral"})],
+            "the thread is released once the turn is over"
+        );
+        let methods = harness.methods();
+        let unsubscribe = methods
+            .iter()
+            .position(|method| method == "thread/unsubscribe")
+            .unwrap();
+        let turn = methods
+            .iter()
+            .position(|method| method == "turn/start")
+            .unwrap();
+        assert!(unsubscribe > turn, "{methods:?}");
 
         // Structured output rides on the turn as its schema.
         let schema = json!({"type": "object", "properties": {"a": {"type": "string"}}});
@@ -1550,6 +1996,91 @@ mod tests {
             turns[1]["input"],
             json!([{"type": "text", "text": "json please"}])
         );
+        assert_eq!(
+            harness.sent("thread/unsubscribe").len(),
+            2,
+            "every one-shot releases its thread"
+        );
+        assert_eq!(
+            PathBuf::from(harness.sent("thread/start")[1]["cwd"].as_str().unwrap()),
+            cwd,
+            "one scratch directory per runtime"
+        );
+        harness.runtime.close();
+    }
+
+    /// A one-shot that fails (here: the turn is interrupted by the
+    /// cancellation) still releases its thread; one that is left open on a
+    /// tool call keeps it until the loop comes back and it ends.
+    #[tokio::test]
+    async fn an_ephemeral_thread_is_released_when_its_turn_ends_however_it_ends() {
+        let harness = Harness::new();
+        let backend = harness.backend();
+        let messages = [Message::user("rate me")];
+        let request = LlmRequest::new(ExecutionScope::Subagent, &[], &messages, &[]);
+        let result = backend.adapter().unwrap().complete(request).await;
+        assert!(
+            matches!(result, Err(LlmError::RateLimited { .. })),
+            "{result:?}"
+        );
+        assert_eq!(
+            harness.sent("thread/unsubscribe"),
+            [json!({"threadId": "thr_fixture_ephemeral"})],
+            "a failed turn releases the thread too"
+        );
+
+        // A tool call leaves the turn, and the thread, open.
+        let tools = [tool("shot"), tool("search")];
+        let mut messages = vec![Message::user("look it up")];
+        let request = LlmRequest::new(ExecutionScope::Subagent, &[], &messages, &tools);
+        let first = backend.adapter().unwrap().complete(request).await.unwrap();
+        assert_eq!(first.stop_reason, StopReason::ToolCalls);
+        assert_eq!(
+            harness.sent("thread/unsubscribe").len(),
+            1,
+            "a turn waiting on a tool keeps its thread"
+        );
+        messages.push(Message::Assistant {
+            content: vec![ContentBlock::ToolCall {
+                id: "call1".into(),
+                name: "shot".into(),
+                arguments: json!({}),
+            }],
+        });
+        messages.push(Message::User {
+            content: vec![ContentBlock::tool_output(
+                "call1".into(),
+                "captured".into(),
+                false,
+            )],
+        });
+        let request = LlmRequest::new(ExecutionScope::Subagent, &[], &messages, &tools);
+        let second = backend.adapter().unwrap().complete(request).await.unwrap();
+        assert_eq!(second.tool_calls[0].id, "call2");
+        assert_eq!(harness.sent("thread/unsubscribe").len(), 1);
+        messages.push(Message::Assistant {
+            content: vec![ContentBlock::ToolCall {
+                id: "call2".into(),
+                name: "search".into(),
+                arguments: json!({"q": "rust"}),
+            }],
+        });
+        messages.push(Message::User {
+            content: vec![ContentBlock::tool_output(
+                "call2".into(),
+                "found".into(),
+                false,
+            )],
+        });
+        let request = LlmRequest::new(ExecutionScope::Subagent, &[], &messages, &tools);
+        let third = backend.adapter().unwrap().complete(request).await.unwrap();
+        assert_eq!(third.text, "done");
+        assert_eq!(
+            harness.sent("thread/unsubscribe").len(),
+            2,
+            "released once the turn ends"
+        );
+        assert_eq!(harness.sent("thread/start").len(), 2);
         harness.runtime.close();
     }
 
@@ -1784,7 +2315,7 @@ mod tests {
         assert_eq!(resumes[0]["threadId"], "thr_fixture_1");
         assert_eq!(
             resumes[0]["cwd"],
-            json!(harness.workspace().to_string_lossy()),
+            json!(harness.durable_cwd().to_string_lossy()),
             "resumed with the conversation's settings"
         );
         harness.runtime.close();
@@ -1898,6 +2429,204 @@ mod tests {
         assert_eq!(answers[0].1, Ok(json!({"decision": "decline"})));
         let wire = std::fs::read_to_string(&harness.log).unwrap();
         assert!(!wire.contains("accept"), "{wire}");
+        harness.runtime.close();
+    }
+
+    /// An MCP server codex starts for a thread is a tool surface outside
+    /// Nolune's capability layer. The app-server merges the thread config
+    /// per key, so the adapter disables every server the effective config
+    /// lists by name; a server that starts anyway (one the config did not
+    /// show: `NOLUNE_FAKE_APP_SERVER_MCP=hidden` lists none, and the fake's
+    /// thread entries start the configured ones for any other override,
+    /// the live behaviour) is caught by the status check after the start
+    /// or resume: the turn is refused before it begins, nothing is sent to
+    /// the model, and the thread is not kept in this process, so the next
+    /// turn checks again.
+    #[tokio::test]
+    async fn a_thread_codex_starts_an_mcp_server_for_is_refused_before_the_turn() {
+        let harness = Harness::with_env(&[(fake::MCP_ENV, "hidden")]);
+        let backend = harness.backend();
+        let messages = [Message::user("hi")];
+        let mut request = LlmRequest::new(ExecutionScope::Conversation, &[], &messages, &[]);
+        request.conversation = Some(harness.conversation());
+        let (result, events) = stream(&backend, request).await;
+        assert!(
+            matches!(&result, Err(LlmError::InvalidResponse(reason)) if reason.contains("MCP") && reason.contains("filesystem")),
+            "{result:?}"
+        );
+        assert!(events.is_empty());
+        assert_eq!(
+            harness.sent("thread/start")[0]["config"]["mcp_servers"],
+            json!({}),
+            "nothing to disable as far as the config said"
+        );
+        assert_eq!(
+            harness.sent("mcpServerStatus/list"),
+            [json!({"threadId": "thr_fixture_leaky", "detail": "toolsAndAuthOnly"})]
+        );
+        assert!(
+            harness.sent("turn/start").is_empty(),
+            "the model never hears from a thread with an MCP server"
+        );
+
+        // The next message resumes the remembered thread and checks again:
+        // still refused, still no turn.
+        let mut request = LlmRequest::new(ExecutionScope::Conversation, &[], &messages, &[]);
+        request.conversation = Some(harness.conversation());
+        let result = stream(&backend, request).await.0;
+        assert!(
+            matches!(&result, Err(LlmError::InvalidResponse(reason)) if reason.contains("MCP")),
+            "{result:?}"
+        );
+        assert_eq!(harness.sent("thread/resume").len(), 1, "checked again");
+        assert_eq!(harness.sent("mcpServerStatus/list").len(), 2);
+        assert!(harness.sent("turn/start").is_empty());
+        assert!(
+            harness.sent("thread/unsubscribe").is_empty(),
+            "a conversation's thread is kept for the next check"
+        );
+
+        // A one-shot is refused the same way and its thread released.
+        let request = LlmRequest::new(ExecutionScope::Subagent, &[], &messages, &[]);
+        let result = backend.adapter().unwrap().complete(request).await;
+        assert!(
+            matches!(&result, Err(LlmError::InvalidResponse(reason)) if reason.contains("MCP")),
+            "{result:?}"
+        );
+        assert!(harness.sent("turn/start").is_empty());
+        assert_eq!(
+            harness.sent("thread/unsubscribe"),
+            [json!({"threadId": "thr_fixture_leaky"})]
+        );
+        harness.runtime.close();
+    }
+
+    /// An MCP server that starts for the thread while a turn runs (a
+    /// config reload from another client, a server that came up late) is
+    /// announced by the app-server; the turn is interrupted and fails
+    /// before the model can call the server's tools, and the thread is
+    /// checked again on the next turn.
+    #[tokio::test]
+    async fn an_mcp_server_that_starts_mid_turn_fails_the_turn() {
+        let harness = Harness::new();
+        let backend = harness.backend();
+        let messages = [Message::user("mcp sneaks in")];
+        let mut request = LlmRequest::new(ExecutionScope::Conversation, &[], &messages, &[]);
+        request.conversation = Some(harness.conversation());
+        let (result, events) = stream(&backend, request).await;
+        assert!(
+            matches!(&result, Err(LlmError::InvalidResponse(reason)) if reason.contains("MCP") && reason.contains("github")),
+            "{result:?}"
+        );
+        assert!(!text_of(&events).contains("I have tools now"), "{events:?}");
+        assert_eq!(
+            harness.sent("turn/interrupt"),
+            [json!({"threadId": "thr_fixture_1", "turnId": "turn_fixture_31"})]
+        );
+
+        // The thread was let go of in this process: the next turn resumes
+        // it with the overrides applied again and checks it before going on.
+        let messages = [Message::user("mcp sneaks in"), Message::user("hi")];
+        let mut request = LlmRequest::new(ExecutionScope::Conversation, &[], &messages, &[]);
+        request.conversation = Some(harness.conversation());
+        let response = stream(&backend, request).await.0.unwrap();
+        assert_eq!(response.text, "Hello from the fixture");
+        assert_eq!(harness.sent("thread/start").len(), 1);
+        assert_eq!(harness.sent("thread/resume").len(), 1);
+        assert_eq!(harness.sent("mcpServerStatus/list").len(), 2);
+        harness.runtime.close();
+    }
+
+    /// A turn parked on a tool call keeps only its own thread's events
+    /// while the agent loop runs the tool: another thread (a one-shot
+    /// routine, a second chat) may stream far more events than the
+    /// supervisor's broadcast buffer holds meanwhile, and the parked turn
+    /// still goes on when its result comes back.
+    #[tokio::test]
+    async fn a_turn_left_open_on_a_tool_survives_another_thread_streaming_past_the_buffer() {
+        let harness = Harness::new();
+        let backend = harness.backend();
+        let tools = [tool("shot"), tool("search")];
+        let mut messages = vec![Message::user("look it up")];
+        let mut request = LlmRequest::new(ExecutionScope::Conversation, &[], &messages, &tools);
+        request.conversation = Some(harness.conversation());
+        let first = stream(&backend, request).await.0.unwrap();
+        assert_eq!(first.stop_reason, StopReason::ToolCalls);
+        assert_eq!(first.tool_calls[0].id, "call1");
+
+        // Meanwhile a one-shot streams a long reasoning trace on a thread
+        // of its own: more events than the broadcast buffer keeps.
+        let flood = std::fs::read_to_string(fake::fixture_path()).unwrap();
+        let repeat = flood
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .find(|entry| entry["when"]["input"][0]["text"] == "flood")
+            .and_then(|entry| {
+                entry["steps"]
+                    .as_array()?
+                    .iter()
+                    .find_map(|step| step["repeat"].as_u64())
+            })
+            .expect("the flood scenario repeats a notification");
+        assert!(
+            repeat as usize > super::super::process::EVENT_BUFFER,
+            "the flood ({repeat}) must exceed the buffer ({})",
+            super::super::process::EVENT_BUFFER
+        );
+        let flooding = [Message::user("flood")];
+        let request = LlmRequest::new(ExecutionScope::Subagent, &[], &flooding, &[]);
+        let flooded = backend.adapter().unwrap().complete(request).await.unwrap();
+        assert_eq!(flooded.text, "flooded");
+        assert_eq!(flooded.usage.output_tokens, 1500);
+
+        // The loop is back with the result: the parked turn goes on.
+        messages.push(Message::Assistant {
+            content: vec![ContentBlock::ToolCall {
+                id: "call1".into(),
+                name: "shot".into(),
+                arguments: json!({}),
+            }],
+        });
+        messages.push(Message::User {
+            content: vec![ContentBlock::tool_output(
+                "call1".into(),
+                "captured".into(),
+                false,
+            )],
+        });
+        let mut request = LlmRequest::new(ExecutionScope::Conversation, &[], &messages, &tools);
+        request.conversation = Some(harness.conversation());
+        let second = stream(&backend, request).await.0.unwrap();
+        assert_eq!(second.stop_reason, StopReason::ToolCalls, "{second:?}");
+        assert_eq!(second.tool_calls[0].id, "call2");
+        messages.push(Message::Assistant {
+            content: vec![ContentBlock::ToolCall {
+                id: "call2".into(),
+                name: "search".into(),
+                arguments: json!({"q": "rust"}),
+            }],
+        });
+        messages.push(Message::User {
+            content: vec![ContentBlock::tool_output(
+                "call2".into(),
+                "found".into(),
+                false,
+            )],
+        });
+        let mut request = LlmRequest::new(ExecutionScope::Conversation, &[], &messages, &tools);
+        request.conversation = Some(harness.conversation());
+        let third = stream(&backend, request).await.0.unwrap();
+        assert_eq!(third.text, "done");
+        assert_eq!(third.stop_reason, StopReason::Complete);
+        assert_eq!(
+            harness.sent("turn/start").len(),
+            2,
+            "the conversation's one turn and the one-shot's"
+        );
+        assert!(harness.sent("turn/interrupt").is_empty());
+        let answers = harness.answers();
+        assert_eq!(answers.len(), 2, "{answers:?}");
+        assert!(answers.iter().all(|(_, outcome)| outcome.is_ok()));
         harness.runtime.close();
     }
 
@@ -2354,9 +3083,14 @@ mod tests {
                 "inputSchema": {"type": "object", "properties": {"q": {"type": "string"}}},
             })]
         );
-        let config = thread_config();
+        let config = thread_config(&["github".into(), "filesystem".into()]);
         assert_eq!(config["project_doc_max_bytes"], 0);
-        assert_eq!(config["mcp_servers"], json!({}));
+        assert_eq!(
+            config["mcp_servers"],
+            json!({"filesystem": {"enabled": false}, "github": {"enabled": false}}),
+            "each server by name: the app-server merges the table per key"
+        );
+        assert_eq!(thread_config(&[])["mcp_servers"], json!({}));
         assert!(
             config["features"]
                 .as_object()
@@ -2365,6 +3099,41 @@ mod tests {
                 .all(|flag| *flag == false),
             "{config}"
         );
+        // The names come from the effective config's table, whatever else
+        // it says about each server.
+        assert_eq!(
+            mcp_server_names(&json!({"config": {"mcp_servers": {
+                "github": {"command": "gh-mcp", "enabled": true},
+                "filesystem": {"url": "http://localhost:1", "enabled": false},
+            }}})),
+            ["filesystem", "github"]
+        );
+        assert!(mcp_server_names(&json!({"config": {}})).is_empty());
+        assert!(mcp_server_names(&json!({"config": {"mcp_servers": null}})).is_empty());
+        // What codex must never run on its own: anything that executes,
+        // edits, reads a file, searches the web or delegates.
+        for kind in [
+            "commandExecution",
+            "fileChange",
+            "mcpToolCall",
+            "collabAgentToolCall",
+            "subAgentActivity",
+            "webSearch",
+            "imageView",
+            "imageGeneration",
+        ] {
+            assert!(is_forbidden_item(kind), "{kind}");
+        }
+        for kind in [
+            "userMessage",
+            "agentMessage",
+            "reasoning",
+            "plan",
+            "dynamicToolCall",
+            "contextCompaction",
+        ] {
+            assert!(!is_forbidden_item(kind), "{kind}");
+        }
         assert!(
             config["tools"]
                 .as_object()

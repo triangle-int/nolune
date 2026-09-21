@@ -43,7 +43,7 @@ use super::{
 };
 
 /// How many events a subscriber may fall behind before it is told so.
-const EVENT_BUFFER: usize = 1024;
+pub(super) const EVENT_BUFFER: usize = 1024;
 /// How many of the child's stderr lines are kept for an error message.
 const STDERR_LINES_KEPT: usize = 16;
 /// How long a stderr line may be in an error message.
@@ -635,6 +635,13 @@ async fn pump(
                     {
                         tokio::spawn(refuse(connection, unheard, write_deadline));
                     }
+                    // One frame, one turn of the scheduler: a burst the
+                    // child wrote in one go is read from an 8 KiB buffer
+                    // many frames at a time, and without this the
+                    // subscribers would not be polled until the buffer
+                    // is drained, which for a long enough burst is more
+                    // frames than the broadcast keeps for them.
+                    tokio::task::yield_now().await;
                 }
                 Ok(None) => break,
                 Err(error) => {
@@ -894,7 +901,6 @@ impl AppServer {
     }
 
     /// The live child's pid, if there is one.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn pid(&self) -> Option<u32> {
         self.live()
             .ok()
@@ -1071,7 +1077,11 @@ mod tests {
         let thread = server
             .request(
                 "thread/start",
-                json!({"approvalPolicy": "never", "sandbox": "read-only"}),
+                json!({
+                    "approvalPolicy": "never",
+                    "sandbox": "read-only",
+                    "config": {"mcp_servers": {"filesystem": {"enabled": false}, "github": {"enabled": false}}},
+                }),
             )
             .await
             .unwrap();
