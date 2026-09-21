@@ -26,7 +26,7 @@ use crate::{
         companion,
         continuity::ContinuityStore,
         machine_registry::MachineInfo,
-        resume_ritual::{RITUAL_FILE, ResumeRitual},
+        resume_ritual::{self, Held, RITUAL_FILE, ResumeRitual},
     },
 };
 use axum::{
@@ -734,6 +734,79 @@ async fn no_suggestion_when_nothing_valid_is_resumable() {
     assert_eq!(held(&body), "nothing_to_resume");
     assert!(h.status().await["suggestion"].is_null());
     studio.assert_untouched("an empty ritual");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn triggers_that_land_together_offer_once_inside_one_cooldown() {
+    let h = harness().await;
+    let mut rx = h.state.events.subscribe();
+    h.connect_ready(MAC_A, "studio").await;
+    h.enable(30, 3_600).await;
+    let task = h
+        .task(
+            "sort the receipts",
+            &[MAC_A],
+            300,
+            ContinuityUpdate::default(),
+        )
+        .await;
+    h.last_opened(10_000).await;
+
+    // On one page load the client reports "opened" while the desktop's
+    // registration lands: every trigger passes the same cooldown check at
+    // once unless the ritual takes them one at a time.
+    let go = std::sync::Arc::new(tokio::sync::Barrier::new(4));
+    let opened = tokio::spawn({
+        let state = h.state.clone();
+        let go = go.clone();
+        async move {
+            go.wait().await;
+            resume_ritual::opened(&state, now()).await
+        }
+    });
+    let connects: Vec<_> = (0..3)
+        .map(|_| {
+            tokio::spawn({
+                let state = h.state.clone();
+                let go = go.clone();
+                async move {
+                    go.wait().await;
+                    resume_ritual::on_machine_connected(&state, MAC_A).await;
+                }
+            })
+        })
+        .collect();
+    let opened = opened.await.unwrap();
+    for connect in connects {
+        connect.await.unwrap();
+    }
+
+    let events = resume_events(&mut rx);
+    assert_eq!(
+        events,
+        vec![Some(task.id.clone())],
+        "exactly one suggestion was announced"
+    );
+    let status = h.status().await;
+    let suggestion = &status["suggestion"];
+    assert_eq!(suggestion["record_id"], task.id);
+    match opened {
+        Ok(offer) => {
+            assert_eq!(suggestion["id"], offer.suggestion.id, "the open report won");
+            assert_eq!(suggestion["trigger"]["kind"], "opened_after_break");
+        }
+        Err(held) => {
+            assert!(
+                matches!(held, Held::Cooldown { .. }),
+                "the open report was held by the reconnect's cooldown, not {held:?}"
+            );
+            assert_eq!(suggestion["trigger"]["kind"], "machine_connected");
+        }
+    }
+    assert_eq!(
+        h.ritual().state().last_suggested_at,
+        Some(suggestion["suggested_at"].as_i64().unwrap())
+    );
 }
 
 #[tokio::test]

@@ -7,10 +7,11 @@
 //! activity. Its policy (enabled, break, cooldown, snooze, dismissed
 //! records) and its bounded state (when Nolune was last opened, when it
 //! last suggested, the current suggestion) live in one file beside the
-//! proactive policy, written atomically, so quiet hours, cooldown, snooze,
-//! dismiss, and a refusal hold across restarts. A suggestion is delivered
-//! as the record's handoff card; nothing continues, and no computer is
-//! touched, until the user accepts that card.
+//! proactive policy, written atomically under one lock, so quiet hours,
+//! cooldown, snooze, dismiss, and a refusal hold across restarts and
+//! across triggers that land together. A suggestion is delivered as the
+//! record's handoff card; nothing continues, and no computer is touched,
+//! until the user accepts that card.
 
 use std::{
     collections::HashMap,
@@ -193,6 +194,11 @@ impl ResumeRitual {
     /// Read, change, and write the file under the lock.
     async fn modify<T>(&self, change: impl FnOnce(&mut RitualFile) -> T) -> io::Result<T> {
         let _guard = self.lock.lock().await;
+        self.modify_locked(change)
+    }
+
+    /// Read, change, and write the file; the caller holds the lock.
+    fn modify_locked<T>(&self, change: impl FnOnce(&mut RitualFile) -> T) -> io::Result<T> {
         let mut file = self.read();
         let out = change(&mut file);
         self.write(&file)?;
@@ -203,6 +209,9 @@ impl ResumeRitual {
         self.read().policy
     }
 
+    /// The bounded state on disk; production reads it with the policy in
+    /// one read, so this is for tests.
+    #[cfg(test)]
     pub fn state(&self) -> RitualState {
         self.read().state
     }
@@ -291,14 +300,18 @@ impl ResumeRitual {
         .await
     }
 
-    /// Persist a new suggestion; starts the cooldown.
+    /// Persist a new suggestion; starts the cooldown. `invoke` places its
+    /// offer while already holding the lock, so this is for tests.
+    #[cfg(test)]
     pub async fn offer(&self, suggestion: ResumeSuggestion) -> io::Result<()> {
-        self.modify(|file| {
-            file.state.last_suggested_at = Some(suggestion.suggested_at);
-            file.state.suggestion = Some(suggestion);
-        })
-        .await
+        self.modify(|file| place(file, suggestion)).await
     }
+}
+
+/// Make `suggestion` the current offer and start the cooldown from it.
+fn place(file: &mut RitualFile, suggestion: ResumeSuggestion) {
+    file.state.last_suggested_at = Some(suggestion.suggested_at);
+    file.state.suggestion = Some(suggestion);
 }
 
 /// Whether `trigger` may look for work now. Spontaneous triggers wait for
@@ -372,11 +385,16 @@ pub async fn status(state: &AppState, now: i64) -> ResumeStatus {
     }
 }
 
-/// The current suggestion with its card, or nothing. A suggestion whose
-/// record is gone, no longer offered, or already accepted is resolved here.
+/// The current suggestion with its card, or nothing while the ritual is
+/// off. A suggestion whose record is gone, no longer offered, or accepted
+/// is resolved here.
 pub async fn current(state: &AppState, now: i64) -> Option<ResumeOffer> {
     let ritual = ritual(state);
-    let suggestion = ritual.state().suggestion?;
+    let file = ritual.read();
+    if !file.policy.enabled {
+        return None;
+    }
+    let suggestion = file.state.suggestion?;
     let card = match handoff::card(state, &suggestion.record_id, now).await {
         Ok(card) if card.offered && !card.decision.as_ref().is_some_and(is_accepted) => card,
         Ok(_) | Err(handoff::HandoffError::NotFound) => {
@@ -405,13 +423,17 @@ fn is_accepted(decision: &HandoffDecision) -> bool {
 
 /// Look for work on behalf of `trigger`: admit it, rank the offered
 /// records against the known machines, persist and broadcast the pick as
-/// the current suggestion.
+/// the current suggestion. Triggers are taken one at a time under the
+/// ritual's lock, so two that land together (the client's open report and
+/// a desktop registering, say) share one cooldown check, and an answer
+/// given while one is ranking is applied after its offer, never lost.
 pub async fn invoke(
     state: &AppState,
     trigger: RitualTrigger,
     now: i64,
 ) -> Result<ResumeOffer, Held> {
     let ritual = ritual(state);
+    let _looking = ritual.lock.lock().await;
     let file = ritual.read();
     admission(
         &file.policy,
@@ -453,7 +475,9 @@ pub async fn invoke(
         destination_id: candidate.destination_id,
         suggested_at: now,
     };
-    ritual.offer(suggestion.clone()).await.map_err(storage)?;
+    ritual
+        .modify_locked(|file| place(file, suggestion.clone()))
+        .map_err(storage)?;
     let offer = ResumeOffer { suggestion, card };
     broadcast(state, Some(&offer));
     Ok(offer)

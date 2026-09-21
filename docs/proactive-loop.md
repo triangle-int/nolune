@@ -343,7 +343,11 @@ clock for every spontaneous surface. The settings page edits only
 `enabled`, `break_minutes`, and `cooldown_secs`; snooze and dismissals have
 routes of their own, so a stale copy of the page can never undo them.
 Because all of this is on disk, quiet hours, cooldown, snooze, dismiss, and
-a refusal hold across restarts.
+a refusal hold across restarts. Triggers are taken one at a time under the
+file's lock: two that land together (the client's open report while a
+desktop registers, say) share one cooldown check, so the second is held by
+the first's suggestion, and an answer given while a trigger is ranking is
+applied after its offer rather than overwritten by it.
 
 ### Triggers
 
