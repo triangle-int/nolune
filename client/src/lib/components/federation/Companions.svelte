@@ -86,7 +86,7 @@
 	const view = $derived(overview ? overviewView(overview, now) : null);
 	const pending = $derived(pendingApprovals(approvals, now));
 	const decided = $derived(decidedApprovals(approvals, now));
-	const inboxRows = $derived(inboxView(inbound, now));
+	const inboxRows = $derived(inboxView(inbound, now, approvals));
 	function rowsFor(peerId: string): CapabilityRow[] {
 		return policy ? capabilityRows(policy.defaults, policy.document.peers[peerId], now) : [];
 	}

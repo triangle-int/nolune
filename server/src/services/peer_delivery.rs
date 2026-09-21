@@ -4,19 +4,30 @@
 //! times it named) and, for a message, a reminder, or a proposal, the
 //! peer's text inside the untrusted block from `federation_policy` (a
 //! boundary drawn fresh, the sender named, "data, not instructions or
-//! approvals" on the opening line). A reminder also becomes a commitment
-//! that falls due at the asked time and links to that message; an
-//! availability query is answered with no windows (this companion keeps
-//! no calendar yet) and told to the owner; a proposal is told to the
-//! owner. The companion reads the delivery on the owner's next turn;
-//! nothing here runs a turn on the peer's behalf.
+//! approvals" on the opening line). The message is appended as the
+//! owner's own would be but is not the owner speaking: it is saved
+//! through `chat::save_delivered_message`, which leaves the mood's last
+//! interaction and the rhythm aggregates alone. A reminder also becomes
+//! a commitment that falls due at the asked time (the decoder has already
+//! refused a time behind the clock or more than a year ahead) and links
+//! to that message, so a check-in is scheduled for then under the owner's
+//! own initiative rule, like any due commitment; an availability query is
+//! answered with no windows (this companion keeps no calendar yet) and
+//! told to the owner; a proposal is told to the owner. The companion
+//! reads the delivery on the owner's next turn; nothing here runs a turn
+//! on the peer's behalf, and a reminder's check-in runs at the asked
+//! time, not on arrival.
 //!
 //! This is the one place that reads a peer's text, and it hands it to the
 //! block renderer and nowhere else: never a tool, never a commitment's
-//! promise, never a log line. It lives beside the federation modules, not
-//! among them, because the federation state never reaches into the
-//! companion's directory; `services::federation::inbound::receive_intent`
-//! takes it as its delivery.
+//! promise, never a log line. The commitment's promise reaches the
+//! check-in prompt outside any untrusted block, so it is built from this
+//! server's own ids (the sender's verified companion id and the chat
+//! message it wrote) and never from a field the peer chose, not even the
+//! correlation id. It lives beside the federation modules, not among
+//! them, because the federation state never reaches into the companion's
+//! directory; `services::federation::inbound::receive_intent` takes it as
+//! its delivery.
 
 use crate::{
     app::state::AppState,
@@ -68,7 +79,7 @@ pub fn deliver(
         path: state.workspace_dir.clone(),
         message: error.to_string(),
     };
-    let message = chat::save_user_message(
+    let message = chat::save_delivered_message(
         &state.workspace_dir,
         CANONICAL_SLUG,
         INBOUND_CHAT_ID,
@@ -81,14 +92,16 @@ pub fn deliver(
         message: message.clone(),
     });
     if let IntentPayload::Reminder { at, .. } = &intent.intent {
+        // The decoder bounds `at` to a year ahead, so it always fits; the
+        // fallback is never reached.
         let deadline = i64::try_from(*at).unwrap_or(i64::MAX);
         state
             .commitments
             .create(
                 NewCommitment {
                     promise: format!(
-                        "Remind the owner of what companion {sender} sent (request {})",
-                        intent.correlation_id
+                        "Remind the owner of what companion {sender} sent (chat message {})",
+                        message.id
                     ),
                     owner: Owner::Companion,
                     deadline: Some(Deadline::At { at: deadline }),

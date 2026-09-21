@@ -1158,14 +1158,20 @@ file this build cannot load refuses every intent that would ask the owner
 #110 leave behind: one record per request a peer delivered (`sender`,
 `correlation_id`, `pairing_id`, `intent`, `disclosure`, the peer's two
 labels `represented_owner` and `purpose`, `status` of `pending`,
-`accepted`, or `denied`, the `response` the peer was given, and the
+`accepted`, or `denied`, the `reason` it stands there (the engine's, or
+`owner_approved` / `owner_denied` when the owner's word decided it), the
+`response` the peer was given, and the
 `approval_id`, `receipt_id`, and chat `message_id` it led to) and one
 intent receipt per outcome (who asked whom for what, on whose behalf and
-to what end, the class requested and granted, and why: the policy reason
-or the owner's approval id). Neither has a field for a body, text, or
+to what end, the class requested and granted, and why: the policy reason,
+the owner's approval id, or the owner's denial). Neither has a field for
+a body, text, or
 payload, and unknown fields are refused. A settled record is what a
 redelivery of the same request is answered with, byte for byte, without a
-second judgement, delivery, or receipt; a pending one is judged afresh.
+second judgement, delivery, or receipt; a pending one is judged afresh. A
+request the owner denied once is settled `denied` with reason
+`owner_denied` while its `response` stays the `needs_owner` the peer was
+told, so the wire never shows the decision.
 Records lapse with their intent's expiry, the newest 1000 are kept, and
 receipts are bounded like the audit log (newest 1000, 200 per pairing, 30
 days). `GET /api/federation/inbox` lists both newest first. A file this

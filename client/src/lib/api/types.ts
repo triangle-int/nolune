@@ -881,6 +881,9 @@ export interface FederationInboundIntent {
 	represented_owner: string;
 	purpose: string;
 	status: FederationInboundStatus;
+	/** Why it stands where it does: the engine's reason, or `owner_approved` / `owner_denied` when the owner's word decided it. */
+	reason: string;
+	/** The answer the peer was given; for a request the owner denied once, still `needs_owner`. */
 	response: FederationIntentResponse;
 	approval_id?: string;
 	receipt_id?: string;

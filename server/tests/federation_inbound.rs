@@ -167,19 +167,55 @@ fn peer_text_leaves_the_handler_only_inside_the_untrusted_block_and_never_reache
             "{DELIVERY} must not reach peer text or a tool via {leak:?}"
         );
     }
-    // The commitment a reminder becomes is written from ids, never the text.
+    // A delivery is appended to the history like the owner's own message
+    // but is not the owner speaking: it goes through the save path that
+    // leaves the mood's last interaction and the rhythm aggregates alone.
+    assert!(
+        delivery.contains("chat::save_delivered_message("),
+        "{DELIVERY} saves through chat::save_delivered_message"
+    );
+    assert!(
+        !delivery.contains("save_user_message("),
+        "{DELIVERY} must not count a delivery as the owner's activity"
+    );
+    let chat = production("server/src/services/chat.rs");
+    let quiet = function(&chat, "save_delivered_message");
+    for activity in ["mood", "rhythm", "last_interaction"] {
+        assert!(
+            !quiet.contains(activity),
+            "save_delivered_message must not touch the owner's {activity}: {quiet}"
+        );
+    }
+    // The commitment a reminder becomes is written from this server's ids
+    // (the sender's verified companion id, the chat message it wrote),
+    // never the text and never a field the peer chose, because the promise
+    // reaches the check-in prompt outside any untrusted block.
     let deliver = function(&delivery, "deliver");
     let promise = deliver
         .split("promise: ")
         .nth(1)
-        .and_then(|rest| rest.split('\n').next())
+        .and_then(|rest| rest.split("owner: Owner::").next())
         .expect("a reminder becomes a commitment with a promise");
-    for word in ["text", "body", "description", "rendered", "block"] {
+    for word in [
+        "text",
+        "body",
+        "description",
+        "rendered",
+        "block",
+        "correlation_id",
+        "represented_owner",
+        "purpose",
+        "intent.",
+    ] {
         assert!(
             !promise.contains(word),
-            "the commitment's promise must not carry the peer's text: {promise}"
+            "the commitment's promise must not carry the peer's {word}: {promise}"
         );
     }
+    assert!(
+        promise.contains("message.id"),
+        "the promise names the delivered message: {promise}"
+    );
     // The line above the block is built from the class, the sender's id,
     // and numbers; it never formats a label or a text.
     let preface = function(&delivery, "preface");
@@ -246,6 +282,7 @@ fn the_store_and_the_listing_have_no_room_for_a_payload_and_are_bounded() {
             "represented_owner",
             "purpose",
             "status",
+            "reason",
             "response",
             "approval_id",
             "receipt_id",

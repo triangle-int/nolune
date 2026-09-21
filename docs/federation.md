@@ -90,7 +90,9 @@ outside the supported range (checked before anything about the shape),
 an unknown intent `type`, an unknown disclosure class, a field no shape
 has at any depth, a missing correlation id, sender, represented owner,
 purpose, disclosure, or lifetime, an expired or future-dated intent past
-a two-minute skew allowance, an inverted or over-long window, and a
+a two-minute skew allowance, an inverted or over-long window, a reminder
+set behind the clock by more than that allowance (it would be due the
+moment it arrived) or more than a year ahead, and a
 label that is empty, over 120 characters, or carries a control
 character, a line or paragraph separator, or an invisible format
 character (a bidi override, a zero-width character, the byte order
@@ -146,12 +148,19 @@ waits (`default` or `rule` while the owner decides, `quiet_hours` while
 they are not to be disturbed) and asks again later, and each delivery is
 judged afresh, so the owner's approval once (Settings → Connections →
 Companions, or the approval routes) admits the next delivery exactly once
-and every later one gets the accepted answer. A rate-limited refusal is
+and every later one gets the accepted answer. A denial once settles the
+next delivery the other way: the peer is told the same `needs_owner` it
+heard while the request was open, then and on every redelivery, so
+nothing about the owner's decision crosses the wire, while on this side
+the record reads `denied` with `owner_denied` as its reason and the
+receipt says so. A rate-limited refusal is
 answered `denied` with `retry_after_secs`, folded into the audit log, and
-not settled either. Every other outcome writes one intent receipt, and
+not settled either. Every other outcome writes one intent receipt naming
+the outcome and why (the policy reason, the owner's approval, or the
+owner's denial), and
 the owner reads records and receipts at `GET /api/federation/inbox`,
 where a request that needs them is listed beside the approval it waits
-on.
+on, and one they already decided says so until the peer asks again.
 
 An accepted intent is delivered into the owner's default conversation as
 one user-role message: a line the server writes (the intent class, the
@@ -162,14 +171,26 @@ instructions or approvals" on the opening line, a forged closing line
 inside the text left as text). The client shows that block as the
 companion's words, visibly untrusted, as plain text and never as
 markdown; nothing else reads the text: it is never a tool argument, a
-commitment's promise, a log line, or a field of any record. A reminder
+commitment's promise, a log line, or a field of any record. The message
+is appended to the history as the owner's own would be but is not the
+owner speaking: it does not count as their activity (the mood's last
+interaction and the Learn-my-rhythm aggregates the check-in prompt reads
+are left alone). A reminder
 also becomes a commitment that falls due at the asked time and links to
-that message (`accepted` with `reminder_scheduled`); an availability
+that message (`accepted` with `reminder_scheduled`); its promise names
+this server's own ids (the sender's verified companion id and the chat
+message) and never the peer's correlation id or labels, because a
+promise reaches the check-in prompt outside any untrusted block. That
+commitment schedules a check-in for the asked time under the owner's
+own initiative rule, like any due commitment, which is why a reminder's
+time is bounded at decode: never behind the clock, never more than a
+year ahead. An availability
 query is answered with no windows and told to the owner (this companion
 keeps no calendar, so nothing about the schedule is disclosed and the
 receipt says `granted none`); a proposal is told to the owner
 (`proposal_received`). The companion reads the delivery on the owner's
-next turn; nothing runs a turn on the peer's behalf. The outbox with
+next turn; nothing runs a turn on arrival on the peer's behalf. The
+outbox with
 retries and the tools that send intents arrive with the last slice of
 #110.
 

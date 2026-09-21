@@ -77,7 +77,10 @@ Connections is where they answer:
   ("wants to send you a message") and, quoted as the companion's own
   unverified words, who it said it speaks for and why. A row that needs
   you sits on the selected surface and points at the Allow and Deny of its
-  request above; a settled row says Delivered or Denied and when. A
+  request above; once you have allowed or denied it, the row says so
+  ("You denied it once; it is refused when the companion asks again")
+  until the companion asks again; a settled row says Delivered or Denied,
+  when, and why ("Refused by your policy" or "You denied this once"). A
   delivered message itself is in your conversation, framed as that
   companion's untrusted content. Route: `GET /api/federation/inbox`.
 

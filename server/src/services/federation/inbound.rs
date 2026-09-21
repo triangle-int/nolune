@@ -29,9 +29,13 @@
 //! `needs_owner` is not settled: the peer is told why it waits and asks
 //! again, and the next delivery is judged afresh, so an approval the owner
 //! gave in the meantime admits it (once, consumed by the gate) and it is
-//! delivered exactly once. A rate-limited refusal is not recorded here
-//! either: the peer's own window is its answer and the audit log folds
-//! the retries.
+//! delivered exactly once. A denial once settles it the other way: the
+//! peer is told the same `needs_owner` it heard while the request was
+//! open, now and on every redelivery, so nothing about the owner's
+//! decision crosses the wire, while the record and its receipt on this
+//! side say `denied` with `owner_denied` as the reason. A rate-limited
+//! refusal is not recorded here at all: the peer's own window is its
+//! answer and the audit log folds the retries.
 //!
 //! `federation/inbound.json` (`0600`, written through a temporary file and
 //! a rename) holds the records and the receipts. A record is who asked for
@@ -65,7 +69,8 @@ use crate::domain::{
         MAX_INTENT_CLOCK_SKEW_SECS, PeerLabel, ReceiptBasis,
     },
     federation_policy::{
-        Decision, DecisionReason, DisclosureClass, IntentClass, ReceiptSide, Verdict,
+        ApprovalStatus, Decision, DecisionReason, DisclosureClass, IntentClass, ReceiptSide,
+        Verdict,
     },
 };
 
@@ -96,7 +101,9 @@ pub enum InboundStatus {
     Pending,
     /// Delivered and answered `accepted`; a redelivery gets the same answer.
     Accepted,
-    /// Refused by policy and answered `denied`; a redelivery gets the same answer.
+    /// Refused by policy and answered `denied`, or denied by the owner once
+    /// and answered `needs_owner` as before; a redelivery gets the same
+    /// answer.
     Denied,
 }
 
@@ -121,8 +128,13 @@ pub struct InboundIntent {
     /// Why the sender said it asked: its own words.
     pub purpose: PeerLabel,
     pub status: InboundStatus,
+    /// Why it stands where it does: the engine's reason, or the owner's
+    /// own word (`owner_approved`, `owner_denied`) when that decided it.
+    pub reason: DecisionReason,
     /// The response the peer was given last; once settled, what every
-    /// redelivery gets again.
+    /// redelivery gets again. For a request the owner denied once this is
+    /// still the `needs_owner` answer: nothing about the decision crosses
+    /// the wire.
     pub response: IntentResponse,
     /// The pending approval the request waits on, while it does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -516,7 +528,7 @@ pub fn receive_intent(
         request.intent.name(),
         request.disclosure.name(),
     );
-    let (response, status, basis, approval_id, message_id) = match judged {
+    let outcome = match judged {
         Ok(Judgement {
             decision,
             approval_id,
@@ -541,13 +553,15 @@ pub fn receive_intent(
                     rule_id: None,
                 },
             };
-            (
+            Outcome {
                 response,
-                InboundStatus::Accepted,
+                recorded: None,
+                status: InboundStatus::Accepted,
+                reason: decision.reason,
                 basis,
-                None,
-                Some(message_id),
-            )
+                approval_id: None,
+                message_id: Some(message_id),
+            }
         }
         Err(FederationError::PolicyRefused(decision)) => {
             let Some(response) =
@@ -560,24 +574,69 @@ pub fn receive_intent(
             if decision.reason == DecisionReason::RateLimited {
                 return federation.seal(&peer.companion_id, &response.encode());
             }
-            let basis = ReceiptBasis::Policy {
-                reason: decision.reason,
+            let policy = |reason| ReceiptBasis::Policy {
+                reason,
                 rule_id: None,
             };
             match decision.verdict {
                 Verdict::Ask | Verdict::Defer => {
-                    let approval_id = gate
-                        .queued_approval(&held, &peer.pairing_id, &intent.sender, request)?
-                        .map(|entry| entry.id);
-                    (response, InboundStatus::Pending, basis, approval_id, None)
+                    let queued =
+                        gate.queued_approval(&held, &peer.pairing_id, &intent.sender, request)?;
+                    match queued {
+                        // The owner denied it once: the peer is told the
+                        // same `needs_owner` it heard while the request
+                        // was open (so nothing about the decision crosses
+                        // the wire, now or on a redelivery), and on this
+                        // side the request is settled as denied, recorded
+                        // as the owner's word.
+                        Some(entry) if entry.status == ApprovalStatus::Denied => Outcome {
+                            response,
+                            recorded: Some(IntentResponse::Denied {
+                                version: INTENT_VERSION,
+                                correlation_id: intent.correlation_id.clone(),
+                                responder: me.clone(),
+                                reason: DecisionReason::OwnerDenied,
+                                retry_after_secs: None,
+                            }),
+                            status: InboundStatus::Denied,
+                            reason: DecisionReason::OwnerDenied,
+                            basis: policy(DecisionReason::OwnerDenied),
+                            approval_id: None,
+                            message_id: None,
+                        },
+                        queued => Outcome {
+                            response,
+                            recorded: None,
+                            status: InboundStatus::Pending,
+                            reason: decision.reason,
+                            basis: policy(decision.reason),
+                            approval_id: queued.map(|entry| entry.id),
+                            message_id: None,
+                        },
+                    }
                 }
-                Verdict::Allow | Verdict::Deny => {
-                    (response, InboundStatus::Denied, basis, None, None)
-                }
+                Verdict::Allow | Verdict::Deny => Outcome {
+                    response,
+                    recorded: None,
+                    status: InboundStatus::Denied,
+                    reason: decision.reason,
+                    basis: policy(decision.reason),
+                    approval_id: None,
+                    message_id: None,
+                },
             }
         }
         Err(error) => return Err(error),
     };
+    let Outcome {
+        response,
+        recorded,
+        status,
+        reason,
+        basis,
+        approval_id,
+        message_id,
+    } = outcome;
 
     // One receipt per outcome: a request still waiting on the owner keeps
     // the receipt from when it first asked.
@@ -594,7 +653,7 @@ pub fn receive_intent(
                 peer.pairing_id.clone(),
                 now,
                 &intent,
-                &response,
+                recorded.as_ref().unwrap_or(&response),
                 basis,
             )
             .map_err(FederationError::Intent)?,
@@ -610,6 +669,7 @@ pub fn receive_intent(
         represented_owner: intent.represented_owner.clone(),
         purpose: intent.purpose.clone(),
         status,
+        reason,
         response: response.clone(),
         approval_id,
         receipt_id: receipt
@@ -627,6 +687,23 @@ pub fn receive_intent(
     };
     store.record(record, receipt)?;
     federation.seal(&peer.companion_id, &response.encode())
+}
+
+/// What judging a request settled, before it is recorded and answered.
+struct Outcome {
+    /// The answer the peer gets now and on every redelivery once settled.
+    response: IntentResponse,
+    /// The answer the receipt records when it is not the one on the wire:
+    /// a request the owner denied once is answered `needs_owner` as before
+    /// and recorded as `denied` here.
+    recorded: Option<IntentResponse>,
+    status: InboundStatus,
+    reason: DecisionReason,
+    basis: ReceiptBasis,
+    /// The queue entry a request still waits on.
+    approval_id: Option<String>,
+    /// The chat message a delivered request became.
+    message_id: Option<String>,
 }
 
 /// The refusal a judgement of an unknown name is: never allowed, so the
@@ -737,6 +814,7 @@ mod tests {
             represented_owner: intent.represented_owner.clone(),
             purpose: intent.purpose.clone(),
             status,
+            reason: DecisionReason::Rule,
             response: accepted(correlation_id),
             approval_id: None,
             receipt_id: None,

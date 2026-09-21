@@ -37,6 +37,7 @@ use crate::{
             peers::Clock,
         },
         peer_delivery::INBOUND_CHAT_ID,
+        rhythm, tools,
     },
 };
 use axum::http::{Method, StatusCode};
@@ -464,6 +465,100 @@ async fn each_intent_dispatches_through_the_gate_to_accepted_denied_or_needs_own
     assert_eq!(opened(&b, body).0, accepted_bytes);
     assert_eq!(chat_messages(&a).len(), 1, "delivered exactly once");
     assert_eq!(inbox(&a).await.1.len(), 2);
+    assert_eq!(
+        inbox(&a).await.0[0].reason,
+        DecisionReason::OwnerApproved,
+        "the record says why it stands where it does"
+    );
+
+    // The approval once is used up, so the next message asks the owner
+    // again, and this time the owner denies it once. The peer, asking
+    // again, gets the same needs_owner bytes (nothing about the decision
+    // crosses the wire), but on this side the request is settled: the
+    // record says the owner denied it, one receipt names the denial as
+    // its basis, nothing reaches the conversation, and the delivery after
+    // that is the stored bytes with no third receipt.
+    let again = intent(
+        &b_id,
+        "req-ask-again",
+        T0 + 120,
+        message("And the day after?"),
+    );
+    let (status, body) = deliver(&a, &b, &again.encode()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (asked_bytes, response) = opened(&b, body);
+    assert_eq!(response.outcome(), IntentOutcome::NeedsOwner);
+    let (records, receipts) = inbox(&a).await;
+    assert_eq!(records[0].correlation_id, "req-ask-again");
+    assert_eq!(records[0].status, InboundStatus::Pending);
+    assert_eq!(records[0].reason, DecisionReason::Default);
+    let denied_id = records[0]
+        .approval_id
+        .clone()
+        .expect("queued for the owner");
+    assert_eq!(receipts.len(), 3);
+    let (status, body) = a
+        .owner(
+            Method::POST,
+            &format!("/api/federation/approvals/{denied_id}/deny"),
+            Some(json!({"scope": "once"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    now.store(T0 + 180, Ordering::SeqCst);
+    let (status, body) = deliver(&a, &b, &again.encode()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        opened(&b, body).0,
+        asked_bytes,
+        "the owner's denial never crosses the wire"
+    );
+    assert_eq!(
+        chat_messages(&a).len(),
+        1,
+        "a denied request reaches nobody"
+    );
+    let (records, receipts) = inbox(&a).await;
+    assert_eq!(records.len(), 2, "{records:?}");
+    assert_eq!(records[0].correlation_id, "req-ask-again");
+    assert_eq!(records[0].status, InboundStatus::Denied);
+    assert_eq!(records[0].reason, DecisionReason::OwnerDenied);
+    assert_eq!(
+        records[0].approval_id, None,
+        "settled requests wait on nothing"
+    );
+    assert_eq!(receipts.len(), 4, "{receipts:?}");
+    assert_eq!(receipts[0].correlation_id, "req-ask-again");
+    assert_eq!(receipts[0].outcome, IntentOutcome::Denied);
+    assert_eq!(
+        receipts[0].basis,
+        ReceiptBasis::Policy {
+            reason: DecisionReason::OwnerDenied,
+            rule_id: None
+        }
+    );
+    assert_eq!(receipts[0].granted, DisclosureClass::None);
+    assert!(
+        receipts[0].summary.contains("owner_denied"),
+        "{}",
+        receipts[0].summary
+    );
+    assert_eq!(
+        records[0].receipt_id.as_deref(),
+        Some(receipts[0].id.as_str())
+    );
+    let (status, body) = deliver(&a, &b, &again.encode()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(opened(&b, body).0, asked_bytes);
+    assert_eq!(inbox(&a).await.1.len(), 4, "no third receipt");
+    assert!(
+        audit(&a)
+            .await
+            .iter()
+            .any(|receipt| receipt.intent == "message"
+                && receipt.decision.reason == DecisionReason::OwnerDenied),
+        "the audit log records the owner's word"
+    );
 
     // An availability query at `personal` is denied by default: the peer
     // is told the reason, the receipt says denied with the policy as its
@@ -499,9 +594,10 @@ async fn each_intent_dispatches_through_the_gate_to_accepted_denied_or_needs_own
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(opened(&b, body).0, denied_bytes);
     let (records, receipts) = inbox(&a).await;
-    assert_eq!(records.len(), 2);
+    assert_eq!(records.len(), 3);
     assert_eq!(records[0].status, InboundStatus::Denied);
-    assert_eq!(receipts.len(), 3);
+    assert_eq!(records[0].reason, DecisionReason::Default);
+    assert_eq!(receipts.len(), 5);
     assert_eq!(receipts[0].outcome, IntentOutcome::Denied);
     assert_eq!(
         receipts[0].basis,
@@ -561,6 +657,21 @@ async fn each_intent_dispatches_through_the_gate_to_accepted_denied_or_needs_own
     let messages = chat_messages(&a);
     assert_eq!(messages.len(), 2);
     assert!(messages[1].content.contains("water the plants"));
+    // The promise reaches the check-in prompt outside any untrusted block,
+    // so it names this server's own ids: the chat message, never the
+    // peer-chosen correlation id or either label.
+    assert!(
+        commitments[0].promise.contains(&messages[1].id),
+        "the promise names the delivered message: {}",
+        commitments[0].promise
+    );
+    for peer_chosen in ["req-remind", "Alice", "catch up"] {
+        assert!(
+            !commitments[0].promise.contains(peer_chosen),
+            "the promise carries the peer's {peer_chosen:?}: {}",
+            commitments[0].promise
+        );
+    }
 
     let window = TimeWindow {
         from: T0 + 3_600,
@@ -612,8 +723,8 @@ async fn each_intent_dispatches_through_the_gate_to_accepted_denied_or_needs_own
         messages[3].content
     );
     let (records, receipts) = inbox(&a).await;
-    assert_eq!(records.len(), 5);
-    assert_eq!(receipts.len(), 6);
+    assert_eq!(records.len(), 6);
+    assert_eq!(receipts.len(), 8);
     assert!(
         receipts
             .iter()
@@ -710,6 +821,36 @@ async fn unknown_and_expired_intents_are_refused_before_any_side_effect() {
     let (status, body) = deliver(&a, &b, &early.encode()).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(body["error"], "intent_issued_in_future");
+
+    // A reminder set in the past would be due the moment it arrived, and
+    // one set past the horizon would never be: both are refused typed,
+    // before the gate (the class is allowed) and before any commitment.
+    allow(&a, &b_id, IntentClass::Reminder, DisclosureClass::None);
+    for at in [T0 - 3_600, 0, T0 + 2 * 366 * 86_400, u64::MAX] {
+        let reminder = intent(
+            &b_id,
+            "req-remind-when",
+            T0,
+            IntentPayload::Reminder {
+                text: serde_json::from_value(json!(INJECTION)).unwrap(),
+                at,
+            },
+        );
+        let (status, body) = deliver(&a, &b, &reminder.encode()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{at}: {body}");
+        assert_eq!(body["error"], "invalid_intent", "{at}");
+        assert!(
+            body["message"].as_str().unwrap().contains("reminder"),
+            "{at}: {body}"
+        );
+    }
+    assert!(
+        a.state
+            .commitments
+            .list(ListFilter::default(), T0 as i64)
+            .is_empty(),
+        "no commitment for a reminder that was never admitted"
+    );
 
     // An unknown field, a missing correlation id, a body that is not an
     // intent at all: typed, never echoed.
@@ -835,6 +976,51 @@ async fn unknown_and_expired_intents_are_refused_before_any_side_effect() {
             "{text}"
         );
     }
+}
+
+#[tokio::test]
+async fn a_delivery_is_not_counted_as_the_owners_activity() {
+    let now = Arc::new(AtomicU64::new(T0));
+    let (a, b, _wire) = paired(&now).await;
+    let b_id = b.companion_id();
+    allow(&a, &b_id, IntentClass::Message, DisclosureClass::None);
+    let instance_dir = a.workspace.path().join("instances").join(CANONICAL_SLUG);
+
+    // The owner spoke once, so the aggregates exist and a change would
+    // show; the mood's last interaction is pinned to a value the clock
+    // cannot reproduce.
+    chat::save_user_message(a.workspace.path(), CANONICAL_SLUG, INBOUND_CHAT_ID, "hello").unwrap();
+    let mut mood = tools::load_mood_state(&instance_dir);
+    assert!(mood.last_interaction > 0);
+    mood.last_interaction = 1;
+    tools::save_mood_state(&instance_dir, &mood);
+    let rhythm_before = rhythm::load_rhythm(&instance_dir);
+    assert_eq!(rhythm_before.total_messages, 1);
+    let rhythm_file = std::fs::read_to_string(instance_dir.join("rhythm.json")).unwrap();
+
+    let request = intent(&b_id, "req-quiet", T0, message(INJECTION));
+    let (status, body) = deliver(&a, &b, &request.encode()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(opened(&b, body).1.outcome(), IntentOutcome::Accepted);
+    let messages = chat_messages(&a);
+    assert_eq!(messages.len(), 2, "{messages:?}");
+    assert_eq!(messages[1].role, ChatRole::User);
+    assert!(messages[1].content.contains(UNTRUSTED_BLOCK_OPEN));
+
+    // A peer's delivery is not the owner speaking: it bumps neither the
+    // mood's last interaction nor the Learn-my-rhythm aggregates that the
+    // check-in prompt turns into "they're usually most active around".
+    assert_eq!(
+        tools::load_mood_state(&instance_dir).last_interaction,
+        1,
+        "a delivery is not an interaction of the owner's"
+    );
+    assert_eq!(rhythm::load_rhythm(&instance_dir), rhythm_before);
+    assert_eq!(
+        std::fs::read_to_string(instance_dir.join("rhythm.json")).unwrap(),
+        rhythm_file,
+        "the rhythm file is untouched byte for byte"
+    );
 }
 
 #[tokio::test]
