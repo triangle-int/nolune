@@ -82,19 +82,29 @@ impl ApprovalStore {
     /// Fails closed over a file this build could not load, without
     /// changing anything.
     pub fn ensure_loadable(&self) -> Result<(), FederationError> {
-        let _ = (&self.root, &self.inner, &self.clock);
-        todo!("PR 3: approvals store")
+        let mut inner = self.inner.lock().unwrap();
+        self.ensure_loaded(&mut inner);
+        self.refuse_if_unloadable(&inner)
     }
 
     /// Every live entry, newest first. Lapsed entries are dropped first.
     pub fn list(&self) -> Result<Vec<PendingApproval>, FederationError> {
-        todo!("PR 3: approvals store")
+        let mut inner = self.inner.lock().unwrap();
+        self.ensure_loaded(&mut inner);
+        self.refuse_if_unloadable(&inner)?;
+        self.prune(&mut inner)?;
+        let mut approvals = inner.approvals.clone();
+        approvals.reverse();
+        Ok(approvals)
     }
 
     /// The live entry with `id`, if any.
     pub fn get(&self, id: &str) -> Result<Option<PendingApproval>, FederationError> {
-        let _ = id;
-        todo!("PR 3: approvals store")
+        let mut inner = self.inner.lock().unwrap();
+        self.ensure_loaded(&mut inner);
+        self.refuse_if_unloadable(&inner)?;
+        self.prune(&mut inner)?;
+        Ok(inner.approvals.iter().find(|entry| entry.id == id).cloned())
     }
 
     /// What the owner said about `request` from `requester`, queueing it
@@ -105,28 +115,111 @@ impl ApprovalStore {
         requester: &str,
         request: IntentRequest,
     ) -> Result<Resolution, FederationError> {
-        let _ = (pairing_id, requester, request);
-        todo!("PR 3: approvals store")
+        let now = (self.clock)();
+        let mut inner = self.inner.lock().unwrap();
+        self.ensure_loaded(&mut inner);
+        self.refuse_if_unloadable(&inner)?;
+        self.prune(&mut inner)?;
+        let at = inner
+            .approvals
+            .iter()
+            .position(|entry| entry.requester == requester && entry.request() == request);
+        if let Some(at) = at {
+            let entry = inner.approvals[at].clone();
+            return Ok(match entry.status {
+                ApprovalStatus::Pending => Resolution::Pending(entry),
+                ApprovalStatus::Denied => Resolution::Denied(entry),
+                ApprovalStatus::Approved => {
+                    let mut approvals = inner.approvals.clone();
+                    approvals.remove(at);
+                    self.persist(&approvals)?;
+                    inner.approvals = approvals;
+                    Resolution::Approved(entry)
+                }
+            });
+        }
+        let entry = PendingApproval {
+            version: APPROVAL_VERSION,
+            id: Self::new_id(),
+            pairing_id: pairing_id.to_owned(),
+            requester: requester.to_owned(),
+            intent: request.intent,
+            disclosure: request.disclosure,
+            status: ApprovalStatus::Pending,
+            requested_at: now,
+            decided_at: None,
+            expires_at: now.saturating_add(PENDING_APPROVAL_TTL_SECS),
+            summary: format!(
+                "companion {requester} asks for {} ({})",
+                request.intent, request.disclosure
+            ),
+        };
+        let mut approvals = inner.approvals.clone();
+        // Past the bound the oldest pending request makes room: a decided
+        // entry is the owner's word and outlives a flood of new asks.
+        while approvals.len() >= MAX_APPROVALS {
+            let oldest = approvals
+                .iter()
+                .position(|entry| entry.status == ApprovalStatus::Pending)
+                .unwrap_or(0);
+            approvals.remove(oldest);
+        }
+        approvals.push(entry.clone());
+        self.persist(&approvals)?;
+        inner.approvals = approvals;
+        Ok(Resolution::Queued(entry))
     }
 
     /// Approves the pending entry `id` for one use, good for
     /// [`ONCE_APPROVAL_TTL_SECS`]. Anything but a pending entry is
     /// `UnknownApproval`.
     pub fn approve_once(&self, id: &str) -> Result<PendingApproval, FederationError> {
-        let _ = id;
-        todo!("PR 3: approvals store")
+        self.decide(id, ApprovalStatus::Approved)
     }
 
     /// Denies the pending entry `id` until the request would have lapsed.
     pub fn deny_once(&self, id: &str) -> Result<PendingApproval, FederationError> {
-        let _ = id;
-        todo!("PR 3: approvals store")
+        self.decide(id, ApprovalStatus::Denied)
+    }
+
+    fn decide(&self, id: &str, status: ApprovalStatus) -> Result<PendingApproval, FederationError> {
+        let now = (self.clock)();
+        let mut inner = self.inner.lock().unwrap();
+        self.ensure_loaded(&mut inner);
+        self.refuse_if_unloadable(&inner)?;
+        self.prune(&mut inner)?;
+        let mut approvals = inner.approvals.clone();
+        let entry = approvals
+            .iter_mut()
+            .find(|entry| entry.id == id && entry.status == ApprovalStatus::Pending)
+            .ok_or(FederationError::UnknownApproval)?;
+        entry.status = status;
+        entry.decided_at = Some(now);
+        if status == ApprovalStatus::Approved {
+            entry.expires_at = now.saturating_add(ONCE_APPROVAL_TTL_SECS);
+        }
+        let decided = entry.clone();
+        self.persist(&approvals)?;
+        inner.approvals = approvals;
+        Ok(decided)
     }
 
     /// Drops the entry `id` whatever its status.
     pub fn remove(&self, id: &str) -> Result<PendingApproval, FederationError> {
-        let _ = id;
-        todo!("PR 3: approvals store")
+        let mut inner = self.inner.lock().unwrap();
+        self.ensure_loaded(&mut inner);
+        self.refuse_if_unloadable(&inner)?;
+        self.prune(&mut inner)?;
+        let at = inner
+            .approvals
+            .iter()
+            .position(|entry| entry.id == id)
+            .ok_or(FederationError::UnknownApproval)?;
+        let mut approvals = inner.approvals.clone();
+        let removed = approvals.remove(at);
+        self.persist(&approvals)?;
+        inner.approvals = approvals;
+        Ok(removed)
     }
 
     /// Drops every entry of `pairing_id` and returns them.
@@ -134,15 +227,151 @@ impl ApprovalStore {
         &self,
         pairing_id: &str,
     ) -> Result<Vec<PendingApproval>, FederationError> {
-        let _ = pairing_id;
-        todo!("PR 3: approvals store")
+        let mut inner = self.inner.lock().unwrap();
+        self.ensure_loaded(&mut inner);
+        self.refuse_if_unloadable(&inner)?;
+        self.prune(&mut inner)?;
+        let (dropped, kept): (Vec<_>, Vec<_>) = inner
+            .approvals
+            .iter()
+            .cloned()
+            .partition(|entry| entry.pairing_id == pairing_id);
+        if dropped.is_empty() {
+            return Ok(dropped);
+        }
+        self.persist(&kept)?;
+        inner.approvals = kept;
+        Ok(dropped)
     }
 
     /// Moves every entry from requester `previous` to `next`: a peer's
     /// queue follows it through a key rotation.
     pub fn rekey(&self, previous: &str, next: &str) -> Result<(), FederationError> {
-        let _ = (previous, next);
-        todo!("PR 3: approvals store")
+        let mut inner = self.inner.lock().unwrap();
+        self.ensure_loaded(&mut inner);
+        self.refuse_if_unloadable(&inner)?;
+        self.prune(&mut inner)?;
+        if !inner
+            .approvals
+            .iter()
+            .any(|entry| entry.requester == previous)
+        {
+            return Ok(());
+        }
+        let mut approvals = inner.approvals.clone();
+        for entry in &mut approvals {
+            if entry.requester == previous {
+                entry.requester = next.to_owned();
+            }
+        }
+        self.persist(&approvals)?;
+        inner.approvals = approvals;
+        Ok(())
+    }
+
+    /// Drops lapsed entries from memory and, when any went, from the file.
+    fn prune(&self, inner: &mut Inner) -> Result<(), FederationError> {
+        let now = (self.clock)();
+        if !inner.approvals.iter().any(|entry| entry.expired_at(now)) {
+            return Ok(());
+        }
+        let kept: Vec<PendingApproval> = inner
+            .approvals
+            .iter()
+            .filter(|entry| !entry.expired_at(now))
+            .cloned()
+            .collect();
+        self.persist(&kept)?;
+        inner.approvals = kept;
+        Ok(())
+    }
+
+    /// Reads the file once. A missing file is an empty queue. A file that
+    /// cannot be read, is not a queue of this version, or has an entry of
+    /// another version leaves the store marked unloadable: reported, never
+    /// repaired, never overwritten.
+    fn ensure_loaded(&self, inner: &mut Inner) {
+        if inner.loaded {
+            return;
+        }
+        inner.loaded = true;
+        let path = self.path();
+        let contents = match std::fs::metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => {
+                return self.mark_unloadable(inner, format!("cannot be read ({error})"));
+            }
+            Ok(metadata) if metadata.len() > MAX_APPROVALS_FILE_BYTES => {
+                return self.mark_unloadable(inner, "is larger than a queue can be".to_owned());
+            }
+            Ok(_) => match std::fs::read_to_string(&path) {
+                Ok(contents) => contents,
+                Err(error) => {
+                    return self.mark_unloadable(inner, format!("cannot be read ({error})"));
+                }
+            },
+        };
+        let version = serde_json::from_str::<FileVersion>(&contents)
+            .ok()
+            .map(|file| file.version);
+        match serde_json::from_str::<ApprovalsFile>(&contents) {
+            Ok(file)
+                if file.version == APPROVAL_VERSION
+                    && file
+                        .approvals
+                        .iter()
+                        .all(|entry| entry.version == APPROVAL_VERSION) =>
+            {
+                inner.approvals = file.approvals;
+            }
+            _ => {
+                let reason = match version {
+                    Some(version) if version != APPROVAL_VERSION => {
+                        format!("has unsupported version {version}")
+                    }
+                    _ => "does not have the expected shape".to_owned(),
+                };
+                self.mark_unloadable(inner, reason);
+            }
+        }
+    }
+
+    fn mark_unloadable(&self, inner: &mut Inner, reason: String) {
+        log::warn!(
+            "[federation] approval queue {} {reason}; nothing that asks the owner will be admitted and nothing will be written until it is repaired or moved aside and the server restarted",
+            self.path().display()
+        );
+        inner.unloadable = Some(reason);
+    }
+
+    fn persist(&self, approvals: &[PendingApproval]) -> Result<(), FederationError> {
+        let path = self.path();
+        let file = ApprovalsFile {
+            version: APPROVAL_VERSION,
+            approvals: approvals.to_vec(),
+        };
+        let mut json =
+            serde_json::to_string_pretty(&file).map_err(|error| FederationError::Io {
+                path: path.clone(),
+                message: error.to_string(),
+            })?;
+        json.push('\n');
+        identity::replace_private(&path, json.as_bytes()).map_err(|error| FederationError::Io {
+            path,
+            message: error.to_string(),
+        })
+    }
+
+    fn refuse_if_unloadable(&self, inner: &Inner) -> Result<(), FederationError> {
+        match &inner.unloadable {
+            Some(reason) => Err(FederationError::Io {
+                path: self.path(),
+                message: format!(
+                    "federation approval queue {reason}; repair or move it aside and restart before federation is used"
+                ),
+            }),
+            None => Ok(()),
+        }
     }
 
     /// A fresh entry id: 16 hex characters, like a receipt's.
@@ -167,15 +396,12 @@ struct ApprovalsFile {
     approvals: Vec<PendingApproval>,
 }
 
-#[allow(dead_code)]
-const _: (u32, u64, u64, usize, u64, ApprovalStatus) = (
-    APPROVAL_VERSION,
-    PENDING_APPROVAL_TTL_SECS,
-    ONCE_APPROVAL_TTL_SECS,
-    MAX_APPROVALS,
-    MAX_APPROVALS_FILE_BYTES,
-    ApprovalStatus::Pending,
-);
+/// Just the version, read leniently so an unsupported file is reported as
+/// such rather than as the wrong shape.
+#[derive(Deserialize)]
+struct FileVersion {
+    version: u32,
+}
 
 #[cfg(test)]
 mod tests {

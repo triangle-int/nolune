@@ -740,8 +740,11 @@ impl PendingApproval {
 
 /// How far the owner's answer to a pending request reaches. Every form is
 /// bounded: by one use, by a deadline, or by the intent and class it names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "scope", rename_all = "snake_case", deny_unknown_fields)]
+/// On the wire it is `{"scope": "once"}`, `{"scope": "until", "expires_at":
+/// …}`, or `{"scope": "class"}` and nothing else: a deadline on a scope
+/// that takes none is refused rather than ignored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "scope", rename_all = "snake_case")]
 pub enum ApprovalScope {
     /// This request only: the next matching intent, within
     /// [`ONCE_APPROVAL_TTL_SECS`] for an approval, or until the request
@@ -751,6 +754,29 @@ pub enum ApprovalScope {
     Until { expires_at: u64 },
     /// A rule for the intent at that class until the owner revokes it.
     Class,
+}
+
+/// The wire shape of an [`ApprovalScope`], read strictly.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApprovalScopeWire {
+    scope: String,
+    #[serde(default)]
+    expires_at: Option<u64>,
+}
+
+impl<'de> Deserialize<'de> for ApprovalScope {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = ApprovalScopeWire::deserialize(deserializer)?;
+        match (wire.scope.as_str(), wire.expires_at) {
+            ("once", None) => Ok(Self::Once),
+            ("until", Some(expires_at)) => Ok(Self::Until { expires_at }),
+            ("class", None) => Ok(Self::Class),
+            _ => Err(serde::de::Error::custom(
+                "approval scope is once, until with expires_at, or class",
+            )),
+        }
+    }
 }
 
 /// What the owner asks for when writing a rule through the API: one intent

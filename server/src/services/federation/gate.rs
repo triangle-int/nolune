@@ -45,7 +45,7 @@ use serde::Serialize;
 use serde::Deserialize;
 
 use super::{
-    approvals::ApprovalStore,
+    approvals::{ApprovalStore, Resolution},
     audit::AuditLog,
     check_version, decode,
     pairing::{FederationState, HttpTransport, PING_PATH, PeerTransport},
@@ -58,9 +58,9 @@ use crate::domain::federation::{
     TransportMessage,
 };
 use crate::domain::federation_policy::{
-    ApprovalOutcome, ApprovalScope, AuditReceipt, Decision, DecisionReason, DefaultAccess,
-    DisclosureClass, IntentClass, PeerPolicy, PendingApproval, PolicyDocument, RECEIPT_VERSION,
-    ReceiptSide, RuleRequest, Verdict, sanitize_name,
+    Access, ApprovalOutcome, ApprovalScope, ApprovalStatus, AuditReceipt, Decision, DecisionReason,
+    DefaultAccess, DisclosureClass, IntentClass, IntentRequest, PeerPolicy, PendingApproval,
+    PolicyDocument, PolicyRule, RECEIPT_VERSION, ReceiptSide, RuleRequest, Verdict, sanitize_name,
 };
 
 /// The intent name recorded for an accepted key rotation notice.
@@ -154,8 +154,7 @@ impl FederationGate {
 
     /// Every live request that asked the owner, newest first.
     pub fn approvals(&self) -> Result<Vec<PendingApproval>, FederationError> {
-        let _ = &self.approvals;
-        todo!("PR 3: owner API")
+        self.approvals.list()
     }
 
     /// The owner approves the pending request `id`: once (the next matching
@@ -168,8 +167,7 @@ impl FederationGate {
         id: &str,
         scope: ApprovalScope,
     ) -> Result<ApprovalOutcome, FederationError> {
-        let _ = (federation, id, scope);
-        todo!("PR 3: owner API")
+        self.decide(federation, id, scope, Access::Allow)
     }
 
     /// The owner denies the pending request `id`: once (until the request
@@ -181,8 +179,85 @@ impl FederationGate {
         id: &str,
         scope: ApprovalScope,
     ) -> Result<ApprovalOutcome, FederationError> {
-        let _ = (federation, id, scope);
-        todo!("PR 3: owner API")
+        self.decide(federation, id, scope, Access::Deny)
+    }
+
+    /// [`approve`] and [`deny`]: the receipt is written before anything is
+    /// applied, so a change is never made without its record, and the
+    /// identity lock is held so a rotation cannot move the request out
+    /// from under the decision.
+    ///
+    /// [`approve`]: FederationGate::approve
+    /// [`deny`]: FederationGate::deny
+    fn decide(
+        &self,
+        federation: &FederationState,
+        id: &str,
+        scope: ApprovalScope,
+        access: Access,
+    ) -> Result<ApprovalOutcome, FederationError> {
+        let _stable = self.identities.read().unwrap();
+        let me = federation.identity()?.companion_id().to_owned();
+        let now = (self.clock)();
+        let entry = self
+            .approvals
+            .get(id)?
+            .filter(|entry| entry.status == ApprovalStatus::Pending)
+            .ok_or(FederationError::UnknownApproval)?;
+        let (verdict, reason) = match access {
+            Access::Allow => (Verdict::Allow, DecisionReason::OwnerApproved),
+            Access::Ask | Access::Deny => (Verdict::Deny, DecisionReason::OwnerDenied),
+        };
+        let expires_at = match scope {
+            ApprovalScope::Once | ApprovalScope::Class => None,
+            ApprovalScope::Until { expires_at } => {
+                check_deadline(expires_at, now)?;
+                Some(expires_at)
+            }
+        };
+        if scope != ApprovalScope::Once {
+            known_peer(federation, &entry.requester, true)?;
+        }
+        self.record(
+            ReceiptSide::Owner,
+            &entry.pairing_id,
+            &entry.requester,
+            &me,
+            entry.intent.name(),
+            entry.disclosure.name(),
+            None,
+            &Decision::new(verdict, reason),
+            now,
+        )?;
+        match scope {
+            ApprovalScope::Once => {
+                let decided = match access {
+                    Access::Allow => self.approvals.approve_once(id)?,
+                    Access::Ask | Access::Deny => self.approvals.deny_once(id)?,
+                };
+                Ok(ApprovalOutcome {
+                    approval: Some(decided),
+                    rule: None,
+                })
+            }
+            ApprovalScope::Until { .. } | ApprovalScope::Class => {
+                let rule = self.write_rule(
+                    &entry.requester,
+                    RuleRequest {
+                        intent: entry.intent,
+                        disclosure: entry.disclosure,
+                        access,
+                        expires_at,
+                    },
+                    now,
+                )?;
+                self.approvals.remove(id)?;
+                Ok(ApprovalOutcome {
+                    approval: None,
+                    rule: Some(rule),
+                })
+            }
+        }
     }
 
     /// The owner drops the entry `id` whatever its status: a pending
@@ -193,8 +268,25 @@ impl FederationGate {
         federation: &FederationState,
         id: &str,
     ) -> Result<PendingApproval, FederationError> {
-        let _ = (federation, id);
-        todo!("PR 3: owner API")
+        let _stable = self.identities.read().unwrap();
+        let me = federation.identity()?.companion_id().to_owned();
+        let now = (self.clock)();
+        let entry = self
+            .approvals
+            .get(id)?
+            .ok_or(FederationError::UnknownApproval)?;
+        self.record(
+            ReceiptSide::Owner,
+            &entry.pairing_id,
+            &entry.requester,
+            &me,
+            entry.intent.name(),
+            entry.disclosure.name(),
+            None,
+            &Decision::deny(DecisionReason::OwnerRevoked),
+            now,
+        )?;
+        self.approvals.remove(id)
     }
 
     /// The owner writes one rule for `companion_id`, replacing any rule for
@@ -207,8 +299,32 @@ impl FederationGate {
         companion_id: &str,
         request: RuleRequest,
     ) -> Result<PeerPolicy, FederationError> {
-        let _ = (federation, companion_id, request);
-        todo!("PR 3: owner API")
+        let _stable = self.identities.read().unwrap();
+        let me = federation.identity()?.companion_id().to_owned();
+        let now = (self.clock)();
+        check_pair(request.intent, request.disclosure)?;
+        if let Some(expires_at) = request.expires_at {
+            check_deadline(expires_at, now)?;
+        }
+        let peer = known_peer(federation, companion_id, true)?;
+        let verdict = match request.access {
+            Access::Allow => Verdict::Allow,
+            Access::Ask => Verdict::Ask,
+            Access::Deny => Verdict::Deny,
+        };
+        self.record(
+            ReceiptSide::Owner,
+            &peer.pairing_id,
+            companion_id,
+            &me,
+            request.intent.name(),
+            request.disclosure.name(),
+            None,
+            &Decision::new(verdict, DecisionReason::Rule),
+            now,
+        )?;
+        self.write_rule(companion_id, request, now)?;
+        Ok(self.policy.document()?.peer(companion_id))
     }
 
     /// The owner withdraws the rule for `intent` at `disclosure` from
@@ -220,22 +336,127 @@ impl FederationGate {
         intent: IntentClass,
         disclosure: DisclosureClass,
     ) -> Result<PeerPolicy, FederationError> {
-        let _ = (federation, companion_id, intent, disclosure);
-        todo!("PR 3: owner API")
+        let _stable = self.identities.read().unwrap();
+        let me = federation.identity()?.companion_id().to_owned();
+        let now = (self.clock)();
+        let peer = known_peer(federation, companion_id, false)?;
+        let matches = |rule: &PolicyRule| rule.intent == intent && rule.disclosure == disclosure;
+        if !self
+            .policy
+            .document()?
+            .peer(companion_id)
+            .rules
+            .iter()
+            .any(matches)
+        {
+            return Err(FederationError::UnknownRule);
+        }
+        self.record(
+            ReceiptSide::Owner,
+            &peer.pairing_id,
+            companion_id,
+            &me,
+            intent.name(),
+            disclosure.name(),
+            None,
+            &Decision::deny(DecisionReason::OwnerRevoked),
+            now,
+        )?;
+        self.policy.update(|document| {
+            if let Some(entry) = document.peers.get_mut(companion_id) {
+                entry.rules.retain(|rule| !matches(rule));
+                if entry.rules.is_empty() && entry.rate_limit.is_none() {
+                    document.peers.remove(companion_id);
+                }
+            }
+            Ok(())
+        })?;
+        Ok(self.policy.document()?.peer(companion_id))
     }
 
     /// A revoked peer keeps nothing: its rules, its rate-limit override,
     /// and every request of its pairing that asked the owner are dropped,
     /// and the revocation is recorded on `side` (`Owner` when this owner
-    /// revoked, `Answering` when the peer's own notice did).
+    /// revoked, `Answering` when the peer's own notice did; the latter
+    /// folds repeats like any other refusal from a peer).
     pub fn forget_peer(
         &self,
         federation: &FederationState,
         companion_id: &str,
         side: ReceiptSide,
     ) -> Result<(), FederationError> {
-        let _ = (federation, companion_id, side);
-        todo!("PR 3: owner API")
+        let _stable = self.identities.read().unwrap();
+        let me = federation.identity()?.companion_id().to_owned();
+        let now = (self.clock)();
+        let peer = federation
+            .overview()?
+            .peers
+            .into_iter()
+            .find(|peer| {
+                peer.companion_id == companion_id
+                    || peer
+                        .rotation_history
+                        .iter()
+                        .any(|transition| transition.previous_companion_id() == companion_id)
+            })
+            .ok_or(FederationError::UnknownPeer)?;
+        let decision = Decision::deny(DecisionReason::PeerRevoked);
+        match side {
+            ReceiptSide::Answering | ReceiptSide::Requesting => self.record_answering(
+                &peer.pairing_id,
+                companion_id,
+                &me,
+                REVOCATION_INTENT,
+                DisclosureClass::None.name(),
+                None,
+                &decision,
+                now,
+            )?,
+            ReceiptSide::Owner => self.record(
+                side,
+                &peer.pairing_id,
+                companion_id,
+                &me,
+                REVOCATION_INTENT,
+                DisclosureClass::None.name(),
+                None,
+                &decision,
+                now,
+            )?,
+        }
+        self.approvals.forget_pairing(&peer.pairing_id)?;
+        self.policy.update(|document| {
+            document.peers.remove(&peer.companion_id);
+            document.peers.remove(companion_id);
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    /// Writes `request` as the one rule for its intent and class under
+    /// `companion_id`, stamped `granted_at: now`. The caller checked the
+    /// pair, the deadline, and the peer.
+    fn write_rule(
+        &self,
+        companion_id: &str,
+        request: RuleRequest,
+        now: u64,
+    ) -> Result<PolicyRule, FederationError> {
+        let rule = PolicyRule {
+            intent: request.intent,
+            disclosure: request.disclosure,
+            access: request.access,
+            granted_at: now,
+            expires_at: request.expires_at,
+        };
+        let replaces = IntentRequest::new(rule.intent, rule.disclosure);
+        self.policy.update(|document| {
+            let entry = document.peers.entry(companion_id.to_owned()).or_default();
+            entry.rules.retain(|existing| !existing.matches(replaces));
+            entry.rules.push(rule.clone());
+            Ok(())
+        })?;
+        Ok(rule)
     }
 
     /// Judges `intent` at `disclosure` (wire names) from `peer`, as this
@@ -281,7 +502,7 @@ impl FederationGate {
                     let local_seconds_of_day = Self::local_seconds_of_day(&document, now);
                     let mut usage = self.usage.lock().unwrap();
                     let window = usage.entry(companion_id.to_owned()).or_default();
-                    let decision = policy::evaluate(
+                    let mut decision = policy::evaluate(
                         Evaluation {
                             document: &document,
                             peer: companion_id,
@@ -292,6 +513,28 @@ impl FederationGate {
                         },
                         window,
                     );
+                    drop(usage);
+                    // The owner's word on what the engine could only ask
+                    // about: an approval once admits it and is consumed, a
+                    // denial once refuses it, and a request still open is
+                    // queued (or stays queued) while the peer is told the
+                    // same `approval_required` every time, whatever the
+                    // owner has or has not done since.
+                    if decision.verdict == Verdict::Ask {
+                        decision =
+                            match self
+                                .approvals
+                                .resolve(&peer.pairing_id, companion_id, request)?
+                            {
+                                Resolution::Approved(_) => {
+                                    Decision::allow(DecisionReason::OwnerApproved)
+                                }
+                                Resolution::Denied(_) => {
+                                    Decision::deny(DecisionReason::OwnerDenied)
+                                }
+                                Resolution::Queued(_) | Resolution::Pending(_) => decision,
+                            };
+                    }
                     (
                         decision,
                         request.intent.name(),
@@ -399,6 +642,9 @@ impl FederationGate {
     ) -> Result<TransportEnvelope, FederationError> {
         let me = federation.identity()?.companion_id().to_owned();
         let _exclusive = self.identities.write().unwrap();
+        // The queue moves with the rules; a queue this build cannot load
+        // refuses the rotation before anything is applied, like the policy.
+        self.approvals.ensure_loadable()?;
         let mut answer = None;
         let applied = self.policy.update(|document| {
             let ack = federation.receive_rotation(envelope)?;
@@ -406,6 +652,7 @@ impl FederationGate {
             if previous != next {
                 Self::move_peer_policy(document, previous, next);
                 self.move_windows(previous, next);
+                self.approvals.rekey(previous, next)?;
             }
             answer = Some(ack);
             Ok(())
@@ -677,6 +924,46 @@ impl FederationGate {
             .map(|utc| utc.with_timezone(&zone).num_seconds_from_midnight())
             .unwrap_or(0)
     }
+}
+
+/// A rule is only for a pair the engine could ever allow.
+fn check_pair(intent: IntentClass, disclosure: DisclosureClass) -> Result<(), FederationError> {
+    if policy::default_access(intent, disclosure).is_none() {
+        return Err(FederationError::Malformed(format!(
+            "{intent} never discloses at {disclosure}"
+        )));
+    }
+    Ok(())
+}
+
+/// A bounded grant is bounded by a moment still ahead.
+fn check_deadline(expires_at: u64, now: u64) -> Result<(), FederationError> {
+    if expires_at <= now {
+        return Err(FederationError::Malformed(
+            "the deadline is not in the future".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// The peer `companion_id` names by its current id, for an owner change:
+/// unknown ids are refused, and so is a revoked peer when `writing`
+/// something it would keep.
+fn known_peer(
+    federation: &FederationState,
+    companion_id: &str,
+    writing: bool,
+) -> Result<PeerSummary, FederationError> {
+    let peer = federation
+        .overview()?
+        .peers
+        .into_iter()
+        .find(|peer| peer.companion_id == companion_id)
+        .ok_or(FederationError::UnknownPeer)?;
+    if writing && peer.state == PeerState::Revoked {
+        return Err(FederationError::PeerRevoked);
+    }
+    Ok(peer)
 }
 
 /// The pairing id of the peer that `companion_id` names: its current id,
@@ -2493,7 +2780,9 @@ mod tests {
             Decision::deny(DecisionReason::PeerRevoked)
         );
         assert_eq!(approvals(&a).len(), 1, "a revoked peer is not queued");
-        // The peer's own notice is recorded on the answering side, once.
+        // The peer's own notice is recorded on the answering side, once
+        // (like every refusal from a peer, repeats inside a minute fold).
+        network.set(T0 + 30 + REFUSAL_DEDUPE_SECS);
         let (_, notified) = b.federation.revoke_peer(&a_id).await.unwrap();
         let _ = notified;
         a.gate

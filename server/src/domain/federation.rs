@@ -768,11 +768,11 @@ mod tests {
             FederationError::ReplayCapacity,
             FederationError::KeyRetired,
             FederationError::RotationMismatch,
+            FederationError::UnknownApproval,
+            FederationError::UnknownRule,
             FederationError::PolicyRefused(crate::domain::federation_policy::Decision::ask(
                 crate::domain::federation_policy::DecisionReason::Default,
             )),
-            FederationError::UnknownApproval,
-            FederationError::UnknownRule,
         ];
         let rendered: Vec<String> = errors.iter().map(ToString::to_string).collect();
         for (index, text) in rendered.iter().enumerate() {

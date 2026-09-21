@@ -105,13 +105,19 @@ fn the_approval_queue_never_touches_a_payload_and_entries_have_no_room_for_one()
     for closed in ["pub enum ApprovalScope", "pub enum ApprovalStatus"] {
         let attributes = domain.split(closed).next().unwrap();
         assert!(
-            attributes.trim_end().ends_with("deny_unknown_fields)]")
-                || attributes
-                    .trim_end()
-                    .ends_with("#[serde(rename_all = \"snake_case\")]"),
+            attributes
+                .trim_end()
+                .ends_with("rename_all = \"snake_case\")]"),
             "{closed} is not a closed, snake_case shape"
         );
     }
+    // The scope is read through one strict wire shape: a deadline on a
+    // scope that takes none is refused, not ignored.
+    assert!(
+        domain.contains("struct ApprovalScopeWire")
+            && domain.contains("impl<'de> Deserialize<'de> for ApprovalScope"),
+        "ApprovalScope must deserialize strictly"
+    );
     assert!(
         store.contains("pub const MAX_APPROVALS: usize")
             && domain.contains("pub const PENDING_APPROVAL_TTL_SECS: u64")
@@ -172,20 +178,46 @@ fn the_gate_consults_the_queue_only_after_the_engine_asked_and_carries_it_throug
         loadable_at < update_at && update_at < rekey_at,
         "receive_rotation must check the queue, then apply, then move it"
     );
-    // Every owner decision writes a receipt on the owner side.
+    // Every owner decision writes a receipt on the owner side, before the
+    // change is applied.
+    for name in ["approve", "deny"] {
+        assert!(
+            method(&gate, name).contains("self.decide("),
+            "{name} must go through decide"
+        );
+    }
     for name in [
-        "approve",
-        "deny",
+        "decide",
         "withdraw_approval",
         "set_rule",
         "revoke_rule",
         "forget_peer",
     ] {
         let body = method(&gate, name);
+        let record_at = body
+            .find("self.record(")
+            .unwrap_or_else(|| panic!("{name} must record the owner's decision"));
         assert!(
-            body.contains("ReceiptSide::Owner") || body.contains("side,") || body.contains("side)"),
-            "{name} must record the owner's decision"
+            body[..record_at].contains("ReceiptSide::Owner")
+                || body[record_at..].contains("ReceiptSide::Owner")
+                || body[record_at..].contains("side,"),
+            "{name} must record on the owner side"
         );
+        for change in [
+            "self.approvals.approve_once(",
+            "self.approvals.deny_once(",
+            "self.approvals.remove(",
+            "self.approvals.forget_pairing(",
+            "self.write_rule(",
+            "self.policy.update(",
+        ] {
+            if let Some(at) = body.find(change) {
+                assert!(
+                    record_at < at,
+                    "{name} must record before it applies {change}"
+                );
+            }
+        }
     }
 }
 
