@@ -179,11 +179,20 @@ than you speak. you're warm but not overbearing. this is a safe, intimate space.
 
 /// Short summary of a tool use for display.
 pub(crate) fn tool_use_summary(name: &str, input: &serde_json::Value) -> String {
-    // The desktop tools read as the live trail words them (#80): naming the
+    // The machine tools read as the live trail words them (#80): naming the
     // computer the arguments name, by id (there is no listing on reload).
+    // The typed window tools (#18) join the list; `computer_use` stays until
+    // #19 deletes the type, since reloaded histories still carry those calls.
     if matches!(
         name,
-        "computer_use" | "remote_bash" | "remote_files" | "list_machines"
+        "discover_windows"
+            | "get_window_state"
+            | "act"
+            | "verify_state"
+            | "computer_use"
+            | "remote_bash"
+            | "remote_files"
+            | "list_machines"
     ) {
         return crate::services::tools::tool_summary(name, &input.to_string());
     }
@@ -1150,6 +1159,45 @@ mod trail_tests {
         assert_eq!(
             tool_use_summary("list_machines", &serde_json::json!({})),
             "listing computers"
+        );
+        // The typed window tools (#18) name the computer the same way, so a
+        // reloaded call reads "observing a window on <id>", never
+        // "get_window_state: …" (#218).
+        let observed = tool_call(
+            "call_4",
+            "get_window_state",
+            serde_json::json!({"machine_id": STUDIO, "target": {"pid": 1, "window_id": 2}}),
+        );
+        assert_eq!(
+            history_to_chat_messages(&[observed])[0].content,
+            format!("observing a window on {STUDIO}")
+        );
+        let acted = tool_call(
+            "call_5",
+            "act",
+            serde_json::json!({
+                "machine_id": STUDIO,
+                "target": {"pid": 1, "window_id": 2},
+                "action": {"kind": "click", "address": {"kind": "element_token", "element_token": "tok/a"}}
+            }),
+        );
+        assert_eq!(
+            history_to_chat_messages(&[acted])[0].content,
+            format!("click on {STUDIO}")
+        );
+        assert_eq!(
+            tool_use_summary(
+                "discover_windows",
+                &serde_json::json!({"machine_id": STUDIO, "mode": "list_windows"})
+            ),
+            format!("listing windows on {STUDIO}")
+        );
+        assert_eq!(
+            tool_use_summary(
+                "verify_state",
+                &serde_json::json!({"machine_id": STUDIO, "expect": []})
+            ),
+            format!("verifying a window on {STUDIO}")
         );
         // Every other tool keeps its argument summary.
         assert_eq!(
