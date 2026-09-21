@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "correlation_id": "corr-proposal-0001",
+  "sender": "BoQmM6BzR2Zw7lfBZK_JAMOs7BVCX59sZytlrGwJ9_Y",
+  "represented_owner": "Alice",
+  "purpose": "Lunch on Friday",
+  "disclosure": "availability",
+  "issued_at": 1800000000,
+  "expires_at": 1800003600,
+  "intent": {
+    "type": "proposal",
+    "description": "Lunch at the corner cafe, then a walk.",
+    "window": {
+      "from": 1800435600,
+      "to": 1800441000
+    }
+  }
+}

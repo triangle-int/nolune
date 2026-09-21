@@ -7,6 +7,7 @@ pub mod correction;
 pub mod drop;
 pub mod events;
 pub mod federation;
+pub mod federation_intent;
 pub mod federation_policy;
 pub mod handoff;
 pub mod machine;
