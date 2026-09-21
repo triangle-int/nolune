@@ -12,6 +12,7 @@ use tokio::sync::{Mutex, oneshot};
 
 use crate::domain::machine::{KnownMachine, MachineRecord};
 use crate::services::cua::desktop::{Completion, DesktopLink};
+use crate::services::cua::runtime::{CuaRuntime, RuntimeHandle};
 
 /// Info about a connected Tauri agent machine.
 #[derive(Clone, Debug, Serialize)]
@@ -162,6 +163,10 @@ impl std::error::Error for CuaRegistrationError {}
 #[derive(Clone, Default)]
 pub struct CuaTargets {
     targets: Arc<Mutex<BTreeMap<MachineId, CuaTarget>>>,
+    /// The runtime that runs the server-local target (#16), kept weakly so
+    /// the typed machine tools (#18) can execute their operations as runs
+    /// of it; set by `CuaRuntime::new`.
+    server_local_runtime: Arc<std::sync::Mutex<Option<RuntimeHandle>>>,
 }
 
 /// One registered target and the labels its descriptor does not carry.
@@ -384,6 +389,24 @@ impl CuaTargets {
         removed
     }
 
+    /// Remember the runtime that registers the server-local target, so the
+    /// typed machine tools can run operations on it (#18).
+    pub fn set_server_local_runtime(&self, handle: RuntimeHandle) {
+        *self
+            .server_local_runtime
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(handle);
+    }
+
+    /// The runtime that runs the server-local target, while it exists.
+    pub fn server_local_runtime(&self) -> Option<CuaRuntime> {
+        self.server_local_runtime
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .and_then(RuntimeHandle::upgrade)
+    }
+
     /// Descriptors of every registered target, ordered by machine id.
     pub async fn list(&self) -> Vec<MachineDescriptor> {
         self.targets
@@ -396,7 +419,6 @@ impl CuaTargets {
 
     /// Resolve a target through `cua_protocol::select_machine`: the requested
     /// id when given, otherwise the only target, never a guess between several.
-    #[allow(dead_code)] // Used by the typed machine tools (#17/#18).
     pub async fn select(
         &self,
         requested: Option<&MachineId>,

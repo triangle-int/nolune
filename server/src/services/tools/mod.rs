@@ -77,6 +77,7 @@ pub mod communication;
 pub mod companion;
 pub mod computer;
 pub mod continuity;
+pub mod cua;
 pub mod files;
 pub mod image;
 pub mod memory_tools;
@@ -93,6 +94,7 @@ pub use computer::{
     ComputerUseTool, ListMachinesTool, MachineTarget, RemoteBashTool, RemoteFilesTool,
     TargetSelection,
 };
+pub use cua::{ActTool, CuaTools, DiscoverWindowsTool, GetWindowStateTool, VerifyStateTool};
 
 pub use files::{EditFileTool, ListFilesTool, ReadFileTool, UploadFileTool, WriteFileTool};
 pub use image::ViewImageTool;
@@ -419,7 +421,13 @@ fn replace_regex_preserving_capabilities(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn openai_schema<T: JsonSchema>() -> serde_json::Value {
-    let mut val = serde_json::to_value(schemars::schema_for!(T)).unwrap();
+    // Nested argument types (the typed machine tools' addresses and
+    // predicates, #18) are inlined so every provider gets one self-contained
+    // schema without `$defs` references.
+    let settings = schemars::generate::SchemaSettings::draft2020_12()
+        .with(|settings| settings.inline_subschemas = true);
+    let schema = settings.into_generator().into_root_schema_for::<T>();
+    let mut val = serde_json::to_value(schema).unwrap();
     if let Some(obj) = val.as_object_mut() {
         obj.remove("$schema");
         obj.remove("$id");
@@ -453,6 +461,23 @@ pub fn tool_summary_on(name: &str, args: &str, target: &MachineTarget) -> String
             on_machine()
         ),
         "remote_bash" => format!("running a command {}", on_machine()),
+        // The typed machine tools (#18) name the computer the same way.
+        "discover_windows" => format!(
+            "{} {}",
+            match v["mode"].as_str() {
+                Some("launch_app") => "launching an app",
+                Some("list_windows") => "listing windows",
+                _ => "listing apps",
+            },
+            on_machine()
+        ),
+        "get_window_state" => format!("observing a window {}", on_machine()),
+        "act" => format!(
+            "{} {}",
+            v["action"]["kind"].as_str().unwrap_or("acting"),
+            on_machine()
+        ),
+        "verify_state" => format!("verifying a window {}", on_machine()),
         "remote_files" => {
             let verb = match v["operation"].as_str() {
                 Some("read") => "reading",
@@ -519,8 +544,17 @@ pub fn tool_summary_on(name: &str, args: &str, target: &MachineTarget) -> String
 /// which names the computer the arguments may omit, so the trail names it
 /// after a reload as well. Other tools say nothing their arguments do not.
 pub fn tool_trail_line(name: &str, args: &str, target: &MachineTarget) -> Option<String> {
-    matches!(name, "computer_use" | "remote_bash" | "remote_files")
-        .then(|| tool_summary_on(name, args, target))
+    matches!(
+        name,
+        "computer_use"
+            | "remote_bash"
+            | "remote_files"
+            | "discover_windows"
+            | "get_window_state"
+            | "act"
+            | "verify_state"
+    )
+    .then(|| tool_summary_on(name, args, target))
 }
 
 // ---------------------------------------------------------------------------
@@ -924,9 +958,17 @@ pub fn build_tools(
         (*machine_target).clone(),
     ))));
     tools.push(wrap(Box::new(RemoteFilesTool::new(
-        machine_registry,
+        machine_registry.clone(),
         (*machine_target).clone(),
     ))));
+    // The typed machine tools (#18) drive any Cua target, server-local or
+    // desktop, through one orchestrator per turn: its snapshot ledger and
+    // verification gate are shared by the four of them.
+    let cua_tools = CuaTools::new(machine_registry, (*machine_target).clone());
+    tools.push(wrap(Box::new(DiscoverWindowsTool::new(cua_tools.clone()))));
+    tools.push(wrap(Box::new(GetWindowStateTool::new(cua_tools.clone()))));
+    tools.push(wrap(Box::new(ActTool::new(cua_tools.clone()))));
+    tools.push(wrap(Box::new(VerifyStateTool::new(cua_tools))));
 
     // MCP tools
     for mcp_tool in mcp_tools {
@@ -1243,6 +1285,61 @@ mod tool_summary_tests {
                 tool_trail_line(other, r#"{"path":"x"}"#, &target),
                 None,
                 "{other} says nothing the arguments do not"
+            );
+        }
+    }
+
+    /// #18: the typed machine tools name the computer the same way, and
+    /// their trail line is persisted like the desktop tools'.
+    #[test]
+    fn the_typed_machine_tools_name_their_computer() {
+        let target = MachineTarget::with_names(
+            TargetSelection::Machine(STUDIO.into()),
+            [(STUDIO.to_owned(), "Studio Mac".to_owned())].into(),
+        );
+        assert_eq!(
+            tool_summary_on("discover_windows", r#"{"mode":"list_apps"}"#, &target),
+            "listing apps on Studio Mac"
+        );
+        assert_eq!(
+            tool_summary_on(
+                "discover_windows",
+                r#"{"mode":"launch_app","name":"Notes"}"#,
+                &target
+            ),
+            "launching an app on Studio Mac"
+        );
+        assert_eq!(
+            tool_summary_on(
+                "get_window_state",
+                r#"{"target":{"pid":1,"window_id":2}}"#,
+                &target
+            ),
+            "observing a window on Studio Mac"
+        );
+        assert_eq!(
+            tool_summary_on(
+                "act",
+                r#"{"target":{"pid":1,"window_id":2},"action":{"kind":"type_text","text":"secret"}}"#,
+                &target
+            ),
+            "type_text on Studio Mac",
+            "what is typed stays out of the one-line trail"
+        );
+        assert_eq!(
+            tool_summary_on("verify_state", r#"{"expect":[]}"#, &target),
+            "verifying a window on Studio Mac"
+        );
+        for name in [
+            "discover_windows",
+            "get_window_state",
+            "act",
+            "verify_state",
+        ] {
+            assert!(
+                tool_trail_line(name, "{}", &target)
+                    .is_some_and(|line| line.ends_with("on Studio Mac")),
+                "{name} persists a trail line naming the computer"
             );
         }
     }

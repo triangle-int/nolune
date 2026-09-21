@@ -15,7 +15,7 @@ use std::{
     future::Future,
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, Weak,
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
@@ -142,21 +142,38 @@ pub struct CuaRuntime {
     inner: Arc<Inner>,
 }
 
+/// A weak handle the registry keeps (#18): the typed machine tools reach
+/// the runtime that runs the server-local target through `CuaTargets`
+/// without the registry keeping the runtime alive.
+#[derive(Clone)]
+pub struct RuntimeHandle(Weak<Inner>);
+
+impl RuntimeHandle {
+    /// The runtime, while it exists.
+    pub fn upgrade(&self) -> Option<CuaRuntime> {
+        self.0.upgrade().map(|inner| CuaRuntime { inner })
+    }
+}
+
 impl CuaRuntime {
     /// A runtime that has not looked at the host yet. Registers into
     /// `targets` once started; `workspace_dir` is where `nolune cua install`
-    /// records the driver it installed, consulted only by `start`.
+    /// records the driver it installed, consulted only by `start`. The
+    /// targets keep a weak handle on it so the typed machine tools can run
+    /// operations on the server-local target (#18).
     pub fn new(config: CuaConfig, targets: CuaTargets, workspace_dir: PathBuf) -> Self {
-        Self {
+        let runtime = Self {
             inner: Arc::new(Inner {
                 config,
-                targets,
+                targets: targets.clone(),
                 workspace_dir,
                 state: tokio::sync::Mutex::new(State::NotStarted),
                 open: Arc::new(OpenSessions::new()),
                 next_run: AtomicU64::new(1),
             }),
-        }
+        };
+        targets.set_server_local_runtime(RuntimeHandle(Arc::downgrade(&runtime.inner)));
+        runtime
     }
 
     /// Probe this host, find the driver, and register the server-local
@@ -442,8 +459,9 @@ impl CuaRuntime {
 
     /// Execute `body` as one run: the first action it executes opens a driver
     /// session, every action carries that session, and the session is ended
-    /// when the body completes, fails, or exceeds the run timeout.
-    #[allow(dead_code)] // Every typed machine tool (#17/#18) executes through a run.
+    /// when the body completes, fails, or exceeds the run timeout. The typed
+    /// machine tools (#18) execute every operation on the server-local
+    /// target this way.
     pub async fn run<T, F, Fut>(&self, purpose: &str, body: F) -> Result<T, RunError>
     where
         F: FnOnce(Arc<RunSession>) -> Fut,
@@ -589,11 +607,15 @@ impl RunSession {
         &self.label
     }
 
+    /// The descriptor the run's actions are authorized against.
+    pub fn descriptor(&self) -> &MachineDescriptor {
+        self.adapter.descriptor()
+    }
+
     /// Execute one action inside this run's session. The action is
     /// authorized against the target's descriptor before the session is
     /// opened, so a refused action never reaches the driver and never opens
     /// a session on its own.
-    #[allow(dead_code)] // The typed machine tools (#17/#18) execute through a run.
     pub async fn execute(&self, action: CuaAction) -> Result<CuaResponseEnvelope, ExecError> {
         if is_run_managed(&action) {
             return Err(ExecError::Refused(

@@ -1067,6 +1067,61 @@ mod list_machines_tests {
         );
     }
 
+    /// #18: a desktop that registered a Cua descriptor (#17) is one entry,
+    /// its legacy fields and its descriptor together, never two entries
+    /// under the same id.
+    #[tokio::test]
+    async fn a_desktop_with_a_driver_is_one_entry_with_both_sides() {
+        let registry = MachineRegistry::new();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        registry.register(legacy_agent(), tx).await;
+        let descriptor = MachineDescriptor {
+            machine_id: MachineId::try_from("studio").unwrap(),
+            location: MachineLocation::Desktop,
+            platform: Platform::Macos,
+            driver_version: DriverVersion::try_from("0.28.2").unwrap(),
+            health: MachineHealth::Healthy,
+            permissions: PermissionState {
+                accessibility: Permission::Granted,
+                screen_capture: Permission::Granted,
+            },
+            capabilities: vec![Capability::AppDiscovery, Capability::Pointer],
+        };
+        let adapter = CheckedCuaAdapter::new(descriptor, |request| {
+            let response = CuaResponseEnvelope {
+                version: request.version,
+                request_id: request.request_id,
+                machine_id: request.machine_id,
+                action: request.action.kind(),
+                response: CuaResponse::Success {
+                    result: Box::new(CuaActionResult::ListApps(AppsResult { apps: vec![] })),
+                },
+            };
+            Box::pin(async move { response })
+        })
+        .unwrap();
+        registry.cua().register(adapter).await.unwrap();
+
+        let machines = listed(&registry).await;
+        assert_eq!(machines.len(), 1, "one entry per machine: {machines:?}");
+        let studio = &machines[0];
+        assert_eq!(studio["machine_id"], "studio");
+        assert_eq!(studio["location"], "desktop");
+        assert_eq!(studio["hostname"], "studio");
+        assert_eq!(studio["screen"], "1440x900");
+        assert_eq!(studio["last_seen"], 1_700_000_000);
+        assert_eq!(studio["driver_version"], "0.28.2");
+        assert_eq!(studio["health"], "healthy");
+        assert_eq!(
+            studio["capabilities"],
+            serde_json::json!(["app_discovery", "pointer"])
+        );
+        assert_eq!(
+            studio["permissions"],
+            serde_json::json!({ "accessibility": "granted", "screen_capture": "granted" })
+        );
+    }
+
     #[tokio::test]
     async fn no_targets_of_either_kind_reads_as_no_machines() {
         let output = ListMachinesTool::new(MachineRegistry::new())
