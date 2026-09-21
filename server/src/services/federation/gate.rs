@@ -567,6 +567,42 @@ impl FederationGate {
         }))
     }
 
+    /// This owner's own word on sending `request` to `companion_id`
+    /// (#110's outbox): the peer must be paired (an unknown, pending, or
+    /// revoked peer is refused), the intent must be able to disclose at
+    /// that class, and a live rule the owner wrote denying the pair
+    /// refuses it too. An `ask` rule and the defaults do not stand in the
+    /// way: the owner asked for this in the conversation. Nothing is
+    /// recorded here; the requesting-side receipt is written when the peer
+    /// answers or when delivery is given up ([`record_requesting`]).
+    ///
+    /// [`record_requesting`]: FederationGate::record_requesting
+    pub fn admit_outbound(
+        &self,
+        federation: &FederationState,
+        companion_id: &str,
+        request: IntentRequest,
+    ) -> Result<PeerSummary, FederationError> {
+        let _ = (federation, companion_id, request);
+        todo!("PR 3 of #110: the own policy's word on an outgoing intent")
+    }
+
+    /// Records a requesting-side receipt for an intent this companion sent
+    /// `peer`: `decision` is what the peer's typed answer amounts to, or
+    /// the refusal this side settled on when the peer could not be reached.
+    pub(crate) fn record_requesting(
+        &self,
+        pairing_id: &str,
+        me: &str,
+        peer: &str,
+        intent: IntentClass,
+        disclosure: DisclosureClass,
+        decision: &Decision,
+    ) -> Result<(), FederationError> {
+        let _ = (pairing_id, me, peer, intent, disclosure, decision);
+        todo!("PR 3 of #110: the requesting-side audit receipt")
+    }
+
     /// Judges `intent` at `disclosure` (wire names) from `peer`, as this
     /// companion `me`, and records the receipt. `Ok` only for an allowed
     /// intent; any other verdict is `FederationError::PolicyRefused`

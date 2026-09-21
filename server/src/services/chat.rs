@@ -157,6 +157,7 @@ pub async fn run_single_turn(
     machine_target: Option<&str>,
     public_url: &str,
     resources: &crate::services::resource_access::ResourceAccess,
+    peer_sending: Option<tools::federation::PeerSending>,
 ) -> io::Result<SingleTurnResult> {
     let instance_slug = sanitize_slug(instance_slug);
     let chat_id = sanitize_slug(chat_id);
@@ -529,6 +530,7 @@ pub async fn run_single_turn(
         machine_target,
         &public_url,
         resources,
+        peer_sending,
     );
     tools::cache_tool_defs(&all_tools).await;
 

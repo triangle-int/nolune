@@ -162,6 +162,12 @@ async fn main() {
     // Start background scheduler for scheduled messages
     services::scheduler::start(state.clone());
 
+    // Deliver what the companion queued for paired peers (#110): interrupted
+    // attempts are recovered first, then retried on the same ids.
+    state
+        .federation_outbox
+        .start(state.federation.clone(), state.federation_gate.clone());
+
     // Report a connected computer whose heartbeat goes stale (#80).
     state.machine_registry.start_health_watch();
 
@@ -235,6 +241,7 @@ async fn main() {
 
     let cua = state.cua.clone();
     let codex_auth = state.codex_auth.clone();
+    let outbox = state.federation_outbox.clone();
     let app = app::router::build_router(state, static_dir);
 
     info!("Starting server on http://{addr}");
@@ -275,6 +282,7 @@ async fn main() {
             // connections drain; the grace timer still bounds the whole exit.
             cua.shutdown().await;
             codex_auth.shutdown().await;
+            outbox.shutdown().await;
         })
         .await
         .expect("server exited unexpectedly");

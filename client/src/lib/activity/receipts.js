@@ -201,3 +201,45 @@ export function commitmentConditionLabel(condition) {
 			return "It looked at this commitment";
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Requests sent to paired companions (#110): the outbox entry is the only
+// source. Stubs until the labels are written.
+// ---------------------------------------------------------------------------
+
+/** @param {any} entry */
+export function outboxLabel(entry) {
+	void entry;
+	return '';
+}
+
+/** @param {any} entry */
+export function outboxText(entry) {
+	void entry;
+	return '';
+}
+
+/** @param {any} entry */
+export function outboxStatusLabel(entry) {
+	void entry;
+	return '';
+}
+
+/**
+ * @param {any} entry
+ * @param {number} nowSeconds
+ */
+export function outboxNote(entry, nowSeconds) {
+	void entry;
+	void nowSeconds;
+	return '';
+}
+
+/**
+ * @param {any[]} entries
+ * @param {any} entry
+ */
+export function upsertOutboxEntry(entries, entry) {
+	void entry;
+	return entries;
+}

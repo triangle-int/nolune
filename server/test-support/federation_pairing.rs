@@ -36,6 +36,11 @@ pub(super) const MAX_BODY: usize = 64 * 1024;
 #[derive(Default)]
 pub(super) struct Wire {
     pub(super) servers: Mutex<HashMap<String, AppState>>,
+    /// Origins whose answers are lost on the way back: the server there
+    /// handles the request in full and the caller sees a transport
+    /// failure, the way a connection that drops after the peer acted looks
+    /// (#110's outbox retries into the peer's dedupe).
+    pub(super) lost_answers: Mutex<std::collections::HashSet<String>>,
 }
 
 impl Wire {
@@ -69,6 +74,11 @@ impl Wire {
         let bytes = axum::body::to_bytes(response.into_body(), MAX_BODY)
             .await
             .unwrap();
+        if self.lost_answers.lock().unwrap().contains(origin) {
+            return Err(FederationError::Transport(format!(
+                "the answer from {origin} was lost on the wire"
+            )));
+        }
         if !status.is_success() {
             let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
             return Err(FederationError::PeerRefused {

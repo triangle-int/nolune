@@ -130,6 +130,10 @@ mod federation_policy_tests;
 mod federation_inbound_tests;
 
 #[cfg(test)]
+#[path = "../../test-support/federation_outbox.rs"]
+mod federation_outbox_tests;
+
+#[cfg(test)]
 #[path = "../../test-support/handoff_cards.rs"]
 mod handoff_tests;
 

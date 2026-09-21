@@ -3,12 +3,17 @@ import assert from 'node:assert/strict';
 import {
 	canCancel,
 	canRetry,
+	outboxLabel,
+	outboxNote,
+	outboxStatusLabel,
+	outboxText,
 	outcomeSummary,
 	relativeTime,
 	runTargetLabel,
 	statusLabel,
 	targetLabel,
 	triggerLabel,
+	upsertOutboxEntry,
 	upsertRun,
 } from '../src/lib/activity/receipts.js';
 
@@ -75,4 +80,99 @@ test('the target of a run is named the way the Computers tab names it (#80)', ()
 	const handoff = { ...base, trigger: { kind: 'handoff', handoff_id: 'h1' }, target: { kind: 'machine', machine_id: 'studio-id' } };
 	assert.equal(runTargetLabel(handoff, machines), 'On Studio Mac');
 	assert.equal(runTargetLabel(base, machines), '');
+});
+
+// Requests sent to paired companions (#110): the outbox entry is the only
+// source. The text shown is this owner's own; the peer's typed response
+// carries ids, classes, times, and spans, never words.
+const PEER = 'TFccHElqXR1lkUBqQoQPWYxPSm1wPjCl8WXbgm_cQ7E';
+const outboxBase = {
+	version: 1,
+	recipient: PEER,
+	pairing_id: '9f1c0b7e2a6d4c31',
+	intent: {
+		version: 1,
+		correlation_id: 'c0ffee',
+		sender: 'yob7BCJNccQgNdznxaQZ_Rxn1k5ACU12hxmKeBKNhL0',
+		represented_owner: 'Bob',
+		purpose: 'plans for the weekend',
+		disclosure: 'none',
+		issued_at: 1000,
+		expires_at: 1000 + 86400,
+		intent: { type: 'message', body: 'see you on Friday at the lake' },
+	},
+	status: 'queued',
+	attempts: [],
+	next_attempt_at: 1000,
+	chat_id: 'default',
+	created_at: 1000,
+	updated_at: 1000,
+};
+
+test('outbox rows name the request kind and the companion, never its words', () => {
+	assert.equal(outboxLabel(outboxBase), 'Message to companion TFccHElq…Q7E');
+	assert.equal(outboxLabel({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'availability', window: { from: 2000, to: 9200 } } } }), 'Availability asked of companion TFccHElq…Q7E');
+	assert.equal(outboxLabel({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'reminder', text: 'water the plants', at: 5000 } } }), 'Reminder proposed to companion TFccHElq…Q7E');
+	assert.equal(outboxLabel({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'proposal', description: 'x', window: { from: 1, to: 2 } } } }), 'Request to companion TFccHElq…Q7E');
+	assert.equal(outboxText(outboxBase), 'see you on Friday at the lake');
+	assert.equal(outboxText({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'reminder', text: 'water the plants', at: 5000 } } }), 'water the plants');
+	const window = outboxText({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'availability', window: { from: 1_800_090_000, to: 1_800_097_200 } } } });
+	assert.match(window, /^Free between .+ and .+\?$/);
+	assert.ok(!window.includes('undefined'));
+});
+
+test('outbox status words follow the entry and count attempts', () => {
+	assert.equal(outboxStatusLabel(outboxBase), 'Queued');
+	const tried = { ...outboxBase, attempts: [{ at: 1000, outcome: { kind: 'unreachable' } }], next_attempt_at: 1030, updated_at: 1000 };
+	assert.equal(outboxStatusLabel(tried), 'Not delivered yet');
+	assert.equal(outboxStatusLabel({ ...outboxBase, status: 'waiting_owner' }), 'Waiting for their owner');
+	assert.equal(outboxStatusLabel({ ...outboxBase, status: 'delivered' }), 'Delivered');
+	assert.equal(outboxStatusLabel({ ...outboxBase, status: 'denied' }), 'Refused');
+	assert.equal(outboxStatusLabel({ ...outboxBase, status: 'failed' }), 'Failed');
+	assert.equal(outboxStatusLabel({ ...outboxBase, status: 'expired' }), 'Expired');
+	assert.equal(outboxStatusLabel({ ...outboxBase, status: 'something_else' }), 'Unknown');
+});
+
+test('outbox notes say what happened, how often it was tried, and what comes next', () => {
+	assert.equal(outboxNote(outboxBase, 1000), 'Sending now.');
+	const tried = { ...outboxBase, attempts: [{ at: 1000, outcome: { kind: 'unreachable' } }, { at: 1030, outcome: { kind: 'unreachable' } }], next_attempt_at: 1030 + 60, updated_at: 1030 };
+	assert.equal(outboxNote(tried, 1040), 'Could not reach it, 2 attempts · next try in 50s.');
+	assert.equal(outboxNote({ ...tried, attempts: [tried.attempts[0]], next_attempt_at: 1030 }, 1000), 'Could not reach it, 1 attempt · next try in 30s.');
+	assert.equal(outboxNote({ ...tried, next_attempt_at: 900 }, 1000), 'Could not reach it, 2 attempts · next try now.');
+	const interrupted = { ...tried, attempts: [{ at: 1000, outcome: { kind: 'interrupted' } }], next_attempt_at: 1100 };
+	assert.equal(outboxNote(interrupted, 1000), 'Could not reach it, 1 attempt · next try in 1m.');
+	const refused = { ...tried, attempts: [{ at: 1000, outcome: { kind: 'refused', code: 'rate_limited' } }], next_attempt_at: 1060 };
+	assert.equal(outboxNote(refused, 1000), 'Their companion refused for now (rate_limited), 1 attempt · next try in 1m.');
+	const waiting = { ...outboxBase, status: 'waiting_owner', attempts: [{ at: 1000, outcome: { kind: 'answered', outcome: 'needs_owner', reason: 'default' } }], next_attempt_at: 1900, response: { outcome: 'needs_owner', version: 1, correlation_id: 'c0ffee', responder: PEER, reason: 'default' }, updated_at: 1000 };
+	assert.equal(outboxNote(waiting, 1000), 'Their owner has to allow it first · asks again in 15m.');
+	assert.equal(outboxNote({ ...waiting, response: { ...waiting.response, reason: 'quiet_hours' } }, 1000), 'Held during their quiet hours · asks again in 15m.');
+	const delivered = { ...outboxBase, status: 'delivered', attempts: [{ at: 1000, outcome: { kind: 'answered', outcome: 'accepted' } }], response: { outcome: 'accepted', version: 1, correlation_id: 'c0ffee', responder: PEER, disclosure: 'none', answer: { kind: 'delivered' } }, updated_at: 1000 };
+	assert.equal(outboxNote(delivered, 1300), 'Delivered to their conversation 5m ago.');
+	const reminder = { ...delivered, intent: { ...outboxBase.intent, intent: { type: 'reminder', text: 'water the plants', at: 1_800_014_400 } }, response: { ...delivered.response, answer: { kind: 'reminder_scheduled', at: 1_800_014_400 } } };
+	assert.match(outboxNote(reminder, 1300), /^Reminder set for .+ · 5m ago\.$/);
+	const availability = { ...delivered, intent: { ...outboxBase.intent, disclosure: 'availability', intent: { type: 'availability', window: { from: 2000, to: 9200 } } }, response: { ...delivered.response, answer: { kind: 'availability', windows: [] } } };
+	assert.equal(outboxNote(availability, 1300), 'Answered 5m ago: nothing about their schedule was shared.');
+	const spans = { ...availability, response: { ...availability.response, disclosure: 'availability', answer: { kind: 'availability', windows: [{ from: 2000, to: 5600, state: 'free' }, { from: 5600, to: 9200, state: 'busy' }] } } };
+	assert.equal(outboxNote(spans, 1300), 'Answered 5m ago: 1 free span, 1 busy span.');
+	const denied = { ...outboxBase, status: 'denied', attempts: [{ at: 1000, outcome: { kind: 'answered', outcome: 'denied', reason: 'rule' } }], response: { outcome: 'denied', version: 1, correlation_id: 'c0ffee', responder: PEER, reason: 'rule' }, updated_at: 1000 };
+	assert.equal(outboxNote(denied, 1300), 'Refused by a rule their owner set · 5m ago.');
+	assert.equal(outboxNote({ ...denied, response: { ...denied.response, reason: 'default' } }, 1300), 'Refused by their defaults · 5m ago.');
+	assert.equal(outboxNote({ ...denied, response: { ...denied.response, reason: 'owner_denied' } }, 1300), 'Refused by their owner · 5m ago.');
+	assert.equal(outboxNote({ ...denied, response: { ...denied.response, reason: 'peer_revoked' } }, 1300), 'Refused (peer_revoked) · 5m ago.');
+	const failed = { ...outboxBase, status: 'failed', attempts: Array.from({ length: 8 }, (_, i) => ({ at: 1000 + i, outcome: { kind: 'unreachable' } })), updated_at: 1007 };
+	assert.equal(outboxNote(failed, 1300), 'Could not reach it after 8 attempts; nothing was delivered · 5m ago.');
+	const refusedForGood = { ...failed, attempts: [{ at: 1000, outcome: { kind: 'refused', code: 'sender_mismatch' } }], updated_at: 1000 };
+	assert.equal(outboxNote(refusedForGood, 1300), 'Their companion refused it (sender_mismatch); nothing was delivered · 5m ago.');
+	const expired = { ...failed, status: 'expired', attempts: failed.attempts.slice(0, 3), updated_at: 1000 };
+	assert.equal(outboxNote(expired, 1300), 'Expired before it could be delivered, 3 attempts · 5m ago.');
+});
+
+test('live outbox updates replace entries by request id and keep newest first', () => {
+	const older = { ...outboxBase, intent: { ...outboxBase.intent, correlation_id: 'older' }, updated_at: 500 };
+	let entries = upsertOutboxEntry([outboxBase], older);
+	assert.deepEqual(entries.map((e) => e.intent.correlation_id), ['c0ffee', 'older']);
+	entries = upsertOutboxEntry(entries, { ...older, status: 'delivered', updated_at: 2000 });
+	assert.deepEqual(entries.map((e) => e.intent.correlation_id), ['older', 'c0ffee']);
+	assert.equal(entries.length, 2);
+	assert.equal(entries[0].status, 'delivered');
 });
