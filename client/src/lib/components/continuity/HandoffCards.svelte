@@ -18,6 +18,7 @@
 	} from "$lib/api/client.js";
 	import type { ContinuityRecordError, HandoffCard as Card, MachineInfo, ServerEvent } from "$lib/api/types.js";
 	import { resolveHere, upsertCard } from "$lib/continuity/handoff.js";
+	import { handoffAnchor } from "$lib/continuity/resume.js";
 	import { getWebSocket } from "$lib/stores/websocket.svelte.js";
 	import HandoffCard from "./HandoffCard.svelte";
 
@@ -69,9 +70,13 @@
 		revealTarget();
 	}
 
-	/** A resume suggestion (#83) links to its card as `#handoff-<record_id>`. */
+	/**
+	 * A resume suggestion (#83) links to its card's list item, whose id is
+	 * `handoffAnchor(record_id)`; the card's own heading keeps
+	 * `handoff-<record_id>` for its accessible name.
+	 */
 	function revealTarget() {
-		if (typeof window === "undefined" || !window.location.hash.startsWith("#handoff-")) return;
+		if (typeof window === "undefined" || !window.location.hash.startsWith(`#${handoffAnchor("")}`)) return;
 		requestAnimationFrame(() => document.getElementById(window.location.hash.slice(1))?.scrollIntoView({ block: "start" }));
 	}
 
@@ -133,7 +138,7 @@
 		{/if}
 		<ul class="handoffs-list">
 			{#each cards as card (card.record_id)}
-				<li id={`handoff-${card.record_id}`}>
+				<li id={handoffAnchor(card.record_id)}>
 					<HandoffCard
 						{card}
 						{machines}

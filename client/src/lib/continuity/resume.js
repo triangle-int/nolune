@@ -78,6 +78,25 @@ export const COOLDOWN_OPTIONS = [
 ];
 
 /**
+ * The id the handoff list gives the card's list item, for "Review and
+ * continue" to scroll to. Distinct from `handoff-<record_id>`, which is
+ * the card's own heading (the article's accessible name).
+ * @param {string} recordId
+ */
+export function handoffAnchor(recordId) {
+	return `handoff-card-${recordId}`;
+}
+
+/**
+ * Where "Review and continue" leads: the task's card under Activity.
+ * @param {string} slug
+ * @param {string} recordId
+ */
+export function reviewHref(slug, recordId) {
+	return `/${slug}/activity#${handoffAnchor(recordId)}`;
+}
+
+/**
  * The label for a stored value: the option's when it is listed, otherwise
  * the value in words so an edited file still reads.
  * @param {{ value: number; label: string }[]} options

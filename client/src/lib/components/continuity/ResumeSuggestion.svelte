@@ -8,7 +8,7 @@
 	import { untrack } from "svelte";
 	import { dismissResume, fetchResume, refuseResume, resumeOpened, snoozeResume } from "$lib/api/client.js";
 	import type { ResumeOffer, ServerEvent } from "$lib/api/types.js";
-	import { applyResumeEvent } from "$lib/continuity/resume.js";
+	import { applyResumeEvent, reviewHref } from "$lib/continuity/resume.js";
 	import { getWebSocket } from "$lib/stores/websocket.svelte.js";
 	import ResumeBanner from "./ResumeBanner.svelte";
 
@@ -92,7 +92,7 @@
 
 {#if offer}
 	<div class="resume-slot">
-		<ResumeBanner {offer} {now} reviewHref={`/${slug}/activity#handoff-${offer.record_id}`} onrefuse={refuse} onsnooze={snooze} ondismiss={dismiss} />
+		<ResumeBanner {offer} {now} reviewHref={reviewHref(slug, offer.record_id)} onrefuse={refuse} onsnooze={snooze} ondismiss={dismiss} />
 	</div>
 {/if}
 

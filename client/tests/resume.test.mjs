@@ -4,8 +4,10 @@ import {
 	BREAK_OPTIONS,
 	COOLDOWN_OPTIONS,
 	applyResumeEvent,
+	handoffAnchor,
 	heldMessage,
 	optionLabel,
+	reviewHref,
 	ritualSummary,
 	snoozePresets,
 	snoozeStatus,
@@ -62,6 +64,15 @@ test('a decided or withdrawn card resolves the offer; an updated card is folded 
 	assert.equal(applyResumeEvent(offer, { type: 'handoff_updated', instance_slug: 'companion', card: other }), undefined);
 	assert.equal(applyResumeEvent(offer, { type: 'mood_updated', instance_slug: 'companion', mood: 'calm' }), undefined);
 	assert.equal(applyResumeEvent(null, { type: 'handoff_updated', instance_slug: 'companion', card: kept }), undefined);
+});
+
+test('review and continue links to an anchor of its own, never the card heading id', () => {
+	// HandoffCard names its <article> by the heading `handoff-<record_id>`
+	// (aria-labelledby); the anchor the list item carries must be another id,
+	// or the first match in tree order would rename the card to its whole text.
+	assert.equal(handoffAnchor('task_1'), 'handoff-card-task_1');
+	assert.notEqual(handoffAnchor('task_1'), 'handoff-task_1');
+	assert.equal(reviewHref('companion', 'task_1'), '/companion/activity#handoff-card-task_1');
 });
 
 test('the banner states when the suggestion was made', () => {
