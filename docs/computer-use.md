@@ -5,8 +5,8 @@ companion uses, without the desktop app. The server drives it through a
 local [Cua Driver](https://github.com/trycua/cua) process and registers it as
 a machine target beside the desktops connected through the app. Everything
 goes through the shared typed protocol in `cua-protocol/`, the same boundary
-a desktop target will use, so one policy decides what the companion may do
-on either kind of machine.
+a desktop target uses (see [Desktop targets](#desktop-targets-17)), so one
+policy decides what the companion may do on either kind of machine.
 
 ## When the target exists
 
@@ -77,7 +77,9 @@ the protocol's identifier grammar (letters, digits, `-`, `_`, `.`), at most
 hostname before #80), so the server and a desktop app on the same physical
 machine never share an id, and a request that names one of them can never
 mean the other. A desktop registration that claims the `server-local:`
-prefix does not shadow the real target in the listing.
+prefix does not shadow the real target in the listing, and a desktop Cua
+descriptor under that prefix is refused outright (below), so the target
+registers whether the desktop connected before or after it.
 
 ## How it appears
 
@@ -118,6 +120,83 @@ screenshot as part of an action it was asked to perform, inside a session
 that ends with the run. There is no continuous capture, no recording, and no
 observation outside a run.
 
+## Desktop targets (#17)
+
+A desktop app with its own Cua driver is the other kind of target. It
+registers over the authenticated machine WebSocket
+(`/api/agents/ws/machine`) exactly as before, with one more field on the
+`register` message:
+
+```json
+{"type": "register", "machine_id": "<stable id>", "os": "macos", "hostname": "studio",
+ "screen_width": 1440, "screen_height": 900, "permissions": {...}, "capabilities": [...],
+ "cua": {"version": "v1", "machine": {"machine_id": "<stable id>", "location": "desktop",
+         "platform": "macos", "driver_version": "0.28.2", "health": "healthy",
+         "permissions": {"accessibility": "granted", "screen_capture": "granted"},
+         "capabilities": ["app_discovery", "pointer", ...]}}}
+```
+
+`cua` is a `CuaRegistrationEnvelope`, decoded through the protocol's bounds.
+It is accepted only when its `machine_id` is the id the socket registered
+as, its `location` is `desktop`, and the id is not under the reserved
+`server-local:` prefix; anything else refuses the whole registration with
+`{"type": "error", "error": "invalid_cua_registration"}`, like an unusable
+machine id. The prefix is refused whether or not the server-local target
+has registered yet: it registers in the background after the listener is
+up, and a desktop that took its id first would block it for the life of
+the process. Without the field the desktop is a legacy-only
+computer: `remote_bash`, `remote_files` and coordinate `computer_use` work
+as they always did and it never sees a typed frame. The ack
+`{"type": "registered", "machine_id": ..., "cua": true|false}` says which.
+
+A registered descriptor makes the desktop a Cua target under its own id,
+beside the server-local one: `list_machines` lists it with
+`location: "desktop"` and the driver's `driver_version`, `health`,
+`permissions` and `capabilities` (the legacy entry with `hostname` and
+`screen` stays), and its row in `GET /api/instances/companion/machines`
+carries `driver_version` and `cua_health` while it is connected; clients
+hear that row as `machine_updated` once the target is attached, after the
+one the registration itself announces. When the registration reports no
+`permissions`, the descriptor's are recorded.
+A desktop reconnecting under its stable id replaces its target; it never
+becomes a second one. The ack's `"cua": false` after a descriptor was sent
+means the socket was replaced between the legacy registration and the
+typed one (logged); the legacy registration stands.
+
+Every authorized request is one frame on the desktop's socket, the envelope
+carried whole so the desktop decodes it with `CuaRequestEnvelope::from_json`
+and authorizes it against its own allowlist before touching its driver:
+
+```json
+{"type": "cua_request", "request": {"version": "v1", "request_id": "nolune-run-3-1",
+ "machine_id": "<stable id>", "action": {"tool": "click", "args": {...}}}}
+```
+
+The desktop answers with the `CuaResponseEnvelope` whole, beside the legacy
+`action_result` messages:
+
+```json
+{"type": "cua_response", "response": {"version": "v1", "request_id": "nolune-run-3-1",
+ "machine_id": "<stable id>", "action": "click", "response": {"status": "success", "result": {...}}}}
+```
+
+The answer is decoded through the same size, depth and shape checks as a
+driver's, matched to the waiting call by `request_id`, and checked against
+the request it answers (`validate_response_for`): an answer for another
+request is dropped, and an answer with the right id but another action, or
+one the protocol cannot read, fails the call as a `driver_failure` at once.
+A desktop that does not answer within `call_timeout_secs` fails the call as
+a retryable `timeout`. Structured window state, action outcomes and
+verification results pass through unchanged.
+
+Sessions the desktop confirms open for the server (`start_session` answered
+`active`) are remembered per socket and forgotten when it ends them. When
+the socket closes, every call still waiting fails at once as a retryable
+`runtime_unavailable` instead of at its deadline, the sessions it held are
+lost with it (the desktop ends them on its side; there is nobody left to
+ask), and the target leaves the listing; the desktop record stays, offline,
+with `driver_version` and `cua_health` back to `null`.
+
 ## Configuration
 
 ```toml
@@ -142,4 +221,5 @@ install` verified against the pin is used, and `cua-driver` on `PATH` last.
 - `cua-protocol/` — the machine protocol, `CheckedCuaAdapter`, and the driver
   wire mapping in `driver_mcp`.
 - `server/src/services/cua/` — discovery, host probe, transport, runtime and
-  sessions.
+  sessions; `desktop.rs` is the typed-frame link a desktop target answers
+  through.

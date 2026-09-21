@@ -10,9 +10,12 @@
 //! section wire this into `AppState`. `install`, `daemon` and `host` also
 //! back `nolune cua install|status` (#20): the verified install of the
 //! pinned driver under the workspace, its macOS daemon, and what this host
-//! can run.
+//! can run. `desktop` is the other kind of target (#17): a desktop app that
+//! registers a descriptor over the machine WebSocket and answers typed
+//! frames with its own driver.
 
 pub mod daemon;
+pub mod desktop;
 pub mod discovery;
 pub mod driver;
 pub mod host;

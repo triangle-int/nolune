@@ -233,17 +233,23 @@ export function sendMessage(
 	});
 }
 
-export function updateLlmConfig(req: {
+export async function updateLlmConfig(req: {
 	api_key?: string;
 	openai?: string;
 	elevenlabs?: string;
 	openrouter?: string;
 }): Promise<void> {
-	return json("/api/config/llm", {
+	const res = await authedFetch("/api/config/llm", {
 		method: "PUT",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(req),
 	});
+	if (res.ok) return;
+	const text = await res.text().catch(() => "");
+	// The key probe's refusal carries its reason ("invalid API key"); a bare
+	// 401 is this browser's session, not the provider.
+	if (res.status === 401 && !text) throw new AuthError();
+	throw new Error(text || res.statusText);
 }
 
 export interface EmbeddingStatus {
@@ -270,6 +276,8 @@ export function fetchConfigStatus(): Promise<{
 	setup_required?: string | null;
 	model?: string | null;
 	chat_preset?: string;
+	/** The Chat preset's provider (#28), so a failed test can be named before the presets load. */
+	chat_provider?: LlmProvider | null;
 	background_preset?: string;
 	configured_keys?: string[];
 }> {
@@ -287,6 +295,17 @@ export interface ModelPreset {
 	model: string;
 }
 
+/** What a preset's provider offers for its model (#28). */
+export interface ModelCapabilities {
+	vision: boolean;
+	documents: boolean;
+	tools: boolean;
+	streaming: boolean;
+	reasoning_controls: boolean;
+	model_discovery: boolean;
+	token_counting: boolean;
+}
+
 export interface ModelPresets {
 	presets: ModelPreset[];
 	/** Preset conversations use unless a chat pins its own. */
@@ -296,6 +315,8 @@ export interface ModelPresets {
 	/** Providers that have an API key. */
 	keyed_providers: LlmProvider[];
 	setup_required: string | null;
+	/** Per preset id, what its model can do; absent for presets not saved yet. */
+	capabilities?: Record<string, ModelCapabilities>;
 }
 
 export function fetchModelPresets(): Promise<ModelPresets> {
@@ -322,6 +343,62 @@ export function seedModelPresets(provider: LlmProvider): Promise<ModelPresets & 
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ provider }),
 	});
+}
+
+/** Why a connection test failed (#28), as the server types it. */
+export type PresetTestError =
+	| "unknown_preset"
+	| "setup_required"
+	| "authentication"
+	| "rate_limited"
+	| "model_not_found"
+	| "provider_rejected"
+	| "provider_unavailable"
+	| "unreachable"
+	| "timeout"
+	| "invalid_response"
+	| "unsupported"
+	| (string & {});
+
+/** What `POST /api/config/models/{id}/test` learned: one completion, no chat message. */
+export type PresetTestResult =
+	| {
+			ok: true;
+			preset: string;
+			provider: LlmProvider;
+			model: string;
+			usage: { input_tokens: number; output_tokens: number };
+			capabilities: ModelCapabilities;
+	  }
+	| { ok: false; error: PresetTestError; message: string; status: number; retry_after_seconds?: number | null };
+
+/**
+ * Run the connection test for a saved preset. Provider outcomes come back
+ * typed instead of thrown, so the caller can say what to fix; only this
+ * browser's own session failure throws `AuthError`.
+ */
+export async function testPreset(id: string): Promise<PresetTestResult> {
+	const res = await authedFetch(`/api/config/models/${encodeURIComponent(id)}/test`, { method: "POST" });
+	const text = await res.text().catch(() => "");
+	let body: Record<string, unknown> | null = null;
+	try {
+		body = text ? JSON.parse(text) : null;
+	} catch {
+		body = null;
+	}
+	if (res.ok && body) return { ok: true, ...(body as Omit<Extract<PresetTestResult, { ok: true }>, "ok">) };
+	// The provider's refusal is typed by the server; a bare 401 is the session's.
+	if (body && typeof body.error === "string") {
+		return {
+			ok: false,
+			error: body.error,
+			message: typeof body.message === "string" ? body.message : text,
+			status: res.status,
+			retry_after_seconds: typeof body.retry_after_seconds === "number" ? body.retry_after_seconds : null,
+		};
+	}
+	if (res.status === 401) throw new AuthError();
+	throw new Error(text || res.statusText);
 }
 
 export interface ChatPreset {
