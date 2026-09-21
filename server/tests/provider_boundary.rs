@@ -14,10 +14,18 @@ use std::{
 const ANTHROPIC_ADAPTER: &str = "server/src/services/llm/anthropic.rs";
 const OPENAI_ADAPTER: &str = "server/src/services/llm/openai.rs";
 const OPENROUTER_ADAPTER: &str = "server/src/services/llm/openrouter.rs";
+const CODEX_ADAPTER: &str = "server/src/services/llm/codex/adapter.rs";
+/// The codex app-server's protocol (#27) lives under this directory only.
+const CODEX_MODULE: &str = "server/src/services/llm/codex/";
 const BACKEND_TYPES: &str = "server/src/services/llm/types.rs";
 
 /// Every adapter that turns a provider's answers into `LlmError` variants.
-const ADAPTERS: [&str; 3] = [ANTHROPIC_ADAPTER, OPENAI_ADAPTER, OPENROUTER_ADAPTER];
+const ADAPTERS: [&str; 4] = [
+    ANTHROPIC_ADAPTER,
+    OPENAI_ADAPTER,
+    OPENROUTER_ADAPTER,
+    CODEX_ADAPTER,
+];
 
 fn files(root: &Path, extensions: &[&str]) -> Vec<PathBuf> {
     fn visit(dir: &Path, extensions: &[&str], out: &mut Vec<PathBuf>) {
@@ -200,6 +208,90 @@ fn openrouter_wire_format_lives_only_in_its_adapter() {
         violations.push(format!(
             "{OPENROUTER_ADAPTER} reads public_url; attribution comes from [llm.openrouter] only"
         ));
+    }
+
+    assert!(violations.is_empty(), "{}", violations.join("\n"));
+}
+
+/// Codex (#27): the app-server's methods, params and error shapes are
+/// spoken under `services/llm/codex/` only; the adapter turns them into the
+/// provider-neutral events and typed errors like the HTTP adapters do, and
+/// the module never reads the login itself.
+#[test]
+fn codex_wire_format_lives_only_under_its_module() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let sources = production_sources(repo);
+    let mut violations = Vec::new();
+
+    let wire = [
+        "thread/start",
+        "thread/resume",
+        "turn/start",
+        "turn/interrupt",
+        "item/tool/call",
+        "item/agentMessage/delta",
+        "turn/completed",
+        "dynamicTools",
+        "developerInstructions",
+        "approvalPolicy",
+        "codexErrorInfo",
+        "account/read",
+    ];
+    for (relative, source) in &sources {
+        if relative.starts_with(CODEX_MODULE) {
+            continue;
+        }
+        for token in wire {
+            if source.contains(token) {
+                violations.push(format!(
+                    "{relative} contains {token:?}; only {CODEX_MODULE} speaks the app-server protocol"
+                ));
+            }
+        }
+    }
+    let adapter = source(&sources, CODEX_ADAPTER);
+    for required in [
+        "thread/start",
+        "thread/resume",
+        "turn/start",
+        "turn/interrupt",
+        "item/tool/call",
+        "dynamicTools",
+        "\"read-only\"",
+        "\"never\"",
+        "LlmEvent::TextDelta",
+        "LlmEvent::ToolCallStarted",
+        "LlmEvent::Usage",
+    ] {
+        if !adapter.contains(required) {
+            violations.push(format!("{CODEX_ADAPTER} no longer contains {required:?}"));
+        }
+    }
+    // Nolune never touches the login: no path into codex's home, no token
+    // field, and the OpenAI key never stands in for a login (`api_key` as
+    // an account kind's label is what `account/read` calls a key the
+    // app-server holds, not a key Nolune reads: the field access and the
+    // member are what is forbidden).
+    for (relative, source) in &sources {
+        if !relative.starts_with(CODEX_MODULE) {
+            continue;
+        }
+        for token in [
+            "auth.json",
+            "access_token",
+            "refresh_token",
+            "id_token",
+            "OPENAI_API_KEY",
+            "tokens.open_ai",
+            ".api_key",
+            "api_key:",
+        ] {
+            if source.contains(token) {
+                violations.push(format!(
+                    "{relative} contains {token:?}; the codex module never reads or forwards a credential"
+                ));
+            }
+        }
     }
 
     assert!(violations.is_empty(), "{}", violations.join("\n"));

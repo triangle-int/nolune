@@ -43,7 +43,7 @@ use super::{
 };
 
 /// How many events a subscriber may fall behind before it is told so.
-const EVENT_BUFFER: usize = 1024;
+pub(super) const EVENT_BUFFER: usize = 1024;
 /// How many of the child's stderr lines are kept for an error message.
 const STDERR_LINES_KEPT: usize = 16;
 /// How long a stderr line may be in an error message.
@@ -275,6 +275,7 @@ impl Shared {
         self.exit.borrow().clone()
     }
 
+    #[allow(dead_code)]
     fn is_gone(&self) -> bool {
         self.exit.borrow().is_some()
     }
@@ -634,6 +635,13 @@ async fn pump(
                     {
                         tokio::spawn(refuse(connection, unheard, write_deadline));
                     }
+                    // One frame, one turn of the scheduler: a burst the
+                    // child wrote in one go is read from an 8 KiB buffer
+                    // many frames at a time, and without this the
+                    // subscribers would not be polled until the buffer
+                    // is drained, which for a long enough burst is more
+                    // frames than the broadcast keeps for them.
+                    tokio::task::yield_now().await;
                 }
                 Ok(None) => break,
                 Err(error) => {
@@ -862,6 +870,7 @@ impl AppServer {
 
     /// Send a notification to the live child; there is no child to start
     /// for one. The write is held to the request deadline.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn notify(&self, method: &str, params: Value) -> Result<(), AppServerError> {
         self.current()?.notify(method, params, self.due()).await
     }
@@ -913,7 +922,8 @@ impl AppServer {
         self.inner.state.lock().unwrap().generation
     }
 
-    /// The binary this supervisor starts.
+    /// The binary this supervisor starts; the status route (27d) reports it.
+    #[allow(dead_code)]
     pub fn binary(&self) -> &Path {
         &self.inner.launch.binary
     }
@@ -1069,13 +1079,18 @@ mod tests {
         assert_eq!(recorded_pids(&pid_file), vec![pid]);
 
         let models = server.request("model/list", json!({})).await.unwrap();
-        assert_eq!(models["data"][0]["id"], "gpt-5.5");
+        assert_eq!(models["data"][0]["id"], "gpt-6-astra");
+        assert_eq!(models["data"][0]["isDefault"], true);
         let account = server.request("account/read", json!({})).await.unwrap();
         assert_eq!(account["account"]["type"], "chatgpt");
         let thread = server
             .request(
                 "thread/start",
-                json!({"approvalPolicy": "never", "sandbox": "read-only"}),
+                json!({
+                    "approvalPolicy": "never",
+                    "sandbox": "read-only",
+                    "config": {"mcp_servers": {"filesystem": {"enabled": false}, "github": {"enabled": false}}},
+                }),
             )
             .await
             .unwrap();
@@ -1243,6 +1258,7 @@ mod tests {
             "item/agentMessage/delta",
             "item/agentMessage/delta",
             "item/completed",
+            "thread/tokenUsage/updated",
             "turn/completed",
         ];
         for events in [&mut first, &mut second] {

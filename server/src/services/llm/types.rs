@@ -340,6 +340,10 @@ pub struct LlmBackend {
     /// OpenRouter attribution and routing preferences (#26); the defaults
     /// for every other provider, which never read them.
     pub openrouter: crate::config::OpenrouterConfig,
+    /// The local codex app-server behind a Codex preset (#27): the one
+    /// process-wide runtime unless a test supplies its own. The other
+    /// providers never touch it, and nothing starts until a Codex turn.
+    pub codex: super::codex::Runtime,
 }
 
 #[derive(Debug)]

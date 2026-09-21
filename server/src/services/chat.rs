@@ -850,6 +850,7 @@ pub fn list_chats(
                 title: String::new(),
                 created_at: String::new(),
                 preset: None,
+                codex_thread_id: None,
             }
         };
 
@@ -917,6 +918,7 @@ pub fn update_chat_title(
             title: String::new(),
             created_at: timestamp(),
             preset: None,
+            codex_thread_id: None,
         }
     };
 
@@ -937,6 +939,7 @@ fn load_or_new_meta(dir: &Path, chat_id: &str) -> io::Result<crate::domain::chat
             title: String::new(),
             created_at: timestamp(),
             preset: None,
+            codex_thread_id: None,
         })
     }
 }
@@ -969,6 +972,40 @@ pub fn set_chat_preset(
     fs::create_dir_all(&dir)?;
     let mut meta = load_or_new_meta(&dir, &chat_id)?;
     meta.preset = preset.map(str::to_owned).filter(|p| !p.is_empty());
+    let body = serde_json::to_string_pretty(&meta)
+        .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
+    fs::write(dir.join("meta.json"), body)
+}
+
+/// The codex app-server thread a chat continues in (#27), if one was
+/// started for it. Missing chats have none.
+pub fn get_chat_codex_thread(
+    workspace_dir: &Path,
+    instance_slug: &str,
+    chat_id: &str,
+) -> io::Result<Option<String>> {
+    let instance_slug = sanitize_slug(instance_slug);
+    let chat_id = sanitize_slug(chat_id);
+    let dir = chat_dir(workspace_dir, &instance_slug, &chat_id);
+    if !dir.join("meta.json").exists() {
+        return Ok(None);
+    }
+    Ok(load_or_new_meta(&dir, &chat_id)?.codex_thread_id)
+}
+
+/// Remember the codex thread a chat continues in, or forget it with None.
+pub fn set_chat_codex_thread(
+    workspace_dir: &Path,
+    instance_slug: &str,
+    chat_id: &str,
+    thread_id: Option<&str>,
+) -> io::Result<()> {
+    let instance_slug = sanitize_slug(instance_slug);
+    let chat_id = sanitize_slug(chat_id);
+    let dir = chat_dir(workspace_dir, &instance_slug, &chat_id);
+    fs::create_dir_all(&dir)?;
+    let mut meta = load_or_new_meta(&dir, &chat_id)?;
+    meta.codex_thread_id = thread_id.map(str::to_owned).filter(|id| !id.is_empty());
     let body = serde_json::to_string_pretty(&meta)
         .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
     fs::write(dir.join("meta.json"), body)
@@ -1081,6 +1118,7 @@ fn ensure_chat_dir(workspace_dir: &Path, instance_slug: &str, chat_id: &str) -> 
             title: String::new(),
             created_at: timestamp(),
             preset: None,
+            codex_thread_id: None,
         };
         let body = serde_json::to_string_pretty(&meta)
             .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
@@ -2010,6 +2048,81 @@ mod count_tokens_tests {
             !openai.adapter().unwrap().capabilities().token_counting,
             "OpenAI has no count endpoint: the caller keeps its local estimate"
         );
+    }
+}
+
+#[cfg(test)]
+mod codex_thread_tests {
+    use super::*;
+
+    /// The thread id sits beside the preset in `meta.json`: written and
+    /// read back, absent from a file an older build wrote, dropped again
+    /// when cleared, and never disturbing the preset.
+    #[test]
+    fn the_codex_thread_id_is_kept_beside_the_preset() {
+        let workspace = tempfile::tempdir().unwrap();
+        let ws = workspace.path();
+        set_chat_preset(ws, "moon", "chat-1", Some("codex-astra")).unwrap();
+        assert_eq!(get_chat_codex_thread(ws, "moon", "chat-1").unwrap(), None);
+        let meta_path = ws.join("instances/moon/chats/chat-1/meta.json");
+        let before: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&meta_path).unwrap()).unwrap();
+        assert!(
+            before.get("codex_thread_id").is_none(),
+            "nothing is written until a thread exists: {before}"
+        );
+
+        set_chat_codex_thread(ws, "moon", "chat-1", Some("thr_1")).unwrap();
+        assert_eq!(
+            get_chat_codex_thread(ws, "moon", "chat-1")
+                .unwrap()
+                .as_deref(),
+            Some("thr_1")
+        );
+        assert_eq!(
+            get_chat_preset(ws, "moon", "chat-1").unwrap().as_deref(),
+            Some("codex-astra"),
+            "the preset is untouched"
+        );
+        let written: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&meta_path).unwrap()).unwrap();
+        assert_eq!(written["codex_thread_id"], "thr_1");
+        assert_eq!(written["preset"], "codex-astra");
+        let summaries = list_chats(ws, "moon").unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].preset.as_deref(), Some("codex-astra"));
+
+        // A chat that never had a meta.json gets one with the thread alone.
+        set_chat_codex_thread(ws, "moon", "chat-2", Some("thr_2")).unwrap();
+        assert_eq!(
+            get_chat_codex_thread(ws, "moon", "chat-2")
+                .unwrap()
+                .as_deref(),
+            Some("thr_2")
+        );
+        assert_eq!(get_chat_preset(ws, "moon", "chat-2").unwrap(), None);
+
+        // Cleared, the field leaves the file; an empty id counts as cleared.
+        set_chat_codex_thread(ws, "moon", "chat-1", None).unwrap();
+        assert_eq!(get_chat_codex_thread(ws, "moon", "chat-1").unwrap(), None);
+        let cleared: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&meta_path).unwrap()).unwrap();
+        assert!(cleared.get("codex_thread_id").is_none(), "{cleared}");
+        set_chat_codex_thread(ws, "moon", "chat-1", Some("")).unwrap();
+        assert_eq!(get_chat_codex_thread(ws, "moon", "chat-1").unwrap(), None);
+
+        // A missing chat has no thread and no directory appears for asking.
+        assert_eq!(get_chat_codex_thread(ws, "moon", "nope").unwrap(), None);
+        assert!(!ws.join("instances/moon/chats/nope").exists());
+
+        // A meta.json from before #27 reads as having no thread.
+        fs::write(
+            &meta_path,
+            r#"{"id":"chat-1","title":"old","created_at":"1"}"#,
+        )
+        .unwrap();
+        assert_eq!(get_chat_codex_thread(ws, "moon", "chat-1").unwrap(), None);
+        assert_eq!(get_chat_title(ws, "moon", "chat-1").unwrap(), "old");
     }
 }
 

@@ -1,6 +1,12 @@
 //! Guard for #156: users pick models through presets. No cheap/fast/heavy
 //! abstraction, no per-message classifier, and no global provider switch
 //! survive in server or client source.
+//!
+//! Codex is a provider again since #27 (`LlmProvider::Codex`, backed by the
+//! local app-server under `services/llm/codex/`). What stays forbidden is
+//! the pre-#157 shape, where a `codex` selection meant the OpenAI key, a
+//! placeholder that could not construct a backend, or a "not supported
+//! yet" setup message: a Codex login is never the OpenAI API in disguise.
 
 #[path = "../test-support/source_scan.rs"]
 mod source_scan;
@@ -59,7 +65,14 @@ fn model_tiers_router_and_provider_switch_are_gone() {
             "classify_needs_heavy",
             "fast_model_name",
             "NOLUNE_MODEL_MODE",
-            "Codex",
+            "\"codex\" => Self::Openai",
+            "\"codex\" => LlmProvider::Openai",
+            "Codex => &self.tokens.open_ai",
+            "Codex => Some(&self.tokens.open_ai",
+            "Codex => &self.tokens.open_ai.is_empty",
+            "Codex is not supported yet",
+            "Codex requires setup and is not supported",
+            "no Codex adapter is implemented",
             "/api/config/model-mode",
             "/api/config/provider\"",
         ] {

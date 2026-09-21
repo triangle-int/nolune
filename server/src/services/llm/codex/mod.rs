@@ -7,21 +7,26 @@
 //! that it is exactly the release the protocol fixtures were recorded
 //! against, the frames on the wire, and the supervised process with its
 //! handshake, request correlation, streamed events, crash restart and
-//! shutdown. The provider adapter (threads, turns, the `dynamicTools`
-//! bridge), the login routes and the settings tile build on it in the
-//! following slices.
-//
-// Nothing constructs the supervisor in production until the adapter slice
-// lands; until then the module is only exercised by its tests.
-#![allow(dead_code)]
+//! shutdown. [`auth`] holds the login state and the one process; [`runtime`]
+//! adds the adapter's thread bookkeeping on top of it, and [`adapter`] is
+//! the provider: one thread per conversation, turns streamed into the
+//! provider-neutral events, Nolune's tools bridged through `dynamicTools`.
+//! The login routes read the same [`auth::Auth`] the runtime's turns run
+//! on, so a login and a turn speak to one child.
 
+pub mod adapter;
 pub mod auth;
 pub mod discovery;
 pub mod process;
 pub mod protocol;
+pub mod runtime;
 
 #[cfg(test)]
 pub(crate) mod fake;
+
+pub use adapter::{CAPABILITIES, CodexAdapter};
+#[allow(unused_imports)]
+pub use runtime::{AccountState, Runtime};
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -45,6 +50,10 @@ pub const CODEX_ENV: &str = "NOLUNE_CODEX_BIN";
 
 /// The arguments that turn the binary into the app-server.
 pub const APP_SERVER_ARGS: &[&str] = &["app-server"];
+
+/// Set to let a test start the real binary through the shared runtime; the
+/// `#[ignore]` live tests set it, nothing else does.
+pub const LIVE_ENV: &str = "NOLUNE_CODEX_LIVE";
 
 /// Why the app-server is not there, or why one exchange with it failed.
 #[derive(Clone, Debug, PartialEq)]

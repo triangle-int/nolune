@@ -1,4 +1,5 @@
 //! Provider boundary. Conversation storage and the agent loop do not own API payloads.
+use std::path::Path;
 use std::time::Duration;
 
 use futures::future::BoxFuture;
@@ -163,6 +164,17 @@ impl ExecutionScope {
     }
 }
 
+/// The conversation a request continues, for a provider that keeps a
+/// thread of its own per chat (Codex, #27): where the chat's `meta.json`
+/// lives, so the thread id can be read back after a restart. A request
+/// without one is a one-shot run whose thread outlives nothing.
+#[derive(Clone, Copy, Debug)]
+pub struct ConversationRef<'a> {
+    pub instance_slug: &'a str,
+    pub chat_id: &'a str,
+    pub workspace_dir: &'a Path,
+}
+
 pub struct LlmRequest<'a> {
     /// Chooses the prompt-cache lifetime; see `ExecutionScope::cache_ttl`.
     pub scope: ExecutionScope,
@@ -174,6 +186,9 @@ pub struct LlmRequest<'a> {
     /// Reserved explicitly, so unsupported controls cannot be silently ignored.
     pub reasoning: Option<&'a str>,
     pub cancellation: CancellationToken,
+    /// The conversation this request continues, when it is one; the HTTP
+    /// adapters send the whole history each turn and never read it.
+    pub conversation: Option<ConversationRef<'a>>,
 }
 impl<'a> LlmRequest<'a> {
     pub fn new(
@@ -191,6 +206,7 @@ impl<'a> LlmRequest<'a> {
             json_schema: None,
             reasoning: None,
             cancellation: CancellationToken::new(),
+            conversation: None,
         }
     }
 
@@ -283,12 +299,24 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     /// Every provider the contract covers; each new adapter joins here.
-    const PROVIDERS: [LlmProvider; 3] = [
+    const PROVIDERS: [LlmProvider; 4] = [
+        LlmProvider::Anthropic,
+        LlmProvider::Openai,
+        LlmProvider::Openrouter,
+        LlmProvider::Codex,
+    ];
+
+    /// The providers spoken over HTTP, for the loops that mock a server
+    /// and answer with status codes; Codex (#27) runs a local process and
+    /// joins the loops through the fake app-server instead.
+    const HTTP_PROVIDERS: [LlmProvider; 3] = [
         LlmProvider::Anthropic,
         LlmProvider::Openai,
         LlmProvider::Openrouter,
     ];
 
+    /// A backend for `provider` at `url`; a Codex backend runs on a fake
+    /// app-server of its own instead (nothing is started until a turn).
     fn backend(provider: LlmProvider, url: &str) -> LlmBackend {
         let mut config = Config::default();
         config.llm.seed_presets(provider);
@@ -298,11 +326,51 @@ mod tests {
         let preset = match provider {
             LlmProvider::Anthropic => "sonnet".to_owned(),
             LlmProvider::Openai => "gpt".to_owned(),
-            LlmProvider::Openrouter => crate::config::default_presets(provider)[0].id.clone(),
+            LlmProvider::Openrouter | LlmProvider::Codex => {
+                crate::config::default_presets(provider)[0].id.clone()
+            }
         };
         let mut backend = LlmBackend::for_preset(&config, reqwest::Client::new(), &preset).unwrap();
         backend.base_url = url.into();
+        if provider == LlmProvider::Codex {
+            backend.codex =
+                super::super::codex::Runtime::for_launch(super::super::codex::fake::launch(None));
+        }
         backend
+    }
+
+    /// A Codex backend on a fake app-server whose wire is logged: the
+    /// counterpart of a mock server's captured requests.
+    struct CodexHarness {
+        backend: LlmBackend,
+        log: std::path::PathBuf,
+        _dir: tempfile::TempDir,
+    }
+
+    fn codex_harness() -> CodexHarness {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("wire.jsonl");
+        let mut backend = backend(LlmProvider::Codex, "");
+        backend.codex = super::super::codex::Runtime::for_launch(
+            super::super::codex::fake::launch_logged(&log),
+        );
+        CodexHarness {
+            backend,
+            log,
+            _dir: dir,
+        }
+    }
+
+    impl CodexHarness {
+        fn sent(&self, method: &str) -> Vec<Value> {
+            super::super::codex::fake::sent(&self.log, method)
+        }
+        fn answers(&self) -> Vec<(Value, Result<Value, Value>)> {
+            super::super::codex::fake::answers(&self.log)
+        }
+        fn close(&self) {
+            self.backend.codex.close();
+        }
     }
 
     /// A finished Chat Completions answer, as openrouter.ai sends it.
@@ -542,6 +610,8 @@ mod tests {
         (url, requests, task)
     }
 
+    /// The same completion through every adapter: the HTTP ones from a
+    /// mocked answer, Codex from the fake app-server's "hello" turn.
     #[tokio::test]
     async fn both_adapters_complete_with_tools_and_usage_through_same_contract() {
         for (provider, body) in [
@@ -562,9 +632,16 @@ mod tests {
                     json!({"prompt_tokens":15,"completion_tokens":4,"prompt_tokens_details":{"cached_tokens":2}}),
                 ),
             ),
+            (LlmProvider::Codex, Value::Null),
         ] {
-            let (url, requests, task) = mock_server(200, body.to_string()).await;
-            let adapter = backend(provider, &url).adapter().unwrap();
+            let (backend, requests, task, harness) = if provider == LlmProvider::Codex {
+                let harness = codex_harness();
+                (harness.backend.clone(), None, None, Some(harness))
+            } else {
+                let (url, requests, task) = mock_server(200, body.to_string()).await;
+                (backend(provider, &url), Some(requests), Some(task), None)
+            };
+            let adapter = backend.adapter().unwrap();
             let messages = [Message::user("hello")];
             let response = adapter
                 .complete(LlmRequest::new(
@@ -574,14 +651,17 @@ mod tests {
                     &[],
                 ))
                 .await
-                .unwrap();
-            assert_eq!(response.text, "hello");
-            assert_eq!(response.stop_reason, StopReason::ToolCalls);
-            assert_eq!(response.tool_calls[0].id, "call1");
-            assert_eq!(response.tool_calls[0].arguments["q"], "rust");
-            assert_eq!(response.usage.input_tokens, 15);
-            assert_eq!(response.usage.output_tokens, 4);
-            assert_eq!(response.usage.cache_read_tokens, 2);
+                .unwrap_or_else(|error| panic!("{provider:?}: {error:?}"));
+            assert_eq!(response.text, "hello", "{provider:?}");
+            assert_eq!(response.stop_reason, StopReason::ToolCalls, "{provider:?}");
+            assert_eq!(response.tool_calls[0].id, "call1", "{provider:?}");
+            assert_eq!(
+                response.tool_calls[0].arguments["q"], "rust",
+                "{provider:?}"
+            );
+            assert_eq!(response.usage.input_tokens, 15, "{provider:?}");
+            assert_eq!(response.usage.output_tokens, 4, "{provider:?}");
+            assert_eq!(response.usage.cache_read_tokens, 2, "{provider:?}");
             assert_eq!(
                 response.usage.cache_write_tokens,
                 if provider == LlmProvider::Anthropic {
@@ -590,8 +670,20 @@ mod tests {
                     0
                 }
             );
-            assert_eq!(requests.lock().unwrap().len(), 1);
-            task.abort();
+            if let Some(requests) = requests {
+                assert_eq!(requests.lock().unwrap().len(), 1);
+            }
+            if let Some(harness) = harness {
+                assert_eq!(harness.sent("turn/start").len(), 1);
+                assert_eq!(
+                    harness.sent("thread/start")[0]["developerInstructions"],
+                    "system"
+                );
+                harness.close();
+            }
+            if let Some(task) = task {
+                task.abort();
+            }
         }
     }
 
@@ -615,10 +707,25 @@ mod tests {
                     json!({"prompt_tokens":10,"completion_tokens":4}),
                 ),
             ),
+            (LlmProvider::Codex, Value::Null),
         ] {
+            let schema = json!({"type":"object","properties":{}});
+            if provider == LlmProvider::Codex {
+                let harness = codex_harness();
+                let (text, tokens) = harness
+                    .backend
+                    .chat_json("system", "json please", schema.clone())
+                    .await
+                    .unwrap();
+                assert_eq!(text, "{}");
+                assert_eq!(tokens, 14);
+                let turn = &harness.sent("turn/start")[0];
+                assert_eq!(turn["outputSchema"], schema);
+                harness.close();
+                continue;
+            }
             let (url, requests, task) = mock_server(200, body.to_string()).await;
             let backend = backend(provider, &url);
-            let schema = json!({"type":"object","properties":{}});
             let (text, tokens) = backend
                 .chat_json("system", "prompt", schema.clone())
                 .await
@@ -637,6 +744,7 @@ mod tests {
                 LlmProvider::Openrouter => {
                     assert_eq!(requests[0]["response_format"]["type"], "json_object");
                 }
+                LlmProvider::Codex => unreachable!("handled above"),
             }
             task.abort();
         }
@@ -671,22 +779,31 @@ mod tests {
             (LlmProvider::Anthropic, anthropic),
             (LlmProvider::Openai, openai),
             (LlmProvider::Openrouter, openrouter),
+            (LlmProvider::Codex, ""),
         ] {
-            let (url, _, task) = mock_server(200, body.into()).await;
+            let (backend, task) = if provider == LlmProvider::Codex {
+                (backend(provider, ""), None)
+            } else {
+                let (url, _, task) = mock_server(200, body.into()).await;
+                (backend(provider, &url), Some(task))
+            };
             let events = Mutex::new(Vec::new());
             let sink = |event| events.lock().unwrap().push(event);
-            let adapter = backend(provider, &url).adapter().unwrap();
+            let adapter = backend.adapter().unwrap();
+            // The fake app-server picks its "stream" turn by this text; the
+            // mocks answer whatever is asked.
+            let messages = [Message::user("stream")];
             let response = adapter
                 .stream(
-                    LlmRequest::new(ExecutionScope::Subagent, &[], &[], &[]),
+                    LlmRequest::new(ExecutionScope::Subagent, &[], &messages, &[]),
                     &sink,
                 )
                 .await
-                .unwrap();
-            assert_eq!(response.text, "hello");
-            assert_eq!(response.stop_reason, StopReason::ToolCalls);
-            assert_eq!(response.tool_calls[0].id, "call1");
-            assert_eq!(response.usage.output_tokens, 3);
+                .unwrap_or_else(|error| panic!("{provider:?}: {error:?}"));
+            assert_eq!(response.text, "hello", "{provider:?}");
+            assert_eq!(response.stop_reason, StopReason::ToolCalls, "{provider:?}");
+            assert_eq!(response.tool_calls[0].id, "call1", "{provider:?}");
+            assert_eq!(response.usage.output_tokens, 3, "{provider:?}");
             let events = events.lock().unwrap();
             assert!(
                 !events.iter().any(
@@ -704,15 +821,64 @@ mod tests {
             assert!(
                 events
                     .iter()
-                    .any(|e| matches!(e, LlmEvent::Usage(u) if u.input_tokens == 5))
+                    .any(|e| matches!(e, LlmEvent::Usage(u) if u.input_tokens == 5)),
+                "{provider:?}"
             );
-            task.abort();
+            drop(events);
+            if let Some(task) = task {
+                task.abort();
+            }
+            if provider == LlmProvider::Codex {
+                backend.codex.close();
+            }
         }
     }
 
     #[tokio::test]
     async fn adapters_return_typed_http_and_truncated_stream_errors() {
-        for provider in PROVIDERS {
+        // Codex has no status codes: a turn fails with a `codexErrorInfo`,
+        // and a turn that ends out of protocol is an invalid response, in
+        // both modes.
+        for (prompt, check) in [
+            ("rate me", "rate_limited"),
+            ("teapot", "http"),
+            ("weird", "invalid"),
+        ] {
+            let backend = backend(LlmProvider::Codex, "");
+            let adapter = backend.adapter().unwrap();
+            let messages = [Message::user(prompt)];
+            let complete = adapter
+                .complete(LlmRequest::new(
+                    ExecutionScope::Subagent,
+                    &[],
+                    &messages,
+                    &[],
+                ))
+                .await
+                .unwrap_err();
+            let stream = adapter
+                .stream(
+                    LlmRequest::new(ExecutionScope::Subagent, &[], &messages, &[]),
+                    &|_| {},
+                )
+                .await
+                .unwrap_err();
+            for error in [complete, stream] {
+                let label = format!("Codex {prompt}: {error:?}");
+                match check {
+                    "rate_limited" => {
+                        assert!(matches!(error, LlmError::RateLimited { .. }), "{label}")
+                    }
+                    "http" => assert!(
+                        matches!(error, LlmError::Http { status: 418, .. }),
+                        "{label}"
+                    ),
+                    _ => assert!(matches!(error, LlmError::InvalidResponse(_)), "{label}"),
+                }
+            }
+            backend.codex.close();
+        }
+        for provider in HTTP_PROVIDERS {
             let (url, _, task) = mock_server(429, "rate limited".into()).await;
             let adapter = backend(provider, &url).adapter().unwrap();
             assert!(matches!(
@@ -757,7 +923,32 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_interrupts_in_flight_http_request() {
-        for provider in PROVIDERS {
+        // Codex: the turn is in flight once its first delta arrives;
+        // cancelling then sends `turn/interrupt` and answers `Cancelled`.
+        {
+            let harness = codex_harness();
+            let adapter = harness.backend.adapter().unwrap();
+            let messages = [Message::user("hang")];
+            let request = LlmRequest::new(ExecutionScope::Subagent, &[], &messages, &[]);
+            let token = request.cancellation.clone();
+            let sink = |event: LlmEvent| {
+                if matches!(event, LlmEvent::TextDelta(_)) {
+                    token.cancel();
+                }
+            };
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                adapter.stream(request, &sink),
+            )
+            .await
+            .unwrap();
+            assert!(matches!(result, Err(LlmError::Cancelled)), "{result:?}");
+            let interrupts = harness.sent("turn/interrupt");
+            assert_eq!(interrupts.len(), 1, "{interrupts:?}");
+            assert_eq!(interrupts[0]["turnId"], "turn_fixture_13");
+            harness.close();
+        }
+        for provider in HTTP_PROVIDERS {
             let entered = Arc::new(tokio::sync::Notify::new());
             let notify = entered.clone();
             let app = axum::Router::new().fallback(axum::routing::post(move || {
@@ -966,6 +1157,7 @@ mod tests {
                 )
                 .into(),
             ],
+            (LlmProvider::Codex, _) => unreachable!("the fake app-server plays its own turn"),
         }
     }
 
@@ -975,31 +1167,43 @@ mod tests {
     /// Completions needs the `tool` messages contiguous right after the
     /// assistant's `tool_calls`, Anthropic every `tool_result` in the one
     /// user message that follows, the Responses API a `function_call_output`
-    /// per call.
+    /// per call. Codex asks for its calls one at a time inside one turn,
+    /// so its trace is longer and each result answers the `item/tool/call`
+    /// it belongs to; its model cannot see images, so its screenshot is
+    /// text.
     #[tokio::test]
     async fn tool_call_round_trip_keeps_every_result_next_to_its_call() {
         for provider in PROVIDERS {
             for streaming in [false, true] {
                 let label = format!("{provider:?} streaming={streaming}");
-                let (url, requests, task) =
-                    mock_server_sequence(round_trip_bodies(provider, streaming)).await;
+                let (backend, requests, task, harness) = if provider == LlmProvider::Codex {
+                    let harness = codex_harness();
+                    (harness.backend.clone(), None, None, Some(harness))
+                } else {
+                    let (url, requests, task) =
+                        mock_server_sequence(round_trip_bodies(provider, streaming)).await;
+                    (backend(provider, &url), Some(requests), Some(task), None)
+                };
                 let tools: Vec<Box<dyn crate::services::tool::ToolDyn>> = vec![
                     Box::new(Answers {
                         name: "shot",
-                        output: SHOT_OUTPUT,
+                        output: if backend.adapter().unwrap().capabilities().vision {
+                            SHOT_OUTPUT
+                        } else {
+                            "captured"
+                        },
                     }),
                     Box::new(Answers {
                         name: "search",
                         output: "found",
                     }),
                 ];
-                let backend = backend(provider, &url);
                 let (text, trace) = if streaming {
                     let workspace = tempfile::tempdir().unwrap();
                     let result = backend
                         .chat_with_tools_streaming(
                             &["system"],
-                            Message::user("hi"),
+                            Message::user("look it up"),
                             vec![],
                             tools,
                             tokio::sync::broadcast::channel(32).0,
@@ -1014,13 +1218,71 @@ mod tests {
                     (result.text, result.rig_history.unwrap())
                 } else {
                     let (text, _, trace) = backend
-                        .chat_with_tools_traced("system", "hi", vec![], tools)
+                        .chat_with_tools_traced("system", "look it up", vec![], tools)
                         .await
                         .unwrap_or_else(|error| panic!("{label}: {error:?}"));
                     (text, trace)
                 };
-                task.abort();
+                if let Some(task) = task {
+                    task.abort();
+                }
                 assert_eq!(text, "done", "{label}");
+
+                if let Some(harness) = harness {
+                    // One turn, two calls asked in sequence, each answered
+                    // with its own result before the next was asked.
+                    assert_eq!(trace.len(), 6, "{label}: {trace:?}");
+                    let calls: Vec<(usize, &str)> = trace
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, message)| match message {
+                            Message::Assistant { content } => {
+                                content.iter().find_map(|block| match block {
+                                    ContentBlock::ToolCall { id, .. } => Some((i, id.as_str())),
+                                    _ => None,
+                                })
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(calls, [(1, "call1"), (3, "call2")], "{label}");
+                    for (index, call_id, output) in
+                        [(2, "call1", "captured"), (4, "call2", "found")]
+                    {
+                        let Message::User { content } = &trace[index] else {
+                            panic!("{label}: {:?}", trace[index]);
+                        };
+                        assert!(
+                            matches!(
+                                &content[0],
+                                ContentBlock::ToolOutput { call_id: id, content: ToolOutputContent::Text(text) }
+                                    if id == call_id && text == output
+                            ),
+                            "{label}: {:?}",
+                            content[0]
+                        );
+                    }
+                    assert_eq!(harness.sent("turn/start").len(), 1, "{label}: one turn");
+                    let answers = harness.answers();
+                    assert_eq!(answers.len(), 2, "{label}: {answers:?}");
+                    assert_eq!(
+                        answers[0].1,
+                        Ok(
+                            json!({"contentItems": [{"type": "inputText", "text": "captured"}], "success": true})
+                        ),
+                        "{label}"
+                    );
+                    assert_eq!(
+                        answers[1].1,
+                        Ok(
+                            json!({"contentItems": [{"type": "inputText", "text": "found"}], "success": true})
+                        ),
+                        "{label}"
+                    );
+                    harness.close();
+                    continue;
+                }
+                let requests = requests.expect("an HTTP provider captures its requests");
 
                 // The canonical trace: user, assistant with both calls, user
                 // with both results (the first carrying its image), assistant.
@@ -1153,6 +1415,7 @@ mod tests {
                             "{label}: {second}"
                         );
                     }
+                    LlmProvider::Codex => unreachable!("checked above"),
                 }
             }
         }
@@ -1164,6 +1427,7 @@ mod tests {
             LlmProvider::Anthropic => ("id", "input"),
             LlmProvider::Openai => ("call_id", "arguments"),
             LlmProvider::Openrouter => ("id", "arguments"),
+            LlmProvider::Codex => unreachable!("codex has no HTTP tool call shape"),
         }
     }
 
@@ -1179,6 +1443,7 @@ mod tests {
             LlmProvider::Openrouter => {
                 json!({"id":"id","type":"function","function":{"name":"search","arguments":"{}"}})
             }
+            LlmProvider::Codex => unreachable!("codex has no HTTP tool call shape"),
         }
     }
 
@@ -1203,7 +1468,76 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_tool_calls_are_rejected_in_both_modes() {
-        for provider in PROVIDERS {
+        // Codex: an `item/tool/call` without a tool name, with arguments
+        // that are not an object, or without a call id is refused on the
+        // wire and reported as `InvalidResponse`; the agent boundary lets
+        // no tool run for it.
+        for prompt in ["bad tool name", "bad arguments", "bad call id"] {
+            for streaming in [false, true] {
+                let harness = codex_harness();
+                let adapter = harness.backend.adapter().unwrap();
+                let messages = [Message::user(prompt)];
+                let request = LlmRequest::new(ExecutionScope::Subagent, &[], &messages, &[]);
+                let result = if streaming {
+                    adapter.stream(request, &|_| {}).await
+                } else {
+                    adapter.complete(request).await
+                };
+                assert!(
+                    matches!(result, Err(LlmError::InvalidResponse(_))),
+                    "Codex streaming={streaming} {prompt}: {result:?}"
+                );
+                let answers = harness.answers();
+                assert!(
+                    answers.len() == 1 && answers[0].1.is_err(),
+                    "Codex {prompt}: refused on the wire: {answers:?}"
+                );
+                harness.close();
+                // A fake of its own for the agent boundary: the fake plays a
+                // scenario with the same thread and turn ids every time,
+                // and the refused play above still emits its remaining
+                // events once its handler wakes, which a second play on
+                // the same process could hear as its own (the real
+                // app-server never reuses an id).
+                let harness = codex_harness();
+                let tools: Vec<Box<dyn crate::services::tool::ToolDyn>> =
+                    vec![Box::new(MustNotExecute)];
+                let result = if streaming {
+                    harness
+                        .backend
+                        .chat_with_tools_streaming(
+                            &[],
+                            Message::user(prompt),
+                            vec![],
+                            tools,
+                            tokio::sync::broadcast::channel(32).0,
+                            "test",
+                            "test",
+                            &std::env::temp_dir(),
+                            None,
+                            Default::default(),
+                        )
+                        .await
+                        .map(|_| ())
+                } else {
+                    harness
+                        .backend
+                        .chat_with_tools_traced("", prompt, vec![], tools)
+                        .await
+                        .map(|_| ())
+                };
+                let error = result.unwrap_err();
+                assert!(
+                    matches!(
+                        error.downcast_ref::<LlmError>(),
+                        Some(LlmError::InvalidResponse(_))
+                    ),
+                    "Codex streaming={streaming} {prompt}: {error:?}"
+                );
+                harness.close();
+            }
+        }
+        for provider in HTTP_PROVIDERS {
             let (id_key, args_key) = tool_call_keys(provider);
             for field in [id_key, "name", args_key] {
                 for bad in [
@@ -1233,6 +1567,7 @@ mod tests {
                             "tool_calls",
                             json!({"prompt_tokens":1,"completion_tokens":1}),
                         ),
+                        LlmProvider::Codex => unreachable!("handled above"),
                     };
                     let stream = match provider {
                         LlmProvider::Anthropic => {
@@ -1270,6 +1605,7 @@ mod tests {
                                 json!({"choices":[{"index":0,"delta":{"tool_calls":[delta]},"finish_reason":"tool_calls"}]})
                             )
                         }
+                        LlmProvider::Codex => unreachable!("handled above"),
                     };
                     for (streaming, body) in [(false, complete.to_string()), (true, stream)] {
                         let (url, _, task) = mock_server(200, body).await;
@@ -1526,6 +1862,81 @@ mod tests {
                 }
             }
         }
+
+        // Codex (#27): the same variants from a failed turn's
+        // `codexErrorInfo`, in both modes; a login the app-server has not
+        // got is setup, reported before any turn.
+        for (prompt, expected) in [
+            ("auth me", "authentication"),
+            ("rate me", "rate_limited"),
+            ("overloaded", "rate_limited"),
+            ("context me", "context_length"),
+            ("teapot", "http"),
+            ("break", "transport"),
+        ] {
+            let backend = backend(LlmProvider::Codex, "");
+            let adapter = backend.adapter().unwrap();
+            let messages = [Message::user(prompt)];
+            let complete = adapter
+                .complete(LlmRequest::new(
+                    ExecutionScope::Subagent,
+                    &[],
+                    &messages,
+                    &[],
+                ))
+                .await
+                .unwrap_err();
+            let stream = adapter
+                .stream(
+                    LlmRequest::new(ExecutionScope::Subagent, &[], &messages, &[]),
+                    &|_| {},
+                )
+                .await
+                .unwrap_err();
+            for error in [complete, stream] {
+                let label = format!("Codex {prompt}: {error:?}");
+                match expected {
+                    "authentication" => {
+                        assert!(matches!(error, LlmError::Authentication(_)), "{label}")
+                    }
+                    "rate_limited" => {
+                        assert!(matches!(error, LlmError::RateLimited { .. }), "{label}")
+                    }
+                    "context_length" => {
+                        assert!(matches!(error, LlmError::ContextLength(_)), "{label}")
+                    }
+                    "transport" => assert!(matches!(error, LlmError::Transport(_)), "{label}"),
+                    _ => assert!(
+                        matches!(error, LlmError::Http { status: 418, .. }),
+                        "{label}"
+                    ),
+                }
+            }
+            backend.codex.close();
+        }
+        let mut launch = super::super::codex::fake::launch(None);
+        launch
+            .env
+            .push((super::super::codex::fake::ACCOUNT_ENV.into(), "none".into()));
+        let mut backend = backend(LlmProvider::Codex, "");
+        backend.codex = super::super::codex::Runtime::for_launch(launch);
+        let messages = [Message::user("hi")];
+        let error = backend
+            .adapter()
+            .unwrap()
+            .complete(LlmRequest::new(
+                ExecutionScope::Subagent,
+                &[],
+                &messages,
+                &[],
+            ))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, LlmError::SetupRequired(message) if message.contains("Codex login required")),
+            "{error:?}"
+        );
+        backend.codex.close();
     }
 
     /// Anthropic can send the same error object mid-stream as an SSE
@@ -1725,7 +2136,7 @@ mod tests {
 
     #[tokio::test]
     async fn probe_key_accepts_authenticated_answers_and_rejects_bad_keys() {
-        for provider in PROVIDERS {
+        for provider in HTTP_PROVIDERS {
             let success = match provider {
                 LlmProvider::Anthropic => END_TURN.to_string(),
                 LlmProvider::Openai => {
@@ -1738,6 +2149,7 @@ mod tests {
                     json!({"prompt_tokens":1,"completion_tokens":1}),
                 )
                 .to_string(),
+                LlmProvider::Codex => unreachable!("no key to probe"),
             };
             let cases = [
                 (200, success, "ok"),
@@ -1771,6 +2183,7 @@ mod tests {
                     LlmProvider::Anthropic => ("max_tokens", 1),
                     LlmProvider::Openai => ("max_output_tokens", 16),
                     LlmProvider::Openrouter => ("max_tokens", 16),
+                    LlmProvider::Codex => unreachable!("no key to probe"),
                 };
                 assert_eq!(
                     body[limit], smallest,
@@ -1806,7 +2219,44 @@ mod tests {
     /// comes back as its variant instead of passing as "past authentication".
     #[tokio::test]
     async fn connection_tests_only_accept_a_real_answer() {
-        for provider in PROVIDERS {
+        // Codex: one ephemeral turn with no tools, its usage reported; a
+        // missing login is setup, not a failed test.
+        {
+            let harness = codex_harness();
+            let usage = harness
+                .backend
+                .test_connection(PROBE_TIMEOUT)
+                .await
+                .unwrap();
+            assert_eq!((usage.input_tokens, usage.output_tokens), (10, 4));
+            let started = harness.sent("thread/start");
+            assert_eq!(started.len(), 1, "{started:?}");
+            assert_eq!(started[0]["ephemeral"], true);
+            assert_eq!(
+                started[0]["dynamicTools"],
+                json!([]),
+                "a test carries no tools"
+            );
+            assert_eq!(
+                harness.sent("turn/start").len(),
+                1,
+                "one turn, nothing else"
+            );
+            harness.close();
+            let mut launch = super::super::codex::fake::launch(None);
+            launch
+                .env
+                .push((super::super::codex::fake::ACCOUNT_ENV.into(), "none".into()));
+            let mut backend = backend(LlmProvider::Codex, "");
+            backend.codex = super::super::codex::Runtime::for_launch(launch);
+            let result = backend.test_connection(PROBE_TIMEOUT).await;
+            assert!(
+                matches!(result, Err(LlmError::SetupRequired(_))),
+                "{result:?}"
+            );
+            backend.codex.close();
+        }
+        for provider in HTTP_PROVIDERS {
             let success = match provider {
                 LlmProvider::Anthropic => END_TURN.to_string(),
                 LlmProvider::Openai => {
@@ -1819,6 +2269,7 @@ mod tests {
                     json!({"prompt_tokens":10,"completion_tokens":4}),
                 )
                 .to_string(),
+                LlmProvider::Codex => unreachable!("handled above"),
             };
             let (url, requests, task) = mock_server_with(200, vec![], success).await;
             let mut backend = LlmBackend::probe(reqwest::Client::new(), provider, "model-x", "k");
@@ -1843,6 +2294,7 @@ mod tests {
                     LlmProvider::Anthropic => ("max_tokens", 1),
                     LlmProvider::Openai => ("max_output_tokens", 16),
                     LlmProvider::Openrouter => ("max_tokens", 16),
+                    LlmProvider::Codex => unreachable!("handled above"),
                 };
                 assert_eq!(
                     body[limit], smallest,
@@ -1890,7 +2342,7 @@ mod tests {
     /// would wait forever.
     #[tokio::test]
     async fn probes_give_up_on_a_provider_that_never_answers() {
-        for provider in PROVIDERS {
+        for provider in HTTP_PROVIDERS {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let url = format!("http://{}", listener.local_addr().unwrap());
             let task = tokio::spawn(async move {

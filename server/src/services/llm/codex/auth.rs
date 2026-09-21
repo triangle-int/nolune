@@ -365,6 +365,12 @@ impl Auth {
         Self::from_binary(Binary::Launch(launch))
     }
 
+    /// Whether `other` is a handle on this very state (and child).
+    #[cfg(test)]
+    pub(crate) fn is_same(&self, other: &Auth) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
     /// How long a login may stay pending; [`LOGIN_DEADLINE`] by default.
     /// Set before the handle is shared.
     pub fn login_deadline(mut self, deadline: Duration) -> Self {
@@ -534,6 +540,23 @@ impl Auth {
         *self.inner.login.lock().unwrap() = None;
         log::info!("[codex] logged out");
         Ok(self.status().await)
+    }
+
+    /// Stop the app-server child now and refuse to start another, without
+    /// waiting on anything: [`shutdown`](Self::shutdown) for a caller that
+    /// cannot await (a runtime built for a test, closed when the test is
+    /// done with it). The start lock is held only while a child starts,
+    /// and a start that sees the flag afterwards closes its own child.
+    pub fn close(&self) {
+        self.inner.closed.store(true, Ordering::SeqCst);
+        self.inner.give_up_pending("codex app-server was shut down");
+        let server = match self.inner.server.try_lock() {
+            Ok(mut server) => server.take(),
+            Err(_starting) => None,
+        };
+        if let Some(server) = server {
+            server.close();
+        }
     }
 
     /// Stop the app-server child and refuse to start another; a pending

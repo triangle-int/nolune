@@ -495,6 +495,22 @@ pub fn default_presets(provider: LlmProvider) -> Vec<ModelPreset> {
                 "openai/gpt-5.4-mini",
             ),
         ],
+        // Codex (#27) names the models the pinned codex release lists; a
+        // ChatGPT login pays for none of them per token.
+        LlmProvider::Codex => vec![
+            ModelPreset::seeded(
+                "codex-astra",
+                "GPT-6 Astra via Codex",
+                provider,
+                "gpt-6-astra",
+            ),
+            ModelPreset::seeded(
+                "codex-luna",
+                "GPT-5.6 Luna via Codex",
+                provider,
+                "gpt-5.6-luna",
+            ),
+        ],
     }
 }
 
@@ -504,6 +520,7 @@ fn default_slots(provider: LlmProvider) -> (&'static str, &'static str) {
         LlmProvider::Anthropic => ("sonnet", "haiku"),
         LlmProvider::Openai => ("gpt", "gpt-mini"),
         LlmProvider::Openrouter => ("openrouter-sonnet", "openrouter-gpt-mini"),
+        LlmProvider::Codex => ("codex-astra", "codex-luna"),
     }
 }
 
@@ -526,6 +543,34 @@ pub enum LlmProvider {
     /// OpenRouter (requires API key): one key, models from many vendors.
     /// Format: OpenAI Chat Completions at openrouter.ai (#26).
     Openrouter,
+    /// A ChatGPT/Codex login held by the local `codex` process (#27): no
+    /// API key, and never the OpenAI API in disguise. Format: that
+    /// process's stdio JSONL protocol, under `services/llm/codex/`.
+    Codex,
+}
+
+/// How a provider authenticates: with a key Nolune stores in
+/// `[llm.tokens]`, or with a login that lives outside Nolune's config.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderAuth {
+    ApiKey,
+    Login,
+}
+
+/// What the config knows about a provider's authentication (#27). For a
+/// key provider that is whether the key is there; for a login provider the
+/// config only knows the kind, because the login itself (and whether it is
+/// still valid) belongs to the local codex process and is read at runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthState {
+    /// The provider's API key is configured.
+    Keyed,
+    /// The provider needs an API key and has none.
+    KeyRequired,
+    /// The provider signs in; nothing to configure here.
+    Login,
 }
 
 impl LlmProvider {
@@ -534,6 +579,17 @@ impl LlmProvider {
             LlmProvider::Anthropic => "Anthropic",
             LlmProvider::Openai => "OpenAI",
             LlmProvider::Openrouter => "OpenRouter",
+            LlmProvider::Codex => "Codex",
+        }
+    }
+
+    /// How the provider authenticates.
+    pub fn auth(self) -> ProviderAuth {
+        match self {
+            LlmProvider::Anthropic | LlmProvider::Openai | LlmProvider::Openrouter => {
+                ProviderAuth::ApiKey
+            }
+            LlmProvider::Codex => ProviderAuth::Login,
         }
     }
 
@@ -542,6 +598,7 @@ impl LlmProvider {
             "api" | "anthropic" | "claude_cli" | "cli" => Some(Self::Anthropic),
             "openai" => Some(Self::Openai),
             "openrouter" | "open_router" => Some(Self::Openrouter),
+            "codex" => Some(Self::Codex),
             _ => None,
         }
     }
@@ -552,7 +609,7 @@ impl<'de> serde::Deserialize<'de> for LlmProvider {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
         Self::parse(&s).ok_or_else(|| {
-            serde::de::Error::unknown_variant(&s, &["anthropic", "openai", "openrouter"])
+            serde::de::Error::unknown_variant(&s, &["anthropic", "openai", "openrouter", "codex"])
         })
     }
 }
@@ -756,18 +813,36 @@ impl LlmConfig {
         self.preset(&self.background_preset)
     }
 
-    /// The API key for a provider, or None when it is not configured.
+    /// The API key for a provider, or None when it is not configured or the
+    /// provider has no key at all (Codex logs in instead, #27).
     pub fn key_for(&self, provider: LlmProvider) -> Option<&str> {
         let key = match provider {
             LlmProvider::Anthropic => &self.tokens.anthropic,
             LlmProvider::Openai => &self.tokens.open_ai,
             LlmProvider::Openrouter => &self.tokens.open_router,
+            LlmProvider::Codex => return None,
         };
         (!key.is_empty()).then_some(key.as_str())
     }
 
     pub fn has_key(&self, provider: LlmProvider) -> bool {
         self.key_for(provider).is_some()
+    }
+
+    /// What this config knows about the provider's authentication (#27).
+    pub fn auth_state_for(&self, provider: LlmProvider) -> AuthState {
+        match provider.auth() {
+            ProviderAuth::Login => AuthState::Login,
+            ProviderAuth::ApiKey if self.has_key(provider) => AuthState::Keyed,
+            ProviderAuth::ApiKey => AuthState::KeyRequired,
+        }
+    }
+
+    /// Whether a preset on this provider can run as far as the config is
+    /// concerned: a key provider needs its key, a login provider needs
+    /// nothing here (the login is checked when a turn starts).
+    pub fn provider_ready(&self, provider: LlmProvider) -> bool {
+        self.auth_state_for(provider) != AuthState::KeyRequired
     }
 
     /// Providers that have an API key, in preset-provider order.
@@ -789,7 +864,7 @@ impl LlmConfig {
         let Some(chat) = self.chat_preset() else {
             return Some("Choose a model preset for chat.".into());
         };
-        if !self.has_key(chat.provider) {
+        if !self.provider_ready(chat.provider) {
             return Some(format!(
                 "Configure an API key for {}.",
                 chat.provider.label()
@@ -798,10 +873,12 @@ impl LlmConfig {
         None
     }
 
-    /// Whether conversations can run: the chat preset exists and its provider has a key.
+    /// Whether conversations can run: the chat preset exists and its
+    /// provider has what the config can give it (a key, or nothing for a
+    /// login provider).
     pub fn is_configured(&self) -> bool {
         self.chat_preset()
-            .is_some_and(|preset| self.has_key(preset.provider))
+            .is_some_and(|preset| self.provider_ready(preset.provider))
     }
 
     /// The model conversations use by default, for status surfaces.
@@ -897,7 +974,7 @@ impl LlmConfig {
             let Some(preset) = self.preset(id) else {
                 return Err(format!("{slot} points at unknown preset {id:?}"));
             };
-            if !self.has_key(preset.provider) {
+            if !self.provider_ready(preset.provider) {
                 return Err(format!(
                     "{slot} uses {} but no {} API key is configured",
                     preset.name,
@@ -1488,8 +1565,8 @@ custom_token = "retained"
     }
 
     #[test]
-    fn codex_and_unknown_providers_are_rejected() {
-        for provider in ["codex", "gemini"] {
+    fn unknown_providers_are_rejected() {
+        for provider in ["gemini", "chatgpt", "open_ai"] {
             let raw =
                 format!("[[llm.presets]]\nid='x'\nname='x'\nprovider='{provider}'\nmodel='m'");
             assert!(
@@ -1497,6 +1574,153 @@ custom_token = "retained"
                 "{provider} accepted"
             );
         }
+    }
+
+    // ── Codex (#27) ──────────────────────────────────────────────────────
+
+    /// Codex is a provider without an API key: it authenticates by a login
+    /// the local codex process holds. The config knows the kind of
+    /// authentication each provider uses and never a login's state, so a
+    /// Codex slot is complete as far as the config is concerned, and the
+    /// OpenAI key is never borrowed for it (the pre-#157 shape).
+    #[test]
+    fn codex_is_a_provider_that_logs_in_instead_of_holding_a_key() {
+        let config: Config = toml::from_str(
+            "[llm]\nchat_preset='codex-astra'\nbackground_preset='codex-luna'\n[[llm.presets]]\nid='codex-astra'\nname='Astra'\nprovider='codex'\nmodel='gpt-6-astra'\n[[llm.presets]]\nid='codex-luna'\nname='Luna'\nprovider='codex'\nmodel='gpt-5.6-luna'",
+        )
+        .unwrap();
+        assert_eq!(config.llm.presets[0].provider, LlmProvider::Codex);
+        assert_eq!(LlmProvider::Codex.label(), "Codex");
+        assert_eq!(LlmProvider::parse("codex"), Some(LlmProvider::Codex));
+        assert_eq!(serde_json::to_value(LlmProvider::Codex).unwrap(), "codex");
+        assert_eq!(
+            serde_json::to_value(AuthState::KeyRequired).unwrap(),
+            "key_required"
+        );
+        let serialized = toml::to_string(&config).unwrap();
+        assert!(serialized.contains("provider = \"codex\""), "{serialized}");
+
+        assert_eq!(LlmProvider::Codex.auth(), ProviderAuth::Login);
+        for keyed in [
+            LlmProvider::Anthropic,
+            LlmProvider::Openai,
+            LlmProvider::Openrouter,
+        ] {
+            assert_eq!(keyed.auth(), ProviderAuth::ApiKey, "{keyed:?}");
+        }
+
+        // No key exists for it, whatever the tokens table holds: an OpenAI
+        // key is OpenAI's, not a Codex login.
+        let mut all = config.clone();
+        all.llm.tokens.anthropic = "a".into();
+        all.llm.tokens.open_ai = "o".into();
+        all.llm.tokens.open_router = "r".into();
+        assert_eq!(all.llm.key_for(LlmProvider::Codex), None);
+        assert!(!all.llm.has_key(LlmProvider::Codex));
+        assert_eq!(
+            all.llm.keyed_providers(),
+            [
+                LlmProvider::Anthropic,
+                LlmProvider::Openai,
+                LlmProvider::Openrouter
+            ],
+            "a login is not a key"
+        );
+        assert_eq!(config.llm.key_for(LlmProvider::Codex), None);
+
+        // The auth state names the kind of setup, per provider.
+        assert_eq!(
+            config.llm.auth_state_for(LlmProvider::Codex),
+            AuthState::Login
+        );
+        assert_eq!(
+            config.llm.auth_state_for(LlmProvider::Openai),
+            AuthState::KeyRequired
+        );
+        assert_eq!(
+            all.llm.auth_state_for(LlmProvider::Openai),
+            AuthState::Keyed
+        );
+        assert_eq!(all.llm.auth_state_for(LlmProvider::Codex), AuthState::Login);
+        assert!(config.llm.provider_ready(LlmProvider::Codex));
+        assert!(!config.llm.provider_ready(LlmProvider::Openai));
+        assert!(all.llm.provider_ready(LlmProvider::Openai));
+
+        // A Codex slot is complete without a key; the login is checked when
+        // a turn starts, not here.
+        assert!(config.llm.is_configured());
+        assert_eq!(config.llm.setup_required(), None);
+        assert_eq!(config.llm.validate_presets(), Ok(()));
+        assert_eq!(config.llm.chat_model(), Some("gpt-6-astra"));
+
+        // A key provider in a slot still needs its key.
+        let mut mixed = config.clone();
+        mixed.llm.presets.push(ModelPreset {
+            id: "gpt".into(),
+            name: "GPT".into(),
+            provider: LlmProvider::Openai,
+            model: "gpt-5.4".into(),
+        });
+        mixed.llm.background_preset = "gpt".into();
+        assert!(
+            mixed.llm.setup_required().is_none(),
+            "the chat slot is Codex"
+        );
+        let error = mixed.llm.validate_presets().unwrap_err();
+        assert!(error.contains("OpenAI") && error.contains("key"), "{error}");
+        mixed.llm.chat_preset = "gpt".into();
+        assert!(
+            mixed.llm.setup_required().unwrap().contains("OpenAI"),
+            "{:?}",
+            mixed.llm.setup_required()
+        );
+    }
+
+    /// Two Codex presets are seeded, one per slot, on models the pinned
+    /// release lists; nothing seeds them from a key, because there is none.
+    #[test]
+    fn codex_seeds_two_presets_that_fill_both_slots() {
+        let presets = default_presets(LlmProvider::Codex);
+        assert_eq!(presets.len(), 2, "{presets:?}");
+        for preset in &presets {
+            assert_eq!(preset.provider, LlmProvider::Codex);
+            assert!(preset.model.starts_with("gpt-"), "{preset:?}");
+            assert!(preset.id.starts_with("codex-"), "{preset:?}");
+            assert!(preset.name.contains("Codex"), "{preset:?}");
+        }
+        for other in [
+            LlmProvider::Anthropic,
+            LlmProvider::Openai,
+            LlmProvider::Openrouter,
+        ] {
+            for foreign in default_presets(other) {
+                assert!(
+                    presets.iter().all(|preset| preset.id != foreign.id),
+                    "{other:?} and Codex both seed {:?}",
+                    foreign.id
+                );
+            }
+        }
+
+        let mut config = Config::default();
+        config.llm.presets.clear();
+        config.llm.chat_preset.clear();
+        config.llm.background_preset.clear();
+        assert_eq!(config.llm.seed_presets(LlmProvider::Codex), 2);
+        let chat = config.llm.chat_preset().unwrap().clone();
+        let background = config.llm.background_preset().unwrap().clone();
+        assert_eq!(chat.provider, LlmProvider::Codex);
+        assert_eq!(background.provider, LlmProvider::Codex);
+        assert_ne!(chat.model, background.model);
+        assert_eq!(config.llm.setup_required(), None);
+        assert_eq!(config.llm.validate_presets(), Ok(()));
+
+        let mut none = Config::default();
+        none.llm.presets.clear();
+        none.llm.chat_preset.clear();
+        none.llm.background_preset.clear();
+        assert_eq!(none.llm.seed_for_keys(), 0, "no key, nothing to seed from");
+        assert!(none.llm.presets.is_empty());
     }
 
     // ── OpenRouter (#26) ─────────────────────────────────────────────────
