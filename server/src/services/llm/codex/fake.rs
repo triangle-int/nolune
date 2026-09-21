@@ -8,24 +8,34 @@
 //! The fixture (`fixtures/codex-<pin>.jsonl`) is one JSON object per line.
 //! Lines with `on` script one method: `reply` (the result), `echo` (the
 //! request params as the result) or `error` (an error object); `notify`
-//! events emitted before the answer and `then` events after it; `delay_ms`
-//! before answering; `exit` to die without answering; `ask` to send the
-//! client a request and answer only once the client answered that; `raw`
-//! to write a verbatim line with `$ID` replaced by the request id; `stdin`
-//! to stop serving stdin after this request while stdout stays open, the
-//! way a wedged app-server does: `ignore` leaves the pipe unread so the
-//! client's writes block once it is full, `close` closes the read end so
-//! they fail at once. Other lines are comments. Requests are served
-//! concurrently, so answers come
-//! back out of order like the real app-server's do. `initialize` must come
-//! first (`-32600 Not initialized` otherwise) and an unscripted method is
+//! events emitted before the answer and `then` events after it, after
+//! `then_delay_ms` when that is set; `delay_ms` before answering; `exit` to
+//! die without answering; `ask` to send the client a request and answer
+//! only once the client answered that; `raw` to write a verbatim line with
+//! `$ID` replaced by the request id; `stdin` to stop serving stdin after
+//! this request while stdout stays open, the way a wedged app-server does:
+//! `ignore` leaves the pipe unread so the client's writes block once it is
+//! full, `close` closes the read end so they fail at once. Other lines are
+//! comments. Requests are served concurrently, so answers come back out of
+//! order like the real app-server's do. `initialize` must come first
+//! (`-32600 Not initialized` otherwise) and an unscripted method is
 //! `-32600 Invalid request: unknown variant`, the live error shapes.
+//!
+//! Several lines may script one method; the first whose conditions hold
+//! serves the request. `when` names members the request params must carry
+//! with these values (`account/login/start` answers by its `type`), and
+//! `if` names members of the fake's state, a flat object that starts as
+//! [`STATE_ENV`] says (empty by default; a member never set reads as
+//! `null`) and that `set` rewrites after the answer, before the `then`
+//! events. That is how a login changes what `account/read` says next
+//! without teaching the fake the protocol's meaning.
 //!
 //! The environment steers the process: [`FIXTURE_ENV`] names the fixture
 //! and turns the entry point into the server, [`MODE_ENV`] is `serve`
 //! (default), `silent` (never answer) or `exit:<code>` (die at once),
-//! [`PID_FILE_ENV`] gets the pid appended at every start, and
-//! [`STDERR_ENV`] is a line written to stderr at start.
+//! [`PID_FILE_ENV`] gets the pid appended at every start, [`STDERR_ENV`]
+//! is a line written to stderr at start, and [`STATE_ENV`] is the initial
+//! state as a JSON object.
 
 use std::{
     collections::HashMap,
@@ -50,6 +60,7 @@ pub const FIXTURE_ENV: &str = "NOLUNE_FAKE_APP_SERVER_FIXTURE";
 pub const MODE_ENV: &str = "NOLUNE_FAKE_APP_SERVER_MODE";
 pub const PID_FILE_ENV: &str = "NOLUNE_FAKE_APP_SERVER_PID_FILE";
 pub const STDERR_ENV: &str = "NOLUNE_FAKE_APP_SERVER_STDERR";
+pub const STATE_ENV: &str = "NOLUNE_FAKE_APP_SERVER_STATE";
 
 /// How long an `ask` waits for the client's answer.
 const ASK_TIMEOUT: Duration = Duration::from_secs(10);
@@ -72,6 +83,12 @@ fn entry_point() -> String {
 /// A [`Launch`] that starts this fake instead of codex, with the default
 /// deadlines and restart policy.
 pub fn launch(pid_file: Option<&Path>) -> Launch {
+    launch_with_state(pid_file, None)
+}
+
+/// [`launch`] with the fake's initial state, for the entries that answer
+/// by `if`.
+pub fn launch_with_state(pid_file: Option<&Path>, state: Option<Value>) -> Launch {
     let mut launch = Launch::new(std::env::current_exe().expect("the test binary has a path"));
     launch.args = vec![
         OsString::from(entry_point()),
@@ -86,6 +103,11 @@ pub fn launch(pid_file: Option<&Path>) -> Launch {
         launch
             .env
             .push((PID_FILE_ENV.into(), pid_file.as_os_str().to_owned()));
+    }
+    if let Some(state) = state {
+        launch
+            .env
+            .push((STATE_ENV.into(), state.to_string().into()));
     }
     launch
 }
@@ -118,6 +140,15 @@ struct Ask {
 #[derive(Clone, Deserialize)]
 struct Entry {
     on: String,
+    /// Members the request params must carry, with these values.
+    #[serde(default)]
+    when: Option<Map<String, Value>>,
+    /// Members the fake's state must carry, with these values.
+    #[serde(default, rename = "if")]
+    only_if: Option<Map<String, Value>>,
+    /// State members rewritten after the answer, before the `then` events.
+    #[serde(default)]
+    set: Option<Map<String, Value>>,
     #[serde(default)]
     reply: Option<Value>,
     #[serde(default)]
@@ -131,6 +162,8 @@ struct Entry {
     #[serde(default)]
     delay_ms: Option<u64>,
     #[serde(default)]
+    then_delay_ms: Option<u64>,
+    #[serde(default)]
     exit: Option<i32>,
     #[serde(default)]
     ask: Option<Ask>,
@@ -140,7 +173,29 @@ struct Entry {
     stdin: Option<String>,
 }
 
-fn load(fixture: &Path) -> HashMap<String, Entry> {
+impl Entry {
+    /// Whether every member of `expected` is in `actual` with that value; a
+    /// member `actual` lacks reads as `null`.
+    fn subset(expected: Option<&Map<String, Value>>, actual: &Value) -> bool {
+        expected.is_none_or(|expected| {
+            expected
+                .iter()
+                .all(|(key, value)| actual.get(key).unwrap_or(&Value::Null) == value)
+        })
+    }
+
+    fn serves(&self, method: &str, params: &Value, state: &Value) -> bool {
+        self.on == method
+            && Self::subset(self.when.as_ref(), params)
+            && Self::subset(self.only_if.as_ref(), state)
+    }
+}
+
+/// The fake's state: what `if` reads and `set` writes.
+type FakeState = Arc<Mutex<Value>>;
+
+/// The script in file order: the first entry that serves a request wins.
+fn load(fixture: &Path) -> Vec<Entry> {
     let text = std::fs::read_to_string(fixture)
         .unwrap_or_else(|error| panic!("{}: {error}", fixture.display()));
     text.lines()
@@ -148,10 +203,26 @@ fn load(fixture: &Path) -> HashMap<String, Entry> {
         .filter_map(|line| {
             let value: Value = serde_json::from_str(line).expect(line);
             value.get("on")?;
-            let entry: Entry = serde_json::from_value(value).expect(line);
-            Some((entry.on.clone(), entry))
+            Some(serde_json::from_value(value).expect(line))
         })
         .collect()
+}
+
+/// The entry that serves this request right now, if any is scripted.
+fn select(script: &[Entry], method: &str, params: &Value, state: &FakeState) -> Option<Entry> {
+    let state = state.lock().unwrap();
+    script
+        .iter()
+        .find(|entry| entry.serves(method, params, &state))
+        .cloned()
+}
+
+/// The initial state from [`STATE_ENV`]: a JSON object, or empty.
+fn initial_state() -> Value {
+    std::env::var(STATE_ENV)
+        .ok()
+        .map(|text| serde_json::from_str(&text).expect("the initial state is a JSON object"))
+        .unwrap_or_else(|| Value::Object(Map::new()))
 }
 
 /// Write one frame as one line; the lock keeps concurrent handlers from
@@ -184,7 +255,8 @@ fn error_frame(id: &Value, code: i64, message: String) -> Value {
 type Asks = Arc<Mutex<HashMap<String, mpsc::Sender<Result<Value, Value>>>>>;
 
 fn handle(
-    script: Arc<HashMap<String, Entry>>,
+    entry: Option<Entry>,
+    state: FakeState,
     initialized: Arc<AtomicBool>,
     asks: Asks,
     id: Value,
@@ -197,7 +269,7 @@ fn handle(
         emit(error_frame(&id, -32600, "Not initialized".into()));
         return;
     }
-    let Some(entry) = script.get(&method) else {
+    let Some(entry) = entry else {
         emit(error_frame(
             &id,
             -32600,
@@ -237,6 +309,16 @@ fn handle(
         emit(json!({"id": id, "error": error}));
     } else if let Some(reply) = &entry.reply {
         emit(json!({"id": id, "result": reply}));
+    }
+    if let Some(ms) = entry.then_delay_ms {
+        thread::sleep(Duration::from_millis(ms));
+    }
+    if let Some(set) = &entry.set {
+        let mut state = state.lock().unwrap();
+        let members = state.as_object_mut().expect("the state is an object");
+        for (key, value) in set {
+            members.insert(key.clone(), value.clone());
+        }
     }
     for event in &entry.then {
         emit(notification(event));
@@ -284,7 +366,8 @@ fn serve(fixture: &Path) -> ! {
         _ => {}
     }
 
-    let script = Arc::new(load(fixture));
+    let script = load(fixture);
+    let state: FakeState = Arc::new(Mutex::new(initial_state()));
     let initialized = Arc::new(AtomicBool::new(false));
     let asks: Asks = Arc::default();
     let stdin = std::io::stdin();
@@ -301,10 +384,10 @@ fn serve(fixture: &Path) -> ! {
         match (method, id) {
             (Some(method), Some(id)) => {
                 let params = frame.remove("params").unwrap_or(Value::Object(Map::new()));
-                let stdin_after = script.get(&method).and_then(|entry| entry.stdin.clone());
-                let (script, initialized, asks) =
-                    (script.clone(), initialized.clone(), asks.clone());
-                thread::spawn(move || handle(script, initialized, asks, id, method, params));
+                let entry = select(&script, &method, &params, &state);
+                let stdin_after = entry.as_ref().and_then(|entry| entry.stdin.clone());
+                let (state, initialized, asks) = (state.clone(), initialized.clone(), asks.clone());
+                thread::spawn(move || handle(entry, state, initialized, asks, id, method, params));
                 if let Some(how) = stdin_after {
                     stop_reading(&how);
                 }

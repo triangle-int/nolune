@@ -1,5 +1,6 @@
 pub mod activity;
 pub mod chat;
+pub mod codex;
 pub mod commitments;
 pub mod companion;
 pub mod config;

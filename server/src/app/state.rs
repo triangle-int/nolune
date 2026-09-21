@@ -70,6 +70,9 @@ pub struct AppState {
     /// The server-local computer-use target (#16): idle until the gateway calls `start`,
     /// so building a state never spawns a driver.
     pub cua: crate::services::cua::runtime::CuaRuntime,
+    /// The codex login and its app-server child (#27): found and started on first use,
+    /// so building a state never runs the binary.
+    pub codex_auth: crate::services::llm::codex::auth::Auth,
 }
 
 // No hardcoded MCP servers — users add them via Settings UI or config.toml.
@@ -151,6 +154,7 @@ impl AppState {
             federation: Arc::new(federation),
             federation_gate: Arc::new(federation_gate),
             cua,
+            codex_auth: crate::services::llm::codex::auth::Auth::new(),
         }
     }
 
