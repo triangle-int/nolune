@@ -239,8 +239,10 @@ fn window_state_reaches_the_model_as_an_image_and_a_table() {
         "build_tools hands the typed tools the upload path for captures"
     );
     assert!(
-        registry.contains("fn bound_tool_result(") && registry.contains("fn multimodal_blocks("),
-        "a tool result carrying an image is bounded per text block, never cut through the image"
+        registry.contains("fn bound_tool_result(")
+            && registry.contains("fn multimodal_blocks(")
+            && registry.contains("fn bound_text_blocks("),
+        "a tool result carrying an image keeps the image whole and holds its text blocks under the one bound"
     );
 }
 

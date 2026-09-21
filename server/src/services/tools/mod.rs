@@ -758,9 +758,10 @@ fn multimodal_blocks(text: &str) -> Option<Vec<serde_json::Value>> {
 /// `output` under the tool-result bound. A multimodal result keeps its
 /// image and document blocks whole (the provider layer bounds those already;
 /// cutting through one would garble the image and drop the text beside it)
-/// and cuts each text block at the bound; any other output is cut as one
-/// text. The blanket `ToolDyn` impl hands a `String` output JSON-encoded, so
-/// that layer is taken off before the bound is applied and put back after.
+/// and holds its text blocks together under the one bound; any other output
+/// is cut as one text. The blanket `ToolDyn` impl hands a `String` output
+/// JSON-encoded, so that layer is taken off before the bound is applied and
+/// put back after.
 fn bound_tool_result(output: String) -> String {
     if output.len() <= MAX_TOOL_RESULT {
         return output;
@@ -770,18 +771,7 @@ fn bound_tool_result(output: String) -> String {
         _ => (output, false),
     };
     let bounded = match multimodal_blocks(&inner) {
-        Some(blocks) => serde_json::Value::Array(
-            blocks
-                .into_iter()
-                .map(|mut block| {
-                    if let Some(text) = block.get("text").and_then(|text| text.as_str()) {
-                        block["text"] = serde_json::Value::String(truncate_tool_text(text));
-                    }
-                    block
-                })
-                .collect(),
-        )
-        .to_string(),
+        Some(blocks) => serde_json::Value::Array(bound_text_blocks(blocks)).to_string(),
         None => truncate_tool_text(&inner),
     };
     if encoded {
@@ -789,6 +779,48 @@ fn bound_tool_result(output: String) -> String {
     } else {
         bounded
     }
+}
+
+/// The text blocks of a multimodal result under one shared bound: the text
+/// budget runs across the blocks in order, the block where it runs out is
+/// cut there (the suffix naming the text total across the result) and the
+/// text blocks after it are dropped, so N text blocks can never carry N
+/// times the bound. Image and document blocks pass whole wherever they are.
+fn bound_text_blocks(blocks: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+    use serde_json::Value;
+    fn text_of(block: &Value) -> Option<&str> {
+        block.get("text").and_then(Value::as_str)
+    }
+    let total: usize = blocks.iter().filter_map(text_of).map(str::len).sum();
+    if total <= MAX_TOOL_RESULT {
+        return blocks;
+    }
+    let mut budget = MAX_TOOL_RESULT;
+    let mut bounded = Vec::with_capacity(blocks.len());
+    for mut block in blocks {
+        let Some(text) = text_of(&block) else {
+            bounded.push(block);
+            continue;
+        };
+        if budget == 0 {
+            continue;
+        }
+        if text.len() < budget {
+            budget -= text.len();
+            bounded.push(block);
+            continue;
+        }
+        // The budget runs out in this block: cut it here and say so. The
+        // total is past the bound, so text is lost even when this block
+        // fits the budget exactly and only later blocks are dropped.
+        let kept: String = text.chars().take(budget).collect();
+        block["text"] = Value::String(format!(
+            "{kept}\n\n...(tool output truncated at {MAX_TOOL_RESULT} chars, total: {total})"
+        ));
+        budget = 0;
+        bounded.push(block);
+    }
+    bounded
 }
 
 fn configured_email_tools(
@@ -1247,7 +1279,9 @@ mod email_tool_tests {
 mod tool_result_bound_tests {
     //! #18: a tool result that carries an image beside its text (a window's
     //! capture, a screenshot, an uploaded image) keeps the image whole under
-    //! the tool-result bound; only text is cut. Plain text is cut as before.
+    //! the tool-result bound; only text is cut, and the text blocks share
+    //! the one bound the way a plain result has it. Plain text is cut as
+    //! before.
     use super::*;
     use serde_json::{Value, json};
 
@@ -1307,7 +1341,7 @@ mod tool_result_bound_tests {
     }
 
     #[tokio::test]
-    async fn a_multimodal_result_keeps_its_image_whole_and_bounds_each_text() {
+    async fn a_multimodal_result_keeps_its_image_whole_and_bounds_its_text() {
         let data = filler("ABCDEFGHIJ", 30_000);
         let output = json!([
             {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": data}},
@@ -1318,7 +1352,6 @@ mod tool_result_bound_tests {
         let result = observed(output).await;
         let blocks: Vec<Value> =
             serde_json::from_str(&result).unwrap_or_else(|e| panic!("{e}: {result}"));
-        assert_eq!(blocks.len(), 3);
         assert_eq!(
             blocks[0]["source"]["data"].as_str().unwrap().len(),
             30_000,
@@ -1327,11 +1360,83 @@ mod tool_result_bound_tests {
         let text = blocks[1]["text"].as_str().unwrap();
         assert!(
             text.starts_with(&filler("0123456789", 12_000))
-                && text.contains("truncated at 12000 chars"),
-            "each text block is cut at the bound: {}",
+                && text.ends_with("(tool output truncated at 12000 chars, total: 20005)"),
+            "the text is cut at the bound and the suffix names the text total: {}",
             &text[text.len() - 80..]
         );
-        assert_eq!(blocks[2]["text"], "short");
+        assert_eq!(
+            blocks.len(),
+            2,
+            "the text block after the cut is dropped: the budget is spent"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_multimodal_result_shares_one_text_budget_across_its_blocks() {
+        // Three text blocks each under the bound but 24 000 chars together:
+        // the bound is on the result the model reads, not on each block.
+        let output = json!([
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": filler("ABCDEFGHIJ", 3_000)}},
+            {"type": "text", "text": filler("0123456789", 8_000)},
+            {"type": "text", "text": filler("abcdefghij", 8_000)},
+            {"type": "text", "text": filler("KLMNOPQRST", 8_000)},
+        ])
+        .to_string();
+        let result = observed(output).await;
+        let blocks: Vec<Value> =
+            serde_json::from_str(&result).unwrap_or_else(|e| panic!("{e}: {result}"));
+        assert_eq!(
+            blocks[0]["source"]["data"].as_str().unwrap().len(),
+            3_000,
+            "the image passes whole"
+        );
+        let texts: Vec<&str> = blocks[1..]
+            .iter()
+            .map(|block| block["text"].as_str().unwrap())
+            .collect();
+        let suffix_at = texts
+            .iter()
+            .enumerate()
+            .find_map(|(i, text)| text.find("\n\n...(tool output truncated").map(|at| (i, at)))
+            .unwrap_or_else(|| {
+                panic!(
+                    "no block says the result was cut; text blocks of {:?} chars",
+                    texts.iter().map(|text| text.len()).collect::<Vec<_>>()
+                )
+            });
+        let text_total: usize = texts
+            .iter()
+            .enumerate()
+            .map(|(i, text)| {
+                if i == suffix_at.0 {
+                    suffix_at.1
+                } else {
+                    text.len()
+                }
+            })
+            .sum();
+        assert!(
+            text_total <= MAX_TOOL_RESULT,
+            "the text across every block stays under the bound: {text_total} chars in {} blocks",
+            texts.len()
+        );
+        assert_eq!(
+            texts[0],
+            filler("0123456789", 8_000),
+            "the first block fits whole"
+        );
+        assert!(
+            texts[1].starts_with(&filler("abcdefghij", 4_000))
+                && texts[1].ends_with("(tool output truncated at 12000 chars, total: 24000)"),
+            "the block where the budget runs out is cut there and names the total: {}",
+            &texts[1][texts[1].len() - 80..]
+        );
+        assert_eq!(
+            texts.len(),
+            2,
+            "text blocks past the budget are dropped, not sent whole: {:?} chars",
+            texts.iter().map(|text| text.len()).collect::<Vec<_>>()
+        );
     }
 
     #[tokio::test]

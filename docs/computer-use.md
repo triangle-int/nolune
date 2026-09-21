@@ -328,9 +328,10 @@ and the system prompt states the loop below rule by rule.
   the companion's uploads and referenced by a provider URL carrying its
   provenance when `public_url` is provider-reachable, inlined within the
   provider's bound on a local install (the result then carries the image
-  and the text as separate blocks, and the tool-result bound cuts text
-  blocks only, never through an image). The result names the upload and a
-  link the user can open; the bytes never appear in the text.
+  and the text as separate blocks; the tool-result bound holds the text
+  blocks together under the one bound a plain result has and never cuts
+  through an image). The result names the upload and a link the user can
+  open; the bytes never appear in the text.
 - `act` — one typed action in a window: `click`, `double_click`,
   `right_click`, `drag`, `scroll`, `type_text`, `press_key`, `hotkey`,
   `set_value` or `invoke_menu`, addressed by `element_token` (preferred),
