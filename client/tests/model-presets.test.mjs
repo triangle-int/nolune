@@ -1,15 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+	CODEX_MODELS,
 	PROVIDERS,
 	capabilityWarnings,
 	effectivePresetId,
+	modelHints,
+	modelPlaceholder,
 	modelShortLabel,
 	pickerPresets,
 	presetCapabilities,
 	presetLabel,
 	presetTestCopy,
 	presetsByProvider,
+	providerAuth,
 	suggestPresetId,
 	validatePresets,
 } from '../src/lib/models/presets.js';
@@ -22,10 +26,50 @@ const presets = [
 ];
 const slots = { chat_preset: 'sonnet', background_preset: 'haiku' };
 
-test('providers are the three adapters the server ships (#156, #26)', () => {
-	assert.deepEqual(PROVIDERS.map((p) => p.id), ['anthropic', 'openai', 'openrouter']);
+test('providers are the four adapters the server ships (#156, #26, #27)', () => {
+	assert.deepEqual(PROVIDERS.map((p) => p.id), ['anthropic', 'openai', 'openrouter', 'codex']);
 	for (const p of PROVIDERS) assert.ok(p.label);
 	assert.equal(PROVIDERS.find((p) => p.id === 'openrouter').label, 'OpenRouter');
+	assert.equal(PROVIDERS.find((p) => p.id === 'codex').label, 'Codex');
+});
+
+test('codex logs in instead of holding an API key (#27)', () => {
+	// Mirrors `LlmProvider::auth()`: three key providers, one login provider.
+	assert.deepEqual(PROVIDERS.map((p) => [p.id, p.auth]), [['anthropic', 'key'], ['openai', 'key'], ['openrouter', 'key'], ['codex', 'login']]);
+	assert.equal(providerAuth('codex'), 'login');
+	assert.equal(providerAuth('openai'), 'key');
+	// An unknown provider is treated like a key provider, so validation still complains.
+	assert.equal(providerAuth('gemini'), 'key');
+	// No provider row has a field for a key or a token: the browser never sees one.
+	for (const p of PROVIDERS) assert.deepEqual(Object.keys(p).sort(), ['auth', 'id', 'label']);
+});
+
+test('a slot on a codex preset needs no key (#27)', () => {
+	const codex = [
+		{ id: 'codex-astra', name: 'GPT-6 Astra via Codex', provider: 'codex', model: 'gpt-6-astra' },
+		{ id: 'codex-luna', name: 'GPT-5.6 Luna via Codex', provider: 'codex', model: 'gpt-5.6-luna' },
+	];
+	// Nothing keyed at all: a codex slot is still complete as far as the config goes (`provider_ready`).
+	assert.deepEqual(validatePresets(codex, { chat_preset: 'codex-astra', background_preset: 'codex-luna' }, []), []);
+	// A key slot next to it still needs its key.
+	const mixed = [...codex, presets[2]];
+	const errors = validatePresets(mixed, { chat_preset: 'codex-astra', background_preset: 'gpt' }, []);
+	assert.equal(errors.length, 1, errors.join('\n'));
+	assert.match(errors[0], /Background uses GPT-5\.4, but no OpenAI API key/);
+	// A codex preset still needs a model id.
+	assert.match(validatePresets([{ ...codex[0], model: '' }], { chat_preset: 'codex-astra', background_preset: 'codex-astra' }, []).join('\n'), /model id/);
+});
+
+test('the preset editor knows the models the pinned codex release lists (#27)', () => {
+	assert.equal(CODEX_MODELS[0], 'gpt-6-astra', 'the default model first');
+	assert.ok(CODEX_MODELS.includes('gpt-5.6-luna'), 'the seeded background preset');
+	assert.deepEqual(modelHints('codex'), CODEX_MODELS);
+	assert.deepEqual(modelHints('openai'), []);
+	assert.deepEqual(modelHints('anthropic'), []);
+	assert.equal(modelPlaceholder('codex'), 'gpt-6-astra');
+	assert.equal(modelPlaceholder('openrouter'), 'vendor/model');
+	assert.equal(modelPlaceholder('anthropic'), 'claude-sonnet-4-6');
+	assert.equal(modelPlaceholder('openai'), 'gpt-5.4');
 });
 
 test('valid presets and slots produce no errors', () => {
@@ -96,6 +140,10 @@ test('labels stay human: preset label and short model names', () => {
 	assert.equal(modelShortLabel('gpt-5.4-mini'), 'GPT-5.4 mini');
 	assert.equal(modelShortLabel('gpt-5.4'), 'GPT-5.4');
 	assert.equal(modelShortLabel('some-custom-model'), 'some-custom-model');
+	// The codex models carry a name after the version (#27).
+	assert.equal(modelShortLabel('gpt-6-astra'), 'GPT-6 Astra');
+	assert.equal(modelShortLabel('gpt-5.6-luna'), 'GPT-5.6 Luna');
+	assert.equal(modelShortLabel('gpt-5.5'), 'GPT-5.5');
 	assert.equal(modelShortLabel(''), '');
 	// OpenRouter ids carry the vendor and spell versions with dots.
 	assert.equal(modelShortLabel('anthropic/claude-sonnet-4.6'), 'Sonnet 4.6');
@@ -113,6 +161,8 @@ test('ids are derived from names and stay unique', () => {
 test('presets group by provider in provider order', () => {
 	const grouped = presetsByProvider(presets);
 	assert.deepEqual(grouped.map((g) => g.provider.id), ['anthropic', 'openai', 'openrouter']);
+	const withCodex = presetsByProvider([...presets, { id: 'codex-astra', name: 'Astra', provider: 'codex', model: 'gpt-6-astra' }]);
+	assert.deepEqual(withCodex.map((g) => g.provider.id), ['anthropic', 'openai', 'openrouter', 'codex']);
 	assert.deepEqual(grouped[0].presets.map((p) => p.id), ['sonnet', 'haiku']);
 	assert.deepEqual(grouped[2].presets.map((p) => p.id), ['router']);
 	assert.deepEqual(presetsByProvider([]), []);
@@ -205,4 +255,30 @@ test('connection test outcomes read as one sentence each, typed by the server er
 	const other = presetTestCopy({ ok: false, error: 'something_new', message: 'the server said this', status: 500 }, gpt);
 	assert.equal(other.tone, 'error');
 	assert.equal(other.text, 'the server said this');
+});
+
+test('connection test outcomes for a codex preset speak of the login, never of an API key (#27)', () => {
+	const astra = { id: 'codex-astra', name: 'GPT-6 Astra via Codex', provider: 'codex', model: 'gpt-6-astra' };
+	// `setup_required` is the server's own actionable sentence: a missing
+	// binary, another release, or no login; the copy adds nothing about keys.
+	for (const message of [
+		'Codex login required: sign in with ChatGPT from Settings › Connections, or run `codex login` on this machine.',
+		'codex is not installed: no `codex` on PATH and NOLUNE_CODEX_BIN is unset',
+		'/opt/homebrew/bin/codex is codex 0.154.0; Nolune supports codex 0.155.0 only',
+	]) {
+		const copy = presetTestCopy({ ok: false, error: 'setup_required', message, status: 503 }, astra);
+		assert.equal(copy.tone, 'error');
+		assert.equal(copy.text, message);
+	}
+	const auth = presetTestCopy({ ok: false, error: 'authentication', message: 'Codex rejected the API key.', status: 401 }, astra);
+	assert.doesNotMatch(auth.text, /API key/);
+	assert.match(auth.text, /Codex.*log(ged)? ?in/i);
+	const limited = presetTestCopy({ ok: false, error: 'rate_limited', message: 'Codex accepted the key but is rate limiting: usage limit', status: 429, retry_after_seconds: 30 }, astra);
+	assert.doesNotMatch(limited.text, /key/);
+	assert.match(limited.text, /Codex.*rate limit.*in 30 s/);
+	const ok = presetTestCopy({ ok: true, preset: 'codex-astra', provider: 'codex', model: 'gpt-6-astra', usage: { input_tokens: 10, output_tokens: 4 } }, astra);
+	assert.equal(ok.tone, 'ok');
+	assert.match(ok.text, /gpt-6-astra answered · 14 tokens/);
+	// The key providers keep their sentences.
+	assert.match(presetTestCopy({ ok: false, error: 'authentication', message: 'x', status: 401 }, presets[2]).text, /API key/);
 });
