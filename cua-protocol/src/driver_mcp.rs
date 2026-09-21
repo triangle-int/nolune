@@ -14,11 +14,11 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use crate::{
-    BoundedText, Capability, CuaAction, CuaRequestEnvelope, CuaResponse, CuaResponseEnvelope,
-    CuaRuntimeError, ElementAddress, ElementCondition, ElementRef, HealthCheckStatus,
-    HealthOverall, HealthPlatform, HealthReportResult, MachineDescriptor, MachineHealth, MachineId,
-    MachineLocation, Permission, PermissionKind, PermissionState, Platform, RuntimeErrorCode,
-    SessionLabel, ValidationError, VerifyPredicate, WindowTarget,
+    BoundedText, Capability, CuaAction, CuaActionKind, CuaRequestEnvelope, CuaResponse,
+    CuaResponseEnvelope, CuaRuntimeError, ElementAddress, ElementCondition, ElementRef,
+    HealthCheckStatus, HealthOverall, HealthPlatform, HealthReportResult, MachineDescriptor,
+    MachineHealth, MachineId, MachineLocation, Permission, PermissionKind, PermissionState,
+    Platform, RuntimeErrorCode, SessionLabel, ValidationError, VerifyPredicate, WindowTarget,
 };
 
 /// The driver tool that produces a [`HealthReportResult`].
@@ -323,9 +323,10 @@ pub fn tool_call(action: &CuaAction) -> Result<DriverToolCall, ValidationError> 
 /// remote adapter's answer would.
 pub fn decode_response(
     request: &CuaRequestEnvelope,
-    payload: Value,
+    mut payload: Value,
 ) -> Result<CuaResponseEnvelope, ValidationError> {
     let kind = request.action.kind();
+    fold_live_spellings(kind, &mut payload);
     let envelope = json!({
         "version": request.version,
         "request_id": request.request_id,
@@ -339,6 +340,186 @@ pub fn decode_response(
     let envelope = CuaResponseEnvelope::from_json(&envelope.to_string())?;
     envelope.validate_response_for(request)?;
     Ok(envelope)
+}
+
+/// The driver (0.28.2) spells a window flat, `pid` and `window_id` beside
+/// the record's other fields, where the protocol carries a `target`; a
+/// window state also carries advisory `_`-prefixed text and omits
+/// `truncated`; a verification says `status` for `overall` and `index` for
+/// `predicate_index` beside timing and observation text the protocol does
+/// not carry; an element's frame is `{x, y, w, h}`; a screenshot is spelled
+/// out in `screenshot_*` fields. Fold those into the protocol's shape so the
+/// strict decoder reads a live answer the way it reads a canonical one. A
+/// record that already carries the canonical key is left alone, so both
+/// spellings at once still fail as unknown fields.
+fn fold_live_spellings(kind: CuaActionKind, payload: &mut Value) {
+    fn fold_target(record: &mut Value) {
+        let Some(object) = record.as_object_mut() else {
+            return;
+        };
+        if object.contains_key("target") {
+            return;
+        }
+        if let (Some(pid), Some(window_id)) = (
+            object.get("pid").and_then(Value::as_u64),
+            object.get("window_id").and_then(Value::as_u64),
+        ) {
+            object.remove("pid");
+            object.remove("window_id");
+            object.insert("target".into(), json!({"pid": pid, "window_id": window_id}));
+        }
+    }
+    /// `{w, h}` for `{width, height}`, as the driver spells an element's
+    /// frame.
+    fn fold_rect(rect: &mut Value) {
+        let Some(object) = rect.as_object_mut() else {
+            return;
+        };
+        for (short, long) in [("w", "width"), ("h", "height")] {
+            if !object.contains_key(long)
+                && let Some(value) = object.remove(short)
+            {
+                object.insert(long.into(), value);
+            }
+        }
+    }
+    /// `screenshot_png_b64` and its `screenshot_*` siblings as the
+    /// protocol's `screenshot` object; a frame the driver marks unprovable
+    /// is dropped rather than handed on. An empty `tree_markdown` is no
+    /// tree.
+    fn fold_capture(object: &mut Map<String, Value>) {
+        if object
+            .get("tree_markdown")
+            .and_then(Value::as_str)
+            .is_some_and(str::is_empty)
+        {
+            object.remove("tree_markdown");
+        }
+        let valid = object
+            .remove("screenshot_frame_valid")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(true);
+        let base64 = object.remove("screenshot_png_b64");
+        let mime = object.remove("screenshot_mime_type");
+        let width = object.remove("screenshot_width");
+        let height = object.remove("screenshot_height");
+        let Some(base64) = base64 else {
+            return;
+        };
+        if !valid {
+            object.remove("screenshot_scale");
+            return;
+        }
+        if object.contains_key("screenshot") {
+            return;
+        }
+        let media_type = match mime.as_ref().and_then(Value::as_str) {
+            Some("image/jpeg") => "jpeg",
+            _ => "png",
+        };
+        object.insert(
+            "screenshot".into(),
+            json!({
+                "media_type": media_type,
+                "base64": base64,
+                "width": width,
+                "height": height,
+            }),
+        );
+    }
+    fn fold_windows(windows: Option<&mut Value>) {
+        if let Some(windows) = windows.and_then(Value::as_array_mut) {
+            windows.iter_mut().for_each(fold_target);
+        }
+    }
+    match kind {
+        CuaActionKind::ListWindows | CuaActionKind::LaunchApp => {
+            fold_windows(payload.get_mut("windows"));
+        }
+        CuaActionKind::ListApps => {
+            if let Some(apps) = payload.get_mut("apps").and_then(Value::as_array_mut) {
+                for app in apps {
+                    fold_windows(app.get_mut("windows"));
+                }
+            }
+        }
+        CuaActionKind::VerifyState => {
+            let Some(object) = payload.as_object_mut() else {
+                return;
+            };
+            if !object.contains_key("overall")
+                && let Some(status) = object.remove("status")
+            {
+                object.insert("overall".into(), status);
+            }
+            for key in ["elapsed_ms", "samples", "stable"] {
+                object.remove(key);
+            }
+            fold_capture(object);
+            if let Some(predicates) = object.get_mut("predicates").and_then(Value::as_array_mut) {
+                for predicate in predicates.iter_mut().filter_map(Value::as_object_mut) {
+                    if !predicate.contains_key("predicate_index")
+                        && let Some(index) = predicate.remove("index")
+                    {
+                        predicate.insert("predicate_index".into(), index);
+                    }
+                    predicate.remove("observed_json");
+                    predicate.remove("unknown_reason");
+                }
+            }
+        }
+        CuaActionKind::GetWindowState => {
+            fold_target(payload);
+            let Some(object) = payload.as_object_mut() else {
+                return;
+            };
+            object.retain(|key, _| !key.starts_with('_'));
+            fold_capture(object);
+            if let Some(elements) = object.get_mut("elements").and_then(Value::as_array_mut) {
+                for element in elements {
+                    if let Some(frame) = element.get_mut("frame") {
+                        fold_rect(frame);
+                    }
+                }
+            }
+            if let Some(bounds) = object.get_mut("window_bounds") {
+                fold_rect(bounds);
+            }
+            if !object.contains_key("truncated") {
+                let count = |key: &str| object.get(key).and_then(Value::as_u64);
+                let cut = matches!(
+                    (count("returned_element_count"), count("total_element_count")),
+                    (Some(returned), Some(total)) if returned < total
+                );
+                object.insert("truncated".into(), json!(cut));
+            }
+        }
+        CuaActionKind::SetWindowFrame
+        | CuaActionKind::Click
+        | CuaActionKind::DoubleClick
+        | CuaActionKind::RightClick
+        | CuaActionKind::MoveCursor
+        | CuaActionKind::Drag
+        | CuaActionKind::Scroll
+        | CuaActionKind::TypeText
+        | CuaActionKind::PressKey
+        | CuaActionKind::Hotkey
+        | CuaActionKind::SetValue
+        | CuaActionKind::InvokeMenu => {
+            // The protocol's action results carry no capture. A driver that
+            // attaches an image beside an outcome as screenshot evidence
+            // (folded in over MCP as `screenshot_*`) is read for its
+            // outcome; the image is dropped, not refused as unknown.
+            if let Some(object) = payload.as_object_mut() {
+                object.retain(|key, _| !key.starts_with("screenshot_"));
+            }
+        }
+        CuaActionKind::StartSession
+        | CuaActionKind::GetSession
+        | CuaActionKind::ListSessions
+        | CuaActionKind::EndSession
+        | CuaActionKind::HealthReport => {}
+    }
 }
 
 /// The runtime error code a driver error code or message text names, if any.

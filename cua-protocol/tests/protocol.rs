@@ -128,3 +128,35 @@ fn machine_selection_rejects_ambiguity_and_duplicate_ids() {
         Err(SelectionError::DuplicateMachineId)
     );
 }
+
+/// #18: the installed driver lists `com.apple.Image_Capture`, so a real
+/// `list_apps` answer must decode; the grammar admits `_` inside a part the
+/// way macOS spells bundle ids, and nothing looser.
+#[test]
+fn bundle_ids_admit_underscores_inside_a_part() {
+    for valid in [
+        "com.apple.Image_Capture",
+        "com.apple.Safari",
+        "org.example.my_app-2",
+    ] {
+        assert!(AppBundleId::try_from(valid).is_ok(), "{valid}");
+    }
+    for invalid in [
+        "com.apple.Image_",
+        "com._apple.x",
+        "com.apple..x",
+        "noperiod",
+        "com.apple.Image Capture",
+        "com.apple.Image/Capture",
+    ] {
+        assert!(AppBundleId::try_from(invalid).is_err(), "{invalid}");
+    }
+    let apps = r#"{"apps":[{"active":false,"bundle_id":"com.apple.Image_Capture","kind":"desktop","name":"Image Capture","pid":3566,"running":true,"windows":[]}]}"#;
+    let envelope = format!(
+        r#"{{"version":"v1","request_id":"r1","machine_id":"m1","action":"list_apps","response":{{"status":"success","result":{{"action":"list_apps","result":{apps}}}}}}}"#
+    );
+    assert!(
+        CuaResponseEnvelope::from_json(&envelope).is_ok(),
+        "a list_apps answer naming Image Capture decodes"
+    );
+}

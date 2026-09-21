@@ -12,7 +12,9 @@
 //! pinned driver under the workspace, its macOS daemon, and what this host
 //! can run. `desktop` is the other kind of target (#17): a desktop app that
 //! registers a descriptor over the machine WebSocket and answers typed
-//! frames with its own driver.
+//! frames with its own driver. `orchestrator` is the loop policy the typed
+//! machine tools (#18) enforce on either kind: the snapshot ledger, the
+//! verification gate and background-only delivery.
 
 pub mod daemon;
 pub mod desktop;
@@ -20,6 +22,7 @@ pub mod discovery;
 pub mod driver;
 pub mod host;
 pub mod install;
+pub mod orchestrator;
 pub mod runtime;
 pub mod session;
 pub mod transport;
