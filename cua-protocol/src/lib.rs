@@ -197,6 +197,8 @@ fn validate_single_line(name: &str, value: &str, max: usize) -> Result<(), Valid
     Ok(())
 }
 
+/// Reverse-DNS parts of letters, digits, `-` and `_` (macOS spells
+/// `com.apple.Image_Capture`), each starting and ending alphanumeric.
 fn validate_bundle_id(name: &str, value: &str, max: usize) -> Result<(), ValidationError> {
     if value.is_empty() || value.len() > max || !value.contains('.') {
         return Err(ValidationError::new(format!("invalid {name} length")));
@@ -205,7 +207,7 @@ fn validate_bundle_id(name: &str, value: &str, max: usize) -> Result<(), Validat
         part.is_empty()
             || !part
                 .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
             || !part
                 .as_bytes()
                 .first()
@@ -1632,6 +1634,9 @@ pub struct AccessibilityElement {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_index: Option<u32>,
     pub depth: u8,
+    /// The element lives in a browser's web content (Safari reports it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_web_content: Option<bool>,
 }
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -1789,6 +1794,8 @@ fn jpeg_dimensions(bytes: &[u8]) -> Result<(u32, u32), ValidationError> {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExactWindowStatus {
+    /// The driver spells this `matched`.
+    #[serde(alias = "matched")]
     Available,
     AxUnresolved,
 }
@@ -1799,6 +1806,8 @@ pub enum ObservationStatus {
     Stale,
     Unknown,
     Unavailable,
+    /// A one-shot capture can be taken (the driver's word for it).
+    Available,
 }
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -1830,7 +1839,9 @@ pub struct ObservationAvailability {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct BackgroundRoute {
-    pub reason: BoundedText,
+    /// Why the route is refused or unverifiable; an available route has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<BoundedText>,
     pub route: BackgroundRouteKind,
     pub status: BackgroundRouteStatus,
 }
@@ -1967,10 +1978,13 @@ impl WindowStateResult {
                     return Err(ValidationError::new("non-root element requires parent"));
                 }
                 Some(parent) => {
+                    // `depth` counts every node of the tree; `parent_index`
+                    // names the nearest actionable ancestor, which may sit
+                    // several levels up.
                     let parent_depth = depths
                         .get(&parent)
                         .ok_or_else(|| ValidationError::new("element parent must precede child"))?;
-                    if element.depth != parent_depth + 1 {
+                    if element.depth <= *parent_depth {
                         return Err(ValidationError::new("invalid accessibility element depth"));
                     }
                 }

@@ -420,12 +420,15 @@ impl Tool for ListMachinesTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "list_machines".into(),
-            description: "List all machines you can control. Every entry has machine_id, location \
-                (desktop or server_local) and os. Connected desktop apps also carry hostname, \
+            description: "List all machines you can control, one entry per machine_id with its \
+                location (desktop or server_local) and os. Connected desktop apps carry hostname, \
                 screen dimensions and last_seen; use their machine_id with computer_use, \
-                remote_bash and remote_files. Cua targets also carry driver_version, health, \
-                permissions (accessibility, screen_capture) and capabilities; they only accept \
-                actions their capabilities and granted permissions allow."
+                remote_bash and remote_files. Machines with a Cua driver also carry \
+                driver_version, health, permissions (accessibility, screen_capture) and \
+                capabilities: those are the ones discover_windows, get_window_state, act and \
+                verify_state drive, and they only accept actions their capabilities and granted \
+                permissions allow. The user's choice in the composer decides which machine the \
+                tools act on; this list is for reading, not for picking."
                 .into(),
             parameters: openai_schema::<ListMachinesArgs>(),
         }
@@ -440,30 +443,40 @@ impl Tool for ListMachinesTool {
                     .into(),
             );
         }
-        let mut info: Vec<serde_json::Value> = agents
+        // One entry per machine id: a desktop that registered a Cua
+        // descriptor (#17) shows its legacy fields and its driver together.
+        let mut info: BTreeMap<String, serde_json::Value> = agents
             .iter()
             .map(|m| {
-                serde_json::json!({
-                    "machine_id": m.machine_id,
-                    "location": cua_protocol::MachineLocation::Desktop,
-                    "os": m.os,
-                    "hostname": m.hostname,
-                    "screen": format!("{}x{}", m.screen_width, m.screen_height),
-                    "last_seen": m.last_seen,
-                })
+                (
+                    m.machine_id.clone(),
+                    serde_json::json!({
+                        "machine_id": m.machine_id,
+                        "location": cua_protocol::MachineLocation::Desktop,
+                        "os": m.os,
+                        "hostname": m.hostname,
+                        "screen": format!("{}x{}", m.screen_width, m.screen_height),
+                        "last_seen": m.last_seen,
+                    }),
+                )
             })
             .collect();
-        info.extend(targets.iter().map(|m| {
-            serde_json::json!({
-                "machine_id": m.machine_id,
-                "location": m.location,
-                "os": m.platform,
-                "driver_version": m.driver_version,
-                "health": m.health,
-                "permissions": m.permissions,
-                "capabilities": m.capabilities,
-            })
-        }));
+        for m in &targets {
+            let entry = info
+                .entry(m.machine_id.as_str().to_owned())
+                .or_insert_with(|| {
+                    serde_json::json!({
+                        "machine_id": m.machine_id,
+                        "location": m.location,
+                        "os": m.platform,
+                    })
+                });
+            entry["driver_version"] = serde_json::json!(m.driver_version);
+            entry["health"] = serde_json::json!(m.health);
+            entry["permissions"] = serde_json::json!(m.permissions);
+            entry["capabilities"] = serde_json::json!(m.capabilities);
+        }
+        let info: Vec<serde_json::Value> = info.into_values().collect();
         serde_json::to_string_pretty(&info).map_err(|e| ToolExecError(e.to_string()))
     }
 }
@@ -1064,6 +1077,61 @@ mod list_machines_tests {
         assert!(
             local.get("hostname").is_none(),
             "no hostname was advertised"
+        );
+    }
+
+    /// #18: a desktop that registered a Cua descriptor (#17) is one entry,
+    /// its legacy fields and its descriptor together, never two entries
+    /// under the same id.
+    #[tokio::test]
+    async fn a_desktop_with_a_driver_is_one_entry_with_both_sides() {
+        let registry = MachineRegistry::new();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        registry.register(legacy_agent(), tx).await;
+        let descriptor = MachineDescriptor {
+            machine_id: MachineId::try_from("studio").unwrap(),
+            location: MachineLocation::Desktop,
+            platform: Platform::Macos,
+            driver_version: DriverVersion::try_from("0.28.2").unwrap(),
+            health: MachineHealth::Healthy,
+            permissions: PermissionState {
+                accessibility: Permission::Granted,
+                screen_capture: Permission::Granted,
+            },
+            capabilities: vec![Capability::AppDiscovery, Capability::Pointer],
+        };
+        let adapter = CheckedCuaAdapter::new(descriptor, |request| {
+            let response = CuaResponseEnvelope {
+                version: request.version,
+                request_id: request.request_id,
+                machine_id: request.machine_id,
+                action: request.action.kind(),
+                response: CuaResponse::Success {
+                    result: Box::new(CuaActionResult::ListApps(AppsResult { apps: vec![] })),
+                },
+            };
+            Box::pin(async move { response })
+        })
+        .unwrap();
+        registry.cua().register(adapter).await.unwrap();
+
+        let machines = listed(&registry).await;
+        assert_eq!(machines.len(), 1, "one entry per machine: {machines:?}");
+        let studio = &machines[0];
+        assert_eq!(studio["machine_id"], "studio");
+        assert_eq!(studio["location"], "desktop");
+        assert_eq!(studio["hostname"], "studio");
+        assert_eq!(studio["screen"], "1440x900");
+        assert_eq!(studio["last_seen"], 1_700_000_000);
+        assert_eq!(studio["driver_version"], "0.28.2");
+        assert_eq!(studio["health"], "healthy");
+        assert_eq!(
+            studio["capabilities"],
+            serde_json::json!(["app_discovery", "pointer"])
+        );
+        assert_eq!(
+            studio["permissions"],
+            serde_json::json!({ "accessibility": "granted", "screen_capture": "granted" })
         );
     }
 

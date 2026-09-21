@@ -6,7 +6,9 @@ local [Cua Driver](https://github.com/trycua/cua) process and registers it as
 a machine target beside the desktops connected through the app. Everything
 goes through the shared typed protocol in `cua-protocol/`, the same boundary
 a desktop target uses (see [Desktop targets](#desktop-targets-17)), so one
-policy decides what the companion may do on either kind of machine.
+policy decides what the companion may do on either kind of machine. The
+companion drives both through the same typed tools and the same loop rules
+(see [Typed machine tools](#typed-machine-tools-18)).
 
 ## When the target exists
 
@@ -268,8 +270,9 @@ states it in the system prompt, and builds the tools around it.
   `unavailable` means the platform cannot report) fails with what to do
   there. No refusal ever falls back to another computer.
 - The server home is where `run_command` and the file tools already act, so
-  the desktop tools answer `server_home` until a desktop is chosen. Driving
-  the server-local Cua target through typed machine tools is #18.
+  the legacy desktop tools answer `server_home` until a desktop is chosen.
+  The typed machine tools (below) drive its Cua target instead, when the
+  server machine has one.
 - The trail names the computer: each desktop tool's activity entry reads
   "<action> on <name>" (the user's name for it, else its hostname; with
   nothing chosen, the only desktop connected when the turn started; with a
@@ -291,6 +294,105 @@ states it in the system prompt, and builds the tools around it.
   queued target it never took is released with the conversation). A new
   message from the composer starts a new run with the composer's own choice.
 
+## Typed machine tools (#18)
+
+Four tools drive any Cua target, the server machine or a desktop with a
+driver, through one orchestrator per chat turn
+(`server/src/services/cua/orchestrator.rs`, tools in
+`server/src/services/tools/cua.rs`). `list_machines` shows one entry per
+machine; the ones with `driver_version` are the ones these tools reach. The
+coordinate `computer_use` tool stays beside them for desktops without a
+driver until #19.
+
+- `discover_windows` — `list_apps`, `list_windows` (optionally one pid) or
+  `launch_app` (by bundle id or name). Every window comes back with the
+  `pid` and `window_id` the other three tools take as `target`.
+- `get_window_state` — observe one window: the `snapshot_id`, the
+  accessibility elements with their `element_token`, role, label, value and
+  frame (a bounded list; `query` narrows large trees), the driver's
+  degraded flags and background-input routes, and `pixel_addresses`, which
+  says whether a point address is allowed on that window right now. The
+  output stays under the tool-result bound whatever the window holds: labels
+  and values are clipped, and elements past the bound are counted rather
+  than shown, so the snapshot id and the pixel policy always reach the
+  model. A screenshot is captured only when asked for (`include_screenshot`)
+  and only its dimensions are reported so far; showing the image to the
+  model is the next slice of #18.
+- `act` — one typed action in a window: `click`, `double_click`,
+  `right_click`, `drag`, `scroll`, `type_text`, `press_key`, `hotkey`,
+  `set_value` or `invoke_menu`, addressed by `element_token` (preferred),
+  `element_index` + `snapshot_id`, or a window-local `point`. `verify`
+  carries the predicates that must hold afterwards.
+- `verify_state` — the predicates alone: `window_exists`, `window_bounds`,
+  or an element (by role and/or `label_contains`) that exists, is enabled or
+  selected, or has a value.
+
+### Which computer
+
+The tools act on the computer the user chose ([above](#choosing-a-computer)),
+resolved to its Cua target: a chosen desktop must have registered a driver
+(`no_cua_driver` names it otherwise), the server home means the server-local
+target (`no_server_local_target` when the server machine has none), and with
+nothing chosen the only registered target is used while several are refused
+with `choose_a_computer`, naming them, even when the model names one. A
+target whose driver reports the machine unavailable is refused with
+`driver_unavailable`; a call that names another computer than the chosen one
+with `target_mismatch`; no target at all with `no_cua_target`. On the server
+machine every tool call is one run of the runtime, sessioned and ended with
+it ([Sessions](#sessions)); a desktop's own driver keeps its session.
+
+### The loop the orchestrator enforces
+
+1. Observe before acting. An element action needs a prior `get_window_state`
+   of that window on that machine (`snapshot_required`), one that carried an
+   accessibility tree (`no_accessibility_tree`).
+2. Tokens are bound to their snapshot. Only tokens and indexes the latest
+   snapshot of the window issued are forwarded; a token from a snapshot a
+   newer one replaced, or one no snapshot issued, is refused with
+   `stale_snapshot` before anything is sent. The driver's own stale verdict
+   is believed too: it drops the window from the ledger. Snapshots are kept
+   per machine and window, so a token never crosses to another window or
+   computer.
+3. One snapshot, one action. After an action reaches the driver the
+   window's observation is consumed (`snapshot_consumed`): call
+   `get_window_state` again before the next action there. Verifying does
+   not consume it.
+4. Pixels are the fallback, not the default. A point address (and a drag)
+   is refused with `pixel_refused` unless the window's latest observation
+   was degraded, its accessibility surface unresolved or empty, or the last
+   verification on it was not satisfied; a verified action closes the pixel
+   route again. An empty tree counts only when nothing narrowed the walk: a
+   `query` that matches nothing, or a `max_depth` above every actionable
+   element, is a filter on a healthy window. The coordinates come from the
+   latest observation, so it is required for point addresses as well, and it
+   must have captured a screenshot (`include_screenshot: true`): with none
+   on record the point is refused too, and `pixel_addresses` says so. A
+   verification on a window that was never observed puts nothing on record
+   either way.
+5. Verify after every action. The orchestrator reads the driver's outcome
+   and, when `verify.expect` was given, issues `verify_state` itself right
+   after the action. `act` succeeds only for a verified outcome: the
+   predicates satisfied, or, without predicates, the driver confirming the
+   effect by reading it back (accessibility, window, snapshot or screenshot
+   evidence; a delivery receipt alone is delivery, not verification).
+   `refused` outcomes are `action_refused`; `unverifiable`, `suspected_noop`
+   and `partial` outcomes without satisfied predicates, and a verification
+   the driver could not evaluate, are `unverified`; unsatisfied predicates
+   are `verification_failed`. A failed verification, a refused delivery, a
+   suspected no-op or the driver's own advice to go through pixels opens the
+   pixel route on that window; an action that was delivered but not read
+   back does not, because nothing showed it missing.
+6. Background only. Every action is delivered with `delivery_mode:
+   background`, the only value the tools accept; nothing is fronted or
+   focused. When the driver recommends escalating, to foreground control
+   or anything else, the recommendation is quoted in the refusal (or, for
+   an observation, in its `escalation` field) and never applied.
+7. The target's say comes first: a capability the descriptor does not
+   advertise or a permission the driver does not hold refuses the action
+   (`permission_denied`, `action_refused`) before the ledger is consulted
+   and before anything is sent; the driver's own errors keep their code
+   (`stale_snapshot`, `timeout`, ...).
+
 ## Related
 
 - [`docs/companion-storage.md`](companion-storage.md) — the known machines
@@ -299,4 +401,5 @@ states it in the system prompt, and builds the tools around it.
   wire mapping in `driver_mcp`.
 - `server/src/services/cua/` — discovery, host probe, transport, runtime and
   sessions; `desktop.rs` is the typed-frame link a desktop target answers
-  through.
+  through; `orchestrator.rs` is the loop policy the typed machine tools
+  (`server/src/services/tools/cua.rs`) enforce on every target.

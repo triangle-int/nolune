@@ -950,3 +950,291 @@ fn other_platforms_read_the_capability_checks() {
         windows.permissions
     );
 }
+
+/// #18: the installed driver (0.28.2) spells a window flat (`pid` and
+/// `window_id` beside the record's fields, no `target`), carries advisory
+/// `_note` text on a window state and omits `truncated`. `decode_response`
+/// folds those into the protocol's shape before validation; a canonical
+/// payload passes through unchanged, and a record that carries both
+/// spellings is still refused as unknown fields.
+#[test]
+fn live_window_spellings_fold_into_the_protocol_shape() {
+    let live_window = json!({
+        "app_name": "Claude", "bounds": {"height": 800.0, "width": 1658.0, "x": 679.0, "y": 256.0},
+        "current_space_id": 1, "is_on_screen": true, "layer": 0, "on_current_space": true,
+        "pid": 42, "space_ids": [1], "title": "Claude", "window_id": 8361, "z_index": 18
+    });
+
+    let windows = request(sample(CuaActionKind::ListWindows));
+    let payload = json!({"current_space_id": 1, "windows": [live_window.clone()]});
+    let envelope = decode_response(&windows, payload).unwrap();
+    let CuaResponse::Success { result } = envelope.response else {
+        panic!("live windows decode");
+    };
+    let CuaActionResult::ListWindows(listed) = *result else {
+        panic!("a windows result");
+    };
+    assert_eq!(listed.windows[0].target.pid, 42);
+    assert_eq!(listed.windows[0].target.window_id, 8361);
+    assert_eq!(listed.windows[0].app_name.as_str(), "Claude");
+
+    // Windows nested under apps and under a launch result fold the same way.
+    let apps = request(sample(CuaActionKind::ListApps));
+    let payload = json!({"apps": [{
+        "active": false, "bundle_id": "com.anthropic.claudefordesktop", "kind": "desktop",
+        "name": "Claude", "pid": 42, "running": true, "windows": [live_window.clone()]
+    }]});
+    let envelope = decode_response(&apps, payload).unwrap();
+    assert!(matches!(envelope.response, CuaResponse::Success { .. }));
+    let launch = request(CuaAction::LaunchApp(LaunchAppArgs {
+        bundle_id: Some(AppBundleId::try_from("com.anthropic.claudefordesktop").unwrap()),
+        name: None,
+        creates_new_application_instance: false,
+    }));
+    let payload = json!({
+        "pid": 42, "bundle_id": "com.anthropic.claudefordesktop", "name": "Claude",
+        "launch_state": "window_ready", "windows": [live_window.clone()],
+        "self_activation_suppressed": true
+    });
+    let envelope = decode_response(&launch, payload).unwrap();
+    assert!(matches!(envelope.response, CuaResponse::Success { .. }));
+
+    // The live degraded window state: flat target, advisory note, no
+    // `truncated`.
+    let state = request(sample(CuaActionKind::GetWindowState));
+    let payload = json!({
+        "_note": "AX unresolved; see escalation",
+        "app_name": "Claude", "window_title": "Claude",
+        "pid": 42, "window_id": 99,
+        "degraded": true, "degraded_reason": "ax_window_unresolved: exact window accessibility surface unavailable",
+        "element_count": 0, "elements": [], "elements_complete": false,
+        "returned_element_count": 0, "total_element_count": 0, "tree_markdown": "",
+        "background_input": {
+            "exact_window": {"pid": 42, "status": "ax_unresolved", "window_id": 99},
+            "observation": {"frame_freshness": "unknown", "one_shot_capture": "unavailable"},
+            "routes": [{"reason": "off_space_or_ax_unresolved", "route": "accessibility", "status": "refused"}]
+        },
+        "escalation": {"reason": "observation-only", "recommended": "foreground"}
+    });
+    let envelope = decode_response(&state, payload).unwrap();
+    let CuaResponse::Success { result } = envelope.response else {
+        panic!("live window state decodes");
+    };
+    let CuaActionResult::GetWindowState(observed) = *result else {
+        panic!("a window state");
+    };
+    assert_eq!(observed.target.pid, 42);
+    assert_eq!(observed.target.window_id, 99);
+    assert!(observed.degraded);
+    assert!(!observed.truncated, "absent means the walk was not cut");
+
+    // Live elements spell their frame `{x, y, w, h}` and their tokens as
+    // `<snapshot>:<index>`; the frame folds to the protocol's rectangle.
+    let payload = json!({
+        "_note": "ok", "app_name": "Finder", "window_title": "Applications",
+        "pid": 42, "window_id": 99, "snapshot_id": "s00000001",
+        "element_count": 3, "returned_element_count": 3, "total_element_count": 3,
+        "elements_complete": true, "tree_markdown": "- [element_index 0] AXWindow",
+        "background_input": {
+            "exact_window": {"pid": 42, "status": "matched", "window_id": 99},
+            "observation": {"frame_freshness": "unknown", "one_shot_capture": "unavailable"},
+            "routes": [
+                {"route": "accessibility", "status": "available"},
+                {"route": "window_pointer", "status": "available"},
+                {"reason": "same_pid_keyboard_ambiguity", "route": "pid_keyboard", "status": "refused"}
+            ]
+        },
+        "elements": [
+            {"actions": ["AXRaise"], "depth": 0, "element_index": 0, "element_token": "s00000001:0",
+             "frame": {"h": 436.0, "w": 920.0, "x": 820.0, "y": 521.0}, "label": "Applications", "role": "AXWindow"},
+            {"actions": ["AXPress"], "depth": 1, "element_index": 1, "element_token": "s00000001:1",
+             "frame": {"h": 20.0, "w": 60.0, "x": 830.0, "y": 530.0}, "label": "Back", "role": "AXButton",
+             "parent_index": 0},
+            {"actions": ["AXPress"], "depth": 3, "element_index": 2, "element_token": "s00000001:2",
+             "frame": {"h": 20.0, "w": 60.0, "x": 900.0, "y": 530.0}, "label": "Forward", "role": "AXButton",
+             "parent_index": 0, "in_web_content": true}
+        ]
+    });
+    let envelope = decode_response(&state, payload).unwrap();
+    let CuaResponse::Success { result } = envelope.response else {
+        panic!("live elements decode");
+    };
+    let CuaActionResult::GetWindowState(observed) = *result else {
+        panic!("a window state");
+    };
+    // `depth` counts every node of the tree while `parent_index` names the
+    // nearest actionable ancestor, so a child is deeper than its parent by
+    // any amount.
+    assert_eq!(observed.elements.len(), 3);
+    assert_eq!(observed.elements[2].depth, 3);
+    assert_eq!(observed.elements[2].in_web_content, Some(true));
+    assert_eq!(observed.elements[1].in_web_content, None);
+    let frame = observed.elements[1].frame.unwrap();
+    assert_eq!(
+        (frame.x, frame.y, frame.width, frame.height),
+        (830.0, 530.0, 60.0, 20.0)
+    );
+    assert_eq!(observed.elements[1].element_token.as_str(), "s00000001:1");
+    assert!(!observed.truncated);
+    // A resolved window reads `matched` for the protocol's `available`, and
+    // an available route carries no reason.
+    let background = observed.background_input.unwrap();
+    assert_eq!(background.exact_window.status, ExactWindowStatus::Available);
+    assert_eq!(background.routes[0].reason, None);
+    assert_eq!(
+        background.routes[2]
+            .reason
+            .as_ref()
+            .map(BoundedText::as_str),
+        Some("same_pid_keyboard_ambiguity")
+    );
+
+    // A walk the driver cut reads as truncated.
+    let payload = json!({
+        "pid": 42, "window_id": 99, "elements": [], "snapshot_id": "s00000001",
+        "element_count": 300, "returned_element_count": 0, "total_element_count": 300
+    });
+    let envelope = decode_response(&state, payload).unwrap();
+    let CuaResponse::Success { result } = envelope.response else {
+        panic!("cut walk decodes");
+    };
+    let CuaActionResult::GetWindowState(observed) = *result else {
+        panic!("a window state");
+    };
+    assert!(observed.truncated);
+
+    // The live verification: `status` for `overall`, `index` for
+    // `predicate_index`, and timing plus observation text the protocol does
+    // not carry.
+    let verify = request(sample(CuaActionKind::VerifyState));
+    let payload = json!({
+        "elapsed_ms": 10,
+        "predicates": [{
+            "index": 0, "observed_json": "{\"exists\":true}", "status": "satisfied",
+            "unknown_reason": null
+        }],
+        "samples": 1, "stable": true, "status": "satisfied"
+    });
+    let envelope = decode_response(&verify, payload).unwrap();
+    let CuaResponse::Success { result } = envelope.response else {
+        panic!("live verification decodes");
+    };
+    let CuaActionResult::VerifyState(verification) = *result else {
+        panic!("a verification");
+    };
+    assert_eq!(verification.overall, PredicateStatus::Satisfied);
+    assert_eq!(verification.predicates[0].predicate_index, 0);
+    assert_eq!(
+        verification.predicates[0].status,
+        PredicateStatus::Satisfied
+    );
+    // The canonical spelling still decodes as it did.
+    let payload = json!({
+        "overall": "unknown",
+        "predicates": [{"predicate_index": 0, "status": "unknown"}]
+    });
+    assert!(decode_response(&verify, payload).is_ok());
+
+    // A capture-only answer: the screenshot spelled out in `screenshot_*`
+    // fields, and an empty `tree_markdown` that is no tree at all.
+    let capture = request(CuaAction::GetWindowState(GetWindowStateArgs {
+        target: WindowTarget {
+            pid: 42,
+            window_id: 99,
+        },
+        session: None,
+        include_accessibility_tree: false,
+        include_screenshot: true,
+        max_elements: None,
+        max_depth: None,
+        max_dimension: Some(200),
+        query: None,
+    }));
+    let png = {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(include_bytes!("fixtures/tiny.png"))
+    };
+    let live_capture = json!({
+        "_note": "Prefer element tokens", "app_name": "Finder", "window_title": "Applications",
+        "pid": 42, "window_id": 99,
+        "element_count": 0, "elements": [], "elements_complete": false,
+        "returned_element_count": 0, "total_element_count": 0, "tree_markdown": "",
+        "screenshot_frame_valid": true, "screenshot_height": 1, "screenshot_width": 1,
+        "screenshot_mime_type": "image/png", "screenshot_png_b64": png, "screenshot_scale": 1.0,
+        "window_bounds": {"height": 436.0, "width": 920.0, "x": 820.0, "y": 521.0},
+        "background_input": {
+            "exact_window": {"pid": 42, "status": "matched", "window_id": 99},
+            "observation": {"frame_freshness": "unknown", "one_shot_capture": "available"},
+            "routes": [{"route": "accessibility", "status": "available"}]
+        }
+    });
+    let envelope = decode_response(&capture, live_capture.clone()).unwrap();
+    let CuaResponse::Success { result } = envelope.response else {
+        panic!("live capture decodes");
+    };
+    let CuaActionResult::GetWindowState(observed) = *result else {
+        panic!("a window state");
+    };
+    assert_eq!(
+        observed
+            .background_input
+            .as_ref()
+            .map(|b| b.observation.one_shot_capture),
+        Some(ObservationStatus::Available)
+    );
+    let screenshot = observed.screenshot.expect("the capture is carried");
+    assert_eq!(screenshot.media_type, ImageMediaType::Png);
+    assert_eq!((screenshot.width, screenshot.height), (1, 1));
+    assert_eq!(observed.screenshot_scale, Some(1.0));
+    assert_eq!(observed.tree_markdown, None);
+    assert_eq!(observed.window_bounds.map(|b| b.width), Some(920.0));
+    // A frame the driver could not prove is not handed on as a screenshot.
+    let mut unprovable = live_capture;
+    unprovable["screenshot_frame_valid"] = json!(false);
+    unprovable["degraded"] = json!(true);
+    unprovable["degraded_reason"] = json!("px_frame_mismatch");
+    let envelope = decode_response(&capture, unprovable).unwrap();
+    let CuaResponse::Success { result } = envelope.response else {
+        panic!("an unprovable capture still decodes");
+    };
+    let CuaActionResult::GetWindowState(observed) = *result else {
+        panic!("a window state");
+    };
+    assert!(observed.screenshot.is_none() && observed.screenshot_scale.is_none());
+
+    // An image beside an action result (screenshot evidence the driver may
+    // attach to a click, folded in by the transport as `screenshot_*`) is
+    // dropped: the protocol's action results carry no capture.
+    let clicked = request(click(token()));
+    let mut with_capture = json!({
+        "target": {"pid": 42, "window_id": 99},
+        "address": {"kind": "element_token", "element_token": "tok/1"},
+        "button": "left", "action": "press",
+        "outcome": {
+            "effect": "confirmed", "route": "accessibility",
+            "delivery": {"requested": "background", "delivered_count": 1},
+            "evidence": ["accessibility_readback", "screenshot"]
+        },
+        "screenshot_png_b64": png, "screenshot_mime_type": "image/png",
+        "screenshot_width": 1, "screenshot_height": 1, "screenshot_scale": 1.0,
+        "screenshot_frame_valid": true
+    });
+    let envelope = decode_response(&clicked, with_capture.clone()).unwrap();
+    let CuaResponse::Success { result } = envelope.response else {
+        panic!("a click with an image beside it decodes");
+    };
+    let CuaActionResult::Click(clicked_result) = *result else {
+        panic!("a click result");
+    };
+    assert_eq!(clicked_result.outcome.effect, ActionEffect::Confirmed);
+    // Any other unknown field on an action result is still refused.
+    with_capture["surprise"] = json!(1);
+    assert!(decode_response(&clicked, with_capture).is_err());
+
+    // Both spellings at once is not a shape the driver emits: refused.
+    let mut both = live_window.clone();
+    both["target"] = json!({"pid": 42, "window_id": 8361});
+    assert!(decode_response(&windows, json!({"windows": [both]})).is_err());
+    // Advisory keys are dropped only on the window state, not elsewhere.
+    assert!(decode_response(&apps, json!({"apps": [], "_note": "x"})).is_err());
+}
