@@ -390,7 +390,11 @@ fn must_not_execute() -> Vec<Box<dyn ToolDyn>> {
 }
 
 /// Run `tools` through the agent loop in either mode, for the cases that
-/// prove no tool runs on a bad answer.
+/// prove no tool runs on a bad answer. The streaming loop gets a workspace
+/// of its own, empty and gone afterwards: the Codex adapter keeps its
+/// thread cwd and the chat's `meta.json` under the workspace, and a
+/// shared one would make later rows, and later runs, resume a remembered
+/// thread instead of starting their own.
 async fn agent_boundary(
     backend: &LlmBackend,
     prompt: &str,
@@ -398,6 +402,7 @@ async fn agent_boundary(
     tools: Vec<Box<dyn ToolDyn>>,
 ) -> anyhow::Result<()> {
     if streaming {
+        let workspace = tempfile::tempdir().unwrap();
         backend
             .chat_with_tools_streaming(
                 &[],
@@ -407,7 +412,7 @@ async fn agent_boundary(
                 tokio::sync::broadcast::channel(32).0,
                 "test",
                 "test",
-                &std::env::temp_dir(),
+                workspace.path(),
                 None,
                 Default::default(),
             )
@@ -1465,6 +1470,21 @@ async fn invalid_tool_calls_rejected(provider: LlmProvider) {
                         Some(LlmError::InvalidResponse(_))
                     ),
                     "Codex streaming={streaming} {prompt}: {error:?}"
+                );
+                // Every row starts from an empty workspace: the boundary
+                // opens a thread of its own and never resumes one that
+                // another row, or an earlier run, remembered in a chat's
+                // `meta.json`.
+                assert!(
+                    harness.sent("thread/resume").is_empty(),
+                    "Codex streaming={streaming} {prompt}: resumed a remembered thread: {:?}",
+                    harness.sent("thread/resume")
+                );
+                assert_eq!(
+                    harness.sent("thread/start").len(),
+                    1,
+                    "Codex streaming={streaming} {prompt}: {:?}",
+                    harness.sent("thread/start")
                 );
                 harness.close();
             }
