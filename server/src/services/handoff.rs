@@ -604,8 +604,9 @@ pub fn continuation_message(record: &ContinuityRecord, destination: &ComputerSum
         }
     }
     message.push_str(&format!(
-        "rules: use machine_id \"{}\" for every computer_use, remote_bash, and remote file call; \
-         do not act on any other computer. record progress with task_continuity_update \
+        "rules: use machine_id \"{}\" for every machine tool call (discover_windows, \
+         get_window_state, act, verify_state, remote_bash, remote_files); do not act on any \
+         other computer. record progress with task_continuity_update \
          (id {}). ask before anything that needs approval or goes beyond the task above.",
         destination.machine_id, record.id
     ));

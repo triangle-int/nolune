@@ -92,10 +92,14 @@ pub struct PendingAction {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ActionResult {
     /// "screenshot" or "action"
+    #[allow(dead_code)] // The coordinate tool's; unregistered by #18, deleted by #19.
     pub result_type: String,
     /// Base64 PNG (only for screenshots)
+    #[allow(dead_code)] // The coordinate tool's; unregistered by #18, deleted by #19.
     pub image: Option<String>,
+    #[allow(dead_code)] // The coordinate tool's; unregistered by #18, deleted by #19.
     pub width: Option<u32>,
+    #[allow(dead_code)] // The coordinate tool's; unregistered by #18, deleted by #19.
     pub height: Option<u32>,
     #[allow(dead_code)]
     pub scale: Option<f64>,

@@ -354,14 +354,202 @@ fn the_settings_doc_describes_the_login_without_a_key() {
         "/api/config/codex/logout",
         "device code",
         "#27",
+        // The tile (slice e): where it is, what it shows, and the gate.
+        "CodexLogin.svelte",
+        "connectOnboardingCodex",
+        "Log in",
+        "Log out",
     ] {
         if !doc.contains(required) {
             violations.push(format!("docs/settings.md is missing {required:?}"));
         }
     }
+    if doc.contains("follows in a later slice") {
+        violations.push("docs/settings.md still promises the tile for later".into());
+    }
     let providers = fs::read_to_string(repo().join("docs/providers.md")).unwrap();
     if !providers.contains("/api/config/codex/status") {
         violations.push("docs/providers.md does not point at the login routes".into());
     }
+    // Bumping the pin is a release step with a checklist, next to the pin.
+    for required in ["CODEX_VERSION", "Release checklist", "re-record"] {
+        if !providers.contains(required) {
+            violations.push(format!("docs/providers.md is missing {required:?}"));
+        }
+    }
+    if providers.contains("follows in the remaining slice") {
+        violations.push("docs/providers.md still promises the tile for later".into());
+    }
+    let readme = fs::read_to_string(repo().join("README.md")).unwrap();
+    for required in ["Codex", "NOLUNE_CODEX_BIN"] {
+        if !readme.contains(required) {
+            violations.push(format!("README.md is missing {required:?}"));
+        }
+    }
     assert!(violations.is_empty(), "{}", violations.join("\n"));
+}
+
+/// The client files that speak of the login: scanned whole (their node
+/// test, which says what it forbids, is not).
+const CLIENT_CODEX_FILES: &[&str] = &[
+    "client/src/lib/models/codex.js",
+    "client/src/lib/components/settings/CodexLogin.svelte",
+];
+
+/// The client files where the login shares a module with keyed providers
+/// (`api_key` is OpenAI's payload there): only the blocks that name
+/// `Codex` are scanned.
+const CLIENT_SHARED_FILES: &[&str] = &[
+    "client/src/lib/api/client.ts",
+    "client/src/lib/components/onboarding/provider.js",
+    "client/src/lib/components/onboarding/InstanceOnboarding.svelte",
+];
+
+/// Every brace-delimited block whose opening line names `Codex` (a type,
+/// an interface, a function, a Svelte `{#if}` is not one), from that line
+/// to the line that closes it, with the number of its first line.
+fn codex_blocks(source: &str) -> Vec<(usize, String)> {
+    let mut blocks = Vec::new();
+    let mut open: Option<(usize, String, i32)> = None;
+    for (index, line) in source.lines().enumerate() {
+        if open.is_none() {
+            if !(line.contains("Codex") || line.contains("codex")) || !line.contains('{') {
+                continue;
+            }
+            open = Some((index + 1, String::new(), 0));
+        }
+        let (_, text, depth) = open.as_mut().unwrap();
+        text.push_str(line);
+        text.push('\n');
+        for byte in line.bytes() {
+            match byte {
+                b'{' => *depth += 1,
+                b'}' => *depth -= 1,
+                _ => {}
+            }
+        }
+        if *depth <= 0 {
+            let (first, text, _) = open.take().unwrap();
+            blocks.push((first, text));
+        }
+    }
+    blocks
+}
+
+/// A member or a word a token could hide behind, matched the way the
+/// route tests match the answers (`assert_no_token_bearing_member`).
+fn names_a_credential(text: &str) -> Option<&'static str> {
+    let lowered = text.to_lowercase();
+    [
+        "token", "secret", "apikey", "api_key:", "password", "cookie",
+    ]
+    .into_iter()
+    .find(|banned| lowered.contains(banned))
+    .or_else(|| {
+        TOKEN_BEARING
+            .iter()
+            .copied()
+            .find(|banned| text.contains(banned))
+    })
+}
+
+#[test]
+fn the_client_shows_the_login_and_carries_no_token_bearing_field() {
+    let mut violations = Vec::new();
+
+    // The pure module and the tile: no word for a credential.
+    for relative in CLIENT_CODEX_FILES {
+        let Ok(source) = fs::read_to_string(repo().join(relative)) else {
+            violations.push(format!("{relative} is missing"));
+            continue;
+        };
+        for (number, line) in source.lines().enumerate() {
+            if let Some(banned) = names_a_credential(line) {
+                violations.push(format!("{relative}:{} names {banned:?}", number + 1));
+            }
+        }
+    }
+    // The shared modules: every block about Codex, whole.
+    for relative in CLIENT_SHARED_FILES {
+        let source = fs::read_to_string(repo().join(relative))
+            .unwrap_or_else(|_| panic!("{relative} is missing"));
+        for (first, block) in codex_blocks(&source) {
+            if let Some(banned) = names_a_credential(&block) {
+                violations.push(format!(
+                    "{relative}:{first} (a Codex block) names {banned:?}"
+                ));
+            }
+        }
+    }
+
+    // The API: status, login and logout, and the provider union.
+    let client = fs::read_to_string(repo().join("client/src/lib/api/client.ts")).unwrap();
+    for required in [
+        "export function fetchCodexStatus(",
+        "export async function startCodexLogin(",
+        "export async function logoutCodex(",
+        "\"/api/config/codex/status\"",
+        "\"/api/config/codex/login\"",
+        "\"/api/config/codex/logout\"",
+        "| \"codex\"",
+    ] {
+        if !client.contains(required) {
+            violations.push(format!("client.ts is missing {required:?}"));
+        }
+    }
+    // The provider list: codex logs in, the others hold a key.
+    let presets = fs::read_to_string(repo().join("client/src/lib/models/presets.js")).unwrap();
+    for required in [
+        "id: \"codex\"",
+        "auth: \"login\"",
+        "export function providerAuth(",
+    ] {
+        if !presets.contains(required) {
+            violations.push(format!("presets.js is missing {required:?}"));
+        }
+    }
+    // The tile sits in Settings › Connections and onboarding offers Codex.
+    let connections = fs::read_to_string(
+        repo().join("client/src/routes/[slug]/settings/connections/+page.svelte"),
+    )
+    .unwrap();
+    if !connections.contains("<CodexLogin") {
+        violations.push("Settings › Connections does not render the Codex tile".into());
+    }
+    let onboarding = fs::read_to_string(
+        repo().join("client/src/lib/components/onboarding/InstanceOnboarding.svelte"),
+    )
+    .unwrap();
+    for required in [
+        "pickProvider(\"codex\")",
+        "connectOnboardingCodex",
+        "startCodexLogin",
+        // A pending browser flow offers the device code (a person on another
+        // device cannot open the auth URL), not only the blocked step.
+        "offersDeviceCode",
+    ] {
+        if !onboarding.contains(required) {
+            violations.push(format!("onboarding is missing {required:?}"));
+        }
+    }
+    assert!(violations.is_empty(), "{}", violations.join("\n"));
+}
+
+#[test]
+fn the_client_block_scan_reads_a_codex_block_whole() {
+    let source = "export interface CodexStatus {\n\tbinary: CodexBinaryStatus;\n\tnope: string;\n}\nexport interface Other {\n\tid_token: string;\n}\nfunction fetchCodexStatus() {\n\treturn json(\"/x\", { headers: { \"X-Y\": \"z\" } });\n}\n";
+    let blocks = codex_blocks(source);
+    assert_eq!(blocks.len(), 2, "{blocks:?}");
+    assert_eq!(blocks[0].0, 1);
+    assert!(blocks[0].1.contains("nope: string"));
+    assert!(!blocks[0].1.contains("Other"));
+    assert_eq!(blocks[1].0, 8);
+    assert!(blocks[1].1.contains("X-Y"), "nested braces close in order");
+    assert_eq!(names_a_credential(&blocks[0].1), None);
+    assert_eq!(
+        names_a_credential("export interface CodexLogin { refreshToken: string }"),
+        Some("token")
+    );
+    assert_eq!(names_a_credential("user_code: string"), None);
+    assert_eq!(names_a_credential("auth_url?: string"), None);
 }
