@@ -386,11 +386,21 @@ pub enum IntentError {
 }
 
 impl PeerLabel {
-    /// Refuses an empty or blank label, one over [`MAX_LABEL_CHARS`], and
-    /// one with a control character.
+    /// Refuses a label with a control character (so it can never carry a
+    /// second line), one over [`MAX_LABEL_CHARS`], and an empty or blank
+    /// one, in that order.
     pub fn new(text: String) -> Result<Self, LabelError> {
-        let _ = text;
-        todo!("PR 1 of #110")
+        if text.chars().any(char::is_control) {
+            return Err(LabelError::ControlCharacter);
+        }
+        let chars = text.chars().count();
+        if chars > MAX_LABEL_CHARS {
+            return Err(LabelError::TooLong { chars });
+        }
+        if text.trim().is_empty() {
+            return Err(LabelError::Empty);
+        }
+        Ok(Self(text))
     }
 
     pub fn as_str(&self) -> &str {
@@ -441,15 +451,57 @@ impl LabelField {
 impl IntentPayload {
     /// The class the policy engine judges this payload as.
     pub fn class(&self) -> IntentClass {
-        todo!("PR 1 of #110")
+        match self {
+            Self::Message { .. } => IntentClass::Message,
+            Self::Availability { .. } => IntentClass::Availability,
+            Self::Reminder { .. } => IntentClass::Reminder,
+            Self::Proposal { .. } => IntentClass::Proposal,
+        }
     }
 
     /// The class behind a `type` tag, or `None` for anything that is not
     /// one of the four intents (a ping is transport, not an intent).
     pub fn class_for_tag(tag: &str) -> Option<IntentClass> {
-        let _ = tag;
-        todo!("PR 1 of #110")
+        IntentClass::parse(tag).filter(|class| *class != IntentClass::Ping)
     }
+}
+
+/// The header of an intent read leniently and by name, so that each fault
+/// is reported as its own error before the strict shape is decoded. A
+/// value of the wrong type fails here as malformed; a missing field is
+/// `None`; anything unknown is left for the strict shape to refuse.
+#[derive(Deserialize)]
+struct IntentProbe {
+    version: Option<u32>,
+    correlation_id: Option<String>,
+    sender: Option<String>,
+    represented_owner: Option<String>,
+    purpose: Option<String>,
+    disclosure: Option<String>,
+    intent: Option<PayloadProbe>,
+}
+
+#[derive(Deserialize)]
+struct PayloadProbe {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+}
+
+/// [`IntentProbe`] for a response.
+#[derive(Deserialize)]
+struct ResponseProbe {
+    version: Option<u32>,
+    outcome: Option<String>,
+    correlation_id: Option<String>,
+    responder: Option<String>,
+    disclosure: Option<String>,
+    reason: Option<String>,
+    answer: Option<AnswerProbe>,
+}
+
+#[derive(Deserialize)]
+struct AnswerProbe {
+    kind: Option<String>,
 }
 
 impl FederationIntent {
@@ -460,16 +512,50 @@ impl FederationIntent {
     /// required header fields by name, each in turn; the strict shape,
     /// which refuses unknown fields at any depth; then [`Self::validate`].
     pub fn decode(bytes: &[u8], now: u64) -> Result<Self, IntentError> {
-        let _ = (bytes, now);
-        todo!("PR 1 of #110")
+        check_size(bytes)?;
+        let probe: IntentProbe = parse(bytes)?;
+        check_version(probe.version.ok_or_else(|| missing("version"))?)?;
+        let tag = probe
+            .intent
+            .ok_or_else(|| missing("intent"))?
+            .kind
+            .ok_or_else(|| missing("type"))?;
+        if IntentPayload::class_for_tag(&tag).is_none() {
+            return Err(IntentError::UnknownIntentType {
+                name: sanitize_name(&tag),
+            });
+        }
+        check_correlation_id(
+            &probe
+                .correlation_id
+                .ok_or_else(|| missing("correlation_id"))?,
+        )?;
+        check_companion_id(
+            &probe.sender.ok_or_else(|| missing("sender"))?,
+            IntentError::InvalidSender,
+        )?;
+        check_label(probe.represented_owner, LabelField::RepresentedOwner)?;
+        check_label(probe.purpose, LabelField::Purpose)?;
+        check_disclosure(&probe.disclosure.ok_or_else(|| missing("disclosure"))?)?;
+        let intent: Self = parse(bytes)?;
+        intent.validate(now)?;
+        Ok(intent)
     }
 
-    /// The checks that need no parser: version range, id and label shapes,
-    /// lifetime and clock, and the payload's windows. `decode` runs them;
-    /// an intent built here runs them before it is sent.
+    /// The checks that need no parser: version range, id shapes, lifetime
+    /// and clock, and the payload's window. `decode` runs them; an intent
+    /// built here runs them before it is sent.
     pub fn validate(&self, now: u64) -> Result<(), IntentError> {
-        let _ = now;
-        todo!("PR 1 of #110")
+        check_version(self.version)?;
+        check_correlation_id(&self.correlation_id)?;
+        check_companion_id(&self.sender, IntentError::InvalidSender)?;
+        check_lifetime(self.issued_at, self.expires_at, now)?;
+        match &self.intent {
+            IntentPayload::Message { .. } | IntentPayload::Reminder { .. } => Ok(()),
+            IntentPayload::Availability { window } | IntentPayload::Proposal { window, .. } => {
+                check_window(window.from, window.to)
+            }
+        }
     }
 
     /// The JSON bytes a transport body carries.
@@ -491,15 +577,39 @@ impl FederationIntent {
 impl fmt::Display for FederationIntent {
     /// Ids, classes, and times only: never a label, never the payload.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let _ = f;
-        todo!("PR 1 of #110")
+        write!(
+            f,
+            "{} intent {} from {} at {}, {}..{}",
+            self.class(),
+            self.correlation_id,
+            self.sender,
+            self.disclosure,
+            self.issued_at,
+            self.expires_at
+        )
     }
 }
 
 impl IntentAnswer {
     /// The intent class this answer belongs to.
     pub fn class(&self) -> IntentClass {
-        todo!("PR 1 of #110")
+        match self {
+            Self::Delivered => IntentClass::Message,
+            Self::Availability { .. } => IntentClass::Availability,
+            Self::ReminderScheduled { .. } => IntentClass::Reminder,
+            Self::ProposalReceived => IntentClass::Proposal,
+        }
+    }
+
+    /// The class behind an answer's `kind` tag, or `None`.
+    pub fn class_for_kind(kind: &str) -> Option<IntentClass> {
+        match kind {
+            "delivered" => Some(IntentClass::Message),
+            "availability" => Some(IntentClass::Availability),
+            "reminder_scheduled" => Some(IntentClass::Reminder),
+            "proposal_received" => Some(IntentClass::Proposal),
+            _ => None,
+        }
     }
 }
 
@@ -521,8 +631,11 @@ impl IntentOutcome {
     /// How a policy verdict is answered: `allow` is accepted, `deny` is
     /// denied, and both `ask` and `defer` need the owner.
     pub fn from_verdict(verdict: Verdict) -> Self {
-        let _ = verdict;
-        todo!("PR 1 of #110")
+        match verdict {
+            Verdict::Allow => Self::Accepted,
+            Verdict::Ask | Verdict::Defer => Self::NeedsOwner,
+            Verdict::Deny => Self::Denied,
+        }
     }
 }
 
@@ -534,17 +647,70 @@ impl fmt::Display for IntentOutcome {
 
 impl IntentResponse {
     /// Decodes `bytes` fail-closed: size, version before shape, the
-    /// `outcome` tag, the ids by name, the strict shape, then
-    /// [`Self::validate`].
+    /// `outcome` tag, the ids by name, every other closed name that is
+    /// present, the strict shape, then [`Self::validate`].
     pub fn decode(bytes: &[u8]) -> Result<Self, IntentError> {
-        let _ = bytes;
-        todo!("PR 1 of #110")
+        check_size(bytes)?;
+        let probe: ResponseProbe = parse(bytes)?;
+        check_version(probe.version.ok_or_else(|| missing("version"))?)?;
+        let outcome = probe.outcome.ok_or_else(|| missing("outcome"))?;
+        if IntentOutcome::parse(&outcome).is_none() {
+            return Err(IntentError::UnknownOutcome {
+                name: sanitize_name(&outcome),
+            });
+        }
+        check_correlation_id(
+            &probe
+                .correlation_id
+                .ok_or_else(|| missing("correlation_id"))?,
+        )?;
+        check_companion_id(
+            &probe.responder.ok_or_else(|| missing("responder"))?,
+            IntentError::InvalidResponder,
+        )?;
+        if let Some(disclosure) = &probe.disclosure {
+            check_disclosure(disclosure)?;
+        }
+        if let Some(reason) = &probe.reason
+            && !names::<DecisionReason>(reason)
+        {
+            return Err(IntentError::UnknownReason {
+                name: sanitize_name(reason),
+            });
+        }
+        if let Some(AnswerProbe { kind: Some(kind) }) = &probe.answer
+            && IntentAnswer::class_for_kind(kind).is_none()
+        {
+            return Err(IntentError::UnknownAnswer {
+                name: sanitize_name(kind),
+            });
+        }
+        let response: Self = parse(bytes)?;
+        response.validate()?;
+        Ok(response)
     }
 
     /// Version range, id shapes, and the windows of an availability
     /// answer.
     pub fn validate(&self) -> Result<(), IntentError> {
-        todo!("PR 1 of #110")
+        check_version(self.version())?;
+        check_correlation_id(self.correlation_id())?;
+        check_companion_id(self.responder(), IntentError::InvalidResponder)?;
+        if let Self::Accepted {
+            answer: IntentAnswer::Availability { windows },
+            ..
+        } = self
+        {
+            if windows.len() > MAX_AVAILABILITY_WINDOWS {
+                return Err(IntentError::TooManyWindows {
+                    count: windows.len(),
+                });
+            }
+            for window in windows {
+                check_window(window.from, window.to)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn encode(&self) -> Vec<u8> {
@@ -561,16 +727,52 @@ impl IntentResponse {
         responder: &str,
         decision: &Decision,
     ) -> Option<Self> {
-        let _ = (correlation_id, responder, decision);
-        todo!("PR 1 of #110")
+        let wire = decision.over_the_wire();
+        let correlation_id = correlation_id.to_owned();
+        let responder = responder.to_owned();
+        match wire.verdict {
+            Verdict::Allow => None,
+            Verdict::Ask | Verdict::Defer => Some(Self::NeedsOwner {
+                version: INTENT_VERSION,
+                correlation_id,
+                responder,
+                reason: wire.reason,
+            }),
+            Verdict::Deny => Some(Self::Denied {
+                version: INTENT_VERSION,
+                correlation_id,
+                responder,
+                reason: wire.reason,
+                retry_after_secs: wire.retry_after_secs,
+            }),
+        }
     }
 
     /// Whether this response answers `intent`: the same correlation id;
     /// for an accepted response, an answer of the intent's class at a
     /// disclosure no higher than the one asked for.
     pub fn check_against(&self, intent: &FederationIntent) -> Result<(), IntentError> {
-        let _ = intent;
-        todo!("PR 1 of #110")
+        if self.correlation_id() != intent.correlation_id {
+            return Err(IntentError::CorrelationMismatch);
+        }
+        if let Self::Accepted {
+            disclosure, answer, ..
+        } = self
+        {
+            if answer.class() != intent.class() {
+                return Err(IntentError::AnswerMismatch {
+                    intent: intent.class(),
+                    answer: answer.class(),
+                });
+            }
+            if *disclosure > intent.disclosure {
+                return Err(IntentError::DisclosureExceeded {
+                    requested: intent.disclosure,
+                    granted: *disclosure,
+                });
+            }
+        }
+        Ok(())
     }
 
     pub fn version(&self) -> u32 {
@@ -617,15 +819,44 @@ impl IntentResponse {
 
 impl fmt::Display for IntentResponse {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let _ = f;
-        todo!("PR 1 of #110")
+        write!(
+            f,
+            "{} for {} from {}",
+            self.outcome(),
+            self.correlation_id(),
+            self.responder()
+        )?;
+        match self {
+            Self::Accepted { disclosure, .. } => write!(f, " at {disclosure}"),
+            Self::Denied {
+                reason,
+                retry_after_secs,
+                ..
+            } => {
+                write!(f, " ({}", reason.name())?;
+                if let Some(secs) = retry_after_secs {
+                    write!(f, ", retry after {secs}s")?;
+                }
+                f.write_str(")")
+            }
+            Self::NeedsOwner { reason, .. } => write!(f, " ({})", reason.name()),
+        }
     }
 }
 
 impl fmt::Display for ReceiptBasis {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let _ = f;
-        todo!("PR 1 of #110")
+        match self {
+            Self::Policy {
+                reason,
+                rule_id: Some(rule_id),
+            } => write!(f, "{} {rule_id}", reason.name()),
+            Self::Policy {
+                reason,
+                rule_id: None,
+            } => f.write_str(reason.name()),
+            Self::OwnerApproval { approval_id } => write!(f, "owner approval {approval_id}"),
+        }
     }
 }
 
@@ -642,14 +873,41 @@ impl IntentReceipt {
         response: &IntentResponse,
         basis: ReceiptBasis,
     ) -> Self {
-        let _ = (id, side, pairing_id, at, intent, response, basis);
-        todo!("PR 1 of #110")
+        let mut receipt = Self {
+            version: INTENT_RECEIPT_VERSION,
+            id,
+            side,
+            pairing_id,
+            correlation_id: intent.correlation_id.clone(),
+            requester: intent.sender.clone(),
+            represented_owner: intent.represented_owner.clone(),
+            responder: response.responder().to_owned(),
+            intent: intent.class(),
+            purpose: intent.purpose.clone(),
+            requested: intent.disclosure,
+            granted: response.granted(),
+            outcome: response.outcome(),
+            basis,
+            at,
+            summary: String::new(),
+        };
+        receipt.summary = receipt.summarize();
+        receipt
     }
 
     /// The one line the owner sees, from the ids, classes, outcome, and
     /// basis; neither label is part of it.
     pub fn summarize(&self) -> String {
-        todo!("PR 1 of #110")
+        format!(
+            "{} asked {} for {} ({}): {}, granted {} ({})",
+            self.requester,
+            self.responder,
+            self.intent,
+            self.requested,
+            self.outcome,
+            self.granted,
+            self.basis
+        )
     }
 }
 
@@ -661,9 +919,235 @@ impl fmt::Display for IntentReceipt {
 
 impl fmt::Display for IntentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let _ = f;
-        todo!("PR 1 of #110")
+        match self {
+            Self::TooLarge { bytes } => write!(
+                f,
+                "federation intent is {bytes} bytes, over the {MAX_INTENT_BYTES} limit"
+            ),
+            Self::VersionTooOld { found, min } => write!(
+                f,
+                "federation intent version {found} is older than the minimum accepted version {min}"
+            ),
+            Self::VersionUnsupported { found } => {
+                write!(f, "federation intent version {found} is not supported")
+            }
+            Self::UnknownIntentType { name } => {
+                write!(f, "federation intent type `{name}` is unknown")
+            }
+            Self::UnknownDisclosure { name } => {
+                write!(f, "federation intent disclosure class `{name}` is unknown")
+            }
+            Self::UnknownOutcome { name } => {
+                write!(f, "federation intent response outcome `{name}` is unknown")
+            }
+            Self::UnknownReason { name } => {
+                write!(f, "federation intent response reason `{name}` is unknown")
+            }
+            Self::UnknownAnswer { name } => {
+                write!(f, "federation intent answer kind `{name}` is unknown")
+            }
+            Self::UnknownField { name } => {
+                write!(f, "federation intent has an unknown field `{name}`")
+            }
+            Self::MissingField { name } => {
+                write!(f, "federation intent is missing the field `{name}`")
+            }
+            Self::InvalidCorrelationId => f.write_str(
+                "federation intent correlation id is empty, too long, or not [A-Za-z0-9_-]",
+            ),
+            Self::InvalidSender => f.write_str("federation intent sender is not a companion id"),
+            Self::InvalidResponder => {
+                f.write_str("federation intent responder is not a companion id")
+            }
+            Self::InvalidLabel { field, reason } => {
+                write!(f, "federation intent {}: {reason}", field.name())
+            }
+            Self::InvalidLifetime {
+                issued_at,
+                expires_at,
+            } => write!(
+                f,
+                "federation intent lifetime from {issued_at} to {expires_at} is not allowed"
+            ),
+            Self::IssuedInFuture { issued_at, now } => write!(
+                f,
+                "federation intent is issued at {issued_at}, beyond {now} plus the skew allowance"
+            ),
+            Self::Expired { expires_at, now } => write!(
+                f,
+                "federation intent expired at {expires_at}, before {now} less the skew allowance"
+            ),
+            Self::InvalidWindow { from, to } => {
+                write!(
+                    f,
+                    "federation intent window from {from} to {to} is not allowed"
+                )
+            }
+            Self::TooManyWindows { count } => write!(
+                f,
+                "federation intent answer has {count} windows, over the {MAX_AVAILABILITY_WINDOWS} limit"
+            ),
+            Self::CorrelationMismatch => {
+                f.write_str("federation intent response answers another request")
+            }
+            Self::AnswerMismatch { intent, answer } => write!(
+                f,
+                "federation intent of class {intent} was answered with a {answer} answer"
+            ),
+            Self::DisclosureExceeded { requested, granted } => write!(
+                f,
+                "federation intent asked for {requested} and was granted {granted}"
+            ),
+            Self::Malformed(reason) => write!(f, "federation intent is malformed: {reason}"),
+        }
     }
+}
+
+/// Longest reason a malformed error keeps, in characters.
+const MAX_REASON_CHARS: usize = 120;
+
+fn check_size(bytes: &[u8]) -> Result<(), IntentError> {
+    if bytes.len() > MAX_INTENT_BYTES {
+        return Err(IntentError::TooLarge { bytes: bytes.len() });
+    }
+    Ok(())
+}
+
+/// Rejects versions this build does not speak, downgrades first.
+fn check_version(found: u32) -> Result<(), IntentError> {
+    if found < MIN_INTENT_VERSION {
+        return Err(IntentError::VersionTooOld {
+            found,
+            min: MIN_INTENT_VERSION,
+        });
+    }
+    if found > INTENT_VERSION {
+        return Err(IntentError::VersionUnsupported { found });
+    }
+    Ok(())
+}
+
+fn missing(name: &str) -> IntentError {
+    IntentError::MissingField { name: name.into() }
+}
+
+fn check_correlation_id(value: &str) -> Result<(), IntentError> {
+    let shaped = !value.is_empty()
+        && value.len() <= MAX_CORRELATION_ID_LEN
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
+    shaped
+        .then_some(())
+        .ok_or(IntentError::InvalidCorrelationId)
+}
+
+/// A companion id is the base64url of its key's digest: exactly
+/// [`COMPANION_ID_CHARS`] characters of that alphabet. Whether it names a
+/// peer is the inbound handler's question.
+fn check_companion_id(value: &str, error: IntentError) -> Result<(), IntentError> {
+    let shaped = value.len() == COMPANION_ID_CHARS
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
+    shaped.then_some(()).ok_or(error)
+}
+
+fn check_label(value: Option<String>, field: LabelField) -> Result<(), IntentError> {
+    let text = value.ok_or_else(|| missing(field.name()))?;
+    PeerLabel::new(text)
+        .map(drop)
+        .map_err(|reason| IntentError::InvalidLabel { field, reason })
+}
+
+fn check_disclosure(name: &str) -> Result<(), IntentError> {
+    DisclosureClass::parse(name)
+        .map(drop)
+        .ok_or_else(|| IntentError::UnknownDisclosure {
+            name: sanitize_name(name),
+        })
+}
+
+fn check_lifetime(issued_at: u64, expires_at: u64, now: u64) -> Result<(), IntentError> {
+    if expires_at <= issued_at || expires_at - issued_at > MAX_INTENT_LIFETIME_SECS {
+        return Err(IntentError::InvalidLifetime {
+            issued_at,
+            expires_at,
+        });
+    }
+    if issued_at > now.saturating_add(MAX_INTENT_CLOCK_SKEW_SECS) {
+        return Err(IntentError::IssuedInFuture { issued_at, now });
+    }
+    if expires_at.saturating_add(MAX_INTENT_CLOCK_SKEW_SECS) < now {
+        return Err(IntentError::Expired { expires_at, now });
+    }
+    Ok(())
+}
+
+fn check_window(from: u64, to: u64) -> Result<(), IntentError> {
+    if to <= from || to - from > MAX_WINDOW_SECS {
+        return Err(IntentError::InvalidWindow { from, to });
+    }
+    Ok(())
+}
+
+/// Whether `name` is one of the closed enum `T`'s own serde names, so the
+/// check cannot drift from the shape it guards.
+fn names<T: serde::de::DeserializeOwned>(name: &str) -> bool {
+    serde_json::to_string(name).is_ok_and(|json| serde_json::from_str::<T>(&json).is_ok())
+}
+
+fn parse<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, IntentError> {
+    serde_json::from_slice(bytes).map_err(|error| classify(&error))
+}
+
+/// Reads a parser error as one of the typed shape faults, or as malformed
+/// with the reason stripped of every quoted span.
+fn classify(error: &serde_json::Error) -> IntentError {
+    let message = error.to_string();
+    let message = message.split(" at line ").next().unwrap_or_default();
+    if let Some(name) = named(message, "unknown field `") {
+        return IntentError::UnknownField { name };
+    }
+    if let Some(name) = named(message, "missing field `") {
+        return IntentError::MissingField { name };
+    }
+    IntentError::Malformed(reduce(message))
+}
+
+/// The backticked name after `prefix`, reduced.
+fn named(message: &str, prefix: &str) -> Option<String> {
+    let rest = message.strip_prefix(prefix)?;
+    Some(sanitize_name(rest.split('`').next().unwrap_or_default()))
+}
+
+/// `message` without the contents of any double-quoted or backticked
+/// span, bounded, so a value from the wire never rides along in an error.
+fn reduce(message: &str) -> String {
+    let mut out = String::new();
+    let mut open: Option<char> = None;
+    let mut escaped = false;
+    for c in message.chars() {
+        match open {
+            Some(quote) => {
+                if escaped {
+                    escaped = false;
+                } else if c == '\\' {
+                    escaped = true;
+                } else if c == quote {
+                    open = None;
+                    out.push(c);
+                }
+            }
+            None => {
+                out.push(c);
+                if c == '"' || c == '`' {
+                    open = Some(c);
+                }
+            }
+        }
+    }
+    out.chars().take(MAX_REASON_CHARS).collect()
 }
 
 impl std::error::Error for IntentError {}
@@ -746,6 +1230,9 @@ mod tests {
     }
 
     /// The fixture with `edit` applied to its JSON value.
+    /// One change to a fixture's JSON value.
+    type Edit = Box<dyn Fn(&mut serde_json::Value)>;
+
     fn edited(text: &str, edit: impl FnOnce(&mut serde_json::Value)) -> String {
         let mut json = value(text);
         edit(&mut json);
@@ -942,7 +1429,7 @@ mod tests {
 
     #[test]
     fn an_extra_field_fails_closed_at_every_depth() {
-        let cases: [(&str, Box<dyn Fn(&mut serde_json::Value)>, &str); 5] = [
+        let cases: [(&str, Edit, &str); 5] = [
             (
                 "header",
                 Box::new(|json| json["profile"] = "molinka".into()),
@@ -991,7 +1478,7 @@ mod tests {
                 NEEDS_OWNER,
                 Box::new(|json: &mut serde_json::Value| {
                     json["deferred_until"] = 1_800_007_200u64.into()
-                }) as Box<dyn Fn(&mut serde_json::Value)>,
+                }) as Edit,
             ),
             (
                 "retry_after_secs",
@@ -1525,20 +2012,29 @@ mod tests {
             Ok(())
         );
 
-        // Every answer kind belongs to one class.
-        assert_eq!(IntentAnswer::Delivered.class(), IntentClass::Message);
-        assert_eq!(
-            IntentAnswer::Availability { windows: vec![] }.class(),
-            IntentClass::Availability
-        );
-        assert_eq!(
-            IntentAnswer::ReminderScheduled { at: 1 }.class(),
-            IntentClass::Reminder
-        );
-        assert_eq!(
-            IntentAnswer::ProposalReceived.class(),
-            IntentClass::Proposal
-        );
+        // Every answer kind belongs to one class, and its `kind` tag maps
+        // back to that class, so the probe cannot drift from the shape.
+        for (answer, class) in [
+            (IntentAnswer::Delivered, IntentClass::Message),
+            (
+                IntentAnswer::Availability { windows: vec![] },
+                IntentClass::Availability,
+            ),
+            (
+                IntentAnswer::ReminderScheduled { at: 1 },
+                IntentClass::Reminder,
+            ),
+            (IntentAnswer::ProposalReceived, IntentClass::Proposal),
+        ] {
+            assert_eq!(answer.class(), class);
+            let json = serde_json::to_value(&answer).unwrap();
+            assert_eq!(
+                IntentAnswer::class_for_kind(json["kind"].as_str().unwrap()),
+                Some(class)
+            );
+        }
+        assert_eq!(IntentAnswer::class_for_kind("memories"), None);
+        assert_eq!(IntentAnswer::class_for_kind("Delivered"), None);
     }
 
     #[test]
