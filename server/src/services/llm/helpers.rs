@@ -1151,6 +1151,45 @@ mod trail_tests {
             tool_use_summary("list_machines", &serde_json::json!({})),
             "listing computers"
         );
+        // The typed window tools (#18) name the computer the same way, so a
+        // reloaded call reads "observing a window on <id>", never
+        // "get_window_state: …" (#218).
+        let observed = tool_call(
+            "call_4",
+            "get_window_state",
+            serde_json::json!({"machine_id": STUDIO, "target": {"pid": 1, "window_id": 2}}),
+        );
+        assert_eq!(
+            history_to_chat_messages(&[observed])[0].content,
+            format!("observing a window on {STUDIO}")
+        );
+        let acted = tool_call(
+            "call_5",
+            "act",
+            serde_json::json!({
+                "machine_id": STUDIO,
+                "target": {"pid": 1, "window_id": 2},
+                "action": {"kind": "click", "address": {"kind": "element_token", "element_token": "tok/a"}}
+            }),
+        );
+        assert_eq!(
+            history_to_chat_messages(&[acted])[0].content,
+            format!("click on {STUDIO}")
+        );
+        assert_eq!(
+            tool_use_summary(
+                "discover_windows",
+                &serde_json::json!({"machine_id": STUDIO, "mode": "list_windows"})
+            ),
+            format!("listing windows on {STUDIO}")
+        );
+        assert_eq!(
+            tool_use_summary(
+                "verify_state",
+                &serde_json::json!({"machine_id": STUDIO, "expect": []})
+            ),
+            format!("verifying a window on {STUDIO}")
+        );
         // Every other tool keeps its argument summary.
         assert_eq!(
             tool_use_summary("read_file", &serde_json::json!({"path": "notes.md"})),
