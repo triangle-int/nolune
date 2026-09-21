@@ -11,6 +11,10 @@ const cleanupSource = readFileSync(
   new URL("../../client/src/lib/api/legacy-auth-cleanup.js", import.meta.url),
   "utf8",
 );
+const importStatusSource = readFileSync(
+  new URL("../../client/src/lib/settings/import-status.js", import.meta.url),
+  "utf8",
+);
 
 async function setup(desktop) {
   const urls = [];
@@ -31,6 +35,10 @@ async function setup(desktop) {
   await module.link((specifier) => {
     if (specifier === "./legacy-auth-cleanup.js") {
       return new vm.SourceTextModule(cleanupSource, { context });
+    }
+    // The import reply reader (#74): pure functions, no credentials.
+    if (specifier === "../settings/import-status.js") {
+      return new vm.SourceTextModule(importStatusSource, { context });
     }
     throw Error(`Unexpected runtime import: ${specifier}`);
   });
