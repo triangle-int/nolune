@@ -78,13 +78,14 @@ impl AuditLog {
         self.refuse_if_unloadable(&inner)?;
         let mut receipts = inner.receipts.clone();
         receipts.push(receipt.clone());
-        if enforce_retention(&mut receipts, now) {
-            // Something was dropped: rewrite the whole file.
+        if enforce_retention(&mut receipts, now) || inner.stale_on_disk {
+            // Something was dropped, now or on load: rewrite the whole file.
             self.rewrite(&receipts)?;
         } else {
             self.append(&receipt)?;
         }
         inner.receipts = receipts;
+        inner.stale_on_disk = false;
         Ok(())
     }
 
@@ -150,10 +151,9 @@ impl AuditLog {
             }
         }
         inner.receipts = receipts;
-        if enforce_retention(&mut inner.receipts, (self.clock)()) {
-            // Old entries are dropped from memory now and from the file on
-            // the next write; a read alone never rewrites the file.
-        }
+        // Old entries are dropped from memory now and from the file on the
+        // next write, which compacts it; a read alone never rewrites it.
+        inner.stale_on_disk = enforce_retention(&mut inner.receipts, (self.clock)());
     }
 
     fn mark_unloadable(&self, inner: &mut Inner, reason: String) {
@@ -266,6 +266,9 @@ struct Inner {
     unloadable: Option<String>,
     /// Oldest first.
     receipts: Vec<AuditReceipt>,
+    /// Load-time retention dropped receipts the file still holds; the next
+    /// write rewrites it rather than appending.
+    stale_on_disk: bool,
 }
 
 #[cfg(test)]
@@ -507,14 +510,36 @@ mod tests {
             std::fs::read_to_string(log.path()).unwrap().lines().count(),
             1
         );
-        let later = AuditLog::with_clock(
-            dir.path(),
-            Arc::new(|| T0 + (2 * AUDIT_RETENTION_DAYS + 5) * 86_400),
-        );
+        let much_later = T0 + (2 * AUDIT_RETENTION_DAYS + 5) * 86_400;
+        let later = AuditLog::with_clock(dir.path(), Arc::new(move || much_later));
         assert_eq!(
             later.list().unwrap(),
             Vec::new(),
             "everything is too old on load"
+        );
+        assert_eq!(
+            std::fs::read_to_string(log.path()).unwrap().lines().count(),
+            1,
+            "a read alone never rewrites the file"
+        );
+        // What load dropped from memory leaves the file with the next
+        // write, so the file never holds what the log does not.
+        later.record(receipt("chatty", much_later)).unwrap();
+        let text = std::fs::read_to_string(log.path()).unwrap();
+        assert_eq!(text.lines().count(), 1, "{text}");
+        assert_eq!(later.list().unwrap()[0].at, much_later);
+        assert_eq!(
+            AuditLog::with_clock(dir.path(), Arc::new(move || much_later))
+                .list()
+                .unwrap()
+                .len(),
+            1
+        );
+        // Once compacted, the next write appends again.
+        later.record(receipt("chatty", much_later + 1)).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(log.path()).unwrap().lines().count(),
+            2
         );
     }
 
