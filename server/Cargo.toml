@@ -63,3 +63,6 @@ gethostname = "1.1.0"
 curve25519-dalek = "4"
 # Paused time for the rate-limit retry tests; the dependency itself is unchanged.
 tokio = { version = "1.0", features = ["test-util"] }
+# Already in the tree under axum's `ws` feature; used only by the fake desktop
+# that connects to the machine WebSocket in the router tests (#17).
+tokio-tungstenite = "0.28"
