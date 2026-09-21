@@ -217,10 +217,11 @@ fn seeded_models(config: &str) -> Vec<(String, String)> {
         if let Some(literal) = line.rsplit('"').nth(1) {
             last_literal = Some(literal.to_owned());
         }
-        if line.ends_with("),") && line.contains(')') {
-            if let Some(model) = last_literal.take() {
-                out.push((provider.clone(), model));
-            }
+        if line.ends_with("),")
+            && line.contains(')')
+            && let Some(model) = last_literal.take()
+        {
+            out.push((provider.clone(), model));
         }
     }
     assert!(!out.is_empty(), "default_presets seeds nothing");

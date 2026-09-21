@@ -1985,12 +1985,12 @@ mod tests {
     /// asked). It uses an empty scratch `CODEX_HOME`, so it reads and
     /// writes nothing under the person's own codex home and needs no
     /// login: what it proves is that the binary on this machine is the
-    /// pin, that the handshake, `model/list`, `account/read`, `config/read`
-    /// and `thread/start` with Nolune's safety settings answer in the
-    /// shapes the fixture records, that a turn without a login is refused
-    /// as setup before it is started, and that closing the runtime leaves
-    /// no `codex app-server` child behind. A logged-in turn is the live
-    /// test in `codex/adapter.rs`.
+    /// pin, that the handshake, `model/list` (naming the seeded models)
+    /// and `account/read` answer in the shapes the fixture records, that
+    /// a turn without a login is refused as setup before any thread is
+    /// started, and that closing the runtime leaves no `codex app-server`
+    /// child behind. A logged-in turn, with `thread/start` and the tool
+    /// bridge, is the live test in `codex/adapter.rs`.
     #[cfg(unix)]
     #[tokio::test]
     #[ignore]
