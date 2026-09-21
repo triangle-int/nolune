@@ -42,6 +42,7 @@ Unknown fields are rejected. A marker with any other `format_version` or
 │   ├── rotations.json           this companion's own key rotations
 │   ├── policy.json              what each paired peer may ask for (#109)
 │   ├── approvals.json           requests that asked the owner, until decided or lapsed
+│   ├── inbound.json             structured intents peers delivered and their receipts (#110)
 │   └── audit.jsonl              receipts for every judged intent, both sides
 ├── skills/                      installed skills (global)
 ├── vectors/                     derived vector index, keyed by slug
@@ -1152,6 +1153,26 @@ change is applied. The queue moves with the rules when a peer rotates its
 key, a rotation is refused while the queue cannot be loaded, and a queue
 file this build cannot load refuses every intent that would ask the owner
 (a ping never consults it) while being neither repaired nor overwritten.
+
+`federation/inbound.json` (mode `0600`) is what the structured intents of
+#110 leave behind: one record per request a peer delivered (`sender`,
+`correlation_id`, `pairing_id`, `intent`, `disclosure`, the peer's two
+labels `represented_owner` and `purpose`, `status` of `pending`,
+`accepted`, or `denied`, the `response` the peer was given, and the
+`approval_id`, `receipt_id`, and chat `message_id` it led to) and one
+intent receipt per outcome (who asked whom for what, on whose behalf and
+to what end, the class requested and granted, and why: the policy reason
+or the owner's approval id). Neither has a field for a body, text, or
+payload, and unknown fields are refused. A settled record is what a
+redelivery of the same request is answered with, byte for byte, without a
+second judgement, delivery, or receipt; a pending one is judged afresh.
+Records lapse with their intent's expiry, the newest 1000 are kept, and
+receipts are bounded like the audit log (newest 1000, 200 per pairing, 30
+days). `GET /api/federation/inbox` lists both newest first. A file this
+build cannot load refuses every intent while being neither repaired nor
+overwritten. The delivered text itself lives only in the conversation
+(`messages.json` of the default chat), inside the untrusted block. See
+[federation.md](federation.md) "Intents".
 
 ## Changing this format
 

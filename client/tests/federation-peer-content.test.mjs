@@ -52,3 +52,11 @@ test('the text is returned as it was sent, never interpreted', () => {
 	assert.ok(content);
 	assert.equal(content.text, html);
 });
+
+test('a delivery from a paired companion is not the owner speaking, so the companion is not listening', async () => {
+	const { companionEventFromServer } = await import('../src/lib/companion/state.js');
+	const delivered = { type: 'chat_message_created', chat_id: 'default', message: { id: 'm1', role: 'user', kind: 'message', content: framed('hello') } };
+	assert.equal(companionEventFromServer(delivered), null);
+	const own = { type: 'chat_message_created', chat_id: 'default', message: { id: 'm2', role: 'user', kind: 'message', content: 'hello' } };
+	assert.deepEqual(companionEventFromServer(own), { type: 'user_message', chatId: 'default' });
+});

@@ -29,7 +29,7 @@ test('a pending request reads as what the peer wants, on whose behalf, and why, 
 	const [row] = inboxView([record()], NOW);
 	assert.equal(row.key, `${PEER}/req-1`);
 	assert.equal(row.peerId, PEER);
-	assert.equal(row.peerShortId, 'TFccHElq…');
+	assert.equal(row.peerShortId, 'TFccHElq…cQ7E');
 	assert.equal(row.label, 'send you a message');
 	assert.equal(row.representedOwner, 'Alice');
 	assert.equal(row.purpose, 'catch up after the trip');

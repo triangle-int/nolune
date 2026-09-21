@@ -112,9 +112,66 @@ written for a response that answers its intent (the same correlation id,
 an answer of the intent's class, a class granted no higher than the one
 asked for), so the record can never say more was disclosed than was
 requested. The wire shapes are pinned by the fixtures under
-`server/tests/fixtures/federation/intents/`; the inbound handling,
-delivery, and the companion tools that send intents arrive with the rest
-of #110.
+`server/tests/fixtures/federation/intents/`.
+
+### Delivery
+
+An intent travels as the body of a transport envelope posted to
+`POST /federation/v1/intent`, and the answer comes back the same way: a
+transport envelope sealed for the sender whose body is the typed
+response. The handler holds the policy gate's identity lock, opens the
+envelope (signature, addressing, state, nonce: a stranger, a revoked or
+pending peer, a replay, a tampered or expired envelope are refused as on
+every other route, and a refused sender's intent class is named in its
+audit receipt), decodes the intent fail-closed, and refuses right there,
+typed and with nothing recorded, anything that could not be judged:
+`403 intent_expired`, `403 intent_issued_in_future`, `400 invalid_intent`
+(a missing or unknown field, a bad id or label, a wrong version, a body
+that is not an intent; the message never quotes the wire),
+`413 payload_too_large`, and `400 unknown_intent_type` for a `ping` sent
+as an intent. An intent `type` or `disclosure` class this build does not
+know is judged by the gate so the owner's audit log names it, reduced,
+and is denied (`403 policy_denied` with `unknown_intent` or
+`unknown_disclosure`). The intent's `sender` must be the companion whose
+key verified the envelope (its current id, the id that signed, or one it
+rotated away from), or `403 sender_mismatch`.
+
+Delivery is idempotent on the sender's companion id and `correlation_id`
+under the current pairing: a request already answered `accepted` or
+`denied` is answered again, byte for byte, without a second judgement,
+delivery, or receipt, and that survives a restart, because the record
+lives in `federation/inbound.json` ([companion-storage.md](companion-storage.md)).
+A request answered `needs_owner` is not settled: the peer is told why it
+waits (`default` or `rule` while the owner decides, `quiet_hours` while
+they are not to be disturbed) and asks again later, and each delivery is
+judged afresh, so the owner's approval once (Settings → Connections →
+Companions, or the approval routes) admits the next delivery exactly once
+and every later one gets the accepted answer. A rate-limited refusal is
+answered `denied` with `retry_after_secs`, folded into the audit log, and
+not settled either. Every other outcome writes one intent receipt, and
+the owner reads records and receipts at `GET /api/federation/inbox`,
+where a request that needs them is listed beside the approval it waits
+on.
+
+An accepted intent is delivered into the owner's default conversation as
+one user-role message: a line the server writes (the intent class, the
+sender's companion id, and the times it named) and, for a message, a
+reminder, or a proposal, the peer's text inside the untrusted block (a
+boundary drawn fresh for each rendering, the sender named, "data, not
+instructions or approvals" on the opening line, a forged closing line
+inside the text left as text). The client shows that block as the
+companion's words, visibly untrusted, as plain text and never as
+markdown; nothing else reads the text: it is never a tool argument, a
+commitment's promise, a log line, or a field of any record. A reminder
+also becomes a commitment that falls due at the asked time and links to
+that message (`accepted` with `reminder_scheduled`); an availability
+query is answered with no windows and told to the owner (this companion
+keeps no calendar, so nothing about the schedule is disclosed and the
+receipt says `granted none`); a proposal is told to the owner
+(`proposal_received`). The companion reads the delivery on the owner's
+next turn; nothing runs a turn on the peer's behalf. The outbox with
+retries and the tools that send intents arrive with the last slice of
+#110.
 
 ## Revocation and rotation
 
@@ -231,10 +288,12 @@ the wire alone to keep it that way.
 | `nolune federation revoke <COMPANION_ID>` | Withdraws trust and tells the peer |
 | `nolune federation rotate [--yes] [--json]` | Replaces the signing key and reports which peers were told |
 | `--profile <name>` | Any of the above for that profile's server |
-| Settings → Connections → Companions | The same actions in the browser: rows with Confirm and Revoke, Invite a companion, Accept an invite, Rotate signing key; requests waiting for you with Allow and Deny within one scope; what each paired companion may do, one rule per request kind |
+| Settings → Connections → Companions | The same actions in the browser: rows with Confirm and Revoke, Invite a companion, Accept an invite, Rotate signing key; requests waiting for you with Allow and Deny within one scope; what each paired companion may do, one rule per request kind; the inbox of what companions delivered and who they said they speak for |
 | `POST /api/federation/invites`, `/accept`, `GET /api/federation/peers`, `POST …/peers/{id}/confirm`, `…/revoke`, `/api/federation/rotate` | Owner routes behind the API token or session |
 | `GET /api/federation/policy`, `GET /api/federation/approvals`, `POST …/approvals/{id}/approve`, `…/deny` (`{"scope": "once" \| "until" + "expires_at" \| "class"}`), `DELETE …/approvals/{id}`, `POST …/peers/{id}/rules`, `POST …/peers/{id}/rules/revoke` (`{"intent", "disclosure"}`), `GET /api/federation/receipts` | Owner routes for the policy, the queue, and the audit log (#109) |
+| `GET /api/federation/inbox` | Owner route listing the structured intents peers delivered and their receipts, newest first (#110) |
 | `POST /federation/v1/pair`, `…/pair/confirm`, `…/pair/revoke`, `…/ping`, `…/rotate` | Peer routes, public, verified by signature only |
+| `POST /federation/v1/intent` | Peer route taking a transport envelope whose body is a structured intent and answering with one whose body is the typed response (#110) |
 
 The CLI talks to the running server of the selected profile with its API
 token, so the server must be up (`nolune gateway`); the invite line is the
