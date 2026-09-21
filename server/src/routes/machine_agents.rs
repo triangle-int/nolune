@@ -259,9 +259,23 @@ struct Registration {
     /// Action names the agent executes; absent from older desktops (legacy set).
     #[serde(default)]
     capabilities: Vec<String>,
+    /// A `CuaRegistrationEnvelope` (#17): the desktop runs a Cua driver and
+    /// answers typed frames for it. Absent from desktops without one, which
+    /// keep the legacy toolcalls only.
+    #[serde(default)]
+    cua: Option<serde_json::Value>,
 }
 
 impl Registration {
+    /// The Cua descriptor this registration carries, checked against the
+    /// machine it registers as; `None` for a legacy-only desktop.
+    fn cua_descriptor(&self) -> Result<Option<cua_protocol::MachineDescriptor>, String> {
+        self.cua
+            .as_ref()
+            .map(|cua| crate::services::cua::desktop::accept_registration(&self.machine_id, cua))
+            .transpose()
+    }
+
     /// The registry's view of this registration, seen at `now`. Labels and
     /// capabilities are handed over as reported; the registry bounds and
     /// normalizes them in one place.
@@ -294,6 +308,10 @@ enum AgentMessage {
         #[serde(flatten)]
         result: ActionResult,
     },
+    /// A desktop answers a `cua_request` frame (#17): the
+    /// `CuaResponseEnvelope`, carried whole so it is decoded through the
+    /// protocol's bounds and correlated by request id.
+    CuaResponse { response: serde_json::Value },
     /// Heartbeat/ping from agent.
     Heartbeat { machine_id: String },
 }
@@ -319,7 +337,7 @@ async fn handle_agent(mut socket: WebSocket, state: AppState) {
             toolcall_msg = agent_rx.recv() => {
                 match toolcall_msg {
                     Some(msg) => {
-                        log::info!("[machine-ws] sending toolcall to '{machine_id}'");
+                        log::info!("[machine-ws] sending frame to '{machine_id}'");
                         if socket.send(Message::Text(msg.into())).await.is_err() {
                             log::warn!("[machine-ws] failed to send to '{machine_id}', disconnecting");
                             break;
@@ -337,6 +355,9 @@ async fn handle_agent(mut socket: WebSocket, state: AppState) {
                                 AgentMessage::ActionResult { request_id, result } => {
                                     log::info!("[machine-ws] result from '{machine_id}' for {}", &request_id[..8.min(request_id.len())]);
                                     state.machine_registry.complete(&request_id, result).await;
+                                }
+                                AgentMessage::CuaResponse { response } => {
+                                    state.machine_registry.complete_cua(&machine_id, response).await;
                                 }
                                 AgentMessage::Heartbeat { machine_id: mid } => {
                                     state.machine_registry.heartbeat(&mid).await;
@@ -412,13 +433,47 @@ async fn wait_for_registration(
                                 let _ = socket.send(Message::Text(refusal.to_string().into())).await;
                                 return None;
                             }
+                            // A descriptor that is not this desktop's is a bug on
+                            // the other end, not a downgrade: refused like a bad id.
+                            let descriptor = match registration.cua_descriptor() {
+                                Ok(descriptor) => descriptor,
+                                Err(error) => {
+                                    log::warn!("[machine-ws] registration of '{}' refused: {error}", registration.machine_id);
+                                    let refusal = serde_json::json!({"type": "error", "error": "invalid_cua_registration", "message": error});
+                                    let _ = socket.send(Message::Text(refusal.to_string().into())).await;
+                                    return None;
+                                }
+                            };
                             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
                             let machine_id = registration.machine_id.clone();
-                            let info = registration.into_info(chrono::Utc::now().timestamp());
+                            let mut info = registration.into_info(chrono::Utc::now().timestamp());
+                            if info.permissions.is_none() {
+                                info.permissions = descriptor.as_ref().map(|d| d.permissions.clone());
+                            }
                             let connection = state.machine_registry.register(info, tx).await;
 
-                            // Send ack
-                            let ack = serde_json::json!({"type": "registered", "machine_id": machine_id});
+                            // The typed target (#17) beside the legacy registration.
+                            // A refusal here (the socket was replaced between the
+                            // two steps) keeps the legacy toolcalls working and is
+                            // logged; a descriptor under the server-local prefix
+                            // never gets this far (`cua_descriptor`).
+                            let mut cua = false;
+                            if let Some(descriptor) = descriptor {
+                                let call_timeout = state.config.read().await.cua.timeouts().call;
+                                match state
+                                    .machine_registry
+                                    .attach_desktop_cua(&machine_id, connection, descriptor, call_timeout)
+                                    .await
+                                {
+                                    Ok(_) => cua = true,
+                                    Err(error) => log::error!(
+                                        "[machine-ws] '{machine_id}' registered without a typed cua target: {error}"
+                                    ),
+                                }
+                            }
+
+                            // Send ack; `cua` says whether typed frames will follow.
+                            let ack = serde_json::json!({"type": "registered", "machine_id": machine_id, "cua": cua});
                             let _ = socket.send(Message::Text(serde_json::to_string(&ack).unwrap().into())).await;
 
                             return Some((machine_id, connection, rx));
@@ -634,6 +689,96 @@ mod registration_tests {
                 .map(|s| (*s).to_owned())
                 .collect::<Vec<_>>()
         );
+    }
+
+    fn cua_envelope(
+        machine_id: &str,
+        location: cua_protocol::MachineLocation,
+    ) -> serde_json::Value {
+        use cua_protocol::*;
+        serde_json::to_value(CuaRegistrationEnvelope {
+            version: ProtocolVersion::V1,
+            machine: MachineDescriptor {
+                machine_id: MachineId::try_from(machine_id).unwrap(),
+                location,
+                platform: Platform::Macos,
+                driver_version: DriverVersion::try_from("0.28.2").unwrap(),
+                health: MachineHealth::Healthy,
+                permissions: PermissionState {
+                    accessibility: Permission::Granted,
+                    screen_capture: Permission::Denied,
+                },
+                capabilities: vec![Capability::AppDiscovery],
+            },
+        })
+        .unwrap()
+    }
+
+    /// A registration with a `cua` envelope (#17) carries the descriptor for
+    /// the machine it registers as; one without keeps the legacy shape.
+    #[test]
+    fn a_registration_carries_its_cua_descriptor_or_none() {
+        let legacy = registration(serde_json::json!({}));
+        assert_eq!(legacy.cua_descriptor().unwrap(), None);
+
+        let typed = registration(serde_json::json!({
+            "cua": cua_envelope(STABLE_ID, cua_protocol::MachineLocation::Desktop),
+        }));
+        let descriptor = typed.cua_descriptor().unwrap().expect("a descriptor");
+        assert_eq!(descriptor.machine_id.as_str(), STABLE_ID);
+        assert_eq!(descriptor.location, cua_protocol::MachineLocation::Desktop);
+        assert_eq!(descriptor.driver_version.as_str(), "0.28.2");
+
+        // Bound to the socket's identity and to the desktop location.
+        let other = registration(serde_json::json!({
+            "cua": cua_envelope("elsewhere", cua_protocol::MachineLocation::Desktop),
+        }));
+        assert!(other.cua_descriptor().unwrap_err().contains("elsewhere"));
+        let local = registration(serde_json::json!({
+            "cua": cua_envelope(STABLE_ID, cua_protocol::MachineLocation::ServerLocal),
+        }));
+        assert!(local.cua_descriptor().is_err());
+        // The server machine's id prefix is reserved even for a desktop
+        // descriptor that is otherwise its own (review finding on #196).
+        let reserved = registration(serde_json::json!({
+            "machine_id": "server-local:studio",
+            "cua": cua_envelope("server-local:studio", cua_protocol::MachineLocation::Desktop),
+        }));
+        assert!(reserved.cua_descriptor().unwrap_err().contains("reserved"));
+        let garbage = registration(serde_json::json!({"cua": {"version": "v1"}}));
+        assert!(garbage.cua_descriptor().is_err());
+    }
+
+    /// The typed answer travels beside the legacy `action_result`, whole.
+    #[test]
+    fn a_cua_response_frame_parses_beside_the_legacy_messages() {
+        let frame = serde_json::json!({
+            "type": "cua_response",
+            "response": {
+                "version": "v1", "request_id": "req-1", "machine_id": STABLE_ID,
+                "action": "list_apps",
+                "response": {"status": "success", "result": {"action": "list_apps", "result": {"apps": []}}}
+            }
+        });
+        let AgentMessage::CuaResponse { response } =
+            serde_json::from_str(&frame.to_string()).unwrap()
+        else {
+            panic!("not a cua_response");
+        };
+        assert_eq!(response, frame["response"]);
+        assert!(
+            cua_protocol::CuaResponseEnvelope::from_json(&response.to_string()).is_ok(),
+            "carried whole: the protocol's decoder reads it"
+        );
+
+        let legacy = serde_json::json!({
+            "type": "action_result", "request_id": "req-2",
+            "result_type": "action", "success": true
+        });
+        assert!(matches!(
+            serde_json::from_str::<AgentMessage>(&legacy.to_string()).unwrap(),
+            AgentMessage::ActionResult { .. }
+        ));
     }
 
     #[test]

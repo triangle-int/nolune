@@ -6,15 +6,18 @@
  import Conversation from '$lib/components/ai-elements/conversation/conversation.svelte';
  import ConversationContent from '$lib/components/ai-elements/conversation/conversation-content.svelte';
  import type { ChatMessage } from '$lib/api/types.js';
+ import { capabilityWarnings } from '$lib/models/presets.js';
  let messages = $state<ChatMessage[]>([
   { id: 'example-user', role: 'user', content: 'Find my notes and help me plan a quieter afternoon.', created_at: '1767258000000' },
   { id: 'example-assistant', role: 'assistant', content: 'Here’s a little room to breathe.\n\n1. Finish the project brief.\n2. Leave space for a walk.\n3. Move the rest to tomorrow.\n\n**One thing at a time is enough.**', created_at: '1767258001000' }
  ]);
  let generating = $state(false);
  let failNext = $state(false);
+ // The rows carry sample capability warnings (#28) built by the real helper, so the picker shows the chips and the sentence.
  const presets = [
-  { id: 'sonnet', name: 'Claude Sonnet', model: 'claude-sonnet-4-6' },
-  { id: 'opus', name: 'Claude Opus', model: 'claude-opus-4-6' },
+  { id: 'sonnet', name: 'Claude Sonnet', model: 'claude-sonnet-4-6', warnings: [] },
+  { id: 'opus', name: 'Claude Opus', model: 'claude-opus-4-6', warnings: [] },
+  { id: 'gpt', name: 'GPT-5.4', model: 'gpt-5.4', warnings: capabilityWarnings({ id: 'gpt', name: 'GPT-5.4', provider: 'openai', model: 'gpt-5.4' }, { vision: true, documents: false, tools: true }) },
  ];
  let presetId = $state('sonnet');
  let status = $state('Sample conversation. Messages and files stay in this page and disappear on reload.');

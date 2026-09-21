@@ -767,3 +767,87 @@ async fn accept_refuses_bad_input_before_touching_the_wire() {
     let (_, listed) = b.owner(Method::GET, "/api/federation/peers", None).await;
     assert_eq!(listed["peers"].as_array().unwrap().len(), 0);
 }
+
+/// #108 PR 4: the invite response also carries the whole invite as one line
+/// (`invite`), which the accepting owner pastes into `nolune federation
+/// accept` or the Companions section; the accept route takes that line in
+/// place of the three fields and refuses a URL in its place.
+#[tokio::test]
+async fn owners_accept_with_the_one_line_invite_token() {
+    use crate::services::federation::invite_token::{INVITE_TOKEN_PREFIX, decode_invite};
+    let (a, b, _wire) = two_servers().await;
+    let (a_id, b_id) = (a.companion_id(), b.companion_id());
+
+    let invite = mint_invite(&a).await;
+    let secret = invite["secret"].as_str().unwrap().to_owned();
+    let token = invite["invite"].as_str().expect("invite line").to_owned();
+    assert!(token.starts_with(INVITE_TOKEN_PREFIX), "{token}");
+    assert!(!token.contains("://"), "an invite line is never a URL");
+    let decoded = decode_invite(&token).unwrap();
+    assert_eq!(decoded.origin, ORIGIN_A);
+    assert_eq!(decoded.secret.expose(), secret);
+    assert_eq!(decoded.issuer.companion_id, a_id);
+
+    // The list never shows the line again, in any field.
+    let (_, listed) = a.owner(Method::GET, "/api/federation/peers", None).await;
+    let text = listed.to_string();
+    assert!(!text.contains(&token) && !text.contains(&secret), "{text}");
+
+    // A URL, a line with extra fields, and a line mixed with the fields are
+    // refused before anything goes over the wire.
+    for (body, expected) in [
+        (
+            serde_json::json!({ "invite": format!("{ORIGIN_A}/federation/v1/pair?invite={token}") }),
+            "malformed",
+        ),
+        (serde_json::json!({ "invite": "hello" }), "malformed"),
+        (serde_json::json!({ "invite": "" }), "malformed"),
+        (
+            serde_json::json!({ "invite": token, "origin": ORIGIN_A }),
+            "invalid_body",
+        ),
+        (serde_json::json!({ "invite": 7 }), "invalid_body"),
+    ] {
+        let (status, response) = b
+            .owner(Method::POST, "/api/federation/accept", Some(body.clone()))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body} -> {response}");
+        assert_eq!(response["error"], expected, "{body} -> {response}");
+        assert!(
+            !response.to_string().contains(&secret),
+            "the error echoed the secret"
+        );
+    }
+    let (_, listed) = a.owner(Method::GET, "/api/federation/peers", None).await;
+    assert_eq!(listed["invites"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["peers"].as_array().unwrap().len(), 0);
+
+    // The genuine line redeems the invite exactly once.
+    let (status, accepted) = b
+        .owner(
+            Method::POST,
+            "/api/federation/accept",
+            Some(serde_json::json!({ "invite": token })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{accepted}");
+    assert_eq!(accepted["peer"]["companion_id"], a_id);
+    assert_eq!(accepted["peer"]["state"], "pending");
+    assert!(!accepted.to_string().contains(&secret));
+    let (status, replayed) = b
+        .owner(
+            Method::POST,
+            "/api/federation/accept",
+            Some(serde_json::json!({ "invite": token })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{replayed}");
+    assert_eq!(replayed["peer_error"], "invalid_invite");
+
+    // Both sides record when they last verified the other (#108 PR 4).
+    let (_, listed) = a.owner(Method::GET, "/api/federation/peers", None).await;
+    assert_eq!(listed["peers"][0]["companion_id"], b_id);
+    assert!(listed["peers"][0]["last_seen_at"].as_u64().is_some());
+    let (_, listed) = b.owner(Method::GET, "/api/federation/peers", None).await;
+    assert!(listed["peers"][0]["last_seen_at"].as_u64().is_some());
+}

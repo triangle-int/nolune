@@ -127,3 +127,7 @@ mod handoff_tests;
 #[cfg(test)]
 #[path = "../../test-support/resume_ritual.rs"]
 mod resume_ritual_tests;
+
+#[cfg(test)]
+#[path = "../../test-support/cua_desktop_frames.rs"]
+mod cua_desktop_frames_tests;

@@ -4,7 +4,8 @@
 //! coordinate-only action vocabulary of `computer_use` is frozen so new machine
 //! actions land in the protocol instead, CI runs the protocol crate's tests,
 //! and the server-local target is started by the gateway, stopped by its
-//! shutdown hook, sessioned only by the runtime, and documented.
+//! shutdown hook, sessioned only by the runtime, and documented. Desktop
+//! targets (#17) register over the machine WebSocket with typed frames.
 
 #[path = "../test-support/source_scan.rs"]
 mod source_scan;
@@ -179,6 +180,87 @@ fn the_server_local_runtime_is_wired_sessioned_and_documented() {
         readme.contains("docs/computer-use.md"),
         "README.md must point at docs/computer-use.md"
     );
+}
+
+/// #17 slice 1: a desktop that registers a Cua descriptor over the machine
+/// WebSocket is a typed target driven through `cua_request` /
+/// `cua_response` frames, beside the legacy toolcalls, and the wire is
+/// documented.
+#[test]
+fn desktop_targets_register_over_typed_frames() {
+    let repo = repo();
+
+    // The route parses the descriptor, attaches the target, routes the
+    // typed answers, and never builds sessions itself.
+    let route = production(&repo.join("server/src/routes/machine_agents.rs"));
+    for required in [
+        "cua_descriptor",
+        "attach_desktop_cua",
+        "complete_cua",
+        "CuaResponse {",
+        "invalid_cua_registration",
+    ] {
+        assert!(
+            route.contains(required),
+            "machine_agents.rs must reference {required}"
+        );
+    }
+
+    // The link lives with the other Cua transports, and the registry
+    // registers, executes and detaches desktop targets through it.
+    let desktop = repo.join("server/src/services/cua/desktop.rs");
+    assert!(
+        desktop.exists(),
+        "services/cua/desktop.rs owns the typed link"
+    );
+    let link = production(&desktop);
+    for required in [
+        "pub struct DesktopLink",
+        "CuaRequestEnvelope",
+        "CuaResponseEnvelope::from_json",
+        "validate_response_for",
+        "CheckedCuaAdapter::new",
+    ] {
+        assert!(
+            link.contains(required),
+            "services/cua/desktop.rs must reference {required}"
+        );
+    }
+    assert!(
+        !link.contains("todo!("),
+        "services/cua/desktop.rs is implemented"
+    );
+    let registry = production(&repo.join("server/src/services/machine_registry.rs"));
+    for required in [
+        "DesktopLink",
+        "pub async fn register_desktop",
+        "pub async fn attach_desktop_cua",
+        "pub async fn complete_cua",
+    ] {
+        assert!(
+            registry.contains(required),
+            "machine_registry.rs must reference {required}"
+        );
+    }
+    assert!(
+        !registry.contains("Desktop targets register here (#17)"),
+        "the desktop registration allow-marker from #163 is retired"
+    );
+
+    // Documented beside the server-local target.
+    let doc = fs::read_to_string(repo.join("docs/computer-use.md")).unwrap();
+    for required in [
+        "cua_request",
+        "cua_response",
+        "request_id",
+        "call_timeout_secs",
+        "#17",
+    ] {
+        assert!(
+            doc.contains(required),
+            "docs/computer-use.md is missing {required:?}"
+        );
+    }
 }
 
 #[test]

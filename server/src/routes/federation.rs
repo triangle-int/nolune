@@ -2,9 +2,11 @@
 //!
 //! Owner side, behind the API auth middleware:
 //!
-//! * `POST /api/federation/invites` mints a one-time invite (shown once).
+//! * `POST /api/federation/invites` mints a one-time invite (shown once),
+//!   as its fields and as the one-line `invite` form the owner hands over.
 //! * `DELETE /api/federation/invites/{id}` withdraws an outstanding invite.
-//! * `POST /api/federation/accept` redeems an invite another owner handed over.
+//! * `POST /api/federation/accept` redeems an invite another owner handed
+//!   over: the three fields, or the one line as `{ "invite": "…" }`.
 //! * `GET /api/federation/peers` lists this companion's identity, invites, and peers.
 //! * `POST /api/federation/peers/{companion_id}/confirm` pairs a pending peer.
 //! * `POST /api/federation/peers/{companion_id}/revoke` withdraws trust.
@@ -33,18 +35,35 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
+use serde::Deserialize;
 use serde_json::json;
 
 use crate::{
     app::state::AppState,
     domain::federation::{AcceptInvite, FederationError, SignedEnvelope, TransportEnvelope},
     services::federation::{
-        envelope, identity,
+        envelope, identity, invite_token,
         pairing::{
             CONFIRM_PATH, MAX_ENVELOPE_BYTES, PAIR_PATH, PING_PATH, REVOKE_PATH, ROTATE_PATH,
         },
     },
 };
+
+/// The one-line form of an invite, as `nolune federation accept` and the
+/// Companions section send it back.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InviteLine {
+    invite: String,
+}
+
+/// What the accept route takes: the one line, or the three fields.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum AcceptRequest {
+    Line(InviteLine),
+    Fields(AcceptInvite),
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -209,7 +228,12 @@ fn parse_transport(bytes: &[u8]) -> Result<TransportEnvelope, ApiError> {
 async fn create_invite(State(state): State<AppState>) -> Result<Response, ApiError> {
     let origin = state.config.read().await.public_url.clone();
     let invite = state.federation.create_invite(&origin)?;
-    Ok((StatusCode::CREATED, Json(invite)).into_response())
+    // The one response that carries the secret also carries the one line
+    // that packs it with the origin and the issuer document.
+    let line = invite_token::encode_invite(&invite.origin, &invite.secret, &invite.issuer);
+    let mut issued = serde_json::to_value(&invite).expect("invites serialize");
+    issued["invite"] = json!(line);
+    Ok((StatusCode::CREATED, Json(issued)).into_response())
 }
 
 async fn cancel_invite(State(state): State<AppState>, Path(id): Path<String>) -> StatusCode {
@@ -225,7 +249,10 @@ async fn accept_invite(
     request: Request,
 ) -> Result<Response, ApiError> {
     let bytes = read_body(request).await?;
-    let accept: AcceptInvite = serde_json::from_slice(&bytes).map_err(|_| ApiError::InvalidBody)?;
+    let accept = match serde_json::from_slice(&bytes).map_err(|_| ApiError::InvalidBody)? {
+        AcceptRequest::Line(line) => invite_token::decode_invite(&line.invite)?,
+        AcceptRequest::Fields(accept) => accept,
+    };
     let own_origin = state.config.read().await.public_url.clone();
     let peer = state.federation.accept_invite(accept, &own_origin).await?;
     Ok(Json(json!({ "peer": peer.summary() })).into_response())

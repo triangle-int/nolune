@@ -1,6 +1,6 @@
 <script lang="ts">
 	import MoonBirth from "./MoonBirth.svelte";
-	import { saveOnboardingProvider } from "./provider.js";
+	import { resumeOnboarding, saveOnboardingProvider } from "./provider.js";
 	import ArrowRight from "@lucide/svelte/icons/arrow-right";
 	import {
 		sendMessage,
@@ -9,8 +9,11 @@
 		fetchSoul,
 		setCompanionName,
 		fetchConfigStatus,
+		fetchModelPresets,
 		updateLlmConfig,
 		seedModelPresets,
+		testPreset,
+		updateModelPresets,
 	} from "$lib/api/client.js";
 	import type { SoulTemplate } from "$lib/api/types.js";
 	import { getCompanion } from "$lib/stores/companion.svelte.js";
@@ -215,16 +218,34 @@
 	}
 
 	async function checkKeyThenAsk() {
-		// Check if LLM is already configured (self-hosted users may have it in config.toml)
+		// A provider may already be configured (self-hosted users write
+		// config.toml, and a key saved on an earlier visit stays saved).
+		// `llm_configured` only says a key and a Chat preset exist (#28): the
+		// preset is tested again, and only an answer skips this step.
+		let next: ReturnType<typeof resumeOnboarding> = { step: "provider", reason: null };
 		try {
 			const status = await fetchConfigStatus();
-			if (status.llm_configured) {
-				await askFirstMessage();
-				return;
+			if (status.llm_configured && status.chat_preset) {
+				stage = "testing";
+				const [outcome, models] = await Promise.all([
+					testPreset(status.chat_preset).catch(() => null),
+					fetchModelPresets().catch(() => null),
+				]);
+				const preset = models?.presets.find((p) => p.id === status.chat_preset) ?? null;
+				next = resumeOnboarding(status, outcome, preset);
+				stage = "intro";
 			}
 		} catch {}
+		if (next.step === "first-message") {
+			await askFirstMessage();
+			return;
+		}
 
-		// Ask how they want to connect
+		// Ask how they want to connect, after what went wrong when something did.
+		if (next.reason) {
+			await typewrite(next.reason);
+			await pause(300);
+		}
 		await typewrite("one more thing — how should i think?");
 		stage = "picking-provider";
 	}
@@ -240,6 +261,16 @@
 		apiKeyInputEl?.focus();
 	}
 
+	/** Back from the key step: a provider that will not answer is not the only way on. */
+	async function chooseAnotherProvider() {
+		if (stage !== "waiting-key") return;
+		apiKeyInput = "";
+		apiKeyError = "";
+		stage = "intro";
+		await typewrite("how should i think, then?");
+		stage = "picking-provider";
+	}
+
 	async function submitApiKey() {
 		const key = apiKeyInput.trim();
 		if (!key || stage !== "waiting-key") return;
@@ -247,7 +278,16 @@
 		stage = "testing";
 
 		try {
-			await saveOnboardingProvider(selectedProvider, key, { updateLlmConfig, seedModelPresets });
+			// The key is probed before it is saved, and a seeded preset must
+			// answer before "connected." (#28): a provider that cannot reply
+			// keeps this step open, with what to fix in the error line.
+			await saveOnboardingProvider(selectedProvider, key, {
+				updateLlmConfig,
+				seedModelPresets,
+				testPreset,
+				// The seeded rows came from the server, so their providers are its union.
+				updateModelPresets: (payload) => updateModelPresets(payload as Parameters<typeof updateModelPresets>[0]),
+			});
 			apiKeyInput = "";
 			stage = "intro";
 			await pause(200);
@@ -257,6 +297,8 @@
 		} catch (e) {
 			apiKeyError = e instanceof Error ? e.message : "invalid key";
 			stage = "waiting-key";
+			await pause(100);
+			apiKeyInputEl?.focus();
 		}
 	}
 
@@ -420,6 +462,7 @@
 					<a href={providerKeyUrl} target="_blank" rel="noopener" class="ob-hint">
 						Get your {providerLabel} API key
 					</a>
+					<button type="button" onclick={chooseAnotherProvider} class="ob-hint ob-hint-button">choose another provider</button>
 				</div>
 			{/if}
 
@@ -712,6 +755,8 @@
     .ob-go:hover { background: var(--primary); color: var(--primary-foreground); filter: brightness(1.06); }
     .ob-error { color: var(--destructive); font-size: 14px; }
     .ob-hint, .ob-hint:hover { color: var(--primary); font-size: 13px; min-height: 44px; padding-top: 12px; text-decoration: underline; text-underline-offset: 3px; }
+    .ob-hint-button { width: 100%; margin-top: 0; padding-bottom: 0; background: none; border: 0; font: inherit; font-size: 13px; cursor: pointer; }
+    .ob-hint-button:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: 4px; }
     .ob-spinner-label { font-family: var(--font-body); font-size: 14px; }
     .ob-spinner { width: 16px; height: 16px; border-color: var(--border); border-top-color: var(--primary); }
     .ob-cursor { background: var(--primary); }

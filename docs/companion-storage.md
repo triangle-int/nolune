@@ -319,10 +319,11 @@ The API reports each record with live state that is never written to disk:
 the user's name or `null`), `online`, `health` derived from heartbeat age
 (`healthy`; `degraded` when the socket is open but no heartbeat arrived for
 45 seconds; `unavailable` when offline), and `driver_version` and
-`cua_health`, both `null` until the Cua driver (#18) reports them. The
-server machine itself, when it has a Cua driver (#16), is listed beside the
-records as one live `server_local` row with both filled in; it is never
-written to this file (see [computer-use.md](computer-use.md)).
+`cua_health`, filled in while a connected desktop has registered its Cua
+driver (#17) and `null` otherwise. The server machine itself, when it has a
+Cua driver (#16), is listed beside the records as one live `server_local`
+row with both filled in; it is never written to this file (see
+[computer-use.md](computer-use.md)).
 
 | Route | Purpose |
 | --- | --- |
@@ -811,6 +812,7 @@ peer:
       "approved_origins": ["https://molinka.example"],
       "created_at": 1789862400,
       "updated_at": 1789862460,
+      "last_seen_at": 1789862460,
       "rotation_history": []
     }
   ]
@@ -822,7 +824,11 @@ and id), the handshake `state`, which side minted the invite (`role`), the id
 of the invite that started the pairing, the base URLs the owner approved for
 reaching the peer (`approved_origins`, plus a `pending_origin` the peer
 reported but the owner has not approved yet), timestamps, and the key
-rotation history (empty until rotation ships). No display name, hostname, port,
+rotation history. `updated_at` moves with the trust state; `last_seen_at`
+(absent on a record written before it existed) is when something signed by
+the peer last verified here, a pairing step, a notice or its
+acknowledgement, or a transport envelope, and never moves for anything the
+owner does locally or for a message that failed verification. No display name, hostname, port,
 profile name, or address is stored, because none of them is trusted. Every
 document is re-verified when the file is loaded; a record whose document no
 longer verifies is dropped. A file of another version or shape is never
@@ -848,9 +854,13 @@ normal API authentication) and the public peer routes under
 its signature and nothing else:
 
 1. Owner A: `POST /api/federation/invites` returns the invite id, its secret,
-   A's base URL, and A's identity document, to hand to owner B out of band.
+   A's base URL, and A's identity document, plus the same three packed into
+   one line as `invite` (`nolune-invite-v1.` followed by the base64url of
+   the accept body), to hand to owner B out of band. The line is not a URL
+   and is refused wherever it looks like one.
 2. Owner B: `POST /api/federation/accept` with that origin, secret, and
-   document. B pins A's document, then posts a signed `pair_request` (the
+   document, or with `{ "invite": "<the line>" }`. B pins A's document,
+   then posts a signed `pair_request` (the
    secret, B's own document, B's base URL) to `{origin}/federation/v1/pair`.
    A verifies the document and the signature, redeems the secret, records B as
    `pending`, and answers with a signed `pair_response`; B verifies it against
@@ -868,7 +878,9 @@ stale, and a body of one kind is never read as another. Every transition is
 checked and applied under the store's lock against the record as it is at
 that moment, so a confirmation that races a revocation can never leave a
 revoked peer paired. Two profiles on one host go through exactly these steps
-over their own ports.
+over their own ports. The owner drives them with `nolune federation …` or
+the Companions section of Settings → Connections; [federation.md](federation.md)
+is the guide.
 
 ### Transport envelope
 

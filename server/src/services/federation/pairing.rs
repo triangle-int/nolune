@@ -40,6 +40,12 @@
 //! under the identity lock the rotation holds (`with_identity`), so no
 //! pending record is ever confirmed under an identity other than the one
 //! it was started with.
+//!
+//! Every time something signed by a peer verifies here (a pairing step, a
+//! notice or its acknowledgement, a transport envelope) the peer's record
+//! is stamped as seen (`PeerStore::touch`), which is what the owner list
+//! reports as `last_seen_at`; nothing that failed verification and nothing
+//! the owner does locally counts as a sighting.
 
 use std::{
     path::{Path, PathBuf},
@@ -344,11 +350,21 @@ impl FederationState {
             verified.retire_at,
             now,
         )?;
+        self.seen(sender.peer.record.companion_id());
         Ok(Inbound {
             peer: sender.peer.record,
             key: sender.kind,
             body: verified.body,
         })
+    }
+
+    /// Stamps a peer as seen after something it signed verified. A store
+    /// that cannot take the stamp does not undo the verification: the
+    /// sighting is informational, the trust decision was already made.
+    fn seen(&self, companion_id: &str) {
+        if let Err(error) = self.peers.touch(companion_id) {
+            log::warn!("[federation] companion {companion_id} sighting not recorded: {error}");
+        }
     }
 
     /// A ping from a paired peer, answered with a sealed pong.
@@ -937,6 +953,7 @@ impl FederationState {
             .get(&envelope.sender)
             .ok_or(FederationError::UnknownPeer)?;
         let body = identity::verify_envelope(envelope, &peer.verified)?;
+        self.seen(peer.record.companion_id());
         Ok((peer, body))
     }
 
@@ -963,6 +980,9 @@ impl FederationState {
                 .as_ref()
                 .map_or(now, |previous| previous.record.created_at),
             updated_at: now,
+            // A record is created only after something the peer signed
+            // verified (its request, or its answer to ours).
+            last_seen_at: Some(now),
             rotation_history: previous
                 .map(|previous| previous.record.rotation_history)
                 .unwrap_or_default(),
@@ -1008,6 +1028,7 @@ impl FederationState {
         expected: PeerState,
     ) -> Result<(), FederationError> {
         let body = identity::verify_envelope(answer, &peer.verified)?;
+        self.seen(peer.record.companion_id());
         let PairingMessage::Ack {
             version,
             pairing_id,
@@ -1897,6 +1918,84 @@ mod tests {
     }
 
     const PING: &[u8] = br#"{"kind":"ping","version":1}"#;
+
+    /// `last_seen_at` (#108, PR 4) is when something signed by the peer
+    /// last verified here: set by the pairing steps that create a record,
+    /// moved by every verified notice and transport envelope, and never by
+    /// anything that failed verification or by the owner's own actions.
+    #[tokio::test]
+    async fn verified_messages_stamp_the_peer_as_seen() {
+        let mut network = Network::new();
+        let a = network.server(ORIGIN_A);
+        let b = network.server(ORIGIN_B);
+        let c = network.server("https://c.example");
+        let a_id = a.identity().unwrap().companion_id().to_owned();
+        let b_id = b.identity().unwrap().companion_id().to_owned();
+        let seen = |server: &FederationState, id: &str| {
+            server.peers.get(id).map(|peer| peer.record.last_seen_at)
+        };
+
+        // Accepting: B verified A's signed response, A verified B's request.
+        let invite = a.create_invite(ORIGIN_A).unwrap();
+        network.now.store(T0 + 10, Ordering::SeqCst);
+        b.accept_invite(accept_for(&invite), ORIGIN_B)
+            .await
+            .unwrap();
+        assert_eq!(seen(&a, &b_id), Some(Some(T0 + 10)));
+        assert_eq!(seen(&b, &a_id), Some(Some(T0 + 10)));
+
+        // Confirming: B verified A's confirm notice; A verified B's ack.
+        network.now.store(T0 + 20, Ordering::SeqCst);
+        a.confirm_peer(&b_id).await.unwrap();
+        assert_eq!(seen(&b, &a_id), Some(Some(T0 + 20)));
+        assert_eq!(seen(&a, &b_id), Some(Some(T0 + 20)));
+        let a_updated = a.peers.get(&b_id).unwrap().record.updated_at;
+
+        // A transport envelope that verifies moves it; one that does not
+        // (a replay, a stranger, a body tampered after signing) does not.
+        network.now.store(T0 + 40, Ordering::SeqCst);
+        let envelope = transport_ping(&b, &a);
+        a.open(&envelope).unwrap();
+        assert_eq!(seen(&a, &b_id), Some(Some(T0 + 40)));
+        assert_eq!(
+            a.peers.get(&b_id).unwrap().record.updated_at,
+            a_updated,
+            "a sighting is not a trust change"
+        );
+        network.now.store(T0 + 50, Ordering::SeqCst);
+        assert_eq!(a.open(&envelope).unwrap_err(), FederationError::Replayed);
+        assert_eq!(
+            a.open(&transport_ping(&c, &a)).unwrap_err(),
+            FederationError::UnknownPeer
+        );
+        let mut tampered = transport_ping(&b, &a);
+        tampered.body = super::super::encode(br#"{"kind":"ping","version":9}"#);
+        assert_eq!(
+            a.open(&tampered).unwrap_err(),
+            FederationError::BodyHashMismatch
+        );
+        assert_eq!(seen(&a, &b_id), Some(Some(T0 + 40)));
+        assert_eq!(seen(&b, &a_id), Some(Some(T0 + 20)), "B heard nothing new");
+
+        // The owner revoking is not a sighting of the peer; the peer's
+        // acknowledgement of the notice is.
+        network.now.store(T0 + 60, Ordering::SeqCst);
+        b.revoke_peer(&a_id).await.unwrap();
+        assert_eq!(seen(&b, &a_id), Some(Some(T0 + 60)), "A acknowledged");
+        assert_eq!(
+            seen(&a, &b_id),
+            Some(Some(T0 + 60)),
+            "A verified the revoke"
+        );
+
+        // The owner list carries it for the CLI and the Companions section.
+        let listed = a.overview().unwrap();
+        assert_eq!(listed.peers[0].last_seen_at, Some(T0 + 60));
+        assert_eq!(
+            serde_json::to_value(&listed).unwrap()["peers"][0]["last_seen_at"],
+            T0 + 60
+        );
+    }
 
     fn transport_ping(from: &FederationState, to: &FederationState) -> TransportEnvelope {
         from.seal(to.identity().unwrap().companion_id(), PING)
