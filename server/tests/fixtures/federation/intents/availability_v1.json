@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "correlation_id": "corr-availability-0001",
+  "sender": "BoQmM6BzR2Zw7lfBZK_JAMOs7BVCX59sZytlrGwJ9_Y",
+  "represented_owner": "Alice",
+  "purpose": "Lunch on Friday",
+  "disclosure": "availability",
+  "issued_at": 1800000000,
+  "expires_at": 1800003600,
+  "intent": {
+    "type": "availability",
+    "window": {
+      "from": 1800432000,
+      "to": 1800518400
+    }
+  }
+}
