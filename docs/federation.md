@@ -86,28 +86,35 @@ policy in [companion-storage.md](companion-storage.md) judges by), and an
 under `intent` with its `type`.
 
 Decoding fails closed and each fault is reported on its own: a version
-outside the supported range (checked before anything about the shape), an
-unknown intent `type`, an unknown disclosure class, a field no shape has
-at any depth, a missing correlation id, sender, represented owner,
+outside the supported range (checked before anything about the shape),
+an unknown intent `type`, an unknown disclosure class, a field no shape
+has at any depth, a missing correlation id, sender, represented owner,
 purpose, disclosure, or lifetime, an expired or future-dated intent past
-a two-minute skew allowance, an inverted or over-long window, and a label
-that is empty, over 120 characters, or carries a control character. Free
+a two-minute skew allowance, an inverted or over-long window, and a
+label that is empty, over 120 characters, or carries a control
+character, a line or paragraph separator, or an invisible format
+character (a bidi override, a zero-width character, the byte order
+mark), so it can neither show a second line nor read backwards. Free
 text inside a payload (a message body, a reminder text, a proposal
-description) is peer content: it is bounded, never printed in a log or an
-error, and only ever shown inside a block marked as untrusted data from
-that companion, never as instructions.
+description) is peer content: it is bounded, never printed in a log or
+an error, and only ever shown inside a block marked as untrusted data
+from that companion, never as instructions.
 
-The answer is typed too: `accepted` (with what was disclosed, never above
-the class asked for), `denied` (with the policy reason and, for a rate
-limit, how long to wait), or `needs_owner` (the owner has to answer; a
-peer is told why it waits, never when quiet hours end). Either side keeps
-a receipt of the exchange naming who asked whom for what, on whose behalf
-and to what end, the class requested and the class granted, and why: the
-policy reason and the rule that applied, or the owner's own approval. A
-receipt has no field for the payload. The wire shapes are pinned by the
-fixtures under `server/tests/fixtures/federation/intents/`; the inbound
-handling, delivery, and the companion tools that send intents arrive with
-the rest of #110.
+The answer is typed too: `accepted` (with what was disclosed, never
+above the class asked for), `denied` (with the policy reason and, for a
+rate limit, how long to wait), or `needs_owner` (the owner has to
+answer; a peer is told why it waits, never when quiet hours end). Either
+side keeps a receipt of the exchange naming who asked whom for what, on
+whose behalf and to what end, the class requested and the class granted,
+and why: the policy reason and the rule that applied, or the owner's own
+approval. A receipt has no field for the payload, and it is only ever
+written for a response that answers its intent (the same correlation id,
+an answer of the intent's class, a class granted no higher than the one
+asked for), so the record can never say more was disclosed than was
+requested. The wire shapes are pinned by the fixtures under
+`server/tests/fixtures/federation/intents/`; the inbound handling,
+delivery, and the companion tools that send intents arrive with the rest
+of #110.
 
 ## Revocation and rotation
 

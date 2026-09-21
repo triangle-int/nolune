@@ -9,7 +9,9 @@
 //! around one [`IntentPayload`]. The answer is an [`IntentResponse`] that
 //! is `accepted`, `denied`, or `needs_owner`, and what either side keeps of
 //! the exchange is an [`IntentReceipt`]: who asked whom for what, at which
-//! class, what was granted and why, never the payload.
+//! class, what was granted and why, never the payload. A receipt is only
+//! built from a response that answers its intent, so it never records a
+//! class granted above the one asked for.
 //!
 //! Decoding fails closed. Every shape refuses unknown fields, every name
 //! comes from a closed enum, and [`FederationIntent::decode`] reports each
@@ -24,8 +26,9 @@
 //! a [`PeerText`] and stays one: it never formats through `Display` or
 //! `Debug`, and no receipt has a field that could hold it. The two labels
 //! a peer declares about itself, `represented_owner` and `purpose`, are
-//! bounded single lines ([`PeerLabel`]) and travel into the receipt as
-//! their own fields, never into its summary.
+//! bounded single lines ([`PeerLabel`]: no control, separator, or format
+//! character, so neither a second line nor a reordered one) and travel
+//! into the receipt as their own fields, never into its summary.
 //!
 //! The intent classes and disclosure classes are the ones the policy
 //! engine keys on ([`IntentClass`], [`DisclosureClass`]); a ping is
@@ -174,19 +177,23 @@ pub enum IntentResponse {
     },
 }
 
-/// What an accepted intent disclosed, typed per intent class.
+/// What an accepted intent disclosed, typed per intent class. The two
+/// answers that carry nothing are empty struct variants, not unit
+/// variants: serde checks `deny_unknown_fields` on the struct variants of
+/// a tagged enum only, and a unit variant would take any field beside its
+/// `kind` and drop it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum IntentAnswer {
     /// The message reached this owner.
-    Delivered,
+    Delivered {},
     /// Free and busy spans inside the window asked about; at most
     /// [`MAX_AVAILABILITY_WINDOWS`].
     Availability { windows: Vec<AvailabilityWindow> },
     /// The reminder is set for `at`.
     ReminderScheduled { at: u64 },
     /// The proposal reached this owner.
-    ProposalReceived,
+    ProposalReceived {},
 }
 
 /// One span of an availability answer.
@@ -269,8 +276,12 @@ pub struct IntentReceipt {
 }
 
 /// A short line a peer declares about itself: non-empty, at most
-/// [`MAX_LABEL_CHARS`] characters, no control characters, so it can never
-/// carry a second line. It formats as itself: it is a name, not a body.
+/// [`MAX_LABEL_CHARS`] characters, and no character that could draw a
+/// second line or change how the line reads without showing: no control
+/// character, no Unicode line or paragraph separator, and no format
+/// character (bidi controls, zero-width characters, the byte order mark,
+/// tag characters; see [`is_format_character`]). It formats as itself: it
+/// is a name, not a body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerLabel(String);
 
@@ -278,8 +289,12 @@ pub struct PeerLabel(String);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LabelError {
     Empty,
-    TooLong { chars: usize },
+    TooLong {
+        chars: usize,
+    },
+    /// A `Cc` character (a newline, a tab, an escape, ...).
     ControlCharacter,
+    /// A line or paragraph separator, or a `Cf` format character.
     FormatCharacter,
 }
 
@@ -387,12 +402,16 @@ pub enum IntentError {
 }
 
 impl PeerLabel {
-    /// Refuses a label with a control character (so it can never carry a
-    /// second line), one over [`MAX_LABEL_CHARS`], and an empty or blank
-    /// one, in that order.
+    /// Refuses a label with a control character, one with a separator or
+    /// format character (either could carry a second line or reorder the
+    /// first), one over [`MAX_LABEL_CHARS`], and an empty or blank one,
+    /// in that order.
     pub fn new(text: String) -> Result<Self, LabelError> {
         if text.chars().any(char::is_control) {
             return Err(LabelError::ControlCharacter);
+        }
+        if text.chars().any(is_format_character) {
+            return Err(LabelError::FormatCharacter);
         }
         let chars = text.chars().count();
         if chars > MAX_LABEL_CHARS {
@@ -407,6 +426,50 @@ impl PeerLabel {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+}
+
+/// Whether `c` is a Unicode line or paragraph separator (`Zl`, `Zp`) or a
+/// format character (`Cf`, Unicode 16.0): the characters that are not
+/// controls yet render as nothing or reorder what is around them, so a
+/// label with one could show a second line or read backwards. This is the
+/// whole `Cf` category, spelled out because the standard library has no
+/// predicate for it and the module takes no crate for one. A joined emoji
+/// sequence uses the zero-width joiner and is refused too.
+pub fn is_format_character(c: char) -> bool {
+    matches!(
+        c,
+        // Zl, Zp: line and paragraph separators.
+        '\u{2028}' | '\u{2029}'
+        // Cf: soft hyphen; Arabic, Syriac, and Mongolian marks.
+        | '\u{AD}'
+        | '\u{600}'..='\u{605}'
+        | '\u{61C}'
+        | '\u{6DD}'
+        | '\u{70F}'
+        | '\u{890}'..='\u{891}'
+        | '\u{8E2}'
+        | '\u{180E}'
+        // Zero-width space, non-joiner, joiner, and the directional marks.
+        | '\u{200B}'..='\u{200F}'
+        // Bidi embeddings and overrides.
+        | '\u{202A}'..='\u{202E}'
+        // Word joiner and the invisible operators.
+        | '\u{2060}'..='\u{2064}'
+        // Bidi isolates and the deprecated format characters.
+        | '\u{2066}'..='\u{206F}'
+        // Byte order mark, interlinear annotations.
+        | '\u{FEFF}'
+        | '\u{FFF9}'..='\u{FFFB}'
+        // Kaithi, Egyptian hieroglyph, shorthand, and musical controls.
+        | '\u{110BD}'
+        | '\u{110CD}'
+        | '\u{13430}'..='\u{1343F}'
+        | '\u{1BCA0}'..='\u{1BCA3}'
+        | '\u{1D173}'..='\u{1D17A}'
+        // Language tag and the tag characters.
+        | '\u{E0001}'
+        | '\u{E0020}'..='\u{E007F}'
+    )
 }
 
 impl fmt::Display for PeerLabel {
@@ -598,10 +661,10 @@ impl IntentAnswer {
     /// The intent class this answer belongs to.
     pub fn class(&self) -> IntentClass {
         match self {
-            Self::Delivered => IntentClass::Message,
+            Self::Delivered {} => IntentClass::Message,
             Self::Availability { .. } => IntentClass::Availability,
             Self::ReminderScheduled { .. } => IntentClass::Reminder,
-            Self::ProposalReceived => IntentClass::Proposal,
+            Self::ProposalReceived {} => IntentClass::Proposal,
         }
     }
 
@@ -867,7 +930,12 @@ impl fmt::Display for ReceiptBasis {
 impl IntentReceipt {
     /// The receipt for `intent` answered by `response`, on `side` of the
     /// exchange, kept under `pairing_id`. Everything but `id`, `at`, and
-    /// `basis` is read off the two shapes; the payload is not.
+    /// `basis` is read off the two shapes; the payload is not. The
+    /// response is first checked against the intent
+    /// ([`IntentResponse::check_against`]): a response for another
+    /// request, an answer of another class, or a disclosure above the one
+    /// asked for gets no receipt, so `granted` is never recorded above
+    /// `requested`.
     pub fn new(
         id: String,
         side: ReceiptSide,
@@ -877,6 +945,7 @@ impl IntentReceipt {
         response: &IntentResponse,
         basis: ReceiptBasis,
     ) -> Result<Self, IntentError> {
+        response.check_against(intent)?;
         let mut receipt = Self {
             version: INTENT_RECEIPT_VERSION,
             id,
@@ -1537,8 +1606,8 @@ mod tests {
         }
         // Bare, the two decode and encode as their kind alone.
         for (kind, answer) in [
-            ("delivered", IntentAnswer::Delivered),
-            ("proposal_received", IntentAnswer::ProposalReceived),
+            ("delivered", IntentAnswer::Delivered {}),
+            ("proposal_received", IntentAnswer::ProposalReceived {}),
         ] {
             let text = edited(ACCEPTED, |json| {
                 json["answer"] = serde_json::json!({"kind": kind});
@@ -2106,7 +2175,7 @@ mod tests {
         // Every answer kind belongs to one class, and its `kind` tag maps
         // back to that class, so the probe cannot drift from the shape.
         for (answer, class) in [
-            (IntentAnswer::Delivered, IntentClass::Message),
+            (IntentAnswer::Delivered {}, IntentClass::Message),
             (
                 IntentAnswer::Availability { windows: vec![] },
                 IntentClass::Availability,
@@ -2115,7 +2184,7 @@ mod tests {
                 IntentAnswer::ReminderScheduled { at: 1 },
                 IntentClass::Reminder,
             ),
-            (IntentAnswer::ProposalReceived, IntentClass::Proposal),
+            (IntentAnswer::ProposalReceived {}, IntentClass::Proposal),
         ] {
             assert_eq!(answer.class(), class);
             let json = serde_json::to_value(&answer).unwrap();
@@ -2435,7 +2504,7 @@ mod tests {
             correlation_id: message.correlation_id.clone(),
             responder: ME.into(),
             disclosure: DisclosureClass::Sensitive,
-            answer: IntentAnswer::Delivered,
+            answer: IntentAnswer::Delivered {},
         };
         assert_eq!(
             over.check_against(&message),
@@ -2478,7 +2547,7 @@ mod tests {
             correlation_id: message.correlation_id.clone(),
             responder: ME.into(),
             disclosure: DisclosureClass::None,
-            answer: IntentAnswer::Delivered,
+            answer: IntentAnswer::Delivered {},
         };
         let receipt = receipt(&message, &within).unwrap();
         assert_eq!(receipt.requested, DisclosureClass::None);
