@@ -7,8 +7,10 @@
 //! runs through one `Orchestrator` per turn: its snapshot ledger fails
 //! closed on stale element tokens, its verification gate reports an action
 //! only when it is verified, delivery is always background, and a driver's
-//! foreground recommendation is quoted back, never obeyed. The coordinate
-//! `computer_use` tool stays beside these for legacy desktops until #19.
+//! foreground recommendation is quoted back, never obeyed. What an
+//! observation sees reaches the model as the window's capture (an image
+//! through the upload path) beside a bounded elements table. The coordinate
+//! `computer_use` tool is no longer offered; its type stays until #19.
 
 use std::{
     fmt,
@@ -16,9 +18,10 @@ use std::{
     sync::Arc,
 };
 
+use base64::Engine;
 use cua_protocol::{
-    CuaAction, CuaActionResult, GetWindowStateArgs as ProtocolWindowStateArgs, MachineHealth,
-    MachineId, MachineLocation, VerificationResult, VerifyPredicate,
+    CuaAction, CuaActionResult, GetWindowStateArgs as ProtocolWindowStateArgs, ImageMediaType,
+    MachineHealth, MachineId, MachineLocation, Screenshot, VerificationResult, VerifyPredicate,
     VerifyStateArgs as ProtocolVerifyArgs, WindowStateResult, WindowTarget,
 };
 use schemars::JsonSchema;
@@ -30,7 +33,9 @@ use crate::services::cua::orchestrator::{
 use crate::services::machine_registry::MachineRegistry;
 use crate::services::resource_access::ResourceAccess;
 use crate::services::tool::{Tool, ToolDefinition};
-use crate::services::tools::computer::{MachineTarget, TargetRefusal, TargetSelection};
+use crate::services::tools::computer::{
+    MachineTarget, TargetRefusal, TargetSelection, screenshot_image_block,
+};
 use crate::services::tools::{ToolExecError, openai_schema};
 
 /// How many accessibility elements one `get_window_state` result shows the
@@ -115,7 +120,8 @@ impl fmt::Display for CuaRefusal {
             Self::NoCuaDriver { label } => write!(
                 f,
                 "{}: {label} is connected without a Cua driver, so the typed tools cannot drive \
-                 it; computer_use, remote_bash and remote_files still work there",
+                 it; remote_bash and remote_files still work there, and its Nolune app needs \
+                 the driver (`nolune cua install`) before windows can be seen or acted in",
                 self.code()
             ),
             Self::DriverUnavailable { label } => write!(
@@ -181,6 +187,52 @@ impl CaptureStore {
             resources: resources.clone(),
         }
     }
+
+    /// The capture saved as an upload of the companion, with the block the
+    /// model sees it through (`screenshot_image_block`, the desktop
+    /// screenshot's path: a URL with provenance where the provider can
+    /// fetch, the bytes inlined within its bound otherwise, nothing when
+    /// they exceed it) and the browser link for the user.
+    fn keep(&self, screenshot: &Screenshot) -> Result<KeptCapture, String> {
+        use crate::services::resource_capability::{CapabilityAudience, CapabilityResource};
+        let (name, media_type) = match screenshot.media_type {
+            ImageMediaType::Png => ("window.png", "image/png"),
+            ImageMediaType::Jpeg => ("window.jpg", "image/jpeg"),
+        };
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(screenshot.base64.as_str())
+            .map_err(|error| format!("capture is not valid base64: {error}"))?;
+        let meta = crate::services::uploads::save_upload(
+            &self.workspace_dir,
+            &self.instance_slug,
+            name,
+            &bytes,
+        )
+        .map_err(|error| format!("capture could not be saved: {error}"))?;
+        let link = CapabilityResource::uploaded_file(&meta.id)
+            .and_then(|resource| {
+                self.resources.url(
+                    "",
+                    &self.instance_slug,
+                    resource,
+                    CapabilityAudience::Browser,
+                )
+            })
+            .map_err(|error| error.to_string())?;
+        let block = screenshot_image_block(
+            &self.public_url,
+            &self.instance_slug,
+            &meta.id,
+            media_type,
+            screenshot.base64.as_str(),
+            &self.resources,
+        );
+        Ok(KeptCapture {
+            upload_id: meta.id,
+            link,
+            block,
+        })
+    }
 }
 
 /// What the four tools share: the registry the targets live in, the
@@ -190,7 +242,6 @@ pub struct CuaTools {
     registry: MachineRegistry,
     target: MachineTarget,
     orchestrator: Arc<Orchestrator>,
-    #[allow(dead_code)] // The stub of slice 3; the observation keeps captures here next.
     captures: CaptureStore,
 }
 
@@ -392,8 +443,9 @@ pub struct WindowStateArgs {
     /// Walk the accessibility tree and issue element tokens (default true).
     #[serde(default)]
     pub include_accessibility_tree: Option<bool>,
-    /// Also capture a one-shot screenshot of the window (default false; the
-    /// image is not shown to you yet, its dimensions are).
+    /// Also capture a one-shot screenshot of the window (default false). The
+    /// image is shown to you beside the elements and kept as an upload the
+    /// user can open; a point address needs it.
     #[serde(default)]
     pub include_screenshot: Option<bool>,
     /// Cap on the elements the driver walks (1-2000).
@@ -961,48 +1013,54 @@ fn clip(text: &str, max: usize) -> String {
     clipped
 }
 
-/// One accessibility element as the model reads it: its token, role,
-/// clipped label and value, flags, frame and a bounded list of actions.
-fn element_json(element: &cua_protocol::AccessibilityElement) -> serde_json::Value {
-    use serde_json::json;
-    let mut value = json!({
-        "element_index": element.element_index,
-        "element_token": element.element_token.as_str(),
-        "role": clip(element.role.as_str(), MAX_RENDERED_TEXT),
-    });
-    if let Some(text) = &element.label {
-        value["label"] = json!(clip(text.as_str(), MAX_RENDERED_TEXT));
+/// The columns of the elements table, in row order. One header for the
+/// whole table and one array per element keeps the rendering compact, so
+/// more of a window fits under the bound than one object per element would.
+const ELEMENT_COLUMNS: [&str; 9] = [
+    "element_index",
+    "element_token",
+    "role",
+    "label",
+    "value",
+    "enabled",
+    "selected",
+    "frame",
+    "actions",
+];
+
+/// One accessibility element as a row of the table: its index and token,
+/// role, clipped label and value (null when absent or empty), enabled and
+/// selected flags (null when the driver did not say), frame as
+/// `[x, y, width, height]` and a bounded list of actions.
+fn element_row(element: &cua_protocol::AccessibilityElement) -> serde_json::Value {
+    use serde_json::{Value, json};
+    let cell = |text: Option<&str>| {
+        text.filter(|text| !text.is_empty())
+            .map_or(Value::Null, |text| json!(clip(text, MAX_RENDERED_TEXT)))
+    };
+    let mut actions: Vec<String> = element
+        .actions
+        .iter()
+        .take(MAX_RENDERED_ACTIONS)
+        .map(|action| clip(action.as_str(), MAX_RENDERED_TEXT))
+        .collect();
+    if element.actions.len() > MAX_RENDERED_ACTIONS {
+        actions.push(format!(
+            "… (+{} more)",
+            element.actions.len() - MAX_RENDERED_ACTIONS
+        ));
     }
-    if let Some(text) = &element.value
-        && !text.as_str().is_empty()
-    {
-        value["value"] = json!(clip(text.as_str(), MAX_RENDERED_TEXT));
-    }
-    if let Some(enabled) = element.enabled {
-        value["enabled"] = json!(enabled);
-    }
-    if let Some(selected) = element.selected {
-        value["selected"] = json!(selected);
-    }
-    if let Some(frame) = &element.frame {
-        value["frame"] = rect_json(frame);
-    }
-    if !element.actions.is_empty() {
-        let mut actions: Vec<String> = element
-            .actions
-            .iter()
-            .take(MAX_RENDERED_ACTIONS)
-            .map(|action| clip(action.as_str(), MAX_RENDERED_TEXT))
-            .collect();
-        if element.actions.len() > MAX_RENDERED_ACTIONS {
-            actions.push(format!(
-                "… (+{} more)",
-                element.actions.len() - MAX_RENDERED_ACTIONS
-            ));
-        }
-        value["actions"] = json!(actions);
-    }
-    value
+    json!([
+        element.element_index,
+        element.element_token.as_str(),
+        clip(element.role.as_str(), MAX_RENDERED_TEXT),
+        cell(element.label.as_ref().map(|text| text.as_str())),
+        cell(element.value.as_ref().map(|text| text.as_str())),
+        element.enabled,
+        element.selected,
+        element.frame.as_ref().map(rect_json),
+        actions,
+    ])
 }
 
 fn window_json(window: &cua_protocol::WindowRecord) -> serde_json::Value {
@@ -1100,18 +1158,19 @@ pub fn render_discovery(result: &CuaActionResult, label: &str) -> serde_json::Va
     }
 }
 
-/// A window state as the model reads it: the snapshot id, a bounded list
+/// A window state as the model reads it: the snapshot id, a bounded table
 /// of elements with their tokens, the driver's flags, the pixel policy for
-/// the window, and a foreground recommendation reported as not applied.
-/// Never the screenshot bytes. The whole rendering stays under
-/// `MAX_RENDERED_CHARS`: every free text is clipped, and the elements list
-/// is cut where it stops fitting beside the rest, with the count of what
-/// was left out.
+/// the window, a foreground recommendation reported as not applied, and
+/// what became of the capture (`capture`: kept as an upload and handed over
+/// as the image beside this text, or not). Never the screenshot bytes. The
+/// whole rendering stays under `MAX_RENDERED_CHARS`: every free text is
+/// clipped, and the elements table is cut where it stops fitting beside the
+/// rest, with the count of what was left out.
 pub fn render_window_state(
     state: &WindowStateResult,
     policy: &PixelPolicy,
     label: &str,
-    _capture: Option<&KeptCapture>,
+    capture: Option<&KeptCapture>,
 ) -> serde_json::Value {
     use serde_json::json;
     let returned = state.elements.len();
@@ -1129,6 +1188,7 @@ pub fn render_window_state(
             .degraded_reason
             .as_ref()
             .map(|reason| clip(reason.as_str(), MAX_RENDERED_NOTE)),
+        "element_columns": ELEMENT_COLUMNS,
         "elements": [],
         "elements_shown": 0,
         "elements_returned": returned,
@@ -1165,14 +1225,37 @@ pub fn render_window_state(
         ));
     }
     if let Some(screenshot) = &state.screenshot {
-        value["screenshot"] = json!({
+        let mut shot = json!({
             "media_type": screenshot.media_type,
             "width": screenshot.width,
             "height": screenshot.height,
             "scale": state.screenshot_scale,
             "shown": false,
-            "note": "captured one-shot; the image is not shown to you yet",
         });
+        match capture {
+            Some(kept) => {
+                shot["upload_id"] = json!(kept.upload_id);
+                shot["link"] = json!(kept.link);
+                shot["show_to_user"] = json!(format!("![window]({})", kept.link));
+                shot["shown"] = json!(kept.block.is_some());
+                shot["note"] = json!(if kept.block.is_some() {
+                    "captured one-shot; the image beside this text is it, in window-local \
+                     pixels at this scale. To show it to the user, paste show_to_user into \
+                     your reply."
+                } else {
+                    "captured one-shot and kept, but too large to hand to you inline and no \
+                     provider-reachable public_url is configured; paste show_to_user into \
+                     your reply so the user sees it"
+                });
+            }
+            None => {
+                shot["note"] = json!(
+                    "captured one-shot, but it could not be kept as an upload, so it is not \
+                     shown to you; call get_window_state again to capture it anew"
+                );
+            }
+        }
+        value["screenshot"] = shot;
     }
 
     // Everything but the elements is on the page now; the elements get
@@ -1181,7 +1264,7 @@ pub fn render_window_state(
     let mut budget = MAX_RENDERED_CHARS.saturating_sub(value.to_string().len() + NOTE_RESERVE);
     let mut elements = Vec::new();
     for element in state.elements.iter().take(MAX_RENDERED_ELEMENTS) {
-        let rendered = element_json(element);
+        let rendered = element_row(element);
         let cost = rendered.to_string().len() + 1;
         if cost > budget {
             break;
@@ -1324,6 +1407,9 @@ impl GetWindowStateTool {
 
 impl Tool for GetWindowStateTool {
     const NAME: &'static str = "get_window_state";
+    /// The image block's provenance is this tool's own (an upload it saved),
+    /// so the provider URL is renewed on later turns like a screenshot's.
+    const TRUSTS_RESOURCE_PROVENANCE: bool = true;
     type Error = ToolExecError;
     type Args = WindowStateArgs;
     type Output = String;
@@ -1332,17 +1418,21 @@ impl Tool for GetWindowStateTool {
         ToolDefinition {
             name: Self::NAME.into(),
             description: "Observe one window (pid + window_id from discover_windows) before \
-                acting in it: returns the snapshot_id and the accessibility elements with their \
-                element_token, role, label, value and frame. Call it before every act on that \
-                window: element tokens are valid only from the latest snapshot of their window \
-                and only until the next action there; anything older is refused. Use query to \
-                narrow large trees; a query that matches nothing is an empty list, not a \
-                broken window. pixel_addresses says whether act may use a point address: only \
-                when accessibility is unavailable for the window or the last verification there \
-                failed, and only after an observation with include_screenshot: true, since a \
-                point is read from that capture. The screenshot is captured one-shot and its \
-                dimensions reported; the image is not shown to you yet. The output is bounded: \
-                long labels and values are clipped, and elements past the bound are counted."
+                acting in it: returns the snapshot_id and a table of the accessibility \
+                elements (element_columns names the columns: element_index, element_token, \
+                role, label, value, enabled, selected, frame, actions). Call it before every \
+                act on that window: element tokens are valid only from the latest snapshot of \
+                their window and only until the next action there; anything older is refused. \
+                Use query to narrow large trees; a query that matches nothing is an empty \
+                table, not a broken window. With include_screenshot: true the window is \
+                captured one-shot and the image is shown to you beside the table (window-local \
+                pixels, at the reported scale), kept as an upload the user can open through \
+                the link in the result. pixel_addresses says whether act may use a point \
+                address: only when accessibility is unavailable for the window or the last \
+                verification there failed, and only after an observation with \
+                include_screenshot: true, since a point is read from that capture. The output \
+                is bounded: long labels and values are clipped, and elements past the bound \
+                are counted."
                 .into(),
             parameters: openai_schema::<WindowStateArgs>(),
         }
@@ -1367,7 +1457,31 @@ impl Tool for GetWindowStateTool {
         let policy = orchestrator
             .ledger()
             .pixel_policy(resolved.target.machine_id(), window);
-        Ok(render_window_state(&state, &policy, &resolved.label, None).to_string())
+        // The capture goes to the model as an image beside the text, through
+        // the upload path; a capture that cannot be kept costs the image, not
+        // the observation.
+        let kept = state.screenshot.as_ref().and_then(|screenshot| {
+            self.0
+                .captures
+                .keep(screenshot)
+                .map_err(|error| {
+                    log::warn!(
+                        "[get_window_state] capture of pid {} window {} on '{}' not kept: {error}",
+                        window.pid,
+                        window.window_id,
+                        resolved.target.machine_id().as_str()
+                    );
+                })
+                .ok()
+        });
+        let rendered = render_window_state(&state, &policy, &resolved.label, kept.as_ref());
+        Ok(match kept.and_then(|kept| kept.block) {
+            Some(image) => {
+                serde_json::json!([image, {"type": "text", "text": rendered.to_string()}])
+                    .to_string()
+            }
+            None => rendered.to_string(),
+        })
     }
 }
 
@@ -2743,7 +2857,7 @@ mod tool_tests {
         registry.cua().register(laptop).await.unwrap();
         let tools = tools_on(&registry, None, ROUTABLE).await;
         assert!(
-            <GetWindowStateTool as Tool>::TRUSTS_RESOURCE_PROVENANCE,
+            crate::services::tool::ToolDyn::trusts_resource_provenance(&tools.state),
             "the provenance on the image block is the tool's own, so the URL is renewed \
              on later turns like a screenshot's"
         );
@@ -2798,11 +2912,16 @@ mod tool_tests {
             link.contains("/resources/browser/files/moon/") && link.contains(upload_id),
             "the user's link to the capture: {link}"
         );
+        assert_eq!(
+            rendered["screenshot"]["show_to_user"],
+            format!("![window]({link})"),
+            "the markdown that shows the user the capture: {rendered}"
+        );
         assert!(
             rendered["screenshot"]["note"]
                 .as_str()
                 .unwrap()
-                .contains("![window]("),
+                .contains("show_to_user"),
             "{rendered}"
         );
     }
@@ -2896,10 +3015,13 @@ mod tool_tests {
                     Value::String(text) => *text = text.replace(label, "<machine>"),
                     Value::Array(items) => items.iter_mut().for_each(|item| scrub(item, label)),
                     Value::Object(fields) => {
-                        for key in ["upload_id", "link", "url", "id"] {
+                        for key in ["upload_id", "link", "show_to_user", "url", "id"] {
                             if fields.contains_key(key) {
                                 fields[key] = json!("<capture>");
                             }
+                        }
+                        if fields.contains_key("machine") {
+                            fields["machine"] = json!("<machine>");
                         }
                         if let Some(text) = fields.get_mut("text")
                             && let Some(inner) = text.as_str()
@@ -2942,7 +3064,8 @@ mod tool_tests {
         let from_desktop = run_the_loop(&desktop).await;
         assert_eq!(laptop_log.lock().unwrap().len(), 4);
 
-        // The server machine: every operation is one sessioned run.
+        // The server machine: every tool call is one sessioned run, the
+        // action and its verification inside the same one.
         let local_registry = MachineRegistry::new();
         let runtime = attach_server_local(
             &local_registry,
@@ -2952,13 +3075,11 @@ mod tool_tests {
                 ended(1),
                 started(2),
                 clicked_in_run(2),
+                satisfied(),
                 ended(2),
                 started(3),
                 satisfied(),
                 ended(3),
-                started(4),
-                satisfied(),
-                ended(4),
             ],
         )
         .await;
@@ -2971,7 +3092,7 @@ mod tool_tests {
         {
             assert_eq!(
                 normalized(desktop_output, LAPTOP),
-                normalized(local_output, STUDIO),
+                normalized(local_output, "studio"),
                 "step {step} renders the same for both kinds of target"
             );
         }

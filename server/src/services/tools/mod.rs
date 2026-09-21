@@ -91,8 +91,7 @@ pub use companion::{
     ALLOWED_MOODS, EditSoulTool, SetVoiceTool, get_voice_override, load_mood_state, save_mood_state,
 };
 pub use computer::{
-    ComputerUseTool, ListMachinesTool, MachineTarget, RemoteBashTool, RemoteFilesTool,
-    TargetSelection,
+    ListMachinesTool, MachineTarget, RemoteBashTool, RemoteFilesTool, TargetSelection,
 };
 pub use cua::{
     ActTool, CaptureStore, CuaTools, DiscoverWindowsTool, GetWindowStateTool, VerifyStateTool,
@@ -675,20 +674,8 @@ impl ToolDyn for ObservableTool {
         let chat_id = self.chat_id.clone();
         let fut = self.inner.call(args);
         Box::pin(async move {
-            const MAX_TOOL_RESULT: usize = 12_000;
             let result = match fut.await {
-                Ok(s) => {
-                    let redacted = redact_secrets(&s);
-                    if redacted.len() > MAX_TOOL_RESULT {
-                        let truncated: String = redacted.chars().take(MAX_TOOL_RESULT).collect();
-                        Ok(format!(
-                            "{truncated}\n\n...(tool output truncated at {MAX_TOOL_RESULT} chars, total: {})",
-                            redacted.len()
-                        ))
-                    } else {
-                        Ok(redacted)
-                    }
-                }
+                Ok(s) => Ok(bound_tool_result(redact_secrets(&s))),
                 Err(e) => Err(ToolError::ToolCallError(Box::new(ToolExecError(
                     redact_secrets(&e.to_string()),
                 )))),
@@ -733,6 +720,74 @@ impl ToolDyn for ObservableTool {
             }
             result
         })
+    }
+}
+
+/// The bound on one tool result as the model reads it, in characters.
+const MAX_TOOL_RESULT: usize = 12_000;
+
+/// `text` cut at the bound, saying so.
+fn truncate_tool_text(text: &str) -> String {
+    if text.len() <= MAX_TOOL_RESULT {
+        return text.to_owned();
+    }
+    let truncated: String = text.chars().take(MAX_TOOL_RESULT).collect();
+    format!(
+        "{truncated}\n\n...(tool output truncated at {MAX_TOOL_RESULT} chars, total: {})",
+        text.len()
+    )
+}
+
+/// The blocks of a multimodal tool result: a JSON array of `text`, `image`
+/// and `document` blocks, the shape `ContentBlock::tool_output` decodes for
+/// the provider. Anything else (plain text, a JSON array of domain objects)
+/// is text to the model.
+fn multimodal_blocks(text: &str) -> Option<Vec<serde_json::Value>> {
+    use serde_json::Value;
+    fn is_block(block: &Value) -> bool {
+        match block.get("type").and_then(Value::as_str) {
+            Some("text") => block.get("text").is_some_and(Value::is_string),
+            Some("image" | "document") => block.get("source").is_some_and(Value::is_object),
+            _ => false,
+        }
+    }
+    let blocks: Vec<Value> = serde_json::from_str(text.trim()).ok()?;
+    (!blocks.is_empty() && blocks.iter().all(is_block)).then_some(blocks)
+}
+
+/// `output` under the tool-result bound. A multimodal result keeps its
+/// image and document blocks whole (the provider layer bounds those already;
+/// cutting through one would garble the image and drop the text beside it)
+/// and cuts each text block at the bound; any other output is cut as one
+/// text. The blanket `ToolDyn` impl hands a `String` output JSON-encoded, so
+/// that layer is taken off before the bound is applied and put back after.
+fn bound_tool_result(output: String) -> String {
+    if output.len() <= MAX_TOOL_RESULT {
+        return output;
+    }
+    let (inner, encoded) = match serde_json::from_str::<String>(&output) {
+        Ok(inner) if output.starts_with('"') => (inner, true),
+        _ => (output, false),
+    };
+    let bounded = match multimodal_blocks(&inner) {
+        Some(blocks) => serde_json::Value::Array(
+            blocks
+                .into_iter()
+                .map(|mut block| {
+                    if let Some(text) = block.get("text").and_then(|text| text.as_str()) {
+                        block["text"] = serde_json::Value::String(truncate_tool_text(text));
+                    }
+                    block
+                })
+                .collect(),
+        )
+        .to_string(),
+        None => truncate_tool_text(&inner),
+    };
+    if encoded {
+        serde_json::to_string(&bounded).unwrap_or(bounded)
+    } else {
+        bounded
     }
 }
 
@@ -940,21 +995,13 @@ pub fn build_tools(
     }
 
     // ── Computer use (multi-machine routing) ──
-    // The three desktop tools act on the computer the user chose (#80); the
+    // The desktop tools act on the computer the user chose (#80); the
     // target is resolved once per turn and never defaults to a machine here.
+    // The coordinate `computer_use` tool is not offered since #18: seeing
+    // and acting in a window goes through the typed tools below.
     tools.push(wrap(Box::new(ListMachinesTool::new(
         machine_registry.clone(),
     ))));
-    {
-        tools.push(wrap(Box::new(ComputerUseTool::new(
-            machine_registry.clone(),
-            (*machine_target).clone(),
-            workspace_dir,
-            instance_slug,
-            public_url,
-            resources,
-        ))));
-    }
     tools.push(wrap(Box::new(RemoteBashTool::new(
         machine_registry.clone(),
         (*machine_target).clone(),
@@ -965,7 +1012,8 @@ pub fn build_tools(
     ))));
     // The typed machine tools (#18) drive any Cua target, server-local or
     // desktop, through one orchestrator per turn: its snapshot ledger and
-    // verification gate are shared by the four of them.
+    // verification gate are shared by the four of them, and the captures
+    // they take go to the model through the upload path.
     let cua_tools = CuaTools::new(
         machine_registry,
         (*machine_target).clone(),
@@ -1251,12 +1299,19 @@ mod tool_result_bound_tests {
         serde_json::from_str::<String>(&result).unwrap_or(result)
     }
 
+    /// Filler no registered secret can match (a sibling test registers a
+    /// run of 4096 `x`s as a control secret, which `redact_secrets` would
+    /// cut out of a plain run).
+    fn filler(unit: &str, len: usize) -> String {
+        unit.repeat(len / unit.len())
+    }
+
     #[tokio::test]
     async fn a_multimodal_result_keeps_its_image_whole_and_bounds_each_text() {
-        let data = "A".repeat(30_000);
+        let data = filler("ABCDEFGHIJ", 30_000);
         let output = json!([
             {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": data}},
-            {"type": "text", "text": "t".repeat(20_000)},
+            {"type": "text", "text": filler("0123456789", 20_000)},
             {"type": "text", "text": "short"},
         ])
         .to_string();
@@ -1271,7 +1326,8 @@ mod tool_result_bound_tests {
         );
         let text = blocks[1]["text"].as_str().unwrap();
         assert!(
-            text.starts_with(&"t".repeat(12_000)) && text.contains("truncated at 12000 chars"),
+            text.starts_with(&filler("0123456789", 12_000))
+                && text.contains("truncated at 12000 chars"),
             "each text block is cut at the bound: {}",
             &text[text.len() - 80..]
         );
@@ -1280,9 +1336,9 @@ mod tool_result_bound_tests {
 
     #[tokio::test]
     async fn a_plain_result_and_a_domain_array_are_cut_as_text() {
-        let result = observed("x".repeat(20_000)).await;
+        let result = observed(filler("0123456789", 20_000)).await;
         assert!(
-            result.starts_with(&"x".repeat(12_000))
+            result.starts_with(&filler("0123456789", 12_000))
                 && result.ends_with("(tool output truncated at 12000 chars, total: 20000)"),
             "{}",
             &result[result.len() - 80..]
