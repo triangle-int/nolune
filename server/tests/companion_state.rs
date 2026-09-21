@@ -132,35 +132,27 @@ fn the_chat_view_feeds_persisted_state_and_the_overlays_run_the_same_model() {
 #[test]
 fn every_expression_has_an_asset_and_the_docs_and_gallery_list_the_states() {
     let table = read("client/src/lib/companion/expressions.js");
-    let expressions: Vec<&str> = table
+    let files: Vec<&str> = table
         .lines()
         .filter_map(|line| {
             let line = line.trim();
             let rest = line.strip_prefix("{ kind: \"")?;
-            let expression = rest.split("expression: \"").nth(1)?;
-            expression.split('"').next()
+            let file = rest.split("file: \"").nth(1)?;
+            file.split('"').next()
         })
         .collect();
     assert!(
-        expressions.len() >= 11,
-        "the table lists every companion state ({} rows)",
-        expressions.len()
+        files.len() >= 11,
+        "the table lists every companion state with its SVG ({} rows)",
+        files.len()
     );
     let docs = read("docs/design-system.md");
     let gallery = read("client/src/routes/design-system/+page.svelte");
-    for expression in &expressions {
-        let file = if *expression == "idle" {
-            "character.svg".to_owned()
-        } else {
-            format!("{expression}.svg")
-        };
+    for file in &files {
         let path = format!("client/static/skins/moon/{file}");
+        assert!(repo().join(&path).is_file(), "{path} is missing");
         assert!(
-            repo().join(&path).is_file(),
-            "{expression} is drawn from {path}"
-        );
-        assert!(
-            docs.contains(&file),
+            docs.contains(file),
             "docs/design-system.md names {file} in the companion-state table"
         );
     }

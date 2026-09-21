@@ -349,45 +349,45 @@ test('a desktop tool call names the computer from its trail line', () => {
 
 test('a proactive run is a run the companion is on, and its outcome is never invented', () => {
 	const machines = [{ machine_id: 'm-1', display_name: 'Studio Mac' }];
-	const run = (status, over = {}) => ({ type: 'activity_updated', instance_slug: slug, run: { version: 1, id: 'r1', trigger: { kind: 'heartbeat', agent: 'companion' }, reason: 'periodic', target: { kind: 'companion' }, dedupe_key: 'heartbeat:companion', status, attempt: 1, started_at: 1, approvals: [], ...over } });
-	assert.deepEqual(companionEventFromServer(run({ kind: 'running' })), { type: 'activity_run', id: 'r1', status: 'running', label: 'Check-in', machine: null, handoffId: null, error: null });
+	const receipt = (status, over = {}) => ({ type: 'activity_updated', instance_slug: slug, run: { version: 1, id: 'r1', trigger: { kind: 'heartbeat', agent: 'companion' }, reason: 'periodic', target: { kind: 'companion' }, dedupe_key: 'heartbeat:companion', status, attempt: 1, started_at: 1, approvals: [], ...over } });
+	assert.deepEqual(companionEventFromServer(receipt({ kind: 'running' })), { type: 'activity_run', id: 'r1', status: 'running', label: 'Check-in', machine: null, handoffId: null, error: null });
 	assert.deepEqual(
-		companionEventFromServer(run({ kind: 'running' }, { trigger: { kind: 'handoff', handoff_id: 'h1' }, target: { kind: 'machine', machine_id: 'm-1' } }), machines),
+		companionEventFromServer(receipt({ kind: 'running' }, { trigger: { kind: 'handoff', handoff_id: 'h1' }, target: { kind: 'machine', machine_id: 'm-1' } }), machines),
 		{ type: 'activity_run', id: 'r1', status: 'running', label: 'Handoff on Studio Mac', machine: 'Studio Mac', handoffId: 'h1', error: null },
 		'a run targeting a computer names it the way the Computers tab does',
 	);
-	assert.deepEqual(companionEventFromServer(run({ kind: 'failed', error: 'no model configured', retryable: true })), { type: 'activity_run', id: 'r1', status: 'failed', label: 'Check-in', machine: null, handoffId: null, error: 'no model configured' });
+	assert.deepEqual(companionEventFromServer(receipt({ kind: 'failed', error: 'no model configured', retryable: true })), { type: 'activity_run', id: 'r1', status: 'failed', label: 'Check-in', machine: null, handoffId: null, error: 'no model configured' });
 	// Running: the companion is on it, with nothing more claimed than the run itself.
-	const thinking = replay([run({ kind: 'running' })]);
+	const thinking = replay([receipt({ kind: 'running' })]);
 	assert.equal(thinking.kind, 'thinking');
 	assert.equal(companionStatusText(thinking), 'Nolune is thinking: Check-in.');
 	assert.equal(replay([{ type: 'memory_recall', instance_slug: slug, chat_id: 'default', memories: [{ path: 'a', preview: '', score: 1 }] }], thinking).kind, 'recalling');
 	// Completed: only because the server said so.
-	const done = replay([run({ kind: 'completed', finished_at: 2 })], thinking);
+	const done = replay([receipt({ kind: 'completed', finished_at: 2 })], thinking);
 	assert.equal(done.kind, 'completed');
 	assert.equal(companionStatusText(done), 'Nolune finished: Check-in.');
 	assert.equal(run([{ type: 'settle' }], done).kind, 'idle');
 	// Failed: the error, never completed.
-	const failed = replay([run({ kind: 'failed', error: 'no model configured', retryable: true })], thinking);
+	const failed = replay([receipt({ kind: 'failed', error: 'no model configured', retryable: true })], thinking);
 	assert.equal(failed.kind, 'failed');
 	assert.equal(failed.completed, false);
 	assert.equal(companionStatusText(failed), 'Nolune stopped with an error: no model configured.');
-	assert.equal(replay([run({ kind: 'failed', error: 'no model configured', retryable: true })]).kind, 'failed', 'a failure is reported even for a run that was not seen starting');
+	assert.equal(replay([receipt({ kind: 'failed', error: 'no model configured', retryable: true })]).kind, 'failed', 'a failure is reported even for a run that was not seen starting');
 	// Cancelled: over, with no success claimed.
-	const cancelled = replay([run({ kind: 'cancelled' })], thinking);
+	const cancelled = replay([receipt({ kind: 'cancelled' })], thinking);
 	assert.equal(cancelled.kind, 'idle');
 	assert.equal(cancelled.completed, false);
 	// Skipped or finished runs the client never saw start say nothing.
 	const idle = run([online]);
-	assert.equal(replay([run({ kind: 'skipped', reason: { kind: 'quiet_hours' } })], idle), idle);
-	assert.equal(replay([run({ kind: 'completed' })], idle), idle, 'a stray completion is not a success');
+	assert.equal(replay([receipt({ kind: 'skipped', reason: { kind: 'quiet_hours' } })], idle), idle);
+	assert.equal(replay([receipt({ kind: 'completed' })], idle), idle, 'a stray completion is not a success');
 	// A chat run and a proactive run at once: the companion is busy until the last one stops.
-	const both = replay([run({ kind: 'running' })], run([online, running, reading]));
+	const both = replay([receipt({ kind: 'running' })], run([online, running, reading]));
 	assert.equal(both.kind, 'working', 'the action in progress is what shows');
 	const chatDone = run([stopped], both);
 	assert.equal(chatDone.kind, 'thinking');
 	assert.equal(companionStatusText(chatDone), 'Nolune is thinking: Check-in.');
-	assert.equal(replay([run({ kind: 'completed' })], chatDone).kind, 'completed');
+	assert.equal(replay([receipt({ kind: 'completed' })], chatDone).kind, 'completed');
 	// The next message or run starts clean.
 	assert.equal(companionStatusText(run([{ type: 'user_message', chatId: 'chat-a' }], done)), 'Nolune is listening.');
 	assert.equal(companionStatusText(run([running], done)), 'Nolune is thinking.');
@@ -404,7 +404,8 @@ test('a conversation snapshot is persisted state: it starts a missed run and end
 	assert.equal(ended.kind, 'idle');
 	assert.equal(ended.completed, false);
 	assert.equal(ended.action, null);
-	assert.equal(run([{ type: 'snapshot', chatId: 'chat-a', running: false }], run([online])), run([online]), 'a snapshot of nothing running changes nothing');
+	const idle = run([online]);
+	assert.equal(run([{ type: 'snapshot', chatId: 'chat-a', running: false }], idle), idle, 'a snapshot of nothing running changes nothing');
 	const held = run([online, running, reading, stopped]);
 	assert.equal(run([{ type: 'snapshot', chatId: 'chat-a', running: false }], held), held, 'nor does it cut a completed hold short');
 	const blocked = run([online, running, reading, { type: 'permission_denied', chatId: 'chat-a', reason: 'permission denied' }]);
@@ -422,15 +423,15 @@ test('the status text links to the machine, the run, the handoff or the blocker'
 	assert.equal(joined(companionStatusSegments(remoteWork, 'Nolune', at)), companionStatusText(remoteWork), 'the segments read as the status sentence');
 	assert.deepEqual(companionStatusSegments(run([online, running, reading]), 'Luna', at), [
 		{ text: 'Luna is working on this computer: ' },
-		{ text: 'reading notes/tea.md', href: '/companion/chat' },
+		{ text: 'reading notes/tea.md', href: '/companion/chat/chat-a' },
 		{ text: '.' },
-	]);
-	const other = run([online, { type: 'action', chatId: 'notes', tool: 'read_file', summary: 'reading notes/tea.md' }]);
-	assert.equal(companionStatusSegments(other, 'Luna', at)[1].href, '/companion/chat/notes', 'an action in another conversation links there');
+	], 'an action links to its conversation');
+	const main = run([online, { type: 'action', chatId: 'default', tool: 'read_file', summary: 'reading notes/tea.md' }]);
+	assert.equal(companionStatusSegments(main, 'Luna', at)[1].href, '/companion/chat', 'the default conversation is the chat tab itself');
 	const blocked = run([online, running, { type: 'action', chatId: 'chat-a', tool: 'run_command', summary: 'running command' }, { type: 'permission_denied', chatId: 'chat-a', reason: 'ls: /root: Permission denied' }]);
 	assert.deepEqual(companionStatusSegments(blocked, 'Nolune', at), [
 		{ text: 'Nolune is blocked by permissions: ' },
-		{ text: 'running command', href: '/companion/chat' },
+		{ text: 'running command', href: '/companion/chat/chat-a' },
 		{ text: ' (ls: /root: Permission denied).' },
 	]);
 	const activity = { type: 'activity_run', id: 'r1', status: 'running', label: 'Check-in', machine: null, handoffId: null, error: null };
@@ -449,7 +450,7 @@ test('the status text links to the machine, the run, the handoff or the blocker'
 	const handoff = run([online, { ...activity, id: 'r2', label: 'Handoff on Studio Mac', machine: 'Studio Mac', handoffId: 'h1' }]);
 	assert.equal(companionStatusSegments(handoff, 'Nolune', at)[1].href, '/companion/activity#handoff-card-h1', 'a continuation links to its handoff card');
 	const chatFailure = run([online, running, { type: 'run_failed', chatId: 'chat-a', error: 'something went wrong' }]);
-	assert.equal(companionStatusSegments(chatFailure, 'Nolune', at)[1].href, '/companion/chat', 'a failed chat turn links to the conversation');
+	assert.equal(companionStatusSegments(chatFailure, 'Nolune', at)[1].href, '/companion/chat/chat-a', 'a failed chat turn links to the conversation');
 	for (const state of [run([online]), run([online, { type: 'user_message', chatId: 'chat-a' }]), run([online, running]), run([dropped]), run([online, running, { type: 'approval_requested', id: 'q', prompt: 'a GitHub token for gh' }])]) {
 		const segments = companionStatusSegments(state, 'Nolune', at);
 		assert.equal(segments.length, 1, `${state.kind} has nothing to link to`);
