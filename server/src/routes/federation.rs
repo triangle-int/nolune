@@ -17,6 +17,17 @@
 //! * `GET /api/federation/receipts` lists the audit receipts, newest first.
 //! * `POST /api/federation/peers/{companion_id}/ping` pings a paired peer
 //!   through its policy and records the answer on this side.
+//! * `GET /api/federation/approvals` lists the requests that asked the
+//!   owner (#109, PR 3); `POST …/approvals/{id}/approve` and `…/deny` take
+//!   `{ "scope": "once" | "until", "expires_at" | "class" }`; `DELETE
+//!   …/approvals/{id}` withdraws an entry whatever its status.
+//! * `POST /api/federation/peers/{companion_id}/rules` writes one rule
+//!   (`intent`, `disclosure`, `access`, optional `expires_at`), replacing
+//!   the rule for that pair; `POST …/rules/revoke` takes `{ "intent",
+//!   "disclosure" }` and revokes one capability. Revoking the peer drops
+//!   every rule and pending approval it had. Every owner decision is an
+//!   audit receipt. Paths name a companion id or an entry id and nothing
+//!   else; everything the owner chooses travels in a body.
 //!
 //! Peer side, public, verified by signature only. Every verified envelope
 //! is judged by the owner's policy and recorded before it is dispatched
@@ -52,7 +63,10 @@ use crate::{
     app::state::AppState,
     domain::{
         federation::{AcceptInvite, FederationError, SignedEnvelope, TransportEnvelope},
-        federation_policy::{Decision, DecisionReason, Verdict},
+        federation_policy::{
+            ApprovalScope, Decision, DecisionReason, DisclosureClass, IntentClass, ReceiptSide,
+            RuleRequest, Verdict,
+        },
     },
     services::federation::{
         envelope, identity, invite_token,
@@ -68,6 +82,15 @@ use crate::{
 #[serde(deny_unknown_fields)]
 struct InviteLine {
     invite: String,
+}
+
+/// Which rule to revoke: one intent at one disclosure class, matched
+/// against the closed classes.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuleKey {
+    intent: IntentClass,
+    disclosure: DisclosureClass,
 }
 
 /// What the accept route takes: the one line, or the three fields.
@@ -96,6 +119,18 @@ pub fn router() -> Router<AppState> {
         .route("/api/federation/policy", get(show_policy))
         .route("/api/federation/receipts", get(list_receipts))
         .route("/api/federation/peers/{companion_id}/ping", post(ping_peer))
+        .route("/api/federation/approvals", get(list_approvals))
+        .route("/api/federation/approvals/{id}", delete(withdraw_approval))
+        .route(
+            "/api/federation/approvals/{id}/approve",
+            post(approve_request),
+        )
+        .route("/api/federation/approvals/{id}/deny", post(deny_request))
+        .route("/api/federation/peers/{companion_id}/rules", post(set_rule))
+        .route(
+            "/api/federation/peers/{companion_id}/rules/revoke",
+            post(revoke_rule),
+        )
 }
 
 /// Mounted outside the auth middleware: a peer has no owner credential and
@@ -185,6 +220,8 @@ impl IntoResponse for ApiError {
             ),
             FederationError::InviteInvalid => (StatusCode::UNAUTHORIZED, "invalid_invite"),
             FederationError::UnknownPeer => (StatusCode::NOT_FOUND, "unknown_peer"),
+            FederationError::UnknownApproval => (StatusCode::NOT_FOUND, "unknown_approval"),
+            FederationError::UnknownRule => (StatusCode::NOT_FOUND, "unknown_rule"),
             FederationError::PeerNotPaired { .. } => (StatusCode::CONFLICT, "peer_not_paired"),
             FederationError::Transport(_) => (StatusCode::BAD_GATEWAY, "peer_unreachable"),
             FederationError::PeerRefused { .. } => (StatusCode::BAD_GATEWAY, "peer_refused"),
@@ -255,6 +292,12 @@ async fn read_body(request: Request) -> Result<Bytes, ApiError> {
     axum::body::to_bytes(request.into_body(), MAX_ENVELOPE_BYTES)
         .await
         .map_err(|_| ApiError::PayloadTooLarge)
+}
+
+/// Parses an owner request body as `T`; any shape complaint is the fixed
+/// `invalid_body`, never the parser's text.
+fn parse_json<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, ApiError> {
+    serde_json::from_slice(bytes).map_err(|_| ApiError::InvalidBody)
 }
 
 /// Parses a signed envelope, keeping the version-first refusal and replacing
@@ -330,6 +373,11 @@ async fn revoke_peer(
     Path(companion_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let (peer, notified) = state.federation.revoke_peer(&companion_id).await?;
+    // A revoked peer keeps nothing: its rules and whatever it asked the
+    // owner go with the trust (#109).
+    state
+        .federation_gate
+        .forget_peer(&state.federation, &companion_id, ReceiptSide::Owner)?;
     Ok(Json(json!({ "peer": peer.summary(), "notified": notified })).into_response())
 }
 
@@ -359,6 +407,72 @@ async fn ping_peer(
     Ok(Json(json!({ "decision": decision })).into_response())
 }
 
+async fn list_approvals(State(state): State<AppState>) -> Result<Response, ApiError> {
+    Ok(
+        Json(json!({ "approvals": state.federation_gate.approvals(&state.federation)? }))
+            .into_response(),
+    )
+}
+
+async fn approve_request(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    request: Request,
+) -> Result<Response, ApiError> {
+    let scope: ApprovalScope = parse_json(&read_body(request).await?)?;
+    let outcome = state
+        .federation_gate
+        .approve(&state.federation, &id, scope)?;
+    Ok(Json(outcome).into_response())
+}
+
+async fn deny_request(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    request: Request,
+) -> Result<Response, ApiError> {
+    let scope: ApprovalScope = parse_json(&read_body(request).await?)?;
+    let outcome = state.federation_gate.deny(&state.federation, &id, scope)?;
+    Ok(Json(outcome).into_response())
+}
+
+async fn withdraw_approval(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state
+        .federation_gate
+        .withdraw_approval(&state.federation, &id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn set_rule(
+    State(state): State<AppState>,
+    Path(companion_id): Path<String>,
+    request: Request,
+) -> Result<Response, ApiError> {
+    let rule: RuleRequest = parse_json(&read_body(request).await?)?;
+    let policy = state
+        .federation_gate
+        .set_rule(&state.federation, &companion_id, rule)?;
+    Ok(Json(json!({ "policy": policy })).into_response())
+}
+
+async fn revoke_rule(
+    State(state): State<AppState>,
+    Path(companion_id): Path<String>,
+    request: Request,
+) -> Result<Response, ApiError> {
+    let key: RuleKey = parse_json(&read_body(request).await?)?;
+    let policy = state.federation_gate.revoke_rule(
+        &state.federation,
+        &companion_id,
+        key.intent,
+        key.disclosure,
+    )?;
+    Ok(Json(json!({ "policy": policy })).into_response())
+}
+
 async fn pair(State(state): State<AppState>, request: Request) -> Result<Response, ApiError> {
     let envelope = parse_envelope(&read_body(request).await?)?;
     Ok(Json(state.federation.receive_pair_request(&envelope)?).into_response())
@@ -377,7 +491,15 @@ async fn revoke_notice(
     request: Request,
 ) -> Result<Response, ApiError> {
     let envelope = parse_envelope(&read_body(request).await?)?;
-    Ok(Json(state.federation.receive_revoke(&envelope)?).into_response())
+    let ack = state.federation.receive_revoke(&envelope)?;
+    // The peer withdrew the pairing: what it asked the owner and what the
+    // owner had granted it go with it, and the withdrawal is recorded.
+    state.federation_gate.forget_peer(
+        &state.federation,
+        &envelope.sender,
+        ReceiptSide::Answering,
+    )?;
+    Ok(Json(ack).into_response())
 }
 
 async fn ping(State(state): State<AppState>, request: Request) -> Result<Response, ApiError> {

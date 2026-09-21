@@ -34,10 +34,44 @@ one section and one scope:
 | Section | Route | Owns | Scope |
 |---------|-------|------|-------|
 | Companion | `settings/companion` | Little Moon presence, Learn my rhythm, Initiative (check-in, quiet hours, daily budget, reflection), Resume my work (#83: on/off, break, cooldown, snooze, Suggest now), Timezone, Scheduled messages | companion |
-| Connections | `settings/connections` | Model presets and slots (#156) with capability chips and a connection test per preset (#28), API keys, Connected computers (the compact Connected Spaces list, #80), Companions (peer companions paired through federation, #108: rows with Confirm and Revoke, Invite a companion, Accept an invite, Rotate signing key; see [federation.md](federation.md)), Paired browsers | server |
+| Connections | `settings/connections` | Model presets and slots (#156) with capability chips and a connection test per preset (#28), API keys, Connected computers (the compact Connected Spaces list, #80), Companions (peer companions paired through federation, #108: rows with Confirm and Revoke, Invite a companion, Accept an invite, Rotate signing key; #109: pending approvals with Allow and Deny within one scope, and per-peer capability rows with one rule per request kind; see [federation.md](federation.md)), Paired browsers | server |
 | Capabilities | `settings/capabilities` | Skills (registry), Extensions (curated MCP catalog, per-tool grants, custom servers behind the #97 acknowledgement) | server |
 | Data | `settings/data` | What the companion keeps, Export, Import (replaces the companion after a confirmation dialog) | companion |
 | Advanced | `settings/advanced` | Server port and API token, Updates and release channel, ElevenLabs voice ID, Email (SMTP/IMAP), GitHub token | mixed; each control carries an owner badge |
+
+## Companions: approvals and capabilities (#109)
+
+A paired companion may only check that it can reach this one. Anything
+else asks the owner first, and the Companions section under Settings →
+Connections is where they answer:
+
+- **Requests waiting for you** sit above the rows, one per companion,
+  request kind, and disclosure class ("wants to send you a message", "wants
+  to ask whether you are free"), with when it asked and when it lapses (24
+  hours). A native select picks one bounded scope, Once (the next matching
+  request goes through and uses it up; unused, it lapses after an hour),
+  For a day, For a week, or Always for this kind of request, and **Allow**
+  or **Deny** applies it: once as a decision on that request, otherwise as
+  a rule for the companion. A denial once holds until the request would
+  have lapsed, so the companion is not queued again meanwhile; it keeps
+  hearing that approval is required, exactly as before you looked, so it
+  learns neither that you decided nor when. Decisions
+  still standing (Allowed once, Denied) are listed beneath with Withdraw.
+  Nothing a companion sent is shown or kept: the queue holds the request
+  kind and the class, never a text.
+- **What it may do** folds out under each paired row: one line per request
+  kind and disclosure class the server could ever allow, saying what
+  applies now (Allowed, Asks you, Denied) and whether that is the default,
+  a rule set by you (with its deadline), or the default again after a rule
+  lapsed. The Rule select writes one rule for that pair (Allowed, Asks you,
+  Denied) or takes it back (Default); the very next request is judged by
+  it. Revoking the companion drops every rule and pending request it had.
+- Every decision is an audit receipt (`GET /api/federation/receipts`, side
+  `owner`). Routes: `GET /api/federation/approvals`, `POST
+  …/approvals/{id}/approve` and `…/deny` with `{scope}`, `DELETE
+  …/approvals/{id}`, `POST /api/federation/peers/{id}/rules`, `POST
+  …/rules/revoke` with `{intent, disclosure}`; shapes in
+  [companion-storage.md](companion-storage.md) "Policy and audit".
 
 ## Model presets (#156)
 

@@ -3,18 +3,22 @@
 	// PeerView built by lib/federation/companions.js, so the /design-system
 	// sample and the live list cannot drift. Confirm pairs a peer whose
 	// owner redeemed this server's invite; Revoke asks once, inline.
+	import type { Snippet } from "svelte";
 	import type { PeerView } from "$lib/federation/companions.js";
 
 	let {
 		peer,
 		onconfirm,
 		onrevoke,
+		children,
 	}: {
 		peer: PeerView;
 		/** Pairs a pending peer this server invited. Absent means the row cannot confirm. */
 		onconfirm?: () => Promise<void>;
 		/** Withdraws trust and tells the peer. Absent means the row cannot revoke. */
 		onrevoke?: () => Promise<void>;
+		/** Rendered under the row's text: what the peer may do (#109). */
+		children?: Snippet;
 	} = $props();
 
 	let confirming = $state(false);
@@ -98,6 +102,7 @@
 		{/if}
 		{#if error}<p class="companion-error" role="alert">{error}</p>{/if}
 		{#if notice}<p class="companion-notice" role="status">{notice}</p>{/if}
+		{@render children?.()}
 	</div>
 	{#if !asking && (canConfirm || canRevoke)}
 		<div class="companion-actions">
