@@ -223,6 +223,65 @@ forwarded unchanged. When the socket closes, the desktop sends `end_session`
 for every session it confirmed open for the server, one at a time, and
 forgets each only once the driver answered.
 
+## Permissions (#20)
+
+Computer use on macOS needs two grants, Accessibility (pointer, keyboard,
+reading windows) and Screen Recording (window snapshots), and macOS
+attributes each grant to the process that asks for it. The Cua Driver runs
+from its own app bundle (`CuaDriver.app`, `com.trycua.driver`), so the
+grants belong to that bundle: not to the Nolune server, and not to the
+desktop app. Both runtimes therefore read the state from the driver itself.
+Its health report carries `tcc_accessibility` and `tcc_screen_recording`
+under the driver's bundle identity, and `driver_mcp::permissions_from_health`
+maps them to `granted`, `denied` or `prompt_required` (never asked). The
+desktop app's own grants (`AXIsProcessTrusted`,
+`CGPreflightScreenCaptureAccess`) still ride on the legacy `permissions`
+field for the older coordinate tools that run inside the app; they say
+nothing about what the driver can do.
+
+The desktop app's Settings window (`desktop/src/routes/settings/+page.svelte`,
+fed by the `cua_permissions` command in
+`desktop/src-tauri/src/cua_permissions.rs`) shows that state in one place:
+
+- The host. macOS is supported. Linux and Windows are named as unsupported,
+  with the note that the pinned driver still installs with
+  `nolune cua install` so a later release can turn computer use on, and that
+  there is nothing to grant there. A session without a display (an SSH or
+  background login on macOS, `DISPLAY` and `WAYLAND_DISPLAY` unset on Linux,
+  no `SESSIONNAME` on Windows) is named as headless: the driver is never
+  started and headless installs need nothing from the page.
+- The workspace install (`cua-driver/install.json`) checked against the
+  pin: pinned, stale, a binary that is gone, or none, each with the command
+  to run.
+- The driver the app runs, asked for its own report through the same
+  runtime the machine socket uses (`CuaRuntime::probe` starts the driver
+  when none runs and re-reads the one that does, so a grant made since
+  shows). Its version is checked against the pin: a mismatch is the
+  headline, with `nolune cua install`, and nothing is granted through a
+  driver that is not the pinned one. Its health and every failed check
+  come with the driver's own hints. A driver that cannot report shows what
+  it said on stderr, and a Retry.
+- The two rows, Accessibility and Screen recording, each Granted, Denied,
+  Not asked yet or Unavailable as the driver's bundle holds them.
+
+Grant runs the driver's own flow, `cua-driver permissions grant`, detached
+and without a terminal: the driver launches its app through LaunchServices
+so the macOS prompts and the pane entries name CuaDriver, then asks for the
+grants. The app also opens the System Settings pane for that permission,
+where CuaDriver is enabled when no prompt appears (macOS does not prompt
+again after a denial). The status is re-read a few seconds later and on
+Refresh. The pure views in `desktop/src/lib/cua-permissions.js` hold the
+copy (`desktop/tests/cua-permissions.test.mjs`).
+
+The wording is deliberate, on the page and here: every screenshot is a
+one-shot window snapshot taken during an action the user asked for, inside
+a session that ends with the run. There is no continuous capture, nothing is
+recorded, and nothing in the onboarding starts the driver's own recorder;
+`scripts/tests/no-continuous-screen-recording.py` keeps the module to
+`permissions grant`, checks the copy, and checks this section. Nolune never
+updates the driver on its own: a wrong version is reported with the install
+command, never fixed silently.
+
 ## Configuration
 
 ```toml

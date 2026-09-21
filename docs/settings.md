@@ -319,6 +319,13 @@ Nolune release.
   desktop target with `scripts/cua-driver.sh`, verifies it against the pin,
   and uploads the verified archive beside the desktop bundle, so a pin that
   no longer matches upstream fails the release instead of a user's install.
+- The desktop app: its Settings window shows Accessibility and Screen
+  Recording as macOS granted them to the driver's own bundle
+  (`com.trycua.driver`), read from the driver's report, beside the workspace
+  install and the reported version against the pin; Grant runs the driver's
+  own `permissions grant` and opens the System Settings pane. Linux, Windows
+  and headless sessions are named as such with nothing to grant. See
+  [computer-use.md](computer-use.md#permissions-20).
 
 ## Companions (#108)
 
