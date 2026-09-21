@@ -583,8 +583,23 @@ impl FederationGate {
         companion_id: &str,
         request: IntentRequest,
     ) -> Result<PeerSummary, FederationError> {
-        let _ = (federation, companion_id, request);
-        todo!("PR 3 of #110: the own policy's word on an outgoing intent")
+        let peer = known_peer(federation, companion_id, true)?;
+        if peer.state != PeerState::Paired {
+            return Err(FederationError::PeerNotPaired { state: peer.state });
+        }
+        if policy::default_access(request.intent, request.disclosure).is_none() {
+            return Err(FederationError::PolicyRefused(Decision::deny(
+                DecisionReason::UnsupportedDisclosure,
+            )));
+        }
+        let document = self.policy.document()?;
+        let rules = document.peer(companion_id).rules;
+        if policy::live_rule(&rules, request, (self.clock)()).0 == Some(Access::Deny) {
+            return Err(FederationError::PolicyRefused(Decision::deny(
+                DecisionReason::Rule,
+            )));
+        }
+        Ok(peer)
     }
 
     /// Records a requesting-side receipt for an intent this companion sent
@@ -599,8 +614,17 @@ impl FederationGate {
         disclosure: DisclosureClass,
         decision: &Decision,
     ) -> Result<(), FederationError> {
-        let _ = (pairing_id, me, peer, intent, disclosure, decision);
-        todo!("PR 3 of #110: the requesting-side audit receipt")
+        self.record(
+            ReceiptSide::Requesting,
+            pairing_id,
+            me,
+            peer,
+            intent.name(),
+            disclosure.name(),
+            None,
+            decision,
+            (self.clock)(),
+        )
     }
 
     /// Judges `intent` at `disclosure` (wire names) from `peer`, as this

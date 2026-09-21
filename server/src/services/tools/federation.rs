@@ -21,6 +21,7 @@ use std::sync::Arc;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use crate::domain::federation::FederationError;
 use crate::services::federation::{
     gate::FederationGate,
     outbox::{Outbox, OutboxEntry, OutboxRequest, Outgoing},
@@ -57,7 +58,10 @@ impl Context {
         u64::try_from(at).map_err(|_| ToolExecError("that moment is before 1970".into()))
     }
 
-    /// Queues `request` for `peer` and answers with what was queued.
+    /// Queues `request` for `peer` and answers with what was queued. The
+    /// outbox asks this owner's own policy gate first; a refusal comes
+    /// back as the error's own words, which name a state or a reason and
+    /// never a text.
     fn send(
         &self,
         peer: String,
@@ -65,15 +69,53 @@ impl Context {
         purpose: String,
         request: OutboxRequest,
     ) -> Result<serde_json::Value, ToolExecError> {
-        let _ = (peer, on_behalf_of, purpose, request);
-        todo!("PR 3 of #110: queue through the outbox behind the own policy gate")
+        let outgoing = Outgoing {
+            peer,
+            represented_owner: on_behalf_of,
+            purpose,
+            request,
+            chat_id: self.chat_id.clone(),
+        };
+        let entry = self
+            .sending
+            .outbox
+            .enqueue(&self.sending.federation, &self.sending.gate, outgoing)
+            .map_err(refusal)?;
+        Ok(queued(&entry))
     }
+}
+
+/// Why nothing was queued, in words the model can act on: the peer's
+/// state, the owner's rule, or the wire's bound. Never a text.
+fn refusal(error: FederationError) -> ToolExecError {
+    ToolExecError(match error {
+        FederationError::UnknownPeer => {
+            "not queued: unknown companion; no paired companion is named by that id or prefix (see Settings › Connections › Companions)".into()
+        }
+        FederationError::PeerRevoked => {
+            "not queued: that companion was revoked, so nothing can be sent to it".into()
+        }
+        FederationError::PeerNotPaired { state } => {
+            format!("not queued: that companion is not paired yet ({state:?})")
+        }
+        FederationError::PolicyRefused(decision) => format!(
+            "not queued: denied by this owner's own policy for that companion ({})",
+            decision.reason.name()
+        ),
+        other => format!("not queued: {other}"),
+    })
 }
 
 /// What the model gets back: the queued request, never the peer's answer.
 fn queued(entry: &OutboxEntry) -> serde_json::Value {
-    let _ = entry;
-    todo!("PR 3 of #110: the tool answer")
+    serde_json::json!({
+        "status": "queued",
+        "request_id": entry.intent.correlation_id,
+        "peer": entry.recipient,
+        "kind": entry.intent.class().name(),
+        "expires_at": entry.intent.expires_at,
+        "note": "Delivery is asynchronous: the other companion decides by its owner's policy, and the outcome is shown on the Activity page. Do not queue this request again.",
+    })
 }
 
 /// The three sending tools, in registration order.

@@ -39,13 +39,19 @@ fn production(relative: &str) -> String {
     without_cfg_test_items(&read(relative))
 }
 
-/// The body of `fn <name>(` up to the next function.
+/// The body of `fn <name>(` up to the end of that function: the next
+/// item at its own indentation (a method's sibling, or a top-level
+/// item's closing brace).
 fn function<'a>(source: &'a str, name: &str) -> &'a str {
     source
         .split(&format!("fn {name}("))
         .nth(1)
+        .and_then(|rest| rest.split("\n}\n").next())
         .and_then(|rest| rest.split("\n    fn ").next())
-        .and_then(|rest| rest.split("\n    pub").next())
+        .and_then(|rest| rest.split("\n    pub fn ").next())
+        .and_then(|rest| rest.split("\n    pub(crate) fn ").next())
+        .and_then(|rest| rest.split("\n    pub async fn ").next())
+        .and_then(|rest| rest.split("\n    async fn ").next())
         .unwrap_or_else(|| panic!("{name} exists"))
 }
 
@@ -145,7 +151,8 @@ fn the_outbox_retries_with_a_bounded_backoff_and_gives_up_visibly() {
         "enqueue is the one place a correlation id is minted"
     );
     assert_eq!(
-        outbox.matches("new_correlation_id()").count(),
+        outbox.matches("new_correlation_id()").count()
+            - outbox.matches("fn new_correlation_id()").count(),
         1,
         "one call site mints ids"
     );

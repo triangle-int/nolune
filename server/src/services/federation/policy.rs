@@ -25,7 +25,7 @@
 use crate::domain::federation::PeerState;
 use crate::domain::federation_policy::{
     Access, Decision, DecisionReason, DefaultAccess, DisclosureClass, IntentClass, IntentRequest,
-    PolicyDocument, RateLimitPolicy, Verdict, sanitize_name,
+    PolicyDocument, PolicyRule, RateLimitPolicy, Verdict, sanitize_name,
 };
 
 /// Seconds in a day, for quiet-hours arithmetic on a local time of day.
@@ -210,18 +210,7 @@ pub fn evaluate(evaluation: Evaluation<'_>, usage: &mut RateWindow) -> Decision 
     // 4. The owner's rules: the most restrictive live exact match, else the
     // default, reported as such when a rule lapsed.
     let policy = document.peer(peer);
-    let mut live: Option<Access> = None;
-    let mut expired = false;
-    for rule in policy.rules.iter().filter(|rule| rule.matches(request)) {
-        if rule.expired_at(now) {
-            expired = true;
-            continue;
-        }
-        live = Some(match live {
-            Some(current) => more_restrictive(current, rule.access),
-            None => rule.access,
-        });
-    }
+    let (live, expired) = live_rule(&policy.rules, request, now);
     let (access, reason) = match live {
         Some(access) => (access, DecisionReason::Rule),
         None if expired => (default, DecisionReason::RuleExpired),
@@ -260,6 +249,26 @@ pub fn quiet_hours_end(now: u64, local_seconds_of_day: u32, end_hour: u8) -> u64
         SECONDS_PER_DAY - local + end
     };
     now.saturating_add(u64::from(remaining))
+}
+
+/// What the owner's `rules` say about `request` at `now`: the most
+/// restrictive live exact match, if any, and whether a matching rule had
+/// lapsed. The engine reads it for a peer's request; the gate reads it for
+/// a request this companion sends (#110), where only a live denial counts.
+pub fn live_rule(rules: &[PolicyRule], request: IntentRequest, now: u64) -> (Option<Access>, bool) {
+    let mut live: Option<Access> = None;
+    let mut expired = false;
+    for rule in rules.iter().filter(|rule| rule.matches(request)) {
+        if rule.expired_at(now) {
+            expired = true;
+            continue;
+        }
+        live = Some(match live {
+            Some(current) => more_restrictive(current, rule.access),
+            None => rule.access,
+        });
+    }
+    (live, expired)
 }
 
 /// Of two rules for the same intent and class, the one that gives less.
