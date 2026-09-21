@@ -814,7 +814,7 @@ async fn the_sending_tools_are_gated_by_this_owners_policy_and_queue_typed_inten
 async fn each_answer_settles_or_holds_the_entry_and_leaves_one_receipt_per_outcome() {
     let now = Arc::new(AtomicU64::new(T0));
     let (a, b, wire) = paired(&now).await;
-    let (a_id, b_id) = (a.companion_id(), b.companion_id());
+    let a_id = a.companion_id();
     let mut events = a.state.events.subscribe();
 
     // No rule on B: B's owner has to answer. The entry waits, asks again

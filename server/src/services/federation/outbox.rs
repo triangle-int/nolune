@@ -75,8 +75,8 @@ use crate::domain::{
     federation::{FederationError, PeerState, PeerSummary},
     federation_intent::{
         FederationIntent, INTENT_VERSION, IntentError, IntentOutcome, IntentPayload, IntentReceipt,
-        IntentResponse, LabelField, MAX_INTENT_CLOCK_SKEW_SECS, PeerLabel, ReceiptBasis,
-        TimeWindow,
+        IntentResponse, LabelField, MAX_INTENT_CLOCK_SKEW_SECS, MAX_INTENT_LIFETIME_SECS,
+        PeerLabel, ReceiptBasis, TimeWindow,
     },
     federation_policy::{
         Decision, DecisionReason, DisclosureClass, IntentRequest, PeerText, ReceiptSide, Verdict,
@@ -89,8 +89,9 @@ pub const OUTBOX_FILE: &str = "outbox.json";
 pub const OUTBOX_VERSION: u32 = 1;
 /// How long a queued intent stands: it may wait out an outage, and the
 /// peer's owner may take a while, but not forever. Below the decoder's
-/// week-long maximum.
+/// week-long maximum, which the line after it pins at compile time.
 pub const OUTBOX_INTENT_LIFETIME_SECS: u64 = 24 * 60 * 60;
+const _: () = assert!(OUTBOX_INTENT_LIFETIME_SECS <= MAX_INTENT_LIFETIME_SECS);
 /// Failed attempts (unreachable, undecodable, transiently refused) before
 /// an entry is given up on and shown as failed.
 pub const MAX_DELIVERY_ATTEMPTS: u32 = 8;
@@ -169,6 +170,20 @@ pub enum AttemptOutcome {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<DecisionReason>,
     },
+}
+
+impl AttemptOutcome {
+    /// The outcome's wire name, for a log line.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::InFlight {} => "in_flight",
+            Self::Interrupted {} => "interrupted",
+            Self::Unreachable {} => "unreachable",
+            Self::Refused { .. } => "refused",
+            Self::Malformed {} => "malformed",
+            Self::Answered { .. } => "answered",
+        }
+    }
 }
 
 /// One delivery attempt.
@@ -796,9 +811,14 @@ impl Outbox {
         now: u64,
         failure: AttemptOutcome,
     ) -> Result<(), FederationError> {
+        let kind = failure.name();
         record_attempt(&mut entry, now, failure);
         let failures = entry.failures();
+        let recipient = entry.recipient.clone();
         if failures >= MAX_DELIVERY_ATTEMPTS {
+            log::warn!(
+                "[federation] outbox: giving up on a request to companion {recipient} after {failures} failed attempts (last: {kind})"
+            );
             let local = never_answered(&entry, DecisionReason::Unreachable);
             return self.settle(
                 gate,
@@ -809,7 +829,11 @@ impl Outbox {
                 Decision::deny(DecisionReason::Unreachable),
             );
         }
-        let next = Some(now.saturating_add(backoff_secs(failures)));
+        let wait = backoff_secs(failures);
+        log::info!(
+            "[federation] outbox: a request to companion {recipient} did not go through ({kind}, attempt {failures}); trying again in {wait}s"
+        );
+        let next = Some(now.saturating_add(wait));
         self.hold(entry, now, None, next)
     }
 
@@ -1311,10 +1335,6 @@ mod tests {
         // room for the peer's owner to answer.
         let ladder: u64 = (1..MAX_DELIVERY_ATTEMPTS).map(backoff_secs).sum();
         assert!(ladder < OUTBOX_INTENT_LIFETIME_SECS / 2, "{ladder}");
-        assert!(
-            OUTBOX_INTENT_LIFETIME_SECS
-                <= crate::domain::federation_intent::MAX_INTENT_LIFETIME_SECS
-        );
     }
 
     #[test]

@@ -434,10 +434,15 @@ fn the_outbox_is_started_by_main_listed_to_the_owner_and_shown_on_the_activity_p
         state.contains("pub federation_outbox: Arc<crate::services::federation::outbox::Outbox>")
     );
     let main = production("server/src/main.rs");
+    let started_at = main
+        .find("outbox.start(federation, gate)")
+        .expect("main starts the sender loop");
+    let ready_at = main
+        .find("nolune: ready http://localhost:")
+        .expect("the ready line");
     assert!(
-        main.contains(".federation_outbox\n        .start(")
-            || main.contains("federation_outbox.start("),
-        "main starts the sender loop"
+        started_at > ready_at,
+        "the loop starts only once this process is the one serving"
     );
     assert!(
         main.contains("outbox.shutdown().await"),

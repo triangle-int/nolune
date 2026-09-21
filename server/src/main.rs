@@ -162,12 +162,6 @@ async fn main() {
     // Start background scheduler for scheduled messages
     services::scheduler::start(state.clone());
 
-    // Deliver what the companion queued for paired peers (#110): interrupted
-    // attempts are recovered first, then retried on the same ids.
-    state
-        .federation_outbox
-        .start(state.federation.clone(), state.federation_gate.clone());
-
     // Report a connected computer whose heartbeat goes stale (#80).
     state.machine_registry.start_health_watch();
 
@@ -241,7 +235,11 @@ async fn main() {
 
     let cua = state.cua.clone();
     let codex_auth = state.codex_auth.clone();
-    let outbox = state.federation_outbox.clone();
+    let (outbox, federation, gate) = (
+        state.federation_outbox.clone(),
+        state.federation.clone(),
+        state.federation_gate.clone(),
+    );
     let app = app::router::build_router(state, static_dir);
 
     info!("Starting server on http://{addr}");
@@ -264,6 +262,11 @@ async fn main() {
 
     // Installers and the desktop app wait for this exact stdout line (#124).
     println!("nolune: ready http://localhost:{port}");
+
+    // Deliver what the companion queued for paired peers (#110), now that
+    // this process is the one serving: interrupted attempts are recovered
+    // first, then every entry is retried on the same id.
+    outbox.start(federation, gate);
 
     // The machine this server runs on as a computer-use target (#16): registered
     // when a Cua driver and a display are there, skipped honestly otherwise. It
