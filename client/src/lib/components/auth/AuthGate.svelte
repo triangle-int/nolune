@@ -56,7 +56,7 @@
 			</p>
 			<ul class="auth-steps">
 				<li>On the computer where Nolune is installed, run <code>nolune pair</code>.</li>
-				<li>Or, on a device that is already connected, open <strong>Settings → Server → Pair another browser</strong>.</li>
+				<li>Or, on a device that is already connected, open <strong>Settings → Connections → Pair another browser</strong>.</li>
 			</ul>
 			<form class="auth-form" onsubmit={onSubmit}>
 				<label for="pairing-code" class="auth-label">Enter the code</label>

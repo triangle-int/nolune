@@ -1,8 +1,56 @@
 //! Per-run driver sessions: every action a run executes carries the run's
 //! session label, so the driver attributes it to one bounded session that the
 //! runtime opened before the first action and closes when the run ends.
+//! `OpenSessions` is the set of labels a target holds open for the server,
+//! kept the same way by the server-local runtime (#192) and a desktop's
+//! typed link (#17).
+
+use std::{collections::BTreeSet, sync::Mutex};
 
 use cua_protocol::{CuaAction, SessionLabel};
+
+/// The labels of the sessions one target holds open for the server. The
+/// runtime opens and ends its per-run sessions through it; a desktop link
+/// records the ones the desktop confirmed over its socket. Either way, what
+/// a driver exit or a closed socket loses is the set taken at that moment.
+#[derive(Default)]
+pub struct OpenSessions(Mutex<BTreeSet<SessionLabel>>);
+
+impl OpenSessions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Remember `label` as open; `false` when it already was.
+    pub fn insert(&self, label: SessionLabel) -> bool {
+        self.lock().insert(label)
+    }
+
+    /// Forget `label`; `false` when it was not open.
+    pub fn remove(&self, label: &SessionLabel) -> bool {
+        self.lock().remove(label)
+    }
+
+    /// Every open label in label order, leaving none: what is lost when
+    /// the target goes away, or what a shutdown has to end.
+    pub fn take(&self) -> Vec<SessionLabel> {
+        std::mem::take(&mut *self.lock()).into_iter().collect()
+    }
+
+    /// The open labels, in label order.
+    #[cfg(test)]
+    pub fn labels(&self) -> Vec<SessionLabel> {
+        self.lock().iter().cloned().collect()
+    }
+
+    /// A poisoned lock only means a task panicked mid-update; the set
+    /// itself is still consistent.
+    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeSet<SessionLabel>> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
 
 /// The action as the run sends it: labelled with the run's session wherever
 /// the protocol carries one. Session-management and discovery calls have no
@@ -250,6 +298,32 @@ mod tests {
                 assert_eq!(call, original, "{kind:?} is passed through unchanged");
             }
         }
+    }
+
+    /// The one open-session set the runtime and a desktop link share: a
+    /// label is open once, forgotten once, and `take` empties it in order.
+    #[test]
+    fn open_sessions_are_counted_once_and_taken_in_label_order() {
+        let label = |name: &str| SessionLabel::try_from(name).unwrap();
+        let open = OpenSessions::new();
+        assert!(open.labels().is_empty());
+        assert!(open.insert(label("nolune-run-2")));
+        assert!(open.insert(label("nolune-run-1")));
+        assert!(!open.insert(label("nolune-run-1")), "already open");
+        assert_eq!(
+            open.labels(),
+            vec![label("nolune-run-1"), label("nolune-run-2")]
+        );
+        assert!(open.remove(&label("nolune-run-2")));
+        assert!(!open.remove(&label("nolune-run-2")), "already ended");
+        assert!(open.insert(label("mine")));
+        assert_eq!(
+            open.take(),
+            vec![label("mine"), label("nolune-run-1")],
+            "what a driver exit or a closed socket loses"
+        );
+        assert!(open.labels().is_empty());
+        assert!(open.take().is_empty(), "taking again finds nothing");
     }
 
     #[test]

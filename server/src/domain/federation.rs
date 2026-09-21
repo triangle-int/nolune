@@ -244,6 +244,11 @@ pub struct PeerRecord {
     pub pending_origin: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
+    /// Unix seconds when something signed by this peer last verified here:
+    /// a pairing step, a notice, or a transport envelope. Absent on a record
+    /// written before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_at: Option<u64>,
     #[serde(default)]
     pub rotation_history: Vec<KeyTransition>,
 }
@@ -266,6 +271,7 @@ impl PeerRecord {
             pending_origin: self.pending_origin.clone(),
             created_at: self.created_at,
             updated_at: self.updated_at,
+            last_seen_at: self.last_seen_at,
             rotation_history: self.rotation_history.clone(),
         }
     }
@@ -284,6 +290,8 @@ pub struct PeerSummary {
     pub pending_origin: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_seen_at: Option<u64>,
     pub rotation_history: Vec<KeyTransition>,
 }
 
@@ -1024,6 +1032,7 @@ mod tests {
             pending_origin: None,
             created_at: 1,
             updated_at: 2,
+            last_seen_at: None,
             rotation_history: Vec::new(),
         };
         let json = serde_json::to_value(&record).unwrap();
@@ -1059,5 +1068,22 @@ mod tests {
         assert_eq!(summary.companion_id, "cid");
         assert_eq!(summary.public_key, "pk");
         assert_eq!(summary.state, PeerState::Paired);
+        assert_eq!(summary.last_seen_at, None);
+        assert!(
+            !serde_json::to_string(&summary)
+                .unwrap()
+                .contains("last_seen_at"),
+            "a peer never seen has no last-seen field, not a zero"
+        );
+
+        // A record that saw its peer persists the time and reports it.
+        let seen = PeerRecord {
+            last_seen_at: Some(3),
+            ..record
+        };
+        let json = serde_json::to_value(&seen).unwrap();
+        assert_eq!(json["last_seen_at"], 3);
+        assert_eq!(serde_json::from_value::<PeerRecord>(json).unwrap(), seen);
+        assert_eq!(seen.summary().last_seen_at, Some(3));
     }
 }

@@ -32,8 +32,13 @@ import type {
 	CorrectionResponse,
 	UploadMeta,
 	MachineInfo,
+	FederationOverview,
+	FederationPeer,
+	FederationRotationReport,
+	IssuedFederationInvite,
 } from "./types.js";
 export type { MachineInfo } from "./types.js";
+export type { FederationOverview, FederationPeer, FederationRotationReport, IssuedFederationInvite } from "./types.js";
 import { clearLegacyBrowserAuth } from "./legacy-auth-cleanup.js";
 
 const BASE = "";
@@ -230,17 +235,23 @@ export function sendMessage(
 	});
 }
 
-export function updateLlmConfig(req: {
+export async function updateLlmConfig(req: {
 	api_key?: string;
 	openai?: string;
 	elevenlabs?: string;
 	openrouter?: string;
 }): Promise<void> {
-	return json("/api/config/llm", {
+	const res = await authedFetch("/api/config/llm", {
 		method: "PUT",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(req),
 	});
+	if (res.ok) return;
+	const text = await res.text().catch(() => "");
+	// The key probe's refusal carries its reason ("invalid API key"); a bare
+	// 401 is this browser's session, not the provider.
+	if (res.status === 401 && !text) throw new AuthError();
+	throw new Error(text || res.statusText);
 }
 
 export interface EmbeddingStatus {
@@ -267,6 +278,8 @@ export function fetchConfigStatus(): Promise<{
 	setup_required?: string | null;
 	model?: string | null;
 	chat_preset?: string;
+	/** The Chat preset's provider (#28), so a failed test can be named before the presets load. */
+	chat_provider?: LlmProvider | null;
 	background_preset?: string;
 	configured_keys?: string[];
 }> {
@@ -284,6 +297,17 @@ export interface ModelPreset {
 	model: string;
 }
 
+/** What a preset's provider offers for its model (#28). */
+export interface ModelCapabilities {
+	vision: boolean;
+	documents: boolean;
+	tools: boolean;
+	streaming: boolean;
+	reasoning_controls: boolean;
+	model_discovery: boolean;
+	token_counting: boolean;
+}
+
 export interface ModelPresets {
 	presets: ModelPreset[];
 	/** Preset conversations use unless a chat pins its own. */
@@ -293,6 +317,8 @@ export interface ModelPresets {
 	/** Providers that have an API key. */
 	keyed_providers: LlmProvider[];
 	setup_required: string | null;
+	/** Per preset id, what its model can do; absent for presets not saved yet. */
+	capabilities?: Record<string, ModelCapabilities>;
 }
 
 export function fetchModelPresets(): Promise<ModelPresets> {
@@ -319,6 +345,62 @@ export function seedModelPresets(provider: LlmProvider): Promise<ModelPresets & 
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ provider }),
 	});
+}
+
+/** Why a connection test failed (#28), as the server types it. */
+export type PresetTestError =
+	| "unknown_preset"
+	| "setup_required"
+	| "authentication"
+	| "rate_limited"
+	| "model_not_found"
+	| "provider_rejected"
+	| "provider_unavailable"
+	| "unreachable"
+	| "timeout"
+	| "invalid_response"
+	| "unsupported"
+	| (string & {});
+
+/** What `POST /api/config/models/{id}/test` learned: one completion, no chat message. */
+export type PresetTestResult =
+	| {
+			ok: true;
+			preset: string;
+			provider: LlmProvider;
+			model: string;
+			usage: { input_tokens: number; output_tokens: number };
+			capabilities: ModelCapabilities;
+	  }
+	| { ok: false; error: PresetTestError; message: string; status: number; retry_after_seconds?: number | null };
+
+/**
+ * Run the connection test for a saved preset. Provider outcomes come back
+ * typed instead of thrown, so the caller can say what to fix; only this
+ * browser's own session failure throws `AuthError`.
+ */
+export async function testPreset(id: string): Promise<PresetTestResult> {
+	const res = await authedFetch(`/api/config/models/${encodeURIComponent(id)}/test`, { method: "POST" });
+	const text = await res.text().catch(() => "");
+	let body: Record<string, unknown> | null = null;
+	try {
+		body = text ? JSON.parse(text) : null;
+	} catch {
+		body = null;
+	}
+	if (res.ok && body) return { ok: true, ...(body as Omit<Extract<PresetTestResult, { ok: true }>, "ok">) };
+	// The provider's refusal is typed by the server; a bare 401 is the session's.
+	if (body && typeof body.error === "string") {
+		return {
+			ok: false,
+			error: body.error,
+			message: typeof body.message === "string" ? body.message : text,
+			status: res.status,
+			retry_after_seconds: typeof body.retry_after_seconds === "number" ? body.retry_after_seconds : null,
+		};
+	}
+	if (res.status === 401) throw new AuthError();
+	throw new Error(text || res.statusText);
 }
 
 export interface ChatPreset {
@@ -1087,6 +1169,79 @@ export async function importInstance(slug: string, file: File): Promise<{ ok: bo
 		throw new Error(text || "import failed");
 	}
 	return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// Companion federation (#108)
+//
+// Owner routes behind the session. An invite is handed over as one line
+// (`invite`), never as a URL; it is posted back in a JSON body and the
+// browser keeps no copy once the panel that showed it is dismissed.
+// ---------------------------------------------------------------------------
+
+/** A typed refusal from `/api/federation/*`; `code` is the server's `error`. */
+export class FederationApiError extends Error {
+	constructor(
+		public readonly code: string,
+		public readonly status: number,
+		public readonly peerError?: string,
+	) {
+		super(code);
+		this.name = "FederationApiError";
+	}
+}
+
+async function federationJson<T>(url: string, init?: RequestInit): Promise<T> {
+	const res = await fetch(`${BASE}${url}`, init);
+	if (res.status === 401) throw new AuthError();
+	if (!res.ok) {
+		let code = "unknown";
+		let peerError: string | undefined;
+		try {
+			const body = await res.json();
+			if (typeof body?.error === "string") code = body.error;
+			if (typeof body?.peer_error === "string") peerError = body.peer_error;
+		} catch {
+			// no JSON body
+		}
+		throw new FederationApiError(code, res.status, peerError);
+	}
+	if (res.status === 204) return undefined as T;
+	return res.json();
+}
+
+export function fetchFederation(): Promise<FederationOverview> {
+	return federationJson("/api/federation/peers");
+}
+
+/** Mint a one-time invite; the response is the only one that ever carries it. */
+export function createFederationInvite(): Promise<IssuedFederationInvite> {
+	return federationJson("/api/federation/invites", { method: "POST" });
+}
+
+export function cancelFederationInvite(id: string): Promise<void> {
+	return federationJson(`/api/federation/invites/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+/** Redeem the one line another owner handed over; this server contacts the issuer. */
+export function acceptFederationInvite(line: string): Promise<{ peer: FederationPeer }> {
+	return federationJson("/api/federation/accept", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ invite: line }),
+	});
+}
+
+export function confirmFederationPeer(companionId: string): Promise<{ peer: FederationPeer; notified: boolean }> {
+	return federationJson(`/api/federation/peers/${encodeURIComponent(companionId)}/confirm`, { method: "POST" });
+}
+
+export function revokeFederationPeer(companionId: string): Promise<{ peer: FederationPeer; notified: boolean }> {
+	return federationJson(`/api/federation/peers/${encodeURIComponent(companionId)}/revoke`, { method: "POST" });
+}
+
+export function rotateFederationIdentity(): Promise<FederationRotationReport> {
+	return federationJson("/api/federation/rotate", { method: "POST" });
 }
 
 // ---------------------------------------------------------------------------

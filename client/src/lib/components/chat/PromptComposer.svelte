@@ -10,8 +10,8 @@
  import * as Select from '$lib/components/ui/select/index.js';
  import TargetPicker from './TargetPicker.svelte';
  import type { TargetOption, TargetSummary } from '$lib/computers/target.js';
- /** A preset the picker can offer (#156): the user's own name for a model. */
- type PresetOption = { id: string; name: string; model: string };
+ /** A preset the picker can offer (#156): the user's own name for a model, and what the model cannot do (#28) when known. */
+ type PresetOption = { id: string; name: string; model: string; warnings?: { chip: string; detail: string }[] };
  let { onSend, onStop, disabled = false, agentRunning = false, presets = [], presetId = null, onPresetChange, targets, targetId = '', targetSummary, onTargetChange, footer, onFileAdd }:
  { onSend: (text: string, files?: File[]) => void | boolean | Promise<void | boolean>; onStop: () => void; disabled?: boolean; agentRunning?: boolean; presets?: PresetOption[]; presetId?: string | null; onPresetChange?: (id: string) => void;
    /** The computers the desktop tools can act on (#80); absent hides the selector. */
@@ -57,7 +57,7 @@
       </Select.Trigger>
       <Select.Content side="top" align="start" sideOffset={8} class="min-w-48 border border-border p-1 shadow-lg">
        {#each presets as preset (preset.id)}
-        <Select.Item value={preset.id} label={preset.name} class="min-h-11 pl-3 pr-9"><span class="flex flex-col"><span>{preset.name}</span><span class="text-[11px] text-muted-foreground">{preset.model}</span></span></Select.Item>
+        <Select.Item value={preset.id} label={preset.name} class="min-h-11 pl-3 pr-9"><span class="flex flex-col"><span>{preset.name}</span><span class="text-[11px] text-muted-foreground">{preset.model}{#if preset.warnings?.length}{' — '}{preset.warnings.map(w => w.chip).join(', ')}{/if}</span></span></Select.Item>
        {/each}
       </Select.Content>
      </Select.Root>
@@ -70,11 +70,12 @@
   </PromptToolbar>
  </PromptInput>
  {#if error}<p role="alert" class="error">{error}</p>{/if}
+ {#each currentPreset?.warnings ?? [] as warning (warning.chip)}<p role="status" class="limit">{warning.detail}</p>{/each}
  {@render footer?.()}
 </div>
 <style>
  /* The form provides the focus border; an inner outline would divide the composer. */
  .composer :global(textarea:focus-visible){outline:none}
 
- .composer{width:100%;min-width:0}.hint{font-size:12px;color:var(--text-muted)}.error{font-size:13px;color:var(--destructive);padding:8px 4px;margin:0}
+ .composer{width:100%;min-width:0}.hint{font-size:12px;color:var(--text-muted)}.error{font-size:13px;color:var(--destructive);padding:8px 4px;margin:0}.limit{font-size:13px;line-height:1.5;color:var(--text-secondary);padding:8px 4px 0;margin:0}
 </style>

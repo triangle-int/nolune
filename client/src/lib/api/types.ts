@@ -609,3 +609,100 @@ export type ServerEvent =
 			scroll_delta?: [number, number];
 	  }
 ;
+
+// ---------------------------------------------------------------------------
+// Companion federation (#108)
+// ---------------------------------------------------------------------------
+
+/** A companion's public, self-signed identity document (`federation/identity.json`). */
+export interface FederationIdentity {
+	version: number;
+	/** Derived from `public_key`; the only thing a peer binds trust to. */
+	companion_id: string;
+	public_key: string;
+	created_at: number;
+	signature: string;
+}
+
+/** `invited` lives in memory as an outstanding invite; the rest are peer records. */
+export type FederationPeerState = "invited" | "pending" | "paired" | "revoked";
+/** Which side minted the invite: `issuer` (this server) confirms; `accepter` waits. */
+export type FederationPairingRole = "issuer" | "accepter";
+
+/** A key rotation: the new identity endorsed by the previous key. */
+export interface FederationKeyRotation {
+	version: number;
+	previous: FederationIdentity;
+	identity: FederationIdentity;
+	rotated_at: number;
+	endorsement: string;
+	signature: string;
+}
+
+/** A rotation this server accepted from a peer, kept on its record. */
+export interface FederationKeyTransition {
+	rotation: FederationKeyRotation;
+	accepted_at: number;
+}
+
+/**
+ * A peer companion as `GET /api/federation/peers` lists it: its key and
+ * id, the handshake state, the origins this owner approved, and when
+ * something it signed last verified here. No name, host, or profile.
+ */
+export interface FederationPeer {
+	companion_id: string;
+	public_key: string;
+	state: FederationPeerState;
+	role: FederationPairingRole;
+	pairing_id: string;
+	approved_origins: string[];
+	/** The origin the peer reported while pairing, until the owner approves it. */
+	pending_origin?: string;
+	created_at: number;
+	updated_at: number;
+	/** Unix seconds; absent until something the peer signed verified here. */
+	last_seen_at?: number;
+	rotation_history: FederationKeyTransition[];
+}
+
+/** An outstanding invite as the list shows it: a handle and a clock, no secret. */
+export interface FederationInvite {
+	id: string;
+	state: FederationPeerState;
+	created_at: number;
+	expires_at: number;
+}
+
+/** `GET /api/federation/peers`. */
+export interface FederationOverview {
+	companion_id: string;
+	identity: FederationIdentity;
+	rotations: FederationKeyRotation[];
+	invites: FederationInvite[];
+	peers: FederationPeer[];
+}
+
+/**
+ * `POST /api/federation/invites`: the one response that carries the secret,
+ * as its fields and packed into `invite`, the one line to hand over.
+ */
+export interface IssuedFederationInvite {
+	id: string;
+	secret: string;
+	/** `nolune-invite-v1.…`: origin, secret, and issuer document in one line. */
+	invite: string;
+	created_at: number;
+	expires_at: number;
+	expires_in_secs: number;
+	origin: string;
+	issuer: FederationIdentity;
+}
+
+/** `POST /api/federation/rotate`. */
+export interface FederationRotationReport {
+	identity: FederationIdentity;
+	rotation: FederationKeyRotation;
+	notified: string[];
+	unreachable: string[];
+}

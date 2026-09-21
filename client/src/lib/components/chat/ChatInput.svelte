@@ -1,9 +1,9 @@
 <script lang="ts">
  import { play } from '$lib/sounds.js';
  import { hapticLight, hapticMedium } from '$lib/haptics.js';
- import { fetchChatPreset, fetchMachines, fetchModelPresets, updateChatPreset, type MachineInfo, type ModelPreset } from '$lib/api/client.js';
+ import { fetchChatPreset, fetchMachines, fetchModelPresets, updateChatPreset, type MachineInfo } from '$lib/api/client.js';
  import type { ServerEvent } from '$lib/api/types.js';
- import { effectivePresetId } from '$lib/models/presets.js';
+ import { effectivePresetId, pickerPresets, type PickerPreset } from '$lib/models/presets.js';
  import { applyMachineEvent, buildSpaces, homeSpace, reconcileListing } from '$lib/computers/spaces.js';
  import { NO_TARGET, normalizeTarget, requestTarget, runningLabel, targetOptions, targetStorageKey, targetSummary } from '$lib/computers/target.js';
  import { getCompanion } from '$lib/stores/companion.svelte.js';
@@ -14,7 +14,9 @@
  let { slug, chatId, onSend, onStop, onTargetChange, disabled = false, agentRunning = false, mood = 'calm', uploadProgress = null }:
  { slug: string; chatId: string; onSend: (content: string, files?: File[]) => void | boolean | Promise<void | boolean>; onStop: () => void; onTargetChange?: (target: ChatTarget) => void; disabled?: boolean; agentRunning?: boolean; mood?: string; uploadProgress?: { fileIndex: number; fileCount: number; loaded: number; total: number } | null } = $props();
  // Per-conversation model preset (#156): the pin when set, else the Chat slot.
- let presets = $state<ModelPreset[]>([]);
+ // Each row carries what its model cannot do (#28), for the picker's chips
+ // and the sentence under the composer once such a model is chosen.
+ let presets = $state<PickerPreset[]>([]);
  let presetId = $state<string | null>(null);
  let modelError = $state('');
  let changingPreset = false;
@@ -24,7 +26,7 @@
   Promise.all([fetchModelPresets(), fetchChatPreset(currentSlug, currentChat)])
    .then(([models, pin]) => {
     if (currentSlug !== slug || currentChat !== chatId) return;
-    presets = models.presets;
+    presets = pickerPresets(models);
     presetId = effectivePresetId(pin.preset, { chat_preset: pin.default_preset, background_preset: models.background_preset }, models.presets);
    })
    .catch(() => {});

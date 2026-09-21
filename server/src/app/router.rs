@@ -122,3 +122,7 @@ mod federation_transport_tests;
 #[cfg(test)]
 #[path = "../../test-support/handoff_cards.rs"]
 mod handoff_tests;
+
+#[cfg(test)]
+#[path = "../../test-support/cua_desktop_frames.rs"]
+mod cua_desktop_frames_tests;
