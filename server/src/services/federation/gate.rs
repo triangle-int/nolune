@@ -36,7 +36,7 @@
 use std::{
     collections::HashMap,
     path::Path,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, Mutex, RwLock, RwLockReadGuard},
 };
 
 use chrono::{TimeZone, Timelike, Utc};
@@ -80,6 +80,22 @@ pub struct PolicyView {
     pub document: PolicyDocument,
     pub defaults: Vec<DefaultAccess>,
 }
+
+/// What judging an allowed intent settled: the decision, and the pending
+/// approval it consumed when the owner's approval once is what allowed it
+/// (#110's receipts name that approval as their basis).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Judgement {
+    pub decision: Decision,
+    pub approval_id: Option<String>,
+}
+
+/// The identity lock held shared by a caller outside this module that
+/// opens an envelope and judges what it carries as one step (#110's
+/// inbound intents), the way `receive_ping` does inside it. Only
+/// [`FederationGate::hold`] makes one, and the entry points that take it
+/// do not take the lock again.
+pub struct Held<'a>(#[allow(dead_code)] RwLockReadGuard<'a, ()>);
 
 pub struct FederationGate {
     policy: PolicyStore,
@@ -507,18 +523,63 @@ impl FederationGate {
         Ok(rule)
     }
 
+    /// Takes the identity lock shared for a caller that opens an envelope
+    /// and judges it through [`judge_held`]; see [`Held`]. Nothing else in
+    /// this module is called while it is held except through the entry
+    /// points that take it.
+    ///
+    /// [`judge_held`]: FederationGate::judge_held
+    pub(crate) fn hold(&self) -> Held<'_> {
+        Held(self.identities.read().unwrap())
+    }
+
+    /// [`admit`] for a caller that holds the identity lock through
+    /// [`hold`]: the same judgement, the same receipt, and the approval
+    /// the judgement consumed when the owner's approval is what allowed it.
+    ///
+    /// [`admit`]: FederationGate::admit
+    /// [`hold`]: FederationGate::hold
+    pub(crate) fn judge_held(
+        &self,
+        _held: &Held<'_>,
+        me: &str,
+        peer: &PeerSummary,
+        intent: &str,
+        disclosure: &str,
+    ) -> Result<Judgement, FederationError> {
+        self.judge(me, peer, intent, disclosure)
+    }
+
+    /// The queue entry `request` from `requester` under `pairing_id` waits
+    /// on (pending, or decided once and not lapsed), for a caller that
+    /// holds the identity lock; `None` when nothing is queued.
+    pub(crate) fn queued_approval(
+        &self,
+        _held: &Held<'_>,
+        pairing_id: &str,
+        requester: &str,
+        request: IntentRequest,
+    ) -> Result<Option<PendingApproval>, FederationError> {
+        Ok(self.approvals.list()?.into_iter().find(|entry| {
+            entry.pairing_id == pairing_id
+                && entry.requester == requester
+                && entry.request() == request
+        }))
+    }
+
     /// Judges `intent` at `disclosure` (wire names) from `peer`, as this
     /// companion `me`, and records the receipt. `Ok` only for an allowed
     /// intent; any other verdict is `FederationError::PolicyRefused`
     /// carrying the decision. Unknown names fail closed. `peer` is the
     /// record `open` returned (as its summary) or the owner listing's entry,
     /// so the id, the pairing, and the state come from the store together.
-    /// The structured intents of #110 are the first production caller;
     /// `receive_ping` holds the identity lock across `open` and calls
-    /// [`judge`] directly.
+    /// [`judge`] directly; the inbound intents of #110 hold it through
+    /// [`hold`] and call [`judge_held`].
     ///
     /// [`judge`]: FederationGate::judge
-    #[allow(dead_code)]
+    /// [`hold`]: FederationGate::hold
+    /// [`judge_held`]: FederationGate::judge_held
     pub fn admit(
         &self,
         me: &str,
@@ -528,6 +589,7 @@ impl FederationGate {
     ) -> Result<Decision, FederationError> {
         let _stable = self.identities.read().unwrap();
         self.judge(me, peer, intent, disclosure)
+            .map(|judgement| judgement.decision)
     }
 
     /// [`admit`] for a caller that already holds [`identities`].
@@ -540,9 +602,10 @@ impl FederationGate {
         peer: &PeerSummary,
         intent: &str,
         disclosure: &str,
-    ) -> Result<Decision, FederationError> {
+    ) -> Result<Judgement, FederationError> {
         let now = (self.clock)();
         let companion_id = peer.companion_id.as_str();
+        let mut approval_id = None;
         // What the peer is told, and what the receipt keeps when the two
         // differ: a denial once is refused under the same `approval_required`
         // the peer heard while the request was open, so the wire never
@@ -577,8 +640,9 @@ impl FederationGate {
                         let pairing = peer.pairing_id.as_str();
                         let word = self.approvals.resolve(pairing, companion_id, request)?;
                         match word {
-                            Resolution::Approved(_) => {
+                            Resolution::Approved(entry) => {
                                 decision = Decision::allow(DecisionReason::OwnerApproved);
+                                approval_id = Some(entry.id);
                             }
                             Resolution::Denied(_) => {
                                 recorded = Some(Decision::deny(DecisionReason::OwnerDenied));
@@ -636,7 +700,10 @@ impl FederationGate {
             now,
         )?;
         if decision.verdict == Verdict::Allow {
-            Ok(decision)
+            Ok(Judgement {
+                decision,
+                approval_id,
+            })
         } else {
             Err(FederationError::PolicyRefused(decision))
         }
@@ -846,7 +913,7 @@ impl FederationGate {
     /// but whose state does not admit it. Every other error never got past
     /// the signature (or the nonce), so nothing about it is a fact worth a
     /// receipt.
-    fn record_refused_sender(
+    pub(crate) fn record_refused_sender(
         &self,
         federation: &FederationState,
         me: &str,
@@ -1087,18 +1154,27 @@ fn parse_message(body: &[u8]) -> Result<TransportMessage, FederationError> {
     })
 }
 
-/// The `kind` of an envelope's body, for naming a refused sender's intent
-/// in its receipt. The body was verified against its signed hash before
-/// the sender's state was refused, so the kind is the sender's own claim.
+/// The `kind` of an envelope's body (or the `type` of the intent it
+/// carries, #110), for naming a refused sender's intent in its receipt.
+/// The body was verified against its signed hash before the sender's
+/// state was refused, so the kind is the sender's own claim.
 fn peek_kind(envelope: &TransportEnvelope) -> Option<String> {
     #[derive(Deserialize)]
-    struct Kind {
-        kind: String,
+    struct Body {
+        #[serde(default)]
+        kind: Option<String>,
+        #[serde(default)]
+        intent: Option<Payload>,
+    }
+    #[derive(Deserialize)]
+    struct Payload {
+        #[serde(rename = "type")]
+        kind: Option<String>,
     }
     let body = decode(&envelope.body)?;
-    serde_json::from_slice::<Kind>(&body)
-        .ok()
-        .map(|message| message.kind)
+    let body = serde_json::from_slice::<Body>(&body).ok()?;
+    body.kind
+        .or_else(|| body.intent.and_then(|payload| payload.kind))
 }
 
 /// The ping body this companion sends.

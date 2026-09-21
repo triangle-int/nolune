@@ -579,6 +579,9 @@ pub enum FederationError {
     UnknownApproval,
     /// The peer has no rule for that intent at that disclosure class.
     UnknownRule,
+    /// A structured intent (#110) could not be decoded or has lapsed; the
+    /// fault is typed and never echoes the wire.
+    Intent(crate::domain::federation_intent::IntentError),
 }
 
 impl fmt::Display for FederationError {
@@ -672,6 +675,7 @@ impl fmt::Display for FederationError {
             Self::UnknownApproval => {
                 f.write_str("federation approval is not pending: decided, withdrawn, or lapsed")
             }
+            Self::Intent(error) => fmt::Display::fmt(error, f),
             Self::UnknownRule => {
                 f.write_str("federation peer has no rule for that intent and disclosure class")
             }
@@ -770,6 +774,10 @@ mod tests {
             FederationError::RotationMismatch,
             FederationError::UnknownApproval,
             FederationError::UnknownRule,
+            FederationError::Intent(crate::domain::federation_intent::IntentError::Expired {
+                expires_at: 10,
+                now: 200,
+            }),
             FederationError::PolicyRefused(crate::domain::federation_policy::Decision::ask(
                 crate::domain::federation_policy::DecisionReason::Default,
             )),
