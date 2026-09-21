@@ -212,6 +212,12 @@ pub struct HistoryEntry {
     /// Model name used to generate this message (assistant only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// The trail line of each tool call in this entry, by tool-call id
+    /// (#80): what the tool announced when it ran, naming the computer it
+    /// acted on, so a reloaded conversation reads the way the live one did.
+    /// Beside the message, never inside it: the model replays only `message`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_trail: Option<std::collections::BTreeMap<String, String>>,
 }
 
 impl HistoryEntry {
@@ -224,6 +230,7 @@ impl HistoryEntry {
             mcp_app_html: None,
             mcp_app_input: None,
             model: None,
+            tool_trail: None,
         }
     }
 

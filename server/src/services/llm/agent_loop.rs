@@ -233,8 +233,14 @@ pub(crate) async fn streaming_agent_loop(
         }
 
         // Execute validated tool calls; outputs retain typed text and image content.
+        // The trail line a tool announces for its call (#80: the desktop
+        // tools name the computer they act on) is kept beside the call.
         let mut results = Vec::new();
+        let mut tool_trail = std::collections::BTreeMap::new();
         for tu in &tool_calls {
+            if let Some(line) = trail_line(tools, &tu.name, &tu.arguments) {
+                tool_trail.insert(tu.id.clone(), line);
+            }
             let (content, trusted) = execute_tool(tools, &tu.name, &tu.arguments).await;
             results.push(ContentBlock::tool_output(tu.id.clone(), content, trusted));
         }
@@ -247,14 +253,15 @@ pub(crate) async fn streaming_agent_loop(
         let ts = crate::services::tools::unix_millis().to_string();
         // The assistant message (with tool_use) was pushed to messages a few lines above
         let assistant_msg = &messages[messages.len() - 2]; // assistant before tool_result
-        crate::services::chat::append_to_rig_history(
-            &rig_path,
-            &HistoryEntry::new(
-                strip_context_blocks(assistant_msg),
-                ts.clone(),
-                format!("tool_{}", crate::services::tools::unix_millis()),
-            ),
+        let mut assistant_entry = HistoryEntry::new(
+            strip_context_blocks(assistant_msg),
+            ts.clone(),
+            format!("tool_{}", crate::services::tools::unix_millis()),
         );
+        if !tool_trail.is_empty() {
+            assistant_entry.tool_trail = Some(tool_trail);
+        }
+        crate::services::chat::append_to_rig_history(&rig_path, &assistant_entry);
         crate::services::chat::append_to_rig_history(
             &rig_path,
             &HistoryEntry::new(
@@ -322,6 +329,19 @@ pub(crate) async fn streaming_agent_loop(
     }
 
     Ok((all_text, Some(current_message_id), total_tokens))
+}
+
+/// The trail line the tool that will run `name` keeps with this call (#80),
+/// from the same tool `execute_tool` reaches; `None` when it has nothing to
+/// say beyond the arguments or no tool has that name.
+pub(crate) fn trail_line(
+    tools: &[Box<dyn ToolDyn>],
+    name: &str,
+    input: &serde_json::Value,
+) -> Option<String> {
+    let tool = tools.iter().find(|t| t.name() == name)?;
+    let args = serde_json::to_string(input).unwrap_or_default();
+    tool.trail_line(&args)
 }
 
 pub(crate) async fn execute_tool(
@@ -487,6 +507,61 @@ mod provenance_tests {
         ) -> Pin<Box<dyn Future<Output = Result<String, ToolError>> + Send + '_>> {
             Box::pin(async { Ok(self.output.into()) })
         }
+    }
+
+    /// A tool that announces where it acts (#80), the way `ObservableTool`
+    /// does for the desktop tools.
+    struct AnnouncingTool;
+
+    impl ToolDyn for AnnouncingTool {
+        fn name(&self) -> String {
+            "remote_bash".into()
+        }
+
+        fn definition(
+            &self,
+            _prompt: String,
+        ) -> Pin<Box<dyn Future<Output = ToolDefinition> + Send + '_>> {
+            Box::pin(async {
+                ToolDefinition {
+                    name: "remote_bash".into(),
+                    description: String::new(),
+                    parameters: serde_json::json!({}),
+                }
+            })
+        }
+
+        fn trail_line(&self, args: &str) -> Option<String> {
+            Some(format!("running a command on Studio Mac ({args})"))
+        }
+
+        fn call(
+            &self,
+            _args: String,
+        ) -> Pin<Box<dyn Future<Output = Result<String, ToolError>> + Send + '_>> {
+            Box::pin(async { Ok("ok".into()) })
+        }
+    }
+
+    #[test]
+    fn the_trail_line_comes_from_the_tool_that_runs_and_only_when_it_has_one() {
+        let tools: Vec<Box<dyn ToolDyn>> = vec![
+            Box::new(SameNamedTool {
+                trusted: false,
+                output: "x",
+            }),
+            Box::new(AnnouncingTool),
+        ];
+        assert_eq!(
+            trail_line(&tools, "remote_bash", &serde_json::json!({"command": "ls"})).as_deref(),
+            Some(r#"running a command on Studio Mac ({"command":"ls"})"#)
+        );
+        assert_eq!(
+            trail_line(&tools, "read_file", &serde_json::json!({"path": "x"})),
+            None,
+            "a tool without a line leaves the reloaded trail to its arguments"
+        );
+        assert_eq!(trail_line(&tools, "missing", &serde_json::json!({})), None);
     }
 
     #[tokio::test]

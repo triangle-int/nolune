@@ -50,11 +50,14 @@ impl TargetSelection {
 }
 
 /// The selection resolved once per turn, with the display names of the
-/// known machines so the trail names computers the way the Computers tab does.
+/// known machines so the trail names computers the way the Computers tab
+/// does, and the ids of the desktops connected at that moment so the trail
+/// can name the only one when nothing was chosen.
 #[derive(Clone, Debug, Default)]
 pub struct MachineTarget {
     selection: TargetSelection,
     names: BTreeMap<String, String>,
+    live: Vec<String>,
 }
 
 /// What a computer tool needs from the desktop before it acts there.
@@ -177,21 +180,35 @@ impl From<TargetRefusal> for ToolExecError {
 }
 
 impl MachineTarget {
-    /// A target with no names: the trail falls back to ids.
+    /// A target with no names and no snapshot: the trail falls back to ids
+    /// and never names a desktop nobody chose.
     pub fn new(selection: TargetSelection) -> Self {
         Self {
             selection,
             names: BTreeMap::new(),
+            live: Vec::new(),
         }
     }
 
     /// A selection with the display names the trail uses (`label`).
     pub fn with_names(selection: TargetSelection, names: BTreeMap<String, String>) -> Self {
-        Self { selection, names }
+        Self {
+            selection,
+            names,
+            live: Vec::new(),
+        }
+    }
+
+    /// The ids of the desktops connected when the target was resolved, so
+    /// `describe` names the only one while nothing is chosen.
+    pub fn with_live(mut self, live: Vec<String>) -> Self {
+        self.live = live;
+        self
     }
 
     /// The request's `machine_id` resolved against the registry: the
-    /// selection plus a snapshot of every known machine's display name.
+    /// selection plus a snapshot of every known machine's display name and
+    /// of which desktops are connected right now.
     pub async fn resolve(registry: &MachineRegistry, machine_id: Option<&str>) -> Self {
         // The record's display name is the user's; a desktop the store cannot
         // read right now (an unsupported file) is still named by its hostname.
@@ -205,10 +222,14 @@ impl MachineTarget {
                 BTreeMap::new()
             }
         };
-        for live in registry.list().await {
-            names.entry(live.machine_id).or_insert(live.hostname);
+        let mut live = Vec::new();
+        for connected in registry.list().await {
+            live.push(connected.machine_id.clone());
+            names
+                .entry(connected.machine_id)
+                .or_insert(connected.hostname);
         }
-        Self::with_names(TargetSelection::from_request(machine_id), names)
+        Self::with_names(TargetSelection::from_request(machine_id), names).with_live(live)
     }
 
     pub fn selection(&self) -> &TargetSelection {
@@ -223,13 +244,23 @@ impl MachineTarget {
             .unwrap_or_else(|| machine_id.to_owned())
     }
 
-    /// Where a call acts, for the activity trail: "on <name>".
+    /// Where a call acts, for the activity trail: "on <name>". The user's
+    /// choice outranks the `machine_id` the model passed: with a computer or
+    /// the home chosen the tool only ever acts there or refuses, so that is
+    /// what the line says. With nothing chosen, the computer the model named
+    /// is the one the call is about; otherwise the only desktop connected
+    /// when the turn started is the one that acts, so it is named, and the
+    /// generic wording stays only while the choice is genuinely open (none
+    /// or several connected).
     pub fn describe(&self, requested: Option<&str>) -> String {
-        match (requested, &self.selection) {
-            (Some(id), _) => format!("on {}", self.label(id)),
-            (None, TargetSelection::Machine(id)) => format!("on {}", self.label(id)),
-            (None, TargetSelection::ServerHome) => "on the server home".to_owned(),
-            (None, TargetSelection::Unselected) => "on the connected computer".to_owned(),
+        match (&self.selection, requested) {
+            (TargetSelection::Machine(id), _) => format!("on {}", self.label(id)),
+            (TargetSelection::ServerHome, _) => "on the server home".to_owned(),
+            (TargetSelection::Unselected, Some(id)) => format!("on {}", self.label(id)),
+            (TargetSelection::Unselected, None) => match self.live.as_slice() {
+                [only] => format!("on {}", self.label(only)),
+                _ => "on the connected computer".to_owned(),
+            },
         }
     }
 
@@ -1456,15 +1487,19 @@ mod target_tests {
         let chosen = MachineTarget::resolve(&registry, Some(STUDIO)).await;
         assert_eq!(chosen.describe(None), "on Studio Mac");
         assert_eq!(chosen.describe(Some(STUDIO)), "on Studio Mac");
-        assert_eq!(chosen.describe(Some(LAPTOP)), format!("on {LAPTOP}"));
+        // The model naming another computer does not move the trail line:
+        // the tool only ever acts on the user's choice or refuses.
+        assert_eq!(chosen.describe(Some(LAPTOP)), "on Studio Mac");
         assert!(
             chosen.prompt_line(1).contains("Studio Mac"),
             "{}",
             chosen.prompt_line(1)
         );
 
+        // Nothing chosen and one desktop connected: the trail names the
+        // desktop that will act, not "the connected computer".
         let open = MachineTarget::resolve(&registry, None).await;
-        assert_eq!(open.describe(None), "on the connected computer");
+        assert_eq!(open.describe(None), "on Studio Mac");
         assert_eq!(open.describe(Some(STUDIO)), "on Studio Mac");
         assert!(open.prompt_line(1).contains("only connected desktop"));
         assert!(
@@ -1476,6 +1511,11 @@ mod target_tests {
 
         let home = MachineTarget::resolve(&registry, Some(SERVER_HOME_TARGET)).await;
         assert_eq!(home.describe(None), "on the server home");
+        assert_eq!(
+            home.describe(Some(STUDIO)),
+            "on the server home",
+            "nothing runs on a desktop the model names while the home is chosen"
+        );
         assert!(home.prompt_line(1).contains("run_command"));
 
         // Without a snapshot the trail falls back to ids, never to a guess.
@@ -1483,6 +1523,51 @@ mod target_tests {
             MachineTarget::new(TargetSelection::Machine(STUDIO.into())).describe(None),
             format!("on {STUDIO}")
         );
+    }
+
+    #[tokio::test]
+    async fn the_trail_names_the_only_connected_desktop_and_stays_generic_when_the_choice_is_open()
+    {
+        // No desktop connected: nothing to name.
+        let registry = MachineRegistry::new();
+        let none = MachineTarget::resolve(&registry, None).await;
+        assert_eq!(none.describe(None), "on the connected computer");
+
+        // One connected: the trail says which one, by the user's name.
+        let _studio = connect(&registry, desktop(STUDIO, "studio", now(), None)).await;
+        registry.rename(STUDIO, Some("Studio Mac")).await.unwrap();
+        let only = MachineTarget::resolve(&registry, None).await;
+        assert_eq!(only.describe(None), "on Studio Mac");
+        assert_eq!(
+            tool_summary_line(&only),
+            "left_click on Studio Mac",
+            "the trail line the tool announces names the desktop that acts"
+        );
+
+        // Two connected and none chosen: the choice is open, the generic
+        // wording stays (the call itself is refused with choose_a_computer).
+        let _laptop = connect(&registry, desktop(LAPTOP, "laptop", now(), None)).await;
+        let open = MachineTarget::resolve(&registry, None).await;
+        assert_eq!(open.describe(None), "on the connected computer");
+        assert_eq!(open.describe(Some(LAPTOP)), "on laptop");
+
+        // A snapshot without names still names the only desktop, by id.
+        let bare =
+            MachineTarget::new(TargetSelection::Unselected).with_live(vec![STUDIO.to_owned()]);
+        assert_eq!(bare.describe(None), format!("on {STUDIO}"));
+        // Without a snapshot at all nothing is guessed.
+        assert_eq!(
+            MachineTarget::new(TargetSelection::Unselected).describe(None),
+            "on the connected computer"
+        );
+    }
+
+    fn tool_summary_line(target: &MachineTarget) -> String {
+        crate::services::tools::tool_summary_on(
+            "computer_use",
+            r#"{"action":"left_click"}"#,
+            target,
+        )
     }
 
     #[test]

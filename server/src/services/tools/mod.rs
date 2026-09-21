@@ -515,6 +515,14 @@ pub fn tool_summary_on(name: &str, args: &str, target: &MachineTarget) -> String
     }
 }
 
+/// The trail line persisted with a call (#80): the desktop tools' summary,
+/// which names the computer the arguments may omit, so the trail names it
+/// after a reload as well. Other tools say nothing their arguments do not.
+pub fn tool_trail_line(name: &str, args: &str, target: &MachineTarget) -> Option<String> {
+    matches!(name, "computer_use" | "remote_bash" | "remote_files")
+        .then(|| tool_summary_on(name, args, target))
+}
+
 // ---------------------------------------------------------------------------
 // ObservableTool
 // ---------------------------------------------------------------------------
@@ -566,6 +574,10 @@ impl ToolDyn for ObservableTool {
         prompt: String,
     ) -> Pin<Box<dyn Future<Output = ToolDefinition> + Send + '_>> {
         self.inner.definition(prompt)
+    }
+
+    fn trail_line(&self, args: &str) -> Option<String> {
+        tool_trail_line(&self.inner.name(), args, &self.target).map(|line| redact_secrets(&line))
     }
 
     fn call(
@@ -1189,5 +1201,47 @@ mod tool_summary_tests {
             tool_summary_on("remote_files", r#"{"operation":"list","path":"~"}"#, &open),
             "listing ~ on the connected computer"
         );
+    }
+
+    /// The line persisted with a call so a reloaded conversation names the
+    /// computer the way the live trail did: the desktop tools' summary,
+    /// nothing for tools whose arguments already say everything.
+    #[test]
+    fn the_desktop_tools_persist_a_trail_line_that_names_their_computer() {
+        let target = MachineTarget::with_names(
+            TargetSelection::Unselected,
+            [(STUDIO.to_owned(), "Studio Mac".to_owned())].into(),
+        )
+        .with_live(vec![STUDIO.to_owned()]);
+        assert_eq!(
+            tool_trail_line("computer_use", r#"{"action":"screenshot"}"#, &target).as_deref(),
+            Some("screenshot on Studio Mac")
+        );
+        assert_eq!(
+            tool_trail_line("remote_bash", r#"{"command":"uname -a"}"#, &target).as_deref(),
+            Some("running a command on Studio Mac")
+        );
+        assert_eq!(
+            tool_trail_line(
+                "remote_files",
+                r#"{"operation":"read","path":"~/notes.md"}"#,
+                &target
+            )
+            .as_deref(),
+            Some("reading ~/notes.md on Studio Mac")
+        );
+        for other in [
+            "read_file",
+            "run_command",
+            "web_search",
+            "list_machines",
+            "mcp_tool",
+        ] {
+            assert_eq!(
+                tool_trail_line(other, r#"{"path":"x"}"#, &target),
+                None,
+                "{other} says nothing the arguments do not"
+            );
+        }
     }
 }
