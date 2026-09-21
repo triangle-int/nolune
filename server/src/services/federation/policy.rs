@@ -142,6 +142,13 @@ impl RateWindow {
         Ok(())
     }
 
+    /// Counts `other`'s requests as this window's too: a peer's window
+    /// follows it through a key rotation, so rotating does not refill it.
+    pub fn absorb(&mut self, other: RateWindow) {
+        self.accepted.extend(other.accepted);
+        self.accepted.sort_unstable();
+    }
+
     #[cfg(test)]
     pub fn len(&self) -> usize {
         self.accepted.len()

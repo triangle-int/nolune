@@ -989,25 +989,33 @@ peer's own) the answer is a denial with a retry-after and nothing further is
 consulted; then the rules; and inside quiet hours (read in the given IANA
 zone, UTC when unset) anything that would land in front of the owner, or
 would ask them, is deferred until they end. Owners revoke a rule or a peer
-by removing it, and the very next evaluation sees the change. A missing
-file is the default document and is not written until the owner changes
-something; a file of another version or shape is never repaired and never
-overwritten: nothing is judged until it is repaired or moved aside.
+by removing it, and the very next evaluation sees the change. Rules, the
+rate window, and the refusal window are keyed by the peer's companion id;
+when a peer rotates its key they move to its new id in the same step that
+applies the rotation, under the policy lock, so a rotation never sheds a
+denial or refills a budget, and a rotation is refused while the policy
+cannot be loaded rather than applied without the rules that go with it. A
+missing file is the default document and is not written until the owner
+changes something; a file of another version or shape is never repaired
+and never overwritten: nothing is judged until it is repaired or moved
+aside.
 
 `federation/audit.jsonl` (mode `0600`) keeps one receipt per line for every
 decision, on both sides: the requesting companion records what it asked and
 what came back, the answering companion records what it was asked and what
-it decided. A receipt names the requester and responder ids, the intent and
-disclosure class, the decision (verdict, reason, retry-after or
-deferred-until) and the time, plus a one-line summary built from those
-names. Receipts never contain what the peer sent: no body, message, or text
-field exists in the shape, and unknown fields are refused. Retention is
-bounded like proactive run records: the newest 1000 overall, the newest 200
-per peer (so one chatty peer cannot push the others out), and nothing older
-than 30 days; past a bound the file is compacted through a temporary file
-and a rename. Repeated refusals of one kind from one peer inside a minute
-are recorded once. A log this build cannot load or write refuses every
-intent: a decision is not made without its receipt.
+it decided. A receipt names the requester and responder ids, the pairing
+(which a key rotation does not change), the intent and disclosure class,
+the decision (verdict, reason, retry-after or deferred-until) and the time,
+plus a one-line summary built from those names. Receipts never contain what
+the peer sent: no body, message, or text field exists in the shape, and
+unknown fields are refused. Retention is bounded like proactive run
+records: the newest 1000 overall, the newest 200 per pairing under every id
+the peer has had (so one chatty peer cannot push the others out, and cannot
+start over by rotating its key), and nothing older than 30 days; past a
+bound the file is compacted through a temporary file and a rename.
+Repeated refusals of one kind from one peer inside a minute are recorded
+once. A log this build cannot load or write refuses every intent: a
+decision is not made without its receipt.
 
 Over the wire a refusal is `403` with `policy_denied`, `approval_required`,
 or `deferred`, or `429 rate_limited`, each carrying the decision and a

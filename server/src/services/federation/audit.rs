@@ -7,9 +7,10 @@
 //! takes an envelope or peer text, so the log can be listed and kept without
 //! re-reading what a peer sent. Retention is bounded like proactive run
 //! records: the newest [`MAX_AUDIT_RECEIPTS`] overall, the newest
-//! [`MAX_RECEIPTS_PER_PEER`] per peer (so one chatty peer cannot push the
-//! others out), and nothing older than [`AUDIT_RETENTION_DAYS`]; past a
-//! bound the file is compacted through a temporary file and a rename.
+//! [`MAX_RECEIPTS_PER_PEER`] per pairing (so one chatty peer cannot push
+//! the others out, and cannot start over by rotating its key), and nothing
+//! older than [`AUDIT_RETENTION_DAYS`]; past a bound the file is compacted
+//! through a temporary file and a rename.
 //!
 //! A file this build cannot load is never repaired and never overwritten:
 //! every read and write fails closed, and because a decision is not made
@@ -29,7 +30,8 @@ use crate::domain::federation_policy::{AuditReceipt, RECEIPT_VERSION as RECEIPT_
 pub const AUDIT_FILE: &str = "audit.jsonl";
 /// Receipts kept overall, newest first.
 pub const MAX_AUDIT_RECEIPTS: usize = 1000;
-/// Receipts kept per peer (as requester or responder), newest first.
+/// Receipts kept per pairing (as requester or responder, under every id
+/// the peer has had), newest first.
 pub const MAX_RECEIPTS_PER_PEER: usize = 200;
 /// Receipts older than this are dropped.
 pub const AUDIT_RETENTION_DAYS: u64 = 30;
@@ -230,13 +232,15 @@ fn enforce_retention(receipts: &mut Vec<AuditReceipt>, now: u64) -> bool {
     let before = receipts.len();
     let oldest_allowed = now.saturating_sub(AUDIT_RETENTION_DAYS * 86_400);
     receipts.retain(|receipt| receipt.at > oldest_allowed);
-    // Per peer: a receipt belongs to the companion on the other side, so a
-    // flood from one peer only ever pushes out that peer's own history.
-    let mut kept_per_peer: HashMap<String, usize> = HashMap::new();
+    // Per pairing: a receipt belongs to the pairing on the other side,
+    // whichever key the peer signed with at the time, so a flood from one
+    // peer only ever pushes out that peer's own history.
+    let mut kept_per_peer: HashMap<&str, usize> = HashMap::new();
     let mut keep = vec![false; receipts.len()];
     for (index, receipt) in receipts.iter().enumerate().rev() {
-        let peer = receipt.peer().to_owned();
-        let kept = kept_per_peer.entry(peer).or_insert(0);
+        let kept = kept_per_peer
+            .entry(receipt.pairing_id.as_str())
+            .or_insert(0);
         if *kept < MAX_RECEIPTS_PER_PEER {
             *kept += 1;
             keep[index] = true;
@@ -290,6 +294,7 @@ mod tests {
             version: RECEIPT_VERSION,
             id: AuditLog::new_id(),
             side: ReceiptSide::Answering,
+            pairing_id: format!("pairing-{requester}"),
             requester: requester.into(),
             responder: "me".into(),
             intent: "message".into(),
@@ -423,6 +428,7 @@ mod tests {
         requester_side.side = ReceiptSide::Requesting;
         requester_side.requester = "me".into();
         requester_side.responder = "peer-a".into();
+        assert_eq!(requester_side.pairing_id, "pairing-peer-a");
         let mut mixed: Vec<AuditReceipt> = (0..MAX_RECEIPTS_PER_PEER as u64)
             .map(|i| receipt("peer-a", T0 + 1 + i))
             .collect();
@@ -433,6 +439,44 @@ mod tests {
             mixed.iter().all(|r| r.side == ReceiptSide::Answering),
             "the requesting-side receipt about peer-a was the oldest of that peer's"
         );
+    }
+
+    #[test]
+    fn a_peer_that_rotates_its_key_keeps_one_retention_bucket() {
+        // The same pairing under three ids in turn, and a quiet peer.
+        let mut receipts = vec![receipt("quiet", T0)];
+        for (round, id) in ["peer-a-first", "peer-a-second", "peer-a-third"]
+            .into_iter()
+            .enumerate()
+        {
+            for i in 0..MAX_RECEIPTS_PER_PEER as u64 {
+                let mut rotated = receipt(id, T0 + 1 + round as u64 * 1000 + i);
+                rotated.pairing_id = "pairing-a".into();
+                receipts.push(rotated);
+            }
+        }
+        assert!(enforce_retention(&mut receipts, T0 + 5000));
+        assert_eq!(
+            receipts
+                .iter()
+                .filter(|r| r.pairing_id == "pairing-a")
+                .count(),
+            MAX_RECEIPTS_PER_PEER,
+            "the three ids share one bucket"
+        );
+        assert!(
+            receipts
+                .iter()
+                .filter(|r| r.pairing_id == "pairing-a")
+                .all(|r| r.requester == "peer-a-third"),
+            "the newest id's receipts are the newest of the bucket"
+        );
+        assert_eq!(
+            receipts.iter().filter(|r| r.requester == "quiet").count(),
+            1,
+            "the rotating peer never reached the overall bound"
+        );
+        assert_eq!(receipts.len(), MAX_RECEIPTS_PER_PEER + 1);
     }
 
     #[test]

@@ -193,6 +193,11 @@ async fn a_ping_over_the_public_route_is_judged_and_recorded_on_both_sides() {
         assert_eq!(receipt.decision.verdict, Verdict::Allow);
         assert_eq!(receipt.at, T0);
     }
+    assert_eq!(
+        on_a[0].pairing_id, on_b[0].pairing_id,
+        "both sides name the one pairing"
+    );
+    assert_eq!(on_a[0].pairing_id.len(), 16);
 
     // The owner routes need the owner.
     for uri in ["/api/federation/receipts", "/api/federation/policy"] {
@@ -365,16 +370,19 @@ async fn policy_refusals_are_typed_over_the_wire_and_never_echo_the_body() {
     // Judging a content intent records who asked for what and the verdict,
     // and the listing never carries what was said.
     now.store(T0 + 120, Ordering::SeqCst);
+    let peer_b = a
+        .state
+        .federation
+        .overview()
+        .unwrap()
+        .peers
+        .into_iter()
+        .find(|peer| peer.companion_id == b_id)
+        .unwrap();
     let refused = a
         .state
         .federation_gate
-        .admit(
-            &a_id,
-            &b_id,
-            crate::domain::federation::PeerState::Paired,
-            "message",
-            "none",
-        )
+        .admit(&a_id, &peer_b, "message", "none")
         .unwrap_err();
     assert!(
         matches!(refused, crate::domain::federation::FederationError::PolicyRefused(ref d) if d.verdict == Verdict::Ask),

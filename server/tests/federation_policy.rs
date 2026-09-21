@@ -234,6 +234,7 @@ fn the_audit_log_never_touches_a_payload_and_receipts_have_no_room_for_one() {
             "version",
             "id",
             "side",
+            "pairing_id",
             "requester",
             "responder",
             "intent",
@@ -347,45 +348,78 @@ fn every_peer_side_transport_route_goes_through_the_gate() {
         );
     }
     // The gate judges a ping only after `open` verified it, and answers
-    // only after the receipt was written.
+    // only after the receipt was written. The identity lock is held from
+    // `open` to the judgement, so a rotation cannot move the peer's policy
+    // out from under a ping that was opened under its previous id.
     let gate = production("server/src/services/federation/gate.rs");
     let receive_ping = gate
         .split("pub fn receive_ping(")
         .nth(1)
         .and_then(|rest| rest.split("\n    pub fn ").next())
         .expect("receive_ping exists");
+    let lock_at = receive_ping
+        .find("self.identities.read()")
+        .expect("receive_ping holds the identity lock");
     let open_at = receive_ping
         .find(".open(")
         .expect("receive_ping opens the envelope");
-    let admit_at = receive_ping
-        .find("self.admit(")
+    let judge_at = receive_ping
+        .find("self.judge(")
         .expect("receive_ping judges the ping");
     let seal_at = receive_ping
         .find(".seal(")
         .expect("receive_ping seals the pong");
     assert!(
-        open_at < admit_at && admit_at < seal_at,
-        "receive_ping must open, then judge, then answer"
+        lock_at < open_at && open_at < judge_at && judge_at < seal_at,
+        "receive_ping must take the identity lock, open, then judge, then answer"
     );
     let admit = gate
         .split("pub fn admit(")
         .nth(1)
-        .and_then(|rest| rest.split("\n    pub fn ").next())
+        .and_then(|rest| rest.split("\n    fn judge(").next())
         .expect("admit exists");
-    let evaluate_at = admit
+    assert!(
+        admit.contains("self.identities.read()") && admit.contains("self.judge("),
+        "admit must judge under the identity lock"
+    );
+    let judge = gate
+        .split("fn judge(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n    pub fn ").next())
+        .expect("judge exists");
+    let evaluate_at = judge
         .find("policy::evaluate(")
-        .expect("admit runs the engine");
-    let record_at = admit
+        .expect("judge runs the engine");
+    let record_at = judge
         .find("self.record_answering(")
-        .expect("admit records the receipt");
+        .expect("judge records the receipt");
     assert!(
         evaluate_at < record_at,
-        "admit must evaluate before it records"
+        "judge must evaluate before it records"
     );
     assert!(
-        admit.contains("PolicyRefused"),
-        "admit must refuse anything that is not allowed"
+        judge.contains("PolicyRefused"),
+        "judge must refuse anything that is not allowed"
     );
+    // A rotation moves the peer's rules and windows under the exclusive
+    // side of the same lock, in the step that applies it.
+    let receive_rotation = gate
+        .split("pub fn receive_rotation(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n    pub async fn ").next())
+        .expect("receive_rotation exists");
+    for required in [
+        "self.identities.write()",
+        "self.policy.update(",
+        "federation.receive_rotation(",
+        "move_peer_policy(",
+        "self.move_windows(",
+    ] {
+        assert!(
+            receive_rotation.contains(required),
+            "receive_rotation lacks {required}"
+        );
+    }
     // The owner routes are read-only and live in the owner router.
     let owner = routes
         .split("pub fn router()")
