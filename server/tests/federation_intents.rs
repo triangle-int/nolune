@@ -182,7 +182,24 @@ fn every_wire_shape_is_closed_and_every_name_comes_from_a_closed_enum() {
                 .nth(1)
                 .and_then(|rest| rest.split("\n}\n").next())
                 .unwrap();
-            if !tagged {
+            if tagged {
+                // serde applies `deny_unknown_fields` to the struct variants
+                // of a tagged enum only: a unit variant takes any fields
+                // beside its tag and drops them. Every variant must be a
+                // struct variant, `Name {}` when it carries nothing.
+                for line in variants.lines() {
+                    let variant = line
+                        .strip_prefix("    ")
+                        .filter(|rest| rest.starts_with(|c: char| c.is_ascii_uppercase()));
+                    if let Some(variant) = variant {
+                        assert!(
+                            variant.contains('{') && !variant.contains('('),
+                            "{name}::{variant} is not a struct variant: a unit variant of a \
+                             tagged enum is never checked for unknown fields"
+                        );
+                    }
+                }
+            } else {
                 assert!(
                     !variants.contains('{') && !variants.contains('('),
                     "{name} is an untagged enum with data"
@@ -302,6 +319,19 @@ fn the_receipt_has_no_room_for_a_payload_and_nothing_formats_peer_text() {
             "summarize formats the peer's {label}"
         );
     }
+    // A receipt is only ever built from a response that answers its
+    // intent, so `granted` can never be written down above `requested`.
+    let constructor = module
+        .split("impl IntentReceipt {")
+        .nth(1)
+        .and_then(|rest| rest.split("pub fn new(").nth(1))
+        .and_then(|rest| rest.split("\n    }\n").next())
+        .expect("IntentReceipt::new exists");
+    assert!(
+        constructor.contains("-> Result<Self, IntentError>")
+            && constructor.contains("response.check_against(intent)?"),
+        "IntentReceipt::new must check the response against the intent before recording it:\n{constructor}"
+    );
 }
 
 #[test]
