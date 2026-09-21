@@ -620,7 +620,8 @@ struct Driver {
     machine_id: MachineId,
     descriptor: MachineDescriptor,
     /// The health report the descriptor came from: what the settings
-    /// window shows about the driver's own grants (#20).
+    /// window shows about the driver's own grants when its probe is what
+    /// started the driver (#20); a driver already running is asked again.
     report: HealthReportResult,
     adapter: CheckedCuaAdapter,
 }
@@ -737,17 +738,50 @@ impl CuaRuntime {
     }
 
     /// The driver's health report as of now, for the settings window
-    /// (#20): the driver is started when none runs, as on a first
-    /// connection, and the one that runs is asked again, so a permission
-    /// granted since shows. The report is the driver's own, so the grants
-    /// in it are the ones macOS gave the driver's bundle.
+    /// (#20): the driver is started when none runs (never started, or
+    /// gone), as on a first connection or the restart a request would do,
+    /// and the one that runs is asked again, so a permission granted since
+    /// shows. The report is the driver's own, so the grants in it are the
+    /// ones macOS gave the driver's bundle.
+    ///
+    /// A read, never a reset: the running driver is asked outside the
+    /// driver lock, so the server's requests are not held up by it, and a
+    /// re-read that fails (a stalled report, a daemon hiccup) is returned
+    /// as the error and nothing more. The driver the server registered
+    /// stays up and keeps answering; unlike a reconnect's `start`, which
+    /// replaces a driver that no longer reports because the socket
+    /// re-registers either way, nothing here re-registers, so nothing here
+    /// may leave the desktop without the driver it registered.
     pub async fn probe(&self, machine_id: &str) -> Result<HealthReportResult, String> {
-        self.start(machine_id).await?;
-        let slot = self.driver.lock().await;
-        match &*slot {
-            Slot::Running(driver) => Ok(driver.report.clone()),
-            _ => Err("no driver is running on this desktop".to_owned()),
-        }
+        let machine_id = MachineId::try_from(machine_id).map_err(|error| error.to_string())?;
+        let running = {
+            let mut slot = self.driver.lock().await;
+            if self.stopping() {
+                return Err(EXITING.to_owned());
+            }
+            match self.live(&mut slot) {
+                Some(driver) => driver,
+                None => {
+                    // None runs: the one brought up now was just described,
+                    // so its report is the current one. A driver that
+                    // cannot be described is closed by `describe`, and the
+                    // slot is left for the next start or request, as
+                    // `start` leaves it on a first connection.
+                    let driver = match self.bring_up(None, machine_id).await {
+                        Ok(driver) => driver,
+                        Err(error) => {
+                            if self.stopping() {
+                                *slot = Slot::Stopped;
+                            }
+                            return Err(error);
+                        }
+                    };
+                    *slot = Slot::Running(driver.clone());
+                    return Ok(driver.report.clone());
+                }
+            }
+        };
+        health_report(&*running.transport, &running.machine_id).await
     }
 
     /// Whether a driver is running (spawned and not gone).
@@ -1394,14 +1428,15 @@ mod tests {
     use super::fake::{FakeTransport, HEALTHY};
     use super::*;
     use cua_protocol::{
-        driver_mcp::HEALTH_REPORT_TOOL, AccessibilityElement, ActionDelivery, ActionEffect,
-        ActionOutcome, ActionRoute, AppDisplayName, Base64Image, Capability, CaptureScope,
-        ClickAction, ClickActionResult, ClickArgs, DeliveryMode, ElementAddress, ElementToken,
-        EmptyArgs, EmptyTitleText, EndSessionResult, GetWindowStateArgs, ImageMediaType,
-        LaunchAppArgs, MachineHealth, MouseButton, Permission, PredicateEvaluation,
-        PredicateStatus, Rect, Screenshot, SnapshotId, StartSessionArgs, StartSessionResult,
-        TreeMarkdown, TypeTextArgs, VerificationResult, VerifyPredicate, VerifyStateArgs,
-        WindowPoint, WindowStateResult, WindowTarget,
+        driver_mcp::{permissions_from_health, HEALTH_REPORT_TOOL},
+        AccessibilityElement, ActionDelivery, ActionEffect, ActionOutcome, ActionRoute,
+        AppDisplayName, Base64Image, Capability, CaptureScope, ClickAction, ClickActionResult,
+        ClickArgs, DeliveryMode, ElementAddress, ElementToken, EmptyArgs, EmptyTitleText,
+        EndSessionResult, GetWindowStateArgs, HealthOverall, ImageMediaType, LaunchAppArgs,
+        MachineHealth, MouseButton, Permission, PredicateEvaluation, PredicateStatus, Rect,
+        Screenshot, SnapshotId, StartSessionArgs, StartSessionResult, TreeMarkdown, TypeTextArgs,
+        VerificationResult, VerifyPredicate, VerifyStateArgs, WindowPoint, WindowStateResult,
+        WindowTarget,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -2262,6 +2297,139 @@ mod tests {
         assert!(error.retryable);
         assert_eq!(spawns.load(Ordering::SeqCst), 3, "a restart was attempted");
         assert!(!runtime.is_running().await);
+    }
+
+    #[tokio::test]
+    async fn a_probe_asks_the_running_driver_again_so_a_grant_made_since_shows() {
+        // The socket registered a driver with Accessibility denied. The
+        // user grants it and opens the settings window: the probe asks the
+        // same child again and hands back what it says now (#20).
+        let fake =
+            FakeTransport::answering([Ok(payload(ACCESSIBILITY_DENIED)), Ok(payload(HEALTHY))]);
+        let (runtime, spawns) = runtime_over(vec![fake.clone()]);
+        let registered = runtime.start(STUDIO).await.unwrap();
+        assert_eq!(registered.permissions.accessibility, Permission::Denied);
+
+        let probed = runtime.probe(STUDIO).await.unwrap();
+        assert_eq!(
+            spawns.load(Ordering::SeqCst),
+            1,
+            "the running driver is asked"
+        );
+        assert_eq!(
+            fake.tools_called(),
+            vec![HEALTH_REPORT_TOOL.to_owned(), HEALTH_REPORT_TOOL.to_owned()],
+            "one more unfiltered health_report, nothing else"
+        );
+        assert_eq!(probed.overall, HealthOverall::Ok);
+        assert_eq!(
+            permissions_from_health(&probed).accessibility,
+            Permission::Granted,
+            "the grant made since the registration shows"
+        );
+        assert!(runtime.is_running().await);
+
+        // The server learns of it on the next reconnect, from the same child.
+        fake.also_answering([Ok(payload(HEALTHY))]);
+        let reconnected = runtime.start(STUDIO).await.unwrap();
+        assert_eq!(reconnected.permissions.accessibility, Permission::Granted);
+        assert_eq!(spawns.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_probe_that_fails_leaves_the_running_driver_to_the_servers_requests() {
+        // A health re-read from the settings window that times out (or a
+        // daemon hiccup) is reported on the page and nothing more: the
+        // driver the server registered stays up and keeps answering, and
+        // the next probe asks it again.
+        let fake = FakeTransport::answering([
+            Ok(payload(HEALTHY)),
+            Err(DriverCallFailure::Timeout(
+                "health_report did not answer within 30s; the request was cancelled".into(),
+            )),
+            Ok(json!({"apps": []})),
+        ]);
+        let (runtime, spawns) = runtime_over(vec![fake.clone()]);
+        runtime.start(STUDIO).await.unwrap();
+
+        let error = runtime.probe(STUDIO).await.unwrap_err();
+        assert!(error.contains("health_report"), "{error}");
+        assert!(!fake.closed(), "a probe never stops a running driver");
+        assert!(!fake.gone());
+        assert!(runtime.is_running().await);
+
+        // The server's requests go on through the same child, no restart.
+        let listed = runtime.handle(&request("req-1", STUDIO, list_apps())).await;
+        assert_eq!(
+            listed["response"]["response"]["status"], "success",
+            "{listed}"
+        );
+        assert_eq!(spawns.load(Ordering::SeqCst), 1, "nothing was restarted");
+
+        // Asked again once the driver answers, the fresh report comes back.
+        fake.also_answering([Ok(payload(ACCESSIBILITY_DENIED))]);
+        let probed = runtime.probe(STUDIO).await.unwrap();
+        assert_eq!(probed.overall, HealthOverall::Degraded);
+        assert_eq!(
+            fake.tools_called(),
+            vec![
+                HEALTH_REPORT_TOOL.to_owned(),
+                HEALTH_REPORT_TOOL.to_owned(),
+                "list_apps".to_owned(),
+                HEALTH_REPORT_TOOL.to_owned(),
+            ]
+        );
+        assert_eq!(spawns.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_probe_starts_the_driver_when_none_runs_and_restarts_a_crashed_one() {
+        // The settings window opened before any connection: the driver is
+        // started as on a first connection, and the report it was
+        // described with is the one shown (one health_report call).
+        let first = FakeTransport::answering([Ok(payload(HEALTHY))]);
+        let second = FakeTransport::answering([Ok(payload(ACCESSIBILITY_DENIED))]);
+        let (runtime, spawns) = runtime_over(vec![first.clone(), second.clone()]);
+        assert!(!runtime.is_running().await);
+
+        let probed = runtime.probe(STUDIO).await.unwrap();
+        assert_eq!(spawns.load(Ordering::SeqCst), 1);
+        assert_eq!(first.tools_called(), vec![HEALTH_REPORT_TOOL.to_owned()]);
+        assert_eq!(probed.overall, HealthOverall::Ok);
+        assert!(runtime.is_running().await);
+
+        // A driver that died since is noticed and restarted under the same
+        // id, exactly as a request would restart it.
+        first.crash();
+        let probed = runtime.probe(STUDIO).await.unwrap();
+        assert_eq!(spawns.load(Ordering::SeqCst), 2, "restarted on the probe");
+        assert_eq!(probed.overall, HealthOverall::Degraded);
+        assert_eq!(second.tools_called(), vec![HEALTH_REPORT_TOOL.to_owned()]);
+        assert!(runtime.is_running().await);
+
+        // Once the app exits, a probe starts nothing.
+        runtime.shutdown().await;
+        let error = runtime.probe(STUDIO).await.unwrap_err();
+        assert!(error.contains("exiting"), "{error}");
+        assert_eq!(spawns.load(Ordering::SeqCst), 2);
+
+        // A driver started by the probe that cannot report is stopped, as
+        // on a first connection, and the next probe spawns a fresh one.
+        let silent = FakeTransport::answering([Err(DriverCallFailure::Transport(
+            "the MCP handshake timed out".into(),
+        ))]);
+        let fresh = FakeTransport::answering([Ok(payload(HEALTHY))]);
+        let (runtime, spawns) = runtime_over(vec![silent.clone(), fresh.clone()]);
+        let error = runtime.probe(STUDIO).await.unwrap_err();
+        assert!(error.contains("health_report"), "{error}");
+        assert!(
+            silent.closed(),
+            "a driver that cannot be described is stopped"
+        );
+        assert!(!runtime.is_running().await);
+        runtime.probe(STUDIO).await.unwrap();
+        assert_eq!(spawns.load(Ordering::SeqCst), 2);
+        assert!(runtime.is_running().await);
     }
 
     #[test]

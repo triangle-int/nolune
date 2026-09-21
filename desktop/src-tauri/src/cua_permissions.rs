@@ -1,13 +1,15 @@
 //! Permission onboarding for the desktop's Cua Driver (#20): what the
 //! settings window says about Accessibility and Screen Recording as macOS
-//! grants them to the driver's own bundle (`com.trycua.driver`), read from
-//! the driver's health report through the runtime and never from this
-//! app's grants; the workspace install and the reported version against
-//! the pin; the hosts where there is nothing to grant (Linux and Windows,
-//! a session without a display); and the grant action, which drives
-//! `cua-driver permissions grant` so the prompts name the driver, and
-//! opens the System Settings pane. Capture is one-shot: the driver
-//! snapshots a window when an action asks for one, and nothing here
+//! grants them to the driver's own bundle (`com.trycua.driver` for the
+//! pinned driver), read from the driver's health report through the
+//! runtime and never from this app's grants, and attributed to the bundle
+//! that report names, so a driver built as another bundle is named as such
+//! with nothing granted through it; the workspace install and the reported
+//! version against the pin; the hosts where there is nothing to grant
+//! (Linux and Windows, a session without a display); and the grant action,
+//! which drives `cua-driver permissions grant` so the prompts name the
+//! driver, and opens the System Settings pane. Capture is one-shot: the
+//! driver snapshots a window when an action asks for one, and nothing here
 //! records, streams or watches a screen.
 
 use std::{
@@ -254,7 +256,9 @@ pub enum DriverState {
     /// A driver was found but could not report (a failed handshake, a
     /// stalled report); `error` repeats what it said.
     Unreachable { path: String, error: String },
-    /// The driver reported.
+    /// The driver reported. Its version and the bundle its grants are
+    /// under are each checked against the pin; either mismatch is the
+    /// report's headline, with the install command.
     Reported {
         path: String,
         version: String,
@@ -265,6 +269,9 @@ pub enum DriverState {
         health: Health,
         /// The bundle the report attributes its grants to.
         bundle: Option<String>,
+        /// Why the grants are not the pinned driver's, with the remedy,
+        /// when `bundle` is named and is not [`DRIVER_BUNDLE`].
+        bundle_mismatch: Option<String>,
         failed_checks: Vec<FailedCheck>,
     },
 }
@@ -311,6 +318,21 @@ pub fn driver_state(path: &Path, probe: Result<&HealthReportResult, String>) -> 
                 _ => None,
             })
         });
+    // macOS keeps the grants under the bundle that asked, so a driver built
+    // as another bundle (from `NOLUNE_CUA_DRIVER` or `PATH`) holds its own
+    // grants, not CuaDriver's: the page attributes them to that bundle and
+    // grants nothing through it. A report that names no bundle is not
+    // compared; the pinned driver always names its own.
+    let bundle_mismatch = bundle
+        .as_deref()
+        .filter(|named| *named != DRIVER_BUNDLE)
+        .map(|named| {
+            format!(
+                "The driver at {path} holds its grants as {named}, not as CuaDriver \
+                 ({DRIVER_BUNDLE}), the bundle Nolune's pinned driver runs as; nothing is \
+                 granted through it (`{INSTALL_COMMAND}` installs the pinned release)"
+            )
+        });
     let failed_checks = report
         .checks
         .iter()
@@ -328,6 +350,7 @@ pub fn driver_state(path: &Path, probe: Result<&HealthReportResult, String>) -> 
         incompatibility,
         health,
         bundle,
+        bundle_mismatch,
         failed_checks,
     }
 }
@@ -410,6 +433,10 @@ fn summary(
             incompatibility: Some(incompatibility),
             ..
         } => incompatibility.clone(),
+        DriverState::Reported {
+            bundle_mismatch: Some(mismatch),
+            ..
+        } => mismatch.clone(),
         DriverState::Reported {
             version,
             health: Health::Failed,
@@ -713,6 +740,19 @@ mod tests {
         report
     }
 
+    /// A healthy report from a driver whose identity and TCC checks name
+    /// `bundle`: a build from `NOLUNE_CUA_DRIVER` or `PATH` that is not
+    /// the pinned CuaDriver, so macOS keeps its grants under that bundle.
+    fn healthy_under(bundle: &str) -> serde_json::Value {
+        let mut report = payload(HEALTHY);
+        for check in report["checks"].as_array_mut().unwrap() {
+            if check["data"]["bundle_identifier"].is_string() {
+                check["data"]["bundle_identifier"] = serde_json::Value::String(bundle.to_owned());
+            }
+        }
+        report
+    }
+
     fn macos() -> HostFacts<'static> {
         HostFacts {
             os: "macos",
@@ -940,6 +980,79 @@ mod tests {
             report.permissions.as_ref().map(|p| p.accessibility),
             Some(Permission::Granted)
         );
+    }
+
+    #[tokio::test]
+    async fn a_driver_under_another_bundle_is_named_and_nothing_is_granted_through_it() {
+        // A driver from `NOLUNE_CUA_DRIVER` or `PATH` on the pinned version
+        // but built as another bundle: macOS keeps its grants under that
+        // bundle, so the page must attribute them to it, never to
+        // com.trycua.driver, and the remedy is the pinned install.
+        let fake = FakeTransport::answering([Ok(healthy_under("com.example.fork"))]);
+        let (report, _, _) = gathered(Some(fake), true).await;
+        let DriverState::Reported {
+            version,
+            compatible,
+            incompatibility,
+            bundle,
+            bundle_mismatch,
+            ..
+        } = &report.driver
+        else {
+            panic!("expected a reported driver, got {:?}", report.driver);
+        };
+        assert_eq!(version, "0.28.2");
+        assert!(*compatible, "the version is the pin");
+        assert_eq!(*incompatibility, None);
+        assert_eq!(bundle.as_deref(), Some("com.example.fork"));
+        assert_eq!(report.driver_bundle, DRIVER_BUNDLE);
+        let mismatch = bundle_mismatch
+            .as_deref()
+            .expect("the bundle mismatch is named");
+        assert!(mismatch.contains("com.example.fork"), "{mismatch}");
+        assert!(mismatch.contains(DRIVER_BUNDLE), "{mismatch}");
+        assert!(mismatch.contains(INSTALL_COMMAND), "{mismatch}");
+        assert_eq!(report.summary, mismatch, "the mismatch is the headline");
+        // The grants are still what the driver reported, under its bundle.
+        assert_eq!(
+            report.permissions,
+            Some(DriverPermissions {
+                accessibility: Permission::Granted,
+                screen_recording: Permission::Granted,
+            })
+        );
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["driver"]["bundle"], "com.example.fork");
+        assert_eq!(json["driver"]["bundle_mismatch"], mismatch);
+
+        // The pinned driver's own bundle, and a report that names none
+        // (nothing to compare), are not mismatches.
+        let (report, _, _) =
+            gathered(Some(FakeTransport::answering([Ok(payload(HEALTHY))])), true).await;
+        let (.., bundle) = reported(&report.driver);
+        assert_eq!(bundle, Some(DRIVER_BUNDLE));
+        assert!(matches!(
+            &report.driver,
+            DriverState::Reported {
+                bundle_mismatch: None,
+                ..
+            }
+        ));
+        let mut unnamed = payload(HEALTHY);
+        for check in unnamed["checks"].as_array_mut().unwrap() {
+            if check["data"]["bundle_identifier"].is_string() {
+                check.as_object_mut().unwrap().remove("data");
+            }
+        }
+        let (report, _, _) = gathered(Some(FakeTransport::answering([Ok(unnamed)])), true).await;
+        assert!(matches!(
+            &report.driver,
+            DriverState::Reported {
+                bundle: None,
+                bundle_mismatch: None,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1234,6 +1347,7 @@ mod tests {
             Ok(report(ACCESSIBILITY_DENIED)),
             Ok(report(NEVER_ASKED)),
             Ok(serde_json::from_value(healthy_on("0.27.0")).unwrap()),
+            Ok(serde_json::from_value(healthy_under("com.example.fork")).unwrap()),
             Err("no answer".to_owned()),
         ] {
             let permissions = probe.as_ref().ok().map(driver_permissions);

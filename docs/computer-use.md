@@ -255,12 +255,18 @@ fed by the `cua_permissions` command in
   to run.
 - The driver the app runs, asked for its own report through the same
   runtime the machine socket uses (`CuaRuntime::probe` starts the driver
-  when none runs and re-reads the one that does, so a grant made since
-  shows). Its version is checked against the pin: a mismatch is the
-  headline, with `nolune cua install`, and nothing is granted through a
-  driver that is not the pinned one. Its health and every failed check
-  come with the driver's own hints. A driver that cannot report shows what
-  it said on stderr, and a Retry.
+  when none runs and asks the one that does again, so a grant made since
+  shows). The probe is a read, never a reset: a re-read that fails is shown
+  on the page and the driver the socket registered stays up for the
+  server's requests. Its version is checked against the pin: a mismatch is
+  the headline, with `nolune cua install`, and nothing is granted through a
+  driver that is not the pinned one. The bundle its report names is checked
+  the same way: the grants are attributed to that bundle, and a driver
+  (from `NOLUNE_CUA_DRIVER` or `PATH`) that holds them as anything but
+  `com.trycua.driver` is named as such, with the install command and
+  nothing to grant through it. Its health and every failed check come with
+  the driver's own hints. A driver that cannot report shows what it said on
+  stderr, and a Retry.
 - The two rows, Accessibility and Screen recording, each Granted, Denied,
   Not asked yet or Unavailable as the driver's bundle holds them.
 

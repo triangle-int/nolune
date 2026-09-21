@@ -33,6 +33,7 @@ const reported = (over = {}) => ({
   incompatibility: null,
   health: "ok",
   bundle: BUNDLE,
+  bundle_mismatch: null,
   failed_checks: [],
   ...over,
 });
@@ -123,7 +124,22 @@ const HEADLESS = report({
   summary: "No graphical session (launchctl managername reports Background, an SSH or background session, not Aqua): the driver is never started here and there is nothing to grant. Headless installs need nothing from this page.",
 });
 
-const ALL = { READY: report(), DENIED, NEVER_ASKED, MISMATCH, ABSENT, UNREACHABLE, LINUX, WINDOWS, HEADLESS };
+const FORK = "com.example.fork";
+const PATH_DRIVER = "/opt/homebrew/bin/cua-driver";
+
+/** A driver on the pinned version from PATH, built as another bundle: its grants are that bundle's. */
+const OTHER_BUNDLE = report({
+  install: { kind: "none" },
+  driver: reported({
+    path: PATH_DRIVER,
+    bundle: FORK,
+    bundle_mismatch: `The driver at ${PATH_DRIVER} holds its grants as ${FORK}, not as CuaDriver (${BUNDLE}), the bundle Nolune's pinned driver runs as; nothing is granted through it (\`${INSTALL}\` installs the pinned release)`,
+  }),
+  permissions: { accessibility: "granted", screen_recording: "denied" },
+  summary: `The driver at ${PATH_DRIVER} holds its grants as ${FORK}, not as CuaDriver (${BUNDLE}), the bundle Nolune's pinned driver runs as; nothing is granted through it (\`${INSTALL}\` installs the pinned release)`,
+});
+
+const ALL = { READY: report(), DENIED, NEVER_ASKED, MISMATCH, OTHER_BUNDLE, ABSENT, UNREACHABLE, LINUX, WINDOWS, HEADLESS };
 
 test("a driver holding both grants shows two granted rows with nothing to grant", () => {
   const ready = report();
@@ -182,6 +198,69 @@ test("a version mismatch fails clearly with both versions and the install comman
   const rows = permissionRows(MISMATCH);
   assert.equal(rows.length, 2);
   assert.ok(rows.every((row) => row.canGrant === false), "no grant through an incompatible driver");
+});
+
+test("the install line names what the workspace holds against the pin, with the command to run", () => {
+  // A manifest whose binary is gone.
+  const missing = report({ install: { kind: "missing", version: PIN, driver: DRIVER } });
+  const [missingLine] = statusLines(missing);
+  assert.equal(missingLine.tone, "error");
+  assert.ok(missingLine.text.includes(PIN) && missingLine.text.includes("gone"), missingLine.text);
+  assert.ok(missingLine.text.includes(`${INSTALL} --force`), missingLine.text);
+  assert.equal(pageState(missing), "ready", "the driver that reported is still the pinned one");
+
+  // A manifest that cannot be read.
+  const detail = "cannot read /Users/me/.nolune/cua-driver/install.json: Permission denied (os error 13)";
+  const unreadable = report({ install: { kind: "unreadable", detail } });
+  const [unreadableLine] = statusLines(unreadable);
+  assert.equal(unreadableLine.tone, "error");
+  assert.ok(unreadableLine.text.includes(detail), unreadableLine.text);
+  assert.ok(unreadableLine.text.includes(`${INSTALL} --force`), unreadableLine.text);
+
+  // Nothing installed for Nolune, but a pinned driver on PATH reported: said, not flagged.
+  const fromPath = report({ install: { kind: "none" }, driver: reported({ path: PATH_DRIVER }) });
+  const [pathLine, versionLine] = statusLines(fromPath);
+  assert.equal(pathLine.tone, "muted");
+  assert.ok(pathLine.text.includes(PATH_DRIVER), pathLine.text);
+  assert.ok(pathLine.text.includes("installed for Nolune"), pathLine.text);
+  assert.equal(versionLine.tone, "ok");
+  assert.equal(pageState(fromPath), "ready");
+  assert.equal(permissionRows(fromPath).length, 2);
+  assert.ok(statusLines(fromPath).every((line) => line.tone !== "error"), "nothing is wrong with a pinned driver from PATH");
+});
+
+test("a driver under another bundle shows that bundle's grants as such, and nothing is granted through it", () => {
+  assert.equal(pageState(OTHER_BUNDLE), "incompatible");
+  // Whose grants these are: the reported bundle, never the constant.
+  const lead = intro(OTHER_BUNDLE);
+  assert.ok(lead.includes(FORK), lead);
+  assert.ok(!lead.includes(BUNDLE), lead);
+  assert.ok(lead.includes("not to this app"), lead);
+  const lines = statusLines(OTHER_BUNDLE);
+  const mismatch = lines.find((line) => line.tone === "error" && line.text.includes(FORK));
+  assert.ok(mismatch, JSON.stringify(lines));
+  assert.ok(mismatch.text.includes(BUNDLE), mismatch.text);
+  assert.ok(mismatch.text.includes(INSTALL), mismatch.text);
+  assert.ok(lines.some((line) => line.tone === "ok" && line.text.includes("matches the pin")), "the version itself is fine");
+  // The rows say what the driver reported, but nothing is granted through the wrong bundle.
+  const rows = permissionRows(OTHER_BUNDLE);
+  assert.deepEqual(rows.map((row) => [row.stateText, row.canGrant]), [["Granted", false], ["Denied", false]]);
+  // A page that must still describe a grant names the reported bundle.
+  const note = grantOutcomeText({ permission: "screen_recording", driver_grant: false, opened_settings: true }, OTHER_BUNDLE);
+  assert.ok(note.includes(FORK) && !note.includes(BUNDLE), note);
+
+  // The JS check stands on its own: a report without the Rust wording still flags the bundle.
+  const bare = report({ driver: reported({ bundle: FORK }) });
+  assert.equal(pageState(bare), "incompatible");
+  const bareLine = statusLines(bare).find((line) => line.tone === "error");
+  assert.ok(bareLine && bareLine.text.includes(FORK) && bareLine.text.includes(BUNDLE) && bareLine.text.includes(INSTALL), JSON.stringify(statusLines(bare)));
+  assert.ok(permissionRows(NEVER_ASKED).every((row) => row.canGrant), "the pinned bundle grants");
+  assert.ok(permissionRows(report({ driver: reported({ bundle: FORK }), permissions: NEVER_ASKED.permissions })).every((row) => !row.canGrant));
+  // A report that names no bundle is not a mismatch; the constant stands in.
+  const unnamed = report({ driver: reported({ bundle: null }) });
+  assert.equal(pageState(unnamed), "ready");
+  assert.ok(intro(unnamed).includes(BUNDLE), intro(unnamed));
+  assert.ok(statusLines(unnamed).every((line) => line.tone !== "error"));
 });
 
 test("no driver means the install command and no rows", () => {
