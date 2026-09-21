@@ -299,8 +299,9 @@ provider's turns run on, over the same protocol, and hand out an account's
 label and what a person needs to finish a login, never a token. The Codex
 section of Settings → Connections and the Codex choice in onboarding are
 built on them (settings.md says what each state shows and how the
-onboarding gate works). Moving the pin is a release step, walked in
-[release-checklist.md](release-checklist.md).
+onboarding gate works). Moving the pin is a release step: the
+[Release checklist](release-checklist.md) says how to re-record the fixture
+and which tests to run before `CODEX_VERSION` changes.
 
 ## Capabilities per provider
 
