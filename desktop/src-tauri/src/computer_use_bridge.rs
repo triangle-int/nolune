@@ -4,6 +4,7 @@ use tauri::Emitter;
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
 
 use crate::computer_use;
+use crate::cua_runtime;
 use crate::overlay;
 
 const MAX_QUEUED_REQUEST_BYTES: usize = 1024 * 1024;
@@ -170,6 +171,8 @@ pub async fn disconnect_computer_use(app: tauri::AppHandle) -> Result<(), String
         overlay::hide(&app);
         let _ = task.task.await;
         task.session.drain().await;
+        // The socket is gone for good: end the driver sessions it held (#17).
+        cua_runtime::runtime().end_sessions().await;
     }
     *SERVER_URL.lock().map_err(|e| e.to_string())? = None;
     *INSTANCE_SLUG.lock().map_err(|e| e.to_string())? = None;
@@ -203,6 +206,9 @@ async fn run_agent(
     let result = run_agent_connection(app, instance_url, auth_token, session).await;
     session.cancel_connection();
     overlay::hide(app);
+    // The socket closed: the sessions the desktop held for the server end
+    // now, and the driver stays up for the reconnect (#17).
+    cua_runtime::runtime().end_sessions().await;
     result
 }
 
@@ -213,17 +219,28 @@ async fn run_agent_connection(
     session: &Session,
 ) -> Result<(), String> {
     session.begin_connection();
+    // Register this machine under its stable id (#80); the hostname is for display.
+    let machine_id = stable_machine_id(app)?;
+    let host = hostname();
+    let os = std::env::consts::OS.to_string();
+
+    // The Cua driver (#17) is described before the socket opens, since the
+    // server waits only briefly for the registration; without a driver this
+    // desktop registers legacy-only and never sees a typed frame.
+    let cua = match cua_runtime::runtime().start(&machine_id).await {
+        Ok(descriptor) => Some(descriptor),
+        Err(error) => {
+            eprintln!("[cua] registering without a typed target: {error}");
+            None
+        }
+    };
+
     let request = machine_request(instance_url, auth_token)?;
     let (ws, _) = tokio_tungstenite::connect_async(request)
         .await
         .map_err(|_| "Could not connect to machine WebSocket".to_string())?;
 
     let (mut write, mut read) = ws.split();
-
-    // Register this machine under its stable id (#80); the hostname is for display.
-    let machine_id = stable_machine_id(app)?;
-    let host = hostname();
-    let os = std::env::consts::OS.to_string();
 
     // Get screen dimensions
     let screen = screenshots::Screen::all()
@@ -246,13 +263,23 @@ async fn run_agent_connection(
         (sw, sh),
         instance_slug,
         &crate::permissions::check_permissions(),
+        cua.as_ref(),
     );
     write
         .send(Message::Text(register.to_string().into()))
         .await
         .map_err(|e| format!("send register: {e}"))?;
 
-    eprintln!("[agent] registered as '{machine_id}' ({host}, {os}, {sw}x{sh})");
+    eprintln!(
+        "[agent] registered as '{machine_id}' ({host}, {os}, {sw}x{sh}, cua driver: {})",
+        cua.as_ref()
+            .map(|descriptor| format!(
+                "{} {:?}",
+                descriptor.driver_version.as_str(),
+                descriptor.health
+            ))
+            .unwrap_or_else(|| "none".to_owned())
+    );
 
     // Emit server URL so overlay can build iframe src
     app.emit("server-url", instance_url.to_string()).ok();
@@ -318,23 +345,23 @@ async fn run_agent_connection(
             Err(_) => continue,
         };
 
-        // Skip non-toolcall messages (e.g. "registered" ack)
-        let request_id = match call.get("request_id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => continue,
+        let Some(inbound) = Inbound::from_frame(&call) else {
+            continue;
         };
-        let action = call
-            .get("action")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
 
-        // Temporarily hide the action overlay so it does not appear in explicit screenshots.
-        let hide_for_screenshot = action == "screenshot";
+        // Temporarily hide the action overlay so it does not appear in
+        // explicit screenshots, nor in the window snapshot a typed
+        // `get_window_state` may take.
+        let hide_for_screenshot = inbound.hides_overlay();
         if hide_for_screenshot {
             overlay::set_visible(app, false);
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
+
+        let (request_id, action) = match &inbound {
+            Inbound::Legacy { request_id, action } => (request_id.clone(), action.clone()),
+            Inbound::Cua(_) => (String::new(), String::new()),
+        };
 
         // Input actions (keyboard, mouse) must run on main thread on macOS
         // because enigo calls HIToolbox APIs that assert main queue.
@@ -352,46 +379,62 @@ async fn run_agent_connection(
                 | "switch_desktop"
         );
 
-        let permit = session
-            .work
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| "Session stopped")?;
-        if session.cancelled() {
-            break;
-        }
-        let work = Work {
-            _permit: permit,
-            session: session.clone(),
-        };
-        let action_call = call.clone();
-        let action_name = action.clone();
-        let action_scale = cached_scale.clone();
-        let action_app = app.clone();
-        let action_future = async move {
-            if is_input_action {
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                let _ = action_app.run_on_main_thread(move || {
-                    let result = work.run(|session| {
-                        let mut scale = action_scale.lock().unwrap();
-                        execute_action(&action_call, &action_name, &mut scale, session)
-                    });
-                    let _ = tx.send(result);
-                });
-                rx.await
-                    .unwrap_or_else(|error| Err(format!("main thread recv: {error}")))
-            } else {
-                tokio::task::spawn_blocking(move || {
-                    work.run(|session| {
-                        let mut scale = action_scale.lock().unwrap();
-                        execute_action(&action_call, &action_name, &mut scale, session)
+        let action_future: std::pin::Pin<Box<dyn std::future::Future<Output = Executed> + Send>> =
+            match inbound {
+                // A typed request runs on the driver, not on the main
+                // thread, and takes no work permit: the driver serializes
+                // its own actions and a dropped call is cancelled at the
+                // driver.
+                Inbound::Cua(request) => {
+                    let token = auth_token.to_owned();
+                    Box::pin(async move {
+                        Executed::Cua(answer_typed(cua_runtime::runtime(), &request, &token).await)
                     })
-                })
-                .await
-                .unwrap_or_else(|error| Err(format!("task panic: {error}")))
-            }
-        };
+                }
+                Inbound::Legacy { .. } => {
+                    let permit = session
+                        .work
+                        .clone()
+                        .acquire_owned()
+                        .await
+                        .map_err(|_| "Session stopped")?;
+                    if session.cancelled() {
+                        break;
+                    }
+                    let work = Work {
+                        _permit: permit,
+                        session: session.clone(),
+                    };
+                    let action_call = call.clone();
+                    let action_name = action.clone();
+                    let action_scale = cached_scale.clone();
+                    let action_app = app.clone();
+                    Box::pin(async move {
+                        let result = if is_input_action {
+                            let (tx, rx) = tokio::sync::oneshot::channel();
+                            let _ = action_app.run_on_main_thread(move || {
+                                let result = work.run(|session| {
+                                    let mut scale = action_scale.lock().unwrap();
+                                    execute_action(&action_call, &action_name, &mut scale, session)
+                                });
+                                let _ = tx.send(result);
+                            });
+                            rx.await
+                                .unwrap_or_else(|error| Err(format!("main thread recv: {error}")))
+                        } else {
+                            tokio::task::spawn_blocking(move || {
+                                work.run(|session| {
+                                    let mut scale = action_scale.lock().unwrap();
+                                    execute_action(&action_call, &action_name, &mut scale, session)
+                                })
+                            })
+                            .await
+                            .unwrap_or_else(|error| Err(format!("task panic: {error}")))
+                        };
+                        Executed::Legacy(result)
+                    })
+                }
+            };
         tokio::pin!(action_future);
         let result = loop {
             tokio::select! {
@@ -443,6 +486,25 @@ async fn run_agent_connection(
         if hide_for_screenshot {
             overlay::set_visible(app, true);
         }
+
+        let result = match result {
+            Executed::Legacy(result) => result,
+            Executed::Cua(answer) => {
+                // The overlay names the kind and what it targeted; a frame
+                // the protocol could not read was refused and shows nothing.
+                if let Some((kind, detail)) = &answer.overlay {
+                    overlay::emit_cua_action(app, *kind, detail);
+                }
+                if write
+                    .send(Message::Text(answer.frame.to_string().into()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                continue;
+            }
+        };
 
         // Build human-readable detail for the overlay
         let detail = match action.as_str() {
@@ -538,6 +600,91 @@ async fn run_agent_connection(
     overlay::hide(app);
 
     Ok(())
+}
+
+/// One frame the server sent: a legacy toolcall (flat `request_id` and
+/// `action`) or a typed Cua request (#17), told apart by its shape.
+#[derive(Debug, PartialEq)]
+enum Inbound {
+    Legacy { request_id: String, action: String },
+    Cua(serde_json::Value),
+}
+
+impl Inbound {
+    /// The frame to execute, or `None` for one that carries no request:
+    /// the `registered` ack, whose `cua` flag says whether the server took
+    /// the descriptor, and anything else without a request id.
+    fn from_frame(call: &serde_json::Value) -> Option<Self> {
+        if let Some(request) = cua_runtime::typed_request(call) {
+            return Some(Self::Cua(request.clone()));
+        }
+        match call.get("request_id").and_then(|v| v.as_str()) {
+            Some(id) => Some(Self::Legacy {
+                request_id: id.to_string(),
+                action: call
+                    .get("action")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            }),
+            None => {
+                if call.get("type").and_then(|v| v.as_str()) == Some("registered") {
+                    eprintln!(
+                        "[agent] registration acknowledged (typed cua frames: {})",
+                        call.get("cua").and_then(|v| v.as_bool()).unwrap_or(false)
+                    );
+                }
+                None
+            }
+        }
+    }
+
+    /// Whether the overlay hides while this runs, so it appears in neither
+    /// an explicit screenshot nor the window snapshot a typed
+    /// `get_window_state` may take.
+    fn hides_overlay(&self) -> bool {
+        match self {
+            Self::Legacy { action, .. } => action == "screenshot",
+            Self::Cua(request) => request["action"]["tool"] == "get_window_state",
+        }
+    }
+}
+
+/// What one typed request leaves behind once the runtime answered it: the
+/// `cua_response` frame to write back and, for a request the protocol could
+/// read, what the overlay is told (the kind's name and a redacted detail).
+struct TypedAnswer {
+    frame: serde_json::Value,
+    overlay: Option<(cua_protocol::CuaActionKind, String)>,
+}
+
+/// A typed request's turn: answered on the runtime (refused locally, or
+/// executed on the driver with the result forwarded unchanged).
+async fn answer_typed(
+    runtime: &cua_runtime::CuaRuntime,
+    request: &serde_json::Value,
+    auth_token: &str,
+) -> TypedAnswer {
+    let frame = runtime.handle(request).await;
+    let overlay = cua_protocol::CuaRequestEnvelope::from_json(&request.to_string())
+        .ok()
+        .map(|typed| {
+            (
+                typed.action.kind(),
+                crate::companion_relay::redact_secret(
+                    &cua_runtime::action_detail(&typed.action),
+                    auth_token,
+                ),
+            )
+        });
+    TypedAnswer { frame, overlay }
+}
+
+/// What executing one frame produced: the legacy result, or the typed
+/// answer the runtime built.
+enum Executed {
+    Legacy(Result<AgentResult, String>),
+    Cua(TypedAnswer),
 }
 
 enum AgentResult {
@@ -976,7 +1123,8 @@ fn machine_id_from_store(stored: Option<serde_json::Value>) -> (String, bool) {
 
 /// The registration the server expects: stable id, hostname for display,
 /// platform label, screen, the companion slug, permission state as the
-/// protocol names it, and what this agent can execute.
+/// protocol names it, what this agent can execute, and the Cua descriptor
+/// of the driver this desktop runs (#17), absent when there is none.
 fn register_message(
     machine_id: &str,
     os: &str,
@@ -984,9 +1132,10 @@ fn register_message(
     screen: (u32, u32),
     instance_slug: Option<String>,
     permissions: &crate::permissions::PermissionStatus,
+    cua: Option<&cua_protocol::MachineDescriptor>,
 ) -> serde_json::Value {
     let state = |granted: bool| if granted { "granted" } else { "denied" };
-    serde_json::json!({
+    let mut message = serde_json::json!({
         "type": "register",
         "machine_id": machine_id,
         "os": os,
@@ -999,7 +1148,11 @@ fn register_message(
             "screen_capture": state(permissions.screen_recording),
         },
         "capabilities": CAPABILITIES,
-    })
+    });
+    if let Some(descriptor) = cua {
+        message["cua"] = cua_runtime::registration_envelope(descriptor);
+    }
+    message
 }
 
 /// Upload a local file to the server via curl.
@@ -1129,6 +1282,7 @@ mod tests {
                 screen_recording: false,
                 accessibility: true,
             },
+            None,
         );
         assert_eq!(message["type"], "register");
         assert_eq!(
@@ -1174,6 +1328,7 @@ mod tests {
                 screen_recording: true,
                 accessibility: false,
             },
+            None,
         );
         assert_eq!(bound["instance_slug"], "companion");
         assert_eq!(bound["permissions"]["accessibility"], "denied");
@@ -1202,6 +1357,233 @@ mod tests {
         let advertised: std::collections::BTreeSet<String> =
             CAPABILITIES.iter().map(|s| (*s).to_owned()).collect();
         assert_eq!(advertised, handled);
+    }
+
+    /// The descriptor rides on the register message under the same stable
+    /// id the socket registers as, so the server binds it to this socket; a
+    /// desktop without a driver sends no `cua` field and stays legacy-only.
+    #[test]
+    fn registration_carries_the_cua_descriptor_under_the_same_stable_id() {
+        use cua_protocol::*;
+
+        // The id survives a second run against the same store.
+        let (first, minted) = machine_id_from_store(None);
+        assert!(minted);
+        let (again, minted) = machine_id_from_store(Some(serde_json::Value::String(first.clone())));
+        assert!(!minted);
+        assert_eq!(again, first, "the persisted id is what every run registers");
+
+        let descriptor = MachineDescriptor {
+            machine_id: MachineId::try_from(first.as_str()).unwrap(),
+            location: MachineLocation::Desktop,
+            platform: Platform::Macos,
+            driver_version: DriverVersion::try_from("0.28.2").unwrap(),
+            health: MachineHealth::Healthy,
+            permissions: PermissionState {
+                accessibility: Permission::Granted,
+                screen_capture: Permission::Granted,
+            },
+            capabilities: vec![Capability::AppDiscovery, Capability::Pointer],
+        };
+        let permissions = crate::permissions::PermissionStatus {
+            screen_recording: true,
+            accessibility: true,
+        };
+        let message = register_message(
+            &first,
+            "macos",
+            "studio.local",
+            (2560, 1440),
+            None,
+            &permissions,
+            Some(&descriptor),
+        );
+        let cua = CuaRegistrationEnvelope::from_json(&message["cua"].to_string())
+            .expect("the cua field is the registration envelope the server decodes");
+        assert_eq!(cua.version, ProtocolVersion::V1);
+        assert_eq!(cua.machine, descriptor);
+        assert_eq!(message["machine_id"], first);
+        assert_eq!(
+            cua.machine.machine_id.as_str(),
+            message["machine_id"].as_str().unwrap()
+        );
+        assert_eq!(cua.machine.location, MachineLocation::Desktop);
+        // The legacy fields are untouched beside it.
+        assert_eq!(
+            message["capabilities"].as_array().unwrap().len(),
+            CAPABILITIES.len()
+        );
+        assert_eq!(message["permissions"]["accessibility"], "granted");
+
+        let legacy = register_message(
+            &first,
+            "macos",
+            "studio.local",
+            (2560, 1440),
+            None,
+            &permissions,
+            None,
+        );
+        assert!(
+            legacy.get("cua").is_none(),
+            "no driver, no cua field: {legacy}"
+        );
+    }
+
+    /// The socket loop's typed-frame turn, against the fake driver: the
+    /// server's frames are told apart by shape (the `registered` ack
+    /// executes nothing, a legacy toolcall keeps its path), a typed
+    /// request is answered on the runtime with the driver's result inside
+    /// the `cua_response` frame unchanged and the overlay told the kind and
+    /// a redacted detail, a frame the protocol cannot read is refused and
+    /// shows nothing, and the overlay hides for a window snapshot as it
+    /// does for a legacy screenshot.
+    #[tokio::test]
+    async fn typed_frames_are_answered_on_the_runtime_and_labelled_for_the_overlay() {
+        use crate::cua_runtime::fake::{FakeTransport, HEALTHY};
+        use crate::cua_runtime::{CuaRuntime, DriverTransport};
+        use cua_protocol::*;
+        use serde_json::json;
+        use std::sync::Arc;
+
+        const STUDIO: &str = "4f3c1c2e-9b5e-4d2b-8f0a-1c2d3e4f5a6b";
+        const TOKEN: &str = "machine-token-17";
+        let target = WindowTarget {
+            pid: 42,
+            window_id: 99,
+        };
+        let address = ElementAddress::Point(WindowPoint { x: 1.0, y: 2.0 });
+        let text = BoundedText::try_from(format!("paste {TOKEN} here")).unwrap();
+        let type_text = CuaAction::TypeText(TypeTextArgs {
+            target,
+            session: None,
+            delivery_mode: DeliveryMode::Background,
+            address: address.clone(),
+            text: text.clone(),
+            delay_ms: 0,
+        });
+        let typed_result = serde_json::to_value(TypeTextActionResult {
+            target,
+            session: None,
+            address,
+            text,
+            delay_ms: 0,
+            outcome: ActionOutcome {
+                effect: ActionEffect::Confirmed,
+                route: ActionRoute::Accessibility,
+                delivery: Some(ActionDelivery {
+                    requested: DeliveryMode::Background,
+                    delivered_count: Some(1),
+                }),
+                evidence: vec![],
+                escalation: None,
+            },
+        })
+        .unwrap();
+        let fake = FakeTransport::answering([
+            Ok(serde_json::from_str(HEALTHY).unwrap()),
+            Ok(typed_result.clone()),
+        ]);
+        let runtime = CuaRuntime::with_spawner(Arc::new({
+            let fake = fake.clone();
+            move || {
+                let fake = fake.clone();
+                Box::pin(async move { Ok(fake as Arc<dyn DriverTransport>) })
+            }
+        }));
+        runtime.start(STUDIO).await.unwrap();
+
+        // The frames as the server sends them (#196).
+        let typed = |request_id: &str, action: CuaAction| {
+            json!({
+                "type": "cua_request",
+                "request": CuaRequestEnvelope {
+                    version: ProtocolVersion::V1,
+                    request_id: RequestId::try_from(request_id).unwrap(),
+                    machine_id: MachineId::try_from(STUDIO).unwrap(),
+                    action,
+                },
+            })
+        };
+        assert_eq!(
+            Inbound::from_frame(&json!({"type": "registered", "machine_id": STUDIO, "cua": true})),
+            None,
+            "the ack executes nothing"
+        );
+        let screenshot = Inbound::from_frame(&json!({"request_id": "abc", "action": "screenshot"}))
+            .expect("a legacy toolcall");
+        assert_eq!(
+            screenshot,
+            Inbound::Legacy {
+                request_id: "abc".into(),
+                action: "screenshot".into()
+            }
+        );
+        assert!(screenshot.hides_overlay());
+        let snapshot = Inbound::from_frame(&typed(
+            "obs-1",
+            CuaAction::GetWindowState(GetWindowStateArgs {
+                target,
+                session: None,
+                include_accessibility_tree: true,
+                include_screenshot: true,
+                max_elements: None,
+                max_depth: None,
+                max_dimension: None,
+                query: None,
+            }),
+        ))
+        .expect("a typed frame");
+        assert!(matches!(snapshot, Inbound::Cua(_)));
+        assert!(
+            snapshot.hides_overlay(),
+            "a window snapshot hides the overlay like a screenshot"
+        );
+
+        // The typed request's turn: the driver's result rides back inside
+        // the response frame, the overlay is told the kind and a detail
+        // with the secret redacted.
+        let Some(Inbound::Cua(request)) = Inbound::from_frame(&typed("req-1", type_text)) else {
+            panic!("a typed frame")
+        };
+        assert!(!Inbound::Cua(request.clone()).hides_overlay());
+        let answer = answer_typed(&runtime, &request, TOKEN).await;
+        assert_eq!(answer.frame["type"], "cua_response", "{}", answer.frame);
+        assert_eq!(answer.frame["response"]["request_id"], "req-1");
+        assert_eq!(answer.frame["response"]["machine_id"], STUDIO);
+        assert_eq!(answer.frame["response"]["action"], "type_text");
+        assert_eq!(answer.frame["response"]["response"]["status"], "success");
+        assert_eq!(
+            answer.frame["response"]["response"]["result"]["result"],
+            typed_result
+        );
+        let sent = CuaRequestEnvelope::from_json(&request.to_string()).unwrap();
+        CuaResponseEnvelope::from_json(&answer.frame["response"].to_string())
+            .unwrap()
+            .validate_response_for(&sent)
+            .unwrap();
+        let (kind, detail) = answer.overlay.expect("the overlay is told");
+        assert_eq!(kind, CuaActionKind::TypeText);
+        assert_eq!(detail, "paste [redacted] here");
+        assert_eq!(fake.tools_called(), ["health_report", "type_text"]);
+
+        // A forged frame is refused locally and shows nothing.
+        let forged = json!({"type": "cua_request", "request": {
+            "version": "v1", "request_id": "forged-1", "machine_id": STUDIO,
+            "action": {"tool": "clipboard_read", "args": {}},
+        }});
+        let Some(Inbound::Cua(request)) = Inbound::from_frame(&forged) else {
+            panic!("a typed frame by shape")
+        };
+        let refused = answer_typed(&runtime, &request, TOKEN).await;
+        assert_eq!(refused.frame["type"], "cua_response");
+        assert_eq!(refused.frame["response"]["request_id"], "forged-1");
+        assert_eq!(
+            refused.frame["response"]["response"]["error"]["code"],
+            "capability_denied"
+        );
+        assert!(refused.overlay.is_none(), "nothing to show for a refusal");
+        assert_eq!(fake.tools_called().len(), 2, "the driver never saw it");
     }
 
     #[test]

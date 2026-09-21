@@ -2,6 +2,7 @@ mod companion_relay;
 mod computer_use;
 mod computer_use_bridge;
 mod credentials;
+mod cua_runtime;
 mod local_server;
 mod overlay;
 mod permissions;
@@ -575,8 +576,10 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            // The app-managed gateway (#128) must not outlive the app.
+            // The app-managed gateway (#128) and the Cua driver (#17) must
+            // not outlive the app.
             if let tauri::RunEvent::Exit = event {
+                cua_runtime::shutdown_blocking();
                 local_server::shutdown(app);
             }
         });

@@ -151,6 +151,13 @@ pub fn emit_action_detail(app: &AppHandle, action: &str, detail: &str) {
     app.emit("computer-use-action", payload.to_string()).ok();
 }
 
+/// Notify the overlay of a typed Cua action (#17): the protocol's own name
+/// for the action kind and a short human detail, on the same event the
+/// legacy actions use.
+pub fn emit_cua_action(app: &AppHandle, kind: cua_protocol::CuaActionKind, detail: &str) {
+    emit_action_detail(app, &crate::cua_runtime::action_name(kind), detail);
+}
+
 /// Signal idle.
 pub fn emit_idle(app: &AppHandle) {
     app.emit("computer-use-idle", ()).ok();
