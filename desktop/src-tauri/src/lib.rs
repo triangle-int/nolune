@@ -2,6 +2,7 @@ mod companion_relay;
 mod computer_use;
 mod computer_use_bridge;
 mod credentials;
+mod cua_permissions;
 mod cua_runtime;
 mod local_server;
 mod overlay;
@@ -475,6 +476,8 @@ pub fn run() {
             computer_use_bridge::set_instance_slug,
             permissions::check_permissions,
             permissions::open_permission_settings,
+            cua_permissions::cua_permissions,
+            cua_permissions::cua_grant_permission,
             local_server::local_server_status,
             local_server::install_local_server,
             local_server::start_local_gateway,
