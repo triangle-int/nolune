@@ -368,6 +368,7 @@ impl FederationState {
     }
 
     /// A ping from a paired peer, answered with a sealed pong.
+    #[allow(dead_code)] // The policy gate (#109) answers pings on the route now; the in-module tests still use this.
     pub fn receive_ping(
         &self,
         envelope: &TransportEnvelope,
