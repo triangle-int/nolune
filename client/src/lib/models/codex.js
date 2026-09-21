@@ -184,16 +184,32 @@ export function codexReady(status) {
 /**
  * Where the login that was started stands, from a later status: still
  * pending, completed, failed, or replaced by another login (or cleared by
- * a logout). An app-server that went away while it was pending ends it.
+ * a logout). A login codex holds is completed whatever the record says:
+ * the server ends a record only on the app-server's event for that id, so
+ * a `codex login` run on the server leaves it pending while the status
+ * already reports the account. An app-server that went away while it was
+ * pending ends it.
  * @param {CodexStatus | null | undefined} status
  * @param {string} loginId
  * @returns {'pending' | 'completed' | 'failed' | 'replaced'}
  */
 export function loginProgress(status, loginId) {
+	if (status?.logged_in) return "completed";
 	const login = status?.login;
 	if (!login || login.id !== loginId) return "replaced";
 	if (login.state === "pending") return status?.error ? "failed" : "pending";
 	return login.state;
+}
+
+/**
+ * Whether a pending login can be swapped for a device code: the managed
+ * browser flow needs a browser on the machine the server runs on, which a
+ * person on another device does not have; a device-code login already is
+ * one, and a login that is over has nothing to swap.
+ * @param {CodexLogin | null | undefined} login
+ */
+export function offersDeviceCode(login) {
+	return !!login && login.state === "pending" && login.method === "browser";
 }
 
 /**

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import MoonBirth from "./MoonBirth.svelte";
 	import { connectOnboardingCodex, resumeOnboarding, saveOnboardingProvider } from "./provider.js";
-	import { CODEX_LOGIN_POLL_MS, codexErrorCopy, loginInstructions, loginProgress } from "$lib/models/codex.js";
+	import { CODEX_LOGIN_POLL_MS, codexErrorCopy, loginInstructions, loginProgress, offersDeviceCode } from "$lib/models/codex.js";
 	import ArrowRight from "@lucide/svelte/icons/arrow-right";
 	import {
 		sendMessage,
@@ -294,6 +294,9 @@
 	let codexError = $state("");
 	let codexPoll: ReturnType<typeof setInterval> | null = null;
 	const codexSteps = $derived(loginInstructions(codexLogin));
+	// The browser flow needs a browser on the server's machine; from another
+	// device the way through is a device code, offered while it waits.
+	const codexDeviceCodeOffered = $derived(offersDeviceCode(codexLogin));
 
 	function stopCodexPoll() {
 		if (codexPoll) clearInterval(codexPoll);
@@ -366,13 +369,16 @@
 			codexLogin = started.value;
 			stage = "codex-login";
 			const loginId = started.value.id;
-			codexPoll = setInterval(async () => {
+			const poll = setInterval(async () => {
 				let progress: ReturnType<typeof loginProgress>;
 				try {
 					progress = loginProgress(await fetchCodexStatus(), loginId);
 				} catch {
 					return; // a missed poll is not an outcome
 				}
+				// "use a device code" replaced this login while the status was
+				// being read: the new login's poll owns the outcome.
+				if (codexPoll !== poll) return;
 				if (progress === "pending") return;
 				stopCodexPoll();
 				if (progress === "completed") {
@@ -389,6 +395,7 @@
 				codexLogin = null;
 				stage = "codex-blocked";
 			}, CODEX_LOGIN_POLL_MS);
+			codexPoll = poll;
 		} catch (e) {
 			codexError = e instanceof Error ? e.message : "The login could not start.";
 			stage = "codex-blocked";
@@ -575,6 +582,9 @@
 						{/if}
 						<p class="ob-codex-note">{codexSteps.note} i'll notice once codex has the login.</p>
 					</div>
+					{#if codexDeviceCodeOffered}
+						<button type="button" onclick={() => beginCodexLogin("device_code")} class="ob-hint ob-hint-button">on another device? use a device code</button>
+					{/if}
 					<button type="button" onclick={chooseAnotherProvider} class="ob-hint ob-hint-button">choose another provider</button>
 				</div>
 			{/if}

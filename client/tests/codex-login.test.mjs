@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { CODEX_LOGIN_POLL_MS, codexAccountLabel, codexErrorCopy, codexReady, codexView, loginInstructions, loginProgress } from '../src/lib/models/codex.js';
+import { CODEX_LOGIN_POLL_MS, codexAccountLabel, codexErrorCopy, codexReady, codexView, loginInstructions, loginProgress, offersDeviceCode } from '../src/lib/models/codex.js';
 
 // What `GET /api/config/codex/status` answers (#27), one status per state
 // the tile shows. Nothing here carries a token; the guard in
@@ -133,6 +133,35 @@ test('polling reads whether the login it started is still pending, done, failed 
 	// The app-server went away mid-login: not pending any more.
 	assert.equal(loginProgress({ ...statuses.pendingDevice, error: 'codex app-server exited' }, 'login_1'), 'failed');
 	assert.ok(CODEX_LOGIN_POLL_MS >= 1000 && CODEX_LOGIN_POLL_MS <= 5000, 'polls every few seconds');
+});
+
+test('a login codex holds is the outcome whatever the pending record says (`codex login` run on the server)', () => {
+	// The server finishes a login record only on the app-server's event for
+	// that id; a login done outside (`codex login` in a terminal) leaves the
+	// record pending while the status already reports the account.
+	const outside = { ...statuses.pendingDevice, logged_in: true, account: chatgpt };
+	assert.equal(loginProgress(outside, 'login_1'), 'completed');
+	assert.equal(loginProgress({ ...statuses.pendingBrowser, logged_in: true, account: chatgpt }, 'login_2'), 'completed');
+	// The record is gone (a restart cleared it) but the login is there.
+	assert.equal(loginProgress({ ...base, logged_in: true, account: chatgpt, login: null }, 'login_1'), 'completed');
+	// Another login took the id, and it is the one that finished: still a login to use.
+	assert.equal(loginProgress({ ...statuses.loggedIn, login: { id: 'login_9', method: 'browser', state: 'completed' } }, 'login_1'), 'completed');
+	// Without the account nothing changes: pending stays pending, gone stays replaced.
+	assert.equal(loginProgress(statuses.pendingDevice, 'login_1'), 'pending');
+	assert.equal(loginProgress(statuses.loggedOut, 'login_1'), 'replaced');
+	assert.equal(codexReady(outside), true, 'the same status passes the onboarding gate');
+});
+
+test('a pending browser-flow login can be swapped for a device code; a device code already is one', () => {
+	// The managed flow needs a browser on the machine the server runs on;
+	// a person onboarding from another device has none, so the login stage
+	// offers the device code instead of waiting out the deadline.
+	assert.equal(offersDeviceCode(browser), true);
+	assert.equal(offersDeviceCode(device), false);
+	assert.equal(offersDeviceCode({ ...browser, state: 'completed' }), false);
+	assert.equal(offersDeviceCode({ ...browser, state: 'failed', error: 'x' }), false);
+	assert.equal(offersDeviceCode(null), false);
+	assert.equal(offersDeviceCode(undefined), false);
 });
 
 test('ready means the pinned binary, a login, and an app-server that answered', () => {

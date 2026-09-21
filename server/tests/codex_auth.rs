@@ -524,6 +524,9 @@ fn the_client_shows_the_login_and_carries_no_token_bearing_field() {
         "pickProvider(\"codex\")",
         "connectOnboardingCodex",
         "startCodexLogin",
+        // A pending browser flow offers the device code (a person on another
+        // device cannot open the auth URL), not only the blocked step.
+        "offersDeviceCode",
     ] {
         if !onboarding.contains(required) {
             violations.push(format!("onboarding is missing {required:?}"));

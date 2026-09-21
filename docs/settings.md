@@ -214,8 +214,10 @@ logged in as the email and plan codex reports. Log in starts the server's
 `auto` flow and Use a device code forces one; while the login is pending the
 tile shows the URL to open and the code to type in the pairing panel's
 shape, polls the status every two seconds and updates itself when codex has
-the login; Cancel (a logout) ends a pending login, Log out forgets the
-login. A typed refusal (`codex_not_installed`, `codex_incompatible`,
+the login; the account decides, not the login record (`loginProgress` in
+`codex.js` answers `completed` once `logged_in` is true), so a `codex login`
+run in a terminal on the server ends the wait too. Cancel (a logout) ends a
+pending login, Log out forgets the login. A typed refusal (`codex_not_installed`, `codex_incompatible`,
 `codex_unusable`, `codex_unavailable`, `codex_refused`) reads as one
 sentence with what to do. Model presets treat `codex` as a login provider
 (`PROVIDERS` in `client/src/lib/models/presets.js`, `auth: "login"`): a
@@ -234,7 +236,13 @@ reason and "choose another provider", no login starts one and shows the URL
 and code until the poll sees it completed, and only then are the Codex
 presets seeded and one tested; "connected." is typed once a model answered,
 and a failed login or test offers "try again", "use a device code" and
-another provider. On a reload with a Codex chat preset, the same test runs
+another provider. While the browser flow waits (the server's `auto` picks it
+on a host with a display, and its URL only works on that machine), the
+login step offers "on another device? use a device code", which starts a
+device-code login in its place (the server cancels the pending one) and
+shows its URL and code instead; a login finished outside the record
+(`codex login` on the server) is picked up on the next poll, since the
+status reports the account before the record ends. On a reload with a Codex chat preset, the same test runs
 and a lost login returns to the provider step with the login sentence.
 
 ## Layout (#153)
