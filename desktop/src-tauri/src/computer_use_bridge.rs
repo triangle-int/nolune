@@ -404,33 +404,29 @@ async fn run_agent_connection(
                 | "switch_desktop"
         );
 
-        // A typed request runs on the driver, not on the main thread, and
-        // needs no work permit: the driver serializes its own actions and a
-        // dropped call is cancelled at the driver.
-        let permit = match &inbound {
-            Inbound::Legacy { .. } => Some(
-                session
-                    .work
-                    .clone()
-                    .acquire_owned()
-                    .await
-                    .map_err(|_| "Session stopped")?,
-            ),
-            Inbound::Cua(_) => None,
-        };
-        if session.cancelled() {
-            break;
-        }
         let action_future: std::pin::Pin<Box<dyn std::future::Future<Output = Executed> + Send>> =
-            match (inbound, permit) {
-                (Inbound::Cua(request), _) => {
+            match inbound {
+                // A typed request runs on the driver, not on the main
+                // thread, and takes no work permit: the driver serializes
+                // its own actions and a dropped call is cancelled at the
+                // driver.
+                Inbound::Cua(request) => {
                     Box::pin(
                         async move { Executed::Cua(cua_runtime::runtime().handle(&request).await) },
                     )
                 }
-                (Inbound::Legacy { .. }, permit) => {
+                Inbound::Legacy { .. } => {
+                    let permit = session
+                        .work
+                        .clone()
+                        .acquire_owned()
+                        .await
+                        .map_err(|_| "Session stopped")?;
+                    if session.cancelled() {
+                        break;
+                    }
                     let work = Work {
-                        _permit: permit.ok_or("Session stopped")?,
+                        _permit: permit,
                         session: session.clone(),
                     };
                     let action_call = call.clone();

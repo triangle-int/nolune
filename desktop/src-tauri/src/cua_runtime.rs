@@ -834,7 +834,10 @@ impl CuaRuntime {
         // The child is killed when the aborted keep-alive task drops the
         // service; wait for that so an exiting app never leaves it behind.
         let _ = tokio::time::timeout(Duration::from_secs(3), driver.transport.exited()).await;
-        eprintln!("[cua] driver stopped; {} open session(s) ended", open.len());
+        eprintln!(
+            "[cua] runtime stopped with the app; {} open session(s) ended",
+            open.len()
+        );
     }
 
     /// The labelled sessions still open, in label order.
@@ -1928,6 +1931,81 @@ done
         wait_until_gone(&pid).await;
         assert!(!process_exists(&pid), "child {pid} outlived shutdown()");
         assert!(!runtime.is_running().await);
+    }
+
+    /// Against the installed driver (needs `cua-driver`: `NOLUNE_CUA_DRIVER`,
+    /// a workspace install or `PATH`). Read-only: the driver is described,
+    /// asked for its sessions, and stopped without a child left behind.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore]
+    async fn live_driver_describes_this_machine_and_leaves_no_child() {
+        let children = || -> BTreeSet<String> {
+            let listed = std::process::Command::new("pgrep")
+                .args(["-f", "cua-driver mcp"])
+                .output()
+                .expect("pgrep runs");
+            String::from_utf8_lossy(&listed.stdout)
+                .lines()
+                .map(str::to_owned)
+                .collect()
+        };
+        let before = children();
+        let runtime = CuaRuntime::with_spawner(Arc::new(|| Box::pin(spawn_installed_driver())));
+        let descriptor = runtime
+            .start(STUDIO)
+            .await
+            .expect("the installed driver reports");
+        assert_eq!(descriptor.location, MachineLocation::Desktop);
+        assert_eq!(descriptor.machine_id, id());
+        assert_eq!(descriptor.platform, cua_protocol::Platform::Macos);
+        assert_eq!(
+            descriptor.driver_version.as_str(),
+            cua_protocol::cua_driver_pin::PINNED_VERSION
+        );
+        eprintln!(
+            "live: {:?}, accessibility {:?}, screen capture {:?}, {} capabilities",
+            descriptor.health,
+            descriptor.permissions.accessibility,
+            descriptor.permissions.screen_capture,
+            descriptor.capabilities.len()
+        );
+        assert!(
+            children().len() > before.len(),
+            "the runtime's own child is running"
+        );
+
+        let sessions = CuaAction::ListSessions(cua_protocol::ListSessionsArgs {
+            cursor: None,
+            limit: None,
+        });
+        let frame = runtime.handle(&request("live-1", STUDIO, sessions)).await;
+        match answer(&frame).response {
+            CuaResponse::Success { result } => {
+                assert!(matches!(*result, CuaActionResult::ListSessions(_)))
+            }
+            CuaResponse::Error { error } => panic!("{error:?}"),
+        }
+        // Reconnecting keeps the one child; a forged frame still never runs.
+        runtime.end_sessions().await;
+        runtime.start(STUDIO).await.unwrap();
+        let forged = json!({"version": "v1", "request_id": "live-2", "machine_id": STUDIO,
+            "action": {"tool": "clipboard_read", "args": {}}});
+        assert_eq!(
+            runtime.handle(&forged).await["response"]["response"]["error"]["code"],
+            "capability_denied"
+        );
+
+        runtime.shutdown().await;
+        let gone_by = std::time::Instant::now() + Duration::from_secs(5);
+        while children() != before && std::time::Instant::now() < gone_by {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(
+            children(),
+            before,
+            "shutdown leaves no cua-driver mcp child"
+        );
     }
 
     #[cfg(unix)]
