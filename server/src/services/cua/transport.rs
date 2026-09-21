@@ -79,7 +79,26 @@ pub(crate) fn payload_from_call_result(result: CallToolResult) -> CallOutcome {
             message: text,
         });
     }
-    if let Some(structured) = result.structured_content {
+    if let Some(mut structured) = result.structured_content {
+        // A capture travels as an image block beside the structured
+        // result (#18): fold it in under the driver's own field names so
+        // the protocol mapping sees one payload.
+        if let Some(object) = structured.as_object_mut()
+            && !object.contains_key("screenshot_png_b64")
+            && let Some((data, mime_type)) =
+                result
+                    .content
+                    .iter()
+                    .find_map(|content| match &content.raw {
+                        RawContent::Image(image) => {
+                            Some((image.data.clone(), image.mime_type.clone()))
+                        }
+                        _ => None,
+                    })
+        {
+            object.insert("screenshot_png_b64".into(), Value::String(data));
+            object.insert("screenshot_mime_type".into(), Value::String(mime_type));
+        }
         return Ok(structured);
     }
     if text.trim_start().starts_with(['{', '['])
@@ -448,6 +467,40 @@ mod tests {
             payload_from_call_result(CallToolResult::structured(payload.clone())),
             Ok(payload)
         );
+    }
+
+    /// #18: a capture travels as an MCP image block beside the structured
+    /// result; it is folded in as the driver's own `screenshot_png_b64` /
+    /// `screenshot_mime_type` fields so the protocol mapping reads it. A
+    /// payload that already carries the image keeps its own.
+    #[test]
+    fn an_image_block_is_folded_into_the_structured_payload() {
+        let mut result = CallToolResult::structured(json!({
+            "pid": 42, "window_id": 99, "elements": [],
+            "screenshot_width": 1, "screenshot_height": 1, "screenshot_scale": 1.0
+        }));
+        result.content = vec![
+            Content::text("Window state captured."),
+            Content::image("aGVsbG8=", "image/png"),
+        ];
+        let payload = payload_from_call_result(result).unwrap();
+        assert_eq!(payload["screenshot_png_b64"], "aGVsbG8=");
+        assert_eq!(payload["screenshot_mime_type"], "image/png");
+        assert_eq!(payload["screenshot_width"], 1);
+
+        let mut own = CallToolResult::structured(json!({
+            "pid": 42, "window_id": 99, "elements": [],
+            "screenshot_png_b64": "b3du", "screenshot_mime_type": "image/jpeg"
+        }));
+        own.content = vec![Content::image("aGVsbG8=", "image/png")];
+        let payload = payload_from_call_result(own).unwrap();
+        assert_eq!(payload["screenshot_png_b64"], "b3du");
+        assert_eq!(payload["screenshot_mime_type"], "image/jpeg");
+
+        // A list is left alone; an image beside a non-object result is dropped.
+        let mut list = CallToolResult::structured(json!([1, 2]));
+        list.content = vec![Content::image("aGVsbG8=", "image/png")];
+        assert_eq!(payload_from_call_result(list).unwrap(), json!([1, 2]));
     }
 
     #[test]
