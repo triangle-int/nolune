@@ -23,9 +23,9 @@ const slug = 'companion';
 function serverMessage(id, role, content, extra = {}) {
 	return { type: 'chat_message_created', instance_slug: slug, chat_id: 'c', message: { id, role, content, created_at: '1', ...extra } };
 }
-/** Replays raw server events through the adapter, dropping the ones that say nothing. */
+/** Replays raw server events through the adapter (no known computers), dropping the ones that say nothing. */
 function replay(serverEvents, state = run([online])) {
-	return run(serverEvents.map(companionEventFromServer).filter((e) => e !== null), state);
+	return run(serverEvents.map((event) => companionEventFromServer(event)).filter((e) => e !== null), state);
 }
 
 const online = { type: 'connection', connected: true, reconnecting: false, attempt: 0 };
@@ -412,6 +412,102 @@ test('a conversation snapshot is persisted state: it starts a missed run and end
 	assert.equal(run([{ type: 'snapshot', chatId: 'chat-a', running: false }], blocked).kind, 'blocked', 'the blocker outlives the run either way');
 });
 
+test('the server snapshots the conversation before it stops, and the stop that follows still completes the run', () => {
+	// server/src/routes/chat.rs broadcasts chat_snapshot{agent_running:false} right
+	// before agent_stopped. Persisted state ends the run without claiming success;
+	// the runtime's own stop, which follows, may still claim it.
+	const over = { type: 'snapshot', chatId: 'chat-a', running: false };
+	const between = run([online, running, reading, over]);
+	assert.equal(between.kind, 'idle', 'the snapshot alone claims nothing');
+	assert.equal(between.completed, false);
+	assert.equal(between.action, null);
+	const done = run([stopped], between);
+	assert.equal(done.kind, 'completed', 'the stop the server sends next completes the run the client saw');
+	assert.equal(companionStatusText(done), 'Nolune finished.');
+	assert.equal(run([{ type: 'settle' }], done).kind, 'idle');
+	assert.equal(run([stopped], done).kind, 'idle', 'a second stop for the same run is not a second completion');
+	// A stop for a run the client never saw, even after a snapshot of it not running, claims nothing.
+	assert.equal(run([online, over, stopped]).kind, 'idle');
+	// The stop that was missed while away never arrives: the next run of that chat starts clean and completes on its own.
+	assert.equal(run([running], between).kind, 'thinking');
+	assert.equal(run([running, stopped], between).kind, 'completed');
+	assert.equal(run([running, over], between).kind, 'idle', 'the next run ended by a snapshot is again unclaimed');
+	// A run the user stopped is over with nothing claimed: the server sends the
+	// same snapshot and stop for it, with no error, and neither is a completion.
+	const cancelled = run([online, running, reading, { type: 'run_cancelled', chatId: 'chat-a' }]);
+	assert.equal(cancelled.kind, 'idle');
+	assert.equal(cancelled.action, null);
+	assert.equal(run([over, stopped], cancelled).kind, 'idle', 'stopping is not finishing');
+	assert.equal(run([over, stopped], cancelled).completed, false);
+	const idle = run([online]);
+	assert.equal(run([{ type: 'run_cancelled', chatId: 'chat-a' }], idle), idle, 'stopping nothing changes nothing');
+	assert.equal(run([running, stopped], cancelled).kind, 'completed', 'the next run of that chat completes on its own');
+	assert.equal(run([{ type: 'run_cancelled', chatId: 'chat-a' }, over, stopped], run([online, running, reading, { type: 'permission_denied', chatId: 'chat-a', reason: 'permission denied' }])).kind, 'blocked', 'a blocker outlives the user\'s stop');
+	// What was reported before the snapshot still decides the outcome.
+	assert.equal(run([online, running, reading, { type: 'run_failed', chatId: 'chat-a', error: 'something went wrong' }, over, stopped]).kind, 'failed');
+	assert.equal(run([online, running, reading, { type: 'permission_denied', chatId: 'chat-a', reason: 'permission denied' }, over, stopped]).kind, 'blocked');
+	assert.equal(run([online, running, { type: 'approval_requested', id: 'q', prompt: 'a token' }, over, stopped]).kind, 'waiting');
+	// Several chats: the snapshot and the stop end one of them; the companion is busy until the last one stops.
+	const two = run([online, running, { type: 'agent_running', chatId: 'chat-b' }, reading, over, stopped]);
+	assert.equal(two.kind, 'thinking');
+	assert.deepEqual(two.runs, ['chat-b']);
+	assert.equal(run([{ type: 'agent_stopped', chatId: 'chat-b' }], two).kind, 'completed');
+	// The exact wire order, through the adapter: chat_snapshot is not a reducer event
+	// (ChatView feeds only the snapshots it loads), and the stop completes the run.
+	const live = replay([
+		serverMessage('u1', 'user', 'hi'),
+		{ type: 'agent_running', instance_slug: slug, chat_id: 'c' },
+		serverMessage('t1', 'assistant', 'reading notes/tea.md', { kind: 'tool_call', tool_name: 'read_file' }),
+		serverMessage('a1', 'assistant', 'here is your tea'),
+		{ type: 'chat_snapshot', instance_slug: slug, chat_id: 'c', messages: [], agent_running: false },
+		{ type: 'agent_stopped', instance_slug: slug, chat_id: 'c' },
+	]);
+	assert.equal(live.kind, 'completed');
+	assert.equal(companionEventFromServer({ type: 'chat_snapshot', instance_slug: slug, chat_id: 'c', messages: [], agent_running: false }), null);
+});
+
+test('a proactive failure belongs to its run and never overrides a chat turn in progress', () => {
+	const receipt = (status) => ({ type: 'activity_updated', instance_slug: slug, run: { version: 1, id: 'r1', trigger: { kind: 'machine_connected', machine_id: 'm-1' }, reason: 'connected', target: { kind: 'companion' }, dedupe_key: 'machine_connected:m-1', status, attempt: 1, started_at: 1, approvals: [] } });
+	const failed = receipt({ kind: 'failed', error: 'background model preset not configured', retryable: false });
+	// A receipt for a run the client never saw start, while a chat turn runs: nothing changes.
+	const working = run([online, running, reading]);
+	const unrelated = replay([failed], working);
+	assert.equal(unrelated, working, 'the chat turn keeps its state, untouched');
+	assert.equal(unrelated.kind, 'working');
+	assert.equal(unrelated.error, null);
+	assert.equal(companionStatusText(unrelated), 'Nolune is working on this computer: reading notes/tea.md.');
+	const done = run([{ type: 'assistant_message', chatId: 'chat-a' }, stopped], unrelated);
+	assert.equal(done.kind, 'completed', 'the chat turn\'s clean stop is still its own');
+	assert.equal(companionStatusText(done), 'Nolune finished.');
+	// A proactive run the client saw, failing while the chat turn runs: over, its failure is the Activity view's.
+	const both = replay([receipt({ kind: 'running' })], working);
+	assert.deepEqual(both.runs, ['chat-a', 'run:r1']);
+	const proactiveFailed = replay([failed], both);
+	assert.equal(proactiveFailed.kind, 'working');
+	assert.deepEqual(proactiveFailed.runs, ['chat-a']);
+	assert.equal(proactiveFailed.error, null);
+	assert.equal(run([stopped], proactiveFailed).kind, 'completed');
+	assert.equal(run([{ type: 'run_failed', chatId: 'chat-a', error: 'something went wrong' }, stopped], proactiveFailed).kind, 'failed', 'the chat turn\'s own failure still shows');
+	// The reverse: the chat turn's failure is the companion's own and outlives the proactive run's receipt.
+	const chatFailed = run([{ type: 'run_failed', chatId: 'chat-a', error: 'something went wrong' }], both);
+	assert.equal(chatFailed.kind, 'failed');
+	const receiptAfter = replay([receipt({ kind: 'completed', finished_at: 2 })], chatFailed);
+	assert.equal(receiptAfter.kind, 'failed');
+	assert.equal(run([stopped], receiptAfter).kind, 'failed');
+	assert.equal(companionStatusText(run([stopped], receiptAfter)), 'Nolune stopped with an error: something went wrong.');
+	// Alone, a proactive failure is still the companion's: seen or not, once nothing else runs.
+	assert.equal(replay([failed]).kind, 'failed');
+	assert.equal(companionStatusText(replay([failed])), 'Nolune stopped with an error: background model preset not configured.');
+	assert.equal(replay([failed], run([online, running, reading, stopped])).kind, 'failed', 'after the chat turn completed, the failure shows');
+	assert.equal(replay([receipt({ kind: 'running' }), failed]).kind, 'failed');
+	// A failure while another proactive run continues waits the same way.
+	const other = { type: 'activity_run', id: 'r2', status: 'running', label: 'Check-in', machine: null, handoffId: null, error: null };
+	const twoRuns = replay([failed], run([online, other]));
+	assert.equal(twoRuns.kind, 'thinking');
+	assert.equal(twoRuns.error, null);
+	assert.equal(companionStatusText(twoRuns), 'Nolune is thinking: Check-in.');
+});
+
 test('the status text links to the machine, the run, the handoff or the blocker', () => {
 	const at = 'companion';
 	const remoteWork = run([online, running, remote]);
@@ -451,7 +547,7 @@ test('the status text links to the machine, the run, the handoff or the blocker'
 	assert.equal(companionStatusSegments(handoff, 'Nolune', at)[1].href, '/companion/activity#handoff-card-h1', 'a continuation links to its handoff card');
 	const chatFailure = run([online, running, { type: 'run_failed', chatId: 'chat-a', error: 'something went wrong' }]);
 	assert.equal(companionStatusSegments(chatFailure, 'Nolune', at)[1].href, '/companion/chat/chat-a', 'a failed chat turn links to the conversation');
-	for (const state of [run([online]), run([online, { type: 'user_message', chatId: 'chat-a' }]), run([online, running]), run([dropped]), run([online, running, { type: 'approval_requested', id: 'q', prompt: 'a GitHub token for gh' }])]) {
+	for (const state of [run([online]), run([online, { type: 'user_message', chatId: 'chat-a' }]), run([online, running]), run([dropped])]) {
 		const segments = companionStatusSegments(state, 'Nolune', at);
 		assert.equal(segments.length, 1, `${state.kind} has nothing to link to`);
 		assert.equal(segments[0].href, undefined);
@@ -459,4 +555,63 @@ test('the status text links to the machine, the run, the handoff or the blocker'
 	}
 	assert.deepEqual(companionStatusSegments(remoteWork), [{ text: 'Nolune is working on studio-mac: opening Finder.' }], 'without a companion route there is nothing to link, and the sentence is unchanged');
 	assert.ok(Object.isFrozen(companionStatusSegments(remoteWork, 'Nolune', at)));
+});
+
+test('a blocker or a failure keeps linking to its conversation after the run stopped', () => {
+	const at = 'companion';
+	// Blocked outlives agent_stopped, and that is when it is most visible.
+	const blocked = run([online, running, { type: 'action', chatId: 'chat-a', tool: 'run_command', summary: 'running command' }, { type: 'permission_denied', chatId: 'chat-a', reason: 'ls: /root: Permission denied' }]);
+	const blockedStopped = run([stopped], blocked);
+	assert.equal(blockedStopped.kind, 'blocked');
+	assert.deepEqual(companionStatusSegments(blockedStopped, 'Nolune', at), [
+		{ text: 'Nolune is blocked by permissions: ' },
+		{ text: 'running command', href: '/companion/chat/chat-a' },
+		{ text: ' (ls: /root: Permission denied).' },
+	]);
+	assert.equal(companionStatusSegments(run([{ type: 'snapshot', chatId: 'chat-a', running: false }], blocked), 'Nolune', at)[1].href, '/companion/chat/chat-a', 'also when a snapshot ended the run');
+	// A denial reported without an action in progress still names its conversation.
+	const bare = run([online, { type: 'agent_running', chatId: 'chat-b' }, { type: 'permission_denied', chatId: 'chat-b', tool: 'run_command', reason: 'operation not permitted' }, { type: 'agent_stopped', chatId: 'chat-b' }]);
+	assert.equal(companionStatusSegments(bare, 'Nolune', at)[1].href, '/companion/chat/chat-b');
+	// A failed chat turn, after its stop, in a conversation other than the default one.
+	const failed = run([online, { type: 'agent_running', chatId: 'chat-b' }, { type: 'run_failed', chatId: 'chat-b', error: 'something went wrong' }, { type: 'agent_stopped', chatId: 'chat-b' }]);
+	assert.equal(failed.kind, 'failed');
+	assert.deepEqual(companionStatusSegments(failed, 'Nolune', at), [
+		{ text: 'Nolune stopped with an error: ' },
+		{ text: 'something went wrong', href: '/companion/chat/chat-b' },
+		{ text: '.' },
+	]);
+	assert.equal(companionStatusSegments(run([online, { type: 'agent_running', chatId: 'chat-b' }, { type: 'agent_stopped', chatId: 'chat-b', error: 'provider returned 500' }]), 'Nolune', at)[1].href, '/companion/chat/chat-b', 'a stop that names the error links the same way');
+	assert.equal(companionStatusSegments(run([online, { type: 'agent_running', chatId: 'default' }, { type: 'run_failed', chatId: 'default', error: 'x' }, { type: 'agent_stopped', chatId: 'default' }]), 'Nolune', at)[1].href, '/companion/chat', 'the default conversation is the chat tab');
+	// A chat turn failing while a proactive run continues links to the conversation, not to the run.
+	const activity = { type: 'activity_run', id: 'r1', status: 'running', label: 'Check-in', machine: null, handoffId: null, error: null };
+	const chatAmongRuns = run([online, activity, { type: 'agent_running', chatId: 'chat-b' }, { type: 'run_failed', chatId: 'chat-b', error: 'something went wrong' }]);
+	assert.equal(companionStatusSegments(chatAmongRuns, 'Nolune', at)[1].href, '/companion/chat/chat-b');
+	// And a proactive run's failure still links to its Activity entry.
+	assert.equal(companionStatusSegments(run([online, activity, { ...activity, status: 'failed', error: 'no model configured' }]), 'Nolune', at)[1].href, '/companion/activity#run-r1');
+});
+
+test('waiting for approval links to the conversation the request came from', () => {
+	const at = 'companion';
+	// request_secret announces itself as a tool call before the secret_request event arrives.
+	const asked = run([online, running, { type: 'action', chatId: 'chat-a', tool: 'request_secret', summary: 'requesting a secret' }, { type: 'approval_requested', id: 'q', prompt: 'a GitHub token for gh', target: 'GITHUB_TOKEN' }]);
+	assert.equal(asked.kind, 'waiting');
+	assert.deepEqual(companionStatusSegments(asked, 'Nolune', at), [
+		{ text: 'Nolune is waiting for you: ' },
+		{ text: 'a GitHub token for gh', href: '/companion/chat/chat-a' },
+		{ text: '.' },
+	]);
+	assert.equal(joined(companionStatusSegments(asked, 'Nolune', at)), companionStatusText(asked));
+	assert.equal(companionStatusSegments(run([stopped], asked), 'Nolune', at)[1].href, '/companion/chat/chat-a', 'the request outlives the run and keeps its link');
+	assert.equal(companionStatusSegments(run([online, running, { type: 'approval_requested', id: 'q', prompt: 'a token' }]), 'Nolune', at)[1].href, '/companion/chat/chat-a', 'without the tool call, the one conversation running');
+	assert.equal(companionStatusSegments(run([online, { type: 'approval_requested', id: 'q', prompt: 'a token', chatId: 'chat-b' }]), 'Nolune', at)[1].href, '/companion/chat/chat-b', 'or the conversation the event names');
+	assert.equal(companionStatusSegments(run([online, { type: 'approval_requested', id: 'q', prompt: 'a token' }]), 'Nolune', at)[1].href, '/companion/chat', 'with no conversation known, the chat tab, where the request is answered');
+	assert.equal(companionStatusSegments(run([online, running, { type: 'agent_running', chatId: 'chat-b' }, { type: 'approval_requested', id: 'q', prompt: 'a token' }]), 'Nolune', at)[1].href, '/companion/chat', 'two conversations running and no tool call: nothing is guessed');
+	// From the wire: the tool call carries the chat id the secret_request lacks.
+	const viaServer = replay([
+		{ type: 'agent_running', instance_slug: slug, chat_id: 'c' },
+		serverMessage('t1', 'assistant', 'requesting a secret', { kind: 'tool_call', tool_name: 'request_secret' }),
+		{ type: 'secret_request', instance_slug: slug, id: 'req-1', prompt: 'a GitHub token for gh', target: 'GITHUB_TOKEN' },
+	]);
+	assert.equal(companionStatusSegments(viaServer, 'Nolune', at)[1].href, '/companion/chat/c');
+	assert.equal(run([{ type: 'approval_resolved', id: 'req-1' }], viaServer).kind, 'working', 'the answer returns to the action in progress');
 });

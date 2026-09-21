@@ -29,6 +29,10 @@ test("the desktop overlay runs the same companion-state model as the client", ()
   assert.equal(idleAgain.kind, "idle");
   assert.equal(idleAgain.completed, false, "the overlay never claims a completion the runtime did not report");
   assert.equal(reduce(idle, [overlayEvent("computer-use-idle", undefined)]), idle, "idle while idle changes nothing");
+  const again = reduce(idleAgain, [click]);
+  assert.equal(again.kind, "working", "the next action is a new run on this computer");
+  assert.deepEqual(again.ended, [], "the run the idle signal ended is forgotten by the next one");
+  assert.equal(reduce(again, [overlayEvent("computer-use-idle", undefined)]).completed, false, "and ends the same way, unclaimed");
   assert.equal(overlayEvent("something-else", "{}"), null);
 });
 

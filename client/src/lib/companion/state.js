@@ -23,10 +23,15 @@
  *    approval) and has no answer. Beats working; only the answer clears it,
  *    even after the run stops.
  * 4. failed — the run reported an error: the server's `[system] <label>`
- *    assistant message (agent_stopped carries no error field), or an
- *    agent_stopped that names one. Recorded before the stop arrives, so the
- *    stop cannot turn it into completed. Never settles into idle on its own;
- *    the next message or run clears it.
+ *    assistant message (agent_stopped carries no error field), an
+ *    agent_stopped that names one, or a proactive run's failed receipt.
+ *    Recorded before the stop arrives, so the stop cannot turn it into
+ *    completed. Never settles into idle on its own; the next message or run
+ *    clears it. A failure belongs to the run that reported it: a chat turn's
+ *    failure is the companion's own, while a proactive run's failure is
+ *    recorded only when it leaves nothing else running, so it can neither
+ *    override a chat turn in progress nor turn that turn's clean stop into a
+ *    failure (its receipt is in the Activity view either way).
  * 5. working_remote / working — a tool call is in progress, on another
  *    computer when the event names one, otherwise on this one. A tool call,
  *    a recall and agent_running all prove the run is active.
@@ -49,7 +54,13 @@
  * ends the way its receipt says: completed, failed with its error, or
  * cancelled (over, nothing claimed). A conversation snapshot (`agent_running`
  * from GET /chat) starts a run the client missed and ends one that stopped
- * while the client was away, without claiming success for it.
+ * while the client was away, without claiming success for it. The server
+ * also snapshots a conversation right before it stops, so a run a snapshot
+ * ended is remembered (`ended`) until the runtime's own stop for it, which
+ * may still claim completion; the next run of that chat forgets it. A run
+ * the user stopped (`run_cancelled`) is over and forgotten at once: the
+ * server stops a cancelled turn the same way as a finished one, and stopping
+ * is not finishing.
  */
 
 import { runTargetLabel, triggerLabel } from "../activity/receipts.js";
@@ -60,8 +71,9 @@ import { handoffAnchor } from "../continuity/resume.js";
  */
 
 /** @typedef {{ chatId: string; tool: string; summary: string; machine: string | null }} CompanionAction */
-/** @typedef {{ id: string; prompt: string; target: string | null }} CompanionRequest */
-/** @typedef {{ tool: string | null; summary: string; reason: string }} CompanionBlocker */
+/** An open request for the user, with the conversation it was made from when known. @typedef {{ id: string; prompt: string; target: string | null; chatId: string | null }} CompanionRequest */
+/** A permission or policy denial, in the conversation it was reported in. @typedef {{ chatId: string; tool: string | null; summary: string; reason: string }} CompanionBlocker */
+/** The error a run reported; `chatId` is null for a proactive run. @typedef {{ message: string; chatId: string | null }} CompanionFailure */
 /**
  * The proactive run the companion is on, or the last one when no run is
  * active (kept so the finished state still links to its Activity entry).
@@ -77,12 +89,13 @@ import { handoffAnchor } from "../continuity/resume.js";
  *   attempt: number;
  *   listening: boolean;
  *   runs: readonly string[];
+ *   ended: readonly string[];
  *   action: CompanionAction | null;
  *   acted: boolean;
  *   recalled: number;
  *   waiting: CompanionRequest | null;
  *   blocker: CompanionBlocker | null;
- *   error: string | null;
+ *   error: CompanionFailure | null;
  *   completed: boolean;
  *   activity: CompanionActivity | null;
  * }} CompanionState
@@ -94,11 +107,12 @@ import { handoffAnchor } from "../continuity/resume.js";
  *   | { type: "user_message"; chatId?: string }
  *   | { type: "agent_running"; chatId?: string }
  *   | { type: "agent_stopped"; chatId?: string; error?: string | null }
+ *   | { type: "run_cancelled"; chatId?: string }
  *   | { type: "run_failed"; chatId?: string; error: string }
  *   | { type: "memory_recall"; chatId?: string; count: number }
  *   | { type: "action"; chatId?: string; tool: string; summary: string; machine?: string | null }
  *   | { type: "assistant_message"; chatId?: string }
- *   | { type: "approval_requested"; id: string; prompt: string; target?: string | null }
+ *   | { type: "approval_requested"; id: string; prompt: string; target?: string | null; chatId?: string | null }
  *   | { type: "approval_resolved"; id: string }
  *   | { type: "permission_denied"; chatId?: string; tool?: string; summary?: string; reason: string }
  *   | { type: "activity_run"; id: string; status: ActivityStatus; label: string; machine?: string | null; handoffId?: string | null; error?: string | null }
@@ -121,6 +135,7 @@ const INITIAL_FACTS = Object.freeze({
 	attempt: 0,
 	listening: false,
 	runs: Object.freeze([]),
+	ended: Object.freeze([]),
 	action: null,
 	acted: false,
 	recalled: 0,
@@ -133,6 +148,18 @@ const INITIAL_FACTS = Object.freeze({
 
 /** Run id of a proactive run in `runs`, beside the chat ids. */
 const activityRunId = (/** @type {string} */ id) => `run:${id}`;
+/** Whether a run id names a proactive run rather than a conversation. */
+const isActivityRun = (/** @type {string} */ id) => id.startsWith("run:");
+
+/**
+ * `ids` without `id`; the same array when it was not there, so `next` sees
+ * no change.
+ * @param {readonly string[]} ids
+ * @param {string} id
+ */
+function without(ids, id) {
+	return ids.includes(id) ? Object.freeze(ids.filter((other) => other !== id)) : ids;
+}
 
 /** The state before any event: the socket has not reported it is open. */
 export function initialCompanionState() {
@@ -196,6 +223,7 @@ function startRun(state, chatId) {
 	// gathered inside an active run (a blocker, for instance) stay.
 	return next(state, {
 		runs: Object.freeze([...state.runs, chatId]),
+		ended: without(state.ended, chatId),
 		listening: false,
 		completed: false,
 		error: null,
@@ -208,21 +236,24 @@ function startRun(state, chatId) {
 /**
  * Ends a run. `claim` says whether success may be claimed for it: true for
  * the runtime's own stop (agent_stopped, a completed receipt), false when the
- * run is merely known to be over (a snapshot, a cancelled receipt). `error`
- * is recorded either way, so a failure reported for a run the client never
- * saw start still shows.
+ * run is merely known to be over (a snapshot, a cancelled receipt). A run a
+ * snapshot ended stays in `ended` so the stop that follows it can still
+ * claim; the stop settles it. `failure` is recorded either way, so a failure
+ * reported for a run the client never saw start still shows.
  * @param {CompanionState} state
  * @param {string} runId
  * @param {boolean} claim
- * @param {string | null} error
+ * @param {CompanionFailure | null} failure
  */
-function stopRun(state, runId, claim, error) {
-	const seen = state.runs.includes(runId);
-	const runs = seen ? Object.freeze(state.runs.filter((id) => id !== runId)) : state.runs;
+function stopRun(state, runId, claim, failure) {
+	const active = state.runs.includes(runId);
+	const seen = active || state.ended.includes(runId);
+	const runs = without(state.runs, runId);
 	const last = runs.length === 0;
-	const nextError = error ? error : state.error;
+	const nextError = failure ? failure : state.error;
 	return next(state, {
 		runs,
+		ended: claim ? without(state.ended, runId) : state.ended,
 		listening: last ? false : state.listening,
 		action: state.action && state.action.chatId === runId ? null : state.action,
 		acted: last ? false : state.acted,
@@ -280,20 +311,33 @@ export function reduceCompanion(state, event) {
 			// follows must not claim success.
 			const chatId = event.chatId ?? NO_CHAT;
 			return next(state, {
-				error: event.error,
+				error: Object.freeze({ message: event.error, chatId }),
 				action: state.action && state.action.chatId === chatId ? null : state.action,
 				completed: false,
 			});
 		}
-		case "agent_stopped":
-			return stopRun(state, event.chatId ?? NO_CHAT, true, event.error ?? null);
+		case "agent_stopped": {
+			const chatId = event.chatId ?? NO_CHAT;
+			return stopRun(state, chatId, true, event.error ? Object.freeze({ message: event.error, chatId }) : null);
+		}
+		case "run_cancelled": {
+			// The user stopped the run (the server accepted POST …/stop): over,
+			// nothing claimed. The server sends the same snapshot and stop for a
+			// cancelled turn as for a finished one, so the run is forgotten here
+			// and neither can turn the stop into a completion.
+			const chatId = event.chatId ?? NO_CHAT;
+			if (!state.runs.includes(chatId)) return state;
+			return stopRun(state, chatId, false, null);
+		}
 		case "snapshot": {
 			// Persisted state, not a live event: it only starts a run the client
-			// missed or ends one that stopped while the client was away.
+			// missed or ends one that stopped while the client was away. The
+			// server snapshots a conversation right before it stops, so the run
+			// is remembered for the stop that may follow and claim it.
 			const chatId = event.chatId ?? NO_CHAT;
 			if (event.running) return startRun(state, chatId);
 			if (!state.runs.includes(chatId)) return state;
-			return stopRun(state, chatId, false, null);
+			return next(stopRun(state, chatId, false, null), { ended: Object.freeze([...state.ended, chatId]) });
 		}
 		case "activity_run": {
 			const runId = activityRunId(event.id);
@@ -307,8 +351,13 @@ export function reduceCompanion(state, event) {
 				return next(startRun(state, runId), { activity });
 			}
 			if (event.status === "skipped") return state;
-			const failed = event.status === "failed" ? event.error || "the run failed" : null;
-			if (!state.runs.includes(runId) && !failed) return state;
+			const seen = state.runs.includes(runId);
+			// A proactive run's failure is the companion's own only once nothing
+			// else runs: a chat turn in progress keeps its state, and its clean
+			// stop stays its own. The receipt is in the Activity view either way.
+			const alone = without(state.runs, runId).length === 0;
+			const failed = event.status === "failed" && alone ? Object.freeze({ message: event.error || "the run failed", chatId: null }) : null;
+			if (!seen && !failed) return state;
 			const stopped = stopRun(state, runId, event.status === "completed", failed);
 			// The finished run stays linked while nothing else runs; while other
 			// runs continue it is no longer what the companion is on.
@@ -316,17 +365,24 @@ export function reduceCompanion(state, event) {
 			const current = state.activity && state.activity.id === event.id;
 			return next(stopped, { activity: last ? activity : current ? null : state.activity });
 		}
-		case "approval_requested":
+		case "approval_requested": {
+			// The request was made from the tool call in progress (request_secret
+			// announces itself first), else from the one conversation running.
+			const chats = state.runs.filter((id) => !isActivityRun(id));
+			const chatId = event.chatId ?? state.action?.chatId ?? (chats.length === 1 ? chats[0] : null);
 			return next(state, {
-				waiting: Object.freeze({ id: event.id, prompt: event.prompt, target: event.target ?? null }),
+				waiting: Object.freeze({ id: event.id, prompt: event.prompt, target: event.target ?? null, chatId }),
 			});
+		}
 		case "approval_resolved":
 			if (!state.waiting || state.waiting.id !== event.id) return state;
 			return next(state, { waiting: null });
 		case "permission_denied": {
-			const related = state.action && state.action.chatId === (event.chatId ?? NO_CHAT) ? state.action : null;
+			const chatId = event.chatId ?? NO_CHAT;
+			const related = state.action && state.action.chatId === chatId ? state.action : null;
 			return next(state, {
 				blocker: Object.freeze({
+					chatId,
 					tool: event.tool ?? related?.tool ?? null,
 					summary: event.summary ?? related?.summary ?? "",
 					reason: event.reason,
@@ -346,7 +402,7 @@ export const COMPANION_KINDS = Object.freeze(
 		{ kind: "offline", label: "Offline", source: "The websocket closed or has not opened yet." },
 		{ kind: "blocked", label: "Blocked by permissions", source: "A tool's output reported a permission or policy denial in this run." },
 		{ kind: "waiting", label: "Waiting for approval", source: "A secret_request or approval is open and unanswered." },
-		{ kind: "failed", label: "Failed", source: "The server reported the run failed ([system] line) before agent_stopped." },
+		{ kind: "failed", label: "Failed", source: "The server reported the run failed ([system] line) before agent_stopped, or a proactive run failed while nothing else ran." },
 		{ kind: "working_remote", label: "Working on another computer", source: "The current tool call's trail line names another computer (#80)." },
 		{ kind: "working", label: "Working locally", source: "A tool call is in progress on this computer." },
 		{ kind: "recalling", label: "Recalling", source: "memory_recall arrived and no action has started yet." },
@@ -367,14 +423,15 @@ export function companionLabel(kind) {
 /**
  * The status sentence in three parts: `lead + focus + tail` is the sentence
  * and `focus` is the phrase that names the related action, machine, request
- * or blocker, with `link` saying where that phrase leads.
+ * or blocker, with `link` saying where that phrase leads and `chatId` the
+ * conversation it belongs to when the link is a conversation.
  * @param {CompanionState} state
  * @param {string} name
- * @returns {{ lead: string; focus: string; tail: string; link: StatusLink }}
+ * @returns {{ lead: string; focus: string; tail: string; link: StatusLink; chatId: string | null }}
  */
 function statusParts(state, name) {
-	/** @param {string} lead @param {string} focus @param {string} tail @param {StatusLink} link */
-	const parts = (lead, focus = "", tail = "", link = null) => ({ lead, focus, tail, link });
+	/** @param {string} lead @param {string} focus @param {string} tail @param {StatusLink} link @param {string | null} chatId */
+	const parts = (lead, focus = "", tail = "", link = null, chatId = null) => ({ lead, focus, tail, link, chatId });
 	const activity = state.activity;
 	/** The link for a state about the run as a whole: the proactive run when one is (or was) it, else the conversation. */
 	const runLink = () => (activity ? (activity.handoffId ? "handoff" : "run") : "chat");
@@ -385,18 +442,27 @@ function statusParts(state, name) {
 		case "blocked": {
 			const blocker = /** @type {CompanionBlocker} */ (state.blocker);
 			const what = blocker.summary || blocker.tool || "an action";
-			return parts(`${name} is blocked by permissions: `, what, ` (${blocker.reason}).`, "chat");
+			return parts(`${name} is blocked by permissions: `, what, ` (${blocker.reason}).`, "chat", blocker.chatId);
 		}
-		case "waiting":
-			return parts(`${name} is waiting for you: ${/** @type {CompanionRequest} */ (state.waiting).prompt}.`);
-		case "failed":
-			return parts(`${name} stopped with an error: `, /** @type {string} */ (state.error), ".", runLink());
+		case "waiting": {
+			// The request is answered in the dialog; the link leads to the conversation it came from.
+			const request = /** @type {CompanionRequest} */ (state.waiting);
+			return parts(`${name} is waiting for you: `, request.prompt, ".", "chat", request.chatId);
+		}
+		case "failed": {
+			// A chat turn's failure links to its conversation, a proactive run's to its Activity entry.
+			const failure = /** @type {CompanionFailure} */ (state.error);
+			const lead = `${name} stopped with an error: `;
+			return failure.chatId === null ? parts(lead, failure.message, ".", runLink()) : parts(lead, failure.message, ".", "chat", failure.chatId);
+		}
 		case "working_remote": {
 			const action = /** @type {CompanionAction} */ (state.action);
 			return parts(`${name} is working on `, /** @type {string} */ (action.machine), `: ${action.summary}.`, "machine");
 		}
-		case "working":
-			return parts(`${name} is working on this computer: `, /** @type {CompanionAction} */ (state.action).summary, ".", "chat");
+		case "working": {
+			const action = /** @type {CompanionAction} */ (state.action);
+			return parts(`${name} is working on this computer: `, action.summary, ".", "chat", action.chatId);
+		}
 		case "recalling":
 			return parts(`${name} is recalling ${state.recalled} ${state.recalled === 1 ? "memory" : "memories"}.`);
 		case "thinking":
@@ -423,20 +489,21 @@ export function companionStatusText(state, name = "Nolune") {
 
 /**
  * Where the status sentence's focus leads, on the companion's routes: the
- * Computers tab for a machine, the conversation an action or blocker
- * belongs to, the Activity entry of a proactive run, or its handoff card.
+ * Computers tab for a machine, the conversation an action, request, blocker
+ * or failure belongs to (the chat tab itself for the default one or when the
+ * conversation is not known), the Activity entry of a proactive run, or its
+ * handoff card.
  * @param {CompanionState} state
  * @param {StatusLink} link
+ * @param {string | null} chatId
  * @param {string} slug
  */
-function statusHref(state, link, slug) {
+function statusHref(state, link, chatId, slug) {
 	switch (link) {
 		case "machine":
 			return `/${slug}/computers`;
-		case "chat": {
-			const chatId = state.action?.chatId || state.runs.find((id) => !id.startsWith("run:")) || "";
+		case "chat":
 			return chatId && chatId !== "default" ? `/${slug}/chat/${chatId}` : `/${slug}/chat`;
-		}
 		case "run":
 			return `/${slug}/activity#run-${/** @type {CompanionActivity} */ (state.activity).id}`;
 		case "handoff":
@@ -456,8 +523,8 @@ function statusHref(state, link, slug) {
  * @returns {readonly ({ text: string } | { text: string; href: string })[]}
  */
 export function companionStatusSegments(state, name = "Nolune", slug = null) {
-	const { lead, focus, tail, link } = statusParts(state, name);
-	const href = slug && focus ? statusHref(state, link, slug) : null;
+	const { lead, focus, tail, link, chatId } = statusParts(state, name);
+	const href = slug && focus ? statusHref(state, link, chatId, slug) : null;
 	if (!href) return Object.freeze([Object.freeze({ text: lead + focus + tail })]);
 	return Object.freeze([Object.freeze({ text: lead }), Object.freeze({ text: focus, href }), Object.freeze({ text: tail })]);
 }

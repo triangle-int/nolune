@@ -89,6 +89,28 @@ fn the_chat_view_feeds_persisted_state_and_the_overlays_run_the_same_model() {
         chat.contains("type: \"snapshot\""),
         "ChatView feeds the conversation snapshot (agent_running) into the reducer"
     );
+    // The server broadcasts `chat_snapshot{agent_running:false}` right before
+    // `agent_stopped` (server/src/routes/chat.rs), so the live snapshot must
+    // not end the run in the reducer: only the snapshots ChatView loads are
+    // persisted state. `reconcileSnapshot` handles the live event.
+    let reconcile = chat
+        .split("function reconcileSnapshot(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n\t}\n").next())
+        .expect("ChatView defines reconcileSnapshot");
+    assert!(
+        !reconcile.contains("companionEvent"),
+        "the live chat_snapshot (reconcileSnapshot) is not fed to the reducer as persisted state"
+    );
+    let resync = chat
+        .split("=== \"resync\"")
+        .nth(1)
+        .and_then(|rest| rest.split("return;").next())
+        .expect("ChatView handles resync");
+    assert!(
+        resync.contains("fetchMessages(") && resync.contains("type: \"snapshot\""),
+        "a resync loads the conversation and feeds its agent_running as persisted state"
+    );
 
     let layout = read("client/src/routes/+layout.svelte");
     assert!(
@@ -106,6 +128,12 @@ fn the_chat_view_feeds_persisted_state_and_the_overlays_run_the_same_model() {
     assert!(
         !overlay.contains("agent_running ?? false") && !overlay.contains("setInterval"),
         "the client overlay no longer polls a bare thinking flag"
+    );
+    assert!(
+        overlay.contains("fetchMessages(")
+            && overlay.contains("type: \"snapshot\"")
+            && overlay.contains("ws.connected"),
+        "the client overlay loads the default conversation's persisted agent_running on every connection"
     );
 
     let desktop = read("desktop/src/routes/overlay/+page.svelte");
