@@ -311,6 +311,9 @@ test('the design-system gallery is produced by the reducer and covers every stat
 	}
 	const away = STATE_EXAMPLES.find((e) => e.kind === 'working_remote');
 	assert.match(companionStatusText(run(away.events)), /studio-mac/, 'the remote example names its machine');
+	// #214 stopped offering computer_use: the example is a call the server still makes.
+	assert.equal(away.events.find((e) => e.type === 'action')?.tool, 'get_window_state', 'the remote example is a typed window tool');
+	assert.equal(companionStatusText(run(away.events)), 'Nolune is working on studio-mac: observing a window.');
 	assert.ok(Object.isFrozen(STATE_EXAMPLES) && Object.isFrozen(COMPANION_KINDS));
 });
 
@@ -345,6 +348,41 @@ test('a desktop tool call names the computer from its trail line', () => {
 	const home = replay([serverMessage('t2', 'assistant', 'screenshot on the server home', { kind: 'tool_call', tool_name: 'computer_use' })], away);
 	assert.equal(home.kind, 'working', 'the server home is where the companion lives');
 	assert.equal(companionStatusText(home), 'Nolune is working on this computer: screenshot.');
+});
+
+test('the typed window tools drive the working-on-another-computer state (#217)', () => {
+	// #214 stopped offering computer_use: the model observes and acts in
+	// windows through discover_windows, get_window_state, act and verify_state,
+	// whose trail lines name the computer the same way (#18, #80).
+	const typed = [
+		['discover_windows', 'listing apps'],
+		['get_window_state', 'observing a window'],
+		['act', 'click'],
+		['verify_state', 'verifying a window'],
+	];
+	for (const [tool, action] of typed) {
+		assert.deepEqual(machineFromTrail(tool, `${action} on Studio Mac`), { summary: action, machine: 'Studio Mac' }, `${tool} names its computer`);
+		const away = replay([
+			{ type: 'agent_running', instance_slug: slug, chat_id: 'c' },
+			serverMessage('t1', 'assistant', `${action} on Studio Mac`, { kind: 'tool_call', tool_name: tool }),
+		]);
+		assert.equal(away.kind, 'working_remote', `${tool} on another computer`);
+		assert.equal(companionStatusText(away), `Nolune is working on Studio Mac: ${action}.`);
+	}
+	assert.deepEqual(
+		companionEventFromServer({ type: 'tool_activity', instance_slug: slug, chat_id: 'c', tool_name: 'act', summary: 'type_text on studio-mac' }),
+		{ type: 'action', chatId: 'c', tool: 'act', summary: 'type_text', machine: 'studio-mac' },
+		'the live tool_activity event reads the same trail line',
+	);
+	// The server home is this computer, for the typed tools as for the legacy ones.
+	const home = replay([
+		{ type: 'agent_running', instance_slug: slug, chat_id: 'c' },
+		serverMessage('t2', 'assistant', 'observing a window on the server home', { kind: 'tool_call', tool_name: 'get_window_state' }),
+	]);
+	assert.equal(home.kind, 'working');
+	assert.equal(companionStatusText(home), 'Nolune is working on this computer: observing a window.');
+	// The legacy name still reads the same until #19 deletes the type: reloaded histories carry those calls.
+	assert.deepEqual(machineFromTrail('computer_use', 'screenshot on Studio Mac'), { summary: 'screenshot', machine: 'Studio Mac' });
 });
 
 test('a proactive run is a run the companion is on, and its outcome is never invented', () => {
