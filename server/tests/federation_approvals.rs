@@ -335,7 +335,14 @@ fn the_companions_section_keeps_no_approval_in_the_browser_and_is_documented() {
     }
 
     let settings = read("docs/settings.md");
-    for required in ["approvals", "capabilit", "Allow once", "Deny"] {
+    for required in [
+        "approvals",
+        "capabilit",
+        "Once",
+        "Allow",
+        "Deny",
+        "Withdraw",
+    ] {
         assert!(
             settings.contains(required),
             "docs/settings.md must describe the Companions controls; missing {required:?}"

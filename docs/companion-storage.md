@@ -41,6 +41,7 @@ Unknown fields are rejected. A marker with any other `format_version` or
 │   ├── peers.json               paired companions and their key rotations
 │   ├── rotations.json           this companion's own key rotations
 │   ├── policy.json              what each paired peer may ask for (#109)
+│   ├── approvals.json           requests that asked the owner, until decided or lapsed
 │   └── audit.jsonl              receipts for every judged intent, both sides
 ├── skills/                      installed skills (global)
 ├── vectors/                     derived vector index, keyed by slug
@@ -1109,6 +1110,36 @@ read-only. Peer text is data, never instructions: it has no accessor and
 can only be rendered inside a delimited block that names it as untrusted
 content from a named companion, framed by a boundary the text cannot
 predict, and it never becomes a tool argument.
+
+`federation/approvals.json` (mode `0600`) is the owner's queue: when the
+engine answers `ask`, the gate keeps one entry per peer, intent, and
+disclosure class (`id`, `pairing_id`, `requester`, `intent`, `disclosure`,
+`status`, `requested_at`, `decided_at`, `expires_at`, `summary`; no body,
+text, or payload field exists, and unknown fields are refused) and tells
+the peer `approval_required`, the same way on every retry, so nothing about
+the owner's decision or its timing crosses the wire until an intent is
+allowed. A pending entry lapses after 24 hours. `GET /api/federation/approvals`
+lists the live entries newest first; `POST …/approvals/{id}/approve` and
+`…/deny` take `{"scope": "once"}` (the next matching intent consumes an
+approval, which lapses unused after an hour; a denial holds until the
+request would have lapsed and the peer is not queued again meanwhile),
+`{"scope": "until", "expires_at": …}` or `{"scope": "class"}` (both become
+a rule in `policy.json` and drop the entry); `DELETE …/approvals/{id}`
+withdraws an entry whatever it stands at. `POST
+/api/federation/peers/{id}/rules` writes one rule (`intent`, `disclosure`,
+`access`, optional `expires_at` in the future; a pair the intent cannot
+disclose at is refused), replacing the rule for that pair, and `DELETE
+…/rules/{intent}/{disclosure}` revokes one capability; the next evaluation
+sees either. Revoking a peer, by this owner or by the peer's own notice,
+drops its rules, its rate-limit override, and every entry of its pairing:
+a revoked peer keeps nothing, and pairing it again starts from the
+defaults. Every owner decision is a receipt on the `owner` side (reasons
+`owner_approved`, `owner_denied`, `owner_revoked`, `rule`, and
+`peer_revoked` under the intent name `revocation`), written before the
+change is applied. The queue moves with the rules when a peer rotates its
+key, a rotation is refused while the queue cannot be loaded, and a queue
+file this build cannot load refuses every intent that would ask the owner
+(a ping never consults it) while being neither repaired nor overwritten.
 
 ## Changing this format
 

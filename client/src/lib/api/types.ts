@@ -768,3 +768,89 @@ export interface FederationRotationReport {
 	notified: string[];
 	unreachable: string[];
 }
+
+// ---------------------------------------------------------------------------
+// Federation policy and approvals (#109)
+// ---------------------------------------------------------------------------
+
+/** What a rule, or the default for a pair, says. */
+export type FederationAccess = "allow" | "ask" | "deny";
+
+/** One owner rule: what a peer may do with one intent at one class, until `expires_at` if set. */
+export interface FederationPolicyRule {
+	intent: string;
+	disclosure: string;
+	access: FederationAccess;
+	granted_at: number;
+	expires_at?: number;
+}
+
+export interface FederationRateLimit {
+	max_requests: number;
+	window_secs: number;
+}
+
+/** The owner's rules for one peer, keyed by companion id in the document. */
+export interface FederationPeerPolicy {
+	rules: FederationPolicyRule[];
+	rate_limit?: FederationRateLimit;
+}
+
+/** `federation/policy.json` as the owner routes list it. */
+export interface FederationPolicyDocument {
+	version: number;
+	quiet_hours?: { start_hour: number; end_hour: number; timezone?: string };
+	rate_limit: FederationRateLimit;
+	peers: Record<string, FederationPeerPolicy>;
+}
+
+/** One row of the defaults table: what applies to a pair when no rule says otherwise. */
+export interface FederationDefaultAccess {
+	intent: string;
+	disclosure: string;
+	access: FederationAccess;
+}
+
+/** `GET /api/federation/policy`. */
+export interface FederationPolicyView {
+	document: FederationPolicyDocument;
+	defaults: FederationDefaultAccess[];
+}
+
+export type FederationApprovalStatus = "pending" | "approved" | "denied";
+
+/**
+ * A request that asked the owner, as `GET /api/federation/approvals` lists
+ * it: who asked for which intent at which class, when, until when, and what
+ * the owner said so far. Never what the peer sent.
+ */
+export interface FederationApproval {
+	version: number;
+	id: string;
+	pairing_id: string;
+	requester: string;
+	intent: string;
+	disclosure: string;
+	status: FederationApprovalStatus;
+	requested_at: number;
+	decided_at?: number;
+	expires_at: number;
+	summary: string;
+}
+
+/** How far an approval or denial reaches: one use, a deadline, or the class. */
+export type FederationApprovalScope = { scope: "once" } | { scope: "until"; expires_at: number } | { scope: "class" };
+
+/** What `POST /api/federation/approvals/{id}/approve` (or `/deny`) left behind. */
+export interface FederationApprovalOutcome {
+	approval?: FederationApproval;
+	rule?: FederationPolicyRule;
+}
+
+/** The body of `POST /api/federation/peers/{id}/rules`. */
+export interface FederationRuleRequest {
+	intent: string;
+	disclosure: string;
+	access: FederationAccess;
+	expires_at?: number;
+}

@@ -100,6 +100,56 @@ but the answer never arrived, the command says so and points at
 `nolune gateway`: the work may have been done, and a rotation must not be
 repeated on the strength of a wrong message.
 
+## Policy, approvals, and audit (#109)
+
+A paired peer companion has no implicit access to anything. Every verified
+envelope is classified into an intent (`ping`, `message`, `availability`,
+`reminder`, `proposal`) and a disclosure class (`none`, `availability`,
+`personal`, `sensitive`: what an answer would reveal about this owner) and
+judged against the owner's policy before anything is dispatched; a kind or
+class the server does not know is denied. Memory and tool access have no
+intent class at all: there is nothing to grant. By default only a `ping`
+at `none` is allowed (pairing is the consent to be reachable); a message, a
+reminder, a proposal, and a query for whether you are free ask the owner,
+and the `sensitive` class is denied until the owner writes a rule. A rule
+is `allow`, `ask`, or `deny` for one intent at one class, optionally until
+a deadline (`expires_at`), and matches exactly. Before the rules, a
+revoked or unpaired peer is denied whatever they say and a peer past its
+rate limit (60 requests a minute unless the owner sets otherwise) is told
+to retry later; after them, inside the owner's quiet hours anything that
+would land in front of the owner is deferred, and the peer is told only
+that, never when the quiet hours end.
+
+When the answer is `ask`, the request lands in the owner's queue and the
+peer is told `approval_required`, the same way on every retry: nothing
+about whether the owner has looked, decided, or when, crosses the wire
+until the intent is allowed. Under Settings → Connections → Companions the
+owner sees "wants to send you a message" with when it asked and when it
+lapses (a day), picks one bounded scope, and allows or denies it: **once**
+(the next matching request goes through and uses the approval up; unused,
+it lapses after an hour; a denial once holds until the request would have
+lapsed, without asking again), **until** a deadline (a day, a week), or
+for that **kind of request** for good (both as a rule). Under each paired
+row, what the peer may do is listed one line per intent and class with
+the rule it is under, and a select writes or revokes one rule at a time;
+the very next request is judged by it. Revoking a peer, by this owner or
+by the peer's own notice, drops every rule and pending request it had.
+
+Every decision leaves a human-readable audit receipt on both sides: the
+answering companion records what it was asked and what it decided, the
+requesting companion what it asked and what came back, and the owner's own
+approvals, denials, rule changes, and revocations are recorded too. A
+receipt names the companion ids, the intent and class, the verdict and
+reason, and the time; it never contains what the peer sent. Receipts are
+kept bounded (the newest thousand, two hundred per pairing, thirty days)
+and are listed by `GET /api/federation/receipts`. Peer text, when the
+structured intents carry some, is data and never instructions: it can only
+reach the model inside a delimited block that names it as untrusted
+content from a named companion, and never becomes a tool argument. The
+files (`policy.json`, `approvals.json`, `audit.jsonl`, all `0600` beside
+`peers.json`), the defaults table, and the exact check order are in
+[companion-storage.md](companion-storage.md) "Policy and audit".
+
 ## No implicit trust on a shared host
 
 Profiles on the same host (`nolune gateway run --profile molinka` beside
@@ -128,8 +178,9 @@ the wire alone to keep it that way.
 | `nolune federation revoke <COMPANION_ID>` | Withdraws trust and tells the peer |
 | `nolune federation rotate [--yes] [--json]` | Replaces the signing key and reports which peers were told |
 | `--profile <name>` | Any of the above for that profile's server |
-| Settings → Connections → Companions | The same actions in the browser: rows with Confirm and Revoke, Invite a companion, Accept an invite, Rotate signing key |
+| Settings → Connections → Companions | The same actions in the browser: rows with Confirm and Revoke, Invite a companion, Accept an invite, Rotate signing key; requests waiting for you with Allow and Deny within one scope; what each paired companion may do, one rule per request kind |
 | `POST /api/federation/invites`, `/accept`, `GET /api/federation/peers`, `POST …/peers/{id}/confirm`, `…/revoke`, `/api/federation/rotate` | Owner routes behind the API token or session |
+| `GET /api/federation/policy`, `GET /api/federation/approvals`, `POST …/approvals/{id}/approve`, `…/deny` (`{"scope": "once" \| "until" + "expires_at" \| "class"}`), `DELETE …/approvals/{id}`, `POST …/peers/{id}/rules`, `DELETE …/peers/{id}/rules/{intent}/{disclosure}`, `GET /api/federation/receipts` | Owner routes for the policy, the queue, and the audit log (#109) |
 | `POST /federation/v1/pair`, `…/pair/confirm`, `…/pair/revoke`, `…/ping`, `…/rotate` | Peer routes, public, verified by signature only |
 
 The CLI talks to the running server of the selected profile with its API

@@ -521,19 +521,15 @@ impl FederationGate {
                     // same `approval_required` every time, whatever the
                     // owner has or has not done since.
                     if decision.verdict == Verdict::Ask {
-                        decision =
-                            match self
-                                .approvals
-                                .resolve(&peer.pairing_id, companion_id, request)?
-                            {
-                                Resolution::Approved(_) => {
-                                    Decision::allow(DecisionReason::OwnerApproved)
-                                }
-                                Resolution::Denied(_) => {
-                                    Decision::deny(DecisionReason::OwnerDenied)
-                                }
-                                Resolution::Queued(_) | Resolution::Pending(_) => decision,
-                            };
+                        let pairing = peer.pairing_id.as_str();
+                        let word = self.approvals.resolve(pairing, companion_id, request)?;
+                        decision = match word {
+                            Resolution::Approved(_) => {
+                                Decision::allow(DecisionReason::OwnerApproved)
+                            }
+                            Resolution::Denied(_) => Decision::deny(DecisionReason::OwnerDenied),
+                            Resolution::Queued(_) | Resolution::Pending(_) => decision,
+                        };
                     }
                     (
                         decision,

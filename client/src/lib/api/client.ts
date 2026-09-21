@@ -36,13 +36,28 @@ import type {
 	CorrectionResponse,
 	UploadMeta,
 	MachineInfo,
+	FederationApproval,
+	FederationApprovalOutcome,
+	FederationApprovalScope,
 	FederationOverview,
 	FederationPeer,
+	FederationPeerPolicy,
+	FederationPolicyView,
 	FederationRotationReport,
+	FederationRuleRequest,
 	IssuedFederationInvite,
 } from "./types.js";
 export type { MachineInfo } from "./types.js";
 export type { FederationOverview, FederationPeer, FederationRotationReport, IssuedFederationInvite } from "./types.js";
+export type {
+	FederationApproval,
+	FederationApprovalOutcome,
+	FederationApprovalScope,
+	FederationDefaultAccess,
+	FederationPeerPolicy,
+	FederationPolicyView,
+	FederationRuleRequest,
+} from "./types.js";
 import { clearLegacyBrowserAuth } from "./legacy-auth-cleanup.js";
 import { importReply } from "../settings/import-status.js";
 
@@ -1360,6 +1375,44 @@ export function revokeFederationPeer(companionId: string): Promise<{ peer: Feder
 
 export function rotateFederationIdentity(): Promise<FederationRotationReport> {
 	return federationJson("/api/federation/rotate", { method: "POST" });
+}
+
+// Policy and approvals (#109): every decision travels in a JSON body, and
+// an approval id only ever sits in the path, never in a query string.
+
+function federationBody(body: unknown): RequestInit {
+	return { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+}
+
+export function fetchFederationPolicy(): Promise<FederationPolicyView> {
+	return federationJson("/api/federation/policy");
+}
+
+export function fetchFederationApprovals(): Promise<{ approvals: FederationApproval[] }> {
+	return federationJson("/api/federation/approvals");
+}
+
+export function approveFederationRequest(id: string, scope: FederationApprovalScope): Promise<FederationApprovalOutcome> {
+	return federationJson(`/api/federation/approvals/${encodeURIComponent(id)}/approve`, federationBody(scope));
+}
+
+export function denyFederationRequest(id: string, scope: FederationApprovalScope): Promise<FederationApprovalOutcome> {
+	return federationJson(`/api/federation/approvals/${encodeURIComponent(id)}/deny`, federationBody(scope));
+}
+
+export function withdrawFederationApproval(id: string): Promise<void> {
+	return federationJson(`/api/federation/approvals/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export function setFederationRule(companionId: string, rule: FederationRuleRequest): Promise<{ policy: FederationPeerPolicy }> {
+	return federationJson(`/api/federation/peers/${encodeURIComponent(companionId)}/rules`, federationBody(rule));
+}
+
+export function revokeFederationRule(companionId: string, intent: string, disclosure: string): Promise<{ policy: FederationPeerPolicy }> {
+	return federationJson(
+		`/api/federation/peers/${encodeURIComponent(companionId)}/rules/${encodeURIComponent(intent)}/${encodeURIComponent(disclosure)}`,
+		{ method: "DELETE" },
+	);
 }
 
 // ---------------------------------------------------------------------------
