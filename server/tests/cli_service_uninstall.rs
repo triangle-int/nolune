@@ -156,6 +156,22 @@ impl Sandbox {
         drop(free);
         self.set_port(port);
     }
+
+    /// `gateway install` for the default profile on a port `use_free_port` chose. Other
+    /// tests in this binary bind 127.0.0.1:0 concurrently, so the just-released port can
+    /// be taken again before the install probes it; on that exact refusal pick a fresh
+    /// port and try again (as the desktop port probe test does, #183). Every other
+    /// outcome, success or failure, is returned as is for the caller to assert on.
+    fn install_on_free_port(&self) -> Output {
+        for _ in 0..5 {
+            self.use_free_port();
+            let out = self.run(&["gateway", "install"]);
+            if out.status.success() || !text(&out.stderr).contains("already listening on port") {
+                return out;
+            }
+        }
+        panic!("every free port was retaken before `gateway install` probed it, five attempts");
+    }
 }
 
 fn set_port_in(home: &Path, port: u16) {
@@ -188,9 +204,8 @@ fn seed_install(home: &Path) {
 #[test]
 fn gateway_install_writes_definition_and_starts_service() {
     let sb = Sandbox::new();
-    sb.use_free_port();
 
-    let out = sb.run(&["gateway", "install"]);
+    let out = sb.install_on_free_port();
 
     assert!(out.status.success(), "stderr: {}", text(&out.stderr));
     let definition = fs::read_to_string(sb.definition()).unwrap();
@@ -246,8 +261,7 @@ fn gateway_install_refuses_when_a_foreground_gateway_holds_the_port() {
 #[test]
 fn gateway_uninstall_removes_definition_and_status_reports_not_installed() {
     let sb = Sandbox::new();
-    sb.use_free_port();
-    assert!(sb.run(&["gateway", "install"]).status.success());
+    assert!(sb.install_on_free_port().status.success());
     assert!(sb.definition().exists());
 
     let out = sb.run(&["gateway", "uninstall"]);
@@ -295,9 +309,8 @@ fn top_level_service_verbs_still_work_as_hidden_aliases() {
 #[test]
 fn uninstall_keep_data_removes_bin_and_service_but_keeps_workspace() {
     let sb = Sandbox::new();
-    sb.use_free_port();
     seed_install(&sb.nolune_home);
-    assert!(sb.run(&["gateway", "install"]).status.success());
+    assert!(sb.install_on_free_port().status.success());
 
     let out = sb.run(&["uninstall", "--keep-data"]);
 
@@ -636,10 +649,9 @@ fn gateway_install_refuses_a_data_root_that_belongs_to_another_profile() {
 #[test]
 fn uninstall_refuses_a_data_root_that_belongs_to_another_profile() {
     let sb = Sandbox::new();
-    sb.use_free_port();
     seed_install(&sb.nolune_home);
     sb.onboard_profile("molinka");
-    let out = sb.run(&["gateway", "install"]);
+    let out = sb.install_on_free_port();
     assert!(out.status.success(), "stderr: {}", text(&out.stderr));
     let out = sb.run_profile("molinka", &["gateway", "install"]);
     assert!(out.status.success(), "stderr: {}", text(&out.stderr));
