@@ -118,9 +118,9 @@ works. Driver answers pass through the same size, depth, shape and
 correlation checks as any remote target's answers.
 
 Computer use here is explicit and bounded: the companion takes a one-shot
-screenshot as part of an action it was asked to perform, inside a session
-that ends with the run. There is no continuous capture, no recording, and no
-observation outside a run.
+screenshot of one window when it asks for one (`get_window_state` with
+`include_screenshot`), inside a session that ends with the run. There is no
+continuous capture, no recording, and no observation outside a run.
 
 ## Desktop targets (#17)
 
@@ -147,8 +147,10 @@ machine id. The prefix is refused whether or not the server-local target
 has registered yet: it registers in the background after the listener is
 up, and a desktop that took its id first would block it for the life of
 the process. Without the field the desktop is a legacy-only
-computer: `remote_bash`, `remote_files` and coordinate `computer_use` work
-as they always did and it never sees a typed frame. The ack
+computer: `remote_bash` and `remote_files` work as they always did, it never
+sees a typed frame, and the companion cannot see or act in its windows (the
+coordinate `computer_use` tool is no longer offered to the model, see
+[Typed machine tools](#typed-machine-tools-18)). The ack
 `{"type": "registered", "machine_id": ..., "cua": true|false}` says which.
 
 A registered descriptor makes the desktop a Cua target under its own id,
@@ -307,20 +309,21 @@ install` verified against the pin is used, and `cua-driver` on `PATH` last.
 
 ## Choosing a computer
 
-Every desktop tool (`computer_use`, `remote_bash`, `remote_files`) acts on
-the computer the user chose for the conversation (#80), never on one the
-model picked between several. The composer's computer selector lists the
-server home and every known desktop with its state word; the choice is
-remembered per conversation in the browser and travels with each message as
-`machine_id` on `POST /api/chat`: a known machine's stable id, `server-home`
-(the synthesized home row, or any `server-local:` id) or nothing. An id that
-is not shaped like a registered one (`validate_machine_id`) is refused with
-400 before it reaches the prompt or the log. Until the browser's first
-listing of the computers arrives, a remembered choice is sent as it is, so
-a computer that turns out to be offline is refused by name rather than
-replaced by the only connected one; a computer a listing no longer has
-reads as no choice. The agent loop resolves the choice once per turn,
-states it in the system prompt, and builds the tools around it.
+Every machine tool (`remote_bash`, `remote_files`, and the typed tools
+below) acts on the computer the user chose for the conversation (#80),
+never on one the model picked between several. The composer's computer
+selector lists the server home and every known desktop with its state
+word; the choice is remembered per conversation in the browser and travels
+with each message as `machine_id` on `POST /api/chat`: a known machine's
+stable id, `server-home` (the synthesized home row, or any `server-local:`
+id) or nothing. An id that is not shaped like a registered one
+(`validate_machine_id`) is refused with 400 before it reaches the prompt or
+the log. Until the browser's first listing of the computers arrives, a
+remembered choice is sent as it is, so a computer that turns out to be
+offline is refused by name rather than replaced by the only connected one;
+a computer a listing no longer has reads as no choice. The agent loop
+resolves the choice once per turn, states it in the system prompt, and
+builds the tools around it.
 
 - Nothing chosen: the only connected desktop is used. With several connected
   the tools refuse with `choose_a_computer`, naming them, and the companion
@@ -335,9 +338,9 @@ states it in the system prompt, and builds the tools around it.
   `unavailable` means the platform cannot report) fails with what to do
   there. No refusal ever falls back to another computer.
 - The server home is where `run_command` and the file tools already act, so
-  the legacy desktop tools answer `server_home` until a desktop is chosen.
-  The typed machine tools (below) drive its Cua target instead, when the
-  server machine has one.
+  `remote_bash` and `remote_files` answer `server_home` until a desktop is
+  chosen. The typed machine tools (below) drive its Cua target instead,
+  when the server machine has one.
 - The trail names the computer: each desktop tool's activity entry reads
   "<action> on <name>" (the user's name for it, else its hostname; with
   nothing chosen, the only desktop connected when the turn started; with a
@@ -365,24 +368,35 @@ Four tools drive any Cua target, the server machine or a desktop with a
 driver, through one orchestrator per chat turn
 (`server/src/services/cua/orchestrator.rs`, tools in
 `server/src/services/tools/cua.rs`). `list_machines` shows one entry per
-machine; the ones with `driver_version` are the ones these tools reach. The
-coordinate `computer_use` tool stays beside them for desktops without a
-driver until #19.
+machine with its `location`, `driver_version`, `health`, `permissions` and
+`capabilities`; the ones with `driver_version` are the ones these tools
+reach. They are the only way the companion sees or acts in a window: the
+coordinate `computer_use` tool is no longer offered to the model (its type
+stays in `tools/computer.rs` until #19 deletes the legacy desktop executor),
+and the system prompt states the loop below rule by rule.
 
 - `discover_windows` — `list_apps`, `list_windows` (optionally one pid) or
   `launch_app` (by bundle id or name). Every window comes back with the
   `pid` and `window_id` the other three tools take as `target`.
 - `get_window_state` — observe one window: the `snapshot_id`, the
-  accessibility elements with their `element_token`, role, label, value and
-  frame (a bounded list; `query` narrows large trees), the driver's
-  degraded flags and background-input routes, and `pixel_addresses`, which
-  says whether a point address is allowed on that window right now. The
-  output stays under the tool-result bound whatever the window holds: labels
-  and values are clipped, and elements past the bound are counted rather
-  than shown, so the snapshot id and the pixel policy always reach the
-  model. A screenshot is captured only when asked for (`include_screenshot`)
-  and only its dimensions are reported so far; showing the image to the
-  model is the next slice of #18.
+  accessibility elements as a table (`element_columns` names the columns:
+  `element_index`, `element_token`, role, label, value, enabled, selected,
+  frame, actions; one array per element; `query` narrows large trees), the
+  driver's degraded flags and background-input routes, and
+  `pixel_addresses`, which says whether a point address is allowed on that
+  window right now. The output stays under the tool-result bound whatever
+  the window holds: labels and values are clipped, and elements past the
+  bound are counted rather than shown, so the snapshot id and the pixel
+  policy always reach the model. A screenshot is captured only when asked
+  for (`include_screenshot`) and is then shown to the model as an image
+  beside the text, through the path every other image takes: saved among
+  the companion's uploads and referenced by a provider URL carrying its
+  provenance when `public_url` is provider-reachable, inlined within the
+  provider's bound on a local install (the result then carries the image
+  and the text as separate blocks; the tool-result bound holds the text
+  blocks together under the one bound a plain result has and never cuts
+  through an image). The result names the upload and a link the user can
+  open; the bytes never appear in the text.
 - `act` — one typed action in a window: `click`, `double_click`,
   `right_click`, `drag`, `scroll`, `type_text`, `press_key`, `hotkey`,
   `set_value` or `invoke_menu`, addressed by `element_token` (preferred),

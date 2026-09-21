@@ -75,8 +75,10 @@ pub struct MachineTarget {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Need {
     /// Pointer and keyboard actions.
+    #[allow(dead_code)] // Only the coordinate tool asked; unregistered by #18, deleted by #19.
     Accessibility,
     /// Screenshots.
+    #[allow(dead_code)] // Only the coordinate tool asked; unregistered by #18, deleted by #19.
     ScreenCapture,
     /// Shell and file operations need no desktop permission.
     None,
@@ -170,8 +172,8 @@ impl fmt::Display for TargetRefusal {
             }
             Self::ServerHome => f.write_str(
                 "the user chose the server home for this conversation, where run_command \
-                 and the file tools already act; computer_use, remote_bash and remote_files \
-                 need a desktop, so ask the user to choose one in the composer",
+                 and the file tools already act; remote_bash and remote_files need a \
+                 desktop, so ask the user to choose one in the composer",
             ),
             Self::Mismatch { chosen, requested } => write!(
                 f,
@@ -275,27 +277,36 @@ impl MachineTarget {
         }
     }
 
-    /// The system-prompt sentence about the chosen computer.
+    /// The system-prompt sentence about the chosen computer. The machine
+    /// tools are the typed ones (#18: discover_windows, get_window_state,
+    /// act, verify_state) and the remote shell and file tools.
     pub fn prompt_line(&self, connected_desktops: usize) -> String {
         match &self.selection {
             TargetSelection::Machine(id) => format!(
-                "the user chose {} for this conversation: computer_use, remote_bash and \
-                 remote_files act there and nowhere else.",
+                "the user chose {} for this conversation: the machine tools (discover_windows, \
+                 get_window_state, act, verify_state, remote_bash, remote_files) act there and \
+                 nowhere else.",
                 self.label(id)
             ),
             TargetSelection::ServerHome => "the user chose the server home for this \
-                 conversation: run_command and the file tools act there; computer_use, \
-                 remote_bash and remote_files are refused until they choose a desktop."
+                 conversation: run_command and the file tools act there, and so do \
+                 discover_windows, get_window_state, act and verify_state when the server \
+                 machine has a Cua driver; remote_bash and remote_files are refused until they \
+                 choose a desktop."
                 .to_owned(),
             TargetSelection::Unselected => match connected_desktops {
-                0 => "no desktop is connected; computer_use, remote_bash and remote_files \
-                      will refuse."
+                0 => "no desktop is connected; remote_bash and remote_files will refuse, and \
+                      the typed machine tools act only on the server machine when it has a \
+                      Cua driver."
                     .to_owned(),
                 1 => "the user has not chosen a computer; the only connected desktop is used \
-                      by computer_use, remote_bash and remote_files."
+                      by remote_bash and remote_files, and by discover_windows, \
+                      get_window_state, act and verify_state when it is the only computer \
+                      with a Cua driver."
                     .to_owned(),
                 _ => "several desktops are connected and the user has not chosen one; \
-                      computer_use, remote_bash and remote_files will refuse until they \
+                      the machine tools (discover_windows, get_window_state, act, \
+                      verify_state, remote_bash, remote_files) will refuse until they \
                       choose a computer in the composer, so ask them to choose one before \
                       using those tools."
                     .to_owned(),
@@ -422,13 +433,13 @@ impl Tool for ListMachinesTool {
             name: "list_machines".into(),
             description: "List all machines you can control, one entry per machine_id with its \
                 location (desktop or server_local) and os. Connected desktop apps carry hostname, \
-                screen dimensions and last_seen; use their machine_id with computer_use, \
-                remote_bash and remote_files. Machines with a Cua driver also carry \
-                driver_version, health, permissions (accessibility, screen_capture) and \
-                capabilities: those are the ones discover_windows, get_window_state, act and \
-                verify_state drive, and they only accept actions their capabilities and granted \
-                permissions allow. The user's choice in the composer decides which machine the \
-                tools act on; this list is for reading, not for picking."
+                screen dimensions and last_seen; use their machine_id with remote_bash and \
+                remote_files. Machines with a Cua driver also carry driver_version, health, \
+                permissions (accessibility, screen_capture) and capabilities: those are the ones \
+                discover_windows, get_window_state, act and verify_state drive (the only way to \
+                see and act in a window), and they only accept actions their capabilities and \
+                granted permissions allow. The user's choice in the composer decides which \
+                machine the tools act on; this list is for reading, not for picking."
                 .into(),
             parameters: openai_schema::<ListMachinesArgs>(),
         }
@@ -481,16 +492,19 @@ impl Tool for ListMachinesTool {
     }
 }
 
-/// The image block a screenshot contributes to the tool result.
+/// The image block a screenshot (a desktop's, or a window capture the typed
+/// tools took, #18) contributes to the tool result, once it is saved as an
+/// upload under `upload_id` with `media_type` (`image/png`, `image/jpeg`).
 ///
 /// With a provider-reachable `public_url` the provider fetches the saved upload
 /// by URL, keeping base64 out of the context. Localhost installs inline the
 /// bytes instead, and drop the image (leaving the caption) when the encoded
 /// payload exceeds the provider's inline limit.
-fn screenshot_image_block(
+pub(super) fn screenshot_image_block(
     public_url: &str,
     instance_slug: &str,
     upload_id: &str,
+    media_type: &str,
     image_b64: &str,
     resources: &crate::services::resource_access::ResourceAccess,
 ) -> Option<serde_json::Value> {
@@ -523,7 +537,7 @@ fn screenshot_image_block(
         "type": "image",
         "source": {
             "type": "base64",
-            "media_type": "image/jpeg",
+            "media_type": media_type,
             "data": image_b64,
         }
     }))
@@ -533,6 +547,12 @@ fn screenshot_image_block(
 // computer_use — route action to a specific machine agent
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// The coordinate tool of the legacy desktop protocol. Since #18 it is no
+/// longer offered to the model (`build_tools` registers the typed machine
+/// tools in `tools/cua.rs` instead, so every action is snapshot-bound and
+/// verified); the type stays until #19 deletes it with the rest of the
+/// legacy desktop executor.
+#[allow(dead_code)] // Unregistered by #18; deleted by #19.
 pub struct ComputerUseTool {
     registry: MachineRegistry,
     target: MachineTarget,
@@ -542,6 +562,7 @@ pub struct ComputerUseTool {
     resources: crate::services::resource_access::ResourceAccess,
 }
 
+#[allow(dead_code)] // Unregistered by #18; deleted by #19.
 impl ComputerUseTool {
     pub fn new(
         registry: MachineRegistry,
@@ -562,6 +583,7 @@ impl ComputerUseTool {
     }
 }
 
+#[allow(dead_code)] // Unregistered by #18; deleted by #19.
 #[derive(Deserialize, JsonSchema)]
 pub struct ComputerUseArgs {
     /// ID of the machine to control (from list_machines). Omit to act on the
@@ -703,6 +725,7 @@ impl Tool for ComputerUseTool {
                         &self.public_url,
                         &self.instance_slug,
                         &meta.id,
+                        "image/jpeg",
                         &image_b64,
                         &self.resources,
                     );
@@ -916,9 +939,15 @@ mod screenshot_block_tests {
     fn local_public_url_inlines_the_screenshot() {
         let resources = crate::services::resource_access::ResourceAccess::new("control-token");
         for public_url in ["http://localhost:26559", "http://0.0.0.0:26559", ""] {
-            let block =
-                screenshot_image_block(public_url, "moon", "shot.jpg", "aGVsbG8=", &resources)
-                    .unwrap();
+            let block = screenshot_image_block(
+                public_url,
+                "moon",
+                "shot.jpg",
+                "image/jpeg",
+                "aGVsbG8=",
+                &resources,
+            )
+            .unwrap();
             assert_eq!(block["source"]["type"], "base64", "{public_url}");
             assert_eq!(block["source"]["media_type"], "image/jpeg");
             assert_eq!(block["source"]["data"], "aGVsbG8=");
@@ -934,6 +963,7 @@ mod screenshot_block_tests {
             "https://public.invalid",
             "moon",
             "shot.jpg",
+            "image/jpeg",
             "aGVsbG8=",
             &resources,
         )
@@ -950,6 +980,21 @@ mod screenshot_block_tests {
     }
 
     #[test]
+    fn a_png_capture_inlines_as_png() {
+        let resources = crate::services::resource_access::ResourceAccess::new("control-token");
+        let block = screenshot_image_block(
+            "http://localhost:26559",
+            "moon",
+            "upload_1.png",
+            "image/png",
+            "aGVsbG8=",
+            &resources,
+        )
+        .unwrap();
+        assert_eq!(block["source"]["media_type"], "image/png");
+    }
+
+    #[test]
     fn oversized_inline_screenshot_is_dropped() {
         let resources = crate::services::resource_access::ResourceAccess::new("control-token");
         let huge = "A".repeat(crate::services::llm::MAX_INLINE_IMAGE_BASE64_BYTES + 1);
@@ -958,6 +1003,7 @@ mod screenshot_block_tests {
                 "http://localhost:26559",
                 "moon",
                 "shot.jpg",
+                "image/jpeg",
                 &huge,
                 &resources
             )

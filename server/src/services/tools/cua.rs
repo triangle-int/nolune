@@ -7,14 +7,21 @@
 //! runs through one `Orchestrator` per turn: its snapshot ledger fails
 //! closed on stale element tokens, its verification gate reports an action
 //! only when it is verified, delivery is always background, and a driver's
-//! foreground recommendation is quoted back, never obeyed. The coordinate
-//! `computer_use` tool stays beside these for legacy desktops until #19.
+//! foreground recommendation is quoted back, never obeyed. What an
+//! observation sees reaches the model as the window's capture (an image
+//! through the upload path) beside a bounded elements table. The coordinate
+//! `computer_use` tool is no longer offered; its type stays until #19.
 
-use std::{fmt, sync::Arc};
+use std::{
+    fmt,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
+use base64::Engine;
 use cua_protocol::{
-    CuaAction, CuaActionResult, GetWindowStateArgs as ProtocolWindowStateArgs, MachineHealth,
-    MachineId, MachineLocation, VerificationResult, VerifyPredicate,
+    CuaAction, CuaActionResult, GetWindowStateArgs as ProtocolWindowStateArgs, ImageMediaType,
+    MachineHealth, MachineId, MachineLocation, Screenshot, VerificationResult, VerifyPredicate,
     VerifyStateArgs as ProtocolVerifyArgs, WindowStateResult, WindowTarget,
 };
 use schemars::JsonSchema;
@@ -24,8 +31,11 @@ use crate::services::cua::orchestrator::{
     ActReport, Failure, Orchestrator, PixelPolicy, Target, VerifySpec, kind_name,
 };
 use crate::services::machine_registry::MachineRegistry;
+use crate::services::resource_access::ResourceAccess;
 use crate::services::tool::{Tool, ToolDefinition};
-use crate::services::tools::computer::{MachineTarget, TargetRefusal, TargetSelection};
+use crate::services::tools::computer::{
+    MachineTarget, TargetRefusal, TargetSelection, screenshot_image_block,
+};
 use crate::services::tools::{ToolExecError, openai_schema};
 
 /// How many accessibility elements one `get_window_state` result shows the
@@ -110,7 +120,8 @@ impl fmt::Display for CuaRefusal {
             Self::NoCuaDriver { label } => write!(
                 f,
                 "{}: {label} is connected without a Cua driver, so the typed tools cannot drive \
-                 it; computer_use, remote_bash and remote_files still work there",
+                 it; remote_bash and remote_files still work there, and its Nolune app needs \
+                 the driver (`nolune cua install`) before windows can be seen or acted in",
                 self.code()
             ),
             Self::DriverUnavailable { label } => write!(
@@ -142,21 +153,105 @@ pub struct Resolved {
     pub label: String,
 }
 
+/// Where a window's one-shot capture is kept so the model can see it: among
+/// the companion's uploads, referenced the way every other image reaches
+/// the model (a provider-reachable URL carrying its provenance, or the bytes
+/// inlined within the provider's bound on a local install).
+#[derive(Clone)]
+pub struct CaptureStore {
+    workspace_dir: PathBuf,
+    instance_slug: String,
+    public_url: String,
+    resources: ResourceAccess,
+}
+
+/// A capture kept as an upload: the image block for the model, when one
+/// could be built, and the link that shows it to the user.
+pub struct KeptCapture {
+    pub upload_id: String,
+    pub link: String,
+    pub block: Option<serde_json::Value>,
+}
+
+impl CaptureStore {
+    pub fn new(
+        workspace_dir: &Path,
+        instance_slug: &str,
+        public_url: &str,
+        resources: &ResourceAccess,
+    ) -> Self {
+        Self {
+            workspace_dir: workspace_dir.to_path_buf(),
+            instance_slug: instance_slug.to_owned(),
+            public_url: public_url.to_owned(),
+            resources: resources.clone(),
+        }
+    }
+
+    /// The capture saved as an upload of the companion, with the block the
+    /// model sees it through (`screenshot_image_block`, the desktop
+    /// screenshot's path: a URL with provenance where the provider can
+    /// fetch, the bytes inlined within its bound otherwise, nothing when
+    /// they exceed it) and the browser link for the user.
+    fn keep(&self, screenshot: &Screenshot) -> Result<KeptCapture, String> {
+        use crate::services::resource_capability::{CapabilityAudience, CapabilityResource};
+        let (name, media_type) = match screenshot.media_type {
+            ImageMediaType::Png => ("window.png", "image/png"),
+            ImageMediaType::Jpeg => ("window.jpg", "image/jpeg"),
+        };
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(screenshot.base64.as_str())
+            .map_err(|error| format!("capture is not valid base64: {error}"))?;
+        let meta = crate::services::uploads::save_upload(
+            &self.workspace_dir,
+            &self.instance_slug,
+            name,
+            &bytes,
+        )
+        .map_err(|error| format!("capture could not be saved: {error}"))?;
+        let link = CapabilityResource::uploaded_file(&meta.id)
+            .and_then(|resource| {
+                self.resources.url(
+                    "",
+                    &self.instance_slug,
+                    resource,
+                    CapabilityAudience::Browser,
+                )
+            })
+            .map_err(|error| error.to_string())?;
+        let block = screenshot_image_block(
+            &self.public_url,
+            &self.instance_slug,
+            &meta.id,
+            media_type,
+            screenshot.base64.as_str(),
+            &self.resources,
+        );
+        Ok(KeptCapture {
+            upload_id: meta.id,
+            link,
+            block,
+        })
+    }
+}
+
 /// What the four tools share: the registry the targets live in, the
-/// conversation's choice, and the turn's orchestrator.
+/// conversation's choice, the turn's orchestrator and where captures go.
 #[derive(Clone)]
 pub struct CuaTools {
     registry: MachineRegistry,
     target: MachineTarget,
     orchestrator: Arc<Orchestrator>,
+    captures: CaptureStore,
 }
 
 impl CuaTools {
-    pub fn new(registry: MachineRegistry, target: MachineTarget) -> Self {
+    pub fn new(registry: MachineRegistry, target: MachineTarget, captures: CaptureStore) -> Self {
         Self {
             registry,
             target,
             orchestrator: Arc::new(Orchestrator::new()),
+            captures,
         }
     }
 
@@ -348,8 +443,9 @@ pub struct WindowStateArgs {
     /// Walk the accessibility tree and issue element tokens (default true).
     #[serde(default)]
     pub include_accessibility_tree: Option<bool>,
-    /// Also capture a one-shot screenshot of the window (default false; the
-    /// image is not shown to you yet, its dimensions are).
+    /// Also capture a one-shot screenshot of the window (default false). The
+    /// image is shown to you beside the elements and kept as an upload the
+    /// user can open; a point address needs it.
     #[serde(default)]
     pub include_screenshot: Option<bool>,
     /// Cap on the elements the driver walks (1-2000).
@@ -917,48 +1013,54 @@ fn clip(text: &str, max: usize) -> String {
     clipped
 }
 
-/// One accessibility element as the model reads it: its token, role,
-/// clipped label and value, flags, frame and a bounded list of actions.
-fn element_json(element: &cua_protocol::AccessibilityElement) -> serde_json::Value {
-    use serde_json::json;
-    let mut value = json!({
-        "element_index": element.element_index,
-        "element_token": element.element_token.as_str(),
-        "role": clip(element.role.as_str(), MAX_RENDERED_TEXT),
-    });
-    if let Some(text) = &element.label {
-        value["label"] = json!(clip(text.as_str(), MAX_RENDERED_TEXT));
+/// The columns of the elements table, in row order. One header for the
+/// whole table and one array per element keeps the rendering compact, so
+/// more of a window fits under the bound than one object per element would.
+const ELEMENT_COLUMNS: [&str; 9] = [
+    "element_index",
+    "element_token",
+    "role",
+    "label",
+    "value",
+    "enabled",
+    "selected",
+    "frame",
+    "actions",
+];
+
+/// One accessibility element as a row of the table: its index and token,
+/// role, clipped label and value (null when absent or empty), enabled and
+/// selected flags (null when the driver did not say), frame as
+/// `[x, y, width, height]` and a bounded list of actions.
+fn element_row(element: &cua_protocol::AccessibilityElement) -> serde_json::Value {
+    use serde_json::{Value, json};
+    let cell = |text: Option<&str>| {
+        text.filter(|text| !text.is_empty())
+            .map_or(Value::Null, |text| json!(clip(text, MAX_RENDERED_TEXT)))
+    };
+    let mut actions: Vec<String> = element
+        .actions
+        .iter()
+        .take(MAX_RENDERED_ACTIONS)
+        .map(|action| clip(action.as_str(), MAX_RENDERED_TEXT))
+        .collect();
+    if element.actions.len() > MAX_RENDERED_ACTIONS {
+        actions.push(format!(
+            "… (+{} more)",
+            element.actions.len() - MAX_RENDERED_ACTIONS
+        ));
     }
-    if let Some(text) = &element.value
-        && !text.as_str().is_empty()
-    {
-        value["value"] = json!(clip(text.as_str(), MAX_RENDERED_TEXT));
-    }
-    if let Some(enabled) = element.enabled {
-        value["enabled"] = json!(enabled);
-    }
-    if let Some(selected) = element.selected {
-        value["selected"] = json!(selected);
-    }
-    if let Some(frame) = &element.frame {
-        value["frame"] = rect_json(frame);
-    }
-    if !element.actions.is_empty() {
-        let mut actions: Vec<String> = element
-            .actions
-            .iter()
-            .take(MAX_RENDERED_ACTIONS)
-            .map(|action| clip(action.as_str(), MAX_RENDERED_TEXT))
-            .collect();
-        if element.actions.len() > MAX_RENDERED_ACTIONS {
-            actions.push(format!(
-                "… (+{} more)",
-                element.actions.len() - MAX_RENDERED_ACTIONS
-            ));
-        }
-        value["actions"] = json!(actions);
-    }
-    value
+    json!([
+        element.element_index,
+        element.element_token.as_str(),
+        clip(element.role.as_str(), MAX_RENDERED_TEXT),
+        cell(element.label.as_ref().map(|text| text.as_str())),
+        cell(element.value.as_ref().map(|text| text.as_str())),
+        element.enabled,
+        element.selected,
+        element.frame.as_ref().map(rect_json),
+        actions,
+    ])
 }
 
 fn window_json(window: &cua_protocol::WindowRecord) -> serde_json::Value {
@@ -1056,17 +1158,19 @@ pub fn render_discovery(result: &CuaActionResult, label: &str) -> serde_json::Va
     }
 }
 
-/// A window state as the model reads it: the snapshot id, a bounded list
+/// A window state as the model reads it: the snapshot id, a bounded table
 /// of elements with their tokens, the driver's flags, the pixel policy for
-/// the window, and a foreground recommendation reported as not applied.
-/// Never the screenshot bytes. The whole rendering stays under
-/// `MAX_RENDERED_CHARS`: every free text is clipped, and the elements list
-/// is cut where it stops fitting beside the rest, with the count of what
-/// was left out.
+/// the window, a foreground recommendation reported as not applied, and
+/// what became of the capture (`capture`: kept as an upload and handed over
+/// as the image beside this text, or not). Never the screenshot bytes. The
+/// whole rendering stays under `MAX_RENDERED_CHARS`: every free text is
+/// clipped, and the elements table is cut where it stops fitting beside the
+/// rest, with the count of what was left out.
 pub fn render_window_state(
     state: &WindowStateResult,
     policy: &PixelPolicy,
     label: &str,
+    capture: Option<&KeptCapture>,
 ) -> serde_json::Value {
     use serde_json::json;
     let returned = state.elements.len();
@@ -1084,6 +1188,7 @@ pub fn render_window_state(
             .degraded_reason
             .as_ref()
             .map(|reason| clip(reason.as_str(), MAX_RENDERED_NOTE)),
+        "element_columns": ELEMENT_COLUMNS,
         "elements": [],
         "elements_shown": 0,
         "elements_returned": returned,
@@ -1120,14 +1225,37 @@ pub fn render_window_state(
         ));
     }
     if let Some(screenshot) = &state.screenshot {
-        value["screenshot"] = json!({
+        let mut shot = json!({
             "media_type": screenshot.media_type,
             "width": screenshot.width,
             "height": screenshot.height,
             "scale": state.screenshot_scale,
             "shown": false,
-            "note": "captured one-shot; the image is not shown to you yet",
         });
+        match capture {
+            Some(kept) => {
+                shot["upload_id"] = json!(kept.upload_id);
+                shot["link"] = json!(kept.link);
+                shot["show_to_user"] = json!(format!("![window]({})", kept.link));
+                shot["shown"] = json!(kept.block.is_some());
+                shot["note"] = json!(if kept.block.is_some() {
+                    "captured one-shot; the image beside this text is it, in window-local \
+                     pixels at this scale. To show it to the user, paste show_to_user into \
+                     your reply."
+                } else {
+                    "captured one-shot and kept, but too large to hand to you inline and no \
+                     provider-reachable public_url is configured; paste show_to_user into \
+                     your reply so the user sees it"
+                });
+            }
+            None => {
+                shot["note"] = json!(
+                    "captured one-shot, but it could not be kept as an upload, so it is not \
+                     shown to you; call get_window_state again to capture it anew"
+                );
+            }
+        }
+        value["screenshot"] = shot;
     }
 
     // Everything but the elements is on the page now; the elements get
@@ -1136,7 +1264,7 @@ pub fn render_window_state(
     let mut budget = MAX_RENDERED_CHARS.saturating_sub(value.to_string().len() + NOTE_RESERVE);
     let mut elements = Vec::new();
     for element in state.elements.iter().take(MAX_RENDERED_ELEMENTS) {
-        let rendered = element_json(element);
+        let rendered = element_row(element);
         let cost = rendered.to_string().len() + 1;
         if cost > budget {
             break;
@@ -1279,6 +1407,9 @@ impl GetWindowStateTool {
 
 impl Tool for GetWindowStateTool {
     const NAME: &'static str = "get_window_state";
+    /// The image block's provenance is this tool's own (an upload it saved),
+    /// so the provider URL is renewed on later turns like a screenshot's.
+    const TRUSTS_RESOURCE_PROVENANCE: bool = true;
     type Error = ToolExecError;
     type Args = WindowStateArgs;
     type Output = String;
@@ -1287,17 +1418,21 @@ impl Tool for GetWindowStateTool {
         ToolDefinition {
             name: Self::NAME.into(),
             description: "Observe one window (pid + window_id from discover_windows) before \
-                acting in it: returns the snapshot_id and the accessibility elements with their \
-                element_token, role, label, value and frame. Call it before every act on that \
-                window: element tokens are valid only from the latest snapshot of their window \
-                and only until the next action there; anything older is refused. Use query to \
-                narrow large trees; a query that matches nothing is an empty list, not a \
-                broken window. pixel_addresses says whether act may use a point address: only \
-                when accessibility is unavailable for the window or the last verification there \
-                failed, and only after an observation with include_screenshot: true, since a \
-                point is read from that capture. The screenshot is captured one-shot and its \
-                dimensions reported; the image is not shown to you yet. The output is bounded: \
-                long labels and values are clipped, and elements past the bound are counted."
+                acting in it: returns the snapshot_id and a table of the accessibility \
+                elements (element_columns names the columns: element_index, element_token, \
+                role, label, value, enabled, selected, frame, actions). Call it before every \
+                act on that window: element tokens are valid only from the latest snapshot of \
+                their window and only until the next action there; anything older is refused. \
+                Use query to narrow large trees; a query that matches nothing is an empty \
+                table, not a broken window. With include_screenshot: true the window is \
+                captured one-shot and the image is shown to you beside the table (window-local \
+                pixels, at the reported scale), kept as an upload the user can open through \
+                the link in the result. pixel_addresses says whether act may use a point \
+                address: only when accessibility is unavailable for the window or the last \
+                verification there failed, and only after an observation with \
+                include_screenshot: true, since a point is read from that capture. The output \
+                is bounded: long labels and values are clipped, and elements past the bound \
+                are counted."
                 .into(),
             parameters: openai_schema::<WindowStateArgs>(),
         }
@@ -1322,7 +1457,31 @@ impl Tool for GetWindowStateTool {
         let policy = orchestrator
             .ledger()
             .pixel_policy(resolved.target.machine_id(), window);
-        Ok(render_window_state(&state, &policy, &resolved.label).to_string())
+        // The capture goes to the model as an image beside the text, through
+        // the upload path; a capture that cannot be kept costs the image, not
+        // the observation.
+        let kept = state.screenshot.as_ref().and_then(|screenshot| {
+            self.0
+                .captures
+                .keep(screenshot)
+                .map_err(|error| {
+                    log::warn!(
+                        "[get_window_state] capture of pid {} window {} on '{}' not kept: {error}",
+                        window.pid,
+                        window.window_id,
+                        resolved.target.machine_id().as_str()
+                    );
+                })
+                .ok()
+        });
+        let rendered = render_window_state(&state, &policy, &resolved.label, kept.as_ref());
+        Ok(match kept.and_then(|kept| kept.block) {
+            Some(image) => {
+                serde_json::json!([image, {"type": "text", "text": rendered.to_string()}])
+                    .to_string()
+            }
+            None => rendered.to_string(),
+        })
     }
 }
 
@@ -1665,9 +1824,12 @@ mod schema_tests {
 
     #[tokio::test]
     async fn the_tool_definitions_state_the_loop() {
+        let workspace = tempfile::tempdir().unwrap();
+        let resources = crate::services::resource_access::ResourceAccess::new("control-token");
         let shared = CuaTools::new(
             MachineRegistry::new(),
             MachineTarget::new(TargetSelection::Unselected),
+            CaptureStore::new(workspace.path(), "moon", "", &resources),
         );
         let discover = DiscoverWindowsTool::new(shared.clone())
             .definition(String::new())
@@ -1679,6 +1841,11 @@ mod schema_tests {
             .await;
         assert_eq!(state.name, "get_window_state");
         assert!(state.description.contains("element_token"));
+        assert!(
+            state.description.contains("shown to you") && !state.description.contains("not shown"),
+            "the capture reaches the model now: {}",
+            state.description
+        );
         let act = ActTool::new(shared.clone()).definition(String::new()).await;
         assert_eq!(act.name, "act");
         for rule in [
@@ -2294,24 +2461,51 @@ mod tool_tests {
         }
     }
 
+    /// A `public_url` the provider can fetch from, so a capture travels as
+    /// a URL with its provenance.
+    const ROUTABLE: &str = "https://public.invalid";
+    /// The default install: the provider cannot fetch from it, so a capture
+    /// is inlined within the provider's bound.
+    const LOCAL: &str = "http://localhost:26559";
+
     struct Tools {
         discover: DiscoverWindowsTool,
         state: GetWindowStateTool,
         act: ActTool,
         verify: VerifyStateTool,
+        /// The workspace the captures are saved under, for the test's life.
+        workspace: tempfile::TempDir,
     }
 
     async fn tools_for(registry: &MachineRegistry, chosen: Option<&str>) -> Tools {
+        tools_on(registry, chosen, LOCAL).await
+    }
+
+    async fn tools_on(registry: &MachineRegistry, chosen: Option<&str>, public_url: &str) -> Tools {
+        let workspace = tempfile::tempdir().unwrap();
+        let resources = crate::services::resource_access::ResourceAccess::new("control-token");
         let shared = CuaTools::new(
             registry.clone(),
             MachineTarget::resolve(registry, chosen).await,
+            CaptureStore::new(workspace.path(), "moon", public_url, &resources),
         );
         Tools {
             discover: DiscoverWindowsTool::new(shared.clone()),
             state: GetWindowStateTool::new(shared.clone()),
             act: ActTool::new(shared.clone()),
             verify: VerifyStateTool::new(shared),
+            workspace,
         }
+    }
+
+    /// The text block of a result that carries a capture beside it, parsed.
+    fn text_of(blocks: &[Value]) -> Value {
+        let text = blocks
+            .iter()
+            .find(|block| block["type"] == "text")
+            .unwrap_or_else(|| panic!("a text block: {blocks:?}"));
+        serde_json::from_str(text["text"].as_str().unwrap())
+            .unwrap_or_else(|e| panic!("{e}: {text}"))
     }
 
     /// Every typed tool refuses with the same code and text.
@@ -2501,8 +2695,10 @@ mod tool_tests {
         let tools = tools_for(&registry, Some(LAPTOP)).await;
         let message = every_tool_refuses(&tools, None, "no_cua_driver").await;
         assert!(
-            message.contains("Laptop") && message.contains("computer_use"),
-            "{message}"
+            message.contains("Laptop")
+                && message.contains("remote_bash")
+                && !message.contains("computer_use"),
+            "the refusal names the tools the model still has there: {message}"
         );
 
         let mut unavailable = descriptor(TABLET, MachineLocation::Desktop);
@@ -2543,21 +2739,48 @@ mod tool_tests {
             vec![state("s00000001", many), degraded, degraded_with_capture],
         );
         registry.cua().register(laptop).await.unwrap();
-        let tools = tools_for(&registry, None).await;
+        let tools = tools_on(&registry, None, ROUTABLE).await;
 
+        // Without a capture the result is the one JSON document.
         let output = tools.state.call(observe(None)).await.unwrap();
         let rendered: Value =
             serde_json::from_str(&output).unwrap_or_else(|e| panic!("{e}: {output}"));
+        assert!(rendered.is_object(), "one text result: {output}");
         assert_eq!(rendered["snapshot_id"], "s00000001");
         assert_eq!(rendered["target"], json!({"pid": 42, "window_id": 99}));
         assert_eq!(rendered["app_name"], "Notes");
+        // The elements are a table: one header, one row per element.
+        assert_eq!(
+            rendered["element_columns"],
+            json!([
+                "element_index",
+                "element_token",
+                "role",
+                "label",
+                "value",
+                "enabled",
+                "selected",
+                "frame",
+                "actions"
+            ])
+        );
         let elements = rendered["elements"].as_array().unwrap();
         assert_eq!(elements.len(), MAX_RENDERED_ELEMENTS, "bounded");
-        assert_eq!(elements[0]["element_token"], "tok/0");
-        assert_eq!(elements[0]["element_index"], 0);
-        assert_eq!(elements[0]["role"], "AXButton");
-        assert_eq!(elements[0]["label"], "Button 0");
-        assert_eq!(elements[0]["frame"], json!([10.0, 20.0, 80.0, 24.0]));
+        assert_eq!(
+            elements[0],
+            json!([
+                0,
+                "tok/0",
+                "AXButton",
+                "Button 0",
+                null,
+                true,
+                null,
+                [10.0, 20.0, 80.0, 24.0],
+                ["AXPress"]
+            ])
+        );
+        assert_eq!(elements[7][1], "tok/7");
         assert_eq!(rendered["elements_shown"], MAX_RENDERED_ELEMENTS);
         assert_eq!(rendered["elements_returned"], MAX_RENDERED_ELEMENTS + 5);
         assert!(
@@ -2603,16 +2826,279 @@ mod tool_tests {
         assert!(!output.contains("base64"), "no image bytes in the output");
 
         // Observed again with a screenshot: the point route is open, and the
-        // image still travels as dimensions only.
+        // image travels beside the text as a URL block, never as bytes.
         let mut args = observe(None);
         args.include_screenshot = Some(true);
         let output = tools.state.call(args).await.unwrap();
-        let rendered: Value = serde_json::from_str(&output).unwrap();
+        let blocks: Vec<Value> =
+            serde_json::from_str(&output).unwrap_or_else(|e| panic!("{e}: {output}"));
+        assert_eq!(blocks[0]["type"], "image");
+        assert_eq!(blocks[0]["source"]["type"], "url");
+        let rendered = text_of(&blocks);
         assert_eq!(rendered["degraded"], true);
         assert_eq!(rendered["pixel_addresses"]["allowed"], true);
-        assert_eq!(rendered["screenshot"]["shown"], false);
+        assert_eq!(rendered["screenshot"]["shown"], true);
         assert_eq!(rendered["screenshot"]["width"], 1);
         assert!(!output.contains("base64"), "no image bytes in the output");
+    }
+
+    /// #18 slice 3: the capture reaches the model as an image beside the
+    /// elements, through the same upload path every other image takes, so
+    /// the provider fetches it by a URL that carries its provenance and no
+    /// bytes enter the context.
+    #[tokio::test]
+    async fn get_window_state_shows_the_capture_to_the_model_through_the_upload_path() {
+        let registry = MachineRegistry::new();
+        let mut captured = state("s00000001", vec![element(0, "tok/a", "AXButton", "Save")]);
+        captured["screenshot"] = json!({
+            "media_type": "png", "base64": tiny_png(), "width": 1, "height": 1,
+        });
+        let (laptop, _) = scripted(descriptor(LAPTOP, MachineLocation::Desktop), vec![captured]);
+        registry.cua().register(laptop).await.unwrap();
+        let tools = tools_on(&registry, None, ROUTABLE).await;
+        assert!(
+            crate::services::tool::ToolDyn::trusts_resource_provenance(&tools.state),
+            "the provenance on the image block is the tool's own, so the URL is renewed \
+             on later turns like a screenshot's"
+        );
+
+        let mut args = observe(None);
+        args.include_screenshot = Some(true);
+        let output = tools.state.call(args).await.unwrap();
+        let blocks: Vec<Value> =
+            serde_json::from_str(&output).unwrap_or_else(|e| panic!("{e}: {output}"));
+        assert_eq!(blocks.len(), 2, "the image and the text: {output}");
+
+        let image = &blocks[0];
+        assert_eq!(image["type"], "image");
+        assert_eq!(image["source"]["type"], "url");
+        let url = image["source"]["url"].as_str().unwrap();
+        assert!(
+            url.starts_with("https://public.invalid/resources/model-provider/files/moon/upload_"),
+            "{url}"
+        );
+        assert_eq!(image["resource_provenance"]["kind"], "uploaded_file");
+        assert_eq!(image["resource_provenance"]["slug"], "moon");
+        let upload_id = image["resource_provenance"]["id"].as_str().unwrap();
+        assert!(
+            upload_id.starts_with("upload_") && upload_id.ends_with(".png"),
+            "saved with the capture's own media type: {upload_id}"
+        );
+        let stored = tools
+            .workspace
+            .path()
+            .join("instances/moon/uploads")
+            .join(format!("{upload_id}_blob.png"));
+        assert_eq!(
+            std::fs::read(&stored).unwrap(),
+            include_bytes!("../../../../cua-protocol/tests/fixtures/tiny.png"),
+            "the capture is an upload of the companion"
+        );
+        assert!(
+            !output.contains(&tiny_png()),
+            "no image bytes in the output"
+        );
+
+        let rendered = text_of(&blocks);
+        assert_eq!(rendered["snapshot_id"], "s00000001");
+        assert_eq!(rendered["elements"][0][1], "tok/a");
+        assert_eq!(rendered["screenshot"]["shown"], true);
+        assert_eq!(rendered["screenshot"]["width"], 1);
+        assert_eq!(rendered["screenshot"]["height"], 1);
+        assert_eq!(rendered["screenshot"]["media_type"], "png");
+        assert_eq!(rendered["screenshot"]["upload_id"], upload_id);
+        let link = rendered["screenshot"]["link"].as_str().unwrap();
+        assert!(
+            link.contains("/resources/browser/files/moon/") && link.contains(upload_id),
+            "the user's link to the capture: {link}"
+        );
+        assert_eq!(
+            rendered["screenshot"]["show_to_user"],
+            format!("![window]({link})"),
+            "the markdown that shows the user the capture: {rendered}"
+        );
+        assert!(
+            rendered["screenshot"]["note"]
+                .as_str()
+                .unwrap()
+                .contains("show_to_user"),
+            "{rendered}"
+        );
+    }
+
+    /// On the default install the provider cannot fetch from `public_url`,
+    /// so the capture is inlined the way the other tools inline images:
+    /// within the provider's bound, as its own media type.
+    #[tokio::test]
+    async fn get_window_state_inlines_the_capture_on_a_local_install() {
+        let registry = MachineRegistry::new();
+        let mut captured = state("s00000001", vec![element(0, "tok/a", "AXButton", "Save")]);
+        captured["screenshot"] = json!({
+            "media_type": "png", "base64": tiny_png(), "width": 1, "height": 1,
+        });
+        let (laptop, _) = scripted(descriptor(LAPTOP, MachineLocation::Desktop), vec![captured]);
+        registry.cua().register(laptop).await.unwrap();
+        let tools = tools_on(&registry, None, LOCAL).await;
+
+        let mut args = observe(None);
+        args.include_screenshot = Some(true);
+        let output = tools.state.call(args).await.unwrap();
+        let blocks: Vec<Value> =
+            serde_json::from_str(&output).unwrap_or_else(|e| panic!("{e}: {output}"));
+        assert_eq!(blocks.len(), 2);
+        let image = &blocks[0];
+        assert_eq!(image["type"], "image");
+        assert_eq!(image["source"]["type"], "base64");
+        assert_eq!(image["source"]["media_type"], "image/png");
+        assert_eq!(image["source"]["data"], tiny_png());
+        assert!(
+            image.get("resource_provenance").is_none(),
+            "nothing to renew for inline bytes"
+        );
+        assert!(!output.contains("localhost"), "{output}");
+        let rendered = text_of(&blocks);
+        assert_eq!(rendered["screenshot"]["shown"], true);
+        assert!(
+            tools
+                .workspace
+                .path()
+                .join("instances/moon/uploads")
+                .join(format!(
+                    "{}_blob.png",
+                    rendered["screenshot"]["upload_id"].as_str().unwrap()
+                ))
+                .is_file(),
+            "still kept as an upload for the user's link"
+        );
+    }
+
+    /// The same orchestration renders identically whichever kind of target
+    /// runs it: a desktop through its adapter and the server machine
+    /// through the runtime's runs yield the same model-visible output, the
+    /// machine's name and the capture's ids aside.
+    #[tokio::test]
+    async fn a_desktop_and_the_server_machine_render_identically_to_the_model() {
+        fn captured() -> Value {
+            let mut captured = state(
+                "s00000001",
+                vec![
+                    element(0, "tok/a", "AXButton", "Save"),
+                    element(1, "tok/b", "AXTextField", "Name"),
+                ],
+            );
+            captured["screenshot"] = json!({
+                "media_type": "png", "base64": tiny_png(), "width": 1, "height": 1,
+            });
+            captured
+        }
+        fn satisfied() -> Value {
+            json!({
+                "overall": "satisfied",
+                "predicates": [{"predicate_index": 0, "status": "satisfied"}],
+            })
+        }
+        /// The click result the server-local driver returns inside run `n`.
+        fn clicked_in_run(n: u64) -> Value {
+            json!({
+                "target": {"pid": 42, "window_id": 99},
+                "session": format!("nolune-run-{n}"),
+                "address": {"kind": "element_token", "element_token": "tok/a"},
+                "button": "left", "action": "press",
+                "outcome": confirmed()["outcome"],
+            })
+        }
+        /// The output with the machine's name and the capture's ids taken out.
+        fn normalized(output: &str, label: &str) -> Value {
+            let mut value: Value = serde_json::from_str(output).unwrap();
+            fn scrub(value: &mut Value, label: &str) {
+                match value {
+                    Value::String(text) => *text = text.replace(label, "<machine>"),
+                    Value::Array(items) => items.iter_mut().for_each(|item| scrub(item, label)),
+                    Value::Object(fields) => {
+                        for key in ["upload_id", "link", "show_to_user", "url", "id"] {
+                            if fields.contains_key(key) {
+                                fields[key] = json!("<capture>");
+                            }
+                        }
+                        if fields.contains_key("machine") {
+                            fields["machine"] = json!("<machine>");
+                        }
+                        if let Some(text) = fields.get_mut("text")
+                            && let Some(inner) = text.as_str()
+                        {
+                            let mut inner: Value = serde_json::from_str(inner).unwrap();
+                            scrub(&mut inner, label);
+                            *text = inner;
+                        }
+                        fields.values_mut().for_each(|field| scrub(field, label));
+                    }
+                    _ => {}
+                }
+            }
+            scrub(&mut value, label);
+            value
+        }
+        async fn run_the_loop(tools: &Tools) -> [String; 3] {
+            let mut args = observe(None);
+            args.include_screenshot = Some(true);
+            let observed = tools.state.call(args).await.unwrap();
+            let mut act = click(None, "tok/a");
+            act.verify = Some(VerifyArgs {
+                expect: vec![PredicateArgs::WindowExists { value: true }],
+                timeout_ms: None,
+                stable_samples: None,
+            });
+            let acted = tools.act.call(act).await.unwrap();
+            let verified = tools.verify.call(verify(None)).await.unwrap();
+            [observed, acted, verified]
+        }
+
+        // The desktop: straight through its checked adapter.
+        let desktop_registry = MachineRegistry::new();
+        let (laptop, laptop_log) = scripted(
+            descriptor(LAPTOP, MachineLocation::Desktop),
+            vec![captured(), confirmed(), satisfied(), satisfied()],
+        );
+        desktop_registry.cua().register(laptop).await.unwrap();
+        let desktop = tools_on(&desktop_registry, None, ROUTABLE).await;
+        let from_desktop = run_the_loop(&desktop).await;
+        assert_eq!(laptop_log.lock().unwrap().len(), 4);
+
+        // The server machine: every tool call is one sessioned run, the
+        // action and its verification inside the same one.
+        let local_registry = MachineRegistry::new();
+        let runtime = attach_server_local(
+            &local_registry,
+            vec![
+                started(1),
+                captured(),
+                ended(1),
+                started(2),
+                clicked_in_run(2),
+                satisfied(),
+                ended(2),
+                started(3),
+                satisfied(),
+                ended(3),
+            ],
+        )
+        .await;
+        let local = tools_on(&local_registry, None, ROUTABLE).await;
+        let from_local = run_the_loop(&local).await;
+        runtime.shutdown().await;
+
+        for (step, (desktop_output, local_output)) in
+            from_desktop.iter().zip(from_local.iter()).enumerate()
+        {
+            assert_eq!(
+                normalized(desktop_output, LAPTOP),
+                normalized(local_output, "studio"),
+                "step {step} renders the same for both kinds of target"
+            );
+        }
+        let observed: Vec<Value> = serde_json::from_str(&from_local[0]).unwrap();
+        assert_eq!(observed[0]["type"], "image");
+        assert_eq!(text_of(&observed)["screenshot"]["shown"], true);
     }
 
     fn tiny_png() -> String {
@@ -2657,13 +3143,13 @@ mod tool_tests {
             2,
             "both elements fit once their text is clipped"
         );
-        assert_eq!(elements[1]["element_token"], "tok/1");
-        let value = elements[0]["value"].as_str().unwrap();
+        assert_eq!(elements[1][1], "tok/1");
+        let value = elements[0][4].as_str().unwrap();
         assert!(
             value.chars().count() <= MAX_RENDERED_TEXT + 16 && value.ends_with("chars)"),
             "the value is clipped and says so: {value:?}"
         );
-        let label = elements[1]["label"].as_str().unwrap();
+        let label = elements[1][3].as_str().unwrap();
         assert!(label.chars().count() <= MAX_RENDERED_TEXT + 16, "{label:?}");
         assert_eq!(rendered["elements_shown"], 2);
         assert_eq!(rendered["elements_returned"], 2);
@@ -2706,7 +3192,7 @@ mod tool_tests {
             shown > 5 && shown < MAX_RENDERED_ELEMENTS,
             "cut by size: {shown}"
         );
-        assert_eq!(rendered["elements"][0]["element_token"], "tok/0");
+        assert_eq!(rendered["elements"][0][1], "tok/0");
         assert_eq!(rendered["elements_shown"], shown);
         assert_eq!(rendered["elements_returned"], MAX_RENDERED_ELEMENTS);
         assert_eq!(rendered["snapshot_id"], "s00000001");
@@ -2874,7 +3360,7 @@ mod tool_tests {
             let policy = orchestrator
                 .ledger()
                 .pixel_policy(target.machine_id(), window_target);
-            let rendered = render_window_state(&state, &policy, label).to_string();
+            let rendered = render_window_state(&state, &policy, label, None).to_string();
             let value: Value = serde_json::from_str(&rendered).unwrap();
             println!(
                 "{:?} ({}/{}): snapshot {}, {} elements shown of {}, degraded {}, pixels {} \
@@ -2931,7 +3417,7 @@ mod tool_tests {
         let policy = orchestrator
             .ledger()
             .pixel_policy(target.machine_id(), window);
-        let rendered = render_window_state(&state, &policy, label).to_string();
+        let rendered = render_window_state(&state, &policy, label, None).to_string();
         let value: Value = serde_json::from_str(&rendered).unwrap();
         println!(
             "capture: {}x{} scale {} ({} chars)",
