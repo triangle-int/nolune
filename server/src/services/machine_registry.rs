@@ -20,8 +20,6 @@ pub struct MachineInfo {
     pub machine_id: String,
     pub os: String,
     pub hostname: String,
-    pub screen_width: u32,
-    pub screen_height: u32,
     pub last_seen: i64,
     /// Instance this machine is bound to (if any).
     pub instance_slug: Option<String>,
@@ -88,22 +86,12 @@ pub struct PendingAction {
     pub responder: oneshot::Sender<ActionResult>,
 }
 
-/// Result from a Tauri agent executing a computer use action.
+/// Result from a Tauri agent executing a shell or file toolcall
+/// (`remote_bash`, `remote_files`): whether it succeeded, and the text it
+/// produced (the output on success, the failure on an error). Since #19 no
+/// toolcall returns an image; a window capture is a typed `get_window_state`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ActionResult {
-    /// "screenshot" or "action"
-    #[allow(dead_code)] // The coordinate tool's; unregistered by #18, deleted by #19.
-    pub result_type: String,
-    /// Base64 PNG (only for screenshots)
-    #[allow(dead_code)] // The coordinate tool's; unregistered by #18, deleted by #19.
-    pub image: Option<String>,
-    #[allow(dead_code)] // The coordinate tool's; unregistered by #18, deleted by #19.
-    pub width: Option<u32>,
-    #[allow(dead_code)] // The coordinate tool's; unregistered by #18, deleted by #19.
-    pub height: Option<u32>,
-    #[allow(dead_code)]
-    pub scale: Option<f64>,
-    /// For action results
     pub success: Option<bool>,
     pub error: Option<String>,
 }
@@ -577,7 +565,9 @@ impl KnownMachines {
                 path.display()
             ));
         }
-        let file: MachinesFile = serde_json::from_slice(&raw)
+        let file: MachinesFile = serde_json::from_slice::<serde_json::Value>(&raw)
+            .map(without_legacy_screen_fields)
+            .and_then(serde_json::from_value)
             .map_err(|error| format!("{} is not a machines file: {error}", path.display()))?;
         if file.version != MACHINES_FORMAT_VERSION {
             return Err(format!(
@@ -640,6 +630,21 @@ fn write_atomic(path: &Path, content: &str) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
+/// Servers before #19 wrote the desktop's screen size on every record; the
+/// desktop reports none since the `screenshots` executor left. Those two
+/// keys are dropped from each record before the strict decode so a file they
+/// wrote stays readable, and the next write leaves them out for good.
+/// Anything else unknown still fails the file closed.
+fn without_legacy_screen_fields(mut file: serde_json::Value) -> serde_json::Value {
+    if let Some(machines) = file.get_mut("machines").and_then(|v| v.as_array_mut()) {
+        for record in machines.iter_mut().filter_map(|v| v.as_object_mut()) {
+            record.remove("screen_width");
+            record.remove("screen_height");
+        }
+    }
+    file
+}
+
 /// The record as the API reports it, with what the registry knows right now.
 fn known_view(
     record: &MachineRecord,
@@ -661,8 +666,6 @@ fn known_view(
         os: record.os.clone(),
         platform: record.platform,
         location: record.location,
-        screen_width: record.screen_width,
-        screen_height: record.screen_height,
         permissions: record.permissions.clone(),
         capabilities: record.capabilities.clone(),
         first_seen: record.first_seen,
@@ -693,8 +696,6 @@ fn server_local_view(entry: &ServerLocalEntry, now: i64, slug: &str) -> KnownMac
         os,
         platform: Some(descriptor.platform),
         location: descriptor.location,
-        screen_width: 0,
-        screen_height: 0,
         permissions: Some(descriptor.permissions.clone()),
         capabilities: descriptor
             .capabilities
@@ -781,8 +782,6 @@ fn insert_record(
             os: info.os.clone(),
             platform: info.platform,
             location: info.location,
-            screen_width: info.screen_width,
-            screen_height: info.screen_height,
             permissions: info.permissions.clone(),
             capabilities: info.capabilities.clone(),
             first_seen,
@@ -832,8 +831,6 @@ fn refresh_record(
     record.os = info.os.clone();
     record.platform = info.platform;
     record.location = info.location;
-    record.screen_width = info.screen_width;
-    record.screen_height = info.screen_height;
     record.permissions = info.permissions.clone();
     record.capabilities = info.capabilities.clone();
     record.last_seen = now;
@@ -1535,8 +1532,6 @@ mod companion_boundary_tests {
             machine_id: "machine-1".into(),
             os: "macos".into(),
             hostname: "studio".into(),
-            screen_width: 1440,
-            screen_height: 900,
             last_seen: 0,
             instance_slug: instance_slug.map(str::to_owned),
             platform: Some(Platform::Macos),
@@ -1793,7 +1788,6 @@ mod cua_targets_tests {
         assert_eq!(row.display_name, "studio.local");
         assert_eq!(row.os, "macos");
         assert_eq!(row.platform, Some(Platform::Macos));
-        assert_eq!((row.screen_width, row.screen_height), (0, 0));
         assert!(row.online);
         assert_eq!(row.health, MachineHealth::Healthy);
         assert_eq!(row.cua_health, Some(MachineHealth::Healthy));
@@ -1943,8 +1937,6 @@ mod known_machines_tests {
             machine_id: machine_id.into(),
             os: "macos".into(),
             hostname: hostname.into(),
-            screen_width: 1440,
-            screen_height: 900,
             last_seen: seen,
             instance_slug: None,
             platform: Some(Platform::Macos),
@@ -2026,9 +2018,9 @@ mod known_machines_tests {
         drop(rx);
         registry.unregister_at(STABLE_ID, T0 + 10).await;
 
-        // Same machine, new hostname and screen, after a reboot.
+        // Same machine, new hostname and OS label, after a reboot.
         let mut again = desktop(STABLE_ID, "studio-2", T0 + 500);
-        again.screen_width = 2560;
+        again.os = "macos 16".into();
         again.capabilities = Vec::new();
         let _rx = connect(&registry, again).await;
 
@@ -2037,7 +2029,7 @@ mod known_machines_tests {
         let machine = &known[0];
         assert!(machine.online);
         assert_eq!(machine.hostname, "studio-2", "fresh registration wins");
-        assert_eq!(machine.screen_width, 2560);
+        assert_eq!(machine.os, "macos 16");
         assert_eq!(machine.first_seen, T0, "first_seen survives reconnects");
         assert_eq!(machine.last_seen, T0 + 500);
         assert_eq!(
@@ -2079,6 +2071,66 @@ mod known_machines_tests {
         assert_eq!(ids, vec!["other-id".to_owned(), STABLE_ID.to_owned()]);
     }
 
+    /// A file a server before #19 wrote carries the screen size on every
+    /// record; it still reads, the size is gone from the listing, and the
+    /// next write leaves the two keys out. Any other unknown key on a
+    /// record still fails the file closed.
+    #[tokio::test]
+    async fn a_machines_file_with_the_legacy_screen_size_still_reads_and_is_rewritten_without_it() {
+        let (ws, registry) = harness();
+        let legacy = serde_json::json!({
+            "version": 1, "slug": CANONICAL_SLUG, "machines": [{
+                "machine_id": STABLE_ID, "display_name": "Studio Mac", "hostname": "studio",
+                "os": "macos", "platform": "macos", "location": "desktop",
+                "screen_width": 2560, "screen_height": 1440, "permissions": null,
+                "capabilities": ["bash"], "first_seen": 1, "last_seen": 2
+            }]
+        });
+        fs::write(machines_path(&ws), legacy.to_string()).unwrap();
+
+        let known = registry.known_at(T0).await.unwrap();
+        assert_eq!(known.len(), 1);
+        assert_eq!(
+            known[0].display_name, "Studio Mac",
+            "the record reads whole"
+        );
+        assert_eq!(known[0].first_seen, 1);
+        let listed = serde_json::to_value(&known[0]).unwrap();
+        assert!(
+            listed.get("screen_width").is_none() && listed.get("screen_height").is_none(),
+            "the listing carries no screen size: {listed}"
+        );
+
+        // The next write drops the two keys and nothing else.
+        registry.rename(STABLE_ID, Some("Studio")).await.unwrap();
+        let written: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(machines_path(&ws)).unwrap()).unwrap();
+        let record = &written["machines"][0];
+        assert_eq!(record["display_name"], "Studio");
+        assert_eq!(record["capabilities"], serde_json::json!(["bash"]));
+        assert!(
+            record.get("screen_width").is_none() && record.get("screen_height").is_none(),
+            "rewritten without the legacy keys: {record}"
+        );
+        assert_eq!(
+            registry.known_at(T0).await.unwrap()[0].display_name,
+            "Studio",
+            "the rewritten file reads back"
+        );
+
+        // The tolerance is for those two keys only.
+        let mut other = legacy.clone();
+        other["machines"][0]["screen_depth"] = serde_json::json!(32);
+        fs::write(machines_path(&ws), other.to_string()).unwrap();
+        assert!(
+            matches!(
+                registry.known_at(T0).await,
+                Err(MachineError::Unsupported(_))
+            ),
+            "an unknown record key still fails closed"
+        );
+    }
+
     #[tokio::test]
     async fn a_corrupt_or_foreign_machines_file_fails_closed() {
         for (label, contents) in [
@@ -2103,7 +2155,7 @@ mod known_machines_tests {
                     let record = serde_json::json!({
                         "machine_id": STABLE_ID, "display_name": null, "hostname": "studio",
                         "os": "macos", "platform": "macos", "location": "desktop",
-                        "screen_width": 1, "screen_height": 1, "permissions": null,
+                        "permissions": null,
                         "capabilities": [], "first_seen": 1, "last_seen": 2
                     });
                     serde_json::json!({"version": 1, "slug": CANONICAL_SLUG, "machines": [record, record]})
@@ -2339,8 +2391,8 @@ mod known_machines_tests {
 
         let call = AgentToolCall {
             request_id: "req-00000002".into(),
-            action: "screenshot".into(),
-            params: serde_json::json!({}),
+            action: "bash".into(),
+            params: serde_json::json!({"command": "uname -a"}),
         };
         let registry_c = registry.clone();
         let call_c = call.clone();
@@ -2354,11 +2406,6 @@ mod known_machines_tests {
             .complete(
                 "req-00000002",
                 ActionResult {
-                    result_type: "action".into(),
-                    image: None,
-                    width: None,
-                    height: None,
-                    scale: None,
                     success: Some(true),
                     error: None,
                 },
@@ -2396,8 +2443,8 @@ mod known_machines_tests {
                 STABLE_ID,
                 AgentToolCall {
                     request_id: "req-00000001".into(),
-                    action: "screenshot".into(),
-                    params: serde_json::json!({}),
+                    action: "bash".into(),
+                    params: serde_json::json!({"command": "uname -a"}),
                 },
             )
             .await;
@@ -2455,8 +2502,6 @@ mod known_machines_tests {
             os: "o".repeat(MAX_MACHINES_FILE_BYTES + 1),
             platform: Some(Platform::Macos),
             location: MachineLocation::Desktop,
-            screen_width: 1,
-            screen_height: 1,
             permissions: None,
             capabilities: Vec::new(),
             first_seen: T0,
@@ -2801,8 +2846,6 @@ mod desktop_cua_tests {
             machine_id: machine_id.into(),
             os: "macos".into(),
             hostname: "studio".into(),
-            screen_width: 1440,
-            screen_height: 900,
             last_seen: seen,
             instance_slug: None,
             platform: Some(Platform::Macos),

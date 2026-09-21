@@ -147,11 +147,6 @@ impl Desktop {
                 .complete(
                     call["request_id"].as_str().unwrap(),
                     ActionResult {
-                        result_type: "action".into(),
-                        image: None,
-                        width: None,
-                        height: None,
-                        scale: None,
                         success: Some(success),
                         error: Some(output.into()),
                     },
@@ -181,8 +176,6 @@ impl Harness {
                     machine_id: machine_id.into(),
                     os: "macos".into(),
                     hostname: hostname.into(),
-                    screen_width: 2560,
-                    screen_height: 1440,
                     last_seen,
                     instance_slug: None,
                     platform: Some(Platform::Macos),

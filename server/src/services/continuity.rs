@@ -524,8 +524,6 @@ mod tests {
                     machine_id: machine_id.into(),
                     os: "macos".into(),
                     hostname: "studio".into(),
-                    screen_width: 1920,
-                    screen_height: 1080,
                     last_seen: T0,
                     instance_slug: Some(CANONICAL_SLUG.into()),
                     platform: None,

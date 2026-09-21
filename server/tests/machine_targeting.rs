@@ -38,7 +38,6 @@ fn computer_tools_never_default_a_machine() {
         "\"choose_a_computer\"",
         "\"machine_unavailable\"",
         "\"machine_unhealthy\"",
-        "\"permission_denied\"",
         "\"target_mismatch\"",
         "\"server_home\"",
         "SERVER_HOME_TARGET",
@@ -48,11 +47,18 @@ fn computer_tools_never_default_a_machine() {
             "typed target refusals are missing {required}"
         );
     }
-    // Each desktop tool goes through the shared resolution before it sends anything.
+    // Each desktop tool goes through the shared resolution before it sends
+    // anything (the coordinate tool is gone, #19; the typed tools resolve
+    // their target in the orchestrator).
     assert_eq!(
         tools.matches(".desktop(&self.registry").count(),
-        3,
-        "computer_use, remote_bash and remote_files each resolve the target once"
+        2,
+        "remote_bash and remote_files each resolve the target once"
+    );
+    assert!(
+        !tools.contains("permission_denied"),
+        "shell and file work needs no desktop permission; window actions are refused \
+         against the Cua descriptor by the orchestrator"
     );
     assert!(
         !tools.contains("execute(&args.machine_id"),

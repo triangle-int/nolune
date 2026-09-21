@@ -503,8 +503,6 @@ mod tests {
             os: "macos".into(),
             platform: Some(Platform::Macos),
             location: MachineLocation::Desktop,
-            screen_width: 1920,
-            screen_height: 1080,
             permissions: Some(PermissionState {
                 accessibility: Permission::Granted,
                 screen_capture: Permission::Granted,

@@ -249,8 +249,6 @@ struct Registration {
     machine_id: String,
     os: String,
     hostname: String,
-    screen_width: u32,
-    screen_height: u32,
     #[serde(default)]
     instance_slug: Option<String>,
     /// Desktop permission state, in the protocol's shape; absent from older desktops.
@@ -285,8 +283,6 @@ impl Registration {
             machine_id: self.machine_id,
             os: self.os,
             hostname: self.hostname,
-            screen_width: self.screen_width,
-            screen_height: self.screen_height,
             last_seen: now,
             instance_slug: self.instance_slug,
             location: cua_protocol::MachineLocation::Desktop,
@@ -633,8 +629,6 @@ mod registration_tests {
             "machine_id": STABLE_ID,
             "os": "macos",
             "hostname": "studio",
-            "screen_width": 1440,
-            "screen_height": 900,
         });
         frame
             .as_object_mut()
@@ -771,14 +765,20 @@ mod registration_tests {
             "carried whole: the protocol's decoder reads it"
         );
 
+        // A shell or file toolcall's answer; a desktop from before #19 still
+        // labels it with a `result_type`, which is ignored.
         let legacy = serde_json::json!({
             "type": "action_result", "request_id": "req-2",
-            "result_type": "action", "success": true
+            "result_type": "output", "success": true, "error": "Darwin"
         });
-        assert!(matches!(
-            serde_json::from_str::<AgentMessage>(&legacy.to_string()).unwrap(),
-            AgentMessage::ActionResult { .. }
-        ));
+        let AgentMessage::ActionResult { request_id, result } =
+            serde_json::from_str::<AgentMessage>(&legacy.to_string()).unwrap()
+        else {
+            panic!("not an action_result");
+        };
+        assert_eq!(request_id, "req-2");
+        assert_eq!(result.success, Some(true));
+        assert_eq!(result.error.as_deref(), Some("Darwin"));
     }
 
     #[test]

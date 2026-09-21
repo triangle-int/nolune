@@ -165,8 +165,6 @@ impl SocketDesktop {
                     "machine_id": machine_id,
                     "os": "macos",
                     "hostname": hostname,
-                    "screen_width": 2560,
-                    "screen_height": 1440,
                     "permissions": granted(),
                     "capabilities": full_capabilities(),
                 })
@@ -298,8 +296,6 @@ impl Harness {
                     machine_id: machine_id.into(),
                     os: "macos".into(),
                     hostname: hostname.into(),
-                    screen_width: 2560,
-                    screen_height: 1440,
                     last_seen: now(),
                     instance_slug: None,
                     platform: Some(Platform::Macos),

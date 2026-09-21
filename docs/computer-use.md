@@ -131,7 +131,7 @@ registers over the authenticated machine WebSocket
 
 ```json
 {"type": "register", "machine_id": "<stable id>", "os": "macos", "hostname": "studio",
- "screen_width": 1440, "screen_height": 900, "permissions": {...}, "capabilities": [...],
+ "permissions": {...}, "capabilities": ["bash", "file_read", "file_write", "file_list", "upload_file"],
  "cua": {"version": "v1", "machine": {"machine_id": "<stable id>", "location": "desktop",
          "platform": "macos", "driver_version": "0.28.2", "health": "healthy",
          "permissions": {"accessibility": "granted", "screen_capture": "granted"},
@@ -148,16 +148,16 @@ has registered yet: it registers in the background after the listener is
 up, and a desktop that took its id first would block it for the life of
 the process. Without the field the desktop is a legacy-only
 computer: `remote_bash` and `remote_files` work as they always did, it never
-sees a typed frame, and the companion cannot see or act in its windows (the
-coordinate `computer_use` tool is no longer offered to the model, see
-[Typed machine tools](#typed-machine-tools-18)). The ack
+sees a typed frame, and the companion cannot see or act in its windows (see
+[Typed machine tools](#typed-machine-tools-18) and
+[What the desktop app executes](#what-the-desktop-app-executes-19)). The ack
 `{"type": "registered", "machine_id": ..., "cua": true|false}` says which.
 
 A registered descriptor makes the desktop a Cua target under its own id,
 beside the server-local one: `list_machines` lists it with
 `location: "desktop"` and the driver's `driver_version`, `health`,
 `permissions` and `capabilities` (the legacy entry with `hostname` and
-`screen` stays), and its row in `GET /api/instances/companion/machines`
+`last_seen` stays), and its row in `GET /api/instances/companion/machines`
 carries `driver_version` and `cua_health` while it is connected; clients
 hear that row as `machine_updated` once the target is attached, after the
 one the registration itself announces. When the registration reports no
@@ -238,8 +238,9 @@ under the driver's bundle identity, and `driver_mcp::permissions_from_health`
 maps them to `granted`, `denied` or `prompt_required` (never asked). The
 desktop app's own grants (`AXIsProcessTrusted`,
 `CGPreflightScreenCaptureAccess`) still ride on the legacy `permissions`
-field for the older coordinate tools that run inside the app; they say
-nothing about what the driver can do.
+field and show on the Computers tab; since #19 nothing inside the app uses
+them (see [What the desktop app executes](#what-the-desktop-app-executes-19)),
+and they say nothing about what the driver can do.
 
 The desktop app's Settings window (`desktop/src/routes/settings/+page.svelte`,
 fed by the `cua_permissions` command in
@@ -362,6 +363,38 @@ builds the tools around it.
   queued target it never took is released with the conversation). A new
   message from the composer starts a new run with the composer's own choice.
 
+## What the desktop app executes (#19)
+
+The desktop app has no screen path of its own. The `enigo` pointer and
+keyboard automation, the `screenshots` capture with its own scaling and
+scale cache, the `computer_*` Tauri commands and the browser-side bridge
+that answered the coordinate `computer_use` tool are deleted; the app links
+none of those crates. Every window action, and every capture, is a typed
+Cua frame the driver answers (the sections above), and a desktop without a
+driver cannot see or act in a window at all.
+
+The toolcalls the app still executes over the machine socket are the shell
+and file ones behind `remote_bash` and `remote_files`: `bash`, `file_read`,
+`file_write`, `file_list` and the `upload_file` that hands a file to the
+companion. They are the `capabilities` the registration reports, they run
+off the main thread under the connection's work permit and are cancelled
+with the socket, and their `action_result` carries the output (or the
+failure) in the `error` field as it always did. The server no longer reads
+an image, a size or a scale from a toolcall's result, needs no desktop
+permission for shell or file work (the typed tools' permission checks are
+the orchestrator's, against the Cua descriptor), and neither the
+registration nor the machine record carries a screen size: the old one came
+from the `screenshots` crate, and a `machines.json` written before #19 is
+read with its `screen_width` and `screen_height` dropped (see
+[companion-storage.md](companion-storage.md#known-machines)).
+
+The overlay still hears every action on the same events (`computer-use-action`
+for each shell, file or typed action, `computer-use-idle` when the socket
+closes) and hides only for the window snapshot a typed `get_window_state`
+takes, the one capture the desktop takes part in. `nolune cua install` on
+the desktop machine, or a `cua-driver` on its `PATH`, is what turns window
+actions on there; the Computers tab says so for a desktop without a driver.
+
 ## Typed machine tools (#18)
 
 Four tools drive any Cua target, the server machine or a desktop with a
@@ -371,9 +404,9 @@ driver, through one orchestrator per chat turn
 machine with its `location`, `driver_version`, `health`, `permissions` and
 `capabilities`; the ones with `driver_version` are the ones these tools
 reach. They are the only way the companion sees or acts in a window: the
-coordinate `computer_use` tool is no longer offered to the model (its type
-stays in `tools/computer.rs` until #19 deletes the legacy desktop executor),
-and the system prompt states the loop below rule by rule.
+coordinate `computer_use` tool is no longer offered to the model (#18) and
+is deleted with the legacy desktop executor (#19), and the system prompt
+states the loop below rule by rule.
 
 - `discover_windows` — `list_apps`, `list_windows` (optionally one pid) or
   `launch_app` (by bundle id or name). Every window comes back with the

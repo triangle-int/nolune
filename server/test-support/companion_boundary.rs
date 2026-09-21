@@ -464,8 +464,6 @@ async fn every_persisted_subsystem_is_owned_by_the_canonical_companion() {
                 machine_id: "mac-mini".into(),
                 os: "macos".into(),
                 hostname: "studio".into(),
-                screen_width: 1920,
-                screen_height: 1080,
                 last_seen: 0,
                 instance_slug: Some("alice".into()),
                 platform: None,
@@ -926,8 +924,6 @@ async fn connected_computers_are_listed_for_the_one_companion_only() {
                 machine_id: "mac-mini".into(),
                 os: "macos".into(),
                 hostname: "studio".into(),
-                screen_width: 2560,
-                screen_height: 1440,
                 last_seen: 1_700_000_000,
                 instance_slug: None,
                 platform: Some(cua_protocol::Platform::Macos),
@@ -955,7 +951,11 @@ async fn connected_computers_are_listed_for_the_one_companion_only() {
     assert_eq!(machines[0]["os"], "macos");
     assert_eq!(machines[0]["platform"], "macos");
     assert_eq!(machines[0]["location"], "desktop");
-    assert_eq!(machines[0]["screen_width"], 2560);
+    assert!(
+        machines[0].get("screen_width").is_none(),
+        "no screen size on the row (#19): {}",
+        machines[0]
+    );
     assert_eq!(machines[0]["last_seen"], 1_700_000_000);
     assert_eq!(machines[0]["first_seen"], 1_700_000_000);
     assert_eq!(machines[0]["online"], true);
@@ -1077,8 +1077,6 @@ async fn a_broken_machines_file_answers_503_instead_of_an_empty_list() {
                 machine_id: "mac-mini".into(),
                 os: "macos".into(),
                 hostname: "studio".into(),
-                screen_width: 1440,
-                screen_height: 900,
                 last_seen: 1_700_000_000,
                 instance_slug: None,
                 platform: Some(cua_protocol::Platform::Macos),
@@ -1124,8 +1122,6 @@ async fn only_invalid_capabilities_are_recorded_as_none() {
                 machine_id: "mac-mini".into(),
                 os: "macos".into(),
                 hostname: "studio".into(),
-                screen_width: 1440,
-                screen_height: 900,
                 last_seen: 1_700_000_000,
                 instance_slug: None,
                 platform: Some(cua_protocol::Platform::Macos),
@@ -1162,8 +1158,6 @@ async fn an_offline_computer_can_be_forgotten_over_the_api() {
                     machine_id: id.into(),
                     os: "macos".into(),
                     hostname: id.into(),
-                    screen_width: 1440,
-                    screen_height: 900,
                     last_seen: 1_700_000_000,
                     instance_slug: None,
                     platform: Some(cua_protocol::Platform::Macos),
@@ -1262,8 +1256,6 @@ async fn machine_hello_and_bye_never_guess_between_connected_computers() {
                     machine_id: id.into(),
                     os: "macos".into(),
                     hostname: id.into(),
-                    screen_width: 1440,
-                    screen_height: 900,
                     last_seen: 1_700_000_000,
                     instance_slug: None,
                     platform: Some(cua_protocol::Platform::Macos),
@@ -1346,8 +1338,6 @@ async fn machine_hello_and_bye_never_guess_between_connected_computers() {
                 machine_id: "laptop".into(),
                 os: "macos".into(),
                 hostname: "laptop".into(),
-                screen_width: 1440,
-                screen_height: 900,
                 last_seen: 1_700_000_000,
                 instance_slug: None,
                 platform: Some(cua_protocol::Platform::Macos),

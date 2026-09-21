@@ -63,8 +63,6 @@ pub struct MachineRecord {
     /// `None` when the OS label is not one the protocol names.
     pub platform: Option<Platform>,
     pub location: MachineLocation,
-    pub screen_width: u32,
-    pub screen_height: u32,
     /// Desktop permission state at the last registration; `None` when the
     /// desktop did not report it.
     pub permissions: Option<PermissionState>,
@@ -98,8 +96,6 @@ pub struct KnownMachine {
     pub os: String,
     pub platform: Option<Platform>,
     pub location: MachineLocation,
-    pub screen_width: u32,
-    pub screen_height: u32,
     pub permissions: Option<PermissionState>,
     pub capabilities: Vec<String>,
     pub first_seen: i64,

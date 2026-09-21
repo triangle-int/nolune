@@ -9,8 +9,9 @@
 //! only when it is verified, delivery is always background, and a driver's
 //! foreground recommendation is quoted back, never obeyed. What an
 //! observation sees reaches the model as the window's capture (an image
-//! through the upload path) beside a bounded elements table. The coordinate
-//! `computer_use` tool is no longer offered; its type stays until #19.
+//! through the upload path) beside a bounded elements table. These are the
+//! only window tools: the coordinate `computer_use` tool and the desktop
+//! executor behind it are gone (#19).
 
 use std::{
     fmt,
@@ -2364,8 +2365,6 @@ mod tool_tests {
             machine_id: machine_id.into(),
             os: "macos".into(),
             hostname: hostname.into(),
-            screen_width: 1440,
-            screen_height: 900,
             last_seen: chrono::Utc::now().timestamp(),
             instance_slug: None,
             platform: Some(Platform::Macos),

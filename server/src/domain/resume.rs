@@ -365,8 +365,6 @@ mod tests {
             os: "macos".into(),
             platform: Some(Platform::Macos),
             location: MachineLocation::Desktop,
-            screen_width: 2560,
-            screen_height: 1440,
             permissions: Some(PermissionState {
                 accessibility: Permission::Granted,
                 screen_capture: Permission::Granted,

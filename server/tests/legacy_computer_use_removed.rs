@@ -139,7 +139,9 @@ fn the_legacy_desktop_executor_is_gone() {
     let overlay = production("desktop/src-tauri/src/overlay.rs");
     for event in ["\"computer-use-action\"", "\"computer-use-idle\""] {
         if !overlay.contains(event) {
-            violations.push(format!("desktop/src-tauri/src/overlay.rs no longer emits {event}"));
+            violations.push(format!(
+                "desktop/src-tauri/src/overlay.rs no longer emits {event}"
+            ));
         }
     }
     let overlay_page =
