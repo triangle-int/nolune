@@ -18,6 +18,7 @@
 	} from "$lib/api/client.js";
 	import type { ContinuityRecordError, HandoffCard as Card, MachineInfo, ServerEvent } from "$lib/api/types.js";
 	import { resolveHere, upsertCard } from "$lib/continuity/handoff.js";
+	import { handoffAnchor } from "$lib/continuity/resume.js";
 	import { getWebSocket } from "$lib/stores/websocket.svelte.js";
 	import HandoffCard from "./HandoffCard.svelte";
 
@@ -66,6 +67,17 @@
 		} finally {
 			loading = false;
 		}
+		revealTarget();
+	}
+
+	/**
+	 * A resume suggestion (#83) links to its card's list item, whose id is
+	 * `handoffAnchor(record_id)`; the card's own heading keeps
+	 * `handoff-<record_id>` for its accessible name.
+	 */
+	function revealTarget() {
+		if (typeof window === "undefined" || !window.location.hash.startsWith(`#${handoffAnchor("")}`)) return;
+		requestAnimationFrame(() => document.getElementById(window.location.hash.slice(1))?.scrollIntoView({ block: "start" }));
 	}
 
 	let hadConnection = false;
@@ -126,7 +138,7 @@
 		{/if}
 		<ul class="handoffs-list">
 			{#each cards as card (card.record_id)}
-				<li>
+				<li id={handoffAnchor(card.record_id)}>
 					<HandoffCard
 						{card}
 						{machines}
@@ -154,4 +166,6 @@
 	.handoffs-error { max-width: 720px; margin: 0 auto 24px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; color: var(--text-secondary); font: 400 14px/1.6 var(--font-body); }
 	.handoffs-error p { margin: 0; }
 	.handoffs-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+	.handoffs-list li { scroll-margin-top: 16px; }
+	.handoffs-list li:target > :global(.handoff) { outline: 2px solid var(--ring); outline-offset: 2px; }
 </style>

@@ -60,6 +60,7 @@ Unknown fields are rejected. A marker with any other `format_version` or
         ├── continuity/*.json    resumable task records (see below)
         ├── machines.json        every computer that ever connected (see below)
         ├── proactive_policy.json quiet hours, budget, routine intervals
+        ├── resume_ritual.json   Resume my work policy and its one suggestion (docs/proactive-loop.md)
         ├── heartbeat.md         optional guidance for check-ins
         ├── uploads/             user-uploaded files
         ├── drops/               proactive creative artifacts
@@ -93,6 +94,8 @@ or memories it points at.
 | `completed_steps` | what already happened, each with provenance |
 | `blockers` | `machine_unavailable`, `resource_missing` (added and cleared by the server's reference check), or `other` (stated by the user or the tool), each with a detail and provenance |
 | `next_step` | the suggested next step |
+| `priority` | the user's stated priority, `low`, `normal`, or `high`; absent means normal (#83) |
+| `due_at` | when the user wants it done, unix seconds; absent means no deadline (#83) |
 | `handoff` | the user's handoff decision, if any (see [Handoff cards](#handoff-cards)) |
 | `created_at`, `updated_at` | unix seconds |
 | `provenance` | every write: `source` (`user`, `chat`, `tool`, `server`), `at`, and a note |
@@ -110,7 +113,9 @@ and a rename, so a read never overwrites a write that landed in between.
 
 Records are written only by explicit task activity: the
 `task_continuity_update` chat tool, which the companion calls while doing
-work the user asked for, and the API below. Nothing is ever inferred from
+work the user asked for (a stated `priority` and `due` moment included,
+the latter read like a commitment's: RFC 3339, or a local date and time in
+the companion's timezone), and the API below. Nothing is ever inferred from
 screenshots, connected-computer events, check-ins, reflections, or
 schedules, and the tool is not part of any routine's tool set. Only
 `active`, `waiting`, and `ready_to_resume` records are resumable;
@@ -124,7 +129,7 @@ reference is back.
 | --- | --- |
 | `GET /api/instances/companion/continuity?resumable=` | `{records, errors}`, most recently updated first |
 | `GET /api/instances/companion/continuity/{id}` | one record after the reference check |
-| `PUT /api/instances/companion/continuity/{id}` | apply `goal`, `state`, `completed_step`, `blocker`, `clear_blockers`, `next_step`, `machine_ids`, `resources` with a required `note` |
+| `PUT /api/instances/companion/continuity/{id}` | apply `goal`, `state`, `completed_step`, `blocker`, `clear_blockers`, `next_step`, `priority`, `due_at`, `clear_due`, `machine_ids`, `resources` with a required `note` |
 | `POST /api/instances/companion/continuity/{id}/complete` | mark done (optional `note`) |
 | `POST /api/instances/companion/continuity/{id}/dismiss` | dismiss (optional `note`) |
 

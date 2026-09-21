@@ -33,7 +33,7 @@ one section and one scope:
 
 | Section | Route | Owns | Scope |
 |---------|-------|------|-------|
-| Companion | `settings/companion` | Little Moon presence, Learn my rhythm, Initiative (check-in, quiet hours, daily budget, reflection), Timezone, Scheduled messages | companion |
+| Companion | `settings/companion` | Little Moon presence, Learn my rhythm, Initiative (check-in, quiet hours, daily budget, reflection), Resume my work (#83: on/off, break, cooldown, snooze, Suggest now), Timezone, Scheduled messages | companion |
 | Connections | `settings/connections` | Model presets and slots (#156) with capability chips and a connection test per preset (#28), API keys, Connected computers (the compact Connected Spaces list, #80), Companions (peer companions paired through federation, #108: rows with Confirm and Revoke, Invite a companion, Accept an invite, Rotate signing key; see [federation.md](federation.md)), Paired browsers | server |
 | Capabilities | `settings/capabilities` | Skills (registry), Extensions (curated MCP catalog, per-tool grants, custom servers behind the #97 acknowledgement) | server |
 | Data | `settings/data` | What the companion keeps, Export, Import | companion |
