@@ -994,11 +994,16 @@ rate window, and the refusal window are keyed by the peer's companion id;
 when a peer rotates its key they move to its new id in the same step that
 applies the rotation, under the policy lock, so a rotation never sheds a
 denial or refills a budget, and a rotation is refused while the policy
-cannot be loaded rather than applied without the rules that go with it. A
-missing file is the default document and is not written until the owner
-changes something; a file of another version or shape is never repaired
-and never overwritten: nothing is judged until it is repaired or moved
-aside.
+cannot be loaded rather than applied without the rules that go with it.
+The rate limit bounds decisions, not verification: the transport checks
+the signature and reserves the nonce before the policy runs, so a peer past
+its budget still costs one signature check and one replay-guard slot per
+request until the transport lets the gate limit a verified sender before
+its nonce is reserved. Quiet hours are hours (0-23); a document that says
+otherwise is refused on write and unloadable on read. A missing file is
+the default document and is not written until the owner changes something;
+a file of another version or shape is never repaired and never
+overwritten: nothing is judged until it is repaired or moved aside.
 
 `federation/audit.jsonl` (mode `0600`) keeps one receipt per line for every
 decision, on both sides: the requesting companion records what it asked and
