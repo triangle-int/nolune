@@ -1,8 +1,9 @@
 <script lang="ts">
-	import { cancelActivity, fetchActivity, fetchMachines, retryActivity, type MachineInfo } from "$lib/api/client.js";
+	import { ResumeDisabled, cancelActivity, fetchActivity, fetchMachines, invokeResume, retryActivity, type MachineInfo } from "$lib/api/client.js";
 	import type { ProactiveRun, ServerEvent } from "$lib/api/types.js";
 	import { canCancel, canRetry, commitmentConditionLabel, commitmentReceipt, outcomeSummary, relativeTime, runTargetLabel, statusLabel, triggerLabel } from "$lib/activity/receipts.js";
 	import { applyMachineEvent } from "$lib/computers/spaces.js";
+	import { heldMessage } from "$lib/continuity/resume.js";
 	import CommitmentsSection from "$lib/components/commitments/CommitmentsSection.svelte";
 	import { getWebSocket } from "$lib/stores/websocket.svelte.js";
 	import { getToasts } from "$lib/stores/toast.svelte.js";
@@ -78,6 +79,22 @@
 		}
 	}
 
+	// Resume my work (#83): an explicit request for one suggestion; the
+	// suggestion itself appears above the page, and leads to a handoff card.
+	let resuming = $state(false);
+	async function resumeMyWork() {
+		resuming = true;
+		try {
+			const outcome = await invokeResume(slug);
+			if (outcome.suggestion) toast.success(`Suggested: ${outcome.suggestion.goal}`);
+			else toast.info(heldMessage(outcome.held, now));
+		} catch (e) {
+			toast.error(e instanceof ResumeDisabled ? heldMessage({ kind: "disabled" }, now) : "Could not look for work to resume.");
+		} finally {
+			resuming = false;
+		}
+	}
+
 	function approvalNote(run: ProactiveRun): string {
 		const denied = run.approvals.filter((a) => !a.allowed);
 		if (denied.length === 0) return "";
@@ -90,7 +107,10 @@
 	<header class="activity-header">
 		<h2>Activity</h2>
 		<p>What your companion did on its own, why, and what it was allowed to do. Nothing here is private reasoning.</p>
-		<a class="nl-button-secondary activity-drops-link" href={`/${slug}/drops`}>Things it made · Drops</a>
+		<div class="activity-header-actions">
+			<a class="nl-button-secondary" href={`/${slug}/drops`}>Things it made · Drops</a>
+			<button class="nl-button-secondary" disabled={resuming} onclick={resumeMyWork}>{resuming ? "Looking…" : "Resume my work"}</button>
+		</div>
 	</header>
 
 	<HandoffCards {slug} />
@@ -160,7 +180,7 @@
 	.activity-header { max-width: 720px; margin: 0 auto 24px; }
 	.activity-header h2 { font: 400 28px/1.2 var(--font-display); letter-spacing: -0.02em; color: var(--foreground); margin: 0 0 8px; }
 	.activity-header p { font: 400 14px/1.6 var(--font-body); color: var(--text-secondary); margin: 0; }
-	.activity-drops-link { display: inline-flex; margin-top: 12px; }
+	.activity-header-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 	.activity-center { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: 220px; text-align: center; color: var(--text-secondary); font: 400 16px/1.6 var(--font-body); }
 	.empty-text { color: var(--foreground); }
 	.empty-sub { font-size: 14px; }

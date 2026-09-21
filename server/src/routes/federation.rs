@@ -12,8 +12,18 @@
 //! * `POST /api/federation/peers/{companion_id}/revoke` withdraws trust.
 //! * `POST /api/federation/rotate` replaces this companion's key, withdraws
 //!   invites and pending pairings, and tells every paired peer.
+//! * `GET /api/federation/policy` lists the owner's federation policy and
+//!   the defaults that apply where it says nothing (#109).
+//! * `GET /api/federation/receipts` lists the audit receipts, newest first.
+//! * `POST /api/federation/peers/{companion_id}/ping` pings a paired peer
+//!   through its policy and records the answer on this side.
 //!
-//! Peer side, public, verified by signature only:
+//! Peer side, public, verified by signature only. Every verified envelope
+//! is judged by the owner's policy and recorded before it is dispatched
+//! (#109): a refusal is `403` with a `policy_denied`, `approval_required`,
+//! or `deferred` code, or `429 rate_limited`, each carrying the decision in
+//! its wire shape: a rate limit says how long the peer's own window has
+//! left, a deferral says nothing about when the owner's quiet hours end.
 //!
 //! * `POST /federation/v1/pair` redeems an invite with a signed pair request.
 //! * `POST /federation/v1/pair/confirm` and `/revoke` carry signed notices.
@@ -40,7 +50,10 @@ use serde_json::json;
 
 use crate::{
     app::state::AppState,
-    domain::federation::{AcceptInvite, FederationError, SignedEnvelope, TransportEnvelope},
+    domain::{
+        federation::{AcceptInvite, FederationError, SignedEnvelope, TransportEnvelope},
+        federation_policy::{Decision, DecisionReason, Verdict},
+    },
     services::federation::{
         envelope, identity, invite_token,
         pairing::{
@@ -80,6 +93,9 @@ pub fn router() -> Router<AppState> {
             post(revoke_peer),
         )
         .route("/api/federation/rotate", post(rotate_identity))
+        .route("/api/federation/policy", get(show_policy))
+        .route("/api/federation/receipts", get(list_receipts))
+        .route("/api/federation/peers/{companion_id}/ping", post(ping_peer))
 }
 
 /// Mounted outside the auth middleware: a peer has no owner credential and
@@ -159,6 +175,14 @@ impl IntoResponse for ApiError {
             FederationError::Replayed => (StatusCode::FORBIDDEN, "replayed"),
             FederationError::KeyRetired => (StatusCode::FORBIDDEN, "key_retired"),
             FederationError::RotationMismatch => (StatusCode::FORBIDDEN, "rotation_mismatch"),
+            FederationError::PolicyRefused(decision) => (
+                if decision.reason == DecisionReason::RateLimited {
+                    StatusCode::TOO_MANY_REQUESTS
+                } else {
+                    StatusCode::FORBIDDEN
+                },
+                policy_error_code(decision),
+            ),
             FederationError::InviteInvalid => (StatusCode::UNAUTHORIZED, "invalid_invite"),
             FederationError::UnknownPeer => (StatusCode::NOT_FOUND, "unknown_peer"),
             FederationError::PeerNotPaired { .. } => (StatusCode::CONFLICT, "peer_not_paired"),
@@ -174,6 +198,14 @@ impl IntoResponse for ApiError {
                 (StatusCode::SERVICE_UNAVAILABLE, "federation_unavailable")
             }
         };
+        // A policy refusal crosses in its wire shape: the receipt on this
+        // side keeps the whole decision, the peer gets what it may know.
+        let error = match error {
+            FederationError::PolicyRefused(decision) => {
+                FederationError::PolicyRefused(decision.over_the_wire())
+            }
+            other => other,
+        };
         let mut body = json!({ "error": code, "message": error.to_string() });
         match &error {
             FederationError::PeerRefused { status, error } => {
@@ -181,9 +213,32 @@ impl IntoResponse for ApiError {
                 body["peer_error"] = json!(error);
             }
             FederationError::PeerNotPaired { state } => body["state"] = json!(state),
+            FederationError::PolicyRefused(decision) => {
+                body["decision"] = json!(decision);
+                if let Some(secs) = decision.retry_after_secs {
+                    return (
+                        status,
+                        [(header::RETRY_AFTER, secs.to_string())],
+                        Json(body),
+                    )
+                        .into_response();
+                }
+            }
             _ => {}
         }
         (status, Json(body)).into_response()
+    }
+}
+
+/// The error code a policy refusal answers with, by verdict; the requesting
+/// side maps it back to a decision for its own receipt.
+pub(crate) fn policy_error_code(decision: &Decision) -> &'static str {
+    match decision.verdict {
+        Verdict::Allow => "policy_denied",
+        Verdict::Ask => "approval_required",
+        Verdict::Defer => "deferred",
+        Verdict::Deny if decision.reason == DecisionReason::RateLimited => "rate_limited",
+        Verdict::Deny => "policy_denied",
     }
 }
 
@@ -282,6 +337,28 @@ async fn rotate_identity(State(state): State<AppState>) -> Result<Response, ApiE
     Ok(Json(state.federation.rotate_identity().await?).into_response())
 }
 
+async fn show_policy(State(state): State<AppState>) -> Result<Response, ApiError> {
+    Ok(Json(state.federation_gate.policy()?).into_response())
+}
+
+async fn list_receipts(State(state): State<AppState>) -> Result<Response, ApiError> {
+    Ok(Json(json!({ "receipts": state.federation_gate.receipts()? })).into_response())
+}
+
+/// The peer's decision comes back as `200 { decision }` whether it allowed
+/// the ping or refused it by policy; only an unreachable peer or a refusal
+/// that was not a decision is an error.
+async fn ping_peer(
+    State(state): State<AppState>,
+    Path(companion_id): Path<String>,
+) -> Result<Response, ApiError> {
+    let decision = state
+        .federation_gate
+        .send_ping(&state.federation, &companion_id)
+        .await?;
+    Ok(Json(json!({ "decision": decision })).into_response())
+}
+
 async fn pair(State(state): State<AppState>, request: Request) -> Result<Response, ApiError> {
     let envelope = parse_envelope(&read_body(request).await?)?;
     Ok(Json(state.federation.receive_pair_request(&envelope)?).into_response())
@@ -305,7 +382,10 @@ async fn revoke_notice(
 
 async fn ping(State(state): State<AppState>, request: Request) -> Result<Response, ApiError> {
     let envelope = parse_transport(&read_body(request).await?)?;
-    Ok(Json(state.federation.receive_ping(&envelope)?).into_response())
+    let pong = state
+        .federation_gate
+        .receive_ping(&state.federation, &envelope)?;
+    Ok(Json(pong).into_response())
 }
 
 async fn rotation_notice(
@@ -313,5 +393,58 @@ async fn rotation_notice(
     request: Request,
 ) -> Result<Response, ApiError> {
     let envelope = parse_transport(&read_body(request).await?)?;
-    Ok(Json(state.federation.receive_rotation(&envelope)?).into_response())
+    let ack = state
+        .federation_gate
+        .receive_rotation(&state.federation, &envelope)?;
+    Ok(Json(ack).into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn refusal(decision: Decision) -> (StatusCode, Option<String>, serde_json::Value) {
+        let response =
+            ApiError::Federation(FederationError::PolicyRefused(decision)).into_response();
+        let status = response.status();
+        let retry_after = response
+            .headers()
+            .get(header::RETRY_AFTER)
+            .map(|value| value.to_str().unwrap().to_owned());
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        (status, retry_after, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_deferred_refusal_carries_no_quiet_hours_end_time() {
+        // The engine's decision says when the owner's quiet hours end; the
+        // peer is told only that it was deferred, in the body, the message,
+        // and the headers.
+        let deferred = Decision {
+            retry_after_secs: Some(7200),
+            ..Decision::deferred(1_800_007_200)
+        };
+        let (status, retry_after, body) = refusal(deferred).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(retry_after, None, "no Retry-After for a deferral");
+        assert_eq!(body["error"], "deferred");
+        assert_eq!(
+            body["decision"],
+            json!({"verdict": "defer", "reason": "quiet_hours"})
+        );
+        let text = body.to_string();
+        assert!(
+            !text.contains("1800007200") && !text.contains("7200") && !text.contains("until"),
+            "{text}"
+        );
+
+        // A rate-limited peer still learns how long its own window has left.
+        let (status, retry_after, body) = refusal(Decision::rate_limited(45)).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(retry_after.as_deref(), Some("45"));
+        assert_eq!(body["error"], "rate_limited");
+        assert_eq!(body["decision"]["retry_after_secs"], 45);
+    }
 }

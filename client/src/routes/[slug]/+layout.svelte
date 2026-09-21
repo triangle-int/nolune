@@ -10,6 +10,7 @@
 	import { getSkinStore } from "$lib/stores/skin.svelte.js";
 	import { getVoiceState } from "$lib/stores/voice.svelte.js";
 	import InstanceOnboarding from "$lib/components/onboarding/InstanceOnboarding.svelte";
+	import ResumeSuggestion from "$lib/components/continuity/ResumeSuggestion.svelte";
 	import UpdateBanner from "$lib/components/UpdateBanner.svelte";
 	let { children } = $props();
 
@@ -83,6 +84,10 @@
 				</a>
 			{/each}
 		</nav>
+		{/if}
+
+		{#if !presentation.active}
+			<ResumeSuggestion {slug} />
 		{/if}
 
 		<div class="instance-content" class:instance-content-backdrop={activeTab !== "chat"}>

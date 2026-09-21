@@ -100,6 +100,8 @@ export function statusLabel(status) {
 					return "Already running";
 				case "disabled":
 					return "Initiative is off";
+				case "import":
+					return "Held for an import";
 				default:
 					return "Skipped";
 			}

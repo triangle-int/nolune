@@ -322,6 +322,10 @@
 		background: var(--accent);
 		border-color: var(--border);
 	}
+	.settings-page .data-btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
 	
 	.settings-page .sched-list {
 		display: flex;
@@ -388,6 +392,9 @@
 		margin-top: 0.5rem;
 		line-height: 1.5;
 	}
+	/* Import's confirmation is the shared AlertDialog (styled in the Data
+	   page, where it is portaled from); only the progress line lives here. */
+	.settings-page .data-status { font: 400 13px/1.5 var(--font-body); color: var(--text-secondary); margin: 0.5rem 0 0; overflow-wrap: anywhere; }
 
 	
 	.settings-page .model-mode-options {

@@ -114,7 +114,7 @@ async fn retry_activity(
                 .proactive
                 .get(handle.id())
                 .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "run vanished".into()))?;
-            std::mem::forget(handle);
+            handle.leave_pending();
             Ok((StatusCode::ACCEPTED, Json(run)))
         }
         Ok(Admission::Skipped(run)) => Ok((StatusCode::ACCEPTED, Json(run))),

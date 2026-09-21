@@ -18,23 +18,32 @@ format version 1:
 | `reason` | stated, user-readable reason, at most 200 characters |
 | `target` | `companion`, `chat` (with `chat_id`), or `machine` (with `machine_id`) |
 | `dedupe_key` | derived from the trigger; runs sharing a key never execute concurrently |
-| `status` | `running`, `completed`, `failed` (`error`, `retryable`), `cancelled`, or `skipped` (`quiet_hours`, `cooldown`, `duplicate`, `disabled`) |
+| `status` | `running`, `completed`, `failed` (`error`, `retryable`), `cancelled`, or `skipped` (`quiet_hours`, `cooldown`, `duplicate`, `disabled`, `import`) |
 | `attempt`, `retry_of` | attempt number and the id this attempt retries |
 | `approvals` | each side-effect decision: `reach_out`, allowed or not, reason, time |
 | `outcome` | receipts only: tool names with short summaries, `messages_sent`, `tokens` |
 
 Records never contain model text, hidden reasoning, or tool traces. Skips are
-recorded too, so a quiet or rate-limited period stays explainable.
+recorded too, so a quiet or rate-limited period stays explainable. The one
+exception is `skipped/import`: while a companion import (#74) is replacing
+the tree nothing may be written into it, so that skip is returned to the
+caller and logged but not saved; the scheduler leaves the schedule in place
+for a later tick.
 
 ## Lifecycle
 
-1. A trigger calls `begin`. The loop admits or skips it under the policy:
-   disabled → `skipped/disabled`; same `dedupe_key` already running →
+1. A trigger calls `begin`. The loop first takes the process-wide import
+   gate shared (a companion import holding it → `skipped/import`, nothing
+   written), then admits or skips under the policy: disabled →
+   `skipped/disabled`; same `dedupe_key` already running →
    `skipped/duplicate`; spontaneous trigger inside quiet hours →
    `skipped/quiet_hours`; event trigger within `cooldown_secs` of its last
    finish → `skipped/cooldown`.
 2. The worker holds a handle with a cancellation token and ends the run with
-   exactly one of `complete`, `fail`, or `cancel`.
+   exactly one of `complete`, `fail`, or `cancel`. The handle keeps the
+   import gate until then, so an import waits for the run (a bounded time,
+   after which it reports the companion busy) instead of interleaving with
+   the receipts and messages the run writes.
 3. Side effects that leave companion storage (today: `reach_out`) call
    `approve_side_effect`, which denies during quiet hours or once the rolling
    24-hour `daily_reach_out_budget` is spent, and records the decision on the
@@ -311,8 +320,135 @@ Moments are RFC 3339 or a local date and time in the companion's timezone;
 a date alone is the start of that day. Every write is broadcast as
 `commitment_updated` like a write through the API.
 
+## Resume my work (#83)
+
+An opt-in ritual that, when the user comes back or asks, offers at most
+one way to pick unfinished work up again. It is backed only by the
+persisted [continuity records](companion-storage.md#continuity-records)
+and the [known machines](companion-storage.md#known-machines) list: it
+never looks at a screen, at application activity, or at model text. Its
+delivery is the record's [handoff card](companion-storage.md#handoff-cards),
+so nothing continues, and no computer is touched, until the user accepts
+that card; the suggestion itself is a read plus one small file write.
+
+### Policy and state
+
+`instances/companion/resume_ritual.json`, beside `proactive_policy.json`,
+written atomically (a temp file renamed over the record), format version 1:
+
+| Field | Default | Effect |
+| --- | --- | --- |
+| `policy.enabled` | `false` | opt-in; while off, nothing is suggested and the "opened" report is not even recorded |
+| `policy.break_minutes` | 120 | opening Nolune after at least this long away counts as coming back; 1 to 43 200 (30 days) |
+| `policy.cooldown_secs` | 3600 | least gap after a suggestion, or after the user says not now, before the next spontaneous one; 0 (none) to 2 592 000 (30 days) |
+| `policy.snooze_until` | none | no spontaneous suggestion before this moment |
+| `policy.dismissed_record_ids` | `[]` | records never suggested again (at most 200; the oldest makes room); the records themselves are untouched |
+| `state.last_opened_at` | | when the client last reported Nolune being opened or brought back |
+| `state.last_suggested_at`, `state.last_refused_at` | | the moments the cooldown runs from |
+| `state.suggestion` | | the one current suggestion (below), until it is answered or its card is decided |
+
+The proactive policy's `quiet_hours` hold the ritual too: there is one
+clock for every spontaneous surface. The settings page edits only
+`enabled`, `break_minutes`, and `cooldown_secs`; snooze and dismissals have
+routes of their own, so a stale copy of the page can never undo them.
+Because all of this is on disk, quiet hours, cooldown, snooze, dismiss, and
+a refusal hold across restarts. Triggers are taken one at a time under the
+file's lock: two that land together (the client's open report while a
+desktop registers, say) share one cooldown check, so the second is held by
+the first's suggestion, and an answer given while a trigger is ranking is
+applied after its offer rather than overwritten by it.
+
+### Triggers
+
+| Trigger | Source | Holds it |
+| --- | --- | --- |
+| `manual` | `POST /api/instances/companion/resume` ("Resume my work", "Suggest now") | only the ritual being off (`409 resume_disabled`) |
+| `opened_after_break` | `POST .../resume/opened`, sent by the client when the companion opens and when its tab comes back into view; the server measures the gap since the last report and triggers only when it is at least `break_minutes` (`no_break` otherwise) | quiet hours, snooze, cooldown |
+| `machine_connected` | a desktop registering on the machine socket (`routes/machine_agents.rs`, once its registration is accepted): the computer really came back, so the suggestion can say so; only records that name that computer are considered. The browser's `machine-hello` check-in on a page load is not a reconnect and never reaches the ritual; a page load is the `opened_after_break` trigger's business | quiet hours, snooze, cooldown |
+
+A held trigger makes no suggestion and starts no cooldown. The one thing
+a trigger writes before admission is the open report's moment: while the
+ritual is on, every `opened` call moves `state.last_opened_at`, held or
+not, so the next break is measured from the last time Nolune was actually
+opened. The manual trigger re-ranks every time and replaces the current
+suggestion; there is never more than one.
+
+### Ranking
+
+`domain/resume.rs::rank` is pure and deterministic. Of the records behind
+the cards offered right now (resumable, not kept or dismissed on the card,
+after the reference check), it drops the ones whose accepted continuation
+is still running (the user already answered that card; once the outcome
+lands the card is open again and so is the record), the ones the user
+dismissed from the ritual, the ones not updated for 30 days (stale), and
+the ones no connected computer could take right now: a destination is ready when the
+handoff checks against it (online, responding, every required capability,
+no denied permission, no missing or unreachable resource) would refuse
+nothing, judged with a ready model and initiative on. A computer the
+record names is preferred over any other ready one. Among what is left,
+the score adds explicit `priority` (high +300, low -150), the deadline
+(overdue +250, within a day +200, within a week +100, later +25), the
+state (`ready_to_resume` +80, `active` +40), stated blockers (-120 each,
+reference-check blockers -60 each, three of each at most), a named
+computer being ready (+100), and recency (within an hour +60, a day +40, a
+week +20). Ties go to the most recently updated record, then the smaller
+id. The winner's stated reason lists the factors that applied ("high
+priority, due in 3 hours, updated 2 hours ago, studio can take it, where
+it started"), at most 200 characters.
+
+### Suggestion
+
+The suggestion the ritual persists and the API returns:
+
+| Field | Meaning |
+| --- | --- |
+| `id` | `sug_<unix seconds>_<8 hex>` |
+| `record_id`, `goal` | the source record |
+| `trigger` | `manual`, `opened_after_break` (`away_secs`), or `machine_connected` (`machine_id`) |
+| `why_now` | one sentence naming the trigger: "You asked to resume your work.", "You opened Nolune after 3 hours away.", "studio reconnected, and this task names it." |
+| `why_this` | the ranking's stated reason |
+| `destination_id` | the ready computer the ranking found |
+| `suggested_at` | unix seconds |
+| `card` | the record's handoff card at that moment (API and event only, never stored) |
+
+Reading the suggestion back (`GET`) rebuilds the card; a suggestion whose
+record is gone, no longer offered (kept, dismissed, or closed), continuing,
+or accepted since the suggestion was made is resolved then and there, so
+an answer given on the card is an answer to the ritual as well. While the
+ritual is off, `GET` reports no suggestion whatever the file holds.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/instances/companion/resume` | `{policy, suggestion, quiet_hours_active}` |
+| `PUT /api/instances/companion/resume` | `{enabled, break_minutes, cooldown_secs}`; turning the ritual off drops the suggestion; a value outside the bounds above is `400 invalid` and changes nothing |
+| `POST /api/instances/companion/resume` | the manual trigger: `{suggestion}` or `{suggestion: null, held}`; `409 resume_disabled` while off |
+| `POST /api/instances/companion/resume/opened` | the client's open report: the same shape, `held: disabled` while off |
+| `POST /api/instances/companion/resume/refuse` | not now: drops the suggestion and starts the cooldown; `204` |
+| `POST /api/instances/companion/resume/snooze` | `{until}` in the future, or `null` to end the snooze; a snooze drops the suggestion |
+| `POST /api/instances/companion/resume/dismiss` | `{record_id}`: never that record again |
+
+`held` is `disabled`, `quiet_hours`, `cooldown` (`until`), `snoozed`
+(`until`), `no_break`, `nothing_to_resume`, or `storage`. Every change to
+the offer is broadcast as a `resume_updated` server event carrying the
+suggestion with its card, or `null` when it was dropped.
+
+### Client
+
+The suggestion is one panel above the content of every companion tab
+(`lib/components/continuity/ResumeSuggestion.svelte`): the task, why now,
+why this one, the next step, and when it was suggested. **Review and
+continue** opens the task's handoff card under Activity, where Continue
+here, Continue on…, Keep there, and Dismiss are the same four decisions as
+for any card; **Not now**, **Snooze** (1 hour, 4 hours, tomorrow), and
+**Never this task** answer the ritual. The Activity header has **Resume my
+work** for the manual trigger. Settings › Companion holds the controls:
+Suggest resuming on/off with Suggest now, the break, the cooldown, and the
+snooze, with a note that quiet hours hold it. Pure helpers live in
+`lib/continuity/resume.js` (`client/tests/resume.test.mjs`).
+
 ## Migration hooks
 
 #85 adds the commitment trigger and its evaluator; #82 adds the handoff
 trigger, admitted only by the user's acceptance of a handoff card (see
-[companion-storage.md](companion-storage.md#handoff-cards)).
+[companion-storage.md](companion-storage.md#handoff-cards)); #83 adds the
+resume ritual above, which admits nothing itself and leads to that card.

@@ -125,6 +125,8 @@ export interface QuietHours { start_hour: number; end_hour: number }
 
 /** A resumable task record (#81): links and provenance, never file contents. */
 export type ContinuityState = "active" | "waiting" | "ready_to_resume" | "completed" | "dismissed" | "failed";
+/** The user's stated priority on a task (#83); absent means normal. */
+export type ContinuityPriority = "low" | "normal" | "high";
 export type ProvenanceSource = "user" | "chat" | "tool" | "server";
 export interface Provenance { source: ProvenanceSource; at: number; note: string }
 export type ResourceRef =
@@ -149,6 +151,10 @@ export interface ContinuityRecord {
 	completed_steps: ContinuityStep[];
 	blockers: ContinuityBlocker[];
 	next_step?: string;
+	/** The user's stated priority (#83); absent means normal. */
+	priority?: ContinuityPriority | null;
+	/** When the user wants it done, unix seconds (#83); absent means no deadline. */
+	due_at?: number | null;
 	/** The user's handoff decision (#82), absent until one is made. */
 	handoff?: HandoffDecision | null;
 	created_at: number;
@@ -218,6 +224,9 @@ export interface ContinuityUpdate {
 	blocker?: string;
 	clear_blockers?: boolean;
 	next_step?: string;
+	priority?: ContinuityPriority;
+	due_at?: number;
+	clear_due?: boolean;
 	machine_ids?: string[];
 	resources?: ResourceRef[];
 	note: string;
@@ -273,6 +282,53 @@ export interface CommitmentPatch {
 	continuity_ids?: string[];
 }
 export type CommitmentListFilter = "open" | "closed" | "all";
+
+/**
+ * The Resume my work ritual (#83): opt-in, backed only by continuity
+ * records; at most one suggestion per trigger, delivered as a handoff card.
+ */
+export interface ResumeRitualPolicy {
+	enabled: boolean;
+	/** Away for at least this long counts as a break. */
+	break_minutes: number;
+	/** Least seconds between spontaneous suggestions, and after a refusal. */
+	cooldown_secs: number;
+	snooze_until: number | null;
+	dismissed_record_ids: string[];
+}
+/** The editable part of the policy; snooze and dismissals have routes of their own. */
+export type ResumePolicyEdit = Pick<ResumeRitualPolicy, "enabled" | "break_minutes" | "cooldown_secs">;
+export type RitualTrigger =
+	| { kind: "manual" }
+	| { kind: "opened_after_break"; away_secs: number }
+	| { kind: "machine_connected"; machine_id: string };
+/** One bounded suggestion: the record, why it was picked, why now, and the card it leads to. */
+export interface ResumeOffer {
+	id: string;
+	record_id: string;
+	goal: string;
+	trigger: RitualTrigger;
+	why_now: string;
+	why_this: string;
+	destination_id: string;
+	suggested_at: number;
+	card: HandoffCard;
+}
+export type ResumeHeld =
+	| { kind: "disabled" }
+	| { kind: "quiet_hours" }
+	| { kind: "cooldown"; until: number }
+	| { kind: "snoozed"; until: number }
+	| { kind: "no_break" }
+	| { kind: "nothing_to_resume" }
+	| { kind: "storage"; message: string };
+export interface ResumeStatus {
+	policy: ResumeRitualPolicy;
+	suggestion: ResumeOffer | null;
+	quiet_hours_active: boolean;
+}
+/** What a trigger produced: one suggestion, or why there is none. */
+export interface ResumeOutcome { suggestion: ResumeOffer | null; held?: ResumeHeld }
 export interface ProactivePolicy {
 	enabled: boolean;
 	quiet_hours: QuietHours | null;
@@ -538,6 +594,12 @@ export type ServerEvent =
 			type: "handoff_updated";
 			instance_slug: string;
 			card: HandoffCard;
+	  }
+	| {
+			/** The resume ritual's offer changed (#83): a new suggestion, or none. */
+			type: "resume_updated";
+			instance_slug: string;
+			suggestion: ResumeOffer | null;
 	  }
 	| {
 			type: "context_compacting";

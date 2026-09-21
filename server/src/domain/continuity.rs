@@ -49,6 +49,17 @@ pub enum ContinuityState {
     Failed,
 }
 
+/// How much the user wants a task ahead of the others (#83). Stated by the
+/// user or the tool, never inferred.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Priority {
+    Low,
+    #[default]
+    Normal,
+    High,
+}
+
 impl ContinuityState {
     pub const ALL: [Self; 6] = [
         Self::Active,
@@ -217,6 +228,12 @@ impl HandoffDecision {
     pub fn hides_card(&self) -> bool {
         matches!(self, Self::Kept { .. } | Self::Dismissed { .. })
     }
+
+    /// An acceptance whose continuation has not ended: the card says the
+    /// task is continuing and offers no decision until the outcome lands.
+    pub fn is_continuing(&self) -> bool {
+        matches!(self, Self::Accepted { outcome: None, .. })
+    }
 }
 
 /// How the continuation run ended, as the activity record says.
@@ -254,6 +271,12 @@ pub struct ContinuityRecord {
     pub blockers: Vec<Blocker>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_step: Option<String>,
+    /// The user's stated priority (#83); absent means normal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<Priority>,
+    /// When the user wants it done, unix seconds (#83); absent means no deadline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_at: Option<i64>,
     /// The user's handoff decision (#82), if any. Absent on records written
     /// before handoff cards existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -275,6 +298,12 @@ pub struct ContinuityUpdate {
     pub clear_blockers: bool,
     /// `Some("")` clears the next step.
     pub next_step: Option<String>,
+    /// The user's stated priority (#83).
+    pub priority: Option<Priority>,
+    /// The deadline, unix seconds (#83).
+    pub due_at: Option<i64>,
+    /// Drop the deadline.
+    pub clear_due: bool,
     pub machine_ids: Vec<String>,
     pub resources: Vec<ResourceRef>,
 }
@@ -324,6 +353,8 @@ impl ContinuityRecord {
             completed_steps: Vec::new(),
             blockers: Vec::new(),
             next_step: None,
+            priority: None,
+            due_at: None,
             handoff: None,
             created_at: now,
             updated_at: now,
@@ -369,6 +400,15 @@ impl ContinuityRecord {
         if let Some(next_step) = &update.next_step {
             let next_step = bounded(next_step, MAX_NOTE_CHARS);
             next.next_step = (!next_step.is_empty()).then_some(next_step);
+        }
+        if let Some(priority) = update.priority {
+            next.priority = Some(priority);
+        }
+        if update.clear_due {
+            next.due_at = None;
+        }
+        if let Some(due_at) = update.due_at {
+            next.due_at = Some(due_at);
         }
         for machine_id in &update.machine_ids {
             validate_machine_id(machine_id)?;
@@ -1442,5 +1482,58 @@ mod tests {
         let back: ContinuityRecord = serde_json::from_value(json).unwrap();
         assert_eq!(back.handoff, None);
         assert!(back.handoff_offered());
+    }
+
+    #[test]
+    fn priority_and_deadline_are_explicit_optional_fields_that_round_trip() {
+        let mut task = record();
+        assert_eq!((task.priority, task.due_at), (None, None));
+        task.apply(
+            &ContinuityUpdate {
+                priority: Some(Priority::High),
+                due_at: Some(T0 + 3_600),
+                ..Default::default()
+            },
+            by(ProvenanceSource::User, "urgent, by tonight"),
+            T0 + 1,
+        )
+        .unwrap();
+        assert_eq!(task.priority, Some(Priority::High));
+        assert_eq!(task.due_at, Some(T0 + 3_600));
+
+        let json = serde_json::to_string_pretty(&task).unwrap();
+        let back: ContinuityRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, task);
+        assert!(Priority::High > Priority::Normal && Priority::Normal > Priority::Low);
+
+        // An update that says nothing about them leaves them alone; `clear_due` drops the deadline.
+        task.apply(
+            &ContinuityUpdate {
+                completed_step: Some("listed the folder".into()),
+                ..Default::default()
+            },
+            by(ProvenanceSource::Tool, "progress"),
+            T0 + 2,
+        )
+        .unwrap();
+        assert_eq!(task.priority, Some(Priority::High));
+        assert_eq!(task.due_at, Some(T0 + 3_600));
+        task.apply(
+            &ContinuityUpdate {
+                clear_due: true,
+                ..Default::default()
+            },
+            by(ProvenanceSource::User, "no deadline after all"),
+            T0 + 3,
+        )
+        .unwrap();
+        assert_eq!(task.due_at, None);
+
+        // A record written before #83 reads back without them.
+        let mut json = serde_json::to_value(record()).unwrap();
+        json.as_object_mut().unwrap().remove("priority");
+        json.as_object_mut().unwrap().remove("due_at");
+        let back: ContinuityRecord = serde_json::from_value(json).unwrap();
+        assert_eq!((back.priority, back.due_at), (None, None));
     }
 }

@@ -44,10 +44,27 @@ pub struct MemoryMetadata {
     pub len: u64,
 }
 
+/// One name under `imports/` (#74), as the startup recovery sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportEntry {
+    pub name: String,
+    pub kind: ImportEntryKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportEntryKind {
+    Directory,
+    File,
+    /// A symlink or special file: never followed, never removed.
+    Other,
+}
+
 /// Filesystem authority anchored to the configured workspace at startup.
 pub struct MediaStore {
     root: Dir,
     upload_dirs: std::sync::Mutex<HashMap<String, std::sync::Arc<Dir>>>,
+    /// The process-wide import gate (#74); see `services::import_gate`.
+    import_gate: std::sync::Arc<super::import_gate::ImportGate>,
     #[cfg(test)]
     fail_next_write: std::sync::atomic::AtomicBool,
     #[cfg(test)]
@@ -76,6 +93,7 @@ impl MediaStore {
         Ok(Self {
             root: Dir::open_ambient_dir(workspace_root, ambient_authority())?,
             upload_dirs: std::sync::Mutex::new(HashMap::new()),
+            import_gate: super::import_gate::ImportGate::new(),
             #[cfg(test)]
             fail_next_write: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
@@ -85,6 +103,12 @@ impl MediaStore {
             #[cfg(test)]
             legacy_cleanup_failures: std::sync::Mutex::new(std::collections::HashSet::new()),
         })
+    }
+
+    /// The gate every ambient writer of the companion tree holds shared and
+    /// a companion import holds exclusively (#74).
+    pub fn import_gate(&self) -> std::sync::Arc<super::import_gate::ImportGate> {
+        self.import_gate.clone()
     }
 
     fn memory_path(&self, slug: &str, path: &str) -> io::Result<PathBuf> {
@@ -299,6 +323,55 @@ impl MediaStore {
         Ok(Path::new(IMPORTS_DIR).join(validate_single_component(name, "invalid import name")?))
     }
 
+    /// Whether `instances/<slug>` is there as a real directory. A symlink or
+    /// a file at that name is an error, never a companion.
+    pub(crate) fn has_companion_tree(&self, slug: &str) -> io::Result<bool> {
+        validate_slug(slug)?;
+        let target = Path::new("instances").join(slug);
+        match self.root.symlink_metadata(&target) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                Err(invalid_path("companion path is not a real directory"))
+            }
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Every name directly under `imports/`, sorted; empty when the
+    /// directory is absent. Nothing is followed or opened.
+    pub(crate) fn list_imports(&self) -> io::Result<Vec<ImportEntry>> {
+        let imports = Path::new(IMPORTS_DIR);
+        match self.root.symlink_metadata(imports) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(invalid_path("imports directory must be a real directory"));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        }
+        let mut entries = Vec::new();
+        for entry in self.root.read_dir(imports)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let kind = if file_type.is_symlink() {
+                ImportEntryKind::Other
+            } else if file_type.is_dir() {
+                ImportEntryKind::Directory
+            } else if file_type.is_file() {
+                ImportEntryKind::File
+            } else {
+                ImportEntryKind::Other
+            };
+            entries.push(ImportEntry {
+                name: entry.file_name().to_string_lossy().into_owned(),
+                kind,
+            });
+        }
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(entries)
+    }
+
     /// Create `imports/<name>`, which must not exist yet, and hand back the
     /// capability the archive reader extracts into (#74).
     pub(crate) fn create_import(&self, name: &str) -> io::Result<Dir> {
@@ -312,6 +385,41 @@ impl MediaStore {
             .ok_or_else(|| invalid_path("imports directory must be a real directory"))?;
         open_real_child_dir(&imports, name)?
             .ok_or_else(|| invalid_path("import directory must be a real directory"))
+    }
+
+    /// Create `imports/<name>` as a new regular file the import route streams
+    /// a request body into (#74). The handle is opened read-write and
+    /// no-follow, so a name that already exists (a link parked there, an
+    /// earlier upload) is refused rather than reused, and the restore reads
+    /// the archive back through this same handle.
+    pub(crate) fn create_import_upload(&self, name: &str) -> io::Result<cap_std::fs::File> {
+        let relative = Self::import_path(name)?;
+        let imports = Path::new(IMPORTS_DIR);
+        reject_symlinks(&self.root, imports, true)?;
+        self.root.create_dir_all(imports)?;
+        reject_symlinks(&self.root, imports, false)?;
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .follow(FollowSymlinks::No);
+        self.root.open_with(&relative, &options)
+    }
+
+    /// Remove the regular file `imports/<name>`; a missing file is
+    /// already-clean success. Symlinks and directories at that name are left
+    /// in place and reported.
+    pub(crate) fn remove_import_upload(&self, name: &str) -> io::Result<()> {
+        let relative = Self::import_path(name)?;
+        match self.root.symlink_metadata(&relative) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                Err(invalid_path("import upload is not a regular file"))
+            }
+            Ok(_) => self.root.remove_file(&relative),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 
     /// Remove `imports/<name>` and everything under it; a missing directory
@@ -1941,6 +2049,9 @@ mod tests {
         assert!(companion.contains("store.instance_slugs()"));
         assert!(!companion.contains("fs::read_dir"));
 
+        // The import route (#74) streams the request body into imports/ through
+        // the store and hands it to the transactional restore; it never buffers
+        // the archive, resolves a path, or runs tar itself.
         let import_route = routes
             .split("async fn import_instance")
             .nth(1)
@@ -1948,13 +2059,41 @@ mod tests {
             .split("#[cfg(test)]")
             .next()
             .unwrap();
-        for forbidden in ["create_dir", "Command::new", "tar", "multipart", "read("] {
+        for forbidden in [
+            "create_dir",
+            "Command::new",
+            "\"tar\"",
+            "fs::read",
+            "fs::write",
+            "fs::remove",
+            "File::open(",
+            "File::create(",
+            ".bytes()",
+            "to_bytes(",
+            "read_to_end",
+            "workspace_dir",
+            "\"instances\"",
+            "open_ambient_dir",
+            "extract_into(",
+        ] {
             assert!(
                 !import_route.contains(forbidden),
-                "disabled import route contains unsafe operation {forbidden}"
+                "import route contains unsafe operation {forbidden}"
             );
         }
+        for required in ["create_import_upload(", ".chunk()", "restore_companion("] {
+            assert!(
+                import_route.contains(required),
+                "import route does not go through {required}"
+            );
+        }
+        assert!(
+            routes.contains("DefaultBodyLimit::max("),
+            "the import route must bound its request body"
+        );
 
+        // The restore tool (#74) takes an upload id only and opens it through
+        // the media store's held capability; a path never reaches it.
         let restore = include_str!("tools/system.rs")
             .split("impl Tool for ImportProfileTool")
             .nth(1)
@@ -1962,10 +2101,25 @@ mod tests {
             .split("#[cfg(test)]")
             .next()
             .unwrap();
-        for forbidden in ["fs::read", "Command::new", "archive_path", "instance_dir"] {
+        for forbidden in [
+            "fs::",
+            "Command::new",
+            "archive_path",
+            "instance_dir",
+            "workspace_dir",
+            "Path::new(",
+            "PathBuf::from(",
+            "extract_into(",
+        ] {
             assert!(
                 !restore.contains(forbidden),
-                "disabled restore tool contains unsafe operation {forbidden}"
+                "restore tool contains unsafe operation {forbidden}"
+            );
+        }
+        for required in ["open_upload_blob(", "restore_companion_from_agent("] {
+            assert!(
+                restore.contains(required),
+                "restore tool does not go through {required}"
             );
         }
     }
@@ -2108,6 +2262,68 @@ mod tests {
         store.remove_import("staging-2").unwrap();
         assert!(!workspace.path().join("imports/staging-2").exists());
         assert!(workspace.path().join("imports/linked").is_symlink());
+    }
+
+    /// The import route streams a request body into `imports/<name>` before
+    /// the restore reads it back (#74): the file is created new, opened
+    /// no-follow, read back through the same handle, and removed by name
+    /// without ever following a link or touching a directory.
+    #[cfg(unix)]
+    #[test]
+    fn import_uploads_are_regular_files_under_imports_that_links_cannot_redirect() {
+        use std::io::{Read as _, Seek as _, Write as _};
+        use std::os::unix::fs::symlink;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("sentinel"), b"outside").unwrap();
+        let store = MediaStore::open(workspace.path()).unwrap();
+
+        for name in ["../escape.tar.gz", "a/b.tar.gz", "", ".", ".."] {
+            assert!(store.create_import_upload(name).is_err(), "{name:?}");
+            assert!(store.remove_import_upload(name).is_err(), "{name:?}");
+        }
+
+        let mut upload = store.create_import_upload("upload-1.tar.gz").unwrap();
+        upload.write_all(b"archive bytes").unwrap();
+        upload.seek(io::SeekFrom::Start(0)).unwrap();
+        let mut back = Vec::new();
+        upload.read_to_end(&mut back).unwrap();
+        assert_eq!(back, b"archive bytes");
+        assert!(
+            workspace
+                .path()
+                .join("imports/upload-1.tar.gz")
+                .symlink_metadata()
+                .unwrap()
+                .is_file()
+        );
+        assert!(
+            store.create_import_upload("upload-1.tar.gz").is_err(),
+            "an upload name is never reused"
+        );
+
+        // A link at the name is refused on both sides and left in place.
+        symlink(
+            outside.path().join("sentinel"),
+            workspace.path().join("imports/linked.tar.gz"),
+        )
+        .unwrap();
+        assert!(store.create_import_upload("linked.tar.gz").is_err());
+        assert!(store.remove_import_upload("linked.tar.gz").is_err());
+        assert!(workspace.path().join("imports/linked.tar.gz").is_symlink());
+        assert_eq!(
+            std::fs::read(outside.path().join("sentinel")).unwrap(),
+            b"outside"
+        );
+        // A staging directory is not an upload.
+        store.create_import("staging-1").unwrap();
+        assert!(store.remove_import_upload("staging-1").is_err());
+        assert!(workspace.path().join("imports/staging-1").is_dir());
+
+        store.remove_import_upload("upload-1.tar.gz").unwrap();
+        store.remove_import_upload("upload-1.tar.gz").unwrap();
+        assert!(!workspace.path().join("imports/upload-1.tar.gz").exists());
     }
 
     #[cfg(unix)]

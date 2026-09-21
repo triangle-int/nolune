@@ -7,6 +7,11 @@
 //! caller completes, fails, or cancels. Side effects that leave companion
 //! storage ask [`ProactiveLoop::approve_side_effect`], which enforces quiet
 //! hours and the daily attention budget and records the decision on the run.
+//!
+//! An admitted run holds the process-wide import gate (#74) shared until it
+//! is finished, so a companion import never interleaves with the receipts
+//! and messages it writes; while an import holds the gate, `begin` skips
+//! with [`SkipReason::Import`] and records nothing.
 
 use std::{
     collections::HashMap,
@@ -22,6 +27,7 @@ use crate::domain::proactive::{
     ACTIVITY_FORMAT_VERSION, ActionReceipt, Approval, MAX_REASON_CHARS, ProactivePolicy,
     ProactiveRun, RunOutcome, RunStatus, SideEffect, SkipReason, Target, Trigger,
 };
+use crate::services::import_gate::{ImportGate, WriterGuard};
 
 const ACTIVITY_DIR: &str = "activity";
 const POLICY_FILE: &str = "proactive_policy.json";
@@ -78,6 +84,9 @@ pub struct ProactiveLoop {
     active: Arc<Mutex<HashMap<String, Active>>>,
     /// Receipt updates for connected clients (#94). None in tests that do not care.
     events: Option<tokio::sync::broadcast::Sender<crate::domain::events::ServerEvent>>,
+    /// The import gate (#74) every admitted run holds shared. None in tests
+    /// of the loop alone.
+    import_gate: Option<Arc<ImportGate>>,
 }
 
 impl ProactiveLoop {
@@ -87,6 +96,7 @@ impl ProactiveLoop {
             slug: slug.to_owned(),
             active: Arc::new(Mutex::new(HashMap::new())),
             events: None,
+            import_gate: None,
         }
     }
 
@@ -96,6 +106,13 @@ impl ProactiveLoop {
         events: tokio::sync::broadcast::Sender<crate::domain::events::ServerEvent>,
     ) -> Self {
         self.events = Some(events);
+        self
+    }
+
+    /// Hold `gate` shared for every admitted run, and skip runs while a
+    /// companion import holds it (#74).
+    pub fn with_import_gate(mut self, gate: Arc<ImportGate>) -> Self {
+        self.import_gate = Some(gate);
         self
     }
 
@@ -144,6 +161,12 @@ impl ProactiveLoop {
         }
     }
 
+    /// Whether the policy's quiet hours are active at `now`: the one clock
+    /// every spontaneous surface holds by, the resume ritual included (#83).
+    pub fn quiet_hours_now(&self, now: i64) -> bool {
+        self.in_quiet_hours(&self.policy(), now)
+    }
+
     // ── lifecycle ──────────────────────────────────────────────────────────
 
     pub fn begin(&self, trigger: Trigger, reason: &str, target: Target) -> Admission {
@@ -163,7 +186,6 @@ impl ProactiveLoop {
         now: i64,
         retry: Option<Retry>,
     ) -> Admission {
-        let policy = self.policy();
         let dedupe_key = trigger.dedupe_key();
         let reason: String = reason.chars().take(MAX_REASON_CHARS).collect();
         let id = new_run_id(now);
@@ -188,6 +210,24 @@ impl ProactiveLoop {
             outcome: None,
         };
 
+        // Before anything is read or written: while an import holds the
+        // gate the tree is being replaced, so even a skipped record must
+        // not be saved.
+        let writer = match &self.import_gate {
+            Some(gate) => match gate.try_writer() {
+                Some(writer) => Some(writer),
+                None => {
+                    run.status = RunStatus::Skipped {
+                        reason: SkipReason::Import,
+                    };
+                    run.finished_at = Some(now);
+                    return Admission::Skipped(run);
+                }
+            },
+            None => None,
+        };
+
+        let policy = self.policy();
         let skip = if !policy.enabled {
             Some(SkipReason::Disabled)
         } else if let Some(active) = self.active_id(&dedupe_key) {
@@ -226,6 +266,7 @@ impl ProactiveLoop {
             r#loop: self.clone(),
             run,
             token,
+            _writer: writer,
         })
     }
 
@@ -486,6 +527,9 @@ pub struct RunHandle {
     r#loop: ProactiveLoop,
     run: ProactiveRun,
     token: CancellationToken,
+    /// The shared hold on the import gate (#74), released with the handle
+    /// once the final record is written.
+    _writer: Option<WriterGuard>,
 }
 
 impl RunHandle {
@@ -530,6 +574,15 @@ impl RunHandle {
     pub fn cancel_at(self, now: i64) -> ProactiveRun {
         let run = self.reload();
         self.r#loop.finish(run, RunStatus::Cancelled, now)
+    }
+
+    /// Leave the run recorded as running for another owner to finish (the
+    /// activity route's retry of a worker-owned trigger) and give up the
+    /// handle. Its hold on the import gate goes with it: nothing writes on
+    /// behalf of this run until its owner takes it up, and a handle that
+    /// were merely forgotten would refuse every later import as busy.
+    pub fn leave_pending(self) {
+        drop(self);
     }
 
     /// Approvals may have been appended by tools while the run executed.

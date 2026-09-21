@@ -731,6 +731,7 @@ pub fn build_tools(
     mcp_tools: Vec<Box<dyn ToolDyn>>,
     github_token: Option<String>,
     vector_store: Arc<crate::services::vector::VectorStore>,
+    agent_tasks: Arc<tokio::sync::Mutex<HashMap<String, tokio_util::sync::CancellationToken>>>,
     machine_registry: crate::services::machine_registry::MachineRegistry,
     machine_target: MachineTarget,
     public_url: &str,
@@ -892,9 +893,10 @@ pub fn build_tools(
         events.clone(),
     ))));
     tools.push(wrap(Box::new(ImportProfileTool::new(
-        workspace_dir,
         instance_slug,
+        chat_id,
         vector_store.clone(),
+        agent_tasks,
     ))));
     // ── Email (SMTP/IMAP) ──
     for email_tool in configured_email_tools(email_accounts) {

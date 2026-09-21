@@ -39,7 +39,9 @@ Unknown fields are rejected. A marker with any other `format_version` or
 │   ├── identity.json            public, self-signed identity document
 │   ├── signing_key.json         private Ed25519 seed, mode 0600
 │   ├── peers.json               paired companions and their key rotations
-│   └── rotations.json           this companion's own key rotations
+│   ├── rotations.json           this companion's own key rotations
+│   ├── policy.json              what each paired peer may ask for (#109)
+│   └── audit.jsonl              receipts for every judged intent, both sides
 ├── skills/                      installed skills (global)
 ├── vectors/                     derived vector index, keyed by slug
 ├── imports/                     restore staging (see Restore below); empty between imports unless a crash left a tree behind
@@ -58,6 +60,7 @@ Unknown fields are rejected. A marker with any other `format_version` or
         ├── continuity/*.json    resumable task records (see below)
         ├── machines.json        every computer that ever connected (see below)
         ├── proactive_policy.json quiet hours, budget, routine intervals
+        ├── resume_ritual.json   Resume my work policy and its one suggestion (docs/proactive-loop.md)
         ├── heartbeat.md         optional guidance for check-ins
         ├── uploads/             user-uploaded files
         ├── drops/               proactive creative artifacts
@@ -91,6 +94,8 @@ or memories it points at.
 | `completed_steps` | what already happened, each with provenance |
 | `blockers` | `machine_unavailable`, `resource_missing` (added and cleared by the server's reference check), or `other` (stated by the user or the tool), each with a detail and provenance |
 | `next_step` | the suggested next step |
+| `priority` | the user's stated priority, `low`, `normal`, or `high`; absent means normal (#83) |
+| `due_at` | when the user wants it done, unix seconds; absent means no deadline (#83) |
 | `handoff` | the user's handoff decision, if any (see [Handoff cards](#handoff-cards)) |
 | `created_at`, `updated_at` | unix seconds |
 | `provenance` | every write: `source` (`user`, `chat`, `tool`, `server`), `at`, and a note |
@@ -108,7 +113,9 @@ and a rename, so a read never overwrites a write that landed in between.
 
 Records are written only by explicit task activity: the
 `task_continuity_update` chat tool, which the companion calls while doing
-work the user asked for, and the API below. Nothing is ever inferred from
+work the user asked for (a stated `priority` and `due` moment included,
+the latter read like a commitment's: RFC 3339, or a local date and time in
+the companion's timezone), and the API below. Nothing is ever inferred from
 screenshots, connected-computer events, check-ins, reflections, or
 schedules, and the tool is not part of any routine's tool set. Only
 `active`, `waiting`, and `ready_to_resume` records are resumable;
@@ -122,7 +129,7 @@ reference is back.
 | --- | --- |
 | `GET /api/instances/companion/continuity?resumable=` | `{records, errors}`, most recently updated first |
 | `GET /api/instances/companion/continuity/{id}` | one record after the reference check |
-| `PUT /api/instances/companion/continuity/{id}` | apply `goal`, `state`, `completed_step`, `blocker`, `clear_blockers`, `next_step`, `machine_ids`, `resources` with a required `note` |
+| `PUT /api/instances/companion/continuity/{id}` | apply `goal`, `state`, `completed_step`, `blocker`, `clear_blockers`, `next_step`, `priority`, `due_at`, `clear_due`, `machine_ids`, `resources` with a required `note` |
 | `POST /api/instances/companion/continuity/{id}/complete` | mark done (optional `note`) |
 | `POST /api/instances/companion/continuity/{id}/dismiss` | dismiss (optional `note`) |
 
@@ -675,20 +682,39 @@ refused as truncated rather than restored with files missing.
 ### Restore
 
 `services/profile_import.rs` (#74) replaces the companion with an archive in
-one transaction under the companion's lifecycle gate, the same
-`VectorStore::lifecycle_lock` every memory write, delete, media replacement,
-and backfill holds. A memory write that arrives during an import waits and
-then lands in the imported tree; two imports serialize the same way. Once
-the busy check below has passed, the transaction runs on a task of its own
-that owns the gate: a caller that stops waiting (an HTTP client that
-disconnects drops the handler future) detaches from the import rather than
-stopping it between two steps, and the import finishes on its own and logs
-its result.
+one transaction under two gates. The first is the companion's lifecycle
+gate, the same `VectorStore::lifecycle_lock` every memory write, delete,
+media replacement, and backfill holds: a memory write that arrives during
+an import waits and then lands in the imported tree, and two imports
+serialize the same way. The second is the process-wide import gate
+(`services/import_gate.rs`, reached through `MediaStore::import_gate`),
+which every writer that reaches the tree through plain paths holds
+*shared* while it runs: the companion boundary holds it for every admitted
+mutating request (`POST`, `PUT`, `PATCH`, `DELETE` with a slug, the import
+route excepted) from before `ensure_identity` until the response is built,
+`POST /api/chat` holds it until the message is saved and the agent loop is
+registered, and every admitted proactive run (`ProactiveLoop::begin`:
+heartbeat, schedule, commitment check-in, handoff continuation, machine
+connect) holds it until the run is completed, failed, or cancelled. The
+import holds it *exclusively* from its busy check until the previous tree
+is discarded, so a request that arrives during an import waits and then
+runs against the imported tree, and a run that would start then is skipped
+(`skipped/import`) without writing a record. Once the busy check below has
+passed, the transaction runs on a task of its own that owns both gates: a
+caller that stops waiting (an HTTP client that disconnects drops the
+handler future) detaches from the import rather than stopping it between
+two steps, and the import finishes on its own and logs its result.
 
-1. **Refuse while busy.** While chat or scheduler agent tasks exist for the
-   companion (they write through ambient paths the gate does not cover) the
-   restore returns a typed `busy` error before anything is staged; the route
-   maps it to `409`.
+1. **Refuse while busy.** The import takes the lifecycle gate, then waits
+   up to ten seconds for ambient writers in flight to release the import
+   gate; writers that outlast that (a proactive run in the middle of a
+   model call) are reported, never interrupted. Then, while agent loops
+   exist for the companion (`agent_tasks`; they write through plain paths
+   and hold no gate, and only the conversation running the `restore_backup`
+   tool is discounted, because it is blocked on the call), the restore
+   returns a typed `busy` error before anything is staged. The route maps
+   both refusals to `409 companion_busy`, and answers the agent-loop one
+   before it reads the request body.
 2. **Stage.** The archive is extracted into `imports/staging-<id>/` through
    the workspace capability. `imports/` is a top-level directory, never a
    sibling under `instances/`, so a half-extracted tree is never mistaken
@@ -719,24 +745,61 @@ its result.
 6. **Discard the previous tree.** `imports/previous-<id>` is removed only
    after the new tree is in place and derived state has been handled.
 
-The busy check covers agent tasks only. Writers that create the companion
-directory ambiently (`companion_boundary::admit`'s `ensure_identity` on
-every `POST`/`PUT`/`PATCH` with a slug, the proactive loop, the scheduler)
-are not gated yet, so one of them can still recreate `instances/companion`
-in the window between the two renames: the second rename then fails with
-`AlreadyExists`, the rollback fails the same way, and the error names
-`imports/previous-<id>`. A process-wide import-in-progress gate those
-writers consult belongs with the route wiring in the last #74 slice.
+Should a writer that holds neither gate ever recreate `instances/companion`
+between the two renames, the second rename fails with `AlreadyExists`, the
+rollback fails the same way, and the error names `imports/previous-<id>`:
+the previous tree is intact, never lost.
 
-If the process dies between the two renames, the previous companion is at
-`imports/previous-<id>`; move it back to `instances/companion` by hand. A
-crash during extraction leaves `imports/staging-<id>` behind. A startup
-recovery (move a lone `previous-*` back when `instances/companion` is
-missing, sweep the rest of `imports/`) belongs to `main.rs` and lands with
-the route wiring. Wiring the multipart route, the `restore_backup` tool,
-and the `nolune restore` CLI to this restore is that last #74 slice; until
-it lands, `POST /api/instances/companion/import` answers `501` and the tool
-stays disabled.
+**Startup recovery.** `profile_import::recover_on_startup` runs in
+`main.rs` before the obsolete-directory report, the migration, and every
+writer, and reconciles what a crash left under `imports/`:
+
+- `instances/companion` missing and exactly one `imports/previous-<id>`:
+  the process died between the two renames; the parked tree is moved back
+  and the companion is byte for byte what it was before the import. The
+  derived index was never rebuilt, so it still describes that tree.
+- `instances/companion` present and a `previous-*` beside it: the swap had
+  published the import; the parked tree is the replaced data and is
+  removed, and because the derived rebuild may not have run the vector
+  collection is reset so the startup backfill re-indexes the live tree.
+- `instances/companion` missing and several `previous-*` trees: nothing is
+  moved; the log names them for an operator to choose.
+- `staging-*` directories and `upload-*` archives are removed. Anything
+  else under `imports/`, and any symlink there, is left alone and logged.
+
+Three surfaces reach this restore, and nothing else writes the companion
+tree wholesale:
+
+- `POST /api/instances/companion/import` takes a multipart `file` field.
+  The body streams into `imports/upload-<id>.companion.tar.gz` through the
+  workspace capability as it arrives (bounded by a `DefaultBodyLimit` just
+  above the reader's 8 GiB payload cap, never buffered in memory), the
+  restore reads it from there, and the file is removed afterwards. The
+  answer is `200` with `{ok, files, directories, bytes, derived_index,
+  pending_reason?, indexed_chunks}`; `409 companion_busy` while an agent
+  task runs; `400 archive_refused` (or `413 archive_too_large`) for an
+  archive the reader rejects, with the companion exactly as it was; `500
+  import_failed` or `import_stranded` (the message names
+  `imports/previous-<id>`) when the swap itself failed. The Data settings
+  page asks once, in the destructive confirmation dialog, before sending
+  and shows the upload and the restore.
+- The `restore_backup` tool takes only the upload id (`upload_<id>`) of an
+  archive attached to the chat or produced by `create_backup`, opened
+  through `MediaStore::open_upload_blob`, and only with
+  `confirmed_by_user: true`, the user's explicit confirmation in that
+  conversation: without it the tool refuses before anything is looked up,
+  so text the model read cannot trigger a replacement. A path from the
+  model is refused the same way. The conversation running the tool is
+  blocked on it and does not count as busy; every other one still does.
+  That conversation's remaining turn appends to the imported tree, with
+  one caveat: a server-side compaction later in the same turn rewrites the
+  chat's history from the loop's in-memory messages, which predate the
+  restore. The tool's answer therefore asks the model to end the turn, and
+  a fresh message afterwards loads the imported history.
+- `nolune restore <archive> [--yes] [--profile <name>]` posts an
+  operator-chosen local file to the local API with the token from
+  `config.toml`. The CLI never opens the archive beyond streaming it, so
+  the server's validation is the only path into the companion.
 
 ## Federation identity
 
@@ -956,6 +1019,96 @@ acknowledged again without being applied twice. The peer answers with a
 `rotation_ack` addressed to the new identity. Companion ids are derived from
 keys, so a rotated companion has a new id; the transition record ties the
 two together, and both histories can be re-verified at any time.
+
+### Policy and audit
+
+A paired peer has no implicit access to anything (#109). Every verified
+envelope is classified into an intent (`ping`, `message`, `availability`,
+`reminder`, `proposal`) and a disclosure class (`none`, `availability`,
+`personal`, `sensitive`: what an answer would reveal about this owner),
+judged against `federation/policy.json` (mode `0600`, beside `peers.json`),
+and recorded before anything is dispatched. Memory and tool access have no
+intent class: there is nothing to grant. A kind or class the server does
+not know is denied and recorded as `unknown`, with the name the peer used
+reduced to `[a-z0-9_]` and bounded.
+
+```json
+{
+  "version": 1,
+  "quiet_hours": { "start_hour": 22, "end_hour": 7, "timezone": "Europe/Berlin" },
+  "rate_limit": { "max_requests": 60, "window_secs": 60 },
+  "peers": {
+    "<companion_id>": {
+      "rules": [
+        { "intent": "message", "disclosure": "none", "access": "allow", "granted_at": 1789862400, "expires_at": 1790467200 }
+      ],
+      "rate_limit": { "max_requests": 10, "window_secs": 60 }
+    }
+  }
+}
+```
+
+A rule is `allow`, `ask` (the owner decides each time), or `deny` for one
+intent at one disclosure class, and matches exactly: a grant at one class
+says nothing about another. From `expires_at` on the rule no longer applies
+and the default does. Where no rule applies, the defaults are closed: only a
+`ping` at `none` is allowed (pairing is the consent to be reachable; a ping
+discloses nothing more); a `message`, a `reminder`, a `proposal`, and an
+`availability` query at `availability` ask the owner; the `sensitive` class
+and any combination an intent cannot disclose at are denied. The checks run
+in a fixed order and each one short-circuits: a revoked or unpaired peer is
+denied whatever the rules say; past the rate limit (the document's, or the
+peer's own) the answer is a denial with a retry-after and nothing further is
+consulted; then the rules; and inside quiet hours (read in the given IANA
+zone, UTC when unset) anything that would land in front of the owner, or
+would ask them, is deferred until they end. Owners revoke a rule or a peer
+by removing it, and the very next evaluation sees the change. Rules, the
+rate window, and the refusal window are keyed by the peer's companion id;
+when a peer rotates its key they move to its new id in the same step that
+applies the rotation, under the policy lock, so a rotation never sheds a
+denial or refills a budget, and a rotation is refused while the policy
+cannot be loaded rather than applied without the rules that go with it.
+The rate limit bounds decisions, not verification: the transport checks
+the signature and reserves the nonce before the policy runs, so a peer past
+its budget still costs one signature check and one replay-guard slot per
+request until the transport lets the gate limit a verified sender before
+its nonce is reserved. Quiet hours are hours (0-23); a document that says
+otherwise is refused on write and unloadable on read. A missing file is
+the default document and is not written until the owner changes something;
+a file of another version or shape is never repaired and never
+overwritten: nothing is judged until it is repaired or moved aside.
+
+`federation/audit.jsonl` (mode `0600`) keeps one receipt per line for every
+decision, on both sides: the requesting companion records what it asked and
+what came back, the answering companion records what it was asked and what
+it decided. A receipt names the requester and responder ids, the pairing
+(which a key rotation does not change), the intent and disclosure class,
+the decision (verdict, reason, retry-after or deferred-until) and the time,
+plus a one-line summary built from those names. Receipts never contain what
+the peer sent: no body, message, or text field exists in the shape, and
+unknown fields are refused. Retention is bounded like proactive run
+records: the newest 1000 overall, the newest 200 per pairing under every id
+the peer has had (so one chatty peer cannot push the others out, and cannot
+start over by rotating its key), and nothing older than 30 days; past a
+bound the file is compacted through a temporary file and a rename.
+Repeated refusals of one kind from one peer inside a minute are recorded
+once. A log this build cannot load or write refuses every intent: a
+decision is not made without its receipt.
+
+Over the wire a refusal is `403` with `policy_denied`, `approval_required`,
+or `deferred`, or `429 rate_limited`, each carrying the decision in its wire
+shape: a rate limit says how long the peer's own window has left (as a
+`Retry-After` header too), while a deferral says only that it was deferred,
+because when the owner's quiet hours end is the owner's schedule and stays
+in the owner's receipt; a revoked or unpaired sender keeps its own code and
+is recorded too, because its signature was checked before its state. Key rotation notices are trust maintenance rather than intents: they
+are gated by the peer's state and recorded as `key_rotation` once accepted.
+`GET /api/federation/policy` lists the document and the defaults table;
+`GET /api/federation/receipts` lists the receipts, newest first; both are
+read-only. Peer text is data, never instructions: it has no accessor and
+can only be rendered inside a delimited block that names it as untrusted
+content from a named companion, framed by a boundary the text cannot
+predict, and it never becomes a tool argument.
 
 ## Changing this format
 

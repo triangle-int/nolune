@@ -56,7 +56,15 @@ async fn post_chat(
     State(state): State<AppState>,
     Json(request): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, axum::response::Response> {
-    // The body names the companion; admit it exactly like a path parameter.
+    // The body names the companion; admit it exactly like a path parameter,
+    // holding the import gate (#74) until the message is saved and the
+    // agent loop is registered, so an import never interleaves with either.
+    let _writer = state
+        .vector_store
+        .media_store()
+        .import_gate()
+        .writer()
+        .await;
     crate::app::companion_boundary::admit(
         &state.workspace_dir,
         &request.instance_slug,
@@ -352,6 +360,7 @@ pub async fn run_agent_loop(
             &state.mcp_registry,
             voice_mode,
             state.vector_store.clone(),
+            state.agent_tasks.clone(),
             state.machine_registry.clone(),
             machine_target.as_deref(),
             &public_url,

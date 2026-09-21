@@ -207,6 +207,19 @@ pub async fn list(state: &AppState, now: i64) -> Listing {
     }
 }
 
+/// The records behind the cards offered right now, after the reference
+/// check, most recently updated first: what the resume ritual (#83) ranks.
+/// A read, like `list`; the ritual never writes a record.
+pub async fn offered_records(state: &AppState, now: i64) -> Vec<ContinuityRecord> {
+    let (records, _) = store(state)
+        .list_validated(&state.machine_registry, now, true)
+        .await;
+    records
+        .into_iter()
+        .filter(ContinuityRecord::handoff_offered)
+        .collect()
+}
+
 /// The record after the reference check, so the card and the checks see
 /// the same blockers the continuity API reports.
 async fn validated(state: &AppState, id: &str, now: i64) -> Result<ContinuityRecord, HandoffError> {

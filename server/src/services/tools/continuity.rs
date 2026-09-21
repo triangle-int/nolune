@@ -4,14 +4,14 @@
 //! or reflection routines and never reacts to screenshots or any other
 //! passive observation.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::domain::continuity::{
-    ContinuityRecord, ContinuityState, ContinuityUpdate, Origin, Provenance, ProvenanceSource,
-    ResourceRef,
+    ContinuityRecord, ContinuityState, ContinuityUpdate, Origin, Priority, Provenance,
+    ProvenanceSource, ResourceRef,
 };
 use crate::services::continuity::ContinuityStore;
 use crate::services::tool::{Tool, ToolDefinition};
@@ -20,6 +20,8 @@ use super::{ToolExecError, openai_schema};
 
 pub struct TaskContinuityUpdateTool {
     store: ContinuityStore,
+    /// For the companion's timezone, which a stated deadline is read in.
+    instance_dir: PathBuf,
     chat_id: String,
 }
 
@@ -27,8 +29,13 @@ impl TaskContinuityUpdateTool {
     pub fn new(workspace_dir: &Path, instance_slug: &str, chat_id: &str) -> Self {
         Self {
             store: ContinuityStore::new(workspace_dir, instance_slug),
+            instance_dir: workspace_dir.join("instances").join(instance_slug),
             chat_id: chat_id.to_owned(),
         }
+    }
+
+    fn tz(&self) -> chrono_tz::Tz {
+        crate::services::commitment_evaluator::instance_timezone(&self.instance_dir)
     }
 }
 
@@ -62,6 +69,12 @@ pub struct TaskContinuityUpdateArgs {
     /// The next suggested step, or an empty string to clear it.
     #[serde(default)]
     pub next_step: Option<String>,
+    /// How much the user wants this ahead of other tasks, when they said so: low, normal, or high.
+    #[serde(default)]
+    pub priority: Option<String>,
+    /// When the user wants it done, when they said so: RFC 3339, a local date and time like 2026-01-06T09:00 in the companion's timezone, or a date. An empty string clears it.
+    #[serde(default)]
+    pub due: Option<String>,
     /// Computers involved (ids from list_machines).
     #[serde(default)]
     pub machine_ids: Vec<String>,
@@ -79,7 +92,26 @@ pub struct TaskContinuityUpdateArgs {
 }
 
 impl TaskContinuityUpdateArgs {
-    fn update(&self) -> Result<ContinuityUpdate, ToolExecError> {
+    fn update(&self, tz: chrono_tz::Tz) -> Result<ContinuityUpdate, ToolExecError> {
+        let priority = match self.priority.as_deref().map(str::trim) {
+            None | Some("") => None,
+            Some(priority) => Some(
+                serde_json::from_value::<Priority>(serde_json::Value::String(priority.to_owned()))
+                    .map_err(|_| {
+                        ToolExecError(format!(
+                            "unknown priority {priority:?}; use low, normal, or high"
+                        ))
+                    })?,
+            ),
+        };
+        let (due_at, clear_due) = match self.due.as_deref().map(str::trim) {
+            None => (None, false),
+            Some("") => (None, true),
+            Some(due) => (
+                Some(super::commitments::parse_when(due, tz).map_err(ToolExecError)?),
+                false,
+            ),
+        };
         let state = match self.state.as_deref().map(str::trim) {
             None | Some("") => None,
             Some(state) => Some(
@@ -125,6 +157,9 @@ impl TaskContinuityUpdateArgs {
             blocker: self.blocker.clone(),
             clear_blockers: self.clear_blockers,
             next_step: self.next_step.clone(),
+            priority,
+            due_at,
+            clear_due,
             machine_ids: self.machine_ids.clone(),
             resources,
         })
@@ -138,6 +173,8 @@ fn summary(record: &ContinuityRecord) -> serde_json::Value {
         "state": record.state,
         "goal": record.goal,
         "next_step": record.next_step,
+        "priority": record.priority,
+        "due_at": record.due_at,
         "completed_steps": record.completed_steps.len(),
         "blockers": record
             .blockers
@@ -162,14 +199,14 @@ impl Tool for TaskContinuityUpdateTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.into(),
-            description: "Record explicit progress on a task the user asked you to do, so it can be resumed later in another chat or on another device: goal, state, finished steps, blockers, next step, and the computers, uploads, and memory paths involved (as links). Call it when such a task starts, finishes a step, gets blocked, changes state, or completes. Only record work the user asked for; never record things you merely observed.".into(),
+            description: "Record explicit progress on a task the user asked you to do, so it can be resumed later in another chat or on another device: goal, state, finished steps, blockers, next step, the priority and deadline the user stated, and the computers, uploads, and memory paths involved (as links). Call it when such a task starts, finishes a step, gets blocked, changes state, or completes. Only record work the user asked for; never record things you merely observed.".into(),
             parameters: openai_schema::<TaskContinuityUpdateArgs>(),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let now = chrono::Utc::now().timestamp();
-        let update = args.update()?;
+        let update = args.update(self.tz())?;
         let provenance = Provenance {
             source: ProvenanceSource::Tool,
             at: now,

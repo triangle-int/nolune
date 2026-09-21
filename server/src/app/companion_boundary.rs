@@ -6,12 +6,19 @@
 //! second companion. Canonical reads never create storage; canonical writes
 //! create-or-open the companion through the identity marker, and an
 //! unsupported marker refuses both with `503 companion_format_unsupported`.
+//!
+//! A mutating request also holds the process-wide import gate (#74) shared
+//! from before it is admitted until its response is built, so a companion
+//! import never interleaves with it: the request either finishes before the
+//! import replaces the tree or runs against the imported tree afterwards.
+//! The import route itself is the one exception; it takes the exclusive
+//! side of the gate inside its handler.
 
 use std::{collections::HashMap, path::Path};
 
 use axum::{
     Json,
-    extract::{Path as PathParams, Request, State, rejection::PathRejection},
+    extract::{MatchedPath, Path as PathParams, Request, State, rejection::PathRejection},
     http::{Method, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
@@ -92,16 +99,42 @@ pub fn admit(workspace_dir: &Path, slug: &str, method: &Method) -> Result<(), Co
     Ok(())
 }
 
+/// Methods that never write the companion tree and hold no gate.
+fn is_read_only(method: &Method) -> bool {
+    matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
+}
+
 pub async fn companion_boundary(
     State(state): State<AppState>,
     params: Result<PathParams<HashMap<String, String>>, PathRejection>,
     request: Request,
     next: Next,
 ) -> Response {
-    if let Ok(PathParams(params)) = params
-        && let Some(slug) = params.get(SLUG_PARAM)
-        && let Err(rejection) = admit(&state.workspace_dir, slug, request.method())
-    {
+    let Ok(PathParams(params)) = params else {
+        return next.run(request).await;
+    };
+    let Some(slug) = params.get(SLUG_PARAM) else {
+        return next.run(request).await;
+    };
+    // Held until the response is built; `DELETE` writes too, only `admit`
+    // treats it as read-only because it never creates the companion.
+    let is_import = request
+        .extensions()
+        .get::<MatchedPath>()
+        .is_some_and(|path| path.as_str() == crate::routes::instances::IMPORT_ROUTE);
+    let _writer = if is_read_only(request.method()) || is_import {
+        None
+    } else {
+        Some(
+            state
+                .vector_store
+                .media_store()
+                .import_gate()
+                .writer()
+                .await,
+        )
+    };
+    if let Err(rejection) = admit(&state.workspace_dir, slug, request.method()) {
         return rejection.into_response();
     }
     next.run(request).await

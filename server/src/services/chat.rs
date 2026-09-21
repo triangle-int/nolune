@@ -119,6 +119,9 @@ pub async fn run_single_turn(
     mcp_registry: &crate::services::mcp::McpRegistry,
     voice_mode: bool,
     vector_store: std::sync::Arc<crate::services::vector::VectorStore>,
+    agent_tasks: std::sync::Arc<
+        tokio::sync::Mutex<std::collections::HashMap<String, tokio_util::sync::CancellationToken>>,
+    >,
     machine_registry: crate::services::machine_registry::MachineRegistry,
     machine_target: Option<&str>,
     public_url: &str,
@@ -490,6 +493,7 @@ pub async fn run_single_turn(
         mcp_tools,
         github_token,
         vector_store.clone(),
+        agent_tasks,
         machine_registry,
         machine_target,
         &public_url,

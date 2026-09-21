@@ -65,6 +65,8 @@ pub struct AppState {
     pub browser_sessions: Arc<BrowserSessionStore>,
     /// Federation identity and peers (#108); the keystore under `workspace_dir` opens on first use.
     pub federation: Arc<crate::services::federation::pairing::FederationState>,
+    /// Federation policy and audit (#109): every verified envelope is judged and recorded here.
+    pub federation_gate: Arc<crate::services::federation::gate::FederationGate>,
     /// The server-local computer-use target (#16): idle until the gateway calls `start`,
     /// so building a state never spawns a driver.
     pub cua: crate::services::cua::runtime::CuaRuntime,
@@ -100,6 +102,10 @@ impl AppState {
             &workspace_dir,
             http_client.clone(),
         );
+        let federation_gate = crate::services::federation::gate::FederationGate::new(
+            &workspace_dir,
+            http_client.clone(),
+        );
 
         // Open the local derived vector index.
         let vector_store = VectorStore::connect_with_config(&workspace_dir, &config).await;
@@ -108,7 +114,8 @@ impl AppState {
             &workspace_dir,
             crate::domain::companion::CANONICAL_SLUG,
         )
-        .with_events(events.clone());
+        .with_events(events.clone())
+        .with_import_gate(vector_store.media_store().import_gate());
         let commitments = crate::services::commitments::CommitmentStore::new(
             &workspace_dir,
             crate::domain::companion::CANONICAL_SLUG,
@@ -142,6 +149,7 @@ impl AppState {
             commitments,
             browser_sessions: Arc::new(BrowserSessionStore::new()),
             federation: Arc::new(federation),
+            federation_gate: Arc::new(federation_gate),
             cua,
         }
     }
