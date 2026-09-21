@@ -4,6 +4,7 @@ use tauri::Emitter;
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
 
 use crate::computer_use;
+use crate::cua_runtime;
 use crate::overlay;
 
 const MAX_QUEUED_REQUEST_BYTES: usize = 1024 * 1024;
@@ -170,6 +171,8 @@ pub async fn disconnect_computer_use(app: tauri::AppHandle) -> Result<(), String
         overlay::hide(&app);
         let _ = task.task.await;
         task.session.drain().await;
+        // The socket is gone for good: end the driver sessions it held (#17).
+        cua_runtime::runtime().end_sessions().await;
     }
     *SERVER_URL.lock().map_err(|e| e.to_string())? = None;
     *INSTANCE_SLUG.lock().map_err(|e| e.to_string())? = None;
@@ -203,6 +206,9 @@ async fn run_agent(
     let result = run_agent_connection(app, instance_url, auth_token, session).await;
     session.cancel_connection();
     overlay::hide(app);
+    // The socket closed: the sessions the desktop held for the server end
+    // now, and the driver stays up for the reconnect (#17).
+    cua_runtime::runtime().end_sessions().await;
     result
 }
 
@@ -213,17 +219,28 @@ async fn run_agent_connection(
     session: &Session,
 ) -> Result<(), String> {
     session.begin_connection();
+    // Register this machine under its stable id (#80); the hostname is for display.
+    let machine_id = stable_machine_id(app)?;
+    let host = hostname();
+    let os = std::env::consts::OS.to_string();
+
+    // The Cua driver (#17) is described before the socket opens, since the
+    // server waits only briefly for the registration; without a driver this
+    // desktop registers legacy-only and never sees a typed frame.
+    let cua = match cua_runtime::runtime().start(&machine_id).await {
+        Ok(descriptor) => Some(descriptor),
+        Err(error) => {
+            eprintln!("[cua] registering without a typed target: {error}");
+            None
+        }
+    };
+
     let request = machine_request(instance_url, auth_token)?;
     let (ws, _) = tokio_tungstenite::connect_async(request)
         .await
         .map_err(|_| "Could not connect to machine WebSocket".to_string())?;
 
     let (mut write, mut read) = ws.split();
-
-    // Register this machine under its stable id (#80); the hostname is for display.
-    let machine_id = stable_machine_id(app)?;
-    let host = hostname();
-    let os = std::env::consts::OS.to_string();
 
     // Get screen dimensions
     let screen = screenshots::Screen::all()
@@ -246,14 +263,23 @@ async fn run_agent_connection(
         (sw, sh),
         instance_slug,
         &crate::permissions::check_permissions(),
-        None,
+        cua.as_ref(),
     );
     write
         .send(Message::Text(register.to_string().into()))
         .await
         .map_err(|e| format!("send register: {e}"))?;
 
-    eprintln!("[agent] registered as '{machine_id}' ({host}, {os}, {sw}x{sh})");
+    eprintln!(
+        "[agent] registered as '{machine_id}' ({host}, {os}, {sw}x{sh}, cua driver: {})",
+        cua.as_ref()
+            .map(|descriptor| format!(
+                "{} {:?}",
+                descriptor.driver_version.as_str(),
+                descriptor.health
+            ))
+            .unwrap_or_else(|| "none".to_owned())
+    );
 
     // Emit server URL so overlay can build iframe src
     app.emit("server-url", instance_url.to_string()).ok();
@@ -319,23 +345,48 @@ async fn run_agent_connection(
             Err(_) => continue,
         };
 
-        // Skip non-toolcall messages (e.g. "registered" ack)
-        let request_id = match call.get("request_id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => continue,
+        // A typed Cua frame (#17) beside the legacy toolcalls; anything
+        // else without a request id (the "registered" ack) is skipped.
+        let inbound = if let Some(request) = cua_runtime::typed_request(&call) {
+            Inbound::Cua(request.clone())
+        } else {
+            match call.get("request_id").and_then(|v| v.as_str()) {
+                Some(id) => Inbound::Legacy {
+                    request_id: id.to_string(),
+                    action: call
+                        .get("action")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                },
+                None => {
+                    if call.get("type").and_then(|v| v.as_str()) == Some("registered") {
+                        eprintln!(
+                            "[agent] registration acknowledged (typed cua frames: {})",
+                            call.get("cua").and_then(|v| v.as_bool()).unwrap_or(false)
+                        );
+                    }
+                    continue;
+                }
+            }
         };
-        let action = call
-            .get("action")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
 
-        // Temporarily hide the action overlay so it does not appear in explicit screenshots.
-        let hide_for_screenshot = action == "screenshot";
+        // Temporarily hide the action overlay so it does not appear in
+        // explicit screenshots, nor in the window snapshot a typed
+        // `get_window_state` may take.
+        let hide_for_screenshot = match &inbound {
+            Inbound::Legacy { action, .. } => action == "screenshot",
+            Inbound::Cua(request) => request["action"]["tool"] == "get_window_state",
+        };
         if hide_for_screenshot {
             overlay::set_visible(app, false);
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
+
+        let (request_id, action) = match &inbound {
+            Inbound::Legacy { request_id, action } => (request_id.clone(), action.clone()),
+            Inbound::Cua(_) => (String::new(), String::new()),
+        };
 
         // Input actions (keyboard, mouse) must run on main thread on macOS
         // because enigo calls HIToolbox APIs that assert main queue.
@@ -353,46 +404,65 @@ async fn run_agent_connection(
                 | "switch_desktop"
         );
 
-        let permit = session
-            .work
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| "Session stopped")?;
+        // A typed request runs on the driver, not on the main thread, and
+        // needs no work permit: the driver serializes its own actions and a
+        // dropped call is cancelled at the driver.
+        let permit = match &inbound {
+            Inbound::Legacy { .. } => Some(
+                session
+                    .work
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| "Session stopped")?,
+            ),
+            Inbound::Cua(_) => None,
+        };
         if session.cancelled() {
             break;
         }
-        let work = Work {
-            _permit: permit,
-            session: session.clone(),
-        };
-        let action_call = call.clone();
-        let action_name = action.clone();
-        let action_scale = cached_scale.clone();
-        let action_app = app.clone();
-        let action_future = async move {
-            if is_input_action {
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                let _ = action_app.run_on_main_thread(move || {
-                    let result = work.run(|session| {
-                        let mut scale = action_scale.lock().unwrap();
-                        execute_action(&action_call, &action_name, &mut scale, session)
-                    });
-                    let _ = tx.send(result);
-                });
-                rx.await
-                    .unwrap_or_else(|error| Err(format!("main thread recv: {error}")))
-            } else {
-                tokio::task::spawn_blocking(move || {
-                    work.run(|session| {
-                        let mut scale = action_scale.lock().unwrap();
-                        execute_action(&action_call, &action_name, &mut scale, session)
+        let action_future: std::pin::Pin<Box<dyn std::future::Future<Output = Executed> + Send>> =
+            match (inbound, permit) {
+                (Inbound::Cua(request), _) => {
+                    Box::pin(
+                        async move { Executed::Cua(cua_runtime::runtime().handle(&request).await) },
+                    )
+                }
+                (Inbound::Legacy { .. }, permit) => {
+                    let work = Work {
+                        _permit: permit.ok_or("Session stopped")?,
+                        session: session.clone(),
+                    };
+                    let action_call = call.clone();
+                    let action_name = action.clone();
+                    let action_scale = cached_scale.clone();
+                    let action_app = app.clone();
+                    Box::pin(async move {
+                        let result = if is_input_action {
+                            let (tx, rx) = tokio::sync::oneshot::channel();
+                            let _ = action_app.run_on_main_thread(move || {
+                                let result = work.run(|session| {
+                                    let mut scale = action_scale.lock().unwrap();
+                                    execute_action(&action_call, &action_name, &mut scale, session)
+                                });
+                                let _ = tx.send(result);
+                            });
+                            rx.await
+                                .unwrap_or_else(|error| Err(format!("main thread recv: {error}")))
+                        } else {
+                            tokio::task::spawn_blocking(move || {
+                                work.run(|session| {
+                                    let mut scale = action_scale.lock().unwrap();
+                                    execute_action(&action_call, &action_name, &mut scale, session)
+                                })
+                            })
+                            .await
+                            .unwrap_or_else(|error| Err(format!("task panic: {error}")))
+                        };
+                        Executed::Legacy(result)
                     })
-                })
-                .await
-                .unwrap_or_else(|error| Err(format!("task panic: {error}")))
-            }
-        };
+                }
+            };
         tokio::pin!(action_future);
         let result = loop {
             tokio::select! {
@@ -444,6 +514,34 @@ async fn run_agent_connection(
         if hide_for_screenshot {
             overlay::set_visible(app, true);
         }
+
+        let result = match result {
+            Executed::Legacy(result) => result,
+            Executed::Cua(frame) => {
+                // The overlay names the kind and what it targeted; a frame
+                // the protocol could not read was refused and shows nothing.
+                if let Ok(typed) =
+                    cua_protocol::CuaRequestEnvelope::from_json(&call["request"].to_string())
+                {
+                    overlay::emit_cua_action(
+                        app,
+                        typed.action.kind(),
+                        &crate::companion_relay::redact_secret(
+                            &cua_runtime::action_detail(&typed.action),
+                            auth_token,
+                        ),
+                    );
+                }
+                if write
+                    .send(Message::Text(frame.to_string().into()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                continue;
+            }
+        };
 
         // Build human-readable detail for the overlay
         let detail = match action.as_str() {
@@ -539,6 +637,20 @@ async fn run_agent_connection(
     overlay::hide(app);
 
     Ok(())
+}
+
+/// One frame the server sent: a legacy toolcall (flat `request_id` and
+/// `action`) or a typed Cua request (#17), told apart by its shape.
+enum Inbound {
+    Legacy { request_id: String, action: String },
+    Cua(serde_json::Value),
+}
+
+/// What executing one frame produced: the legacy result, or the
+/// `cua_response` frame the runtime built.
+enum Executed {
+    Legacy(Result<AgentResult, String>),
+    Cua(serde_json::Value),
 }
 
 enum AgentResult {
@@ -988,9 +1100,8 @@ fn register_message(
     permissions: &crate::permissions::PermissionStatus,
     cua: Option<&cua_protocol::MachineDescriptor>,
 ) -> serde_json::Value {
-    let _ = cua;
     let state = |granted: bool| if granted { "granted" } else { "denied" };
-    serde_json::json!({
+    let mut message = serde_json::json!({
         "type": "register",
         "machine_id": machine_id,
         "os": os,
@@ -1003,7 +1114,11 @@ fn register_message(
             "screen_capture": state(permissions.screen_recording),
         },
         "capabilities": CAPABILITIES,
-    })
+    });
+    if let Some(descriptor) = cua {
+        message["cua"] = cua_runtime::registration_envelope(descriptor);
+    }
+    message
 }
 
 /// Upload a local file to the server via curl.

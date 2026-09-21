@@ -155,8 +155,7 @@ pub fn emit_action_detail(app: &AppHandle, action: &str, detail: &str) {
 /// for the action kind and a short human detail, on the same event the
 /// legacy actions use.
 pub fn emit_cua_action(app: &AppHandle, kind: cua_protocol::CuaActionKind, detail: &str) {
-    let _ = (app, kind, detail);
-    todo!("desktop cua runtime (#17)")
+    emit_action_detail(app, &crate::cua_runtime::action_name(kind), detail);
 }
 
 /// Signal idle.

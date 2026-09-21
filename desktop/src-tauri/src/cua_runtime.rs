@@ -24,10 +24,11 @@ use cua_protocol::{
     driver_mcp::{
         descriptor_from_health, error_response, response_for, tool_call, DriverCallFailure,
     },
-    CheckedCuaAdapter, CuaAction, CuaActionKind, CuaActionResult, CuaRegistrationEnvelope,
-    CuaRequestEnvelope, CuaResponse, CuaResponseEnvelope, CuaRuntimeError, HealthReportArgs,
-    HealthReportResult, MachineDescriptor, MachineId, MachineLocation, ProtocolVersion, RequestId,
-    RuntimeErrorCode, SessionLabel, SessionRefArgs, MAX_ID_BYTES,
+    BoundedText, CheckedCuaAdapter, CuaAction, CuaActionKind, CuaActionResult,
+    CuaRegistrationEnvelope, CuaRequestEnvelope, CuaResponse, CuaResponseEnvelope, CuaRuntimeError,
+    ElementAddress, HealthReportArgs, HealthReportResult, MachineDescriptor, MachineId,
+    MachineLocation, ProtocolVersion, RequestId, RuntimeErrorCode, SessionLabel, SessionRefArgs,
+    ValidationError, WindowTarget, MAX_ID_BYTES,
 };
 use futures_util::FutureExt as _;
 use rmcp::{
@@ -100,8 +101,102 @@ impl Default for DriverTimeouts {
 /// block, so the text is only consulted when it is itself JSON. An `isError`
 /// result carries the driver's structured `code` beside its text.
 fn payload_from_call_result(result: CallToolResult) -> CallOutcome {
-    let _ = result;
-    todo!("desktop cua runtime (#17)")
+    let text = result
+        .content
+        .iter()
+        .filter_map(|content| match &content.raw {
+            RawContent::Text(raw) => Some(raw.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if result.is_error == Some(true) {
+        let code = result
+            .structured_content
+            .as_ref()
+            .and_then(|structured| structured.get("code"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        return Err(DriverCallFailure::Tool {
+            code,
+            message: text,
+        });
+    }
+    if let Some(structured) = result.structured_content {
+        return Ok(structured);
+    }
+    if text.trim_start().starts_with(['{', '[']) {
+        if let Ok(parsed) = serde_json::from_str::<Value>(&text) {
+            return Ok(parsed);
+        }
+    }
+    Err(DriverCallFailure::Malformed(
+        "driver returned no structured payload".to_owned(),
+    ))
+}
+
+/// How many of the driver's stderr lines are kept for an error message.
+const STDERR_LINES_KEPT: usize = 16;
+/// How long a stderr line may be in an error message.
+const STDERR_LINE_LIMIT: usize = 400;
+/// How long the stderr reader gets to drain after the child failed.
+const STDERR_DRAIN: Duration = Duration::from_millis(300);
+
+/// The last lines a driver child wrote to stderr, read as they arrive. The
+/// driver explains itself there (a missing daemon, a permission to grant),
+/// and only a message that repeats it is actionable.
+struct DriverStderr {
+    lines: Arc<Mutex<VecDeque<String>>>,
+    reader: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl DriverStderr {
+    fn capture(stderr: Option<tokio::process::ChildStderr>) -> Self {
+        let lines = Arc::new(Mutex::new(VecDeque::new()));
+        let reader = stderr.map(|stderr| {
+            let lines = lines.clone();
+            tokio::spawn(async move {
+                let mut reader = tokio::io::BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    let line = line.trim().to_owned();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    eprintln!("[cua] driver: {line}");
+                    let mut kept = lines.lock().unwrap();
+                    if kept.len() == STDERR_LINES_KEPT {
+                        kept.pop_front();
+                    }
+                    kept.push_back(line.chars().take(STDERR_LINE_LIMIT).collect());
+                }
+            })
+        });
+        Self { lines, reader }
+    }
+
+    /// `; the driver said: "..."` once the child is gone and its stderr is
+    /// drained, or nothing when it said nothing.
+    async fn suffix(mut self) -> String {
+        if let Some(mut reader) = self.reader.take() {
+            // The child is dead or dying by now; give the reader a moment to
+            // reach end of file, then report what arrived so far.
+            if tokio::time::timeout(STDERR_DRAIN, &mut reader)
+                .await
+                .is_err()
+            {
+                reader.abort();
+            }
+        }
+        let lines = self.lines.lock().unwrap();
+        if lines.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; the driver said: \"{}\"",
+                lines.iter().cloned().collect::<Vec<_>>().join(" | ")
+            )
+        }
+    }
 }
 
 /// MCP over stdio to one persistent `cua-driver mcp` child process. The child
@@ -123,28 +218,118 @@ impl Drop for StdioDriverTransport {
     }
 }
 
+fn client_info() -> ClientInfo {
+    let mut info = ClientInfo::default();
+    info.client_info = Implementation::new("nolune-desktop", env!("CARGO_PKG_VERSION"));
+    info
+}
+
 impl StdioDriverTransport {
     /// Spawn `<driver> mcp` and complete the MCP handshake within
     /// `timeouts.handshake`; a child that has not answered by then is killed
     /// and the error names the driver and repeats what it said on stderr.
     pub async fn spawn_with(driver: &Path, timeouts: DriverTimeouts) -> Result<Self, String> {
-        let _ = (driver, timeouts);
-        todo!("desktop cua runtime (#17)")
+        let mut command = tokio::process::Command::new(driver);
+        command.arg("mcp");
+        let (process, stderr) = TokioChildProcess::builder(command)
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| format!("could not start {} mcp: {error}", driver.display()))?;
+        let said = DriverStderr::capture(stderr);
+        // On expiry the connect future is dropped with the child process
+        // still inside it, which kills the child.
+        let connected =
+            tokio::time::timeout(timeouts.handshake, client_info().serve(process)).await;
+        let running = match connected {
+            Ok(Ok(running)) => running,
+            Ok(Err(error)) => {
+                return Err(format!(
+                    "could not start {} mcp: {error}{}",
+                    driver.display(),
+                    said.suffix().await
+                ));
+            }
+            Err(_elapsed) => {
+                return Err(format!(
+                    "{} mcp did not complete the MCP handshake within {:?}{}",
+                    driver.display(),
+                    timeouts.handshake,
+                    said.suffix().await
+                ));
+            }
+        };
+        let sink = running.peer().clone();
+        let keep_alive = tokio::spawn(async move {
+            let _ = running.waiting().await;
+        });
+        eprintln!("[cua] driver started: {} mcp", driver.display());
+        // The keep-alive task ends when the child exits or when it is
+        // aborted; either way the flag flips exactly once.
+        let abort = keep_alive.abort_handle();
+        let (flag, gone) = tokio::sync::watch::channel(false);
+        tokio::spawn(async move {
+            let _ = keep_alive.await;
+            flag.send_replace(true);
+        });
+        Ok(Self {
+            sink,
+            keep_alive: abort,
+            gone,
+            timeouts,
+        })
+    }
+}
+
+/// One `tools/call` that rmcp cancels (with a `notifications/cancelled` to
+/// the driver) when `deadline` passes.
+async fn call_tool_within(
+    sink: &ServerSink,
+    params: CallToolRequestParams,
+    deadline: Duration,
+) -> Result<CallToolResult, ServiceError> {
+    let request = ClientRequest::CallToolRequest(CallToolRequest::new(params));
+    let options = PeerRequestOptions::with_timeout(deadline);
+    let handle = sink.send_request_with_option(request, options).await?;
+    match handle.await_response().await? {
+        ServerResult::CallToolResult(result) => Ok(result),
+        _ => Err(ServiceError::UnexpectedResponse),
     }
 }
 
 impl DriverTransport for StdioDriverTransport {
     fn call_tool(&self, name: &str, arguments: Map<String, Value>) -> TransportFuture<'_> {
-        let _ = (name, arguments);
-        todo!("desktop cua runtime (#17)")
+        let mut params = CallToolRequestParams::new(name.to_owned());
+        params.arguments = Some(arguments);
+        let name = name.to_owned();
+        Box::pin(async move {
+            let result = call_tool_within(&self.sink, params, self.timeouts.call)
+                .await
+                .map_err(|error| match error {
+                    ServiceError::Timeout { timeout } => DriverCallFailure::Timeout(format!(
+                        "{name} did not answer within {timeout:?}; the request was cancelled"
+                    )),
+                    other => DriverCallFailure::Transport(other.to_string()),
+                })?;
+            payload_from_call_result(result)
+        })
     }
 
+    /// Abort the keep-alive task: the rmcp service drops, the connection
+    /// closes and the child is killed. Aborting twice is harmless.
     fn close(&self) {
-        todo!("desktop cua runtime (#17)")
+        if !self.keep_alive.is_finished() {
+            eprintln!("[cua] driver stopped");
+        }
+        self.keep_alive.abort();
     }
 
     fn exited(&self) -> ExitFuture<'_> {
-        todo!("desktop cua runtime (#17)")
+        let mut gone = self.gone.clone();
+        Box::pin(async move {
+            // A closed channel means the flag task is over, which it only is
+            // after it flipped the flag: gone either way.
+            let _ = gone.wait_for(|gone| *gone).await;
+        })
     }
 }
 
@@ -158,6 +343,21 @@ pub const DRIVER_ENV: &str = "NOLUNE_CUA_DRIVER";
 pub const INSTALL_MANIFEST: &str = "cua-driver/install.json";
 const DRIVER_BINARY: &str = "cua-driver";
 
+fn is_executable(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        metadata.is_file()
+    }
+}
+
 /// The driver this desktop runs: `NOLUNE_CUA_DRIVER` when set, else the
 /// driver `nolune cua install` recorded under the workspace, else an
 /// executable `cua-driver` on `path`. `None` when there is none.
@@ -166,8 +366,39 @@ pub fn locate_driver(
     env_override: Option<&std::ffi::OsStr>,
     path: Option<&std::ffi::OsStr>,
 ) -> Option<PathBuf> {
-    let _ = (workspace, env_override, path);
-    todo!("desktop cua runtime (#17)")
+    if let Some(named) = env_override.filter(|named| !named.is_empty()) {
+        let named = PathBuf::from(named);
+        if is_executable(&named) {
+            return Some(named);
+        }
+        // An explicitly named driver that cannot run is a misconfiguration,
+        // never silently "no driver": say so and register legacy-only.
+        eprintln!(
+            "[cua] {DRIVER_ENV} names {} which is not an executable file",
+            named.display()
+        );
+        return None;
+    }
+    let manifest = workspace.join(INSTALL_MANIFEST);
+    if let Ok(raw) = std::fs::read_to_string(&manifest) {
+        let installed = serde_json::from_str::<Value>(&raw)
+            .ok()
+            .and_then(|manifest| manifest.get("driver")?.as_str().map(PathBuf::from));
+        match installed {
+            Some(driver) if is_executable(&driver) => return Some(driver),
+            Some(driver) => eprintln!(
+                "[cua] {} names {} which is gone; run nolune cua install",
+                manifest.display(),
+                driver.display()
+            ),
+            None => eprintln!("[cua] {} is not a driver manifest", manifest.display()),
+        }
+    }
+    path.and_then(|path| {
+        std::env::split_paths(path)
+            .map(|dir| dir.join(DRIVER_BINARY))
+            .find(|candidate| is_executable(candidate))
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -180,25 +411,54 @@ pub async fn health_report(
     transport: &dyn DriverTransport,
     machine_id: &MachineId,
 ) -> Result<HealthReportResult, String> {
-    let _ = (transport, machine_id);
-    todo!("desktop cua runtime (#17)")
+    let request = CuaRequestEnvelope {
+        version: ProtocolVersion::V1,
+        request_id: RequestId::try_from("health").expect("static id"),
+        machine_id: machine_id.clone(),
+        action: CuaAction::HealthReport(HealthReportArgs {
+            include: vec![],
+            skip: vec![],
+        }),
+    };
+    let call = tool_call(&request.action).map_err(|error| error.to_string())?;
+    let outcome = transport.call_tool(call.name, call.arguments).await;
+    match response_for(&request, outcome).response {
+        CuaResponse::Success { result } => match *result {
+            CuaActionResult::HealthReport(report) => Ok(report),
+            other => Err(format!("health_report answered with {:?}", other.kind())),
+        },
+        CuaResponse::Error { error } => Err(format!(
+            "health_report failed ({:?}): {}",
+            error.code,
+            error.message.as_str()
+        )),
+    }
 }
 
 /// The descriptor this desktop registers: the driver's health report under
-/// this machine's stable id, at the desktop location.
+/// this machine's stable id, at the desktop location. The driver acts under
+/// its own bundle's grants, so its report decides the permissions and the
+/// capabilities; the app's own grants stay on the legacy `permissions`.
 pub async fn describe_machine(
     transport: &dyn DriverTransport,
     machine_id: MachineId,
 ) -> Result<MachineDescriptor, String> {
-    let _ = (transport, machine_id);
-    todo!("desktop cua runtime (#17)")
+    let report = health_report(transport, &machine_id).await?;
+    Ok(descriptor_from_health(
+        machine_id,
+        MachineLocation::Desktop,
+        &report,
+    ))
 }
 
 /// The `cua` field of the register message: the descriptor in the
 /// registration envelope the server decodes.
 pub fn registration_envelope(descriptor: &MachineDescriptor) -> Value {
-    let _ = descriptor;
-    todo!("desktop cua runtime (#17)")
+    serde_json::to_value(CuaRegistrationEnvelope {
+        version: ProtocolVersion::V1,
+        machine: descriptor.clone(),
+    })
+    .expect("a valid descriptor serializes")
 }
 
 // ---------------------------------------------------------------------------
@@ -208,8 +468,38 @@ pub fn registration_envelope(descriptor: &MachineDescriptor) -> Value {
 /// The typed request inside a `cua_request` frame, or `None` for anything
 /// else on the socket (a legacy toolcall, the registration ack).
 pub fn typed_request(frame: &Value) -> Option<&Value> {
-    let _ = frame;
-    todo!("desktop cua runtime (#17)")
+    if frame.get("type").and_then(Value::as_str) != Some("cua_request") {
+        return None;
+    }
+    frame.get("request").filter(|request| request.is_object())
+}
+
+/// Longest message a locally built error envelope carries.
+const MAX_LOCAL_MESSAGE_BYTES: usize = 1_024;
+
+/// A message as bounded protocol text: control characters dropped, length
+/// capped, never empty, so the error envelope always validates.
+fn bounded_message(raw: &str) -> BoundedText {
+    let mut message: String = raw
+        .chars()
+        .filter(|c| !c.is_control() || matches!(c, '\n' | '\r' | '\t'))
+        .collect();
+    if message.len() > MAX_LOCAL_MESSAGE_BYTES {
+        let mut end = MAX_LOCAL_MESSAGE_BYTES;
+        while !message.is_char_boundary(end) {
+            end -= 1;
+        }
+        message.truncate(end);
+    }
+    if message.is_empty() {
+        message.push_str("refused by this desktop");
+    }
+    BoundedText::try_from(message).expect("filtered text within bounds is valid")
+}
+
+/// What a frame said about itself, cut to the protocol's id bound.
+fn bounded_id(raw: &str) -> String {
+    raw.chars().take(MAX_ID_BYTES).collect()
 }
 
 /// Why a `cua_request` frame never reached the driver, and what to answer.
@@ -231,20 +521,66 @@ pub enum Refusal {
 impl Refusal {
     /// The typed verdict: every refusal is a capability denial.
     pub fn error(&self) -> CuaRuntimeError {
-        todo!("desktop cua runtime (#17)")
+        match self {
+            Self::Denied(envelope) => match &envelope.response {
+                CuaResponse::Error { error } => error.clone(),
+                CuaResponse::Success { .. } => denial(format!(
+                    "{} is not allowed on this desktop",
+                    action_name(envelope.action)
+                )),
+            },
+            Self::Unreadable { message, .. } => denial(message.clone()),
+        }
     }
 
     /// The `cua_response` frame to send back.
     pub fn frame(&self) -> Value {
-        todo!("desktop cua runtime (#17)")
+        match self {
+            Self::Denied(envelope) => response_frame(envelope),
+            Self::Unreadable {
+                request_id,
+                machine_id,
+                action,
+                ..
+            } => json!({
+                "type": "cua_response",
+                "response": {
+                    "version": ProtocolVersion::V1,
+                    "request_id": request_id,
+                    "machine_id": machine_id,
+                    "action": action,
+                    "response": {"status": "error", "error": self.error()},
+                },
+            }),
+        }
+    }
+}
+
+/// A capability denial: never retryable, the server has to change what it asks.
+fn denial(message: String) -> CuaRuntimeError {
+    CuaRuntimeError {
+        code: RuntimeErrorCode::CapabilityDenied,
+        message: bounded_message(&message),
+        retryable: false,
     }
 }
 
 /// Decode one inbound request through the protocol's bounds (size, depth,
 /// shape, a tool the protocol names). Nothing else is ever executed.
 pub fn decode_request(request: &Value) -> Result<CuaRequestEnvelope, Refusal> {
-    let _ = request;
-    todo!("desktop cua runtime (#17)")
+    CuaRequestEnvelope::from_json(&request.to_string()).map_err(|error| {
+        let field = |key: &str| request.get(key).and_then(Value::as_str).map(bounded_id);
+        Refusal::Unreadable {
+            request_id: field("request_id"),
+            machine_id: field("machine_id"),
+            action: request
+                .get("action")
+                .and_then(|action| action.get("tool"))
+                .and_then(Value::as_str)
+                .map(bounded_id),
+            message: format!("request is not on this desktop's allowlist: {error}"),
+        }
+    })
 }
 
 /// The local allowlist: the request must name this machine, and the
@@ -255,14 +591,35 @@ pub fn authorize(
     descriptor: &MachineDescriptor,
     request: &CuaRequestEnvelope,
 ) -> Result<(), Refusal> {
-    let _ = (descriptor, request);
-    todo!("desktop cua runtime (#17)")
+    let refuse = |message: String| {
+        Refusal::Denied(CuaResponseEnvelope {
+            version: request.version,
+            request_id: request.request_id.clone(),
+            machine_id: request.machine_id.clone(),
+            action: request.action.kind(),
+            response: CuaResponse::Error {
+                error: denial(message),
+            },
+        })
+    };
+    if request.machine_id != descriptor.machine_id {
+        return Err(refuse(format!(
+            "request names machine '{}' but this desktop is '{}'",
+            request.machine_id.as_str(),
+            descriptor.machine_id.as_str()
+        )));
+    }
+    descriptor.authorize(&request.action).map_err(|error| {
+        refuse(format!(
+            "{} is not allowed on this desktop: {error}",
+            action_name(request.action.kind())
+        ))
+    })
 }
 
 /// The `cua_response` frame carrying `response` whole.
 pub fn response_frame(response: &CuaResponseEnvelope) -> Value {
-    let _ = response;
-    todo!("desktop cua runtime (#17)")
+    json!({"type": "cua_response", "response": response})
 }
 
 // ---------------------------------------------------------------------------
@@ -279,8 +636,72 @@ struct Driver {
     machine_id: MachineId,
     descriptor: MachineDescriptor,
     adapter: CheckedCuaAdapter,
-    /// Logs the exit of a driver nobody stopped; aborted before a stop.
-    watch: tokio::task::AbortHandle,
+}
+
+impl Driver {
+    /// A driver described from `transport`'s health report; a transport that
+    /// cannot be described is closed.
+    async fn describe(
+        transport: Arc<dyn DriverTransport>,
+        machine_id: MachineId,
+    ) -> Result<Arc<Self>, String> {
+        let descriptor = match describe_machine(&*transport, machine_id.clone()).await {
+            Ok(descriptor) => descriptor,
+            Err(error) => {
+                transport.close();
+                return Err(error);
+            }
+        };
+        let adapter = checked_adapter(transport.clone(), descriptor.clone())
+            .map_err(|error| format!("descriptor: {error}"))?;
+        Ok(Arc::new(Self {
+            transport,
+            machine_id,
+            descriptor,
+            adapter,
+        }))
+    }
+
+    /// Whether the child is gone (exited on its own or closed).
+    fn gone(&self) -> bool {
+        self.transport.exited().now_or_never().is_some()
+    }
+}
+
+/// A checked adapter that executes every authorized request against the
+/// driver: action to tool call, payload to correlated envelope. The adapter
+/// validates and authorizes before the callback runs and checks the
+/// correlation after it, so the callback only encodes, calls and decodes.
+fn checked_adapter(
+    transport: Arc<dyn DriverTransport>,
+    descriptor: MachineDescriptor,
+) -> Result<CheckedCuaAdapter, ValidationError> {
+    CheckedCuaAdapter::new(descriptor, move |request| {
+        let transport = transport.clone();
+        Box::pin(async move {
+            let call = match tool_call(&request.action) {
+                Ok(call) => call,
+                Err(error) => {
+                    return error_response(
+                        &request,
+                        &DriverCallFailure::Malformed(error.to_string()),
+                    );
+                }
+            };
+            let outcome = transport.call_tool(call.name, call.arguments).await;
+            response_for(&request, outcome)
+        })
+    })
+}
+
+/// Where the runtime stands with its driver.
+enum Slot {
+    /// No driver was ever started, or the app is exiting.
+    None,
+    Running(Arc<Driver>),
+    /// The driver exited on its own; the next request restarts it under
+    /// the same id.
+    Crashed(MachineId),
 }
 
 /// One driver for the app lifetime, started on the first connection and
@@ -288,7 +709,7 @@ struct Driver {
 /// stopped when the app exits.
 pub struct CuaRuntime {
     spawner: Spawner,
-    driver: tokio::sync::Mutex<Option<Arc<Driver>>>,
+    driver: tokio::sync::Mutex<Slot>,
     /// The labelled sessions the desktop confirmed open for the server and
     /// has not ended: what a disconnect or an exit has to end.
     open: Mutex<BTreeSet<SessionLabel>>,
@@ -297,60 +718,282 @@ pub struct CuaRuntime {
 impl CuaRuntime {
     /// A runtime that starts its driver through `spawner`.
     pub fn with_spawner(spawner: Spawner) -> Self {
-        let _ = spawner;
-        todo!("desktop cua runtime (#17)")
+        Self {
+            spawner,
+            driver: tokio::sync::Mutex::new(Slot::None),
+            open: Mutex::new(BTreeSet::new()),
+        }
     }
 
     /// Whether a driver is running (spawned and not gone).
+    #[cfg(test)]
     pub async fn is_running(&self) -> bool {
-        todo!("desktop cua runtime (#17)")
+        let mut slot = self.driver.lock().await;
+        self.live(&mut slot).is_some()
     }
 
     /// The descriptor to register with: starts the driver when none runs,
     /// re-reads the health of the one that does. An error means this desktop
     /// registers without a typed target.
     pub async fn start(&self, machine_id: &str) -> Result<MachineDescriptor, String> {
-        let _ = machine_id;
-        todo!("desktop cua runtime (#17)")
+        let machine_id = MachineId::try_from(machine_id).map_err(|error| error.to_string())?;
+        let mut slot = self.driver.lock().await;
+        let driver = match self.live(&mut slot) {
+            // A reconnect: the same child, its health read again so the
+            // descriptor the server binds is current.
+            Some(running) => {
+                let described = Driver::describe(running.transport.clone(), machine_id).await;
+                if described.is_err() {
+                    // A driver that no longer reports is stopped; the next
+                    // start spawns a new one.
+                    *slot = Slot::None;
+                }
+                described?
+            }
+            None => {
+                let transport = (self.spawner)().await?;
+                Driver::describe(transport, machine_id).await?
+            }
+        };
+        let descriptor = driver.descriptor.clone();
+        *slot = Slot::Running(driver);
+        Ok(descriptor)
     }
 
     /// One inbound `cua_request` frame's `request`, answered with the
     /// `cua_response` frame to send back: refused locally, or executed
     /// through the checked adapter with its typed result forwarded unchanged.
     pub async fn handle(&self, request: &Value) -> Value {
-        let _ = request;
-        todo!("desktop cua runtime (#17)")
+        let request = match decode_request(request) {
+            Ok(request) => request,
+            Err(refusal) => return refusal.frame(),
+        };
+        let driver = match self.driver_for_request().await {
+            Ok(driver) => driver,
+            Err(why) => {
+                return response_frame(&error_response(
+                    &request,
+                    &DriverCallFailure::Transport(why),
+                ));
+            }
+        };
+        if let Err(refusal) = authorize(&driver.descriptor, &request) {
+            return refusal.frame();
+        }
+        let response = match driver.adapter.execute(&request).await {
+            Ok(response) => response,
+            Err(error) => error_response(
+                &request,
+                &DriverCallFailure::Malformed(format!(
+                    "driver answered request {} with a response that does not match it: {error}",
+                    request.request_id.as_str()
+                )),
+            ),
+        };
+        self.note_session(&request.action, &response.response);
+        response_frame(&response)
     }
 
     /// End every session the desktop holds open for the server: the socket
     /// is gone, so nobody will. The driver keeps running for the reconnect.
     pub async fn end_sessions(&self) {
-        todo!("desktop cua runtime (#17)")
+        let driver = {
+            let mut slot = self.driver.lock().await;
+            self.live(&mut slot)
+        };
+        let open = self.take_open();
+        let Some(driver) = driver else {
+            return;
+        };
+        for label in &open {
+            end_session(&driver, label).await;
+        }
+        if !open.is_empty() {
+            eprintln!("[cua] {} open session(s) ended on disconnect", open.len());
+        }
     }
 
     /// End the open sessions and stop the driver: the app is exiting.
     /// Idempotent and a no-op for a runtime that never started.
     pub async fn shutdown(&self) {
-        todo!("desktop cua runtime (#17)")
+        let driver = {
+            let mut slot = self.driver.lock().await;
+            match std::mem::replace(&mut *slot, Slot::None) {
+                Slot::Running(driver) if !driver.gone() => Some(driver),
+                _ => None,
+            }
+        };
+        let open = self.take_open();
+        let Some(driver) = driver else {
+            return;
+        };
+        for label in &open {
+            end_session(&driver, label).await;
+        }
+        driver.transport.close();
+        // The child is killed when the aborted keep-alive task drops the
+        // service; wait for that so an exiting app never leaves it behind.
+        let _ = tokio::time::timeout(Duration::from_secs(3), driver.transport.exited()).await;
+        eprintln!("[cua] driver stopped; {} open session(s) ended", open.len());
     }
 
     /// The labelled sessions still open, in label order.
     #[cfg(test)]
     pub fn open_sessions(&self) -> Vec<SessionLabel> {
-        todo!("desktop cua runtime (#17)")
+        self.lock_open().iter().cloned().collect()
+    }
+
+    /// The running driver, or none: a driver that exited on its own is
+    /// noticed here, with the sessions it held (nobody is left to end them),
+    /// and remembered for a restart.
+    fn live(&self, slot: &mut Slot) -> Option<Arc<Driver>> {
+        let crashed = match &*slot {
+            Slot::Running(driver) if driver.gone() => driver.machine_id.clone(),
+            Slot::Running(driver) => return Some(driver.clone()),
+            Slot::None | Slot::Crashed(_) => return None,
+        };
+        let lost = self.take_open();
+        eprintln!(
+            "[cua] driver exited on its own; {} open session(s) lost with it",
+            lost.len()
+        );
+        *slot = Slot::Crashed(crashed);
+        None
+    }
+
+    /// The driver a request executes on: the running one, or the one
+    /// restarted under the same id after a crash.
+    async fn driver_for_request(&self) -> Result<Arc<Driver>, String> {
+        let mut slot = self.driver.lock().await;
+        if let Some(driver) = self.live(&mut slot) {
+            return Ok(driver);
+        }
+        let Slot::Crashed(machine_id) = &*slot else {
+            return Err("no driver is running on this desktop".to_owned());
+        };
+        eprintln!("[cua] restarting the driver");
+        let transport = (self.spawner)()
+            .await
+            .map_err(|error| format!("the driver could not be restarted: {error}"))?;
+        let driver = Driver::describe(transport, machine_id.clone())
+            .await
+            .map_err(|error| format!("the restarted driver could not be described: {error}"))?;
+        *slot = Slot::Running(driver.clone());
+        Ok(driver)
+    }
+
+    /// The bookkeeping for a confirmed answer: a `start_session` that came
+    /// back active opens its label, an `end_session` closes it. Implicit
+    /// sessions carry no label and are the driver's own to end.
+    fn note_session(&self, action: &CuaAction, response: &CuaResponse) {
+        let CuaResponse::Success { result } = response else {
+            return;
+        };
+        match (action, &**result) {
+            (CuaAction::StartSession(args), CuaActionResult::StartSession(started)) => {
+                if !started.active {
+                    return;
+                }
+                if let Some(label) = started.session.clone().or_else(|| args.session.clone()) {
+                    self.lock_open().insert(label);
+                }
+            }
+            (CuaAction::EndSession(args), CuaActionResult::EndSession(ended)) => {
+                if let Some(label) = ended.session.clone().or_else(|| args.session.clone()) {
+                    self.lock_open().remove(&label);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Every open label in label order, leaving none.
+    fn take_open(&self) -> Vec<SessionLabel> {
+        std::mem::take(&mut *self.lock_open()).into_iter().collect()
+    }
+
+    /// A poisoned lock only means a task panicked mid-update; the set
+    /// itself is still consistent.
+    fn lock_open(&self) -> std::sync::MutexGuard<'_, BTreeSet<SessionLabel>> {
+        self.open
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
-/// The app's one runtime: the driver from [`locate_driver`] under the
-/// workspace `local_server::nolune_home` names, with the default deadlines.
-pub fn runtime() -> &'static CuaRuntime {
-    todo!("desktop cua runtime (#17)")
+/// End one driver session; a failure is logged, never propagated, because
+/// the socket is gone either way.
+async fn end_session(driver: &Driver, label: &SessionLabel) {
+    let request = CuaRequestEnvelope {
+        version: ProtocolVersion::V1,
+        request_id: RequestId::try_from(format!("{}-end", label.as_str()))
+            .expect("a session label plus a suffix is an identifier"),
+        machine_id: driver.machine_id.clone(),
+        action: CuaAction::EndSession(SessionRefArgs {
+            session: Some(label.clone()),
+        }),
+    };
+    match driver.adapter.execute(&request).await {
+        Ok(envelope) => match envelope.response {
+            CuaResponse::Success { .. } => eprintln!("[cua] session {} ended", label.as_str()),
+            CuaResponse::Error { error } => eprintln!(
+                "[cua] session {} did not end cleanly ({:?}): {}",
+                label.as_str(),
+                error.code,
+                error.message.as_str()
+            ),
+        },
+        Err(error) => eprintln!(
+            "[cua] session {} did not end cleanly: {error}",
+            label.as_str()
+        ),
+    }
 }
+
+static RUNTIME: std::sync::OnceLock<CuaRuntime> = std::sync::OnceLock::new();
+
+/// The driver this desktop runs, from [`locate_driver`] under the workspace
+/// `local_server::nolune_home` names, started with the default deadlines.
+async fn spawn_installed_driver() -> Result<Arc<dyn DriverTransport>, String> {
+    let workspace = crate::local_server::nolune_home();
+    let driver = locate_driver(
+        &workspace,
+        std::env::var_os(DRIVER_ENV).as_deref(),
+        std::env::var_os("PATH").as_deref(),
+    )
+    .ok_or_else(|| {
+        format!(
+            "no cua-driver installed: run `nolune cua install` (looked at {DRIVER_ENV}, {} and PATH)",
+            workspace.join(INSTALL_MANIFEST).display()
+        )
+    })?;
+    let transport = StdioDriverTransport::spawn_with(&driver, DriverTimeouts::default()).await?;
+    Ok(Arc::new(transport))
+}
+
+/// The app's one runtime.
+pub fn runtime() -> &'static CuaRuntime {
+    RUNTIME
+        .get_or_init(|| CuaRuntime::with_spawner(Arc::new(|| Box::pin(spawn_installed_driver()))))
+}
+
+/// How long the exit hook waits for the sessions to end and the child to die.
+const EXIT_GRACE: Duration = Duration::from_secs(5);
 
 /// Stop the driver as the app exits, bounded so a stuck driver never holds
 /// the exit: the open sessions are ended and the child is killed.
 pub fn shutdown_blocking() {
-    todo!("desktop cua runtime (#17)")
+    let Some(runtime) = RUNTIME.get() else {
+        return;
+    };
+    tauri::async_runtime::block_on(async {
+        if tokio::time::timeout(EXIT_GRACE, runtime.shutdown())
+            .await
+            .is_err()
+        {
+            eprintln!("[cua] the driver did not stop within {EXIT_GRACE:?}");
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -360,16 +1003,100 @@ pub fn shutdown_blocking() {
 /// The action name the overlay is told: the protocol's own spelling of the
 /// kind (`click`, `type_text`, `get_window_state`).
 pub fn action_name(kind: CuaActionKind) -> String {
-    let _ = kind;
-    todo!("desktop cua runtime (#17)")
+    match serde_json::to_value(kind) {
+        Ok(Value::String(name)) => name,
+        _ => format!("{kind:?}").to_ascii_lowercase(),
+    }
 }
 
+/// How many characters of typed text the overlay shows.
+const DETAIL_PREVIEW_CHARS: usize = 30;
+
 /// A short human detail for the overlay: what a pointer action targets, a
-/// bounded preview of typed text, the app being launched. Never a secret
-/// beyond what the user sees the companion do.
+/// bounded preview of typed text, the app being launched. Never more than
+/// what the user sees the companion do.
 pub fn action_detail(action: &CuaAction) -> String {
-    let _ = action;
-    todo!("desktop cua runtime (#17)")
+    fn window(target: &WindowTarget) -> String {
+        format!("window {} of pid {}", target.window_id, target.pid)
+    }
+    fn addressed(target: &WindowTarget, address: &ElementAddress) -> String {
+        match address {
+            ElementAddress::Point(point) => {
+                format!("{} at {}, {}", window(target), point.x, point.y)
+            }
+            ElementAddress::ElementToken { .. } => format!("{} element", window(target)),
+            ElementAddress::ElementIndex { element_index, .. } => {
+                format!("{} element #{element_index}", window(target))
+            }
+        }
+    }
+    fn preview(text: &str) -> String {
+        let short: String = text.chars().take(DETAIL_PREVIEW_CHARS).collect();
+        if text.chars().count() > DETAIL_PREVIEW_CHARS {
+            format!("{short}...")
+        } else {
+            short
+        }
+    }
+    fn session(label: Option<&SessionLabel>) -> String {
+        label
+            .map(|label| label.as_str().to_owned())
+            .unwrap_or_default()
+    }
+    match action {
+        CuaAction::ListApps(_) | CuaAction::ListSessions(_) | CuaAction::HealthReport(_) => {
+            String::new()
+        }
+        CuaAction::LaunchApp(args) => args
+            .bundle_id
+            .as_ref()
+            .map(|bundle| bundle.as_str().to_owned())
+            .or_else(|| args.name.as_ref().map(|name| name.as_str().to_owned()))
+            .unwrap_or_default(),
+        CuaAction::ListWindows(args) => {
+            args.pid.map(|pid| format!("pid {pid}")).unwrap_or_default()
+        }
+        CuaAction::GetWindowState(args) => window(&args.target),
+        CuaAction::SetWindowFrame(args) => window(&args.target),
+        CuaAction::Click(args) => addressed(&args.target, &args.address),
+        CuaAction::DoubleClick(args) => addressed(&args.target, &args.address),
+        CuaAction::RightClick(args) => addressed(&args.target, &args.address),
+        CuaAction::MoveCursor(args) => {
+            format!(
+                "{} to {}, {}",
+                window(&args.target),
+                args.point.x,
+                args.point.y
+            )
+        }
+        CuaAction::Drag(args) => format!(
+            "{} from {}, {} to {}, {}",
+            window(&args.target),
+            args.from.x,
+            args.from.y,
+            args.to.x,
+            args.to.y
+        ),
+        CuaAction::Scroll(args) => format!("{:?}", args.direction).to_ascii_lowercase(),
+        CuaAction::TypeText(args) => preview(args.text.as_str()),
+        CuaAction::PressKey(args) => args.key.as_str().to_owned(),
+        CuaAction::Hotkey(args) => args
+            .keys
+            .iter()
+            .map(|key| key.as_str())
+            .collect::<Vec<_>>()
+            .join("+"),
+        CuaAction::SetValue(args) => window(&args.target),
+        CuaAction::InvokeMenu(args) => args
+            .path
+            .iter()
+            .map(|item| item.as_str())
+            .collect::<Vec<_>>()
+            .join(" > "),
+        CuaAction::VerifyState(args) => window(&args.target),
+        CuaAction::StartSession(args) => session(args.session.as_ref()),
+        CuaAction::GetSession(args) | CuaAction::EndSession(args) => session(args.session.as_ref()),
+    }
 }
 
 #[cfg(test)]
@@ -396,11 +1123,6 @@ pub(crate) mod fake {
                 closed: std::sync::atomic::AtomicBool::new(false),
                 gone: tokio::sync::watch::Sender::new(false),
             })
-        }
-
-        /// Queue another answer behind the ones already waiting.
-        pub fn answer(&self, outcome: CallOutcome) {
-            self.outcomes.lock().unwrap().push_back(outcome);
         }
 
         /// The driver child died on its own: `exited` resolves and every
@@ -1155,8 +1877,9 @@ done
     #[tokio::test]
     async fn reconnects_reuse_one_driver_child_and_exit_kills_it() {
         let dir = tempfile::tempdir().unwrap();
+        // One line: the stub answers over line-delimited JSON-RPC.
         let report = dir.path().join("health.json");
-        std::fs::write(&report, HEALTHY).unwrap();
+        std::fs::write(&report, payload(HEALTHY).to_string()).unwrap();
         let pid_file = dir.path().join("pid");
         let stub = script(
             dir.path(),

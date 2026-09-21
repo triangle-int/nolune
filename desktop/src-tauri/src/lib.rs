@@ -576,8 +576,10 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            // The app-managed gateway (#128) must not outlive the app.
+            // The app-managed gateway (#128) and the Cua driver (#17) must
+            // not outlive the app.
             if let tauri::RunEvent::Exit = event {
+                cua_runtime::shutdown_blocking();
                 local_server::shutdown(app);
             }
         });
