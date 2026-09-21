@@ -19,8 +19,9 @@
 //! Peer side, public, verified by signature only. Every verified envelope
 //! is judged by the owner's policy and recorded before it is dispatched
 //! (#109): a refusal is `403` with a `policy_denied`, `approval_required`,
-//! or `deferred` code, or `429 rate_limited`, each carrying the decision.
-//!
+//! or `deferred` code, or `429 rate_limited`, each carrying the decision in
+//! its wire shape: a rate limit says how long the peer's own window has
+//! left, a deferral says nothing about when the owner's quiet hours end.
 //!
 //! * `POST /federation/v1/pair` redeems an invite with a signed pair request.
 //! * `POST /federation/v1/pair/confirm` and `/revoke` carry signed notices.
@@ -177,6 +178,14 @@ impl IntoResponse for ApiError {
             | FederationError::Io { .. } => {
                 (StatusCode::SERVICE_UNAVAILABLE, "federation_unavailable")
             }
+        };
+        // A policy refusal crosses in its wire shape: the receipt on this
+        // side keeps the whole decision, the peer gets what it may know.
+        let error = match error {
+            FederationError::PolicyRefused(decision) => {
+                FederationError::PolicyRefused(decision.over_the_wire())
+            }
+            other => other,
         };
         let mut body = json!({ "error": code, "message": error.to_string() });
         match &error {
@@ -361,4 +370,54 @@ async fn rotation_notice(
         .federation_gate
         .receive_rotation(&state.federation, &envelope)?;
     Ok(Json(ack).into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn refusal(decision: Decision) -> (StatusCode, Option<String>, serde_json::Value) {
+        let response =
+            ApiError::Federation(FederationError::PolicyRefused(decision)).into_response();
+        let status = response.status();
+        let retry_after = response
+            .headers()
+            .get(header::RETRY_AFTER)
+            .map(|value| value.to_str().unwrap().to_owned());
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        (status, retry_after, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_deferred_refusal_carries_no_quiet_hours_end_time() {
+        // The engine's decision says when the owner's quiet hours end; the
+        // peer is told only that it was deferred, in the body, the message,
+        // and the headers.
+        let deferred = Decision {
+            retry_after_secs: Some(7200),
+            ..Decision::deferred(1_800_007_200)
+        };
+        let (status, retry_after, body) = refusal(deferred).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(retry_after, None, "no Retry-After for a deferral");
+        assert_eq!(body["error"], "deferred");
+        assert_eq!(
+            body["decision"],
+            json!({"verdict": "defer", "reason": "quiet_hours"})
+        );
+        let text = body.to_string();
+        assert!(
+            !text.contains("1800007200") && !text.contains("7200") && !text.contains("until"),
+            "{text}"
+        );
+
+        // A rate-limited peer still learns how long its own window has left.
+        let (status, retry_after, body) = refusal(Decision::rate_limited(45)).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(retry_after.as_deref(), Some("45"));
+        assert_eq!(body["error"], "rate_limited");
+        assert_eq!(body["decision"]["retry_after_secs"], 45);
+    }
 }

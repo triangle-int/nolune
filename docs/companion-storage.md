@@ -1018,10 +1018,12 @@ once. A log this build cannot load or write refuses every intent: a
 decision is not made without its receipt.
 
 Over the wire a refusal is `403` with `policy_denied`, `approval_required`,
-or `deferred`, or `429 rate_limited`, each carrying the decision and a
-`Retry-After` header when it says so; a revoked or unpaired sender keeps its
-own code and is recorded too, because its signature was checked before its
-state. Key rotation notices are trust maintenance rather than intents: they
+or `deferred`, or `429 rate_limited`, each carrying the decision in its wire
+shape: a rate limit says how long the peer's own window has left (as a
+`Retry-After` header too), while a deferral says only that it was deferred,
+because when the owner's quiet hours end is the owner's schedule and stays
+in the owner's receipt; a revoked or unpaired sender keeps its own code and
+is recorded too, because its signature was checked before its state. Key rotation notices are trust maintenance rather than intents: they
 are gated by the peer's state and recorded as `key_rotation` once accepted.
 `GET /api/federation/policy` lists the document and the defaults table;
 `GET /api/federation/receipts` lists the receipts, newest first; both are

@@ -273,6 +273,18 @@ impl Decision {
             ..Self::new(Verdict::Defer, DecisionReason::QuietHours)
         }
     }
+
+    /// What the peer is told. A deferral carries only the verdict and the
+    /// reason: when the owner's quiet hours end is the owner's schedule,
+    /// kept in the answering side's receipt and never sent at disclosure
+    /// class `none`. A rate-limited peer is told how long its own window
+    /// has left, and every other decision crosses as it is.
+    pub fn over_the_wire(&self) -> Self {
+        match self.verdict {
+            Verdict::Defer => Self::new(self.verdict, self.reason),
+            _ => self.clone(),
+        }
+    }
 }
 
 impl fmt::Display for Decision {
@@ -764,6 +776,42 @@ mod tests {
             timezone: None,
         };
         assert!(!none.contains(5));
+    }
+
+    #[test]
+    fn a_deferral_tells_the_peer_nothing_about_the_owners_quiet_hours() {
+        // The answering side's receipt keeps when quiet hours end; the peer
+        // learns only that it was deferred.
+        let deferred = Decision {
+            retry_after_secs: Some(7200),
+            ..Decision::deferred(1_800_007_200)
+        };
+        let wire = deferred.over_the_wire();
+        assert_eq!(
+            wire,
+            Decision::new(Verdict::Defer, DecisionReason::QuietHours)
+        );
+        assert_eq!(
+            serde_json::to_value(&wire).unwrap(),
+            serde_json::json!({"verdict": "defer", "reason": "quiet_hours"})
+        );
+        assert_eq!(wire.to_string(), "defer (quiet_hours)");
+        assert_eq!(
+            deferred.to_string(),
+            "defer (quiet_hours), retry after 7200s, deferred until 1800007200",
+            "the receipt keeps both"
+        );
+        // A rate-limited peer is told how long its own window has left, and
+        // every other decision crosses unchanged.
+        for decision in [
+            Decision::rate_limited(45),
+            Decision::allow(DecisionReason::Default),
+            Decision::ask(DecisionReason::Rule),
+            Decision::deny(DecisionReason::PeerRevoked),
+            Decision::deny(DecisionReason::UnknownIntent),
+        ] {
+            assert_eq!(decision.over_the_wire(), decision);
+        }
     }
 
     #[test]
