@@ -5,8 +5,10 @@ import {
 	STATE_EXAMPLES,
 	companionEventFromServer,
 	companionLabel,
+	companionStatusSegments,
 	companionStatusText,
 	initialCompanionState,
+	machineFromTrail,
 	permissionDenial,
 	reduceCompanion,
 } from '../src/lib/companion/state.js';
@@ -310,4 +312,150 @@ test('the design-system gallery is produced by the reducer and covers every stat
 	const away = STATE_EXAMPLES.find((e) => e.kind === 'working_remote');
 	assert.match(companionStatusText(run(away.events)), /studio-mac/, 'the remote example names its machine');
 	assert.ok(Object.isFrozen(STATE_EXAMPLES) && Object.isFrozen(COMPANION_KINDS));
+});
+
+/** The text a list of status segments reads as. @param {readonly { text: string; href?: string }[]} segments */
+const joined = (segments) => segments.map((s) => s.text).join('');
+
+test('a desktop tool call names the computer from its trail line', () => {
+	// #80 persisted the trail line the tool announced: "<action> on <computer>",
+	// by the name the Computers tab shows (else the id).
+	assert.deepEqual(machineFromTrail('computer_use', 'screenshot on Studio Mac'), { summary: 'screenshot', machine: 'Studio Mac' });
+	assert.deepEqual(machineFromTrail('remote_bash', 'running a command on studio-mac'), { summary: 'running a command', machine: 'studio-mac' });
+	assert.deepEqual(machineFromTrail('remote_files', 'reading ~/notes on tea.md on Studio Mac'), { summary: 'reading ~/notes on tea.md', machine: 'Studio Mac' }, 'the computer is what follows the last " on "');
+	assert.deepEqual(machineFromTrail('computer_use', 'screenshot on the server home'), { summary: 'screenshot', machine: null }, 'the server home is this computer');
+	assert.deepEqual(machineFromTrail('computer_use', 'screenshot on the connected computer'), { summary: 'screenshot', machine: 'the connected computer' }, 'a call with the choice still open names no computer, and says so');
+	assert.deepEqual(machineFromTrail('read_file', 'reading notes on tea.md'), { summary: 'reading notes on tea.md', machine: null }, 'only the desktop tools act on another computer');
+	assert.deepEqual(machineFromTrail('computer_use', 'screenshot'), { summary: 'screenshot', machine: null }, 'a trail line recorded before #80 names nothing');
+	// Through the adapter, from the events the server actually sends.
+	assert.deepEqual(
+		companionEventFromServer(serverMessage('t1', 'assistant', 'left_click on Studio Mac', { kind: 'tool_call', tool_name: 'computer_use' })),
+		{ type: 'action', chatId: 'c', tool: 'computer_use', summary: 'left_click', machine: 'Studio Mac' },
+	);
+	assert.deepEqual(
+		companionEventFromServer({ type: 'tool_activity', instance_slug: slug, chat_id: 'c', tool_name: 'remote_files', summary: 'writing ~/notes.md on Studio Mac' }),
+		{ type: 'action', chatId: 'c', tool: 'remote_files', summary: 'writing ~/notes.md', machine: 'Studio Mac' },
+	);
+	const away = replay([
+		{ type: 'agent_running', instance_slug: slug, chat_id: 'c' },
+		serverMessage('t1', 'assistant', 'screenshot on Studio Mac', { kind: 'tool_call', tool_name: 'computer_use' }),
+	]);
+	assert.equal(away.kind, 'working_remote');
+	assert.equal(companionStatusText(away), 'Nolune is working on Studio Mac: screenshot.');
+	const home = replay([serverMessage('t2', 'assistant', 'screenshot on the server home', { kind: 'tool_call', tool_name: 'computer_use' })], away);
+	assert.equal(home.kind, 'working', 'the server home is where the companion lives');
+	assert.equal(companionStatusText(home), 'Nolune is working on this computer: screenshot.');
+});
+
+test('a proactive run is a run the companion is on, and its outcome is never invented', () => {
+	const machines = [{ machine_id: 'm-1', display_name: 'Studio Mac' }];
+	const run = (status, over = {}) => ({ type: 'activity_updated', instance_slug: slug, run: { version: 1, id: 'r1', trigger: { kind: 'heartbeat', agent: 'companion' }, reason: 'periodic', target: { kind: 'companion' }, dedupe_key: 'heartbeat:companion', status, attempt: 1, started_at: 1, approvals: [], ...over } });
+	assert.deepEqual(companionEventFromServer(run({ kind: 'running' })), { type: 'activity_run', id: 'r1', status: 'running', label: 'Check-in', machine: null, handoffId: null, error: null });
+	assert.deepEqual(
+		companionEventFromServer(run({ kind: 'running' }, { trigger: { kind: 'handoff', handoff_id: 'h1' }, target: { kind: 'machine', machine_id: 'm-1' } }), machines),
+		{ type: 'activity_run', id: 'r1', status: 'running', label: 'Handoff on Studio Mac', machine: 'Studio Mac', handoffId: 'h1', error: null },
+		'a run targeting a computer names it the way the Computers tab does',
+	);
+	assert.deepEqual(companionEventFromServer(run({ kind: 'failed', error: 'no model configured', retryable: true })), { type: 'activity_run', id: 'r1', status: 'failed', label: 'Check-in', machine: null, handoffId: null, error: 'no model configured' });
+	// Running: the companion is on it, with nothing more claimed than the run itself.
+	const thinking = replay([run({ kind: 'running' })]);
+	assert.equal(thinking.kind, 'thinking');
+	assert.equal(companionStatusText(thinking), 'Nolune is thinking: Check-in.');
+	assert.equal(replay([{ type: 'memory_recall', instance_slug: slug, chat_id: 'default', memories: [{ path: 'a', preview: '', score: 1 }] }], thinking).kind, 'recalling');
+	// Completed: only because the server said so.
+	const done = replay([run({ kind: 'completed', finished_at: 2 })], thinking);
+	assert.equal(done.kind, 'completed');
+	assert.equal(companionStatusText(done), 'Nolune finished: Check-in.');
+	assert.equal(run([{ type: 'settle' }], done).kind, 'idle');
+	// Failed: the error, never completed.
+	const failed = replay([run({ kind: 'failed', error: 'no model configured', retryable: true })], thinking);
+	assert.equal(failed.kind, 'failed');
+	assert.equal(failed.completed, false);
+	assert.equal(companionStatusText(failed), 'Nolune stopped with an error: no model configured.');
+	assert.equal(replay([run({ kind: 'failed', error: 'no model configured', retryable: true })]).kind, 'failed', 'a failure is reported even for a run that was not seen starting');
+	// Cancelled: over, with no success claimed.
+	const cancelled = replay([run({ kind: 'cancelled' })], thinking);
+	assert.equal(cancelled.kind, 'idle');
+	assert.equal(cancelled.completed, false);
+	// Skipped or finished runs the client never saw start say nothing.
+	const idle = run([online]);
+	assert.equal(replay([run({ kind: 'skipped', reason: { kind: 'quiet_hours' } })], idle), idle);
+	assert.equal(replay([run({ kind: 'completed' })], idle), idle, 'a stray completion is not a success');
+	// A chat run and a proactive run at once: the companion is busy until the last one stops.
+	const both = replay([run({ kind: 'running' })], run([online, running, reading]));
+	assert.equal(both.kind, 'working', 'the action in progress is what shows');
+	const chatDone = run([stopped], both);
+	assert.equal(chatDone.kind, 'thinking');
+	assert.equal(companionStatusText(chatDone), 'Nolune is thinking: Check-in.');
+	assert.equal(replay([run({ kind: 'completed' })], chatDone).kind, 'completed');
+	// The next message or run starts clean.
+	assert.equal(companionStatusText(run([{ type: 'user_message', chatId: 'chat-a' }], done)), 'Nolune is listening.');
+	assert.equal(companionStatusText(run([running], done)), 'Nolune is thinking.');
+});
+
+test('a conversation snapshot is persisted state: it starts a missed run and ends one without claiming success', () => {
+	// GET /chat says agent_running; the client may have missed agent_running (page load, reconnect).
+	const missed = run([online, { type: 'snapshot', chatId: 'chat-a', running: true }]);
+	assert.equal(missed.kind, 'thinking');
+	assert.equal(run([{ type: 'snapshot', chatId: 'chat-a', running: true }], missed), missed, 'a snapshot of a run already seen changes nothing');
+	// The run ended while the client was away: over, but nobody said it succeeded.
+	const working = run([online, running, reading]);
+	const ended = run([{ type: 'snapshot', chatId: 'chat-a', running: false }], working);
+	assert.equal(ended.kind, 'idle');
+	assert.equal(ended.completed, false);
+	assert.equal(ended.action, null);
+	assert.equal(run([{ type: 'snapshot', chatId: 'chat-a', running: false }], run([online])), run([online]), 'a snapshot of nothing running changes nothing');
+	const held = run([online, running, reading, stopped]);
+	assert.equal(run([{ type: 'snapshot', chatId: 'chat-a', running: false }], held), held, 'nor does it cut a completed hold short');
+	const blocked = run([online, running, reading, { type: 'permission_denied', chatId: 'chat-a', reason: 'permission denied' }]);
+	assert.equal(run([{ type: 'snapshot', chatId: 'chat-a', running: false }], blocked).kind, 'blocked', 'the blocker outlives the run either way');
+});
+
+test('the status text links to the machine, the run, the handoff or the blocker', () => {
+	const at = 'companion';
+	const remoteWork = run([online, running, remote]);
+	assert.deepEqual(companionStatusSegments(remoteWork, 'Nolune', at), [
+		{ text: 'Nolune is working on ' },
+		{ text: 'studio-mac', href: '/companion/computers' },
+		{ text: ': opening Finder.' },
+	]);
+	assert.equal(joined(companionStatusSegments(remoteWork, 'Nolune', at)), companionStatusText(remoteWork), 'the segments read as the status sentence');
+	assert.deepEqual(companionStatusSegments(run([online, running, reading]), 'Luna', at), [
+		{ text: 'Luna is working on this computer: ' },
+		{ text: 'reading notes/tea.md', href: '/companion/chat' },
+		{ text: '.' },
+	]);
+	const other = run([online, { type: 'action', chatId: 'notes', tool: 'read_file', summary: 'reading notes/tea.md' }]);
+	assert.equal(companionStatusSegments(other, 'Luna', at)[1].href, '/companion/chat/notes', 'an action in another conversation links there');
+	const blocked = run([online, running, { type: 'action', chatId: 'chat-a', tool: 'run_command', summary: 'running command' }, { type: 'permission_denied', chatId: 'chat-a', reason: 'ls: /root: Permission denied' }]);
+	assert.deepEqual(companionStatusSegments(blocked, 'Nolune', at), [
+		{ text: 'Nolune is blocked by permissions: ' },
+		{ text: 'running command', href: '/companion/chat' },
+		{ text: ' (ls: /root: Permission denied).' },
+	]);
+	const activity = { type: 'activity_run', id: 'r1', status: 'running', label: 'Check-in', machine: null, handoffId: null, error: null };
+	const onRun = run([online, activity]);
+	assert.deepEqual(companionStatusSegments(onRun, 'Nolune', at), [
+		{ text: 'Nolune is thinking: ' },
+		{ text: 'Check-in', href: '/companion/activity#run-r1' },
+		{ text: '.' },
+	]);
+	assert.equal(companionStatusSegments(run([{ ...activity, status: 'completed' }], onRun), 'Nolune', at)[1].href, '/companion/activity#run-r1', 'the completed run stays linked');
+	assert.deepEqual(companionStatusSegments(run([{ ...activity, status: 'failed', error: 'no model configured' }], onRun), 'Nolune', at), [
+		{ text: 'Nolune stopped with an error: ' },
+		{ text: 'no model configured', href: '/companion/activity#run-r1' },
+		{ text: '.' },
+	]);
+	const handoff = run([online, { ...activity, id: 'r2', label: 'Handoff on Studio Mac', machine: 'Studio Mac', handoffId: 'h1' }]);
+	assert.equal(companionStatusSegments(handoff, 'Nolune', at)[1].href, '/companion/activity#handoff-card-h1', 'a continuation links to its handoff card');
+	const chatFailure = run([online, running, { type: 'run_failed', chatId: 'chat-a', error: 'something went wrong' }]);
+	assert.equal(companionStatusSegments(chatFailure, 'Nolune', at)[1].href, '/companion/chat', 'a failed chat turn links to the conversation');
+	for (const state of [run([online]), run([online, { type: 'user_message', chatId: 'chat-a' }]), run([online, running]), run([dropped]), run([online, running, { type: 'approval_requested', id: 'q', prompt: 'a GitHub token for gh' }])]) {
+		const segments = companionStatusSegments(state, 'Nolune', at);
+		assert.equal(segments.length, 1, `${state.kind} has nothing to link to`);
+		assert.equal(segments[0].href, undefined);
+		assert.equal(segments[0].text, companionStatusText(state));
+	}
+	assert.deepEqual(companionStatusSegments(remoteWork), [{ text: 'Nolune is working on studio-mac: opening Finder.' }], 'without a companion route there is nothing to link, and the sentence is unchanged');
+	assert.ok(Object.isFrozen(companionStatusSegments(remoteWork, 'Nolune', at)));
 });

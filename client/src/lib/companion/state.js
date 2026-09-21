@@ -460,3 +460,22 @@ export const STATE_EXAMPLES = Object.freeze(
 		return examples.map((e) => Object.freeze({ kind: e.kind, events: Object.freeze(e.events) }));
 	})(),
 );
+
+/**
+ * @param {string} tool
+ * @param {string} summary
+ * @returns {{ summary: string; machine: string | null }}
+ */
+export function machineFromTrail(tool, summary) {
+	throw new Error(`machineFromTrail not implemented (${tool}: ${summary})`);
+}
+
+/**
+ * @param {CompanionState} state
+ * @param {string} [name]
+ * @param {string | null} [slug]
+ * @returns {readonly ({ text: string } | { text: string; href: string })[]}
+ */
+export function companionStatusSegments(state, name = "Nolune", slug = null) {
+	throw new Error(`companionStatusSegments not implemented (${state.kind}, ${name}, ${slug})`);
+}
