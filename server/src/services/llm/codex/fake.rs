@@ -26,9 +26,11 @@
 //! with these values (`account/login/start` answers by its `type`), and
 //! `if` names members of the fake's state, a flat object that starts as
 //! [`STATE_ENV`] says (empty by default; a member never set reads as
-//! `null`) and that `set` rewrites after the answer, before the `then`
-//! events. That is how a login changes what `account/read` says next
-//! without teaching the fake the protocol's meaning.
+//! `null`) and that `set` rewrites: before the answer, or, when
+//! `then_delay_ms` is set, after that delay and before the `then` events.
+//! That is how a logout changes what `account/read` says next, and a
+//! login only once its completion fires, without teaching the fake the
+//! protocol's meaning.
 //!
 //! The environment steers the process: [`FIXTURE_ENV`] names the fixture
 //! and turns the entry point into the server, [`MODE_ENV`] is `serve`
@@ -146,7 +148,8 @@ struct Entry {
     /// Members the fake's state must carry, with these values.
     #[serde(default, rename = "if")]
     only_if: Option<Map<String, Value>>,
-    /// State members rewritten after the answer, before the `then` events.
+    /// State members rewritten before the answer, or after `then_delay_ms`
+    /// and before the `then` events when that is set.
     #[serde(default)]
     set: Option<Map<String, Value>>,
     #[serde(default)]
@@ -303,6 +306,16 @@ fn handle(
         }
         return;
     }
+    // The state changes when the entry's outcome lands: with the delayed
+    // events when there is a delay (a login is complete only once its
+    // completion fires), else before the answer, so a request the client
+    // sends on the answer reads the new state, the way codex has logged
+    // out by the time it answers `account/logout`. The reader thread
+    // selects the entry for the next request, so a state rewritten after
+    // the answer would race it.
+    if entry.then_delay_ms.is_none() {
+        rewrite(&state, entry.set.as_ref());
+    }
     if entry.echo {
         emit(json!({"id": id, "result": params}));
     } else if let Some(error) = &entry.error {
@@ -312,16 +325,20 @@ fn handle(
     }
     if let Some(ms) = entry.then_delay_ms {
         thread::sleep(Duration::from_millis(ms));
-    }
-    if let Some(set) = &entry.set {
-        let mut state = state.lock().unwrap();
-        let members = state.as_object_mut().expect("the state is an object");
-        for (key, value) in set {
-            members.insert(key.clone(), value.clone());
-        }
+        rewrite(&state, entry.set.as_ref());
     }
     for event in &entry.then {
         emit(notification(event));
+    }
+}
+
+/// Rewrite the members `set` names in the fake's state.
+fn rewrite(state: &FakeState, set: Option<&Map<String, Value>>) {
+    let Some(set) = set else { return };
+    let mut state = state.lock().unwrap();
+    let members = state.as_object_mut().expect("the state is an object");
+    for (key, value) in set {
+        members.insert(key.clone(), value.clone());
     }
 }
 
