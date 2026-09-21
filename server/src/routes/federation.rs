@@ -185,6 +185,8 @@ impl IntoResponse for ApiError {
             ),
             FederationError::InviteInvalid => (StatusCode::UNAUTHORIZED, "invalid_invite"),
             FederationError::UnknownPeer => (StatusCode::NOT_FOUND, "unknown_peer"),
+            FederationError::UnknownApproval => (StatusCode::NOT_FOUND, "unknown_approval"),
+            FederationError::UnknownRule => (StatusCode::NOT_FOUND, "unknown_rule"),
             FederationError::PeerNotPaired { .. } => (StatusCode::CONFLICT, "peer_not_paired"),
             FederationError::Transport(_) => (StatusCode::BAD_GATEWAY, "peer_unreachable"),
             FederationError::PeerRefused { .. } => (StatusCode::BAD_GATEWAY, "peer_refused"),

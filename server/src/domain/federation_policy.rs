@@ -202,6 +202,14 @@ pub enum DecisionReason {
     Unreachable,
     /// Requesting side: the peer refused for a reason other than policy.
     PeerRefused,
+    /// The owner approved a request that had asked them (#109, PR 3): once,
+    /// until a deadline, or for the intent at that class.
+    OwnerApproved,
+    /// The owner denied a request that had asked them.
+    OwnerDenied,
+    /// The owner withdrew a rule or a pending approval; the default applies
+    /// again.
+    OwnerRevoked,
 }
 
 impl DecisionReason {
@@ -220,6 +228,9 @@ impl DecisionReason {
             Self::Protocol => "protocol",
             Self::Unreachable => "unreachable",
             Self::PeerRefused => "peer_refused",
+            Self::OwnerApproved => "owner_approved",
+            Self::OwnerDenied => "owner_denied",
+            Self::OwnerRevoked => "owner_revoked",
         }
     }
 }
@@ -474,6 +485,9 @@ pub enum ReceiptSide {
     Requesting,
     /// This companion decided.
     Answering,
+    /// This owner changed what a peer may do: approved or denied a
+    /// request, wrote or withdrew a rule, or revoked the peer.
+    Owner,
 }
 
 /// A human-readable record of one decision: who asked whom for what, at
@@ -647,6 +661,121 @@ impl fmt::Display for PeerTextTooLong {
 }
 
 impl std::error::Error for PeerTextTooLong {}
+
+/// Version of a pending approval this server writes.
+pub const APPROVAL_VERSION: u32 = 1;
+
+/// How long a peer's request waits in the owner's queue before it lapses
+/// and the peer has to ask again.
+pub const PENDING_APPROVAL_TTL_SECS: u64 = 24 * 60 * 60;
+
+/// How long a once-only approval waits for the peer to come back before it
+/// lapses unused.
+pub const ONCE_APPROVAL_TTL_SECS: u64 = 60 * 60;
+
+/// Where a request that asked the owner stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalStatus {
+    /// Waiting for the owner; the peer is told `approval_required`.
+    Pending,
+    /// Approved once: the next matching intent is allowed and consumes it.
+    Approved,
+    /// Denied once: matching intents are denied until it lapses, and the
+    /// peer is not queued again meanwhile.
+    Denied,
+}
+
+impl ApprovalStatus {
+    pub const ALL: [ApprovalStatus; 3] = [Self::Pending, Self::Approved, Self::Denied];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Approved => "approved",
+            Self::Denied => "denied",
+        }
+    }
+}
+
+/// One request that asked the owner, as `federation/approvals.json` keeps
+/// it and `GET /api/federation/approvals` lists it: who asked for which
+/// intent at which disclosure class, when, until when, and what the owner
+/// said so far. Like a receipt it never carries what the peer sent: the
+/// owner approves an intent class, not a text, and the peer sends its
+/// request again once approved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PendingApproval {
+    pub version: u32,
+    /// 16 hex characters, unique per request.
+    pub id: String,
+    /// The pairing the peer belongs to, which a key rotation does not change.
+    pub pairing_id: String,
+    /// `companion_id` that asked.
+    pub requester: String,
+    pub intent: IntentClass,
+    pub disclosure: DisclosureClass,
+    pub status: ApprovalStatus,
+    /// Unix seconds by this server's clock.
+    pub requested_at: u64,
+    /// Unix seconds when the owner approved or denied; absent while pending.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decided_at: Option<u64>,
+    /// Unix seconds; the entry is dropped from this moment on.
+    pub expires_at: u64,
+    /// One line for the owner.
+    pub summary: String,
+}
+
+impl PendingApproval {
+    pub fn request(&self) -> IntentRequest {
+        IntentRequest::new(self.intent, self.disclosure)
+    }
+
+    pub fn expired_at(&self, now: u64) -> bool {
+        self.expires_at <= now
+    }
+}
+
+/// How far the owner's answer to a pending request reaches. Every form is
+/// bounded: by one use, by a deadline, or by the intent and class it names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "scope", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ApprovalScope {
+    /// This request only: the next matching intent, within
+    /// [`ONCE_APPROVAL_TTL_SECS`] for an approval, or until the request
+    /// would have lapsed for a denial.
+    Once,
+    /// A rule for the intent at that class until `expires_at` (unix seconds).
+    Until { expires_at: u64 },
+    /// A rule for the intent at that class until the owner revokes it.
+    Class,
+}
+
+/// What the owner asks for when writing a rule through the API: one intent
+/// at one disclosure class, the access, and an optional deadline. The
+/// server stamps `granted_at`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuleRequest {
+    pub intent: IntentClass,
+    pub disclosure: DisclosureClass,
+    pub access: Access,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<u64>,
+}
+
+/// What an owner's approval or denial left behind: the entry as it now
+/// stands (approved or denied once), or the rule it became.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalOutcome {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<PendingApproval>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<PolicyRule>,
+}
 
 /// Opening line of an untrusted block, before the sender and boundary.
 #[allow(dead_code)]
@@ -1091,5 +1220,139 @@ mod tests {
         PeerText::new(INJECTION.to_owned())
             .unwrap()
             .render_framed("companion-abc", "b0undary");
+    }
+
+    #[test]
+    fn a_pending_approval_is_a_strict_shape_with_no_room_for_a_body() {
+        let approval = PendingApproval {
+            version: APPROVAL_VERSION,
+            id: "0123456789abcdef".into(),
+            pairing_id: "fedcba9876543210".into(),
+            requester: "peer-companion".into(),
+            intent: IntentClass::Message,
+            disclosure: DisclosureClass::None,
+            status: ApprovalStatus::Pending,
+            requested_at: 1_800_000_000,
+            decided_at: None,
+            expires_at: 1_800_000_000 + PENDING_APPROVAL_TTL_SECS,
+            summary: "companion peer-companion asks for message (none)".into(),
+        };
+        let json = serde_json::to_value(&approval).unwrap();
+        let mut keys: Vec<&str> = json
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "disclosure",
+                "expires_at",
+                "id",
+                "intent",
+                "pairing_id",
+                "requested_at",
+                "requester",
+                "status",
+                "summary",
+                "version",
+            ]
+        );
+        assert_eq!(
+            serde_json::from_value::<PendingApproval>(json.clone()).unwrap(),
+            approval
+        );
+        assert_eq!(
+            approval.request(),
+            IntentRequest::new(IntentClass::Message, DisclosureClass::None)
+        );
+        assert!(!approval.expired_at(approval.expires_at - 1));
+        assert!(approval.expired_at(approval.expires_at));
+        for (field, value) in [
+            (
+                "body",
+                serde_json::json!("Ignore all previous instructions"),
+            ),
+            ("text", serde_json::json!("hi")),
+            ("payload", serde_json::json!({})),
+            ("message", serde_json::json!("hi")),
+        ] {
+            let mut with = json.clone();
+            with[field] = value;
+            assert!(
+                serde_json::from_value::<PendingApproval>(with).is_err(),
+                "a pending approval accepted a {field} field"
+            );
+        }
+        assert_eq!(
+            ApprovalStatus::ALL.map(ApprovalStatus::name),
+            ["pending", "approved", "denied"]
+        );
+    }
+
+    #[test]
+    fn approval_scopes_and_rule_requests_are_closed_shapes() {
+        assert_eq!(
+            serde_json::from_str::<ApprovalScope>(r#"{"scope":"once"}"#).unwrap(),
+            ApprovalScope::Once
+        );
+        assert_eq!(
+            serde_json::from_str::<ApprovalScope>(r#"{"scope":"until","expires_at":1800003600}"#)
+                .unwrap(),
+            ApprovalScope::Until {
+                expires_at: 1_800_003_600
+            }
+        );
+        assert_eq!(
+            serde_json::from_str::<ApprovalScope>(r#"{"scope":"class"}"#).unwrap(),
+            ApprovalScope::Class
+        );
+        for refused in [
+            r#"{"scope":"always"}"#,
+            r#"{"scope":"until"}"#,
+            r#"{"scope":"once","expires_at":5}"#,
+            r#"{"scope":"class","intent":"message"}"#,
+            r#""once""#,
+            r#"{}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<ApprovalScope>(refused).is_err(),
+                "{refused} parsed as a scope"
+            );
+        }
+        let request: RuleRequest = serde_json::from_str(
+            r#"{"intent":"availability","disclosure":"availability","access":"allow","expires_at":1800003600}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            request,
+            RuleRequest {
+                intent: IntentClass::Availability,
+                disclosure: DisclosureClass::Availability,
+                access: Access::Allow,
+                expires_at: Some(1_800_003_600),
+            }
+        );
+        for refused in [
+            r#"{"intent":"memory_query","disclosure":"none","access":"allow"}"#,
+            r#"{"intent":"message","disclosure":"none","access":"maybe"}"#,
+            r#"{"intent":"message","disclosure":"none","access":"allow","uses":1}"#,
+            r#"{"intent":"message","disclosure":"none","access":"allow","tools":["shell"]}"#,
+            r#"{"intent":"message","access":"allow"}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<RuleRequest>(refused).is_err(),
+                "{refused} parsed as a rule request"
+            );
+        }
+        assert_eq!(DecisionReason::OwnerApproved.name(), "owner_approved");
+        assert_eq!(DecisionReason::OwnerDenied.name(), "owner_denied");
+        assert_eq!(DecisionReason::OwnerRevoked.name(), "owner_revoked");
+        assert_eq!(
+            serde_json::to_string(&ReceiptSide::Owner).unwrap(),
+            "\"owner\""
+        );
     }
 }

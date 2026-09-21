@@ -45,6 +45,7 @@ use serde::Serialize;
 use serde::Deserialize;
 
 use super::{
+    approvals::ApprovalStore,
     audit::AuditLog,
     check_version, decode,
     pairing::{FederationState, HttpTransport, PING_PATH, PeerTransport},
@@ -57,8 +58,9 @@ use crate::domain::federation::{
     TransportMessage,
 };
 use crate::domain::federation_policy::{
-    AuditReceipt, Decision, DecisionReason, DefaultAccess, DisclosureClass, IntentClass,
-    PolicyDocument, RECEIPT_VERSION, ReceiptSide, Verdict, sanitize_name,
+    ApprovalOutcome, ApprovalScope, AuditReceipt, Decision, DecisionReason, DefaultAccess,
+    DisclosureClass, IntentClass, PeerPolicy, PendingApproval, PolicyDocument, RECEIPT_VERSION,
+    ReceiptSide, RuleRequest, Verdict, sanitize_name,
 };
 
 /// The intent name recorded for an accepted key rotation notice.
@@ -67,6 +69,9 @@ pub const KEY_ROTATION_INTENT: &str = "key_rotation";
 pub const UNKNOWN_NAME: &str = "unknown";
 /// One refusal of a kind per peer is recorded inside this window.
 pub const REFUSAL_DEDUPE_SECS: u64 = 60;
+/// The intent name recorded when a peer is revoked and everything it had
+/// (rules, pending approvals) is dropped with it.
+pub const REVOCATION_INTENT: &str = "revocation";
 
 /// What the owner listing shows: the document as written and the defaults
 /// that apply where it says nothing.
@@ -78,6 +83,8 @@ pub struct PolicyView {
 
 pub struct FederationGate {
     policy: PolicyStore,
+    /// Requests that asked the owner, until they decide or the request lapses.
+    approvals: ApprovalStore,
     audit: AuditLog,
     /// Per-peer rate windows, keyed by companion id.
     usage: Mutex<HashMap<String, RateWindow>>,
@@ -110,6 +117,7 @@ impl FederationGate {
     ) -> Self {
         Self {
             policy: PolicyStore::new(workspace_root),
+            approvals: ApprovalStore::with_clock(workspace_root, clock.clone()),
             audit: AuditLog::with_clock(workspace_root, clock.clone()),
             usage: Mutex::new(HashMap::new()),
             refusals: Mutex::new(HashMap::new()),
@@ -142,6 +150,92 @@ impl FederationGate {
     /// Every kept receipt, newest first.
     pub fn receipts(&self) -> Result<Vec<AuditReceipt>, FederationError> {
         self.audit.list()
+    }
+
+    /// Every live request that asked the owner, newest first.
+    pub fn approvals(&self) -> Result<Vec<PendingApproval>, FederationError> {
+        let _ = &self.approvals;
+        todo!("PR 3: owner API")
+    }
+
+    /// The owner approves the pending request `id`: once (the next matching
+    /// intent consumes it), until a deadline, or for the intent at that
+    /// class (both as a rule). The next evaluation sees it, and the owner's
+    /// decision is recorded.
+    pub fn approve(
+        &self,
+        federation: &FederationState,
+        id: &str,
+        scope: ApprovalScope,
+    ) -> Result<ApprovalOutcome, FederationError> {
+        let _ = (federation, id, scope);
+        todo!("PR 3: owner API")
+    }
+
+    /// The owner denies the pending request `id`: once (until the request
+    /// would have lapsed, without asking again), until a deadline, or for
+    /// the intent at that class (both as a rule).
+    pub fn deny(
+        &self,
+        federation: &FederationState,
+        id: &str,
+        scope: ApprovalScope,
+    ) -> Result<ApprovalOutcome, FederationError> {
+        let _ = (federation, id, scope);
+        todo!("PR 3: owner API")
+    }
+
+    /// The owner drops the entry `id` whatever its status: a pending
+    /// request goes unanswered (the peer may ask again), an approval once
+    /// is withdrawn unused, a denial once is lifted.
+    pub fn withdraw_approval(
+        &self,
+        federation: &FederationState,
+        id: &str,
+    ) -> Result<PendingApproval, FederationError> {
+        let _ = (federation, id);
+        todo!("PR 3: owner API")
+    }
+
+    /// The owner writes one rule for `companion_id`, replacing any rule for
+    /// the same intent and class; the next evaluation sees it. Refused for
+    /// a pair the intent cannot disclose at, a deadline in the past, a peer
+    /// no record knows, or a revoked peer (which keeps nothing).
+    pub fn set_rule(
+        &self,
+        federation: &FederationState,
+        companion_id: &str,
+        request: RuleRequest,
+    ) -> Result<PeerPolicy, FederationError> {
+        let _ = (federation, companion_id, request);
+        todo!("PR 3: owner API")
+    }
+
+    /// The owner withdraws the rule for `intent` at `disclosure` from
+    /// `companion_id`; the default applies again from the next evaluation.
+    pub fn revoke_rule(
+        &self,
+        federation: &FederationState,
+        companion_id: &str,
+        intent: IntentClass,
+        disclosure: DisclosureClass,
+    ) -> Result<PeerPolicy, FederationError> {
+        let _ = (federation, companion_id, intent, disclosure);
+        todo!("PR 3: owner API")
+    }
+
+    /// A revoked peer keeps nothing: its rules, its rate-limit override,
+    /// and every request of its pairing that asked the owner are dropped,
+    /// and the revocation is recorded on `side` (`Owner` when this owner
+    /// revoked, `Answering` when the peer's own notice did).
+    pub fn forget_peer(
+        &self,
+        federation: &FederationState,
+        companion_id: &str,
+        side: ReceiptSide,
+    ) -> Result<(), FederationError> {
+        let _ = (federation, companion_id, side);
+        todo!("PR 3: owner API")
     }
 
     /// Judges `intent` at `disclosure` (wire names) from `peer`, as this
@@ -635,6 +729,9 @@ fn summarize(
         ReceiptSide::Requesting => {
             format!("asked companion {responder} for {intent} ({disclosure}): {decision}")
         }
+        ReceiptSide::Owner => {
+            format!("owner ruled on companion {requester} for {intent} ({disclosure}): {decision}")
+        }
     }
 }
 
@@ -677,7 +774,10 @@ fn ping_body() -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::domain::federation::{AcceptInvite, IssuedInvite, SignedEnvelope};
-    use crate::domain::federation_policy::{Access, PolicyRule, QuietHoursPolicy, RateLimitPolicy};
+    use crate::domain::federation_policy::{
+        Access, ApprovalStatus, ONCE_APPROVAL_TTL_SECS, PENDING_APPROVAL_TTL_SECS, PolicyRule,
+        QuietHoursPolicy, RateLimitPolicy,
+    };
     use crate::services::federation::{
         envelope,
         pairing::{CONFIRM_PATH, PAIR_PATH, REVOKE_PATH, ROTATE_PATH},
@@ -1735,5 +1835,782 @@ mod tests {
         );
         assert!(mine.contains("them") && mine.contains("ping") && mine.contains("allow"));
         assert_ne!(line, mine);
+    }
+
+    // ---- Owner approvals and per-peer capability controls (#109, PR 3) ----
+
+    /// Judges a content intent from `peer` at `node`, as the dispatch of
+    /// #110 will.
+    fn admit(
+        node: &Node,
+        peer: &str,
+        intent: &str,
+        disclosure: &str,
+    ) -> Result<Decision, FederationError> {
+        node.gate
+            .admit(&node.id(), &node.peer(peer), intent, disclosure)
+    }
+
+    fn refused(result: Result<Decision, FederationError>) -> Decision {
+        match result {
+            Err(FederationError::PolicyRefused(decision)) => decision,
+            other => panic!("expected a policy refusal, got {other:?}"),
+        }
+    }
+
+    fn approvals(node: &Node) -> Vec<PendingApproval> {
+        node.gate.approvals().unwrap()
+    }
+
+    fn peer_policy(node: &Node, peer: &str) -> PeerPolicy {
+        node.gate.policy().unwrap().document.peer(peer)
+    }
+
+    fn rule(
+        intent: IntentClass,
+        disclosure: DisclosureClass,
+        access: Access,
+        expires_at: Option<u64>,
+    ) -> RuleRequest {
+        RuleRequest {
+            intent,
+            disclosure,
+            access,
+            expires_at,
+        }
+    }
+
+    #[tokio::test]
+    async fn an_intent_that_asks_the_owner_is_queued_and_the_peer_learns_nothing_about_timing() {
+        let mut network = Network::new();
+        let (a, b) = paired(&mut network).await;
+        let b_id = b.id();
+        assert!(approvals(&a).is_empty());
+
+        let first = refused(admit(&a, &b_id, "message", "none"));
+        assert_eq!(first, Decision::ask(DecisionReason::Default));
+        assert_eq!(first.over_the_wire(), first);
+        assert_eq!(first.retry_after_secs, None);
+        assert_eq!(first.deferred_until, None);
+        let queued = approvals(&a);
+        assert_eq!(queued.len(), 1, "{queued:?}");
+        let entry = &queued[0];
+        assert_eq!(entry.requester, b_id);
+        assert_eq!(entry.pairing_id, a.pairing_with(&b_id));
+        assert_eq!(entry.intent, IntentClass::Message);
+        assert_eq!(entry.disclosure, DisclosureClass::None);
+        assert_eq!(entry.status, ApprovalStatus::Pending);
+        assert_eq!(entry.requested_at, T0);
+        assert_eq!(entry.expires_at, T0 + PENDING_APPROVAL_TTL_SECS);
+        assert_eq!(receipts(&a)[0].decision, first);
+        assert_eq!(receipts(&a)[0].side, ReceiptSide::Answering);
+
+        // Asking again later is answered exactly the same way (nothing
+        // says how long it has waited or whether the owner has looked),
+        // and queues nothing new.
+        network.set(T0 + 3600);
+        let again = refused(admit(&a, &b_id, "message", "none"));
+        assert_eq!(again, first);
+        assert_eq!(
+            serde_json::to_value(&again).unwrap(),
+            serde_json::json!({"verdict": "ask", "reason": "default"})
+        );
+        assert_eq!(approvals(&a), queued);
+
+        // A ping never asks, so it is never queued; a denied class is not
+        // queued either: only what the owner can grant reaches the queue.
+        assert_eq!(
+            admit(&a, &b_id, "ping", "none").unwrap(),
+            Decision::allow(DecisionReason::Default)
+        );
+        assert_eq!(
+            refused(admit(&a, &b_id, "availability", "personal")),
+            Decision::deny(DecisionReason::Default)
+        );
+        assert_eq!(
+            refused(admit(&a, &b_id, "shell", "none")).reason,
+            DecisionReason::UnknownIntent
+        );
+        assert_eq!(approvals(&a).len(), 1);
+        // A different class from the same peer is its own request.
+        assert_eq!(
+            refused(admit(&a, &b_id, "availability", "availability")),
+            Decision::ask(DecisionReason::Default)
+        );
+        assert_eq!(approvals(&a).len(), 2);
+        assert_eq!(
+            approvals(&a)[0].intent,
+            IntentClass::Availability,
+            "newest first"
+        );
+        // The queue sits beside the other federation files, owner-only.
+        let path = a.root.join("federation").join("approvals.json");
+        assert!(path.is_file());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("body") && !text.contains("text\""), "{text}");
+    }
+
+    #[tokio::test]
+    async fn an_approval_once_admits_the_next_matching_intent_and_no_more() {
+        let mut network = Network::new();
+        let (a, b) = paired(&mut network).await;
+        let (a_id, b_id) = (a.id(), b.id());
+        refused(admit(&a, &b_id, "message", "none"));
+        let id = approvals(&a)[0].id.clone();
+        let before = receipts(&a).len();
+
+        network.set(T0 + 60);
+        let outcome = a
+            .gate
+            .approve(&a.federation, &id, ApprovalScope::Once)
+            .unwrap();
+        let approved = outcome.approval.expect("the entry stands, approved once");
+        assert_eq!(outcome.rule, None);
+        assert_eq!(approved.id, id);
+        assert_eq!(approved.status, ApprovalStatus::Approved);
+        assert_eq!(approved.decided_at, Some(T0 + 60));
+        assert_eq!(approved.expires_at, T0 + 60 + ONCE_APPROVAL_TTL_SECS);
+        assert_eq!(approvals(&a), vec![approved]);
+        // The owner's decision is a receipt of its own.
+        let all = receipts(&a);
+        assert_eq!(all.len(), before + 1);
+        let owner = &all[0];
+        assert_eq!(owner.side, ReceiptSide::Owner);
+        assert_eq!(owner.requester, b_id);
+        assert_eq!(owner.responder, a_id);
+        assert_eq!(owner.intent, "message");
+        assert_eq!(owner.disclosure, "none");
+        assert_eq!(
+            owner.decision,
+            Decision::allow(DecisionReason::OwnerApproved)
+        );
+        assert_eq!(owner.pairing_id, a.pairing_with(&b_id));
+        assert_eq!(owner.at, T0 + 60);
+        assert!(
+            owner.summary.contains("owner")
+                && owner.summary.contains(&b_id)
+                && owner.summary.contains("message"),
+            "{}",
+            owner.summary
+        );
+        // Nothing was written to the policy: once is not a rule.
+        assert!(peer_policy(&a, &b_id).rules.is_empty());
+
+        // The next matching intent is allowed and consumes it.
+        network.set(T0 + 120);
+        assert_eq!(
+            admit(&a, &b_id, "message", "none").unwrap(),
+            Decision::allow(DecisionReason::OwnerApproved)
+        );
+        assert_eq!(
+            receipts(&a)[0].decision,
+            Decision::allow(DecisionReason::OwnerApproved)
+        );
+        assert_eq!(receipts(&a)[0].side, ReceiptSide::Answering);
+        assert!(approvals(&a).is_empty());
+        // The one after asks the owner again, under a fresh entry.
+        assert_eq!(
+            refused(admit(&a, &b_id, "message", "none")),
+            Decision::ask(DecisionReason::Default)
+        );
+        assert_eq!(approvals(&a).len(), 1);
+        assert_ne!(approvals(&a)[0].id, id);
+        assert_eq!(approvals(&a)[0].status, ApprovalStatus::Pending);
+        // Deciding what is no longer pending is refused.
+        assert!(matches!(
+            a.gate.approve(&a.federation, &id, ApprovalScope::Once),
+            Err(FederationError::UnknownApproval)
+        ));
+        assert!(matches!(
+            a.gate
+                .deny(&a.federation, "0123456789abcdef", ApprovalScope::Once),
+            Err(FederationError::UnknownApproval)
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_unused_approval_lapses_and_the_peer_asks_again() {
+        let mut network = Network::new();
+        let (a, b) = paired(&mut network).await;
+        let b_id = b.id();
+        refused(admit(&a, &b_id, "message", "none"));
+        let id = approvals(&a)[0].id.clone();
+        a.gate
+            .approve(&a.federation, &id, ApprovalScope::Once)
+            .unwrap();
+        network.set(T0 + ONCE_APPROVAL_TTL_SECS);
+        assert_eq!(
+            refused(admit(&a, &b_id, "message", "none")),
+            Decision::ask(DecisionReason::Default)
+        );
+        assert_eq!(approvals(&a).len(), 1);
+        assert_ne!(approvals(&a)[0].id, id);
+    }
+
+    #[tokio::test]
+    async fn an_approval_until_a_deadline_becomes_a_rule_that_lapses() {
+        let mut network = Network::new();
+        let (a, b) = paired(&mut network).await;
+        let b_id = b.id();
+        refused(admit(&a, &b_id, "message", "none"));
+        let id = approvals(&a)[0].id.clone();
+
+        // A deadline in the past changes nothing.
+        network.set(T0 + 10);
+        assert!(matches!(
+            a.gate.approve(
+                &a.federation,
+                &id,
+                ApprovalScope::Until {
+                    expires_at: T0 + 10
+                }
+            ),
+            Err(FederationError::Malformed(_))
+        ));
+        assert_eq!(approvals(&a)[0].status, ApprovalStatus::Pending);
+        assert!(peer_policy(&a, &b_id).rules.is_empty());
+
+        let outcome = a
+            .gate
+            .approve(
+                &a.federation,
+                &id,
+                ApprovalScope::Until {
+                    expires_at: T0 + 3600,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            outcome.approval, None,
+            "a bounded approval is a rule, not an entry"
+        );
+        let written = outcome.rule.expect("the rule it became");
+        assert_eq!(
+            written,
+            PolicyRule {
+                intent: IntentClass::Message,
+                disclosure: DisclosureClass::None,
+                access: Access::Allow,
+                granted_at: T0 + 10,
+                expires_at: Some(T0 + 3600),
+            }
+        );
+        assert!(approvals(&a).is_empty());
+        assert_eq!(peer_policy(&a, &b_id).rules, vec![written]);
+        let owner = &receipts(&a)[0];
+        assert_eq!(owner.side, ReceiptSide::Owner);
+        assert_eq!(
+            owner.decision,
+            Decision::allow(DecisionReason::OwnerApproved)
+        );
+
+        network.set(T0 + 3599);
+        assert_eq!(
+            admit(&a, &b_id, "message", "none").unwrap(),
+            Decision::allow(DecisionReason::Rule)
+        );
+        assert!(approvals(&a).is_empty(), "an allowed intent is not queued");
+        network.set(T0 + 3600);
+        assert_eq!(
+            refused(admit(&a, &b_id, "message", "none")),
+            Decision::ask(DecisionReason::RuleExpired)
+        );
+        assert_eq!(
+            approvals(&a).len(),
+            1,
+            "past the deadline the owner is asked again"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_approval_for_the_class_holds_until_the_owner_revokes_it() {
+        let mut network = Network::new();
+        let (a, b) = paired(&mut network).await;
+        let (a_id, b_id) = (a.id(), b.id());
+        refused(admit(&a, &b_id, "message", "none"));
+        let id = approvals(&a)[0].id.clone();
+        let outcome = a
+            .gate
+            .approve(&a.federation, &id, ApprovalScope::Class)
+            .unwrap();
+        let written = outcome.rule.expect("a rule for the class");
+        assert_eq!(written.expires_at, None);
+        assert_eq!(written.access, Access::Allow);
+        assert!(approvals(&a).is_empty());
+        for at in [T0 + 1, T0 + 86_400 * 400] {
+            network.set(at);
+            assert_eq!(
+                admit(&a, &b_id, "message", "none").unwrap(),
+                Decision::allow(DecisionReason::Rule),
+                "at {at}"
+            );
+        }
+        // A grant at one class says nothing about another.
+        assert_eq!(
+            refused(admit(&a, &b_id, "availability", "availability")),
+            Decision::ask(DecisionReason::Default)
+        );
+
+        // Revoking the one capability takes effect at once and is recorded.
+        let policy = a
+            .gate
+            .revoke_rule(
+                &a.federation,
+                &b_id,
+                IntentClass::Message,
+                DisclosureClass::None,
+            )
+            .unwrap();
+        assert!(policy.rules.is_empty());
+        let owner = &receipts(&a)[0];
+        assert_eq!(owner.side, ReceiptSide::Owner);
+        assert_eq!(owner.requester, b_id);
+        assert_eq!(owner.responder, a_id);
+        assert_eq!(owner.intent, "message");
+        assert_eq!(owner.disclosure, "none");
+        assert_eq!(owner.decision, Decision::deny(DecisionReason::OwnerRevoked));
+        assert_eq!(
+            refused(admit(&a, &b_id, "message", "none")),
+            Decision::ask(DecisionReason::Default)
+        );
+        assert!(matches!(
+            a.gate.revoke_rule(
+                &a.federation,
+                &b_id,
+                IntentClass::Message,
+                DisclosureClass::None
+            ),
+            Err(FederationError::UnknownRule)
+        ));
+        assert!(matches!(
+            a.gate.revoke_rule(
+                &a.federation,
+                "nobody",
+                IntentClass::Message,
+                DisclosureClass::None
+            ),
+            Err(FederationError::UnknownPeer)
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_denial_once_holds_and_a_denial_for_the_class_is_a_rule() {
+        let mut network = Network::new();
+        let (a, b) = paired(&mut network).await;
+        let b_id = b.id();
+        refused(admit(&a, &b_id, "message", "none"));
+        let id = approvals(&a)[0].id.clone();
+
+        network.set(T0 + 60);
+        let outcome = a
+            .gate
+            .deny(&a.federation, &id, ApprovalScope::Once)
+            .unwrap();
+        let denied = outcome.approval.expect("the entry stands, denied once");
+        assert_eq!(outcome.rule, None);
+        assert_eq!(denied.status, ApprovalStatus::Denied);
+        assert_eq!(denied.decided_at, Some(T0 + 60));
+        assert_eq!(denied.expires_at, T0 + PENDING_APPROVAL_TTL_SECS);
+        let owner = &receipts(&a)[0];
+        assert_eq!(owner.side, ReceiptSide::Owner);
+        assert_eq!(owner.decision, Decision::deny(DecisionReason::OwnerDenied));
+        // The peer is denied and is not queued again while the denial holds.
+        network.set(T0 + 120);
+        assert_eq!(
+            refused(admit(&a, &b_id, "message", "none")),
+            Decision::deny(DecisionReason::OwnerDenied)
+        );
+        assert_eq!(
+            receipts(&a)[0].decision,
+            Decision::deny(DecisionReason::OwnerDenied)
+        );
+        assert_eq!(receipts(&a)[0].side, ReceiptSide::Answering);
+        assert_eq!(approvals(&a), vec![denied]);
+        // Once the request would have lapsed the peer may ask again.
+        network.set(T0 + PENDING_APPROVAL_TTL_SECS);
+        assert_eq!(
+            refused(admit(&a, &b_id, "message", "none")),
+            Decision::ask(DecisionReason::Default)
+        );
+        assert_eq!(approvals(&a).len(), 1);
+        assert_eq!(approvals(&a)[0].status, ApprovalStatus::Pending);
+
+        // Denying for the class writes a deny rule; until a deadline too.
+        let id = approvals(&a)[0].id.clone();
+        let outcome = a
+            .gate
+            .deny(&a.federation, &id, ApprovalScope::Class)
+            .unwrap();
+        let written = outcome.rule.expect("a deny rule");
+        assert_eq!(written.access, Access::Deny);
+        assert_eq!(written.expires_at, None);
+        assert!(approvals(&a).is_empty());
+        assert_eq!(
+            refused(admit(&a, &b_id, "message", "none")),
+            Decision::deny(DecisionReason::Rule)
+        );
+        assert!(approvals(&a).is_empty(), "a denied intent is not queued");
+        refused(admit(&a, &b_id, "availability", "availability"));
+        let id = approvals(&a)[0].id.clone();
+        let now = T0 + PENDING_APPROVAL_TTL_SECS;
+        let outcome = a
+            .gate
+            .deny(
+                &a.federation,
+                &id,
+                ApprovalScope::Until {
+                    expires_at: now + 600,
+                },
+            )
+            .unwrap();
+        assert_eq!(outcome.rule.unwrap().expires_at, Some(now + 600));
+        assert_eq!(
+            refused(admit(&a, &b_id, "availability", "availability")),
+            Decision::deny(DecisionReason::Rule)
+        );
+        network.set(now + 600);
+        assert_eq!(
+            refused(admit(&a, &b_id, "availability", "availability")),
+            Decision::ask(DecisionReason::RuleExpired)
+        );
+    }
+
+    #[tokio::test]
+    async fn owner_rules_apply_to_the_next_evaluation_and_every_change_is_recorded() {
+        let mut network = Network::new();
+        let (a, b) = paired(&mut network).await;
+        let (a_id, b_id) = (a.id(), b.id());
+        let availability = |access, expires_at| {
+            rule(
+                IntentClass::Availability,
+                DisclosureClass::Availability,
+                access,
+                expires_at,
+            )
+        };
+
+        network.set(T0 + 5);
+        let policy = a
+            .gate
+            .set_rule(&a.federation, &b_id, availability(Access::Allow, None))
+            .unwrap();
+        assert_eq!(
+            policy.rules,
+            vec![PolicyRule {
+                intent: IntentClass::Availability,
+                disclosure: DisclosureClass::Availability,
+                access: Access::Allow,
+                granted_at: T0 + 5,
+                expires_at: None,
+            }]
+        );
+        assert_eq!(peer_policy(&a, &b_id), policy);
+        assert_eq!(
+            admit(&a, &b_id, "availability", "availability").unwrap(),
+            Decision::allow(DecisionReason::Rule)
+        );
+        // Writing the same pair again replaces, never duplicates.
+        let policy = a
+            .gate
+            .set_rule(
+                &a.federation,
+                &b_id,
+                availability(Access::Ask, Some(T0 + 900)),
+            )
+            .unwrap();
+        assert_eq!(policy.rules.len(), 1);
+        assert_eq!(policy.rules[0].access, Access::Ask);
+        assert_eq!(policy.rules[0].expires_at, Some(T0 + 900));
+        assert_eq!(
+            refused(admit(&a, &b_id, "availability", "availability")),
+            Decision::ask(DecisionReason::Rule)
+        );
+        let policy = a
+            .gate
+            .set_rule(&a.federation, &b_id, availability(Access::Deny, None))
+            .unwrap();
+        assert_eq!(policy.rules.len(), 1);
+        assert_eq!(
+            refused(admit(&a, &b_id, "availability", "availability")),
+            Decision::deny(DecisionReason::Rule)
+        );
+        // Another pair is another rule beside it.
+        let policy = a
+            .gate
+            .set_rule(
+                &a.federation,
+                &b_id,
+                rule(
+                    IntentClass::Message,
+                    DisclosureClass::None,
+                    Access::Allow,
+                    None,
+                ),
+            )
+            .unwrap();
+        assert_eq!(policy.rules.len(), 2);
+
+        // Every change is an owner receipt naming the pair and the access.
+        let owner: Vec<AuditReceipt> = receipts(&a)
+            .into_iter()
+            .filter(|r| r.side == ReceiptSide::Owner)
+            .collect();
+        assert_eq!(owner.len(), 4, "{owner:?}");
+        assert_eq!(owner[0].decision, Decision::allow(DecisionReason::Rule));
+        assert_eq!(owner[0].intent, "message");
+        assert_eq!(owner[1].decision, Decision::deny(DecisionReason::Rule));
+        assert_eq!(owner[2].decision, Decision::ask(DecisionReason::Rule));
+        assert_eq!(owner[3].decision, Decision::allow(DecisionReason::Rule));
+        assert_eq!(owner[3].intent, "availability");
+        assert_eq!(owner[3].disclosure, "availability");
+        for receipt in &owner {
+            assert_eq!(receipt.requester, b_id);
+            assert_eq!(receipt.responder, a_id);
+            assert_eq!(receipt.pairing_id, a.pairing_with(&b_id));
+        }
+
+        // Refused: a pair the intent cannot disclose at, a deadline in the
+        // past, a peer no record knows.
+        for (request, what) in [
+            (
+                rule(
+                    IntentClass::Ping,
+                    DisclosureClass::Personal,
+                    Access::Allow,
+                    None,
+                ),
+                "an unsupported pair",
+            ),
+            (
+                rule(
+                    IntentClass::Message,
+                    DisclosureClass::None,
+                    Access::Allow,
+                    Some(T0 + 5),
+                ),
+                "a deadline that already passed",
+            ),
+        ] {
+            assert!(
+                matches!(
+                    a.gate.set_rule(&a.federation, &b_id, request),
+                    Err(FederationError::Malformed(_))
+                ),
+                "{what} was accepted"
+            );
+        }
+        assert!(matches!(
+            a.gate
+                .set_rule(&a.federation, "nobody", availability(Access::Allow, None)),
+            Err(FederationError::UnknownPeer)
+        ));
+        assert_eq!(
+            peer_policy(&a, &b_id).rules.len(),
+            2,
+            "a refused change writes nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn revoking_a_peer_drops_its_pending_approvals_and_rules() {
+        let mut network = Network::new();
+        let (a, b) = paired(&mut network).await;
+        let (a_id, b_id) = (a.id(), b.id());
+        let pairing = a.pairing_with(&b_id);
+        refused(admit(&a, &b_id, "message", "none"));
+        let id = approvals(&a)[0].id.clone();
+        a.gate
+            .set_rule(
+                &a.federation,
+                &b_id,
+                rule(
+                    IntentClass::Availability,
+                    DisclosureClass::Availability,
+                    Access::Allow,
+                    None,
+                ),
+            )
+            .unwrap();
+        // A third companion's request stays.
+        let c = network.server(ORIGIN_C);
+        let invite = a.federation.create_invite(ORIGIN_A).unwrap();
+        c.federation
+            .accept_invite(accept_for(&invite), ORIGIN_C)
+            .await
+            .unwrap();
+        a.federation.confirm_peer(&c.id()).await.unwrap();
+        refused(admit(&a, &c.id(), "message", "none"));
+        assert_eq!(approvals(&a).len(), 2);
+
+        network.set(T0 + 30);
+        a.federation.revoke_peer(&b_id).await.unwrap();
+        a.gate
+            .forget_peer(&a.federation, &b_id, ReceiptSide::Owner)
+            .unwrap();
+        let left = approvals(&a);
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].requester, c.id());
+        assert!(
+            !a.gate.policy().unwrap().document.peers.contains_key(&b_id),
+            "a revoked peer keeps no rules"
+        );
+        let owner = &receipts(&a)[0];
+        assert_eq!(owner.side, ReceiptSide::Owner);
+        assert_eq!(owner.requester, b_id);
+        assert_eq!(owner.responder, a_id);
+        assert_eq!(owner.pairing_id, pairing);
+        assert_eq!(owner.intent, REVOCATION_INTENT);
+        assert_eq!(owner.decision, Decision::deny(DecisionReason::PeerRevoked));
+        assert_eq!(owner.at, T0 + 30);
+        // Nothing of it can be decided or written any more.
+        assert!(matches!(
+            a.gate.approve(&a.federation, &id, ApprovalScope::Once),
+            Err(FederationError::UnknownApproval)
+        ));
+        assert!(matches!(
+            a.gate.set_rule(
+                &a.federation,
+                &b_id,
+                rule(
+                    IntentClass::Message,
+                    DisclosureClass::None,
+                    Access::Allow,
+                    None
+                )
+            ),
+            Err(FederationError::PeerRevoked)
+        ));
+        assert_eq!(
+            refused(admit(&a, &b_id, "message", "none")),
+            Decision::deny(DecisionReason::PeerRevoked)
+        );
+        assert_eq!(approvals(&a).len(), 1, "a revoked peer is not queued");
+        // The peer's own notice is recorded on the answering side, once.
+        let (_, notified) = b.federation.revoke_peer(&a_id).await.unwrap();
+        let _ = notified;
+        a.gate
+            .forget_peer(&a.federation, &b_id, ReceiptSide::Answering)
+            .unwrap();
+        a.gate
+            .forget_peer(&a.federation, &b_id, ReceiptSide::Answering)
+            .unwrap();
+        let answering: Vec<AuditReceipt> = receipts(&a)
+            .into_iter()
+            .filter(|r| r.side == ReceiptSide::Answering && r.intent == REVOCATION_INTENT)
+            .collect();
+        assert_eq!(answering.len(), 1, "{answering:?}");
+        assert!(matches!(
+            a.gate
+                .forget_peer(&a.federation, "nobody", ReceiptSide::Owner),
+            Err(FederationError::UnknownPeer)
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_rotation_moves_pending_approvals_to_the_new_id() {
+        let mut network = Network::new();
+        let (a, b) = paired(&mut network).await;
+        let old_b = b.id();
+        let pairing = a.pairing_with(&old_b);
+        refused(admit(&a, &old_b, "message", "none"));
+        let id = approvals(&a)[0].id.clone();
+
+        let report = b.federation.rotate_identity().await.unwrap();
+        let new_b = report.identity.companion_id.clone();
+        assert_ne!(new_b, old_b);
+        assert_eq!(report.notified, vec![a.id()]);
+        let moved = approvals(&a);
+        assert_eq!(moved.len(), 1);
+        assert_eq!(moved[0].id, id);
+        assert_eq!(moved[0].requester, new_b);
+        assert_eq!(moved[0].pairing_id, pairing);
+        // Approving it once admits the rotated peer.
+        a.gate
+            .approve(&a.federation, &id, ApprovalScope::Once)
+            .unwrap();
+        assert_eq!(
+            admit(&a, &new_b, "message", "none").unwrap(),
+            Decision::allow(DecisionReason::OwnerApproved)
+        );
+        assert!(approvals(&a).is_empty());
+    }
+
+    #[tokio::test]
+    async fn withdrawing_an_entry_is_recorded_and_frees_the_request() {
+        let mut network = Network::new();
+        let (a, b) = paired(&mut network).await;
+        let b_id = b.id();
+        refused(admit(&a, &b_id, "message", "none"));
+        let id = approvals(&a)[0].id.clone();
+        network.set(T0 + 10);
+        let dropped = a.gate.withdraw_approval(&a.federation, &id).unwrap();
+        assert_eq!(dropped.id, id);
+        assert!(approvals(&a).is_empty());
+        let owner = &receipts(&a)[0];
+        assert_eq!(owner.side, ReceiptSide::Owner);
+        assert_eq!(owner.requester, b_id);
+        assert_eq!(owner.intent, "message");
+        assert_eq!(owner.decision, Decision::deny(DecisionReason::OwnerRevoked));
+        assert_eq!(owner.at, T0 + 10);
+        assert!(matches!(
+            a.gate.withdraw_approval(&a.federation, &id),
+            Err(FederationError::UnknownApproval)
+        ));
+        // Withdrawing an approval once takes it back unused.
+        refused(admit(&a, &b_id, "message", "none"));
+        let id = approvals(&a)[0].id.clone();
+        a.gate
+            .approve(&a.federation, &id, ApprovalScope::Once)
+            .unwrap();
+        a.gate.withdraw_approval(&a.federation, &id).unwrap();
+        assert_eq!(
+            refused(admit(&a, &b_id, "message", "none")),
+            Decision::ask(DecisionReason::Default)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unloadable_queue_refuses_what_asks_the_owner_but_not_a_ping() {
+        let mut network = Network::new();
+        let (a, b) = paired(&mut network).await;
+        let (a_id, b_id) = (a.id(), b.id());
+        let path = a.root.join("federation").join("approvals.json");
+        std::fs::write(&path, "{\"version\":2,\"approvals\":[]}\n").unwrap();
+        assert!(
+            matches!(
+                admit(&a, &b_id, "message", "none"),
+                Err(FederationError::Io { .. })
+            ),
+            "an intent that asks the owner is refused, not admitted, over a queue that cannot be read"
+        );
+        assert!(
+            receipts(&a).is_empty(),
+            "no decision was made, so none is recorded"
+        );
+        assert_eq!(
+            admit(&a, &b_id, "ping", "none").unwrap(),
+            Decision::allow(DecisionReason::Default),
+            "a ping never consults the queue"
+        );
+        assert!(matches!(
+            a.gate.approvals(),
+            Err(FederationError::Io { .. })
+        ));
+        // A rotation is refused rather than applied without the queue.
+        let report = b.federation.rotate_identity().await.unwrap();
+        assert_eq!(report.unreachable, vec![a_id]);
+        assert_eq!(a.federation.overview().unwrap().peers[0].companion_id, b_id);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{\"version\":2,\"approvals\":[]}\n"
+        );
     }
 }
