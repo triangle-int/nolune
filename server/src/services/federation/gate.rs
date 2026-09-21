@@ -494,7 +494,9 @@ impl FederationGate {
     }
 
     /// Records an answering-side receipt, folding repeated refusals of one
-    /// kind from one peer inside [`REFUSAL_DEDUPE_SECS`] into one.
+    /// kind from one peer inside [`REFUSAL_DEDUPE_SECS`] into one. Only a
+    /// receipt that was written starts a window: a refusal the log could
+    /// not take does not silence the next one.
     #[allow(clippy::too_many_arguments)]
     fn record_answering(
         &self,
@@ -513,15 +515,13 @@ impl FederationGate {
                 | DecisionReason::PeerRevoked
                 | DecisionReason::PeerNotPaired
         );
-        if folded {
-            let mut refusals = self.refusals.lock().unwrap();
-            if let Some((reason, at)) = refusals.get(requester)
-                && *reason == decision.reason
-                && now.saturating_sub(*at) < REFUSAL_DEDUPE_SECS
-            {
-                return Ok(());
-            }
-            refusals.insert(requester.to_owned(), (decision.reason, now));
+        let mut refusals = folded.then(|| self.refusals.lock().unwrap());
+        if let Some(refusals) = &refusals
+            && let Some((reason, at)) = refusals.get(requester)
+            && *reason == decision.reason
+            && now.saturating_sub(*at) < REFUSAL_DEDUPE_SECS
+        {
+            return Ok(());
         }
         self.record(
             ReceiptSide::Answering,
@@ -533,7 +533,11 @@ impl FederationGate {
             detail,
             decision,
             now,
-        )
+        )?;
+        if let Some(refusals) = &mut refusals {
+            refusals.insert(requester.to_owned(), (decision.reason, now));
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1605,6 +1609,51 @@ mod tests {
             "{error:?}"
         );
         assert_eq!(receipts(&b)[0].decision.reason, DecisionReason::PeerRefused);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_refusal_whose_receipt_was_not_written_does_not_fold_the_next_one() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut network = Network::new();
+        let (a, b) = paired(&mut network).await;
+        let (a_id, b_id) = (a.id(), b.id());
+        let ping = b.federation.seal(&a_id, &ping_body()).unwrap();
+        a.federation.revoke_peer(&b_id).await.unwrap();
+        assert_eq!(
+            a.gate.receive_ping(&a.federation, &ping).unwrap_err(),
+            FederationError::PeerRevoked
+        );
+        assert_eq!(receipts(&a).len(), 1);
+
+        // Past the dedupe window the next refusal is due a receipt, but the
+        // log cannot be appended to just then.
+        network.set(T0 + REFUSAL_DEDUPE_SECS);
+        let path = a.root.join("federation").join("audit.jsonl");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400)).unwrap();
+        let again = b.federation.seal(&a_id, &ping_body()).unwrap();
+        let error = a.gate.receive_ping(&a.federation, &again).unwrap_err();
+        assert!(matches!(error, FederationError::Io { .. }), "{error:?}");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(receipts(&a).len(), 1, "nothing was written");
+
+        // The receipt that was not written did not start a dedupe window:
+        // the next refusal inside the minute is recorded.
+        let once_more = b.federation.seal(&a_id, &ping_body()).unwrap();
+        assert_eq!(
+            a.gate.receive_ping(&a.federation, &once_more).unwrap_err(),
+            FederationError::PeerRevoked
+        );
+        let on_a = receipts(&a);
+        assert_eq!(on_a.len(), 2, "{on_a:?}");
+        assert_eq!(on_a[0].at, T0 + REFUSAL_DEDUPE_SECS);
+        // And that one does.
+        let folded = b.federation.seal(&a_id, &ping_body()).unwrap();
+        assert_eq!(
+            a.gate.receive_ping(&a.federation, &folded).unwrap_err(),
+            FederationError::PeerRevoked
+        );
+        assert_eq!(receipts(&a).len(), 2);
     }
 
     #[tokio::test]
