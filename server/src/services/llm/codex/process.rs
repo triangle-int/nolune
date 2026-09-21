@@ -275,6 +275,7 @@ impl Shared {
         self.exit.borrow().clone()
     }
 
+    #[allow(dead_code)]
     fn is_gone(&self) -> bool {
         self.exit.borrow().is_some()
     }
@@ -862,6 +863,7 @@ impl AppServer {
 
     /// Send a notification to the live child; there is no child to start
     /// for one. The write is held to the request deadline.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn notify(&self, method: &str, params: Value) -> Result<(), AppServerError> {
         self.current()?.notify(method, params, self.due()).await
     }
@@ -892,6 +894,7 @@ impl AppServer {
     }
 
     /// The live child's pid, if there is one.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn pid(&self) -> Option<u32> {
         self.live()
             .ok()
@@ -904,7 +907,8 @@ impl AppServer {
         self.inner.state.lock().unwrap().generation
     }
 
-    /// The binary this supervisor starts.
+    /// The binary this supervisor starts; the status route (27d) reports it.
+    #[allow(dead_code)]
     pub fn binary(&self) -> &Path {
         &self.inner.launch.binary
     }

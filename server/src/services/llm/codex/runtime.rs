@@ -8,7 +8,10 @@
 //! and the fake app-server, so the real binary is never started by a test
 //! that did not ask for it.
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{
+    Arc, Mutex, OnceLock,
+    atomic::{AtomicBool, Ordering},
+};
 
 use serde_json::{Value, json};
 
@@ -45,6 +48,7 @@ enum Source {
     /// [`discovery::discover`] from the environment, at first use.
     Discover,
     /// A launch handed in, for tests.
+    #[cfg_attr(not(test), allow(dead_code))]
     Launch(Launch),
 }
 
@@ -56,6 +60,8 @@ struct Inner {
     server: tokio::sync::Mutex<Option<AppServer>>,
     /// The adapter's threads and open turns.
     threads: Mutex<Threads>,
+    /// Set by `close`: nothing starts again.
+    closed: AtomicBool,
 }
 
 /// The shared codex state. Cheap to clone; every clone is the same process.
@@ -74,6 +80,7 @@ impl Runtime {
     }
 
     /// A runtime of its own that starts `launch`: the fake in tests.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn for_launch(launch: Launch) -> Runtime {
         Self::with_source(Source::Launch(launch))
     }
@@ -84,6 +91,7 @@ impl Runtime {
                 source,
                 server: tokio::sync::Mutex::new(None),
                 threads: Mutex::new(Threads::default()),
+                closed: AtomicBool::new(false),
             }),
         }
     }
@@ -91,16 +99,48 @@ impl Runtime {
     /// The supervised app-server, started now if it is not running yet.
     /// Discovery failures come back typed and are retried on the next call.
     pub(crate) async fn app_server(&self) -> Result<AppServer, AppServerError> {
-        let _ = (&self.inner.source, &self.inner.server, discovery::discover);
-        let _ = Launch::new("");
-        todo!("27c")
+        if self.inner.closed.load(Ordering::SeqCst) {
+            return Err(AppServerError::Closed);
+        }
+        let mut server = self.inner.server.lock().await;
+        if let Some(server) = server.as_ref() {
+            return Ok(server.clone());
+        }
+        let launch = match &self.inner.source {
+            Source::Launch(launch) => launch.clone(),
+            Source::Discover => {
+                // A test that reaches the shared runtime by accident must
+                // never start the real binary, or spend a login on a turn.
+                if cfg!(test) && std::env::var_os(super::LIVE_ENV).is_none() {
+                    return Err(AppServerError::Unusable {
+                        path: "codex".into(),
+                        reason: format!(
+                            "the shared runtime does not start the real binary under test (set {} for a live test)",
+                            super::LIVE_ENV
+                        ),
+                    });
+                }
+                Launch::new(discovery::discover().await?.path)
+            }
+        };
+        let started = AppServer::start(launch).await?;
+        if self.inner.closed.load(Ordering::SeqCst) {
+            started.close();
+            return Err(AppServerError::Closed);
+        }
+        *server = Some(started.clone());
+        Ok(started)
     }
 
     /// Who the app-server is logged in as, from `account/read`. Nothing but
     /// the account kind, email and plan leaves this function.
     pub(crate) async fn account(&self) -> Result<AccountState, AppServerError> {
-        let _: Value = json!({});
-        todo!("27c")
+        let answer = self
+            .app_server()
+            .await?
+            .request("account/read", json!({}))
+            .await?;
+        Ok(account_state(&answer))
     }
 
     /// The adapter's per-conversation bookkeeping.
@@ -110,9 +150,35 @@ impl Runtime {
 
     /// Kill the child and refuse restarts; a runtime built for a test is
     /// closed when the test is done with it.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn close(&self) {
-        let _ = &self.inner.server;
-        todo!("27c")
+        // The lock is held only while a child starts; a start that sees the
+        // flag afterwards closes its own child.
+        self.inner.closed.store(true, Ordering::SeqCst);
+        let server = match self.inner.server.try_lock() {
+            Ok(mut server) => server.take(),
+            Err(_) => None,
+        };
+        match server {
+            Some(server) => server.close(),
+            None => log::debug!("[codex] close: nothing running"),
+        }
+        self.inner.threads.lock().unwrap().clear();
+    }
+}
+
+/// The `account/read` answer as an [`AccountState`]: `account` is null when
+/// nobody is logged in, else an object whose `type` says what it is.
+fn account_state(answer: &Value) -> AccountState {
+    let account = &answer["account"];
+    match account["type"].as_str() {
+        None => AccountState::LoggedOut,
+        Some("chatgpt") => AccountState::ChatGpt {
+            email: account["email"].as_str().map(str::to_owned),
+            plan: account["planType"].as_str().unwrap_or("unknown").to_owned(),
+        },
+        Some("apiKey") => AccountState::ApiKey,
+        Some(other) => AccountState::Other(other.to_owned()),
     }
 }
 

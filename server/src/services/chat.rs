@@ -984,8 +984,13 @@ pub fn get_chat_codex_thread(
     instance_slug: &str,
     chat_id: &str,
 ) -> io::Result<Option<String>> {
-    let _ = (workspace_dir, instance_slug, chat_id);
-    todo!("27c")
+    let instance_slug = sanitize_slug(instance_slug);
+    let chat_id = sanitize_slug(chat_id);
+    let dir = chat_dir(workspace_dir, &instance_slug, &chat_id);
+    if !dir.join("meta.json").exists() {
+        return Ok(None);
+    }
+    Ok(load_or_new_meta(&dir, &chat_id)?.codex_thread_id)
 }
 
 /// Remember the codex thread a chat continues in, or forget it with None.
@@ -995,8 +1000,15 @@ pub fn set_chat_codex_thread(
     chat_id: &str,
     thread_id: Option<&str>,
 ) -> io::Result<()> {
-    let _ = (workspace_dir, instance_slug, chat_id, thread_id);
-    todo!("27c")
+    let instance_slug = sanitize_slug(instance_slug);
+    let chat_id = sanitize_slug(chat_id);
+    let dir = chat_dir(workspace_dir, &instance_slug, &chat_id);
+    fs::create_dir_all(&dir)?;
+    let mut meta = load_or_new_meta(&dir, &chat_id)?;
+    meta.codex_thread_id = thread_id.map(str::to_owned).filter(|id| !id.is_empty());
+    let body = serde_json::to_string_pretty(&meta)
+        .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
+    fs::write(dir.join("meta.json"), body)
 }
 
 // ---------------------------------------------------------------------------

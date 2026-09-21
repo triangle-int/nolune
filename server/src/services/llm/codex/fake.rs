@@ -113,10 +113,15 @@ pub fn launch_logged(log: &Path) -> Launch {
     launch
 }
 
-/// The frames a [`launch_logged`] fake received so far, in order.
+/// The frames a [`launch_logged`] fake received so far, in order. A line
+/// still being written (no newline yet) is not there yet.
 pub fn wire_log(log: &Path) -> Vec<Value> {
-    std::fs::read_to_string(log)
-        .unwrap_or_default()
+    let text = std::fs::read_to_string(log).unwrap_or_default();
+    let complete = match text.rfind('\n') {
+        Some(end) => &text[..end],
+        None => "",
+    };
+    complete
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).expect(line))
@@ -193,13 +198,16 @@ struct Step {
     raw: Option<String>,
 }
 
+/// One scripted line. `on`, `when` and `env` are read from the raw JSON
+/// when an entry is selected; they are here so a fixture typo fails at load.
 #[derive(Clone, Deserialize)]
 struct Entry {
-    on: String,
-    #[serde(default)]
-    when: Option<Value>,
-    #[serde(default)]
-    env: Option<HashMap<String, String>>,
+    #[serde(rename = "on")]
+    _on: String,
+    #[serde(default, rename = "when")]
+    _when: Option<Value>,
+    #[serde(default, rename = "env")]
+    _env: Option<HashMap<String, String>>,
     #[serde(default)]
     steps: Option<Vec<Step>>,
     #[serde(default)]
@@ -496,7 +504,10 @@ fn serve(fixture: &Path) -> ! {
             continue;
         };
         if let Some(log) = log.as_mut() {
-            writeln!(log, "{}", Value::Object(frame.clone())).expect("wire log");
+            // One write per line, so a reader never sees half a frame.
+            let mut line = Value::Object(frame.clone()).to_string();
+            line.push('\n');
+            log.write_all(line.as_bytes()).expect("wire log");
         }
         let method = frame
             .get("method")

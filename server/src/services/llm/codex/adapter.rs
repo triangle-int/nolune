@@ -29,11 +29,15 @@
 //! variants the callers act on.
 
 use std::collections::HashMap;
+use std::hash::{Hash as _, Hasher as _};
+use std::path::Path;
 use std::time::Duration;
 
 use futures::future::BoxFuture;
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
+use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 
 use crate::services::tool::ToolDefinition;
 
@@ -42,8 +46,9 @@ use super::super::contract::{
     StopReason, Usage,
 };
 use super::super::types::{
-    ContentBlock, LlmBackend, LlmResponse, Message, ToolCall, ToolOutputContent,
+    ContentBlock, ImageSource, LlmBackend, LlmResponse, Message, ToolCall, ToolOutputContent,
 };
+use super::AppServerError;
 use super::process::{AppServer, Incoming};
 use super::protocol::RpcError;
 
@@ -66,6 +71,9 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 /// gives up on hearing it.
 const INTERRUPT_GRACE: Duration = Duration::from_secs(5);
 
+/// What a turn asks the user to do when the app-server holds no login.
+const LOGIN_REQUIRED: &str = "Codex login required: sign in with ChatGPT from Settings › Connections, or run `codex login` on this machine.";
+
 /// The bookkeeping the runtime keeps for the adapter: which thread each
 /// conversation continues in, and the turns left open on a tool call.
 #[derive(Default)]
@@ -78,14 +86,52 @@ pub(super) struct Threads {
     pending: HashMap<String, String>,
 }
 
+impl Threads {
+    /// Forget everything: the child is gone.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn clear(&mut self) {
+        self.by_conversation.clear();
+        self.open.clear();
+        self.pending.clear();
+    }
+
+    /// The open turn that `call_ids` answer, taken out of the books.
+    fn take_open_answering(&mut self, call_ids: &[&str]) -> Option<OpenTurn> {
+        let thread_id = call_ids
+            .iter()
+            .find_map(|call_id| self.pending.get(*call_id).cloned())?;
+        self.take_open(&thread_id)
+    }
+
+    /// The open turn of `thread_id`, taken out of the books.
+    fn take_open(&mut self, thread_id: &str) -> Option<OpenTurn> {
+        let open = self.open.remove(thread_id)?;
+        self.pending.retain(|_, thread| thread != thread_id);
+        Some(open)
+    }
+
+    /// Leave a turn open on its tool call(s).
+    fn store_open(&mut self, open: OpenTurn) {
+        for call_id in open.calls.keys() {
+            self.pending.insert(call_id.clone(), open.thread_id.clone());
+        }
+        self.open.insert(open.thread_id.clone(), open);
+    }
+}
+
 /// A thread attached in this process.
+#[derive(Clone)]
 struct ThreadState {
     thread_id: String,
     /// The names of the tools the thread was started with, when this
     /// process started it; unknown for a resumed thread.
     tools: Option<Vec<String>>,
-    /// The instructions and model the thread was last configured with.
-    configured: String,
+    /// A digest of the instructions and model the thread was last
+    /// configured with.
+    configured: u64,
+    /// The app-server child the thread is loaded in; another child has to
+    /// resume it first.
+    generation: u64,
 }
 
 /// A turn that asked for a tool and waits for the answer.
@@ -96,6 +142,8 @@ struct OpenTurn {
     /// The calls handed to the agent loop, by call id: the app-server's
     /// request id to answer with.
     calls: HashMap<String, Value>,
+    /// The child the turn runs in; a replacement child never heard of it.
+    generation: u64,
 }
 
 pub struct CodexAdapter(pub LlmBackend);
@@ -107,23 +155,128 @@ pub struct CodexAdapter(pub LlmBackend);
 /// Nolune's tools as codex `dynamicTools`: name, description and schema,
 /// nothing that lets codex run them itself.
 pub(super) fn dynamic_tools(tools: &[ToolDefinition]) -> Vec<Value> {
-    let _ = tools;
-    todo!("27c")
+    tools
+        .iter()
+        .map(|tool| {
+            json!({
+                "type": "function",
+                "name": tool.name,
+                "description": tool.description,
+                "inputSchema": tool.parameters,
+            })
+        })
+        .collect()
 }
 
 /// The config overrides every thread is started with: no project docs, no
 /// MCP servers, and codex's own tool surface switched off, so the model
 /// has Nolune's tools and nothing else.
 pub(super) fn thread_config() -> Value {
-    todo!("27c")
+    json!({
+        "project_doc_max_bytes": 0,
+        "mcp_servers": {},
+        "features": {
+            "shell_tool": false,
+            "unified_exec": false,
+            "unified_exec_tty": false,
+            "view_image": false,
+            "image_generation": false,
+            "browser_use": false,
+            "browser_use_external": false,
+            "browser_use_full_cdp_access": false,
+            "computer_use": false,
+            "multi_agent": false,
+            "multi_agent_v2": false,
+            "apps": false,
+            "plugins": false,
+            "hooks": false,
+            "sleep_tool": false,
+            "tool_suggest": false,
+        },
+        "tools": {
+            "web_search": false,
+            "view_image": false,
+        },
+    })
 }
 
 /// The system blocks as the thread's developer instructions, with the
 /// output schema appended for a structured request; secrets redacted like
 /// every other outgoing payload.
 pub(crate) fn developer_instructions(system: &[&str], json_schema: Option<&Value>) -> String {
-    let _ = (system, json_schema);
-    todo!("27c")
+    let mut blocks: Vec<String> = system
+        .iter()
+        .filter(|block| !block.is_empty())
+        .map(|block| (*block).to_owned())
+        .collect();
+    if let Some(schema) = json_schema {
+        blocks.push(format!(
+            "Respond with ONLY valid JSON matching this schema:\n{schema}"
+        ));
+    }
+    crate::services::tools::redact_secrets(&blocks.join("\n\n"))
+}
+
+/// One `text` input item.
+fn text_item(text: String) -> Value {
+    json!({"type": "text", "text": text})
+}
+
+fn tool_output_text(content: &ToolOutputContent) -> String {
+    match content {
+        ToolOutputContent::Text(text) => text.clone(),
+        ToolOutputContent::Blocks(blocks) => blocks
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        ToolOutputContent::Legacy(value) => value.to_string(),
+    }
+}
+
+/// The conversation before `messages`' last turn, told as text for a
+/// thread that was not there for it.
+fn recap(earlier: &[Message]) -> String {
+    let mut lines = vec!["Earlier in this conversation, before this thread:".to_owned()];
+    for message in earlier {
+        match message {
+            Message::User { content } => {
+                for block in content {
+                    match block {
+                        ContentBlock::Text { text } => lines.push(format!("user: {text}")),
+                        ContentBlock::ToolOutput { call_id, content } => {
+                            lines.push(format!(
+                                "tool result {call_id}: {}",
+                                tool_output_text(content)
+                            ));
+                        }
+                        ContentBlock::ContextSummary { content }
+                        | ContentBlock::LegacyContextSummary {
+                            summary: content, ..
+                        } => lines.push(format!("summary: {content}")),
+                        ContentBlock::Image { .. } => lines.push("user: [image]".into()),
+                        ContentBlock::Document { .. } => lines.push("user: [document]".into()),
+                        _ => {}
+                    }
+                }
+            }
+            Message::Assistant { content } => {
+                for block in content {
+                    match block {
+                        ContentBlock::Text { text } => lines.push(format!("assistant: {text}")),
+                        ContentBlock::ToolCall {
+                            name, arguments, ..
+                        } => lines.push(format!("assistant called {name}({arguments})")),
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    lines.join("\n")
 }
 
 /// The `turn/start` input for `messages`: the user content after the last
@@ -133,22 +286,123 @@ pub(crate) fn developer_instructions(system: &[&str], json_schema: Option<&Value
 /// answer no open call are text too, so a turn interrupted between a call
 /// and its result still tells the model what happened.
 pub(crate) fn turn_input(messages: &[Message], fresh_thread: bool) -> Vec<Value> {
-    let _ = (messages, fresh_thread);
-    todo!("27c")
+    let split = messages
+        .iter()
+        .rposition(|message| matches!(message, Message::Assistant { .. }))
+        .map_or(0, |last| last + 1);
+    let (earlier, trailing) = messages.split_at(split);
+    let mut input = Vec::new();
+    if fresh_thread && !earlier.is_empty() {
+        input.push(text_item(recap(earlier)));
+    }
+    for message in trailing {
+        let Message::User { content } = message else {
+            continue;
+        };
+        for block in content {
+            match block {
+                ContentBlock::Text { text } => input.push(text_item(text.clone())),
+                ContentBlock::ToolOutput { call_id, content } => input.push(text_item(format!(
+                    "Result of the earlier tool call {call_id}:\n{}",
+                    tool_output_text(content)
+                ))),
+                ContentBlock::ContextSummary { content }
+                | ContentBlock::LegacyContextSummary {
+                    summary: content, ..
+                } => input.push(text_item(format!("Conversation summary:\n{content}"))),
+                _ => {}
+            }
+        }
+    }
+    input
+        .into_iter()
+        .map(crate::services::tools::redact_value)
+        .collect()
 }
 
 /// A tool result as the `contentItems` of a `item/tool/call` answer.
 pub(super) fn tool_output_items(content: &ToolOutputContent) -> Vec<Value> {
-    let _ = content;
-    todo!("27c")
+    let mut items = match content {
+        ToolOutputContent::Text(text) => vec![json!({"type": "inputText", "text": text})],
+        ToolOutputContent::Blocks(blocks) => blocks
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text { text } => Some(json!({"type": "inputText", "text": text})),
+                ContentBlock::Image { source, .. } => {
+                    let url = match source {
+                        ImageSource::Base64 { media_type, data } => {
+                            format!("data:{media_type};base64,{data}")
+                        }
+                        ImageSource::Url { url } => url.clone(),
+                    };
+                    Some(json!({"type": "inputImage", "imageUrl": url}))
+                }
+                _ => None,
+            })
+            .collect(),
+        ToolOutputContent::Legacy(value) => {
+            vec![json!({"type": "inputText", "text": value.to_string()})]
+        }
+    };
+    if items.is_empty() {
+        items.push(json!({"type": "inputText", "text": ""}));
+    }
+    items
+        .into_iter()
+        .map(crate::services::tools::redact_value)
+        .collect()
 }
 
 /// The typed reading of a failed turn's `error` (`TurnError`): the
 /// `codexErrorInfo` names the class, as a string for the simple variants
 /// and as `{variant: {httpStatusCode}}` for the transport ones.
 pub(super) fn map_turn_error(error: &Value) -> LlmError {
-    let _ = error;
-    todo!("27c")
+    let message = crate::services::tools::redact_secrets(
+        error["message"].as_str().unwrap_or("the turn failed"),
+    );
+    let info = &error["codexErrorInfo"];
+    if let Some(kind) = info.as_str() {
+        return match kind {
+            "usageLimitExceeded" | "rateLimitExceeded" | "serverOverloaded" => {
+                LlmError::RateLimited {
+                    retry_after: None,
+                    message,
+                }
+            }
+            "contextWindowExceeded" | "sessionBudgetExceeded" => LlmError::ContextLength(message),
+            "unauthorized" => LlmError::Authentication(message),
+            "internalServerError" => LlmError::Http {
+                status: 500,
+                message,
+            },
+            "badRequest" => LlmError::Http {
+                status: 400,
+                message,
+            },
+            "interrupted" => LlmError::Cancelled,
+            _ => LlmError::Transport(message),
+        };
+    }
+    let upstream = [
+        "httpConnectionFailed",
+        "responseStreamConnectionFailed",
+        "responseStreamDisconnected",
+        "responseTooManyFailedAttempts",
+    ]
+    .into_iter()
+    .find_map(|variant| info.get(variant));
+    match upstream.and_then(|detail| detail["httpStatusCode"].as_u64()) {
+        Some(401 | 403) => LlmError::Authentication(message),
+        Some(429) => LlmError::RateLimited {
+            retry_after: None,
+            message,
+        },
+        Some(status) => LlmError::Http {
+            status: status as u16,
+            message,
+        },
+        None => LlmError::Transport(message),
+    }
 }
 
 /// Output-equivalent tokens by the ratios the OpenAI adapter uses: the
@@ -164,13 +418,417 @@ fn normalized_tokens(usage: &Usage, structured: bool) -> u64 {
 
 /// `thread/tokenUsage/updated`'s `last` breakdown as usage.
 fn parse_usage(last: &Value) -> Usage {
-    let _ = last;
-    todo!("27c")
+    Usage {
+        input_tokens: last["inputTokens"].as_u64().unwrap_or(0),
+        output_tokens: last["outputTokens"].as_u64().unwrap_or(0),
+        cache_read_tokens: last["cachedInputTokens"].as_u64().unwrap_or(0),
+        cache_write_tokens: last["cacheWriteInputTokens"].as_u64().unwrap_or(0),
+        cost: None,
+    }
+}
+
+/// The `thread/start` params: read-only, no approvals, codex's surfaces
+/// off, Nolune's tools, on the preset's model.
+fn thread_start_params(
+    backend: &LlmBackend,
+    request: &LlmRequest<'_>,
+    cwd: &Path,
+    ephemeral: bool,
+) -> Value {
+    json!({
+        "approvalPolicy": "never",
+        "config": thread_config(),
+        "cwd": cwd.to_string_lossy(),
+        "developerInstructions": developer_instructions(request.system, request.json_schema),
+        "dynamicTools": dynamic_tools(request.tools),
+        "ephemeral": ephemeral,
+        "model": backend.model,
+        "sandbox": "read-only",
+    })
+}
+
+/// The `thread/resume` params: the same settings, on the thread codex
+/// already has; its turns stay where they are.
+fn thread_resume_params(
+    backend: &LlmBackend,
+    request: &LlmRequest<'_>,
+    thread_id: &str,
+    cwd: &Path,
+) -> Value {
+    json!({
+        "threadId": thread_id,
+        "approvalPolicy": "never",
+        "config": thread_config(),
+        "cwd": cwd.to_string_lossy(),
+        "developerInstructions": developer_instructions(request.system, request.json_schema),
+        "excludeTurns": true,
+        "model": backend.model,
+        "sandbox": "read-only",
+    })
+}
+
+/// A digest of what a thread is configured with, to know when to
+/// reconfigure it.
+fn configuration_digest(backend: &LlmBackend, request: &LlmRequest<'_>) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    backend.model.hash(&mut hasher);
+    developer_instructions(request.system, request.json_schema).hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The tool names a request carries, sorted: a thread's tools are fixed
+/// when it starts.
+fn tool_names(tools: &[ToolDefinition]) -> Vec<String> {
+    let mut names: Vec<String> = tools.iter().map(|tool| tool.name.clone()).collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// The tool results in the user content after the last assistant message:
+/// what the agent loop brings back for the calls of an open turn.
+fn trailing_tool_outputs(messages: &[Message]) -> Vec<(&str, &ToolOutputContent)> {
+    let split = messages
+        .iter()
+        .rposition(|message| matches!(message, Message::Assistant { .. }))
+        .map_or(0, |last| last + 1);
+    messages[split..]
+        .iter()
+        .flat_map(|message| match message {
+            Message::User { content } => content.as_slice(),
+            Message::Assistant { .. } => &[],
+        })
+        .filter_map(|block| match block {
+            ContentBlock::ToolOutput { call_id, content } => Some((call_id.as_str(), content)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The id a `thread/start` or `thread/resume` answer names.
+fn thread_id_of(reply: &Value) -> Result<String, LlmError> {
+    reply["thread"]["id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| LlmError::InvalidResponse("the thread answer names no thread id".into()))
+}
+
+/// Items codex must never produce on its own: anything that executes,
+/// edits or delegates outside Nolune's tools.
+fn is_forbidden_item(kind: &str) -> bool {
+    matches!(
+        kind,
+        "commandExecution"
+            | "fileChange"
+            | "mcpToolCall"
+            | "collabAgentToolCall"
+            | "subAgentActivity"
+    )
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // The turn
 // ═══════════════════════════════════════════════════════════════════════════
+
+/// The thread a request runs in, attached to the live child, and whether
+/// it is new to the conversation (a recap of the earlier messages goes in
+/// its first turn).
+struct Attached {
+    thread_id: String,
+    fresh: bool,
+}
+
+/// How one turn ended.
+enum Outcome {
+    Completed,
+    /// Codex asked for a tool; the turn stays open on this call.
+    ToolCall {
+        call: ToolCall,
+        request_id: Value,
+    },
+}
+
+/// One turn being read: what streamed so far and where it came from.
+struct Turn<'a> {
+    server: AppServer,
+    thread_id: String,
+    turn_id: String,
+    events: broadcast::Receiver<Incoming>,
+    sink: &'a EventSink<'a>,
+    cancel: &'a CancellationToken,
+    text: String,
+    usage: Usage,
+    /// Agent message items that streamed deltas, by item id, so a completed
+    /// item is not appended twice.
+    streamed: std::collections::HashSet<String>,
+}
+
+impl Turn<'_> {
+    /// Read events until the turn completes, asks for a tool, fails, is
+    /// cancelled, or goes quiet for too long.
+    async fn read(&mut self) -> Result<Outcome, LlmError> {
+        loop {
+            let incoming = tokio::select! {
+                biased;
+                _ = self.cancel.cancelled() => {
+                    self.interrupt().await;
+                    return Err(LlmError::Cancelled);
+                }
+                next = tokio::time::timeout(IDLE_TIMEOUT, self.events.recv()) => match next {
+                    Err(_elapsed) => {
+                        self.interrupt().await;
+                        return Err(LlmError::Timeout);
+                    }
+                    Ok(Err(broadcast::error::RecvError::Closed)) => {
+                        return Err(LlmError::Transport(
+                            "codex app-server event stream closed".into(),
+                        ));
+                    }
+                    Ok(Err(broadcast::error::RecvError::Lagged(missed))) => {
+                        // A request the app-server waits on may be among
+                        // the missed events: the turn cannot go on.
+                        self.interrupt().await;
+                        return Err(LlmError::Transport(format!(
+                            "fell {missed} events behind the codex app-server"
+                        )));
+                    }
+                    Ok(Ok(incoming)) => incoming,
+                }
+            };
+            match incoming {
+                Incoming::Started { .. } => {}
+                Incoming::Exited { reason, .. } => {
+                    return Err(LlmError::Transport(reason));
+                }
+                Incoming::Notification { method, params } => {
+                    if let Some(outcome) = self.notification(&method, &params).await? {
+                        return Ok(outcome);
+                    }
+                }
+                Incoming::Request { id, method, params } => {
+                    if let Some(outcome) = self.request(id, &method, params).await? {
+                        return Ok(outcome);
+                    }
+                }
+            }
+        }
+    }
+
+    fn is_ours(&self, params: &Value) -> bool {
+        params["threadId"] == self.thread_id.as_str() && params["turnId"] == self.turn_id.as_str()
+    }
+
+    async fn notification(
+        &mut self,
+        method: &str,
+        params: &Value,
+    ) -> Result<Option<Outcome>, LlmError> {
+        if params["threadId"] != self.thread_id.as_str() {
+            return Ok(None);
+        }
+        match method {
+            "item/agentMessage/delta" if self.is_ours(params) => {
+                if let Some(delta) = params["delta"].as_str() {
+                    if let Some(item) = params["itemId"].as_str() {
+                        self.streamed.insert(item.to_owned());
+                    }
+                    self.text.push_str(delta);
+                    (self.sink)(LlmEvent::TextDelta(delta.to_owned()));
+                }
+            }
+            "item/started" if self.is_ours(params) => {
+                let item = &params["item"];
+                let kind = item["type"].as_str().unwrap_or("");
+                if is_forbidden_item(kind) {
+                    let detail = item["command"]
+                        .as_str()
+                        .or_else(|| item["tool"].as_str())
+                        .or_else(|| item["id"].as_str())
+                        .unwrap_or("")
+                        .to_owned();
+                    log::error!(
+                        "[codex] the app-server started a {kind} item on its own ({detail}); interrupting the turn"
+                    );
+                    self.interrupt().await;
+                    return Err(LlmError::InvalidResponse(format!(
+                        "codex ran a {kind} item outside Nolune's tools: {detail}"
+                    )));
+                }
+            }
+            "item/completed" if self.is_ours(params) => {
+                let item = &params["item"];
+                if item["type"] == "agentMessage"
+                    && let Some(text) = item["text"].as_str()
+                    && !item["id"]
+                        .as_str()
+                        .is_some_and(|id| self.streamed.contains(id))
+                    && !text.is_empty()
+                {
+                    // No deltas came for this item: the whole text at once.
+                    self.text.push_str(text);
+                    (self.sink)(LlmEvent::TextDelta(text.to_owned()));
+                }
+            }
+            "thread/tokenUsage/updated" if self.is_ours(params) => {
+                self.usage = parse_usage(&params["tokenUsage"]["last"]);
+                (self.sink)(LlmEvent::Usage(self.usage));
+            }
+            "turn/completed" if params["turn"]["id"] == self.turn_id.as_str() => {
+                let turn = &params["turn"];
+                return match turn["status"].as_str().unwrap_or("") {
+                    "completed" => Ok(Some(Outcome::Completed)),
+                    "interrupted" => Err(LlmError::Cancelled),
+                    "failed" => Err(map_turn_error(&turn["error"])),
+                    other => Err(LlmError::InvalidResponse(format!(
+                        "the turn ended with status {other:?}"
+                    ))),
+                };
+            }
+            _ => {}
+        }
+        Ok(None)
+    }
+
+    /// A request from the app-server: a tool call for this turn is handed
+    /// to the agent loop; everything that asks to run, change or grant
+    /// something is declined; the rest is refused so nothing waits.
+    async fn request(
+        &mut self,
+        id: Value,
+        method: &str,
+        params: Value,
+    ) -> Result<Option<Outcome>, LlmError> {
+        if params["threadId"] != self.thread_id.as_str() {
+            return Ok(None);
+        }
+        if params["turnId"] != self.turn_id.as_str() {
+            self.refuse(&id, method, "this turn is over").await;
+            return Ok(None);
+        }
+        match method {
+            "item/tool/call" => {
+                let call = ToolCall::required_string(&params, "callId").and_then(|call_id| {
+                    let name = ToolCall::required_string(&params, "tool")?;
+                    ToolCall::validate_arguments(&params["arguments"])?;
+                    Ok(ToolCall {
+                        id: call_id,
+                        name,
+                        arguments: params["arguments"].clone(),
+                    })
+                });
+                match call {
+                    Ok(call) => {
+                        (self.sink)(LlmEvent::ToolCallStarted {
+                            id: call.id.clone(),
+                            name: call.name.clone(),
+                        });
+                        (self.sink)(LlmEvent::ToolArgumentsDelta {
+                            id: call.id.clone(),
+                            name: call.name.clone(),
+                            delta: call.arguments.to_string(),
+                        });
+                        Ok(Some(Outcome::ToolCall {
+                            call,
+                            request_id: id,
+                        }))
+                    }
+                    Err(error) => {
+                        self.refuse(&id, method, &error.to_string()).await;
+                        self.interrupt().await;
+                        Err(error)
+                    }
+                }
+            }
+            "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
+                log::warn!(
+                    "[codex] the app-server asked for approval ({method}); declined, nothing runs but Nolune's tools"
+                );
+                self.answer(&id, json!({"decision": "decline"})).await;
+                Ok(None)
+            }
+            "item/permissions/requestApproval" => {
+                log::warn!("[codex] the app-server asked for permissions; none granted");
+                self.answer(&id, json!({"permissions": {}})).await;
+                Ok(None)
+            }
+            "item/tool/requestUserInput" => {
+                self.answer(&id, json!({"answers": {}})).await;
+                Ok(None)
+            }
+            "mcpServer/elicitation/request" => {
+                self.answer(&id, json!({"action": "decline"})).await;
+                Ok(None)
+            }
+            _ => {
+                self.refuse(&id, method, "nolune does not handle this request")
+                    .await;
+                Ok(None)
+            }
+        }
+    }
+
+    async fn answer(&self, id: &Value, result: Value) {
+        if let Err(error) = self.server.respond(id, Ok(result)).await {
+            log::warn!("[codex] could not answer the app-server's request {id}: {error}");
+        }
+    }
+
+    async fn refuse(&self, id: &Value, method: &str, why: &str) {
+        let refusal = RpcError {
+            code: -32601,
+            message: format!("nolune refused {method}: {why}"),
+            data: None,
+        };
+        if let Err(error) = self.server.respond(id, Err(refusal)).await {
+            log::warn!("[codex] could not refuse the app-server's {method} request {id}: {error}");
+        }
+    }
+
+    /// Stop the turn and wait, briefly, for the app-server to say it did.
+    async fn interrupt(&mut self) {
+        interrupt_turn(
+            &self.server,
+            &self.thread_id,
+            &self.turn_id,
+            &mut self.events,
+        )
+        .await;
+    }
+}
+
+/// Send `turn/interrupt` and drain `events` until that turn completes, or
+/// the grace period ends. Errors are logged: the turn may be over already,
+/// or the child gone, and either way there is nothing left to stop.
+async fn interrupt_turn(
+    server: &AppServer,
+    thread_id: &str,
+    turn_id: &str,
+    events: &mut broadcast::Receiver<Incoming>,
+) {
+    if let Err(error) = server
+        .request(
+            super::protocol::TURN_INTERRUPT,
+            json!({"threadId": thread_id, "turnId": turn_id}),
+        )
+        .await
+    {
+        log::warn!("[codex] turn/interrupt for {turn_id}: {error}");
+        return;
+    }
+    let deadline = Instant::now() + INTERRUPT_GRACE;
+    loop {
+        match tokio::time::timeout_at(deadline, events.recv()).await {
+            Ok(Ok(Incoming::Notification { method, params }))
+                if method == "turn/completed" && params["turn"]["id"] == turn_id =>
+            {
+                return;
+            }
+            Ok(Ok(Incoming::Exited { .. })) | Ok(Err(_)) | Err(_) => return,
+            Ok(Ok(_)) => {}
+        }
+    }
+}
 
 impl CodexAdapter {
     /// One request: attach the conversation's thread, start or continue a
@@ -180,36 +838,347 @@ impl CodexAdapter {
         request: &LlmRequest<'_>,
         events: &EventSink<'_>,
     ) -> Result<LlmResponse, LlmError> {
-        let _ = (
-            request,
-            events,
-            IDLE_TIMEOUT,
-            INTERRUPT_GRACE,
-            AppServer::request,
-            RpcError {
-                code: 0,
-                message: String::new(),
-                data: None,
-            },
-            ConversationRef {
-                instance_slug: "",
-                chat_id: "",
-                workspace_dir: std::path::Path::new(""),
-            },
-            LlmEvent::TextDelta(String::new()),
-            StopReason::Complete,
-            ToolCall {
-                id: String::new(),
-                name: String::new(),
-                arguments: Value::Null,
-            },
-            ContentBlock::text(""),
-            normalized_tokens,
-            parse_usage,
-        );
-        let _: HashMap<String, ThreadState> = HashMap::new();
-        let _: Option<OpenTurn> = None;
-        todo!("27c")
+        let backend = &self.0;
+        let runtime = &backend.codex;
+
+        // The agent loop is back with the result of a call codex waits on:
+        // answer it and read on in the same turn.
+        let outputs = trailing_tool_outputs(request.messages);
+        if !outputs.is_empty() {
+            let call_ids: Vec<&str> = outputs.iter().map(|(call_id, _)| *call_id).collect();
+            let open = runtime
+                .threads()
+                .lock()
+                .unwrap()
+                .take_open_answering(&call_ids);
+            if let Some(mut open) = open {
+                let server = runtime.app_server().await?;
+                if server.generation() != open.generation {
+                    // The child died while the loop ran the tool: the turn
+                    // died with it. The thread is resumed on the next turn.
+                    return Err(LlmError::Transport(
+                        "codex app-server restarted while the turn waited on a tool result".into(),
+                    ));
+                }
+                for (call_id, content) in &outputs {
+                    let Some(request_id) = open.calls.remove(*call_id) else {
+                        continue;
+                    };
+                    server
+                        .respond(
+                            &request_id,
+                            Ok(json!({"contentItems": tool_output_items(content), "success": true})),
+                        )
+                        .await?;
+                }
+                for (call_id, request_id) in open.calls.drain() {
+                    log::warn!(
+                        "[codex] tool call {call_id} came back without a result; refusing it"
+                    );
+                    let refusal = RpcError {
+                        code: -32601,
+                        message: "nolune has no result for this call".into(),
+                        data: None,
+                    };
+                    let _ = server.respond(&request_id, Err(refusal)).await;
+                }
+                let turn = Turn {
+                    server,
+                    thread_id: open.thread_id,
+                    turn_id: open.turn_id,
+                    events: open.events,
+                    sink: events,
+                    cancel: &request.cancellation,
+                    text: String::new(),
+                    usage: Usage::default(),
+                    streamed: Default::default(),
+                };
+                return self.finish(request, turn).await;
+            }
+        }
+
+        let server = runtime.app_server().await?;
+        // The app-server accepts a turn without a login and retries the
+        // model for a minute before it fails: ask first.
+        if !runtime.account().await?.is_logged_in() {
+            return Err(LlmError::SetupRequired(LOGIN_REQUIRED.into()));
+        }
+        let Attached { thread_id, fresh } = self.attach(request, &server).await?;
+        if request.cancellation.is_cancelled() {
+            return Err(LlmError::Cancelled);
+        }
+        // Subscribe before the turn starts, so its first events are heard.
+        let events_rx = server.subscribe();
+        let mut params = json!({
+            "threadId": thread_id,
+            "input": turn_input(request.messages, fresh),
+        });
+        if let Some(schema) = request.json_schema {
+            params["outputSchema"] = schema.clone();
+        }
+        let reply = server.request("turn/start", params).await?;
+        let turn_id = reply["turn"]["id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| LlmError::InvalidResponse("turn/start named no turn id".into()))?;
+        let turn = Turn {
+            server,
+            thread_id,
+            turn_id,
+            events: events_rx,
+            sink: events,
+            cancel: &request.cancellation,
+            text: String::new(),
+            usage: Usage::default(),
+            streamed: Default::default(),
+        };
+        self.finish(request, turn).await
+    }
+
+    /// Read the turn to its end, or to a tool call left open.
+    async fn finish(
+        &self,
+        request: &LlmRequest<'_>,
+        mut turn: Turn<'_>,
+    ) -> Result<LlmResponse, LlmError> {
+        let outcome = turn.read().await?;
+        let structured = request.json_schema.is_some();
+        let (tool_calls, stop_reason) = match outcome {
+            Outcome::Completed => (Vec::new(), StopReason::Complete),
+            Outcome::ToolCall { call, request_id } => {
+                let mut calls = HashMap::new();
+                calls.insert(call.id.clone(), request_id);
+                self.0.codex.threads().lock().unwrap().store_open(OpenTurn {
+                    thread_id: turn.thread_id.clone(),
+                    turn_id: turn.turn_id.clone(),
+                    events: turn.events,
+                    calls,
+                    generation: turn.server.generation(),
+                });
+                (vec![call], StopReason::ToolCalls)
+            }
+        };
+        let ordered_content = if turn.text.is_empty() {
+            Vec::new()
+        } else {
+            vec![ContentBlock::text(&turn.text)]
+        };
+        Ok(LlmResponse {
+            ordered_content,
+            text: turn.text,
+            tool_calls,
+            stop_reason,
+            tokens_used: normalized_tokens(&turn.usage, structured),
+            usage: turn.usage,
+        })
+    }
+
+    /// The thread this request runs in, attached to the live child: a
+    /// conversation's thread from the books or its `meta.json`, resumed
+    /// after a restart or reconfigured when the instructions or model
+    /// changed, started fresh when it is new, lost, or its tools changed;
+    /// an ephemeral thread for a one-shot run.
+    async fn attach(
+        &self,
+        request: &LlmRequest<'_>,
+        server: &AppServer,
+    ) -> Result<Attached, LlmError> {
+        let backend = &self.0;
+        let Some(conversation) = request.conversation else {
+            let cwd = std::env::temp_dir();
+            let reply = server
+                .request(
+                    "thread/start",
+                    thread_start_params(backend, request, &cwd, true),
+                )
+                .await?;
+            return Ok(Attached {
+                thread_id: thread_id_of(&reply)?,
+                fresh: true,
+            });
+        };
+        let ConversationRef {
+            instance_slug,
+            chat_id,
+            workspace_dir,
+        } = conversation;
+        let key = format!("{instance_slug}/{chat_id}");
+        let configured = configuration_digest(backend, request);
+        let tools = tool_names(request.tools);
+        let generation = server.generation();
+        let known = backend
+            .codex
+            .threads()
+            .lock()
+            .unwrap()
+            .by_conversation
+            .get(&key)
+            .cloned();
+
+        if let Some(state) = known {
+            // A turn left waiting on a tool result that never came: the
+            // conversation moved on without it.
+            let stale = backend
+                .codex
+                .threads()
+                .lock()
+                .unwrap()
+                .take_open(&state.thread_id);
+            if let Some(mut stale) = stale {
+                log::info!(
+                    "[codex] interrupting turn {} of {key}, left waiting on a tool result",
+                    stale.turn_id
+                );
+                interrupt_turn(server, &stale.thread_id, &stale.turn_id, &mut stale.events).await;
+                for (call_id, request_id) in stale.calls.drain() {
+                    let refusal = RpcError {
+                        code: -32601,
+                        message: format!("nolune abandoned tool call {call_id}"),
+                        data: None,
+                    };
+                    let _ = server.respond(&request_id, Err(refusal)).await;
+                }
+            }
+            if state.tools.as_ref().is_some_and(|known| *known != tools) {
+                log::info!("[codex] the tools of {key} changed; starting a fresh thread");
+                return self
+                    .start_durable(request, server, &key, workspace_dir, tools, configured)
+                    .await;
+            }
+            if state.generation != generation || state.configured != configured {
+                match server
+                    .request(
+                        "thread/resume",
+                        thread_resume_params(backend, request, &state.thread_id, workspace_dir),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        let mut threads = backend.codex.threads().lock().unwrap();
+                        threads.by_conversation.insert(
+                            key,
+                            ThreadState {
+                                configured,
+                                generation,
+                                ..state.clone()
+                            },
+                        );
+                    }
+                    Err(AppServerError::Rpc(error)) => {
+                        log::warn!(
+                            "[codex] thread {} of {key} could not be resumed ({}); starting a fresh one",
+                            state.thread_id,
+                            error.message
+                        );
+                        return self
+                            .start_durable(request, server, &key, workspace_dir, tools, configured)
+                            .await;
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            return Ok(Attached {
+                thread_id: state.thread_id,
+                fresh: false,
+            });
+        }
+
+        // Not attached in this process: the chat may remember a thread from
+        // an earlier run.
+        let remembered =
+            crate::services::chat::get_chat_codex_thread(workspace_dir, instance_slug, chat_id)
+                .map_err(|error| {
+                    LlmError::Transport(format!("reading the chat's thread: {error}"))
+                })?;
+        if let Some(thread_id) = remembered {
+            match server
+                .request(
+                    "thread/resume",
+                    thread_resume_params(backend, request, &thread_id, workspace_dir),
+                )
+                .await
+            {
+                Ok(_) => {
+                    backend
+                        .codex
+                        .threads()
+                        .lock()
+                        .unwrap()
+                        .by_conversation
+                        .insert(
+                            key,
+                            ThreadState {
+                                thread_id: thread_id.clone(),
+                                tools: None,
+                                configured,
+                                generation,
+                            },
+                        );
+                    return Ok(Attached {
+                        thread_id,
+                        fresh: false,
+                    });
+                }
+                Err(AppServerError::Rpc(error)) => {
+                    log::warn!(
+                        "[codex] thread {thread_id} of {key} is gone ({}); starting a fresh one",
+                        error.message
+                    );
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        self.start_durable(request, server, &key, workspace_dir, tools, configured)
+            .await
+    }
+
+    /// Start a durable thread for a conversation and remember it, in the
+    /// books and in the chat's `meta.json`.
+    async fn start_durable(
+        &self,
+        request: &LlmRequest<'_>,
+        server: &AppServer,
+        key: &str,
+        workspace_dir: &Path,
+        tools: Vec<String>,
+        configured: u64,
+    ) -> Result<Attached, LlmError> {
+        let backend = &self.0;
+        let reply = server
+            .request(
+                "thread/start",
+                thread_start_params(backend, request, workspace_dir, false),
+            )
+            .await?;
+        let thread_id = thread_id_of(&reply)?;
+        let (instance_slug, chat_id) = key.split_once('/').unwrap_or((key, ""));
+        crate::services::chat::set_chat_codex_thread(
+            workspace_dir,
+            instance_slug,
+            chat_id,
+            Some(&thread_id),
+        )
+        .map_err(|error| LlmError::Transport(format!("remembering the chat's thread: {error}")))?;
+        backend
+            .codex
+            .threads()
+            .lock()
+            .unwrap()
+            .by_conversation
+            .insert(
+                key.to_owned(),
+                ThreadState {
+                    thread_id: thread_id.clone(),
+                    tools: Some(tools),
+                    configured,
+                    generation: server.generation(),
+                },
+            );
+        Ok(Attached {
+            thread_id,
+            fresh: true,
+        })
     }
 }
 
@@ -715,12 +1684,14 @@ mod tests {
             harness.sent("turn/interrupt"),
             [json!({"threadId": "thr_fixture_1", "turnId": "turn_fixture_4"})]
         );
+        // The abandoned call is refused, never answered; whatever the old
+        // turn asks after that (the fake plays on) is refused the same way.
         let answers = harness.answers();
-        assert_eq!(answers.len(), 1, "{answers:?}");
+        assert!(!answers.is_empty(), "{answers:?}");
         assert_eq!(answers[0].0, json!(40));
         assert!(
-            answers[0].1.is_err(),
-            "the stale call is refused, never answered"
+            answers.iter().all(|(_, outcome)| outcome.is_err()),
+            "{answers:?}"
         );
         let turns = harness.sent("turn/start");
         assert_eq!(turns.len(), 2);
@@ -816,6 +1787,74 @@ mod tests {
             json!(harness.workspace().to_string_lossy()),
             "resumed with the conversation's settings"
         );
+        harness.runtime.close();
+    }
+
+    /// The child dies while the loop runs the tool: the result has nowhere
+    /// to go, the turn is reported lost, and the next turn resumes the
+    /// thread in the replaced child instead of waiting on the old one.
+    #[tokio::test]
+    async fn a_crash_while_a_turn_waits_on_a_tool_loses_that_turn_only() {
+        let harness = Harness::new();
+        let backend = harness.backend();
+        let tools = [tool("shot"), tool("search")];
+        let messages = [Message::user("look it up")];
+        let mut request = LlmRequest::new(ExecutionScope::Conversation, &[], &messages, &tools);
+        request.conversation = Some(harness.conversation());
+        let first = stream(&backend, request).await.0.unwrap();
+        assert_eq!(first.stop_reason, StopReason::ToolCalls);
+        harness
+            .runtime
+            .app_server()
+            .await
+            .unwrap()
+            .request("fake/crash", json!({}))
+            .await
+            .unwrap_err();
+
+        let messages = [
+            Message::user("look it up"),
+            Message::Assistant {
+                content: vec![ContentBlock::ToolCall {
+                    id: "call1".into(),
+                    name: "shot".into(),
+                    arguments: json!({}),
+                }],
+            },
+            Message::User {
+                content: vec![ContentBlock::tool_output(
+                    "call1".into(),
+                    "captured".into(),
+                    false,
+                )],
+            },
+        ];
+        let mut request = LlmRequest::new(ExecutionScope::Conversation, &[], &messages, &tools);
+        request.conversation = Some(harness.conversation());
+        let started = std::time::Instant::now();
+        let result = stream(&backend, request).await.0;
+        // The dead child refuses the answer, or a replacement never heard
+        // of the turn: either way a transport error, at once.
+        assert!(
+            matches!(&result, Err(LlmError::Transport(reason)) if reason.contains("exit status: 3") || reason.contains("restarted")),
+            "{result:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "not held for the idle timeout"
+        );
+
+        let messages = [Message::user("look it up"), Message::user("hi")];
+        let mut request = LlmRequest::new(ExecutionScope::Conversation, &[], &messages, &tools);
+        request.conversation = Some(harness.conversation());
+        let response = stream(&backend, request).await.0.unwrap();
+        assert_eq!(response.text, "Hello from the fixture");
+        assert_eq!(
+            harness.sent("thread/resume").len(),
+            1,
+            "resumed in the new child"
+        );
+        assert_eq!(harness.sent("thread/start").len(), 1);
         harness.runtime.close();
     }
 
@@ -981,6 +2020,88 @@ mod tests {
             "{result:?}"
         );
         harness.runtime.close();
+    }
+
+    /// Needs the real binary at the pin and a ChatGPT login; run with
+    /// `NOLUNE_CODEX_LIVE=1 cargo test ... -- --ignored`. One ephemeral
+    /// thread and one short turn with one dynamic tool: the model has to
+    /// call it, Nolune answers, and the model repeats the answer. Nothing
+    /// is written under `~/.codex`; the login is read by codex alone.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore]
+    async fn live_turn_round_trips_a_tool_call_through_the_real_app_server() {
+        let found = super::super::discovery::discover()
+            .await
+            .expect("codex at the pin");
+        let runtime = Runtime::for_launch(super::super::process::Launch::new(found.path));
+        let mut config = Config::default();
+        config.llm.seed_presets(LlmProvider::Codex);
+        let mut backend =
+            LlmBackend::for_preset(&config, reqwest::Client::new(), "codex-luna").unwrap();
+        backend.codex = runtime.clone();
+        let tools = [ToolDefinition {
+            name: "lookup_note".into(),
+            description: "Returns the note the user saved under a name.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+            }),
+        }];
+        let system = [
+            "You are a terse assistant in an integration test. When asked, call the lookup_note tool and then answer with exactly what it returned.",
+        ];
+        let mut messages = vec![Message::user(
+            "Call lookup_note with name \"garden\", then reply with exactly the text it returned and nothing else.",
+        )];
+        let request = LlmRequest::new(ExecutionScope::Subagent, &system, &messages, &tools);
+        let first = tokio::time::timeout(
+            Duration::from_secs(120),
+            backend.adapter().unwrap().complete(request),
+        )
+        .await
+        .expect("a live turn ends")
+        .expect("the turn completes");
+        assert_eq!(first.stop_reason, StopReason::ToolCalls, "{first:?}");
+        assert_eq!(first.tool_calls.len(), 1, "{first:?}");
+        assert_eq!(first.tool_calls[0].name, "lookup_note");
+        assert_eq!(first.tool_calls[0].arguments["name"], "garden");
+        let call_id = first.tool_calls[0].id.clone();
+        assert!(!call_id.is_empty());
+
+        messages.push(Message::Assistant {
+            content: vec![ContentBlock::ToolCall {
+                id: call_id.clone(),
+                name: "lookup_note".into(),
+                arguments: first.tool_calls[0].arguments.clone(),
+            }],
+        });
+        messages.push(Message::User {
+            content: vec![ContentBlock::tool_output(
+                call_id,
+                "the roses are blue this year".into(),
+                false,
+            )],
+        });
+        let request = LlmRequest::new(ExecutionScope::Subagent, &system, &messages, &tools);
+        let second = tokio::time::timeout(
+            Duration::from_secs(120),
+            backend.adapter().unwrap().complete(request),
+        )
+        .await
+        .expect("a live turn ends")
+        .expect("the turn completes");
+        assert_eq!(second.stop_reason, StopReason::Complete, "{second:?}");
+        assert!(
+            second.text.to_lowercase().contains("roses"),
+            "the model repeats the tool result: {second:?}"
+        );
+        assert!(
+            second.usage.input_tokens > 0 && second.usage.output_tokens > 0,
+            "{second:?}"
+        );
+        runtime.close();
     }
 
     // ── Pure wire shapes ─────────────────────────────────────────────────
@@ -1212,7 +2333,7 @@ mod tests {
         let legacy = ToolOutputContent::Legacy(json!([{"type": "expense", "amount": 1}]));
         assert_eq!(
             tool_output_items(&legacy),
-            [json!({"type": "inputText", "text": "[{\"type\":\"expense\",\"amount\":1}]"})]
+            [json!({"type": "inputText", "text": "[{\"amount\":1,\"type\":\"expense\"}]"})]
         );
         // Nothing at all is still one (empty) text item: codex wants a list.
         assert_eq!(

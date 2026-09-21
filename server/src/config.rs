@@ -495,7 +495,22 @@ pub fn default_presets(provider: LlmProvider) -> Vec<ModelPreset> {
                 "openai/gpt-5.4-mini",
             ),
         ],
-        LlmProvider::Codex => todo!("27a"),
+        // Codex (#27) names the models the pinned app-server lists; a
+        // ChatGPT login pays for none of them per token.
+        LlmProvider::Codex => vec![
+            ModelPreset::seeded(
+                "codex-astra",
+                "GPT-6 Astra via Codex",
+                provider,
+                "gpt-6-astra",
+            ),
+            ModelPreset::seeded(
+                "codex-luna",
+                "GPT-5.6 Luna via Codex",
+                provider,
+                "gpt-5.6-luna",
+            ),
+        ],
     }
 }
 
@@ -505,7 +520,7 @@ fn default_slots(provider: LlmProvider) -> (&'static str, &'static str) {
         LlmProvider::Anthropic => ("sonnet", "haiku"),
         LlmProvider::Openai => ("gpt", "gpt-mini"),
         LlmProvider::Openrouter => ("openrouter-sonnet", "openrouter-gpt-mini"),
-        LlmProvider::Codex => todo!("27a"),
+        LlmProvider::Codex => ("codex-astra", "codex-luna"),
     }
 }
 
@@ -564,13 +579,18 @@ impl LlmProvider {
             LlmProvider::Anthropic => "Anthropic",
             LlmProvider::Openai => "OpenAI",
             LlmProvider::Openrouter => "OpenRouter",
-            LlmProvider::Codex => todo!("27a"),
+            LlmProvider::Codex => "Codex",
         }
     }
 
     /// How the provider authenticates.
     pub fn auth(self) -> ProviderAuth {
-        todo!("27a")
+        match self {
+            LlmProvider::Anthropic | LlmProvider::Openai | LlmProvider::Openrouter => {
+                ProviderAuth::ApiKey
+            }
+            LlmProvider::Codex => ProviderAuth::Login,
+        }
     }
 
     pub fn parse(value: &str) -> Option<Self> {
@@ -578,6 +598,7 @@ impl LlmProvider {
             "api" | "anthropic" | "claude_cli" | "cli" => Some(Self::Anthropic),
             "openai" => Some(Self::Openai),
             "openrouter" | "open_router" => Some(Self::Openrouter),
+            "codex" => Some(Self::Codex),
             _ => None,
         }
     }
@@ -799,7 +820,7 @@ impl LlmConfig {
             LlmProvider::Anthropic => &self.tokens.anthropic,
             LlmProvider::Openai => &self.tokens.open_ai,
             LlmProvider::Openrouter => &self.tokens.open_router,
-            LlmProvider::Codex => todo!("27a"),
+            LlmProvider::Codex => return None,
         };
         (!key.is_empty()).then_some(key.as_str())
     }
@@ -810,16 +831,18 @@ impl LlmConfig {
 
     /// What this config knows about the provider's authentication (#27).
     pub fn auth_state_for(&self, provider: LlmProvider) -> AuthState {
-        let _ = provider;
-        todo!("27a")
+        match provider.auth() {
+            ProviderAuth::Login => AuthState::Login,
+            ProviderAuth::ApiKey if self.has_key(provider) => AuthState::Keyed,
+            ProviderAuth::ApiKey => AuthState::KeyRequired,
+        }
     }
 
     /// Whether a preset on this provider can run as far as the config is
     /// concerned: a key provider needs its key, a login provider needs
     /// nothing here (the login is checked when a turn starts).
     pub fn provider_ready(&self, provider: LlmProvider) -> bool {
-        let _ = provider;
-        todo!("27a")
+        self.auth_state_for(provider) != AuthState::KeyRequired
     }
 
     /// Providers that have an API key, in preset-provider order.
@@ -841,7 +864,7 @@ impl LlmConfig {
         let Some(chat) = self.chat_preset() else {
             return Some("Choose a model preset for chat.".into());
         };
-        if !self.has_key(chat.provider) {
+        if !self.provider_ready(chat.provider) {
             return Some(format!(
                 "Configure an API key for {}.",
                 chat.provider.label()
@@ -850,10 +873,12 @@ impl LlmConfig {
         None
     }
 
-    /// Whether conversations can run: the chat preset exists and its provider has a key.
+    /// Whether conversations can run: the chat preset exists and its
+    /// provider has what the config can give it (a key, or nothing for a
+    /// login provider).
     pub fn is_configured(&self) -> bool {
         self.chat_preset()
-            .is_some_and(|preset| self.has_key(preset.provider))
+            .is_some_and(|preset| self.provider_ready(preset.provider))
     }
 
     /// The model conversations use by default, for status surfaces.
@@ -949,7 +974,7 @@ impl LlmConfig {
             let Some(preset) = self.preset(id) else {
                 return Err(format!("{slot} points at unknown preset {id:?}"));
             };
-            if !self.has_key(preset.provider) {
+            if !self.provider_ready(preset.provider) {
                 return Err(format!(
                     "{slot} uses {} but no {} API key is configured",
                     preset.name,

@@ -11,7 +11,7 @@ OpenRouter options.
 | Anthropic | API key | `services/llm/anthropic.rs` |
 | OpenAI | API key | `services/llm/openai.rs` |
 | OpenRouter (#26) | API key | `services/llm/openrouter.rs` |
-| codex app-server (#27, in progress) | a ChatGPT login held by the local `codex` binary | `services/llm/codex/` |
+| Codex (#27) | a ChatGPT login held by the local `codex` binary | `services/llm/codex/` |
 
 ## codex app-server (#27)
 
@@ -47,6 +47,44 @@ codex's own tool surface (shell, file edits, MCP servers) is exposed: only
 tools from Nolune's capability and approval layer will run, once the
 provider adapter lands.
 
-What ships today is this process layer. The provider itself, with presets
-naming a codex model and login status in Settings → Connections, follows in
-later slices of #27.
+### The provider
+
+`LlmProvider::Codex` has no API key: `key_for` is `None`, the config's
+`auth_state_for` answers `login`, and a Codex preset is complete as far as
+the config is concerned. Whether a login is there is runtime state, read
+from the app-server (`account/read`) before every turn and never stored;
+without one a turn fails with a typed setup error that says to log in.
+`codex-astra` and `codex-luna` are the seeded presets, on the models the
+pinned release lists.
+
+Each conversation runs in one app-server thread. The first turn starts it
+(`thread/start`) and the id is kept in the chat's `meta.json`
+(`codex_thread_id`), so a restart of Nolune, or of the child, resumes the
+same thread (`thread/resume`) and the conversation continues where it was;
+a thread codex no longer has is started again, and the new one hears the
+conversation so far. One-shot runs (titles, memory extraction, the
+connection test) use ephemeral threads.
+
+A thread is started read-only (`sandbox: read-only`), with no approvals
+(`approvalPolicy: never`), with codex's own shell, file, browser, MCP,
+plugin, hook and sub-agent surfaces switched off in the thread's config,
+and with Nolune's tool definitions as `dynamicTools`: the only tools the
+model can call. When codex asks `item/tool/call`, the adapter hands the
+call to the agent loop as an ordinary tool call and leaves the turn open;
+the loop runs the tool through Nolune's capability and approval layer and
+the adapter answers codex with the result. Codex itself executes nothing:
+any approval it asks for is declined, and a command or file change it
+starts on its own fails the turn. Dynamic tools are fixed when a thread
+starts, so a conversation whose tool set changes continues in a fresh
+thread.
+
+Cancellation sends `turn/interrupt`. A child that dies mid-turn fails that
+turn with a transport error and the next turn resumes the thread in the
+replaced child. A failed turn maps its `codexErrorInfo` to the same typed
+errors the other adapters produce (rate limits, context length,
+authentication, upstream status). The Codex model cannot be sent images or
+documents through Nolune yet (its capabilities say so), and codex keeps its
+own conversation history, so only the new message goes out per turn.
+
+The login routes (status, device-code login, logout) and the Settings →
+Connections tile follow in the remaining slices of #27.
