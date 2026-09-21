@@ -1,6 +1,11 @@
 mod agent_loop;
 mod anthropic;
 pub mod codex;
+/// The provider conformance harness (#29): test-only source, kept out of
+/// `src/` so the guards that scan production source never read it.
+#[cfg(test)]
+#[path = "../../../test-support/llm_conformance.rs"]
+mod conformance;
 pub mod contract;
 mod helpers;
 mod openai;

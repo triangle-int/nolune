@@ -200,7 +200,7 @@ Everything important is stored as files under `~/.nolune`:
 
 ## Configuration
 
-Most settings are available through the interface. Advanced configuration lives at `~/.nolune/config.toml`.
+Most settings are available through the interface. Advanced configuration lives at `~/.nolune/config.toml`. [docs/providers.md](docs/providers.md) covers the model providers: setup, keys, model ids and what each one can do.
 
 | Environment variable | Description |
 |----------------------|-------------|
@@ -212,6 +212,8 @@ Most settings are available through the interface. Advanced configuration lives 
 | `ANTHROPIC_API_KEY` | Anthropic API key override |
 | `OPENAI_API_KEY` | OpenAI API key override |
 | `OPENROUTER_API_KEY` | OpenRouter API key override |
+| `BRAVE_SEARCH_API_KEY` | Brave Search API key override (the web search tool) |
+| `ELEVENLABS_API_KEY` | ElevenLabs API key override (voice) |
 | `NOLUNE_CODEX_BIN` | Path of the `codex` binary for the Codex provider, instead of the one on `PATH`; it must be the release Nolune pins (Settings › Connections names it). Codex logs in with ChatGPT and holds no API key |
 | `RUST_LOG` | Logging level, defaults to `info` |
 

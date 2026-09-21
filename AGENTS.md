@@ -27,6 +27,8 @@ git tag vX.Y.Z
 git push && git push origin vX.Y.Z
 ```
 
+The script moves version numbers only. A release that changes a seeded model id or the pinned `codex` release (`CODEX_VERSION`) walks [docs/release-checklist.md](docs/release-checklist.md) first: where the defaults live, how to re-record the Codex fixture, which live tests to run and which docs name the values.
+
 ## Package manager
 
 Use `pnpm` (not npm) for client and landing.
