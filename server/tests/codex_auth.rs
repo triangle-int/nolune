@@ -77,6 +77,129 @@ fn production(relative: &str) -> String {
     without_cfg_test_items(&text)
 }
 
+/// The macros that write a log record; `log::info!(` contains `info!(`.
+const LOG_MACROS: &[&str] = &["trace!(", "debug!(", "info!(", "warn!(", "error!(", "log!("];
+
+/// What the fields of a login or an account are called; a log call that
+/// formats one puts what a person was handed, or their address, on disk.
+const LOGGED_FIELDS: &[&str] = &["user_code", "auth_url", "verification_url", "email"];
+
+/// Every log macro call in `source`, each as one string from the line
+/// that opens it to the line that closes its parentheses, with the number
+/// of its first line. rustfmt wraps a call's arguments onto lines of their
+/// own, and an argument is part of the call that formats it: scanning one
+/// line at a time would miss every wrapped call. Parentheses inside string
+/// literals do not count.
+fn log_calls(source: &str) -> Vec<(usize, String)> {
+    let mut calls = Vec::new();
+    // The call being read: its first line, its text so far, and how many
+    // parentheses are open.
+    let mut open: Option<(usize, String, usize)> = None;
+    let mut in_string = false;
+    for (index, line) in source.lines().enumerate() {
+        let from = match &open {
+            Some(_) => 0,
+            None => match LOG_MACROS.iter().filter_map(|m| line.find(m)).min() {
+                Some(start) => {
+                    open = Some((index + 1, String::new(), 0));
+                    start
+                }
+                None => continue,
+            },
+        };
+        let (first, text, depth) = open.as_mut().unwrap();
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(line.trim());
+        let mut escaped = false;
+        for byte in line[from..].bytes() {
+            match byte {
+                _ if escaped => escaped = false,
+                b'\\' if in_string => escaped = true,
+                b'"' => in_string = !in_string,
+                b'(' if !in_string => *depth += 1,
+                b')' if !in_string => {
+                    *depth -= 1;
+                    if *depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if *depth == 0 {
+            calls.push((*first, std::mem::take(text)));
+            open = None;
+        }
+    }
+    calls
+}
+
+/// The log calls in `source` that format one of [`LOGGED_FIELDS`].
+fn leaking_log_calls(relative: &str, source: &str) -> Vec<String> {
+    let mut violations = Vec::new();
+    for (line, call) in log_calls(source) {
+        for field in LOGGED_FIELDS {
+            if call.contains(field) {
+                violations.push(format!("{relative}:{line} logs {field}: {call}"));
+            }
+        }
+    }
+    violations
+}
+
+#[test]
+fn the_log_scan_reads_a_wrapped_call_as_one_call() {
+    // A call rustfmt wrapped: the macro on one line, the arguments that
+    // name the fields on the lines after it.
+    let wrapped = concat!(
+        "fn started(status: &LoginStatus) {\n",
+        "    log::info!(\n",
+        "        \"[codex] login started: open {} and type {}\",\n",
+        "        status.verification_url.as_deref().unwrap_or(\"(none)\"),\n",
+        "        status.user_code.as_deref().unwrap_or(\"\")\n",
+        "    );\n",
+        "    log::info!(\"[codex] logged out\");\n",
+        "    let email = status.id.clone(); // not a log\n",
+        "    log::warn!(\"[codex] login failed ({}): {why}\", status.method);\n",
+        "}\n",
+    );
+    let calls = log_calls(wrapped);
+    let lines: Vec<usize> = calls.iter().map(|(line, _)| *line).collect();
+    assert_eq!(
+        lines,
+        [2, 7, 9],
+        "one call each, at its first line: {calls:?}"
+    );
+    assert!(
+        calls[0].1.contains("verification_url") && calls[0].1.contains("user_code"),
+        "the wrapped arguments belong to the call: {}",
+        calls[0].1
+    );
+    let violations = leaking_log_calls("fixture.rs", wrapped);
+    assert_eq!(violations.len(), 2, "{violations:?}");
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.starts_with("fixture.rs:2 logs user_code"))
+    );
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.starts_with("fixture.rs:2 logs verification_url"))
+    );
+    // A one-line call is still one call, and a field named outside a log
+    // call is nobody's business here.
+    let single = "log::info!(\"[codex] account {}\", account.email);\nlet user_code = 1;\n";
+    let violations = leaking_log_calls("fixture.rs", single);
+    assert_eq!(
+        violations,
+        ["fixture.rs:1 logs email: log::info!(\"[codex] account {}\", account.email);"]
+    );
+    assert!(leaking_log_calls("fixture.rs", "fn quiet() { let email = 1; }\n").is_empty());
+}
+
 #[test]
 fn the_login_routes_and_state_name_no_token_bearing_field() {
     let mut violations = Vec::new();
@@ -87,27 +210,9 @@ fn the_login_routes_and_state_name_no_token_bearing_field() {
                 violations.push(format!("{relative} names {token:?}"));
             }
         }
-        // A log line that formats what a person is handed to finish a
+        // A log call that formats what a person is handed to finish a
         // login, or the account's address, would put it on disk.
-        for (number, line) in source.lines().enumerate() {
-            let logs = line.contains("log::")
-                || line.contains("info!(")
-                || line.contains("warn!(")
-                || line.contains("error!(")
-                || line.contains("debug!(");
-            if !logs {
-                continue;
-            }
-            for field in ["user_code", "auth_url", "verification_url", "email"] {
-                if line.contains(field) {
-                    violations.push(format!(
-                        "{relative}:{} logs {field}: {}",
-                        number + 1,
-                        line.trim()
-                    ));
-                }
-            }
-        }
+        violations.extend(leaking_log_calls(relative, &source));
     }
     // The routes answer the status types as they are; a route that builds
     // its own JSON could add what the types leave out.

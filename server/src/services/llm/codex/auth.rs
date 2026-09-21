@@ -30,6 +30,7 @@ use super::{
     AppServerError, CODEX_VERSION,
     discovery::{self, BinaryLookup, BinarySource, LocatedBinary},
     process::{AppServer, Incoming, Launch},
+    protocol::RpcError,
 };
 use crate::services::cua::host::DisplaySession;
 
@@ -666,7 +667,8 @@ async fn watch(
 
 /// How the login `id` ended, from the events. A subscriber told it lagged
 /// may have missed the completion among a turn's events; the account then
-/// says whether the login went through.
+/// says whether the login went through. A request the app-server sends
+/// meanwhile is refused when this watcher is the only one who heard it.
 async fn ended(
     server: &AppServer,
     events: &mut broadcast::Receiver<Incoming>,
@@ -674,6 +676,11 @@ async fn ended(
 ) -> Result<(), String> {
     loop {
         match events.recv().await {
+            Ok(Incoming::Request {
+                id: request,
+                method,
+                ..
+            }) => refuse_when_alone(server, request, method),
             Ok(event) => {
                 if let Some(outcome) = login_outcome(&event, id) {
                     return outcome;
@@ -695,6 +702,35 @@ async fn ended(
             }
         }
     }
+}
+
+/// A request the app-server sent while a login is pending. The supervisor
+/// refuses a request nobody is subscribed for, so the app-server never
+/// waits for an answer that cannot come; the watcher is subscribed for the
+/// whole login, which would turn that net off, so it refuses in the
+/// supervisor's stead when it is the only subscriber. Another subscriber
+/// is a turn's, which answers the app-server's requests itself: a refusal
+/// on top of its answer would fail a live tool call and hand the
+/// app-server two answers, so the request is left to it. The answer is
+/// written from a task of its own, so the watcher keeps hearing events.
+fn refuse_when_alone(server: &AppServer, id: Value, method: String) {
+    if server.subscribers() > 1 {
+        return;
+    }
+    log::warn!(
+        "[codex] nobody but the login watcher is subscribed to answer the app-server's {method} request {id}: refusing it"
+    );
+    let server = server.clone();
+    tokio::spawn(async move {
+        let refusal = RpcError {
+            code: -32601,
+            message: format!("nolune has no handler listening for {method}"),
+            data: None,
+        };
+        if let Err(error) = server.respond(&id, Err(refusal)).await {
+            log::warn!("[codex] could not refuse the app-server's {method} request {id}: {error}");
+        }
+    });
 }
 
 /// What an event says about the login `id`: nothing, or how it ended. A
@@ -1135,6 +1171,76 @@ mod tests {
             "{done:?}"
         );
         assert!(!after.logged_in);
+        auth.shutdown().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_request_from_the_app_server_during_a_pending_login_is_refused_not_left_waiting() {
+        // The supervisor refuses a request from the app-server when nobody
+        // is subscribed; the watcher of a pending login is subscribed for
+        // up to the deadline, and must not turn that net off. "silent":
+        // the login never completes, so the watcher stays.
+        let auth = auth_with_state(json!({"session": "none", "login": "silent"}));
+        let login = auth.login(LoginMethod::DeviceCode).await.unwrap();
+        assert_eq!(login.state, LoginState::Pending);
+        let server = auth.app_server().await.unwrap();
+        let started = Instant::now();
+        let answer = server.request("fake/ask", json!({})).await.unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "refused at once, not after the fake gave up: took {:?}",
+            started.elapsed()
+        );
+        assert_eq!(answer["refused"]["code"], -32601, "{answer}");
+        let message = answer["refused"]["message"].as_str().unwrap();
+        assert!(message.contains("item/tool/call"), "{message}");
+        // The refusal is not the login's end: it still waits for the person.
+        let status = auth.status().await;
+        assert_eq!(
+            status.login.as_ref().map(|login| login.state),
+            Some(LoginState::Pending),
+            "{status:?}"
+        );
+        auth.shutdown().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_login_watcher_leaves_a_request_to_a_subscriber_that_answers_it() {
+        // A turn's own subscriber (the adapter's, in 27c) answers the
+        // app-server's requests; a refusal from the watcher on top of it
+        // would fail a live tool call and hand the app-server two answers.
+        let auth = auth_with_state(json!({"session": "none", "login": "silent"}));
+        auth.login(LoginMethod::DeviceCode).await.unwrap();
+        let server = auth.app_server().await.unwrap();
+        let mut turn = server.subscribe();
+        let asked = tokio::spawn({
+            let server = server.clone();
+            async move { server.request("fake/ask", json!({})).await }
+        });
+        let (id, method) = loop {
+            match tokio::time::timeout(Duration::from_secs(10), turn.recv())
+                .await
+                .expect("the app-server's request arrives")
+                .expect("the subscription is live")
+            {
+                Incoming::Request { id, method, .. } => break (id, method),
+                _ => continue,
+            }
+        };
+        assert_eq!(method, "item/tool/call");
+        // Time for a watcher that refused wrongly to have done so first.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        server
+            .respond(&id, Ok(json!({"success": true})))
+            .await
+            .unwrap();
+        let answer = asked.await.unwrap().unwrap();
+        assert_eq!(
+            answer["answered"]["success"], true,
+            "the subscriber's answer is the one that counts: {answer}"
+        );
         auth.shutdown().await;
     }
 
