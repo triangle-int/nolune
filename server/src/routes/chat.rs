@@ -145,8 +145,9 @@ pub async fn run_agent_loop(
     chat_id: String,
     cancel: CancellationToken,
     voice_mode: bool,
-    machine_target: Option<String>,
+    mut machine_target: Option<String>,
 ) -> AgentLoopExit {
+    let key = task_key(&instance_slug, &chat_id);
     let _ = state.events.send(ServerEvent::AgentRunning {
         instance_slug: instance_slug.clone(),
         chat_id: chat_id.clone(),
@@ -273,6 +274,11 @@ pub async fn run_agent_loop(
         }
 
         iteration += 1;
+
+        // A request queued on this conversation since the last turn (a
+        // handoff accepted while it ran, #82) names the computer this turn
+        // acts on; otherwise the loop keeps the target it started with.
+        machine_target = next_turn_target(&state, &key, machine_target).await;
 
         let config_path = config::config_path();
 
@@ -475,18 +481,10 @@ pub async fn run_agent_loop(
     // Clean up
     chat::clear_agent_running(&state.workspace_dir, &instance_slug, &chat_id);
 
-    let key = task_key(&instance_slug, &chat_id);
     // The reason is on record before the key is released, so a follower
-    // that sees the conversation idle can read it.
-    state
-        .agent_exits
-        .lock()
-        .await
-        .insert(key.clone(), exit.clone());
-    {
-        let mut tasks = state.agent_tasks.lock().await;
-        tasks.remove(&key);
-    }
+    // that sees the conversation idle can read it; a target queued on this
+    // loop that it never took is released with the key.
+    state.release_agent(&key, exit.clone()).await;
 
     // Final snapshot — client gets complete state before agent_stopped
     send_snapshot(&state, &instance_slug, &chat_id, false);
@@ -508,6 +506,26 @@ pub async fn run_agent_loop(
 }
 
 /// Send a full chat state snapshot so all clients converge to the same state.
+/// The computer the next turn of the conversation `key` acts on (#80): what
+/// a request queued on it since the last turn asked for, else what the loop
+/// started with (`current`). A queued target is taken once and carried by
+/// the loop from then on.
+pub(crate) async fn next_turn_target(
+    state: &AppState,
+    key: &str,
+    current: Option<String>,
+) -> Option<String> {
+    match state.take_queued_target(key).await {
+        Some(queued) => {
+            log::info!(
+                "[agent] {key} — a queued request re-targets this conversation to {queued:?}"
+            );
+            Some(queued)
+        }
+        None => current,
+    }
+}
+
 fn send_snapshot(state: &AppState, instance_slug: &str, chat_id: &str, agent_running: bool) {
     match chat::load_messages(&state.workspace_dir, instance_slug, chat_id) {
         Ok(resp) => {
@@ -684,3 +702,119 @@ fn map_chat_error(error: std::io::Error) -> (StatusCode, String) {
 
     (status, error.to_string())
 }
+
+#[cfg(test)]
+mod queued_target_tests {
+    //! #80: a request queued on a running conversation (a handoff accepted
+    //! while it ran, #82) names the computer its next turn acts on.
+    use super::*;
+    use crate::domain::companion::CANONICAL_SLUG;
+
+    const STUDIO: &str = "4f3c1c2e-9b5e-4d2b-8f0a-1c2d3e4f5a6b";
+    const LAPTOP: &str = "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d";
+
+    async fn state() -> (tempfile::TempDir, AppState) {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = AppState::new_in(config::Config::default(), tmp.path().join("workspace")).await;
+        (tmp, state)
+    }
+
+    #[tokio::test]
+    async fn the_next_turn_takes_the_queued_computer_once_and_keeps_it_after() {
+        let (_tmp, state) = state().await;
+        let key = task_key(CANONICAL_SLUG, "chat_1");
+        // Nothing queued: the loop keeps what it started with.
+        assert_eq!(next_turn_target(&state, &key, None).await, None);
+        assert_eq!(
+            next_turn_target(&state, &key, Some(STUDIO.into()))
+                .await
+                .as_deref(),
+            Some(STUDIO)
+        );
+        // Queued: the next turn acts there, whatever the loop started with.
+        state
+            .agent_targets
+            .lock()
+            .await
+            .insert(key.clone(), LAPTOP.to_owned());
+        assert_eq!(
+            next_turn_target(&state, &key, Some(STUDIO.into()))
+                .await
+                .as_deref(),
+            Some(LAPTOP)
+        );
+        // Taken once; the loop carries it from there.
+        assert_eq!(state.take_queued_target(&key).await, None);
+        assert_eq!(
+            next_turn_target(&state, &key, Some(LAPTOP.into()))
+                .await
+                .as_deref(),
+            Some(LAPTOP)
+        );
+        // Another conversation's queue is not this one's.
+        state
+            .agent_targets
+            .lock()
+            .await
+            .insert(task_key(CANONICAL_SLUG, "chat_2"), LAPTOP.to_owned());
+        assert_eq!(next_turn_target(&state, &key, None).await, None);
+    }
+
+    #[tokio::test]
+    async fn the_loop_takes_the_queued_computer_at_the_start_of_a_turn_and_releases_it_with_the_key()
+     {
+        let (_tmp, state) = state().await;
+        let key = task_key(CANONICAL_SLUG, "chat_1");
+        state
+            .agent_tasks
+            .lock()
+            .await
+            .insert(key.clone(), CancellationToken::new());
+        state
+            .agent_targets
+            .lock()
+            .await
+            .insert(key.clone(), LAPTOP.to_owned());
+        // No model is configured: the turn stops before a provider is
+        // reached, right after the loop settled the turn's target.
+        let exit = run_agent_loop(
+            state.clone(),
+            CANONICAL_SLUG.to_owned(),
+            "chat_1".to_owned(),
+            CancellationToken::new(),
+            false,
+            Some(STUDIO.to_owned()),
+        )
+        .await;
+        assert_eq!(exit, AgentLoopExit::NoModel);
+        assert_eq!(
+            state.take_queued_target(&key).await,
+            None,
+            "the loop took the queued computer for its turn"
+        );
+        assert!(
+            !state.agent_tasks.lock().await.contains_key(&key),
+            "the loop released the conversation"
+        );
+
+        // A target queued for a loop that stopped with it untaken does not
+        // reach the next loop: what that loop is started with wins.
+        state
+            .agent_tasks
+            .lock()
+            .await
+            .insert(key.clone(), CancellationToken::new());
+        state
+            .agent_targets
+            .lock()
+            .await
+            .insert(key.clone(), LAPTOP.to_owned());
+        state.release_agent(&key, AgentLoopExit::Finished).await;
+        assert_eq!(state.take_queued_target(&key).await, None);
+        assert_eq!(
+            state.agent_exits.lock().await.get(&key),
+            Some(&AgentLoopExit::Finished)
+        );
+    }
+}
+

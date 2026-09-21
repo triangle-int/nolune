@@ -674,6 +674,66 @@ async fn accepting_twice_returns_the_same_run_and_starts_nothing_new() {
     assert_eq!(h.activity().await.len(), 2);
 }
 
+/// #80: the task's conversation is already running when the handoff is
+/// accepted, so the request is queued on that loop. The loop keeps the
+/// computer it started with for the turn in progress; the acceptance
+/// queues the destination as the computer its next turn acts on, taken
+/// exactly once, so the continuation is not refused with `target_mismatch`
+/// or `choose_a_computer` on a computer the user did not pick for it.
+#[tokio::test]
+async fn a_queued_continuation_retargets_the_running_conversation_to_its_destination() {
+    let h = harness().await;
+    let mut a = h.connect_ready(MAC_A, "studio").await;
+    let mut b = h.connect_ready(MAC_B, "laptop").await;
+    let task = h.task(Harness::usual_resources()).await;
+    let key = format!("{CANONICAL_SLUG}/{CHAT}");
+    let _token = h.conversation_running(CHAT).await;
+    assert_eq!(
+        h.state.take_queued_target(&key).await,
+        None,
+        "nothing is queued before the acceptance"
+    );
+
+    let (status, accepted) = h.accept(&task.id, MAC_B).await;
+    assert_eq!(status, StatusCode::OK, "{accepted}");
+    assert_eq!(accepted["already_running"], false);
+    assert_eq!(
+        h.handoff_messages(CHAT).len(),
+        1,
+        "queued on the conversation"
+    );
+
+    // The loop's next turn acts on the destination, whatever it started
+    // with; the queued target is taken once.
+    assert_eq!(
+        crate::routes::chat::next_turn_target(&h.state, &key, Some(MAC_A.to_owned()))
+            .await
+            .as_deref(),
+        Some(MAC_B)
+    );
+    assert_eq!(
+        crate::routes::chat::next_turn_target(&h.state, &key, Some(MAC_B.to_owned()))
+            .await
+            .as_deref(),
+        Some(MAC_B),
+        "a turn after that keeps the destination"
+    );
+    a.assert_untouched("queued acceptance");
+    b.assert_untouched("queued acceptance");
+
+    // A second acceptance while that run is still going changes nothing:
+    // the same run is answered and no other target is queued.
+    let (status, again) = h.accept(&task.id, MAC_A).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["already_running"], true);
+    assert_eq!(h.state.take_queued_target(&key).await, None);
+
+    h.play_conversation(CHAT, MAC_B);
+    h.conversation_stopped(CHAT).await;
+    let card = h.wait_for_outcome(&task.id).await;
+    assert_eq!(card["decision"]["outcome"]["status"], "completed", "{card}");
+}
+
 /// Two clients (or a double click) accept at the same moment: acceptance is
 /// serialized per record, so exactly one run starts and one request lands
 /// in the conversation, and every caller is told about that one run.

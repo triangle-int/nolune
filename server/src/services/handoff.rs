@@ -655,7 +655,9 @@ fn spawn_continuation(
 
 /// Start the conversation's agent loop when none is running, exactly as a
 /// sent message does, targeting the destination computer (#80); `None` when
-/// one is already running and will pick the handoff up on its next turn.
+/// one is already running and will pick the handoff up on its next turn,
+/// which is then queued to act on the destination as well (the loop keeps
+/// the computer it started with only for the turn in progress).
 async fn ensure_agent_loop(
     state: &AppState,
     chat_id: &str,
@@ -666,6 +668,12 @@ async fn ensure_agent_loop(
     {
         let mut tasks = state.agent_tasks.lock().await;
         if tasks.contains_key(&key) {
+            // Queued while the key is held, so a loop that is releasing it
+            // right now takes the target with it instead of leaving it for
+            // the next loop.
+            if let Some(target) = machine_target {
+                state.agent_targets.lock().await.insert(key, target);
+            }
             return None;
         }
         tasks.insert(key, cancel.clone());
