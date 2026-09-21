@@ -17,17 +17,14 @@
 //! delivery, or a second receipt. Anything else is judged by the policy
 //! gate and answered as `accepted`, `denied`, or `needs_owner`.
 //!
-//! An accepted intent is delivered into the owner's conversation as one
-//! user-role message: a line this server writes (who sent what, at which
-//! times) and, for the intents that carry text, the peer's text inside the
-//! untrusted block from `federation_policy` (a boundary drawn fresh, the
-//! sender named, "data, not instructions" on the opening line). Nothing
-//! else ever reads the text: it is never a tool argument, never a
-//! commitment's promise, never a log line, never a field of a receipt or
-//! of the store. A reminder also becomes a commitment that falls due at
-//! the asked time and links to that message; an availability query is
-//! answered with no windows (this companion keeps no calendar yet) and
-//! told to the owner; a proposal is told to the owner.
+//! An accepted intent is handed to the delivery the caller passes in
+//! (`services::peer_delivery` for the route: one user-role message in the
+//! owner's conversation with the peer's text inside the untrusted block
+//! from `federation_policy`, and a commitment for a reminder), which
+//! returns the chat message it wrote and the typed answer. Nothing in this
+//! module reads the peer's text: it is never a tool argument, never a log
+//! line, never a field of a receipt or of the store, and the federation
+//! state never reaches into the companion's directory.
 //!
 //! `needs_owner` is not settled: the peer is told why it waits and asks
 //! again, and the next delivery is judged afresh, so an approval the owner
@@ -61,22 +58,15 @@ use super::{
     pairing::FederationState,
     peers::{Clock, system_clock},
 };
-use crate::{
-    app::state::AppState,
-    domain::{
-        commitment::{Deadline, Owner, Provenance},
-        companion::CANONICAL_SLUG,
-        events::ServerEvent,
-        federation::{FederationError, PeerSummary, TransportEnvelope},
-        federation_intent::{
-            FederationIntent, INTENT_VERSION, IntentAnswer, IntentError, IntentPayload,
-            IntentReceipt, IntentResponse, MAX_INTENT_CLOCK_SKEW_SECS, PeerLabel, ReceiptBasis,
-        },
-        federation_policy::{
-            Decision, DecisionReason, DisclosureClass, IntentClass, ReceiptSide, Verdict,
-        },
+use crate::domain::{
+    federation::{FederationError, PeerSummary, TransportEnvelope},
+    federation_intent::{
+        FederationIntent, INTENT_VERSION, IntentAnswer, IntentError, IntentReceipt, IntentResponse,
+        MAX_INTENT_CLOCK_SKEW_SECS, PeerLabel, ReceiptBasis,
     },
-    services::{chat, commitments::NewCommitment},
+    federation_policy::{
+        Decision, DecisionReason, DisclosureClass, IntentClass, ReceiptSide, Verdict,
+    },
 };
 
 /// The peer route an intent is posted to.
@@ -94,8 +84,6 @@ pub const MAX_INTENT_RECEIPTS: usize = 1000;
 pub const MAX_INTENT_RECEIPTS_PER_PAIRING: usize = 200;
 /// Nothing older than this is kept.
 pub const INTENT_RECEIPT_RETENTION_SECS: u64 = 30 * 24 * 60 * 60;
-/// The conversation an accepted intent is delivered into.
-pub const INBOUND_CHAT_ID: &str = "default";
 
 /// Upper bound for the store file; anything larger is not ours.
 const MAX_INBOUND_FILE_BYTES: u64 = 8 * 1024 * 1024;
@@ -226,7 +214,15 @@ impl InboundStore {
 
     /// Every live record and every kept receipt, newest first.
     pub fn view(&self) -> Result<InboxView, FederationError> {
-        todo!("InboundStore::view")
+        let mut inner = self.inner.lock().unwrap();
+        self.ensure_loaded(&mut inner);
+        self.refuse_if_unloadable(&inner)?;
+        self.prune(&mut inner)?;
+        let mut intents = inner.intents.clone();
+        intents.reverse();
+        let mut receipts = inner.receipts.clone();
+        receipts.reverse();
+        Ok(InboxView { intents, receipts })
     }
 
     /// The record for `correlation_id` from `sender`, if one is live.
@@ -235,7 +231,15 @@ impl InboundStore {
         sender: &str,
         correlation_id: &str,
     ) -> Result<Option<InboundIntent>, FederationError> {
-        todo!("InboundStore::find")
+        let mut inner = self.inner.lock().unwrap();
+        self.ensure_loaded(&mut inner);
+        self.refuse_if_unloadable(&inner)?;
+        self.prune(&mut inner)?;
+        Ok(inner
+            .intents
+            .iter()
+            .find(|record| record.sender == sender && record.correlation_id == correlation_id)
+            .cloned())
     }
 
     /// Writes `record` (replacing the record with its sender and
@@ -247,29 +251,435 @@ impl InboundStore {
         record: InboundIntent,
         receipt: Option<IntentReceipt>,
     ) -> Result<(), FederationError> {
-        todo!("InboundStore::record")
+        let now = (self.clock)();
+        let mut inner = self.inner.lock().unwrap();
+        self.ensure_loaded(&mut inner);
+        self.refuse_if_unloadable(&inner)?;
+        let mut intents: Vec<InboundIntent> = inner
+            .intents
+            .iter()
+            .filter(|kept| {
+                !(kept.sender == record.sender && kept.correlation_id == record.correlation_id)
+            })
+            .cloned()
+            .collect();
+        intents.push(record);
+        let mut receipts = inner.receipts.clone();
+        receipts.extend(receipt);
+        enforce_retention(&mut intents, &mut receipts, now);
+        self.persist(&intents, &receipts)?;
+        inner.intents = intents;
+        inner.receipts = receipts;
+        Ok(())
+    }
+
+    /// Drops lapsed records and receipts from memory and, when any went,
+    /// from the file.
+    fn prune(&self, inner: &mut Inner) -> Result<(), FederationError> {
+        let now = (self.clock)();
+        let mut intents = inner.intents.clone();
+        let mut receipts = inner.receipts.clone();
+        if !enforce_retention(&mut intents, &mut receipts, now) {
+            return Ok(());
+        }
+        self.persist(&intents, &receipts)?;
+        inner.intents = intents;
+        inner.receipts = receipts;
+        Ok(())
+    }
+
+    /// Reads the file once. A missing file is an empty store. A file that
+    /// cannot be read, is not a store of this version, or has a record of
+    /// another version leaves the store marked unloadable: reported, never
+    /// repaired, never overwritten.
+    fn ensure_loaded(&self, inner: &mut Inner) {
+        if inner.loaded {
+            return;
+        }
+        inner.loaded = true;
+        let path = self.path();
+        let contents = match std::fs::metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => {
+                return self.mark_unloadable(inner, format!("cannot be read ({error})"));
+            }
+            Ok(metadata) if metadata.len() > MAX_INBOUND_FILE_BYTES => {
+                return self.mark_unloadable(inner, "is larger than the store can be".to_owned());
+            }
+            Ok(_) => match std::fs::read_to_string(&path) {
+                Ok(contents) => contents,
+                Err(error) => {
+                    return self.mark_unloadable(inner, format!("cannot be read ({error})"));
+                }
+            },
+        };
+        let version = serde_json::from_str::<FileVersion>(&contents)
+            .ok()
+            .map(|file| file.version);
+        match serde_json::from_str::<InboundFile>(&contents) {
+            Ok(file)
+                if file.version == INBOUND_VERSION
+                    && file
+                        .intents
+                        .iter()
+                        .all(|record| record.version == INBOUND_VERSION) =>
+            {
+                inner.intents = file.intents;
+                inner.receipts = file.receipts;
+            }
+            _ => {
+                let reason = match version {
+                    Some(version) if version != INBOUND_VERSION => {
+                        format!("has unsupported version {version}")
+                    }
+                    _ => "does not have the expected shape".to_owned(),
+                };
+                self.mark_unloadable(inner, reason);
+            }
+        }
+    }
+
+    fn mark_unloadable(&self, inner: &mut Inner, reason: String) {
+        log::warn!(
+            "[federation] inbound intent store {} {reason}; no intent will be accepted and nothing will be written until it is repaired or moved aside and the server restarted",
+            self.path().display()
+        );
+        inner.unloadable = Some(reason);
+    }
+
+    fn persist(
+        &self,
+        intents: &[InboundIntent],
+        receipts: &[IntentReceipt],
+    ) -> Result<(), FederationError> {
+        let path = self.path();
+        let file = InboundFile {
+            version: INBOUND_VERSION,
+            intents: intents.to_vec(),
+            receipts: receipts.to_vec(),
+        };
+        let mut json =
+            serde_json::to_string_pretty(&file).map_err(|error| FederationError::Io {
+                path: path.clone(),
+                message: error.to_string(),
+            })?;
+        json.push('\n');
+        identity::replace_private(&path, json.as_bytes()).map_err(|error| FederationError::Io {
+            path,
+            message: error.to_string(),
+        })
+    }
+
+    fn refuse_if_unloadable(&self, inner: &Inner) -> Result<(), FederationError> {
+        match &inner.unloadable {
+            Some(reason) => Err(FederationError::Io {
+                path: self.path(),
+                message: format!(
+                    "federation inbound intent store {reason}; repair or move it aside and restart before federation is used"
+                ),
+            }),
+            None => Ok(()),
+        }
     }
 }
 
-/// An intent from a paired peer, judged by policy and answered with a
-/// sealed [`IntentResponse`]. See the module docs for the order of checks.
-pub fn receive_intent(
-    state: &AppState,
-    envelope: &TransportEnvelope,
-) -> Result<TransportEnvelope, FederationError> {
-    todo!("receive_intent")
+/// Drops what retention says goes: records past their intent's expiry
+/// (plus the skew allowance the decoder gives, so a record outlives every
+/// delivery the intent could still make) and beyond the newest
+/// [`MAX_INBOUND_INTENTS`]; receipts older than
+/// [`INTENT_RECEIPT_RETENTION_SECS`], beyond the newest
+/// [`MAX_INTENT_RECEIPTS_PER_PAIRING`] of their pairing, and beyond the
+/// newest [`MAX_INTENT_RECEIPTS`] overall. Both lists are kept oldest
+/// first. Returns whether anything went.
+fn enforce_retention(
+    intents: &mut Vec<InboundIntent>,
+    receipts: &mut Vec<IntentReceipt>,
+    now: u64,
+) -> bool {
+    let before = intents.len() + receipts.len();
+    intents.retain(|record| record.expires_at.saturating_add(MAX_INTENT_CLOCK_SKEW_SECS) >= now);
+    if intents.len() > MAX_INBOUND_INTENTS {
+        let excess = intents.len() - MAX_INBOUND_INTENTS;
+        intents.drain(..excess);
+    }
+    let oldest_allowed = now.saturating_sub(INTENT_RECEIPT_RETENTION_SECS);
+    receipts.retain(|receipt| receipt.at > oldest_allowed);
+    let mut kept_per_pairing: HashMap<&str, usize> = HashMap::new();
+    let mut keep = vec![false; receipts.len()];
+    for (index, receipt) in receipts.iter().enumerate().rev() {
+        let kept = kept_per_pairing
+            .entry(receipt.pairing_id.as_str())
+            .or_insert(0);
+        if *kept < MAX_INTENT_RECEIPTS_PER_PAIRING {
+            *kept += 1;
+            keep[index] = true;
+        }
+    }
+    let mut index = 0;
+    receipts.retain(|_| {
+        let kept = keep[index];
+        index += 1;
+        kept
+    });
+    if receipts.len() > MAX_INTENT_RECEIPTS {
+        let excess = receipts.len() - MAX_INTENT_RECEIPTS;
+        receipts.drain(..excess);
+    }
+    intents.len() + receipts.len() != before
 }
 
-/// The line this server writes above a delivered intent: the class, the
-/// sender's id, and the times it named. Never a label, never the text.
-fn preface(intent: &FederationIntent) -> String {
-    todo!("preface")
+/// What delivering an allowed intent left behind: the id of the chat
+/// message it became and the typed answer for the peer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Delivered {
+    pub message_id: String,
+    pub answer: IntentAnswer,
+}
+
+/// An intent from a paired peer, judged by policy and answered with a
+/// sealed [`IntentResponse`]. `deliver` is called for an allowed intent
+/// only, with the clock's `now`, and is the one thing that reads the
+/// payload. See the module docs for the order of checks.
+pub fn receive_intent(
+    federation: &FederationState,
+    gate: &FederationGate,
+    store: &InboundStore,
+    envelope: &TransportEnvelope,
+    deliver: impl FnOnce(&FederationIntent, u64) -> Result<Delivered, FederationError>,
+) -> Result<TransportEnvelope, FederationError> {
+    let me = federation.identity()?.companion_id().to_owned();
+    // Held from the envelope to the judgement, as the ping route holds it,
+    // so a rotation cannot move the sender's policy in between.
+    let held = gate.hold();
+    let inbound = match federation.open(envelope) {
+        Ok(inbound) => inbound,
+        Err(error) => {
+            gate.record_refused_sender(federation, &me, envelope, &error)?;
+            return Err(error);
+        }
+    };
+    let peer = inbound.peer.summary();
+    let now = store.now();
+    let intent = match FederationIntent::decode(&inbound.body, now) {
+        Ok(intent) => intent,
+        // A name this build does not know is judged so the owner's log says
+        // what was asked (reduced, never the payload), and denied. A ping
+        // is transport on its own route, not an intent: a protocol error,
+        // refused typed and unrecorded like a wrong body on the ping route.
+        Err(IntentError::UnknownIntentType { name }) => {
+            if IntentClass::parse(&name).is_some() {
+                return Err(FederationError::Intent(IntentError::UnknownIntentType {
+                    name,
+                }));
+            }
+            return Err(refused(gate.judge_held(
+                &held,
+                &me,
+                &peer,
+                &name,
+                DisclosureClass::None.name(),
+            )));
+        }
+        Err(IntentError::UnknownDisclosure { name }) => {
+            let class = peek_class(&inbound.body);
+            return Err(refused(gate.judge_held(
+                &held,
+                &me,
+                &peer,
+                class.as_deref().unwrap_or(UNKNOWN_NAME),
+                &name,
+            )));
+        }
+        Err(error) => return Err(FederationError::Intent(error)),
+    };
+    check_sender(&intent, envelope, &peer)?;
+
+    // From here to the record, one delivery at a time: two copies of one
+    // request in flight together are judged one after the other, and the
+    // second finds the first's record.
+    let _one_at_a_time = store.one_at_a_time();
+    let earlier = store
+        .find(&intent.sender, &intent.correlation_id)?
+        .filter(|record| record.pairing_id == peer.pairing_id);
+    if let Some(settled) = earlier
+        .as_ref()
+        .filter(|record| record.status != InboundStatus::Pending)
+    {
+        return federation.seal(&peer.companion_id, &settled.response.encode());
+    }
+
+    let request = intent.request();
+    let judged = gate.judge_held(
+        &held,
+        &me,
+        &peer,
+        request.intent.name(),
+        request.disclosure.name(),
+    );
+    let (response, status, basis, approval_id, message_id) = match judged {
+        Ok(Judgement {
+            decision,
+            approval_id,
+        }) => {
+            let Delivered { message_id, answer } = deliver(&intent, now)?;
+            let response = IntentResponse::Accepted {
+                version: INTENT_VERSION,
+                correlation_id: intent.correlation_id.clone(),
+                responder: me.clone(),
+                // Nothing an answer carries yet says anything about the
+                // owner: a delivery is acknowledged, an availability query
+                // is answered with no windows.
+                disclosure: DisclosureClass::None,
+                answer,
+            };
+            let basis = match (decision.reason, approval_id) {
+                (DecisionReason::OwnerApproved, Some(approval_id)) => {
+                    ReceiptBasis::OwnerApproval { approval_id }
+                }
+                (reason, _) => ReceiptBasis::Policy {
+                    reason,
+                    rule_id: None,
+                },
+            };
+            (
+                response,
+                InboundStatus::Accepted,
+                basis,
+                None,
+                Some(message_id),
+            )
+        }
+        Err(FederationError::PolicyRefused(decision)) => {
+            let Some(response) =
+                IntentResponse::from_decision(&intent.correlation_id, &me, &decision)
+            else {
+                return Err(FederationError::PolicyRefused(decision));
+            };
+            // A rate limit is the peer's own window to wait out: answered,
+            // folded into the audit log, and not settled.
+            if decision.reason == DecisionReason::RateLimited {
+                return federation.seal(&peer.companion_id, &response.encode());
+            }
+            let basis = ReceiptBasis::Policy {
+                reason: decision.reason,
+                rule_id: None,
+            };
+            match decision.verdict {
+                Verdict::Ask | Verdict::Defer => {
+                    let approval_id = gate
+                        .queued_approval(&held, &peer.pairing_id, &intent.sender, request)?
+                        .map(|entry| entry.id);
+                    (response, InboundStatus::Pending, basis, approval_id, None)
+                }
+                Verdict::Allow | Verdict::Deny => {
+                    (response, InboundStatus::Denied, basis, None, None)
+                }
+            }
+        }
+        Err(error) => return Err(error),
+    };
+
+    // One receipt per outcome: a request still waiting on the owner keeps
+    // the receipt from when it first asked.
+    let receipt = match &earlier {
+        Some(record)
+            if record.status == InboundStatus::Pending && status == InboundStatus::Pending =>
+        {
+            None
+        }
+        _ => Some(
+            IntentReceipt::new(
+                AuditLog::new_id(),
+                ReceiptSide::Answering,
+                peer.pairing_id.clone(),
+                now,
+                &intent,
+                &response,
+                basis,
+            )
+            .map_err(FederationError::Intent)?,
+        ),
+    };
+    let record = InboundIntent {
+        version: INBOUND_VERSION,
+        sender: intent.sender.clone(),
+        correlation_id: intent.correlation_id.clone(),
+        pairing_id: peer.pairing_id.clone(),
+        intent: intent.class(),
+        disclosure: intent.disclosure,
+        represented_owner: intent.represented_owner.clone(),
+        purpose: intent.purpose.clone(),
+        status,
+        response: response.clone(),
+        approval_id,
+        receipt_id: receipt
+            .as_ref()
+            .map(|receipt| receipt.id.clone())
+            .or_else(|| {
+                earlier
+                    .as_ref()
+                    .and_then(|record| record.receipt_id.clone())
+            }),
+        message_id,
+        requested_at: earlier.as_ref().map_or(now, |record| record.requested_at),
+        updated_at: now,
+        expires_at: intent.expires_at,
+    };
+    store.record(record, receipt)?;
+    federation.seal(&peer.companion_id, &response.encode())
+}
+
+/// The refusal a judgement of an unknown name is: never allowed, so the
+/// `Ok` arm is the fail-closed answer for a gate that somehow was.
+fn refused(judged: Result<Judgement, FederationError>) -> FederationError {
+    judged.map_or_else(
+        |error| error,
+        |_| FederationError::PolicyRefused(Decision::deny(DecisionReason::UnknownIntent)),
+    )
+}
+
+/// The intent's `sender` must be the companion whose key verified the
+/// envelope: the id that signed, the record's current id, or an id the
+/// record rotated away from (an intent may wait in an outbox across a
+/// rotation).
+fn check_sender(
+    intent: &FederationIntent,
+    envelope: &TransportEnvelope,
+    peer: &PeerSummary,
+) -> Result<(), FederationError> {
+    let sender = intent.sender.as_str();
+    let known = sender == envelope.sender
+        || sender == peer.companion_id
+        || peer
+            .rotation_history
+            .iter()
+            .any(|transition| transition.previous_companion_id() == sender);
+    known.then_some(()).ok_or(FederationError::SenderMismatch)
+}
+
+/// The `type` tag of an intent body, read leniently, for naming the class
+/// of a request whose disclosure class this build does not know.
+fn peek_class(body: &[u8]) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Probe {
+        intent: Option<Payload>,
+    }
+    #[derive(Deserialize)]
+    struct Payload {
+        #[serde(rename = "type")]
+        kind: Option<String>,
+    }
+    serde_json::from_slice::<Probe>(body)
+        .ok()?
+        .intent?
+        .kind
+        .filter(|kind| IntentClass::parse(kind).is_some())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::federation_intent::{IntentOutcome, TimeWindow};
+    use crate::domain::federation_intent::{IntentOutcome, IntentPayload};
     use crate::domain::federation_policy::PeerText;
     use std::sync::{
         Arc,
@@ -586,53 +996,5 @@ mod tests {
         let file = std::fs::File::create(store.path()).unwrap();
         file.set_len(MAX_INBOUND_FILE_BYTES + 1).unwrap();
         assert!(store.view().is_err());
-    }
-
-    #[test]
-    fn the_chat_line_for_each_intent_names_the_sender_and_the_times_and_nothing_the_peer_wrote() {
-        let intent = intent("req-1", T0);
-        let line = preface(&intent);
-        assert!(line.contains(SENDER) && line.contains("message"), "{line}");
-        assert!(
-            !line.contains("Alice") && !line.contains("catch up"),
-            "labels stay out: {line}"
-        );
-        assert!(!line.contains("Ignore"), "{line}");
-        let reminder = FederationIntent {
-            intent: IntentPayload::Reminder {
-                text: serde_json::from_str::<PeerText>("\"water\"").unwrap(),
-                at: 1_800_003_600,
-            },
-            ..intent.clone()
-        };
-        let line = preface(&reminder);
-        assert!(line.contains("2027-01-15 09:00 UTC"), "{line}");
-        assert!(!line.contains("water"), "{line}");
-        let window = TimeWindow {
-            from: 1_800_000_000,
-            to: 1_800_007_200,
-        };
-        let availability = FederationIntent {
-            intent: IntentPayload::Availability { window },
-            ..intent.clone()
-        };
-        let line = preface(&availability);
-        assert!(
-            line.contains("2027-01-15 08:00 UTC") && line.contains("10:00 UTC"),
-            "{line}"
-        );
-        assert!(
-            line.to_lowercase().contains("nothing about your schedule"),
-            "{line}"
-        );
-        let proposal = FederationIntent {
-            intent: IntentPayload::Proposal {
-                description: serde_json::from_str::<PeerText>("\"lunch\"").unwrap(),
-                window,
-            },
-            ..intent
-        };
-        let line = preface(&proposal);
-        assert!(line.contains("propos") && !line.contains("lunch"), "{line}");
     }
 }

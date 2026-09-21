@@ -33,10 +33,9 @@
 //! The intent classes and disclosure classes are the ones the policy
 //! engine keys on ([`IntentClass`], [`DisclosureClass`]); a ping is
 //! transport, not an intent, and is refused here as an unknown type. The
-//! inbound handler, the dedupe store, the outbox, and the tools that emit
-//! intents arrive with the later slices of #110; until then this module
-//! has no production caller.
-#![allow(dead_code)]
+//! inbound handler and the dedupe store (`services::federation::inbound`)
+//! decode, answer, and record with these shapes; the outbox and the tools
+//! that emit intents arrive with the last slice of #110.
 
 use std::fmt;
 
@@ -423,6 +422,8 @@ impl PeerLabel {
         Ok(Self(text))
     }
 
+    /// Used by the sending side and its listings (#110, PR 3).
+    #[allow(dead_code)]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -626,6 +627,8 @@ impl FederationIntent {
     }
 
     /// The JSON bytes a transport body carries.
+    /// Used by the sending side (#110, PR 3); the tests exercise it until then.
+    #[allow(dead_code)]
     pub fn encode(&self) -> Vec<u8> {
         serde_json::to_vec(self).expect("intents serialize")
     }
@@ -669,6 +672,8 @@ impl IntentAnswer {
     }
 
     /// The class behind an answer's `kind` tag, or `None`.
+    /// Used by the sending side's response decoding (#110, PR 3).
+    #[allow(dead_code)]
     pub fn class_for_kind(kind: &str) -> Option<IntentClass> {
         match kind {
             "delivered" => Some(IntentClass::Message),
@@ -689,6 +694,8 @@ impl IntentOutcome {
         }
     }
 
+    /// Used by the sending side's response decoding (#110, PR 3).
+    #[allow(dead_code)]
     pub fn parse(name: &str) -> Option<Self> {
         [Self::Accepted, Self::Denied, Self::NeedsOwner]
             .into_iter()
@@ -697,6 +704,8 @@ impl IntentOutcome {
 
     /// How a policy verdict is answered: `allow` is accepted, `deny` is
     /// denied, and both `ask` and `defer` need the owner.
+    /// Used by the sending side's receipts (#110, PR 3).
+    #[allow(dead_code)]
     pub fn from_verdict(verdict: Verdict) -> Self {
         match verdict {
             Verdict::Allow => Self::Accepted,
@@ -716,6 +725,8 @@ impl IntentResponse {
     /// Decodes `bytes` fail-closed: size, version before shape, the
     /// `outcome` tag, the ids by name, every other closed name that is
     /// present, the strict shape, then [`Self::validate`].
+    /// The sending side decodes what a peer answered (#110, PR 3).
+    #[allow(dead_code)]
     pub fn decode(bytes: &[u8]) -> Result<Self, IntentError> {
         check_size(bytes)?;
         let probe: ResponseProbe = parse(bytes)?;
@@ -842,6 +853,8 @@ impl IntentResponse {
         Ok(())
     }
 
+    /// Used by the sending side (#110, PR 3).
+    #[allow(dead_code)]
     pub fn version(&self) -> u32 {
         match self {
             Self::Accepted { version, .. }

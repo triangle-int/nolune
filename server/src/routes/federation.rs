@@ -80,13 +80,16 @@ use crate::{
             RuleRequest, Verdict,
         },
     },
-    services::federation::{
-        envelope, identity,
-        inbound::{self, INTENT_PATH},
-        invite_token,
-        pairing::{
-            CONFIRM_PATH, MAX_ENVELOPE_BYTES, PAIR_PATH, PING_PATH, REVOKE_PATH, ROTATE_PATH,
+    services::{
+        federation::{
+            envelope, identity,
+            inbound::{self, INTENT_PATH},
+            invite_token,
+            pairing::{
+                CONFIRM_PATH, MAX_ENVELOPE_BYTES, PAIR_PATH, PING_PATH, REVOKE_PATH, ROTATE_PATH,
+            },
         },
+        peer_delivery,
     },
 };
 
@@ -559,11 +562,18 @@ async fn rotation_notice(
 }
 
 /// A structured intent (#110): opened, decoded, deduplicated, judged by
-/// the policy gate, delivered when allowed, and answered with a sealed
-/// typed response, all in `inbound::receive_intent`.
+/// the policy gate, and answered with a sealed typed response in
+/// `inbound::receive_intent`; an allowed one is delivered into the owner's
+/// conversation by `peer_delivery::deliver`.
 async fn intent(State(state): State<AppState>, request: Request) -> Result<Response, ApiError> {
     let envelope = parse_transport(&read_body(request).await?)?;
-    let answer = inbound::receive_intent(&state, &envelope)?;
+    let answer = inbound::receive_intent(
+        &state.federation,
+        &state.federation_gate,
+        &state.federation_inbox,
+        &envelope,
+        |intent, now| peer_delivery::deliver(&state, intent, now),
+    )?;
     Ok(Json(answer).into_response())
 }
 

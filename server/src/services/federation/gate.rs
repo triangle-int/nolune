@@ -580,6 +580,7 @@ impl FederationGate {
     /// [`judge`]: FederationGate::judge
     /// [`hold`]: FederationGate::hold
     /// [`judge_held`]: FederationGate::judge_held
+    #[allow(dead_code)]
     pub fn admit(
         &self,
         me: &str,

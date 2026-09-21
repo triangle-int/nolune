@@ -15,6 +15,7 @@ use std::{
 use source_scan::without_cfg_test_items;
 
 const HANDLER: &str = "server/src/services/federation/inbound.rs";
+const DELIVERY: &str = "server/src/services/peer_delivery.rs";
 const ROUTES: &str = "server/src/routes/federation.rs";
 const GATE: &str = "server/src/services/federation/gate.rs";
 
@@ -86,22 +87,26 @@ fn an_intent_is_opened_decoded_deduplicated_and_judged_before_it_is_delivered_or
         (".record(", "records before answering"),
         (".seal(", "answers last"),
     ];
+    // Each step is found after the one before it (an unknown name is judged
+    // before the lookup, since there is no request to look up).
     let mut last = 0;
     for (needle, what) in order {
-        let at = receive
+        let at = receive[last..]
             .find(needle)
-            .unwrap_or_else(|| panic!("receive_intent {what} ({needle})"));
-        assert!(
-            at > last,
-            "receive_intent must {what} after the step before it ({needle})"
-        );
-        last = at;
+            .map(|at| last + at)
+            .unwrap_or_else(|| {
+                panic!("receive_intent must {what} after the step before it ({needle})")
+            });
+        last = at + needle.len();
     }
-    // A settled request is answered from the store, before the gate.
-    let settled_at = receive
+    // A settled request is answered from the store, before the gate judges
+    // the request (the judgement of an unknown name comes earlier and has
+    // no request to look up).
+    let lookup_at = receive.find(".find(").unwrap();
+    let settled_at = receive[lookup_at..]
         .find("InboundStatus::Pending")
         .expect("distinguishes pending");
-    let judge_at = receive.find("judge_held(").unwrap();
+    let judge_at = receive[lookup_at..].find("judge_held(").unwrap();
     assert!(
         settled_at < judge_at,
         "the store is consulted before the gate"
@@ -114,9 +119,38 @@ fn an_intent_is_opened_decoded_deduplicated_and_judged_before_it_is_delivered_or
 
 #[test]
 fn peer_text_leaves_the_handler_only_inside_the_untrusted_block_and_never_reaches_a_tool() {
+    // The handler never touches the payload: delivery is a seam it is
+    // handed, and the federation state never reaches into the companion's
+    // directory (the #108 guard pins that for the whole directory).
     let handler = production(HANDLER);
-    // The one way a peer's text is read is the block renderer.
-    assert!(handler.contains("render_untrusted_block("));
+    for leak in [
+        "render_untrusted_block",
+        "PeerText",
+        "IntentPayload::Message",
+        "IntentPayload::Reminder",
+        "IntentPayload::Proposal",
+        "description",
+        "services::tools",
+        "services::llm",
+        "services::mcp",
+        "services::chat",
+        "AppState",
+        "CANONICAL_SLUG",
+    ] {
+        assert!(
+            !handler.contains(leak),
+            "{HANDLER} must not reach the payload or the companion via {leak:?}"
+        );
+    }
+    let receive = function(&handler, "receive_intent");
+    assert!(
+        receive.contains("deliver: impl FnOnce(&FederationIntent, u64)"),
+        "receive_intent takes its delivery as a seam"
+    );
+    // The delivery is the one reader of the text, and hands it to the
+    // block renderer and nowhere else.
+    let delivery = production(DELIVERY);
+    assert!(delivery.contains("render_untrusted_block("));
     for leak in [
         "services::tools",
         "services::llm",
@@ -129,12 +163,12 @@ fn peer_text_leaves_the_handler_only_inside_the_untrusted_block_and_never_reache
         "PeerText::new(",
     ] {
         assert!(
-            !handler.contains(leak),
-            "{HANDLER} must not reach peer text or a tool via {leak:?}"
+            !delivery.contains(leak),
+            "{DELIVERY} must not reach peer text or a tool via {leak:?}"
         );
     }
     // The commitment a reminder becomes is written from ids, never the text.
-    let deliver = function(&handler, "deliver");
+    let deliver = function(&delivery, "deliver");
     let promise = deliver
         .split("promise: ")
         .nth(1)
@@ -148,7 +182,7 @@ fn peer_text_leaves_the_handler_only_inside_the_untrusted_block_and_never_reache
     }
     // The line above the block is built from the class, the sender's id,
     // and numbers; it never formats a label or a text.
-    let preface = function(&handler, "preface");
+    let preface = function(&delivery, "preface");
     for leak in [
         "represented_owner",
         "purpose",
@@ -158,11 +192,12 @@ fn peer_text_leaves_the_handler_only_inside_the_untrusted_block_and_never_reache
     ] {
         assert!(!preface.contains(leak), "preface formats the peer's {leak}");
     }
-    // No tool knows the intents or the inbox.
+    // No tool knows the intents, the inbox, or the delivery.
     for (path, source) in sources_under("server/src/services/tools") {
         for token in [
             "federation_intent",
             "federation::inbound",
+            "peer_delivery",
             "InboundStore",
             "IntentPayload",
         ] {
@@ -172,15 +207,17 @@ fn peer_text_leaves_the_handler_only_inside_the_untrusted_block_and_never_reache
             );
         }
     }
-    // Nothing logs or prints from the handler at all.
-    for name in ["println", "eprintln", "dbg", "print", "eprint"] {
-        assert!(
-            !handler.contains(&format!("{name}!(")),
-            "{HANDLER} prints via {name}!"
-        );
-    }
-    for log in ["log::info!(", "log::debug!(", "log::trace!("] {
-        assert!(!handler.contains(log), "{HANDLER} logs via {log}");
+    // Nothing logs or prints from either module at all.
+    for (name, source) in [(HANDLER, &handler), (DELIVERY, &delivery)] {
+        for print in ["println", "eprintln", "dbg", "print", "eprint"] {
+            assert!(
+                !source.contains(&format!("{print}!(")),
+                "{name} prints via {print}!"
+            );
+        }
+        for log in ["log::info!(", "log::debug!(", "log::trace!("] {
+            assert!(!source.contains(log), "{name} logs via {log}");
+        }
     }
 }
 
@@ -278,11 +315,13 @@ fn the_intent_route_is_public_and_dispatches_through_the_handler_and_the_gate() 
         .and_then(|rest| rest.split("\n}\n").next())
         .expect("intent handler exists");
     assert!(
-        handler.contains("parse_transport(") && handler.contains("inbound::receive_intent("),
-        "the intent handler parses a transport envelope and dispatches through inbound::receive_intent"
+        handler.contains("parse_transport(")
+            && handler.contains("inbound::receive_intent(")
+            && handler.contains("peer_delivery::deliver("),
+        "the intent handler parses a transport envelope, dispatches through inbound::receive_intent, and delivers through peer_delivery"
     );
     assert!(
-        !handler.contains("federation.open(") && !handler.contains("federation_gate"),
+        !handler.contains("federation.open(") && !handler.contains("federation_gate."),
         "the route does not open or judge on its own"
     );
     let owner = routes

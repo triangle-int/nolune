@@ -32,10 +32,11 @@ use crate::{
         commitments::ListFilter,
         federation::{
             gate::FederationGate,
-            inbound::{INBOUND_CHAT_ID, INTENT_PATH, InboundIntent, InboundStatus, InboundStore},
+            inbound::{INTENT_PATH, InboundIntent, InboundStatus, InboundStore},
             pairing::FederationState,
             peers::Clock,
         },
+        peer_delivery::INBOUND_CHAT_ID,
     },
 };
 use axum::http::{Method, StatusCode};
@@ -732,7 +733,7 @@ async fn unknown_and_expired_intents_are_refused_before_any_side_effect() {
     assert_eq!(body["error"], "invalid_intent");
 
     // An unknown intent type is judged so the owner's log names it, and
-    // denied; a ping is not an intent.
+    // denied; a ping is transport, not an intent, and is a protocol error.
     let mut shell: serde_json::Value =
         serde_json::to_value(intent(&b_id, "req-shell", T0, message(INJECTION))).unwrap();
     shell["intent"] = json!({"type": "shell", "command": "rm -rf ~"});
@@ -744,8 +745,8 @@ async fn unknown_and_expired_intents_are_refused_before_any_side_effect() {
         serde_json::to_value(intent(&b_id, "req-ping", T0, message(INJECTION))).unwrap();
     ping["intent"] = json!({"type": "ping"});
     let (status, body) = deliver(&a, &b, &serde_json::to_vec(&ping).unwrap()).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    assert_eq!(body["decision"]["reason"], "unknown_intent");
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "unknown_intent_type");
     let mut secret: serde_json::Value =
         serde_json::to_value(intent(&b_id, "req-secret", T0, message(INJECTION))).unwrap();
     secret["disclosure"] = json!("everything");
@@ -757,13 +758,17 @@ async fn unknown_and_expired_intents_are_refused_before_any_side_effect() {
         .iter()
         .filter(|receipt| receipt.decision.verdict == Verdict::Deny)
         .collect();
-    assert_eq!(unknown.len(), 3, "{judged:?}");
+    assert_eq!(unknown.len(), 2, "{judged:?}");
+    assert_eq!(
+        judged.len(),
+        2,
+        "a ping on the intent route is recorded nowhere: {judged:?}"
+    );
     assert!(
         unknown.iter().any(
             |receipt| receipt.intent == "unknown" && receipt.detail.as_deref() == Some("shell")
         )
     );
-    assert!(unknown.iter().any(|receipt| receipt.intent == "unknown" && receipt.detail.as_deref() == Some("ping")));
     assert!(unknown.iter().any(|receipt| receipt.intent == "message"
         && receipt.disclosure == "unknown"
         && receipt.detail.as_deref() == Some("everything")));

@@ -22,6 +22,7 @@ pub mod media_text;
 pub mod memory;
 pub mod memory_corrections;
 pub mod memory_receipts;
+pub mod peer_delivery;
 pub mod proactive;
 pub mod profile_archive;
 pub mod profile_import;
