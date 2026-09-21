@@ -27,8 +27,8 @@
  // Sample computers for the selector (#80): the same helpers as the live composer, at a fixed clock.
  const sampleNow = 1_767_603_600;
  const sampleSpaces = buildSpaces([
-  { machine_id: 'sample-studio', display_name: 'Studio Mac', custom_name: 'Studio Mac', hostname: 'studio', os: 'macos', platform: 'macos', location: 'desktop', screen_width: 2560, screen_height: 1440, permissions: { accessibility: 'granted', screen_capture: 'granted' }, capabilities: ['screenshot'], first_seen: sampleNow - 86_400, last_seen: sampleNow, instance_slug: 'companion', online: true, health: 'healthy', driver_version: null, cua_health: null },
-  { machine_id: 'sample-laptop', display_name: 'laptop', custom_name: null, hostname: 'laptop', os: 'macos', platform: 'macos', location: 'desktop', screen_width: 1440, screen_height: 900, permissions: { accessibility: 'denied', screen_capture: 'granted' }, capabilities: ['screenshot'], first_seen: sampleNow - 86_400, last_seen: sampleNow, instance_slug: 'companion', online: true, health: 'healthy', driver_version: null, cua_health: null },
+  { machine_id: 'sample-studio', display_name: 'Studio Mac', custom_name: 'Studio Mac', hostname: 'studio', os: 'macos', platform: 'macos', location: 'desktop', permissions: { accessibility: 'granted', screen_capture: 'granted' }, capabilities: ['screenshot'], first_seen: sampleNow - 86_400, last_seen: sampleNow, instance_slug: 'companion', online: true, health: 'healthy', driver_version: null, cua_health: null },
+  { machine_id: 'sample-laptop', display_name: 'laptop', custom_name: null, hostname: 'laptop', os: 'macos', platform: 'macos', location: 'desktop', permissions: { accessibility: 'denied', screen_capture: 'granted' }, capabilities: ['screenshot'], first_seen: sampleNow - 86_400, last_seen: sampleNow, instance_slug: 'companion', online: true, health: 'healthy', driver_version: null, cua_health: null },
  ], sampleNow, homeSpace({ connected: true, companionName: 'Luna', nowSeconds: sampleNow }), 'Luna');
  const targets = targetOptions(sampleSpaces);
  let targetId = $state(NO_TARGET);

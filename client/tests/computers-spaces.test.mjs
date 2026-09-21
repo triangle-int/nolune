@@ -33,8 +33,6 @@ function desktop(overrides = {}) {
 		os: 'macOS 15.1',
 		platform: 'macos',
 		location: 'desktop',
-		screen_width: 2560,
-		screen_height: 1440,
 		permissions: { accessibility: 'granted', screen_capture: 'granted' },
 		capabilities: ['screenshot', 'left_click', 'type', 'bash'],
 		first_seen: NOW - 86400,
@@ -117,13 +115,20 @@ test('permissions, capabilities and the Cua driver are summarized without guessi
 });
 
 test('hints name the computer and the one thing to do about it', () => {
-	assert.deepEqual(spaceHints(desktop(), NOW), [
-		{ level: 'info', text: 'Screen actions use the desktop app’s built-in path until the Cua driver ships.' },
-	]);
+	// A desktop without a driver has no screen path of its own (#19): the
+	// hint says what still works there and the one thing to install.
+	const noDriver = (name) =>
+		`${name} has no Cua driver: the Nolune desktop app runs commands and files there, but it cannot see or act in windows. Install the driver there with nolune cua install, then reconnect.`;
+	assert.deepEqual(spaceHints(desktop(), NOW), [{ level: 'info', text: noDriver('studio') }]);
 	assert.deepEqual(spaceHints(offline, NOW), [
 		{ level: 'warn', text: 'laptop is offline. Open the Nolune desktop app there to reconnect it.' },
-		{ level: 'info', text: 'Screen actions use the desktop app’s built-in path until the Cua driver ships.' },
+		{ level: 'info', text: noDriver('laptop') },
 	]);
+	assert.deepEqual(
+		spaceHints(desktop({ driver_version: '0.28.2', cua_health: 'healthy' }), NOW),
+		[],
+		'a desktop with a healthy driver needs nothing',
+	);
 	assert.deepEqual(spaceHints(stale, NOW)[0], {
 		level: 'warn',
 		text: `den has not answered for ${STALE_HEARTBEAT_SECS + 5} s. Check that the computer is awake and the desktop app is still running.`,
@@ -217,7 +222,7 @@ test('a listed server-local record is the home row but keeps its own state, fact
 	assert.equal(offlineView.status, 'offline');
 	assert.equal(offlineView.stateLabel, 'Offline');
 	assert.equal(offlineView.location, 'This server');
-	assert.equal(offlineView.meta, 'macOS · 2560×1440 · This server');
+	assert.equal(offlineView.meta, 'macOS · This server');
 	assert.equal(offlineView.lastSeen, 'Seen 2 h ago');
 	assert.equal(offlineView.note, 'Where Luna runs. The computers below are other places it can act; they are not separate companions.');
 	assert.equal(offlineView.cua, 'Cua driver 0.28.2 · unavailable');
@@ -292,13 +297,12 @@ test('a desktop view carries every fact the surface shows', () => {
 	assert.equal(view.hostname, 'studio');
 	assert.equal(view.status, 'online');
 	assert.equal(view.health, 'healthy');
-	assert.equal(view.meta, 'macOS · 2560×1440 · Desktop');
+	assert.equal(view.meta, 'macOS · Desktop', 'platform and location only: no screen size is reported (#19)');
 	assert.equal(view.lastSeen, 'Online now');
 	assert.equal(view.capabilities, '4 actions');
 	assert.equal(view.cua, 'Cua driver not reported');
 	assert.equal(view.canRename, true);
 	assert.equal(view.note, '');
-	assert.equal(spaceView(desktop({ screen_width: 0, screen_height: 0 }), NOW).meta, 'macOS · Desktop', 'an unreported screen is left out');
 });
 
 test('machine events upsert one row by stable id and forget drops it; others are ignored', () => {

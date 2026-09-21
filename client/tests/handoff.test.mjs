@@ -49,8 +49,6 @@ const machine = (id, name, online = true, health = 'healthy') => ({
 	os: 'macos',
 	platform: 'macos',
 	location: 'desktop',
-	screen_width: 1920,
-	screen_height: 1080,
 	permissions: null,
 	capabilities: [],
 	first_seen: NOW - 1000,

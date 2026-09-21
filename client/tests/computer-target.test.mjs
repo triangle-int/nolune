@@ -22,8 +22,6 @@ function desktop(machine_id, hostname, overrides = {}) {
 		os: 'macos',
 		platform: 'macos',
 		location: 'desktop',
-		screen_width: 1440,
-		screen_height: 900,
 		permissions: { accessibility: 'granted', screen_capture: 'granted' },
 		capabilities: ['screenshot'],
 		first_seen: NOW - 3600,

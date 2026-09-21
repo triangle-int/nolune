@@ -514,8 +514,6 @@ export interface MachineInfo {
 	os: string;
 	platform: MachinePlatform | null;
 	location: MachineLocation;
-	screen_width: number;
-	screen_height: number;
 	/** Reported at the last registration; `null` when the desktop did not report it. */
 	permissions: MachinePermissions | null;
 	/** Action names the desktop accepts. */
@@ -659,16 +657,6 @@ export type ServerEvent =
 			instance_slug: string;
 			chat_id: string;
 			memories: RecalledMemory[];
-	  }
-	| {
-			type: "computer_use_request";
-			instance_slug: string;
-			request_id: string;
-			action: string;
-			coordinate?: [number, number];
-			text?: string;
-			key?: string;
-			scroll_delta?: [number, number];
 	  }
 ;
 

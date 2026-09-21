@@ -308,11 +308,12 @@ export function spaceHints(machine, nowSeconds) {
 	}
 
 	if (!machine.driver_version) {
-		// A server-local record is the Cua driver itself; only a desktop has a built-in path to explain.
+		// A server-local record is the Cua driver itself; a desktop without one
+		// runs commands and files only (#19: the app has no screen path of its own).
 		if (!home) {
 			hints.push({
 				level: "info",
-				text: "Screen actions use the desktop app’s built-in path until the Cua driver ships.",
+				text: `${name} has no Cua driver: ${app} runs commands and files ${there}, but it cannot see or act in windows. Install the driver ${there} with nolune cua install, then reconnect.`,
 			});
 		}
 	} else if (machine.cua_health === "degraded") {
@@ -343,8 +344,6 @@ export function homeSpace({ connected, address = "", version = "", companionName
 		os: version ? `v${version}` : "",
 		platform: null,
 		location: "server_local",
-		screen_width: 0,
-		screen_height: 0,
 		permissions: null,
 		capabilities: [],
 		first_seen: nowSeconds,
@@ -395,13 +394,7 @@ export function spaceView(machine, nowSeconds, companionName = "") {
 	const who = companionName.trim() || (synthesized ? machine.display_name.replace(/’s home$/, "") : "") || "Nolune";
 	const meta = synthesized
 		? [locationLabel(machine), machine.hostname, machine.os].filter(Boolean).join(" · ")
-		: [
-				platformLabel(machine),
-				machine.screen_width > 0 && machine.screen_height > 0 ? `${machine.screen_width}×${machine.screen_height}` : "",
-				locationLabel(machine),
-			]
-				.filter(Boolean)
-				.join(" · ");
+		: [platformLabel(machine), locationLabel(machine)].filter(Boolean).join(" · ");
 	return {
 		id: machine.machine_id,
 		kind: home ? "home" : "desktop",
