@@ -591,15 +591,21 @@ export function systemFailure(content) {
 	return SYSTEM_STATUS.test(text) ? "" : text;
 }
 
-/** The tools that act on another computer, whose trail line names it (#80). */
-const MACHINE_TOOLS = new Set(["computer_use", "remote_bash", "remote_files"]);
+/**
+ * The tools that act on another computer, whose trail line names it (#80):
+ * the typed window tools (#18: discover_windows, get_window_state, act,
+ * verify_state), the remote shell and file tools, and the legacy
+ * computer_use, which #214 no longer offers but reloaded histories still
+ * carry until #19 deletes the type.
+ */
+const MACHINE_TOOLS = new Set(["discover_windows", "get_window_state", "act", "verify_state", "remote_bash", "remote_files", "computer_use"]);
 /** How the trail describes the server's own computer: the desktop tools refused, nothing acted elsewhere. */
 const SERVER_HOME = "the server home";
 
 /**
  * The computer a tool call acts on, from the trail line the tool announced
  * (#80): `<action> on <computer>`, the computer named the way the Computers
- * tab shows it (else its id). Only the desktop tools name one; the server
+ * tab shows it (else its id). Only the machine tools name one; the server
  * home is this computer; a line recorded before #80 names nothing.
  * @param {string} tool
  * @param {string} summary
@@ -653,7 +659,7 @@ function activityEvent(run, machines) {
 
 /**
  * Maps a websocket event onto the reducer vocabulary. Returns null for events
- * that say nothing about what the companion is doing. A desktop tool's
+ * that say nothing about what the companion is doing. A machine tool's
  * `machine` comes from its trail line (#80); `machines` names a proactive
  * run's target computer the way the Computers tab does.
  * @param {import("../api/types.js").ServerEvent} event
@@ -718,7 +724,7 @@ export const STATE_EXAMPLES = Object.freeze(
 			{ kind: "blocked", events: [online, running, { type: "action", chatId: "default", tool: "run_command", summary: "running command" }, { type: "permission_denied", chatId: "default", reason: "ls: /root: Permission denied" }] },
 			{ kind: "waiting", events: [online, running, { type: "approval_requested", id: "example", prompt: "a GitHub token for gh", target: "GITHUB_TOKEN" }] },
 			{ kind: "failed", events: [online, running, reading, { type: "run_failed", chatId: "default", error: "something went wrong" }, { type: "agent_stopped", chatId: "default" }] },
-			{ kind: "working_remote", events: [online, running, { type: "action", chatId: "default", tool: "computer_use", summary: "opening Finder", machine: "studio-mac" }] },
+			{ kind: "working_remote", events: [online, running, { type: "action", chatId: "default", tool: "get_window_state", summary: "observing a window", machine: "studio-mac" }] },
 			{ kind: "working", events: [online, running, reading] },
 			{ kind: "recalling", events: [online, running, { type: "memory_recall", chatId: "default", count: 3 }] },
 			{ kind: "thinking", events: [online, { type: "user_message", chatId: "default" }, running] },

@@ -179,11 +179,20 @@ than you speak. you're warm but not overbearing. this is a safe, intimate space.
 
 /// Short summary of a tool use for display.
 pub(crate) fn tool_use_summary(name: &str, input: &serde_json::Value) -> String {
-    // The desktop tools read as the live trail words them (#80): naming the
+    // The machine tools read as the live trail words them (#80): naming the
     // computer the arguments name, by id (there is no listing on reload).
+    // The typed window tools (#18) join the list; `computer_use` stays until
+    // #19 deletes the type, since reloaded histories still carry those calls.
     if matches!(
         name,
-        "computer_use" | "remote_bash" | "remote_files" | "list_machines"
+        "discover_windows"
+            | "get_window_state"
+            | "act"
+            | "verify_state"
+            | "computer_use"
+            | "remote_bash"
+            | "remote_files"
+            | "list_machines"
     ) {
         return crate::services::tools::tool_summary(name, &input.to_string());
     }
