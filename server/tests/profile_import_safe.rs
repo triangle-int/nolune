@@ -49,6 +49,12 @@ fn segment(source: &str, start: &str) -> String {
         .to_owned()
 }
 
+/// `source` with every run of whitespace removed, so a method chain that
+/// rustfmt breaks across lines still matches its one-line spelling.
+fn compact(source: &str) -> String {
+    source.split_whitespace().collect()
+}
+
 #[test]
 fn no_production_code_runs_the_tar_command() {
     let repo = repo();
@@ -145,6 +151,7 @@ fn the_import_route_streams_the_body_to_staging_and_never_buffers_or_extracts_it
         "restore_companion(",
         "remove_import_upload(",
         "CONFLICT",
+        "running_agent_tasks(",
     ] {
         assert!(
             handler.contains(required),
@@ -189,6 +196,7 @@ fn the_restore_tool_takes_upload_ids_only_and_the_cli_posts_to_the_local_api() {
         "starts_with(\"upload_\")",
         "open_upload_blob(",
         "restore_companion_from_agent(",
+        "confirmed_by_user",
     ] {
         assert!(
             tool.contains(required),
@@ -211,6 +219,11 @@ fn the_restore_tool_takes_upload_ids_only_and_the_cli_posts_to_the_local_api() {
             "restore_backup contains {forbidden:?}"
         );
     }
+    let call = segment(&tool, "async fn call(");
+    assert!(
+        call.find("confirmed_by_user").unwrap() < call.find("open_upload_blob(").unwrap(),
+        "restore_backup must refuse an unconfirmed call before it looks the upload up"
+    );
 
     let cli = production("server/src/cli.rs");
     assert!(
@@ -241,6 +254,91 @@ fn the_restore_tool_takes_upload_ids_only_and_the_cli_posts_to_the_local_api() {
     }
 }
 
+/// Every writer that reaches the companion tree through plain paths holds
+/// the import gate shared, and a restart reconciles `imports/` before any
+/// of them starts.
+#[test]
+fn ambient_writers_hold_the_import_gate_and_startup_reconciles_imports() {
+    let boundary = production("server/src/app/companion_boundary.rs");
+    let middleware = compact(&segment(&boundary, "pub async fn companion_boundary("));
+    for required in [
+        "import_gate()",
+        ".writer().await",
+        "IMPORT_ROUTE",
+        "MatchedPath",
+    ] {
+        assert!(
+            middleware.contains(required),
+            "the companion boundary does not hold the import gate: {required}"
+        );
+    }
+    assert!(
+        middleware.find(".writer().await").unwrap() < middleware.find("admit(").unwrap(),
+        "the gate must be held before the companion is created or opened"
+    );
+
+    let chat = production("server/src/routes/chat.rs");
+    let post_chat = segment(&chat, "async fn post_chat(");
+    let post_chat = compact(post_chat.split("\n}\n").next().unwrap());
+    assert!(
+        post_chat.contains("import_gate()") && post_chat.contains(".writer().await"),
+        "POST /api/chat must hold the import gate while it saves and registers the loop"
+    );
+    assert!(
+        post_chat.find(".writer().await").unwrap() < post_chat.find("save_user_message(").unwrap()
+    );
+
+    let proactive = production("server/src/services/proactive.rs");
+    let admit = segment(&proactive, "fn admit(");
+    assert!(
+        admit.contains("try_writer()") && admit.contains("SkipReason::Import"),
+        "ProactiveLoop::begin must take the import gate or skip"
+    );
+    assert!(
+        admit.find("try_writer()").unwrap() < admit.find("self.policy()").unwrap(),
+        "the gate comes before anything is read or written"
+    );
+    assert!(
+        proactive.contains("_writer: Option<WriterGuard>"),
+        "the run handle must hold the gate until the run is finished"
+    );
+    let scheduler = production("server/src/services/scheduler.rs");
+    assert!(
+        scheduler.contains("SkipReason::Import"),
+        "the scheduler must leave a schedule in place while an import runs"
+    );
+    let state = production("server/src/app/state.rs");
+    assert!(
+        state.contains(".with_import_gate(vector_store.media_store().import_gate())"),
+        "the one proactive loop must be given the process-wide gate"
+    );
+
+    let main = production("server/src/main.rs");
+    let recovery = main
+        .find("profile_import::recover_on_startup(")
+        .expect("main.rs must reconcile imports/ at startup");
+    for later in [
+        "obsolete_instance_dirs(",
+        "migrate_companion(",
+        "notify_restart(",
+        "scheduler::start(",
+        "heartbeat::start(",
+        "build_router(",
+    ] {
+        assert!(
+            recovery < main.find(later).unwrap(),
+            "the startup recovery must run before {later}"
+        );
+    }
+    let restore = production("server/src/services/profile_import.rs");
+    assert!(
+        restore.contains("pub async fn recover_on_startup(")
+            && restore.contains("has_companion_tree(")
+            && restore.contains("list_imports(")
+            && restore.contains("reset_collection(")
+    );
+}
+
 #[test]
 fn the_data_page_says_import_replaces_and_asks_before_it_does() {
     let repo = repo();
@@ -259,12 +357,20 @@ fn the_data_page_says_import_replaces_and_asks_before_it_does() {
         "cancelImport",
         "role=\"alert\"",
         "role=\"status\"",
+        "$lib/components/ui/alert-dialog/index.js",
+        "<AlertDialog.Action",
+        "<AlertDialog.Cancel",
+        "<AlertDialog.Description",
     ] {
         assert!(
             page.contains(required),
             "the Data page lost its import control {required:?}"
         );
     }
+    assert!(
+        !page.contains("data-confirm"),
+        "the Data page must confirm through the shared AlertDialog, not an inline block"
+    );
 
     let client = fs::read_to_string(repo.join("client/src/lib/api/client.ts")).unwrap();
     let import = client

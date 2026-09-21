@@ -722,6 +722,18 @@ async fn proactive_activity_api_lists_cancels_retries_and_exposes_policy() {
     assert_eq!(retried["attempt"], 2);
     assert_eq!(retried["retry_of"], failed.id);
     let retry_id = retried["id"].as_str().unwrap().to_owned();
+    // The pending retry is left recorded as running on purpose, but its
+    // hold on the import gate (#74) is not kept: an import afterwards is
+    // not refused as busy.
+    assert!(
+        h.state
+            .vector_store
+            .media_store()
+            .import_gate()
+            .try_import()
+            .is_some(),
+        "the retry route leaked its hold on the import gate"
+    );
     h.state.proactive.cancel(&retry_id);
     let (status, _) = h
         .send(Method::POST, &api("activity/run_missing/retry"), None)
@@ -2167,9 +2179,41 @@ async fn import_refuses_a_hostile_archive_and_keeps_the_companion_byte_identical
     );
 }
 
+/// One request against a fresh router, usable from a spawned task.
+async fn request(
+    state: AppState,
+    method: Method,
+    uri: &str,
+    content_type: &str,
+    body: Body,
+) -> (StatusCode, serde_json::Value) {
+    let request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+        .header(header::CONTENT_TYPE, content_type)
+        .body(body)
+        .unwrap();
+    let response = build_router(state, None).oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), MAX_BODY)
+        .await
+        .unwrap();
+    let value = serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+        panic!(
+            "{uri}: expected JSON body, got {error}: {}",
+            String::from_utf8_lossy(&bytes)
+        )
+    });
+    (status, value)
+}
+
+/// The busy answer comes before the request body is read: a multi-gigabyte
+/// archive is never streamed to `imports/` only to be refused.
 #[tokio::test]
 async fn import_answers_409_while_an_agent_task_runs_for_the_companion() {
     use crate::services::embedding::tests::{MockServer, response};
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     let mock = MockServer::new(vec![(200, response(vec![1., 0., 0.])); 2]).await;
     let h = harness_with(mock.config.clone()).await;
@@ -2180,16 +2224,165 @@ async fn import_answers_409_while_an_agent_task_runs_for_the_companion() {
         tokio_util::sync::CancellationToken::new(),
     );
     let (archive, _) = archive_of(&[("memory/new.md", b"Andromeda")]);
+    let (content_type, body) = multipart_archive(&archive);
+    let polled = std::sync::Arc::new(AtomicBool::new(false));
+    let stream = futures::stream::poll_fn({
+        let polled = polled.clone();
+        let mut chunks = vec![axum::body::Bytes::from(body)];
+        move |_| {
+            polled.store(true, Ordering::SeqCst);
+            std::task::Poll::Ready(chunks.pop().map(Ok::<_, std::io::Error>))
+        }
+    });
 
-    let (status, value) = h
-        .post_archive(&format!("/api/instances/{CANONICAL_SLUG}/import"), &archive)
-        .await;
+    let (status, value) = request(
+        h.state.clone(),
+        Method::POST,
+        &format!("/api/instances/{CANONICAL_SLUG}/import"),
+        &content_type,
+        Body::from_stream(stream),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::CONFLICT, "{value}");
     assert_eq!(value["error"], "companion_busy", "{value}");
+    assert!(
+        !polled.load(Ordering::SeqCst),
+        "the request body was read before the busy answer"
+    );
     assert_eq!(tree(&h.companion()), before);
     assert_eq!(h.imports_entries(), Vec::<String>::new());
     assert_eq!(h.indexed_paths().await, vec!["old.md"]);
+}
+
+/// A mutating request that arrives while the import is between its two
+/// renames waits on the import gate instead of recreating the companion
+/// directory, and lands in the imported tree afterwards; a proactive run
+/// that would start then is skipped without writing a record.
+#[tokio::test]
+async fn writes_arriving_during_an_import_wait_for_it_and_land_in_the_imported_tree() {
+    use crate::domain::proactive::{RunStatus, SkipReason, Target, Trigger};
+    use crate::services::embedding::tests::{MockServer, response};
+    use crate::services::media_text::StashPause;
+    use crate::services::proactive::Admission;
+
+    let mock = MockServer::new(vec![(200, response(vec![1., 0., 0.])); 4]).await;
+    let h = harness_with(mock.config.clone()).await;
+    h.seed_indexed_companion().await;
+    let (archive, _) = archive_of(&[
+        ("memory/new.md", b"Andromeda"),
+        ("soul.md", b"restored soul"),
+    ]);
+    let (reached, reached_rx) = std::sync::mpsc::channel();
+    let (resume, resume_rx) = std::sync::mpsc::channel();
+    h.state
+        .vector_store
+        .media_store()
+        .pause_next_stash(StashPause {
+            reached,
+            resume: resume_rx,
+        });
+    let uri = format!("/api/instances/{CANONICAL_SLUG}/import");
+    let import = {
+        let state = h.state.clone();
+        let (content_type, body) = multipart_archive(&archive);
+        tokio::spawn(async move {
+            request(state, Method::POST, &uri, &content_type, Body::from(body)).await
+        })
+    };
+    tokio::task::spawn_blocking(move || reached_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        !h.companion().exists(),
+        "the live tree is parked between the renames"
+    );
+
+    let write = {
+        let state = h.state.clone();
+        let uri = format!("/api/instances/{CANONICAL_SLUG}/soul");
+        let body = serde_json::to_vec(&serde_json::json!({"content": "written during the import"}))
+            .unwrap();
+        tokio::spawn(async move {
+            request(
+                state,
+                Method::PUT,
+                &uri,
+                "application/json",
+                Body::from(body),
+            )
+            .await
+        })
+    };
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    assert!(!write.is_finished(), "the write waits for the import");
+    assert!(
+        !h.companion().exists(),
+        "the write recreated the companion between the renames"
+    );
+    let trigger = Trigger::Heartbeat {
+        agent: "companion".into(),
+    };
+    match h
+        .state
+        .proactive
+        .begin(trigger.clone(), "check-in", Target::Companion)
+    {
+        Admission::Skipped(run) => assert!(
+            matches!(
+                run.status,
+                RunStatus::Skipped {
+                    reason: SkipReason::Import
+                }
+            ),
+            "{:?}",
+            run.status
+        ),
+        Admission::Admitted(_) => panic!("a proactive run was admitted during the import"),
+    }
+    assert!(!h.companion().exists(), "the skipped run wrote a record");
+    let parked = h.imports_entries();
+    for prefix in ["previous-", "staging-", "upload-"] {
+        assert_eq!(
+            parked
+                .iter()
+                .filter(|name| name.starts_with(prefix))
+                .count(),
+            1,
+            "{prefix}: {parked:?}"
+        );
+    }
+
+    resume.send(()).unwrap();
+    let (status, value) = import.await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{value}");
+    assert_eq!(value["derived_index"], "rebuilt", "{value}");
+    let (status, soul) = write.await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{soul}");
+    assert_eq!(
+        fs::read(h.companion().join("soul.md")).unwrap(),
+        b"written during the import",
+        "the write landed on the imported tree, after the swap"
+    );
+    assert!(h.companion().join("memory/new.md").is_file());
+    assert!(!h.companion().join("memory/old.md").exists());
+    assert_eq!(h.instance_dirs(), vec![CANONICAL_SLUG]);
+    assert_eq!(h.imports_entries(), Vec::<String>::new());
+    assert_eq!(h.indexed_paths().await, vec!["new.md"]);
+    // Runs are admitted again once the import is done.
+    match h
+        .state
+        .proactive
+        .begin(trigger, "check-in", Target::Companion)
+    {
+        Admission::Admitted(handle) => {
+            handle.cancel();
+        }
+        Admission::Skipped(run) => panic!("still skipped after the import: {:?}", run.status),
+    }
 }
 
 #[tokio::test]

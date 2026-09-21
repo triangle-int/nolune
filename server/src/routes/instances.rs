@@ -34,6 +34,11 @@ use crate::{
 /// with `413` before it is read.
 const MAX_IMPORT_BODY_BYTES: usize = 8 * 1024 * 1024 * 1024 + 64 * 1024 * 1024;
 
+/// The import route as the router matches it. The companion boundary holds
+/// the import gate shared for every other mutating request; this one takes
+/// the exclusive side inside its handler.
+pub(crate) const IMPORT_ROUTE: &str = "/api/instances/{instance_slug}/import";
+
 /// Retired control-token resource namespace; always denies access.
 pub fn public_memory_router() -> Router<AppState> {
     Router::new().route(
@@ -141,7 +146,7 @@ pub fn router() -> Router<AppState> {
             get(export_instance),
         )
         .route(
-            "/api/instances/{instance_slug}/import",
+            IMPORT_ROUTE,
             post(import_instance).layer(DefaultBodyLimit::max(MAX_IMPORT_BODY_BYTES)),
         )
 }
@@ -1105,12 +1110,15 @@ impl std::io::Write for ArchiveChunks {
 /// The body streams into `imports/<upload>` through the workspace capability
 /// as it arrives, so a multi-gigabyte archive never sits in memory, and
 /// `profile_import::restore_companion` then stages, validates, swaps, and
-/// rebuilds derived state under the companion's lifecycle gate. The answer is
-/// `200 {ok, files, directories, bytes, derived_index, ...}`; `409
-/// companion_busy` while an agent task runs for the companion; `400
-/// archive_refused` or `413 archive_too_large` for an archive the reader
-/// rejects, with the companion exactly as it was; `500` when the swap itself
-/// failed (the message says where the previous tree is).
+/// rebuilds derived state under the companion's lifecycle gate and the
+/// process-wide import gate. The answer is `200 {ok, files, directories,
+/// bytes, derived_index, ...}`; `409 companion_busy` while an agent task runs
+/// for the companion (answered before the body is read, so a large archive
+/// is not streamed to disk only to be refused; the restore repeats the check
+/// under the gates) or while ambient writers outlast the import's wait for
+/// them; `400 archive_refused` or `413 archive_too_large` for an archive the
+/// reader rejects, with the companion exactly as it was; `500` when the swap
+/// itself failed (the message says where the previous tree is).
 async fn import_instance(
     State(state): State<AppState>,
     Path(instance_slug): Path<String>,
@@ -1129,6 +1137,11 @@ async fn import_instance(
             );
         }
     };
+    let running =
+        profile_import::running_agent_tasks(&state.agent_tasks, &instance_slug, None).await;
+    if running > 0 {
+        return import_failure(RestoreError::Busy { tasks: running });
+    }
     let media = state.vector_store.media_store();
     let (upload, archive) = match ImportUpload::receive(media, multipart).await {
         Ok(received) => received,
@@ -1189,7 +1202,8 @@ impl ImportUpload {
             }
 
             let name = format!(
-                "upload-{}.{}",
+                "{}{}.{}",
+                profile_import::UPLOAD_PREFIX,
                 uuid::Uuid::new_v4(),
                 profile_archive::ARCHIVE_FILE_NAME
             );
@@ -1320,7 +1334,9 @@ fn multipart_error(error: axum::extract::multipart::MultipartError) -> ImportRej
 /// 4xx leaves the companion exactly as it was.
 fn import_failure(error: RestoreError) -> Response {
     let (status, code) = match &error {
-        RestoreError::Busy { .. } => (StatusCode::CONFLICT, "companion_busy"),
+        RestoreError::Busy { .. } | RestoreError::WritersInFlight => {
+            (StatusCode::CONFLICT, "companion_busy")
+        }
         RestoreError::Archive(archive) => match archive {
             ArchiveError::TooManyEntries { .. }
             | ArchiveError::FileTooLarge { .. }

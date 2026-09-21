@@ -674,20 +674,39 @@ refused as truncated rather than restored with files missing.
 ### Restore
 
 `services/profile_import.rs` (#74) replaces the companion with an archive in
-one transaction under the companion's lifecycle gate, the same
-`VectorStore::lifecycle_lock` every memory write, delete, media replacement,
-and backfill holds. A memory write that arrives during an import waits and
-then lands in the imported tree; two imports serialize the same way. Once
-the busy check below has passed, the transaction runs on a task of its own
-that owns the gate: a caller that stops waiting (an HTTP client that
-disconnects drops the handler future) detaches from the import rather than
-stopping it between two steps, and the import finishes on its own and logs
-its result.
+one transaction under two gates. The first is the companion's lifecycle
+gate, the same `VectorStore::lifecycle_lock` every memory write, delete,
+media replacement, and backfill holds: a memory write that arrives during
+an import waits and then lands in the imported tree, and two imports
+serialize the same way. The second is the process-wide import gate
+(`services/import_gate.rs`, reached through `MediaStore::import_gate`),
+which every writer that reaches the tree through plain paths holds
+*shared* while it runs: the companion boundary holds it for every admitted
+mutating request (`POST`, `PUT`, `PATCH`, `DELETE` with a slug, the import
+route excepted) from before `ensure_identity` until the response is built,
+`POST /api/chat` holds it until the message is saved and the agent loop is
+registered, and every admitted proactive run (`ProactiveLoop::begin`:
+heartbeat, schedule, commitment check-in, handoff continuation, machine
+connect) holds it until the run is completed, failed, or cancelled. The
+import holds it *exclusively* from its busy check until the previous tree
+is discarded, so a request that arrives during an import waits and then
+runs against the imported tree, and a run that would start then is skipped
+(`skipped/import`) without writing a record. Once the busy check below has
+passed, the transaction runs on a task of its own that owns both gates: a
+caller that stops waiting (an HTTP client that disconnects drops the
+handler future) detaches from the import rather than stopping it between
+two steps, and the import finishes on its own and logs its result.
 
-1. **Refuse while busy.** While chat or scheduler agent tasks exist for the
-   companion (they write through ambient paths the gate does not cover) the
-   restore returns a typed `busy` error before anything is staged; the route
-   maps it to `409`.
+1. **Refuse while busy.** The import takes the lifecycle gate, then waits
+   up to ten seconds for ambient writers in flight to release the import
+   gate; writers that outlast that (a proactive run in the middle of a
+   model call) are reported, never interrupted. Then, while agent loops
+   exist for the companion (`agent_tasks`; they write through plain paths
+   and hold no gate, and only the conversation running the `restore_backup`
+   tool is discounted, because it is blocked on the call), the restore
+   returns a typed `busy` error before anything is staged. The route maps
+   both refusals to `409 companion_busy`, and answers the agent-loop one
+   before it reads the request body.
 2. **Stage.** The archive is extracted into `imports/staging-<id>/` through
    the workspace capability. `imports/` is a top-level directory, never a
    sibling under `instances/`, so a half-extracted tree is never mistaken
@@ -718,22 +737,27 @@ its result.
 6. **Discard the previous tree.** `imports/previous-<id>` is removed only
    after the new tree is in place and derived state has been handled.
 
-The busy check covers agent tasks only. Writers that create the companion
-directory ambiently (`companion_boundary::admit`'s `ensure_identity` on
-every `POST`/`PUT`/`PATCH` with a slug, the proactive loop, the scheduler)
-are not gated yet, so one of them can still recreate `instances/companion`
-in the window between the two renames: the second rename then fails with
-`AlreadyExists`, the rollback fails the same way, and the error names
-`imports/previous-<id>`. A process-wide import-in-progress gate those
-writers consult belongs with the route wiring in the last #74 slice.
+Should a writer that holds neither gate ever recreate `instances/companion`
+between the two renames, the second rename fails with `AlreadyExists`, the
+rollback fails the same way, and the error names `imports/previous-<id>`:
+the previous tree is intact, never lost.
 
-If the process dies between the two renames, the previous companion is at
-`imports/previous-<id>`; move it back to `instances/companion` by hand. A
-crash during extraction leaves `imports/staging-<id>` behind, and one
-during an upload leaves `imports/upload-<id>.companion.tar.gz`; both can be
-deleted. A startup recovery (move a lone `previous-*` back when
-`instances/companion` is missing, sweep the rest of `imports/`) is still
-open.
+**Startup recovery.** `profile_import::recover_on_startup` runs in
+`main.rs` before the obsolete-directory report, the migration, and every
+writer, and reconciles what a crash left under `imports/`:
+
+- `instances/companion` missing and exactly one `imports/previous-<id>`:
+  the process died between the two renames; the parked tree is moved back
+  and the companion is byte for byte what it was before the import. The
+  derived index was never rebuilt, so it still describes that tree.
+- `instances/companion` present and a `previous-*` beside it: the swap had
+  published the import; the parked tree is the replaced data and is
+  removed, and because the derived rebuild may not have run the vector
+  collection is reset so the startup backfill re-indexes the live tree.
+- `instances/companion` missing and several `previous-*` trees: nothing is
+  moved; the log names them for an operator to choose.
+- `staging-*` directories and `upload-*` archives are removed. Anything
+  else under `imports/`, and any symlink there, is left alone and logged.
 
 Three surfaces reach this restore, and nothing else writes the companion
 tree wholesale:
@@ -749,12 +773,21 @@ tree wholesale:
   archive the reader rejects, with the companion exactly as it was; `500
   import_failed` or `import_stranded` (the message names
   `imports/previous-<id>`) when the swap itself failed. The Data settings
-  page asks once before sending and shows the upload and the restore.
+  page asks once, in the destructive confirmation dialog, before sending
+  and shows the upload and the restore.
 - The `restore_backup` tool takes only the upload id (`upload_<id>`) of an
   archive attached to the chat or produced by `create_backup`, opened
-  through `MediaStore::open_upload_blob`; a path from the model is refused
-  before anything is looked up. The conversation running the tool is
+  through `MediaStore::open_upload_blob`, and only with
+  `confirmed_by_user: true`, the user's explicit confirmation in that
+  conversation: without it the tool refuses before anything is looked up,
+  so text the model read cannot trigger a replacement. A path from the
+  model is refused the same way. The conversation running the tool is
   blocked on it and does not count as busy; every other one still does.
+  That conversation's remaining turn appends to the imported tree, with
+  one caveat: a server-side compaction later in the same turn rewrites the
+  chat's history from the loop's in-memory messages, which predate the
+  restore. The tool's answer therefore asks the model to end the turn, and
+  a fresh message afterwards loads the imported history.
 - `nolune restore <archive> [--yes] [--profile <name>]` posts an
   operator-chosen local file to the local API with the token from
   `config.toml`. The CLI never opens the archive beyond streaming it, so

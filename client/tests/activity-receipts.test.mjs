@@ -28,6 +28,7 @@ test('receipts describe trigger and status without exposing model text', () => {
 	assert.equal(triggerLabel({ kind: 'heartbeat', agent: 'reflection' }), 'Reflection');
 	assert.equal(triggerLabel({ kind: 'machine_connected', machine_id: 'mac' }), 'Computer connected · mac');
 	assert.equal(statusLabel({ kind: 'skipped', reason: { kind: 'quiet_hours' } }), 'Held for quiet hours');
+	assert.equal(statusLabel({ kind: 'skipped', reason: { kind: 'import' } }), 'Held for an import');
 	assert.equal(statusLabel({ kind: 'failed', error: 'x', retryable: true }), 'Failed, can retry');
 	assert.equal(statusLabel({ kind: 'failed', error: 'x', retryable: false }), 'Failed');
 	assert.equal(outcomeSummary(base), 'sent you a message, 1 action');

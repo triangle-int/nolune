@@ -44,10 +44,27 @@ pub struct MemoryMetadata {
     pub len: u64,
 }
 
+/// One name under `imports/` (#74), as the startup recovery sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportEntry {
+    pub name: String,
+    pub kind: ImportEntryKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportEntryKind {
+    Directory,
+    File,
+    /// A symlink or special file: never followed, never removed.
+    Other,
+}
+
 /// Filesystem authority anchored to the configured workspace at startup.
 pub struct MediaStore {
     root: Dir,
     upload_dirs: std::sync::Mutex<HashMap<String, std::sync::Arc<Dir>>>,
+    /// The process-wide import gate (#74); see `services::import_gate`.
+    import_gate: std::sync::Arc<super::import_gate::ImportGate>,
     #[cfg(test)]
     fail_next_write: std::sync::atomic::AtomicBool,
     #[cfg(test)]
@@ -76,6 +93,7 @@ impl MediaStore {
         Ok(Self {
             root: Dir::open_ambient_dir(workspace_root, ambient_authority())?,
             upload_dirs: std::sync::Mutex::new(HashMap::new()),
+            import_gate: super::import_gate::ImportGate::new(),
             #[cfg(test)]
             fail_next_write: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
@@ -85,6 +103,12 @@ impl MediaStore {
             #[cfg(test)]
             legacy_cleanup_failures: std::sync::Mutex::new(std::collections::HashSet::new()),
         })
+    }
+
+    /// The gate every ambient writer of the companion tree holds shared and
+    /// a companion import holds exclusively (#74).
+    pub fn import_gate(&self) -> std::sync::Arc<super::import_gate::ImportGate> {
+        self.import_gate.clone()
     }
 
     fn memory_path(&self, slug: &str, path: &str) -> io::Result<PathBuf> {
@@ -297,6 +321,55 @@ impl MediaStore {
 
     fn import_path(name: &str) -> io::Result<PathBuf> {
         Ok(Path::new(IMPORTS_DIR).join(validate_single_component(name, "invalid import name")?))
+    }
+
+    /// Whether `instances/<slug>` is there as a real directory. A symlink or
+    /// a file at that name is an error, never a companion.
+    pub(crate) fn has_companion_tree(&self, slug: &str) -> io::Result<bool> {
+        validate_slug(slug)?;
+        let target = Path::new("instances").join(slug);
+        match self.root.symlink_metadata(&target) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                Err(invalid_path("companion path is not a real directory"))
+            }
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Every name directly under `imports/`, sorted; empty when the
+    /// directory is absent. Nothing is followed or opened.
+    pub(crate) fn list_imports(&self) -> io::Result<Vec<ImportEntry>> {
+        let imports = Path::new(IMPORTS_DIR);
+        match self.root.symlink_metadata(imports) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(invalid_path("imports directory must be a real directory"));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        }
+        let mut entries = Vec::new();
+        for entry in self.root.read_dir(imports)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let kind = if file_type.is_symlink() {
+                ImportEntryKind::Other
+            } else if file_type.is_dir() {
+                ImportEntryKind::Directory
+            } else if file_type.is_file() {
+                ImportEntryKind::File
+            } else {
+                ImportEntryKind::Other
+            };
+            entries.push(ImportEntry {
+                name: entry.file_name().to_string_lossy().into_owned(),
+                kind,
+            });
+        }
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(entries)
     }
 
     /// Create `imports/<name>`, which must not exist yet, and hand back the

@@ -14,6 +14,7 @@ pub mod drops;
 pub mod federation;
 pub mod handoff;
 pub mod heartbeat;
+pub mod import_gate;
 pub mod llm;
 pub mod machine_registry;
 pub mod mcp;

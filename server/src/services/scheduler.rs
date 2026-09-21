@@ -6,7 +6,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::app::state::AppState;
 use crate::domain::companion::CANONICAL_SLUG;
-use crate::domain::proactive::{ActionReceipt, RunOutcome, Target, Trigger};
+use crate::domain::proactive::{ActionReceipt, RunOutcome, RunStatus, SkipReason, Target, Trigger};
 use crate::services::proactive::Admission;
 use crate::services::tools::ScheduledTask;
 use crate::services::{chat, companion};
@@ -31,10 +31,9 @@ pub(crate) async fn check_and_trigger(state: &AppState) {
     crate::services::commitment_evaluator::tick(state, now).await;
 
     for (path, scheduled) in due_scheduled_tasks(&state.workspace_dir, now) {
-        // Remove the scheduled file first (prevent re-trigger on next tick)
-        let _ = fs::remove_file(&path);
-
-        // One run per explicit schedule in the proactive loop (#92).
+        // One run per explicit schedule in the proactive loop (#92). The
+        // admitted run holds the import gate (#74) until it is completed
+        // below, after the agent loop is registered.
         let handle = match state.proactive.begin(
             Trigger::Schedule {
                 task_id: scheduled.id.clone(),
@@ -46,6 +45,21 @@ pub(crate) async fn check_and_trigger(state: &AppState) {
         ) {
             Admission::Admitted(handle) => handle,
             Admission::Skipped(run) => {
+                if matches!(
+                    run.status,
+                    RunStatus::Skipped {
+                        reason: SkipReason::Import
+                    }
+                ) {
+                    // An import is replacing the companion: the schedule
+                    // stays on disk and fires on a later tick.
+                    log::info!(
+                        "[scheduler] task {} held: a companion import is in progress",
+                        scheduled.id
+                    );
+                    continue;
+                }
+                let _ = fs::remove_file(&path);
                 log::info!(
                     "[scheduler] task {} skipped ({:?})",
                     scheduled.id,
@@ -54,6 +68,8 @@ pub(crate) async fn check_and_trigger(state: &AppState) {
                 continue;
             }
         };
+        // Remove the scheduled file (prevent re-trigger on next tick)
+        let _ = fs::remove_file(&path);
 
         // Inject the task as a user message so the agent sees it
         let label = format!("[scheduled task] {}", scheduled.task);
@@ -77,17 +93,6 @@ pub(crate) async fn check_and_trigger(state: &AppState) {
                 continue;
             }
         }
-        // Delivery into the chat is the schedule's outcome; the chat turn runs
-        // under the ordinary conversation loop.
-        handle.complete(RunOutcome {
-            actions: vec![ActionReceipt {
-                tool: "chat".into(),
-                summary: "delivered scheduled task to chat".into(),
-            }],
-            messages_sent: 0,
-            tokens: 0,
-        });
-
         // Trigger the agent loop (same mechanism as POST /api/chat)
         let key = format!("{instance_slug}/default");
         let already_running = {
@@ -126,6 +131,18 @@ pub(crate) async fn check_and_trigger(state: &AppState) {
                 "[scheduler] agent already running for {instance_slug}, task injected as message"
             );
         }
+
+        // Delivery into the chat is the schedule's outcome; the chat turn runs
+        // under the ordinary conversation loop, which is registered above
+        // while the run still holds the import gate.
+        handle.complete(RunOutcome {
+            actions: vec![ActionReceipt {
+                tool: "chat".into(),
+                summary: "delivered scheduled task to chat".into(),
+            }],
+            messages_sent: 0,
+            tokens: 0,
+        });
     }
 }
 

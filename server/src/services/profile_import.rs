@@ -7,21 +7,26 @@
 //! staged tree moves into place, and a failure of the second rename moves the
 //! previous tree back. Both renames and the rollback run on one blocking
 //! thread, and the whole transaction from staging to the discard of the
-//! previous tree runs on a task of its own that owns the per-companion
-//! lifecycle gate every memory write holds: a write that arrives during an
-//! import lands in the imported tree afterwards instead of racing the swap,
-//! and a caller that stops waiting (an HTTP client that disconnects drops
-//! the handler future) detaches from the import instead of aborting it half
-//! way. Derived state (vectors, BM25, the catalog snapshot) is rebuilt from
-//! the imported memory files before the previous tree is discarded, and a
+//! previous tree runs on a task of its own that owns two gates: the
+//! per-companion lifecycle gate every memory write holds, and the
+//! process-wide [`ImportGate`](super::import_gate::ImportGate) every ambient writer of the companion tree
+//! (an admitted mutating request, a saved chat message, a proactive run)
+//! holds shared. A write that arrives during an import waits and lands in
+//! the imported tree afterwards instead of racing the swap, and a caller
+//! that stops waiting (an HTTP client that disconnects drops the handler
+//! future) detaches from the import instead of aborting it half way.
+//! Derived state (vectors, BM25, the catalog snapshot) is rebuilt from the
+//! imported memory files before the previous tree is discarded, and a
 //! provider that cannot embed leaves the collection marked for the startup
-//! backfill rather than claiming a full rebuild.
-//! See `docs/companion-storage.md` for the contract.
+//! backfill rather than claiming a full rebuild. [`recover_on_startup`]
+//! reconciles whatever a crash left under `imports/` before any writer
+//! starts. See `docs/companion-storage.md` for the contract.
 
 use std::{
     collections::HashMap,
     io::{self, Read},
     sync::Arc,
+    time::Duration,
 };
 
 use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt};
@@ -29,7 +34,7 @@ use cap_std::fs::{Dir, OpenOptions};
 use tokio_util::sync::CancellationToken;
 
 use super::{
-    media_text::MediaStore,
+    media_text::{ImportEntryKind, MediaStore},
     memory,
     profile_archive::{self, ArchiveError},
     vector::VectorStore,
@@ -42,6 +47,16 @@ const STAGING_PREFIX: &str = "staging-";
 /// `imports/previous-<id>`: where the replaced companion waits until the
 /// import has succeeded.
 const PREVIOUS_PREFIX: &str = "previous-";
+
+/// `imports/upload-<id>.companion.tar.gz`: where the import route streams a
+/// request body before the restore reads it.
+pub(crate) const UPLOAD_PREFIX: &str = "upload-";
+
+/// How long an import waits for ambient writers in flight (a request being
+/// handled, a proactive run) before it reports the companion busy. Requests
+/// finish in milliseconds; a run that outlasts this is reported rather than
+/// interrupted.
+const AMBIENT_WRITER_WAIT: Duration = Duration::from_secs(10);
 
 /// Largest identity marker re-read from staging before the swap.
 const MAX_IDENTITY_BYTES: u64 = 4096;
@@ -86,6 +101,10 @@ pub enum RestoreError {
     /// paths; the import is refused before anything is staged. The route
     /// answers `409`.
     Busy { tasks: usize },
+    /// Ambient writers (a request being handled, a proactive run) still held
+    /// the import gate after [`AMBIENT_WRITER_WAIT`]; nothing was staged.
+    /// The route answers `409` too.
+    WritersInFlight,
     /// The archive was refused; the staging directory has been discarded.
     Archive(ArchiveError),
     /// Creating the staging directory failed; nothing was extracted.
@@ -113,6 +132,10 @@ impl std::fmt::Display for RestoreError {
                 f,
                 "companion is busy: {tasks} agent task(s) are running; retry once they finish"
             ),
+            Self::WritersInFlight => write!(
+                f,
+                "companion is busy: a request or a background routine is still writing to it; retry in a moment"
+            ),
             Self::Archive(error) => write!(f, "archive refused: {error}"),
             Self::Staging(error) => write!(f, "import staging failed: {error}"),
             Self::PublishFailed(error) => {
@@ -136,17 +159,38 @@ impl std::fmt::Display for RestoreError {
 
 impl std::error::Error for RestoreError {}
 
+/// Agent loops registered in `agent_tasks` for `slug`, `own_task` excepted:
+/// they write the companion through ambient paths and hold no gate, so an
+/// import is refused while any exists. The route asks before it reads the
+/// request body; the restore asks again under the gates, where the answer
+/// is authoritative.
+pub(crate) async fn running_agent_tasks(
+    agent_tasks: &tokio::sync::Mutex<HashMap<String, CancellationToken>>,
+    slug: &str,
+    own_task: Option<&str>,
+) -> usize {
+    let prefix = format!("{slug}/");
+    let tasks = agent_tasks.lock().await;
+    tasks
+        .keys()
+        .filter(|key| key.starts_with(&prefix) && own_task != Some(key.as_str()))
+        .count()
+}
+
 /// Replace the companion `slug` with the contents of `archive`.
 ///
-/// Holds `VectorStore::lifecycle_lock(slug)` from before the archive is
-/// staged until derived state has been rebuilt and the previous tree removed.
-/// Once the busy check has passed the transaction runs on a task of its own
-/// that owns the gate, so dropping this future (an HTTP client that
-/// disconnects drops the axum handler future) detaches from the import
-/// rather than stopping it between two steps; the import then finishes on
-/// its own and logs its result. The archive is read on a blocking thread
-/// through the validating extractor in `profile_archive`, so nothing but the
-/// staging directory is written before validation succeeds.
+/// Holds `VectorStore::lifecycle_lock(slug)` and the exclusive side of the
+/// [`ImportGate`](super::import_gate::ImportGate), taken together and
+/// holding neither while ambient writers finish, from before the archive is
+/// staged until derived state has been rebuilt and the previous tree
+/// removed. Once the busy check has passed the transaction runs on a task
+/// of its own that owns both gates,
+/// so dropping this future (an HTTP client that disconnects drops the axum
+/// handler future) detaches from the import rather than stopping it between
+/// two steps; the import then finishes on its own and logs its result. The
+/// archive is read on a blocking thread through the validating extractor in
+/// `profile_archive`, so nothing but the staging directory is written before
+/// validation succeeds.
 pub async fn restore_companion<R: Read + Send + 'static>(
     store: Arc<VectorStore>,
     agent_tasks: &tokio::sync::Mutex<HashMap<String, CancellationToken>>,
@@ -177,21 +221,38 @@ async fn restore<R: Read + Send + 'static>(
     slug: &str,
     archive: R,
 ) -> Result<RestoreOutcome, RestoreError> {
-    let gate = store.lifecycle_lock(slug).lock_owned().await;
-
-    // Chat and scheduler agents write the companion through ambient paths
-    // that the gate does not cover, so an import while one runs would race
-    // the swap. Refuse before anything is staged; the route answers 409.
-    // Nothing has been written up to here, so dropping the future while it
-    // waits on either lock is harmless.
-    let running = {
-        let prefix = format!("{slug}/");
-        let tasks = agent_tasks.lock().await;
-        tasks
-            .keys()
-            .filter(|key| key.starts_with(&prefix) && own_task != Some(key.as_str()))
-            .count()
+    // The lifecycle gate first: an import queues behind a backfill or a
+    // memory write like any other lifecycle change, holding nothing while it
+    // waits. Then the import gate, exclusively, and without holding the
+    // lifecycle gate while ambient writers in flight (a request, a proactive
+    // run) finish: one of them may need the lifecycle gate for a memory
+    // write, and queueing it behind the import would stall both. So the
+    // import lets the lifecycle gate go, waits a bounded time for the
+    // writers, and takes both again; while it holds the import gate no new
+    // writer starts. Nothing has been written up to here, so dropping the
+    // future while it waits on any of them is harmless.
+    let import_gate = store.media_store().import_gate();
+    let deadline = tokio::time::Instant::now() + AMBIENT_WRITER_WAIT;
+    let (gate, exclusive) = loop {
+        let gate = store.lifecycle_lock(slug).lock_owned().await;
+        if let Some(exclusive) = import_gate.try_import() {
+            break (gate, exclusive);
+        }
+        drop(gate);
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero()
+            || tokio::time::timeout(remaining, import_gate.idle())
+                .await
+                .is_err()
+        {
+            return Err(RestoreError::WritersInFlight);
+        }
     };
+
+    // Agent loops write the companion through ambient paths and hold no
+    // gate, so an import while one runs would race the swap. Refuse before
+    // anything is staged; the route answers 409.
+    let running = running_agent_tasks(agent_tasks, slug, own_task).await;
     if running > 0 {
         return Err(RestoreError::Busy { tasks: running });
     }
@@ -208,6 +269,7 @@ async fn restore<R: Read + Send + 'static>(
             ),
             Err(error) => log::warn!("[import] restore of {slug} failed: {error}"),
         }
+        drop(exclusive);
         drop(gate);
         result
     })
@@ -380,6 +442,152 @@ fn validate_staged(staging: &Dir) -> Result<(), ArchiveError> {
         ));
     }
     profile_archive::parse_identity(&bytes).map(|_| ())
+}
+
+/// What [`recover_on_startup`] found under `imports/` and did about it.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Recovery {
+    /// The parked tree moved back to `instances/companion`: the process died
+    /// between the two renames of a swap and the companion was missing.
+    pub restored: Option<String>,
+    /// Parked trees found next to a live companion: the swap had published
+    /// the import before the process died, so they are the replaced data and
+    /// were discarded; the derived index is reset for the startup backfill
+    /// because the rebuild may not have run.
+    pub discarded_previous: Vec<String>,
+    /// Parked trees left in place because the companion was missing and more
+    /// than one candidate exists; an operator has to choose.
+    pub ambiguous: Vec<String>,
+    /// Staging directories and uploaded archives removed.
+    pub swept: Vec<String>,
+    /// Names left alone: not an import artifact, not a regular file or
+    /// directory, or one that could not be removed.
+    pub ignored: Vec<String>,
+}
+
+impl Recovery {
+    pub fn is_noop(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Reconcile `imports/` after a crash (#74), before any writer starts.
+///
+/// A process that dies between the two renames of a swap leaves no
+/// `instances/companion` and one `imports/previous-<id>`: that tree is moved
+/// back, so the companion is exactly what it was before the import. One that
+/// dies after the second rename leaves the imported tree live and a
+/// `previous-*` tree beside it: the tree is the replaced data and is
+/// discarded, and because the derived rebuild may not have run the vector
+/// collection is reset so the startup backfill re-indexes the live tree.
+/// `staging-*` directories and `upload-*` archives are always leftovers and
+/// are removed. Anything else under `imports/`, and a `previous-*` tree that
+/// is not the one candidate for a missing companion, is left in place and
+/// reported.
+pub async fn recover_on_startup(store: &VectorStore, slug: &str) -> io::Result<Recovery> {
+    let media = store.media_store();
+    let (recovery, reset_index) = blocking({
+        let slug = slug.to_owned();
+        move || reconcile_imports(&media, &slug)
+    })
+    .await?;
+    if reset_index {
+        match store.reset_collection(slug).await {
+            Ok(()) => log::info!(
+                "[import] derived index of {slug} reset for the startup backfill after an interrupted import"
+            ),
+            Err(error) => log::warn!(
+                "[import] could not reset the derived index of {slug} after an interrupted import: {error}"
+            ),
+        }
+    }
+    Ok(recovery)
+}
+
+/// The filesystem half of [`recover_on_startup`]; `true` when the derived
+/// index must be reset.
+fn reconcile_imports(media: &MediaStore, slug: &str) -> io::Result<(Recovery, bool)> {
+    let entries = media.list_imports()?;
+    let mut recovery = Recovery::default();
+    if entries.is_empty() {
+        return Ok((recovery, false));
+    }
+    let mut previous = Vec::new();
+    let mut staging = Vec::new();
+    let mut uploads = Vec::new();
+    for entry in entries {
+        match entry.kind {
+            ImportEntryKind::Directory if entry.name.starts_with(PREVIOUS_PREFIX) => {
+                previous.push(entry.name);
+            }
+            ImportEntryKind::Directory if entry.name.starts_with(STAGING_PREFIX) => {
+                staging.push(entry.name);
+            }
+            ImportEntryKind::File if entry.name.starts_with(UPLOAD_PREFIX) => {
+                uploads.push(entry.name);
+            }
+            _ => recovery.ignored.push(entry.name),
+        }
+    }
+
+    let mut reset_index = false;
+    if media.has_companion_tree(slug)? {
+        for name in previous {
+            match media.remove_import(&name) {
+                Ok(()) => {
+                    log::warn!(
+                        "[import] discarded imports/{name}: the import it belonged to was published before the process stopped"
+                    );
+                    recovery.discarded_previous.push(name);
+                    reset_index = true;
+                }
+                Err(error) => {
+                    log::warn!("[import] could not remove imports/{name}: {error}");
+                    recovery.ignored.push(name);
+                }
+            }
+        }
+    } else if previous.len() == 1 {
+        let name = previous.remove(0);
+        media.publish_import(slug, &name)?;
+        log::warn!(
+            "[import] moved imports/{name} back into place: the companion was missing after an interrupted import"
+        );
+        recovery.restored = Some(name);
+    } else if !previous.is_empty() {
+        log::error!(
+            "[import] the companion is missing and {} parked trees are under imports/ ({}); none was moved back, choose one by hand",
+            previous.len(),
+            previous.join(", ")
+        );
+        recovery.ambiguous = previous;
+    }
+
+    for name in staging {
+        match media.remove_import(&name) {
+            Ok(()) => recovery.swept.push(name),
+            Err(error) => {
+                log::warn!("[import] could not remove imports/{name}: {error}");
+                recovery.ignored.push(name);
+            }
+        }
+    }
+    for name in uploads {
+        match media.remove_import_upload(&name) {
+            Ok(()) => recovery.swept.push(name),
+            Err(error) => {
+                log::warn!("[import] could not remove imports/{name}: {error}");
+                recovery.ignored.push(name);
+            }
+        }
+    }
+    if !recovery.ignored.is_empty() {
+        log::warn!(
+            "[import] left alone under imports/: {}",
+            recovery.ignored.join(", ")
+        );
+    }
+    Ok((recovery, reset_index))
 }
 
 async fn blocking<T: Send + 'static>(
@@ -1054,6 +1262,370 @@ mod tests {
         assert!(matches!(error, RestoreError::Busy { tasks: 1 }), "{error}");
     }
 
+    /// Poll `done` until it holds, yielding to other tasks in between.
+    async fn wait_until(done: impl Fn() -> bool) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while !done() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "condition never held"
+            );
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    }
+
+    /// An admitted request or a proactive run holds the import gate shared:
+    /// the import stages nothing until it is released, and a writer that
+    /// arrives once the import holds the gate waits and then sees the
+    /// imported tree.
+    #[tokio::test]
+    async fn ambient_writers_and_the_import_take_turns_on_the_import_gate() {
+        let workspace = tempfile::tempdir().unwrap();
+        write_tree(
+            &companion_dir(workspace.path()),
+            &[("memory/old.md", b"old")],
+        );
+        let store = Arc::new(VectorStore::connect(workspace.path()).await);
+        let gate = store.media_store().import_gate();
+        let writer = gate.writer().await;
+
+        let import = {
+            let store = store.clone();
+            let tasks = tasks();
+            let archive = archive(&[("memory/new.md", b"new")]);
+            tokio::spawn(
+                async move { restore_companion(store, &tasks, CANONICAL_SLUG, archive).await },
+            )
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!import.is_finished(), "the import waits for the writer");
+        assert!(!gate.importing());
+        assert_eq!(
+            imports_entries(workspace.path()),
+            Vec::<String>::new(),
+            "nothing is staged while a writer is in flight"
+        );
+        assert!(
+            companion_dir(workspace.path())
+                .join("memory/old.md")
+                .is_file()
+        );
+        drop(writer);
+
+        wait_until(|| gate.importing()).await;
+        let late = {
+            let gate = gate.clone();
+            let memory = companion_dir(workspace.path()).join("memory");
+            tokio::spawn(async move {
+                let _writer = gate.writer().await;
+                (
+                    memory.join("new.md").is_file(),
+                    memory.join("old.md").exists(),
+                )
+            })
+        };
+        tokio::task::yield_now().await;
+        assert!(
+            !late.is_finished(),
+            "a writer arriving now waits for the import"
+        );
+        let outcome = import.await.unwrap().unwrap();
+        assert_eq!(outcome.files, 2);
+        assert_eq!(
+            late.await.unwrap(),
+            (true, false),
+            "the late writer ran after the import, against the imported tree"
+        );
+        assert!(!gate.importing());
+        assert_eq!(imports_entries(workspace.path()), Vec::<String>::new());
+    }
+
+    /// While the import waits for a writer to finish it holds nothing: a
+    /// memory write that arrives then (another admitted request) goes
+    /// through the lifecycle gate at once instead of queueing behind the
+    /// import and stalling it for the whole wait, and the import follows.
+    #[tokio::test]
+    async fn a_memory_write_arriving_while_the_import_waits_for_writers_is_not_stalled() {
+        let workspace = tempfile::tempdir().unwrap();
+        write_tree(
+            &companion_dir(workspace.path()),
+            &[("memory/old.md", b"old")],
+        );
+        let store = Arc::new(VectorStore::connect(workspace.path()).await);
+        let gate = store.media_store().import_gate();
+        let first = gate.writer().await;
+
+        let import = {
+            let store = store.clone();
+            let tasks = tasks();
+            let archive = archive(&[("memory/new.md", b"new")]);
+            tokio::spawn(
+                async move { restore_companion(store, &tasks, CANONICAL_SLUG, archive).await },
+            )
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!import.is_finished(), "the import waits for the writer");
+
+        // A second request: admitted (the import is only waiting), and its
+        // memory write must not wait for the import.
+        let second = gate
+            .try_writer()
+            .expect("a writer is admitted while the import waits");
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            store.write_text_memory(CANONICAL_SLUG, "during.md", "written while waiting", false),
+        )
+        .await
+        .expect("the write waited for the import instead of going first")
+        .unwrap();
+        assert!(
+            companion_dir(workspace.path())
+                .join("memory/during.md")
+                .is_file()
+        );
+        drop(second);
+        assert!(!import.is_finished(), "the first writer is still in flight");
+        drop(first);
+
+        let outcome = import.await.unwrap().unwrap();
+        assert_eq!(outcome.files, 2);
+        assert!(
+            companion_dir(workspace.path())
+                .join("memory/new.md")
+                .is_file()
+        );
+        assert!(
+            !companion_dir(workspace.path())
+                .join("memory/during.md")
+                .exists(),
+            "the write landed before the import and was replaced by it"
+        );
+        assert_eq!(imports_entries(workspace.path()), Vec::<String>::new());
+    }
+
+    /// A writer that outlasts the import's bounded wait (a proactive run in
+    /// the middle of a model call) is reported, never interrupted, and the
+    /// companion is untouched.
+    #[tokio::test(start_paused = true)]
+    async fn an_import_reports_busy_when_ambient_writers_outlast_its_wait() {
+        let workspace = tempfile::tempdir().unwrap();
+        write_tree(
+            &companion_dir(workspace.path()),
+            &[("memory/old.md", b"old")],
+        );
+        let store = Arc::new(VectorStore::connect(workspace.path()).await);
+        let tree_before = snapshot(&companion_dir(workspace.path()));
+        let gate = store.media_store().import_gate();
+        let writer = gate.writer().await;
+
+        let error = restore_companion(
+            store.clone(),
+            &tasks(),
+            CANONICAL_SLUG,
+            archive(&[("memory/new.md", b"new")]),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, RestoreError::WritersInFlight), "{error}");
+        assert!(error.to_string().contains("busy"), "{error}");
+        assert_eq!(snapshot(&companion_dir(workspace.path())), tree_before);
+        assert_eq!(imports_entries(workspace.path()), Vec::<String>::new());
+        assert!(!gate.importing(), "a refused import holds nothing");
+        // The gate is free again: a later write and a later import go through.
+        store
+            .write_text_memory(CANONICAL_SLUG, "later.md", "after the refusal", false)
+            .await
+            .unwrap();
+        drop(writer);
+        let outcome = restore_companion(
+            store.clone(),
+            &tasks(),
+            CANONICAL_SLUG,
+            archive(&[("memory/new.md", b"new")]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.files, 2);
+        assert!(
+            companion_dir(workspace.path())
+                .join("memory/new.md")
+                .is_file()
+        );
+    }
+
+    /// The process died between the two renames: the companion is missing
+    /// and its tree is parked. Startup moves it back byte for byte and
+    /// sweeps the staging directory and the uploaded archive, leaving
+    /// anything else under `imports/` alone.
+    #[tokio::test]
+    async fn startup_recovery_moves_a_lone_parked_tree_back_and_sweeps_leftovers() {
+        let mock = MockServer::new(vec![(200, response(vec![1., 0., 0.])); 1]).await;
+        let workspace = tempfile::tempdir().unwrap();
+        write_tree(
+            &companion_dir(workspace.path()),
+            &[("memory/old.md", b"Orion"), ("soul.md", b"old soul")],
+        );
+        let store =
+            Arc::new(VectorStore::connect_with_config(workspace.path(), &mock.config).await);
+        store
+            .backfill_text_memories(workspace.path(), CANONICAL_SLUG)
+            .await
+            .unwrap();
+        let expected = snapshot(&companion_dir(workspace.path()));
+        // The process died right after the first rename of a swap.
+        let imports = workspace.path().join("imports");
+        fs::create_dir_all(&imports).unwrap();
+        fs::rename(
+            companion_dir(workspace.path()),
+            imports.join("previous-abc"),
+        )
+        .unwrap();
+        write_tree(&imports.join("staging-abc"), &[("memory/new.md", b"new")]);
+        fs::write(imports.join("upload-abc.companion.tar.gz"), b"partial").unwrap();
+        fs::write(imports.join("notes.txt"), b"operator note").unwrap();
+        assert!(!companion_dir(workspace.path()).exists());
+
+        let recovery = recover_on_startup(&store, CANONICAL_SLUG).await.unwrap();
+
+        assert_eq!(recovery.restored.as_deref(), Some("previous-abc"));
+        assert_eq!(
+            recovery.swept,
+            vec!["staging-abc", "upload-abc.companion.tar.gz"]
+        );
+        assert_eq!(recovery.ignored, vec!["notes.txt"]);
+        assert!(recovery.discarded_previous.is_empty());
+        assert!(recovery.ambiguous.is_empty());
+        assert_eq!(snapshot(&companion_dir(workspace.path())), expected);
+        assert_eq!(imports_entries(workspace.path()), vec!["notes.txt"]);
+        assert!(
+            !store.needs_backfill(CANONICAL_SLUG).await.unwrap(),
+            "the index still describes the tree that is back in place"
+        );
+        assert_eq!(listing(&store).await[0].0, "old.md");
+        // Running again finds nothing to move.
+        let again = recover_on_startup(&store, CANONICAL_SLUG).await.unwrap();
+        assert_eq!(again.restored, None);
+        assert_eq!(again.ignored, vec!["notes.txt"]);
+        assert_eq!(snapshot(&companion_dir(workspace.path())), expected);
+    }
+
+    /// The process died after the second rename: the imported tree is live
+    /// and the replaced one is still parked. Startup discards the parked
+    /// tree and, because the derived rebuild may not have run, resets the
+    /// collection so the startup backfill re-indexes the live tree.
+    #[tokio::test]
+    async fn startup_recovery_discards_a_parked_tree_beside_a_published_import_and_reindexes() {
+        let mock = MockServer::new(vec![(200, response(vec![1., 0., 0.])); 2]).await;
+        let workspace = tempfile::tempdir().unwrap();
+        write_tree(
+            &companion_dir(workspace.path()),
+            &[("memory/new.md", b"Andromeda")],
+        );
+        let store =
+            Arc::new(VectorStore::connect_with_config(workspace.path(), &mock.config).await);
+        // The index still describes the replaced tree.
+        let mut vector = vec![0.; 3];
+        vector[0] = 1.;
+        store
+            .upsert_text_memory(CANONICAL_SLUG, "old.md", vec![("Orion".into(), vector)])
+            .await
+            .unwrap();
+        store
+            .backfill_text_memories(workspace.path(), CANONICAL_SLUG)
+            .await
+            .unwrap();
+        let before = snapshot(&companion_dir(workspace.path()));
+        let imports = workspace.path().join("imports");
+        write_tree(
+            &imports.join("previous-abc"),
+            &[("memory/old.md", b"Orion")],
+        );
+
+        let recovery = recover_on_startup(&store, CANONICAL_SLUG).await.unwrap();
+
+        assert_eq!(recovery.discarded_previous, vec!["previous-abc"]);
+        assert_eq!(recovery.restored, None);
+        assert!(recovery.swept.is_empty());
+        assert_eq!(snapshot(&companion_dir(workspace.path())), before);
+        assert_eq!(imports_entries(workspace.path()), Vec::<String>::new());
+        assert!(
+            store.needs_backfill(CANONICAL_SLUG).await.unwrap(),
+            "the derived index is rebuilt by the startup backfill"
+        );
+        assert!(listing(&store).await.is_empty());
+        assert_eq!(
+            store
+                .backfill_text_memories(workspace.path(), CANONICAL_SLUG)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(listing(&store).await[0].0, "new.md");
+    }
+
+    /// Two parked trees and no companion: nothing is chosen for the operator.
+    #[tokio::test]
+    async fn startup_recovery_leaves_several_parked_trees_for_the_operator() {
+        let workspace = tempfile::tempdir().unwrap();
+        let store = Arc::new(VectorStore::connect(workspace.path()).await);
+        let imports = workspace.path().join("imports");
+        write_tree(&imports.join("previous-one"), &[("soul.md", b"one")]);
+        write_tree(&imports.join("previous-two"), &[("soul.md", b"two")]);
+        write_tree(&imports.join("staging-one"), &[]);
+        let before = snapshot(&imports);
+
+        let recovery = recover_on_startup(&store, CANONICAL_SLUG).await.unwrap();
+
+        assert_eq!(recovery.ambiguous, vec!["previous-one", "previous-two"]);
+        assert_eq!(recovery.restored, None);
+        assert_eq!(recovery.swept, vec!["staging-one"]);
+        assert!(!companion_dir(workspace.path()).exists());
+        let mut expected = before;
+        expected.retain(|path, _| !path.starts_with("staging-one"));
+        assert_eq!(snapshot(&imports), expected);
+    }
+
+    /// Nothing under `imports/` means nothing happens, and a link parked
+    /// there is never followed, moved, or removed.
+    #[tokio::test]
+    async fn startup_recovery_is_a_noop_without_leftovers_and_never_follows_links() {
+        let workspace = tempfile::tempdir().unwrap();
+        let store = Arc::new(VectorStore::connect(workspace.path()).await);
+        assert!(
+            recover_on_startup(&store, CANONICAL_SLUG)
+                .await
+                .unwrap()
+                .is_noop()
+        );
+        assert!(!workspace.path().join("imports").exists());
+
+        #[cfg(unix)]
+        {
+            let elsewhere = workspace.path().join("elsewhere");
+            write_tree(&elsewhere, &[("soul.md", b"elsewhere")]);
+            let imports = workspace.path().join("imports");
+            fs::create_dir_all(&imports).unwrap();
+            std::os::unix::fs::symlink(&elsewhere, imports.join("previous-link")).unwrap();
+            std::os::unix::fs::symlink(&elsewhere, imports.join("staging-link")).unwrap();
+
+            let recovery = recover_on_startup(&store, CANONICAL_SLUG).await.unwrap();
+
+            assert_eq!(recovery.ignored, vec!["previous-link", "staging-link"]);
+            assert_eq!(recovery.restored, None);
+            assert!(!companion_dir(workspace.path()).exists());
+            assert!(
+                imports
+                    .join("previous-link")
+                    .symlink_metadata()
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            assert!(elsewhere.join("soul.md").is_file());
+        }
+    }
+
     #[tokio::test]
     async fn an_import_is_refused_while_agent_tasks_run_for_the_companion() {
         let workspace = tempfile::tempdir().unwrap();
@@ -1203,6 +1775,7 @@ mod tests {
         }
         for required in [
             "lifecycle_lock(",
+            "import_gate()",
             "profile_archive::extract_into(",
             "create_import(",
             "stash_companion(",
@@ -1210,6 +1783,9 @@ mod tests {
             "remove_import(",
             "rebuild_derived_no_lifecycle(",
             "rebuild_catalog_snapshot(",
+            "list_imports(",
+            "has_companion_tree(",
+            "reset_collection(",
         ] {
             assert!(
                 production.contains(required),

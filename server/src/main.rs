@@ -107,6 +107,21 @@ async fn main() {
         log::warn!("legacy stats aggregate cleanup was incomplete: {error}");
     }
 
+    // A companion import (#74) the previous process did not finish: a parked
+    // tree goes back into place when the companion is missing, one beside a
+    // published import is discarded, staging and upload leftovers are swept.
+    // Before the obsolete-directory report, the migration, and every writer.
+    match services::profile_import::recover_on_startup(
+        &state.vector_store,
+        domain::companion::CANONICAL_SLUG,
+    )
+    .await
+    {
+        Ok(recovery) if recovery.is_noop() => {}
+        Ok(recovery) => log::warn!("[import] reconciled imports/ after a restart: {recovery:?}"),
+        Err(error) => log::warn!("[import] could not reconcile imports/: {error}"),
+    }
+
     // One companion per server (#103). Sibling directories from the unpublished
     // multi-instance layout are reported and otherwise ignored.
     let obsolete = services::companion::obsolete_instance_dirs(&state.workspace_dir);

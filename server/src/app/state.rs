@@ -101,7 +101,8 @@ impl AppState {
             &workspace_dir,
             crate::domain::companion::CANONICAL_SLUG,
         )
-        .with_events(events.clone());
+        .with_events(events.clone())
+        .with_import_gate(vector_store.media_store().import_gate());
         let commitments = crate::services::commitments::CommitmentStore::new(
             &workspace_dir,
             crate::domain::companion::CANONICAL_SLUG,
