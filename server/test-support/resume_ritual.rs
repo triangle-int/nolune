@@ -1068,14 +1068,16 @@ async fn quiet_hours_hold_the_spontaneous_triggers_but_not_the_manual_one() {
         )
         .await;
 
-    // Quiet hours around this very hour, in the companion's timezone (UTC by default).
+    // Quiet hours around this very hour, in the companion's timezone (UTC by
+    // default): the hour before through the hour after, so the window cannot
+    // end between reading the clock here and the requests below.
     let hour = chrono::Utc::now().hour() as u8;
     h.state
         .proactive
         .set_policy(&ProactivePolicy {
             quiet_hours: Some(QuietHours {
-                start_hour: hour,
-                end_hour: (hour + 1) % 24,
+                start_hour: (hour + 23) % 24,
+                end_hour: (hour + 2) % 24,
             }),
             ..Default::default()
         })
