@@ -237,7 +237,7 @@ fn the_owner_api_is_post_and_delete_and_both_revoke_paths_drop_what_the_peer_had
         "\"/api/federation/approvals/{id}/approve\",",
         "\"/api/federation/approvals/{id}/deny\",",
         "\"/api/federation/peers/{companion_id}/rules\",",
-        "\"/api/federation/peers/{companion_id}/rules/{intent}/{disclosure}\",",
+        "\"/api/federation/peers/{companion_id}/rules/revoke\",",
     ] {
         assert!(owner.contains(route), "the owner router lacks {route}");
     }
@@ -250,6 +250,10 @@ fn the_owner_api_is_post_and_delete_and_both_revoke_paths_drop_what_the_peer_had
     assert!(
         !routes.contains("Query<") && !routes.contains("query::"),
         "nothing is taken from the query string"
+    );
+    assert!(
+        !owner.contains("{intent}") && !owner.contains("{disclosure}"),
+        "a rule's pair travels in a body; paths name a companion or an entry only"
     );
     for handler in ["async fn revoke_peer(", "async fn revoke_notice("] {
         let body = routes

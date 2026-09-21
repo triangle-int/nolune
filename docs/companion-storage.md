@@ -1128,9 +1128,9 @@ a rule in `policy.json` and drop the entry); `DELETE …/approvals/{id}`
 withdraws an entry whatever it stands at. `POST
 /api/federation/peers/{id}/rules` writes one rule (`intent`, `disclosure`,
 `access`, optional `expires_at` in the future; a pair the intent cannot
-disclose at is refused), replacing the rule for that pair, and `DELETE
-…/rules/{intent}/{disclosure}` revokes one capability; the next evaluation
-sees either. Revoking a peer, by this owner or by the peer's own notice,
+disclose at is refused), replacing the rule for that pair, and `POST …/rules/revoke` with
+`{"intent", "disclosure"}` revokes one capability; the next evaluation
+sees either. Paths name a companion id or an entry id and nothing else. Revoking a peer, by this owner or by the peer's own notice,
 drops its rules, its rate-limit override, and every entry of its pairing:
 a revoked peer keeps nothing, and pairing it again starts from the
 defaults. Every owner decision is a receipt on the `owner` side (reasons

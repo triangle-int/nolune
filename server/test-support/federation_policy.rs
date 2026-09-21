@@ -672,11 +672,12 @@ async fn owners_see_pending_approvals_and_decide_them_over_the_api() {
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
     assert_eq!(answer["error"], "unknown_peer");
+    let availability = json!({"intent": "availability", "disclosure": "availability"});
     let (status, answer) = a
         .owner(
-            Method::DELETE,
-            &format!("/api/federation/peers/{b_id}/rules/availability/availability"),
-            None,
+            Method::POST,
+            &format!("/api/federation/peers/{b_id}/rules/revoke"),
+            Some(availability.clone()),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{answer}");
@@ -685,32 +686,43 @@ async fn owners_see_pending_approvals_and_decide_them_over_the_api() {
         refused(admit(&a, &b_id, "availability", "availability")),
         Decision::ask(DecisionReason::Default)
     );
-    for (uri, status, code) in [
+    // The pair travels in the body, matched against the closed classes;
+    // the path names the companion and nothing else.
+    for (uri, body, status, code) in [
         (
-            format!("/api/federation/peers/{b_id}/rules/availability/availability"),
+            format!("/api/federation/peers/{b_id}/rules/revoke"),
+            Some(availability.clone()),
             StatusCode::NOT_FOUND,
             "unknown_rule",
         ),
         (
-            format!("/api/federation/peers/{b_id}/rules/shell/none"),
+            format!("/api/federation/peers/{b_id}/rules/revoke"),
+            Some(json!({"intent": "shell", "disclosure": "none"})),
             StatusCode::BAD_REQUEST,
-            "malformed",
+            "invalid_body",
         ),
         (
-            "/api/federation/peers/nobody/rules/message/none".to_owned(),
+            format!("/api/federation/peers/{b_id}/rules/revoke"),
+            None,
+            StatusCode::BAD_REQUEST,
+            "invalid_body",
+        ),
+        (
+            "/api/federation/peers/nobody/rules/revoke".to_owned(),
+            Some(json!({"intent": "message", "disclosure": "none"})),
             StatusCode::NOT_FOUND,
             "unknown_peer",
         ),
     ] {
-        let (got, answer) = a.owner(Method::DELETE, &uri, None).await;
-        assert_eq!(got, status, "{uri}: {answer}");
-        assert_eq!(answer["error"], code, "{uri}");
+        let (got, answer) = a.owner(Method::POST, &uri, body.clone()).await;
+        assert_eq!(got, status, "{uri} {body:?}: {answer}");
+        assert_eq!(answer["error"], code, "{uri} {body:?}");
     }
     let (status, _) = a
         .owner(
-            Method::DELETE,
-            &format!("/api/federation/peers/{b_id}/rules/message/none"),
-            None,
+            Method::POST,
+            &format!("/api/federation/peers/{b_id}/rules/revoke"),
+            Some(json!({"intent": "message", "disclosure": "none"})),
         )
         .await;
     assert_eq!(status, StatusCode::OK);

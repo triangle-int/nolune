@@ -23,9 +23,11 @@
 //!   …/approvals/{id}` withdraws an entry whatever its status.
 //! * `POST /api/federation/peers/{companion_id}/rules` writes one rule
 //!   (`intent`, `disclosure`, `access`, optional `expires_at`), replacing
-//!   the rule for that pair; `DELETE …/rules/{intent}/{disclosure}` revokes
-//!   one capability. Revoking the peer drops every rule and pending
-//!   approval it had. Every owner decision is an audit receipt.
+//!   the rule for that pair; `POST …/rules/revoke` takes `{ "intent",
+//!   "disclosure" }` and revokes one capability. Revoking the peer drops
+//!   every rule and pending approval it had. Every owner decision is an
+//!   audit receipt. Paths name a companion id or an entry id and nothing
+//!   else; everything the owner chooses travels in a body.
 //!
 //! Peer side, public, verified by signature only. Every verified envelope
 //! is judged by the owner's policy and recorded before it is dispatched
@@ -82,6 +84,15 @@ struct InviteLine {
     invite: String,
 }
 
+/// Which rule to revoke: one intent at one disclosure class, matched
+/// against the closed classes.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuleKey {
+    intent: IntentClass,
+    disclosure: DisclosureClass,
+}
+
 /// What the accept route takes: the one line, or the three fields.
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -117,8 +128,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/federation/approvals/{id}/deny", post(deny_request))
         .route("/api/federation/peers/{companion_id}/rules", post(set_rule))
         .route(
-            "/api/federation/peers/{companion_id}/rules/{intent}/{disclosure}",
-            delete(revoke_rule),
+            "/api/federation/peers/{companion_id}/rules/revoke",
+            post(revoke_rule),
         )
 }
 
@@ -446,19 +457,16 @@ async fn set_rule(
 
 async fn revoke_rule(
     State(state): State<AppState>,
-    Path((companion_id, intent, disclosure)): Path<(String, String, String)>,
+    Path(companion_id): Path<String>,
+    request: Request,
 ) -> Result<Response, ApiError> {
-    // Path names are matched against the closed classes; nothing from the
-    // path is echoed back.
-    let unknown = || {
-        FederationError::Malformed("intent or disclosure class is not one this server knows".into())
-    };
-    let intent = IntentClass::parse(&intent).ok_or_else(unknown)?;
-    let disclosure = DisclosureClass::parse(&disclosure).ok_or_else(unknown)?;
-    let policy =
-        state
-            .federation_gate
-            .revoke_rule(&state.federation, &companion_id, intent, disclosure)?;
+    let key: RuleKey = parse_json(&read_body(request).await?)?;
+    let policy = state.federation_gate.revoke_rule(
+        &state.federation,
+        &companion_id,
+        key.intent,
+        key.disclosure,
+    )?;
     Ok(Json(json!({ "policy": policy })).into_response())
 }
 

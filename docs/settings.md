@@ -67,8 +67,8 @@ Connections is where they answer:
 - Every decision is an audit receipt (`GET /api/federation/receipts`, side
   `owner`). Routes: `GET /api/federation/approvals`, `POST
   …/approvals/{id}/approve` and `…/deny` with `{scope}`, `DELETE
-  …/approvals/{id}`, `POST /api/federation/peers/{id}/rules`, `DELETE
-  …/rules/{intent}/{disclosure}`; shapes in
+  …/approvals/{id}`, `POST /api/federation/peers/{id}/rules`, `POST
+  …/rules/revoke` with `{intent, disclosure}`; shapes in
   [companion-storage.md](companion-storage.md) "Policy and audit".
 
 ## Model presets (#156)

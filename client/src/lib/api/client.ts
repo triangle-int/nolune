@@ -1409,10 +1409,7 @@ export function setFederationRule(companionId: string, rule: FederationRuleReque
 }
 
 export function revokeFederationRule(companionId: string, intent: string, disclosure: string): Promise<{ policy: FederationPeerPolicy }> {
-	return federationJson(
-		`/api/federation/peers/${encodeURIComponent(companionId)}/rules/${encodeURIComponent(intent)}/${encodeURIComponent(disclosure)}`,
-		{ method: "DELETE" },
-	);
+	return federationJson(`/api/federation/peers/${encodeURIComponent(companionId)}/rules/revoke`, federationBody({ intent, disclosure }));
 }
 
 // ---------------------------------------------------------------------------
