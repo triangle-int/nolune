@@ -33,6 +33,17 @@ pub enum TargetSelection {
 }
 
 impl TargetSelection {
+    /// The chat request's `machine_id` checked the way registration checks
+    /// one (`validate_machine_id`) before it reaches the prompt, the log or
+    /// a refusal: blank passes as nothing chosen; anything else must be a
+    /// well-formed id. The error names the rule, never the id.
+    pub fn check_request(machine_id: Option<&str>) -> Result<(), String> {
+        match machine_id.map(str::trim) {
+            None | Some("") => Ok(()),
+            Some(id) => crate::domain::machine::validate_machine_id(id),
+        }
+    }
+
     /// From the chat request's `machine_id`: blank means nothing chosen, the
     /// synthesized home or a server-local id means the server home.
     pub fn from_request(machine_id: Option<&str>) -> Self {

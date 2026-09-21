@@ -71,7 +71,11 @@ async fn post_chat(
     let content = request.content.trim().to_string();
     let voice_mode = request.voice_mode;
     // The computer the user chose (#80) travels with the run that this
-    // message starts; a running loop keeps the target it started with.
+    // message starts; a running loop keeps the target it started with. It
+    // is checked like a registered id before it reaches the prompt or the
+    // log, and the refusal names the rule rather than echoing it.
+    crate::services::tools::TargetSelection::check_request(request.machine_id.as_deref())
+        .map_err(|reason| (StatusCode::BAD_REQUEST, reason).into_response())?;
     let machine_target = request.machine_id.clone();
 
     if content.is_empty() {
@@ -818,3 +822,125 @@ mod queued_target_tests {
     }
 }
 
+#[cfg(test)]
+mod request_target_tests {
+    //! #80: the request's `machine_id` is checked the way registration
+    //! checks one before it reaches the prompt, the log or a refusal.
+    use super::*;
+    use crate::{
+        config::{Config, LlmProvider, ModelPreset},
+        domain::{companion::CANONICAL_SLUG, machine::MAX_MACHINE_ID_BYTES},
+        services::companion,
+    };
+    use axum::{
+        body::Body,
+        http::{Method, Request, header},
+    };
+    use tower::ServiceExt;
+
+    const TOKEN: &str = "issue-80-request-token";
+
+    /// A companion with a chat model configured, so a well-formed message
+    /// would start a run; nothing here reaches a provider.
+    async fn state() -> (tempfile::TempDir, AppState) {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = Config {
+            auth_token: TOKEN.into(),
+            ..Default::default()
+        };
+        config.llm.presets = vec![ModelPreset {
+            id: "sonnet".into(),
+            name: "Claude Sonnet".into(),
+            provider: LlmProvider::Anthropic,
+            model: "claude-sonnet-4-6".into(),
+        }];
+        config.llm.chat_preset = "sonnet".into();
+        config.llm.tokens.anthropic = "test-key-never-used".into();
+        let state = AppState::new_in(config, tmp.path().to_owned()).await;
+        companion::ensure_identity(tmp.path()).unwrap();
+        (tmp, state)
+    }
+
+    async fn post_chat(state: &AppState, body: serde_json::Value) -> (StatusCode, String) {
+        let response = crate::app::router::build_router(state.clone(), None)
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/chat")
+                    .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    #[tokio::test]
+    async fn a_malformed_machine_id_is_refused_before_anything_is_saved_or_started() {
+        let (tmp, state) = state().await;
+        let key = task_key(CANONICAL_SLUG, "chat_1");
+        let too_long = "a".repeat(MAX_MACHINE_ID_BYTES + 1);
+        for bad in [
+            too_long.as_str(),
+            "studio mac",
+            "studio\nmac",
+            "<b>studio</b>",
+            "studio\u{7f}",
+        ] {
+            let (status, body) = post_chat(
+                &state,
+                serde_json::json!({
+                    "instance_slug": CANONICAL_SLUG,
+                    "chat_id": "chat_1",
+                    "content": "hi",
+                    "machine_id": bad,
+                }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad:?}: {body}");
+            assert!(
+                body.contains("machine id"),
+                "{bad:?}: the refusal says what is wrong: {body}"
+            );
+            assert!(
+                !body.contains(bad),
+                "{bad:?}: the refusal does not echo the id: {body}"
+            );
+        }
+        assert!(
+            !state.agent_tasks.lock().await.contains_key(&key),
+            "no run was started"
+        );
+        let saved = chat::load_messages(tmp.path(), CANONICAL_SLUG, "chat_1").unwrap();
+        assert!(saved.messages.is_empty(), "no message was saved: {saved:?}");
+    }
+
+    #[test]
+    fn the_request_target_is_checked_like_a_registration() {
+        use crate::services::tools::TargetSelection;
+        // Nothing chosen, the home, a server-local id and a stable id pass.
+        for ok in [
+            None,
+            Some(""),
+            Some("  "),
+            Some("server-home"),
+            Some("server-local:studio"),
+            Some("4f3c1c2e-9b5e-4d2b-8f0a-1c2d3e4f5a6b"),
+            Some("Studio_Mac.local"),
+        ] {
+            assert_eq!(TargetSelection::check_request(ok), Ok(()), "{ok:?}");
+        }
+        let too_long = "a".repeat(MAX_MACHINE_ID_BYTES + 1);
+        for bad in [too_long.as_str(), "studio mac", "studio\nmac", "<b>x</b>"] {
+            let error = TargetSelection::check_request(Some(bad)).unwrap_err();
+            assert!(error.contains("machine id"), "{bad:?}: {error}");
+            assert!(!error.contains(bad), "{bad:?}: {error}");
+        }
+    }
+}

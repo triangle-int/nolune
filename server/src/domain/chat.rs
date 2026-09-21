@@ -52,6 +52,8 @@ pub struct ChatRequest {
     pub voice_mode: bool,
     /// The computer the user chose for this conversation (#80): a known
     /// machine's stable id, or `server-home`. Absent means nothing chosen.
+    /// Checked like a registered id (`TargetSelection::check_request`)
+    /// before the message is saved.
     #[serde(default)]
     pub machine_id: Option<String>,
 }
