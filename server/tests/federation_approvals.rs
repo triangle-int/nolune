@@ -207,7 +207,8 @@ fn the_gate_consults_the_queue_only_after_the_engine_asked_and_carries_it_throug
             "self.approvals.approve_once(",
             "self.approvals.deny_once(",
             "self.approvals.remove(",
-            "self.approvals.forget_pairing(",
+            "self.approvals.forget_peer(",
+            "self.approvals.drop_stale(",
             "self.write_rule(",
             "self.policy.update(",
         ] {

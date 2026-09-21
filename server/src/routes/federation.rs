@@ -408,7 +408,10 @@ async fn ping_peer(
 }
 
 async fn list_approvals(State(state): State<AppState>) -> Result<Response, ApiError> {
-    Ok(Json(json!({ "approvals": state.federation_gate.approvals()? })).into_response())
+    Ok(
+        Json(json!({ "approvals": state.federation_gate.approvals(&state.federation)? }))
+            .into_response(),
+    )
 }
 
 async fn approve_request(

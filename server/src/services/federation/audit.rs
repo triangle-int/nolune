@@ -7,10 +7,13 @@
 //! takes an envelope or peer text, so the log can be listed and kept without
 //! re-reading what a peer sent. Retention is bounded like proactive run
 //! records: the newest [`MAX_AUDIT_RECEIPTS`] overall, the newest
-//! [`MAX_RECEIPTS_PER_PEER`] per pairing (so one chatty peer cannot push
-//! the others out, and cannot start over by rotating its key), and nothing
-//! older than [`AUDIT_RETENTION_DAYS`]; past a bound the file is compacted
-//! through a temporary file and a rename.
+//! [`MAX_RECEIPTS_PER_PEER`] per pairing for the peer's traffic (so one
+//! chatty peer cannot push the others out, and cannot start over by
+//! rotating its key) and as many again for the owner's own decisions about
+//! that pairing (so a peer retrying what it was refused cannot push out the
+//! record of the refusal), and nothing older than [`AUDIT_RETENTION_DAYS`];
+//! past a bound the file is compacted through a temporary file and a
+//! rename.
 //!
 //! A file this build cannot load is never repaired and never overwritten:
 //! every read and write fails closed, and because a decision is not made
@@ -24,14 +27,17 @@ use std::{
 
 use super::{identity, peers::Clock};
 use crate::domain::federation::FederationError;
-use crate::domain::federation_policy::{AuditReceipt, RECEIPT_VERSION as RECEIPT_FORMAT_VERSION};
+use crate::domain::federation_policy::{
+    AuditReceipt, RECEIPT_VERSION as RECEIPT_FORMAT_VERSION, ReceiptSide,
+};
 
 /// The audit log, under the keystore directory.
 pub const AUDIT_FILE: &str = "audit.jsonl";
 /// Receipts kept overall, newest first.
 pub const MAX_AUDIT_RECEIPTS: usize = 1000;
 /// Receipts kept per pairing (as requester or responder, under every id
-/// the peer has had), newest first.
+/// the peer has had), newest first, and separately as many of the owner's
+/// own decisions about that pairing.
 pub const MAX_RECEIPTS_PER_PEER: usize = 200;
 /// Receipts older than this are dropped.
 pub const AUDIT_RETENTION_DAYS: u64 = 30;
@@ -234,29 +240,54 @@ fn enforce_retention(receipts: &mut Vec<AuditReceipt>, now: u64) -> bool {
     receipts.retain(|receipt| receipt.at > oldest_allowed);
     // Per pairing: a receipt belongs to the pairing on the other side,
     // whichever key the peer signed with at the time, so a flood from one
-    // peer only ever pushes out that peer's own history.
-    let mut kept_per_peer: HashMap<&str, usize> = HashMap::new();
+    // peer only ever pushes out that peer's own history. The owner's own
+    // decisions about a pairing are a bucket of their own, so a peer
+    // retrying what it was refused cannot push out the record of who
+    // refused it and when.
+    let mut kept_per_peer: HashMap<(&str, bool), usize> = HashMap::new();
     let mut keep = vec![false; receipts.len()];
     for (index, receipt) in receipts.iter().enumerate().rev() {
         let kept = kept_per_peer
-            .entry(receipt.pairing_id.as_str())
+            .entry((
+                receipt.pairing_id.as_str(),
+                receipt.side == ReceiptSide::Owner,
+            ))
             .or_insert(0);
         if *kept < MAX_RECEIPTS_PER_PEER {
             *kept += 1;
             keep[index] = true;
         }
     }
+    retain_kept(receipts, &keep);
+    if receipts.len() > MAX_AUDIT_RECEIPTS {
+        // Past the overall bound the peers' oldest traffic goes first; an
+        // owner decision goes only once no peer receipt is left to drop.
+        let mut excess = receipts.len() - MAX_AUDIT_RECEIPTS;
+        let mut keep = vec![true; receipts.len()];
+        for owner_pass in [false, true] {
+            for (index, receipt) in receipts.iter().enumerate() {
+                if excess == 0 {
+                    break;
+                }
+                if keep[index] && (receipt.side == ReceiptSide::Owner) == owner_pass {
+                    keep[index] = false;
+                    excess -= 1;
+                }
+            }
+        }
+        retain_kept(receipts, &keep);
+    }
+    receipts.len() != before
+}
+
+/// Keeps the receipts `keep` marks, in order.
+fn retain_kept(receipts: &mut Vec<AuditReceipt>, keep: &[bool]) {
     let mut index = 0;
     receipts.retain(|_| {
         let kept = keep[index];
         index += 1;
         kept
     });
-    if receipts.len() > MAX_AUDIT_RECEIPTS {
-        let excess = receipts.len() - MAX_AUDIT_RECEIPTS;
-        receipts.drain(..excess);
-    }
-    receipts.len() != before
 }
 
 #[derive(Default)]
@@ -274,9 +305,7 @@ struct Inner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::federation_policy::{
-        Decision, DecisionReason, RECEIPT_VERSION, ReceiptSide,
-    };
+    use crate::domain::federation_policy::{Decision, DecisionReason, RECEIPT_VERSION};
     use crate::services::federation::peers::system_clock;
     use std::sync::{
         Arc,
@@ -441,6 +470,101 @@ mod tests {
         assert!(
             mixed.iter().all(|r| r.side == ReceiptSide::Answering),
             "the requesting-side receipt about peer-a was the oldest of that peer's"
+        );
+    }
+
+    fn owner_receipt(peer: &str, at: u64) -> AuditReceipt {
+        AuditReceipt {
+            side: ReceiptSide::Owner,
+            decision: Decision::deny(DecisionReason::OwnerDenied),
+            summary: format!(
+                "owner ruled on companion {peer} for message (none): deny (owner_denied)"
+            ),
+            ..receipt(peer, at)
+        }
+    }
+
+    #[test]
+    fn a_peers_traffic_never_pushes_out_the_owners_decisions_about_it() {
+        // The owner denies, then the peer retries for well over its bucket:
+        // the peer's answering receipts are bounded, the owner's stays.
+        let mut receipts = vec![owner_receipt("chatty", T0)];
+        receipts.extend((1..MAX_RECEIPTS_PER_PEER as u64 * 3).map(|i| receipt("chatty", T0 + i)));
+        assert!(enforce_retention(&mut receipts, T0 + 1000));
+        assert_eq!(
+            receipts
+                .iter()
+                .filter(|r| r.side == ReceiptSide::Answering)
+                .count(),
+            MAX_RECEIPTS_PER_PEER
+        );
+        let owner: Vec<&AuditReceipt> = receipts
+            .iter()
+            .filter(|r| r.side == ReceiptSide::Owner)
+            .collect();
+        assert_eq!(owner.len(), 1, "the owner's decision survives the flood");
+        assert_eq!(owner[0].at, T0);
+        // The owner's own decisions about one pairing are bounded on their
+        // own, and their bucket is not eaten by the peer's traffic.
+        let mut receipts: Vec<AuditReceipt> = (0..MAX_RECEIPTS_PER_PEER as u64 + 5)
+            .map(|i| owner_receipt("chatty", T0 + i))
+            .chain((0..MAX_RECEIPTS_PER_PEER as u64 + 5).map(|i| receipt("chatty", T0 + 500 + i)))
+            .collect();
+        assert!(enforce_retention(&mut receipts, T0 + 1000));
+        assert_eq!(
+            receipts
+                .iter()
+                .filter(|r| r.side == ReceiptSide::Owner)
+                .count(),
+            MAX_RECEIPTS_PER_PEER
+        );
+        assert_eq!(
+            receipts
+                .iter()
+                .filter(|r| r.side == ReceiptSide::Answering)
+                .count(),
+            MAX_RECEIPTS_PER_PEER
+        );
+        assert_eq!(
+            receipts
+                .iter()
+                .filter(|r| r.side == ReceiptSide::Owner)
+                .map(|r| r.at)
+                .min(),
+            Some(T0 + 5),
+            "the oldest owner decisions went first among their own"
+        );
+        // Past the overall bound the peers' oldest traffic goes before any
+        // owner decision does.
+        let mut receipts: Vec<AuditReceipt> = (0..MAX_AUDIT_RECEIPTS as u64 + 10)
+            .map(|i| {
+                if i % 100 == 0 {
+                    owner_receipt(&format!("peer-{}", i % 7), T0 + i)
+                } else {
+                    receipt(&format!("peer-{}", i % 7), T0 + i)
+                }
+            })
+            .collect();
+        let owner_before = receipts
+            .iter()
+            .filter(|r| r.side == ReceiptSide::Owner)
+            .count();
+        assert!(enforce_retention(&mut receipts, T0 + 5000));
+        assert_eq!(receipts.len(), MAX_AUDIT_RECEIPTS);
+        assert_eq!(
+            receipts
+                .iter()
+                .filter(|r| r.side == ReceiptSide::Owner)
+                .count(),
+            owner_before
+        );
+        assert_eq!(
+            receipts[0].at, T0,
+            "the first owner receipt is the oldest kept"
+        );
+        assert!(
+            receipts.windows(2).all(|pair| pair[0].at <= pair[1].at),
+            "order is kept"
         );
     }
 

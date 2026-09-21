@@ -1090,8 +1090,12 @@ the peer sent: no body, message, or text field exists in the shape, and
 unknown fields are refused. Retention is bounded like proactive run
 records: the newest 1000 overall, the newest 200 per pairing under every id
 the peer has had (so one chatty peer cannot push the others out, and cannot
-start over by rotating its key), and nothing older than 30 days; past a
-bound the file is compacted through a temporary file and a rename.
+start over by rotating its key) plus, counted on their own, the newest 200
+of the owner's decisions about that pairing (so a peer retrying what it was
+refused cannot push out the record of the refusal; past the overall bound
+the peers' oldest traffic goes before any owner decision), and nothing
+older than 30 days; past a bound the file is compacted through a temporary
+file and a rename.
 Repeated refusals of one kind from one peer inside a minute are recorded
 once. A log this build cannot load or write refuses every intent: a
 decision is not made without its receipt.
@@ -1112,17 +1116,20 @@ content from a named companion, framed by a boundary the text cannot
 predict, and it never becomes a tool argument.
 
 `federation/approvals.json` (mode `0600`) is the owner's queue: when the
-engine answers `ask`, the gate keeps one entry per peer, intent, and
-disclosure class (`id`, `pairing_id`, `requester`, `intent`, `disclosure`,
-`status`, `requested_at`, `decided_at`, `expires_at`, `summary`; no body,
-text, or payload field exists, and unknown fields are refused) and tells
-the peer `approval_required`, the same way on every retry, so nothing about
-the owner's decision or its timing crosses the wire until an intent is
-allowed. A pending entry lapses after 24 hours. `GET /api/federation/approvals`
-lists the live entries newest first; `POST …/approvals/{id}/approve` and
-`…/deny` take `{"scope": "once"}` (the next matching intent consumes an
-approval, which lapses unused after an hour; a denial holds until the
-request would have lapsed and the peer is not queued again meanwhile),
+engine answers `ask`, the gate keeps one entry per pairing, peer, intent,
+and disclosure class (`id`, `pairing_id`, `requester`, `intent`,
+`disclosure`, `status`, `requested_at`, `decided_at`, `expires_at`,
+`summary`; no body, text, or payload field exists, and unknown fields are
+refused) and tells the peer `approval_required`, the same way on every
+retry, whether the owner has not looked yet or has denied it once, so
+nothing about the owner's decision or its timing crosses the wire until an
+intent is allowed. A pending entry lapses after 24 hours. `GET
+/api/federation/approvals` lists the live entries newest first; `POST
+…/approvals/{id}/approve` and `…/deny` take `{"scope": "once"}` (the next
+matching intent consumes an approval, which lapses unused after an hour; a
+denial holds until the request would have lapsed and the peer is not queued
+again meanwhile: its retries are recorded `owner_denied` on the answering
+side and answered `approval_required` as before),
 `{"scope": "until", "expires_at": …}` or `{"scope": "class"}` (both become
 a rule in `policy.json` and drop the entry); `DELETE …/approvals/{id}`
 withdraws an entry whatever it stands at. `POST
@@ -1131,9 +1138,14 @@ withdraws an entry whatever it stands at. `POST
 disclose at is refused), replacing the rule for that pair, and `POST …/rules/revoke` with
 `{"intent", "disclosure"}` revokes one capability; the next evaluation
 sees either. Paths name a companion id or an entry id and nothing else. Revoking a peer, by this owner or by the peer's own notice,
-drops its rules, its rate-limit override, and every entry of its pairing:
-a revoked peer keeps nothing, and pairing it again starts from the
-defaults. Every owner decision is a receipt on the `owner` side (reasons
+drops its rules, its rate-limit override, and every entry of its pairing
+or under any id it has had: a revoked peer keeps nothing, and pairing it
+again starts from the defaults. An entry belongs to the pairing it was
+queued under: when a companion starts over under a fresh invite (same key,
+new pairing) without a revocation in between, what its earlier pairing
+asked or was granted is stale and admits nothing; the next request it
+makes, the owner's next listing, and a decision on it (refused as
+`unknown_approval`) each drop it. Every owner decision is a receipt on the `owner` side (reasons
 `owner_approved`, `owner_denied`, `owner_revoked`, `rule`, and
 `peer_revoked` under the intent name `revocation`), written before the
 change is applied. The queue moves with the rules when a peer rotates its

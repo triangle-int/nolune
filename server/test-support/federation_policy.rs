@@ -742,10 +742,15 @@ async fn owners_see_pending_approvals_and_decide_them_over_the_api() {
         .await;
     assert_eq!(status, StatusCode::OK, "{answer}");
     assert_eq!(answer["approval"]["status"], "denied");
+    // The peer is told what it was told while the request was open; the
+    // denial is on the owner's side of the log only.
     assert_eq!(
         refused(admit(&a, &b_id, "message", "none")),
-        Decision::deny(DecisionReason::OwnerDenied)
+        Decision::ask(DecisionReason::Default)
     );
+    let latest = &receipts(&a).await[0];
+    assert_eq!(latest.side, ReceiptSide::Answering);
+    assert_eq!(latest.decision, Decision::deny(DecisionReason::OwnerDenied));
     let (status, _) = a
         .owner(
             Method::DELETE,

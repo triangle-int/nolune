@@ -3,18 +3,24 @@
 //! a rename.
 //!
 //! When the policy engine answers `ask`, the gate queues one
-//! [`PendingApproval`] per peer, intent, and disclosure class and tells the
-//! peer `approval_required`; the peer is told the same on every retry, so
+//! [`PendingApproval`] per pairing, peer, intent, and disclosure class and
+//! tells the peer `approval_required`; the peer is told the same on every
+//! retry, whether the owner has not looked yet or has denied it once, so
 //! nothing about the owner's decision, or when they made it, crosses the
 //! wire until an intent is allowed. The owner lists the queue, approves
 //! (once, until a deadline, or for the class) or denies, and the very next
 //! evaluation sees it: an approval once is consumed by the next matching
-//! intent, a denial once holds until the request would have lapsed, and
-//! anything bounded by a deadline becomes a rule in the policy document
-//! instead. Entries lapse: a pending request after
+//! intent, a denial once holds until the request would have lapsed (the
+//! answering side's receipt says `owner_denied`, the wire still says
+//! `approval_required`), and anything bounded by a deadline becomes a rule
+//! in the policy document instead. Entries lapse: a pending request after
 //! [`PENDING_APPROVAL_TTL_SECS`], an unused approval after
-//! [`ONCE_APPROVAL_TTL_SECS`]. Like a receipt, an entry never carries what
-//! the peer sent.
+//! [`ONCE_APPROVAL_TTL_SECS`]. An entry belongs to the pairing it was
+//! queued under: when a companion starts over under a fresh invite, what
+//! its earlier pairing asked or was granted is stale and is dropped, by the
+//! next request it makes, by the owner's next listing, or with the peer
+//! when it is revoked. Like a receipt, an entry never carries what the peer
+//! sent.
 //!
 //! A missing file is an empty queue and is not written until something is
 //! queued. A file this build cannot load (another version, junk, the wrong
@@ -107,8 +113,13 @@ impl ApprovalStore {
         Ok(inner.approvals.iter().find(|entry| entry.id == id).cloned())
     }
 
-    /// What the owner said about `request` from `requester`, queueing it
-    /// when nothing was. An approval once is consumed here.
+    /// What the owner said about `request` from `requester` under
+    /// `pairing_id`, queueing it when nothing was. An approval once is
+    /// consumed here. An entry matches only under the pairing it was
+    /// queued for: a companion that started over under a fresh invite
+    /// (same key, new pairing) left the entries of its earlier pairing
+    /// behind, and they are dropped when it asks again rather than answer
+    /// for it.
     pub fn resolve(
         &self,
         pairing_id: &str,
@@ -120,10 +131,11 @@ impl ApprovalStore {
         self.ensure_loaded(&mut inner);
         self.refuse_if_unloadable(&inner)?;
         self.prune(&mut inner)?;
-        let at = inner
-            .approvals
-            .iter()
-            .position(|entry| entry.requester == requester && entry.request() == request);
+        let at = inner.approvals.iter().position(|entry| {
+            entry.pairing_id == pairing_id
+                && entry.requester == requester
+                && entry.request() == request
+        });
         if let Some(at) = at {
             let entry = inner.approvals[at].clone();
             return Ok(match entry.status {
@@ -154,7 +166,15 @@ impl ApprovalStore {
                 request.intent, request.disclosure
             ),
         };
-        let mut approvals = inner.approvals.clone();
+        // Whatever the requester had queued under another pairing is
+        // stale: its record names this pairing now, and nothing an earlier
+        // pairing asked or was granted carries over.
+        let mut approvals: Vec<PendingApproval> = inner
+            .approvals
+            .iter()
+            .filter(|entry| entry.requester != requester || entry.pairing_id == pairing_id)
+            .cloned()
+            .collect();
         // Past the bound the oldest pending request makes room: a decided
         // entry is the owner's word and outlives a flood of new asks.
         while approvals.len() >= MAX_APPROVALS {
@@ -222,10 +242,28 @@ impl ApprovalStore {
         Ok(removed)
     }
 
-    /// Drops every entry of `pairing_id` and returns them.
-    pub fn forget_pairing(
+    /// Drops every entry of `pairing_id` and every entry from any of
+    /// `requesters` (a peer's current id and the ids it rotated away from),
+    /// so that a companion which started over under a fresh invite before
+    /// it was revoked keeps nothing from its earlier pairing either.
+    /// Returns what went.
+    pub fn forget_peer(
         &self,
         pairing_id: &str,
+        requesters: &[&str],
+    ) -> Result<Vec<PendingApproval>, FederationError> {
+        self.drop_stale(|entry| {
+            entry.pairing_id == pairing_id || requesters.contains(&entry.requester.as_str())
+        })
+    }
+
+    /// Drops every entry `stale` says so about and returns them: the gate
+    /// lists the queue against the peer records, and an entry whose
+    /// requester now stands under another pairing is nobody's to decide.
+    /// Nothing stale is not a write.
+    pub fn drop_stale(
+        &self,
+        stale: impl Fn(&PendingApproval) -> bool,
     ) -> Result<Vec<PendingApproval>, FederationError> {
         let mut inner = self.inner.lock().unwrap();
         self.ensure_loaded(&mut inner);
@@ -235,7 +273,7 @@ impl ApprovalStore {
             .approvals
             .iter()
             .cloned()
-            .partition(|entry| entry.pairing_id == pairing_id);
+            .partition(|entry| stale(entry));
         if dropped.is_empty() {
             return Ok(dropped);
         }
@@ -679,7 +717,7 @@ mod tests {
     }
 
     #[test]
-    fn forgetting_a_pairing_drops_every_entry_of_it() {
+    fn forgetting_a_peer_drops_every_entry_of_its_pairing_and_of_its_ids() {
         let dir = tempfile::tempdir().unwrap();
         let now = Arc::new(AtomicU64::new(T0));
         let store = store(dir.path(), &now);
@@ -694,16 +732,116 @@ mod tests {
             panic!()
         };
         store.approve_once(&a2.id).unwrap();
-        let dropped = store.forget_pairing(PAIRING).unwrap();
+        let dropped = store.forget_peer(PAIRING, &[PEER]).unwrap();
         let mut ids: Vec<&str> = dropped.iter().map(|e| e.id.as_str()).collect();
         ids.sort_unstable();
         let mut expected = vec![a1.id.as_str(), a2.id.as_str()];
         expected.sort_unstable();
         assert_eq!(ids, expected);
         assert_eq!(store.list().unwrap(), vec![b1.clone()]);
-        assert!(store.forget_pairing(PAIRING).unwrap().is_empty());
+        assert!(store.forget_peer(PAIRING, &[PEER]).unwrap().is_empty());
         let reloaded = self::store(dir.path(), &now);
-        assert_eq!(reloaded.list().unwrap(), vec![b1]);
+        assert_eq!(reloaded.list().unwrap(), vec![b1.clone()]);
+
+        // An entry queued under an earlier pairing of the same companion
+        // (it started over under a fresh invite, so its record now names
+        // PAIRING, and it has not asked again since) goes with the peer
+        // too, matched by its id rather than its pairing.
+        let Resolution::Queued(stale) = store.resolve("earlier-pairing", PEER, message()).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(store.list().unwrap(), vec![stale.clone(), b1.clone()]);
+        assert_eq!(store.forget_peer(PAIRING, &[PEER]).unwrap(), vec![stale]);
+        assert_eq!(store.list().unwrap(), vec![b1.clone()]);
+        // The ids a peer rotated away from count as its own.
+        let Resolution::Queued(rotated) = store
+            .resolve("rotated-pairing", "rotated-companion", message())
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            store
+                .forget_peer("unrelated-pairing", &["nobody", "rotated-companion"])
+                .unwrap(),
+            vec![rotated]
+        );
+        assert_eq!(store.list().unwrap(), vec![b1]);
+    }
+
+    #[test]
+    fn a_request_under_a_new_pairing_replaces_what_the_earlier_one_queued() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Arc::new(AtomicU64::new(T0));
+        let store = store(dir.path(), &now);
+        let Resolution::Queued(earlier) = store.resolve(PAIRING, PEER, message()).unwrap() else {
+            panic!()
+        };
+        let Resolution::Queued(other) = store.resolve(PAIRING, PEER, availability()).unwrap()
+        else {
+            panic!()
+        };
+        // An approval once under the earlier pairing does not admit the
+        // companion after it started over: the request under the new
+        // pairing asks afresh, and every entry of the earlier pairing goes.
+        store.approve_once(&earlier.id).unwrap();
+        now.store(T0 + 60, Ordering::SeqCst);
+        let Resolution::Queued(fresh) = store.resolve("new-pairing", PEER, message()).unwrap()
+        else {
+            panic!("an approval under another pairing is not an approval of this one")
+        };
+        assert_ne!(fresh.id, earlier.id);
+        assert_eq!(fresh.pairing_id, "new-pairing");
+        assert_eq!(fresh.status, ApprovalStatus::Pending);
+        assert_eq!(
+            store.list().unwrap(),
+            vec![fresh.clone()],
+            "the earlier pairing's entries, decided or not, are stale"
+        );
+        assert_eq!(store.get(&earlier.id).unwrap(), None);
+        assert_eq!(store.get(&other.id).unwrap(), None);
+        // Asking again under the new pairing is the same fresh entry.
+        assert_eq!(
+            store.resolve("new-pairing", PEER, message()).unwrap(),
+            Resolution::Pending(fresh.clone())
+        );
+        let reloaded = self::store(dir.path(), &now);
+        assert_eq!(reloaded.list().unwrap(), vec![fresh]);
+    }
+
+    #[test]
+    fn stale_entries_are_dropped_when_the_owner_looks() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Arc::new(AtomicU64::new(T0));
+        let store = store(dir.path(), &now);
+        let Resolution::Queued(stale) = store.resolve("earlier-pairing", PEER, message()).unwrap()
+        else {
+            panic!()
+        };
+        let Resolution::Queued(live) = store.resolve("other-pairing", OTHER, message()).unwrap()
+        else {
+            panic!()
+        };
+        let current = |entry: &PendingApproval| {
+            (entry.requester == PEER && entry.pairing_id == PAIRING)
+                || (entry.requester == OTHER && entry.pairing_id == "other-pairing")
+        };
+        assert_eq!(
+            store.drop_stale(|entry| !current(entry)).unwrap(),
+            vec![stale.clone()]
+        );
+        assert_eq!(store.list().unwrap(), vec![live.clone()]);
+        assert_eq!(store.get(&stale.id).unwrap(), None);
+        // Nothing stale is not a write.
+        assert!(
+            store
+                .drop_stale(|entry| !current(entry))
+                .unwrap()
+                .is_empty()
+        );
+        let reloaded = self::store(dir.path(), &now);
+        assert_eq!(reloaded.list().unwrap(), vec![live]);
     }
 
     #[test]
@@ -779,7 +917,8 @@ mod tests {
             refused(store.approve_once("0123456789abcdef").map(|_| ()));
             refused(store.deny_once("0123456789abcdef").map(|_| ()));
             refused(store.remove("0123456789abcdef").map(|_| ()));
-            refused(store.forget_pairing(PAIRING).map(|_| ()));
+            refused(store.forget_peer(PAIRING, &[PEER]).map(|_| ()));
+            refused(store.drop_stale(|_| true).map(|_| ()));
             refused(store.rekey(PEER, OTHER));
             assert_eq!(
                 std::fs::read_to_string(store.path()).unwrap(),

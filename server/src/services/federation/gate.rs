@@ -152,9 +152,53 @@ impl FederationGate {
         self.audit.list()
     }
 
-    /// Every live request that asked the owner, newest first.
-    pub fn approvals(&self) -> Result<Vec<PendingApproval>, FederationError> {
+    /// Every live request that asked the owner, newest first. An entry
+    /// whose requester no longer stands under the pairing it was queued
+    /// for (the companion started over under a fresh invite) is nobody's
+    /// to decide and is dropped here, from the file too. Held shared
+    /// against the identity lock so a rotation cannot re-key a requester
+    /// between the records and the queue.
+    pub fn approvals(
+        &self,
+        federation: &FederationState,
+    ) -> Result<Vec<PendingApproval>, FederationError> {
+        let _stable = self.identities.read().unwrap();
+        let current: HashMap<String, String> = federation
+            .overview()?
+            .peers
+            .into_iter()
+            .map(|peer| (peer.companion_id, peer.pairing_id))
+            .collect();
+        self.approvals
+            .drop_stale(|entry| current.get(&entry.requester) != Some(&entry.pairing_id))?;
         self.approvals.list()
+    }
+
+    /// The live entry `id`, provided its requester still stands under the
+    /// pairing it was queued for; anything else is `UnknownApproval`, so a
+    /// decision racing a re-pair lands on nothing. `pending` narrows it to
+    /// an entry the owner has not decided yet.
+    fn live_entry(
+        &self,
+        federation: &FederationState,
+        id: &str,
+        pending: bool,
+    ) -> Result<PendingApproval, FederationError> {
+        let entry = self
+            .approvals
+            .get(id)?
+            .filter(|entry| !pending || entry.status == ApprovalStatus::Pending)
+            .ok_or(FederationError::UnknownApproval)?;
+        let current = federation
+            .overview()?
+            .peers
+            .into_iter()
+            .find(|peer| peer.companion_id == entry.requester)
+            .map(|peer| peer.pairing_id);
+        if current.as_deref() != Some(entry.pairing_id.as_str()) {
+            return Err(FederationError::UnknownApproval);
+        }
+        Ok(entry)
     }
 
     /// The owner approves the pending request `id`: once (the next matching
@@ -172,7 +216,10 @@ impl FederationGate {
 
     /// The owner denies the pending request `id`: once (until the request
     /// would have lapsed, without asking again), until a deadline, or for
-    /// the intent at that class (both as a rule).
+    /// the intent at that class (both as a rule). A denial once is the
+    /// owner's side of the log only: the peer keeps hearing
+    /// `approval_required`, exactly as while the request was open, until
+    /// the request would have lapsed.
     pub fn deny(
         &self,
         federation: &FederationState,
@@ -199,11 +246,7 @@ impl FederationGate {
         let _stable = self.identities.read().unwrap();
         let me = federation.identity()?.companion_id().to_owned();
         let now = (self.clock)();
-        let entry = self
-            .approvals
-            .get(id)?
-            .filter(|entry| entry.status == ApprovalStatus::Pending)
-            .ok_or(FederationError::UnknownApproval)?;
+        let entry = self.live_entry(federation, id, true)?;
         let (verdict, reason) = match access {
             Access::Allow => (Verdict::Allow, DecisionReason::OwnerApproved),
             Access::Ask | Access::Deny => (Verdict::Deny, DecisionReason::OwnerDenied),
@@ -271,10 +314,7 @@ impl FederationGate {
         let _stable = self.identities.read().unwrap();
         let me = federation.identity()?.companion_id().to_owned();
         let now = (self.clock)();
-        let entry = self
-            .approvals
-            .get(id)?
-            .ok_or(FederationError::UnknownApproval)?;
+        let entry = self.live_entry(federation, id, false)?;
         self.record(
             ReceiptSide::Owner,
             &entry.pairing_id,
@@ -375,10 +415,12 @@ impl FederationGate {
     }
 
     /// A revoked peer keeps nothing: its rules, its rate-limit override,
-    /// and every request of its pairing that asked the owner are dropped,
-    /// and the revocation is recorded on `side` (`Owner` when this owner
-    /// revoked, `Answering` when the peer's own notice did; the latter
-    /// folds repeats like any other refusal from a peer).
+    /// and every request that asked the owner under its pairing or under
+    /// any id it has had (so an entry left behind by an earlier pairing of
+    /// the same companion goes too) are dropped, and the revocation is
+    /// recorded on `side` (`Owner` when this owner revoked, `Answering`
+    /// when the peer's own notice did; the latter folds repeats like any
+    /// other refusal from a peer).
     pub fn forget_peer(
         &self,
         federation: &FederationState,
@@ -424,7 +466,13 @@ impl FederationGate {
                 now,
             )?,
         }
-        self.approvals.forget_pairing(&peer.pairing_id)?;
+        let mut ids: Vec<&str> = vec![peer.companion_id.as_str(), companion_id];
+        ids.extend(
+            peer.rotation_history
+                .iter()
+                .map(|transition| transition.previous_companion_id()),
+        );
+        self.approvals.forget_peer(&peer.pairing_id, &ids)?;
         self.policy.update(|document| {
             document.peers.remove(&peer.companion_id);
             document.peers.remove(companion_id);
@@ -495,7 +543,11 @@ impl FederationGate {
     ) -> Result<Decision, FederationError> {
         let now = (self.clock)();
         let companion_id = peer.companion_id.as_str();
-        let (decision, intent_name, disclosure_name, detail) =
+        // What the peer is told, and what the receipt keeps when the two
+        // differ: a denial once is refused under the same `approval_required`
+        // the peer heard while the request was open, so the wire never
+        // shows that the owner decided, let alone when.
+        let (decision, recorded, intent_name, disclosure_name, detail) =
             match policy::classify(intent, disclosure) {
                 Classified::Known(request) => {
                     let document = self.policy.document()?;
@@ -514,6 +566,7 @@ impl FederationGate {
                         window,
                     );
                     drop(usage);
+                    let mut recorded = None;
                     // The owner's word on what the engine could only ask
                     // about: an approval once admits it and is consumed, a
                     // denial once refuses it, and a request still open is
@@ -523,16 +576,19 @@ impl FederationGate {
                     if decision.verdict == Verdict::Ask {
                         let pairing = peer.pairing_id.as_str();
                         let word = self.approvals.resolve(pairing, companion_id, request)?;
-                        decision = match word {
+                        match word {
                             Resolution::Approved(_) => {
-                                Decision::allow(DecisionReason::OwnerApproved)
+                                decision = Decision::allow(DecisionReason::OwnerApproved);
                             }
-                            Resolution::Denied(_) => Decision::deny(DecisionReason::OwnerDenied),
-                            Resolution::Queued(_) | Resolution::Pending(_) => decision,
-                        };
+                            Resolution::Denied(_) => {
+                                recorded = Some(Decision::deny(DecisionReason::OwnerDenied));
+                            }
+                            Resolution::Queued(_) | Resolution::Pending(_) => {}
+                        }
                     }
                     (
                         decision,
+                        recorded,
                         request.intent.name(),
                         request.disclosure.name(),
                         None,
@@ -566,7 +622,7 @@ impl FederationGate {
                         ),
                         _ => (UNKNOWN_NAME, disclosure_or_unknown(disclosure)),
                     };
-                    (decision, intent_name, disclosure_name, Some(detail))
+                    (decision, None, intent_name, disclosure_name, Some(detail))
                 }
             };
         self.record_answering(
@@ -576,7 +632,7 @@ impl FederationGate {
             intent_name,
             disclosure_name,
             detail,
-            &decision,
+            recorded.as_ref().unwrap_or(&decision),
             now,
         )?;
         if decision.verdict == Verdict::Allow {
@@ -2142,7 +2198,7 @@ mod tests {
     }
 
     fn approvals(node: &Node) -> Vec<PendingApproval> {
-        node.gate.approvals().unwrap()
+        node.gate.approvals(&node.federation).unwrap()
     }
 
     fn peer_policy(node: &Node, peer: &str) -> PeerPolicy {
@@ -2505,17 +2561,24 @@ mod tests {
         let owner = &receipts(&a)[0];
         assert_eq!(owner.side, ReceiptSide::Owner);
         assert_eq!(owner.decision, Decision::deny(DecisionReason::OwnerDenied));
-        // The peer is denied and is not queued again while the denial holds.
+        // The peer is refused and is not queued again while the denial
+        // holds, and is told exactly what it was told before the owner
+        // looked: the denial is the answering side's receipt, never the
+        // wire's, so polling shows neither that the owner decided nor when.
         network.set(T0 + 120);
+        let told = refused(admit(&a, &b_id, "message", "none"));
+        assert_eq!(told, Decision::ask(DecisionReason::Default));
+        assert_eq!(told.over_the_wire(), told);
         assert_eq!(
-            refused(admit(&a, &b_id, "message", "none")),
-            Decision::deny(DecisionReason::OwnerDenied)
+            serde_json::to_value(&told).unwrap(),
+            serde_json::json!({"verdict": "ask", "reason": "default"})
         );
         assert_eq!(
             receipts(&a)[0].decision,
             Decision::deny(DecisionReason::OwnerDenied)
         );
         assert_eq!(receipts(&a)[0].side, ReceiptSide::Answering);
+        assert_eq!(receipts(&a)[0].at, T0 + 120);
         assert_eq!(approvals(&a), vec![denied]);
         // Once the request would have lapsed the peer may ask again.
         network.set(T0 + PENDING_APPROVAL_TTL_SECS);
@@ -2799,6 +2862,208 @@ mod tests {
         ));
     }
 
+    /// B's owner redeems a fresh invite from A with the same key and no
+    /// revocation in between, and A's owner confirms again: B's record now
+    /// names another pairing.
+    async fn started_over(a: &Node, b: &Node) -> String {
+        let invite = a.federation.create_invite(ORIGIN_A).unwrap();
+        b.federation
+            .accept_invite(accept_for(&invite), ORIGIN_B)
+            .await
+            .unwrap();
+        a.federation.confirm_peer(&b.id()).await.unwrap();
+        a.pairing_with(&b.id())
+    }
+
+    fn queue_file(node: &Node) -> Vec<PendingApproval> {
+        let text =
+            std::fs::read_to_string(node.root.join("federation").join("approvals.json")).unwrap();
+        serde_json::from_value(
+            serde_json::from_str::<serde_json::Value>(&text).unwrap()["approvals"].take(),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_companion_that_starts_over_leaves_no_entry_from_its_earlier_pairing() {
+        let mut network = Network::new();
+        let (a, b) = paired(&mut network).await;
+        let b_id = b.id();
+        let earlier = a.pairing_with(&b_id);
+        refused(admit(&a, &b_id, "message", "none"));
+        refused(admit(&a, &b_id, "availability", "availability"));
+        let stale: Vec<PendingApproval> = approvals(&a);
+        assert_eq!(stale.len(), 2);
+        let (pending, approved) = (stale[0].id.clone(), stale[1].id.clone());
+        a.gate
+            .approve(&a.federation, &approved, ApprovalScope::Once)
+            .unwrap();
+
+        network.set(T0 + 60);
+        let current = started_over(&a, &b).await;
+        assert_ne!(current, earlier);
+        assert_eq!(a.peer(&b_id).state, PeerState::Paired);
+
+        // What the earlier pairing asked is decided by nobody: the entries
+        // are still in the file, and refused before the listing is looked
+        // at, so a decision racing a re-pair cannot land on them.
+        assert_eq!(queue_file(&a).len(), 2);
+        for id in [&pending, &approved] {
+            assert!(matches!(
+                a.gate.approve(&a.federation, id, ApprovalScope::Once),
+                Err(FederationError::UnknownApproval)
+            ));
+            assert!(matches!(
+                a.gate.deny(&a.federation, id, ApprovalScope::Class),
+                Err(FederationError::UnknownApproval)
+            ));
+            assert!(matches!(
+                a.gate.withdraw_approval(&a.federation, id),
+                Err(FederationError::UnknownApproval)
+            ));
+        }
+        assert_eq!(
+            receipts(&a)
+                .iter()
+                .filter(|r| r.side == ReceiptSide::Owner)
+                .count(),
+            1,
+            "a refused decision writes nothing"
+        );
+        // The owner's listing drops them, from the file too.
+        assert!(approvals(&a).is_empty());
+        assert!(queue_file(&a).is_empty());
+
+        // The approval once under the earlier pairing admits nothing now:
+        // the companion asks afresh, under its current pairing.
+        assert_eq!(
+            refused(admit(&a, &b_id, "message", "none")),
+            Decision::ask(DecisionReason::Default)
+        );
+        let fresh = approvals(&a);
+        assert_eq!(fresh.len(), 1, "{fresh:?}");
+        assert_eq!(fresh[0].pairing_id, current);
+        assert_eq!(fresh[0].requester, b_id);
+        assert_eq!(fresh[0].status, ApprovalStatus::Pending);
+        assert_ne!(fresh[0].id, approved);
+        assert_ne!(fresh[0].id, pending);
+        // Approving that one admits the peer as usual.
+        a.gate
+            .approve(&a.federation, &fresh[0].id, ApprovalScope::Once)
+            .unwrap();
+        assert_eq!(
+            admit(&a, &b_id, "message", "none").unwrap(),
+            Decision::allow(DecisionReason::OwnerApproved)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_ask_under_a_new_pairing_replaces_the_earlier_pairings_entries_without_a_listing() {
+        let mut network = Network::new();
+        let (a, b) = paired(&mut network).await;
+        let b_id = b.id();
+        refused(admit(&a, &b_id, "message", "none"));
+        refused(admit(&a, &b_id, "availability", "availability"));
+        let approved = approvals(&a)[1].id.clone();
+        a.gate
+            .approve(&a.federation, &approved, ApprovalScope::Once)
+            .unwrap();
+        let current = started_over(&a, &b).await;
+        // Nobody listed the queue since: the gate alone must not admit the
+        // companion on the earlier pairing's approval.
+        assert_eq!(
+            refused(admit(&a, &b_id, "message", "none")),
+            Decision::ask(DecisionReason::Default)
+        );
+        let file = queue_file(&a);
+        assert_eq!(file.len(), 1, "{file:?}");
+        assert_eq!(file[0].pairing_id, current);
+        assert_eq!(file[0].intent, IntentClass::Message);
+    }
+
+    #[tokio::test]
+    async fn revoking_a_peer_that_started_over_drops_the_entries_of_its_earlier_pairing_too() {
+        let mut network = Network::new();
+        let (a, b) = paired(&mut network).await;
+        let b_id = b.id();
+        refused(admit(&a, &b_id, "message", "none"));
+        started_over(&a, &b).await;
+        // A third companion's request stays.
+        let c = network.server(ORIGIN_C);
+        let invite = a.federation.create_invite(ORIGIN_A).unwrap();
+        c.federation
+            .accept_invite(accept_for(&invite), ORIGIN_C)
+            .await
+            .unwrap();
+        a.federation.confirm_peer(&c.id()).await.unwrap();
+        refused(admit(&a, &c.id(), "message", "none"));
+        assert_eq!(queue_file(&a).len(), 2);
+
+        a.federation.revoke_peer(&b_id).await.unwrap();
+        a.gate
+            .forget_peer(&a.federation, &b_id, ReceiptSide::Owner)
+            .unwrap();
+        let left = queue_file(&a);
+        assert_eq!(left.len(), 1, "{left:?}");
+        assert_eq!(left[0].requester, c.id());
+        assert_eq!(approvals(&a).len(), 1);
+        assert_eq!(
+            refused(admit(&a, &b_id, "message", "none")),
+            Decision::deny(DecisionReason::PeerRevoked)
+        );
+        assert_eq!(queue_file(&a).len(), 1, "a revoked peer is not queued");
+    }
+
+    #[tokio::test]
+    async fn a_peers_retries_cannot_push_the_owners_decisions_out_of_the_log() {
+        use crate::services::federation::audit::MAX_RECEIPTS_PER_PEER;
+        let mut network = Network::new();
+        let (a, b) = paired(&mut network).await;
+        let b_id = b.id();
+        refused(admit(&a, &b_id, "message", "none"));
+        let id = approvals(&a)[0].id.clone();
+        network.set(T0 + 1);
+        a.gate
+            .deny(&a.federation, &id, ApprovalScope::Once)
+            .unwrap();
+        a.gate
+            .set_rule(
+                &a.federation,
+                &b_id,
+                rule(
+                    IntentClass::Availability,
+                    DisclosureClass::Availability,
+                    Access::Allow,
+                    None,
+                ),
+            )
+            .unwrap();
+        // The peer retries under its rate limit for long enough to fill
+        // its own bucket several times over.
+        for i in 0..(MAX_RECEIPTS_PER_PEER as u64 + 50) {
+            network.set(T0 + 2 + i * 2);
+            refused(admit(&a, &b_id, "message", "none"));
+        }
+        let all = receipts(&a);
+        let owner: Vec<&AuditReceipt> = all
+            .iter()
+            .filter(|r| r.side == ReceiptSide::Owner)
+            .collect();
+        assert_eq!(owner.len(), 2, "{owner:?}");
+        assert_eq!(owner[0].decision, Decision::allow(DecisionReason::Rule));
+        assert_eq!(
+            owner[1].decision,
+            Decision::deny(DecisionReason::OwnerDenied)
+        );
+        assert_eq!(
+            all.iter()
+                .filter(|r| r.side == ReceiptSide::Answering)
+                .count(),
+            MAX_RECEIPTS_PER_PEER,
+            "the peer's own trail is bounded as before"
+        );
+    }
+
     #[tokio::test]
     async fn a_rotation_moves_pending_approvals_to_the_new_id() {
         let mut network = Network::new();
@@ -2886,7 +3151,7 @@ mod tests {
             "a ping never consults the queue"
         );
         assert!(matches!(
-            a.gate.approvals(),
+            a.gate.approvals(&a.federation),
             Err(FederationError::Io { .. })
         ));
         // A rotation is refused rather than applied without the queue.

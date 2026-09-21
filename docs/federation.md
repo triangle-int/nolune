@@ -121,19 +121,24 @@ would land in front of the owner is deferred, and the peer is told only
 that, never when the quiet hours end.
 
 When the answer is `ask`, the request lands in the owner's queue and the
-peer is told `approval_required`, the same way on every retry: nothing
-about whether the owner has looked, decided, or when, crosses the wire
-until the intent is allowed. Under Settings → Connections → Companions the
-owner sees "wants to send you a message" with when it asked and when it
-lapses (a day), picks one bounded scope, and allows or denies it: **once**
-(the next matching request goes through and uses the approval up; unused,
-it lapses after an hour; a denial once holds until the request would have
-lapsed, without asking again), **until** a deadline (a day, a week), or
-for that **kind of request** for good (both as a rule). Under each paired
-row, what the peer may do is listed one line per intent and class with
-the rule it is under, and a select writes or revokes one rule at a time;
-the very next request is judged by it. Revoking a peer, by this owner or
-by the peer's own notice, drops every rule and pending request it had.
+peer is told `approval_required`, the same way on every retry, whether the
+owner has not looked yet or has denied it once: nothing about whether the
+owner has looked, decided, or when, crosses the wire until the intent is
+allowed. Under Settings → Connections → Companions the owner sees "wants
+to send you a message" with when it asked and when it lapses (a day),
+picks one bounded scope, and allows or denies it: **once** (the next
+matching request goes through and uses the approval up; unused, it lapses
+after an hour; a denial once holds until the request would have lapsed,
+without asking again, and shows only in this owner's receipts), **until**
+a deadline (a day, a week), or for that **kind of request** for good (both
+as a rule). Under each paired row, what the peer may do is listed one line
+per intent and class with the rule it is under, and a select writes or
+revokes one rule at a time; the very next request is judged by it.
+Revoking a peer, by this owner or by the peer's own notice, drops every
+rule and pending request it had, under every pairing and id it has had. A
+request belongs to the pairing it was made under: a companion that starts
+over with a fresh invite asks afresh, and whatever its earlier pairing
+asked or was granted admits nothing.
 
 Every decision leaves a human-readable audit receipt on both sides: the
 answering companion records what it was asked and what it decided, the
@@ -141,7 +146,10 @@ requesting companion what it asked and what came back, and the owner's own
 approvals, denials, rule changes, and revocations are recorded too. A
 receipt names the companion ids, the intent and class, the verdict and
 reason, and the time; it never contains what the peer sent. Receipts are
-kept bounded (the newest thousand, two hundred per pairing, thirty days)
+kept bounded (the newest thousand, two hundred per pairing for the peer's
+traffic and two hundred more for the owner's own decisions about it, so a
+peer's retries never push out the record of what the owner decided, thirty
+days)
 and are listed by `GET /api/federation/receipts`. Peer text, when the
 structured intents carry some, is data and never instructions: it can only
 reach the model inside a delimited block that names it as untrusted

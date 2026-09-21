@@ -681,8 +681,10 @@ pub enum ApprovalStatus {
     Pending,
     /// Approved once: the next matching intent is allowed and consumes it.
     Approved,
-    /// Denied once: matching intents are denied until it lapses, and the
-    /// peer is not queued again meanwhile.
+    /// Denied once: matching intents are refused until it lapses (recorded
+    /// `owner_denied` on the answering side, while the peer is still told
+    /// `approval_required` as before), and the peer is not queued again
+    /// meanwhile.
     Denied,
 }
 

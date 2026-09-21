@@ -53,7 +53,9 @@ Connections is where they answer:
   For a day, For a week, or Always for this kind of request, and **Allow**
   or **Deny** applies it: once as a decision on that request, otherwise as
   a rule for the companion. A denial once holds until the request would
-  have lapsed, so the companion is not queued again meanwhile. Decisions
+  have lapsed, so the companion is not queued again meanwhile; it keeps
+  hearing that approval is required, exactly as before you looked, so it
+  learns neither that you decided nor when. Decisions
   still standing (Allowed once, Denied) are listed beneath with Withdraw.
   Nothing a companion sent is shown or kept: the queue holds the request
   kind and the class, never a text.
