@@ -40,6 +40,7 @@ import type {
 	FederationApprovalOutcome,
 	FederationApprovalScope,
 	FederationInbox,
+	FederationOutbox,
 	FederationOverview,
 	FederationPeer,
 	FederationPeerPolicy,
@@ -58,6 +59,8 @@ export type {
 	FederationInbox,
 	FederationInboundIntent,
 	FederationIntentReceipt,
+	FederationOutbox,
+	FederationOutboxEntry,
 	FederationPeerPolicy,
 	FederationPolicyView,
 	FederationRuleRequest,
@@ -1527,6 +1530,12 @@ export function revokeFederationRule(companionId: string, intent: string, disclo
 
 export function fetchFederationInbox(): Promise<FederationInbox> {
 	return federationJson("/api/federation/inbox");
+}
+
+// Outbound intents (#110): what this companion queued for peers, where each stands, and the receipts.
+
+export function fetchFederationOutbox(): Promise<FederationOutbox> {
+	return federationJson("/api/federation/outbox");
 }
 
 // ---------------------------------------------------------------------------

@@ -579,6 +579,12 @@ export type ServerEvent =
 			commitment: Commitment;
 	  }
 	| {
+			/** A request sent to a paired companion was queued or changed (#110): the outbox entry. */
+			type: "outbox_updated";
+			instance_slug: string;
+			entry: FederationOutboxEntry;
+	  }
+	| {
 			type: "machine_updated";
 			instance_slug: string;
 			machine: MachineInfo;
@@ -919,5 +925,63 @@ export interface FederationIntentReceipt {
 /** `GET /api/federation/inbox`: live records and kept receipts, newest first. */
 export interface FederationInbox {
 	intents: FederationInboundIntent[];
+	receipts: FederationIntentReceipt[];
+}
+
+// Outbound federation intents (#110)
+
+export type FederationOutboxStatus = "queued" | "waiting_owner" | "delivered" | "denied" | "failed" | "expired";
+
+/** How one delivery attempt ended. */
+export type FederationOutboxAttemptOutcome =
+	| { kind: "in_flight" }
+	| { kind: "interrupted" }
+	| { kind: "unreachable" }
+	| { kind: "refused"; code: string }
+	| { kind: "malformed" }
+	| { kind: "answered"; outcome: "accepted" | "denied" | "needs_owner"; reason?: string };
+
+export interface FederationOutboxAttempt {
+	at: number;
+	outcome: FederationOutboxAttemptOutcome;
+}
+
+/** The intent this companion sent, as the wire carries it: this owner's own words. */
+export interface FederationOutboundIntent {
+	version: number;
+	correlation_id: string;
+	sender: string;
+	represented_owner: string;
+	purpose: string;
+	disclosure: string;
+	issued_at: number;
+	expires_at: number;
+	intent: { type: string; body?: string; text?: string; at?: number; description?: string; window?: { from: number; to: number } };
+}
+
+/**
+ * One request this companion queued for a paired companion, as
+ * `GET /api/federation/outbox` lists it and `outbox_updated` carries it:
+ * the intent, where it stands, every attempt, and the peer's typed
+ * response. Nothing else the peer said.
+ */
+export interface FederationOutboxEntry {
+	version: number;
+	recipient: string;
+	pairing_id: string;
+	intent: FederationOutboundIntent;
+	status: FederationOutboxStatus;
+	attempts: FederationOutboxAttempt[];
+	next_attempt_at?: number;
+	response?: FederationIntentResponse;
+	receipt_id?: string;
+	chat_id: string;
+	created_at: number;
+	updated_at: number;
+}
+
+/** `GET /api/federation/outbox`: entries and kept receipts, newest first. */
+export interface FederationOutbox {
+	entries: FederationOutboxEntry[];
 	receipts: FederationIntentReceipt[];
 }

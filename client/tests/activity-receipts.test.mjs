@@ -110,10 +110,10 @@ const outboxBase = {
 };
 
 test('outbox rows name the request kind and the companion, never its words', () => {
-	assert.equal(outboxLabel(outboxBase), 'Message to companion TFccHElq…Q7E');
-	assert.equal(outboxLabel({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'availability', window: { from: 2000, to: 9200 } } } }), 'Availability asked of companion TFccHElq…Q7E');
-	assert.equal(outboxLabel({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'reminder', text: 'water the plants', at: 5000 } } }), 'Reminder proposed to companion TFccHElq…Q7E');
-	assert.equal(outboxLabel({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'proposal', description: 'x', window: { from: 1, to: 2 } } } }), 'Request to companion TFccHElq…Q7E');
+	assert.equal(outboxLabel(outboxBase), 'Message to companion TFccHElq…cQ7E');
+	assert.equal(outboxLabel({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'availability', window: { from: 2000, to: 9200 } } } }), 'Availability asked of companion TFccHElq…cQ7E');
+	assert.equal(outboxLabel({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'reminder', text: 'water the plants', at: 5000 } } }), 'Reminder proposed to companion TFccHElq…cQ7E');
+	assert.equal(outboxLabel({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'proposal', description: 'x', window: { from: 1, to: 2 } } } }), 'Request to companion TFccHElq…cQ7E');
 	assert.equal(outboxText(outboxBase), 'see you on Friday at the lake');
 	assert.equal(outboxText({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'reminder', text: 'water the plants', at: 5000 } } }), 'water the plants');
 	const window = outboxText({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'availability', window: { from: 1_800_090_000, to: 1_800_097_200 } } } });
@@ -159,7 +159,7 @@ test('outbox notes say what happened, how often it was tried, and what comes nex
 	assert.equal(outboxNote({ ...denied, response: { ...denied.response, reason: 'default' } }, 1300), 'Refused by their defaults · 5m ago.');
 	assert.equal(outboxNote({ ...denied, response: { ...denied.response, reason: 'owner_denied' } }, 1300), 'Refused by their owner · 5m ago.');
 	assert.equal(outboxNote({ ...denied, response: { ...denied.response, reason: 'peer_revoked' } }, 1300), 'Refused (peer_revoked) · 5m ago.');
-	const failed = { ...outboxBase, status: 'failed', attempts: Array.from({ length: 8 }, (_, i) => ({ at: 1000 + i, outcome: { kind: 'unreachable' } })), updated_at: 1007 };
+	const failed = { ...outboxBase, status: 'failed', attempts: Array.from({ length: 8 }, (_, i) => ({ at: 900 + i, outcome: { kind: 'unreachable' } })), updated_at: 1000 };
 	assert.equal(outboxNote(failed, 1300), 'Could not reach it after 8 attempts; nothing was delivered · 5m ago.');
 	const refusedForGood = { ...failed, attempts: [{ at: 1000, outcome: { kind: 'refused', code: 'sender_mismatch' } }], updated_at: 1000 };
 	assert.equal(outboxNote(refusedForGood, 1300), 'Their companion refused it (sender_mismatch); nothing was delivered · 5m ago.');
