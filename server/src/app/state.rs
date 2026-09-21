@@ -67,6 +67,8 @@ pub struct AppState {
     pub federation: Arc<crate::services::federation::pairing::FederationState>,
     /// Federation policy and audit (#109): every verified envelope is judged and recorded here.
     pub federation_gate: Arc<crate::services::federation::gate::FederationGate>,
+    /// Inbound structured intents (#110): the dedupe store and the receipts of what peers asked.
+    pub federation_inbox: Arc<crate::services::federation::inbound::InboundStore>,
     /// The server-local computer-use target (#16): idle until the gateway calls `start`,
     /// so building a state never spawns a driver.
     pub cua: crate::services::cua::runtime::CuaRuntime,
@@ -110,6 +112,8 @@ impl AppState {
             &workspace_dir,
             http_client.clone(),
         );
+        let federation_inbox =
+            crate::services::federation::inbound::InboundStore::new(&workspace_dir);
 
         // Open the local derived vector index.
         let vector_store = VectorStore::connect_with_config(&workspace_dir, &config).await;
@@ -154,6 +158,7 @@ impl AppState {
             browser_sessions: Arc::new(BrowserSessionStore::new()),
             federation: Arc::new(federation),
             federation_gate: Arc::new(federation_gate),
+            federation_inbox: Arc::new(federation_inbox),
             cua,
             codex_auth: crate::services::llm::codex::Runtime::shared()
                 .auth()

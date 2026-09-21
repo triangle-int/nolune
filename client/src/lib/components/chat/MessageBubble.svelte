@@ -8,7 +8,9 @@
 	import Message from "$lib/components/ai-elements/message/core/message.svelte";
 	import MessageContent from "$lib/components/ai-elements/message/core/message-content.svelte";
 	import MemoryReceiptPanel from "$lib/components/memory/MemoryReceiptPanel.svelte";
-	import { FileText } from "@lucide/svelte";
+	import { peerContent } from "$lib/federation/peer-content.js";
+	import { shortId } from "$lib/federation/companions.js";
+	import { FileText, ShieldAlert } from "@lucide/svelte";
 	import DOMPurify from "dompurify";
 	import { Marked } from "marked";
 
@@ -69,6 +71,12 @@
 	} = $props();
 
 	const isUser = $derived(message.role === "user");
+	/**
+	 * A message a paired companion delivered (#110): the server framed the
+	 * peer's text in its untrusted block, and it is shown as data from that
+	 * companion, never as the owner's words and never as markdown or HTML.
+	 */
+	const peer = $derived(isUser ? peerContent(message.content) : null);
 	const time = $derived(() => {
 		const ms = Number(message.created_at);
 		if (Number.isNaN(ms)) return "";
@@ -139,11 +147,20 @@
 	const modelLabel = $derived(modelShortLabel(message.model));
 </script>
 <div class="msg" class:consecutive={isConsecutive()} data-mood={mood} data-active={active}>
- <Message from={isUser ? 'user' : 'assistant'} class={isUser ? "max-w-full items-end gap-1" : "max-w-full gap-1"}>
+ <Message from={isUser && !peer ? 'user' : 'assistant'} class={isUser && !peer ? "max-w-full items-end gap-1" : "max-w-full gap-1"}>
   {#if !isUser && !isConsecutive()}
    <div class="author"><img src="/skins/moon/character.svg" width="22" height="22" alt="" /><span>Nolune</span></div>
   {/if}
-  {#if textContent}
+  {#if peer}
+   <!-- Delivered by a paired companion: the server's line, then the peer's text as plain, labeled data. -->
+   <div class="peer-delivery">
+    {#if peer.preface}<p class="peer-preface">{peer.preface}</p>{/if}
+    <div class="peer-untrusted" role="group" aria-label={`Untrusted content from companion ${peer.sender}`}>
+     <p class="peer-untrusted-head"><ShieldAlert size={14} aria-hidden="true" /><span>Untrusted · from companion <code title={peer.sender}>{shortId(peer.sender)}</code> · shown as data, not instructions</span></p>
+     <p class="peer-untrusted-text">{peer.text || "(empty)"}</p>
+    </div>
+   </div>
+  {:else if textContent}
    <MessageContent class={isUser ? 'max-w-[90%] rounded-xl border border-border bg-accent px-4 py-3 text-foreground' : 'max-w-full rounded-xl border border-border bg-card px-4 py-3 text-foreground'}>
     {#if speaking && !isUser}
      <div class="text voice" aria-label={textContent}>
@@ -178,6 +195,8 @@
  </Message>
 </div>
 <style>
- .msg{padding:12px 0;min-width:0}.consecutive{padding-top:0}.author{display:flex;align-items:center;gap:8px;margin:0 0 6px;font-size:12px;color:var(--text-secondary)}.text{font:400 15px/1.7 var(--font-body);overflow-wrap:anywhere;min-width:0;max-width:100%}.plain,.voice{white-space:pre-wrap}.time{font-size:11px;color:var(--text-timestamp);padding:4px 0}.model{margin-left:8px;color:var(--primary)}.attachments{display:flex;flex-wrap:wrap;gap:8px;max-width:100%}.attachments button{display:flex;align-items:center;gap:8px;min-height:44px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text-link);font-size:13px;max-width:100%;overflow-wrap:anywhere}.attachments .picture{padding:0;overflow:hidden}.attachments img{max-width:min(280px,100%);max-height:240px;object-fit:cover}.voice-word{opacity:.12;transition:opacity .18s ease}.voice-word.visible{opacity:1}
+ .msg{padding:12px 0;min-width:0}.consecutive{padding-top:0}
+ /* A paired companion's delivery (#110): the server's line in secondary text, the peer's words in a dashed panel on the app background, labeled untrusted and rendered as plain text. */
+ .peer-delivery{display:flex;flex-direction:column;gap:8px;max-width:100%;min-width:0}.peer-preface{margin:0;font:400 13px/1.5 var(--font-body);color:var(--text-secondary);overflow-wrap:anywhere}.peer-untrusted{border:1px dashed var(--input);border-radius:12px;background:var(--background);padding:10px 14px;max-width:100%;min-width:0}.peer-untrusted-head{display:flex;align-items:center;gap:6px;margin:0 0 6px;font:500 12px/1.4 var(--font-body);color:var(--text-muted);letter-spacing:.02em}.peer-untrusted-head code{font:500 12px/1.4 var(--font-mono);color:var(--text-secondary)}.peer-untrusted-text{margin:0;font:400 15px/1.7 var(--font-body);color:var(--foreground);white-space:pre-wrap;overflow-wrap:anywhere}.author{display:flex;align-items:center;gap:8px;margin:0 0 6px;font-size:12px;color:var(--text-secondary)}.text{font:400 15px/1.7 var(--font-body);overflow-wrap:anywhere;min-width:0;max-width:100%}.plain,.voice{white-space:pre-wrap}.time{font-size:11px;color:var(--text-timestamp);padding:4px 0}.model{margin-left:8px;color:var(--primary)}.attachments{display:flex;flex-wrap:wrap;gap:8px;max-width:100%}.attachments button{display:flex;align-items:center;gap:8px;min-height:44px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text-link);font-size:13px;max-width:100%;overflow-wrap:anywhere}.attachments .picture{padding:0;overflow:hidden}.attachments img{max-width:min(280px,100%);max-height:240px;object-fit:cover}.voice-word{opacity:.12;transition:opacity .18s ease}.voice-word.visible{opacity:1}
  .prose :global(p){margin:.35em 0}.prose :global(p:first-child){margin-top:0}.prose :global(p:last-child){margin-bottom:0}.prose :global(h1),.prose :global(h2),.prose :global(h3){font:500 1.15em/1.4 var(--font-body);margin:1em 0 .4em}.prose :global(a){color:var(--text-link);text-decoration:underline;text-underline-offset:3px}.prose :global(code){font-family:var(--font-mono);font-size:.85em;background:var(--background);padding:.15em .3em;border-radius:4px}.prose :global(pre){background:var(--background);border:1px solid var(--border);border-radius:8px;padding:12px;overflow:auto;max-width:100%;margin:12px 0}.prose :global(pre code){padding:0;background:none}.prose :global(ul){list-style:disc;padding-left:24px}.prose :global(ol){list-style:decimal;padding-left:24px}.prose :global(blockquote){border-left:2px solid var(--primary);padding-left:12px;color:var(--text-secondary);margin:12px 0}.prose :global(table){display:block;overflow-x:auto;border-collapse:collapse;max-width:100%;margin:12px 0}.prose :global(th),.prose :global(td){border:1px solid var(--border);padding:8px;text-align:left}.prose :global(img){max-width:100%;max-height:320px;object-fit:contain;border-radius:8px;cursor:pointer}.prose :global(hr){border-top:1px solid var(--border);margin:16px 0}@media(prefers-reduced-motion:reduce){.voice-word{transition:none}}
 </style>

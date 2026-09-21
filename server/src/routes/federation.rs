@@ -28,6 +28,9 @@
 //!   every rule and pending approval it had. Every owner decision is an
 //!   audit receipt. Paths name a companion id or an entry id and nothing
 //!   else; everything the owner chooses travels in a body.
+//! * `GET /api/federation/inbox` lists the structured intents peers
+//!   delivered (#110) and the receipts they left: who asked for what on
+//!   whose behalf, what it was answered, never the payload.
 //!
 //! Peer side, public, verified by signature only. Every verified envelope
 //! is judged by the owner's policy and recorded before it is dispatched
@@ -42,6 +45,14 @@
 //!   peer and answers with one (#108, PR 3).
 //! * `POST /federation/v1/rotate` takes a key rotation notice signed by the
 //!   retiring key and answers with an ack for the new identity.
+//! * `POST /federation/v1/intent` takes a transport envelope whose body is
+//!   a structured intent (#110) and answers with one whose body is the
+//!   typed response: `accepted`, `denied`, or `needs_owner`, sealed for the
+//!   sender. A redelivery of a settled request gets the same response. An
+//!   intent that could not be judged (expired, malformed, for someone
+//!   else) is a typed refusal with no envelope: `403 intent_expired`,
+//!   `403 intent_issued_in_future`, `400 unknown_intent_type`,
+//!   `413 payload_too_large`, `400 invalid_intent`.
 //!
 //! Every body is JSON and read whole under a size cap; nothing is taken from
 //! the query string, and parse failures never echo the body. There is no
@@ -63,16 +74,22 @@ use crate::{
     app::state::AppState,
     domain::{
         federation::{AcceptInvite, FederationError, SignedEnvelope, TransportEnvelope},
+        federation_intent::IntentError,
         federation_policy::{
             ApprovalScope, Decision, DecisionReason, DisclosureClass, IntentClass, ReceiptSide,
             RuleRequest, Verdict,
         },
     },
-    services::federation::{
-        envelope, identity, invite_token,
-        pairing::{
-            CONFIRM_PATH, MAX_ENVELOPE_BYTES, PAIR_PATH, PING_PATH, REVOKE_PATH, ROTATE_PATH,
+    services::{
+        federation::{
+            envelope, identity,
+            inbound::{self, INTENT_PATH},
+            invite_token,
+            pairing::{
+                CONFIRM_PATH, MAX_ENVELOPE_BYTES, PAIR_PATH, PING_PATH, REVOKE_PATH, ROTATE_PATH,
+            },
         },
+        peer_delivery,
     },
 };
 
@@ -131,6 +148,7 @@ pub fn router() -> Router<AppState> {
             "/api/federation/peers/{companion_id}/rules/revoke",
             post(revoke_rule),
         )
+        .route("/api/federation/inbox", get(list_inbox))
 }
 
 /// Mounted outside the auth middleware: a peer has no owner credential and
@@ -142,6 +160,7 @@ pub fn public_router() -> Router<AppState> {
         .route(REVOKE_PATH, post(revoke_notice))
         .route(PING_PATH, post(ping))
         .route(ROTATE_PATH, post(rotation_notice))
+        .route(INTENT_PATH, post(intent))
 }
 
 /// Refusals as typed JSON. The message is the error's own text, which never
@@ -222,6 +241,21 @@ impl IntoResponse for ApiError {
             FederationError::UnknownPeer => (StatusCode::NOT_FOUND, "unknown_peer"),
             FederationError::UnknownApproval => (StatusCode::NOT_FOUND, "unknown_approval"),
             FederationError::UnknownRule => (StatusCode::NOT_FOUND, "unknown_rule"),
+            // An intent that could not be judged: the fault is typed, and
+            // the message is the decoder's, which never quotes the wire.
+            FederationError::Intent(error) => match error {
+                IntentError::Expired { .. } => (StatusCode::FORBIDDEN, "intent_expired"),
+                IntentError::IssuedInFuture { .. } => {
+                    (StatusCode::FORBIDDEN, "intent_issued_in_future")
+                }
+                IntentError::UnknownIntentType { .. } => {
+                    (StatusCode::BAD_REQUEST, "unknown_intent_type")
+                }
+                IntentError::TooLarge { .. } => {
+                    (StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large")
+                }
+                _ => (StatusCode::BAD_REQUEST, "invalid_intent"),
+            },
             FederationError::PeerNotPaired { .. } => (StatusCode::CONFLICT, "peer_not_paired"),
             FederationError::Transport(_) => (StatusCode::BAD_GATEWAY, "peer_unreachable"),
             FederationError::PeerRefused { .. } => (StatusCode::BAD_GATEWAY, "peer_refused"),
@@ -407,6 +441,12 @@ async fn ping_peer(
     Ok(Json(json!({ "decision": decision })).into_response())
 }
 
+/// Every structured intent peers delivered and every receipt kept, newest
+/// first (#110).
+async fn list_inbox(State(state): State<AppState>) -> Result<Response, ApiError> {
+    Ok(Json(state.federation_inbox.view()?).into_response())
+}
+
 async fn list_approvals(State(state): State<AppState>) -> Result<Response, ApiError> {
     Ok(
         Json(json!({ "approvals": state.federation_gate.approvals(&state.federation)? }))
@@ -519,6 +559,22 @@ async fn rotation_notice(
         .federation_gate
         .receive_rotation(&state.federation, &envelope)?;
     Ok(Json(ack).into_response())
+}
+
+/// A structured intent (#110): opened, decoded, deduplicated, judged by
+/// the policy gate, and answered with a sealed typed response in
+/// `inbound::receive_intent`; an allowed one is delivered into the owner's
+/// conversation by `peer_delivery::deliver`.
+async fn intent(State(state): State<AppState>, request: Request) -> Result<Response, ApiError> {
+    let envelope = parse_transport(&read_body(request).await?)?;
+    let answer = inbound::receive_intent(
+        &state.federation,
+        &state.federation_gate,
+        &state.federation_inbox,
+        &envelope,
+        |intent, now| peer_delivery::deliver(&state, intent, now),
+    )?;
+    Ok(Json(answer).into_response())
 }
 
 #[cfg(test)]

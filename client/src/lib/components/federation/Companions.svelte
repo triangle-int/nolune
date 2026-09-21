@@ -9,7 +9,8 @@
 	// Requests that asked the owner (#109) sit above the rows with Allow and
 	// Deny within one bounded scope, and each paired row folds out what the
 	// peer may do, one rule per pair, from GET /api/federation/policy and
-	// GET /api/federation/approvals.
+	// GET /api/federation/approvals. The inbox (#110) under them lists what
+	// companions delivered, from GET /api/federation/inbox.
 	import {
 		acceptFederationInvite,
 		approveFederationRequest,
@@ -19,6 +20,7 @@
 		denyFederationRequest,
 		fetchFederation,
 		fetchFederationApprovals,
+		fetchFederationInbox,
 		fetchFederationPolicy,
 		revokeFederationPeer,
 		revokeFederationRule,
@@ -26,6 +28,7 @@
 		setFederationRule,
 		withdrawFederationApproval,
 		type FederationApproval,
+		type FederationInboundIntent,
 		type FederationOverview,
 		type FederationPolicyView,
 	} from "$lib/api/client.js";
@@ -40,7 +43,9 @@
 		type InviteHandoff,
 	} from "$lib/federation/companions.js";
 	import { capabilityRows, decidedApprovals, pendingApprovals, scopeBody, type CapabilityRow } from "$lib/federation/policy.js";
+	import { inboxView } from "$lib/federation/inbox.js";
 	import CompanionRow from "./CompanionRow.svelte";
+	import InboundIntents from "./InboundIntents.svelte";
 	import PeerCapabilities from "./PeerCapabilities.svelte";
 	import PendingApprovals from "./PendingApprovals.svelte";
 
@@ -49,6 +54,7 @@
 	let overview = $state<FederationOverview | null>(null);
 	let policy = $state<FederationPolicyView | null>(null);
 	let approvals = $state<FederationApproval[]>([]);
+	let inbound = $state<FederationInboundIntent[]>([]);
 	let policyError = $state("");
 	let loading = $state(true);
 	let loadError = $state("");
@@ -80,6 +86,7 @@
 	const view = $derived(overview ? overviewView(overview, now) : null);
 	const pending = $derived(pendingApprovals(approvals, now));
 	const decided = $derived(decidedApprovals(approvals, now));
+	const inboxRows = $derived(inboxView(inbound, now, approvals));
 	function rowsFor(peerId: string): CapabilityRow[] {
 		return policy ? capabilityRows(policy.defaults, policy.document.peers[peerId], now) : [];
 	}
@@ -102,12 +109,13 @@
 		await loadPolicy();
 	}
 
-	/** The rules and the queue, beside the listing; a failure here keeps the rows. */
+	/** The rules, the queue, and the inbox, beside the listing; a failure here keeps the rows. */
 	async function loadPolicy() {
 		try {
-			const [nextPolicy, queue] = await Promise.all([fetchFederationPolicy(), fetchFederationApprovals()]);
+			const [nextPolicy, queue, inbox] = await Promise.all([fetchFederationPolicy(), fetchFederationApprovals(), fetchFederationInbox()]);
 			policy = nextPolicy;
 			approvals = queue.approvals ?? [];
+			inbound = inbox.intents ?? [];
 			policyError = "";
 		} catch {
 			policyError = "Could not load what companions may do; the rows show the pairing only.";
@@ -262,6 +270,10 @@
 		<p class="setting-hint">A paired companion may only check that it can reach this one. Anything else asks you first, here; allow it once, for a while, or for that kind of request, or deny it. Nothing it sent is shown or kept.</p>
 	{/if}
 	<PendingApprovals {pending} {decided} onapprove={approveRequest} ondeny={denyRequest} onwithdraw={withdrawRequest} />
+	{#if inboxRows.length > 0}
+		<p class="setting-hint">What companions delivered, and who they said they speak for. A delivered message is in your conversation, marked as theirs and untrusted; the quoted words are theirs too.</p>
+	{/if}
+	<InboundIntents rows={inboxRows} />
 	{#if policyError}<p class="key-error" role="alert">{policyError}</p>{/if}
 
 	{#if view.peers.length === 0}

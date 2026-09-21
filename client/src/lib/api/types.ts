@@ -854,3 +854,70 @@ export interface FederationRuleRequest {
 	access: FederationAccess;
 	expires_at?: number;
 }
+
+// Inbound federation intents (#110)
+
+export type FederationInboundStatus = "pending" | "accepted" | "denied";
+
+/** The typed answer a peer was given, as the server sealed it. */
+export type FederationIntentResponse =
+	| { outcome: "accepted"; version: number; correlation_id: string; responder: string; disclosure: string; answer: { kind: string; at?: number; windows?: { from: number; to: number; state: string }[] } }
+	| { outcome: "denied"; version: number; correlation_id: string; responder: string; reason: string; retry_after_secs?: number }
+	| { outcome: "needs_owner"; version: number; correlation_id: string; responder: string; reason: string };
+
+/**
+ * One request a paired companion delivered, as `GET /api/federation/inbox`
+ * lists it: who asked for what at which class, on whose behalf and to what
+ * end (the peer's own words), what it was answered, and what it led to.
+ * Never what the peer sent.
+ */
+export interface FederationInboundIntent {
+	version: number;
+	sender: string;
+	correlation_id: string;
+	pairing_id: string;
+	intent: string;
+	disclosure: string;
+	represented_owner: string;
+	purpose: string;
+	status: FederationInboundStatus;
+	/** Why it stands where it does: the engine's reason, or `owner_approved` / `owner_denied` when the owner's word decided it. */
+	reason: string;
+	/** The answer the peer was given; for a request the owner denied once, still `needs_owner`. */
+	response: FederationIntentResponse;
+	approval_id?: string;
+	receipt_id?: string;
+	message_id?: string;
+	requested_at: number;
+	updated_at: number;
+	expires_at: number;
+}
+
+/** Why an intent was answered the way it was. */
+export type FederationReceiptBasis = { kind: "policy"; reason: string; rule_id?: string } | { kind: "owner_approval"; approval_id: string };
+
+/** What this side kept of one intent: who asked whom for what, what was granted, and why. */
+export interface FederationIntentReceipt {
+	version: number;
+	id: string;
+	side: "requesting" | "answering" | "owner";
+	pairing_id: string;
+	correlation_id: string;
+	requester: string;
+	represented_owner: string;
+	responder: string;
+	intent: string;
+	purpose: string;
+	requested: string;
+	granted: string;
+	outcome: "accepted" | "denied" | "needs_owner";
+	basis: FederationReceiptBasis;
+	at: number;
+	summary: string;
+}
+
+/** `GET /api/federation/inbox`: live records and kept receipts, newest first. */
+export interface FederationInbox {
+	intents: FederationInboundIntent[];
+	receipts: FederationIntentReceipt[];
+}

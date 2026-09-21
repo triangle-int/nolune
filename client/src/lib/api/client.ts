@@ -39,6 +39,7 @@ import type {
 	FederationApproval,
 	FederationApprovalOutcome,
 	FederationApprovalScope,
+	FederationInbox,
 	FederationOverview,
 	FederationPeer,
 	FederationPeerPolicy,
@@ -54,6 +55,9 @@ export type {
 	FederationApprovalOutcome,
 	FederationApprovalScope,
 	FederationDefaultAccess,
+	FederationInbox,
+	FederationInboundIntent,
+	FederationIntentReceipt,
 	FederationPeerPolicy,
 	FederationPolicyView,
 	FederationRuleRequest,
@@ -1517,6 +1521,12 @@ export function setFederationRule(companionId: string, rule: FederationRuleReque
 
 export function revokeFederationRule(companionId: string, intent: string, disclosure: string): Promise<{ policy: FederationPeerPolicy }> {
 	return federationJson(`/api/federation/peers/${encodeURIComponent(companionId)}/rules/revoke`, federationBody({ intent, disclosure }));
+}
+
+// Inbound intents (#110): what peers delivered and the receipts they left.
+
+export function fetchFederationInbox(): Promise<FederationInbox> {
+	return federationJson("/api/federation/inbox");
 }
 
 // ---------------------------------------------------------------------------

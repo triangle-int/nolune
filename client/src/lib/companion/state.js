@@ -65,6 +65,7 @@
 
 import { runTargetLabel, triggerLabel } from "../activity/receipts.js";
 import { handoffAnchor } from "../continuity/resume.js";
+import { peerContent } from "../federation/peer-content.js";
 
 /**
  * @typedef {"offline" | "blocked" | "waiting" | "failed" | "working_remote" | "working" | "recalling" | "thinking" | "listening" | "completed" | "idle"} CompanionKind
@@ -671,7 +672,9 @@ export function companionEventFromServer(event, machines = []) {
 				return reason ? { type: "permission_denied", chatId, tool: msg.tool_name ?? "tool", reason } : null;
 			}
 			if (msg.kind && msg.kind !== "message") return null;
-			if (msg.role === "user") return { type: "user_message", chatId };
+			// A message a paired companion delivered (#110) is not the owner
+			// speaking: nothing is being listened to and no run follows.
+			if (msg.role === "user") return peerContent(msg.content) ? null : { type: "user_message", chatId };
 			const failure = systemFailure(msg.content);
 			if (failure === null) return { type: "assistant_message", chatId };
 			return failure ? { type: "run_failed", chatId, error: failure } : null;

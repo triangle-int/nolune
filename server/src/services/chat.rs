@@ -27,30 +27,7 @@ pub fn save_user_message(
     content: &str,
 ) -> io::Result<ChatMessage> {
     let instance_slug = sanitize_slug(instance_slug);
-    let chat_id = sanitize_slug(chat_id);
-    ensure_instance_layout(workspace_dir, &instance_slug)?;
-    ensure_chat_dir(workspace_dir, &instance_slug, &chat_id)?;
-
-    let content = tools::redact_secrets(content);
-    let ts = timestamp();
-    let id = next_id();
-
-    let entry = llm::HistoryEntry::new(llm::Message::user(&content), ts.clone(), id.clone());
-
-    let rig_path = rig_history_path(workspace_dir, &instance_slug, &chat_id);
-    append_to_rig_history(&rig_path, &entry);
-
-    let user_message = ChatMessage {
-        id,
-        role: ChatRole::User,
-        content,
-        created_at: ts,
-        kind: Default::default(),
-        tool_name: None,
-        mcp_app_html: None,
-        mcp_app_input: None,
-        model: None,
-    };
+    let user_message = append_user_message(workspace_dir, &instance_slug, chat_id, content)?;
 
     // Update last_interaction timestamp
     let instance_dir = workspace_dir.join("instances").join(&instance_slug);
@@ -62,6 +39,60 @@ pub fn save_user_message(
     rhythm::record_user_message(workspace_dir, &instance_slug, user_message.content.len());
 
     Ok(user_message)
+}
+
+/// A user-role message this server writes on someone else's behalf (a
+/// paired companion's delivery, #110): appended to the history exactly as
+/// the owner's own message would be, and nothing else. It is not the owner
+/// speaking, so it is not their activity either: the timestamp of their
+/// last interaction and the interaction aggregates the check-in prompt
+/// reads ("they're usually most active around") are left alone.
+pub fn save_delivered_message(
+    workspace_dir: &Path,
+    instance_slug: &str,
+    chat_id: &str,
+    content: &str,
+) -> io::Result<ChatMessage> {
+    append_user_message(
+        workspace_dir,
+        &sanitize_slug(instance_slug),
+        chat_id,
+        content,
+    )
+}
+
+/// Appends a user-role message to the chat's history and returns it, with
+/// secrets redacted. `instance_slug` is already sanitized.
+fn append_user_message(
+    workspace_dir: &Path,
+    instance_slug: &str,
+    chat_id: &str,
+    content: &str,
+) -> io::Result<ChatMessage> {
+    let chat_id = sanitize_slug(chat_id);
+    ensure_instance_layout(workspace_dir, instance_slug)?;
+    ensure_chat_dir(workspace_dir, instance_slug, &chat_id)?;
+
+    let content = tools::redact_secrets(content);
+    let ts = timestamp();
+    let id = next_id();
+
+    let entry = llm::HistoryEntry::new(llm::Message::user(&content), ts.clone(), id.clone());
+
+    let rig_path = rig_history_path(workspace_dir, instance_slug, &chat_id);
+    append_to_rig_history(&rig_path, &entry);
+
+    Ok(ChatMessage {
+        id,
+        role: ChatRole::User,
+        content,
+        created_at: ts,
+        kind: Default::default(),
+        tool_name: None,
+        mcp_app_html: None,
+        mcp_app_input: None,
+        model: None,
+    })
 }
 
 /// Save a system/tool message (role=assistant) for status/error notifications.

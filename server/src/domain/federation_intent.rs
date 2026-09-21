@@ -33,10 +33,9 @@
 //! The intent classes and disclosure classes are the ones the policy
 //! engine keys on ([`IntentClass`], [`DisclosureClass`]); a ping is
 //! transport, not an intent, and is refused here as an unknown type. The
-//! inbound handler, the dedupe store, the outbox, and the tools that emit
-//! intents arrive with the later slices of #110; until then this module
-//! has no production caller.
-#![allow(dead_code)]
+//! inbound handler and the dedupe store (`services::federation::inbound`)
+//! decode, answer, and record with these shapes; the outbox and the tools
+//! that emit intents arrive with the last slice of #110.
 
 use std::fmt;
 
@@ -81,6 +80,11 @@ pub const MAX_WINDOW_SECS: u64 = 31 * 24 * 60 * 60;
 
 /// Most windows an availability answer may carry.
 pub const MAX_AVAILABILITY_WINDOWS: usize = 32;
+
+/// Furthest ahead a reminder may be set: a year. Behind the clock it may
+/// be at most the skew allowance, so a reminder never arrives already
+/// due.
+pub const MAX_REMINDER_AHEAD_SECS: u64 = 365 * 24 * 60 * 60;
 
 /// Length of a companion id: base64url of [`COMPANION_ID_BYTES`] bytes.
 pub const COMPANION_ID_CHARS: usize = (COMPANION_ID_BYTES * 4).div_ceil(3);
@@ -380,6 +384,12 @@ pub enum IntentError {
         from: u64,
         to: u64,
     },
+    /// A reminder's `at` is behind the clock by more than the skew
+    /// allowance, or ahead of it by more than [`MAX_REMINDER_AHEAD_SECS`].
+    InvalidReminderTime {
+        at: u64,
+        now: u64,
+    },
     /// An availability answer with more than [`MAX_AVAILABILITY_WINDOWS`].
     TooManyWindows {
         count: usize,
@@ -423,6 +433,8 @@ impl PeerLabel {
         Ok(Self(text))
     }
 
+    /// Used by the sending side and its listings (#110, PR 3).
+    #[allow(dead_code)]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -610,15 +622,16 @@ impl FederationIntent {
     }
 
     /// The checks that need no parser: version range, id shapes, lifetime
-    /// and clock, and the payload's window. `decode` runs them; an intent
-    /// built here runs them before it is sent.
+    /// and clock, the payload's window, and a reminder's time. `decode`
+    /// runs them; an intent built here runs them before it is sent.
     pub fn validate(&self, now: u64) -> Result<(), IntentError> {
         check_version(self.version)?;
         check_correlation_id(&self.correlation_id)?;
         check_companion_id(&self.sender, IntentError::InvalidSender)?;
         check_lifetime(self.issued_at, self.expires_at, now)?;
         match &self.intent {
-            IntentPayload::Message { .. } | IntentPayload::Reminder { .. } => Ok(()),
+            IntentPayload::Message { .. } => Ok(()),
+            IntentPayload::Reminder { at, .. } => check_reminder_time(*at, now),
             IntentPayload::Availability { window } | IntentPayload::Proposal { window, .. } => {
                 check_window(window.from, window.to)
             }
@@ -626,6 +639,8 @@ impl FederationIntent {
     }
 
     /// The JSON bytes a transport body carries.
+    /// Used by the sending side (#110, PR 3); the tests exercise it until then.
+    #[allow(dead_code)]
     pub fn encode(&self) -> Vec<u8> {
         serde_json::to_vec(self).expect("intents serialize")
     }
@@ -669,6 +684,8 @@ impl IntentAnswer {
     }
 
     /// The class behind an answer's `kind` tag, or `None`.
+    /// Used by the sending side's response decoding (#110, PR 3).
+    #[allow(dead_code)]
     pub fn class_for_kind(kind: &str) -> Option<IntentClass> {
         match kind {
             "delivered" => Some(IntentClass::Message),
@@ -689,6 +706,8 @@ impl IntentOutcome {
         }
     }
 
+    /// Used by the sending side's response decoding (#110, PR 3).
+    #[allow(dead_code)]
     pub fn parse(name: &str) -> Option<Self> {
         [Self::Accepted, Self::Denied, Self::NeedsOwner]
             .into_iter()
@@ -697,6 +716,8 @@ impl IntentOutcome {
 
     /// How a policy verdict is answered: `allow` is accepted, `deny` is
     /// denied, and both `ask` and `defer` need the owner.
+    /// Used by the sending side's receipts (#110, PR 3).
+    #[allow(dead_code)]
     pub fn from_verdict(verdict: Verdict) -> Self {
         match verdict {
             Verdict::Allow => Self::Accepted,
@@ -716,6 +737,8 @@ impl IntentResponse {
     /// Decodes `bytes` fail-closed: size, version before shape, the
     /// `outcome` tag, the ids by name, every other closed name that is
     /// present, the strict shape, then [`Self::validate`].
+    /// The sending side decodes what a peer answered (#110, PR 3).
+    #[allow(dead_code)]
     pub fn decode(bytes: &[u8]) -> Result<Self, IntentError> {
         check_size(bytes)?;
         let probe: ResponseProbe = parse(bytes)?;
@@ -842,6 +865,8 @@ impl IntentResponse {
         Ok(())
     }
 
+    /// Used by the sending side (#110, PR 3).
+    #[allow(dead_code)]
     pub fn version(&self) -> u32 {
         match self {
             Self::Accepted { version, .. }
@@ -1056,6 +1081,10 @@ impl fmt::Display for IntentError {
                     "federation intent window from {from} to {to} is not allowed"
                 )
             }
+            Self::InvalidReminderTime { at, now } => write!(
+                f,
+                "federation intent reminder at {at} is behind {now} less the skew allowance or more than a year ahead"
+            ),
             Self::TooManyWindows { count } => write!(
                 f,
                 "federation intent answer has {count} windows, over the {MAX_AVAILABILITY_WINDOWS} limit"
@@ -1160,6 +1189,20 @@ fn check_lifetime(issued_at: u64, expires_at: u64, now: u64) -> Result<(), Inten
 fn check_window(from: u64, to: u64) -> Result<(), IntentError> {
     if to <= from || to - from > MAX_WINDOW_SECS {
         return Err(IntentError::InvalidWindow { from, to });
+    }
+    Ok(())
+}
+
+/// A reminder falls due at `at`: no further behind the clock than the
+/// skew allowance (it would be due the moment it arrived and run a
+/// check-in at once) and no further ahead than
+/// [`MAX_REMINDER_AHEAD_SECS`], which also keeps it inside the range a
+/// deadline can hold.
+fn check_reminder_time(at: u64, now: u64) -> Result<(), IntentError> {
+    if at.saturating_add(MAX_INTENT_CLOCK_SKEW_SECS) < now
+        || at > now.saturating_add(MAX_REMINDER_AHEAD_SECS)
+    {
+        return Err(IntentError::InvalidReminderTime { at, now });
     }
     Ok(())
 }
@@ -2075,6 +2118,44 @@ mod tests {
         });
         assert!(decode(&text).is_ok());
 
+        // A reminder is set no further behind the clock than the skew
+        // allowance (it would be due the moment it arrived) and no further
+        // ahead than a year; a number past i64 is refused, not saturated.
+        for at in [
+            NOW - MAX_INTENT_CLOCK_SKEW_SECS - 1,
+            0,
+            NOW + MAX_REMINDER_AHEAD_SECS + 1,
+            u64::MAX,
+        ] {
+            let text = edited(REMINDER, |json| json["intent"]["at"] = at.into());
+            assert_eq!(
+                FederationIntent::decode(text.as_bytes(), NOW),
+                Err(IntentError::InvalidReminderTime { at, now: NOW }),
+                "{at}"
+            );
+            let mut intent = decode(REMINDER).unwrap();
+            intent.intent = IntentPayload::Reminder {
+                text: serde_json::from_str::<PeerText>("\"water\"").unwrap(),
+                at,
+            };
+            assert_eq!(
+                intent.validate(NOW),
+                Err(IntentError::InvalidReminderTime { at, now: NOW }),
+                "{at}"
+            );
+        }
+        for at in [
+            NOW - MAX_INTENT_CLOCK_SKEW_SECS,
+            NOW,
+            NOW + MAX_REMINDER_AHEAD_SECS,
+        ] {
+            let text = edited(REMINDER, |json| json["intent"]["at"] = at.into());
+            assert!(
+                FederationIntent::decode(text.as_bytes(), NOW).is_ok(),
+                "{at}"
+            );
+        }
+
         let window = serde_json::json!({"from": 1, "to": 2, "state": "free"});
         let text = edited(ACCEPTED, |json| {
             json["answer"]["windows"] =
@@ -2612,6 +2693,7 @@ mod tests {
                 now: 200,
             },
             IntentError::InvalidWindow { from: 10, to: 5 },
+            IntentError::InvalidReminderTime { at: 10, now: 200 },
             IntentError::TooManyWindows { count: 33 },
             IntentError::CorrelationMismatch,
             IntentError::AnswerMismatch {

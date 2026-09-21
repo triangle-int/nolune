@@ -34,7 +34,7 @@ one section and one scope:
 | Section | Route | Owns | Scope |
 |---------|-------|------|-------|
 | Companion | `settings/companion` | Little Moon presence, Learn my rhythm, Initiative (check-in, quiet hours, daily budget, reflection), Resume my work (#83: on/off, break, cooldown, snooze, Suggest now), Timezone, Scheduled messages | companion |
-| Connections | `settings/connections` | Model presets and slots (#156) with capability chips and a connection test per preset (#28), API keys, the Codex login (#27: binary state against the pinned release, who codex is logged in as, Log in, Use a device code, Log out), Connected computers (the compact Connected Spaces list, #80), Companions (peer companions paired through federation, #108: rows with Confirm and Revoke, Invite a companion, Accept an invite, Rotate signing key; #109: pending approvals with Allow and Deny within one scope, and per-peer capability rows with one rule per request kind; see [federation.md](federation.md)), Paired browsers | server |
+| Connections | `settings/connections` | Model presets and slots (#156) with capability chips and a connection test per preset (#28), API keys, the Codex login (#27: binary state against the pinned release, who codex is logged in as, Log in, Use a device code, Log out), Connected computers (the compact Connected Spaces list, #80), Companions (peer companions paired through federation, #108: rows with Confirm and Revoke, Invite a companion, Accept an invite, Rotate signing key; #109: pending approvals with Allow and Deny within one scope, and per-peer capability rows with one rule per request kind; #110: the inbox of what companions delivered and who they said they speak for; see [federation.md](federation.md)), Paired browsers | server |
 | Capabilities | `settings/capabilities` | Skills (registry), Extensions (curated MCP catalog, per-tool grants, custom servers behind the #97 acknowledgement) | server |
 | Data | `settings/data` | What the companion keeps, Export, Import (replaces the companion after a confirmation dialog) | companion |
 | Advanced | `settings/advanced` | Server port and API token, Updates and release channel, ElevenLabs voice ID, Email (SMTP/IMAP), GitHub token | mixed; each control carries an owner badge |
@@ -72,6 +72,17 @@ Connections is where they answer:
   …/approvals/{id}`, `POST /api/federation/peers/{id}/rules`, `POST
   …/rules/revoke` with `{intent, disclosure}`; shapes in
   [companion-storage.md](companion-storage.md) "Policy and audit".
+- **The inbox** (#110) sits under the requests: one row per structured
+  intent a paired companion delivered, saying who wants to do what
+  ("wants to send you a message") and, quoted as the companion's own
+  unverified words, who it said it speaks for and why. A row that needs
+  you sits on the selected surface and points at the Allow and Deny of its
+  request above; once you have allowed or denied it, the row says so
+  ("You denied it once; it is refused when the companion asks again")
+  until the companion asks again; a settled row says Delivered or Denied,
+  when, and why ("Refused by your policy" or "You denied this once"). A
+  delivered message itself is in your conversation, framed as that
+  companion's untrusted content. Route: `GET /api/federation/inbox`.
 
 ## Model presets (#156)
 
