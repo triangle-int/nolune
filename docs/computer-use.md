@@ -143,9 +143,14 @@ model picked between several. The composer's computer selector lists the
 server home and every known desktop with its state word; the choice is
 remembered per conversation in the browser and travels with each message as
 `machine_id` on `POST /api/chat`: a known machine's stable id, `server-home`
-(the synthesized home row, or any `server-local:` id) or nothing. The agent
-loop resolves it once per turn, states it in the system prompt, and builds
-the tools around it.
+(the synthesized home row, or any `server-local:` id) or nothing. An id that
+is not shaped like a registered one (`validate_machine_id`) is refused with
+400 before it reaches the prompt or the log. Until the browser's first
+listing of the computers arrives, a remembered choice is sent as it is, so
+a computer that turns out to be offline is refused by name rather than
+replaced by the only connected one; a computer a listing no longer has
+reads as no choice. The agent loop resolves the choice once per turn,
+states it in the system prompt, and builds the tools around it.
 
 - Nothing chosen: the only connected desktop is used. With several connected
   the tools refuse with `choose_a_computer`, naming them, and the companion
@@ -163,10 +168,25 @@ the tools around it.
   the desktop tools answer `server_home` until a desktop is chosen. Driving
   the server-local Cua target through typed machine tools is #18.
 - The trail names the computer: each desktop tool's activity entry reads
-  "<action> on <name>" (the user's name for it, else its hostname), the
+  "<action> on <name>" (the user's name for it, else its hostname; with
+  nothing chosen, the only desktop connected when the turn started; with a
+  computer chosen, that computer whatever `machine_id` the model passed,
+  since the call acts there or is refused), the
   chat bar shows "working on <name>" while the companion works, and an
-  Activity run that acted on a computer says "On <name>". A handoff continued
-  on a computer (#82) targets that computer for the whole run.
+  Activity run that acted on a computer says "On <name>". The line is
+  persisted beside the tool call in the conversation's history (`tool_trail`,
+  by tool-call id; the model replays only the message itself), so the trail
+  reads the same after a reload, and a call recorded without one still names
+  the computer its arguments name. "on the connected computer" appears only
+  while the choice is genuinely open (none or several connected), where the
+  call itself is refused.
+- A handoff continued on a computer (#82) targets that computer: an
+  acceptance that starts the conversation's loop starts it with the
+  destination, and one queued on a conversation that is already running
+  queues the destination as the computer its next turn acts on (the loop
+  keeps the computer it started with only for the turn in progress, and a
+  queued target it never took is released with the conversation). A new
+  message from the composer starts a new run with the composer's own choice.
 
 ## Related
 

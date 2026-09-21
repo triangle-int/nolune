@@ -148,3 +148,53 @@ fn the_choice_travels_from_the_composer_to_the_tools() {
         );
     }
 }
+
+/// The trail names the computer after a reload too, and a handoff queued on
+/// a running conversation re-targets that conversation's next turn.
+#[test]
+fn the_trail_survives_a_reload_and_a_queued_handoff_retargets_the_loop() {
+    let helpers = production("server/src/services/llm/helpers.rs");
+    assert!(
+        helpers.contains("tool_trail"),
+        "history_to_chat_messages renders a tool call from the trail line persisted with it"
+    );
+    let agent_loop = production("server/src/services/llm/agent_loop.rs");
+    assert!(
+        agent_loop.contains("tool_trail") && agent_loop.contains("trail_line("),
+        "the streaming loop persists each tool's trail line with its call"
+    );
+    let tools = production("server/src/services/tools/mod.rs");
+    assert!(
+        tools.contains("fn trail_line(&self") && tools.contains("pub fn tool_trail_line("),
+        "ObservableTool announces the desktop tools' trail line for persistence"
+    );
+    let types = production("server/src/services/llm/types.rs");
+    assert!(
+        types.contains("pub tool_trail: Option<"),
+        "HistoryEntry carries the trail line beside the message, never inside it"
+    );
+
+    let route = production("server/src/routes/chat.rs");
+    assert!(
+        route.contains("next_turn_target(&state, &key") || route.contains("next_turn_target("),
+        "run_agent_loop settles each turn's target from what was queued since the last one"
+    );
+    assert!(
+        route.contains("TargetSelection::check_request(request.machine_id.as_deref())"),
+        "post_chat checks the request's machine_id like a registered id before saving the message"
+    );
+    assert!(
+        route.contains("release_agent("),
+        "the loop releases the conversation and whatever was queued on it together"
+    );
+    let handoff = production("server/src/services/handoff.rs");
+    assert!(
+        handoff.contains("agent_targets"),
+        "a handoff accepted while the conversation runs queues its destination on that loop"
+    );
+    let doc = fs::read_to_string(repo().join("docs/computer-use.md")).unwrap();
+    assert!(
+        doc.contains("reload") && doc.contains("next turn"),
+        "computer-use doc states that the trail survives a reload and how a queued handoff is targeted"
+    );
+}
