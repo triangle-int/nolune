@@ -396,7 +396,7 @@ pub async fn current(state: &AppState, now: i64) -> Option<ResumeOffer> {
     }
     let suggestion = file.state.suggestion?;
     let card = match handoff::card(state, &suggestion.record_id, now).await {
-        Ok(card) if card.offered && !card.decision.as_ref().is_some_and(is_accepted) => card,
+        Ok(card) if !answered(&card, &suggestion) => card,
         Ok(_) | Err(handoff::HandoffError::NotFound) => {
             if let Err(error) = ritual.resolve(&suggestion.id).await {
                 log::warn!(
@@ -417,8 +417,21 @@ pub async fn current(state: &AppState, now: i64) -> Option<ResumeOffer> {
     Some(ResumeOffer { suggestion, card })
 }
 
-fn is_accepted(decision: &HandoffDecision) -> bool {
-    matches!(decision, HandoffDecision::Accepted { .. })
+/// Whether the card answers the suggestion: it is no longer offered, its
+/// continuation is running, or it was accepted since the suggestion was
+/// made. The same line `rank` draws: a running continuation is never
+/// suggested, and a finished one leaves the card open again.
+fn answered(card: &HandoffCard, suggestion: &ResumeSuggestion) -> bool {
+    !card.offered
+        || card
+            .decision
+            .as_ref()
+            .is_some_and(|decision| match decision {
+                HandoffDecision::Accepted { at, .. } => {
+                    decision.is_continuing() || *at >= suggestion.suggested_at
+                }
+                HandoffDecision::Kept { .. } | HandoffDecision::Dismissed { .. } => true,
+            })
 }
 
 /// Look for work on behalf of `trigger`: admit it, rank the offered

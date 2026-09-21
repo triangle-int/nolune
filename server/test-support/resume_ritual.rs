@@ -16,7 +16,8 @@ use crate::{
     domain::{
         companion::CANONICAL_SLUG,
         continuity::{
-            ContinuityRecord, ContinuityUpdate, Origin, Priority, Provenance, ProvenanceSource,
+            ContinuityRecord, ContinuityUpdate, HandoffDecision, Origin, Priority, Provenance,
+            ProvenanceSource,
         },
         events::ServerEvent,
         handoff::{COMPUTER_USE_CAPABILITIES, FILE_CAPABILITIES},
@@ -734,6 +735,82 @@ async fn no_suggestion_when_nothing_valid_is_resumable() {
     assert_eq!(held(&body), "nothing_to_resume");
     assert!(h.status().await["suggestion"].is_null());
     studio.assert_untouched("an empty ritual");
+}
+
+#[tokio::test]
+async fn work_already_being_continued_is_never_suggested_and_the_next_best_is() {
+    let h = harness().await;
+    let mut rx = h.state.events.subscribe();
+    let mut studio = h.connect_ready(MAC_A, "studio").await;
+    h.enable(120, 3_600).await;
+    let continuing = h
+        .task(
+            "rename the trip photos",
+            &[MAC_A],
+            60,
+            ContinuityUpdate::default(),
+        )
+        .await;
+    let plain = h
+        .task(
+            "sort the receipts",
+            &[MAC_A],
+            3_600,
+            ContinuityUpdate::default(),
+        )
+        .await;
+    // The user accepted the first card and its continuation is running.
+    h.store()
+        .decide_handoff(
+            &continuing.id,
+            HandoffDecision::Accepted {
+                machine_id: MAC_A.into(),
+                run_id: "run_1767603700_0badcafe".into(),
+                at: now() - 30,
+                outcome: None,
+            },
+            Provenance {
+                source: ProvenanceSource::User,
+                at: now() - 30,
+                note: "continue here".into(),
+            },
+            now() - 30,
+        )
+        .await
+        .unwrap();
+
+    let (status, body) = h.resume_now().await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["suggestion"]["record_id"], plain.id,
+        "the newer task is being continued already: {body}"
+    );
+    assert!(body["suggestion"]["card"]["decision"].is_null());
+    let current = h.status().await;
+    assert_eq!(
+        current["suggestion"]["id"], body["suggestion"]["id"],
+        "the suggestion is what a fresh read shows"
+    );
+    assert_eq!(resume_events(&mut rx), vec![Some(plain.id.clone())]);
+
+    // With only the continuing task on file there is nothing to suggest, and
+    // the cooldown does not start for a suggestion that was never made.
+    let (status, done) = h
+        .json(
+            Method::POST,
+            &api(&format!("continuity/{}/complete", plain.id)),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let (_, body) = h.resume_now().await;
+    assert_eq!(held(&body), "nothing_to_resume");
+    assert!(h.status().await["suggestion"].is_null());
+    assert_eq!(
+        h.ritual().state().last_suggested_at,
+        Some(current["suggestion"]["suggested_at"].as_i64().unwrap())
+    );
+    studio.assert_untouched("a continuing task");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

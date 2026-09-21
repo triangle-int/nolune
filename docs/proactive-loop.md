@@ -365,9 +365,11 @@ more than one.
 
 `domain/resume.rs::rank` is pure and deterministic. Of the records behind
 the cards offered right now (resumable, not kept or dismissed on the card,
-after the reference check), it drops the ones the user dismissed from the
-ritual, the ones not updated for 30 days (stale), and the ones no
-connected computer could take right now: a destination is ready when the
+after the reference check), it drops the ones whose accepted continuation
+is still running (the user already answered that card; once the outcome
+lands the card is open again and so is the record), the ones the user
+dismissed from the ritual, the ones not updated for 30 days (stale), and
+the ones no connected computer could take right now: a destination is ready when the
 handoff checks against it (online, responding, every required capability,
 no denied permission, no missing or unreachable resource) would refuse
 nothing, judged with a ready model and initiative on. A computer the
@@ -398,9 +400,10 @@ The suggestion the ritual persists and the API returns:
 | `card` | the record's handoff card at that moment (API and event only, never stored) |
 
 Reading the suggestion back (`GET`) rebuilds the card; a suggestion whose
-record is gone, no longer offered (kept, dismissed, or closed), or already
-accepted is resolved then and there, so an answer given on the card is an
-answer to the ritual as well.
+record is gone, no longer offered (kept, dismissed, or closed), continuing,
+or accepted since the suggestion was made is resolved then and there, so
+an answer given on the card is an answer to the ritual as well. While the
+ritual is off, `GET` reports no suggestion whatever the file holds.
 
 | Route | Purpose |
 | --- | --- |

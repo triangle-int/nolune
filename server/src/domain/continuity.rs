@@ -228,6 +228,12 @@ impl HandoffDecision {
     pub fn hides_card(&self) -> bool {
         matches!(self, Self::Kept { .. } | Self::Dismissed { .. })
     }
+
+    /// An acceptance whose continuation has not ended: the card says the
+    /// task is continuing and offers no decision until the outcome lands.
+    pub fn is_continuing(&self) -> bool {
+        matches!(self, Self::Accepted { outcome: None, .. })
+    }
 }
 
 /// How the continuation run ended, as the activity record says.

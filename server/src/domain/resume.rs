@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{
-    continuity::{BlockerKind, ContinuityRecord, ContinuityState, Priority},
+    continuity::{BlockerKind, ContinuityRecord, ContinuityState, HandoffDecision, Priority},
     handoff::{Environment, Severity, continuation_checks},
     machine::KnownMachine,
     proactive::MAX_REASON_CHARS,
@@ -140,15 +140,23 @@ pub struct RankContext<'a> {
     pub only_naming: Option<&'a str>,
 }
 
-/// Pick at most one record to offer. Closed, kept, dismissed, stale, and
-/// unreachable work never qualifies; among the rest, explicit priority, the
-/// deadline, the state, stated blockers, a ready destination the record
-/// names, and recency decide, in that order of weight. Deterministic: ties
-/// go to the most recently updated record, then the smaller id.
+/// Pick at most one record to offer. Closed, kept, dismissed, continuing,
+/// stale, and unreachable work never qualifies; among the rest, explicit
+/// priority, the deadline, the state, stated blockers, a ready destination
+/// the record names, and recency decide, in that order of weight.
+/// Deterministic: ties go to the most recently updated record, then the
+/// smaller id.
 pub fn rank(records: &[ContinuityRecord], ctx: &RankContext<'_>) -> Option<Candidate> {
     records
         .iter()
         .filter(|record| record.handoff_offered())
+        // Accepted and still running: the user already answered this card.
+        .filter(|record| {
+            !record
+                .handoff
+                .as_ref()
+                .is_some_and(HandoffDecision::is_continuing)
+        })
         .filter(|record| !ctx.dismissed.iter().any(|id| id == &record.id))
         .filter(|record| ctx.now - record.updated_at <= STALE_AFTER_SECS)
         .filter(|record| {
@@ -475,6 +483,43 @@ mod tests {
         // Stale: untouched for longer than the window.
         let stale = record("000stale", "old work", T0 - STALE_AFTER_SECS - 1, &[STUDIO]);
         assert_eq!(rank(&[stale], &ctx(&machines, &[])), None);
+    }
+
+    #[test]
+    fn a_record_whose_continuation_is_running_is_skipped_for_the_next_best() {
+        use crate::domain::continuity::{HandoffDecision, HandoffOutcome, HandoffOutcomeStatus};
+        let machines = [machine(STUDIO, "studio", true)];
+        let accepted = |outcome: Option<HandoffOutcome>| HandoffDecision::Accepted {
+            machine_id: STUDIO.into(),
+            run_id: "run_1767603700_0badcafe".into(),
+            at: T0 - 20,
+            outcome,
+        };
+
+        // The user already accepted this one and its continuation is running:
+        // suggesting it would only send them to a card that says so.
+        let mut continuing = record("0running", "the continuing task", T0 - 30, &[STUDIO]);
+        continuing.handoff = Some(accepted(None));
+        assert!(continuing.handoff_offered(), "the card is still listed");
+        assert_eq!(
+            rank(std::slice::from_ref(&continuing), &ctx(&machines, &[])),
+            None
+        );
+
+        // The next-best record is chosen instead, even though it is older.
+        let plain = record("000plain", "the plain task", T0 - 3_600, &[STUDIO]);
+        let candidate = rank(&[continuing.clone(), plain.clone()], &ctx(&machines, &[])).unwrap();
+        assert_eq!(candidate.record_id, plain.id);
+
+        // Once the continuation has ended, the card is open again and so is the record.
+        let mut ended = continuing.clone();
+        ended.handoff = Some(accepted(Some(HandoffOutcome {
+            status: HandoffOutcomeStatus::Failed,
+            finished_at: T0 - 10,
+            summary: "the folder was missing".into(),
+        })));
+        let candidate = rank(&[ended.clone(), plain.clone()], &ctx(&machines, &[])).unwrap();
+        assert_eq!(candidate.record_id, ended.id, "newer, and open again");
     }
 
     #[test]
