@@ -48,7 +48,10 @@ use crate::{
         llm::{ContentBlock, Message},
         proactive::{Admission, RunHandle, outcome_from_trace},
         tool::Tool,
-        tools::computer::{RemoteFilesArgs, RemoteFilesTool},
+        tools::{
+            MachineTarget, TargetSelection,
+            computer::{RemoteFilesArgs, RemoteFilesTool},
+        },
     },
 };
 
@@ -422,7 +425,7 @@ async fn continue_on(
     // The acceptance itself decides whether the conversation needs a turn
     // started or is already running and will pick the request up; the
     // follower spawned below only waits for it to stop.
-    let own_loop = ensure_agent_loop(state, &chat_id).await;
+    let own_loop = ensure_agent_loop(state, &chat_id, Some(destination.machine_id.clone())).await;
     log::info!(
         "[handoff] {id}: continuing on '{}' as {run_id} in {chat_id} ({})",
         destination.machine_id,
@@ -551,8 +554,12 @@ async fn look_for(state: &AppState, machine_id: &str, path: &str) -> Result<(), 
     log::info!("[handoff] looking for '{path}' on '{machine_id}'");
     let listing = tokio::time::timeout(
         std::time::Duration::from_secs(LISTING_WAIT_SECS),
-        RemoteFilesTool::new(state.machine_registry.clone()).call(RemoteFilesArgs {
-            machine_id: machine_id.to_owned(),
+        RemoteFilesTool::new(
+            state.machine_registry.clone(),
+            MachineTarget::new(TargetSelection::Machine(machine_id.to_owned())),
+        )
+        .call(RemoteFilesArgs {
+            machine_id: Some(machine_id.to_owned()),
             operation: "list".into(),
             path: folder.clone(),
             content: None,
@@ -660,17 +667,26 @@ fn spawn_continuation(
 }
 
 /// Start the conversation's agent loop when none is running, exactly as a
-/// sent message does; `None` when one is already running and will pick the
-/// handoff up on its next turn.
+/// sent message does, targeting the destination computer (#80); `None` when
+/// one is already running and will pick the handoff up on its next turn,
+/// which is then queued to act on the destination as well (the loop keeps
+/// the computer it started with only for the turn in progress).
 async fn ensure_agent_loop(
     state: &AppState,
     chat_id: &str,
+    machine_target: Option<String>,
 ) -> Option<tokio::task::JoinHandle<AgentLoopExit>> {
     let key = crate::routes::chat::task_key(CANONICAL_SLUG, chat_id);
     let cancel = CancellationToken::new();
     {
         let mut tasks = state.agent_tasks.lock().await;
         if tasks.contains_key(&key) {
+            // Queued while the key is held, so a loop that is releasing it
+            // right now takes the target with it instead of leaving it for
+            // the next loop.
+            if let Some(target) = machine_target {
+                state.agent_targets.lock().await.insert(key, target);
+            }
             return None;
         }
         tasks.insert(key, cancel.clone());
@@ -681,6 +697,7 @@ async fn ensure_agent_loop(
         chat_id.to_owned(),
         cancel,
         false,
+        machine_target,
     )))
 }
 

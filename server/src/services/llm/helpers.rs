@@ -179,6 +179,14 @@ than you speak. you're warm but not overbearing. this is a safe, intimate space.
 
 /// Short summary of a tool use for display.
 pub(crate) fn tool_use_summary(name: &str, input: &serde_json::Value) -> String {
+    // The desktop tools read as the live trail words them (#80): naming the
+    // computer the arguments name, by id (there is no listing on reload).
+    if matches!(
+        name,
+        "computer_use" | "remote_bash" | "remote_files" | "list_machines"
+    ) {
+        return crate::services::tools::tool_summary(name, &input.to_string());
+    }
     // Extract first meaningful field value for a one-line summary
     if let Some(obj) = input.as_object() {
         if obj.contains_key("command") {
@@ -297,11 +305,18 @@ pub fn history_to_chat_messages(entries: &[HistoryEntry]) -> Vec<ChatMessage> {
                     });
                 }
                 ContentBlock::ToolCall {
+                    id,
                     name,
                     arguments: input,
-                    ..
                 } => {
-                    let summary = tool_use_summary(name, input);
+                    // The line the tool announced when it ran (#80: naming the
+                    // computer a desktop tool acted on), else the arguments.
+                    let summary = entry
+                        .tool_trail
+                        .as_ref()
+                        .and_then(|trail| trail.get(id))
+                        .cloned()
+                        .unwrap_or_else(|| tool_use_summary(name, input));
                     out.push(ChatMessage {
                         id: block_id,
                         role: ChatRole::Assistant,
@@ -1023,5 +1038,154 @@ mod tests {
         let serialized = serde_json::to_string(&message).unwrap();
         assert!(serialized.contains("/resources/model-provider/files/test/"));
         assert!(serialized.contains("resource_provenance"));
+    }
+}
+
+#[cfg(test)]
+mod trail_tests {
+    //! #80: a reloaded conversation names the computer a desktop tool acted
+    //! on the way the live trail did.
+    use super::{ContentBlock, HistoryEntry, Message, history_to_chat_messages, tool_use_summary};
+    use crate::domain::chat::MessageKind;
+
+    const STUDIO: &str = "4f3c1c2e-9b5e-4d2b-8f0a-1c2d3e4f5a6b";
+
+    fn tool_call(id: &str, name: &str, arguments: serde_json::Value) -> HistoryEntry {
+        HistoryEntry::new(
+            Message::Assistant {
+                content: vec![ContentBlock::ToolCall {
+                    id: id.into(),
+                    name: name.into(),
+                    arguments,
+                }],
+            },
+            "1".into(),
+            format!("msg_{id}"),
+        )
+    }
+
+    #[test]
+    fn a_reloaded_trail_reads_the_line_persisted_with_the_call() {
+        let mut entry = tool_call(
+            "call_1",
+            "remote_bash",
+            serde_json::json!({"command": "uname -a"}),
+        );
+        entry.tool_trail = Some(
+            [(
+                "call_1".to_owned(),
+                "running a command on Studio Mac".to_owned(),
+            )]
+            .into(),
+        );
+        let messages = history_to_chat_messages(&[entry]);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].kind, MessageKind::ToolCall);
+        assert_eq!(messages[0].tool_name.as_deref(), Some("remote_bash"));
+        assert_eq!(messages[0].content, "running a command on Studio Mac");
+
+        // The persisted line belongs to its own call, never to a neighbour.
+        let mut entry = HistoryEntry::new(
+            Message::Assistant {
+                content: vec![
+                    ContentBlock::ToolCall {
+                        id: "call_a".into(),
+                        name: "computer_use".into(),
+                        arguments: serde_json::json!({"action": "screenshot"}),
+                    },
+                    ContentBlock::ToolCall {
+                        id: "call_b".into(),
+                        name: "remote_files".into(),
+                        arguments: serde_json::json!({"operation": "list", "path": "~"}),
+                    },
+                ],
+            },
+            "1".into(),
+            "msg_pair".into(),
+        );
+        entry.tool_trail = Some(
+            [
+                ("call_a".to_owned(), "screenshot on Studio Mac".to_owned()),
+                ("call_b".to_owned(), "listing ~ on Studio Mac".to_owned()),
+            ]
+            .into(),
+        );
+        let messages = history_to_chat_messages(&[entry]);
+        assert_eq!(messages[0].content, "screenshot on Studio Mac");
+        assert_eq!(messages[1].content, "listing ~ on Studio Mac");
+    }
+
+    #[test]
+    fn a_call_without_a_persisted_line_reads_like_the_live_trail_from_its_arguments() {
+        // Older histories and other writers have no trail line: the desktop
+        // tools still read as the live trail words them, naming the computer
+        // the arguments name (by id, there is no listing on reload).
+        let named = tool_call(
+            "call_1",
+            "computer_use",
+            serde_json::json!({"machine_id": STUDIO, "action": "left_click"}),
+        );
+        assert_eq!(
+            history_to_chat_messages(&[named])[0].content,
+            format!("left_click on {STUDIO}")
+        );
+        let bash = tool_call(
+            "call_2",
+            "remote_bash",
+            serde_json::json!({"command": "ls"}),
+        );
+        assert_eq!(
+            history_to_chat_messages(&[bash])[0].content,
+            "running a command on the connected computer"
+        );
+        let files = tool_call(
+            "call_3",
+            "remote_files",
+            serde_json::json!({"machine_id": STUDIO, "operation": "read", "path": "~/notes.md"}),
+        );
+        assert_eq!(
+            history_to_chat_messages(&[files])[0].content,
+            format!("reading ~/notes.md on {STUDIO}")
+        );
+        assert_eq!(
+            tool_use_summary("list_machines", &serde_json::json!({})),
+            "listing computers"
+        );
+        // Every other tool keeps its argument summary.
+        assert_eq!(
+            tool_use_summary("read_file", &serde_json::json!({"path": "notes.md"})),
+            "read_file: notes.md"
+        );
+        assert_eq!(
+            tool_use_summary("run_command", &serde_json::json!({"command": "ls"})),
+            "run_command: command"
+        );
+    }
+
+    #[test]
+    fn the_trail_line_stays_out_of_what_the_model_replays() {
+        let mut entry = tool_call(
+            "call_1",
+            "remote_bash",
+            serde_json::json!({"command": "uname -a"}),
+        );
+        entry.tool_trail = Some(
+            [(
+                "call_1".to_owned(),
+                "running a command on Studio Mac".to_owned(),
+            )]
+            .into(),
+        );
+        let replayed =
+            serde_json::to_string(&HistoryEntry::to_messages(std::slice::from_ref(&entry)))
+                .unwrap();
+        assert!(!replayed.contains("Studio Mac"), "{replayed}");
+        // It survives the history file, and its absence is not an error.
+        let json = serde_json::to_string(&entry).unwrap();
+        let back: HistoryEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.tool_trail, entry.tool_trail);
+        let bare: HistoryEntry =
+            serde_json::from_str(r#"{"role":"assistant","content":[]}"#).unwrap();
+        assert_eq!(bare.tool_trail, None);
     }
 }

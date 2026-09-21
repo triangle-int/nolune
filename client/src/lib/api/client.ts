@@ -225,16 +225,18 @@ export function fetchMessages(slug: string, chatId = "default"): Promise<ChatRes
 	return json(`/api/chat/${encodeURIComponent(slug)}/${encodeURIComponent(chatId)}/messages`);
 }
 
+/** `machineId` is the computer the user chose for this conversation (#80); `null` leaves the choice open. */
 export function sendMessage(
 	slug: string,
 	content: string,
 	chatId = "default",
 	voiceMode = false,
+	machineId: string | null = null,
 ): Promise<ChatResponse> {
 	return json("/api/chat", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ instance_slug: slug, content, chat_id: chatId, voice_mode: voiceMode }),
+		body: JSON.stringify({ instance_slug: slug, content, chat_id: chatId, voice_mode: voiceMode, machine_id: machineId }),
 	});
 }
 

@@ -89,7 +89,10 @@ pub use communication::{ReachOutTool, ReadEmailTool, ScheduledTask, SendEmailToo
 pub use companion::{
     ALLOWED_MOODS, EditSoulTool, SetVoiceTool, get_voice_override, load_mood_state, save_mood_state,
 };
-pub use computer::{ComputerUseTool, ListMachinesTool, RemoteBashTool, RemoteFilesTool};
+pub use computer::{
+    ComputerUseTool, ListMachinesTool, MachineTarget, RemoteBashTool, RemoteFilesTool,
+    TargetSelection,
+};
 
 pub use files::{EditFileTool, ListFilesTool, ReadFileTool, UploadFileTool, WriteFileTool};
 pub use image::ViewImageTool;
@@ -433,8 +436,36 @@ pub(crate) fn openai_schema<T: JsonSchema>() -> serde_json::Value {
 // ---------------------------------------------------------------------------
 
 pub fn tool_summary(name: &str, args: &str) -> String {
+    tool_summary_on(name, args, &MachineTarget::default())
+}
+
+/// `tool_summary` with the conversation's machine target (#80): the computer
+/// tools name the computer they act on the way the Computers tab does, so
+/// the trail records the actual target machine.
+pub fn tool_summary_on(name: &str, args: &str, target: &MachineTarget) -> String {
     let v: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
+    let on_machine = || target.describe(v["machine_id"].as_str());
     match name {
+        "list_machines" => "listing computers".into(),
+        "computer_use" => format!(
+            "{} {}",
+            v["action"].as_str().unwrap_or("computer action"),
+            on_machine()
+        ),
+        "remote_bash" => format!("running a command {}", on_machine()),
+        "remote_files" => {
+            let verb = match v["operation"].as_str() {
+                Some("read") => "reading",
+                Some("write") => "writing",
+                Some("list") => "listing",
+                _ => "touching",
+            };
+            format!(
+                "{verb} {} {}",
+                v["path"].as_str().unwrap_or("?"),
+                on_machine()
+            )
+        }
         "read_file" => format!("reading {}", v["path"].as_str().unwrap_or("?")),
         "write_file" => format!("writing {}", v["path"].as_str().unwrap_or("?")),
         "edit_file" => format!("editing {}", v["path"].as_str().unwrap_or("?")),
@@ -484,6 +515,14 @@ pub fn tool_summary(name: &str, args: &str) -> String {
     }
 }
 
+/// The trail line persisted with a call (#80): the desktop tools' summary,
+/// which names the computer the arguments may omit, so the trail names it
+/// after a reload as well. Other tools say nothing their arguments do not.
+pub fn tool_trail_line(name: &str, args: &str, target: &MachineTarget) -> Option<String> {
+    matches!(name, "computer_use" | "remote_bash" | "remote_files")
+        .then(|| tool_summary_on(name, args, target))
+}
+
 // ---------------------------------------------------------------------------
 // ObservableTool
 // ---------------------------------------------------------------------------
@@ -495,6 +534,8 @@ pub struct ObservableTool {
     instance_slug: String,
     chat_id: String,
     mcp_snapshot: Option<crate::services::mcp::McpAppSnapshot>,
+    /// The conversation's machine target (#80), so the trail names computers.
+    target: Arc<MachineTarget>,
 }
 
 impl ObservableTool {
@@ -505,6 +546,7 @@ impl ObservableTool {
         instance_slug: String,
         chat_id: String,
         mcp_snapshot: Option<crate::services::mcp::McpAppSnapshot>,
+        target: Arc<MachineTarget>,
     ) -> Self {
         Self {
             inner,
@@ -513,6 +555,7 @@ impl ObservableTool {
             instance_slug,
             chat_id,
             mcp_snapshot,
+            target,
         }
     }
 }
@@ -533,12 +576,16 @@ impl ToolDyn for ObservableTool {
         self.inner.definition(prompt)
     }
 
+    fn trail_line(&self, args: &str) -> Option<String> {
+        tool_trail_line(&self.inner.name(), args, &self.target).map(|line| redact_secrets(&line))
+    }
+
     fn call(
         &self,
         args: String,
     ) -> Pin<Box<dyn Future<Output = Result<String, ToolError>> + Send + '_>> {
         let tool_name = self.inner.name();
-        let summary = redact_secrets(&tool_summary(&tool_name, &args));
+        let summary = redact_secrets(&tool_summary_on(&tool_name, &args, &self.target));
 
         let start_msg = crate::domain::chat::ChatMessage {
             id: format!("tool_{}_{}", tool_call_counter(), unix_millis()),
@@ -686,10 +733,12 @@ pub fn build_tools(
     vector_store: Arc<crate::services::vector::VectorStore>,
     agent_tasks: Arc<tokio::sync::Mutex<HashMap<String, tokio_util::sync::CancellationToken>>>,
     machine_registry: crate::services::machine_registry::MachineRegistry,
+    machine_target: MachineTarget,
     public_url: &str,
     resources: &crate::services::resource_access::ResourceAccess,
 ) -> (Vec<Box<dyn ToolDyn>>, SentFiles) {
     let snap = mcp_snapshot;
+    let machine_target = Arc::new(machine_target);
     let wrap = |tool: Box<dyn ToolDyn>| -> Box<dyn ToolDyn> {
         Box::new(ObservableTool::new(
             tool,
@@ -698,6 +747,7 @@ pub fn build_tools(
             instance_slug.to_string(),
             chat_id.to_string(),
             snap.clone(),
+            machine_target.clone(),
         ))
     };
 
@@ -854,12 +904,15 @@ pub fn build_tools(
     }
 
     // ── Computer use (multi-machine routing) ──
+    // The three desktop tools act on the computer the user chose (#80); the
+    // target is resolved once per turn and never defaults to a machine here.
     tools.push(wrap(Box::new(ListMachinesTool::new(
         machine_registry.clone(),
     ))));
     {
         tools.push(wrap(Box::new(ComputerUseTool::new(
             machine_registry.clone(),
+            (*machine_target).clone(),
             workspace_dir,
             instance_slug,
             public_url,
@@ -868,8 +921,12 @@ pub fn build_tools(
     }
     tools.push(wrap(Box::new(RemoteBashTool::new(
         machine_registry.clone(),
+        (*machine_target).clone(),
     ))));
-    tools.push(wrap(Box::new(RemoteFilesTool::new(machine_registry))));
+    tools.push(wrap(Box::new(RemoteFilesTool::new(
+        machine_registry,
+        (*machine_target).clone(),
+    ))));
 
     // MCP tools
     for mcp_tool in mcp_tools {
@@ -1087,5 +1144,106 @@ mod email_tool_tests {
                 .iter()
                 .any(|value| value == "rotation-secret-2")
         );
+    }
+}
+
+#[cfg(test)]
+mod tool_summary_tests {
+    //! #80: the activity trail names the computer a desktop tool acted on.
+    use super::*;
+
+    const STUDIO: &str = "4f3c1c2e-9b5e-4d2b-8f0a-1c2d3e4f5a6b";
+
+    #[test]
+    fn computer_tools_name_their_machine_by_id() {
+        let shot = tool_summary(
+            "computer_use",
+            &format!(r#"{{"machine_id":"{STUDIO}","action":"screenshot"}}"#),
+        );
+        assert!(
+            shot.contains("screenshot") && shot.contains(STUDIO),
+            "{shot}"
+        );
+        let bash = tool_summary(
+            "remote_bash",
+            &format!(r#"{{"machine_id":"{STUDIO}","command":"uname -a"}}"#),
+        );
+        assert!(bash.contains("command") && bash.contains(STUDIO), "{bash}");
+        assert!(
+            !bash.contains("uname"),
+            "the command itself stays out of the one-line trail: {bash}"
+        );
+        let files = tool_summary(
+            "remote_files",
+            &format!(r#"{{"machine_id":"{STUDIO}","operation":"read","path":"~/notes.md"}}"#),
+        );
+        assert!(
+            files.contains("reading") && files.contains("~/notes.md") && files.contains(STUDIO),
+            "{files}"
+        );
+        assert_eq!(tool_summary("list_machines", "{}"), "listing computers");
+    }
+
+    #[test]
+    fn the_conversation_target_gives_the_trail_the_users_name() {
+        let target = MachineTarget::with_names(
+            TargetSelection::Machine(STUDIO.into()),
+            [(STUDIO.to_owned(), "Studio Mac".to_owned())].into(),
+        );
+        let named = tool_summary_on(
+            "computer_use",
+            &format!(r#"{{"machine_id":"{STUDIO}","action":"left_click"}}"#),
+            &target,
+        );
+        assert_eq!(named, "left_click on Studio Mac");
+        let omitted = tool_summary_on("remote_bash", r#"{"command":"ls"}"#, &target);
+        assert_eq!(omitted, "running a command on Studio Mac");
+        let open = MachineTarget::new(TargetSelection::Unselected);
+        assert_eq!(
+            tool_summary_on("remote_files", r#"{"operation":"list","path":"~"}"#, &open),
+            "listing ~ on the connected computer"
+        );
+    }
+
+    /// The line persisted with a call so a reloaded conversation names the
+    /// computer the way the live trail did: the desktop tools' summary,
+    /// nothing for tools whose arguments already say everything.
+    #[test]
+    fn the_desktop_tools_persist_a_trail_line_that_names_their_computer() {
+        let target = MachineTarget::with_names(
+            TargetSelection::Unselected,
+            [(STUDIO.to_owned(), "Studio Mac".to_owned())].into(),
+        )
+        .with_live(vec![STUDIO.to_owned()]);
+        assert_eq!(
+            tool_trail_line("computer_use", r#"{"action":"screenshot"}"#, &target).as_deref(),
+            Some("screenshot on Studio Mac")
+        );
+        assert_eq!(
+            tool_trail_line("remote_bash", r#"{"command":"uname -a"}"#, &target).as_deref(),
+            Some("running a command on Studio Mac")
+        );
+        assert_eq!(
+            tool_trail_line(
+                "remote_files",
+                r#"{"operation":"read","path":"~/notes.md"}"#,
+                &target
+            )
+            .as_deref(),
+            Some("reading ~/notes.md on Studio Mac")
+        );
+        for other in [
+            "read_file",
+            "run_command",
+            "web_search",
+            "list_machines",
+            "mcp_tool",
+        ] {
+            assert_eq!(
+                tool_trail_line(other, r#"{"path":"x"}"#, &target),
+                None,
+                "{other} says nothing the arguments do not"
+            );
+        }
     }
 }

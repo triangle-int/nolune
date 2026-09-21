@@ -38,6 +38,13 @@ pub struct AppState {
     /// `agent_tasks`; written by the loop right before it releases its key,
     /// so a follower learns the reason instead of guessing it from chat text.
     pub agent_exits: Arc<Mutex<HashMap<String, crate::domain::chat::AgentLoopExit>>>,
+    /// The computer a request queued on a running conversation asks its
+    /// next turn to act on (#80), keyed like `agent_tasks`: a handoff
+    /// accepted while the task's conversation runs (#82) is queued on that
+    /// loop and continues on its destination, not on what the loop started
+    /// with. Written under the `agent_tasks` lock while the key is held,
+    /// taken by the loop at the start of a turn, cleared with the key.
+    pub agent_targets: Arc<Mutex<HashMap<String, String>>>,
     /// Pending secret requests awaiting user input.
     pub pending_secrets: Arc<Mutex<HashMap<String, PendingSecret>>>,
     /// Connected MCP servers and their tools.
@@ -132,6 +139,7 @@ impl AppState {
             background_llm: Arc::new(RwLock::new(background_llm)),
             agent_tasks: Arc::new(Mutex::new(HashMap::new())),
             agent_exits: Arc::new(Mutex::new(HashMap::new())),
+            agent_targets: Arc::new(Mutex::new(HashMap::new())),
             pending_secrets: Arc::new(Mutex::new(HashMap::new())),
             mcp_registry,
             http_client,
@@ -156,6 +164,25 @@ impl AppState {
         drop(config);
         *self.llm.write().await = chat;
         *self.background_llm.write().await = background;
+    }
+
+    /// The computer a request queued on the running conversation `key`
+    /// asked its next turn to act on (#80), taken once; `None` when nothing
+    /// was queued since the loop's last turn.
+    pub(crate) async fn take_queued_target(&self, key: &str) -> Option<String> {
+        self.agent_targets.lock().await.remove(key)
+    }
+
+    /// The conversation's loop stopped with `exit`: the reason goes on
+    /// record before the key is released, so a follower that sees the
+    /// conversation idle can read it, and a target queued on this loop that
+    /// it never took goes with it, so it cannot reach a loop started later
+    /// with the user's own choice.
+    pub(crate) async fn release_agent(&self, key: &str, exit: crate::domain::chat::AgentLoopExit) {
+        self.agent_exits.lock().await.insert(key.to_owned(), exit);
+        let mut tasks = self.agent_tasks.lock().await;
+        tasks.remove(key);
+        self.agent_targets.lock().await.remove(key);
     }
 
     /// Reload config from disk and rebuild LLM if credentials or model selection changed.

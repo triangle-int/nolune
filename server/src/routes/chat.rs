@@ -78,6 +78,13 @@ async fn post_chat(
     let chat_id = request.chat_id.clone();
     let content = request.content.trim().to_string();
     let voice_mode = request.voice_mode;
+    // The computer the user chose (#80) travels with the run that this
+    // message starts; a running loop keeps the target it started with. It
+    // is checked like a registered id before it reaches the prompt or the
+    // log, and the refusal names the rule rather than echoing it.
+    crate::services::tools::TargetSelection::check_request(request.machine_id.as_deref())
+        .map_err(|reason| (StatusCode::BAD_REQUEST, reason).into_response())?;
+    let machine_target = request.machine_id.clone();
 
     if content.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "content required").into_response());
@@ -118,7 +125,15 @@ async fn post_chat(
         let bg_state = state.clone();
         let bg_chat_id = chat_id.clone();
         tokio::spawn(async move {
-            run_agent_loop(bg_state, instance_slug, bg_chat_id, cancel, voice_mode).await;
+            run_agent_loop(
+                bg_state,
+                instance_slug,
+                bg_chat_id,
+                cancel,
+                voice_mode,
+                machine_target,
+            )
+            .await;
         });
     }
 
@@ -133,13 +148,18 @@ async fn post_chat(
 
 /// Agent loop: keeps calling the LLM until it responds without tool use or is cancelled.
 /// New user messages are automatically picked up because each turn re-reads from disk.
+/// `machine_target` is the computer the user chose for this run (#80): a
+/// known machine's stable id or `server-home`; `None` leaves the desktop
+/// tools to the only connected computer and refuses several.
 pub async fn run_agent_loop(
     state: AppState,
     instance_slug: String,
     chat_id: String,
     cancel: CancellationToken,
     voice_mode: bool,
+    mut machine_target: Option<String>,
 ) -> AgentLoopExit {
+    let key = task_key(&instance_slug, &chat_id);
     let _ = state.events.send(ServerEvent::AgentRunning {
         instance_slug: instance_slug.clone(),
         chat_id: chat_id.clone(),
@@ -267,6 +287,11 @@ pub async fn run_agent_loop(
 
         iteration += 1;
 
+        // A request queued on this conversation since the last turn (a
+        // handoff accepted while it ran, #82) names the computer this turn
+        // acts on; otherwise the loop keeps the target it started with.
+        machine_target = next_turn_target(&state, &key, machine_target).await;
+
         let config_path = config::config_path();
 
         // Resolve the model for this turn (#156): the chat's pinned preset,
@@ -337,6 +362,7 @@ pub async fn run_agent_loop(
             state.vector_store.clone(),
             state.agent_tasks.clone(),
             state.machine_registry.clone(),
+            machine_target.as_deref(),
             &public_url,
             &state.resources,
         );
@@ -468,18 +494,10 @@ pub async fn run_agent_loop(
     // Clean up
     chat::clear_agent_running(&state.workspace_dir, &instance_slug, &chat_id);
 
-    let key = task_key(&instance_slug, &chat_id);
     // The reason is on record before the key is released, so a follower
-    // that sees the conversation idle can read it.
-    state
-        .agent_exits
-        .lock()
-        .await
-        .insert(key.clone(), exit.clone());
-    {
-        let mut tasks = state.agent_tasks.lock().await;
-        tasks.remove(&key);
-    }
+    // that sees the conversation idle can read it; a target queued on this
+    // loop that it never took is released with the key.
+    state.release_agent(&key, exit.clone()).await;
 
     // Final snapshot — client gets complete state before agent_stopped
     send_snapshot(&state, &instance_slug, &chat_id, false);
@@ -501,6 +519,26 @@ pub async fn run_agent_loop(
 }
 
 /// Send a full chat state snapshot so all clients converge to the same state.
+/// The computer the next turn of the conversation `key` acts on (#80): what
+/// a request queued on it since the last turn asked for, else what the loop
+/// started with (`current`). A queued target is taken once and carried by
+/// the loop from then on.
+pub(crate) async fn next_turn_target(
+    state: &AppState,
+    key: &str,
+    current: Option<String>,
+) -> Option<String> {
+    match state.take_queued_target(key).await {
+        Some(queued) => {
+            log::info!(
+                "[agent] {key} — a queued request re-targets this conversation to {queued:?}"
+            );
+            Some(queued)
+        }
+        None => current,
+    }
+}
+
 fn send_snapshot(state: &AppState, instance_slug: &str, chat_id: &str, agent_running: bool) {
     match chat::load_messages(&state.workspace_dir, instance_slug, chat_id) {
         Ok(resp) => {
@@ -676,4 +714,242 @@ fn map_chat_error(error: std::io::Error) -> (StatusCode, String) {
     };
 
     (status, error.to_string())
+}
+
+#[cfg(test)]
+mod queued_target_tests {
+    //! #80: a request queued on a running conversation (a handoff accepted
+    //! while it ran, #82) names the computer its next turn acts on.
+    use super::*;
+    use crate::domain::companion::CANONICAL_SLUG;
+
+    const STUDIO: &str = "4f3c1c2e-9b5e-4d2b-8f0a-1c2d3e4f5a6b";
+    const LAPTOP: &str = "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d";
+
+    async fn state() -> (tempfile::TempDir, AppState) {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = AppState::new_in(config::Config::default(), tmp.path().join("workspace")).await;
+        (tmp, state)
+    }
+
+    #[tokio::test]
+    async fn the_next_turn_takes_the_queued_computer_once_and_keeps_it_after() {
+        let (_tmp, state) = state().await;
+        let key = task_key(CANONICAL_SLUG, "chat_1");
+        // Nothing queued: the loop keeps what it started with.
+        assert_eq!(next_turn_target(&state, &key, None).await, None);
+        assert_eq!(
+            next_turn_target(&state, &key, Some(STUDIO.into()))
+                .await
+                .as_deref(),
+            Some(STUDIO)
+        );
+        // Queued: the next turn acts there, whatever the loop started with.
+        state
+            .agent_targets
+            .lock()
+            .await
+            .insert(key.clone(), LAPTOP.to_owned());
+        assert_eq!(
+            next_turn_target(&state, &key, Some(STUDIO.into()))
+                .await
+                .as_deref(),
+            Some(LAPTOP)
+        );
+        // Taken once; the loop carries it from there.
+        assert_eq!(state.take_queued_target(&key).await, None);
+        assert_eq!(
+            next_turn_target(&state, &key, Some(LAPTOP.into()))
+                .await
+                .as_deref(),
+            Some(LAPTOP)
+        );
+        // Another conversation's queue is not this one's.
+        state
+            .agent_targets
+            .lock()
+            .await
+            .insert(task_key(CANONICAL_SLUG, "chat_2"), LAPTOP.to_owned());
+        assert_eq!(next_turn_target(&state, &key, None).await, None);
+    }
+
+    #[tokio::test]
+    async fn the_loop_takes_the_queued_computer_at_the_start_of_a_turn_and_releases_it_with_the_key()
+     {
+        let (_tmp, state) = state().await;
+        let key = task_key(CANONICAL_SLUG, "chat_1");
+        state
+            .agent_tasks
+            .lock()
+            .await
+            .insert(key.clone(), CancellationToken::new());
+        state
+            .agent_targets
+            .lock()
+            .await
+            .insert(key.clone(), LAPTOP.to_owned());
+        // No model is configured: the turn stops before a provider is
+        // reached, right after the loop settled the turn's target.
+        let exit = run_agent_loop(
+            state.clone(),
+            CANONICAL_SLUG.to_owned(),
+            "chat_1".to_owned(),
+            CancellationToken::new(),
+            false,
+            Some(STUDIO.to_owned()),
+        )
+        .await;
+        assert_eq!(exit, AgentLoopExit::NoModel);
+        assert_eq!(
+            state.take_queued_target(&key).await,
+            None,
+            "the loop took the queued computer for its turn"
+        );
+        assert!(
+            !state.agent_tasks.lock().await.contains_key(&key),
+            "the loop released the conversation"
+        );
+
+        // A target queued for a loop that stopped with it untaken does not
+        // reach the next loop: what that loop is started with wins.
+        state
+            .agent_tasks
+            .lock()
+            .await
+            .insert(key.clone(), CancellationToken::new());
+        state
+            .agent_targets
+            .lock()
+            .await
+            .insert(key.clone(), LAPTOP.to_owned());
+        state.release_agent(&key, AgentLoopExit::Finished).await;
+        assert_eq!(state.take_queued_target(&key).await, None);
+        assert_eq!(
+            state.agent_exits.lock().await.get(&key),
+            Some(&AgentLoopExit::Finished)
+        );
+    }
+}
+
+#[cfg(test)]
+mod request_target_tests {
+    //! #80: the request's `machine_id` is checked the way registration
+    //! checks one before it reaches the prompt, the log or a refusal.
+    use super::*;
+    use crate::{
+        config::{Config, LlmProvider, ModelPreset},
+        domain::{companion::CANONICAL_SLUG, machine::MAX_MACHINE_ID_BYTES},
+        services::companion,
+    };
+    use axum::{
+        body::Body,
+        http::{Method, Request, header},
+    };
+    use tower::ServiceExt;
+
+    const TOKEN: &str = "issue-80-request-token";
+
+    /// A companion with a chat model configured, so a well-formed message
+    /// would start a run; nothing here reaches a provider.
+    async fn state() -> (tempfile::TempDir, AppState) {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = Config {
+            auth_token: TOKEN.into(),
+            ..Default::default()
+        };
+        config.llm.presets = vec![ModelPreset {
+            id: "sonnet".into(),
+            name: "Claude Sonnet".into(),
+            provider: LlmProvider::Anthropic,
+            model: "claude-sonnet-4-6".into(),
+        }];
+        config.llm.chat_preset = "sonnet".into();
+        config.llm.tokens.anthropic = "test-key-never-used".into();
+        let state = AppState::new_in(config, tmp.path().to_owned()).await;
+        companion::ensure_identity(tmp.path()).unwrap();
+        (tmp, state)
+    }
+
+    async fn post_chat(state: &AppState, body: serde_json::Value) -> (StatusCode, String) {
+        let response = crate::app::router::build_router(state.clone(), None)
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/chat")
+                    .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    #[tokio::test]
+    async fn a_malformed_machine_id_is_refused_before_anything_is_saved_or_started() {
+        let (tmp, state) = state().await;
+        let key = task_key(CANONICAL_SLUG, "chat_1");
+        let too_long = "a".repeat(MAX_MACHINE_ID_BYTES + 1);
+        for bad in [
+            too_long.as_str(),
+            "studio mac",
+            "studio\nmac",
+            "<b>studio</b>",
+            "studio\u{7f}",
+        ] {
+            let (status, body) = post_chat(
+                &state,
+                serde_json::json!({
+                    "instance_slug": CANONICAL_SLUG,
+                    "chat_id": "chat_1",
+                    "content": "hi",
+                    "machine_id": bad,
+                }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad:?}: {body}");
+            assert!(
+                body.contains("machine id"),
+                "{bad:?}: the refusal says what is wrong: {body}"
+            );
+            assert!(
+                !body.contains(bad),
+                "{bad:?}: the refusal does not echo the id: {body}"
+            );
+        }
+        assert!(
+            !state.agent_tasks.lock().await.contains_key(&key),
+            "no run was started"
+        );
+        let saved = chat::load_messages(tmp.path(), CANONICAL_SLUG, "chat_1").unwrap();
+        assert!(saved.messages.is_empty(), "no message was saved: {saved:?}");
+    }
+
+    #[test]
+    fn the_request_target_is_checked_like_a_registration() {
+        use crate::services::tools::TargetSelection;
+        // Nothing chosen, the home, a server-local id and a stable id pass.
+        for ok in [
+            None,
+            Some(""),
+            Some("  "),
+            Some("server-home"),
+            Some("server-local:studio"),
+            Some("4f3c1c2e-9b5e-4d2b-8f0a-1c2d3e4f5a6b"),
+            Some("Studio_Mac.local"),
+        ] {
+            assert_eq!(TargetSelection::check_request(ok), Ok(()), "{ok:?}");
+        }
+        let too_long = "a".repeat(MAX_MACHINE_ID_BYTES + 1);
+        for bad in [too_long.as_str(), "studio mac", "studio\nmac", "<b>x</b>"] {
+            let error = TargetSelection::check_request(Some(bad)).unwrap_err();
+            assert!(error.contains("machine id"), "{bad:?}: {error}");
+            assert!(!error.contains(bad), "{bad:?}: {error}");
+        }
+    }
 }

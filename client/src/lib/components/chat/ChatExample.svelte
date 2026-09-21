@@ -6,6 +6,8 @@
  import Conversation from '$lib/components/ai-elements/conversation/conversation.svelte';
  import ConversationContent from '$lib/components/ai-elements/conversation/conversation-content.svelte';
  import type { ChatMessage } from '$lib/api/types.js';
+ import { buildSpaces, homeSpace } from '$lib/computers/spaces.js';
+ import { NO_TARGET, targetOptions, targetSummary } from '$lib/computers/target.js';
  import { capabilityWarnings } from '$lib/models/presets.js';
  let messages = $state<ChatMessage[]>([
   { id: 'example-user', role: 'user', content: 'Find my notes and help me plan a quieter afternoon.', created_at: '1767258000000' },
@@ -20,6 +22,15 @@
   { id: 'gpt', name: 'GPT-5.4', model: 'gpt-5.4', warnings: capabilityWarnings({ id: 'gpt', name: 'GPT-5.4', provider: 'openai', model: 'gpt-5.4' }, { vision: true, documents: false, tools: true }) },
  ];
  let presetId = $state('sonnet');
+ // Sample computers for the selector (#80): the same helpers as the live composer, at a fixed clock.
+ const sampleNow = 1_767_603_600;
+ const sampleSpaces = buildSpaces([
+  { machine_id: 'sample-studio', display_name: 'Studio Mac', custom_name: 'Studio Mac', hostname: 'studio', os: 'macos', platform: 'macos', location: 'desktop', screen_width: 2560, screen_height: 1440, permissions: { accessibility: 'granted', screen_capture: 'granted' }, capabilities: ['screenshot'], first_seen: sampleNow - 86_400, last_seen: sampleNow, instance_slug: 'companion', online: true, health: 'healthy', driver_version: null, cua_health: null },
+  { machine_id: 'sample-laptop', display_name: 'laptop', custom_name: null, hostname: 'laptop', os: 'macos', platform: 'macos', location: 'desktop', screen_width: 1440, screen_height: 900, permissions: { accessibility: 'denied', screen_capture: 'granted' }, capabilities: ['screenshot'], first_seen: sampleNow - 86_400, last_seen: sampleNow, instance_slug: 'companion', online: true, health: 'healthy', driver_version: null, cua_health: null },
+ ], sampleNow, homeSpace({ connected: true, companionName: 'Luna', nowSeconds: sampleNow }), 'Luna');
+ const targets = targetOptions(sampleSpaces);
+ let targetId = $state(NO_TARGET);
+ const target = $derived(targetSummary(targetId, sampleSpaces));
  let status = $state('Sample conversation. Messages and files stay in this page and disappear on reload.');
  let timer: ReturnType<typeof setInterval> | undefined;
  function stop() { clearInterval(timer); generating = false; status = 'Example response stopped.'; }
@@ -53,7 +64,7 @@
    {/each}
   </ConversationContent>
  </Conversation>
- <div class="input"><PromptComposer onSend={send} onStop={stop} agentRunning={generating} disabled={generating} {presets} {presetId} onPresetChange={id => presetId = id} /></div>
+ <div class="input"><PromptComposer onSend={send} onStop={stop} agentRunning={generating} disabled={generating} {presets} {presetId} onPresetChange={id => presetId = id} {targets} {targetId} targetSummary={target} onTargetChange={id => targetId = id} /></div>
  <p role="status">{status}</p>
 </div>
 <style>

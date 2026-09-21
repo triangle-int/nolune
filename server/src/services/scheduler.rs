@@ -118,6 +118,7 @@ pub(crate) async fn check_and_trigger(state: &AppState) {
                     "default".to_string(),
                     cancel,
                     false,
+                    None,
                 )
                 .await;
             });

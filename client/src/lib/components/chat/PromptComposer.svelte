@@ -8,10 +8,14 @@
  import PromptAttachButton from './PromptAttachButton.svelte';
  import type { Snippet } from 'svelte';
  import * as Select from '$lib/components/ui/select/index.js';
+ import TargetPicker from './TargetPicker.svelte';
+ import type { TargetOption, TargetSummary } from '$lib/computers/target.js';
  /** A preset the picker can offer (#156): the user's own name for a model, and what the model cannot do (#28) when known. */
  type PresetOption = { id: string; name: string; model: string; warnings?: { chip: string; detail: string }[] };
- let { onSend, onStop, disabled = false, agentRunning = false, presets = [], presetId = null, onPresetChange, footer, onFileAdd }:
- { onSend: (text: string, files?: File[]) => void | boolean | Promise<void | boolean>; onStop: () => void; disabled?: boolean; agentRunning?: boolean; presets?: PresetOption[]; presetId?: string | null; onPresetChange?: (id: string) => void; footer?: Snippet; onFileAdd?: () => void } = $props();
+ let { onSend, onStop, disabled = false, agentRunning = false, presets = [], presetId = null, onPresetChange, targets, targetId = '', targetSummary, onTargetChange, footer, onFileAdd }:
+ { onSend: (text: string, files?: File[]) => void | boolean | Promise<void | boolean>; onStop: () => void; disabled?: boolean; agentRunning?: boolean; presets?: PresetOption[]; presetId?: string | null; onPresetChange?: (id: string) => void;
+   /** The computers the desktop tools can act on (#80); absent hides the selector. */
+   targets?: TargetOption[]; targetId?: string; targetSummary?: TargetSummary; onTargetChange?: (id: string) => void; footer?: Snippet; onFileAdd?: () => void } = $props();
  const modelId = $props.id();
  const presetItems = $derived(presets.map(p => ({ value: p.id, label: p.name })));
  const currentPreset = $derived(presets.find(p => p.id === presetId));
@@ -42,14 +46,14 @@
   <PromptAttachments disabled={busy} />
   <PromptTextarea bind:value bind:ref={textarea} aria-label="Message Nolune" placeholder="What’s on your mind?" disabled={submitting || (disabled && !agentRunning)} class="min-h-20 p-4 text-base md:text-base" />
   <PromptToolbar class="gap-2 px-2 pb-2">
-   <div class="flex min-w-0 items-center gap-1">
+   <div class="flex min-w-0 flex-1 items-center gap-1">
     <PromptAttachButton disabled={busy || agentRunning} />
     {#if presets.length > 0 && onPresetChange}
      <label class="sr-only" for={modelId}>Model preset for this conversation</label>
      <Select.Root type="single" items={presetItems} disabled={busy}
       bind:value={() => presetId ?? '', next => { if (next) onPresetChange?.(next); }}>
-      <Select.Trigger id={modelId} aria-label="Model preset for this conversation" title={currentPreset?.model} class="w-36 gap-3 border-border bg-card px-3 text-[13px] text-secondary-foreground shadow-none data-[size=default]:h-11 dark:bg-card dark:hover:bg-accent">
-       <span data-slot="select-value" class="truncate">{currentPreset?.name ?? "Model"}</span>
+      <Select.Trigger id={modelId} aria-label="Model preset for this conversation" title={currentPreset?.model} class="min-w-0 flex-[2] basis-0 gap-3 border-border bg-card px-3 text-[13px] text-secondary-foreground shadow-none data-[size=default]:h-11 dark:bg-card dark:hover:bg-accent md:w-36 md:flex-none">
+       <span class="min-w-0 flex-1 truncate text-left">{currentPreset?.name ?? "Model"}</span>
       </Select.Trigger>
       <Select.Content side="top" align="start" sideOffset={8} class="min-w-48 border border-border p-1 shadow-lg">
        {#each presets as preset (preset.id)}
@@ -58,6 +62,9 @@
       </Select.Content>
      </Select.Root>
     {:else}<span class="hint">Enter to send</span>{/if}
+    {#if targets && targetSummary && onTargetChange}
+     <TargetPicker options={targets} value={targetId} summary={targetSummary} onChange={onTargetChange} disabled={busy} />
+    {/if}
    </div>
    <PromptSubmit class="size-11 shrink-0 bg-primary text-primary-foreground hover:bg-primary/90" status={agentRunning ? 'streaming' : submitting || disabled ? 'submitted' : 'ready'} {onStop} disabled={!agentRunning && (busy || (!value.trim() && !attachments.length))} />
   </PromptToolbar>

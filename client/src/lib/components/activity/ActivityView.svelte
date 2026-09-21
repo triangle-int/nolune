@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { ResumeDisabled, cancelActivity, fetchActivity, invokeResume, retryActivity } from "$lib/api/client.js";
+	import { ResumeDisabled, cancelActivity, fetchActivity, fetchMachines, invokeResume, retryActivity, type MachineInfo } from "$lib/api/client.js";
 	import type { ProactiveRun, ServerEvent } from "$lib/api/types.js";
-	import { canCancel, canRetry, commitmentConditionLabel, commitmentReceipt, outcomeSummary, relativeTime, statusLabel, triggerLabel } from "$lib/activity/receipts.js";
+	import { canCancel, canRetry, commitmentConditionLabel, commitmentReceipt, outcomeSummary, relativeTime, runTargetLabel, statusLabel, triggerLabel } from "$lib/activity/receipts.js";
+	import { applyMachineEvent } from "$lib/computers/spaces.js";
 	import { heldMessage } from "$lib/continuity/resume.js";
 	import CommitmentsSection from "$lib/components/commitments/CommitmentsSection.svelte";
 	import { getWebSocket } from "$lib/stores/websocket.svelte.js";
@@ -17,6 +18,8 @@
 	let loadError = $state("");
 	let busy = $state<string | null>(null);
 	let now = $state(Math.floor(Date.now() / 1000));
+	/** Known computers, so a run's target reads by the name the Computers tab shows (#80). */
+	let machines = $state<MachineInfo[]>([]);
 
 	const ws = getWebSocket();
 
@@ -34,9 +37,16 @@
 
 	$effect(() => {
 		load();
+		// Names only: a listing that fails leaves ids in the labels, never blocks the runs.
+		fetchMachines(slug)
+			.then((listing) => (machines = listing.machines))
+			.catch(() => {});
 		const unsub = ws.subscribe((event: ServerEvent) => {
 			if (event.type === "activity_updated" && event.instance_slug === slug) {
 				runs = upsertRun(runs, event.run);
+			}
+			if ((event.type === "machine_updated" || event.type === "machine_forgotten") && event.instance_slug === slug) {
+				machines = applyMachineEvent(machines, event);
 			}
 		});
 		const tick = setInterval(() => (now = Math.floor(Date.now() / 1000)), 30_000);
@@ -123,7 +133,7 @@
 				{@const commitment = commitmentReceipt(run)}
 				<li id={`run-${run.id}`} class="activity-item" class:activity-running={status === "running"} class:activity-failed={status === "failed"} class:activity-skipped={status === "skipped"}>
 					<div class="activity-row">
-						<span class="activity-trigger">{triggerLabel(run.trigger)}</span>
+						<span class="activity-trigger">{triggerLabel(run.trigger, machines)}{#if runTargetLabel(run, machines)}<span class="activity-target"> · {runTargetLabel(run, machines)}</span>{/if}</span>
 						<span class="activity-time">{relativeTime(run.started_at, now)}</span>
 					</div>
 					{#if commitment}
@@ -184,6 +194,7 @@
 	.activity-skipped { opacity: 0.8; }
 	.activity-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 	.activity-trigger { font: 500 14px var(--font-body); color: var(--foreground); }
+	.activity-target { font-weight: 400; color: var(--text-secondary); }
 	.activity-time { font: 400 12px var(--font-body); color: var(--text-muted); }
 	.activity-reason { margin: 0; font: 400 14px/1.5 var(--font-body); color: var(--text-secondary); }
 	.activity-status { font: 500 13px var(--font-body); color: var(--primary); }

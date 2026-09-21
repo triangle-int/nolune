@@ -59,6 +59,14 @@ pub trait ToolDyn: Send + Sync {
         &'a self,
         args: String,
     ) -> Pin<Box<dyn Future<Output = Result<String, ToolError>> + Send + 'a>>;
+    /// The line the activity trail keeps with a call when it says more than
+    /// the arguments do (#80: the computer a desktop tool acts on, which the
+    /// model may leave out). It is persisted beside the call so a reloaded
+    /// conversation reads the way the live one did; `None` leaves the
+    /// reloaded line to a summary of the arguments.
+    fn trail_line(&self, _args: &str) -> Option<String> {
+        None
+    }
 }
 
 /// Typed tool trait. Implement this for concrete tools.

@@ -18,6 +18,9 @@ export interface ChatRequest {
 	instance_slug: string;
 	content: string;
 	chat_id?: string;
+	voice_mode?: boolean;
+	/** The computer chosen for this conversation (#80): a machine id or `server-home`. */
+	machine_id?: string | null;
 }
 
 export interface ChatResponse {

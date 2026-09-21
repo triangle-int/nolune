@@ -5,7 +5,9 @@ import {
 	canRetry,
 	outcomeSummary,
 	relativeTime,
+	runTargetLabel,
 	statusLabel,
+	targetLabel,
 	triggerLabel,
 	upsertRun,
 } from '../src/lib/activity/receipts.js';
@@ -56,4 +58,21 @@ test('live updates replace runs in place and keep newest first', () => {
 	assert.equal(relativeTime(1000, 1000 + 120), '2m ago');
 	assert.equal(relativeTime(1000, 1000 + 7200), '2h ago');
 	assert.equal(relativeTime(1000, 1000 + 3 * 86400), '3d ago');
+});
+
+test('the target of a run is named the way the Computers tab names it (#80)', () => {
+	const machines = [{ machine_id: 'studio-id', display_name: 'Studio Mac' }];
+	assert.equal(targetLabel({ kind: 'machine', machine_id: 'studio-id' }, machines), 'On Studio Mac');
+	assert.equal(targetLabel({ kind: 'machine', machine_id: 'laptop-id' }, machines), 'On laptop-id');
+	assert.equal(targetLabel({ kind: 'machine', machine_id: 'laptop-id' }), 'On laptop-id');
+	assert.equal(targetLabel({ kind: 'companion' }, machines), '');
+	assert.equal(targetLabel({ kind: 'chat', chat_id: 'default' }, machines), '');
+	assert.equal(triggerLabel({ kind: 'machine_connected', machine_id: 'studio-id' }, machines), 'Computer connected · Studio Mac');
+	assert.equal(triggerLabel({ kind: 'machine_connected', machine_id: 'studio-id' }), 'Computer connected · studio-id');
+	// A card never names the same computer twice.
+	const connected = { ...base, trigger: { kind: 'machine_connected', machine_id: 'studio-id' }, target: { kind: 'machine', machine_id: 'studio-id' } };
+	assert.equal(runTargetLabel(connected, machines), '');
+	const handoff = { ...base, trigger: { kind: 'handoff', handoff_id: 'h1' }, target: { kind: 'machine', machine_id: 'studio-id' } };
+	assert.equal(runTargetLabel(handoff, machines), 'On Studio Mac');
+	assert.equal(runTargetLabel(base, machines), '');
 });
