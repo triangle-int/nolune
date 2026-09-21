@@ -1202,6 +1202,35 @@ fn live_window_spellings_fold_into_the_protocol_shape() {
     };
     assert!(observed.screenshot.is_none() && observed.screenshot_scale.is_none());
 
+    // An image beside an action result (screenshot evidence the driver may
+    // attach to a click, folded in by the transport as `screenshot_*`) is
+    // dropped: the protocol's action results carry no capture.
+    let clicked = request(click(token()));
+    let mut with_capture = json!({
+        "target": {"pid": 42, "window_id": 99},
+        "address": {"kind": "element_token", "element_token": "tok/1"},
+        "button": "left", "action": "press",
+        "outcome": {
+            "effect": "confirmed", "route": "accessibility",
+            "delivery": {"requested": "background", "delivered_count": 1},
+            "evidence": ["accessibility_readback", "screenshot"]
+        },
+        "screenshot_png_b64": png, "screenshot_mime_type": "image/png",
+        "screenshot_width": 1, "screenshot_height": 1, "screenshot_scale": 1.0,
+        "screenshot_frame_valid": true
+    });
+    let envelope = decode_response(&clicked, with_capture.clone()).unwrap();
+    let CuaResponse::Success { result } = envelope.response else {
+        panic!("a click with an image beside it decodes");
+    };
+    let CuaActionResult::Click(clicked_result) = *result else {
+        panic!("a click result");
+    };
+    assert_eq!(clicked_result.outcome.effect, ActionEffect::Confirmed);
+    // Any other unknown field on an action result is still refused.
+    with_capture["surprise"] = json!(1);
+    assert!(decode_response(&clicked, with_capture).is_err());
+
     // Both spellings at once is not a shape the driver emits: refused.
     let mut both = live_window.clone();
     both["target"] = json!({"pid": 42, "window_id": 8361});

@@ -7,7 +7,9 @@
 //! snapshot: nothing observed yet, a token from a superseded snapshot, or a
 //! snapshot the last action already acted on all fail closed. A point
 //! address is forwarded only while the window's accessibility route is
-//! unavailable or the last verification showed an action did not land.
+//! unavailable or the last verification showed an action did not land, and
+//! only when the latest observation carried the screenshot the point is
+//! read from.
 //!
 //! After an action the orchestrator reads the driver's `ActionOutcome` and,
 //! when the caller supplied predicates, issues `verify_state` itself. Success
@@ -64,9 +66,22 @@ pub enum LedgerRefusal {
         snapshot: Option<SnapshotId>,
         action: CuaActionKind,
     },
-    /// A point address while the window's accessibility route is usable and
-    /// no verification has failed on it.
-    PixelRefused { target: WindowTarget },
+    /// A point address the window's ledger does not allow right now.
+    PixelRefused {
+        target: WindowTarget,
+        reason: PixelRefusal,
+    },
+}
+
+/// Why a point address is not forwarded on a window.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PixelRefusal {
+    /// The window's accessibility route works and no verification there
+    /// failed: elements are addressed by token.
+    AccessibilityWorks,
+    /// Pixels would be the route, but the latest observation of the window
+    /// carried no screenshot to read the point from.
+    NoScreenshot,
 }
 
 impl LedgerRefusal {
@@ -139,11 +154,24 @@ impl fmt::Display for LedgerRefusal {
                 target.pid,
                 kind_name(*action)
             ),
-            Self::PixelRefused { target } => write!(
+            Self::PixelRefused {
+                target,
+                reason: PixelRefusal::AccessibilityWorks,
+            } => write!(
                 f,
                 "a point address on window {} (pid {}) is not allowed while its accessibility \
                  route works and no verification there has failed; act with an element_token \
                  from the latest get_window_state instead",
+                target.window_id, target.pid
+            ),
+            Self::PixelRefused {
+                target,
+                reason: PixelRefusal::NoScreenshot,
+            } => write!(
+                f,
+                "a point address on window {} (pid {}) is read from a screenshot, and the \
+                 latest get_window_state of the window captured none; call get_window_state \
+                 again with include_screenshot: true, then act with a point from that capture",
                 target.window_id, target.pid
             ),
         }
@@ -175,16 +203,32 @@ struct WindowLedger {
     /// The kind of the action taken since the latest observation, if any.
     acted: Option<CuaActionKind>,
     /// The latest observation could not resolve the window's accessibility
-    /// surface (degraded, AX unresolved, or a tree with no elements).
+    /// surface (degraded, AX unresolved, or an unfiltered tree with no
+    /// elements).
     ax_unavailable: bool,
+    /// The latest observation carried a screenshot: what a point address
+    /// is read from.
+    screenshot: bool,
     /// The last verification on this window failed or an action did not
     /// land; cleared by the next verified action.
     fallback: bool,
 }
 
 impl WindowLedger {
-    fn pixels_allowed(&self) -> bool {
+    /// Whether the window's state calls for the pixel route at all.
+    fn pixels_wanted(&self) -> bool {
         self.fallback || self.ax_unavailable
+    }
+
+    /// Why a point address is refused right now, if it is.
+    fn pixel_refusal(&self) -> Option<PixelRefusal> {
+        if !self.pixels_wanted() {
+            Some(PixelRefusal::AccessibilityWorks)
+        } else if !self.screenshot {
+            Some(PixelRefusal::NoScreenshot)
+        } else {
+            None
+        }
     }
 }
 
@@ -289,11 +333,16 @@ impl SnapshotLedger {
     }
 
     /// Record what `get_window_state` returned for a window: the snapshot it
-    /// issued (or that it issued none) and whether accessibility is usable
-    /// there. Replaces the previous snapshot of the same machine and window
-    /// and clears the action taken since; a failed verification stays on
-    /// record, because the pixel action it allows needs this fresh
-    /// screenshot.
+    /// issued (or that it issued none), whether accessibility is usable
+    /// there, and whether a screenshot came with it. Replaces the previous
+    /// snapshot of the same machine and window and clears the action taken
+    /// since; a failed verification stays on record, because the pixel
+    /// action it allows needs this fresh screenshot.
+    ///
+    /// A tree with no elements counts as an unavailable accessibility
+    /// surface only when nothing narrowed the walk: a `query` that matches
+    /// nothing or a `max_depth` above every actionable element is a filter
+    /// on a healthy window, not a reason to click blind.
     pub fn observed(
         &self,
         machine: &MachineId,
@@ -320,10 +369,12 @@ impl SnapshotLedger {
         let ax_unresolved = state.background_input.as_ref().is_some_and(|background| {
             background.exact_window.status == ExactWindowStatus::AxUnresolved
         });
+        let narrowed = args.query.is_some() || args.max_depth.is_some();
+        let tree_empty = tree_requested && !narrowed && state.elements.is_empty();
         let mut windows = self.lock();
         let entry = windows.entry(key(machine, state.target)).or_default();
-        entry.ax_unavailable =
-            state.degraded || ax_unresolved || (tree_requested && state.elements.is_empty());
+        entry.ax_unavailable = state.degraded || ax_unresolved || tree_empty;
+        entry.screenshot = state.screenshot.is_some();
         if let Some(previous) = entry.snapshot.take() {
             entry.superseded = Some(previous);
         }
@@ -354,8 +405,8 @@ impl SnapshotLedger {
         for address in addresses {
             match address {
                 Address::Point => {
-                    if !entry.pixels_allowed() {
-                        return Err(LedgerRefusal::PixelRefused { target });
+                    if let Some(reason) = entry.pixel_refusal() {
+                        return Err(LedgerRefusal::PixelRefused { target, reason });
                     }
                 }
                 Address::Token(_) | Address::Index { .. } => {
@@ -396,11 +447,13 @@ impl SnapshotLedger {
 
     /// A verification of the window finished. Unsatisfied (or an action
     /// that did not land) opens the pixel route there; satisfied closes it.
+    /// A window that was never observed gets no entry: there is no
+    /// screenshot to read a point from and no snapshot to act on, so the
+    /// next address there stays `snapshot_required`.
     pub fn verified(&self, machine: &MachineId, target: WindowTarget, satisfied: bool) {
-        self.lock()
-            .entry(key(machine, target))
-            .or_default()
-            .fallback = !satisfied;
+        if let Some(entry) = self.lock().get_mut(&key(machine, target)) {
+            entry.fallback = !satisfied;
+        }
     }
 
     /// The driver itself called the window's snapshot stale: forget it, so
@@ -418,23 +471,28 @@ impl SnapshotLedger {
                 reason: "the window has not been observed; call get_window_state first",
             };
         };
-        if entry.fallback {
-            PixelPolicy {
+        match entry.pixel_refusal() {
+            Some(PixelRefusal::AccessibilityWorks) => PixelPolicy {
+                allowed: false,
+                reason: "the accessibility route works; address elements by element_token",
+            },
+            Some(PixelRefusal::NoScreenshot) => PixelPolicy {
+                allowed: false,
+                reason: "the accessibility route is unavailable on this window or the last \
+                         verification there failed, but the latest get_window_state captured \
+                         no screenshot to read a point from; call it again with \
+                         include_screenshot: true before a point address",
+            },
+            None if entry.fallback => PixelPolicy {
                 allowed: true,
                 reason: "the last verification on this window failed or an action did not \
                          land; a point address is allowed until an action there is verified",
-            }
-        } else if entry.ax_unavailable {
-            PixelPolicy {
+            },
+            None => PixelPolicy {
                 allowed: true,
                 reason: "the window's accessibility surface is unavailable or empty; a point \
                          address read from the screenshot is the only route",
-            }
-        } else {
-            PixelPolicy {
-                allowed: false,
-                reason: "the accessibility route works; address elements by element_token",
-            }
+            },
         }
     }
 }
@@ -714,8 +772,9 @@ impl fmt::Display for Failure {
                     )?;
                 }
                 f.write_str(
-                    "; not reported as done. Observe the window again; a point address is \
-                     allowed there now if the accessibility route failed you",
+                    "; not reported as done. Observe the window again (with include_screenshot: \
+                     true if the accessibility route failed you: a point address is allowed \
+                     there once a screenshot is on record)",
                 )
             }
             Self::Exec(message) => f.write_str(message),
@@ -754,6 +813,17 @@ fn confirmed_by_readback(outcome: &ActionOutcome) -> bool {
                     | ActionEvidence::Screenshot
             )
         })
+}
+
+/// The driver delivered the action and saw it miss: a suspected no-op, or
+/// an escalation to the pixel route. Opens the pixel route on the window,
+/// as a refused delivery and a failed verification do.
+fn did_not_land(outcome: &ActionOutcome) -> bool {
+    outcome.effect == ActionEffect::SuspectedNoop
+        || outcome
+            .escalation
+            .as_ref()
+            .is_some_and(|escalation| escalation.target == cua_protocol::EscalationTarget::Pixel)
 }
 
 /// The outcome an action result carries.
@@ -965,7 +1035,13 @@ impl Orchestrator {
                 })
             }
             None => {
-                self.ledger.verified(&machine, window, false);
+                // Delivered but not read back is not a miss: the
+                // accessibility route stays the one to use. A suspected
+                // no-op, or the driver's own advice to go through pixels,
+                // is.
+                if did_not_land(&outcome) {
+                    self.ledger.verified(&machine, window, false);
+                }
                 Err(Failure::Unconfirmed { outcome })
             }
         }
@@ -1256,12 +1332,26 @@ mod tests {
         snapshot
     }
 
+    fn screenshot_json() -> Value {
+        json!({"media_type": "png", "base64": tiny_png(), "width": 1, "height": 1})
+    }
+
+    /// `payload` with a one-pixel screenshot beside whatever it carries.
+    fn with_screenshot(mut payload: Value) -> Value {
+        payload["screenshot"] = screenshot_json();
+        payload
+    }
+
     fn observe_args(tree: bool) -> GetWindowStateArgs {
+        observe_args_with(tree, !tree)
+    }
+
+    fn observe_args_with(tree: bool, screenshot: bool) -> GetWindowStateArgs {
         GetWindowStateArgs {
             target: window(),
             session: None,
             include_accessibility_tree: tree,
-            include_screenshot: !tree,
+            include_screenshot: screenshot,
             max_elements: None,
             max_depth: None,
             max_dimension: None,
@@ -1362,6 +1452,14 @@ mod tests {
     async fn observe(orchestrator: &Orchestrator, target: &Target, tree: bool) {
         orchestrator
             .window_state(target, observe_args(tree))
+            .await
+            .unwrap();
+    }
+
+    /// Observe with the tree and a screenshot: what a point address needs.
+    async fn observe_both(orchestrator: &Orchestrator, target: &Target) {
+        orchestrator
+            .window_state(target, observe_args_with(true, true))
             .await
             .unwrap();
     }
@@ -1997,18 +2095,18 @@ mod tests {
                     "s00000001",
                     vec![element(0, "tok/a", "AXButton", "Save")],
                 )),
-                Answer::Payload(degraded_state()),
+                Answer::Payload(with_screenshot(degraded_state())),
                 Answer::Outcome(confirmed(&["screenshot"])),
-                Answer::Payload(state(
+                Answer::Payload(with_screenshot(state(
                     "s00000002",
                     vec![element(1, "tok/b", "AXTextField", "Name")],
-                )),
+                ))),
                 Answer::Outcome(confirmed(&["accessibility_readback"])),
                 Answer::Verification("unsatisfied"),
-                Answer::Payload(state(
+                Answer::Payload(with_screenshot(state(
                     "s00000003",
                     vec![element(1, "tok/c", "AXTextField", "Name")],
-                )),
+                ))),
                 Answer::Outcome(confirmed(&["screenshot"])),
                 Answer::Verification("satisfied"),
                 Answer::Payload(state(
@@ -2033,7 +2131,10 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             error,
-            Failure::Ledger(LedgerRefusal::PixelRefused { target: window() })
+            Failure::Ledger(LedgerRefusal::PixelRefused {
+                target: window(),
+                reason: PixelRefusal::AccessibilityWorks,
+            })
         );
         assert!(
             error.to_string().starts_with("pixel_refused: ")
@@ -2042,10 +2143,11 @@ mod tests {
         );
         assert_eq!(kinds(&log), [CuaActionKind::GetWindowState]);
 
-        // The exact window's accessibility surface is unresolved: pixels are
-        // the only route left, and the driver's foreground recommendation is
-        // not what happens.
-        observe(&orchestrator, &target, true).await;
+        // The exact window's accessibility surface is unresolved and the
+        // observation carried the screenshot the point is read from: pixels
+        // are the only route left, and the driver's foreground
+        // recommendation is not what happens.
+        observe_both(&orchestrator, &target).await;
         let policy = orchestrator.ledger().pixel_policy(&machine, window());
         assert!(policy.allowed, "{policy:?}");
         let report = orchestrator
@@ -2062,7 +2164,7 @@ mod tests {
 
         // Healthy again: pixels refused; then a verification that fails
         // opens the pixel route for this window.
-        observe(&orchestrator, &target, true).await;
+        observe_both(&orchestrator, &target).await;
         assert!(
             !orchestrator
                 .ledger()
@@ -2084,7 +2186,7 @@ mod tests {
 
         // The fresh snapshot the pixel click needs does not close it again;
         // a verified action does.
-        observe(&orchestrator, &target, true).await;
+        observe_both(&orchestrator, &target).await;
         assert!(
             orchestrator
                 .ledger()
@@ -2108,27 +2210,289 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             error,
-            Failure::Ledger(LedgerRefusal::PixelRefused { target: window() })
+            Failure::Ledger(LedgerRefusal::PixelRefused {
+                target: window(),
+                reason: PixelRefusal::AccessibilityWorks,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_point_address_needs_the_screenshot_of_the_latest_observation() {
+        let orchestrator = Orchestrator::new();
+        let (target, log) = fake(
+            desktop(),
+            vec![
+                Answer::Payload(degraded_state()),
+                Answer::Payload(with_screenshot(degraded_state())),
+                Answer::Outcome(confirmed(&["screenshot"])),
+                Answer::Payload(with_screenshot(degraded_state())),
+                Answer::Payload(degraded_state()),
+            ],
+        );
+        let machine = target.machine_id().clone();
+
+        // Accessibility is unavailable, so pixels would be the route, but
+        // the observation carried no screenshot to read a point from.
+        observe(&orchestrator, &target, true).await;
+        let policy = orchestrator.ledger().pixel_policy(&machine, window());
+        assert!(!policy.allowed, "{policy:?}");
+        assert!(policy.reason.contains("include_screenshot"), "{policy:?}");
+        let error = orchestrator
+            .act(&target, click_point(), None)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            Failure::Ledger(LedgerRefusal::PixelRefused {
+                target: window(),
+                reason: PixelRefusal::NoScreenshot,
+            })
+        );
+        let text = error.to_string();
+        assert!(
+            text.starts_with("pixel_refused: ") && text.contains("include_screenshot"),
+            "{text}"
+        );
+        assert_eq!(kinds(&log), [CuaActionKind::GetWindowState]);
+
+        // The same window observed with a screenshot: the point is read
+        // from it and forwarded.
+        observe_both(&orchestrator, &target).await;
+        let policy = orchestrator.ledger().pixel_policy(&machine, window());
+        assert!(policy.allowed, "{policy:?}");
+        orchestrator
+            .act(&target, click_point(), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            kinds(&log),
+            [
+                CuaActionKind::GetWindowState,
+                CuaActionKind::GetWindowState,
+                CuaActionKind::Click
+            ]
+        );
+
+        // A screenshot is only as fresh as the latest observation: one
+        // without it closes the point route again, whatever came before.
+        observe_both(&orchestrator, &target).await;
+        assert!(
+            orchestrator
+                .ledger()
+                .pixel_policy(&machine, window())
+                .allowed
+        );
+        observe(&orchestrator, &target, true).await;
+        assert_eq!(
+            orchestrator.ledger().check(&machine, &click_point()),
+            Err(LedgerRefusal::PixelRefused {
+                target: window(),
+                reason: PixelRefusal::NoScreenshot,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_verification_on_an_unobserved_window_opens_nothing() {
+        let orchestrator = Orchestrator::new();
+        let (target, log) = fake(
+            desktop(),
+            vec![
+                Answer::Verification("unsatisfied"),
+                Answer::Verification("unknown"),
+            ],
+        );
+        let machine = target.machine_id().clone();
+        let args = VerifyStateArgs {
+            target: window(),
+            session: None,
+            expect: vec![VerifyPredicate::WindowExists(false)],
+            include_screenshot: false,
+            stable_samples: 1,
+            timeout_ms: 500,
+        };
+
+        // The verification itself is an error, as always.
+        let error = orchestrator
+            .verify(&target, args.clone())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Failure::Unverified { .. }), "{error:?}");
+        assert_eq!(error.code(), "verification_failed");
+
+        // But it puts nothing on the ledger: the window was never observed,
+        // so there is no screenshot to read a point from and no snapshot
+        // to act on. The next point address is refused before anything is
+        // sent, exactly as before the verification.
+        let policy = orchestrator.ledger().pixel_policy(&machine, window());
+        assert!(!policy.allowed, "{policy:?}");
+        assert!(policy.reason.contains("not been observed"), "{policy:?}");
+        let error = orchestrator
+            .act(&target, click_point(), None)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            Failure::Ledger(LedgerRefusal::NoSnapshot { target: window() })
+        );
+        assert_eq!(
+            orchestrator.ledger().check(&machine, &click_token("tok/a")),
+            Err(LedgerRefusal::NoSnapshot { target: window() })
+        );
+
+        // An unknown verdict on the unobserved window changes nothing either.
+        let error = orchestrator.verify(&target, args).await.unwrap_err();
+        assert_eq!(error.code(), "unverified");
+        assert_eq!(
+            orchestrator.ledger().check(&machine, &click_point()),
+            Err(LedgerRefusal::NoSnapshot { target: window() })
+        );
+        assert_eq!(
+            kinds(&log),
+            [CuaActionKind::VerifyState, CuaActionKind::VerifyState],
+            "no click reached the driver"
         );
     }
 
     #[tokio::test]
     async fn a_tree_without_elements_counts_as_accessibility_unavailable() {
         let orchestrator = Orchestrator::new();
+        let empty = json!({
+            "target": {"pid": 42, "window_id": 99},
+            "snapshot_id": "s00000009",
+            "elements": [],
+            "truncated": false,
+        });
         let (target, _) = fake(
             desktop(),
-            vec![Answer::Payload(json!({
+            vec![
+                Answer::Payload(empty.clone()),
+                Answer::Payload(with_screenshot(empty)),
+            ],
+        );
+        let machine = target.machine_id().clone();
+
+        // An unfiltered tree with nothing in it: the accessibility route
+        // has nothing to address, so pixels are the route once a
+        // screenshot is on record.
+        observe(&orchestrator, &target, true).await;
+        let policy = orchestrator.ledger().pixel_policy(&machine, window());
+        assert!(!policy.allowed, "{policy:?}");
+        assert!(policy.reason.contains("include_screenshot"), "{policy:?}");
+        observe_both(&orchestrator, &target).await;
+        let policy = orchestrator.ledger().pixel_policy(&machine, window());
+        assert!(policy.allowed, "{policy:?}");
+        assert!(policy.reason.contains("unavailable or empty"), "{policy:?}");
+    }
+
+    #[tokio::test]
+    async fn a_narrowed_observation_with_no_matches_keeps_the_pixel_route_closed() {
+        // The driver answers a `query` that matches nothing with a snapshot
+        // and no elements: that is a healthy window and a filter, not an
+        // unavailable accessibility surface.
+        for (query, max_depth) in [(Some("zzz-no-such-label"), None), (None, Some(1))] {
+            let orchestrator = Orchestrator::new();
+            let empty = json!({
                 "target": {"pid": 42, "window_id": 99},
                 "snapshot_id": "s00000009",
                 "elements": [],
                 "truncated": false,
-            }))],
-        );
-        observe(&orchestrator, &target, true).await;
-        let policy = orchestrator
-            .ledger()
-            .pixel_policy(target.machine_id(), window());
-        assert!(policy.allowed, "{policy:?}");
+                "app_name": "Notes",
+            });
+            let (target, log) = fake(desktop(), vec![Answer::Payload(with_screenshot(empty))]);
+            let machine = target.machine_id().clone();
+            let mut args = observe_args_with(true, true);
+            args.query = query.map(|q| cua_protocol::BoundedText::try_from(q).unwrap());
+            args.max_depth = max_depth;
+            orchestrator.window_state(&target, args).await.unwrap();
+
+            let policy = orchestrator.ledger().pixel_policy(&machine, window());
+            assert!(
+                !policy.allowed,
+                "query {query:?}, depth {max_depth:?}: {policy:?}"
+            );
+            let error = orchestrator
+                .act(&target, click_point(), None)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error,
+                Failure::Ledger(LedgerRefusal::PixelRefused {
+                    target: window(),
+                    reason: PixelRefusal::AccessibilityWorks,
+                })
+            );
+            assert_eq!(kinds(&log), [CuaActionKind::GetWindowState]);
+        }
+    }
+
+    #[tokio::test]
+    async fn only_an_action_that_did_not_land_opens_the_pixel_route() {
+        // Delivered but not read back is not evidence of a miss: the
+        // accessibility route stays the one to use.
+        for outcome_json in [
+            confirmed(&["delivery_receipt"]),
+            outcome("unverifiable", None),
+            outcome("partial", None),
+        ] {
+            let orchestrator = Orchestrator::new();
+            let (target, log) = fake(
+                desktop(),
+                vec![
+                    Answer::Payload(with_screenshot(state(
+                        "s00000001",
+                        vec![element(0, "tok/a", "AXButton", "Save")],
+                    ))),
+                    Answer::Outcome(outcome_json.clone()),
+                ],
+            );
+            let machine = target.machine_id().clone();
+            observe_both(&orchestrator, &target).await;
+            let error = orchestrator
+                .act(&target, click_token("tok/a"), None)
+                .await
+                .unwrap_err();
+            assert!(matches!(error, Failure::Unconfirmed { .. }), "{error:?}");
+            let policy = orchestrator.ledger().pixel_policy(&machine, window());
+            assert!(!policy.allowed, "{outcome_json}: {policy:?}");
+            assert_eq!(
+                kinds(&log),
+                [CuaActionKind::GetWindowState, CuaActionKind::Click]
+            );
+        }
+
+        // A suspected no-op, or the driver's own advice to go through
+        // pixels, is a miss on the accessibility route: pixels open.
+        for outcome_json in [
+            outcome("suspected_noop", None),
+            outcome(
+                "unverifiable",
+                Some(json!({"target": "pixel", "reason": "route_unavailable"})),
+            ),
+        ] {
+            let orchestrator = Orchestrator::new();
+            let (target, _) = fake(
+                desktop(),
+                vec![
+                    Answer::Payload(with_screenshot(state(
+                        "s00000001",
+                        vec![element(0, "tok/a", "AXButton", "Save")],
+                    ))),
+                    Answer::Outcome(outcome_json.clone()),
+                ],
+            );
+            let machine = target.machine_id().clone();
+            observe_both(&orchestrator, &target).await;
+            let error = orchestrator
+                .act(&target, click_token("tok/a"), None)
+                .await
+                .unwrap_err();
+            assert!(matches!(error, Failure::Unconfirmed { .. }), "{error:?}");
+            let policy = orchestrator.ledger().pixel_policy(&machine, window());
+            assert!(policy.allowed, "{outcome_json}: {policy:?}");
+            assert!(policy.reason.contains("did not land"), "{policy:?}");
+        }
     }
 
     #[tokio::test]
@@ -2260,15 +2624,15 @@ mod tests {
         let (target, log) = fake(
             desktop(),
             vec![
-                Answer::Payload(state(
+                Answer::Payload(with_screenshot(state(
                     "s00000001",
                     vec![element(0, "tok/a", "AXButton", "Save")],
-                )),
+                ))),
                 Answer::Verification("satisfied"),
                 Answer::Verification("unsatisfied"),
             ],
         );
-        observe(&orchestrator, &target, true).await;
+        observe_both(&orchestrator, &target).await;
         let args = VerifyStateArgs {
             target: window(),
             session: None,

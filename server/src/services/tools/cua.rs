@@ -29,8 +29,25 @@ use crate::services::tools::computer::{MachineTarget, TargetRefusal, TargetSelec
 use crate::services::tools::{ToolExecError, openai_schema};
 
 /// How many accessibility elements one `get_window_state` result shows the
-/// model; the rest is counted and reachable through `query`.
+/// model at most; the rest is counted and reachable through `query`.
 pub const MAX_RENDERED_ELEMENTS: usize = 50;
+
+/// The longest text one rendered field (a label, a value, a role, an
+/// action name) carries; the protocol allows 16 KiB per element value.
+pub const MAX_RENDERED_TEXT: usize = 200;
+
+/// The longest free text a window state's own fields carry (a degraded
+/// reason, a route reason, an escalation reason, a title).
+const MAX_RENDERED_NOTE: usize = 400;
+
+/// How many action names one element lists.
+const MAX_RENDERED_ACTIONS: usize = 8;
+
+/// The bound on one rendered `get_window_state` result, in bytes: under
+/// `ObservableTool`'s 12 000-char truncation with room to spare, so the
+/// snapshot id, the pixel policy and the machine always reach the model
+/// (serde_json sorts keys, and `elements` sorts before all of them).
+pub const MAX_RENDERED_CHARS: usize = 11_000;
 
 /// The driver's verification bounds when the model gives none.
 const DEFAULT_VERIFY_TIMEOUT_MS: u16 = 2_000;
@@ -889,6 +906,61 @@ fn rect_json(rect: &cua_protocol::Rect) -> serde_json::Value {
     serde_json::json!([rect.x, rect.y, rect.width, rect.height])
 }
 
+/// `text` cut to `max` characters, saying how much was cut.
+fn clip(text: &str, max: usize) -> String {
+    let total = text.chars().count();
+    if total <= max {
+        return text.to_owned();
+    }
+    let mut clipped: String = text.chars().take(max).collect();
+    clipped.push_str(&format!("… (+{} chars)", total - max));
+    clipped
+}
+
+/// One accessibility element as the model reads it: its token, role,
+/// clipped label and value, flags, frame and a bounded list of actions.
+fn element_json(element: &cua_protocol::AccessibilityElement) -> serde_json::Value {
+    use serde_json::json;
+    let mut value = json!({
+        "element_index": element.element_index,
+        "element_token": element.element_token.as_str(),
+        "role": clip(element.role.as_str(), MAX_RENDERED_TEXT),
+    });
+    if let Some(text) = &element.label {
+        value["label"] = json!(clip(text.as_str(), MAX_RENDERED_TEXT));
+    }
+    if let Some(text) = &element.value
+        && !text.as_str().is_empty()
+    {
+        value["value"] = json!(clip(text.as_str(), MAX_RENDERED_TEXT));
+    }
+    if let Some(enabled) = element.enabled {
+        value["enabled"] = json!(enabled);
+    }
+    if let Some(selected) = element.selected {
+        value["selected"] = json!(selected);
+    }
+    if let Some(frame) = &element.frame {
+        value["frame"] = rect_json(frame);
+    }
+    if !element.actions.is_empty() {
+        let mut actions: Vec<String> = element
+            .actions
+            .iter()
+            .take(MAX_RENDERED_ACTIONS)
+            .map(|action| clip(action.as_str(), MAX_RENDERED_TEXT))
+            .collect();
+        if element.actions.len() > MAX_RENDERED_ACTIONS {
+            actions.push(format!(
+                "… (+{} more)",
+                element.actions.len() - MAX_RENDERED_ACTIONS
+            ));
+        }
+        value["actions"] = json!(actions);
+    }
+    value
+}
+
 fn window_json(window: &cua_protocol::WindowRecord) -> serde_json::Value {
     let mut value = serde_json::json!({
         "pid": window.target.pid,
@@ -987,76 +1059,38 @@ pub fn render_discovery(result: &CuaActionResult, label: &str) -> serde_json::Va
 /// A window state as the model reads it: the snapshot id, a bounded list
 /// of elements with their tokens, the driver's flags, the pixel policy for
 /// the window, and a foreground recommendation reported as not applied.
-/// Never the screenshot bytes.
+/// Never the screenshot bytes. The whole rendering stays under
+/// `MAX_RENDERED_CHARS`: every free text is clipped, and the elements list
+/// is cut where it stops fitting beside the rest, with the count of what
+/// was left out.
 pub fn render_window_state(
     state: &WindowStateResult,
     policy: &PixelPolicy,
     label: &str,
 ) -> serde_json::Value {
     use serde_json::json;
-    let elements: Vec<serde_json::Value> = state
-        .elements
-        .iter()
-        .take(MAX_RENDERED_ELEMENTS)
-        .map(|element| {
-            let mut value = json!({
-                "element_index": element.element_index,
-                "element_token": element.element_token.as_str(),
-                "role": element.role.as_str(),
-            });
-            if let Some(text) = &element.label {
-                value["label"] = json!(text.as_str());
-            }
-            if let Some(text) = &element.value
-                && !text.as_str().is_empty()
-            {
-                value["value"] = json!(text.as_str());
-            }
-            if let Some(enabled) = element.enabled {
-                value["enabled"] = json!(enabled);
-            }
-            if let Some(selected) = element.selected {
-                value["selected"] = json!(selected);
-            }
-            if let Some(frame) = &element.frame {
-                value["frame"] = rect_json(frame);
-            }
-            if !element.actions.is_empty() {
-                value["actions"] = json!(
-                    element
-                        .actions
-                        .iter()
-                        .map(|action| action.as_str())
-                        .collect::<Vec<_>>()
-                );
-            }
-            value
-        })
-        .collect();
-    let shown = elements.len();
     let returned = state.elements.len();
     let mut value = json!({
         "machine": label,
         "target": {"pid": state.target.pid, "window_id": state.target.window_id},
         "app_name": state.app_name.as_ref().map(|name| name.as_str()),
-        "window_title": state.window_title.as_ref().map(|title| title.as_str()),
+        "window_title": state
+            .window_title
+            .as_ref()
+            .map(|title| clip(title.as_str(), MAX_RENDERED_NOTE)),
         "snapshot_id": state.snapshot_id.as_ref().map(|id| id.as_str()),
         "degraded": state.degraded,
-        "degraded_reason": state.degraded_reason.as_ref().map(|reason| reason.as_str()),
-        "elements": elements,
-        "elements_shown": shown,
+        "degraded_reason": state
+            .degraded_reason
+            .as_ref()
+            .map(|reason| clip(reason.as_str(), MAX_RENDERED_NOTE)),
+        "elements": [],
+        "elements_shown": 0,
         "elements_returned": returned,
         "elements_total": state.total_element_count.or(state.element_count),
         "truncated": state.truncated,
         "pixel_addresses": {"allowed": policy.allowed, "reason": policy.reason},
     });
-    if shown < returned {
-        value["note"] = json!(format!(
-            "{} more elements not shown; narrow with query or max_depth, or use \
-             element_index + snapshot_id for an element you already know",
-            returned - shown
-        ));
-    }
     if let Some(bounds) = &state.window_bounds {
         value["window_bounds"] = rect_json(bounds);
     }
@@ -1069,7 +1103,10 @@ pub fn render_window_state(
                 .map(|route| json!({
                     "route": route.route,
                     "status": route.status,
-                    "reason": route.reason.as_ref().map(|reason| reason.as_str()),
+                    "reason": route
+                        .reason
+                        .as_ref()
+                        .map(|reason| clip(reason.as_str(), MAX_RENDERED_NOTE)),
                 }))
                 .collect::<Vec<_>>(),
         });
@@ -1079,7 +1116,7 @@ pub fn render_window_state(
             "the driver recommends {} ({}); Nolune never applies it: delivery stays \
              background, a point address is the fallback when pixel_addresses allows it",
             kind_name(escalation.recommended),
-            escalation.reason.as_str()
+            clip(escalation.reason.as_str(), MAX_RENDERED_NOTE)
         ));
     }
     if let Some(screenshot) = &state.screenshot {
@@ -1091,6 +1128,31 @@ pub fn render_window_state(
             "shown": false,
             "note": "captured one-shot; the image is not shown to you yet",
         });
+    }
+
+    // Everything but the elements is on the page now; the elements get
+    // what is left, minus room for the note and the counts.
+    const NOTE_RESERVE: usize = 200;
+    let mut budget = MAX_RENDERED_CHARS.saturating_sub(value.to_string().len() + NOTE_RESERVE);
+    let mut elements = Vec::new();
+    for element in state.elements.iter().take(MAX_RENDERED_ELEMENTS) {
+        let rendered = element_json(element);
+        let cost = rendered.to_string().len() + 1;
+        if cost > budget {
+            break;
+        }
+        budget -= cost;
+        elements.push(rendered);
+    }
+    let shown = elements.len();
+    value["elements"] = json!(elements);
+    value["elements_shown"] = json!(shown);
+    if shown < returned {
+        value["note"] = json!(format!(
+            "{} more elements not shown; narrow with query or max_depth, or use \
+             element_index + snapshot_id for an element you already know",
+            returned - shown
+        ));
     }
     value
 }
@@ -1229,10 +1291,13 @@ impl Tool for GetWindowStateTool {
                 element_token, role, label, value and frame. Call it before every act on that \
                 window: element tokens are valid only from the latest snapshot of their window \
                 and only until the next action there; anything older is refused. Use query to \
-                narrow large trees. pixel_addresses says whether act may use a point address \
-                (only when accessibility is unavailable for the window or the last verification \
-                there failed). The screenshot, when requested, is captured one-shot and its \
-                dimensions reported; the image is not shown to you yet."
+                narrow large trees; a query that matches nothing is an empty list, not a \
+                broken window. pixel_addresses says whether act may use a point address: only \
+                when accessibility is unavailable for the window or the last verification there \
+                failed, and only after an observation with include_screenshot: true, since a \
+                point is read from that capture. The screenshot is captured one-shot and its \
+                dimensions reported; the image is not shown to you yet. The output is bounded: \
+                long labels and values are clipped, and elements past the bound are counted."
                 .into(),
             parameters: openai_schema::<WindowStateArgs>(),
         }
@@ -1283,7 +1348,8 @@ impl Tool for ActTool {
                 elements by element_token from the latest get_window_state of that window \
                 (preferred) or element_index + snapshot_id; a point address (window-local pixels \
                 from the latest screenshot) is refused unless accessibility is unavailable there \
-                or the last verification failed. Delivery is always background: nothing is \
+                or the last verification failed, and the latest get_window_state of the window \
+                captured a screenshot. Delivery is always background: nothing is \
                 fronted or focused, and a driver that recommends foreground control is refused, \
                 not escalated. Give verify.expect predicates for what must hold afterwards; the \
                 action is verified right away and reported as success only when they are \
@@ -1349,7 +1415,8 @@ impl Tool for VerifyStateTool {
             description: "Check predicates against a window without acting: window_exists, \
                 window_bounds, or an element (by role and/or label_contains) that exists, is \
                 enabled/selected, or has a value. Satisfied is success; unsatisfied or unknown \
-                is an error, and after one a point address is allowed on that window. Use it to \
+                is an error, and after one a point address is allowed on that window once it is \
+                observed with a screenshot. Use it to \
                 confirm a state before deciding the next step; act verifies its own action when \
                 given verify.expect."
                 .into(),
@@ -2467,9 +2534,13 @@ mod tool_tests {
         degraded["target"] = json!({"pid": 42, "window_id": 99});
         degraded["background_input"]["exact_window"]["pid"] = json!(42);
         degraded["background_input"]["exact_window"]["window_id"] = json!(99);
+        let mut degraded_with_capture = degraded.clone();
+        degraded_with_capture["screenshot"] = json!({
+            "media_type": "png", "base64": tiny_png(), "width": 1, "height": 1,
+        });
         let (laptop, _) = scripted(
             descriptor(LAPTOP, MachineLocation::Desktop),
-            vec![state("s00000001", many), degraded],
+            vec![state("s00000001", many), degraded, degraded_with_capture],
         );
         registry.cua().register(laptop).await.unwrap();
         let tools = tools_for(&registry, None).await;
@@ -2510,7 +2581,16 @@ mod tool_tests {
                 .contains("ax_window_unresolved")
         );
         assert_eq!(rendered["snapshot_id"], Value::Null);
-        assert_eq!(rendered["pixel_addresses"]["allowed"], true);
+        // Accessibility is unavailable, but this observation carried no
+        // screenshot to read a point from: the policy says what to do.
+        assert_eq!(rendered["pixel_addresses"]["allowed"], false);
+        assert!(
+            rendered["pixel_addresses"]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("include_screenshot"),
+            "{rendered}"
+        );
         let escalation = rendered["escalation"].as_str().unwrap();
         assert!(
             escalation.contains("foreground") && escalation.contains("never"),
@@ -2521,6 +2601,124 @@ mod tool_tests {
             "ax_unresolved"
         );
         assert!(!output.contains("base64"), "no image bytes in the output");
+
+        // Observed again with a screenshot: the point route is open, and the
+        // image still travels as dimensions only.
+        let mut args = observe(None);
+        args.include_screenshot = Some(true);
+        let output = tools.state.call(args).await.unwrap();
+        let rendered: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(rendered["degraded"], true);
+        assert_eq!(rendered["pixel_addresses"]["allowed"], true);
+        assert_eq!(rendered["screenshot"]["shown"], false);
+        assert_eq!(rendered["screenshot"]["width"], 1);
+        assert!(!output.contains("base64"), "no image bytes in the output");
+    }
+
+    fn tiny_png() -> String {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+            "../../../../cua-protocol/tests/fixtures/tiny.png"
+        ))
+    }
+
+    #[tokio::test]
+    async fn get_window_state_output_stays_under_the_tool_result_bound_with_long_values() {
+        // One text area holding 16 KiB (the protocol's bound for a value)
+        // beside a button; serde_json sorts keys, so an unbounded value
+        // would push machine, pixel_addresses, snapshot_id and the second
+        // token past ObservableTool's 12 000-char truncation.
+        let registry = MachineRegistry::new();
+        let long = "x".repeat(16 * 1024);
+        let mut text_area = element(0, "tok/0", "AXTextArea", "Body");
+        text_area["value"] = json!(long);
+        let mut button = element(1, "tok/1", "AXButton", &"Save ".repeat(100));
+        button["value"] = json!("");
+        let (laptop, _) = scripted(
+            descriptor(LAPTOP, MachineLocation::Desktop),
+            vec![state("s00000001", vec![text_area, button])],
+        );
+        registry.cua().register(laptop).await.unwrap();
+        let tools = tools_for(&registry, None).await;
+
+        let output = tools.state.call(observe(None)).await.unwrap();
+        assert!(
+            output.len() < 12_000,
+            "fits the tool result bound: {}",
+            output.len()
+        );
+        let rendered: Value = serde_json::from_str(&output).unwrap();
+        assert!(rendered["machine"].as_str().is_some(), "{rendered}");
+        assert_eq!(rendered["snapshot_id"], "s00000001");
+        assert_eq!(rendered["pixel_addresses"]["allowed"], false);
+        let elements = rendered["elements"].as_array().unwrap();
+        assert_eq!(
+            elements.len(),
+            2,
+            "both elements fit once their text is clipped"
+        );
+        assert_eq!(elements[1]["element_token"], "tok/1");
+        let value = elements[0]["value"].as_str().unwrap();
+        assert!(
+            value.chars().count() <= MAX_RENDERED_TEXT + 16 && value.ends_with("chars)"),
+            "the value is clipped and says so: {value:?}"
+        );
+        let label = elements[1]["label"].as_str().unwrap();
+        assert!(label.chars().count() <= MAX_RENDERED_TEXT + 16, "{label:?}");
+        assert_eq!(rendered["elements_shown"], 2);
+        assert_eq!(rendered["elements_returned"], 2);
+    }
+
+    #[tokio::test]
+    async fn get_window_state_output_drops_elements_that_do_not_fit_and_says_so() {
+        // Fifty elements each carrying the longest clipped label and value
+        // exceed the bound together; the list is cut where it stops
+        // fitting, and the counts say how many were left out.
+        let registry = MachineRegistry::new();
+        let many: Vec<Value> = (0..(MAX_RENDERED_ELEMENTS as u32))
+            .map(|i| {
+                let mut element = element(
+                    i,
+                    &format!("tok/{i}"),
+                    "AXStaticText",
+                    &format!("label {i} {}", "l".repeat(400)),
+                );
+                element["value"] = json!(format!("value {i} {}", "v".repeat(400)));
+                element
+            })
+            .collect();
+        let (laptop, _) = scripted(
+            descriptor(LAPTOP, MachineLocation::Desktop),
+            vec![state("s00000001", many)],
+        );
+        registry.cua().register(laptop).await.unwrap();
+        let tools = tools_for(&registry, None).await;
+
+        let output = tools.state.call(observe(None)).await.unwrap();
+        assert!(
+            output.len() <= MAX_RENDERED_CHARS,
+            "fits the bound: {}",
+            output.len()
+        );
+        let rendered: Value = serde_json::from_str(&output).unwrap();
+        let shown = rendered["elements"].as_array().unwrap().len();
+        assert!(
+            shown > 5 && shown < MAX_RENDERED_ELEMENTS,
+            "cut by size: {shown}"
+        );
+        assert_eq!(rendered["elements"][0]["element_token"], "tok/0");
+        assert_eq!(rendered["elements_shown"], shown);
+        assert_eq!(rendered["elements_returned"], MAX_RENDERED_ELEMENTS);
+        assert_eq!(rendered["snapshot_id"], "s00000001");
+        assert_eq!(rendered["pixel_addresses"]["allowed"], false);
+        let note = rendered["note"].as_str().unwrap();
+        assert!(
+            note.contains(&format!(
+                "{} more elements not shown",
+                MAX_RENDERED_ELEMENTS - shown
+            )) && note.contains("query"),
+            "{note}"
+        );
     }
 
     #[tokio::test]

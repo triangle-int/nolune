@@ -287,10 +287,13 @@ driver until #19.
   accessibility elements with their `element_token`, role, label, value and
   frame (a bounded list; `query` narrows large trees), the driver's
   degraded flags and background-input routes, and `pixel_addresses`, which
-  says whether a point address is allowed on that window right now. A
-  screenshot is captured only when asked for (`include_screenshot`) and only
-  its dimensions are reported so far; showing the image to the model is the
-  next slice of #18.
+  says whether a point address is allowed on that window right now. The
+  output stays under the tool-result bound whatever the window holds: labels
+  and values are clipped, and elements past the bound are counted rather
+  than shown, so the snapshot id and the pixel policy always reach the
+  model. A screenshot is captured only when asked for (`include_screenshot`)
+  and only its dimensions are reported so far; showing the image to the
+  model is the next slice of #18.
 - `act` — one typed action in a window: `click`, `double_click`,
   `right_click`, `drag`, `scroll`, `type_text`, `press_key`, `hotkey`,
   `set_value` or `invoke_menu`, addressed by `element_token` (preferred),
@@ -333,9 +336,15 @@ it ([Sessions](#sessions)); a desktop's own driver keeps its session.
 4. Pixels are the fallback, not the default. A point address (and a drag)
    is refused with `pixel_refused` unless the window's latest observation
    was degraded, its accessibility surface unresolved or empty, or the last
-   verification on it failed; a verified action closes the pixel route
-   again. The coordinates come from the latest observation, so it is
-   required for point addresses as well.
+   verification on it was not satisfied; a verified action closes the pixel
+   route again. An empty tree counts only when nothing narrowed the walk: a
+   `query` that matches nothing, or a `max_depth` above every actionable
+   element, is a filter on a healthy window. The coordinates come from the
+   latest observation, so it is required for point addresses as well, and it
+   must have captured a screenshot (`include_screenshot: true`): with none
+   on record the point is refused too, and `pixel_addresses` says so. A
+   verification on a window that was never observed puts nothing on record
+   either way.
 5. Verify after every action. The orchestrator reads the driver's outcome
    and, when `verify.expect` was given, issues `verify_state` itself right
    after the action. `act` succeeds only for a verified outcome: the
@@ -345,8 +354,10 @@ it ([Sessions](#sessions)); a desktop's own driver keeps its session.
    `refused` outcomes are `action_refused`; `unverifiable`, `suspected_noop`
    and `partial` outcomes without satisfied predicates, and a verification
    the driver could not evaluate, are `unverified`; unsatisfied predicates
-   are `verification_failed`. A failed verification or an action that did
-   not land opens the pixel route on that window.
+   are `verification_failed`. A failed verification, a refused delivery, a
+   suspected no-op or the driver's own advice to go through pixels opens the
+   pixel route on that window; an action that was delivered but not read
+   back does not, because nothing showed it missing.
 6. Background only. Every action is delivered with `delivery_mode:
    background`, the only value the tools accept; nothing is fronted or
    focused. When the driver recommends escalating, to foreground control

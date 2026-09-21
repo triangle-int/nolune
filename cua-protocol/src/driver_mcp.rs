@@ -494,7 +494,31 @@ fn fold_live_spellings(kind: CuaActionKind, payload: &mut Value) {
                 object.insert("truncated".into(), json!(cut));
             }
         }
-        _ => {}
+        CuaActionKind::SetWindowFrame
+        | CuaActionKind::Click
+        | CuaActionKind::DoubleClick
+        | CuaActionKind::RightClick
+        | CuaActionKind::MoveCursor
+        | CuaActionKind::Drag
+        | CuaActionKind::Scroll
+        | CuaActionKind::TypeText
+        | CuaActionKind::PressKey
+        | CuaActionKind::Hotkey
+        | CuaActionKind::SetValue
+        | CuaActionKind::InvokeMenu => {
+            // The protocol's action results carry no capture. A driver that
+            // attaches an image beside an outcome as screenshot evidence
+            // (folded in over MCP as `screenshot_*`) is read for its
+            // outcome; the image is dropped, not refused as unknown.
+            if let Some(object) = payload.as_object_mut() {
+                object.retain(|key, _| !key.starts_with("screenshot_"));
+            }
+        }
+        CuaActionKind::StartSession
+        | CuaActionKind::GetSession
+        | CuaActionKind::ListSessions
+        | CuaActionKind::EndSession
+        | CuaActionKind::HealthReport => {}
     }
 }
 
