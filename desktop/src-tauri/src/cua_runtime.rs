@@ -840,6 +840,15 @@ impl CuaRuntime {
         );
     }
 
+    /// Kill the driver without ending anything: the exit's last resort
+    /// when a graceful `shutdown` was cut short. Terminal like `shutdown`,
+    /// closes the driver synchronously, whatever else is in flight, and
+    /// hands its transport back for the exit to wait on; `None` when no
+    /// driver was ever spawned. Idempotent.
+    pub fn kill_driver(&self) -> Option<Arc<dyn DriverTransport>> {
+        todo!("a stop that is terminal and reachable without the driver lock")
+    }
+
     /// The labelled sessions still open, in label order.
     #[cfg(test)]
     pub fn open_sessions(&self) -> Vec<SessionLabel> {
@@ -1109,9 +1118,17 @@ pub(crate) mod fake {
 
     use super::*;
 
+    /// What the fake does with one call.
+    enum Canned {
+        Answer(CallOutcome),
+        /// Held until the fake is gone: a driver wedged on a permission
+        /// prompt, which only a deadline or a kill releases.
+        Stall,
+    }
+
     pub struct FakeTransport {
         calls: Mutex<Vec<(String, Map<String, Value>)>>,
-        outcomes: Mutex<VecDeque<CallOutcome>>,
+        outcomes: Mutex<VecDeque<Canned>>,
         closed: std::sync::atomic::AtomicBool,
         /// Flipped by `close` and by `crash`: the stand-in for a child that
         /// is no longer there.
@@ -1122,10 +1139,24 @@ pub(crate) mod fake {
         pub fn answering(outcomes: impl IntoIterator<Item = CallOutcome>) -> Arc<Self> {
             Arc::new(Self {
                 calls: Mutex::new(Vec::new()),
-                outcomes: Mutex::new(outcomes.into_iter().collect()),
+                outcomes: Mutex::new(outcomes.into_iter().map(Canned::Answer).collect()),
                 closed: std::sync::atomic::AtomicBool::new(false),
                 gone: tokio::sync::watch::Sender::new(false),
             })
+        }
+
+        /// After the answers queued so far, hold the next call for as long
+        /// as the fake lives.
+        pub fn then_stall(&self) {
+            self.outcomes.lock().unwrap().push_back(Canned::Stall);
+        }
+
+        /// Queue more answers after the ones already there.
+        pub fn also_answering(&self, outcomes: impl IntoIterator<Item = CallOutcome>) {
+            self.outcomes
+                .lock()
+                .unwrap()
+                .extend(outcomes.into_iter().map(Canned::Answer));
         }
 
         /// The driver child died on its own: `exited` resolves and every
@@ -1168,17 +1199,24 @@ pub(crate) mod fake {
                 .lock()
                 .unwrap()
                 .push((name.to_owned(), arguments));
-            let outcome = self
-                .outcomes
-                .lock()
-                .unwrap()
-                .pop_front()
-                .unwrap_or_else(|| {
+            let name = name.to_owned();
+            match self.outcomes.lock().unwrap().pop_front() {
+                Some(Canned::Answer(outcome)) => Box::pin(async move { outcome }),
+                Some(Canned::Stall) => {
+                    let mut gone = self.gone.subscribe();
+                    Box::pin(async move {
+                        let _ = gone.wait_for(|gone| *gone).await;
+                        Err(DriverCallFailure::Transport(format!(
+                            "fake driver went away while {name} was pending"
+                        )))
+                    })
+                }
+                None => Box::pin(async move {
                     Err(DriverCallFailure::Transport(format!(
                         "fake driver has no answer for {name}"
                     )))
-                });
-            Box::pin(async move { outcome })
+                }),
+            }
         }
 
         fn close(&self) {
@@ -1322,6 +1360,29 @@ mod tests {
             action,
         })
         .unwrap()
+    }
+
+    fn start_session(label: &str) -> CuaAction {
+        CuaAction::StartSession(StartSessionArgs {
+            session: Some(SessionLabel::try_from(label).unwrap()),
+        })
+    }
+
+    fn labels(labels: &[&str]) -> Vec<SessionLabel> {
+        labels
+            .iter()
+            .map(|label| SessionLabel::try_from(*label).unwrap())
+            .collect()
+    }
+
+    /// Flips a flag when dropped: proves a future was dropped, not left
+    /// hanging.
+    struct DropFlag(Arc<std::sync::atomic::AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
     }
 
     /// The typed answer inside a `cua_response` frame.
@@ -1542,22 +1603,11 @@ mod tests {
         let (runtime, spawns) = runtime_over(vec![fake.clone()]);
         runtime.start(STUDIO).await.unwrap();
 
-        let start = |label: &str| {
-            CuaAction::StartSession(StartSessionArgs {
-                session: Some(SessionLabel::try_from(label).unwrap()),
-            })
-        };
-        let labels = |labels: &[&str]| -> Vec<SessionLabel> {
-            labels
-                .iter()
-                .map(|label| SessionLabel::try_from(*label).unwrap())
-                .collect()
-        };
         runtime
-            .handle(&request("s-1", STUDIO, start("nolune-run-1")))
+            .handle(&request("s-1", STUDIO, start_session("nolune-run-1")))
             .await;
         runtime
-            .handle(&request("s-2", STUDIO, start("nolune-run-2")))
+            .handle(&request("s-2", STUDIO, start_session("nolune-run-2")))
             .await;
         assert_eq!(
             runtime.open_sessions(),
@@ -1597,7 +1647,7 @@ mod tests {
 
         // App exit: the open session is ended and the driver is stopped.
         runtime
-            .handle(&request("s-3", STUDIO, start("nolune-run-3")))
+            .handle(&request("s-3", STUDIO, start_session("nolune-run-3")))
             .await;
         runtime.shutdown().await;
         assert_eq!(fake.tools_called()[7], "end_session");
@@ -1611,6 +1661,190 @@ mod tests {
         let late = error_of(&runtime.handle(&request("late", STUDIO, list_apps())).await);
         assert_eq!(late.code, RuntimeErrorCode::RuntimeUnavailable);
         assert!(late.retryable);
+    }
+
+    #[tokio::test]
+    async fn a_disconnect_cut_short_keeps_the_sessions_it_did_not_end() {
+        let fake = FakeTransport::answering([
+            Ok(payload(HEALTHY)),
+            Ok(started("nolune-run-1")),
+            Ok(started("nolune-run-2")),
+            Ok(ended("nolune-run-1")),
+        ]);
+        fake.then_stall();
+        let (runtime, _) = runtime_over(vec![fake.clone()]);
+        runtime.start(STUDIO).await.unwrap();
+        runtime
+            .handle(&request("s-1", STUDIO, start_session("nolune-run-1")))
+            .await;
+        runtime
+            .handle(&request("s-2", STUDIO, start_session("nolune-run-2")))
+            .await;
+        assert_eq!(
+            runtime.open_sessions(),
+            labels(&["nolune-run-1", "nolune-run-2"])
+        );
+
+        // The bridge drops a closed socket's `end_sessions` when the user
+        // disconnects explicitly meanwhile: the first session was ended,
+        // the driver still holds the second.
+        let cut_short =
+            tokio::time::timeout(Duration::from_millis(100), runtime.end_sessions()).await;
+        assert!(cut_short.is_err(), "the fake holds the second end_session");
+        assert_eq!(
+            &fake.tools_called()[3..],
+            ["end_session", "end_session"],
+            "the sessions are ended one at a time"
+        );
+        assert_eq!(
+            runtime.open_sessions(),
+            labels(&["nolune-run-2"]),
+            "a session the driver still holds is not forgotten"
+        );
+
+        // The disconnect's own `end_sessions` ends what is left.
+        fake.also_answering([Ok(ended("nolune-run-2"))]);
+        runtime.end_sessions().await;
+        assert_eq!(runtime.open_sessions(), Vec::<SessionLabel>::new());
+        let calls = fake.calls();
+        assert_eq!(calls.len(), 6);
+        assert_eq!(calls[5].0, "end_session");
+        assert_eq!(
+            calls[5].1,
+            json!({"session": "nolune-run-2"})
+                .as_object()
+                .unwrap()
+                .clone()
+        );
+        assert!(
+            runtime.is_running().await,
+            "the driver stays for the reconnect"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_exit_while_the_driver_is_still_reporting_stops_it_for_good() {
+        // The first health_report wedges (a permission prompt): `start`
+        // holds the driver lock for as long as the driver takes.
+        let wedged = FakeTransport::answering([]);
+        wedged.then_stall();
+        let spare = FakeTransport::answering([Ok(payload(HEALTHY))]);
+        let (runtime, spawns) = runtime_over(vec![wedged.clone(), spare.clone()]);
+
+        let (started, stopped) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(runtime.start(STUDIO), async {
+                // Once the driver holds the report, the app exits.
+                while wedged.tools_called().is_empty() {
+                    tokio::task::yield_now().await;
+                }
+                tokio::time::timeout(Duration::from_secs(1), runtime.shutdown()).await
+            })
+        })
+        .await
+        .expect("start lets go of the driver once the app exits");
+        stopped.expect("shutdown is not starved by a description in flight");
+        let error = started.unwrap_err();
+        assert!(error.contains("exiting"), "{error}");
+        assert!(wedged.closed(), "the wedged driver is killed");
+
+        // Nothing starts again: the reconnect loop's next `start` spawns
+        // nothing and a late request restarts nothing.
+        let error = runtime.start(STUDIO).await.unwrap_err();
+        assert!(error.contains("exiting"), "{error}");
+        let late = error_of(&runtime.handle(&request("late", STUDIO, list_apps())).await);
+        assert_eq!(late.code, RuntimeErrorCode::RuntimeUnavailable);
+        assert_eq!(spawns.load(Ordering::SeqCst), 1, "no driver after the exit");
+        assert!(spare.tools_called().is_empty());
+        assert!(!runtime.is_running().await);
+    }
+
+    #[tokio::test]
+    async fn an_exit_during_the_handshake_drops_the_spawn_and_nothing_starts_again() {
+        // A driver still in its MCP handshake past the exit grace: the spawn
+        // is dropped, which kills the child, instead of holding the exit.
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let spawns = Arc::new(AtomicUsize::new(0));
+        let runtime = CuaRuntime::with_spawner(Arc::new({
+            let dropped = dropped.clone();
+            let spawns = spawns.clone();
+            move || {
+                spawns.fetch_add(1, Ordering::SeqCst);
+                let flag = DropFlag(dropped.clone());
+                Box::pin(async move {
+                    let _flag = flag;
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    Err("the handshake never completes".to_owned())
+                })
+            }
+        }));
+
+        let (started, stopped) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(runtime.start(STUDIO), async {
+                while spawns.load(Ordering::SeqCst) == 0 {
+                    tokio::task::yield_now().await;
+                }
+                tokio::time::timeout(Duration::from_secs(1), runtime.shutdown()).await
+            })
+        })
+        .await
+        .expect("start lets go of the spawn once the app exits");
+        stopped.expect("shutdown is not starved by a handshake in flight");
+        let error = started.unwrap_err();
+        assert!(error.contains("exiting"), "{error}");
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "the spawn is dropped, and its child with it"
+        );
+
+        let error = runtime.start(STUDIO).await.unwrap_err();
+        assert!(error.contains("exiting"), "{error}");
+        assert_eq!(spawns.load(Ordering::SeqCst), 1, "nothing spawns again");
+        assert!(!runtime.is_running().await);
+    }
+
+    #[tokio::test]
+    async fn a_shutdown_cut_short_by_a_wedged_session_end_still_kills_the_driver() {
+        let fake = FakeTransport::answering([
+            Ok(payload(HEALTHY)),
+            Ok(started("nolune-run-1")),
+            Ok(started("nolune-run-2")),
+        ]);
+        fake.then_stall();
+        let (runtime, spawns) = runtime_over(vec![fake.clone()]);
+        runtime.start(STUDIO).await.unwrap();
+        runtime
+            .handle(&request("s-1", STUDIO, start_session("nolune-run-1")))
+            .await;
+        runtime
+            .handle(&request("s-2", STUDIO, start_session("nolune-run-2")))
+            .await;
+
+        // The exit grace runs out while the driver holds the first
+        // end_session: `shutdown` is dropped mid-way.
+        let cut_short = tokio::time::timeout(Duration::from_millis(100), runtime.shutdown()).await;
+        assert!(cut_short.is_err(), "the fake holds the end_session");
+        assert_eq!(fake.tools_called().len(), 4);
+        assert_eq!(fake.tools_called()[3], "end_session");
+        assert_eq!(
+            runtime.open_sessions(),
+            labels(&["nolune-run-1", "nolune-run-2"]),
+            "nothing the driver did not confirm ended is forgotten"
+        );
+        assert!(fake.closed(), "a shutdown cut short still kills the driver");
+
+        // The exit hook still has the driver to wait for.
+        let transport = runtime
+            .kill_driver()
+            .expect("the killed driver is there to wait for");
+        tokio::time::timeout(Duration::from_secs(1), transport.exited())
+            .await
+            .expect("the killed driver is gone");
+
+        // Nothing starts again.
+        let error = runtime.start(STUDIO).await.unwrap_err();
+        assert!(error.contains("exiting"), "{error}");
+        assert_eq!(spawns.load(Ordering::SeqCst), 1);
+        assert!(!runtime.is_running().await);
     }
 
     #[tokio::test]
