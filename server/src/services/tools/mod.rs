@@ -94,7 +94,9 @@ pub use computer::{
     ComputerUseTool, ListMachinesTool, MachineTarget, RemoteBashTool, RemoteFilesTool,
     TargetSelection,
 };
-pub use cua::{ActTool, CuaTools, DiscoverWindowsTool, GetWindowStateTool, VerifyStateTool};
+pub use cua::{
+    ActTool, CaptureStore, CuaTools, DiscoverWindowsTool, GetWindowStateTool, VerifyStateTool,
+};
 
 pub use files::{EditFileTool, ListFilesTool, ReadFileTool, UploadFileTool, WriteFileTool};
 pub use image::ViewImageTool;
@@ -964,7 +966,11 @@ pub fn build_tools(
     // The typed machine tools (#18) drive any Cua target, server-local or
     // desktop, through one orchestrator per turn: its snapshot ledger and
     // verification gate are shared by the four of them.
-    let cua_tools = CuaTools::new(machine_registry, (*machine_target).clone());
+    let cua_tools = CuaTools::new(
+        machine_registry,
+        (*machine_target).clone(),
+        CaptureStore::new(workspace_dir, instance_slug, public_url, resources),
+    );
     tools.push(wrap(Box::new(DiscoverWindowsTool::new(cua_tools.clone()))));
     tools.push(wrap(Box::new(GetWindowStateTool::new(cua_tools.clone()))));
     tools.push(wrap(Box::new(ActTool::new(cua_tools.clone()))));
@@ -1186,6 +1192,123 @@ mod email_tool_tests {
                 .iter()
                 .any(|value| value == "rotation-secret-2")
         );
+    }
+}
+
+#[cfg(test)]
+mod tool_result_bound_tests {
+    //! #18: a tool result that carries an image beside its text (a window's
+    //! capture, a screenshot, an uploaded image) keeps the image whole under
+    //! the tool-result bound; only text is cut. Plain text is cut as before.
+    use super::*;
+    use serde_json::{Value, json};
+
+    /// A tool answering with a fixed output, JSON-encoded the way the
+    /// blanket `ToolDyn` impl hands a `String` output over.
+    struct Fixed(String);
+
+    impl ToolDyn for Fixed {
+        fn name(&self) -> String {
+            "fixed".into()
+        }
+
+        fn definition(
+            &self,
+            _prompt: String,
+        ) -> Pin<Box<dyn Future<Output = ToolDefinition> + Send + '_>> {
+            Box::pin(async {
+                ToolDefinition {
+                    name: "fixed".into(),
+                    description: String::new(),
+                    parameters: json!({}),
+                }
+            })
+        }
+
+        fn call(
+            &self,
+            _args: String,
+        ) -> Pin<Box<dyn Future<Output = Result<String, ToolError>> + Send + '_>> {
+            let output = serde_json::to_string(&self.0).unwrap();
+            Box::pin(async move { Ok(output) })
+        }
+    }
+
+    async fn observed(output: String) -> String {
+        let (events, _rx) = broadcast::channel(4);
+        let tool = ObservableTool::new(
+            Box::new(Fixed(output)),
+            events,
+            Path::new("/nonexistent"),
+            "moon".into(),
+            "chat".into(),
+            None,
+            Arc::new(MachineTarget::default()),
+        );
+        let result = tool.call("{}".into()).await.unwrap();
+        // The blanket impl's JSON string layer, unwrapped the way
+        // `ContentBlock::tool_output` unwraps it.
+        serde_json::from_str::<String>(&result).unwrap_or(result)
+    }
+
+    #[tokio::test]
+    async fn a_multimodal_result_keeps_its_image_whole_and_bounds_each_text() {
+        let data = "A".repeat(30_000);
+        let output = json!([
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": data}},
+            {"type": "text", "text": "t".repeat(20_000)},
+            {"type": "text", "text": "short"},
+        ])
+        .to_string();
+        let result = observed(output).await;
+        let blocks: Vec<Value> =
+            serde_json::from_str(&result).unwrap_or_else(|e| panic!("{e}: {result}"));
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(
+            blocks[0]["source"]["data"].as_str().unwrap().len(),
+            30_000,
+            "the image is bounded by the provider layer, not cut here"
+        );
+        let text = blocks[1]["text"].as_str().unwrap();
+        assert!(
+            text.starts_with(&"t".repeat(12_000)) && text.contains("truncated at 12000 chars"),
+            "each text block is cut at the bound: {}",
+            &text[text.len() - 80..]
+        );
+        assert_eq!(blocks[2]["text"], "short");
+    }
+
+    #[tokio::test]
+    async fn a_plain_result_and_a_domain_array_are_cut_as_text() {
+        let result = observed("x".repeat(20_000)).await;
+        assert!(
+            result.starts_with(&"x".repeat(12_000))
+                && result.ends_with("(tool output truncated at 12000 chars, total: 20000)"),
+            "{}",
+            &result[result.len() - 80..]
+        );
+
+        // A JSON array of domain objects is text to the model, cut as text.
+        let rows: Vec<Value> = (0..2_000)
+            .map(|i| json!({"type": "expense", "amount": i}))
+            .collect();
+        let result = observed(Value::Array(rows).to_string()).await;
+        assert!(
+            serde_json::from_str::<Value>(&result).is_err()
+                && result.contains("tool output truncated at 12000 chars"),
+            "{}",
+            &result[result.len() - 80..]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_result_under_the_bound_passes_untouched() {
+        let output = json!([
+            {"type": "image", "source": {"type": "url", "url": "https://public.invalid/x"}},
+            {"type": "text", "text": "fits"},
+        ])
+        .to_string();
+        assert_eq!(observed(output.clone()).await, output);
     }
 }
 

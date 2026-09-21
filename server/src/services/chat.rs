@@ -2141,6 +2141,52 @@ mod self_hosted_prompt_tests {
         assert!(!prompt.contains("unique subdomain"));
         assert!(!prompt.contains("pricing"));
     }
+
+    /// #18: the computer-use section states the Cua loop the orchestrator
+    /// enforces, in the order the model follows it, and no longer sends
+    /// the model to the coordinate tool.
+    #[test]
+    fn autonomy_prompt_states_the_computer_use_loop() {
+        let workspace = tempfile::tempdir().unwrap();
+        let prompt = load_autonomy_prompt(workspace.path(), "moon");
+        let section = prompt
+            .split("### computers")
+            .nth(1)
+            .and_then(|rest| rest.split("\n## ").next())
+            .expect("a computers section");
+
+        let mut at = 0;
+        for rule in [
+            "list_machines",
+            "discover_windows",
+            "exact app and window",
+            "get_window_state",
+            "before",
+            "element_token",
+            "screenshot",
+            "pixel",
+            "only when",
+            "verify",
+            "after every action",
+            "unknown",
+            "unverifiable",
+            "suspected_noop",
+            "refused",
+            "not success",
+            "background",
+            "foreground",
+            "never",
+        ] {
+            let found = section[at..]
+                .find(rule)
+                .unwrap_or_else(|| panic!("the section states {rule:?} in order: {section}"));
+            at += found;
+        }
+        assert!(
+            !prompt.contains("`computer_use`"),
+            "the coordinate tool is not offered: {prompt}"
+        );
+    }
 }
 
 #[cfg(test)]
