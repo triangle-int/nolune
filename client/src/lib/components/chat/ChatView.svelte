@@ -114,10 +114,14 @@ import McpAppViewer from "./McpAppViewer.svelte";
 	}
 
 	// ── Sync state to shared 3D scene ──
-	// Keep mood/thinking/voice synced to scene store
+	// Keep mood/voice synced to scene store. What the companion is doing
+	// (thinking, working, blocked…) reaches the scene through the reducer,
+	// fed by the root layout from the websocket; this view adds the persisted
+	// `agent_running` of each snapshot it loads, so a run the socket missed
+	// still shows and one that ended while away is over without being claimed.
 	$effect(() => { scene.setMood(mood); });
-	$effect(() => { scene.setThinking(sending || agentRunning); });
 	$effect(() => { scene.setVoiceAmplitude(voice.amplitude); });
+	$effect(() => { if (companionName) scene.setCompanionName(companionName); });
 	// Sync presentation mode to scene (camera targets blob)
 	$effect(() => { scene.presenting = presentation.active; });
 
@@ -141,6 +145,7 @@ import McpAppViewer from "./McpAppViewer.svelte";
 					messages = res.messages.filter((m) => !isToolActivity(m));
 					stream = messagesToStream(res.messages);
 					agentRunning = res.agent_running;
+					scene.companionEvent({ type: "snapshot", chatId, running: res.agent_running });
 					if (agentRunning) pushActivity("state", "thinking...");
 					scrollToBottomIfNear();
 				})
@@ -257,6 +262,7 @@ import McpAppViewer from "./McpAppViewer.svelte";
 		streamingMessageId = "";
 		messages = serverMessages.filter((m) => !isToolActivity(m));
 		agentRunning = serverAgentRunning;
+		scene.companionEvent({ type: "snapshot", chatId, running: serverAgentRunning });
 
 		scrollToBottomIfNear();
 	}
@@ -383,6 +389,7 @@ import McpAppViewer from "./McpAppViewer.svelte";
 			messages = res.messages.filter((m) => !isToolActivity(m));
 			stream = messagesToStream(res.messages);
 			agentRunning = res.agent_running;
+			scene.companionEvent({ type: "snapshot", chatId: currentChat, running: res.agent_running });
 			if (agentRunning) pushActivity("state", "thinking...");
 			scrollToBottom();
 			void loadReceipts(currentSlug, currentChat);

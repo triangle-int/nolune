@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { onMount, onDestroy } from "svelte";
 	import { getSceneStore } from "$lib/stores/scene.svelte.js";
-	import { getSkinStore } from "$lib/stores/skin.svelte.js";
+	import MoonExpression from "$lib/components/companion/MoonExpression.svelte";
+	import CompanionStatus from "$lib/components/companion/CompanionStatus.svelte";
 
 	const store = getSceneStore();
-	const skinStore = getSkinStore();
 
 	let container: HTMLDivElement | undefined = $state();
 
@@ -192,10 +192,12 @@
 				style="left: {orb.x}%; top: {orb.y}%; width: {orb.size}px; height: {orb.size}px; opacity: {orb.opacity};"
 				disabled={store.mode !== "home"}
 			>
-                <img class="moon-avatar" src={store.thinking ? skinStore.skin.avatar.thinking : skinStore.skin.avatar.idle} alt={store.thinking ? "Nolune is thinking" : "Nolune"} />
+				<!-- The face and motion follow the companion-state reducer (#86); the status below is the accessible text. -->
+				<MoonExpression kind={store.companion.kind} class="moon-avatar" />
 			</button>
 		{/if}
 	{/each}
+
 
 	<!-- Memory orbit around the selected orb (desktop) / strip above chat (mobile) -->
 	{#if store.recalledMemories.length > 0}
@@ -235,6 +237,20 @@
 	{/if}
 </div>
 
+<!-- What the companion is doing, in words, under the moon: a live region with the
+     related computer, conversation or run linked. Its own layer above the page,
+     because the scene sits under everything and the link must be reachable. -->
+{#if store.mode === "chat" && !store.presenting}
+	{@const selOrb = orbs.find(o => o.slug === store.selectedSlug)}
+	{#if selOrb && selOrb.visible}
+		<div class="companion-status-layer">
+			<div class="companion-status-anchor" style="left: {selOrb.x}%; top: calc({selOrb.y}% + {selOrb.size * 0.48}px);">
+				<CompanionStatus state={store.companion} name={store.companionName} slug={store.selectedSlug} />
+			</div>
+		</div>
+	{/if}
+{/if}
+
 <style>
 	.scene-root {
 		position: absolute;
@@ -262,7 +278,24 @@
 		cursor: default;
 	}
 
-	.moon-avatar { width: 70%; height: 70%; max-width:320px; max-height:320px; object-fit: contain; pointer-events: none; }
+	.orb-btn :global(.moon-avatar) { width: 70%; height: 70%; max-width:320px; max-height:320px; }
+
+	/* ── Companion status under the moon ── */
+	.companion-status-layer {
+		position: absolute;
+		inset: 0;
+		z-index: 30;
+		overflow: hidden;
+		pointer-events: none;
+	}
+	.companion-status-anchor {
+		position: absolute;
+		transform: translateX(-50%);
+		width: max-content;
+		max-width: min(360px, 40vw);
+		text-align: center;
+		pointer-events: auto;
+	}
 
 
 	/* ── Memory clouds (above orb) ── */
@@ -398,11 +431,23 @@
 	}
 
 	@media (max-width: 640px) {
-		.moon-avatar{max-width:200px;max-height:200px;}
+		.orb-btn :global(.moon-avatar) { max-width:200px; max-height:200px; }
 		.scene-root {
 			pointer-events: none;
 		}
 		.orb-btn {
+			pointer-events: none;
+		}
+		/* The moon is a faded backdrop behind the conversation on phones: the
+		   status stays in the accessibility tree and the chat bar carries the words. */
+		.companion-status-anchor {
+			position: absolute;
+			width: 1px;
+			height: 1px;
+			overflow: hidden;
+			clip: rect(0 0 0 0);
+			clip-path: inset(50%);
+			white-space: nowrap;
 			pointer-events: none;
 		}
 		.memory-orbit {
