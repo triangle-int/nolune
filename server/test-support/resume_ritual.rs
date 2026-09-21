@@ -489,7 +489,10 @@ async fn manual_invocation_offers_exactly_one_suggestion_that_explains_its_recor
             7_200,
             ContinuityUpdate {
                 priority: Some(Priority::High),
-                due_at: Some(now() + 3 * 3_600),
+                // Half an hour of slack: the label floors to whole hours
+                // against a later clock, and a slow full-suite run must not
+                // tip "due in 3 hours" over to "2 hours".
+                due_at: Some(now() + 3 * 3_600 + 1_800),
                 ..Default::default()
             },
         )
