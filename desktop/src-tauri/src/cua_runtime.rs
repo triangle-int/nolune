@@ -696,20 +696,35 @@ fn checked_adapter(
 
 /// Where the runtime stands with its driver.
 enum Slot {
-    /// No driver was ever started, or the app is exiting.
+    /// No driver was ever started.
     None,
     Running(Arc<Driver>),
     /// The driver exited on its own; the next request restarts it under
     /// the same id.
     Crashed(MachineId),
+    /// The app is exiting: nothing starts or restarts again.
+    Stopped,
 }
+
+/// Why a start or a request is refused once the app is exiting.
+const EXITING: &str = "the app is exiting; the driver is not started again";
 
 /// One driver for the app lifetime, started on the first connection and
 /// kept across reconnects; restarted on the next request after a crash;
-/// stopped when the app exits.
+/// stopped for good when the app exits.
 pub struct CuaRuntime {
     spawner: Spawner,
     driver: tokio::sync::Mutex<Slot>,
+    /// Flipped once, by `shutdown` or `kill_driver`, before either waits
+    /// for anything, and never back: a start or restart mid-way sees it,
+    /// closes what it has and lets go of the driver lock, so the exit is
+    /// never starved; and nothing starts afterwards, whether or not the
+    /// stop got as far as the lock.
+    stopping: tokio::sync::watch::Sender<bool>,
+    /// The transport the spawner produced last, reachable without the
+    /// driver lock: what the exit closes and waits for when a graceful
+    /// stop could not get that far.
+    latest: Mutex<Option<Arc<dyn DriverTransport>>>,
     /// The labelled sessions the desktop confirmed open for the server and
     /// has not ended: what a disconnect or an exit has to end.
     open: Mutex<BTreeSet<SessionLabel>>,
@@ -721,6 +736,8 @@ impl CuaRuntime {
         Self {
             spawner,
             driver: tokio::sync::Mutex::new(Slot::None),
+            stopping: tokio::sync::watch::Sender::new(false),
+            latest: Mutex::new(None),
             open: Mutex::new(BTreeSet::new()),
         }
     }
@@ -738,26 +755,79 @@ impl CuaRuntime {
     pub async fn start(&self, machine_id: &str) -> Result<MachineDescriptor, String> {
         let machine_id = MachineId::try_from(machine_id).map_err(|error| error.to_string())?;
         let mut slot = self.driver.lock().await;
-        let driver = match self.live(&mut slot) {
-            // A reconnect: the same child, its health read again so the
-            // descriptor the server binds is current.
-            Some(running) => {
-                let described = Driver::describe(running.transport.clone(), machine_id).await;
-                if described.is_err() {
-                    // A driver that no longer reports is stopped; the next
+        if self.stopping() {
+            return Err(EXITING.to_owned());
+        }
+        // A reconnect: the same child, its health read again so the
+        // descriptor the server binds is current.
+        let running = self
+            .live(&mut slot)
+            .map(|running| running.transport.clone());
+        let reconnect = running.is_some();
+        match self.bring_up(running, machine_id).await {
+            Ok(driver) => {
+                let descriptor = driver.descriptor.clone();
+                *slot = Slot::Running(driver);
+                Ok(descriptor)
+            }
+            Err(error) => {
+                if self.stopping() {
+                    *slot = Slot::Stopped;
+                } else if reconnect {
+                    // A driver that no longer reports was closed; the next
                     // start spawns a new one.
                     *slot = Slot::None;
                 }
-                described?
+                Err(error)
             }
-            None => {
-                let transport = (self.spawner)().await?;
-                Driver::describe(transport, machine_id).await?
-            }
+        }
+    }
+
+    fn stopping(&self) -> bool {
+        *self.stopping.borrow()
+    }
+
+    /// `future`, unless the app starts exiting first (or already is): then
+    /// `None`, with the future dropped.
+    async fn unless_stopping<T>(&self, future: impl Future<Output = T>) -> Option<T> {
+        let mut stop = self.stopping.subscribe();
+        tokio::select! {
+            biased;
+            _ = stop.wait_for(|stopping| *stopping) => None,
+            result = future => Some(result),
+        }
+    }
+
+    /// The driver described from `transport`, or from the one the spawner
+    /// produces when there is none. Called under the driver lock, so an
+    /// exit meanwhile is not held up: a spawn still in its handshake is
+    /// dropped, which kills its child; a driver still reporting is closed;
+    /// either way the caller lets go of the lock at once.
+    async fn bring_up(
+        &self,
+        transport: Option<Arc<dyn DriverTransport>>,
+        machine_id: MachineId,
+    ) -> Result<Arc<Driver>, String> {
+        let transport = match transport {
+            Some(transport) => transport,
+            None => match self.unless_stopping((self.spawner)()).await {
+                Some(spawned) => spawned?,
+                None => return Err(EXITING.to_owned()),
+            },
         };
-        let descriptor = driver.descriptor.clone();
-        *slot = Slot::Running(driver);
-        Ok(descriptor)
+        // Reachable without the lock from here on: what the exit closes
+        // when it cannot wait for this description.
+        *self.lock_latest() = Some(transport.clone());
+        match self
+            .unless_stopping(Driver::describe(transport.clone(), machine_id))
+            .await
+        {
+            Some(described) => described,
+            None => {
+                transport.close();
+                Err(EXITING.to_owned())
+            }
+        }
     }
 
     /// One inbound `cua_request` frame's `request`, answered with the
@@ -801,43 +871,61 @@ impl CuaRuntime {
             let mut slot = self.driver.lock().await;
             self.live(&mut slot)
         };
-        let open = self.take_open();
         let Some(driver) = driver else {
             return;
         };
-        for label in &open {
-            end_session(&driver, label).await;
-        }
-        if !open.is_empty() {
-            eprintln!("[cua] {} open session(s) ended on disconnect", open.len());
+        let ended = self.end_open_sessions(&driver).await;
+        if ended > 0 {
+            eprintln!("[cua] {ended} open session(s) ended on disconnect");
         }
     }
 
-    /// End the open sessions and stop the driver: the app is exiting.
-    /// Idempotent and a no-op for a runtime that never started.
+    /// End the open sessions, one at a time, each forgotten only once its
+    /// `end_session` returned (ended, or failed and logged): a caller
+    /// dropped mid-way leaves the rest for the next call. How many ended.
+    async fn end_open_sessions(&self, driver: &Driver) -> usize {
+        let mut ended = 0;
+        while let Some(label) = self.first_open() {
+            end_session(driver, &label).await;
+            self.lock_open().remove(&label);
+            ended += 1;
+        }
+        ended
+    }
+
+    /// End the open sessions and stop the driver for good: the app is
+    /// exiting. Terminal from its first instruction on, so a start or
+    /// restart in flight lets go of the driver lock and nothing starts
+    /// afterwards; cut short (the exit grace ran out on a driver wedged
+    /// in an `end_session`), the driver is killed all the same. Idempotent
+    /// and a no-op for a runtime that never started.
     pub async fn shutdown(&self) {
+        self.stopping.send_replace(true);
+        let mut kill = KillOnDrop {
+            runtime: self,
+            armed: true,
+        };
         let driver = {
             let mut slot = self.driver.lock().await;
-            match std::mem::replace(&mut *slot, Slot::None) {
+            match std::mem::replace(&mut *slot, Slot::Stopped) {
                 Slot::Running(driver) if !driver.gone() => Some(driver),
                 _ => None,
             }
         };
-        let open = self.take_open();
-        let Some(driver) = driver else {
+        let ended = match &driver {
+            Some(driver) => self.end_open_sessions(driver).await,
+            None => 0,
+        };
+        kill.armed = false;
+        let Some(transport) = self.kill_driver() else {
             return;
         };
-        for label in &open {
-            end_session(&driver, label).await;
-        }
-        driver.transport.close();
         // The child is killed when the aborted keep-alive task drops the
         // service; wait for that so an exiting app never leaves it behind.
-        let _ = tokio::time::timeout(Duration::from_secs(3), driver.transport.exited()).await;
-        eprintln!(
-            "[cua] runtime stopped with the app; {} open session(s) ended",
-            open.len()
-        );
+        let _ = tokio::time::timeout(Duration::from_secs(3), transport.exited()).await;
+        if driver.is_some() {
+            eprintln!("[cua] runtime stopped with the app; {ended} open session(s) ended");
+        }
     }
 
     /// Kill the driver without ending anything: the exit's last resort
@@ -846,7 +934,10 @@ impl CuaRuntime {
     /// hands its transport back for the exit to wait on; `None` when no
     /// driver was ever spawned. Idempotent.
     pub fn kill_driver(&self) -> Option<Arc<dyn DriverTransport>> {
-        todo!("a stop that is terminal and reachable without the driver lock")
+        self.stopping.send_replace(true);
+        let transport = self.lock_latest().clone()?;
+        transport.close();
+        Some(transport)
     }
 
     /// The labelled sessions still open, in label order.
@@ -857,12 +948,16 @@ impl CuaRuntime {
 
     /// The running driver, or none: a driver that exited on its own is
     /// noticed here, with the sessions it held (nobody is left to end them),
-    /// and remembered for a restart.
+    /// and remembered for a restart. Nothing runs on once the app exits,
+    /// whether or not the stop has reached the driver lock yet.
     fn live(&self, slot: &mut Slot) -> Option<Arc<Driver>> {
+        if self.stopping() {
+            return None;
+        }
         let crashed = match &*slot {
             Slot::Running(driver) if driver.gone() => driver.machine_id.clone(),
             Slot::Running(driver) => return Some(driver.clone()),
-            Slot::None | Slot::Crashed(_) => return None,
+            Slot::None | Slot::Crashed(_) | Slot::Stopped => return None,
         };
         let lost = self.take_open();
         eprintln!(
@@ -880,16 +975,17 @@ impl CuaRuntime {
         if let Some(driver) = self.live(&mut slot) {
             return Ok(driver);
         }
+        if self.stopping() {
+            return Err(EXITING.to_owned());
+        }
         let Slot::Crashed(machine_id) = &*slot else {
             return Err("no driver is running on this desktop".to_owned());
         };
         eprintln!("[cua] restarting the driver");
-        let transport = (self.spawner)()
+        let driver = self
+            .bring_up(None, machine_id.clone())
             .await
             .map_err(|error| format!("the driver could not be restarted: {error}"))?;
-        let driver = Driver::describe(transport, machine_id.clone())
-            .await
-            .map_err(|error| format!("the restarted driver could not be described: {error}"))?;
         *slot = Slot::Running(driver.clone());
         Ok(driver)
     }
@@ -919,9 +1015,15 @@ impl CuaRuntime {
         }
     }
 
-    /// Every open label in label order, leaving none.
+    /// Every open label in label order, leaving none: what a crashed driver
+    /// took with it.
     fn take_open(&self) -> Vec<SessionLabel> {
         std::mem::take(&mut *self.lock_open()).into_iter().collect()
+    }
+
+    /// The first open label in label order, still open.
+    fn first_open(&self) -> Option<SessionLabel> {
+        self.lock_open().iter().next().cloned()
     }
 
     /// A poisoned lock only means a task panicked mid-update; the set
@@ -930,6 +1032,27 @@ impl CuaRuntime {
         self.open
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn lock_latest(&self) -> std::sync::MutexGuard<'_, Option<Arc<dyn DriverTransport>>> {
+        self.latest
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+/// Kills the driver if `shutdown` is dropped before it got to, so a stop
+/// cut short by the exit grace never leaves the child running.
+struct KillOnDrop<'a> {
+    runtime: &'a CuaRuntime,
+    armed: bool,
+}
+
+impl Drop for KillOnDrop<'_> {
+    fn drop(&mut self) {
+        if self.armed && self.runtime.kill_driver().is_some() {
+            eprintln!("[cua] the stop was cut short; the driver is killed");
+        }
     }
 }
 
@@ -991,9 +1114,14 @@ pub fn runtime() -> &'static CuaRuntime {
 
 /// How long the exit hook waits for the sessions to end and the child to die.
 const EXIT_GRACE: Duration = Duration::from_secs(5);
+/// How much longer it waits for a child it had to kill outright.
+const KILL_GRACE: Duration = Duration::from_secs(2);
 
 /// Stop the driver as the app exits, bounded so a stuck driver never holds
-/// the exit: the open sessions are ended and the child is killed.
+/// the exit: the open sessions are ended and the child is killed. A stop
+/// the grace cuts short (a driver wedged in an `end_session`) still ends
+/// with the child killed and waited for; tauri exits the process right
+/// after this hook, and no destructor runs then.
 pub fn shutdown_blocking() {
     let Some(runtime) = RUNTIME.get() else {
         return;
@@ -1001,9 +1129,13 @@ pub fn shutdown_blocking() {
     tauri::async_runtime::block_on(async {
         if tokio::time::timeout(EXIT_GRACE, runtime.shutdown())
             .await
-            .is_err()
+            .is_ok()
         {
-            eprintln!("[cua] the driver did not stop within {EXIT_GRACE:?}");
+            return;
+        }
+        eprintln!("[cua] the driver did not stop within {EXIT_GRACE:?}; it is killed");
+        if let Some(transport) = runtime.kill_driver() {
+            let _ = tokio::time::timeout(KILL_GRACE, transport.exited()).await;
         }
     });
 }
@@ -2160,11 +2292,16 @@ done
         );
         assert!(process_exists(&pid));
 
-        // App exit: the child is gone, and a later start would spawn anew.
+        // App exit: the child is gone, and nothing starts again.
         runtime.shutdown().await;
         wait_until_gone(&pid).await;
         assert!(!process_exists(&pid), "child {pid} outlived shutdown()");
         assert!(!runtime.is_running().await);
+        // The reconnect loop's next start spawns nothing: the pid file
+        // still names the child that is gone.
+        let error = runtime.start(STUDIO).await.unwrap_err();
+        assert!(error.contains("exiting"), "{error}");
+        assert_eq!(std::fs::read_to_string(&pid_file).unwrap().trim(), pid);
     }
 
     /// Against the installed driver (needs `cua-driver`: `NOLUNE_CUA_DRIVER`,
