@@ -89,9 +89,9 @@
 	.capabilities-chevron { width: 1em; color: var(--text-muted); }
 	.capabilities-summary { color: var(--text-muted); font-weight: 400; }
 	.capabilities-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 10px; background: var(--background); }
-	.capability { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 12px; padding: 8px 12px; min-width: 0; }
+	.capability { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; padding: 8px 12px; min-width: 0; }
 	.capability + .capability { border-top: 1px solid var(--border); }
-	.capability-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+	.capability-main { display: flex; flex: 1 1 200px; flex-direction: column; gap: 2px; min-width: 0; }
 	.capability-text { font: 400 14px/1.5 var(--font-body); color: var(--foreground); margin: 0; overflow-wrap: anywhere; }
 	.capability-text strong { font-weight: 500; }
 	.capability-meta { font: 400 13px/1.5 var(--font-body); color: var(--text-muted); margin: 0; overflow-wrap: anywhere; }
@@ -104,6 +104,6 @@
 	.capability-control-label { font: 500 12px/1.4 var(--font-body); color: var(--text-muted); letter-spacing: 0.03em; }
 	.capability-control select { min-height: 44px; max-width: 100%; }
 	@media (max-width: 480px) {
-		.capability { grid-template-columns: minmax(0, 1fr); }
+		.capability-control { width: 100%; }
 	}
 </style>

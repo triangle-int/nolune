@@ -99,16 +99,17 @@
 	.approvals { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 8px; }
 	.approvals-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 	/* A request waiting for the owner sits on the selected surface so it reads as the thing to do. */
-	.approval { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); min-width: 0; }
+	/* The text keeps at least a readable column; the controls wrap under it when the row is narrow. */
+	.approval { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); min-width: 0; }
 	.approval[data-status="pending"] { background: var(--accent); border-color: var(--primary); }
-	.approval-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+	.approval-main { display: flex; flex: 1 1 220px; flex-direction: column; gap: 4px; min-width: 0; }
 	.approval-text { font: 400 14px/1.5 var(--font-body); color: var(--foreground); margin: 0; overflow-wrap: anywhere; }
 	.approval-id { font: 500 13px/1.4 var(--font-mono, monospace); color: var(--foreground); }
 	.approval-state { font: 500 13px/1.4 var(--font-body); color: var(--text-muted); padding: 2px 8px; border: 1px solid var(--border); border-radius: 999px; white-space: nowrap; }
 	.approval[data-status="approved"] .approval-state { color: var(--primary); border-color: var(--primary); }
 	.approval-meta { font: 400 13px/1.5 var(--font-body); color: var(--text-muted); margin: 0; overflow-wrap: anywhere; }
 	.approval-error { font: 400 13px/1.5 var(--font-body); color: var(--destructive); margin: 2px 0 0; }
-	.approval-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+	.approval-actions { display: flex; flex: 0 1 auto; flex-wrap: wrap; align-items: end; gap: 8px; }
 	.approval-scope { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 	.approval-scope-label { font: 500 12px/1.4 var(--font-body); color: var(--text-muted); letter-spacing: 0.03em; }
 	.approval-scope select { min-height: 44px; max-width: 100%; }
@@ -118,7 +119,7 @@
 	.approval-link-btn:hover:not(:disabled) { color: var(--foreground); border-color: var(--border); }
 	.approval-link-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 	@media (max-width: 480px) {
-		.approval { grid-template-columns: minmax(0, 1fr); }
-		.approval-scope { width: 100%; }
+		.approval-actions { width: 100%; }
+		.approval-scope { flex: 1 1 100%; }
 	}
 </style>
