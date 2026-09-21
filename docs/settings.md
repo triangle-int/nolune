@@ -34,7 +34,7 @@ one section and one scope:
 | Section | Route | Owns | Scope |
 |---------|-------|------|-------|
 | Companion | `settings/companion` | Little Moon presence, Learn my rhythm, Initiative (check-in, quiet hours, daily budget, reflection), Timezone, Scheduled messages | companion |
-| Connections | `settings/connections` | Model presets and slots (#156) with capability chips and a connection test per preset (#28), API keys, Connected computers (the compact Connected Spaces list, #80), Paired browsers | server |
+| Connections | `settings/connections` | Model presets and slots (#156) with capability chips and a connection test per preset (#28), API keys, Connected computers (the compact Connected Spaces list, #80), Companions (peer companions paired through federation, #108: rows with Confirm and Revoke, Invite a companion, Accept an invite, Rotate signing key; see [federation.md](federation.md)), Paired browsers | server |
 | Capabilities | `settings/capabilities` | Skills (registry), Extensions (curated MCP catalog, per-tool grants, custom servers behind the #97 acknowledgement) | server |
 | Data | `settings/data` | What the companion keeps, Export, Import | companion |
 | Advanced | `settings/advanced` | Server port and API token, Updates and release channel, ElevenLabs voice ID, Email (SMTP/IMAP), GitHub token | mixed; each control carries an owner badge |
@@ -232,11 +232,32 @@ Nolune release.
   and uploads the verified archive beside the desktop bundle, so a pin that
   no longer matches upstream fails the release instead of a user's install.
 
+## Companions (#108)
+
+The Companions section of Connections lists the peer companions this
+server's owner paired with, from `GET /api/federation/peers` viewed by the
+pure helpers in `client/src/lib/federation/companions.js`
+(`client/tests/federation-companions.test.mjs`) and rendered by
+`CompanionRow.svelte`; `Companions.svelte` loads, polls, and acts. A row is
+the peer's id, its state beside a color (Paired, Waiting for you, Waiting
+for its owner, Revoked), who invited whom, the approved origins, and when
+something it signed last verified here. **Invite a companion** mints an
+invite and shows its one line once, in a panel that keeps nothing after
+Done; **Accept an invite** takes a pasted line, refuses anything URL-shaped
+before sending, and posts the line in a JSON body; **Confirm** pairs a
+pending peer this server invited; **Revoke** asks once, inline; **Rotate
+signing key** asks once and reports which peers were told. The same actions
+exist as `nolune federation …` on the command line; both are described in
+[federation.md](federation.md).
+
 ## Verifying
 
 - `cd client && pnpm check && pnpm test && pnpm build`
 - `cd server && cargo test --test navigation_settings_split` and the
   `connected_computers_are_listed_for_the_one_companion_only` router test.
+- `cargo test --manifest-path server/Cargo.toml --test federation_cli` for
+  the Companions section guards and the `nolune federation` flow between
+  two profiles on one host.
 - `cargo test --manifest-path server/Cargo.toml --test cli_cua_driver` for
   the driver install and status paths, and `bash scripts/tests/install.sh
   && bash scripts/tests/release-workflow.sh` for the installer step and the
