@@ -353,7 +353,7 @@ and names the variant for the others.
 
 Every provider is exercised in CI without credentials and without the
 network, through the conformance harness in
-`server/src/services/llm/conformance.rs`: one set of cases, run for every
+`server/test-support/llm_conformance.rs`: one set of cases, run for every
 provider. The HTTP adapters answer in-process mock servers that return
 the provider's own wire shapes (SSE for streams, JSON for completions,
 status codes and headers for errors); Codex answers a fake app-server that

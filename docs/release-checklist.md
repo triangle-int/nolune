@@ -67,12 +67,14 @@ To move it:
    `default_presets` (the Model defaults list above applies).
 5. Run the fixture-driven suite, then the live tests against the new
    binary: `cargo test --locked --manifest-path server/Cargo.toml -- codex`
-   without credentials; `NOLUNE_CODEX_LIVE=1 cargo test --locked
+   without credentials; the smoke test with a scratch home,
+   `cargo test --locked --manifest-path server/Cargo.toml --bin nolune --
+   --ignored services::llm::conformance::tests::codex_smoke` (needs only
+   the binary on `PATH`); and `NOLUNE_CODEX_LIVE=1 cargo test --locked
    --manifest-path server/Cargo.toml --bin nolune -- --ignored
-   services::llm::codex` for the handshake, discovery, the smoke test with a
-   scratch home and, with a login in codex's home, the tool round trip
-   through the real app-server. Check that no `codex app-server` child is
-   left running afterwards.
+   services::llm::codex` for discovery, the handshake and, with a login in
+   codex's home, the tool round trip through the real app-server. Check
+   that no `codex app-server` child is left running afterwards.
 6. Update the pinned version wherever the docs name it: the Codex setup
    step and the process section in `docs/providers.md`, and this page;
    `server/tests/provider_docs.rs` fails when either page names another
