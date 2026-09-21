@@ -34,7 +34,7 @@ one section and one scope:
 | Section | Route | Owns | Scope |
 |---------|-------|------|-------|
 | Companion | `settings/companion` | Little Moon presence, Learn my rhythm, Initiative (check-in, quiet hours, daily budget, reflection), Resume my work (#83: on/off, break, cooldown, snooze, Suggest now), Timezone, Scheduled messages | companion |
-| Connections | `settings/connections` | Model presets and slots (#156) with capability chips and a connection test per preset (#28), API keys, Connected computers (the compact Connected Spaces list, #80), Companions (peer companions paired through federation, #108: rows with Confirm and Revoke, Invite a companion, Accept an invite, Rotate signing key; #109: pending approvals with Allow and Deny within one scope, and per-peer capability rows with one rule per request kind; see [federation.md](federation.md)), Paired browsers | server |
+| Connections | `settings/connections` | Model presets and slots (#156) with capability chips and a connection test per preset (#28), API keys, the Codex login (#27: binary state against the pinned release, who codex is logged in as, Log in, Use a device code, Log out), Connected computers (the compact Connected Spaces list, #80), Companions (peer companions paired through federation, #108: rows with Confirm and Revoke, Invite a companion, Accept an invite, Rotate signing key; #109: pending approvals with Allow and Deny within one scope, and per-peer capability rows with one rule per request kind; see [federation.md](federation.md)), Paired browsers | server |
 | Capabilities | `settings/capabilities` | Skills (registry), Extensions (curated MCP catalog, per-tool grants, custom servers behind the #97 acknowledgement) | server |
 | Data | `settings/data` | What the companion keeps, Export, Import (replaces the companion after a confirmation dialog) | companion |
 | Advanced | `settings/advanced` | Server port and API token, Updates and release channel, ElevenLabs voice ID, Email (SMTP/IMAP), GitHub token | mixed; each control carries an owner badge |
@@ -200,8 +200,42 @@ login. A missing or mismatched binary answers 503 with `codex_not_installed`,
 `codex_incompatible` or `codex_unusable` and the message names the path and
 both versions; an app-server that could not answer is 502
 `codex_unavailable`. No response, log line or state type carries a token;
-`server/tests/codex_auth.rs` keeps it so. The settings tile for this follows
-in a later slice of #27.
+`server/tests/codex_auth.rs` keeps it so, and it scans the client's Codex
+module, tile and API blocks for the same token-bearing names.
+
+The Codex section of Settings › Connections
+(`client/src/lib/components/settings/CodexLogin.svelte`, copy from the pure
+`client/src/lib/models/codex.js`) sits under the API keys and holds no key
+field. One row names the release and its path (or the release Nolune
+supports when the binary is not there), then one state line: not installed,
+another release (both versions and the path), cannot run, could not answer,
+not logged in, a pending login, a failed login with codex's reason, or
+logged in as the email and plan codex reports. Log in starts the server's
+`auto` flow and Use a device code forces one; while the login is pending the
+tile shows the URL to open and the code to type in the pairing panel's
+shape, polls the status every two seconds and updates itself when codex has
+the login; Cancel (a logout) ends a pending login, Log out forgets the
+login. A typed refusal (`codex_not_installed`, `codex_incompatible`,
+`codex_unusable`, `codex_unavailable`, `codex_refused`) reads as one
+sentence with what to do. Model presets treat `codex` as a login provider
+(`PROVIDERS` in `client/src/lib/models/presets.js`, `auth: "login"`): a
+slot on a Codex preset needs no key, the editor offers the models the pinned
+release lists as hints, and the capability chips (`no vision`,
+`no documents`) come from the server's `capabilities` like any other
+preset's. A connection test on a Codex preset answers the server's own
+setup sentence (no binary, another release, no login) instead of asking for
+a key.
+
+Onboarding offers Codex as its own choice ("your ChatGPT login"). The gate
+is the login AND the connection test (`connectOnboardingCodex` in
+`client/src/lib/components/onboarding/provider.js`): the status is read
+first, a binary that is missing or another release stops there with the
+reason and "choose another provider", no login starts one and shows the URL
+and code until the poll sees it completed, and only then are the Codex
+presets seeded and one tested; "connected." is typed once a model answered,
+and a failed login or test offers "try again", "use a device code" and
+another provider. On a reload with a Codex chat preset, the same test runs
+and a lost login returns to the provider step with the login sentence.
 
 ## Layout (#153)
 

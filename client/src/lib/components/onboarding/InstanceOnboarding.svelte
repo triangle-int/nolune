@@ -1,6 +1,7 @@
 <script lang="ts">
 	import MoonBirth from "./MoonBirth.svelte";
-	import { resumeOnboarding, saveOnboardingProvider } from "./provider.js";
+	import { connectOnboardingCodex, resumeOnboarding, saveOnboardingProvider } from "./provider.js";
+	import { CODEX_LOGIN_POLL_MS, codexErrorCopy, loginInstructions, loginProgress } from "$lib/models/codex.js";
 	import ArrowRight from "@lucide/svelte/icons/arrow-right";
 	import {
 		sendMessage,
@@ -14,6 +15,10 @@
 		seedModelPresets,
 		testPreset,
 		updateModelPresets,
+		fetchCodexStatus,
+		startCodexLogin,
+		type CodexLoginMethod,
+		type CodexLoginStatus,
 	} from "$lib/api/client.js";
 	import type { SoulTemplate } from "$lib/api/types.js";
 	import { getCompanion } from "$lib/stores/companion.svelte.js";
@@ -52,6 +57,8 @@
 		| "being-born"
 		| "picking-soul"
 		| "picking-provider"
+		| "codex-login"
+		| "codex-blocked"
 		| "waiting-first"
 		| "sending"
 		| "departing";
@@ -60,13 +67,14 @@
 	let revealed = $state(false);
 	let firstMessage = $state("");
 	let companionNameInput = $state("");
-	type OnboardingProvider = "anthropic" | "openai" | "openrouter";
-	const providerInfo: Record<OnboardingProvider, { label: string; keyUrl: string; placeholder: string }> = {
+	type KeyProvider = "anthropic" | "openai" | "openrouter";
+	type OnboardingProvider = KeyProvider | "codex";
+	const providerInfo: Record<KeyProvider, { label: string; keyUrl: string; placeholder: string }> = {
 		anthropic: { label: "Anthropic", keyUrl: "https://console.anthropic.com/settings/keys", placeholder: "sk-ant-..." },
 		openai: { label: "OpenAI", keyUrl: "https://platform.openai.com/api-keys", placeholder: "sk-..." },
 		openrouter: { label: "OpenRouter", keyUrl: "https://openrouter.ai/settings/keys", placeholder: "sk-or-..." },
 	};
-	let selectedProvider = $state<OnboardingProvider>("anthropic");
+	let selectedProvider = $state<KeyProvider>("anthropic");
 	const providerLabel = $derived(providerInfo[selectedProvider].label);
 	const providerKeyUrl = $derived(providerInfo[selectedProvider].keyUrl);
 	let apiKeyInput = $state("");
@@ -251,6 +259,10 @@
 	}
 
 	async function pickProvider(provider: OnboardingProvider) {
+		if (provider === "codex") {
+			await startCodex();
+			return;
+		}
 		selectedProvider = provider;
 		apiKeyInput = "";
 		apiKeyError = "";
@@ -261,14 +273,126 @@
 		apiKeyInputEl?.focus();
 	}
 
-	/** Back from the key step: a provider that will not answer is not the only way on. */
+	/** Back from the key or codex step: a provider that will not answer is not the only way on. */
 	async function chooseAnotherProvider() {
-		if (stage !== "waiting-key") return;
+		if (stage !== "waiting-key" && stage !== "codex-login" && stage !== "codex-blocked") return;
+		stopCodexPoll();
 		apiKeyInput = "";
 		apiKeyError = "";
+		codexError = "";
+		codexLogin = null;
 		stage = "intro";
 		await typewrite("how should i think, then?");
 		stage = "picking-provider";
+	}
+
+	// --- Codex (#27): a ChatGPT login through the local codex binary ---
+	// The gate is the login AND the connection test (`connectOnboardingCodex`):
+	// no key is typed here; a login is started on the server, its URL and
+	// code are shown, and the status is polled until codex has the login.
+	let codexLogin = $state<CodexLoginStatus | null>(null);
+	let codexError = $state("");
+	let codexPoll: ReturnType<typeof setInterval> | null = null;
+	const codexSteps = $derived(loginInstructions(codexLogin));
+
+	function stopCodexPoll() {
+		if (codexPoll) clearInterval(codexPoll);
+		codexPoll = null;
+	}
+
+	const codexApi = {
+		fetchCodexStatus,
+		seedModelPresets,
+		testPreset,
+		// The seeded rows came from the server, so their providers are its union.
+		updateModelPresets: (payload: { presets: unknown[]; chat_preset: string; background_preset: string }) =>
+			updateModelPresets(payload as Parameters<typeof updateModelPresets>[0]),
+	};
+
+	/** Codex was picked: say so, then check the binary and the login. */
+	async function startCodex() {
+		codexError = "";
+		codexLogin = null;
+		stage = "intro";
+		await typewrite("got it. i'll think through your ChatGPT login, via codex.");
+		await checkCodex("auto");
+	}
+
+	/**
+	 * Check the binary and the login, then finish or log in. "try again"
+	 * comes back here, so a binary installed meanwhile or a login done
+	 * elsewhere (`codex login`) is picked up without starting another.
+	 */
+	async function checkCodex(method: "auto" | CodexLoginMethod) {
+		stopCodexPoll();
+		codexError = "";
+		stage = "testing";
+		try {
+			await finishCodex();
+		} catch (e) {
+			const error = e as Error & { codex?: "binary" | "unavailable" | "login" };
+			if (error.codex === "login") {
+				await beginCodexLogin(method);
+				return;
+			}
+			codexError = error.message;
+			stage = "codex-blocked";
+		}
+	}
+
+	/** Seed the Codex presets and test one; "connected." only once a model answered. */
+	async function finishCodex() {
+		await connectOnboardingCodex(codexApi);
+		stopCodexPoll();
+		codexLogin = null;
+		stage = "intro";
+		await pause(200);
+		await typewrite("connected.");
+		await pause(400);
+		await askFirstMessage();
+	}
+
+	async function beginCodexLogin(method: "auto" | CodexLoginMethod) {
+		stopCodexPoll();
+		codexError = "";
+		stage = "testing";
+		try {
+			const started = await startCodexLogin(method);
+			if (!started.ok) {
+				codexError = codexErrorCopy(started);
+				stage = "codex-blocked";
+				return;
+			}
+			codexLogin = started.value;
+			stage = "codex-login";
+			const loginId = started.value.id;
+			codexPoll = setInterval(async () => {
+				let progress: ReturnType<typeof loginProgress>;
+				try {
+					progress = loginProgress(await fetchCodexStatus(), loginId);
+				} catch {
+					return; // a missed poll is not an outcome
+				}
+				if (progress === "pending") return;
+				stopCodexPoll();
+				if (progress === "completed") {
+					stage = "testing";
+					try {
+						await finishCodex();
+					} catch (e) {
+						codexError = e instanceof Error ? e.message : "Codex did not answer.";
+						stage = "codex-blocked";
+					}
+					return;
+				}
+				codexError = progress === "failed" ? "The login did not finish. Try again, or use a device code." : "Another login replaced this one. Try again.";
+				codexLogin = null;
+				stage = "codex-blocked";
+			}, CODEX_LOGIN_POLL_MS);
+		} catch (e) {
+			codexError = e instanceof Error ? e.message : "The login could not start.";
+			stage = "codex-blocked";
+		}
 	}
 
 	async function submitApiKey() {
@@ -337,6 +461,7 @@
 	}
 
 	$effect(() => { runSequence(); });
+	$effect(() => stopCodexPoll);
 </script>
 
 {#if stage === "being-born"}
@@ -433,7 +558,35 @@
 							<span class="ob-pill-label">OpenRouter</span>
 							<span class="ob-pill-note">many models</span>
 						</button>
+						<button onclick={() => pickProvider("codex")} class="ob-pill ob-pill-col ob-pill-soul">
+							<span class="ob-pill-label">Codex</span>
+							<span class="ob-pill-note">your ChatGPT login</span>
+						</button>
 					</div>
+				</div>
+			{/if}
+
+			{#if stage === "codex-login" && codexSteps}
+				<div class="ob-enter">
+					<div class="ob-codex" aria-live="polite">
+						<a href={codexSteps.url} target="_blank" rel="noopener" class="ob-codex-link">{codexSteps.url}</a>
+						{#if codexSteps.code}
+							<span class="ob-codex-code" aria-label="Device code">{codexSteps.code}</span>
+						{/if}
+						<p class="ob-codex-note">{codexSteps.note} i'll notice once codex has the login.</p>
+					</div>
+					<button type="button" onclick={chooseAnotherProvider} class="ob-hint ob-hint-button">choose another provider</button>
+				</div>
+			{/if}
+
+			{#if stage === "codex-blocked"}
+				<div class="ob-enter">
+					<p class="ob-error" role="alert">{codexError}</p>
+					<div class="ob-pills ob-pills-soul ob-pills-providers">
+						<button type="button" onclick={() => checkCodex("auto")} class="ob-pill">try again</button>
+						<button type="button" onclick={() => checkCodex("device_code")} class="ob-pill">use a device code</button>
+					</div>
+					<button type="button" onclick={chooseAnotherProvider} class="ob-hint ob-hint-button">choose another provider</button>
 				</div>
 			{/if}
 
@@ -571,7 +724,7 @@
 	.ob-pills { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 	.ob-pills-lang { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.375rem; }
 	.ob-pills-soul { display: grid; grid-template-columns: repeat(2, 1fr); }
-	.ob-pills-providers { grid-template-columns: repeat(3, 1fr); }
+	.ob-pills-providers { grid-template-columns: repeat(2, 1fr); }
 
 	.ob-pill {
 		min-height: 44px;
@@ -760,5 +913,11 @@
     .ob-spinner-label { font-family: var(--font-body); font-size: 14px; }
     .ob-spinner { width: 16px; height: 16px; border-color: var(--border); border-top-color: var(--primary); }
     .ob-cursor { background: var(--primary); }
-    @media (max-width: 480px) { .ob-pills-lang { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ob-pills-soul { grid-template-columns: 1fr; } }
+    /* Codex login (#27): the URL to open and the code to type, in the pairing panel's shape. */
+    .ob-codex { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 16px; border-radius: 8px; border: 1px solid var(--primary); background: var(--accent); }
+    .ob-codex-link { max-width: 100%; font-family: var(--font-mono); font-size: 0.8125rem; color: var(--primary); text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; text-align: center; }
+    .ob-codex-code { font-family: var(--font-mono); font-size: 1.75rem; letter-spacing: 0.14em; color: var(--foreground); }
+    .ob-codex-note { margin: 0; font-size: 13px; line-height: 1.5; color: var(--text-secondary); text-align: center; }
+    .ob-codex-note, .ob-codex-link { user-select: text; }
+    @media (max-width: 480px) { .ob-pills-lang { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ob-pills-soul { grid-template-columns: 1fr; } .ob-pills-providers { grid-template-columns: repeat(2, 1fr); } }
 </style>

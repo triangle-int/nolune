@@ -306,8 +306,8 @@ export function fetchConfigStatus(): Promise<{
 	return json("/api/config/status");
 }
 
-/** The providers the server ships adapters for (#156, #26). */
-export type LlmProvider = "anthropic" | "openai" | "openrouter";
+/** The providers the server ships adapters for (#156, #26); `codex` logs in instead of holding a key (#27). */
+export type LlmProvider = "anthropic" | "openai" | "openrouter" | "codex";
 
 /** A user-defined model choice (#156): provider plus model id, under a name. */
 export interface ModelPreset {
@@ -421,6 +421,113 @@ export async function testPreset(id: string): Promise<PresetTestResult> {
 	}
 	if (res.status === 401) throw new AuthError();
 	throw new Error(text || res.statusText);
+}
+
+// ---------------------------------------------------------------------------
+// Codex login (#27)
+//
+// A ChatGPT login through the local `codex` binary. The status carries the
+// binary's state against the pinned release, who codex is logged in as (an
+// email and a plan) and what a person needs to finish a login; the server
+// never hands the browser anything codex authenticates with.
+// ---------------------------------------------------------------------------
+
+export type CodexBinaryState = "ready" | "not_installed" | "incompatible" | "unusable";
+
+export interface CodexBinaryStatus {
+	state: CodexBinaryState;
+	/** The one release Nolune speaks to. */
+	pinned_version: string;
+	path?: string;
+	version?: string;
+	/** What to do when the binary is not ready. */
+	message?: string;
+}
+
+/** Who codex is logged in as: `chatgpt` with an email and plan, or `api_key` when codex holds one itself. */
+export interface CodexAccount {
+	kind: string;
+	email?: string;
+	plan?: string;
+}
+
+export type CodexLoginMethod = "browser" | "device_code";
+
+/** One login, from its start to its outcome; the URL and code are gone once it is no longer pending. */
+export interface CodexLoginStatus {
+	id: string;
+	method: CodexLoginMethod;
+	state: "pending" | "completed" | "failed";
+	/** The managed browser flow: open on the machine the server runs on. */
+	auth_url?: string;
+	/** The device-code flow: open anywhere and type `user_code` there. */
+	verification_url?: string;
+	user_code?: string;
+	/** Why a failed login failed. */
+	error?: string;
+}
+
+export interface CodexStatus {
+	binary: CodexBinaryStatus;
+	installed: boolean;
+	compatible: boolean;
+	logged_in: boolean;
+	account: CodexAccount | null;
+	login: CodexLoginStatus | null;
+	/** Why the login could not be read although the binary is ready. */
+	error?: string;
+}
+
+/** Why a login or logout was refused, as the server types it. */
+export type CodexError =
+	| "codex_not_installed"
+	| "codex_incompatible"
+	| "codex_unusable"
+	| "codex_unavailable"
+	| "codex_refused"
+	| (string & {});
+
+export type CodexOutcome<T> = { ok: true; value: T } | { ok: false; error: CodexError; message: string; status: number };
+
+/** Never fails on the server's side: a missing binary is a state, not an error. */
+export function fetchCodexStatus(): Promise<CodexStatus> {
+	return json("/api/config/codex/status");
+}
+
+/** Reads a login or logout answer: typed refusals come back as outcomes, a bare 401 is this browser's session. */
+async function codexOutcome<T>(res: Response): Promise<CodexOutcome<T>> {
+	const text = await res.text().catch(() => "");
+	let body: Record<string, unknown> | null = null;
+	try {
+		body = text ? JSON.parse(text) : null;
+	} catch {
+		body = null;
+	}
+	if (res.ok && body) return { ok: true, value: body as T };
+	if (body && typeof body.error === "string") {
+		return { ok: false, error: body.error, message: typeof body.message === "string" ? body.message : text, status: res.status };
+	}
+	if (res.status === 401) throw new AuthError();
+	throw new Error(text || res.statusText);
+}
+
+/**
+ * Start a login. `auto` is the browser flow where the server has a display
+ * and a device code where it is headless; either can be forced.
+ */
+export async function startCodexLogin(method: "auto" | CodexLoginMethod = "auto"): Promise<CodexOutcome<CodexLoginStatus>> {
+	const res = await authedFetch("/api/config/codex/login", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ method }),
+	});
+	return codexOutcome(res);
+}
+
+/** Forget the login (and cancel one still pending); answers the status. */
+export async function logoutCodex(): Promise<CodexOutcome<CodexStatus>> {
+	const res = await authedFetch("/api/config/codex/logout", { method: "POST" });
+	return codexOutcome(res);
 }
 
 export interface ChatPreset {

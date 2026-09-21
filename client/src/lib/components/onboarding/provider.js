@@ -1,3 +1,4 @@
+import { codexView } from "../../models/codex.js";
 import { presetTestCopy, providerLabel } from "../../models/presets.js";
 
 /**
@@ -5,6 +6,9 @@ import { presetTestCopy, providerLabel } from "../../models/presets.js";
  * @typedef {{ presets: ModelPreset[], chat_preset: string, background_preset: string }} SeededModels
  * @typedef {import("../../models/presets.js").PresetTestOk} PresetTestOk
  * @typedef {import("../../models/presets.js").PresetTestFailure} PresetTestFailure
+ * @typedef {import("../../models/codex.js").CodexStatus} CodexStatus
+ * @typedef {'anthropic' | 'openai' | 'openrouter' | 'codex'} SeedProvider
+ * @typedef {{ seedModelPresets: (provider: SeedProvider) => Promise<SeededModels>, testPreset: (id: string) => Promise<PresetTestOk | PresetTestFailure>, updateModelPresets: (payload: { presets: ModelPreset[], chat_preset: string, background_preset: string }) => Promise<unknown> }} SeedAndTestApi
  */
 
 /**
@@ -58,12 +62,24 @@ export function slotsAfterOnboardingTest(models, presetId) {
  * first message does not go through the provider that did not.
  * @param {'anthropic' | 'openai' | 'openrouter'} provider
  * @param {string} key
- * @param {{ updateLlmConfig: (payload: {api_key?: string, openai?: string, openrouter?: string}) => Promise<void>, seedModelPresets: (provider: 'anthropic' | 'openai' | 'openrouter') => Promise<SeededModels>, testPreset: (id: string) => Promise<PresetTestOk | PresetTestFailure>, updateModelPresets: (payload: { presets: ModelPreset[], chat_preset: string, background_preset: string }) => Promise<unknown> }} api
+ * @param {{ updateLlmConfig: (payload: {api_key?: string, openai?: string, openrouter?: string}) => Promise<void> } & SeedAndTestApi} api
  * @returns {Promise<PresetTestOk>}
  */
 export async function saveOnboardingProvider(provider, key, api) {
 	const payload = provider === 'openai' ? { openai: key } : provider === 'openrouter' ? { openrouter: key } : { api_key: key };
 	await api.updateLlmConfig(payload);
+	return seedAndTest(provider, api);
+}
+
+/**
+ * Seed a provider's default presets and run the connection test on one of
+ * them; the slots follow the preset that answered. Shared by the key
+ * providers and Codex, whose credential is not saved here.
+ * @param {SeedProvider} provider
+ * @param {SeedAndTestApi} api
+ * @returns {Promise<PresetTestOk>}
+ */
+async function seedAndTest(provider, api) {
 	const models = await api.seedModelPresets(provider);
 	const presetId = onboardingTestPreset(models, provider);
 	if (!presetId) throw new Error(`No ${provider} preset to test; add one under Settings.`);
@@ -77,6 +93,33 @@ export async function saveOnboardingProvider(provider, key, api) {
 	const slots = slotsAfterOnboardingTest(models, presetId);
 	if (slots) await api.updateModelPresets({ presets: models.presets, ...slots });
 	return outcome;
+}
+
+/**
+ * Finish Codex onboarding (#27): the gate is the login AND the connection
+ * test. Nothing is saved for the credential, which lives with codex; the
+ * status is read first, and a binary that is missing or another release
+ * (`error.codex === 'binary'`), an app-server that could not answer
+ * (`'unavailable'`) or no login yet (`'login'`, the caller starts one)
+ * rejects before anything is seeded. With a login, the Codex presets are
+ * seeded and one is tested like any other provider's; a preset that does
+ * not answer rejects with the typed outcome on `error.outcome`.
+ * @param {{ fetchCodexStatus: () => Promise<CodexStatus> } & SeedAndTestApi} api
+ * @returns {Promise<PresetTestOk>}
+ */
+export async function connectOnboardingCodex(api) {
+	const status = await api.fetchCodexStatus();
+	const view = codexView(status);
+	/** @param {'binary' | 'unavailable' | 'login'} codex @param {string} message */
+	const refuse = (codex, message) => {
+		const error = /** @type {Error & { codex?: 'binary' | 'unavailable' | 'login' }} */ (new Error(message));
+		error.codex = codex;
+		return error;
+	};
+	if (!status.compatible) throw refuse("binary", `${view.headline} ${view.detail ?? ""}`.trim());
+	if (status.error) throw refuse("unavailable", `${view.headline} ${view.detail ?? ""}`.trim());
+	if (!status.logged_in) throw refuse("login", "Codex is not logged in yet.");
+	return seedAndTest("codex", api);
 }
 
 /**

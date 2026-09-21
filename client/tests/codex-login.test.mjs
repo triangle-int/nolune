@@ -39,6 +39,7 @@ test('the tile reads one state per status, with a headline, what to do, and whic
 	assert.match(missing.headline, /not installed/i);
 	assert.match(missing.detail, /NOLUNE_CODEX_BIN/, 'the server message says how to point at a binary');
 	assert.match(missing.detail, new RegExp(PIN.replace(/\./g, '\\.')), 'the pinned release is named');
+	assert.match(missing.detail, /is unset\. Install codex/, 'the server sentence is ended before the hint');
 	assert.equal(missing.canLogin, false);
 	assert.equal(missing.canLogout, false);
 	assert.equal(missing.instructions, null);
@@ -59,7 +60,7 @@ test('the tile reads one state per status, with a headline, what to do, and whic
 	const gone = view('unavailable');
 	assert.equal(gone.state, 'unavailable');
 	assert.match(gone.headline, /could not answer|did not answer/i);
-	assert.match(gone.detail, /handshake failed/);
+	assert.match(gone.detail, /handshake failed: exited with status 1\. Logging in/);
 	assert.equal(gone.canLogin, true, 'a retry starts the child again');
 	assert.equal(gone.canLogout, false);
 

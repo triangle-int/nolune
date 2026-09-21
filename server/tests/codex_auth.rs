@@ -440,10 +440,17 @@ fn codex_blocks(source: &str) -> Vec<(usize, String)> {
 /// route tests match the answers (`assert_no_token_bearing_member`).
 fn names_a_credential(text: &str) -> Option<&'static str> {
     let lowered = text.to_lowercase();
-    ["token", "secret", "apikey", "api_key:", "password", "cookie"]
-        .into_iter()
-        .find(|banned| lowered.contains(banned))
-        .or_else(|| TOKEN_BEARING.iter().copied().find(|banned| text.contains(banned)))
+    [
+        "token", "secret", "apikey", "api_key:", "password", "cookie",
+    ]
+    .into_iter()
+    .find(|banned| lowered.contains(banned))
+    .or_else(|| {
+        TOKEN_BEARING
+            .iter()
+            .copied()
+            .find(|banned| text.contains(banned))
+    })
 }
 
 #[test]
@@ -492,7 +499,11 @@ fn the_client_shows_the_login_and_carries_no_token_bearing_field() {
     }
     // The provider list: codex logs in, the others hold a key.
     let presets = fs::read_to_string(repo().join("client/src/lib/models/presets.js")).unwrap();
-    for required in ["id: \"codex\"", "auth: \"login\"", "export function providerAuth("] {
+    for required in [
+        "id: \"codex\"",
+        "auth: \"login\"",
+        "export function providerAuth(",
+    ] {
         if !presets.contains(required) {
             violations.push(format!("presets.js is missing {required:?}"));
         }
@@ -509,7 +520,11 @@ fn the_client_shows_the_login_and_carries_no_token_bearing_field() {
         repo().join("client/src/lib/components/onboarding/InstanceOnboarding.svelte"),
     )
     .unwrap();
-    for required in ["pickProvider(\"codex\")", "connectOnboardingCodex", "startCodexLogin"] {
+    for required in [
+        "pickProvider(\"codex\")",
+        "connectOnboardingCodex",
+        "startCodexLogin",
+    ] {
         if !onboarding.contains(required) {
             violations.push(format!("onboarding is missing {required:?}"));
         }

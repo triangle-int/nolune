@@ -114,5 +114,32 @@ The login routes, `GET /api/config/codex/status`,
 for a headless server) and `POST /api/config/codex/logout`, are described
 in [settings.md](settings.md); they ask the same app-server child the
 provider's turns run on, over the same protocol, and hand out an account's
-label and what a person needs to finish a login, never a token. The
-Settings → Connections tile follows in the remaining slice of #27.
+label and what a person needs to finish a login, never a token. The Codex
+section of Settings → Connections and the Codex choice in onboarding are
+built on them (settings.md says what each state shows and how the
+onboarding gate works).
+
+### Release checklist: bumping the pinned codex version
+
+The pin is a release step, not a dependency bump. When a new codex release
+is to be supported:
+
+1. Install that release locally and set `CODEX_VERSION` in
+   `server/src/services/llm/codex/mod.rs` to it.
+2. Re-record `server/src/services/llm/fixtures/codex-<version>.jsonl`
+   against the real binary with a scratch `CODEX_HOME` and no login (the
+   fixture header says which entries are live shapes and which follow the
+   published protocol), rename it to the new version, and check the
+   `model/list` catalog against `CODEX_MODELS` in
+   `client/src/lib/models/presets.js` and the seeded presets in
+   `server/src/config.rs`.
+3. Run the codex module's tests (`cargo test --manifest-path
+   server/Cargo.toml -- codex`) against the fake app-server, then the
+   ignored live tests (`NOLUNE_CODEX_LIVE=1 … -- --ignored`) against the
+   real binary, and the login routes with the fake (`routes::codex`).
+4. Smoke the Settings → Connections tile and the onboarding choice with
+   the real binary (`docs/settings.md`), and the incompatible state with
+   the previous release still installed.
+5. Say in the release notes which codex release is supported now; a user
+   on the previous one sees the `incompatible` state with both versions
+   until they upgrade.
