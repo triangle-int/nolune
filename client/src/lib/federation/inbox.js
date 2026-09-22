@@ -100,7 +100,9 @@ function noteFor(record, word) {
 				? "Held during your quiet hours; it asks again later."
 				: "Allow or deny it above; it asks again once you have.";
 		case "accepted":
-			return record.intent === "reminder" ? "Delivered to your conversation and set as a commitment." : "Delivered to your conversation.";
+			return record.intent === "reminder" || record.intent === "proposal" || record.intent === "handoff"
+				? "Delivered to your conversation; review it under Activity, where nothing is written until you accept."
+				: "Delivered to your conversation.";
 		case "denied":
 			return record.reason === "owner_denied" ? "You denied this once; nothing reached you." : "Refused by your policy; nothing reached you.";
 		default:

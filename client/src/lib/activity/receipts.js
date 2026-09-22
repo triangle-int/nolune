@@ -252,6 +252,10 @@ export function outboxLabel(entry) {
 			return `Availability asked of companion ${peer}`;
 		case "reminder":
 			return `Reminder proposed to companion ${peer}`;
+		case "proposal":
+			return `Meeting proposed to companion ${peer}`;
+		case "handoff":
+			return `Task handed over to companion ${peer}`;
 		default:
 			return `Request to companion ${peer}`;
 	}
@@ -273,6 +277,18 @@ export function outboxText(entry) {
 			const window = /** @type {{ from: number; to: number } | undefined} */ (payload.window);
 			if (!window) return "";
 			return `Free between ${momentLabel(window.from)} and ${momentLabel(window.to)}?`;
+		}
+		case "proposal": {
+			const window = /** @type {{ from: number; to: number } | undefined} */ (payload.window);
+			const description = String(payload.description ?? "");
+			if (!window) return description;
+			return `${description}\nBetween ${momentLabel(window.from)} and ${momentLabel(window.to)}`;
+		}
+		case "handoff": {
+			// The task's goal as it was sent; the steps and references travel with it.
+			const goal = String(payload.task?.goal ?? "");
+			const steps = payload.task?.completed_steps?.length ?? 0;
+			return steps > 0 ? `${goal}\n${steps === 1 ? "1 step" : `${steps} steps`} done so far` : goal;
 		}
 		default:
 			return "";
@@ -360,7 +376,7 @@ export function outboxNote(entry, nowSeconds) {
 			const answer = response?.outcome === "accepted" ? response.answer : undefined;
 			switch (answer?.kind) {
 				case "reminder_scheduled":
-					return `Reminder set for ${momentLabel(Number(answer.at))} · ${ago}.`;
+					return `Reminder for ${momentLabel(Number(answer.at))} delivered for their owner to accept · ${ago}.`;
 				case "availability": {
 					const windows = answer.windows ?? [];
 					if (windows.length === 0) return `Answered ${ago}: nothing about their schedule was shared.`;
@@ -368,7 +384,9 @@ export function outboxNote(entry, nowSeconds) {
 					return `Answered ${ago}: ${spans(free, "free")}, ${spans(windows.length - free, "busy")}.`;
 				}
 				case "proposal_received":
-					return `Delivered to their owner ${ago}.`;
+					return `Delivered for their owner to accept ${ago}.`;
+				case "handoff_received":
+					return `Delivered for their owner to accept as a task of their own ${ago}.`;
 				default:
 					return `Delivered to their conversation ${ago}.`;
 			}
