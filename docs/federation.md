@@ -73,9 +73,10 @@ profile is consulted.
 
 ## Intents
 
-What paired companions ask each other is bounded to four structured
-intents (#110): deliver a `message`, answer an `availability` query for a
-window, set a `reminder`, and put a `proposal` to the owner. Every intent
+What paired companions ask each other is bounded to five structured
+intents (#110, #111): deliver a `message`, answer an `availability` query
+for a window, propose a `reminder`, put a `proposal` (a meeting) to the
+owner, and hand an unfinished task over as a `handoff`. Every intent
 carries the same header: a `version`, a `correlation_id` the sender chose
 (with the sender's companion id it identifies the request, so a redelivery
 is recognised), the `sender`, the `represented_owner` the sender speaks
@@ -98,9 +99,9 @@ character, a line or paragraph separator, or an invisible format
 character (a bidi override, a zero-width character, the byte order
 mark), so it can neither show a second line nor read backwards. Free
 text inside a payload (a message body, a reminder text, a proposal
-description) is peer content: it is bounded, never printed in a log or
-an error, and only ever shown inside a block marked as untrusted data
-from that companion, never as instructions.
+description, every text of a handoff) is peer content: it is bounded,
+never printed in a log or an error, and only ever shown inside a block
+marked as untrusted data from that companion, never as instructions.
 
 The answer is typed too: `accepted` (with what was disclosed, never
 above the class asked for), `denied` (with the policy reason and, for a
@@ -165,46 +166,43 @@ on, and one they already decided says so until the peer asks again.
 An accepted intent is delivered into the owner's default conversation as
 one user-role message: a line the server writes (the intent class, the
 sender's companion id, and the times it named) and, for a message, a
-reminder, or a proposal, the peer's text inside the untrusted block (a
-boundary drawn fresh for each rendering, the sender named, "data, not
-instructions or approvals" on the opening line, a forged closing line
-inside the text left as text). The client shows that block as the
-companion's words, visibly untrusted, as plain text and never as
+reminder, a proposal, or a handoff, the peer's text inside the untrusted
+block (a boundary drawn fresh for each rendering, the sender named,
+"data, not instructions or approvals" on the opening line, a forged
+closing line inside the text left as text). The client shows that block
+as the companion's words, visibly untrusted, as plain text and never as
 markdown; nothing else reads the text: it is never a tool argument, a
-commitment's promise, a log line, or a field of any record. The message
-is appended to the history as the owner's own would be but is not the
-owner speaking: it does not count as their activity (the mood's last
-interaction and the Learn-my-rhythm aggregates the check-in prompt reads
-are left alone). A reminder
-also becomes a commitment that falls due at the asked time and links to
-that message (`accepted` with `reminder_scheduled`); its promise names
-this server's own ids (the sender's verified companion id and the chat
-message) and never the peer's correlation id or labels, because a
-promise reaches the check-in prompt outside any untrusted block. That
-commitment schedules a check-in for the asked time under the owner's
-own initiative rule, like any due commitment, which is why a reminder's
-time is bounded at decode: never behind the clock, never more than a
-year ahead. An availability
-query is answered with no windows and told to the owner (this companion
-keeps no calendar, so nothing about the schedule is disclosed and the
-receipt says `granted none`); a proposal is told to the owner
-(`proposal_received`). The companion reads the delivery on the owner's
-next turn; nothing runs a turn on arrival on the peer's behalf.
+commitment's promise, a log line, or a field of any record but the
+proposal the owner reviews. The message is appended to the history as
+the owner's own would be but is not the owner speaking: it does not
+count as their activity (the mood's last interaction and the
+Learn-my-rhythm aggregates the check-in prompt reads are left alone). A
+reminder, a proposal, and a handoff are answered as received
+(`reminder_scheduled` with the asked time, `proposal_received`,
+`handoff_received`) and recorded for the owner's review; nothing is
+written until the owner accepts, as "Scheduling and handoffs" below
+says. An availability query is answered with the free spans the planner
+derives from the owner's own commitments and quiet hours, at the class
+the policy allowed, and the owner is told how many spans were shared.
+The companion reads the delivery on the owner's next turn; nothing runs
+a turn on arrival on the peer's behalf.
 
 ### Sending
 
-The companion sends intents through three chat tools and nothing else:
+The companion sends intents through five chat tools and nothing else:
 `send_peer_message` (a message for the other owner), `ask_peer_availability`
-(whether the other owner is free inside a window), and
-`propose_peer_reminder` (remind the other owner of something at a time).
-Each takes the peer (its companion id as Settings → Connections →
-Companions shows it, or a unique prefix of at least eight characters),
-the owner it speaks for and its purpose in one line (the two labels the
-other owner sees quoted as this companion's words), and the fields of its
-own class; there is no tool for a free-form method, a remote command, or
-a proposal, and no tool ever takes a peer's words back as an argument.
-The check-in and reflection routines never carry them, so nothing the
-companion does on its own can reach another owner.
+(whether the other owner is free inside a window),
+`propose_peer_reminder` (remind the other owner of something at a time),
+`propose_peer_meeting` (a meeting inside a window), and
+`handoff_task_to_peer` (one of this owner's unfinished tasks, by its
+record id; #111). Each takes the peer (its companion id as Settings →
+Connections → Companions shows it, or a unique prefix of at least eight
+characters), the owner it speaks for and its purpose in one line (the two
+labels the other owner sees quoted as this companion's words), and the
+fields of its own class; there is no tool for a free-form method or a
+remote command, and no tool ever takes a peer's words back as an
+argument. The check-in and reflection routines never carry them, so
+nothing the companion does on its own can reach another owner.
 
 A tool call is judged by this owner's own policy before anything is
 queued: the peer must be paired (an unknown, pending, or revoked peer is
@@ -264,6 +262,95 @@ newest first, and every change is broadcast as `outbox_updated`, so the
 Activity page's "Sent to companions" section shows where each request
 stands, how often it was tried, and what came back, in this owner's own
 words and the peer's typed answer only.
+
+## Scheduling and handoffs
+
+Companions negotiate time and hand tasks over (#111) without either
+side reaching into the other's data: an availability query is answered
+from a planner, a meeting or a reminder becomes a proposal the receiving
+owner reviews, and a task travels as references. Every disclosure and
+every write follows the local policy (`allow`, `ask`, `deny` per intent
+and class), and both owners get receipts: the requesting companion's
+outbox receipt says what was asked and what the peer disclosed, the
+answering companion's inbox receipt says what it was asked and what it
+granted, and the owner's own decision on a proposal is an audit receipt
+on the `owner` side.
+
+**Availability.** An `availability` query the policy admits is answered
+by the pure planner in `services::federation::scheduling`: the free
+spans inside the window asked about, derived from the deadlines of this
+owner's open commitments (a commitment due at a moment counts as an hour
+from it, one due inside a window counts as that window) and from the
+quiet hours of the federation policy (read in their zone, hour by hour),
+and nothing else. There is never a raw calendar: no busy span, no title,
+no reason, no id leaves; the answer carries free spans only, and the
+receipt on both sides records the class granted. The disclosure class
+gates the granularity: at `availability` the spans are rounded inward
+to whole hours, at `personal` (which the owner must allow by rule) to
+quarter hours, and never finer, so no moment is disclosed exactly; a gap
+shorter than the granularity is not disclosed at all, and at most 32
+spans are answered, from the start of the window. A `deny` rule answers
+`denied`; the default and an `ask` rule answer `needs_owner`, and the
+owner's approval once admits the next delivery. The owner is told, in
+the conversation, how many spans were shared and how coarsely. This
+first version relies on what the server keeps (commitments and quiet
+hours); there is no calendar source on the server yet.
+
+**Proposals.** A `reminder`, a `proposal` (a meeting, sent with
+`propose_peer_meeting`: a description in the user's words and a window),
+and a `handoff` are delivered into the conversation as data and recorded
+in `federation/proposals.json` ([companion-storage.md](companion-storage.md))
+with everything the receiving owner needs to decide: who asked, on whose
+behalf, why, the typed details (what, when), and when the proposal
+lapses (a meeting with its window, a reminder at its time, a handoff
+after a week). Nothing else is written on arrival, on either server; the
+peer is told the proposal was received, not that anything was done.
+`GET /api/federation/proposals` lists them newest first, as they stand
+now, and the Activity page shows each as a card with the companion's
+words in the untrusted panel and Accept and Dismiss. `POST
+/api/federation/proposals/{id}/accept` writes exactly one record, on the
+accepting owner's own server and nowhere else: a commitment due in the
+proposed window for a meeting (the owner's own promise), a commitment
+due at the asked time for a reminder (the companion's promise to remind,
+which schedules a check-in then, like any due commitment), or an active
+continuity record for a handoff (see below). What is written is built
+from this server's own ids (the sender's verified companion id and the
+conversation message the proposal was delivered as), never from the
+peer's words, because a promise or a goal reaches the model outside any
+untrusted block; the peer's words stay in the conversation and on the
+proposal the owner reviewed. The owner's decision is recorded as an
+audit receipt (`owner_approved`, or `owner_denied` for a dismissal)
+before the write, and the proposal keeps the receipt's id and what was
+written. Decisions are idempotent and final: accepting twice writes
+once and answers `already_accepted`; dismissing writes nothing and
+stays dismissed (a dismissed proposal does not resurface and cannot be
+accepted, `409 proposal_not_open`); a proposal past its deadline reads
+as `expired` and cannot be accepted either; a request delivered twice
+is one proposal. `POST …/proposals/{id}/dismiss` on an accepted
+proposal is refused the same way; an unknown id is `404 unknown_proposal`.
+Every change is broadcast as `peer_proposal_updated`.
+
+**Task handoffs.** `handoff_task_to_peer` names one of this owner's
+continuity records (#81); the tool refuses a record that does not exist
+or is closed, and the outbox turns the record into the bounded wire
+shape: the record's id as provenance, the goal, the eight most recent
+completed steps, the next step, up to four blockers, up to eight
+resource references (the kind and the record's own label: an upload id,
+a memory path, a path on a computer; never a file, a memory, or an
+upload's contents, and the peer has no way to follow one), and the
+record's provenance entries (the creating one and the most recent ones,
+each with who wrote it, when, and its note). Every text is bounded and
+every list capped, and the record here is left as it is. On the other
+side the handoff arrives as a reviewable card under Activity with those
+sections, rejectable (Dismiss), expiring (a week), and idempotent
+(accepting twice creates one record); accepting creates one active
+continuity record on the accepting owner's server whose goal and
+creating provenance name the sender and the delivered message, with no
+resources, which the owner then works on as a task of their own. There
+is no shared task database and no shared memory: each server keeps its
+own record, and nothing a peer sends can reach a file, an email, or a
+computer-use tool, which a source guard pins for every federation
+module, the delivery, the decisions, and the tools.
 
 ## Revocation and rotation
 
@@ -382,11 +469,14 @@ the wire alone to keep it that way.
 | `--profile <name>` | Any of the above for that profile's server |
 | Settings → Connections → Companions | The same actions in the browser: rows with Confirm and Revoke, Invite a companion, Accept an invite, Rotate signing key; requests waiting for you with Allow and Deny within one scope; what each paired companion may do, one rule per request kind; the inbox of what companions delivered and who they said they speak for |
 | Activity → Sent to companions | Where each request this companion sent stands, how often it was tried, and what came back (#110) |
+| Activity → From companions | What paired companions proposed (a meeting, a reminder, a task handed over), their words shown as data, with Accept and Dismiss (#111) |
 | `POST /api/federation/invites`, `/accept`, `GET /api/federation/peers`, `POST …/peers/{id}/confirm`, `…/revoke`, `/api/federation/rotate` | Owner routes behind the API token or session |
 | `GET /api/federation/policy`, `GET /api/federation/approvals`, `POST …/approvals/{id}/approve`, `…/deny` (`{"scope": "once" \| "until" + "expires_at" \| "class"}`), `DELETE …/approvals/{id}`, `POST …/peers/{id}/rules`, `POST …/peers/{id}/rules/revoke` (`{"intent", "disclosure"}`), `GET /api/federation/receipts` | Owner routes for the policy, the queue, and the audit log (#109) |
 | `GET /api/federation/inbox` | Owner route listing the structured intents peers delivered and their receipts, newest first (#110) |
 | `GET /api/federation/outbox` | Owner route listing the intents this companion queued for peers, their attempts and typed responses, and the receipts on this side, newest first (#110) |
+| `GET /api/federation/proposals`, `POST …/proposals/{id}/accept`, `…/dismiss` | Owner routes listing what peers proposed and deciding on it; accepting writes one record on this server only (#111) |
 | `send_peer_message`, `ask_peer_availability`, `propose_peer_reminder` | Chat tools that queue one typed intent each through the outbox, behind this owner's own policy (#110) |
+| `propose_peer_meeting`, `handoff_task_to_peer` | Chat tools that propose a meeting or hand one of this owner's tasks over as bounded references, through the same outbox and policy (#111) |
 | `POST /federation/v1/pair`, `…/pair/confirm`, `…/pair/revoke`, `…/ping`, `…/rotate` | Peer routes, public, verified by signature only |
 | `POST /federation/v1/intent` | Peer route taking a transport envelope whose body is a structured intent and answering with one whose body is the typed response (#110) |
 
