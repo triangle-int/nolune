@@ -756,3 +756,211 @@ fn the_client_reviews_proposals_through_pure_helpers_and_the_docs_say_so() {
         "docs/design-system.md describes the cards"
     );
 }
+
+#[test]
+fn the_proposing_owner_is_told_the_decision_through_a_typed_notice_gated_like_any_intent() {
+    // The wire: one more intent class, `decision`, whose payload names
+    // the request it answers and the decision, nothing else; its answer
+    // carries nothing.
+    let intents = production(INTENT_DOMAIN);
+    let payload = intents
+        .split("pub enum IntentPayload {")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}\n").next())
+        .expect("IntentPayload is defined");
+    assert!(
+        payload.contains("Decision {")
+            && payload.contains("correlation_id: String")
+            && payload.contains("decision: ProposalDecision"),
+        "the decision payload names the request and the decision:\n{payload}"
+    );
+    let decision = intents
+        .split("pub enum ProposalDecision {")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}\n").next())
+        .expect("ProposalDecision is defined");
+    assert_eq!(
+        decision
+            .lines()
+            .filter_map(|line| line.trim().strip_suffix(','))
+            .filter(|line| line.starts_with(|c: char| c.is_ascii_uppercase()))
+            .collect::<Vec<_>>(),
+        ["Accepted", "Dismissed"],
+        "a decision is accepted or dismissed, nothing else"
+    );
+    assert!(
+        !payload
+            .split("Decision {")
+            .nth(1)
+            .unwrap()
+            .split("},")
+            .next()
+            .unwrap()
+            .contains("PeerText"),
+        "a decision carries no text"
+    );
+    assert!(
+        intents.contains("DecisionNoted {}")
+            && intents.contains("\"decision_noted\" => Some(IntentClass::Decision)"),
+        "the answer to a decision carries nothing"
+    );
+    let policy = production("server/src/domain/federation_policy.rs");
+    assert!(
+        policy.contains("Self::Decision => \"decision\""),
+        "the policy names the class"
+    );
+    // The engine: a decision answers this owner's own request, so it is
+    // allowed by default at `none` and never discloses at any other class;
+    // the owner's rule can still deny it.
+    let engine = production("server/src/services/federation/policy.rs");
+    assert!(
+        engine.contains("(IntentClass::Decision, Nothing) => Access::Allow")
+            && engine.contains("(IntentClass::Decision, _) => return None"),
+        "the engine's defaults for a decision: {engine}"
+    );
+    assert!(
+        fs::read_to_string(
+            repo().join("server/tests/fixtures/federation/intents/decision_v1.json")
+        )
+        .is_ok(),
+        "the decision fixture pins the wire shape"
+    );
+
+    // The deciding side: the store tells the peer after the decision is
+    // saved, through the outbox and this owner's own outbound gate, with
+    // the request's correlation id and the decision, never the details.
+    let store = production(PROPOSALS);
+    for name in ["accept", "dismiss"] {
+        let body = function(&store, name);
+        let saved_at = body.find(".save(").expect("the decision is saved");
+        let told_at = body
+            .find("tell_peer(")
+            .unwrap_or_else(|| panic!("{name} tells the peer"));
+        assert!(saved_at < told_at, "{name}: the decision is saved first");
+    }
+    let tell = function(&store, "tell_peer");
+    assert!(
+        tell.contains("enqueue(") && tell.contains("OutboxRequest::Decision"),
+        "the notice goes through the outbox: {tell}"
+    );
+    for leak in [
+        "description",
+        ".text",
+        "goal",
+        "task.",
+        "details",
+        "render",
+        "post_transport",
+    ] {
+        assert!(!tell.contains(leak), "the notice carries {leak}: {tell}");
+    }
+    assert!(
+        tell.contains("log::warn!") || tell.contains("log::info!"),
+        "a notice that cannot be queued is logged, and the decision stands"
+    );
+    let outbox = production(OUTBOX);
+    assert!(
+        outbox.contains("OutboxRequest::Decision {")
+            && outbox.contains("IntentPayload::Decision {"),
+        "the outbox builds the decision intent"
+    );
+    // The decisions service itself still never touches the wire.
+    let decisions = production(DECISIONS);
+    for leak in ["outbox", "enqueue(", "post_transport", "tell_peer"] {
+        assert!(
+            !decisions.contains(leak),
+            "{DECISIONS} reaches the wire via {leak:?}"
+        );
+    }
+
+    // The proposing side: the delivery notes the decision on the entry it
+    // sent (a delivered proposal, reminder, or handoff to that peer, and
+    // nothing else), tells the owner in this server's words, and writes
+    // nothing else; a notice for a request never sent is refused, typed.
+    assert!(
+        fields(&outbox, "OutboxEntry").contains(&"decision".to_owned()),
+        "an entry keeps the peer's decision"
+    );
+    assert_eq!(
+        fields(&outbox, "PeerDecision"),
+        ["decision", "at"],
+        "what is noted: the decision and when"
+    );
+    let noted = function(&outbox, "note_decision");
+    assert!(
+        noted.contains("OutboxStatus::Delivered")
+            && noted.contains("IntentPayload::Reminder")
+            && noted.contains("IntentPayload::Proposal")
+            && noted.contains("IntentPayload::Handoff")
+            && noted.contains("FederationError::UnknownRequest"),
+        "only a delivered proposal of this owner's is noted: {noted}"
+    );
+    let delivery = production(DELIVERY);
+    assert!(
+        delivery.contains("note_decision(") && delivery.contains("IntentAnswer::DecisionNoted {}"),
+        "{DELIVERY} notes the decision on the outbox entry"
+    );
+    let line = function(&delivery, "decision_line");
+    for leak in [
+        "render_untrusted_block",
+        "PeerText",
+        "represented_owner",
+        "purpose",
+        ".body",
+        ".text",
+        "description",
+        "goal",
+    ] {
+        assert!(
+            !line.contains(leak),
+            "the decision line carries {leak}: {line}"
+        );
+    }
+    let routes = production(ROUTES);
+    assert!(
+        routes.contains("\"unknown_request\""),
+        "a notice for a request never sent is refused with a typed code"
+    );
+    let inbox_test = read("server/tests/federation_intents.rs");
+    assert!(
+        inbox_test.contains("\"decision_v1.json\""),
+        "the fixture list names the decision"
+    );
+
+    // The client and the docs say so.
+    let receipts = read("client/src/lib/activity/receipts.js");
+    for required in [
+        "\"decision_noted\"",
+        "case \"decision\":",
+        "Accepted by their owner",
+        "Declined by their owner",
+    ] {
+        assert!(receipts.contains(required), "receipts.js lacks {required}");
+    }
+    let policy_js = read("client/src/lib/federation/policy.js");
+    assert!(
+        policy_js.contains("\"decision/none\":"),
+        "policy.js labels the decision class"
+    );
+    let types = read("client/src/lib/api/types.ts");
+    assert!(
+        types.contains("export interface FederationPeerDecision"),
+        "types.ts carries the noted decision"
+    );
+    let federation = read("docs/federation.md");
+    for required in ["`decision`", "declined", "unknown_request"] {
+        assert!(
+            federation.contains(required),
+            "docs/federation.md lacks {required:?}"
+        );
+    }
+    assert!(
+        !federation.contains("not that anything was done"),
+        "the docs no longer describe the delivery answer as the last word"
+    );
+    let storage = read("docs/companion-storage.md");
+    assert!(
+        storage.contains("`decision`"),
+        "docs/companion-storage.md names the class and the entry's field"
+    );
+}

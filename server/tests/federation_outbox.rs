@@ -177,8 +177,9 @@ fn the_outbox_retries_with_a_bounded_backoff_and_gives_up_visibly() {
         "the peer's answer is decoded fail-closed and checked against the intent"
     );
 
-    // The entry's shape is pinned: the intent it sends, its history, and
-    // the peer's typed response; nothing else the peer said has a field.
+    // The entry's shape is pinned: the intent it sends, its history, the
+    // peer's typed response, and the decision its owner made on a proposal
+    // (#111, typed); nothing else the peer said has a field.
     let record = outbox
         .split("pub struct OutboxEntry {")
         .nth(1)
@@ -204,9 +205,11 @@ fn the_outbox_retries_with_a_bounded_backoff_and_gives_up_visibly() {
             "chat_id",
             "created_at",
             "updated_at",
+            "decision",
         ]
     );
     assert!(record.contains("pub response: Option<IntentResponse>"));
+    assert!(record.contains("pub decision: Option<PeerDecision>"));
     assert!(
         outbox.contains("#[serde(deny_unknown_fields)]\npub struct OutboxEntry"),
         "unknown fields are refused"

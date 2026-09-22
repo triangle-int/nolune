@@ -27,7 +27,7 @@ use crate::{
         federation_intent::{
             FederationIntent, INTENT_VERSION, IntentAnswer, IntentOutcome, IntentPayload,
             IntentReceipt, IntentResponse, MAX_AVAILABILITY_WINDOWS, MAX_HANDOFF_STEPS, PeerLabel,
-            TimeWindow,
+            ProposalDecision, TimeWindow,
         },
         federation_policy::{
             Access, AuditReceipt, DecisionReason, DisclosureClass, IntentClass, PolicyRule,
@@ -44,7 +44,7 @@ use crate::{
         federation::{
             gate::FederationGate,
             inbound::{INTENT_PATH, InboundStore},
-            outbox::{Outbox, OutboxEntry, OutboxStatus},
+            outbox::{Outbox, OutboxEntry, OutboxStatus, PeerDecision},
             pairing::FederationState,
             peers::Clock,
             proposals::ProposalStore,
@@ -109,7 +109,8 @@ async fn start_in(
     );
     state.federation_proposals = Arc::new(
         ProposalStore::with_clock(workspace.path(), clock)
-            .with_events(state.events.clone(), CANONICAL_SLUG),
+            .with_events(state.events.clone(), CANONICAL_SLUG)
+            .with_outbox(state.federation_outbox.clone()),
     );
     wire.servers
         .lock()
@@ -994,6 +995,233 @@ async fn meeting_and_reminder_proposals_are_reviewed_and_written_only_on_the_acc
         [ProposalStatus::Dismissed, ProposalStatus::Accepted]
     );
 
+    // Both owners learn the decision: each decision queued one typed
+    // `decision` notice on A naming the request it answers and nothing
+    // more (accepting twice and dismissing twice queued nothing more),
+    // behind A's own outbound gate like any other intent.
+    let (notices, _) = outbox(&a).await;
+    assert_eq!(notices.len(), 2, "{notices:?}");
+    for notice in &notices {
+        assert_eq!(notice.recipient, b_id);
+        assert_eq!(notice.intent.class(), IntentClass::Decision);
+        assert_eq!(notice.intent.disclosure, DisclosureClass::None);
+        assert_eq!(notice.status, OutboxStatus::Queued);
+        let wire = String::from_utf8(notice.intent.encode()).unwrap();
+        for word in ["Ignore", "rm -rf", "Bring the signed", "Bob", "handover"] {
+            assert!(!wire.contains(word), "a notice carries {word:?}: {wire}");
+        }
+    }
+    let decision_for = |key: &str| {
+        let notice = notices
+            .iter()
+            .find(|notice| {
+                matches!(&notice.intent.intent, IntentPayload::Decision { correlation_id, .. } if correlation_id == key)
+            })
+            .unwrap_or_else(|| panic!("a notice answers {key}: {notices:?}"));
+        let IntentPayload::Decision { decision, .. } = &notice.intent.intent else {
+            unreachable!()
+        };
+        *decision
+    };
+    assert_eq!(decision_for(&meeting_key), ProposalDecision::Accepted);
+    assert_eq!(decision_for(&reminder_key), ProposalDecision::Dismissed);
+    now.store(T0 + 120, Ordering::SeqCst);
+    assert_eq!(run(&a).await, 2, "both notices go out");
+    let (notices, a_receipts) = outbox(&a).await;
+    assert!(
+        notices
+            .iter()
+            .all(|notice| notice.status == OutboxStatus::Delivered),
+        "{notices:?}"
+    );
+    assert!(
+        notices.iter().all(|notice| matches!(
+            notice.response,
+            Some(IntentResponse::Accepted {
+                answer: IntentAnswer::DecisionNoted {},
+                disclosure: DisclosureClass::None,
+                ..
+            })
+        )),
+        "{notices:?}"
+    );
+    assert_eq!(
+        a_receipts
+            .iter()
+            .filter(|receipt| receipt.side == ReceiptSide::Requesting
+                && receipt.intent == IntentClass::Decision
+                && receipt.outcome == IntentOutcome::Accepted)
+            .count(),
+        2,
+        "the deciding side keeps a receipt per notice: {a_receipts:?}"
+    );
+    // On B: the entries it sent carry the decision, its conversation is
+    // told in this server's words (the kind and the time it sent, no
+    // block, nothing the peer wrote), a receipt per notice, and nothing
+    // written anywhere.
+    let (entries, _) = outbox(&b).await;
+    let by_key = |key: &str| {
+        entries
+            .iter()
+            .find(|entry| entry.correlation_id() == key)
+            .unwrap()
+            .clone()
+    };
+    let meeting_entry = by_key(&meeting_key);
+    assert_eq!(meeting_entry.status, OutboxStatus::Delivered);
+    assert_eq!(
+        meeting_entry.decision,
+        Some(PeerDecision {
+            decision: ProposalDecision::Accepted,
+            at: T0 + 120,
+        })
+    );
+    assert_eq!(
+        by_key(&reminder_key).decision,
+        Some(PeerDecision {
+            decision: ProposalDecision::Dismissed,
+            at: T0 + 120,
+        })
+    );
+    let told = chat_messages(&b);
+    assert_eq!(told.len(), 2, "{told:?}");
+    assert!(told.iter().all(|message| message.role == ChatRole::User));
+    let accepted_line = told
+        .iter()
+        .find(|message| message.content.contains("accepted"))
+        .expect("B is told the meeting was accepted");
+    assert!(
+        accepted_line.content.contains(&a_id)
+            && accepted_line.content.contains("meeting")
+            && accepted_line.content.contains("2027-01-16 10:00 UTC"),
+        "{}",
+        accepted_line.content
+    );
+    let declined_line = told
+        .iter()
+        .find(|message| message.content.contains("declined"))
+        .expect("B is told the reminder was declined");
+    assert!(
+        declined_line.content.contains(&a_id)
+            && declined_line.content.contains("reminder")
+            && declined_line.content.contains("2027-01-16 09:00 UTC"),
+        "{}",
+        declined_line.content
+    );
+    for message in &told {
+        assert!(
+            !message.content.contains(UNTRUSTED_BLOCK_OPEN),
+            "a decision carries no text: {}",
+            message.content
+        );
+        for word in ["Ignore", "Bring the signed", "Bob", "handover"] {
+            assert!(
+                !message.content.contains(word),
+                "the line carries {word:?}: {}",
+                message.content
+            );
+        }
+    }
+    let b_receipts = inbox_receipts(&b).await;
+    assert_eq!(
+        b_receipts
+            .iter()
+            .filter(|receipt| receipt.side == ReceiptSide::Answering
+                && receipt.intent == IntentClass::Decision
+                && receipt.outcome == IntentOutcome::Accepted
+                && receipt.granted == DisclosureClass::None)
+            .count(),
+        2,
+        "the proposing side keeps a receipt per notice: {b_receipts:?}"
+    );
+    assert!(
+        commitments(&b, T0 + 120).is_empty() && continuity(&b).list().is_empty(),
+        "a decision writes nothing on the proposer's side"
+    );
+    assert_eq!(
+        commitments(&a, T0 + 120).len(),
+        1,
+        "and nothing more on the deciding side"
+    );
+    // A notice delivered twice is answered the same and noted once.
+    let notice = notices[0].clone();
+    let again = deliver(&b, &a, &notice.intent.encode()).await;
+    assert_eq!(again.outcome(), IntentOutcome::Accepted);
+    assert_eq!(chat_messages(&b).len(), 2, "told once");
+    // A notice for a request B never made is refused, typed, and nothing
+    // is noted or written.
+    let stray = intent(
+        &a_id,
+        "stray-1",
+        T0 + 120,
+        DisclosureClass::None,
+        IntentPayload::Decision {
+            correlation_id: "never-sent".into(),
+            decision: ProposalDecision::Accepted,
+        },
+    );
+    let envelope = a.state.federation.seal(&b_id, &stray.encode()).unwrap();
+    let (status, body) = b
+        .anonymous(
+            Method::POST,
+            INTENT_PATH,
+            Some(serde_json::to_vec(&envelope).unwrap()),
+            &[],
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "unknown_request");
+    assert_eq!(chat_messages(&b).len(), 2);
+    // B's own rule can refuse to hear decisions from A: the next notice
+    // is denied and A's entry says so.
+    rule(
+        &b,
+        &a_id,
+        IntentClass::Decision,
+        DisclosureClass::None,
+        Access::Deny,
+    );
+    let late = call(
+        tool(&b, "propose_peer_reminder").as_ref(),
+        json!({
+            "peer": a_id,
+            "text": "Water the plants",
+            "at": "2027-01-16T12:00:00Z",
+            "on_behalf_of": "Bob",
+            "purpose": "the plants",
+        }),
+    )
+    .await;
+    let late_key = late["request_id"].as_str().unwrap().to_owned();
+    assert_eq!(run(&b).await, 1);
+    let late_proposal = proposals(&a)
+        .await
+        .into_iter()
+        .find(|proposal| proposal.correlation_id == late_key)
+        .unwrap();
+    let (status, _) = decide(&a, &late_proposal.id, "dismiss").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(run(&a).await, 1);
+    let (notices, _) = outbox(&a).await;
+    let refused = notices
+        .iter()
+        .find(|notice| {
+            matches!(&notice.intent.intent, IntentPayload::Decision { correlation_id, .. } if *correlation_id == late_key)
+        })
+        .unwrap();
+    assert_eq!(refused.status, OutboxStatus::Denied, "{refused:?}");
+    assert_eq!(
+        b.state
+            .federation_outbox
+            .get(&late_key)
+            .unwrap()
+            .unwrap()
+            .decision,
+        None,
+        "a refused notice notes nothing"
+    );
+    assert_eq!(chat_messages(&b).len(), 2);
+
     // Unknown ids, and the owner alone.
     let (status, body) = decide(&a, "0123456789abcdef", "accept").await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
@@ -1020,10 +1248,15 @@ async fn meeting_and_reminder_proposals_are_reviewed_and_written_only_on_the_acc
     drop(state);
     let restarted = start_in(&_wire, token, ORIGIN_A, workspace, clock(&now)).await;
     let listed = proposals(&restarted).await;
-    assert_eq!(listed.len(), 2);
-    assert_eq!(listed[1].status, ProposalStatus::Accepted);
+    assert_eq!(listed.len(), 3);
+    assert_eq!(listed[2].status, ProposalStatus::Accepted);
     let body = accept(&restarted, &meeting_proposal.id).await;
     assert_eq!(body["already_accepted"], true);
+    assert_eq!(
+        outbox(&restarted).await.0.len(),
+        3,
+        "accepting again after a restart tells the peer nothing again"
+    );
     assert_eq!(commitments(&restarted, T0 + 60).len(), 1);
 }
 
@@ -1260,6 +1493,36 @@ async fn task_handoffs_carry_bounded_references_and_arrive_as_reviewable_expirin
             .count(),
         1
     );
+    // B's owner learns it was taken over: the entry B sent carries the
+    // decision, and B is told in this server's words, never the goal.
+    assert_eq!(run(&a).await, 1, "one notice for one decision");
+    let entry = b.state.federation_outbox.get(&key).unwrap().unwrap();
+    assert_eq!(
+        entry.decision,
+        Some(PeerDecision {
+            decision: ProposalDecision::Accepted,
+            at: T0 + 120,
+        })
+    );
+    let told = chat_messages(&b);
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert!(
+        told[0].content.contains(&a_id)
+            && told[0].content.contains("accepted")
+            && told[0].content.contains("task"),
+        "{}",
+        told[0].content
+    );
+    assert!(
+        !told[0].content.contains("Ignore") && !told[0].content.contains(UNTRUSTED_BLOCK_OPEN),
+        "{}",
+        told[0].content
+    );
+    assert_eq!(
+        continuity(&b).list().len(),
+        1,
+        "the notice writes nothing on the proposer's side"
+    );
 
     // A second handoff is dismissed: no task, and it does not resurface.
     let second = call(
@@ -1292,6 +1555,23 @@ async fn task_handoffs_carry_bounded_references_and_arrive_as_reviewable_expirin
             .iter()
             .all(|card| card.correlation_id != second_key
                 || card.status == ProposalStatus::Dismissed)
+    );
+    assert_eq!(run(&a).await, 1);
+    assert_eq!(
+        b.state
+            .federation_outbox
+            .get(&second_key)
+            .unwrap()
+            .unwrap()
+            .decision
+            .map(|noted| noted.decision),
+        Some(ProposalDecision::Dismissed),
+        "B's owner learns the second was declined"
+    );
+    assert!(
+        chat_messages(&b)[1].content.contains("declined"),
+        "{:?}",
+        chat_messages(&b)
     );
 
     // A third lapses after the review window: it cannot be accepted and

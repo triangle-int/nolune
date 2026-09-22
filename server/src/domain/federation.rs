@@ -589,6 +589,10 @@ pub enum FederationError {
     ProposalNotOpen {
         status: crate::domain::federation_proposal::ProposalStatus,
     },
+    /// A peer's decision (#111) names no request this companion sent it:
+    /// no delivered reminder, proposal, or handoff to that peer has that
+    /// correlation id, or one does and was decided the other way already.
+    UnknownRequest,
 }
 
 impl fmt::Display for FederationError {
@@ -691,6 +695,9 @@ impl fmt::Display for FederationError {
                 f,
                 "federation proposal is not open for a decision: it is {}",
                 status.name()
+            ),
+            Self::UnknownRequest => f.write_str(
+                "federation decision names no delivered proposal this companion sent that peer",
             ),
         }
     }

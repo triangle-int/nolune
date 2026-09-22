@@ -61,17 +61,23 @@ pub enum IntentClass {
     /// bounded references and provenance, reviewed before anything is
     /// written.
     Handoff,
+    /// The peer's owner decided on a reminder, a meeting, or a handoff this
+    /// owner proposed (#111): accepted or dismissed, naming the request it
+    /// answers and nothing else. It answers this owner's own request, so
+    /// it is the one intent besides a ping that is allowed by default.
+    Decision,
 }
 
 impl IntentClass {
     /// Every class, in a stable order for tables and listings.
-    pub const ALL: [IntentClass; 6] = [
+    pub const ALL: [IntentClass; 7] = [
         Self::Ping,
         Self::Message,
         Self::Availability,
         Self::Reminder,
         Self::Proposal,
         Self::Handoff,
+        Self::Decision,
     ];
 
     pub fn name(self) -> &'static str {
@@ -82,6 +88,7 @@ impl IntentClass {
             Self::Reminder => "reminder",
             Self::Proposal => "proposal",
             Self::Handoff => "handoff",
+            Self::Decision => "decision",
         }
     }
 
@@ -92,10 +99,12 @@ impl IntentClass {
 
     /// Whether an allowed intent of this class lands in front of the owner
     /// (and so waits out quiet hours) rather than being answered by the
-    /// companion on its own.
+    /// companion on its own. A decision is noted on the request this owner
+    /// made and waits for no one: it is the peer's answer, not its
+    /// initiative.
     pub fn reaches_owner(self) -> bool {
         match self {
-            Self::Ping | Self::Availability => false,
+            Self::Ping | Self::Availability | Self::Decision => false,
             Self::Message | Self::Reminder | Self::Proposal | Self::Handoff => true,
         }
     }
@@ -848,7 +857,8 @@ mod tests {
                 "availability",
                 "reminder",
                 "proposal",
-                "handoff"
+                "handoff",
+                "decision"
             ]
         );
         assert_eq!(
@@ -878,8 +888,10 @@ mod tests {
         assert!(IntentClass::Message.reaches_owner());
         assert!(IntentClass::Reminder.reaches_owner());
         assert!(IntentClass::Proposal.reaches_owner());
+        assert!(IntentClass::Handoff.reaches_owner());
         assert!(!IntentClass::Ping.reaches_owner());
         assert!(!IntentClass::Availability.reaches_owner());
+        assert!(!IntentClass::Decision.reaches_owner());
     }
 
     #[test]

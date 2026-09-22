@@ -40,7 +40,9 @@
 //!   stands for on this server (a commitment, a continuity record) and
 //!   answers `{ "proposal", "already_accepted" }`; `POST …/proposals/{id}/dismiss`
 //!   writes nothing. A decided or lapsed proposal is `409 proposal_not_open`
-//!   with its `status`; an unknown id is `404 unknown_proposal`.
+//!   with its `status`; an unknown id is `404 unknown_proposal`. Either
+//!   decision queues one typed `decision` notice for the proposing
+//!   companion through the outbox, behind this owner's own policy.
 //!
 //! Peer side, public, verified by signature only. Every verified envelope
 //! is judged by the owner's policy and recorded before it is dispatched
@@ -62,7 +64,9 @@
 //!   intent that could not be judged (expired, malformed, for someone
 //!   else) is a typed refusal with no envelope: `403 intent_expired`,
 //!   `403 intent_issued_in_future`, `400 unknown_intent_type`,
-//!   `413 payload_too_large`, `400 invalid_intent`.
+//!   `413 payload_too_large`, `400 invalid_intent`; a `decision` naming no
+//!   delivered proposal this companion sent that peer is `404
+//!   unknown_request` (#111).
 //!
 //! Every body is JSON and read whole under a size cap; nothing is taken from
 //! the query string, and parse failures never echo the body. There is no
@@ -263,6 +267,7 @@ impl IntoResponse for ApiError {
             FederationError::UnknownRule => (StatusCode::NOT_FOUND, "unknown_rule"),
             FederationError::UnknownProposal => (StatusCode::NOT_FOUND, "unknown_proposal"),
             FederationError::ProposalNotOpen { .. } => (StatusCode::CONFLICT, "proposal_not_open"),
+            FederationError::UnknownRequest => (StatusCode::NOT_FOUND, "unknown_request"),
             // An intent that could not be judged: the fault is typed, and
             // the message is the decoder's, which never quotes the wire.
             FederationError::Intent(error) => match error {

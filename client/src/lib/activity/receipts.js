@@ -205,8 +205,9 @@ export function commitmentConditionLabel(condition) {
 // ---------------------------------------------------------------------------
 // Requests sent to paired companions (#110). The server's outbox entry is
 // the only source: the intent this companion sent (its owner's own words),
-// where it stands, every attempt, and the peer's typed response, which
-// carries ids, classes, times, and spans and never a word of the peer's.
+// where it stands, every attempt, the peer's typed response, which
+// carries ids, classes, times, and spans and never a word of the peer's,
+// and, for a proposal their owner decided on, that decision (#111).
 // ---------------------------------------------------------------------------
 
 /** @typedef {import("../api/types.js").FederationOutboxEntry} OutboxEntry */
@@ -256,6 +257,8 @@ export function outboxLabel(entry) {
 			return `Meeting proposed to companion ${peer}`;
 		case "handoff":
 			return `Task handed over to companion ${peer}`;
+		case "decision":
+			return `Your decision told to companion ${peer}`;
 		default:
 			return `Request to companion ${peer}`;
 	}
@@ -290,6 +293,9 @@ export function outboxText(entry) {
 			const steps = payload.task?.completed_steps?.length ?? 0;
 			return steps > 0 ? `${goal}\n${steps === 1 ? "1 step" : `${steps} steps`} done so far` : goal;
 		}
+		case "decision":
+			// What was decided, about which of their requests: ids and a word, nothing they wrote.
+			return `${payload.decision === "accepted" ? "Accepted" : "Declined"} their request ${String(payload.correlation_id ?? "")}`;
 		default:
 			return "";
 	}
@@ -373,8 +379,15 @@ export function outboxNote(entry, nowSeconds) {
 		case "waiting_owner":
 			return response?.outcome === "needs_owner" && response.reason === "quiet_hours" ? `Held during their quiet hours · asks again ${next}.` : `Their owner has to allow it first · asks again ${next}.`;
 		case "delivered": {
+			// Their owner's decision on a proposal, once their companion said (#111).
+			if (entry.decision) {
+				const decided = relativeTime(entry.decision.at, nowSeconds);
+				return entry.decision.decision === "accepted" ? `Accepted by their owner ${decided}.` : `Declined by their owner ${decided}.`;
+			}
 			const answer = response?.outcome === "accepted" ? response.answer : undefined;
 			switch (answer?.kind) {
+				case "decision_noted":
+					return `Their companion noted it ${ago}.`;
 				case "reminder_scheduled":
 					return `Reminder for ${momentLabel(Number(answer.at))} delivered for their owner to accept · ${ago}.`;
 				case "availability": {

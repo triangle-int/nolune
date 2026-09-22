@@ -118,12 +118,15 @@ impl AppState {
         );
         let federation_inbox =
             crate::services::federation::inbound::InboundStore::new(&workspace_dir);
-        let federation_outbox =
+        let federation_outbox = Arc::new(
             crate::services::federation::outbox::Outbox::new(&workspace_dir, http_client.clone())
-                .with_events(events.clone(), crate::domain::companion::CANONICAL_SLUG);
+                .with_events(events.clone(), crate::domain::companion::CANONICAL_SLUG),
+        );
+        // Decisions on what peers proposed are told back through the outbox.
         let federation_proposals =
             crate::services::federation::proposals::ProposalStore::new(&workspace_dir)
-                .with_events(events.clone(), crate::domain::companion::CANONICAL_SLUG);
+                .with_events(events.clone(), crate::domain::companion::CANONICAL_SLUG)
+                .with_outbox(federation_outbox.clone());
 
         // Open the local derived vector index.
         let vector_store = VectorStore::connect_with_config(&workspace_dir, &config).await;
@@ -169,7 +172,7 @@ impl AppState {
             federation: Arc::new(federation),
             federation_gate: Arc::new(federation_gate),
             federation_inbox: Arc::new(federation_inbox),
-            federation_outbox: Arc::new(federation_outbox),
+            federation_outbox,
             federation_proposals: Arc::new(federation_proposals),
             cua,
             codex_auth: crate::services::llm::codex::Runtime::shared()

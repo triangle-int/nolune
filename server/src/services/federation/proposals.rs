@@ -19,6 +19,15 @@
 //! request delivered twice is one proposal: the sender's companion id and
 //! correlation id identify it.
 //!
+//! Once a decision is saved, the proposing companion is told: one typed
+//! `decision` intent naming the request it answers and whether it was
+//! accepted or dismissed, queued through the outbox it was given
+//! ([`ProposalStore::with_outbox`]) and so behind this owner's own
+//! outbound gate like any other intent, with the receipts the outbox
+//! keeps. Nothing of the proposal travels back, and a notice that cannot
+//! be queued (the peer revoked, an owner rule denying it) is logged and
+//! changes nothing about the decision, which stands.
+//!
 //! `federation/proposals.json` (`0600`, written through a temporary file
 //! and a rename) holds the records. The details are the peer's words and
 //! travel to the owner's client as plain text for review; nothing here
@@ -29,7 +38,7 @@
 
 use std::{
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 
 use serde::{Deserialize, Serialize};
@@ -39,13 +48,14 @@ use super::{
     audit::AuditLog,
     gate::FederationGate,
     identity,
+    outbox::{Outbox, OutboxRequest, Outgoing},
     pairing::FederationState,
     peers::{Clock, system_clock},
 };
 use crate::domain::{
     events::ServerEvent,
     federation::FederationError,
-    federation_intent::PeerLabel,
+    federation_intent::{PeerLabel, ProposalDecision},
     federation_policy::{Decision, DecisionReason},
     federation_proposal::{
         PROPOSAL_VERSION, PeerProposal, ProposalDetails, ProposalOutcome, ProposalStatus,
@@ -65,6 +75,15 @@ pub const PROPOSAL_RETENTION_SECS: u64 = 30 * 24 * 60 * 60;
 
 /// Upper bound for the store file; anything larger is not ours.
 const MAX_PROPOSALS_FILE_BYTES: u64 = 8 * 1024 * 1024;
+
+/// The two labels a decision notice carries, this server's fixed words:
+/// the companion speaks for its owner, to answer what the peer proposed.
+pub const DECISION_REPRESENTED_OWNER: &str = "its owner";
+pub const DECISION_PURPOSE: &str = "answer a proposal";
+/// The conversation a decision notice is filed under: the one the
+/// proposal was delivered into (`services::peer_delivery::INBOUND_CHAT_ID`,
+/// which this module does not reach into).
+const DECISION_CHAT_ID: &str = "default";
 
 /// One proposal as the delivery hands it in: the sender and its pairing,
 /// the request's id, the peer's two labels, the typed details, and the
@@ -118,6 +137,8 @@ pub struct ProposalStore {
     clock: Clock,
     /// Every change to a proposal is broadcast under this slug.
     events: Option<(broadcast::Sender<ServerEvent>, String)>,
+    /// Where a decision notice for the proposing companion is queued.
+    outbox: Option<Arc<Outbox>>,
 }
 
 impl ProposalStore {
@@ -134,12 +155,19 @@ impl ProposalStore {
             decisions: tokio::sync::Mutex::new(()),
             clock,
             events: None,
+            outbox: None,
         }
     }
 
     /// Broadcast every change as `peer_proposal_updated` under `slug`.
     pub fn with_events(mut self, events: broadcast::Sender<ServerEvent>, slug: &str) -> Self {
         self.events = Some((events, slug.to_owned()));
+        self
+    }
+
+    /// Tell the proposing companion each decision through `outbox`.
+    pub fn with_outbox(mut self, outbox: Arc<Outbox>) -> Self {
+        self.outbox = Some(outbox);
         self
     }
 
@@ -225,9 +253,10 @@ impl ProposalStore {
     /// The owner accepts `id`: under the decision lock, an open and
     /// unexpired proposal gets the owner's approval recorded as an audit
     /// receipt, then `write` is run once for the one record it creates on
-    /// this server, then the outcome is saved and broadcast. One already
-    /// accepted is returned with `already_accepted` and nothing is run;
-    /// one dismissed or lapsed is refused as not open.
+    /// this server, then the outcome is saved and broadcast, then the
+    /// proposing companion is told. One already accepted is returned with
+    /// `already_accepted` and nothing is run or told again; one dismissed
+    /// or lapsed is refused as not open.
     pub async fn accept(
         &self,
         federation: &FederationState,
@@ -267,6 +296,7 @@ impl ProposalStore {
             ..proposal
         };
         self.save(decided.clone())?;
+        self.tell_peer(federation, gate, &decided, ProposalDecision::Accepted);
         Ok(Accepted {
             proposal: decided,
             already_accepted: false,
@@ -275,9 +305,10 @@ impl ProposalStore {
 
     /// The owner dismisses `id`: under the decision lock, an open or
     /// lapsed proposal gets the owner's denial recorded as an audit
-    /// receipt and is saved as dismissed; nothing else is written. One
-    /// already dismissed is returned as it stands; an accepted one is
-    /// refused as not open.
+    /// receipt and is saved as dismissed, and the proposing companion is
+    /// told; nothing else is written. One already dismissed is returned as
+    /// it stands and nothing is told again; an accepted one is refused as
+    /// not open.
     pub async fn dismiss(
         &self,
         federation: &FederationState,
@@ -310,7 +341,57 @@ impl ProposalStore {
             ..proposal
         };
         self.save(decided.clone())?;
+        self.tell_peer(federation, gate, &decided, ProposalDecision::Dismissed);
         Ok(decided)
+    }
+
+    /// Queues the typed notice of `decision` on `proposal` for the
+    /// companion that sent it: the peer's own correlation id and the
+    /// decision, under this server's fixed labels, through the outbox and
+    /// this owner's outbound gate. The proposal itself travels nowhere.
+    /// Without an outbox, or when the outbox refuses (the peer is revoked
+    /// or no longer paired, an owner rule denies it, the store cannot be
+    /// written), the refusal is logged and the decision stands.
+    fn tell_peer(
+        &self,
+        federation: &FederationState,
+        gate: &FederationGate,
+        proposal: &PeerProposal,
+        decision: ProposalDecision,
+    ) {
+        let Some(outbox) = &self.outbox else {
+            return;
+        };
+        // The peer as it stands now: a key rotation since the proposal
+        // gives it a new id, and the pairing is what survives.
+        let peer = federation
+            .overview()
+            .ok()
+            .and_then(|overview| {
+                overview
+                    .peers
+                    .into_iter()
+                    .find(|peer| peer.pairing_id == proposal.pairing_id)
+                    .map(|peer| peer.companion_id)
+            })
+            .unwrap_or_else(|| proposal.sender.clone());
+        let outgoing = Outgoing {
+            peer,
+            represented_owner: DECISION_REPRESENTED_OWNER.to_owned(),
+            purpose: DECISION_PURPOSE.to_owned(),
+            request: OutboxRequest::Decision {
+                correlation_id: proposal.correlation_id.clone(),
+                decision,
+            },
+            chat_id: DECISION_CHAT_ID.to_owned(),
+        };
+        if let Err(error) = outbox.enqueue(federation, gate, outgoing) {
+            let sender = &proposal.sender;
+            log::warn!(
+                "[federation] the decision on proposal {} was not sent to companion {sender}: {error}",
+                proposal.id
+            );
+        }
     }
 
     /// Writes `proposal` in place of the one with its id, enforces

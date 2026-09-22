@@ -1,11 +1,13 @@
 //! Structured intents between paired companions (#110).
 //!
 //! After pairing (#108) and under the owner's policy (#109), a peer may ask
-//! this companion for exactly five things: deliver a message, say whether
+//! this companion for exactly six things: deliver a message, say whether
 //! the owner is free inside a window, remind the owner of something,
-//! propose doing something together, or hand an unfinished task over
+//! propose doing something together, hand an unfinished task over
 //! (#111, a [`TaskHandoff`]: bounded references and provenance from one
-//! continuity record, never contents). Each is a [`FederationIntent`]: a
+//! continuity record, never contents), or note its owner's decision on
+//! one of those proposals (#111, a [`ProposalDecision`] naming the request
+//! it answers). Each is a [`FederationIntent`]: a
 //! fixed header (version, correlation id, sender, the owner the sender
 //! represents, the purpose, the disclosure class requested, and a lifetime)
 //! around one [`IntentPayload`]. The answer is an [`IntentResponse`] that
@@ -158,6 +160,23 @@ pub enum IntentPayload {
     },
     /// Take over the sender's owner's unfinished task (#111).
     Handoff { task: TaskHandoff },
+    /// The sender's owner decided on a reminder, a proposal, or a handoff
+    /// this companion sent it (#111): `correlation_id` is this companion's
+    /// own id for that request, and `decision` what became of it. Nothing
+    /// else travels: no reason, no text, nothing about what was written.
+    Decision {
+        correlation_id: String,
+        decision: ProposalDecision,
+    },
+}
+
+/// What a receiving owner did with a proposal (#111): accepted it (one
+/// record was written on their server) or dismissed it (nothing was).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProposalDecision {
+    Accepted,
+    Dismissed,
 }
 
 /// What travels for a task handoff: the sender's continuity record id as
@@ -284,6 +303,8 @@ pub enum IntentAnswer {
     ProposalReceived {},
     /// The task handoff reached this owner for review (#111).
     HandoffReceived {},
+    /// The decision was noted on the request it answers (#111).
+    DecisionNoted {},
 }
 
 /// One span of an availability answer.
@@ -485,6 +506,9 @@ pub enum IntentError {
     InvalidHandoff {
         field: &'static str,
     },
+    /// A decision whose `correlation_id` is not shaped like one: empty, too
+    /// long, or outside `[A-Za-z0-9_-]`.
+    InvalidDecisionRequest,
     /// A response for another request.
     CorrelationMismatch,
     /// An answer of one class for an intent of another.
@@ -627,11 +651,12 @@ impl IntentPayload {
             Self::Reminder { .. } => IntentClass::Reminder,
             Self::Proposal { .. } => IntentClass::Proposal,
             Self::Handoff { .. } => IntentClass::Handoff,
+            Self::Decision { .. } => IntentClass::Decision,
         }
     }
 
     /// The class behind a `type` tag, or `None` for anything that is not
-    /// one of the four intents (a ping is transport, not an intent).
+    /// one of the six intents (a ping is transport, not an intent).
     pub fn class_for_tag(tag: &str) -> Option<IntentClass> {
         IntentClass::parse(tag).filter(|class| *class != IntentClass::Ping)
     }
@@ -728,6 +753,8 @@ impl FederationIntent {
                 check_window(window.from, window.to)
             }
             IntentPayload::Handoff { task } => task.validate(),
+            IntentPayload::Decision { correlation_id, .. } => check_correlation_id(correlation_id)
+                .map_err(|_| IntentError::InvalidDecisionRequest),
         }
     }
 
@@ -772,6 +799,7 @@ impl IntentAnswer {
             Self::ReminderScheduled { .. } => IntentClass::Reminder,
             Self::ProposalReceived {} => IntentClass::Proposal,
             Self::HandoffReceived {} => IntentClass::Handoff,
+            Self::DecisionNoted {} => IntentClass::Decision,
         }
     }
 
@@ -783,6 +811,7 @@ impl IntentAnswer {
             "reminder_scheduled" => Some(IntentClass::Reminder),
             "proposal_received" => Some(IntentClass::Proposal),
             "handoff_received" => Some(IntentClass::Handoff),
+            "decision_noted" => Some(IntentClass::Decision),
             _ => None,
         }
     }
@@ -1332,6 +1361,9 @@ impl fmt::Display for IntentError {
             Self::InvalidHandoff { field } => write!(
                 f,
                 "federation intent handoff `{field}` is empty, over its bound, or not an id"
+            ),
+            Self::InvalidDecisionRequest => f.write_str(
+                "federation intent decision names a request whose correlation id is empty, too long, or not `[A-Za-z0-9_-]`",
             ),
             Self::CorrelationMismatch => {
                 f.write_str("federation intent response answers another request")

@@ -72,7 +72,7 @@ pub enum ProposalDetails {
 
 impl ProposalDetails {
     /// The details of `payload`, for the payloads that are proposals;
-    /// `None` for a message or an availability query.
+    /// `None` for a message, an availability query, or a decision.
     pub fn from_payload(payload: &IntentPayload) -> Option<Self> {
         match payload {
             IntentPayload::Proposal {
@@ -87,7 +87,9 @@ impl ProposalDetails {
                 at: *at,
             }),
             IntentPayload::Handoff { task } => Some(Self::Handoff { task: task.clone() }),
-            IntentPayload::Message { .. } | IntentPayload::Availability { .. } => None,
+            IntentPayload::Message { .. }
+            | IntentPayload::Availability { .. }
+            | IntentPayload::Decision { .. } => None,
         }
     }
 

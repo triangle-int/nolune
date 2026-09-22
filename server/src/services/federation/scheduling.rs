@@ -67,8 +67,14 @@ pub fn busy_spans(commitments: &[Commitment], window: TimeWindow) -> Vec<Span> {
 }
 
 /// The spans inside `window` that fall in the owner's quiet hours, read in
-/// the policy's zone (UTC when unset or unknown), hour by hour from the
-/// hour the window starts in; empty without quiet hours.
+/// the policy's zone (UTC when unset or unknown), local hour by local
+/// hour from where the window starts; empty without quiet hours. Each
+/// step runs to the next local hour boundary (the seconds since local
+/// midnight say how far that is, as the gate reads quiet hours), so a
+/// zone whose UTC offset is not a whole hour (Kolkata, Kathmandu,
+/// Adelaide, St John's) keeps its quiet hours where the owner set them
+/// rather than shifted to the UTC hour grid, and a moment inside a
+/// declared quiet hour is never left free.
 pub fn quiet_spans(quiet: Option<&QuietHoursPolicy>, window: TimeWindow) -> Vec<Span> {
     let Some(quiet) = quiet else {
         return Vec::new();
@@ -79,18 +85,26 @@ pub fn quiet_spans(quiet: Option<&QuietHoursPolicy>, window: TimeWindow) -> Vec<
         .and_then(|name| name.parse().ok())
         .unwrap_or(chrono_tz::UTC);
     let mut spans = Vec::new();
-    let mut at = window.from - window.from % HOUR_SECS;
+    let mut at = window.from;
     while at < window.to {
-        let local_hour = Utc
+        let local = Utc
             .timestamp_opt(i64::try_from(at).unwrap_or(i64::MAX), 0)
             .single()
-            .map(|utc| utc.with_timezone(&zone).hour());
-        if local_hour.is_some_and(|hour| quiet.contains(hour))
-            && let Some(span) = clip((at, at.saturating_add(HOUR_SECS)), window)
+            .map(|utc| utc.with_timezone(&zone));
+        // The next local hour boundary in the offset in force at `at`:
+        // between one second and one hour away, so the walk always moves.
+        let until = local
+            .as_ref()
+            .map_or(at.saturating_add(HOUR_SECS), |local| {
+                let into_hour = u64::from(local.num_seconds_from_midnight() % 3600);
+                at.saturating_add(HOUR_SECS - into_hour)
+            });
+        if local.is_some_and(|local| quiet.contains(local.hour()))
+            && let Some(span) = clip((at, until), window)
         {
             spans.push(span);
         }
-        at = at.saturating_add(HOUR_SECS);
+        at = until;
     }
     spans
 }
@@ -266,6 +280,74 @@ mod tests {
             quiet_spans(Some(&unknown_zone), window(T0, T0 + DAY)).len(),
             8,
             "an unknown zone reads as UTC"
+        );
+    }
+
+    #[test]
+    fn quiet_hours_in_a_zone_with_a_fractional_offset_start_on_the_local_hour() {
+        let policy = |zone: &str| QuietHoursPolicy {
+            start_hour: 22,
+            end_hour: 6,
+            timezone: Some(zone.into()),
+        };
+        let minutes = |count: u64| count * 60;
+        // Kolkata is UTC+5:30: quiet 22:00-06:00 IST is 16:30-00:30 UTC,
+        // eight local hours from T0 + 8h30.
+        let kolkata = quiet_spans(Some(&policy("Asia/Kolkata")), window(T0, T0 + DAY));
+        assert_eq!(kolkata.len(), 8, "{kolkata:?}");
+        assert_eq!(
+            kolkata.first(),
+            Some(&(
+                T0 + 8 * HOUR_SECS + minutes(30),
+                T0 + 9 * HOUR_SECS + minutes(30)
+            )),
+            "quiet starts at 22:00 IST, not at the UTC hour after it"
+        );
+        assert_eq!(
+            kolkata.last(),
+            Some(&(
+                T0 + 15 * HOUR_SECS + minutes(30),
+                T0 + 16 * HOUR_SECS + minutes(30)
+            )),
+            "quiet ends at 06:00 IST, not at the UTC hour before it"
+        );
+        // Kathmandu is UTC+5:45: quiet starts at 16:15 UTC.
+        let kathmandu = quiet_spans(Some(&policy("Asia/Kathmandu")), window(T0, T0 + DAY));
+        assert_eq!(kathmandu.len(), 8, "{kathmandu:?}");
+        assert_eq!(
+            kathmandu.first(),
+            Some(&(
+                T0 + 8 * HOUR_SECS + minutes(15),
+                T0 + 9 * HOUR_SECS + minutes(15)
+            ))
+        );
+        // A window starting inside a local hour is clipped, not widened,
+        // and the next span still starts on the local hour boundary.
+        let clipped = quiet_spans(
+            Some(&policy("Asia/Kolkata")),
+            window(T0 + 9 * HOUR_SECS, T0 + 11 * HOUR_SECS),
+        );
+        assert_eq!(
+            clipped,
+            [
+                (T0 + 9 * HOUR_SECS, T0 + 9 * HOUR_SECS + minutes(30)),
+                (
+                    T0 + 9 * HOUR_SECS + minutes(30),
+                    T0 + 10 * HOUR_SECS + minutes(30)
+                ),
+                (T0 + 10 * HOUR_SECS + minutes(30), T0 + 11 * HOUR_SECS),
+            ]
+        );
+        // What a peer at `availability` gets: the free span before quiet
+        // ends on the last whole UTC hour inside the free time (16:00,
+        // T0 + 8h) and the one after starts on the first whole hour after
+        // it (01:00 next day, T0 + 17h); the half hours 22:00-22:30 IST and
+        // 05:30-06:00 IST are never disclosed as free.
+        let free = free_windows(window(T0, T0 + DAY), &kolkata, HOUR_SECS);
+        let spans: Vec<Span> = free.iter().map(|span| (span.from, span.to)).collect();
+        assert_eq!(
+            spans,
+            [(T0, T0 + 8 * HOUR_SECS), (T0 + 17 * HOUR_SECS, T0 + DAY)]
         );
     }
 

@@ -955,14 +955,24 @@ export interface FederationOutboundIntent {
 	disclosure: string;
 	issued_at: number;
 	expires_at: number;
-	intent: { type: string; body?: string; text?: string; at?: number; description?: string; window?: { from: number; to: number }; task?: FederationTaskHandoff };
+	intent: { type: string; body?: string; text?: string; at?: number; description?: string; window?: { from: number; to: number }; task?: FederationTaskHandoff; correlation_id?: string; decision?: FederationProposalDecision };
+}
+
+/** What a receiving owner did with a proposal (#111): accepted it, or dismissed it. */
+export type FederationProposalDecision = "accepted" | "dismissed";
+
+/** The peer owner's decision as noted on a delivered proposal, reminder, or handoff this companion sent (#111), and when this server was told. */
+export interface FederationPeerDecision {
+	decision: FederationProposalDecision;
+	at: number;
 }
 
 /**
  * One request this companion queued for a paired companion, as
  * `GET /api/federation/outbox` lists it and `outbox_updated` carries it:
- * the intent, where it stands, every attempt, and the peer's typed
- * response. Nothing else the peer said.
+ * the intent, where it stands, every attempt, the peer's typed
+ * response, and, for a proposal its owner decided on, that decision.
+ * Nothing else the peer said.
  */
 export interface FederationOutboxEntry {
 	version: number;
@@ -977,6 +987,7 @@ export interface FederationOutboxEntry {
 	chat_id: string;
 	created_at: number;
 	updated_at: number;
+	decision?: FederationPeerDecision;
 }
 
 /** `GET /api/federation/outbox`: entries and kept receipts, newest first. */

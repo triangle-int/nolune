@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "correlation_id": "dec-8c1f2e9b4a7d6035",
+  "sender": "TFccHElqXR1lkUBqQoQPWYxPSm1wPjCl8WXbgm_cQ7E",
+  "represented_owner": "its owner",
+  "purpose": "answer a proposal",
+  "disclosure": "none",
+  "issued_at": 1800000000,
+  "expires_at": 1800086400,
+  "intent": {
+    "type": "decision",
+    "correlation_id": "req-3f9a2c1d7e5b4860",
+    "decision": "accepted"
+  }
+}

@@ -7,7 +7,8 @@
 //! `services::tools::peer_proposals` build a typed [`Outgoing`] request (a
 //! message, an availability query, a reminder, a meeting proposal, or a
 //! task handoff built here from one of this owner's continuity records by
-//! [`super::handoffs`]) and
+//! [`super::handoffs`]), and the proposal store (`super::proposals`) builds
+//! one for the decision this owner made on a peer's proposal (#111), and
 //! hand it to [`Outbox::enqueue`], which resolves the peer, asks this
 //! owner's own policy gate ([`FederationGate::admit_outbound`]: the peer
 //! must be paired, the intent must be able to disclose at that class, and
@@ -47,6 +48,12 @@
 //! process that dies mid-delivery leaves a mark; [`Outbox::recover_on_restart`]
 //! turns it into `interrupted` and the entry is retried on the same id,
 //! never queued a second time.
+//!
+//! A peer's decision on a reminder, a meeting, or a handoff this companion
+//! sent arrives later as its own `decision` intent, and the delivery notes
+//! it on the delivered entry it answers through [`Outbox::note_decision`]
+//! (#111): the entry keeps a [`PeerDecision`], its status stays
+//! `delivered`, and a decision naming no such entry is refused, typed.
 //!
 //! Every settled outcome, and the first `needs_owner`, writes a
 //! requesting-side audit receipt through the gate and an [`IntentReceipt`]
@@ -89,7 +96,7 @@ use crate::domain::{
     federation_intent::{
         FederationIntent, INTENT_VERSION, IntentError, IntentOutcome, IntentPayload, IntentReceipt,
         IntentResponse, LabelField, MAX_INTENT_CLOCK_SKEW_SECS, MAX_INTENT_LIFETIME_SECS,
-        PeerLabel, ReceiptBasis, TimeWindow,
+        PeerLabel, ProposalDecision, ReceiptBasis, TimeWindow,
     },
     federation_policy::{
         Decision, DecisionReason, DisclosureClass, IntentRequest, PeerText, ReceiptSide, Verdict,
@@ -253,6 +260,20 @@ pub struct OutboxEntry {
     pub chat_id: String,
     pub created_at: u64,
     pub updated_at: u64,
+    /// What the peer's owner decided on a delivered reminder, proposal, or
+    /// handoff, once their companion said (#111); absent until then, and
+    /// for every other kind of request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<PeerDecision>,
+}
+
+/// The peer owner's decision as noted on the entry: what they decided and
+/// when this server was told (Unix seconds by this server's clock).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PeerDecision {
+    pub decision: ProposalDecision,
+    pub at: u64,
 }
 
 impl OutboxEntry {
@@ -306,6 +327,12 @@ pub enum OutboxRequest {
     /// reads off the record, never its contents.
     Handoff {
         record: Box<ContinuityRecord>,
+    },
+    /// This owner's decision on a proposal the peer sent (#111):
+    /// `correlation_id` is the peer's own id for that request.
+    Decision {
+        correlation_id: String,
+        decision: ProposalDecision,
     },
 }
 
@@ -464,6 +491,16 @@ impl Outbox {
                         .map_err(FederationError::Intent)?,
                 },
             ),
+            OutboxRequest::Decision {
+                correlation_id,
+                decision,
+            } => (
+                DisclosureClass::None,
+                IntentPayload::Decision {
+                    correlation_id,
+                    decision,
+                },
+            ),
         };
         let request = IntentRequest::new(payload.class(), disclosure);
         let peer = gate.admit_outbound(federation, &named.companion_id, request)?;
@@ -492,9 +529,49 @@ impl Outbox {
             chat_id: outgoing.chat_id,
             created_at: now,
             updated_at: now,
+            decision: None,
         };
         self.save(entry.clone(), None)?;
         self.wake.notify_one();
+        Ok(entry)
+    }
+
+    /// Notes what the peer under `pairing_id` decided on the request
+    /// `correlation_id` (#111): the entry must be one this companion sent
+    /// that pairing, delivered, and a reminder, a proposal, or a handoff
+    /// (the kinds an owner decides on); anything else, and a decision that
+    /// contradicts one already noted, is [`FederationError::UnknownRequest`]
+    /// and notes nothing. The same decision told again is noted once. The
+    /// entry stays `delivered`; the decision and when it was noted are
+    /// kept on it, and the change is broadcast.
+    pub fn note_decision(
+        &self,
+        pairing_id: &str,
+        correlation_id: &str,
+        decision: ProposalDecision,
+    ) -> Result<OutboxEntry, FederationError> {
+        let now = self.now();
+        let mut entry = self
+            .get(correlation_id)?
+            .filter(|entry| entry.pairing_id == pairing_id)
+            .filter(|entry| entry.status == OutboxStatus::Delivered)
+            .filter(|entry| {
+                matches!(
+                    entry.intent.intent,
+                    IntentPayload::Reminder { .. }
+                        | IntentPayload::Proposal { .. }
+                        | IntentPayload::Handoff { .. }
+                )
+            })
+            .ok_or(FederationError::UnknownRequest)?;
+        match entry.decision {
+            Some(noted) if noted.decision == decision => return Ok(entry),
+            Some(_) => return Err(FederationError::UnknownRequest),
+            None => {}
+        }
+        entry.decision = Some(PeerDecision { decision, at: now });
+        entry.updated_at = now;
+        self.save(entry.clone(), None)?;
         Ok(entry)
     }
 
@@ -1405,6 +1482,7 @@ mod tests {
             chat_id: "default".into(),
             created_at: at,
             updated_at: at,
+            decision: None,
         }
     }
 
@@ -1894,5 +1972,89 @@ mod tests {
                 "{hint:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_peers_decision_is_noted_once_on_the_delivered_proposal_it_answers_and_on_nothing_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Arc::new(AtomicU64::new(T0));
+        let outbox = open(dir.path(), &now);
+        let proposal = |correlation_id: &str, status: OutboxStatus| {
+            let mut entry = entry(correlation_id, status, T0);
+            entry.intent.intent = IntentPayload::Proposal {
+                description: PeerText::new("lunch by the lake".into()).unwrap(),
+                window: TimeWindow {
+                    from: T0 + 3_600,
+                    to: T0 + 7_200,
+                },
+            };
+            entry
+        };
+        outbox
+            .save(proposal("delivered", OutboxStatus::Delivered), None)
+            .unwrap();
+        outbox
+            .save(proposal("waiting", OutboxStatus::WaitingOwner), None)
+            .unwrap();
+        outbox
+            .save(entry("message", OutboxStatus::Delivered, T0), None)
+            .unwrap();
+        now.store(T0 + 60, Ordering::SeqCst);
+        let noted = outbox
+            .note_decision(PAIRING, "delivered", ProposalDecision::Accepted)
+            .unwrap();
+        assert_eq!(
+            noted.decision,
+            Some(PeerDecision {
+                decision: ProposalDecision::Accepted,
+                at: T0 + 60,
+            })
+        );
+        assert_eq!(
+            noted.status,
+            OutboxStatus::Delivered,
+            "the status is not the decision"
+        );
+        assert_eq!(noted.updated_at, T0 + 60);
+        assert_eq!(
+            outbox.get("delivered").unwrap().unwrap(),
+            noted,
+            "persisted"
+        );
+        // Told again: noted once; told the other way: refused, and the first
+        // decision stands.
+        now.store(T0 + 120, Ordering::SeqCst);
+        let again = outbox
+            .note_decision(PAIRING, "delivered", ProposalDecision::Accepted)
+            .unwrap();
+        assert_eq!(again, noted);
+        assert!(matches!(
+            outbox.note_decision(PAIRING, "delivered", ProposalDecision::Dismissed),
+            Err(FederationError::UnknownRequest)
+        ));
+        assert_eq!(outbox.get("delivered").unwrap().unwrap(), noted);
+        // Nothing else takes a decision: another pairing, a request not
+        // delivered, a message, an unknown id.
+        for (pairing, key) in [
+            ("other-pairing", "delivered"),
+            (PAIRING, "waiting"),
+            (PAIRING, "message"),
+            (PAIRING, "never-sent"),
+        ] {
+            assert!(
+                matches!(
+                    outbox.note_decision(pairing, key, ProposalDecision::Dismissed),
+                    Err(FederationError::UnknownRequest)
+                ),
+                "{pairing} {key}"
+            );
+        }
+        assert_eq!(outbox.get("waiting").unwrap().unwrap().decision, None);
+        assert_eq!(outbox.get("message").unwrap().unwrap().decision, None);
+        // An entry written before decisions existed reads back without one.
+        let json = serde_json::to_string(&entry("old", OutboxStatus::Delivered, T0)).unwrap();
+        assert!(!json.contains("\"decision\""), "{json}");
+        let read: OutboxEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(read.decision, None);
     }
 }
