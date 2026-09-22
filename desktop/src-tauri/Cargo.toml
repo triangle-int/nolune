@@ -1,6 +1,6 @@
 [package]
 name = "nolune-desktop"
-version = "0.36.0"
+version = "0.37.0"
 description = "Nolune — AI companion desktop app"
 authors = ["Triangle Interactive LLC"]
 license = "MIT"
