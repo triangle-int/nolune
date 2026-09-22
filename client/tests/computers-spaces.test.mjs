@@ -126,9 +126,11 @@ test('permissions, capabilities and the Cua driver are summarized without guessi
 
 test('hints name the computer and the one thing to do about it', () => {
 	// A desktop without a driver has no screen path of its own (#19): the
-	// hint says what still works there and the one thing to install.
+	// hint says what still works there and the one thing to do about it.
+	// That is a button in the desktop app, never a command: a desktop
+	// user has no `nolune` on their PATH.
 	const noDriver = (name) =>
-		`${name} has no Cua driver: the Nolune desktop app runs commands and files there, but it cannot see or act in windows. Install the driver there with nolune cua install, then reconnect.`;
+		`${name} has no Cua driver: the Nolune desktop app runs commands and files there, but it cannot see or act in windows. To give it one, open the Nolune desktop app there and press Install driver under Settings \u2192 Computer use.`;
 	assert.deepEqual(spaceHints(desktop(), NOW), [{ level: 'info', text: noDriver('studio') }]);
 	assert.deepEqual(spaceHints(offline, NOW), [
 		{ level: 'warn', text: 'laptop is offline. Open the Nolune desktop app there to reconnect it.' },

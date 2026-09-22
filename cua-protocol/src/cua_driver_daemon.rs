@@ -1,5 +1,10 @@
 //! The app daemon behind `cua-driver mcp` on macOS (#20).
 //!
+//! Shared by both runtimes, like the installer beside it: the server's
+//! `nolune cua status` and the desktop app both have to bring this daemon
+//! up by path, and a desktop that installs its own driver is the
+//! case where no daemon has ever run.
+//!
 //! On macOS `cua-driver mcp` is a proxy: it talks to the `CuaDriver.app`
 //! daemon (`cua-driver serve`) that owns the login session's socket, and
 //! when none runs it starts one by name through LaunchServices (`open -a

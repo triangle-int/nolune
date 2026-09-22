@@ -414,6 +414,7 @@ fn the_capture_guard_script_covers_every_cua_file() {
         "server/src/routes/machine_agents.rs",
         "desktop/src-tauri/src/cua_runtime.rs",
         "desktop/src-tauri/src/cua_permissions.rs",
+        "desktop/src-tauri/src/cua_install.rs",
         "desktop/src-tauri/src/computer_use_bridge.rs",
         "desktop/src/lib/cua-permissions.js",
         "client/src/lib/computers/spaces.js",

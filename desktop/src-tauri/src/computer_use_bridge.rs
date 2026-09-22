@@ -118,6 +118,29 @@ static INSTANCE_SLUG: Mutex<Option<String>> = Mutex::new(None);
 /// Server URL for overlay (set on connect).
 static SERVER_URL: Mutex<Option<String>> = Mutex::new(None);
 
+/// Asks the open machine socket to close so the retry loop opens another
+/// one and registers this computer again. The descriptor is built
+/// once per connection, before the socket opens, so a driver installed
+/// while connected is invisible to the companion until the next
+/// registration; installing one signals here instead of making the user
+/// reconnect by hand. Nothing else about the connection changes: the
+/// saved credentials, the instance binding and the overlay all stay.
+static REANNOUNCE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// Signal the open connection to re-register. `false` when no bridge is
+/// running, so nothing was signalled and the next connect registers the
+/// new driver anyway.
+pub fn reannounce() -> bool {
+    let running = BRIDGE_TASK
+        .lock()
+        .map(|bridge| bridge.is_some())
+        .unwrap_or(false);
+    if running {
+        REANNOUNCE.notify_one();
+    }
+    running
+}
+
 /// Start the machine agent — connects to the server's machine WebSocket,
 /// registers this machine, then listens for toolcalls and executes them.
 pub async fn connect_computer_use(
@@ -281,6 +304,12 @@ async fn run_agent_connection(
             (frame, true)
         } else {
             let frame = tokio::select! {
+                // A driver installed mid-connection changes what this
+                // computer can do, and only a fresh registration says so.
+                _ = REANNOUNCE.notified() => {
+                    eprintln!("[agent] re-registering: this computer's driver changed");
+                    break;
+                }
                 msg = read.next() => {
                     match msg {
                         Some(Ok(frame @ (Message::Text(_) | Message::Binary(_)))) => frame,
@@ -1071,6 +1100,20 @@ mod tests {
             assert!(minted, "{bad}");
             assert!(uuid::Uuid::parse_str(&replaced).is_ok(), "{bad}");
         }
+    }
+
+    /// The descriptor is built once per connection, so a driver installed
+    /// while the app is connected only reaches the companion through a new
+    /// registration. With no socket open there is nothing to signal
+    /// and the next connect carries the driver anyway, which is what the
+    /// install tells the user.
+    #[test]
+    fn a_driver_change_signals_nothing_when_no_socket_is_open() {
+        assert!(
+            BRIDGE_TASK.lock().unwrap().is_none(),
+            "no bridge runs in a unit test"
+        );
+        assert!(!reannounce());
     }
 
     #[test]

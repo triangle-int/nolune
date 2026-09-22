@@ -3,12 +3,17 @@
 // Driver's own bundle, read from the driver's report, with explicit
 // unsupported, headless, missing-driver, unreachable and version-mismatch
 // states, and copy that only ever promises one-shot capture during an action.
+// A computer without a driver is installed from the page itself, so
+// no state ever asks a desktop user to run a command they do not have.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   PERMISSION_NAMES,
   grantOutcomeText,
+  installAction,
+  installOutcomeText,
+  installProgressText,
   intro,
   pageState,
   permissionRows,
@@ -20,6 +25,7 @@ const source = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 
 const PIN = "0.28.2";
 const INSTALL = "nolune cua install";
+const ACTION = "Install driver";
 const BUNDLE = "com.trycua.driver";
 const DRIVER = "/Users/me/.nolune/cua-driver/releases/0.28.2/CuaDriver.app/Contents/MacOS/cua-driver";
 
@@ -42,7 +48,9 @@ const reported = (over = {}) => ({
 const report = (over = {}) => ({
   platform: macos(),
   pinned_version: PIN,
+  install_action: ACTION,
   install_command: INSTALL,
+  can_install: true,
   driver_bundle: BUNDLE,
   install: pinned(),
   driver: reported(),
@@ -72,17 +80,17 @@ const MISMATCH = report({
   driver: reported({
     version: "0.27.0",
     compatible: false,
-    incompatibility: `Cua Driver 0.27.0 is not the pinned ${PIN}; Nolune does not update the driver on its own, so install Cua Driver ${PIN} and restart it (\`${INSTALL}\` installs the pinned release)`,
+    incompatibility: `Cua Driver 0.27.0 is not the pinned ${PIN}; Nolune does not update the driver on its own, so install Cua Driver ${PIN} and restart it (${ACTION} below installs the pinned release)`,
   }),
   install: { kind: "stale", version: "0.27.0", driver: DRIVER },
-  summary: `Cua Driver 0.27.0 is not the pinned ${PIN}; Nolune does not update the driver on its own, so install Cua Driver ${PIN} and restart it (\`${INSTALL}\` installs the pinned release)`,
+  summary: `Cua Driver 0.27.0 is not the pinned ${PIN}; Nolune does not update the driver on its own, so install Cua Driver ${PIN} and restart it (${ACTION} below installs the pinned release)`,
 });
 
 const ABSENT = report({
   install: { kind: "none" },
   driver: { kind: "absent" },
   permissions: null,
-  summary: `No Cua Driver is installed on this computer; run \`${INSTALL}\`, then check again.`,
+  summary: `No Cua Driver is installed on this computer; ${ACTION} puts the pinned one here.`,
 });
 
 const UNREACHABLE = report({
@@ -96,18 +104,22 @@ const LINUX = report({
     kind: "unsupported",
     os: "linux",
     triple: "x86_64-unknown-linux-gnu",
-    reason: `Computer use is not available on Linux yet: Nolune drives computers on macOS only for now. The pinned driver still installs with \`${INSTALL}\` so a later release can turn it on; there is nothing to grant here.`,
+    reason:
+      "Computer use is not available on Linux yet: Nolune drives computers on macOS only for now, so there is nothing to install or grant on this computer. A later release can turn it on without moving the pinned driver.",
   },
   install: { kind: "none" },
   driver: { kind: "skipped" },
+  can_install: false,
   permissions: null,
-  summary: `Computer use is not available on Linux yet: Nolune drives computers on macOS only for now. The pinned driver still installs with \`${INSTALL}\` so a later release can turn it on; there is nothing to grant here.`,
+  summary:
+    "Computer use is not available on Linux yet: Nolune drives computers on macOS only for now, so there is nothing to install or grant on this computer. A later release can turn it on without moving the pinned driver.",
 });
 
 const WINDOWS = report({
   platform: { ...LINUX.platform, os: "windows", triple: "x86_64-pc-windows-msvc", reason: LINUX.platform.reason.replace("Linux", "Windows") },
   install: { kind: "none" },
   driver: { kind: "skipped" },
+  can_install: false,
   permissions: null,
   summary: LINUX.summary.replace("Linux", "Windows"),
 });
@@ -120,6 +132,7 @@ const HEADLESS = report({
     reason: "No graphical session (launchctl managername reports Background, an SSH or background session, not Aqua): the driver is never started here and there is nothing to grant. Headless installs need nothing from this page.",
   },
   driver: { kind: "skipped" },
+  can_install: false,
   permissions: null,
   summary: "No graphical session (launchctl managername reports Background, an SSH or background session, not Aqua): the driver is never started here and there is nothing to grant. Headless installs need nothing from this page.",
 });
@@ -133,10 +146,10 @@ const OTHER_BUNDLE = report({
   driver: reported({
     path: PATH_DRIVER,
     bundle: FORK,
-    bundle_mismatch: `The driver at ${PATH_DRIVER} holds its grants as ${FORK}, not as CuaDriver (${BUNDLE}), the bundle Nolune's pinned driver runs as; nothing is granted through it (\`${INSTALL}\` installs the pinned release)`,
+    bundle_mismatch: `The driver at ${PATH_DRIVER} holds its grants as ${FORK}, not as CuaDriver (${BUNDLE}), the bundle Nolune's pinned driver runs as; nothing is granted through it (${ACTION} below installs the pinned release)`,
   }),
   permissions: { accessibility: "granted", screen_recording: "denied" },
-  summary: `The driver at ${PATH_DRIVER} holds its grants as ${FORK}, not as CuaDriver (${BUNDLE}), the bundle Nolune's pinned driver runs as; nothing is granted through it (\`${INSTALL}\` installs the pinned release)`,
+  summary: `The driver at ${PATH_DRIVER} holds its grants as ${FORK}, not as CuaDriver (${BUNDLE}), the bundle Nolune's pinned driver runs as; nothing is granted through it (${ACTION} below installs the pinned release)`,
 });
 
 const ALL = { READY: report(), DENIED, NEVER_ASKED, MISMATCH, OTHER_BUNDLE, ABSENT, UNREACHABLE, LINUX, WINDOWS, HEADLESS };
@@ -185,28 +198,34 @@ test("a permission the driver never asked for reads Not asked yet and can be gra
   assert.equal(stateText("unavailable"), "Unavailable");
 });
 
-test("a version mismatch fails clearly with both versions and the install command", () => {
+test("a version mismatch fails clearly with both versions and offers the pinned install", () => {
   assert.equal(pageState(MISMATCH), "incompatible");
   const lines = statusLines(MISMATCH);
-  const mismatch = lines.find((line) => line.tone === "error" && line.text.includes("0.27.0"));
+  // What the driver itself reports: both versions and the way out.
+  const mismatch = lines.find((line) => line.tone === "error" && line.text.includes("does not update"));
   assert.ok(mismatch, JSON.stringify(lines));
-  assert.ok(mismatch.text.includes(PIN), mismatch.text);
-  assert.ok(mismatch.text.includes(INSTALL), mismatch.text);
-  const install = lines.find((line) => line.text.includes("installed"));
-  assert.ok(install && install.tone === "error" && install.text.includes(INSTALL), JSON.stringify(lines));
+  assert.ok(mismatch.text.includes("0.27.0") && mismatch.text.includes(PIN), mismatch.text);
+  assert.ok(mismatch.text.includes(ACTION), mismatch.text);
+  // What the workspace holds, against the pin.
+  const install = lines.find((line) => line.text.includes("is installed for Nolune"));
+  assert.ok(install && install.tone === "error" && install.text.includes("0.27.0") && install.text.includes("install the pinned one below"), JSON.stringify(lines));
+  // The button reinstalls over the stale one rather than leaving it in place.
+  const action = installAction(MISMATCH);
+  assert.ok(action && action.force, JSON.stringify(action));
+  assert.ok(action.label.includes(PIN), action.label);
   // The rows still say what the driver reported, but nothing is granted through a wrong driver.
   const rows = permissionRows(MISMATCH);
   assert.equal(rows.length, 2);
   assert.ok(rows.every((row) => row.canGrant === false), "no grant through an incompatible driver");
 });
 
-test("the install line names what the workspace holds against the pin, with the command to run", () => {
+test("the install line names what the workspace holds against the pin, and the fix is a button", () => {
   // A manifest whose binary is gone.
   const missing = report({ install: { kind: "missing", version: PIN, driver: DRIVER } });
   const [missingLine] = statusLines(missing);
   assert.equal(missingLine.tone, "error");
   assert.ok(missingLine.text.includes(PIN) && missingLine.text.includes("gone"), missingLine.text);
-  assert.ok(missingLine.text.includes(`${INSTALL} --force`), missingLine.text);
+  assert.ok(missingLine.text.includes("install it again below"), missingLine.text);
   assert.equal(pageState(missing), "ready", "the driver that reported is still the pinned one");
 
   // A manifest that cannot be read.
@@ -215,7 +234,7 @@ test("the install line names what the workspace holds against the pin, with the 
   const [unreadableLine] = statusLines(unreadable);
   assert.equal(unreadableLine.tone, "error");
   assert.ok(unreadableLine.text.includes(detail), unreadableLine.text);
-  assert.ok(unreadableLine.text.includes(`${INSTALL} --force`), unreadableLine.text);
+  assert.ok(unreadableLine.text.includes("install it again below"), unreadableLine.text);
 
   // Nothing installed for Nolune, but a pinned driver on PATH reported: said, not flagged.
   const fromPath = report({ install: { kind: "none" }, driver: reported({ path: PATH_DRIVER }) });
@@ -240,7 +259,7 @@ test("a driver under another bundle shows that bundle's grants as such, and noth
   const mismatch = lines.find((line) => line.tone === "error" && line.text.includes(FORK));
   assert.ok(mismatch, JSON.stringify(lines));
   assert.ok(mismatch.text.includes(BUNDLE), mismatch.text);
-  assert.ok(mismatch.text.includes(INSTALL), mismatch.text);
+  assert.ok(mismatch.text.includes(ACTION), mismatch.text);
   assert.ok(lines.some((line) => line.tone === "ok" && line.text.includes("matches the pin")), "the version itself is fine");
   // The rows say what the driver reported, but nothing is granted through the wrong bundle.
   const rows = permissionRows(OTHER_BUNDLE);
@@ -253,7 +272,7 @@ test("a driver under another bundle shows that bundle's grants as such, and noth
   const bare = report({ driver: reported({ bundle: FORK }) });
   assert.equal(pageState(bare), "incompatible");
   const bareLine = statusLines(bare).find((line) => line.tone === "error");
-  assert.ok(bareLine && bareLine.text.includes(FORK) && bareLine.text.includes(BUNDLE) && bareLine.text.includes(INSTALL), JSON.stringify(statusLines(bare)));
+  assert.ok(bareLine && bareLine.text.includes(FORK) && bareLine.text.includes(BUNDLE) && bareLine.text.includes("Install the pinned driver below"), JSON.stringify(statusLines(bare)));
   assert.ok(permissionRows(NEVER_ASKED).every((row) => row.canGrant), "the pinned bundle grants");
   assert.ok(permissionRows(report({ driver: reported({ bundle: FORK }), permissions: NEVER_ASKED.permissions })).every((row) => !row.canGrant));
   // A report that names no bundle is not a mismatch; the constant stands in.
@@ -263,12 +282,23 @@ test("a driver under another bundle shows that bundle's grants as such, and noth
   assert.ok(statusLines(unnamed).every((line) => line.tone !== "error"));
 });
 
-test("no driver means the install command and no rows", () => {
+test("no driver offers the install itself, with no rows to grant yet", () => {
   assert.equal(pageState(ABSENT), "absent");
   assert.deepEqual(permissionRows(ABSENT), []);
   const lines = statusLines(ABSENT);
-  assert.ok(lines.some((line) => line.tone === "error" && line.text.includes(INSTALL)), JSON.stringify(lines));
-  assert.ok(ABSENT.summary.includes(INSTALL));
+  assert.ok(lines.some((line) => line.tone === "error" && line.text.includes("install it below")), JSON.stringify(lines));
+  assert.ok(ABSENT.summary.includes(ACTION));
+  // A first install has nothing to overwrite, so it does not force.
+  const action = installAction(ABSENT);
+  assert.ok(action, "a computer without a driver is offered one");
+  assert.equal(action.label, ACTION);
+  assert.equal(action.force, false);
+  assert.ok(action.note.includes(PIN), action.note);
+  assert.ok(action.note.includes("checksum"), action.note);
+  assert.ok(action.note.includes("never updates the driver on its own"), action.note);
+  // A manifest pointing at a binary that is gone is overwritten.
+  assert.equal(installAction(report({ install: { kind: "missing", version: PIN, driver: DRIVER }, driver: { kind: "absent" }, permissions: null })).force, true);
+  assert.equal(installAction(report({ install: { kind: "unreadable", detail: "denied" }, driver: { kind: "absent" }, permissions: null })).force, true);
 });
 
 test("a driver that cannot report shows what it said", () => {
@@ -287,8 +317,8 @@ test("Linux and Windows are named as unsupported with what still works", () => {
     assert.equal(lines[0].tone, "muted");
     assert.ok(lines[0].text.includes(name), lines[0].text);
     assert.ok(lines[0].text.includes("macOS only"), lines[0].text);
-    assert.ok(lines[0].text.includes(INSTALL), lines[0].text);
-    assert.ok(lines[0].text.includes("nothing to grant"), lines[0].text);
+    assert.ok(lines[0].text.includes("nothing to install or grant"), lines[0].text);
+    assert.equal(installAction(unsupported), null, `${name}: nothing to install`);
   }
 });
 
@@ -299,6 +329,7 @@ test("a headless host says the driver is never started and nothing is needed", (
   assert.equal(line.tone, "muted");
   assert.ok(line.text.includes("never started"), line.text);
   assert.ok(line.text.includes("Headless installs need nothing"), line.text);
+  assert.equal(installAction(HEADLESS), null, "a driver that is never started is not worth downloading");
 });
 
 test("a grant explains the prompt, the pane, and what to do when neither helps", () => {
@@ -333,12 +364,68 @@ test("every sentence promises one-shot capture during an action and never more",
   assert.ok(intro(report()).includes("one-shot"), intro(report()));
 });
 
-test("the settings window renders the report through the pure views and the two commands", () => {
+test("the settings window renders the report through the pure views and the three commands", () => {
   const page = source("../src/routes/settings/+page.svelte");
-  for (const required of ['"cua_permissions"', '"cua_grant_permission"', "$lib/cua-permissions", "permissionRows", "statusLines", "pageState", "grantOutcomeText", 'role="alert"', "Retry", "Refresh status"]) {
+  for (const required of ['"cua_permissions"', '"cua_grant_permission"', '"cua_install_driver"', "$lib/cua-permissions", "permissionRows", "statusLines", "pageState", "grantOutcomeText", "installAction", "installProgressText", "installOutcomeText", 'role="alert"', "Retry", "Refresh status"]) {
     assert.ok(page.includes(required), `settings page has ${required}`);
   }
-  for (const stale of ["Take screenshots of your screen", "Nolune needs these permissions to control your computer"]) {
+  for (const stale of ["Take screenshots of your screen", "Nolune needs these permissions to control your computer", "nolune cua"]) {
     assert.ok(!page.includes(stale), `settings page no longer says ${JSON.stringify(stale)}`);
   }
+});
+
+/**
+ * The whole point of the page installing the driver itself: a desktop user
+ * has no `nolune` on their PATH (the in-app server install never puts one
+ * there, and a desktop bound to a server elsewhere has no binary at all),
+ * so no state may answer "run this command".
+ */
+test("no state on the page ever asks the user to run a terminal command", () => {
+  const texts = [];
+  for (const sample of Object.values(ALL)) {
+    texts.push(sample.summary, intro(sample), ...statusLines(sample).map((line) => line.text));
+    const action = installAction(sample);
+    if (action) texts.push(action.label, action.note);
+    for (const row of permissionRows(sample)) texts.push(row.desc);
+    for (const permission of ["accessibility", "screen_recording"]) {
+      texts.push(grantOutcomeText({ permission, driver_grant: true, opened_settings: true }, sample));
+    }
+  }
+  for (const text of texts) {
+    assert.ok(!text.includes(INSTALL), `${JSON.stringify(text)} sends the user to a terminal`);
+    assert.ok(!text.includes("nolune cua"), `${JSON.stringify(text)} names a CLI command`);
+  }
+});
+
+test("a running install is narrated step by step, in the order the installer reports them", () => {
+  assert.equal(
+    installProgressText({ step: "downloading", url: "https://example/cua.tar.gz", size: 70_000_000 }),
+    "Downloading the driver (70.0 MB)…",
+  );
+  const verified = installProgressText({ step: "verified", sha256: "a".repeat(64) });
+  assert.ok(verified.includes("Checksum matches the pin"), verified);
+  const checked = installProgressText({ step: "version_checked", version: PIN });
+  assert.ok(checked.includes(PIN) && checked.includes("pinned version"), checked);
+});
+
+test("a finished install says what to do next and whether the companion already knows", () => {
+  const fresh = installOutcomeText({ version: PIN, driver: DRIVER, already_installed: false, reannounced: true });
+  assert.ok(fresh.includes(`Installed Cua Driver ${PIN}`), fresh);
+  assert.ok(fresh.includes(DRIVER), fresh);
+  assert.ok(fresh.includes("Accessibility") && fresh.includes("Screen recording"), fresh);
+  assert.ok(fresh.includes("registering with your companion again"), fresh);
+
+  const offline = installOutcomeText({ version: PIN, driver: DRIVER, already_installed: true, reannounced: false });
+  assert.ok(offline.includes("was already installed"), offline);
+  assert.ok(offline.includes("next time this app connects"), offline);
+});
+
+test("a ready computer is not offered a download it does not need", () => {
+  assert.equal(installAction(report()), null);
+  // An unreachable driver is reinstalled rather than left wedged.
+  const stuck = installAction(UNREACHABLE);
+  assert.ok(stuck && stuck.force, JSON.stringify(stuck));
+  assert.ok(stuck.label.toLowerCase().includes("reinstall"), stuck.label);
+  // A host the pin covers no driver for is never offered one, whatever it reports.
+  assert.equal(installAction({ ...ABSENT, can_install: false }), null);
 });

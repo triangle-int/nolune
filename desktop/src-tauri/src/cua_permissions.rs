@@ -8,9 +8,12 @@
 //! version against the pin; the hosts where there is nothing to grant
 //! (Linux and Windows, a session without a display); and the grant action,
 //! which drives `cua-driver permissions grant` so the prompts name the
-//! driver, and opens the System Settings pane. Capture is one-shot: the
-//! driver snapshots a window when an action asks for one, and nothing here
-//! records, streams or watches a screen.
+//! driver, and opens the System Settings pane. The page also installs the
+//! driver itself: a computer with none is one button away from one,
+//! so nothing here sends a desktop user to a terminal for a command they
+//! do not have. Capture is one-shot: the driver snapshots a window when an
+//! action asks for one, and nothing here records, streams or watches a
+//! screen.
 
 use std::{
     ffi::OsStr,
@@ -26,7 +29,11 @@ use serde::Serialize;
 
 use crate::cua_runtime::{self, CuaRuntime};
 
-/// The command that installs the pinned driver under the workspace.
+/// What this page calls its own install, so every sentence asking for one
+/// names the button and never a shell command.
+pub const INSTALL_ACTION: &str = "Install driver";
+/// The same install from a terminal: what a server host without a settings
+/// window runs, and what the docs name. The page never asks for it.
 pub const INSTALL_COMMAND: &str = "nolune cua install";
 /// The bundle macOS attributes the driver's grants to.
 pub const DRIVER_BUNDLE: &str = "com.trycua.driver";
@@ -150,9 +157,8 @@ pub fn platform_state(facts: &HostFacts<'_>) -> PlatformState {
         triple,
         reason: format!(
             "Computer use is not available on {named} yet: Nolune drives computers on macOS \
-             only for now. The pinned driver still installs with `{INSTALL_COMMAND}` so a \
-             later release can turn it on without changing the pin; there is nothing to \
-             grant here."
+             only for now, so there is nothing to install or grant on this computer. A later \
+             release can turn it on without moving the pinned driver."
         ),
     }
 }
@@ -161,7 +167,7 @@ pub fn platform_state(facts: &HostFacts<'_>) -> PlatformState {
 // The workspace install, checked against the pin
 // ---------------------------------------------------------------------------
 
-/// What `nolune cua install` left under the workspace, against the pin.
+/// What an install left under the workspace, against the pin.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum InstallState {
@@ -178,7 +184,7 @@ pub enum InstallState {
 }
 
 /// The install recorded under `workspace` (`cua-driver/install.json`, the
-/// manifest `nolune cua install` writes), checked against the pin.
+/// manifest an install writes), checked against the pin.
 pub fn install_state(workspace: &Path) -> InstallState {
     let manifest = workspace.join(cua_runtime::INSTALL_MANIFEST);
     let raw = match std::fs::read_to_string(&manifest) {
@@ -293,7 +299,7 @@ pub fn driver_state(path: &Path, probe: Result<&HealthReportResult, String>) -> 
     let incompatibility = check_driver_version(&report.driver_version)
         .err()
         .map(|incompatible| {
-            format!("{incompatible} (`{INSTALL_COMMAND}` installs the pinned release)")
+            format!("{incompatible} ({INSTALL_ACTION} below installs the pinned release)")
         });
     let health = match report.overall {
         HealthOverall::Ok => Health::Ok,
@@ -330,7 +336,7 @@ pub fn driver_state(path: &Path, probe: Result<&HealthReportResult, String>) -> 
             format!(
                 "The driver at {path} holds its grants as {named}, not as CuaDriver \
                  ({DRIVER_BUNDLE}), the bundle Nolune's pinned driver runs as; nothing is \
-                 granted through it (`{INSTALL_COMMAND}` installs the pinned release)"
+                 granted through it ({INSTALL_ACTION} below installs the pinned release)"
             )
         });
     let failed_checks = report
@@ -374,8 +380,16 @@ pub struct CuaPermissionsReport {
     pub platform: PlatformState,
     /// The driver version this build expects.
     pub pinned_version: &'static str,
-    /// The command that installs it.
+    /// What the page's own install is called, so its copy and its button
+    /// agree.
+    pub install_action: &'static str,
+    /// The same install from a terminal. Shown nowhere on the page; kept
+    /// so a support answer can name it.
     pub install_command: &'static str,
+    /// Whether the page can install the driver on this computer at all:
+    /// false where computer use does not run, so the button never offers
+    /// a download that could change nothing.
+    pub can_install: bool,
     /// The bundle the grants belong to.
     pub driver_bundle: &'static str,
     pub install: InstallState,
@@ -395,10 +409,13 @@ pub fn assemble(
     permissions: Option<DriverPermissions>,
 ) -> CuaPermissionsReport {
     let summary = summary(&platform, &driver, permissions.as_ref());
+    let can_install = platform.probes();
     CuaPermissionsReport {
         platform,
         pinned_version: PINNED_VERSION,
+        install_action: INSTALL_ACTION,
         install_command: INSTALL_COMMAND,
+        can_install,
         driver_bundle: DRIVER_BUNDLE,
         install,
         driver,
@@ -423,8 +440,8 @@ fn summary(
     match driver {
         DriverState::Skipped => "The driver was not probed.".to_owned(),
         DriverState::Absent => format!(
-            "No Cua Driver is installed on this computer; run `{INSTALL_COMMAND}`, then check \
-             again."
+            "No Cua Driver is installed on this computer; {INSTALL_ACTION} puts the pinned \
+             one here."
         ),
         DriverState::Unreachable { path, error } => {
             format!("The driver at {path} could not report: {error}")
@@ -547,8 +564,9 @@ pub fn grant_plan(os: &str, permission: &str, driver: Option<&Path>) -> Result<G
     }
     let driver = driver.ok_or_else(|| {
         format!(
-            "No Cua Driver is installed on this computer; run `{INSTALL_COMMAND}` first, so \
-             the grant goes to the driver's own bundle."
+            "No Cua Driver is installed on this computer; {} first, so the grant goes to the \
+             driver's own bundle.",
+            INSTALL_ACTION.to_lowercase()
         )
     })?;
     Ok(GrantPlan {
@@ -955,7 +973,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_driver_on_another_version_fails_clearly_with_the_install_command() {
+    async fn a_driver_on_another_version_fails_clearly_and_points_at_the_button() {
         let fake = FakeTransport::answering([Ok(healthy_on("0.27.0"))]);
         let (report, _, _) = gathered(Some(fake), true).await;
         let (version, compatible, incompatibility, _, _) = reported(&report.driver);
@@ -968,7 +986,7 @@ mod tests {
             "{incompatibility}"
         );
         assert!(
-            incompatibility.contains(INSTALL_COMMAND),
+            incompatibility.contains(INSTALL_ACTION),
             "{incompatibility}"
         );
         assert_eq!(
@@ -1011,7 +1029,7 @@ mod tests {
             .expect("the bundle mismatch is named");
         assert!(mismatch.contains("com.example.fork"), "{mismatch}");
         assert!(mismatch.contains(DRIVER_BUNDLE), "{mismatch}");
-        assert!(mismatch.contains(INSTALL_COMMAND), "{mismatch}");
+        assert!(mismatch.contains(INSTALL_ACTION), "{mismatch}");
         assert_eq!(report.summary, mismatch, "the mismatch is the headline");
         // The grants are still what the driver reported, under its bundle.
         assert_eq!(
@@ -1103,16 +1121,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_driver_means_nothing_to_grant_and_the_install_command() {
+    async fn no_driver_means_nothing_to_grant_and_an_install_to_press() {
         let (report, spawns, _) = gathered(None, false).await;
         assert_eq!(spawns.load(Ordering::SeqCst), 0, "nothing was started");
         assert_eq!(report.driver, DriverState::Absent);
         assert_eq!(report.permissions, None);
         assert!(
-            report.summary.contains(INSTALL_COMMAND),
+            report.summary.contains(INSTALL_ACTION),
             "{}",
             report.summary
         );
+        assert!(report.can_install, "a mac with no driver can be given one");
     }
 
     #[tokio::test]
@@ -1210,8 +1229,7 @@ mod tests {
         assert_eq!(os, "linux");
         assert_eq!(triple, "x86_64-unknown-linux-gnu");
         assert!(reason.contains("macOS only"), "{reason}");
-        assert!(reason.contains(INSTALL_COMMAND), "{reason}");
-        assert!(reason.contains("nothing to grant"), "{reason}");
+        assert!(reason.contains("nothing to install or grant"), "{reason}");
 
         let headless_linux = HostFacts {
             os: "linux",
@@ -1303,7 +1321,7 @@ mod tests {
         assert_eq!(settings_pane_url("clipboard"), None);
 
         let error = grant_plan("macos", "accessibility", None).unwrap_err();
-        assert!(error.contains(INSTALL_COMMAND), "{error}");
+        assert!(error.contains("install driver"), "{error}");
         let error = grant_plan("macos", "clipboard", Some(driver)).unwrap_err();
         assert!(error.contains("clipboard"), "{error}");
         for os in ["linux", "windows"] {
@@ -1370,6 +1388,15 @@ mod tests {
                     "{text:?} implies more than one-shot capture ({forbidden})"
                 );
             }
+            // The page installs the driver itself. A desktop user has
+            // no `nolune` on their PATH: the in-app server install never puts
+            // one there, and a desktop bound to a server elsewhere has no
+            // binary at all. So no sentence the window can show may answer a
+            // missing driver with a command to type.
+            assert!(
+                !text.contains(INSTALL_COMMAND) && !text.contains("nolune cua"),
+                "{text:?} sends a desktop user to a terminal"
+            );
         }
     }
 }

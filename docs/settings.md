@@ -323,6 +323,14 @@ scripts read). There is no setting for the driver version and no auto-update:
 Nolune never runs the driver's self-updater, and a new pin ships with a new
 Nolune release.
 
+- The desktop app installs the driver on the computer it runs on: its
+  Settings window, under Computer use, has an **Install driver** button
+  that runs the same verified installer into the same
+  `~/.nolune/cua-driver/`. It exists because a desktop user has no
+  `nolune` on their `PATH`: the app's in-app server install puts the
+  binary in `~/.nolune/bin` without touching `PATH`, and a desktop bound
+  to a server elsewhere has no binary at all. Everything below about the
+  download, the checks and the mirror applies to it unchanged.
 - `nolune cua install` downloads the pinned asset for this host, checks its
   size and sha256 before writing anything, extracts it under
   `~/.nolune/cua-driver/releases/<version>/` (a profile's own data root with

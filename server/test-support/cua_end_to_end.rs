@@ -853,7 +853,11 @@ async fn remote_desktop_machine_discovery() {
     )
     .await;
     assert!(
-        message.contains("studio") && message.contains("nolune cua install"),
+        message.contains("studio")
+            && message.contains("Install driver")
+            // A desktop has no `nolune` on its PATH, so the refusal must
+            // never answer with one.
+            && !message.contains("nolune cua"),
         "{message}"
     );
     legacy.saw_nothing().await;

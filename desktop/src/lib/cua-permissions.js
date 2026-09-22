@@ -6,9 +6,10 @@
  * as macOS granted them to the driver's own bundle (`com.trycua.driver`
  * for the pinned driver, never this app), and what a grant did. The grants
  * are attributed to the bundle the driver reported; a driver under another
- * bundle is named as such and nothing is granted through it. Every
- * sentence here describes one-shot capture during an action; nothing
- * promises more.
+ * bundle is named as such and nothing is granted through it. The page also
+ * installs the driver itself, so a computer without one is a button
+ * away from one and no sentence here asks for a terminal. Every sentence
+ * describes one-shot capture during an action; nothing promises more.
  */
 
 /**
@@ -24,8 +25,14 @@
  *       health: "ok" | "degraded" | "failed", bundle: string | null, bundle_mismatch: string | null,
  *       failed_checks: FailedCheck[] }} DriverState
  * @typedef {{ accessibility: Permission, screen_recording: Permission }} DriverPermissions
- * @typedef {{ platform: PlatformState, pinned_version: string, install_command: string, driver_bundle: string,
- *   install: InstallState, driver: DriverState, permissions: DriverPermissions | null, summary: string }} CuaPermissionsReport
+ * @typedef {{ platform: PlatformState, pinned_version: string, install_action: string, install_command: string,
+ *   can_install: boolean, driver_bundle: string, install: InstallState, driver: DriverState,
+ *   permissions: DriverPermissions | null, summary: string }} CuaPermissionsReport
+ * @typedef {{ label: string, force: boolean, note: string }} InstallAction
+ * @typedef {{ step: "downloading", url: string, size: number }
+ *   | { step: "verified", sha256: string }
+ *   | { step: "version_checked", version: string }} InstallProgress
+ * @typedef {{ version: string, driver: string, already_installed: boolean, reannounced: boolean }} InstallReport
  * @typedef {{ permission: string, driver_grant: boolean, opened_settings: boolean }} GrantOutcome
  * @typedef {"unsupported" | "headless" | "absent" | "unreachable" | "incompatible" | "ready"} PageState
  * @typedef {Pick<CuaPermissionsReport, "driver_bundle"> & Partial<Pick<CuaPermissionsReport, "driver">>} BundleSource
@@ -141,21 +148,21 @@ export function statusLines(report) {
     case "stale":
       lines.push({
         tone: "error",
-        text: `Cua Driver ${install.version} is installed for Nolune, but this build expects ${report.pinned_version}; run \`${report.install_command}\`.`,
+        text: `Cua Driver ${install.version} is installed for Nolune, but this build expects ${report.pinned_version}; install the pinned one below.`,
       });
       break;
     case "missing":
       lines.push({
         tone: "error",
-        text: `Cua Driver ${install.version} was installed for Nolune, but its binary is gone; run \`${report.install_command} --force\`.`,
+        text: `Cua Driver ${install.version} was installed for Nolune, but its binary is gone; install it again below.`,
       });
       break;
     case "unreadable":
-      lines.push({ tone: "error", text: `The driver install could not be read (${install.detail}); run \`${report.install_command} --force\`.` });
+      lines.push({ tone: "error", text: `The driver install could not be read (${install.detail}); install it again below.` });
       break;
     case "none":
       if (driver.kind === "absent" || driver.kind === "skipped") {
-        lines.push({ tone: "error", text: `No Cua Driver is installed on this computer; run \`${report.install_command}\`, then refresh.` });
+        lines.push({ tone: "error", text: "No Cua Driver is installed on this computer; install it below." });
       } else {
         lines.push({ tone: "muted", text: `No driver was installed for Nolune; the one at ${driver.path} is used instead.` });
       }
@@ -172,14 +179,14 @@ export function statusLines(report) {
       if (driver.compatible) {
         lines.push({ tone: "ok", text: `The driver reports version ${driver.version}, which matches the pin.` });
       } else {
-        lines.push({ tone: "error", text: driver.incompatibility ?? `The driver reports version ${driver.version}, not the pinned ${report.pinned_version}; run \`${report.install_command}\`.` });
+        lines.push({ tone: "error", text: driver.incompatibility ?? `The driver reports version ${driver.version}, not the pinned ${report.pinned_version}; install the pinned one below.` });
       }
       if (bundleMismatch(report)) {
         lines.push({
           tone: "error",
           text:
             driver.bundle_mismatch ??
-            `The driver at ${driver.path} holds its grants as ${driver.bundle}, not as CuaDriver (${report.driver_bundle}); the rows below are ${driver.bundle}'s and nothing is granted through it. Run \`${report.install_command}\`.`,
+            `The driver at ${driver.path} holds its grants as ${driver.bundle}, not as CuaDriver (${report.driver_bundle}); the rows below are ${driver.bundle}'s and nothing is granted through it. Install the pinned driver below.`,
         });
       }
       const failed = driver.failed_checks.filter((check) => !PERMISSION_CHECKS.includes(check.name));
@@ -198,6 +205,83 @@ export function statusLines(report) {
     }
   }
   return lines;
+}
+
+/**
+ * What the page's install button offers for `report`, or `null` when there
+ * is nothing to install: this host runs no driver at all, or the pinned one
+ * is already in place and reporting. `force` reinstalls over what is there,
+ * which is what a stale, broken or unreadable install needs.
+ * @param {CuaPermissionsReport} report
+ * @returns {InstallAction | null}
+ */
+export function installAction(report) {
+  if (!report.can_install) return null;
+  const version = report.pinned_version;
+  const pinned = `Cua Driver ${version}`;
+  // Nothing is ever updated behind the user's back: an install happens
+  // because this button was pressed, and the driver stays that version
+  // until a Nolune release moves the pin and it is pressed again.
+  const never = "Nolune never updates the driver on its own.";
+  const verified = `Downloads ${pinned} and checks it against the checksum this build pins before anything is written.`;
+  switch (pageState(report)) {
+    case "unsupported":
+    case "headless":
+      return null;
+    case "absent":
+      return {
+        label: report.install_action,
+        force: report.install.kind === "missing" || report.install.kind === "unreadable",
+        note: `${verified} It is installed for Nolune only, under your home folder. ${never}`,
+      };
+    case "unreachable":
+      return { label: "Reinstall driver", force: true, note: `${verified} ${never}` };
+    case "incompatible":
+      return { label: `Install ${pinned}`, force: true, note: `${verified} ${never}` };
+    case "ready":
+      return null;
+  }
+}
+
+/**
+ * How many megabytes `bytes` is, for the one-line progress.
+ * @param {number} bytes
+ * @returns {string}
+ */
+const megabytes = (bytes) => `${(bytes / 1_000_000).toFixed(1)} MB`;
+
+/**
+ * One line for a step of a running install, in the order they arrive.
+ * @param {InstallProgress} progress
+ * @returns {string}
+ */
+export function installProgressText(progress) {
+  switch (progress.step) {
+    case "downloading":
+      return `Downloading the driver (${megabytes(progress.size)})…`;
+    case "verified":
+      return "Checksum matches the pin; unpacking…";
+    case "version_checked":
+      return `The driver reports ${progress.version}, which is the pinned version.`;
+  }
+}
+
+/**
+ * What to tell the user an install did. A driver installed while the app is
+ * connected only reaches the companion once this computer registers again,
+ * which the install asks for; when nothing was connected, the next connect
+ * carries it.
+ * @param {InstallReport} outcome
+ * @returns {string}
+ */
+export function installOutcomeText(outcome) {
+  const lead = outcome.already_installed
+    ? `Cua Driver ${outcome.version} was already installed at ${outcome.driver}.`
+    : `Installed Cua Driver ${outcome.version} at ${outcome.driver}.`;
+  const reach = outcome.reannounced
+    ? "This computer is registering with your companion again, so it can drive it in a moment."
+    : "Your companion picks it up the next time this app connects.";
+  return `${lead} Grant Accessibility and Screen recording below, then refresh the status. ${reach}`;
 }
 
 /**

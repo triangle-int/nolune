@@ -78,7 +78,8 @@ the tool layer with a fake driver and a fake desktop, refusals included.
   computer use on without a new download, but `nolune cua status` reports
   the host as unsupported, the server registers no target, the desktop app
   registers legacy-only, and its Settings window says there is nothing to
-  grant. `remote_bash` and `remote_files` work there as they always did.
+  install or grant there. `remote_bash` and `remote_files` work there as
+  they always did.
 - A headless host registers no target and never starts the driver, whatever
   the platform: a Linux session without `DISPLAY` or `WAYLAND_DISPLAY`, a
   macOS process outside an Aqua login (over SSH, as a daemon), a Windows
@@ -96,10 +97,37 @@ per target) with a shell-readable copy in `cua-protocol/cua-driver.pin` that
 `scripts/cua-driver.sh` reads for the release workflow; a cua-protocol test
 fails whenever the two disagree, so the pin moves in both places at once.
 
-- `nolune cua install` downloads the asset the pin names for this host,
-  checks its size and sha256 before a byte is kept, asks the extracted
-  binary for its version and refuses anything but the pin, then records the
-  install under the workspace (`cua-driver/install.json`).
+- One installer does the install, wherever it is started from
+  (`cua_protocol::cua_driver_install`, behind the crate's `install`
+  feature): the server's `nolune cua install` and the desktop app's
+  **Install driver** button are the same code. It downloads the
+  asset the pin names for this host, checks its size and sha256 before a
+  byte is kept, asks the extracted binary for its version and refuses
+  anything but the pin, then records the install under the workspace
+  (`cua-driver/install.json`). A failure at any step leaves nothing
+  installed.
+- On macOS `cua-driver mcp` is a proxy to the `CuaDriver.app` daemon that
+  owns the login session's socket, and it would start one *by name* through
+  LaunchServices — whichever `CuaDriver.app` the system knows, which on a
+  Mac that has only ever had Nolune's copy is none. So both runtimes bring
+  the daemon up themselves, by path, from the bundle the located driver
+  runs from, and only when none is running: `cua_protocol::cua_driver_daemon`,
+  used by `nolune cua status` and by the desktop app's driver spawn
+  (`ensure_daemon` in `desktop/src-tauri/src/cua_runtime.rs`). That is what
+  lets the Install driver button work on its own: the driver it just
+  installed is the daemon that answers, and macOS attributes Accessibility
+  and Screen Recording to that bundle.
+- Which entry point to point a user at follows from who they are. A server
+  host has a shell and `nolune` on its `PATH`, so it runs
+  `nolune cua install`. A desktop user has neither: the app's in-app server
+  install (#128) puts the binary in `~/.nolune/bin` without touching
+  `PATH`, and a desktop bound to a server elsewhere has no binary at all.
+  So every surface that can name a desktop — the Computers tab, the
+  handoff checks, the `no_cua_driver` refusal, the companion's own prompt —
+  answers a missing driver with Settings › Computer use › Install driver,
+  and never with a command. Tests in `desktop/tests/cua-permissions.test.mjs`
+  and `desktop/src-tauri/src/cua_permissions.rs` fail if any sentence the
+  settings window can show names `nolune cua`.
 - `nolune cua status` prints the pin, the installed driver checked against
   it (verified, not the pinned version, checksum mismatch, binary missing),
   the driver the server would run, and the driver's own health and grants.
@@ -366,27 +394,45 @@ fed by the `cua_permissions` command in
 `desktop/src-tauri/src/cua_permissions.rs`) shows that state in one place:
 
 - The host. macOS is supported. Linux and Windows are named as unsupported,
-  with the note that the pinned driver still installs with
-  `nolune cua install` so a later release can turn computer use on, and that
-  there is nothing to grant there. A session without a display (an SSH or
-  background login on macOS, `DISPLAY` and `WAYLAND_DISPLAY` unset on Linux,
-  no `SESSIONNAME` on Windows) is named as headless: the driver is never
-  started and headless installs need nothing from the page.
+  with the note that there is nothing to install or grant there and that a
+  later release can turn computer use on without moving the pin. A session
+  without a display (an SSH or background login on macOS, `DISPLAY` and
+  `WAYLAND_DISPLAY` unset on Linux, no `SESSIONNAME` on Windows) is named
+  as headless: the driver is never started and headless installs need
+  nothing from the page. Neither offers the install button.
 - The workspace install (`cua-driver/install.json`) checked against the
-  pin: pinned, stale, a binary that is gone, or none, each with the command
-  to run.
+  pin: pinned, stale, a binary that is gone, or none, each pointing at the
+  **Install driver** button below it.
+- That button (the `cua_install_driver` command in
+  `desktop/src-tauri/src/cua_install.rs`) runs the shared installer into
+  this computer's workspace and narrates each step on the
+  `cua-install-progress` event, so a 70 MB download is not a silent
+  minute. A stale, broken or unreadable install is reinstalled over;
+  a first install is not forced. One install runs at a time. When it
+  finishes it does two things the install would otherwise be invisible
+  without. It lets go of the driver child that is running
+  (`CuaRuntime::replace_driver`, which ends the sessions that child held
+  and closes it, without stopping the runtime), because that child is the
+  driver from before the install — after a reinstall over a stale version,
+  exactly the version being replaced. Then it asks the machine socket to
+  register this computer again (`computer_use_bridge::reannounce`, which
+  closes the socket so the retry loop opens another), because the Cua
+  descriptor is built once per connection and the companion would
+  otherwise keep seeing a computer with no driver until the next
+  reconnect. Nothing is ever updated on its own: an install happens
+  because the button was pressed.
 - The driver the app runs, asked for its own report through the same
   runtime the machine socket uses (`CuaRuntime::probe` starts the driver
   when none runs and asks the one that does again, so a grant made since
   shows). The probe is a read, never a reset: a re-read that fails is shown
   on the page and the driver the socket registered stays up for the
   server's requests. Its version is checked against the pin: a mismatch is
-  the headline, with `nolune cua install`, and nothing is granted through a
-  driver that is not the pinned one. The bundle its report names is checked
-  the same way: the grants are attributed to that bundle, and a driver
-  (from `NOLUNE_CUA_DRIVER` or `PATH`) that holds them as anything but
-  `com.trycua.driver` is named as such, with the install command and
-  nothing to grant through it. Its health and every failed check come with
+  the headline, pointing at **Install driver**, and nothing is granted
+  through a driver that is not the pinned one. The bundle its report names
+  is checked the same way: the grants are attributed to that bundle, and a
+  driver (from `NOLUNE_CUA_DRIVER` or `PATH`) that holds them as anything
+  but `com.trycua.driver` is named as such, pointing at the same button and
+  with nothing to grant through it. Its health and every failed check come with
   the driver's own hints. A driver that cannot report shows what it said on
   stderr, and a Retry.
 - The two rows, Accessibility and Screen recording, each Granted, Denied,
@@ -514,9 +560,10 @@ read with its `screen_width` and `screen_height` dropped (see
 The overlay still hears every action on the same events (`computer-use-action`
 for each shell, file or typed action, `computer-use-idle` when the socket
 closes) and hides only for the window snapshot a typed `get_window_state`
-takes, the one capture the desktop takes part in. `nolune cua install` on
-the desktop machine, or a `cua-driver` on its `PATH`, is what turns window
-actions on there; the Computers tab says so for a desktop without a driver.
+takes, the one capture the desktop takes part in. A driver on the desktop
+machine is what turns window actions on there — its Settings window's
+**Install driver** button, or a `cua-driver` on its `PATH`; the Computers
+tab says so for a desktop without a driver.
 
 What a computer must offer to continue a task there follows from this
 (`server/src/domain/handoff.rs`, the checks behind a handoff card's

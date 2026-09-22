@@ -5,6 +5,10 @@
 //! V1 admits background delivery only and cannot represent desktop scope,
 //! foreground escalation, arbitrary command arguments, URLs, or file paths.
 
+#[cfg(feature = "install")]
+pub mod cua_driver_daemon;
+#[cfg(feature = "install")]
+pub mod cua_driver_install;
 pub mod cua_driver_pin;
 pub mod driver_mcp;
 

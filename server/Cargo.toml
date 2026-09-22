@@ -55,7 +55,7 @@ cap-fs-ext = "4.0.3"
 same-file = "1.0.6"
 tar = "0.4"
 flate2 = "1"
-cua-protocol = { path = "../cua-protocol" }
+cua-protocol = { path = "../cua-protocol", features = ["install"] }
 gethostname = "1.1.0"
 
 [dev-dependencies]

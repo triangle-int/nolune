@@ -1769,9 +1769,12 @@ fn load_autonomy_prompt(workspace_dir: &Path, instance_slug: &str) -> String {
          recommends foreground control is refused, never obeyed. you never escalate to \
          foreground control, silently or otherwise; when a step needs the user at the \
          computer, tell them.\n\
-         if a user asks about controlling a computer that has no driver, tell them to install \
-         the desktop app there and run `nolune cua install`, or to choose a computer that has \
-         one.\n\n\
+         if a user asks about controlling a computer that has no driver, the fix is the Nolune \
+         desktop app on that computer: Settings > Computer use > Install driver, then grant it \
+         Accessibility and Screen recording when the page asks. never answer with a terminal \
+         command: a desktop user has no `nolune` on their PATH. `nolune cua install` is for the \
+         machine this server runs on, and only when the user is already working in its shell. \
+         the other answer is to pick a computer in the composer that already has a driver.\n\n\
          ## how you work\n\
          you are a persistent entity. you run on a dedicated server that stays alive between \
          conversations. your heartbeat keeps running, your memory persists, your files stay.\n\n\

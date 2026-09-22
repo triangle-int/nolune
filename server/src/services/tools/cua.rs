@@ -107,8 +107,9 @@ impl fmt::Display for CuaRefusal {
             Self::NoTargets => write!(
                 f,
                 "{}: no computer with a Cua driver is available; the server machine registers \
-                 one when a driver is installed there (see docs/computer-use.md) and a desktop \
-                 registers one when its Nolune app runs the driver",
+                 one when a driver is installed there (`nolune cua install`, see \
+                 docs/computer-use.md) and a desktop registers one once its Nolune app has \
+                 installed the driver under Settings > Computer use > Install driver",
                 self.code()
             ),
             Self::NoServerLocalTarget => write!(
@@ -121,14 +122,18 @@ impl fmt::Display for CuaRefusal {
             Self::NoCuaDriver { label } => write!(
                 f,
                 "{}: {label} is connected without a Cua driver, so the typed tools cannot drive \
-                 it; remote_bash and remote_files still work there, and its Nolune app needs \
-                 the driver (`nolune cua install`) before windows can be seen or acted in",
+                 it; remote_bash and remote_files still work there. Tell the user to open the \
+                 Nolune app on {label} and press Install driver under Settings > Computer use; \
+                 that computer can be driven once it has installed the driver and granted it \
+                 Accessibility and Screen recording. Never tell them to run a terminal command \
+                 for this.",
                 self.code()
             ),
             Self::DriverUnavailable { label } => write!(
                 f,
-                "{}: the driver on {label} reports the machine unavailable; ask the user to run \
-                 `nolune cua status` there or check the Computers page",
+                "{}: the driver on {label} reports the machine unavailable; ask the user to \
+                 check the Computers page, or Settings > Computer use in the Nolune app on \
+                 {label}, which says what the driver is missing",
                 self.code()
             ),
         }
