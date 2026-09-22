@@ -582,6 +582,17 @@ pub enum FederationError {
     /// A structured intent (#110) could not be decoded or has lapsed; the
     /// fault is typed and never echoes the wire.
     Intent(crate::domain::federation_intent::IntentError),
+    /// No proposal from a peer (#111) has that id.
+    UnknownProposal,
+    /// The proposal was already decided or has lapsed, so it cannot be
+    /// decided (again); `status` is where it stands.
+    ProposalNotOpen {
+        status: crate::domain::federation_proposal::ProposalStatus,
+    },
+    /// A peer's decision (#111) names no request this companion sent it:
+    /// no delivered reminder, proposal, or handoff to that peer has that
+    /// correlation id, or one does and was decided the other way already.
+    UnknownRequest,
 }
 
 impl fmt::Display for FederationError {
@@ -679,6 +690,15 @@ impl fmt::Display for FederationError {
             Self::UnknownRule => {
                 f.write_str("federation peer has no rule for that intent and disclosure class")
             }
+            Self::UnknownProposal => f.write_str("federation proposal is unknown"),
+            Self::ProposalNotOpen { status } => write!(
+                f,
+                "federation proposal is not open for a decision: it is {}",
+                status.name()
+            ),
+            Self::UnknownRequest => f.write_str(
+                "federation decision names no delivered proposal this companion sent that peer",
+            ),
         }
     }
 }
@@ -774,6 +794,10 @@ mod tests {
             FederationError::RotationMismatch,
             FederationError::UnknownApproval,
             FederationError::UnknownRule,
+            FederationError::UnknownProposal,
+            FederationError::ProposalNotOpen {
+                status: crate::domain::federation_proposal::ProposalStatus::Expired,
+            },
             FederationError::Intent(crate::domain::federation_intent::IntentError::Expired {
                 expires_at: 10,
                 now: 200,

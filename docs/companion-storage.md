@@ -44,6 +44,7 @@ Unknown fields are rejected. A marker with any other `format_version` or
 │   ├── approvals.json           requests that asked the owner, until decided or lapsed
 │   ├── inbound.json             structured intents peers delivered and their receipts (#110)
 │   ├── outbox.json              intents queued for peers, their attempts and answers, and the receipts (#110)
+│   ├── proposals.json           what peers proposed (meetings, reminders, task handoffs) awaiting the owner's decision (#111)
 │   └── audit.jsonl              receipts for every judged intent, both sides
 ├── skills/                      installed skills (global)
 ├── vectors/                     derived vector index, keyed by slug
@@ -1028,7 +1029,7 @@ two together, and both histories can be re-verified at any time.
 
 A paired peer has no implicit access to anything (#109). Every verified
 envelope is classified into an intent (`ping`, `message`, `availability`,
-`reminder`, `proposal`) and a disclosure class (`none`, `availability`,
+`reminder`, `proposal`, `handoff`, `decision`) and a disclosure class (`none`, `availability`,
 `personal`, `sensitive`: what an answer would reveal about this owner),
 judged against `federation/policy.json` (mode `0600`, beside `peers.json`),
 and recorded before anything is dispatched. Memory and tool access have no
@@ -1056,8 +1057,11 @@ A rule is `allow`, `ask` (the owner decides each time), or `deny` for one
 intent at one disclosure class, and matches exactly: a grant at one class
 says nothing about another. From `expires_at` on the rule no longer applies
 and the default does. Where no rule applies, the defaults are closed: only a
-`ping` at `none` is allowed (pairing is the consent to be reachable; a ping
-discloses nothing more); a `message`, a `reminder`, a `proposal`, and an
+`ping` at `none` (pairing is the consent to be reachable; a ping
+discloses nothing more) and a `decision` at `none` (the peer's answer to
+a reminder, meeting, or handoff this owner proposed, noted on that
+request alone and disclosing nothing; #111) are allowed; a `message`, a
+`reminder`, a `proposal`, a task `handoff` (#111), and an
 `availability` query at `availability` ask the owner; the `sensitive` class
 and any combination an intent cannot disclose at are denied. The checks run
 in a fixed order and each one short-circuits: a revoked or unpaired peer is
@@ -1193,7 +1197,10 @@ typed `code`, which is `unknown` when whatever answered in front of the
 peer named none, `malformed`, or `answered` with the outcome and reason),
 `next_attempt_at` while it is open, the peer's typed `response` once
 there is one (its last word, kept whatever the entry became), the
-`receipt_id`, and the `chat_id` it was asked in) and one intent receipt
+`receipt_id`, the `chat_id` it was asked in, and, for a delivered
+reminder, meeting, or handoff whose owner has decided, the `decision`
+their companion told (`accepted` or `dismissed`, and `at`, when this
+server was told; #111)) and one intent receipt
 per settled outcome and per first `needs_owner`, on the requesting side.
 An entry carries nothing the peer said beyond its typed response, and
 unknown fields are refused. The entry's correlation id never changes: an
@@ -1208,6 +1215,38 @@ overall, and receipts are bounded like the inbound ones. `GET /api/federation/ou
 file this build cannot load refuses every request and every delivery
 while being neither repaired nor overwritten. See
 [federation.md](federation.md) "Sending".
+
+`federation/proposals.json` (mode `0600`) is what the receiving owner
+has yet to decide (#111): one record per `reminder`, `proposal`
+(meeting), or `handoff` a peer delivered and the policy admitted (`id`,
+`sender`, `pairing_id`, `correlation_id`, the peer's two labels
+`represented_owner` and `purpose`, the `intent`, the typed `details` for
+review, which are the peer's own words: a meeting's `description` and
+`window`, a reminder's `text` and `at`, or a handoff's `task` with its
+`record_id`, `goal`, `completed_steps`, `next_step`, `blockers`,
+`resources` as kind and label references, and `provenance`; `status` of
+`open`, `accepted`, `dismissed`, or `expired`; the chat `message_id` it
+was delivered as; `received_at`; `expires_at`, past which it can no
+longer be accepted: a meeting's window end, a reminder's time, a week
+for a handoff; and, once decided, `decided_at`, the `outcome` (the
+`commitment_id` or continuity `record_id` written on this server, or
+`dismissed`), and the owner-side audit `receipt_id`). No field could
+hold a file, and unknown fields are refused. A request delivered twice
+is one record. Receiving writes this record and the conversation message
+and nothing else; accepting writes exactly one record on this server
+(`commitments/`, or `continuity/` for a handoff, which starts with no
+resources and a goal naming the sender and the message, never the peer's
+words) and is idempotent; dismissing writes nothing. Either decision,
+once saved, queues one `decision` intent for the proposing companion in
+`outbox.json` above (the request's correlation id and the decision,
+nothing of the proposal), behind this owner's outbound gate; a refusal
+there is logged and the decision stands. Decided and lapsed
+records are kept 30 days, the newest 200 overall. `GET
+/api/federation/proposals` lists them newest first as they stand now;
+`POST …/proposals/{id}/accept` and `…/dismiss` decide. A file this
+build cannot load refuses every proposal and every decision while being
+neither repaired nor overwritten. See [federation.md](federation.md)
+"Scheduling and handoffs".
 
 ## Changing this format
 

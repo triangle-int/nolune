@@ -41,19 +41,33 @@ pub struct PeerSending {
     pub outbox: Arc<Outbox>,
 }
 
-/// What every sending tool shares.
-struct Context {
+/// What every sending tool shares; the proposal tools of #111
+/// (`super::peer_proposals`) share it too.
+pub(super) struct Context {
     sending: PeerSending,
     instance_dir: PathBuf,
     chat_id: String,
 }
 
 impl Context {
+    pub(super) fn new(
+        sending: PeerSending,
+        workspace_dir: &Path,
+        instance_slug: &str,
+        chat_id: &str,
+    ) -> Self {
+        Self {
+            sending,
+            instance_dir: workspace_dir.join("instances").join(instance_slug),
+            chat_id: chat_id.to_owned(),
+        }
+    }
+
     fn tz(&self) -> chrono_tz::Tz {
         crate::services::commitment_evaluator::instance_timezone(&self.instance_dir)
     }
 
-    fn when(&self, text: &str) -> Result<u64, ToolExecError> {
+    pub(super) fn when(&self, text: &str) -> Result<u64, ToolExecError> {
         let at = parse_when(text, self.tz()).map_err(ToolExecError)?;
         u64::try_from(at).map_err(|_| ToolExecError("that moment is before 1970".into()))
     }
@@ -62,7 +76,7 @@ impl Context {
     /// outbox asks this owner's own policy gate first; a refusal comes
     /// back as the error's own words, which name a state or a reason and
     /// never a text.
-    fn send(
+    pub(super) fn send(
         &self,
         peer: String,
         on_behalf_of: String,
@@ -125,11 +139,7 @@ pub fn federation_tools(
     instance_slug: &str,
     chat_id: &str,
 ) -> Vec<Box<dyn ToolDyn>> {
-    let context = Arc::new(Context {
-        sending,
-        instance_dir: workspace_dir.join("instances").join(instance_slug),
-        chat_id: chat_id.to_owned(),
-    });
+    let context = Arc::new(Context::new(sending, workspace_dir, instance_slug, chat_id));
     vec![
         Box::new(SendPeerMessageTool(context.clone())),
         Box::new(AskPeerAvailabilityTool(context.clone())),
@@ -138,7 +148,7 @@ pub fn federation_tools(
 }
 
 /// What every sending tool says about the peer, the labels, and delivery.
-const SHARED_GUIDANCE: &str = "`peer` is the paired companion's id as Settings › Connections › Companions shows it: the full id, or its first 8 or more characters when that names one companion. `on_behalf_of` is the owner you speak for, by the name they go by; `purpose` is why you ask, in one line: both are shown to the other owner as your words. Only send what the user asked you to send in this conversation, never a secret, and never on your own initiative. The other companion decides by its own owner's policy; delivery is asynchronous and the outcome (delivered, waiting for their owner, refused, failed) is shown on the Activity page, so do not call this again for the same request.";
+pub(super) const SHARED_GUIDANCE: &str = "`peer` is the paired companion's id as Settings › Connections › Companions shows it: the full id, or its first 8 or more characters when that names one companion. `on_behalf_of` is the owner you speak for, by the name they go by; `purpose` is why you ask, in one line: both are shown to the other owner as your words. Only send what the user asked you to send in this conversation, never a secret, and never on your own initiative. The other companion decides by its own owner's policy; delivery is asynchronous and the outcome (delivered, waiting for their owner, refused, failed) is shown on the Activity page, so do not call this again for the same request.";
 
 // ---------------------------------------------------------------------------
 // send_peer_message

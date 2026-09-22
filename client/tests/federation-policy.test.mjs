@@ -30,6 +30,8 @@ const DEFAULTS = [
 	{ intent: 'proposal', disclosure: 'availability', access: 'ask' },
 	{ intent: 'proposal', disclosure: 'personal', access: 'deny' },
 	{ intent: 'proposal', disclosure: 'sensitive', access: 'deny' },
+	{ intent: 'handoff', disclosure: 'none', access: 'ask' },
+	{ intent: 'decision', disclosure: 'none', access: 'allow' },
 ];
 
 function rule(overrides = {}) {
@@ -63,6 +65,8 @@ test('every supported intent and class reads as a sentence about the owner', () 
 	assert.equal(intentLabel('proposal', 'availability'), 'propose something and see whether you are free');
 	assert.equal(intentLabel('proposal', 'personal'), 'propose something and see what you are doing');
 	assert.equal(intentLabel('proposal', 'sensitive'), 'propose something and see what you marked sensitive');
+	assert.equal(intentLabel('handoff', 'none'), 'hand an unfinished task over to you');
+	assert.equal(intentLabel('decision', 'none'), 'tell you what its owner decided on what you proposed');
 	for (const row of DEFAULTS) {
 		assert.notEqual(intentLabel(row.intent, row.disclosure), `${row.intent} (${row.disclosure})`, `${row.intent}/${row.disclosure} has no sentence`);
 	}

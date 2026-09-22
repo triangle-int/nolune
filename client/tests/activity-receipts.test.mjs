@@ -113,12 +113,22 @@ test('outbox rows name the request kind and the companion, never its words', () 
 	assert.equal(outboxLabel(outboxBase), 'Message to companion TFccHElq…cQ7E');
 	assert.equal(outboxLabel({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'availability', window: { from: 2000, to: 9200 } } } }), 'Availability asked of companion TFccHElq…cQ7E');
 	assert.equal(outboxLabel({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'reminder', text: 'water the plants', at: 5000 } } }), 'Reminder proposed to companion TFccHElq…cQ7E');
-	assert.equal(outboxLabel({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'proposal', description: 'x', window: { from: 1, to: 2 } } } }), 'Request to companion TFccHElq…cQ7E');
+	assert.equal(outboxLabel({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'proposal', description: 'x', window: { from: 1, to: 2 } } } }), 'Meeting proposed to companion TFccHElq…cQ7E');
+	assert.equal(outboxLabel({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'handoff', task: { record_id: 'task_1', goal: 'Print the zine', completed_steps: [], blockers: [], resources: [], provenance: [] } } } }), 'Task handed over to companion TFccHElq…cQ7E');
+	assert.equal(outboxLabel({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'decision', correlation_id: 'req-1', decision: 'accepted' } } }), 'Your decision told to companion TFccHElq…cQ7E');
+	assert.equal(outboxLabel({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'ping' } } }), 'Request to companion TFccHElq…cQ7E');
 	assert.equal(outboxText(outboxBase), 'see you on Friday at the lake');
 	assert.equal(outboxText({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'reminder', text: 'water the plants', at: 5000 } } }), 'water the plants');
 	const window = outboxText({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'availability', window: { from: 1_800_090_000, to: 1_800_097_200 } } } });
 	assert.match(window, /^Free between .+ and .+\?$/);
 	assert.ok(!window.includes('undefined'));
+	const meeting = outboxText({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'proposal', description: 'lunch by the lake', window: { from: 1_800_090_000, to: 1_800_097_200 } } } });
+	assert.match(meeting, /^lunch by the lake\nBetween .+ and .+$/);
+	const handoff = outboxText({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'handoff', task: { record_id: 'task_1', goal: 'Print the zine', completed_steps: ['a', 'b'], blockers: [], resources: [], provenance: [] } } } });
+	assert.equal(handoff, 'Print the zine\n2 steps done so far');
+	// A decision names their request and a word; there is nothing they wrote to show.
+	assert.equal(outboxText({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'decision', correlation_id: 'req-1', decision: 'accepted' } } }), 'Accepted their request req-1');
+	assert.equal(outboxText({ ...outboxBase, intent: { ...outboxBase.intent, intent: { type: 'decision', correlation_id: 'req-2', decision: 'dismissed' } } }), 'Declined their request req-2');
 });
 
 test('outbox status words follow the entry and count attempts', () => {
@@ -156,7 +166,17 @@ test('outbox notes say what happened, how often it was tried, and what comes nex
 	const delivered = { ...outboxBase, status: 'delivered', attempts: [{ at: 1000, outcome: { kind: 'answered', outcome: 'accepted' } }], response: { outcome: 'accepted', version: 1, correlation_id: 'c0ffee', responder: PEER, disclosure: 'none', answer: { kind: 'delivered' } }, updated_at: 1000 };
 	assert.equal(outboxNote(delivered, 1300), 'Delivered to their conversation 5m ago.');
 	const reminder = { ...delivered, intent: { ...outboxBase.intent, intent: { type: 'reminder', text: 'water the plants', at: 1_800_014_400 } }, response: { ...delivered.response, answer: { kind: 'reminder_scheduled', at: 1_800_014_400 } } };
-	assert.match(outboxNote(reminder, 1300), /^Reminder set for .+ · 5m ago\.$/);
+	assert.match(outboxNote(reminder, 1300), /^Reminder for .+ delivered for their owner to accept · 5m ago\.$/);
+	const handedOver = { ...delivered, response: { ...delivered.response, answer: { kind: 'handoff_received' } } };
+	assert.equal(outboxNote(handedOver, 1300), 'Delivered for their owner to accept as a task of their own 5m ago.');
+	const proposed = { ...delivered, response: { ...delivered.response, answer: { kind: 'proposal_received' } } };
+	assert.equal(outboxNote(proposed, 1300), 'Delivered for their owner to accept 5m ago.');
+	// Once their owner decided (#111), the note says so, dated by when this server was told.
+	assert.equal(outboxNote({ ...proposed, decision: { decision: 'accepted', at: 1200 } }, 1300), 'Accepted by their owner 1m ago.');
+	assert.equal(outboxNote({ ...reminder, decision: { decision: 'dismissed', at: 1200 } }, 1300), 'Declined by their owner 1m ago.');
+	assert.equal(outboxNote({ ...handedOver, decision: { decision: 'accepted', at: 1000 } }, 1300), 'Accepted by their owner 5m ago.');
+	const noted = { ...delivered, intent: { ...outboxBase.intent, intent: { type: 'decision', correlation_id: 'req-1', decision: 'accepted' } }, response: { ...delivered.response, answer: { kind: 'decision_noted' } } };
+	assert.equal(outboxNote(noted, 1300), 'Their companion noted it 5m ago.');
 	const availability = { ...delivered, intent: { ...outboxBase.intent, disclosure: 'availability', intent: { type: 'availability', window: { from: 2000, to: 9200 } } }, response: { ...delivered.response, answer: { kind: 'availability', windows: [] } } };
 	assert.equal(outboxNote(availability, 1300), 'Answered 5m ago: nothing about their schedule was shared.');
 	const spans = { ...availability, response: { ...availability.response, disclosure: 'availability', answer: { kind: 'availability', windows: [{ from: 2000, to: 5600, state: 'free' }, { from: 5600, to: 9200, state: 'busy' }] } } };

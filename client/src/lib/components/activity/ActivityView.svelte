@@ -10,6 +10,7 @@
 	import { upsertRun } from "$lib/activity/receipts.js";
 	import HandoffCards from "$lib/components/continuity/HandoffCards.svelte";
 	import PeerRequests from "$lib/components/activity/PeerRequests.svelte";
+	import PeerProposals from "$lib/components/activity/PeerProposals.svelte";
 
 	const toast = getToasts();
 	let { slug }: { slug: string } = $props();
@@ -115,6 +116,8 @@
 	</header>
 
 	<HandoffCards {slug} />
+
+	<PeerProposals {slug} {now} />
 
 	<CommitmentsSection {slug} {now} />
 

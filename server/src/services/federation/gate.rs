@@ -470,17 +470,19 @@ impl FederationGate {
                 &decision,
                 now,
             )?,
-            ReceiptSide::Owner => self.record(
-                side,
-                &peer.pairing_id,
-                companion_id,
-                &me,
-                REVOCATION_INTENT,
-                DisclosureClass::None.name(),
-                None,
-                &decision,
-                now,
-            )?,
+            ReceiptSide::Owner => {
+                self.record(
+                    side,
+                    &peer.pairing_id,
+                    companion_id,
+                    &me,
+                    REVOCATION_INTENT,
+                    DisclosureClass::None.name(),
+                    None,
+                    &decision,
+                    now,
+                )?;
+            }
         }
         let mut ids: Vec<&str> = vec![peer.companion_id.as_str(), companion_id];
         ids.extend(
@@ -625,6 +627,7 @@ impl FederationGate {
             decision,
             (self.clock)(),
         )
+        .map(drop)
     }
 
     /// Judges `intent` at `disclosure` (wire names) from `peer`, as this
@@ -1061,6 +1064,33 @@ impl FederationGate {
         Ok(())
     }
 
+    /// Records the owner's own decision on a proposal a peer delivered
+    /// (#111): accepting it (`owner_approved`) or dismissing it
+    /// (`owner_denied`), as an audit line on the owner side naming the
+    /// peer as requester and this companion as responder. Returns the
+    /// receipt's id, which the proposal keeps.
+    pub(crate) fn record_owner_decision(
+        &self,
+        pairing_id: &str,
+        requester: &str,
+        me: &str,
+        intent: IntentClass,
+        decision: &Decision,
+    ) -> Result<String, FederationError> {
+        self.record(
+            ReceiptSide::Owner,
+            pairing_id,
+            requester,
+            me,
+            intent.name(),
+            DisclosureClass::None.name(),
+            None,
+            decision,
+            (self.clock)(),
+        )
+    }
+
+    /// Writes one receipt and returns its id.
     #[allow(clippy::too_many_arguments)]
     fn record(
         &self,
@@ -1073,10 +1103,11 @@ impl FederationGate {
         detail: Option<String>,
         decision: &Decision,
         now: u64,
-    ) -> Result<(), FederationError> {
+    ) -> Result<String, FederationError> {
+        let id = AuditLog::new_id();
         self.audit.record(AuditReceipt {
             version: RECEIPT_VERSION,
-            id: AuditLog::new_id(),
+            id: id.clone(),
             side,
             pairing_id: pairing_id.to_owned(),
             requester: requester.to_owned(),
@@ -1087,7 +1118,8 @@ impl FederationGate {
             decision: decision.clone(),
             at: now,
             summary: summarize(side, requester, responder, intent, disclosure, decision),
-        })
+        })?;
+        Ok(id)
     }
 
     /// Seconds since local midnight in the policy's quiet-hours zone (UTC

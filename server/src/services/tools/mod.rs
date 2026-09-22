@@ -82,6 +82,7 @@ pub mod federation;
 pub mod files;
 pub mod image;
 pub mod memory_tools;
+pub mod peer_proposals;
 pub mod project;
 pub mod skills;
 pub mod system;
@@ -520,6 +521,8 @@ pub fn tool_summary_on(name: &str, args: &str, target: &MachineTarget) -> String
         "send_peer_message" => "sending a message to a paired companion".into(),
         "ask_peer_availability" => "asking a paired companion about availability".into(),
         "propose_peer_reminder" => "proposing a reminder to a paired companion".into(),
+        "propose_peer_meeting" => "proposing a meeting to a paired companion".into(),
+        "handoff_task_to_peer" => "handing a task over to a paired companion".into(),
         "send_email" => {
             let to = v["to"].as_str().unwrap_or("?");
             format!("sending email to {to}")
@@ -1019,7 +1022,15 @@ pub fn build_tools(
     // Requests to paired companions (#110): chat only, queued through the
     // outbox behind this owner's own policy; the routines never get them.
     if let Some(sending) = peer_sending {
-        for tool in federation::federation_tools(sending, workspace_dir, instance_slug, chat_id) {
+        for tool in
+            federation::federation_tools(sending.clone(), workspace_dir, instance_slug, chat_id)
+        {
+            tools.push(wrap(tool));
+        }
+        // Meeting proposals and tasks handed over to peers (#111): the same
+        // gate, the same outbox, reviewed by the other owner before anything
+        // is written.
+        for tool in peer_proposals::proposal_tools(sending, workspace_dir, instance_slug, chat_id) {
             tools.push(wrap(tool));
         }
     }

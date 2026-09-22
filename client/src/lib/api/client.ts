@@ -44,7 +44,9 @@ import type {
 	FederationOverview,
 	FederationPeer,
 	FederationPeerPolicy,
+	FederationPeerProposal,
 	FederationPolicyView,
+	FederationProposalAccepted,
 	FederationRotationReport,
 	FederationRuleRequest,
 	IssuedFederationInvite,
@@ -62,7 +64,9 @@ export type {
 	FederationOutbox,
 	FederationOutboxEntry,
 	FederationPeerPolicy,
+	FederationPeerProposal,
 	FederationPolicyView,
+	FederationProposalAccepted,
 	FederationRuleRequest,
 } from "./types.js";
 import { clearLegacyBrowserAuth } from "./legacy-auth-cleanup.js";
@@ -1536,6 +1540,22 @@ export function fetchFederationInbox(): Promise<FederationInbox> {
 
 export function fetchFederationOutbox(): Promise<FederationOutbox> {
 	return federationJson("/api/federation/outbox");
+}
+
+// Proposals from paired companions (#111): what they proposed, for review;
+// accepting writes the one record it stands for on this server, dismissing
+// writes nothing.
+
+export function fetchFederationProposals(): Promise<{ proposals: FederationPeerProposal[] }> {
+	return federationJson("/api/federation/proposals");
+}
+
+export function acceptFederationProposal(id: string): Promise<FederationProposalAccepted> {
+	return federationJson(`/api/federation/proposals/${encodeURIComponent(id)}/accept`, { method: "POST" });
+}
+
+export function dismissFederationProposal(id: string): Promise<{ proposal: FederationPeerProposal }> {
+	return federationJson(`/api/federation/proposals/${encodeURIComponent(id)}/dismiss`, { method: "POST" });
 }
 
 // ---------------------------------------------------------------------------

@@ -36,13 +36,22 @@ fn files(root: &Path, extensions: &[&str]) -> Vec<PathBuf> {
 /// The only production files that may touch the store or its writes. The
 /// handoff API (#82) records the user's explicit decision on a record and
 /// the receipt of the continuation they accepted; see `handoff_cards.rs`.
+/// The owner's explicit acceptance of a task a paired companion handed
+/// over (#111) creates one record; see `federation_scheduling.rs`.
 const WRITERS: &[&str] = &[
     "server/src/services/continuity.rs",
     "server/src/routes/continuity.rs",
     "server/src/services/tools/continuity.rs",
     "server/src/services/handoff.rs",
     "server/src/routes/handoff.rs",
+    "server/src/services/peer_proposals.rs",
 ];
+
+/// Files that may read a record and never write one: the chat tool that
+/// hands one of the user's tasks to a paired companion (#111) reads the
+/// record it names and sends bounded references; the record here is left
+/// as it is.
+const READERS: &[&str] = &["server/src/services/tools/peer_proposals.rs"];
 
 /// Module declarations and tool registration, which name the type but never write.
 const REGISTRARS: &[&str] = &[
@@ -88,6 +97,14 @@ fn continuity_records_are_written_only_by_explicit_task_activity() {
             continue;
         }
         if WRITERS.contains(&relative.as_str()) || relative == "server/src/domain/continuity.rs" {
+            continue;
+        }
+        if READERS.contains(&relative.as_str()) {
+            for write in [".create(", ".update(", ".complete(", ".dismiss(", ".save("] {
+                if production.contains(write) {
+                    violations.push(format!("{relative} writes continuity records ({write})"));
+                }
+            }
             continue;
         }
         let names_store = production.contains("ContinuityStore")

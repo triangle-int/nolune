@@ -68,6 +68,8 @@ const INTENT_LABELS = {
 	"proposal/availability": "propose something and see whether you are free",
 	"proposal/personal": "propose something and see what you are doing",
 	"proposal/sensitive": "propose something and see what you marked sensitive",
+	"handoff/none": "hand an unfinished task over to you",
+	"decision/none": "tell you what its owner decided on what you proposed",
 };
 
 /** @type {Record<string, string>} */

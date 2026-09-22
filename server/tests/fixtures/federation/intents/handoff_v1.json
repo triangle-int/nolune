@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "correlation_id": "corr-handoff-0001",
+  "sender": "BoQmM6BzR2Zw7lfBZK_JAMOs7BVCX59sZytlrGwJ9_Y",
+  "represented_owner": "Alice",
+  "purpose": "Lunch on Friday",
+  "disclosure": "none",
+  "issued_at": 1800000000,
+  "expires_at": 1800003600,
+  "intent": {
+    "type": "handoff",
+    "task": {
+      "record_id": "task_1799990000_a1b2c3d4",
+      "goal": "Book the corner cafe for Friday and confirm with everyone.",
+      "completed_steps": [
+        "Shortlisted three places",
+        "Called the corner cafe; they hold a table until Thursday"
+      ],
+      "next_step": "Send the invitation with the signed forms attached",
+      "blockers": [
+        "Waiting on the signed forms"
+      ],
+      "resources": [
+        { "kind": "memory", "label": "memory plans/friday-lunch.md" },
+        { "kind": "upload", "label": "upload 8f0d2c3e" },
+        { "kind": "machine_path", "label": "~/Documents/forms.pdf on studio-mac" }
+      ],
+      "provenance": [
+        { "source": "chat", "at": 1799990000, "note": "Started from the Friday plan" },
+        { "source": "tool", "at": 1799995000, "note": "Recorded the cafe call" }
+      ]
+    }
+  }
+}

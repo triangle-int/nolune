@@ -57,16 +57,27 @@ pub enum IntentClass {
     Reminder,
     /// A proposal to do something together (a meeting, a shared task).
     Proposal,
+    /// The peer's owner hands an unfinished task over to this owner (#111):
+    /// bounded references and provenance, reviewed before anything is
+    /// written.
+    Handoff,
+    /// The peer's owner decided on a reminder, a meeting, or a handoff this
+    /// owner proposed (#111): accepted or dismissed, naming the request it
+    /// answers and nothing else. It answers this owner's own request, so
+    /// it is the one intent besides a ping that is allowed by default.
+    Decision,
 }
 
 impl IntentClass {
     /// Every class, in a stable order for tables and listings.
-    pub const ALL: [IntentClass; 5] = [
+    pub const ALL: [IntentClass; 7] = [
         Self::Ping,
         Self::Message,
         Self::Availability,
         Self::Reminder,
         Self::Proposal,
+        Self::Handoff,
+        Self::Decision,
     ];
 
     pub fn name(self) -> &'static str {
@@ -76,6 +87,8 @@ impl IntentClass {
             Self::Availability => "availability",
             Self::Reminder => "reminder",
             Self::Proposal => "proposal",
+            Self::Handoff => "handoff",
+            Self::Decision => "decision",
         }
     }
 
@@ -86,11 +99,13 @@ impl IntentClass {
 
     /// Whether an allowed intent of this class lands in front of the owner
     /// (and so waits out quiet hours) rather than being answered by the
-    /// companion on its own.
+    /// companion on its own. A decision is noted on the request this owner
+    /// made and waits for no one: it is the peer's answer, not its
+    /// initiative.
     pub fn reaches_owner(self) -> bool {
         match self {
-            Self::Ping | Self::Availability => false,
-            Self::Message | Self::Reminder | Self::Proposal => true,
+            Self::Ping | Self::Availability | Self::Decision => false,
+            Self::Message | Self::Reminder | Self::Proposal | Self::Handoff => true,
         }
     }
 }
@@ -564,6 +579,30 @@ impl PeerText {
         self.0.chars().count()
     }
 
+    /// Whether the text is empty or whitespace only: what a bound on a
+    /// required field (#111's handoff goal) asks, without reading it.
+    pub fn is_blank(&self) -> bool {
+        self.0.trim().is_empty()
+    }
+
+    /// Several texts as one, each on its own labelled line (`label: text`),
+    /// so a task handoff's parts (#111) render inside one untrusted block.
+    /// The labels are this server's words, the texts stay peer text, and
+    /// the whole is bounded like any peer text: anything past
+    /// [`MAX_PEER_TEXT_CHARS`] is cut.
+    pub fn joined<'a>(parts: impl IntoIterator<Item = (&'a str, &'a PeerText)>) -> PeerText {
+        let mut text = String::new();
+        for (label, part) in parts {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(label);
+            text.push_str(": ");
+            text.push_str(&part.0);
+        }
+        Self(text.chars().take(MAX_PEER_TEXT_CHARS).collect())
+    }
+
     /// The text inside a block that marks it as data from `sender`, framed
     /// by a boundary drawn fresh for this rendering
     /// ([`UNTRUSTED_BOUNDARY_BYTES`] random bytes as hex), so the text
@@ -812,7 +851,15 @@ mod tests {
     fn intent_and_disclosure_names_are_stable_and_closed() {
         assert_eq!(
             IntentClass::ALL.map(IntentClass::name),
-            ["ping", "message", "availability", "reminder", "proposal"]
+            [
+                "ping",
+                "message",
+                "availability",
+                "reminder",
+                "proposal",
+                "handoff",
+                "decision"
+            ]
         );
         assert_eq!(
             DisclosureClass::ALL.map(DisclosureClass::name),
@@ -841,8 +888,10 @@ mod tests {
         assert!(IntentClass::Message.reaches_owner());
         assert!(IntentClass::Reminder.reaches_owner());
         assert!(IntentClass::Proposal.reaches_owner());
+        assert!(IntentClass::Handoff.reaches_owner());
         assert!(!IntentClass::Ping.reaches_owner());
         assert!(!IntentClass::Availability.reaches_owner());
+        assert!(!IntentClass::Decision.reaches_owner());
     }
 
     #[test]

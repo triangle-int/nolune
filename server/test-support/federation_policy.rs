@@ -150,10 +150,13 @@ async fn a_ping_over_the_public_route_is_judged_and_recorded_on_both_sides() {
     assert!(
         defaults
             .iter()
-            .filter(|row| row["intent"] != "ping")
+            .filter(|row| row["intent"] != "ping" && row["intent"] != "decision")
             .all(|row| row["access"] != "allow"),
-        "only a ping is allowed by default: {defaults:?}"
+        "only a ping, and a decision on this owner's own proposal (#111), is allowed by default: {defaults:?}"
     );
+    assert!(defaults.iter().any(|row| row["intent"] == "decision"
+        && row["disclosure"] == "none"
+        && row["access"] == "allow"));
     assert!(receipts(&a).await.is_empty());
 
     // B's owner pings A through the wire: A judges and answers, both sides

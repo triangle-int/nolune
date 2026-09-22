@@ -17,6 +17,7 @@ pub mod approvals;
 pub mod audit;
 pub mod envelope;
 pub mod gate;
+pub mod handoffs;
 pub mod identity;
 pub mod inbound;
 pub mod invite_token;
@@ -25,7 +26,9 @@ pub mod pairing;
 pub mod peers;
 pub mod policy;
 pub mod policy_store;
+pub mod proposals;
 pub mod rotation;
+pub mod scheduling;
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use sha2::{Digest, Sha256};

@@ -13,8 +13,8 @@
 //!    disclosure class applies (the most restrictive one when there are
 //!    several); an expired rule is reported and the default applies; no
 //!    rule means the default for the class, which is never `allow` except
-//!    for a ping, and never more than `ask` for anything that reaches the
-//!    owner;
+//!    for a ping and for a decision on this owner's own proposal, and never
+//!    more than `ask` for anything that reaches the owner;
 //! 5. quiet hours: an intent that would be allowed and lands in front of
 //!    the owner, or that would ask the owner, is deferred until they end.
 //!
@@ -33,9 +33,11 @@ pub const SECONDS_PER_DAY: u32 = 86_400;
 
 /// What applies to `intent` at `disclosure` when the owner wrote no rule:
 /// `None` when the intent never discloses at that class. Only a ping at
-/// `none` is allowed by default (pairing is the consent to be reachable);
-/// anything that would show the peer something about this owner, or land
-/// in front of them, is `ask` at most, and the sensitive class is denied.
+/// `none` (pairing is the consent to be reachable) and a decision at
+/// `none` (the peer's answer to a proposal this owner made, noted on that
+/// request alone, #111) are allowed by default; anything that would show
+/// the peer something about this owner, or land in front of them, is
+/// `ask` at most, and the sensitive class is denied.
 pub fn default_access(intent: IntentClass, disclosure: DisclosureClass) -> Option<Access> {
     use DisclosureClass::{Availability, None as Nothing, Personal, Sensitive};
     let access = match (intent, disclosure) {
@@ -48,6 +50,15 @@ pub fn default_access(intent: IntentClass, disclosure: DisclosureClass) -> Optio
         (IntentClass::Message | IntentClass::Reminder, _) => return None,
         (IntentClass::Proposal, Nothing | Availability) => Access::Ask,
         (IntentClass::Proposal, Personal) => Access::Deny,
+        // A task handoff is reviewed by the owner and discloses nothing of
+        // theirs (#111).
+        (IntentClass::Handoff, Nothing) => Access::Ask,
+        (IntentClass::Handoff, _) => return None,
+        // A decision answers a request this owner made and discloses
+        // nothing of theirs; the owner's own rule can still refuse to hear
+        // it (#111).
+        (IntentClass::Decision, Nothing) => Access::Allow,
+        (IntentClass::Decision, _) => return None,
         // An availability query always discloses at least availability.
         (IntentClass::Availability, Nothing) => return None,
         (IntentClass::Availability, Availability) => Access::Ask,
@@ -298,7 +309,7 @@ mod tests {
     use crate::domain::federation_policy::{
         PeerPolicy, PolicyRule, QuietHoursPolicy, RECEIPT_VERSION,
     };
-    use IntentClass::*;
+    use IntentClass::{Availability, Message, Ping, Proposal, Reminder};
 
     const T0: u64 = 1_800_000_000;
     const PEER: &str = "peer-companion";
@@ -356,7 +367,7 @@ mod tests {
     }
 
     #[test]
-    fn a_new_peer_with_no_policy_is_never_allowed_anything_but_a_ping() {
+    fn a_new_peer_with_no_policy_is_never_allowed_anything_but_a_ping_or_a_decision() {
         let document = document();
         for intent in IntentClass::ALL {
             for disclosure in DisclosureClass::ALL {
@@ -371,7 +382,9 @@ mod tests {
                 );
                 let expected = default_access(intent, disclosure);
                 match (intent, disclosure) {
-                    (Ping, DisclosureClass::None) => {
+                    // A ping discloses nothing; a decision answers a
+                    // request this owner made (#111).
+                    (Ping | IntentClass::Decision, DisclosureClass::None) => {
                         assert_eq!(expected, Some(Access::Allow));
                         assert_eq!(decision, Decision::allow(DecisionReason::Default));
                     }

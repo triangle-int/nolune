@@ -1,7 +1,8 @@
 //! Guards for #110 (PR 1): the intent shapes are closed and versioned,
 //! decoding them is pure (nothing it does can have a side effect), the
 //! receipt has no room for a payload, nothing formats peer text, and the
-//! fixtures on disk are the four intents and the three responses.
+//! fixtures on disk are the six intents (the task handoff and the decision
+//! notice of #111 among them) and the three responses.
 
 #[path = "../test-support/source_scan.rs"]
 mod source_scan;
@@ -335,7 +336,7 @@ fn the_receipt_has_no_room_for_a_payload_and_nothing_formats_peer_text() {
 }
 
 #[test]
-fn the_fixtures_are_the_four_intents_and_the_three_responses() {
+fn the_fixtures_are_the_six_intents_and_the_three_responses() {
     let dir = repo().join(FIXTURES);
     let mut names: Vec<String> = fs::read_dir(&dir)
         .unwrap_or_else(|_| panic!("{FIXTURES} is missing"))
@@ -346,6 +347,8 @@ fn the_fixtures_are_the_four_intents_and_the_three_responses() {
         names,
         [
             "availability_v1.json",
+            "decision_v1.json",
+            "handoff_v1.json",
             "message_v1.json",
             "proposal_v1.json",
             "reminder_v1.json",

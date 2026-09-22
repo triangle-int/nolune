@@ -588,6 +588,12 @@ export type ServerEvent =
 			entry: FederationOutboxEntry;
 	  }
 	| {
+			/** A proposal from a paired companion arrived, was decided, or lapsed (#111): the proposal record. */
+			type: "peer_proposal_updated";
+			instance_slug: string;
+			proposal: FederationPeerProposal;
+	  }
+	| {
 			type: "machine_updated";
 			instance_slug: string;
 			machine: MachineInfo;
@@ -949,14 +955,24 @@ export interface FederationOutboundIntent {
 	disclosure: string;
 	issued_at: number;
 	expires_at: number;
-	intent: { type: string; body?: string; text?: string; at?: number; description?: string; window?: { from: number; to: number } };
+	intent: { type: string; body?: string; text?: string; at?: number; description?: string; window?: { from: number; to: number }; task?: FederationTaskHandoff; correlation_id?: string; decision?: FederationProposalDecision };
+}
+
+/** What a receiving owner did with a proposal (#111): accepted it, or dismissed it. */
+export type FederationProposalDecision = "accepted" | "dismissed";
+
+/** The peer owner's decision as noted on a delivered proposal, reminder, or handoff this companion sent (#111), and when this server was told. */
+export interface FederationPeerDecision {
+	decision: FederationProposalDecision;
+	at: number;
 }
 
 /**
  * One request this companion queued for a paired companion, as
  * `GET /api/federation/outbox` lists it and `outbox_updated` carries it:
- * the intent, where it stands, every attempt, and the peer's typed
- * response. Nothing else the peer said.
+ * the intent, where it stands, every attempt, the peer's typed
+ * response, and, for a proposal its owner decided on, that decision.
+ * Nothing else the peer said.
  */
 export interface FederationOutboxEntry {
 	version: number;
@@ -971,10 +987,85 @@ export interface FederationOutboxEntry {
 	chat_id: string;
 	created_at: number;
 	updated_at: number;
+	decision?: FederationPeerDecision;
 }
 
 /** `GET /api/federation/outbox`: entries and kept receipts, newest first. */
 export interface FederationOutbox {
 	entries: FederationOutboxEntry[];
 	receipts: FederationIntentReceipt[];
+}
+
+// Proposals from paired companions (#111)
+
+export type FederationProposalStatus = "open" | "accepted" | "dismissed" | "expired";
+
+/** One resource a handed-over task links, by reference: its kind and the sender's label for it. */
+export interface FederationHandoffResource {
+	kind: "upload" | "memory" | "machine_path";
+	label: string;
+}
+
+/** One provenance entry of the sender's record: who wrote it, when (Unix seconds by the sender's clock), and their note. */
+export interface FederationHandoffProvenance {
+	source: "user" | "chat" | "tool" | "server";
+	at: number;
+	note: string;
+}
+
+/**
+ * A task a paired companion handed over (#111): the sender's record id as
+ * provenance, the goal, the most recent steps, the next step, the
+ * blockers, references to the resources (never their contents), and the
+ * record's provenance. Every text is the peer's own words.
+ */
+export interface FederationTaskHandoff {
+	record_id: string;
+	goal: string;
+	completed_steps: string[];
+	next_step?: string;
+	blockers: string[];
+	resources: FederationHandoffResource[];
+	provenance: FederationHandoffProvenance[];
+}
+
+/** The typed details the owner reviews, one shape per proposal kind; the texts are the peer's own words. */
+export type FederationProposalDetails =
+	| { kind: "meeting"; description: string; window: { from: number; to: number } }
+	| { kind: "reminder"; text: string; at: number }
+	| { kind: "handoff"; task: FederationTaskHandoff };
+
+/** What accepting wrote on this server, or that dismissing wrote nothing. */
+export type FederationProposalOutcome = { kind: "commitment"; commitment_id: string } | { kind: "continuity"; record_id: string } | { kind: "dismissed" };
+
+/**
+ * One proposal a paired companion delivered, as `GET /api/federation/proposals`
+ * lists it and `peer_proposal_updated` carries it: who proposed what on
+ * whose behalf and why, the typed details for review, where it stands,
+ * when it lapses, and what accepting wrote. Nothing is written until the
+ * owner accepts.
+ */
+export interface FederationPeerProposal {
+	version: number;
+	id: string;
+	sender: string;
+	pairing_id: string;
+	correlation_id: string;
+	represented_owner: string;
+	purpose: string;
+	intent: string;
+	details: FederationProposalDetails;
+	status: FederationProposalStatus;
+	message_id: string;
+	received_at: number;
+	expires_at: number;
+	decided_at?: number;
+	outcome?: FederationProposalOutcome;
+	receipt_id?: string;
+}
+
+/** `POST /api/federation/proposals/{id}/accept`: the proposal as it now stands, and whether it had been accepted before. */
+export interface FederationProposalAccepted {
+	proposal: FederationPeerProposal;
+	already_accepted: boolean;
 }
