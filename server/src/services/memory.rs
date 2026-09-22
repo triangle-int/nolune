@@ -544,6 +544,48 @@ pub fn migrate_legacy_memory(media: &super::media_text::MediaStore, instance_slu
     let _ = media.write_memory_text(instance_slug, ".migrated", "migrated");
 }
 
+/// The shape the memory librarian answers in.
+///
+/// Named rather than inline so the OpenAI adapter's strict-mode guard can
+/// assert it stays enforceable: strict structured outputs reject a schema
+/// that leaves a property out of `required` or that allows extra ones.
+pub(crate) fn extraction_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "ops": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["write", "append", "delete", "save_image", "connect"]
+                        },
+                        "path": { "type": "string" },
+                        "content": { "type": "string" },
+                        "upload_id": { "type": "string" },
+                        "description": { "type": "string" },
+                        "from": { "type": "string" },
+                        "to": { "type": "string" }
+                    },
+                    // Strict structured outputs have no optional property:
+                    // every field is named here, and the ones an action does
+                    // not use come back as "", which is what the `MemoryOp`
+                    // defaults already meant.
+                    "required": [
+                        "action", "path", "content",
+                        "upload_id", "description", "from", "to"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        },
+        "required": ["ops"],
+        "additionalProperties": false
+    })
+}
+
 /// Extract new memories from recent messages and store them in the library.
 /// Called as a background task after each chat turn.
 pub async fn extract_and_store(
@@ -660,6 +702,7 @@ rules:
 - DON'T create a new file if you can append to an existing one on the same topic
 - keep files concise — a few lines each, not essays
 - NEVER create a write or append op with empty content — every write/append MUST have non-empty content
+- every op carries all seven fields; leave the ones the action does not use as ""
 - there are currently {file_count} files. aim for quality over quantity — merge related topics
 
 do NOT save images unless they are clearly meaningful (personal photos, important screenshots). ignore memes, random links, UI screenshots.
@@ -675,33 +718,7 @@ examples of good connections:
 only connect memories that are meaningfully related. don't over-connect."#
     );
 
-    let schema = serde_json::json!({
-        "type": "object",
-        "properties": {
-            "ops": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "action": {
-                            "type": "string",
-                            "enum": ["write", "append", "delete", "save_image", "connect"]
-                        },
-                        "path": { "type": "string" },
-                        "content": { "type": "string" },
-                        "upload_id": { "type": "string" },
-                        "description": { "type": "string" },
-                        "from": { "type": "string" },
-                        "to": { "type": "string" }
-                    },
-                    "required": ["action", "path", "content"],
-                    "additionalProperties": false
-                }
-            }
-        },
-        "required": ["ops"],
-        "additionalProperties": false
-    });
+    let schema = extraction_schema();
 
     let (response, _) = llm
         .chat_json(

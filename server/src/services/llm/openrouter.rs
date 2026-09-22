@@ -1165,7 +1165,7 @@ mod tests {
         let call = json!({"id":"call1","type":"function","function":{"name":"search","arguments":"{\"q\":\"rust\"}"}});
         let body = completion(json!("hello"), json!([call]), "tool_calls", usage.clone());
         let (url, requests, task) = mock(None, 200, vec![], body.to_string()).await;
-        let adapter = backend(&url, "openai/gpt-5.4-mini").adapter().unwrap();
+        let adapter = backend(&url, "openai/gpt-5.6-luna").adapter().unwrap();
         let messages = [Message::user("hello")];
         let response = adapter
             .complete(LlmRequest::new(
@@ -1187,7 +1187,7 @@ mod tests {
         let body = &posts(&requests)[0];
         assert_eq!(body["stream"], false);
         assert_eq!(body["usage"]["include"], true);
-        assert_eq!(body["model"], "openai/gpt-5.4-mini");
+        assert_eq!(body["model"], "openai/gpt-5.6-luna");
         task.abort();
 
         // Without a cost the field is absent; `length` is the output limit;
@@ -1199,7 +1199,7 @@ mod tests {
             json!({"prompt_tokens": 3, "completion_tokens": 1}),
         );
         let (url, _, task) = mock(None, 200, vec![], body.to_string()).await;
-        let adapter = backend(&url, "openai/gpt-5.4-mini").adapter().unwrap();
+        let adapter = backend(&url, "openai/gpt-5.6-luna").adapter().unwrap();
         let response = adapter
             .complete(LlmRequest::new(ExecutionScope::Subagent, &[], &[], &[]))
             .await
@@ -1220,7 +1220,7 @@ mod tests {
         );
         let (url, requests, task) = mock(None, 200, vec![], body.to_string()).await;
         let schema = json!({"type":"object","properties":{"color":{"type":"string"}}});
-        let (text, tokens) = backend(&url, "openai/gpt-5.4-mini")
+        let (text, tokens) = backend(&url, "openai/gpt-5.6-luna")
             .chat_json("system", "prompt", schema.clone())
             .await
             .unwrap();

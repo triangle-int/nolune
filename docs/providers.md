@@ -68,8 +68,8 @@ presets you can rename, edit or delete:
 | Provider | Seeded preset ids | Models | Slots filled |
 | --- | --- | --- | --- |
 | Anthropic | `sonnet`, `opus`, `haiku` | `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-haiku-4-5-20251001` | chat `sonnet`, background `haiku` |
-| OpenAI | `gpt`, `gpt-mini` | `gpt-5.4`, `gpt-5.4-mini` | chat `gpt`, background `gpt-mini` |
-| OpenRouter | `openrouter-sonnet`, `openrouter-gpt-mini` | `anthropic/claude-sonnet-4.6`, `openai/gpt-5.4-mini` | chat `openrouter-sonnet`, background `openrouter-gpt-mini` |
+| OpenAI | `gpt-sol`, `gpt-luna` | `gpt-5.6-sol`, `gpt-5.6-luna` | chat `gpt-sol`, background `gpt-luna` |
+| OpenRouter | `openrouter-sonnet`, `openrouter-gpt-luna` | `anthropic/claude-sonnet-4.6`, `openai/gpt-5.6-luna` | chat `openrouter-sonnet`, background `openrouter-gpt-luna` |
 | Codex | `codex-astra`, `codex-luna` | `gpt-6-astra`, `gpt-5.6-luna` | chat `codex-astra`, background `codex-luna` |
 
 The defaults are `default_presets` in `server/src/config.rs`; the
@@ -124,8 +124,9 @@ status or mid-stream as an SSE `error` event, is reported as a rate limit.
 
 1. Create a key at <https://platform.openai.com/api-keys>.
 2. Enter it under Settings → Connections (or `OPEN_AI` in `[llm.tokens]`,
-   or `OPENAI_API_KEY`). Saving seeds `gpt` and `gpt-mini`.
-3. Model ids are the Responses API ids: `gpt-5.4`, `gpt-5.4-mini`, `o3`.
+   or `OPENAI_API_KEY`). Saving seeds `gpt-sol` and `gpt-luna`.
+3. Model ids are the Responses API ids: `gpt-5.6-sol`, `gpt-5.6-luna`,
+   `o3`.
 
 The adapter speaks the Responses API (`/v1/responses`, `store: false`,
 streaming SSE). Images go out as `input_image`; documents do not (the
@@ -141,9 +142,9 @@ Codex, and a Codex login never fills `OPEN_AI`.
 1. Create a key at <https://openrouter.ai/settings/keys>.
 2. Enter it under Settings → Connections (or `OPENROUTER` in
    `[llm.tokens]`, or `OPENROUTER_API_KEY`). Saving seeds
-   `openrouter-sonnet` and `openrouter-gpt-mini`.
+   `openrouter-sonnet` and `openrouter-gpt-luna`.
 3. Model ids are `vendor/model`, optionally with a `:variant` suffix:
-   `anthropic/claude-sonnet-4.6`, `openai/gpt-5.4-mini`,
+   `anthropic/claude-sonnet-4.6`, `openai/gpt-5.6-luna`,
    `meta-llama/llama-4:free`. A bare id is refused when the preset is
    saved.
 

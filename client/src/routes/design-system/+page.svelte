@@ -23,10 +23,10 @@
  };
  let codexSample = $state<keyof typeof codexSamples>('pending');
  // Sample preset row (#28): chips from the real helper, a test result that never leaves the page.
- const examplePreset = { id: 'gpt', name: 'GPT-5.4', provider: 'openai', model: 'gpt-5.4' };
+ const examplePreset = { id: 'gpt', name: 'GPT-5.6 Sol', provider: 'openai', model: 'gpt-5.6-sol' };
  const exampleWarnings = capabilityWarnings(examplePreset, { vision: true, documents: false, tools: true });
  let exampleTested = $state(false);
- const exampleTestCopy = presetTestCopy({ ok: true, preset: 'gpt', provider: 'openai', model: 'gpt-5.4', usage: { input_tokens: 8, output_tokens: 1 } }, examplePreset);
+ const exampleTestCopy = presetTestCopy({ ok: true, preset: 'gpt', provider: 'openai', model: 'gpt-5.6-sol', usage: { input_tokens: 8, output_tokens: 1 } }, examplePreset);
  import { COMPANION_KINDS, STATE_EXAMPLES, initialCompanionState, reduceCompanion } from '$lib/companion/state.js';
  import { companionExpression } from '$lib/companion/expressions.js';
  import { DEFAULT_COMPANION_SLUG } from '$lib/companion/context.js';

@@ -655,8 +655,8 @@ mod tests {
     async fn openai_forwards_reasoning_effort_only_to_reasoning_models() {
         let completed = json!({"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1}});
         for (model, supported) in [
-            ("gpt-5.4", true),
-            ("gpt-5.4-mini", true),
+            ("gpt-5.6-sol", true),
+            ("gpt-5.6-luna", true),
             ("o3", true),
             ("o4-mini", true),
             ("gpt-4.1", false),

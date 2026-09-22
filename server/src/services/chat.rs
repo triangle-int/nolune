@@ -2096,7 +2096,7 @@ mod count_tokens_tests {
         let openai = llm::LlmBackend::probe(
             reqwest::Client::new(),
             crate::config::LlmProvider::Openai,
-            "gpt-5.4",
+            "gpt-5.6-sol",
             "provider-key",
         );
         assert!(

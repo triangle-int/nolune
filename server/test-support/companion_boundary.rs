@@ -765,7 +765,7 @@ async fn model_presets_api_validates_seeds_and_pins_per_chat() {
     // A slot pointing at a provider without a key is rejected as one unit.
     let mut presets = body["presets"].clone();
     presets.as_array_mut().unwrap().push(serde_json::json!({
-        "id": "gpt", "name": "GPT-5.4", "provider": "openai", "model": "gpt-5.4"
+        "id": "gpt-sol", "name": "GPT-5.6 Sol", "provider": "openai", "model": "gpt-5.6-sol"
     }));
     let (status, body) = h
         .json(
@@ -773,7 +773,7 @@ async fn model_presets_api_validates_seeds_and_pins_per_chat() {
             "/api/config/models",
             Some(serde_json::json!({
                 "presets": presets,
-                "chat_preset": "gpt",
+                "chat_preset": "gpt-sol",
                 "background_preset": "haiku",
             })),
         )

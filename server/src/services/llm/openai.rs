@@ -82,6 +82,70 @@ fn stop_reason(response: &serde_json::Value) -> Result<StopReason, LlmError> {
     }
 }
 
+/// The `text.format` of a structured-output request.
+///
+/// Responses only looks in `input` for the word "json" that `json_object`
+/// demands, and never in `instructions`, so a schema described as prose
+/// there was refused with a 400 before the model ever ran. `json_schema`
+/// carries the schema itself and has no such rule. `strict` is the
+/// enforcing mode; it accepts only a schema every object of which forbids
+/// extra properties and requires every property it names, so one that
+/// cannot be enforced still goes out as guidance rather than failing the
+/// turn.
+fn json_schema_format(schema: &serde_json::Value) -> serde_json::Value {
+    let strict = match strict_schema_violation(schema, "$") {
+        None => true,
+        Some(where_) => {
+            log::warn!(
+                "[llm] openai: schema is not strictly enforceable ({where_}); sending it as guidance"
+            );
+            false
+        }
+    };
+    serde_json::json!({
+        "type": "json_schema",
+        "name": "response",
+        "schema": schema,
+        "strict": strict,
+    })
+}
+
+/// Where `schema` breaks the strict-mode rules, or `None` when it is
+/// enforceable. Strict mode has no notion of an absent property: every
+/// object must set `additionalProperties` to `false` and name every one of
+/// its properties in `required`, and a field that may be left out is a
+/// nullable union rather than a missing `required` entry.
+pub(crate) fn strict_schema_violation(schema: &serde_json::Value, path: &str) -> Option<String> {
+    let Some(object) = schema.as_object() else {
+        return None;
+    };
+    if let Some(items) = object.get("items") {
+        if let Some(found) = strict_schema_violation(items, &format!("{path}[]")) {
+            return Some(found);
+        }
+    }
+    let Some(properties) = object.get("properties").and_then(|p| p.as_object()) else {
+        return None;
+    };
+    if object.get("additionalProperties") != Some(&serde_json::Value::Bool(false)) {
+        return Some(format!("{path} does not set additionalProperties to false"));
+    }
+    let required: Vec<&str> = object
+        .get("required")
+        .and_then(|r| r.as_array())
+        .map(|entries| entries.iter().filter_map(|e| e.as_str()).collect())
+        .unwrap_or_default();
+    for (name, property) in properties {
+        if !required.contains(&name.as_str()) {
+            return Some(format!("{path}.{name} is not in required"));
+        }
+        if let Some(found) = strict_schema_violation(property, &format!("{path}.{name}")) {
+            return Some(found);
+        }
+    }
+    None
+}
+
 /// Convert our internal Message format to OpenAI Responses API input items.
 pub(crate) fn messages_to_openai(
     system: &[&str],
@@ -254,12 +318,7 @@ pub(crate) async fn openai_complete(
     }
 
     if let Some(schema) = json_schema {
-        body["instructions"] = serde_json::json!(format!(
-            "{}\n\nRespond with ONLY valid JSON matching this schema:\n{}",
-            system.join("\n\n"),
-            schema
-        ));
-        body["text"] = serde_json::json!({"format": {"type": "json_object"}});
+        body["text"] = serde_json::json!({ "format": json_schema_format(schema) });
     }
     let resp = http
         .post(&format!("{base_url}/v1/responses"))
