@@ -365,6 +365,11 @@ pub async fn run_agent_loop(
             machine_target.as_deref(),
             &public_url,
             &state.resources,
+            Some(crate::services::tools::federation::PeerSending {
+                federation: state.federation.clone(),
+                gate: state.federation_gate.clone(),
+                outbox: state.federation_outbox.clone(),
+            }),
         );
 
         let result = tokio::select! {

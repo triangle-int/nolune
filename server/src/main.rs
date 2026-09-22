@@ -235,6 +235,11 @@ async fn main() {
 
     let cua = state.cua.clone();
     let codex_auth = state.codex_auth.clone();
+    let (outbox, federation, gate) = (
+        state.federation_outbox.clone(),
+        state.federation.clone(),
+        state.federation_gate.clone(),
+    );
     let app = app::router::build_router(state, static_dir);
 
     info!("Starting server on http://{addr}");
@@ -258,6 +263,11 @@ async fn main() {
     // Installers and the desktop app wait for this exact stdout line (#124).
     println!("nolune: ready http://localhost:{port}");
 
+    // Deliver what the companion queued for paired peers (#110), now that
+    // this process is the one serving: interrupted attempts are recovered
+    // first, then every entry is retried on the same id.
+    outbox.start(federation, gate);
+
     // The machine this server runs on as a computer-use target (#16): registered
     // when a Cua driver and a display are there, skipped honestly otherwise. It
     // starts behind the ready line, in the background, so a driver that stalls
@@ -275,6 +285,7 @@ async fn main() {
             // connections drain; the grace timer still bounds the whole exit.
             cua.shutdown().await;
             codex_auth.shutdown().await;
+            outbox.shutdown().await;
         })
         .await
         .expect("server exited unexpectedly");

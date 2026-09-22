@@ -9,6 +9,7 @@
 	import { getToasts } from "$lib/stores/toast.svelte.js";
 	import { upsertRun } from "$lib/activity/receipts.js";
 	import HandoffCards from "$lib/components/continuity/HandoffCards.svelte";
+	import PeerRequests from "$lib/components/activity/PeerRequests.svelte";
 
 	const toast = getToasts();
 	let { slug }: { slug: string } = $props();
@@ -116,6 +117,8 @@
 	<HandoffCards {slug} />
 
 	<CommitmentsSection {slug} {now} />
+
+	<PeerRequests {slug} {now} />
 
 	{#if loading}
 		<p role="status" class="activity-center">Loading activity…</p>

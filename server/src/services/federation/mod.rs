@@ -20,6 +20,7 @@ pub mod gate;
 pub mod identity;
 pub mod inbound;
 pub mod invite_token;
+pub mod outbox;
 pub mod pairing;
 pub mod peers;
 pub mod policy;

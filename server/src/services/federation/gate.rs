@@ -567,6 +567,66 @@ impl FederationGate {
         }))
     }
 
+    /// This owner's own word on sending `request` to `companion_id`
+    /// (#110's outbox): the peer must be paired (an unknown, pending, or
+    /// revoked peer is refused), the intent must be able to disclose at
+    /// that class, and a live rule the owner wrote denying the pair
+    /// refuses it too. An `ask` rule and the defaults do not stand in the
+    /// way: the owner asked for this in the conversation. Nothing is
+    /// recorded here; the requesting-side receipt is written when the peer
+    /// answers or when delivery is given up ([`record_requesting`]).
+    ///
+    /// [`record_requesting`]: FederationGate::record_requesting
+    pub fn admit_outbound(
+        &self,
+        federation: &FederationState,
+        companion_id: &str,
+        request: IntentRequest,
+    ) -> Result<PeerSummary, FederationError> {
+        let peer = known_peer(federation, companion_id, true)?;
+        if peer.state != PeerState::Paired {
+            return Err(FederationError::PeerNotPaired { state: peer.state });
+        }
+        if policy::default_access(request.intent, request.disclosure).is_none() {
+            return Err(FederationError::PolicyRefused(Decision::deny(
+                DecisionReason::UnsupportedDisclosure,
+            )));
+        }
+        let document = self.policy.document()?;
+        let rules = document.peer(companion_id).rules;
+        if policy::live_rule(&rules, request, (self.clock)()).0 == Some(Access::Deny) {
+            return Err(FederationError::PolicyRefused(Decision::deny(
+                DecisionReason::Rule,
+            )));
+        }
+        Ok(peer)
+    }
+
+    /// Records a requesting-side receipt for an intent this companion sent
+    /// `peer`: `decision` is what the peer's typed answer amounts to, or
+    /// the refusal this side settled on when the peer could not be reached.
+    pub(crate) fn record_requesting(
+        &self,
+        pairing_id: &str,
+        me: &str,
+        peer: &str,
+        intent: IntentClass,
+        disclosure: DisclosureClass,
+        decision: &Decision,
+    ) -> Result<(), FederationError> {
+        self.record(
+            ReceiptSide::Requesting,
+            pairing_id,
+            me,
+            peer,
+            intent.name(),
+            disclosure.name(),
+            None,
+            decision,
+            (self.clock)(),
+        )
+    }
+
     /// Judges `intent` at `disclosure` (wire names) from `peer`, as this
     /// companion `me`, and records the receipt. `Ok` only for an allowed
     /// intent; any other verdict is `FederationError::PolicyRefused`

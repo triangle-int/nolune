@@ -31,6 +31,9 @@
 //! * `GET /api/federation/inbox` lists the structured intents peers
 //!   delivered (#110) and the receipts they left: who asked for what on
 //!   whose behalf, what it was answered, never the payload.
+//! * `GET /api/federation/outbox` lists the intents this companion queued
+//!   for peers (#110): where each stands, its attempts, the peer's typed
+//!   response, and the receipts on this side.
 //!
 //! Peer side, public, verified by signature only. Every verified envelope
 //! is judged by the owner's policy and recorded before it is dispatched
@@ -149,6 +152,7 @@ pub fn router() -> Router<AppState> {
             post(revoke_rule),
         )
         .route("/api/federation/inbox", get(list_inbox))
+        .route("/api/federation/outbox", get(list_outbox))
 }
 
 /// Mounted outside the auth middleware: a peer has no owner credential and
@@ -445,6 +449,12 @@ async fn ping_peer(
 /// first (#110).
 async fn list_inbox(State(state): State<AppState>) -> Result<Response, ApiError> {
     Ok(Json(state.federation_inbox.view()?).into_response())
+}
+
+/// Every request this companion queued for a peer, with its attempts and
+/// the peer's typed response, and every receipt kept, newest first (#110).
+async fn list_outbox(State(state): State<AppState>) -> Result<Response, ApiError> {
+    Ok(Json(state.federation_outbox.view()?).into_response())
 }
 
 async fn list_approvals(State(state): State<AppState>) -> Result<Response, ApiError> {

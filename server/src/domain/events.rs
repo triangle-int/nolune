@@ -39,6 +39,13 @@ pub enum ServerEvent {
         instance_slug: String,
         commitment: Commitment,
     },
+    /// A request this companion sends a paired peer was queued or changed
+    /// (#110): the outbox entry with its attempts and the peer's typed
+    /// response, never anything else the peer said.
+    OutboxUpdated {
+        instance_slug: String,
+        entry: crate::services::federation::outbox::OutboxEntry,
+    },
     /// A known machine registered, disconnected, went stale, or was renamed (#80).
     MachineUpdated {
         instance_slug: String,

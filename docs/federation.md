@@ -189,10 +189,81 @@ query is answered with no windows and told to the owner (this companion
 keeps no calendar, so nothing about the schedule is disclosed and the
 receipt says `granted none`); a proposal is told to the owner
 (`proposal_received`). The companion reads the delivery on the owner's
-next turn; nothing runs a turn on arrival on the peer's behalf. The
-outbox with
-retries and the tools that send intents arrive with the last slice of
-#110.
+next turn; nothing runs a turn on arrival on the peer's behalf.
+
+### Sending
+
+The companion sends intents through three chat tools and nothing else:
+`send_peer_message` (a message for the other owner), `ask_peer_availability`
+(whether the other owner is free inside a window), and
+`propose_peer_reminder` (remind the other owner of something at a time).
+Each takes the peer (its companion id as Settings → Connections →
+Companions shows it, or a unique prefix of at least eight characters),
+the owner it speaks for and its purpose in one line (the two labels the
+other owner sees quoted as this companion's words), and the fields of its
+own class; there is no tool for a free-form method, a remote command, or
+a proposal, and no tool ever takes a peer's words back as an argument.
+The check-in and reflection routines never carry them, so nothing the
+companion does on its own can reach another owner.
+
+A tool call is judged by this owner's own policy before anything is
+queued: the peer must be paired (an unknown, pending, or revoked peer is
+refused), the intent must be able to disclose at its class, and a live
+rule this owner wrote denying that intent at that class for that peer
+refuses it too; an `ask` rule and the defaults do not stand in the way,
+because the owner asked for this in the conversation. What passes becomes
+one entry in the outbox (`federation/outbox.json`,
+[companion-storage.md](companion-storage.md)) with a fresh correlation
+id, this companion as the sender, a lifetime of a day, and the intent
+as it will be sent; the tool answers with the request id and says the
+outcome will show on the Activity page, and it never sees the peer's
+answer.
+
+The sender loop delivers due entries one at a time: it seals the intent
+for the peer, posts it to the peer's approved origins at
+`POST /federation/v1/intent`, opens the sealed answer, decodes the typed
+response fail-closed, and checks it against the intent it answers.
+`accepted` and `denied` settle the entry; `needs_owner` leaves it waiting
+and asks again every fifteen minutes until the other owner decides or the
+intent expires. A peer that could not be reached, that answered something
+that did not verify or decode, that refused with a transient code
+(`rate_limited`, `replayed`, `federation_unavailable`), or that answered
+`denied` with its rate limit (the entry then waits out the larger of the
+window the peer named and the backoff) is tried again after a backoff
+that starts at thirty seconds and doubles up to an hour; after sixteen
+such failures, about nine hours of trying (a peer that is away for a
+night is reached in the morning), the entry is visibly `failed`. An
+error status is a failed attempt like those, not a verdict, whenever it
+could have come from something in front of the peer rather than from its
+route: any server error or `429`, and any status whose body names no
+code (a reverse proxy's or a tunnel's own page); the status is kept on
+the attempt. A refusal that will not change (a `4xx` from the peer's
+route naming a condition: the peer no longer knows this companion, a
+malformed intent, a policy denial of an unknown name) fails the entry at
+once. An intent that expires before it was delivered is `expired`.
+Retrying is safe because the correlation id never changes: an attempt is
+written down as in flight before the envelope leaves, a process that dies
+there marks it interrupted at the next start and retries the same
+request, and the receiving side answers a request it already settled with
+the same response again, so the other owner never sees a message twice.
+A pass that fails as a whole (the store cannot be written) is not run
+again at once: the loop waits the base backoff first.
+
+Every settled outcome, and the first `needs_owner`, writes a
+requesting-side audit receipt and an intent receipt naming what was
+requested and what the peer disclosed, read off the typed response only
+(an accepted availability answer that carries no windows is `granted
+none`); a request the peer never answered is recorded as denied,
+`unreachable`, and one that lapsed after the peer did answer is recorded
+as denied with the peer's last word as the reason (`default` or the
+rule's reason when its owner never allowed what the peer had to ask them
+about, `rate_limited` when its window never lifted), with that typed
+answer kept on the entry. `GET /api/federation/outbox` lists the entries (where each
+stands, every attempt, the peer's typed response) and the receipts,
+newest first, and every change is broadcast as `outbox_updated`, so the
+Activity page's "Sent to companions" section shows where each request
+stands, how often it was tried, and what came back, in this owner's own
+words and the peer's typed answer only.
 
 ## Revocation and rotation
 
@@ -310,9 +381,12 @@ the wire alone to keep it that way.
 | `nolune federation rotate [--yes] [--json]` | Replaces the signing key and reports which peers were told |
 | `--profile <name>` | Any of the above for that profile's server |
 | Settings → Connections → Companions | The same actions in the browser: rows with Confirm and Revoke, Invite a companion, Accept an invite, Rotate signing key; requests waiting for you with Allow and Deny within one scope; what each paired companion may do, one rule per request kind; the inbox of what companions delivered and who they said they speak for |
+| Activity → Sent to companions | Where each request this companion sent stands, how often it was tried, and what came back (#110) |
 | `POST /api/federation/invites`, `/accept`, `GET /api/federation/peers`, `POST …/peers/{id}/confirm`, `…/revoke`, `/api/federation/rotate` | Owner routes behind the API token or session |
 | `GET /api/federation/policy`, `GET /api/federation/approvals`, `POST …/approvals/{id}/approve`, `…/deny` (`{"scope": "once" \| "until" + "expires_at" \| "class"}`), `DELETE …/approvals/{id}`, `POST …/peers/{id}/rules`, `POST …/peers/{id}/rules/revoke` (`{"intent", "disclosure"}`), `GET /api/federation/receipts` | Owner routes for the policy, the queue, and the audit log (#109) |
 | `GET /api/federation/inbox` | Owner route listing the structured intents peers delivered and their receipts, newest first (#110) |
+| `GET /api/federation/outbox` | Owner route listing the intents this companion queued for peers, their attempts and typed responses, and the receipts on this side, newest first (#110) |
+| `send_peer_message`, `ask_peer_availability`, `propose_peer_reminder` | Chat tools that queue one typed intent each through the outbox, behind this owner's own policy (#110) |
 | `POST /federation/v1/pair`, `…/pair/confirm`, `…/pair/revoke`, `…/ping`, `…/rotate` | Peer routes, public, verified by signature only |
 | `POST /federation/v1/intent` | Peer route taking a transport envelope whose body is a structured intent and answering with one whose body is the typed response (#110) |
 

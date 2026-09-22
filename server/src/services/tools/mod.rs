@@ -78,6 +78,7 @@ pub mod companion;
 pub mod computer;
 pub mod continuity;
 pub mod cua;
+pub mod federation;
 pub mod files;
 pub mod image;
 pub mod memory_tools;
@@ -513,6 +514,9 @@ pub fn tool_summary_on(name: &str, args: &str, target: &MachineTarget) -> String
         "commitment_cancel" => "cancelling a commitment".into(),
         "commitment_snooze" => "snoozing a commitment".into(),
         "commitment_list" => "listing commitments".into(),
+        "send_peer_message" => "sending a message to a paired companion".into(),
+        "ask_peer_availability" => "asking a paired companion about availability".into(),
+        "propose_peer_reminder" => "proposing a reminder to a paired companion".into(),
         "send_email" => {
             let to = v["to"].as_str().unwrap_or("?");
             format!("sending email to {to}")
@@ -859,6 +863,7 @@ pub fn build_tools(
     machine_target: MachineTarget,
     public_url: &str,
     resources: &crate::services::resource_access::ResourceAccess,
+    peer_sending: Option<federation::PeerSending>,
 ) -> (Vec<Box<dyn ToolDyn>>, SentFiles) {
     let snap = mcp_snapshot;
     let machine_target = Arc::new(machine_target);
@@ -1007,6 +1012,13 @@ pub fn build_tools(
     for tool in commitments::commitment_tools(workspace_dir, instance_slug, chat_id, events.clone())
     {
         tools.push(wrap(tool));
+    }
+    // Requests to paired companions (#110): chat only, queued through the
+    // outbox behind this owner's own policy; the routines never get them.
+    if let Some(sending) = peer_sending {
+        for tool in federation::federation_tools(sending, workspace_dir, instance_slug, chat_id) {
+            tools.push(wrap(tool));
+        }
     }
 
     // ── Data ──
