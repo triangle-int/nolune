@@ -218,7 +218,19 @@ impl MachineTarget {
                 .entry(connected.machine_id)
                 .or_insert(connected.hostname);
         }
-        Self::with_names(TargetSelection::from_request(machine_id), names).with_live(live)
+        // The Cua targets are what the typed tools act on: the server-local
+        // one (never in `live`, which is the desktop sockets) and every
+        // desktop that registered a driver.
+        let cua = registry
+            .cua()
+            .list()
+            .await
+            .into_iter()
+            .map(|descriptor| descriptor.machine_id.as_str().to_owned())
+            .collect();
+        Self::with_names(TargetSelection::from_request(machine_id), names)
+            .with_live(live)
+            .with_cua(cua)
     }
 
     pub fn selection(&self) -> &TargetSelection {
@@ -233,23 +245,60 @@ impl MachineTarget {
             .unwrap_or_else(|| machine_id.to_owned())
     }
 
-    /// Where a call acts, for the activity trail: "on <name>". The user's
-    /// choice outranks the `machine_id` the model passed: with a computer or
-    /// the home chosen the tool only ever acts there or refuses, so that is
-    /// what the line says. With nothing chosen, the computer the model named
-    /// is the one the call is about; otherwise the only desktop connected
-    /// when the turn started is the one that acts, so it is named, and the
-    /// generic wording stays only while the choice is genuinely open (none
-    /// or several connected).
+    /// Where a remote shell or file call acts, for the activity trail: "on
+    /// <name>". The user's choice outranks the `machine_id` the model
+    /// passed: with a computer or the home chosen the tool only ever acts
+    /// there or refuses, so that is what the line says. With nothing chosen,
+    /// the computer the model named is the one the call is about (the
+    /// server home when it named the home's id); otherwise the only desktop
+    /// connected when the turn started is the one that acts, so it is
+    /// named, and the generic wording stays only while the choice is
+    /// genuinely open (none or several connected).
     pub fn describe(&self, requested: Option<&str>) -> String {
         match (&self.selection, requested) {
-            (TargetSelection::Machine(id), _) => format!("on {}", self.label(id)),
-            (TargetSelection::ServerHome, _) => "on the server home".to_owned(),
-            (TargetSelection::Unselected, Some(id)) => format!("on {}", self.label(id)),
             (TargetSelection::Unselected, None) => match self.live.as_slice() {
-                [only] => format!("on {}", self.label(only)),
+                [only] => self.named(only),
                 _ => "on the connected computer".to_owned(),
             },
+            _ => self.describe_chosen(requested),
+        }
+    }
+
+    /// Where a typed machine tool call (#18) acts, for the activity trail.
+    /// The same line as `describe` once something is chosen or named; with
+    /// nothing chosen the typed tools act on the only registered Cua target,
+    /// which may be the server machine, so that is what the line names:
+    /// "on the server home" for it, the desktop's name for a desktop, and
+    /// the generic wording only while the choice is open (no Cua target,
+    /// or several).
+    pub fn describe_typed(&self, requested: Option<&str>) -> String {
+        match (&self.selection, requested) {
+            (TargetSelection::Unselected, None) => match self.cua.as_slice() {
+                [only] => self.named(only),
+                _ => "on the connected computer".to_owned(),
+            },
+            _ => self.describe_chosen(requested),
+        }
+    }
+
+    /// The line for a choice, or for the machine the model named while
+    /// nothing was chosen.
+    fn describe_chosen(&self, requested: Option<&str>) -> String {
+        match (&self.selection, requested) {
+            (TargetSelection::Machine(id), _) => self.named(id),
+            (TargetSelection::ServerHome, _) => "on the server home".to_owned(),
+            (TargetSelection::Unselected, Some(id)) => self.named(id),
+            (TargetSelection::Unselected, None) => "on the connected computer".to_owned(),
+        }
+    }
+
+    /// "on <name>" for a machine id: the server home for the id the server
+    /// machine registers under (or the synthesized home id), else the
+    /// user's name for the machine, its hostname, or the id.
+    fn named(&self, machine_id: &str) -> String {
+        match TargetSelection::from_request(Some(machine_id)) {
+            TargetSelection::ServerHome => "on the server home".to_owned(),
+            _ => format!("on {}", self.label(machine_id)),
         }
     }
 

@@ -263,7 +263,9 @@ impl CuaTools {
     /// The Cua target the user's choice names, checked against what the
     /// model asked for. The chosen desktop or the server home is used
     /// exactly; with nothing chosen, the only registered target is used and
-    /// several are refused. Never a pick, never a fallback.
+    /// several are refused. Never a pick, never a fallback. The server
+    /// machine is labelled the server home throughout (results, refusals,
+    /// the trail), the composer's word for it, whatever its hostname.
     pub async fn resolve(&self, requested: Option<&str>) -> Result<Resolved, CuaRefusal> {
         let cua = self.registry.cua();
         let descriptors = cua.list().await;
@@ -274,6 +276,10 @@ impl CuaTools {
             TargetSelection::from_request(requested),
             TargetSelection::ServerHome
         );
+        let label_of = |id: &str| match TargetSelection::from_request(Some(id)) {
+            TargetSelection::ServerHome => "the server home".to_owned(),
+            _ => self.target.label(id),
+        };
         let requested_label = |id: &str| {
             if names_home {
                 "the server home".to_owned()
@@ -332,7 +338,7 @@ impl CuaTools {
                     // The model naming one of them is not the user choosing it.
                     let mut labels: Vec<String> = several
                         .iter()
-                        .map(|descriptor| self.target.label(descriptor.machine_id.as_str()))
+                        .map(|descriptor| label_of(descriptor.machine_id.as_str()))
                         .collect();
                     labels.sort();
                     return Err(TargetRefusal::ChooseAComputer { labels }.into());
@@ -340,7 +346,7 @@ impl CuaTools {
             },
         };
 
-        let label = self.target.label(chosen.as_str());
+        let label = label_of(chosen.as_str());
         let Ok(adapter) = cua.select(Some(&chosen)).await else {
             // Connected without a descriptor, or not connected at all.
             let connected = self
@@ -2575,8 +2581,8 @@ mod tool_tests {
         let tools = tools_for(&registry, None).await;
         let message = every_tool_refuses(&tools, None, "choose_a_computer").await;
         assert!(
-            message.contains("Laptop") && message.contains("studio"),
-            "the refusal names both computers: {message}"
+            message.contains("Laptop") && message.contains("the server home"),
+            "the refusal names both computers, the server machine as the home: {message}"
         );
         // The model naming one of them is not the user choosing it.
         every_tool_refuses(&tools, Some(LAPTOP), "choose_a_computer").await;
@@ -2646,7 +2652,10 @@ mod tool_tests {
 
         let home = tools_for(&registry, Some(SERVER_HOME_TARGET)).await;
         let apps = home.discover.call(discover(None)).await.unwrap();
-        assert!(apps.contains("studio"), "{apps}");
+        assert!(
+            apps.contains("the server home") && !apps.contains("studio"),
+            "the server machine is the server home to the model, not its hostname: {apps}"
+        );
         // Naming the desktop while the home is chosen is a mismatch.
         every_tool_refuses(&home, Some(LAPTOP), "target_mismatch").await;
         // Choosing the server-local id is the same choice, and the model
@@ -3091,7 +3100,7 @@ mod tool_tests {
         {
             assert_eq!(
                 normalized(desktop_output, LAPTOP),
-                normalized(local_output, "studio"),
+                normalized(local_output, "the server home"),
                 "step {step} renders the same for both kinds of target"
             );
         }

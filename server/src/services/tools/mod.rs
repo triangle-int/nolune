@@ -455,6 +455,9 @@ pub fn tool_summary(name: &str, args: &str) -> String {
 pub fn tool_summary_on(name: &str, args: &str, target: &MachineTarget) -> String {
     let v: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
     let on_machine = || target.describe(v["machine_id"].as_str());
+    // The typed tools act on the only Cua target while nothing is chosen,
+    // which may be the server machine: named as the server home.
+    let on_cua_target = || target.describe_typed(v["machine_id"].as_str());
     match name {
         "list_machines" => "listing computers".into(),
         "computer_use" => format!(
@@ -471,15 +474,15 @@ pub fn tool_summary_on(name: &str, args: &str, target: &MachineTarget) -> String
                 Some("list_windows") => "listing windows",
                 _ => "listing apps",
             },
-            on_machine()
+            on_cua_target()
         ),
-        "get_window_state" => format!("observing a window {}", on_machine()),
+        "get_window_state" => format!("observing a window {}", on_cua_target()),
         "act" => format!(
             "{} {}",
             v["action"]["kind"].as_str().unwrap_or("acting"),
-            on_machine()
+            on_cua_target()
         ),
-        "verify_state" => format!("verifying a window {}", on_machine()),
+        "verify_state" => format!("verifying a window {}", on_cua_target()),
         "remote_files" => {
             let verb = match v["operation"].as_str() {
                 Some("read") => "reading",
