@@ -27,6 +27,18 @@ fn companion_csp(origin: &str) -> String {
     COMPANION_CSP.replace("{relay_ws}", &origin.replacen("http://", "ws://", 1))
 }
 
+/// What the relay does when the companion asks its server to update itself.
+///
+/// The companion webview has no IPC — it reaches the desktop only through this proxy —
+/// so an app-owned server is updated by intercepting its update call here. `None` for
+/// every server this app does not manage: the call is then forwarded upstream untouched
+/// and the server keeps its own update path.
+pub type UpdateHook =
+    Arc<dyn Fn() -> futures_util::future::BoxFuture<'static, Result<String, String>> + Send + Sync>;
+
+/// The one call the relay answers itself instead of forwarding.
+const UPDATE_PATH: &str = "/api/update/apply";
+
 #[derive(Clone)]
 struct RelayState {
     upstream: url::Url,
@@ -37,6 +49,7 @@ struct RelayState {
     token: Arc<Mutex<Option<String>>>,
     client: reqwest::Client,
     stopped: watch::Receiver<bool>,
+    update: Option<UpdateHook>,
 }
 
 pub struct Relay {
@@ -196,7 +209,11 @@ fn native_resource_request(
     )))
 }
 
-pub async fn start(upstream: url::Url, token: String) -> Result<Relay, String> {
+pub async fn start(
+    upstream: url::Url,
+    token: String,
+    update: Option<UpdateHook>,
+) -> Result<Relay, String> {
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
         .await
         .map_err(|_| "Could not start companion relay")?;
@@ -224,6 +241,7 @@ pub async fn start(upstream: url::Url, token: String) -> Result<Relay, String> {
         token: token.clone(),
         stopped,
         client,
+        update,
     };
     let mut shutdown = stop.subscribe();
     let app = Router::new()
@@ -318,6 +336,16 @@ async fn bootstrap(State(state): State<RelayState>, headers: HeaderMap) -> Respo
         .unwrap()
 }
 
+/// A relay-authored JSON reply, never cached: it describes this machine, not the server.
+fn relay_json(value: serde_json::Value) -> Response<Body> {
+    Response::builder()
+        .header("content-type", "application/json")
+        .header("cache-control", "no-store")
+        .header("x-content-type-options", "nosniff")
+        .body(Body::from(value.to_string()))
+        .unwrap()
+}
+
 async fn forward(State(mut state): State<RelayState>, request: Request<Body>) -> Response<Body> {
     if !authorized(request.headers(), &state) {
         if request.uri().path() == "/"
@@ -334,6 +362,27 @@ async fn forward(State(mut state): State<RelayState>, request: Request<Body>) ->
                 .unwrap();
         }
         return StatusCode::UNAUTHORIZED.into_response();
+    }
+    // A server this app owns cannot update itself from inside the webview it is serving:
+    // the update replaces that very binary. The desktop does it and answers in the shape
+    // `/api/update/apply` already returns, so the companion needs no desktop-only branch.
+    // The update runs on its own task: a companion window closed mid-swap must not cancel
+    // it between setting the old binary aside and moving the new one in.
+    if request.method() == "POST" && request.uri().path() == UPDATE_PATH {
+        if let Some(update) = state.update.clone() {
+            let outcome = tokio::spawn(async move { update().await }).await;
+            return match outcome {
+                Ok(Ok(version)) => relay_json(serde_json::json!({
+                    "ok": true,
+                    "message": format!("updated to {version}"),
+                    "version": version,
+                })),
+                Ok(Err(error)) => relay_json(serde_json::json!({ "ok": false, "error": error })),
+                Err(_) => relay_json(
+                    serde_json::json!({ "ok": false, "error": "the update task did not finish" }),
+                ),
+            };
+        }
     }
     let mut target = match upstream_url(&state.upstream, request.uri()) {
         Ok(url) => url,
@@ -1428,7 +1477,7 @@ mod tests {
     #[tokio::test]
     async fn relay_bootstrap_http_media_redirects_and_revocation() {
         let (upstream, task) = fake_upstream().await;
-        let relay = start(upstream, "long-lived".into()).await.unwrap();
+        let relay = start(upstream, "long-lived".into(), None).await.unwrap();
         assert!(!relay.script.contains("long-lived"));
         let client = reqwest::Client::new();
         let unauth = client
@@ -1568,7 +1617,7 @@ mod tests {
         }
 
         let (upstream, task) = fake_upstream().await;
-        let relay = start(upstream, "long-lived".into()).await.unwrap();
+        let relay = start(upstream, "long-lived".into(), None).await.unwrap();
         let cookie = session(&reqwest::Client::new(), &relay).await;
         let mut socket = connect(&relay, &cookie).await;
         socket.send(Message::Text("hello".into())).await.unwrap();
@@ -1670,7 +1719,7 @@ mod tests {
                 .await
                 .unwrap();
         });
-        let relay = start(upstream, "native-secret".into()).await.unwrap();
+        let relay = start(upstream, "native-secret".into(), None).await.unwrap();
         let client = reqwest::Client::new();
         let cookie = session(&client, &relay).await;
         let response = client
@@ -1685,6 +1734,101 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.text().await.unwrap(), "media bytes");
+        task.abort();
+    }
+
+    /// A counting hook standing in for the desktop updater.
+    fn counting_hook(
+        outcome: Result<String, String>,
+    ) -> (UpdateHook, Arc<std::sync::atomic::AtomicUsize>) {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = calls.clone();
+        let hook: UpdateHook = Arc::new(move || {
+            let (seen, outcome) = (seen.clone(), outcome.clone());
+            Box::pin(async move {
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                outcome
+            })
+        });
+        (hook, calls)
+    }
+
+    #[tokio::test]
+    async fn update_apply_runs_the_hook_only_for_an_authorized_companion() {
+        let (upstream, task) = fake_upstream().await;
+        let (hook, calls) = counting_hook(Ok("v9.9.9".into()));
+        let relay = start(upstream, "long-lived".into(), Some(hook))
+            .await
+            .unwrap();
+        let client = reqwest::Client::new();
+
+        // Without the relay session there is no companion behind the request, so the
+        // update must not run — the page that asks is not one this app opened.
+        let unauthorized = client
+            .post(format!("{}/api/update/apply", relay.origin))
+            .header("origin", &relay.origin)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        let cookie = session(&client, &relay).await;
+        let response = client
+            .post(format!("{}/api/update/apply", relay.origin))
+            .header("origin", &relay.origin)
+            .header("cookie", &cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = response.json().await.unwrap();
+        // The upstream echoes the path as text; JSON proves the relay answered instead.
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["version"], "v9.9.9");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn a_failed_update_is_reported_rather_than_swallowed() {
+        let (upstream, task) = fake_upstream().await;
+        let (hook, _) = counting_hook(Err("github.com is unreachable".into()));
+        let relay = start(upstream, "long-lived".into(), Some(hook))
+            .await
+            .unwrap();
+        let client = reqwest::Client::new();
+        let cookie = session(&client, &relay).await;
+        let body: serde_json::Value = client
+            .post(format!("{}/api/update/apply", relay.origin))
+            .header("origin", &relay.origin)
+            .header("cookie", &cookie)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["error"], "github.com is unreachable");
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn update_apply_is_forwarded_when_the_app_does_not_own_the_server() {
+        let (upstream, task) = fake_upstream().await;
+        let relay = start(upstream, "long-lived".into(), None).await.unwrap();
+        let client = reqwest::Client::new();
+        let cookie = session(&client, &relay).await;
+        let response = client
+            .post(format!("{}/api/update/apply", relay.origin))
+            .header("origin", &relay.origin)
+            .header("cookie", &cookie)
+            .send()
+            .await
+            .unwrap();
+        // The fake upstream echoes the path: the call reached the server untouched.
+        assert_eq!(response.text().await.unwrap(), "/api/update/apply");
         task.abort();
     }
 }

@@ -34,10 +34,29 @@ fn companion_allows_navigation(url: &url::Url, origin: &str) -> bool {
     url.origin().ascii_serialization() == origin
 }
 
+/// The companion's update button, for the one server this app manages. A service or a
+/// server on another machine updates itself, so it gets no hook and its update call is
+/// forwarded upstream unchanged.
+fn update_hook(app: &tauri::AppHandle, upstream: &url::Url) -> Option<companion_relay::UpdateHook> {
+    if !local_server::app_owns_gateway(app, upstream) {
+        return None;
+    }
+    let app = app.clone();
+    Some(std::sync::Arc::new(move || {
+        let app = app.clone();
+        Box::pin(async move {
+            local_server::update_local_server(app)
+                .await
+                .map(|outcome| outcome.version)
+        })
+    }))
+}
+
 async fn navigate(app: tauri::AppHandle, url: String, auth_token: String) -> Result<(), String> {
     let parsed = connection_url(&url)?;
     close_companion(&app)?;
-    let relay = companion_relay::start(parsed, auth_token).await?;
+    let relay =
+        companion_relay::start(parsed.clone(), auth_token, update_hook(&app, &parsed)).await?;
     let origin = relay.origin.clone();
     let back_handle = app.clone();
     let closed_origin = relay.origin.clone();

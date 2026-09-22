@@ -1306,7 +1306,12 @@ export function checkUpdate(): Promise<UpdateCheck> {
 	return json("/api/update/check");
 }
 
-export async function applyUpdate(): Promise<{ ok: boolean; message?: string }> {
+export async function applyUpdate(): Promise<{
+	ok: boolean;
+	message?: string;
+	error?: string;
+	version?: string;
+}> {
 	return json("/api/update/apply", { method: "POST" });
 }
 

@@ -162,7 +162,7 @@
           </li>
         </ul>
         <p class="section-hint">
-          Server updates: run <code>~/.nolune/bin/update</code>, then restart the server (<code>nolune gateway restart</code> in background mode, or reopen this app otherwise). The app's own updater only updates this app.
+          Server updates: while this app runs the server, the <strong>Update available</strong> pill in the companion updates it and starts it again for you. In background mode the service owns it instead, so update it with <code>~/.nolune/bin/update</code> and then <code>nolune gateway restart</code>. The app's own updater only updates this app.
         </p>
       {/if}
     </section>

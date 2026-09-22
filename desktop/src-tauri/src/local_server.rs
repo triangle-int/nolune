@@ -144,6 +144,24 @@ pub fn configured_port(home: &Path) -> u16 {
         .unwrap_or(DEFAULT_PORT)
 }
 
+/// The update channel the server records in its workspace (`/api/update/channel`).
+/// Stable unless the user opted into nightly, matching the server's own default.
+pub fn update_channel(home: &Path) -> String {
+    std::fs::read_to_string(home.join(".update-channel"))
+        .ok()
+        .map(|raw| raw.trim().to_lowercase())
+        .filter(|channel| channel == "nightly")
+        .unwrap_or_else(|| "stable".into())
+}
+
+/// The release tag recorded beside the binary, or `None` when nothing is installed.
+pub fn installed_version(home: &Path) -> Option<String> {
+    std::fs::read_to_string(home.join("bin").join(".version"))
+        .ok()
+        .map(|raw| raw.trim().to_owned())
+        .filter(|tag| !tag.is_empty())
+}
+
 /// Stream `url` to `dest` via a temporary file, then make it executable. `on_progress`
 /// receives (downloaded, total) as chunks arrive.
 pub async fn download_binary(
@@ -426,6 +444,26 @@ fn gateway_running(app: &tauri::AppHandle) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether `upstream` is the gateway this app spawned and still owns. Connecting to a
+/// server elsewhere while our own gateway happens to run must not point anything at the
+/// local binary, so the address has to match too, not just the fact that we run one.
+pub fn app_owns_gateway(app: &tauri::AppHandle, upstream: &url::Url) -> bool {
+    gateway_running(app)
+        && is_loopback(upstream)
+        && upstream.port_or_known_default() == Some(configured_port(&nolune_home()))
+}
+
+/// Whether a URL addresses this machine. Only a literal loopback host counts; a name that
+/// merely resolves here today is not this app's gateway.
+fn is_loopback(url: &url::Url) -> bool {
+    matches!(
+        url.host(),
+        Some(url::Host::Domain("localhost"))
+            | Some(url::Host::Ipv4(std::net::Ipv4Addr::LOCALHOST))
+            | Some(url::Host::Ipv6(std::net::Ipv6Addr::LOCALHOST))
+    )
+}
+
 /// Stop the app-owned gateway if there is one. Used on reinstall and at app exit.
 pub fn shutdown(app: &tauri::AppHandle) {
     if let Ok(Some(gateway)) = take_gateway(app) {
@@ -562,6 +600,107 @@ pub async fn install_local_server(
         url: ready_url,
         version,
     })
+}
+
+/// A path beside the binary, carrying the platform's executable suffix.
+fn staging_path(home: &Path, stem: &str) -> PathBuf {
+    home.join("bin").join(if cfg!(windows) {
+        format!("{stem}.exe")
+    } else {
+        stem.to_owned()
+    })
+}
+
+/// Update the server this app owns: download the release for the channel the server
+/// records, swap the binary while the gateway is stopped, and start it again.
+///
+/// Only an app-owned gateway is updated. A background service updates itself through
+/// `nolune gateway`, and a server someone else runs is not ours to replace — the caller
+/// is expected to have checked, and this refuses rather than touching a stranger's files.
+/// A release that will not come up is rolled back, so a failed update never costs the
+/// user the server they had.
+pub async fn update_local_server(app: tauri::AppHandle) -> Result<InstallOutcome, String> {
+    let asset = asset_name(std::env::consts::OS, std::env::consts::ARCH)
+        .ok_or("Nolune does not publish a server for this computer yet.")?;
+    if !gateway_running(&app) {
+        return Err("This app does not manage the server it is connected to.".into());
+    }
+    let home = nolune_home();
+    let binary = binary_path(&home);
+    let channel = update_channel(&home);
+    let previous_version = installed_version(&home);
+    let version_file = home.join("bin").join(".version");
+    let staged = staging_path(&home, "nolune.incoming");
+    let backup = staging_path(&home, "nolune.previous");
+
+    // Download while the old server is still serving the companion; only the swap needs
+    // it stopped, which keeps the window where nothing answers down to a restart.
+    let client = reqwest::Client::builder()
+        .user_agent(format!("nolune-desktop/{}", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|error| format!("cannot create download client: {error}"))?;
+    let url = download_url(&channel, &asset, Some("nightly"));
+    // The companion shows one pending state for the whole update, so no progress is
+    // reported: there is nothing on screen that could render it.
+    download_binary(&client, &url, &staged, |_, _| {})
+        .await
+        .map_err(|error| format!("{error}. Check that github.com is reachable and try again."))?;
+    // `nightly` is a rolling tag with no version in its redirect; the server tells nightly
+    // builds apart by commit, so the recorded tag only has to match what install writes.
+    let version = resolve_version(&url).await.unwrap_or_else(|| {
+        if channel == "nightly" {
+            "nightly".into()
+        } else {
+            "latest".into()
+        }
+    });
+
+    let port = configured_port(&home);
+    if let Some(previous) = take_gateway(&app)? {
+        let _ = previous.stop(SHUTDOWN_GRACE);
+    }
+    // From here the server is down, so every way out has to leave one running again.
+    let _ = std::fs::remove_file(&backup);
+    if let Err(error) = std::fs::rename(&binary, &backup) {
+        let _ = std::fs::remove_file(&staged);
+        let _ = start_gateway(&app, binary.clone(), home.clone(), port).await;
+        return Err(io_err("cannot set the current server aside", error));
+    }
+    if let Err(error) = std::fs::rename(&staged, &binary) {
+        let _ = std::fs::rename(&backup, &binary);
+        let _ = start_gateway(&app, binary.clone(), home.clone(), port).await;
+        return Err(io_err("cannot move the new server into place", error));
+    }
+    let _ = std::fs::write(&version_file, &version);
+
+    match start_gateway(&app, binary.clone(), home.clone(), port).await {
+        Ok(url) => {
+            let _ = std::fs::remove_file(&backup);
+            Ok(InstallOutcome { url, version })
+        }
+        Err(error) => {
+            // Put back the server that worked rather than leave the companion with none.
+            let _ = std::fs::remove_file(&binary);
+            let restored = std::fs::rename(&backup, &binary).is_ok();
+            match previous_version {
+                Some(tag) => {
+                    let _ = std::fs::write(&version_file, tag);
+                }
+                None => {
+                    let _ = std::fs::remove_file(&version_file);
+                }
+            }
+            if restored {
+                let _ = start_gateway(&app, binary, home, port).await;
+                Err(format!(
+                    "{version} did not start, so the previous server was restored: {error}"
+                ))
+            } else {
+                Err(format!("{version} did not start: {error}"))
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -1043,5 +1182,41 @@ if [[ "$2" = uninstall ]]; then echo "launchctl bootout failed" >&2; exit 1; fi"
         );
         let err = run_gateway_service(&binary, &home, "uninstall").unwrap_err();
         assert!(err.contains("launchctl bootout failed"), "{err}");
+    }
+
+    #[test]
+    fn update_channel_is_stable_unless_the_workspace_opted_into_nightly() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(update_channel(home.path()), "stable");
+        fs::write(home.path().join(".update-channel"), " NIGHTLY\n").unwrap();
+        assert_eq!(update_channel(home.path()), "nightly");
+        // Anything the server did not write is not a channel we will download from.
+        fs::write(home.path().join(".update-channel"), "experimental").unwrap();
+        assert_eq!(update_channel(home.path()), "stable");
+    }
+
+    #[test]
+    fn installed_version_reads_the_tag_beside_the_binary() {
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir_all(home.path().join("bin")).unwrap();
+        assert_eq!(installed_version(home.path()), None);
+        fs::write(home.path().join("bin/.version"), "v0.37.0\n").unwrap();
+        assert_eq!(installed_version(home.path()).as_deref(), Some("v0.37.0"));
+        fs::write(home.path().join("bin/.version"), "  \n").unwrap();
+        assert_eq!(installed_version(home.path()), None);
+    }
+
+    #[test]
+    fn only_a_loopback_address_can_be_our_own_gateway() {
+        for url in [
+            "http://localhost:26559",
+            "http://127.0.0.1:26559",
+            "http://[::1]:26559",
+        ] {
+            assert!(is_loopback(&url.parse().unwrap()), "{url}");
+        }
+        for url in ["http://nolune.example.com", "http://192.168.1.4:26559"] {
+            assert!(!is_loopback(&url.parse().unwrap()), "{url}");
+        }
     }
 }

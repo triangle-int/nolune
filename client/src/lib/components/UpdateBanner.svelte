@@ -6,6 +6,7 @@
 
 	let updateInfo = $state<UpdateCheck | null>(null);
 	let updating = $state(false);
+	let error = $state<string | null>(null);
 	let showReborn = $state(false);
 	let frozenCommit = '';
 	const skinStore = getSkinStore();
@@ -36,10 +37,22 @@
 	async function doUpdate() {
 		if (!updateInfo) return;
 		updating = true;
+		error = null;
 		frozenCommit = updateInfo.commit ?? '';
+		// A server that cannot update itself answers 200 with ok:false — no update script,
+		// or a desktop update that failed. Say which, rather than spinning and giving up.
 		try {
-			await applyUpdate();
-		} catch {}
+			const result = await applyUpdate();
+			if (result?.ok === false) {
+				error = result.error ?? 'The server could not update itself.';
+				updating = false;
+				return;
+			}
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e);
+			updating = false;
+			return;
+		}
 		// Wait for server to go DOWN (fast poll — server restarts quickly)
 		let sawDown = false;
 		for (let i = 0; i < 15; i++) {
@@ -72,6 +85,7 @@
 			} catch {}
 		}
 		updating = false;
+		error = 'The update was applied but the server did not come back. Restart it to finish.';
 	}
 
 	function handleReborn() {
@@ -81,7 +95,17 @@
 	}
 </script>
 
-{#if hasUpdate && !updating && !showReborn}
+{#if error && !updating && !showReborn}
+	<div class="update-bar">
+		<p class="update-error" role="alert">Update failed: {error}</p>
+		<div class="update-error-actions">
+			<button class="update-pill" onclick={doUpdate}>
+				<span class="update-label">Try again</span>
+			</button>
+			<button class="update-dismiss" onclick={() => (error = null)}>Dismiss</button>
+		</div>
+	</div>
+{:else if hasUpdate && !updating && !showReborn}
 	<div class="update-bar">
 		<button class="update-pill" onclick={doUpdate}>
 			<span class="update-dot"></span>
@@ -105,5 +129,5 @@
 {/if}
 
 <style>
-.update-bar{display:flex;justify-content:center;padding:8px;background:var(--card);border-bottom:1px solid var(--border)}.update-pill{display:flex;align-items:center;gap:8px;min-height:44px;padding:8px 16px;border-radius:8px;background:var(--primary);color:var(--primary-foreground);cursor:pointer}.update-pill:hover{filter:brightness(1.08)}.update-pill-active{background:var(--accent);color:var(--foreground);cursor:default}.update-dot{width:6px;height:6px;border-radius:50%;background:currentColor}.update-spinner{width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite}.update-label{font:500 14px var(--font-body)}@keyframes spin{to{transform:rotate(360deg)}}.reborn-overlay{position:fixed;inset:0;z-index:9999;background:var(--background);display:flex;flex-direction:column;gap:32px;align-items:center;justify-content:center}.reborn-video{width:min(48vw,320px);height:min(48vw,320px);object-fit:contain}.reborn-text{font:400 clamp(28px,6vw,48px)/1.15 var(--font-display);color:var(--foreground);text-align:center}
+.update-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center;padding:8px;background:var(--card);border-bottom:1px solid var(--border)}.update-error{margin:0;font:400 14px/1.5 var(--font-body);color:var(--destructive)}.update-error-actions{display:flex;gap:8px;align-items:center}.update-dismiss{min-height:44px;padding:8px 16px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--foreground);font:500 14px var(--font-body);cursor:pointer}.update-dismiss:hover{background:var(--accent)}.update-pill{display:flex;align-items:center;gap:8px;min-height:44px;padding:8px 16px;border-radius:8px;background:var(--primary);color:var(--primary-foreground);cursor:pointer}.update-pill:hover{filter:brightness(1.08)}.update-pill-active{background:var(--accent);color:var(--foreground);cursor:default}.update-dot{width:6px;height:6px;border-radius:50%;background:currentColor}.update-spinner{width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite}.update-label{font:500 14px var(--font-body)}@keyframes spin{to{transform:rotate(360deg)}}.reborn-overlay{position:fixed;inset:0;z-index:9999;background:var(--background);display:flex;flex-direction:column;gap:32px;align-items:center;justify-content:center}.reborn-video{width:min(48vw,320px);height:min(48vw,320px);object-fit:contain}.reborn-text{font:400 clamp(28px,6vw,48px)/1.15 var(--font-display);color:var(--foreground);text-align:center}
 </style>
