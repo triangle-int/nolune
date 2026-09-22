@@ -221,7 +221,7 @@ Most settings are available through the interface. Advanced configuration lives 
 
 ## Updates
 
-Nolune checks for updates automatically. Apply an update through Settings or run:
+Nolune checks for updates automatically. When one is out, the **Update available** pill in the web interface applies it: a server the desktop app started is updated and restarted by the app itself, and a server from the one-line installer runs its own update script. To update from a terminal instead:
 
 ```bash
 ~/.nolune/bin/update
