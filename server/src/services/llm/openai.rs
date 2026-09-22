@@ -96,7 +96,9 @@ fn json_schema_format(schema: &serde_json::Value) -> serde_json::Value {
     let strict = match strict_schema_violation(schema, "$") {
         None => true,
         Some(where_) => {
-            log::warn!("[llm] openai: schema is not strictly enforceable ({where_}); sending it as guidance");
+            log::warn!(
+                "[llm] openai: schema is not strictly enforceable ({where_}); sending it as guidance"
+            );
             false
         }
     };
