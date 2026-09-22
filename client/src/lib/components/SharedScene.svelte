@@ -2,7 +2,6 @@
 	import { onMount, onDestroy } from "svelte";
 	import { getSceneStore } from "$lib/stores/scene.svelte.js";
 	import MoonExpression from "$lib/components/companion/MoonExpression.svelte";
-	import CompanionStatus from "$lib/components/companion/CompanionStatus.svelte";
 
 	const store = getSceneStore();
 
@@ -44,8 +43,6 @@
 
 	const HOME_SCALE = 0.5;
 	const FINAL_SCALE = 1.2;
-	const FINAL_X = 1.8;
-	const FINAL_Y = -0.1;
 
 	function animate() {
 		raf = requestAnimationFrame(animate);
@@ -108,39 +105,31 @@
 			} else if (m === "intro") {
 				if (isSelected) {
 					const p = store.introProgress;
+					tx = 50; ty = 50;
 					if (p < 0.25) {
 						const e = easeOutCubic(p / 0.25);
-						tx = 50; ty = 50;
 						ts = (FINAL_SCALE + e * 0.15) * baseSize();
 					} else if (p < 0.58) {
 						const e = easeInOutQuart((p - 0.25) / 0.33);
-						tx = 50 + FINAL_X * WORLD_TO_PCT * e;
-						ty = 50 + FINAL_Y * WORLD_TO_PCT * e;
 						ts = (FINAL_SCALE * 1.15 + (FINAL_SCALE - FINAL_SCALE * 1.15) * e) * baseSize();
 					} else {
-						tx = 50 + FINAL_X * WORLD_TO_PCT;
-						ty = 50 + FINAL_Y * WORLD_TO_PCT;
 						ts = FINAL_SCALE * baseSize();
 					}
 				} else {
 					ts = 0; to = 0;
 				}
 			} else if (m === "chat") {
-				if (isSelected) {
-					const isMobile = (container?.clientWidth ?? 800) < 640;
-					if (store.presenting) {
-						tx = 50;
-						ty = 35;
-						ts = FINAL_SCALE * baseSize() * 0.8;
-					} else if (isMobile) {
-						tx = 50;
-						ty = 50;
-						ts = FINAL_SCALE * baseSize();
-					} else {
-						tx = 50 + FINAL_X * WORLD_TO_PCT;
-						ty = 50 + FINAL_Y * WORLD_TO_PCT;
-						ts = FINAL_SCALE * baseSize();
-					}
+				if (isSelected && store.presenting) {
+					tx = 50;
+					ty = 35;
+					ts = FINAL_SCALE * baseSize() * 0.8;
+				} else if (isSelected) {
+					// The chat carries its own small moon under the last message
+					// (CompanionPresence); the scene moon shrinks away toward it.
+					tx = 50;
+					ty = 70;
+					ts = HOME_SCALE * baseSize();
+					to = 0;
 				} else {
 					ts = 0; to = 0;
 				}
@@ -192,64 +181,14 @@
 				style="left: {orb.x}%; top: {orb.y}%; width: {orb.size}px; height: {orb.size}px; opacity: {orb.opacity};"
 				disabled={store.mode !== "home"}
 			>
-				<!-- The face and motion follow the companion-state reducer (#86); the status below is the accessible text. -->
+				<!-- The face and motion follow the companion-state reducer (#86); in chat the scene moon fades out and CompanionPresence carries the face and status. -->
 				<MoonExpression kind={store.companion.kind} class="moon-avatar" />
 			</button>
 		{/if}
 	{/each}
 
 
-	<!-- Memory orbit around the selected orb (desktop) / strip above chat (mobile) -->
-	{#if store.recalledMemories.length > 0}
-		{@const selOrb = orbs.find(o => o.slug === store.selectedSlug)}
-		{#if selOrb}
-			{@const count = store.recalledMemories.length}
-			<!-- Desktop: orbit around orb -->
-			<div class="memory-orbit" style="left: {selOrb.x}%; top: {selOrb.y}%; --orb-size: {selOrb.size}px;">
-				<div class="memory-orbit-glow"></div>
-				{#each store.recalledMemories as mem, i}
-					{@const angle = (360 / count) * i - 90}
-					<a
-						class="memory-node"
-						style="--angle: {angle}deg; --delay: {i * 200}ms; --i: {i};"
-						href="/{store.selectedSlug}/memory?open={encodeURIComponent(mem.path)}"
-					>
-						<span class="memory-node-line"></span>
-						<span class="memory-node-label">
-							{mem.path.split('/').pop()?.replace('.md', '')}
-						</span>
-					</a>
-				{/each}
-			</div>
-			<!-- Mobile: horizontal strip -->
-			<div class="memory-strip">
-				{#each store.recalledMemories as mem, i}
-					<a
-						class="memory-strip-chip"
-						style="animation-delay: {i * 120}ms;"
-						href="/{store.selectedSlug}/memory?open={encodeURIComponent(mem.path)}"
-					>
-						{mem.path.split('/').pop()?.replace('.md', '')}
-					</a>
-				{/each}
-			</div>
-		{/if}
-	{/if}
 </div>
-
-<!-- What the companion is doing, in words, under the moon: a live region with the
-     related computer, conversation or run linked. Its own layer above the page,
-     because the scene sits under everything and the link must be reachable. -->
-{#if store.mode === "chat" && !store.presenting}
-	{@const selOrb = orbs.find(o => o.slug === store.selectedSlug)}
-	{#if selOrb && selOrb.visible}
-		<div class="companion-status-layer">
-			<div class="companion-status-anchor" style="left: {selOrb.x}%; top: calc({selOrb.y}% + {selOrb.size * 0.48}px);">
-				<CompanionStatus state={store.companion} name={store.companionName} slug={store.selectedSlug} />
-			</div>
-		</div>
-	{/if}
-{/if}
 
 <style>
 	.scene-root {
@@ -280,227 +219,8 @@
 
 	.orb-btn :global(.moon-avatar) { width: 70%; height: 70%; max-width:320px; max-height:320px; }
 
-	/* ── Companion status under the moon ── */
-	.companion-status-layer {
-		position: absolute;
-		inset: 0;
-		z-index: 30;
-		overflow: hidden;
-		pointer-events: none;
-	}
-	.companion-status-anchor {
-		position: absolute;
-		transform: translateX(-50%);
-		width: max-content;
-		max-width: min(360px, 40vw);
-		text-align: center;
-		pointer-events: auto;
-	}
-
-
-	/* ── Memory clouds (above orb) ── */
-	/* ── Memory orbit ── */
-	.memory-orbit {
-		position: absolute;
-		transform: translate(-50%, -50%);
-		z-index: 20;
-		pointer-events: none;
-		width: calc(var(--orb-size) * 1.0);
-		height: calc(var(--orb-size) * 1.0);
-		animation: orbit-breathe 8s ease-in-out infinite;
-	}
-
-	.memory-orbit-glow {
-		display:none;
-		position: absolute;
-		inset: 25%;
-		border-radius: 50%;
-		background: radial-gradient(circle, var(--primary) 0%, transparent 70%);
-		animation: glow-pulse 2s ease-in-out infinite;
-	}
-
-	@keyframes glow-pulse {
-		0%, 100% { opacity: 0.4; transform: scale(1); }
-		50% { opacity: 1; transform: scale(1.1); }
-	}
-
-	.memory-node {
-		position: absolute;
-		left: 50%;
-		top: 50%;
-		width: 0;
-		height: 0;
-		text-decoration: none;
-		pointer-events: auto;
-		cursor: pointer;
-		/* position on the ellipse */
-		transform:
-			rotate(var(--angle))
-			translateX(calc(var(--orb-size) * 0.42))
-			rotate(calc(-1 * var(--angle)));
-		/* entry animation */
-		opacity: 0;
-		animation: node-connect 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-		animation-delay: var(--delay);
-	}
-
-	.memory-node-line {
-		position: absolute;
-		left: 50%;
-		top: 50%;
-		width: calc(var(--orb-size) * 0.42);
-		height: 1px;
-		transform-origin: 0 0;
-		transform:
-			rotate(calc(var(--angle) + 180deg));
-		background: linear-gradient(
-			90deg,
-			var(--primary) 0%,
-			var(--primary) 60%,
-			transparent 100%
-		);
-		pointer-events: none;
-	}
-
-	.memory-node-label {
-		position: absolute;
-		transform: translate(-50%, -50%);
-		padding: 12px;
-		min-height:44px;
-		border-radius: 0.75rem;
-		background: var(--card);
-		backdrop-filter: none;
-		-webkit-backdrop-filter: none;
-		border: 1px solid var(--primary);
-		white-space: nowrap;
-		font-family: var(--font-body);
-		font-style: normal;
-		font-size: 0.75rem;
-		letter-spacing: 0.02em;
-		color: var(--primary);
-		transition: all 0.25s ease;
-	}
-
-	.memory-node:hover .memory-node-label {
-		color: var(--primary);
-		border-color: var(--primary);
-		background: var(--primary);
-		box-shadow: none;
-	}
-
-	.memory-node:hover .memory-node-line {
-		background: linear-gradient(
-			90deg,
-			var(--primary) 0%,
-			var(--primary) 60%,
-			transparent 100%
-		);
-	}
-
-	@keyframes node-connect {
-		0% {
-			opacity: 0;
-			transform:
-				rotate(var(--angle))
-				translateX(0)
-				rotate(calc(-1 * var(--angle)))
-				scale(0.5);
-		}
-		60% {
-			opacity: 1;
-		}
-		100% {
-			opacity: 1;
-			transform:
-				rotate(var(--angle))
-				translateX(calc(var(--orb-size) * 0.42))
-				rotate(calc(-1 * var(--angle)))
-				scale(1);
-		}
-	}
-
-	@keyframes orbit-breathe {
-		0%, 100% { transform: translate(-50%, -50%) scale(1); }
-		50% { transform: translate(-50%, -50%) scale(1.04); }
-	}
-
-
-	/* ── Mobile memory strip ── */
-	.memory-strip {
-		display: none;
-	}
-
 	@media (max-width: 640px) {
 		.orb-btn :global(.moon-avatar) { max-width:200px; max-height:200px; }
-		.scene-root {
-			pointer-events: none;
-		}
-		.orb-btn {
-			pointer-events: none;
-		}
-		/* The moon is a faded backdrop behind the conversation on phones: the
-		   status stays in the accessibility tree and the chat bar carries the words. */
-		.companion-status-anchor {
-			position: absolute;
-			width: 1px;
-			height: 1px;
-			overflow: hidden;
-			clip: rect(0 0 0 0);
-			clip-path: inset(50%);
-			white-space: nowrap;
-			pointer-events: none;
-		}
-		.memory-orbit {
-			display: none;
-		}
-		.memory-strip {
-			display: flex;
-			position: fixed;
-			bottom: calc(env(safe-area-inset-bottom, 0px) + 68px);
-			left: 0;
-			right: 0;
-			z-index: 30;
-			gap: 0.375rem;
-			padding: 0.5rem 1rem;
-			overflow-x: auto;
-			scrollbar-width: none;
-			-webkit-overflow-scrolling: touch;
-			pointer-events: auto;
-			mask-image: linear-gradient(90deg, transparent, black 0.5rem, black calc(100% - 0.5rem), transparent);
-			-webkit-mask-image: linear-gradient(90deg, transparent, black 0.5rem, black calc(100% - 0.5rem), transparent);
-		}
-		.memory-strip::-webkit-scrollbar { display: none; }
-		.memory-strip-chip {
-			flex-shrink: 0;
-			padding: 12px;
-			min-height:44px;
-			border-radius: 1rem;
-			background: var(--card);
-			backdrop-filter: none;
-			-webkit-backdrop-filter: none;
-			border: 1px solid var(--primary);
-			font-family: var(--font-body);
-			font-style: normal;
-			font-size: 0.75rem;
-			color: var(--primary);
-			white-space: nowrap;
-			text-decoration: none;
-			opacity: 0;
-			animation: strip-chip-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-			transition: all 0.2s ease;
-		}
-		.memory-strip-chip:active {
-			color: var(--primary);
-			border-color: var(--primary);
-			background: var(--primary);
-		}
-		@keyframes strip-chip-in {
-			from { opacity: 0; transform: translateY(8px); }
-			to { opacity: 1; transform: translateY(0); }
-		}
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.memory-orbit { animation: none; }
+		.orb-btn { pointer-events: none; }
 	}
 </style>
