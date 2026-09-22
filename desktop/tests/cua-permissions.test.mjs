@@ -3,7 +3,7 @@
 // Driver's own bundle, read from the driver's report, with explicit
 // unsupported, headless, missing-driver, unreachable and version-mismatch
 // states, and copy that only ever promises one-shot capture during an action.
-// A computer without a driver is installed from the page itself, so
+// A computer without a driver is installed from the page itself (#231), so
 // no state ever asks a desktop user to run a command they do not have.
 import { test } from "node:test";
 import assert from "node:assert/strict";

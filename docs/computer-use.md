@@ -100,7 +100,7 @@ fails whenever the two disagree, so the pin moves in both places at once.
 - One installer does the install, wherever it is started from
   (`cua_protocol::cua_driver_install`, behind the crate's `install`
   feature): the server's `nolune cua install` and the desktop app's
-  **Install driver** button are the same code. It downloads the
+  **Install driver** button (#231) are the same code. It downloads the
   asset the pin names for this host, checks its size and sha256 before a
   byte is kept, asks the extracted binary for its version and refuses
   anything but the pin, then records the install under the workspace

@@ -112,7 +112,7 @@
   }
 
   /**
-   * Put the pinned driver on this computer from here. A desktop
+   * Put the pinned driver on this computer from here (#231). A desktop
    * user has no `nolune` on their PATH, so the page does the install
    * itself rather than printing a command they cannot run.
    */

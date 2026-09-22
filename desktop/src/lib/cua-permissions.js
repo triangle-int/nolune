@@ -7,7 +7,7 @@
  * for the pinned driver, never this app), and what a grant did. The grants
  * are attributed to the bundle the driver reported; a driver under another
  * bundle is named as such and nothing is granted through it. The page also
- * installs the driver itself, so a computer without one is a button
+ * installs the driver itself (#231), so a computer without one is a button
  * away from one and no sentence here asks for a terminal. Every sentence
  * describes one-shot capture during an action; nothing promises more.
  */

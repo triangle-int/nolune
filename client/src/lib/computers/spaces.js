@@ -126,7 +126,7 @@ function agentCopy(machine) {
 				host: "the computer",
 				restart: "Restart the Nolune desktop app there.",
 				grant: "grant it from the Nolune desktop app's Settings there",
-				// The app installs the driver itself; a desktop user has no
+				// The app installs the driver itself (#231); a desktop user has no
 				// nolune on their PATH, so never answer them with a command.
 				install: "open the Nolune desktop app there and press Install driver under Settings \u2192 Computer use",
 			};

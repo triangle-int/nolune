@@ -2,7 +2,7 @@
 //!
 //! One installer, shared by everything that can put a driver on a computer:
 //! the server's `nolune cua install`, and the desktop app's own Install
-//! driver button, so a desktop user never opens a terminal to get
+//! driver button (#231), so a desktop user never opens a terminal to get
 //! one. Both download the release asset the pin names for this host, verify
 //! its size and sha256 before a single byte is kept, extract it under
 //! `<workspace>/cua-driver/releases/<version>/`, ask the extracted binary

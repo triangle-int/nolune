@@ -2,7 +2,7 @@
 //!
 //! Shared by both runtimes, like the installer beside it: the server's
 //! `nolune cua status` and the desktop app both have to bring this daemon
-//! up by path, and a desktop that installs its own driver is the
+//! up by path, and a desktop that installs its own driver (#231) is the
 //! case where no daemon has ever run.
 //!
 //! On macOS `cua-driver mcp` is a proxy: it talks to the `CuaDriver.app`

@@ -973,7 +973,7 @@ impl CuaRuntime {
     }
 
     /// Let go of the driver that runs, so the next start or request spawns
-    /// the one on disk now. What an install has to do: a driver
+    /// the one on disk now. What an install has to do (#231): a driver
     /// replaced under the workspace changes nothing while the old child is
     /// still answering, and after a reinstall over a stale version that
     /// child is exactly the version the install was meant to replace.
@@ -1172,7 +1172,7 @@ const DAEMON_START_WAIT: Duration = Duration::from_secs(15);
 /// `mcp` would start one itself, but by name through LaunchServices, which
 /// resolves whichever `CuaDriver.app` the system knows — on a Mac that has
 /// only ever had the driver Nolune installed, that is nothing at all. This
-/// is what makes the settings window's Install driver button work on
+/// is what makes the settings window's Install driver button (#231) work on
 /// its own: the driver it just put under the workspace is the daemon that
 /// answers, and macOS attributes Accessibility and Screen Recording to that
 /// bundle. A failure is logged, never fatal: the handshake below says what
@@ -2052,7 +2052,7 @@ mod tests {
         );
     }
 
-    /// Installing a driver from the settings window replaces the
+    /// Installing a driver from the settings window (#231) replaces the
     /// file on disk; the child that is running is still the old one, and
     /// after a reinstall over a stale version it is the very version the
     /// install was meant to replace. `replace_driver` lets it go — ending

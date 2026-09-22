@@ -9,7 +9,7 @@
 //! (Linux and Windows, a session without a display); and the grant action,
 //! which drives `cua-driver permissions grant` so the prompts name the
 //! driver, and opens the System Settings pane. The page also installs the
-//! driver itself: a computer with none is one button away from one,
+//! driver itself (#231): a computer with none is one button away from one,
 //! so nothing here sends a desktop user to a terminal for a command they
 //! do not have. Capture is one-shot: the driver snapshots a window when an
 //! action asks for one, and nothing here records, streams or watches a
@@ -30,7 +30,7 @@ use serde::Serialize;
 use crate::cua_runtime::{self, CuaRuntime};
 
 /// What this page calls its own install, so every sentence asking for one
-/// names the button and never a shell command.
+/// names the button and never a shell command (#231).
 pub const INSTALL_ACTION: &str = "Install driver";
 /// The same install from a terminal: what a server host without a settings
 /// window runs, and what the docs name. The page never asks for it.
@@ -381,7 +381,7 @@ pub struct CuaPermissionsReport {
     /// The driver version this build expects.
     pub pinned_version: &'static str,
     /// What the page's own install is called, so its copy and its button
-    /// agree.
+    /// agree (#231).
     pub install_action: &'static str,
     /// The same install from a terminal. Shown nowhere on the page; kept
     /// so a support answer can name it.
@@ -1388,7 +1388,7 @@ mod tests {
                     "{text:?} implies more than one-shot capture ({forbidden})"
                 );
             }
-            // The page installs the driver itself. A desktop user has
+            // The page installs the driver itself (#231). A desktop user has
             // no `nolune` on their PATH: the in-app server install never puts
             // one there, and a desktop bound to a server elsewhere has no
             // binary at all. So no sentence the window can show may answer a

@@ -65,7 +65,7 @@ fn production(path: &Path) -> String {
 fn server_depends_on_and_uses_the_shared_cua_protocol() {
     let repo = repo();
     let manifest = fs::read_to_string(repo.join("server/Cargo.toml")).unwrap();
-    // The `install` feature carries the shared driver installer:
+    // The `install` feature carries the shared driver installer (#231):
     // one implementation for `nolune cua install` and for the desktop
     // app's own Install driver button.
     assert!(

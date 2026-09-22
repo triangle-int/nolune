@@ -325,7 +325,7 @@ Nolune release.
 
 - The desktop app installs the driver on the computer it runs on: its
   Settings window, under Computer use, has an **Install driver** button
-  that runs the same verified installer into the same
+  (#231) that runs the same verified installer into the same
   `~/.nolune/cua-driver/`. It exists because a desktop user has no
   `nolune` on their `PATH`: the app's in-app server install puts the
   binary in `~/.nolune/bin` without touching `PATH`, and a desktop bound

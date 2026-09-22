@@ -1,4 +1,4 @@
-//! Installing the Cua Driver from inside the app.
+//! Installing the Cua Driver from inside the app (#231).
 //!
 //! Until now the only way to put a driver on a computer was `nolune cua
 //! install` in a terminal, which a desktop user has no reason to own: the

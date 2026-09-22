@@ -119,7 +119,7 @@ static INSTANCE_SLUG: Mutex<Option<String>> = Mutex::new(None);
 static SERVER_URL: Mutex<Option<String>> = Mutex::new(None);
 
 /// Asks the open machine socket to close so the retry loop opens another
-/// one and registers this computer again. The descriptor is built
+/// one and registers this computer again (#231). The descriptor is built
 /// once per connection, before the socket opens, so a driver installed
 /// while connected is invisible to the companion until the next
 /// registration; installing one signals here instead of making the user
@@ -1104,7 +1104,7 @@ mod tests {
 
     /// The descriptor is built once per connection, so a driver installed
     /// while the app is connected only reaches the companion through a new
-    /// registration. With no socket open there is nothing to signal
+    /// registration (#231). With no socket open there is nothing to signal
     /// and the next connect carries the driver anyway, which is what the
     /// install tells the user.
     #[test]
