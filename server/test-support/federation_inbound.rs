@@ -35,6 +35,7 @@ use crate::{
             inbound::{INTENT_PATH, InboundIntent, InboundStatus, InboundStore},
             pairing::FederationState,
             peers::Clock,
+            proposals::ProposalStore,
         },
         peer_delivery::INBOUND_CHAT_ID,
         rhythm, tools,
@@ -79,7 +80,11 @@ async fn start_in(
         wire.clone(),
         clock.clone(),
     ));
-    state.federation_inbox = Arc::new(InboundStore::with_clock(workspace.path(), clock));
+    state.federation_inbox = Arc::new(InboundStore::with_clock(workspace.path(), clock.clone()));
+    state.federation_proposals = Arc::new(
+        ProposalStore::with_clock(workspace.path(), clock)
+            .with_events(state.events.clone(), CANONICAL_SLUG),
+    );
     wire.servers
         .lock()
         .unwrap()
@@ -610,9 +615,11 @@ async fn each_intent_dispatches_through_the_gate_to_accepted_denied_or_needs_own
     assert_eq!(receipts[0].granted, DisclosureClass::None);
     assert_eq!(chat_messages(&a).len(), 1, "a denied intent reaches nobody");
 
-    // Allowed by rule: a reminder is delivered and becomes a commitment
-    // due at the asked time; a proposal and an availability query are
-    // delivered and answered with their typed answers, disclosing nothing.
+    // Allowed by rule: a reminder is delivered and recorded as a proposal
+    // for the owner's review, and the commitment due at the asked time is
+    // written only once they accept it (#111); a proposal is delivered and
+    // recorded for review; an availability query is answered with free
+    // spans at the class allowed.
     allow(&a, &b_id, IntentClass::Reminder, DisclosureClass::None);
     allow(&a, &b_id, IntentClass::Proposal, DisclosureClass::None);
     allow(
@@ -643,6 +650,32 @@ async fn each_intent_dispatches_through_the_gate_to_accepted_denied_or_needs_own
         .state
         .commitments
         .list(ListFilter::default(), (T0 + 120) as i64);
+    assert!(
+        commitments.is_empty(),
+        "nothing is written before the owner accepts: {commitments:?}"
+    );
+    let messages = chat_messages(&a);
+    assert_eq!(messages.len(), 2);
+    assert!(messages[1].content.contains("water the plants"));
+    let (status, body) = a
+        .owner(Method::GET, "/api/federation/proposals", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["proposals"][0]["correlation_id"], "req-remind");
+    assert_eq!(body["proposals"][0]["status"], "open");
+    let proposal_id = body["proposals"][0]["id"].as_str().unwrap().to_owned();
+    let (status, body) = a
+        .owner(
+            Method::POST,
+            &format!("/api/federation/proposals/{proposal_id}/accept"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let commitments = a
+        .state
+        .commitments
+        .list(ListFilter::default(), (T0 + 120) as i64);
     assert_eq!(commitments.len(), 1, "{commitments:?}");
     assert_eq!(
         commitments[0].deadline,
@@ -654,9 +687,6 @@ async fn each_intent_dispatches_through_the_gate_to_accepted_denied_or_needs_own
         commitments[0].promise
     );
     assert!(commitments[0].promise.contains(&b_id));
-    let messages = chat_messages(&a);
-    assert_eq!(messages.len(), 2);
-    assert!(messages[1].content.contains("water the plants"));
     // The promise reaches the check-in prompt outside any untrusted block,
     // so it names this server's own ids: the chat message, never the
     // peer-chosen correlation id or either label.
@@ -711,8 +741,8 @@ async fn each_intent_dispatches_through_the_gate_to_accepted_denied_or_needs_own
     let (_, response) = opened(&b, body);
     response.check_against(&free).unwrap();
     assert!(
-        matches!(&response, IntentResponse::Accepted { answer: IntentAnswer::Availability { windows }, disclosure: DisclosureClass::None, .. } if windows.is_empty()),
-        "nothing about the schedule is disclosed yet: {response}"
+        matches!(&response, IntentResponse::Accepted { answer: IntentAnswer::Availability { windows }, disclosure: DisclosureClass::Availability, .. } if windows.len() == 1 && windows[0].from == window.from && windows[0].to == window.to),
+        "an owner with nothing on is free for the whole window, at the class allowed: {response}"
     );
     let messages = chat_messages(&a);
     assert_eq!(messages.len(), 4);

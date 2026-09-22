@@ -1058,8 +1058,9 @@ async fn the_sending_tools_are_gated_by_this_owners_policy_and_queue_typed_inten
     assert_eq!(receipts[0].responder, b_id);
 
     // The availability tool asks at the availability class with a window
-    // in this companion's time; B has no calendar, so it answers with no
-    // windows at `none`, which is what the receipt records as granted.
+    // in this companion's time; B's owner has nothing on, so it answers
+    // with the whole window free at `availability` (#111), which is what
+    // the receipt records as granted.
     allow(
         &b,
         &a_id,
@@ -1100,7 +1101,8 @@ async fn the_sending_tools_are_gated_by_this_owners_policy_and_queue_typed_inten
     assert!(
         matches!(
             &entry.response,
-            Some(IntentResponse::Accepted { answer: IntentAnswer::Availability { windows }, disclosure: DisclosureClass::None, .. }) if windows.is_empty()
+            Some(IntentResponse::Accepted { answer: IntentAnswer::Availability { windows }, disclosure: DisclosureClass::Availability, .. })
+                if windows.len() == 1 && windows[0].from == 1_800_090_000 && windows[0].to == 1_800_097_200
         ),
         "{:?}",
         entry.response
@@ -1108,10 +1110,11 @@ async fn the_sending_tools_are_gated_by_this_owners_policy_and_queue_typed_inten
     let (_, receipts) = outbox(&a).await;
     assert_eq!(receipts[0].correlation_id, key);
     assert_eq!(receipts[0].requested, DisclosureClass::Availability);
-    assert_eq!(receipts[0].granted, DisclosureClass::None);
+    assert_eq!(receipts[0].granted, DisclosureClass::Availability);
 
     // The reminder tool asks for a reminder at a time in the future; B
-    // sets it as a commitment and answers `reminder_scheduled`.
+    // records it for its owner's review and answers `reminder_scheduled`,
+    // writing no commitment until its owner accepts (#111).
     allow(&b, &a_id, IntentClass::Reminder, DisclosureClass::None);
     let propose = tool(&a, "propose_peer_reminder");
     let behind = propose
@@ -1162,8 +1165,16 @@ async fn the_sending_tools_are_gated_by_this_owners_policy_and_queue_typed_inten
         entry.response
     );
     let commitments = b.state.commitments.list(ListFilter::default(), T0 as i64);
-    assert_eq!(commitments.len(), 1, "{commitments:?}");
-    assert!(!commitments[0].promise.contains("water"));
+    assert!(
+        commitments.is_empty(),
+        "nothing is written on B before its owner accepts: {commitments:?}"
+    );
+    let (status, body) = b
+        .owner(Method::GET, "/api/federation/proposals", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["proposals"][0]["correlation_id"], key);
+    assert_eq!(body["proposals"][0]["details"]["kind"], "reminder");
 
     // Three requests, three receipts on A, all requesting side, and one
     // audit line each; B judged each once.
