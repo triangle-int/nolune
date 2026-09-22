@@ -277,17 +277,16 @@ fn cua_field(machine_id: &str, location: MachineLocation) -> Value {
     .unwrap()
 }
 
-/// The register message a desktop sends, with or without a descriptor.
+/// The register message a desktop from this release sends, with or without
+/// a descriptor: the toolcalls the app executes (#19, exactly
+/// `computer_use_bridge.rs::CAPABILITIES`) and no grants of the app's own.
 fn register(machine_id: &str, cua: Option<Value>) -> Value {
     let mut frame = json!({
         "type": "register",
         "machine_id": machine_id,
         "os": "macos",
         "hostname": "studio",
-        "screen_width": 1440,
-        "screen_height": 900,
-        "permissions": {"accessibility": "granted", "screen_capture": "granted"},
-        "capabilities": ["screenshot", "left_click", "bash"],
+        "capabilities": crate::domain::machine::DESKTOP_TOOLCALLS,
     });
     if let Some(cua) = cua {
         frame["cua"] = cua;
@@ -405,16 +404,21 @@ async fn a_desktop_with_a_cua_descriptor_is_a_typed_target_and_a_known_machine()
         json!(["app_discovery", "pointer", "session_lifecycle", "health"])
     );
 
-    // The known row is the desktop's record with the driver's live fields.
+    // The known row is the desktop's record with the driver's live fields,
+    // and its grants are the driver's (the registration sent none of the
+    // app's own, #19).
     let row = h.known_row(STUDIO).await;
     assert_eq!(row["location"], "desktop");
     assert_eq!(row["online"], true);
     assert_eq!(row["health"], "healthy");
     assert_eq!(row["hostname"], "studio");
-    assert_eq!(row["permissions"]["accessibility"], "granted");
+    assert_eq!(
+        row["permissions"],
+        json!({"accessibility": "granted", "screen_capture": "granted"})
+    );
     assert_eq!(
         row["capabilities"],
-        json!(["screenshot", "left_click", "bash"])
+        json!(crate::domain::machine::DESKTOP_TOOLCALLS)
     );
     assert_eq!(row["driver_version"], "0.28.2");
     assert_eq!(row["cua_health"], "healthy");
@@ -547,9 +551,15 @@ async fn a_registration_without_cua_keeps_the_legacy_toolcalls_working() {
     assert_eq!(row["online"], true);
     assert_eq!(row["driver_version"], Value::Null);
     assert_eq!(row["cua_health"], Value::Null);
+    assert_eq!(
+        row["permissions"],
+        Value::Null,
+        "no driver, no grants: the app's own are never recorded (#19)"
+    );
 
-    // The legacy toolcall is the flat message it always was, and its
-    // `action_result` resolves it.
+    // The legacy toolcall (a shell command, #19: the only toolcalls left
+    // are the shell and file ones) is the flat message it always was, and
+    // its `action_result` resolves it with the output in the `error` field.
     let registry = h.state.machine_registry.clone();
     let call = tokio::spawn(async move {
         registry
@@ -557,8 +567,8 @@ async fn a_registration_without_cua_keeps_the_legacy_toolcalls_working() {
                 STUDIO,
                 AgentToolCall {
                     request_id: "legacy-1".into(),
-                    action: "screenshot".into(),
-                    params: json!({}),
+                    action: "bash".into(),
+                    params: json!({"command": "uname -a", "cwd": null}),
                 },
             )
             .await
@@ -566,17 +576,17 @@ async fn a_registration_without_cua_keeps_the_legacy_toolcalls_working() {
     let frame = desktop.next_frame().await;
     assert_eq!(
         frame,
-        json!({"request_id": "legacy-1", "action": "screenshot"})
+        json!({"request_id": "legacy-1", "action": "bash", "command": "uname -a", "cwd": null})
     );
     desktop
         .send(json!({
             "type": "action_result", "request_id": "legacy-1",
-            "result_type": "screenshot", "image": "aGk=", "width": 1, "height": 1, "scale": 1.0
+            "success": true, "error": "Darwin studio 25.0.0"
         }))
         .await;
     let result = call.await.unwrap().unwrap();
-    assert_eq!(result.result_type, "screenshot");
-    assert_eq!(result.image.as_deref(), Some("aGk="));
+    assert_eq!(result.success, Some(true));
+    assert_eq!(result.error.as_deref(), Some("Darwin studio 25.0.0"));
 
     // A typed answer from a legacy-only desktop is dropped, not a crash.
     desktop
@@ -589,8 +599,8 @@ async fn a_registration_without_cua_keeps_the_legacy_toolcalls_working() {
                 STUDIO,
                 AgentToolCall {
                     request_id: "legacy-2".into(),
-                    action: "screenshot".into(),
-                    params: json!({}),
+                    action: "file_list".into(),
+                    params: json!({"path": "~", "content": null}),
                 },
             )
             .await
@@ -599,7 +609,7 @@ async fn a_registration_without_cua_keeps_the_legacy_toolcalls_working() {
     desktop
         .send(json!({
             "type": "action_result", "request_id": "legacy-2",
-            "result_type": "action", "success": true
+            "success": true, "error": "Documents/"
         }))
         .await;
     assert_eq!(call.await.unwrap().unwrap().success, Some(true));

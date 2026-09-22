@@ -29,8 +29,24 @@ pub const MAX_CAPABILITIES: usize = 64;
 /// every 15 seconds by `routes/machine_agents.rs`).
 pub const STALE_HEARTBEAT_SECS: i64 = 45;
 
+/// The toolcalls the desktop app executes (#19): what a desktop from this
+/// release reports as its `capabilities`, verbatim from
+/// `desktop/src-tauri/src/computer_use_bridge.rs::CAPABILITIES`
+/// (`tests/legacy_computer_use_removed.rs` keeps the two lists equal).
+/// Seeing and acting in windows is not a toolcall: the Cua descriptor the
+/// same registration carries says what the driver offers.
+pub const DESKTOP_TOOLCALLS: [&str; 5] = [
+    "bash",
+    "file_read",
+    "file_write",
+    "file_list",
+    "upload_file",
+];
+
 /// What a desktop agent that predates capability reporting can do: the
-/// frozen coordinate action set plus the shell and file toolcalls.
+/// coordinate action set its executor answered (gone from the server since
+/// #19, kept here as the names such a desktop accepts) plus the shell and
+/// file toolcalls.
 pub const LEGACY_DESKTOP_CAPABILITIES: [&str; 15] = [
     "screenshot",
     "left_click",
@@ -63,12 +79,13 @@ pub struct MachineRecord {
     /// `None` when the OS label is not one the protocol names.
     pub platform: Option<Platform>,
     pub location: MachineLocation,
-    pub screen_width: u32,
-    pub screen_height: u32,
-    /// Desktop permission state at the last registration; `None` when the
-    /// desktop did not report it.
+    /// The grants of the Cua driver the desktop registered, as its
+    /// descriptor reported them at the last registration; `None` for a
+    /// desktop without a driver. The desktop app's own grants are never
+    /// recorded: nothing inside the app uses them (#19).
     pub permissions: Option<PermissionState>,
-    /// Legacy action names the desktop accepts.
+    /// Toolcall names the desktop app executes (`DESKTOP_TOOLCALLS` from
+    /// this release; the legacy set from older desktops).
     pub capabilities: Vec<String>,
     /// Unix seconds of the first registration.
     pub first_seen: i64,
@@ -98,8 +115,10 @@ pub struct KnownMachine {
     pub os: String,
     pub platform: Option<Platform>,
     pub location: MachineLocation,
-    pub screen_width: u32,
-    pub screen_height: u32,
+    /// The Cua driver's grants: live from its descriptor while one is
+    /// registered (a connected desktop with a driver, or the server-local
+    /// target), otherwise what the record kept; `None` for a desktop
+    /// without a driver.
     pub permissions: Option<PermissionState>,
     pub capabilities: Vec<String>,
     pub first_seen: i64,
@@ -239,6 +258,31 @@ mod tests {
         assert_eq!(platform_from_os("linux"), Some(Platform::Linux));
         assert_eq!(platform_from_os("freebsd"), None);
         assert_eq!(platform_from_os(""), None);
+    }
+
+    #[test]
+    fn the_desktop_toolcalls_are_within_the_legacy_set_and_cover_the_file_work() {
+        for toolcall in DESKTOP_TOOLCALLS {
+            assert!(
+                LEGACY_DESKTOP_CAPABILITIES.contains(&toolcall),
+                "{toolcall} is new to this release, so an older desktop would not answer it"
+            );
+        }
+        for capability in crate::domain::handoff::FILE_CAPABILITIES {
+            assert!(
+                DESKTOP_TOOLCALLS.contains(&capability),
+                "a handoff requires {capability}, which the desktop app does not execute"
+            );
+        }
+        assert!(
+            !DESKTOP_TOOLCALLS.iter().any(|name| {
+                matches!(
+                    *name,
+                    "screenshot" | "left_click" | "type" | "key" | "scroll"
+                )
+            }),
+            "window actions are the Cua driver's, not toolcalls"
+        );
     }
 
     #[test]

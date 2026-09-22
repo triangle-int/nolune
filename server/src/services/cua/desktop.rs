@@ -8,9 +8,9 @@
 //! server, both dropped when the socket closes.
 //!
 //! The legacy `toolcall` / `action_result` messages (`remote_bash`,
-//! `remote_files`, coordinate `computer_use`) travel on the same socket
-//! unchanged; a desktop that registers without a descriptor never sees a
-//! typed frame.
+//! `remote_files`) travel on the same socket unchanged; a desktop that
+//! registers without a descriptor never sees a typed frame, and since #19
+//! nothing else does its window actions.
 
 use std::{
     collections::HashMap,

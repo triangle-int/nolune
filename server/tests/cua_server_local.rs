@@ -17,8 +17,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// The coordinate-only actions the legacy desktop agent understands. Anything
-/// new must be a `cua_protocol::CuaAction`, never another entry here.
+/// The coordinate-only actions the legacy desktop agent understood before
+/// #19 deleted its executor. None of them is a toolcall any more; anything
+/// that sees or acts in a window is a `cua_protocol::CuaAction`.
 const LEGACY_ACTIONS: [&str; 10] = [
     "screenshot",
     "left_click",
@@ -264,29 +265,41 @@ fn desktop_targets_register_over_typed_frames() {
 }
 
 #[test]
-fn legacy_coordinate_actions_are_frozen() {
+fn legacy_coordinate_actions_are_gone_and_only_the_remote_tools_build_toolcalls() {
     let repo = repo();
     let computer = production(&repo.join("server/src/services/tools/computer.rs"));
 
-    // The tool description is the model-facing contract; it lists exactly the
-    // frozen vocabulary and nothing else.
-    let start = computer
-        .find("Available actions:")
-        .expect("computer_use description lists its actions");
-    let clause = &computer[start + "Available actions:".len()..];
-    let end = clause.find('.').expect("action list ends with a period");
-    let advertised: BTreeSet<String> = clause[..end]
-        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-        .filter(|token| !token.is_empty())
-        .map(str::to_owned)
+    // No tool sends a coordinate action to a desktop any more (#19): the
+    // shell and file toolcalls are the only raw ones left.
+    let named: BTreeSet<String> = LEGACY_ACTIONS
+        .iter()
+        .filter(|action| {
+            [
+                format!("action: \"{action}\""),
+                format!("\"{action}\".into()"),
+                format!("\"{action}\" =>"),
+                format!("== \"{action}\""),
+            ]
+            .iter()
+            .any(|shape| computer.contains(shape))
+        })
+        .map(|s| (*s).to_owned())
         .collect();
-    let frozen: BTreeSet<String> = LEGACY_ACTIONS.iter().map(|s| (*s).to_owned()).collect();
-    assert_eq!(
-        advertised, frozen,
-        "computer_use advertises a coordinate-only action outside the frozen set"
+    assert!(
+        named.is_empty(),
+        "tools/computer.rs still names coordinate actions: {named:?}"
     );
+    for remaining in [
+        "action: \"bash\".into()",
+        "format!(\"file_{}\", args.operation)",
+    ] {
+        assert!(
+            computer.contains(remaining),
+            "the remote shell and file toolcalls must remain ({remaining} missing)"
+        );
+    }
 
-    // Only the legacy tools build raw agent toolcalls; every other machine
+    // Only the remote tools build raw agent toolcalls; every other machine
     // action goes through the typed protocol.
     for path in rust_files(&repo.join("server/src")) {
         let relative = path

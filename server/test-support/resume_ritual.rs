@@ -5,7 +5,10 @@
 //! desktops register through the registry exactly as the WebSocket route
 //! does; the reconnect tests instead serve the router on a local port and
 //! connect a desktop over the machine socket itself, so the connect hook is
-//! reached the way a real desktop reaches it. Either way their toolcall
+//! reached the way a real desktop reaches it. Either way a desktop
+//! registers with what one from this release sends (#19): the five
+//! toolcalls the app executes and the descriptor of the Cua driver whose
+//! grants a continuation needs. Either way their toolcall
 //! channels stay empty throughout, which is how these tests prove that a
 //! suggestion never touches a computer. Records are written the way
 //! explicit task activity writes them; the ritual only reads them.
@@ -20,7 +23,7 @@ use crate::{
             ProvenanceSource,
         },
         events::ServerEvent,
-        handoff::{COMPUTER_USE_CAPABILITIES, FILE_CAPABILITIES},
+        machine::DESKTOP_TOOLCALLS,
         proactive::{ProactivePolicy, QuietHours},
         resume::{MAX_BREAK_MINUTES, MAX_COOLDOWN_SECS},
     },
@@ -36,7 +39,10 @@ use axum::{
     http::{Method, Request, StatusCode, header},
 };
 use chrono::Timelike;
-use cua_protocol::{MachineLocation, Permission, PermissionState, Platform};
+use cua_protocol::{
+    Capability, CuaRegistrationEnvelope, DriverVersion, MachineDescriptor, MachineHealth,
+    MachineId, MachineLocation, Permission, PermissionState, Platform, ProtocolVersion,
+};
 use std::{fs, net::SocketAddr, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -99,20 +105,32 @@ fn api(suffix: &str) -> String {
     format!("/api/instances/{CANONICAL_SLUG}/{suffix}")
 }
 
-fn granted() -> Option<PermissionState> {
-    Some(PermissionState {
-        accessibility: Permission::Granted,
-        screen_capture: Permission::Granted,
-    })
+/// What the desktop app reports as `capabilities`: the toolcalls it
+/// executes, and nothing about windows (`computer_use_bridge.rs::CAPABILITIES`).
+fn desktop_toolcalls() -> Vec<String> {
+    DESKTOP_TOOLCALLS.iter().map(|s| (*s).to_owned()).collect()
 }
 
-fn full_capabilities() -> Vec<String> {
-    COMPUTER_USE_CAPABILITIES
-        .iter()
-        .chain(FILE_CAPABILITIES.iter())
-        .chain(["bash", "right_click", "scroll"].iter())
-        .map(|s| (*s).to_owned())
-        .collect()
+/// The descriptor of a healthy Cua driver holding both grants, as a desktop
+/// registers it beside its toolcalls (#17).
+fn driver(machine_id: &str) -> MachineDescriptor {
+    MachineDescriptor {
+        machine_id: MachineId::try_from(machine_id).unwrap(),
+        location: MachineLocation::Desktop,
+        platform: Platform::Macos,
+        driver_version: DriverVersion::try_from("0.28.2").unwrap(),
+        health: MachineHealth::Healthy,
+        permissions: PermissionState {
+            accessibility: Permission::Granted,
+            screen_capture: Permission::Granted,
+        },
+        capabilities: vec![
+            Capability::AppDiscovery,
+            Capability::WindowDiscovery,
+            Capability::SessionLifecycle,
+            Capability::Health,
+        ],
+    }
 }
 
 /// A desktop connected through the registry: the channel every toolcall to
@@ -158,6 +176,9 @@ impl SocketDesktop {
         assert!(response.starts_with("HTTP/1.1 101"), "{response}");
 
         let mut desktop = Self { stream };
+        // The register frame a desktop from this release sends: no grants of
+        // the app's own, the toolcalls it executes, and its driver's
+        // descriptor in `cua`.
         desktop
             .send_text(
                 &serde_json::json!({
@@ -165,10 +186,11 @@ impl SocketDesktop {
                     "machine_id": machine_id,
                     "os": "macos",
                     "hostname": hostname,
-                    "screen_width": 2560,
-                    "screen_height": 1440,
-                    "permissions": granted(),
-                    "capabilities": full_capabilities(),
+                    "capabilities": desktop_toolcalls(),
+                    "cua": CuaRegistrationEnvelope {
+                        version: ProtocolVersion::V1,
+                        machine: driver(machine_id),
+                    },
                 })
                 .to_string(),
             )
@@ -176,6 +198,7 @@ impl SocketDesktop {
         let ack = desktop.next_text(Duration::from_secs(5)).await.unwrap();
         assert_eq!(ack["type"], "registered", "{ack}");
         assert_eq!(ack["machine_id"], machine_id);
+        assert_eq!(ack["cua"], true, "the typed target attached: {ack}");
         desktop
     }
 
@@ -289,27 +312,35 @@ impl Harness {
 }
 
 impl Harness {
+    /// A desktop registered the way the machine route registers one: its
+    /// toolcalls on the legacy registration, then its Cua descriptor
+    /// attached to the same connection.
     async fn connect_ready(&self, machine_id: &str, hostname: &str) -> Desktop {
         let (tx, calls) = tokio::sync::mpsc::unbounded_channel();
-        self.state
+        let descriptor = driver(machine_id);
+        let connection = self
+            .state
             .machine_registry
             .register(
                 MachineInfo {
                     machine_id: machine_id.into(),
                     os: "macos".into(),
                     hostname: hostname.into(),
-                    screen_width: 2560,
-                    screen_height: 1440,
                     last_seen: now(),
                     instance_slug: None,
                     platform: Some(Platform::Macos),
                     location: MachineLocation::Desktop,
-                    permissions: granted(),
-                    capabilities: full_capabilities(),
+                    permissions: Some(descriptor.permissions.clone()),
+                    capabilities: desktop_toolcalls(),
                 },
                 tx,
             )
             .await;
+        self.state
+            .machine_registry
+            .attach_desktop_cua(machine_id, connection, descriptor, Duration::from_secs(5))
+            .await
+            .expect("the driver attaches to the connection that just registered");
         Desktop { calls }
     }
 

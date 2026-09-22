@@ -514,11 +514,14 @@ export interface MachineInfo {
 	os: string;
 	platform: MachinePlatform | null;
 	location: MachineLocation;
-	screen_width: number;
-	screen_height: number;
-	/** Reported at the last registration; `null` when the desktop did not report it. */
+	/**
+	 * The Cua driver's grants (Accessibility and Screen Recording as the
+	 * driver holds them), live while a driver is registered on this machine;
+	 * `null` for a desktop without one. The desktop app's own grants are never
+	 * reported: nothing inside the app uses them (#19).
+	 */
 	permissions: MachinePermissions | null;
-	/** Action names the desktop accepts. */
+	/** Toolcall names the desktop app executes (shell and file work). */
 	capabilities: string[];
 	/** Unix seconds of the first registration. */
 	first_seen: number;
@@ -659,16 +662,6 @@ export type ServerEvent =
 			instance_slug: string;
 			chat_id: string;
 			memories: RecalledMemory[];
-	  }
-	| {
-			type: "computer_use_request";
-			instance_slug: string;
-			request_id: string;
-			action: string;
-			coordinate?: [number, number];
-			text?: string;
-			key?: string;
-			scroll_delta?: [number, number];
 	  }
 ;
 

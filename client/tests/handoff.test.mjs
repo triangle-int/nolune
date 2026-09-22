@@ -33,7 +33,7 @@ const card = {
 	resources: [{ resource: { kind: 'memory', path: 'notes/trip.md' }, label: 'memory notes/trip.md', available: true }],
 	blockers: [],
 	next_step: 'rename IMG_* files',
-	required: { capabilities: ['screenshot', 'left_click', 'type', 'key'], permissions: ['screen_capture', 'accessibility'] },
+	required: { capabilities: ['file_read', 'file_list'], permissions: ['screen_capture', 'accessibility'] },
 	decision: null,
 	bound_to: null,
 	offered: true,
@@ -49,8 +49,6 @@ const machine = (id, name, online = true, health = 'healthy') => ({
 	os: 'macos',
 	platform: 'macos',
 	location: 'desktop',
-	screen_width: 1920,
-	screen_height: 1080,
 	permissions: null,
 	capabilities: [],
 	first_seen: NOW - 1000,
@@ -142,10 +140,17 @@ test('checks are grouped by what they mean for the user', () => {
 	assert.deepEqual(groupChecks([]), { blocking: [], approvals: [], notes: [] });
 });
 
-test('requirements read as a sentence', () => {
+test('requirements read as a sentence that names the Cua driver, never a coordinate action', () => {
+	// The permissions are the driver's (#19), so needing them is needing a
+	// driver on the destination; the capabilities are the desktop app's file
+	// toolcalls when the task links a file.
 	assert.equal(
 		requiredSummary(card.required),
-		'Needs screenshot, left_click, type, key · Screen Recording and Accessibility permissions',
+		'Needs a Cua driver with Screen Recording and Accessibility · file_read, file_list',
+	);
+	assert.equal(
+		requiredSummary({ capabilities: [], permissions: ['screen_capture', 'accessibility'] }),
+		'Needs a Cua driver with Screen Recording and Accessibility',
 	);
 	assert.equal(requiredSummary({ capabilities: [], permissions: [] }), '');
 });
