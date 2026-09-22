@@ -441,11 +441,15 @@ fn enforce_retention(
 }
 
 /// What delivering an allowed intent left behind: the id of the chat
-/// message it became and the typed answer for the peer.
+/// message it became, the typed answer for the peer, and the disclosure
+/// class the answer amounts to (`none` for everything but the free spans
+/// of an availability answer, #111), which the response never states
+/// above the class the intent asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Delivered {
     pub message_id: String,
     pub answer: IntentAnswer,
+    pub disclosure: DisclosureClass,
 }
 
 /// An intent from a paired peer, judged by policy and answered with a
@@ -533,15 +537,19 @@ pub fn receive_intent(
             decision,
             approval_id,
         }) => {
-            let Delivered { message_id, answer } = deliver(&intent, now)?;
+            let delivered = deliver(&intent, now)?;
+            let Delivered {
+                message_id, answer, ..
+            } = delivered.clone();
             let response = IntentResponse::Accepted {
                 version: INTENT_VERSION,
                 correlation_id: intent.correlation_id.clone(),
                 responder: me.clone(),
-                // Nothing an answer carries yet says anything about the
-                // owner: a delivery is acknowledged, an availability query
-                // is answered with no windows.
-                disclosure: DisclosureClass::None,
+                // What the delivery says it disclosed (the free spans of an
+                // availability answer are at the class the policy allowed;
+                // everything else is acknowledged and discloses nothing),
+                // never above the class the intent asked for.
+                disclosure: delivered.disclosure.min(intent.disclosure),
                 answer,
             };
             let basis = match (decision.reason, approval_id) {

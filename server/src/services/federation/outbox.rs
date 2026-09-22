@@ -3,8 +3,11 @@
 //! that delivers it with bounded retries, and the receipts of what was
 //! asked and what the peer disclosed.
 //!
-//! The chat tools in `services::tools::federation` build a typed
-//! [`Outgoing`] request (a message, an availability query, a reminder) and
+//! The chat tools in `services::tools::federation` and
+//! `services::tools::peer_proposals` build a typed [`Outgoing`] request (a
+//! message, an availability query, a reminder, a meeting proposal, or a
+//! task handoff built here from one of this owner's continuity records by
+//! [`super::handoffs`]) and
 //! hand it to [`Outbox::enqueue`], which resolves the peer, asks this
 //! owner's own policy gate ([`FederationGate::admit_outbound`]: the peer
 //! must be paired, the intent must be able to disclose at that class, and
@@ -74,12 +77,13 @@ use tokio_util::sync::CancellationToken;
 use super::{
     audit::AuditLog,
     gate::FederationGate,
-    identity,
+    handoffs, identity,
     inbound::INTENT_PATH,
     pairing::{FederationState, HttpTransport, Overview, PeerTransport},
     peers::{Clock, system_clock},
 };
 use crate::domain::{
+    continuity::ContinuityRecord,
     events::ServerEvent,
     federation::{FederationError, PeerState, PeerSummary},
     federation_intent::{
@@ -291,6 +295,18 @@ pub enum OutboxRequest {
         text: String,
         at: u64,
     },
+    /// A meeting inside a window (#111), Unix seconds, `from` before `to`.
+    Proposal {
+        description: String,
+        from: u64,
+        to: u64,
+    },
+    /// One of this owner's unfinished tasks (#111), handed over as the
+    /// bounded references and provenance [`handoffs::handoff_from_record`]
+    /// reads off the record, never its contents.
+    Handoff {
+        record: Box<ContinuityRecord>,
+    },
 }
 
 /// One request to queue: the peer (a companion id, or its first
@@ -428,6 +444,24 @@ impl Outbox {
                 IntentPayload::Reminder {
                     text: peer_text(text)?,
                     at,
+                },
+            ),
+            OutboxRequest::Proposal {
+                description,
+                from,
+                to,
+            } => (
+                DisclosureClass::None,
+                IntentPayload::Proposal {
+                    description: peer_text(description)?,
+                    window: TimeWindow { from, to },
+                },
+            ),
+            OutboxRequest::Handoff { record } => (
+                DisclosureClass::None,
+                IntentPayload::Handoff {
+                    task: handoffs::handoff_from_record(&record)
+                        .map_err(FederationError::Intent)?,
                 },
             ),
         };

@@ -46,6 +46,13 @@ pub enum ServerEvent {
         instance_slug: String,
         entry: crate::services::federation::outbox::OutboxEntry,
     },
+    /// A proposal from a paired companion (#111) arrived, was accepted or
+    /// dismissed, or lapsed: the proposal record, whose details are the
+    /// peer's words for the owner's review and never model text.
+    PeerProposalUpdated {
+        instance_slug: String,
+        proposal: crate::domain::federation_proposal::PeerProposal,
+    },
     /// A known machine registered, disconnected, went stale, or was renamed (#80).
     MachineUpdated {
         instance_slug: String,

@@ -48,6 +48,10 @@ pub fn default_access(intent: IntentClass, disclosure: DisclosureClass) -> Optio
         (IntentClass::Message | IntentClass::Reminder, _) => return None,
         (IntentClass::Proposal, Nothing | Availability) => Access::Ask,
         (IntentClass::Proposal, Personal) => Access::Deny,
+        // A task handoff is reviewed by the owner and discloses nothing of
+        // theirs (#111).
+        (IntentClass::Handoff, Nothing) => Access::Ask,
+        (IntentClass::Handoff, _) => return None,
         // An availability query always discloses at least availability.
         (IntentClass::Availability, Nothing) => return None,
         (IntentClass::Availability, Availability) => Access::Ask,

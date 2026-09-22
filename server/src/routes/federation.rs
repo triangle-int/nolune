@@ -34,6 +34,13 @@
 //! * `GET /api/federation/outbox` lists the intents this companion queued
 //!   for peers (#110): where each stands, its attempts, the peer's typed
 //!   response, and the receipts on this side.
+//! * `GET /api/federation/proposals` lists what peers proposed (#111: a
+//!   meeting, a reminder, a task handoff) with the details for review;
+//!   `POST …/proposals/{id}/accept` writes the one record the proposal
+//!   stands for on this server (a commitment, a continuity record) and
+//!   answers `{ "proposal", "already_accepted" }`; `POST …/proposals/{id}/dismiss`
+//!   writes nothing. A decided or lapsed proposal is `409 proposal_not_open`
+//!   with its `status`; an unknown id is `404 unknown_proposal`.
 //!
 //! Peer side, public, verified by signature only. Every verified envelope
 //! is judged by the owner's policy and recorded before it is dispatched
@@ -92,7 +99,7 @@ use crate::{
                 CONFIRM_PATH, MAX_ENVELOPE_BYTES, PAIR_PATH, PING_PATH, REVOKE_PATH, ROTATE_PATH,
             },
         },
-        peer_delivery,
+        peer_delivery, peer_proposals,
     },
 };
 
@@ -153,6 +160,15 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/federation/inbox", get(list_inbox))
         .route("/api/federation/outbox", get(list_outbox))
+        .route("/api/federation/proposals", get(list_proposals))
+        .route(
+            "/api/federation/proposals/{id}/accept",
+            post(accept_proposal),
+        )
+        .route(
+            "/api/federation/proposals/{id}/dismiss",
+            post(dismiss_proposal),
+        )
 }
 
 /// Mounted outside the auth middleware: a peer has no owner credential and
@@ -245,6 +261,8 @@ impl IntoResponse for ApiError {
             FederationError::UnknownPeer => (StatusCode::NOT_FOUND, "unknown_peer"),
             FederationError::UnknownApproval => (StatusCode::NOT_FOUND, "unknown_approval"),
             FederationError::UnknownRule => (StatusCode::NOT_FOUND, "unknown_rule"),
+            FederationError::UnknownProposal => (StatusCode::NOT_FOUND, "unknown_proposal"),
+            FederationError::ProposalNotOpen { .. } => (StatusCode::CONFLICT, "proposal_not_open"),
             // An intent that could not be judged: the fault is typed, and
             // the message is the decoder's, which never quotes the wire.
             FederationError::Intent(error) => match error {
@@ -288,6 +306,7 @@ impl IntoResponse for ApiError {
                 body["peer_error"] = json!(error);
             }
             FederationError::PeerNotPaired { state } => body["state"] = json!(state),
+            FederationError::ProposalNotOpen { status } => body["status"] = json!(status),
             FederationError::PolicyRefused(decision) => {
                 body["decision"] = json!(decision);
                 if let Some(secs) = decision.retry_after_secs {
@@ -455,6 +474,29 @@ async fn list_inbox(State(state): State<AppState>) -> Result<Response, ApiError>
 /// the peer's typed response, and every receipt kept, newest first (#110).
 async fn list_outbox(State(state): State<AppState>) -> Result<Response, ApiError> {
     Ok(Json(state.federation_outbox.view()?).into_response())
+}
+
+/// Every proposal peers delivered, newest first, as it stands now (#111).
+async fn list_proposals(State(state): State<AppState>) -> Result<Response, ApiError> {
+    Ok(Json(json!({ "proposals": state.federation_proposals.list()? })).into_response())
+}
+
+/// The owner accepts a proposal: the one record it stands for is written
+/// on this server (#111).
+async fn accept_proposal(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    Ok(Json(peer_proposals::accept(&state, &id).await?).into_response())
+}
+
+/// The owner dismisses a proposal: nothing is written (#111).
+async fn dismiss_proposal(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    let proposal = peer_proposals::dismiss(&state, &id).await?;
+    Ok(Json(json!({ "proposal": proposal })).into_response())
 }
 
 async fn list_approvals(State(state): State<AppState>) -> Result<Response, ApiError> {

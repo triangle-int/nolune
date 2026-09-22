@@ -9,6 +9,7 @@ pub mod events;
 pub mod federation;
 pub mod federation_intent;
 pub mod federation_policy;
+pub mod federation_proposal;
 pub mod handoff;
 pub mod machine;
 pub mod memory;

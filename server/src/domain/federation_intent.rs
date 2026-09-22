@@ -1,9 +1,11 @@
 //! Structured intents between paired companions (#110).
 //!
 //! After pairing (#108) and under the owner's policy (#109), a peer may ask
-//! this companion for exactly four things: deliver a message, say whether
-//! the owner is free inside a window, remind the owner of something, or
-//! propose doing something together. Each is a [`FederationIntent`]: a
+//! this companion for exactly five things: deliver a message, say whether
+//! the owner is free inside a window, remind the owner of something,
+//! propose doing something together, or hand an unfinished task over
+//! (#111, a [`TaskHandoff`]: bounded references and provenance from one
+//! continuity record, never contents). Each is a [`FederationIntent`]: a
 //! fixed header (version, correlation id, sender, the owner the sender
 //! represents, the purpose, the disclosure class requested, and a lifetime)
 //! around one [`IntentPayload`]. The answer is an [`IntentResponse`] that
@@ -90,6 +92,25 @@ pub const MAX_REMINDER_AHEAD_SECS: u64 = 365 * 24 * 60 * 60;
 /// Length of a companion id: base64url of [`COMPANION_ID_BYTES`] bytes.
 pub const COMPANION_ID_CHARS: usize = (COMPANION_ID_BYTES * 4).div_ceil(3);
 
+/// Longest goal a task handoff carries, in characters: the continuity
+/// record's own bound.
+pub const MAX_HANDOFF_GOAL_CHARS: usize = 500;
+/// Longest step, next step, blocker, or provenance note a handoff carries.
+pub const MAX_HANDOFF_NOTE_CHARS: usize = 300;
+/// Longest resource reference label a handoff carries.
+pub const MAX_HANDOFF_RESOURCE_CHARS: usize = 160;
+/// Most completed steps a handoff carries: the most recent ones.
+pub const MAX_HANDOFF_STEPS: usize = 8;
+/// Most blockers a handoff carries.
+pub const MAX_HANDOFF_BLOCKERS: usize = 4;
+/// Most resource references a handoff carries.
+pub const MAX_HANDOFF_RESOURCES: usize = 8;
+/// Most provenance entries a handoff carries: the creating one and the
+/// most recent ones.
+pub const MAX_HANDOFF_PROVENANCE: usize = 8;
+/// Longest continuity record id a handoff names as its provenance.
+pub const MAX_HANDOFF_RECORD_ID_LEN: usize = 64;
+
 /// One structured request from a paired companion. The header names who
 /// asks (`sender`, a companion id, which the inbound handler checks
 /// against the envelope's verified sender), on whose behalf
@@ -135,6 +156,68 @@ pub enum IntentPayload {
         description: PeerText,
         window: TimeWindow,
     },
+    /// Take over the sender's owner's unfinished task (#111).
+    Handoff { task: TaskHandoff },
+}
+
+/// What travels for a task handoff: the sender's continuity record id as
+/// provenance, the goal, the most recent completed steps, the next step,
+/// the blockers, references to the resources the task links (their kind
+/// and the sender's own label for each: an upload id, a memory path, a
+/// path on a computer), and the record's provenance. Every text is peer
+/// text; every list is bounded; there is no field that could hold what a
+/// resource contains.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskHandoff {
+    /// The sender's record, `[A-Za-z0-9_-]`, at most
+    /// [`MAX_HANDOFF_RECORD_ID_LEN`] long.
+    pub record_id: String,
+    pub goal: PeerText,
+    pub completed_steps: Vec<PeerText>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_step: Option<PeerText>,
+    pub blockers: Vec<PeerText>,
+    pub resources: Vec<HandoffResource>,
+    pub provenance: Vec<HandoffProvenance>,
+}
+
+/// One resource the task links, by reference: its kind and the sender's
+/// label for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffResource {
+    pub kind: HandoffResourceKind,
+    pub label: PeerText,
+}
+
+/// The kinds of resource a continuity record links.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HandoffResourceKind {
+    Upload,
+    Memory,
+    MachinePath,
+}
+
+/// One provenance entry of the sender's record: who wrote it, when (Unix
+/// seconds by the sender's clock), and the note.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffProvenance {
+    pub source: HandoffSource,
+    pub at: u64,
+    pub note: PeerText,
+}
+
+/// Who wrote a provenance entry on the sender's side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HandoffSource {
+    User,
+    Chat,
+    Tool,
+    Server,
 }
 
 /// A half-open span of Unix seconds, `from` before `to`, at most
@@ -199,6 +282,8 @@ pub enum IntentAnswer {
     ReminderScheduled { at: u64 },
     /// The proposal reached this owner.
     ProposalReceived {},
+    /// The task handoff reached this owner for review (#111).
+    HandoffReceived {},
 }
 
 /// One span of an availability answer.
@@ -395,6 +480,11 @@ pub enum IntentError {
     TooManyWindows {
         count: usize,
     },
+    /// A task handoff whose `field` is empty, over its bound, or not shaped
+    /// as an id.
+    InvalidHandoff {
+        field: &'static str,
+    },
     /// A response for another request.
     CorrelationMismatch,
     /// An answer of one class for an intent of another.
@@ -536,6 +626,7 @@ impl IntentPayload {
             Self::Availability { .. } => IntentClass::Availability,
             Self::Reminder { .. } => IntentClass::Reminder,
             Self::Proposal { .. } => IntentClass::Proposal,
+            Self::Handoff { .. } => IntentClass::Handoff,
         }
     }
 
@@ -636,6 +727,7 @@ impl FederationIntent {
             IntentPayload::Availability { window } | IntentPayload::Proposal { window, .. } => {
                 check_window(window.from, window.to)
             }
+            IntentPayload::Handoff { task } => task.validate(),
         }
     }
 
@@ -679,6 +771,7 @@ impl IntentAnswer {
             Self::Availability { .. } => IntentClass::Availability,
             Self::ReminderScheduled { .. } => IntentClass::Reminder,
             Self::ProposalReceived {} => IntentClass::Proposal,
+            Self::HandoffReceived {} => IntentClass::Handoff,
         }
     }
 
@@ -689,6 +782,7 @@ impl IntentAnswer {
             "availability" => Some(IntentClass::Availability),
             "reminder_scheduled" => Some(IntentClass::Reminder),
             "proposal_received" => Some(IntentClass::Proposal),
+            "handoff_received" => Some(IntentClass::Handoff),
             _ => None,
         }
     }
@@ -1007,6 +1101,160 @@ impl fmt::Display for IntentReceipt {
     }
 }
 
+impl TaskHandoff {
+    /// Every bound a handoff must hold: the record id shaped as an id, the
+    /// goal present and within [`MAX_HANDOFF_GOAL_CHARS`], every note
+    /// within [`MAX_HANDOFF_NOTE_CHARS`], every label within
+    /// [`MAX_HANDOFF_RESOURCE_CHARS`], and every list within its count.
+    /// `decode` runs it; a handoff built here runs it before it is sent.
+    pub fn validate(&self) -> Result<(), IntentError> {
+        let invalid = |field: &'static str| IntentError::InvalidHandoff { field };
+        let shaped = !self.record_id.is_empty()
+            && self.record_id.len() <= MAX_HANDOFF_RECORD_ID_LEN
+            && self
+                .record_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
+        if !shaped {
+            return Err(invalid("record_id"));
+        }
+        check_text(&self.goal, MAX_HANDOFF_GOAL_CHARS).ok_or_else(|| invalid("goal"))?;
+        check_texts(
+            self.completed_steps.iter(),
+            MAX_HANDOFF_STEPS,
+            MAX_HANDOFF_NOTE_CHARS,
+        )
+        .ok_or_else(|| invalid("completed_steps"))?;
+        if let Some(next_step) = &self.next_step {
+            check_text(next_step, MAX_HANDOFF_NOTE_CHARS).ok_or_else(|| invalid("next_step"))?;
+        }
+        check_texts(
+            self.blockers.iter(),
+            MAX_HANDOFF_BLOCKERS,
+            MAX_HANDOFF_NOTE_CHARS,
+        )
+        .ok_or_else(|| invalid("blockers"))?;
+        check_texts(
+            self.resources.iter().map(|resource| &resource.label),
+            MAX_HANDOFF_RESOURCES,
+            MAX_HANDOFF_RESOURCE_CHARS,
+        )
+        .ok_or_else(|| invalid("resources"))?;
+        check_texts(
+            self.provenance.iter().map(|entry| &entry.note),
+            MAX_HANDOFF_PROVENANCE,
+            MAX_HANDOFF_NOTE_CHARS,
+        )
+        .ok_or_else(|| invalid("provenance"))?;
+        Ok(())
+    }
+
+    /// The handoff as labelled parts for one untrusted block: the goal,
+    /// each step, the next step, each blocker, each resource by kind, and
+    /// each provenance entry by source and time. The labels are this
+    /// server's words; the texts stay peer text.
+    pub fn parts(&self) -> Vec<(String, &PeerText)> {
+        let mut parts = vec![("Goal".to_owned(), &self.goal)];
+        parts.extend(
+            self.completed_steps
+                .iter()
+                .enumerate()
+                .map(|(index, step)| (format!("Done {}", index + 1), step)),
+        );
+        parts.extend(
+            self.next_step
+                .iter()
+                .map(|step| ("Next step".to_owned(), step)),
+        );
+        parts.extend(
+            self.blockers
+                .iter()
+                .enumerate()
+                .map(|(index, blocker)| (format!("Blocker {}", index + 1), blocker)),
+        );
+        parts.extend(self.resources.iter().map(|resource| {
+            (
+                format!("Resource ({})", resource.kind.name()),
+                &resource.label,
+            )
+        }));
+        parts.extend(self.provenance.iter().map(|entry| {
+            (
+                format!("Provenance ({}, {})", entry.source.name(), utc(entry.at)),
+                &entry.note,
+            )
+        }));
+        parts
+    }
+}
+
+/// `Some(())` when `text` is neither blank nor over `max` characters.
+fn check_text(text: &PeerText, max: usize) -> Option<()> {
+    (!text.is_blank() && text.chars() <= max).then_some(())
+}
+
+/// `Some(())` when there are at most `count` texts and each passes
+/// [`check_text`] at `max`.
+fn check_texts<'a>(
+    texts: impl ExactSizeIterator<Item = &'a PeerText>,
+    count: usize,
+    max: usize,
+) -> Option<()> {
+    if texts.len() > count {
+        return None;
+    }
+    for text in texts {
+        check_text(text, max)?;
+    }
+    Some(())
+}
+
+/// `2027-01-15 08:00 UTC` for Unix seconds, from the proleptic Gregorian
+/// calendar by hand (this module takes no calendar crate): the days since
+/// the epoch are turned into a civil date the way Howard Hinnant's
+/// `civil_from_days` does it.
+fn utc(secs: u64) -> String {
+    let days = secs / 86_400;
+    let rest = secs % 86_400;
+    let (hour, minute) = (rest / 3_600, rest % 3_600 / 60);
+    let z = days + 719_468;
+    let era = z / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_index = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+    let month = if month_index < 10 {
+        month_index + 3
+    } else {
+        month_index - 9
+    };
+    let year = year_of_era + era * 400 + u64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02} UTC")
+}
+
+impl HandoffResourceKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Upload => "upload",
+            Self::Memory => "memory",
+            Self::MachinePath => "path on a computer",
+        }
+    }
+}
+
+impl HandoffSource {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Chat => "chat",
+            Self::Tool => "tool",
+            Self::Server => "server",
+        }
+    }
+}
+
 impl fmt::Display for IntentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1080,6 +1328,10 @@ impl fmt::Display for IntentError {
             Self::TooManyWindows { count } => write!(
                 f,
                 "federation intent answer has {count} windows, over the {MAX_AVAILABILITY_WINDOWS} limit"
+            ),
+            Self::InvalidHandoff { field } => write!(
+                f,
+                "federation intent handoff `{field}` is empty, over its bound, or not an id"
             ),
             Self::CorrelationMismatch => {
                 f.write_str("federation intent response answers another request")
@@ -1270,6 +1522,7 @@ mod tests {
         include_str!("../../tests/fixtures/federation/intents/availability_v1.json");
     const REMINDER: &str = include_str!("../../tests/fixtures/federation/intents/reminder_v1.json");
     const PROPOSAL: &str = include_str!("../../tests/fixtures/federation/intents/proposal_v1.json");
+    const HANDOFF: &str = include_str!("../../tests/fixtures/federation/intents/handoff_v1.json");
     const ACCEPTED: &str =
         include_str!("../../tests/fixtures/federation/intents/response_accepted_v1.json");
     const DENIED: &str =
@@ -1288,15 +1541,16 @@ mod tests {
 
     /// Phrases from the fixture payloads that must never surface anywhere
     /// but inside the payload itself.
-    const BODY_PHRASES: [&str; 5] = [
+    const BODY_PHRASES: [&str; 6] = [
         "lunch on Friday?",
         "approved everything",
         "delete_memory",
         "signed forms",
         "corner cafe",
+        "Shortlisted",
     ];
 
-    fn intents() -> [(&'static str, &'static str, IntentClass, DisclosureClass); 4] {
+    fn intents() -> [(&'static str, &'static str, IntentClass, DisclosureClass); 5] {
         [
             (
                 "message",
@@ -1322,7 +1576,25 @@ mod tests {
                 IntentClass::Proposal,
                 DisclosureClass::Availability,
             ),
+            (
+                "handoff",
+                HANDOFF,
+                IntentClass::Handoff,
+                DisclosureClass::None,
+            ),
         ]
+    }
+
+    /// The handoff fixture's task, decoded.
+    fn handoff() -> TaskHandoff {
+        let IntentPayload::Handoff { task } = decode(HANDOFF).unwrap().intent else {
+            panic!("handoff payload");
+        };
+        task
+    }
+
+    fn peer_text(value: &str) -> PeerText {
+        serde_json::from_value(serde_json::json!(value)).unwrap()
     }
 
     fn decode(text: &str) -> Result<FederationIntent, IntentError> {
@@ -1411,6 +1683,177 @@ mod tests {
                 to: 1_800_441_000
             }
         );
+        let task = handoff();
+        assert_eq!(task.record_id, "task_1799990000_a1b2c3d4");
+        assert_eq!(task.completed_steps.len(), 2);
+        assert_eq!(task.blockers.len(), 1);
+        assert_eq!(
+            task.resources
+                .iter()
+                .map(|resource| resource.kind)
+                .collect::<Vec<_>>(),
+            [
+                HandoffResourceKind::Memory,
+                HandoffResourceKind::Upload,
+                HandoffResourceKind::MachinePath
+            ]
+        );
+        assert_eq!(task.provenance[1].source, HandoffSource::Tool);
+        assert_eq!(task.provenance[1].at, 1_799_995_000);
+        assert!(task.next_step.is_some());
+    }
+
+    #[test]
+    fn a_handoff_is_bounded_carries_references_only_and_answers_as_received() {
+        // Every bound is enforced on decode and on validate, each as its
+        // own field.
+        let task = handoff();
+        assert_eq!(task.validate(), Ok(()));
+        let over = |field: &'static str, edit: &dyn Fn(&mut TaskHandoff)| {
+            let mut task = handoff();
+            edit(&mut task);
+            assert_eq!(
+                task.validate(),
+                Err(IntentError::InvalidHandoff { field }),
+                "{field}"
+            );
+            let text = edited(HANDOFF, |json| {
+                json["intent"]["task"] = serde_json::to_value(&task).unwrap();
+            });
+            assert_eq!(decode(&text), Err(IntentError::InvalidHandoff { field }));
+        };
+        over("record_id", &|task| task.record_id = "has space".into());
+        over("record_id", &|task| task.record_id = String::new());
+        over("record_id", &|task| {
+            task.record_id = "x".repeat(MAX_HANDOFF_RECORD_ID_LEN + 1)
+        });
+        over("goal", &|task| task.goal = peer_text("   "));
+        over("goal", &|task| {
+            task.goal = peer_text(&"g".repeat(MAX_HANDOFF_GOAL_CHARS + 1))
+        });
+        over("completed_steps", &|task| {
+            task.completed_steps = vec![peer_text("s"); MAX_HANDOFF_STEPS + 1]
+        });
+        over("completed_steps", &|task| {
+            task.completed_steps = vec![peer_text(&"s".repeat(MAX_HANDOFF_NOTE_CHARS + 1))]
+        });
+        over("next_step", &|task| {
+            task.next_step = Some(peer_text(&"n".repeat(MAX_HANDOFF_NOTE_CHARS + 1)))
+        });
+        over("blockers", &|task| {
+            task.blockers = vec![peer_text("b"); MAX_HANDOFF_BLOCKERS + 1]
+        });
+        over("resources", &|task| {
+            task.resources = vec![
+                HandoffResource {
+                    kind: HandoffResourceKind::Upload,
+                    label: peer_text("u"),
+                };
+                MAX_HANDOFF_RESOURCES + 1
+            ]
+        });
+        over("resources", &|task| {
+            task.resources[0].label = peer_text(&"r".repeat(MAX_HANDOFF_RESOURCE_CHARS + 1))
+        });
+        over("provenance", &|task| {
+            task.provenance = vec![
+                HandoffProvenance {
+                    source: HandoffSource::User,
+                    at: 1,
+                    note: peer_text("p"),
+                };
+                MAX_HANDOFF_PROVENANCE + 1
+            ]
+        });
+        over("provenance", &|task| {
+            task.provenance[0].note = peer_text(&"p".repeat(MAX_HANDOFF_NOTE_CHARS + 1))
+        });
+        // An empty list is fine; an unknown resource kind or source, or a
+        // field with room for contents, is refused as a shape fault.
+        let mut bare = handoff();
+        bare.completed_steps.clear();
+        bare.blockers.clear();
+        bare.resources.clear();
+        bare.provenance.clear();
+        bare.next_step = None;
+        assert_eq!(bare.validate(), Ok(()));
+        for edit in [
+            |json: &mut serde_json::Value| {
+                json["intent"]["task"]["resources"][0]["kind"] = "file".into()
+            },
+            |json: &mut serde_json::Value| {
+                json["intent"]["task"]["provenance"][0]["source"] = "model".into()
+            },
+            |json: &mut serde_json::Value| {
+                json["intent"]["task"]["resources"][0]["contents"] = "…".into()
+            },
+            |json: &mut serde_json::Value| json["intent"]["task"]["contents"] = "…".into(),
+            |json: &mut serde_json::Value| json["intent"]["task"]["goal"] = 7.into(),
+        ] {
+            let text = edited(HANDOFF, edit);
+            assert!(
+                matches!(
+                    decode(&text),
+                    Err(IntentError::UnknownField { .. } | IntentError::Malformed(_))
+                ),
+                "{text}"
+            );
+        }
+        // The parts for the block: every text once, labelled, in order.
+        let parts = task.parts();
+        let labels: Vec<&str> = parts.iter().map(|(label, _)| label.as_str()).collect();
+        assert_eq!(parts.len(), 1 + 2 + 1 + 1 + 3 + 2);
+        assert!(labels[0].starts_with("Goal"));
+        assert!(labels[1].starts_with("Done") && labels[2].starts_with("Done"));
+        assert!(labels[3].starts_with("Next"));
+        assert!(labels[4].starts_with("Blocker"));
+        assert!(labels[5].contains("memory") && labels[6].contains("upload"));
+        assert!(labels[7].contains("computer"));
+        assert!(labels[8].contains("chat") && labels[8].contains("2027-01-15"));
+        assert!(labels[9].contains("tool"));
+        for (label, _) in &parts {
+            assert_no_body_phrase(label, "a part label");
+            assert!(!label.contains("task_1799990000"), "no id in a label");
+        }
+        // The answer is its own kind and class; the class name is closed.
+        assert_eq!(
+            IntentAnswer::HandoffReceived {}.class(),
+            IntentClass::Handoff
+        );
+        assert_eq!(
+            IntentAnswer::class_for_kind("handoff_received"),
+            Some(IntentClass::Handoff)
+        );
+        assert_eq!(
+            IntentPayload::class_for_tag("handoff"),
+            Some(IntentClass::Handoff)
+        );
+        let intent = decode(HANDOFF).unwrap();
+        let answer = IntentResponse::Accepted {
+            version: INTENT_VERSION,
+            correlation_id: intent.correlation_id.clone(),
+            responder: ME.into(),
+            disclosure: DisclosureClass::None,
+            answer: IntentAnswer::HandoffReceived {},
+        };
+        assert_eq!(answer.check_against(&intent), Ok(()));
+        let wrong = IntentResponse::Accepted {
+            version: INTENT_VERSION,
+            correlation_id: intent.correlation_id.clone(),
+            responder: ME.into(),
+            disclosure: DisclosureClass::None,
+            answer: IntentAnswer::ProposalReceived {},
+        };
+        assert_eq!(
+            wrong.check_against(&intent),
+            Err(IntentError::AnswerMismatch {
+                intent: IntentClass::Handoff,
+                answer: IntentClass::Proposal
+            })
+        );
+        // Nothing about the task formats.
+        assert_no_body_phrase(&intent.to_string(), "Display");
+        assert_no_body_phrase(&format!("{intent:?}"), "Debug");
     }
 
     #[test]

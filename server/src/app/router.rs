@@ -134,6 +134,10 @@ mod federation_inbound_tests;
 mod federation_outbox_tests;
 
 #[cfg(test)]
+#[path = "../../test-support/federation_scheduling.rs"]
+mod federation_scheduling_tests;
+
+#[cfg(test)]
 #[path = "../../test-support/handoff_cards.rs"]
 mod handoff_tests;
 

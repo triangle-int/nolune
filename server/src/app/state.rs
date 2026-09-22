@@ -71,6 +71,8 @@ pub struct AppState {
     pub federation_inbox: Arc<crate::services::federation::inbound::InboundStore>,
     /// Outbound structured intents (#110): the persisted outbox and its sender loop, idle until `main` starts it.
     pub federation_outbox: Arc<crate::services::federation::outbox::Outbox>,
+    /// Proposals from paired companions awaiting this owner's decision (#111): meetings, reminders, task handoffs.
+    pub federation_proposals: Arc<crate::services::federation::proposals::ProposalStore>,
     /// The server-local computer-use target (#16): idle until the gateway calls `start`,
     /// so building a state never spawns a driver.
     pub cua: crate::services::cua::runtime::CuaRuntime,
@@ -119,6 +121,9 @@ impl AppState {
         let federation_outbox =
             crate::services::federation::outbox::Outbox::new(&workspace_dir, http_client.clone())
                 .with_events(events.clone(), crate::domain::companion::CANONICAL_SLUG);
+        let federation_proposals =
+            crate::services::federation::proposals::ProposalStore::new(&workspace_dir)
+                .with_events(events.clone(), crate::domain::companion::CANONICAL_SLUG);
 
         // Open the local derived vector index.
         let vector_store = VectorStore::connect_with_config(&workspace_dir, &config).await;
@@ -165,6 +170,7 @@ impl AppState {
             federation_gate: Arc::new(federation_gate),
             federation_inbox: Arc::new(federation_inbox),
             federation_outbox: Arc::new(federation_outbox),
+            federation_proposals: Arc::new(federation_proposals),
             cua,
             codex_auth: crate::services::llm::codex::Runtime::shared()
                 .auth()
