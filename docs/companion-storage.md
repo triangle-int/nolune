@@ -153,7 +153,7 @@ copied between computers.
 | `origin` | the first computer the record names, as a computer summary: `machine_id`, `display_name`, `known`, `online`, `health`, `platform`, `last_seen` (`null` fields when the machine list has never heard of it) |
 | `completed_steps`, `blockers`, `next_step` | the record's, as plain text |
 | `resources` | each link with a `label` and `available` (`false` while the reference check reports it missing) |
-| `required` | `capabilities` the destination's desktop must offer (screen and input actions, plus file actions when the record links a file on a computer) and the desktop `permissions` computer use needs (`screen_capture`, `accessibility`) |
+| `required` | `capabilities` the destination's desktop app must execute (`file_read` and `file_list` when the record links a file on a computer; nothing otherwise, since #19 no window action is a toolcall) and the `permissions` its Cua driver must hold (`screen_capture`, `accessibility`), which is also the requirement that a driver runs there |
 | `decision`, `bound_to` | the record's `handoff` decision and, after acceptance, the computer it is bound to |
 | `offered` | whether the card is shown: the record is resumable and was not kept or dismissed since the last explicit update |
 
@@ -183,9 +183,9 @@ and a sentence the user can read:
 
 | Severity | Checks |
 | --- | --- |
-| `blocking` (continuation refused) | `record_closed`, `model_unavailable`, `initiative_off`, `machine_unknown`, `machine_offline`, `machine_not_responding` (stale heartbeat), `capability_missing`, `permission_denied`, `resource_missing` (an upload or memory note the reference check cannot find, or a file the destination was asked for at acceptance and does not have), `resource_elsewhere` (a file on a computer that is not connected) |
-| `approval` (the desktop will ask before the first action) | `permission_prompt`, `permissions_unknown` |
-| `note` | `resource_elsewhere` while that computer is connected; `resource_unverified` for a file on the destination itself, which is looked for when the user confirms |
+| `blocking` (continuation refused) | `record_closed`, `model_unavailable`, `initiative_off`, `machine_unknown`, `machine_offline`, `machine_not_responding` (stale heartbeat), `capability_missing` (a file toolcall the desktop app does not execute), `driver_missing` (no Cua driver on the destination, so nothing there can see or act in windows, #19), `driver_unavailable` (its driver reports itself unavailable), `permission_denied` (a grant the driver does not hold), `permissions_unknown` (a driver whose grants were not reported), `resource_missing` (an upload or memory note the reference check cannot find, or a file the destination was asked for at acceptance and does not have), `resource_elsewhere` (a file on a computer that is not connected) |
+| `approval` (the user is told what may be asked) | `permission_prompt` (a grant the driver's health report did not cover: the first action that needs it may prompt or be refused) |
+| `note` | `driver_degraded`; `resource_elsewhere` while that computer is connected; `resource_unverified` for a file on the destination itself, which is looked for when the user confirms |
 
 Missing files, unavailable apps, and insufficient permissions are therefore
 reported before continuation and never silently skipped. No computer-use
@@ -275,10 +275,8 @@ the computer a name, which is stored on the server so every client shows it.
       "os": "macos",
       "platform": "macos",
       "location": "desktop",
-      "screen_width": 2560,
-      "screen_height": 1440,
       "permissions": { "accessibility": "granted", "screen_capture": "denied" },
-      "capabilities": ["screenshot", "left_click", "bash", "file_read"],
+      "capabilities": ["bash", "file_read", "file_write", "file_list", "upload_file"],
       "first_seen": 1789862400,
       "last_seen": 1789866000
     }
@@ -292,11 +290,11 @@ the computer a name, which is stored on the server so every client shows it.
 | `slug` | always `companion`; a file naming another companion is refused |
 | `machine_id` | the desktop's stable id: 1 to 128 bytes of letters, digits, `-`, `_`, `.`, `:` |
 | `display_name` | the user's name, at most 64 characters on one line; `null` shows the hostname |
-| `hostname`, `os`, `screen_width`, `screen_height` | as reported at the last registration; the two labels are cut at 256 characters |
+| `hostname`, `os` | as reported at the last registration; both labels are cut at 256 characters |
 | `platform` | `macos`, `windows`, `linux`, or `null` when `os` names none of them |
 | `location` | `desktop` for every desktop registration; the server home is a Cua target (#16), never a desktop record |
-| `permissions` | accessibility and screen capture as `granted` or `denied` (the protocol's names); `null` when the desktop did not report them |
-| `capabilities` | action names the desktop executes; a desktop that reports none is recorded with the legacy set |
+| `permissions` | the Cua driver's accessibility and screen capture grants (`granted`, `denied`, `prompt_required`, `unavailable`, the protocol's names) from the descriptor the desktop registered; `null` for a desktop without a driver. The desktop app's own grants are never recorded: nothing inside the app uses them (#19), and a registration that still sends them (an older desktop) has that field ignored |
+| `capabilities` | toolcall names the desktop executes (the shell and file ones since #19; window actions are the Cua driver's and never a toolcall); a desktop that reports none is recorded with the legacy set |
 | `first_seen`, `last_seen` | unix seconds of the first registration and of the last heartbeat or disconnect |
 
 Bounds: 64 records (a new computer evicts the longest-offline one), 64
@@ -305,7 +303,9 @@ per file; the store refuses to write more than it reads, so it never leaves
 a file behind that it would reject. The file is read on every access and
 every change lands through a temp file and a rename. A file that is larger,
 is not JSON, carries unknown fields, another version or slug, an invalid id,
-or the same id twice fails closed: the listing route answers
+or the same id twice fails closed (one exception: the `screen_width` and
+`screen_height` that servers before #19 wrote on every record are dropped
+on read and left out of the next write): the listing route answers
 `503 machines_format_unsupported`, renames are refused, and the file is
 never rewritten, while connected computers keep working in memory. Fixing
 or removing the file takes effect on the next access, without a restart,
@@ -325,7 +325,8 @@ the user's name or `null`), `online`, `health` derived from heartbeat age
 (`healthy`; `degraded` when the socket is open but no heartbeat arrived for
 45 seconds; `unavailable` when offline), and `driver_version` and
 `cua_health`, filled in while a connected desktop has registered its Cua
-driver (#17) and `null` otherwise. The server machine itself, when it has a
+driver (#17) and `null` otherwise; while they are filled in, `permissions`
+are that descriptor's. The server machine itself, when it has a
 Cua driver (#16), is listed beside the records as one live `server_local`
 row with both filled in; it is never written to this file (see
 [computer-use.md](computer-use.md)).

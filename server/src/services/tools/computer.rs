@@ -1,8 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use base64::Engine;
-use cua_protocol::Permission;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -71,19 +69,6 @@ pub struct MachineTarget {
     live: Vec<String>,
 }
 
-/// What a computer tool needs from the desktop before it acts there.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Need {
-    /// Pointer and keyboard actions.
-    #[allow(dead_code)] // Only the coordinate tool asked; unregistered by #18, deleted by #19.
-    Accessibility,
-    /// Screenshots.
-    #[allow(dead_code)] // Only the coordinate tool asked; unregistered by #18, deleted by #19.
-    ScreenCapture,
-    /// Shell and file operations need no desktop permission.
-    None,
-}
-
 /// The desktop one call acts on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedTarget {
@@ -104,12 +89,6 @@ pub enum TargetRefusal {
     Unavailable { label: String },
     /// Connected, but its heartbeat went stale.
     Unhealthy { label: String, age_secs: i64 },
-    /// A permission the action needs is not granted there.
-    PermissionDenied {
-        label: String,
-        permission: &'static str,
-        state: Permission,
-    },
     /// The user chose the server home, which these tools do not drive.
     ServerHome,
     /// The model named a desktop other than the one the user chose.
@@ -124,7 +103,6 @@ impl TargetRefusal {
             Self::NoneConnected => "no_computer_connected",
             Self::Unavailable { .. } => "machine_unavailable",
             Self::Unhealthy { .. } => "machine_unhealthy",
-            Self::PermissionDenied { .. } => "permission_denied",
             Self::ServerHome => "server_home",
             Self::Mismatch { .. } => "target_mismatch",
         }
@@ -155,21 +133,6 @@ impl fmt::Display for TargetRefusal {
                 "{label} has not answered for {age_secs} s; ask the user to check that it is \
                  awake and the Nolune desktop app is still running there"
             ),
-            Self::PermissionDenied {
-                label,
-                permission,
-                state,
-            } => {
-                let state = match state {
-                    Permission::Denied => "denied",
-                    _ => "not been allowed yet",
-                };
-                write!(
-                    f,
-                    "{permission} is {state} on {label}; ask the user to grant it to the \
-                     Nolune desktop app in System Settings there and reconnect"
-                )
-            }
             Self::ServerHome => f.write_str(
                 "the user chose the server home for this conversation, where run_command \
                  and the file tools already act; remote_bash and remote_files need a \
@@ -315,23 +278,23 @@ impl MachineTarget {
     }
 
     /// The desktop one call acts on: the chosen one, or the only connected
-    /// one, checked for health and the permission the action needs. Never a
-    /// guess between several, never a fallback to another computer.
+    /// one, checked for health. Never a guess between several, never a
+    /// fallback to another computer. Shell and file work needs no desktop
+    /// permission; window actions are the typed tools' (#18), authorized
+    /// against the Cua descriptor by the orchestrator.
     pub async fn desktop(
         &self,
         registry: &MachineRegistry,
         requested: Option<&str>,
-        need: Need,
     ) -> Result<ResolvedTarget, TargetRefusal> {
         let live = registry.list().await;
-        self.desktop_at(&live, requested, need, chrono::Utc::now().timestamp())
+        self.desktop_at(&live, requested, chrono::Utc::now().timestamp())
     }
 
     fn desktop_at(
         &self,
         live: &[MachineInfo],
         requested: Option<&str>,
-        need: Need,
         now: i64,
     ) -> Result<ResolvedTarget, TargetRefusal> {
         // `live` is every connected desktop; the registry drops one the
@@ -382,22 +345,6 @@ impl MachineTarget {
         {
             return Err(TargetRefusal::Unhealthy { label, age_secs });
         }
-        // `unavailable` is the platform saying it cannot report, not a refusal
-        // (the same reading as the Computers tab).
-        let needed = match (need, &machine.permissions) {
-            (Need::Accessibility, Some(state)) => Some(("Accessibility", state.accessibility)),
-            (Need::ScreenCapture, Some(state)) => Some(("Screen recording", state.screen_capture)),
-            _ => None,
-        };
-        if let Some((permission, state @ (Permission::Denied | Permission::PromptRequired))) =
-            needed
-        {
-            return Err(TargetRefusal::PermissionDenied {
-                label,
-                permission,
-                state,
-            });
-        }
         Ok(ResolvedTarget {
             machine_id: machine.machine_id.clone(),
             label,
@@ -432,8 +379,8 @@ impl Tool for ListMachinesTool {
         ToolDefinition {
             name: "list_machines".into(),
             description: "List all machines you can control, one entry per machine_id with its \
-                location (desktop or server_local) and os. Connected desktop apps carry hostname, \
-                screen dimensions and last_seen; use their machine_id with remote_bash and \
+                location (desktop or server_local) and os. Connected desktop apps carry hostname \
+                and last_seen; use their machine_id with remote_bash and \
                 remote_files. Machines with a Cua driver also carry driver_version, health, \
                 permissions (accessibility, screen_capture) and capabilities: those are the ones \
                 discover_windows, get_window_state, act and verify_state drive (the only way to \
@@ -466,7 +413,6 @@ impl Tool for ListMachinesTool {
                         "location": cua_protocol::MachineLocation::Desktop,
                         "os": m.os,
                         "hostname": m.hostname,
-                        "screen": format!("{}x{}", m.screen_width, m.screen_height),
                         "last_seen": m.last_seen,
                     }),
                 )
@@ -544,225 +490,6 @@ pub(super) fn screenshot_image_block(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// computer_use — route action to a specific machine agent
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// The coordinate tool of the legacy desktop protocol. Since #18 it is no
-/// longer offered to the model (`build_tools` registers the typed machine
-/// tools in `tools/cua.rs` instead, so every action is snapshot-bound and
-/// verified); the type stays until #19 deletes it with the rest of the
-/// legacy desktop executor.
-#[allow(dead_code)] // Unregistered by #18; deleted by #19.
-pub struct ComputerUseTool {
-    registry: MachineRegistry,
-    target: MachineTarget,
-    workspace_dir: std::path::PathBuf,
-    instance_slug: String,
-    public_url: String,
-    resources: crate::services::resource_access::ResourceAccess,
-}
-
-#[allow(dead_code)] // Unregistered by #18; deleted by #19.
-impl ComputerUseTool {
-    pub fn new(
-        registry: MachineRegistry,
-        target: MachineTarget,
-        workspace_dir: &std::path::Path,
-        instance_slug: &str,
-        public_url: &str,
-        resources: &crate::services::resource_access::ResourceAccess,
-    ) -> Self {
-        Self {
-            registry,
-            target,
-            workspace_dir: workspace_dir.to_path_buf(),
-            instance_slug: instance_slug.to_string(),
-            public_url: public_url.to_string(),
-            resources: resources.clone(),
-        }
-    }
-}
-
-#[allow(dead_code)] // Unregistered by #18; deleted by #19.
-#[derive(Deserialize, JsonSchema)]
-pub struct ComputerUseArgs {
-    /// ID of the machine to control (from list_machines). Omit to act on the
-    /// computer the user chose for this conversation.
-    #[serde(default)]
-    pub machine_id: Option<String>,
-    /// Action to perform: "screenshot", "left_click", "right_click", "middle_click",
-    /// "double_click", "mouse_move", "type", "key", "scroll".
-    pub action: String,
-    /// [x, y] coordinates for click/move/scroll actions (in screen pixels).
-    #[serde(default)]
-    pub coordinate: Option<[i32; 2]>,
-    /// Text to type (for "type" action).
-    #[serde(default)]
-    pub text: Option<String>,
-    /// Key or key combination to press (for "key" action, e.g. "ctrl+c", "Return").
-    #[serde(default)]
-    pub key: Option<String>,
-    /// Scroll direction: "up", "down", "left", "right".
-    #[serde(default)]
-    pub scroll_direction: Option<String>,
-    /// Number of scroll clicks (default 3).
-    #[serde(default)]
-    pub scroll_amount: Option<i32>,
-}
-
-impl Tool for ComputerUseTool {
-    const NAME: &'static str = "computer_use";
-    const TRUSTS_RESOURCE_PROVENANCE: bool = true;
-    type Error = ToolExecError;
-    type Args = ComputerUseArgs;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: "computer_use".into(),
-            description: "Control a connected desktop machine — take screenshots, click, type, press keys, scroll. \
-                It acts on the computer the user chose for this conversation (or the only connected one); \
-                with several connected and none chosen it refuses and you must ask the user to choose. \
-                Always take a screenshot first to see the current state. \
-                Coordinates are in the screenshot's pixel space. \
-                Available actions: screenshot, left_click, right_click, middle_click, double_click, \
-                mouse_move, type, key, scroll, switch_desktop. \
-                \n\nmacOS tips: \
-                - Switch desktop/Space: use action 'switch_desktop' with scroll_direction 'left' or 'right'. \
-                - Mission Control: key 'ctrl+up'. \
-                - App Exposé: key 'ctrl+down'. \
-                - Spotlight: key 'cmd+space'. \
-                - Close window: key 'cmd+w'. \
-                - Quit app: key 'cmd+q'. \
-                - Switch app: key 'cmd+tab'."
-                .into(),
-            parameters: openai_schema::<ComputerUseArgs>(),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let request_id = uuid::Uuid::new_v4().to_string();
-
-        let mut params = serde_json::json!({});
-        if let Some(c) = &args.coordinate {
-            params["coordinate"] = serde_json::json!(c);
-        }
-        if let Some(t) = &args.text {
-            params["text"] = serde_json::json!(t);
-        }
-        if let Some(k) = &args.key {
-            params["key"] = serde_json::json!(k);
-        }
-        if let Some(d) = &args.scroll_direction {
-            params["scroll_direction"] = serde_json::json!(d);
-        }
-        if let Some(a) = &args.scroll_amount {
-            params["scroll_amount"] = serde_json::json!(a);
-        }
-
-        let call = AgentToolCall {
-            request_id: request_id.clone(),
-            action: args.action.clone(),
-            params,
-        };
-
-        let need = if args.action == "screenshot" {
-            Need::ScreenCapture
-        } else {
-            Need::Accessibility
-        };
-        let target = self
-            .target
-            .desktop(&self.registry, args.machine_id.as_deref(), need)
-            .await?;
-        log::info!(
-            "[computer_use] {} on machine '{}' ({}, req={})",
-            args.action,
-            target.machine_id,
-            target.label,
-            &request_id[..8]
-        );
-
-        let result = self
-            .registry
-            .execute(&target.machine_id, call)
-            .await
-            .map_err(ToolExecError)?;
-
-        match result.result_type.as_str() {
-            "screenshot" => {
-                let image_b64 = result.image.unwrap_or_default();
-                let w = result.width.unwrap_or(0);
-                let h = result.height.unwrap_or(0);
-
-                // Save screenshot as upload file
-                let saved = base64::engine::general_purpose::STANDARD
-                    .decode(&image_b64)
-                    .ok()
-                    .and_then(|bytes| {
-                        crate::services::uploads::save_upload(
-                            &self.workspace_dir,
-                            &self.instance_slug,
-                            "screenshot.jpg",
-                            &bytes,
-                        )
-                        .ok()
-                    });
-
-                if let Some(meta) = saved {
-                    let chat_url = self.resources.url("", &self.instance_slug,
-                        crate::services::resource_capability::CapabilityResource::uploaded_file(&meta.id).map_err(|e| ToolExecError(e.to_string()))?,
-                        crate::services::resource_capability::CapabilityAudience::Browser).map_err(|e| ToolExecError(e.to_string()))?;
-                    let caption = serde_json::json!({
-                        "type": "text",
-                        "text": format!(
-                            "Screenshot captured ({}x{}) on {}. Show to user: ![screenshot]({})",
-                            w, h, target.label, chat_url
-                        ),
-                    });
-
-                    let image_block = screenshot_image_block(
-                        &self.public_url,
-                        &self.instance_slug,
-                        &meta.id,
-                        "image/jpeg",
-                        &image_b64,
-                        &self.resources,
-                    );
-                    let blocks = match image_block {
-                        Some(image_block) => serde_json::json!([image_block, caption]),
-                        None => serde_json::json!([caption]),
-                    };
-                    Ok(blocks.to_string())
-                } else {
-                    Err(ToolExecError("failed to save screenshot".into()))
-                }
-            }
-            "action" => {
-                if result.success.unwrap_or(false) {
-                    Ok(format!(
-                        "Action '{}' executed successfully on {}.",
-                        args.action, target.label
-                    ))
-                } else {
-                    let err = result.error.unwrap_or_else(|| "unknown error".to_string());
-                    Err(ToolExecError(format!(
-                        "Action '{}' failed on {}: {}",
-                        args.action, target.label, err
-                    )))
-                }
-            }
-            // bash/file results return output as text
-            "output" => {
-                let output = result.error.unwrap_or_default(); // reuse error field for output text
-                Ok(output)
-            }
-            other => Err(ToolExecError(format!("unexpected result type: {other}"))),
-        }
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
 // remote_bash — run a shell command on a connected machine
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -820,7 +547,7 @@ impl Tool for RemoteBashTool {
 
         let target = self
             .target
-            .desktop(&self.registry, args.machine_id.as_deref(), Need::None)
+            .desktop(&self.registry, args.machine_id.as_deref())
             .await?;
         log::info!(
             "[remote_bash] '{}' on '{}' ({})",
@@ -892,10 +619,19 @@ impl Tool for RemoteFilesTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        // The desktop app executes a fixed set of toolcalls (#19); an
+        // operation outside it is refused here, before any round trip.
+        let action = format!("file_{}", args.operation);
+        if !crate::domain::machine::DESKTOP_TOOLCALLS.contains(&action.as_str()) {
+            return Err(ToolExecError(format!(
+                "unknown operation '{}': use read, write or list",
+                args.operation
+            )));
+        }
         let request_id = uuid::Uuid::new_v4().to_string();
         let call = AgentToolCall {
             request_id: request_id.clone(),
-            action: format!("file_{}", args.operation),
+            action,
             params: serde_json::json!({
                 "path": args.path,
                 "content": args.content,
@@ -904,7 +640,7 @@ impl Tool for RemoteFilesTool {
 
         let target = self
             .target
-            .desktop(&self.registry, args.machine_id.as_deref(), Need::None)
+            .desktop(&self.registry, args.machine_id.as_deref())
             .await?;
         log::info!(
             "[remote_files] {} '{}' on '{}' ({})",
@@ -1027,8 +763,6 @@ mod list_machines_tests {
             machine_id: "studio".into(),
             os: "macos".into(),
             hostname: "studio".into(),
-            screen_width: 1440,
-            screen_height: 900,
             last_seen: 1_700_000_000,
             instance_slug: None,
             platform: Some(Platform::Macos),
@@ -1086,7 +820,10 @@ mod list_machines_tests {
         assert_eq!(agent["machine_id"], "studio");
         assert_eq!(agent["os"], "macos");
         assert_eq!(agent["hostname"], "studio");
-        assert_eq!(agent["screen"], "1440x900");
+        assert!(
+            agent.get("screen").is_none(),
+            "no screen size: nothing captures the screen on the desktop (#19): {agent}"
+        );
         assert_eq!(agent["last_seen"], 1_700_000_000);
         assert_eq!(agent["location"], "desktop");
     }
@@ -1167,7 +904,6 @@ mod list_machines_tests {
         assert_eq!(studio["machine_id"], "studio");
         assert_eq!(studio["location"], "desktop");
         assert_eq!(studio["hostname"], "studio");
-        assert_eq!(studio["screen"], "1440x900");
         assert_eq!(studio["last_seen"], 1_700_000_000);
         assert_eq!(studio["driver_version"], "0.28.2");
         assert_eq!(studio["health"], "healthy");
@@ -1195,6 +931,9 @@ mod list_machines_tests {
 mod target_tests {
     //! #80: the computer tools act on the computer the user chose, or the
     //! only connected one, and refuse everything else with one thing to do.
+    //! Since #19 the desktop tools are the shell and file ones; window
+    //! actions go through the typed tools, authorized against the Cua
+    //! descriptor by the orchestrator.
     use super::*;
     use crate::services::machine_registry::ActionResult;
     use cua_protocol::{MachineLocation, Permission, PermissionState, Platform};
@@ -1208,13 +947,6 @@ mod target_tests {
         chrono::Utc::now().timestamp()
     }
 
-    fn granted() -> PermissionState {
-        PermissionState {
-            accessibility: Permission::Granted,
-            screen_capture: Permission::Granted,
-        }
-    }
-
     fn desktop(
         machine_id: &str,
         hostname: &str,
@@ -1225,8 +957,6 @@ mod target_tests {
             machine_id: machine_id.into(),
             os: "macos".into(),
             hostname: hostname.into(),
-            screen_width: 1440,
-            screen_height: 900,
             last_seen: seen,
             instance_slug: None,
             platform: Some(Platform::Macos),
@@ -1260,11 +990,6 @@ mod target_tests {
                     .complete(
                         call["request_id"].as_str().unwrap(),
                         ActionResult {
-                            result_type: "action".into(),
-                            image: None,
-                            width: None,
-                            height: None,
-                            scale: None,
                             success: Some(true),
                             error: Some("ok".into()),
                         },
@@ -1283,47 +1008,14 @@ mod target_tests {
     }
 
     struct Tools {
-        _ws: tempfile::TempDir,
-        computer: ComputerUseTool,
         bash: RemoteBashTool,
         files: RemoteFilesTool,
     }
 
     fn harness(registry: &MachineRegistry, target: MachineTarget) -> Tools {
-        let ws = tempfile::tempdir().unwrap();
-        let resources = crate::services::resource_access::ResourceAccess::new("control-token");
         Tools {
-            computer: ComputerUseTool::new(
-                registry.clone(),
-                target.clone(),
-                ws.path(),
-                "companion",
-                "",
-                &resources,
-            ),
             bash: RemoteBashTool::new(registry.clone(), target.clone()),
             files: RemoteFilesTool::new(registry.clone(), target),
-            _ws: ws,
-        }
-    }
-
-    fn click(machine_id: Option<&str>) -> ComputerUseArgs {
-        ComputerUseArgs {
-            machine_id: machine_id.map(str::to_owned),
-            action: "left_click".into(),
-            coordinate: Some([10, 10]),
-            text: None,
-            key: None,
-            scroll_direction: None,
-            scroll_amount: None,
-        }
-    }
-
-    fn screenshot(machine_id: Option<&str>) -> ComputerUseArgs {
-        ComputerUseArgs {
-            action: "screenshot".into(),
-            coordinate: None,
-            ..click(machine_id)
         }
     }
 
@@ -1344,21 +1036,19 @@ mod target_tests {
         }
     }
 
-    /// Every one of the three tools answers a refusal with the same code and
-    /// text, so the model relays one message whichever tool it reached for.
+    /// Both tools answer a refusal with the same code and text, so the
+    /// model relays one message whichever tool it reached for.
     async fn every_tool_refuses(tools: &Tools, machine_id: Option<&str>, code: &str) -> String {
-        let computer = tools.computer.call(click(machine_id)).await.unwrap_err();
         let bash = tools.bash.call(bash(machine_id)).await.unwrap_err();
         let files = tools.files.call(files(machine_id)).await.unwrap_err();
-        for error in [&computer, &bash, &files] {
+        for error in [&bash, &files] {
             assert!(
                 error.0.starts_with(&format!("{code}: ")),
                 "expected a {code} refusal, got {error}"
             );
         }
-        assert_eq!(computer.0, bash.0);
         assert_eq!(bash.0, files.0);
-        computer.0
+        bash.0
     }
 
     #[test]
@@ -1420,7 +1110,7 @@ mod target_tests {
     #[tokio::test]
     async fn the_chosen_desktop_is_used_exactly() {
         let registry = MachineRegistry::new();
-        let studio = connect(&registry, desktop(STUDIO, "studio", now(), Some(granted()))).await;
+        let studio = connect(&registry, desktop(STUDIO, "studio", now(), None)).await;
         let mut laptop = connect(&registry, desktop(LAPTOP, "laptop", now(), None)).await;
         registry.rename(STUDIO, Some("Studio Mac")).await.unwrap();
         let seen = answering(registry.clone(), studio);
@@ -1432,18 +1122,14 @@ mod target_tests {
         let tools = harness(&registry, target);
 
         // With or without the model naming it, the chosen computer is the one asked.
-        let output = tools.computer.call(click(None)).await.unwrap();
-        assert!(
-            output.contains("Studio Mac"),
-            "the result names the computer: {output}"
-        );
-        tools.computer.call(click(Some(STUDIO))).await.unwrap();
         tools.bash.call(bash(None)).await.unwrap();
+        tools.bash.call(bash(Some(STUDIO))).await.unwrap();
+        tools.files.call(files(None)).await.unwrap();
         tools.files.call(files(Some(STUDIO))).await.unwrap();
         tokio::task::yield_now().await;
         assert_eq!(
             *seen.lock().unwrap(),
-            ["left_click", "left_click", "bash", "file_list"]
+            ["bash", "bash", "file_list", "file_list"]
         );
 
         // Naming another computer is refused; the chosen one is never swapped for it.
@@ -1459,16 +1145,14 @@ mod target_tests {
     #[tokio::test]
     async fn the_only_connected_desktop_is_used_without_a_choice() {
         let registry = MachineRegistry::new();
-        let studio = connect(&registry, desktop(STUDIO, "studio", now(), Some(granted()))).await;
+        let studio = connect(&registry, desktop(STUDIO, "studio", now(), None)).await;
         let seen = answering(registry.clone(), studio);
         let tools = harness(&registry, MachineTarget::resolve(&registry, None).await);
 
-        let output = tools.computer.call(screenshot(None)).await.unwrap();
-        assert!(output.contains("on studio"), "{output}");
         tools.bash.call(bash(None)).await.unwrap();
         tools.files.call(files(Some(STUDIO))).await.unwrap();
         tokio::task::yield_now().await;
-        assert_eq!(*seen.lock().unwrap(), ["screenshot", "bash", "file_list"]);
+        assert_eq!(*seen.lock().unwrap(), ["bash", "file_list"]);
     }
 
     #[tokio::test]
@@ -1529,58 +1213,74 @@ mod target_tests {
         assert!(nothing_received(&mut studio));
     }
 
+    /// Shell and file work needs no desktop permission: a desktop whose
+    /// grants are denied, not asked yet, or not reported still runs them.
+    /// The window actions that need Accessibility and Screen Recording are
+    /// the typed tools', refused against the Cua descriptor before a frame
+    /// is sent (#19).
     #[tokio::test]
-    async fn a_missing_permission_refuses_the_actions_that_need_it() {
+    async fn desktop_permissions_never_gate_shell_and_file_work() {
+        for permissions in [
+            Some(PermissionState {
+                accessibility: Permission::Denied,
+                screen_capture: Permission::PromptRequired,
+            }),
+            Some(PermissionState {
+                accessibility: Permission::Unavailable,
+                screen_capture: Permission::Unavailable,
+            }),
+            None,
+        ] {
+            let registry = MachineRegistry::new();
+            let studio = connect(
+                &registry,
+                desktop(STUDIO, "studio", now(), permissions.clone()),
+            )
+            .await;
+            let seen = answering(registry.clone(), studio);
+            let tools = harness(
+                &registry,
+                MachineTarget::resolve(&registry, Some(STUDIO)).await,
+            );
+            tools.bash.call(bash(None)).await.unwrap();
+            tools.files.call(files(None)).await.unwrap();
+            tokio::task::yield_now().await;
+            assert_eq!(
+                *seen.lock().unwrap(),
+                ["bash", "file_list"],
+                "{permissions:?}"
+            );
+        }
+    }
+
+    /// The file operations are the desktop app's `file_*` toolcalls
+    /// (`DESKTOP_TOOLCALLS`, #19); one it does not execute is refused
+    /// before anything reaches the desktop.
+    #[tokio::test]
+    async fn remote_files_refuses_an_operation_the_desktop_does_not_execute() {
         let registry = MachineRegistry::new();
-        let permissions = PermissionState {
-            accessibility: Permission::Denied,
-            screen_capture: Permission::PromptRequired,
-        };
-        let studio = connect(
-            &registry,
-            desktop(STUDIO, "studio", now(), Some(permissions)),
-        )
-        .await;
-        let seen = answering(registry.clone(), studio);
+        let mut studio = connect(&registry, desktop(STUDIO, "studio", now(), None)).await;
         let tools = harness(
             &registry,
             MachineTarget::resolve(&registry, Some(STUDIO)).await,
         );
-
-        let click_error = tools.computer.call(click(None)).await.unwrap_err().0;
-        assert!(
-            click_error.starts_with("permission_denied: ")
-                && click_error.contains("Accessibility")
-                && click_error.contains("denied")
-                && click_error.contains("System Settings"),
-            "{click_error}"
-        );
-        let shot_error = tools.computer.call(screenshot(None)).await.unwrap_err().0;
-        assert!(
-            shot_error.starts_with("permission_denied: ")
-                && shot_error.contains("Screen recording")
-                && shot_error.contains("not been allowed"),
-            "{shot_error}"
-        );
-
-        // Shell and file work need neither, and a report of "unavailable" is
-        // the platform saying it cannot tell, not a refusal.
-        tools.bash.call(bash(None)).await.unwrap();
-        tools.files.call(files(None)).await.unwrap();
-        tokio::task::yield_now().await;
-        assert_eq!(*seen.lock().unwrap(), ["bash", "file_list"]);
-
-        let registry = MachineRegistry::new();
-        let unknown = PermissionState {
-            accessibility: Permission::Unavailable,
-            screen_capture: Permission::Unavailable,
-        };
-        let studio = connect(&registry, desktop(STUDIO, "studio", now(), Some(unknown))).await;
-        let seen = answering(registry.clone(), studio);
-        let tools = harness(&registry, MachineTarget::resolve(&registry, None).await);
-        tools.computer.call(click(None)).await.unwrap();
-        tokio::task::yield_now().await;
-        assert_eq!(*seen.lock().unwrap(), ["left_click"]);
+        for operation in ["delete", "move", "", "read; rm -rf"] {
+            let mut args = files(None);
+            args.operation = operation.into();
+            let error = tools.files.call(args).await.unwrap_err().0;
+            assert!(
+                error.contains("unknown operation") && error.contains("read, write or list"),
+                "{operation:?}: {error}"
+            );
+        }
+        assert!(nothing_received(&mut studio));
+        for operation in ["read", "write", "list"] {
+            assert!(
+                crate::domain::machine::DESKTOP_TOOLCALLS
+                    .contains(&format!("file_{operation}").as_str()),
+                "{operation} is one the desktop executes"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1665,7 +1365,7 @@ mod target_tests {
         assert_eq!(only.describe(None), "on Studio Mac");
         assert_eq!(
             tool_summary_line(&only),
-            "left_click on Studio Mac",
+            "running a command on Studio Mac",
             "the trail line the tool announces names the desktop that acts"
         );
 
@@ -1688,11 +1388,7 @@ mod target_tests {
     }
 
     fn tool_summary_line(target: &MachineTarget) -> String {
-        crate::services::tools::tool_summary_on(
-            "computer_use",
-            r#"{"action":"left_click"}"#,
-            target,
-        )
+        crate::services::tools::tool_summary_on("remote_bash", r#"{"command":"uname -a"}"#, target)
     }
 
     #[test]
@@ -1703,31 +1399,31 @@ mod target_tests {
             desktop(LAPTOP, "laptop", 1_000, None),
         ];
         assert_eq!(
-            target.desktop_at(&live, None, Need::None, 1_000),
+            target.desktop_at(&live, None, 1_000),
             Err(TargetRefusal::ChooseAComputer {
                 labels: vec!["laptop".into(), "studio".into()]
             })
         );
         assert_eq!(
-            target.desktop_at(&live[..1], None, Need::Accessibility, 1_000),
+            target.desktop_at(&live[..1], None, 1_000),
             Ok(ResolvedTarget {
                 machine_id: STUDIO.into(),
                 label: "studio".into()
             })
         );
         assert_eq!(
-            target.desktop_at(&[], None, Need::None, 1_000),
+            target.desktop_at(&[], None, 1_000),
             Err(TargetRefusal::NoneConnected)
         );
         assert_eq!(
-            target.desktop_at(&live[..1], Some(LAPTOP), Need::None, 1_000),
+            target.desktop_at(&live[..1], Some(LAPTOP), 1_000),
             Err(TargetRefusal::Unavailable {
                 label: LAPTOP.into()
             })
         );
         let stale = 1_000 + crate::domain::machine::STALE_HEARTBEAT_SECS + 1;
         assert_eq!(
-            target.desktop_at(&live[..1], None, Need::None, stale),
+            target.desktop_at(&live[..1], None, stale),
             Err(TargetRefusal::Unhealthy {
                 label: "studio".into(),
                 age_secs: crate::domain::machine::STALE_HEARTBEAT_SECS + 1
@@ -1735,19 +1431,14 @@ mod target_tests {
         );
         let chosen = MachineTarget::new(TargetSelection::Machine(LAPTOP.into()));
         assert_eq!(
-            chosen.desktop_at(&live, Some(STUDIO), Need::None, 1_000),
+            chosen.desktop_at(&live, Some(STUDIO), 1_000),
             Err(TargetRefusal::Mismatch {
                 chosen: LAPTOP.into(),
                 requested: STUDIO.into()
             })
         );
         assert_eq!(
-            MachineTarget::new(TargetSelection::ServerHome).desktop_at(
-                &live,
-                None,
-                Need::None,
-                1_000
-            ),
+            MachineTarget::new(TargetSelection::ServerHome).desktop_at(&live, None, 1_000),
             Err(TargetRefusal::ServerHome)
         );
         for refusal in [
@@ -1757,11 +1448,6 @@ mod target_tests {
             TargetRefusal::Unhealthy {
                 label: "x".into(),
                 age_secs: 1,
-            },
-            TargetRefusal::PermissionDenied {
-                label: "x".into(),
-                permission: "Accessibility",
-                state: Permission::Denied,
             },
             TargetRefusal::ServerHome,
             TargetRefusal::Mismatch {

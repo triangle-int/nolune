@@ -1539,26 +1539,6 @@ export function fetchFederationOutbox(): Promise<FederationOutbox> {
 }
 
 // ---------------------------------------------------------------------------
-// Computer Use
-// ---------------------------------------------------------------------------
-
-export async function submitComputerUseResult(
-	slug: string,
-	requestId: string,
-	result: { type: "screenshot"; image: string; width: number; height: number; scale: number }
-		| { type: "action"; success: boolean; error?: string },
-): Promise<void> {
-	await authedFetch(
-		`${BASE}/api/instances/${encodeURIComponent(slug)}/computer-use/${encodeURIComponent(requestId)}`,
-		{
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify(result),
-		},
-	);
-}
-
-// ---------------------------------------------------------------------------
 // WebSocket
 // ---------------------------------------------------------------------------
 

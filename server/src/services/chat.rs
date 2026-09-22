@@ -272,12 +272,7 @@ pub async fn run_single_turn(
         let machines = machine_registry.list().await;
         let machine_lines: Vec<String> = machines
             .iter()
-            .map(|m| {
-                format!(
-                    "  - {} ({}, {}x{})",
-                    m.hostname, m.os, m.screen_width, m.screen_height
-                )
-            })
+            .map(|m| format!("  - {} ({})", m.hostname, m.os))
             .collect();
 
         system_prompt.push_str(&format!(

@@ -1,5 +1,4 @@
 mod companion_relay;
-mod computer_use;
 mod computer_use_bridge;
 mod credentials;
 mod cua_permissions;
@@ -464,13 +463,6 @@ pub fn run() {
             open_saved_connection,
             delete_saved_connection,
             clear_legacy_browser_auth,
-            computer_use::computer_screenshot,
-            computer_use::computer_click,
-            computer_use::computer_double_click,
-            computer_use::computer_mouse_move,
-            computer_use::computer_scroll,
-            computer_use::computer_type,
-            computer_use::computer_key,
             disconnect_computer_use,
             computer_use_bridge::get_server_url,
             computer_use_bridge::set_instance_slug,

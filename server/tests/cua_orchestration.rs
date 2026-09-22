@@ -128,12 +128,12 @@ fn the_typed_tools_go_through_the_orchestrator_and_the_chosen_computer() {
     assert!(
         !registry.contains("ComputerUseTool::new("),
         "build_tools no longer offers the coordinate tool; the typed tools are the machine \
-         surface (the type itself stays in tools/computer.rs until #19 deletes it)"
+         surface"
     );
     let computer = production("server/src/services/tools/computer.rs");
     assert!(
-        computer.contains("pub struct ComputerUseTool"),
-        "the coordinate tool's type stays until #19"
+        !computer.contains("ComputerUseTool"),
+        "the coordinate tool's type is gone with the legacy desktop executor (#19)"
     );
     for name in [
         "\"discover_windows\" =>",

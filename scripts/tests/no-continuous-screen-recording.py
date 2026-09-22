@@ -65,6 +65,10 @@ class NoContinuousScreenRecordingTest(unittest.TestCase):
 
         removed_paths = (
             ROOT / "desktop/src-tauri/src/screen_recorder.rs",
+            # The legacy executor (#19): enigo automation and the app's own
+            # screenshots capture with its scaling and scale cache.
+            ROOT / "desktop/src-tauri/src/computer_use.rs",
+            ROOT / "desktop/src/lib/computer-use.ts",
             ROOT / "server/src/services/tools/screen.rs",
             ROOT / "client/src/lib/components/observations/ObservationsView.svelte",
             ROOT / "client/src/routes/[slug]/observations/+page.svelte",
@@ -77,9 +81,21 @@ class NoContinuousScreenRecordingTest(unittest.TestCase):
     def test_explicit_computer_use_and_remote_tools_remain(self) -> None:
         desktop_bridge = (ROOT / "desktop/src-tauri/src/computer_use_bridge.rs").read_text()
         desktop_cua = (ROOT / "desktop/src-tauri/src/cua_runtime.rs").read_text()
+        desktop_manifest = (ROOT / "desktop/src-tauri/Cargo.toml").read_text()
         server_tools = (ROOT / "server/src/services/tools/mod.rs").read_text()
         typed_tools = (ROOT / "server/src/services/tools/cua.rs").read_text()
-        self.assertIn('"screenshot" =>', desktop_bridge)
+        # The desktop captures nothing on its own (#19): no screenshot
+        # toolcall, no enigo, no screenshots crate. The only capture it takes
+        # part in is the window snapshot a typed `get_window_state` asks for,
+        # and the toolcalls left are the shell and file ones.
+        self.assertNotIn('"screenshot" =>', desktop_bridge)
+        for executor in ("enigo", "screenshots::", "cached_scale", "computer_use::"):
+            self.assertNotIn(executor, desktop_bridge)
+        for crate in ("enigo", "screenshots", "image"):
+            self.assertNotIn(f"\n{crate} =", desktop_manifest)
+        self.assertIn('"get_window_state"', desktop_bridge)
+        for toolcall in ('"bash" =>', '"file_read" =>', '"file_write" =>', '"file_list" =>'):
+            self.assertIn(toolcall, desktop_bridge)
         # The desktop's Cua driver (#17) is the driver's one-shot MCP surface:
         # the only subcommand it ever runs is `mcp`, and every capture is a
         # window snapshot the server asked for by name.
@@ -89,11 +105,12 @@ class NoContinuousScreenRecordingTest(unittest.TestCase):
         self.assertIn("get_window_state", desktop_cua)
         # The model's only capture is the one-shot `get_window_state` takes
         # when asked (#18): the typed tools are registered, the coordinate
-        # `computer_use` tool is not offered any more (its type stays until
-        # #19), and the remote shell and file tools remain.
+        # `computer_use` tool is gone with its type (#19), and the remote
+        # shell and file tools remain.
         self.assertIn("GetWindowStateTool::new", server_tools)
         self.assertIn("ActTool::new", server_tools)
         self.assertNotIn("ComputerUseTool::new", server_tools)
+        self.assertNotIn("ComputerUseTool", (ROOT / "server/src/services/tools/computer.rs").read_text())
         self.assertIn("include_screenshot", typed_tools)
         for continuous in ("start_recording", "stop_recording", "screen_frame"):
             self.assertNotIn(continuous, typed_tools)

@@ -10,7 +10,9 @@
 //! computer. The checks say what would stop a continuation before any work
 //! starts; the handoff service runs them again at acceptance.
 
-use cua_protocol::{MachineHealth, Permission, PermissionKind, PermissionState, Platform};
+use cua_protocol::{
+    MachineHealth, MachineLocation, Permission, PermissionKind, PermissionState, Platform,
+};
 use serde::Serialize;
 
 use crate::domain::{
@@ -18,12 +20,13 @@ use crate::domain::{
     machine::KnownMachine,
 };
 
-/// Capabilities every continuation on a computer needs: seeing the screen
-/// and acting on it.
-pub const COMPUTER_USE_CAPABILITIES: [&str; 4] = ["screenshot", "left_click", "type", "key"];
-/// Capabilities a task that links files on a computer also needs.
+/// Toolcalls the destination's desktop app must execute for a task that
+/// links files on a computer (the `remote_files` path the acceptance looks
+/// for them through).
 pub const FILE_CAPABILITIES: [&str; 2] = ["file_read", "file_list"];
-/// Desktop permissions computer use needs.
+/// The grants the destination's Cua driver must hold for every continuation
+/// on a computer: seeing windows and acting in them. Since #19 nothing else
+/// on a desktop does either, so requiring them is requiring the driver.
 pub const REQUIRED_PERMISSIONS: [PermissionKind; 2] =
     [PermissionKind::ScreenCapture, PermissionKind::Accessibility];
 
@@ -46,7 +49,10 @@ pub struct ComputerSummary {
 /// What the destination must be able to do for this task.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Requirements {
+    /// Toolcalls the destination's desktop app must execute.
     pub capabilities: Vec<String>,
+    /// Grants the destination's Cua driver must hold; a non-empty list is
+    /// also the requirement that a driver runs there at all.
     pub permissions: Vec<PermissionKind>,
 }
 
@@ -106,17 +112,28 @@ pub enum CheckKind {
     MachineOffline,
     /// Connected, but its heartbeat is stale.
     MachineNotResponding,
+    /// The desktop app does not execute a toolcall the task needs.
     CapabilityMissing {
         capability: String,
     },
+    /// No Cua driver runs on the destination, so nothing there can see or
+    /// act in windows (#19).
+    DriverMissing,
+    /// The destination's Cua driver reports itself unavailable; the
+    /// orchestrator refuses every action against it.
+    DriverUnavailable,
+    /// The destination's Cua driver reports degraded health.
+    DriverDegraded,
+    /// The Cua driver on the destination does not hold this grant.
     PermissionDenied {
         permission: PermissionKind,
     },
-    /// The desktop will ask for this permission when work starts.
+    /// The driver's health report did not cover this grant; the first action
+    /// that needs it may prompt for it or be refused.
     PermissionPrompt {
         permission: PermissionKind,
     },
-    /// The desktop did not report its permissions.
+    /// A driver is registered but its grants were not reported.
     PermissionsUnknown,
     /// An upload, memory path, or file the reference check could not find.
     ResourceMissing {
@@ -188,21 +205,20 @@ pub fn computer_summary(machine_id: &str, machines: &[KnownMachine]) -> Computer
     }
 }
 
-/// What the destination must be able to do for this record.
+/// What the destination must be able to do for this record: the file
+/// toolcalls when it links a file on a computer, and the driver's grants
+/// always.
 pub fn requirements(record: &ContinuityRecord) -> Requirements {
-    let mut capabilities: Vec<String> = COMPUTER_USE_CAPABILITIES
-        .iter()
-        .map(|s| (*s).to_owned())
-        .collect();
-    if record
+    let links_files = record
         .resources
         .iter()
-        .any(|link| matches!(link.resource, ResourceRef::MachinePath { .. }))
-    {
-        capabilities.extend(FILE_CAPABILITIES.iter().map(|s| (*s).to_owned()));
-    }
+        .any(|link| matches!(link.resource, ResourceRef::MachinePath { .. }));
     Requirements {
-        capabilities,
+        capabilities: if links_files {
+            FILE_CAPABILITIES.iter().map(|s| (*s).to_owned()).collect()
+        } else {
+            Vec::new()
+        },
         permissions: REQUIRED_PERMISSIONS.to_vec(),
     }
 }
@@ -286,7 +302,7 @@ pub fn continuation_checks(
     machines: &[KnownMachine],
     environment: Environment,
 ) -> Vec<ContinuationCheck> {
-    use Severity::{Approval, Blocking, Note};
+    use Severity::{Blocking, Note};
     let mut checks = Vec::new();
     let destination = computer_summary(machine_id, machines);
     let name = destination.display_name.as_str();
@@ -346,30 +362,11 @@ pub fn continuation_checks(
                 ));
             }
         }
-        match &m.permissions {
-            Some(state) => {
-                for kind in required.permissions {
-                    let label = permission_label(kind);
-                    match permission(state, kind) {
-                        Permission::Granted => {}
-                        Permission::PromptRequired => checks.push(check(
-                            CheckKind::PermissionPrompt { permission: kind },
-                            Approval,
-                            format!("{name} will ask for {label} before the first action"),
-                        )),
-                        Permission::Denied | Permission::Unavailable => checks.push(check(
-                            CheckKind::PermissionDenied { permission: kind },
-                            Blocking,
-                            format!("{label} is not granted on {name}; allow it in its desktop settings"),
-                        )),
-                    }
-                }
-            }
-            None => checks.push(check(
-                CheckKind::PermissionsUnknown,
-                Approval,
-                format!("{name} did not report its permissions; it may ask for Screen Recording or Accessibility"),
-            )),
+        // Seeing and acting in windows is the Cua driver's alone (#19): the
+        // grants the task needs are the driver's, so a destination without
+        // one has nothing to hold them.
+        if !required.permissions.is_empty() {
+            checks.extend(driver_checks(m, name, &required.permissions));
         }
     }
 
@@ -442,6 +439,84 @@ pub fn continuation_checks(
     checks
 }
 
+/// The checks on the destination's Cua driver: that one runs, that it does
+/// not report itself unavailable, and that it holds each grant in
+/// `permissions`. `machine.permissions` are the driver's grants while a
+/// driver is registered (the registry records the descriptor's, never the
+/// desktop app's own, which gate nothing since #19).
+fn driver_checks(
+    machine: &KnownMachine,
+    name: &str,
+    permissions: &[PermissionKind],
+) -> Vec<ContinuationCheck> {
+    use Severity::{Approval, Blocking, Note};
+    let mut checks = Vec::new();
+    if machine.driver_version.is_none() {
+        checks.push(check(
+            CheckKind::DriverMissing,
+            Blocking,
+            format!(
+                "{name} runs no Cua driver, so it cannot see or act in windows; install one there with nolune cua install, then reconnect"
+            ),
+        ));
+        return checks;
+    }
+    match machine.cua_health {
+        Some(MachineHealth::Unavailable) => {
+            checks.push(check(
+                CheckKind::DriverUnavailable,
+                Blocking,
+                format!("the Cua driver on {name} reports itself unavailable; restart it there"),
+            ));
+            return checks;
+        }
+        Some(MachineHealth::Degraded) => checks.push(check(
+            CheckKind::DriverDegraded,
+            Note,
+            format!(
+                "the Cua driver on {name} reports degraded health; a window action there may fail"
+            ),
+        )),
+        Some(MachineHealth::Healthy) | None => {}
+    }
+    let Some(state) = &machine.permissions else {
+        checks.push(check(
+            CheckKind::PermissionsUnknown,
+            Blocking,
+            format!(
+                "the Cua driver on {name} did not report its grants; reconnect it and try again"
+            ),
+        ));
+        return checks;
+    };
+    // Where the grant is made: the desktop app's Settings window runs the
+    // driver's grant flow on a desktop; beside the server it is the
+    // driver's own command.
+    let grant = match machine.location {
+        MachineLocation::Desktop => "grant it from the Nolune desktop app's Settings there",
+        MachineLocation::ServerLocal => "run cua-driver permissions grant on the server",
+    };
+    for &kind in permissions {
+        let label = permission_label(kind);
+        match permission(state, kind) {
+            Permission::Granted => {}
+            Permission::PromptRequired => checks.push(check(
+                CheckKind::PermissionPrompt { permission: kind },
+                Approval,
+                format!(
+                    "the Cua driver on {name} has not been granted {label} yet; the first action that needs it may ask for it or be refused"
+                ),
+            )),
+            Permission::Denied | Permission::Unavailable => checks.push(check(
+                CheckKind::PermissionDenied { permission: kind },
+                Blocking,
+                format!("{label} is not granted to the Cua driver on {name}; {grant}, then reconnect"),
+            )),
+        }
+    }
+    checks
+}
+
 /// The preview for continuing `record` on `machine_id`.
 pub fn preview(
     record: &ContinuityRecord,
@@ -482,7 +557,6 @@ mod tests {
         ContinuityUpdate, HandoffOutcome, HandoffOutcomeStatus, Origin, Provenance,
         ProvenanceSource,
     };
-    use cua_protocol::MachineLocation;
 
     const T0: i64 = 1_767_603_600;
 
@@ -494,6 +568,8 @@ mod tests {
         }
     }
 
+    /// A desktop from this release: the five toolcalls the app executes and
+    /// a healthy Cua driver holding both grants.
     fn machine(id: &str, online: bool, health: MachineHealth) -> KnownMachine {
         KnownMachine {
             machine_id: id.into(),
@@ -503,16 +579,12 @@ mod tests {
             os: "macos".into(),
             platform: Some(Platform::Macos),
             location: MachineLocation::Desktop,
-            screen_width: 1920,
-            screen_height: 1080,
             permissions: Some(PermissionState {
                 accessibility: Permission::Granted,
                 screen_capture: Permission::Granted,
             }),
-            capabilities: COMPUTER_USE_CAPABILITIES
+            capabilities: crate::domain::machine::DESKTOP_TOOLCALLS
                 .iter()
-                .chain(FILE_CAPABILITIES.iter())
-                .chain(["bash"].iter())
                 .map(|s| (*s).to_owned())
                 .collect(),
             first_seen: T0 - 1000,
@@ -520,8 +592,8 @@ mod tests {
             instance_slug: Some("companion".into()),
             online,
             health,
-            driver_version: None,
-            cua_health: None,
+            driver_version: online.then(|| "0.28.2".to_owned()),
+            cua_health: online.then_some(MachineHealth::Healthy),
         }
     }
 
@@ -709,21 +781,102 @@ mod tests {
 
     #[test]
     fn requirements_follow_what_the_record_links() {
+        // A file on a computer needs the desktop app's file toolcalls; the
+        // driver's grants are needed either way, and no coordinate action
+        // name is ever required (#19: the desktop app executes none).
         let required = requirements(&record());
-        let mut expected: Vec<String> = COMPUTER_USE_CAPABILITIES
-            .iter()
-            .chain(FILE_CAPABILITIES.iter())
-            .map(|s| (*s).to_owned())
-            .collect();
-        assert_eq!(required.capabilities, expected);
+        assert_eq!(required.capabilities, FILE_CAPABILITIES.to_vec());
         assert_eq!(required.permissions, REQUIRED_PERMISSIONS.to_vec());
+        for name in ["screenshot", "left_click", "type", "key"] {
+            assert!(!required.capabilities.iter().any(|c| c == name));
+        }
 
         let mut chat_only = record();
         chat_only
             .resources
             .retain(|link| !matches!(link.resource, ResourceRef::MachinePath { .. }));
-        expected.truncate(COMPUTER_USE_CAPABILITIES.len());
-        assert_eq!(requirements(&chat_only).capabilities, expected);
+        let required = requirements(&chat_only);
+        assert!(required.capabilities.is_empty());
+        assert_eq!(required.permissions, REQUIRED_PERMISSIONS.to_vec());
+    }
+
+    #[test]
+    fn a_desktop_from_this_release_is_ready_and_one_without_a_driver_is_refused() {
+        let mut record = record();
+        record.blockers.clear();
+        let env = environment();
+
+        // Exactly what the desktop app registers with: its five toolcalls
+        // and the driver's descriptor.
+        let current = healthy("mac-b");
+        assert_eq!(
+            current.capabilities,
+            crate::domain::machine::DESKTOP_TOOLCALLS
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect::<Vec<_>>()
+        );
+        let checks = continuation_checks(&record, "mac-b", &[healthy("mac-a"), current], env);
+        assert!(blocking(&checks).is_empty(), "{:?}", kinds(&checks));
+
+        // The same desktop without a driver cannot see or act in windows,
+        // whatever toolcalls it executes, and the check says what to install.
+        let mut driverless = healthy("mac-b");
+        driverless.driver_version = None;
+        driverless.cua_health = None;
+        driverless.permissions = None;
+        let checks = continuation_checks(&record, "mac-b", &[healthy("mac-a"), driverless], env);
+        assert_eq!(blocking(&checks), vec![&CheckKind::DriverMissing]);
+        let missing = checks
+            .iter()
+            .find(|c| c.kind == CheckKind::DriverMissing)
+            .unwrap();
+        assert!(
+            missing.detail.contains("mac-b name")
+                && missing.detail.contains("Cua driver")
+                && missing.detail.contains("nolune cua install"),
+            "{}",
+            missing.detail
+        );
+        assert!(
+            !checks
+                .iter()
+                .any(|c| matches!(c.kind, CheckKind::PermissionsUnknown)),
+            "no grants are asked about when there is no driver to hold them"
+        );
+
+        // An older desktop advertising the coordinate names the deleted
+        // executor answered is no better off: those names satisfy nothing.
+        let mut legacy = healthy("mac-b");
+        legacy.capabilities = crate::domain::machine::LEGACY_DESKTOP_CAPABILITIES
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        legacy.driver_version = None;
+        legacy.cua_health = None;
+        let checks = continuation_checks(&record, "mac-b", &[healthy("mac-a"), legacy], env);
+        assert_eq!(blocking(&checks), vec![&CheckKind::DriverMissing]);
+
+        // The driver's own health: unavailable stops, degraded is noted.
+        let mut down = healthy("mac-b");
+        down.cua_health = Some(MachineHealth::Unavailable);
+        let checks = continuation_checks(&record, "mac-b", &[healthy("mac-a"), down], env);
+        assert_eq!(blocking(&checks), vec![&CheckKind::DriverUnavailable]);
+        let mut shaky = healthy("mac-b");
+        shaky.cua_health = Some(MachineHealth::Degraded);
+        let checks = continuation_checks(&record, "mac-b", &[healthy("mac-a"), shaky], env);
+        assert!(blocking(&checks).is_empty(), "{:?}", kinds(&checks));
+        let note = checks
+            .iter()
+            .find(|c| c.kind == CheckKind::DriverDegraded)
+            .expect("a degraded driver is mentioned");
+        assert_eq!(note.severity, Severity::Note);
+
+        // A driver whose grants were not reported is not assumed to hold them.
+        let mut silent = healthy("mac-b");
+        silent.permissions = None;
+        let checks = continuation_checks(&record, "mac-b", &[healthy("mac-a"), silent], env);
+        assert_eq!(blocking(&checks), vec![&CheckKind::PermissionsUnknown]);
     }
 
     #[test]
@@ -744,7 +897,7 @@ mod tests {
         );
         assert!(blocking(&checks).contains(&&CheckKind::MachineNotResponding));
 
-        // A missing capability is named.
+        // A missing file toolcall is named.
         let mut limited = healthy("mac-b");
         limited.capabilities.retain(|c| c != "file_read");
         let checks = continuation_checks(&record, "mac-b", &[limited], env);
@@ -752,16 +905,45 @@ mod tests {
             capability: "file_read".into()
         }));
 
-        // Denied permissions block; prompts and unreported ones are approvals.
+        // The driver's grants: a denied one blocks and says where to grant
+        // it; one its report did not cover is an approval.
         let mut denied = healthy("mac-b");
         denied.permissions = Some(PermissionState {
             accessibility: Permission::Granted,
             screen_capture: Permission::Denied,
         });
-        let checks = continuation_checks(&record, "mac-b", &[denied], env);
-        assert!(blocking(&checks).contains(&&CheckKind::PermissionDenied {
-            permission: PermissionKind::ScreenCapture
-        }));
+        let checks = continuation_checks(&record, "mac-b", &[denied.clone()], env);
+        let refused = checks
+            .iter()
+            .find(|c| {
+                c.kind
+                    == CheckKind::PermissionDenied {
+                        permission: PermissionKind::ScreenCapture,
+                    }
+            })
+            .expect("a denied check");
+        assert_eq!(refused.severity, Severity::Blocking);
+        assert!(
+            refused.detail.contains("Screen Recording")
+                && refused.detail.contains("Cua driver on mac-b name")
+                && refused.detail.contains("desktop app's Settings"),
+            "{}",
+            refused.detail
+        );
+        let mut beside_server = denied.clone();
+        beside_server.location = MachineLocation::ServerLocal;
+        let checks = continuation_checks(&record, "mac-b", &[beside_server], env);
+        let refused = checks
+            .iter()
+            .find(|c| matches!(c.kind, CheckKind::PermissionDenied { .. }))
+            .unwrap();
+        assert!(
+            refused
+                .detail
+                .contains("cua-driver permissions grant on the server"),
+            "{}",
+            refused.detail
+        );
         let mut prompting = healthy("mac-b");
         prompting.permissions = Some(PermissionState {
             accessibility: Permission::PromptRequired,
@@ -778,15 +960,11 @@ mod tests {
             })
             .expect("a prompt check");
         assert_eq!(prompt.severity, Severity::Approval);
-        assert!(prompt.detail.contains("Accessibility"), "{}", prompt.detail);
-        let mut unreported = healthy("mac-b");
-        unreported.permissions = None;
-        let checks = continuation_checks(&record, "mac-b", &[unreported], env);
-        let unknown = checks
-            .iter()
-            .find(|c| c.kind == CheckKind::PermissionsUnknown)
-            .expect("an unknown-permissions check");
-        assert_eq!(unknown.severity, Severity::Approval);
+        assert!(
+            prompt.detail.contains("Accessibility") && prompt.detail.contains("Cua driver"),
+            "{}",
+            prompt.detail
+        );
 
         // Resources: a missing upload blocks; a file on the offline origin
         // blocks; the same file is a note while the origin is online.

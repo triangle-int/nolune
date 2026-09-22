@@ -2,7 +2,10 @@
 //!
 //! Included from `app/router.rs`. Every request goes through `build_router`,
 //! so the real auth and companion middleware run. Two fake desktops register
-//! through the registry exactly as the WebSocket route does; their toolcall
+//! through the registry exactly as the WebSocket route does, with exactly
+//! what a desktop from this release sends (#19): the five toolcalls the app
+//! executes and the Cua descriptor of the driver beside it, whose grants are
+//! the ones a continuation needs. Their toolcall
 //! channels stay empty throughout, which is how these tests prove that
 //! nothing acts on a computer before, or at, the user's acceptance. The
 //! task's conversation is simulated as one that is already running: the
@@ -20,7 +23,7 @@ use crate::{
             ProvenanceSource, ResourceRef,
         },
         events::ServerEvent,
-        handoff::{COMPUTER_USE_CAPABILITIES, FILE_CAPABILITIES},
+        machine::DESKTOP_TOOLCALLS,
         proactive::{ProactivePolicy, RunStatus, Trigger},
     },
     services::{
@@ -34,7 +37,10 @@ use axum::{
     body::Body,
     http::{Method, Request, StatusCode, header},
 };
-use cua_protocol::{MachineLocation, Permission, PermissionState, Platform};
+use cua_protocol::{
+    Capability, DriverVersion, MachineDescriptor, MachineHealth, MachineId, MachineLocation,
+    Permission, PermissionState, Platform,
+};
 use std::{fs, sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
@@ -98,20 +104,36 @@ fn api(suffix: &str) -> String {
     format!("/api/instances/{CANONICAL_SLUG}/{suffix}")
 }
 
-fn granted() -> Option<PermissionState> {
-    Some(PermissionState {
+fn granted() -> PermissionState {
+    PermissionState {
         accessibility: Permission::Granted,
         screen_capture: Permission::Granted,
-    })
+    }
 }
 
-fn full_capabilities() -> Vec<String> {
-    COMPUTER_USE_CAPABILITIES
-        .iter()
-        .chain(FILE_CAPABILITIES.iter())
-        .chain(["bash", "right_click", "scroll"].iter())
-        .map(|s| (*s).to_owned())
-        .collect()
+/// What the desktop app reports as `capabilities`: the toolcalls it
+/// executes, and nothing about windows (`computer_use_bridge.rs::CAPABILITIES`).
+fn desktop_toolcalls() -> Vec<String> {
+    DESKTOP_TOOLCALLS.iter().map(|s| (*s).to_owned()).collect()
+}
+
+/// The descriptor of the Cua driver a desktop registers beside its
+/// toolcalls (#17), with the driver's own grants.
+fn driver(machine_id: &str, permissions: PermissionState) -> MachineDescriptor {
+    MachineDescriptor {
+        machine_id: MachineId::try_from(machine_id).unwrap(),
+        location: MachineLocation::Desktop,
+        platform: Platform::Macos,
+        driver_version: DriverVersion::try_from("0.28.2").unwrap(),
+        health: MachineHealth::Healthy,
+        permissions,
+        capabilities: vec![
+            Capability::AppDiscovery,
+            Capability::WindowDiscovery,
+            Capability::SessionLifecycle,
+            Capability::Health,
+        ],
+    }
 }
 
 /// A desktop connected through the registry: its connection number and the
@@ -147,11 +169,6 @@ impl Desktop {
                 .complete(
                     call["request_id"].as_str().unwrap(),
                     ActionResult {
-                        result_type: "action".into(),
-                        image: None,
-                        width: None,
-                        height: None,
-                        scale: None,
                         success: Some(success),
                         error: Some(output.into()),
                     },
@@ -164,11 +181,15 @@ impl Desktop {
 }
 
 impl Harness {
+    /// A desktop registered the way the machine route registers one: its
+    /// toolcalls on the legacy registration, then its Cua descriptor
+    /// attached to the same connection (`None` for a desktop without a
+    /// driver, which records no grants).
     async fn connect(
         &self,
         machine_id: &str,
         hostname: &str,
-        permissions: Option<PermissionState>,
+        driver: Option<MachineDescriptor>,
         capabilities: Vec<String>,
         last_seen: i64,
     ) -> Desktop {
@@ -181,24 +202,35 @@ impl Harness {
                     machine_id: machine_id.into(),
                     os: "macos".into(),
                     hostname: hostname.into(),
-                    screen_width: 2560,
-                    screen_height: 1440,
                     last_seen,
                     instance_slug: None,
                     platform: Some(Platform::Macos),
                     location: MachineLocation::Desktop,
-                    permissions,
+                    permissions: driver.as_ref().map(|d| d.permissions.clone()),
                     capabilities,
                 },
                 tx,
             )
             .await;
+        if let Some(descriptor) = driver {
+            self.state
+                .machine_registry
+                .attach_desktop_cua(machine_id, connection, descriptor, Duration::from_secs(5))
+                .await
+                .expect("the driver attaches to the connection that just registered");
+        }
         Desktop { connection, calls }
     }
 
     async fn connect_ready(&self, machine_id: &str, hostname: &str) -> Desktop {
-        self.connect(machine_id, hostname, granted(), full_capabilities(), now())
-            .await
+        self.connect(
+            machine_id,
+            hostname,
+            Some(driver(machine_id, granted())),
+            desktop_toolcalls(),
+            now(),
+        )
+        .await
     }
 
     async fn disconnect(&self, machine_id: &str, desktop: &Desktop) {
@@ -508,14 +540,13 @@ async fn a_task_started_on_one_computer_is_reviewed_and_continued_on_another() {
     );
     assert_eq!(
         card["required"]["permissions"],
-        serde_json::json!(["screen_capture", "accessibility"])
+        serde_json::json!(["screen_capture", "accessibility"]),
+        "the Cua driver's grants"
     );
-    assert!(
-        card["required"]["capabilities"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|c| c == "file_read")
+    assert_eq!(
+        card["required"]["capabilities"],
+        serde_json::json!(["file_read", "file_list"]),
+        "the file toolcalls for the linked file, and no coordinate action (#19)"
     );
     assert_eq!(card["decision"], serde_json::Value::Null);
     assert_eq!(card["offered"], true);
@@ -877,7 +908,13 @@ async fn stale_and_unfit_destinations_are_refused_with_reasons_before_any_work()
     let _a = h.connect_ready(MAC_A, "studio").await;
     // B is connected but its heartbeat is stale.
     let mut b = h
-        .connect(MAC_B, "laptop", granted(), full_capabilities(), now() - 120)
+        .connect(
+            MAC_B,
+            "laptop",
+            Some(driver(MAC_B, granted())),
+            desktop_toolcalls(),
+            now() - 120,
+        )
         .await;
     let task = h.task(Harness::usual_resources()).await;
 
@@ -898,17 +935,18 @@ async fn stale_and_unfit_destinations_are_refused_with_reasons_before_any_work()
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(check_kinds(&refused), vec!["blocking:machine_unknown"]);
 
-    // A computer that cannot do what the task needs, and denies a permission.
-    let denied = Some(PermissionState {
+    // A computer whose desktop app executes no file toolcalls, and whose
+    // driver is denied a grant.
+    let denied = PermissionState {
         accessibility: Permission::Granted,
         screen_capture: Permission::Denied,
-    });
+    };
     let _c = h
         .connect(
             "mac-c",
             "old-mini",
-            denied,
-            vec!["screenshot".into(), "bash".into()],
+            Some(driver("mac-c", denied)),
+            vec!["bash".into()],
             now(),
         )
         .await;
@@ -929,21 +967,56 @@ async fn stale_and_unfit_destinations_are_refused_with_reasons_before_any_work()
         .map(|c| c["detail"].as_str().unwrap())
         .collect();
     assert!(
-        details.iter().any(|d| d.contains("Screen Recording")),
+        details
+            .iter()
+            .any(|d| d.contains("Screen Recording") && d.contains("Cua driver on old-mini")),
         "{details:?}"
     );
     assert!(
-        details.iter().any(|d| d.contains("left_click")),
+        details.iter().any(|d| d.contains("file_read")),
         "{details:?}"
     );
 
-    // A computer whose desktop will ask: shown as needing approval, not a stop.
-    let prompting = Some(PermissionState {
+    // A desktop from this release without a driver: it executes every
+    // toolcall the app has, and still cannot see or act in windows (#19).
+    // The refusal names the driver, not a coordinate action, and asks
+    // about no grants (there is nothing to hold them).
+    let _e = h
+        .connect("mac-e", "bare", None, desktop_toolcalls(), now())
+        .await;
+    let (_, preview) = h.preview(&task.id, "mac-e").await;
+    assert_eq!(preview["ready"], false, "{preview}");
+    assert_eq!(
+        check_kinds(&preview)
+            .iter()
+            .filter(|k| k.starts_with("blocking:"))
+            .collect::<Vec<_>>(),
+        vec!["blocking:driver_missing"],
+        "{preview}"
+    );
+    assert!(
+        blocking_detail(&preview).contains("bare runs no Cua driver")
+            && blocking_detail(&preview).contains("nolune cua install"),
+        "{preview}"
+    );
+    let (status, refused) = h.accept(&task.id, "mac-e").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["error"], "handoff_not_ready");
+
+    // A computer whose driver's report did not cover a grant: shown as
+    // needing approval, not a stop.
+    let prompting = PermissionState {
         accessibility: Permission::PromptRequired,
         screen_capture: Permission::Granted,
-    });
+    };
     let _d = h
-        .connect("mac-d", "spare", prompting, full_capabilities(), now())
+        .connect(
+            "mac-d",
+            "spare",
+            Some(driver("mac-d", prompting)),
+            desktop_toolcalls(),
+            now(),
+        )
         .await;
     let (_, preview) = h.preview(&task.id, "mac-d").await;
     assert_eq!(preview["ready"], true, "{preview}");

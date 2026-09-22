@@ -1041,8 +1041,8 @@ pub fn build_tools(
     // ── Computer use (multi-machine routing) ──
     // The desktop tools act on the computer the user chose (#80); the
     // target is resolved once per turn and never defaults to a machine here.
-    // The coordinate `computer_use` tool is not offered since #18: seeing
-    // and acting in a window goes through the typed tools below.
+    // Seeing and acting in a window goes through the typed tools below;
+    // the coordinate `computer_use` tool is gone (#18, #19).
     tools.push(wrap(Box::new(ListMachinesTool::new(
         machine_registry.clone(),
     ))));

@@ -847,8 +847,6 @@ mod tests {
             machine_id: machine_id.into(),
             os: "macos".into(),
             hostname: hostname.into(),
-            screen_width: 1440,
-            screen_height: 900,
             last_seen: 1_700_000_000,
             instance_slug: None,
             platform: Some(Platform::Macos),
