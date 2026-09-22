@@ -1,16 +1,128 @@
-# Computer use on the server machine (#16)
+# Computer use
 
-The machine the Nolune server runs on can be one of the computers the
-companion uses, without the desktop app. The server drives it through a
-local [Cua Driver](https://github.com/trycua/cua) process and registers it as
-a machine target beside the desktops connected through the app. Everything
-goes through the shared typed protocol in `cua-protocol/`, the same boundary
-a desktop target uses (see [Desktop targets](#desktop-targets-17)), so one
-policy decides what the companion may do on either kind of machine. The
-companion drives both through the same typed tools and the same loop rules
-(see [Typed machine tools](#typed-machine-tools-18)).
+Nolune can see and act in the windows of two kinds of computer: the machine
+the server runs on (the server-local target, #16) and a remote desktop that
+runs the Nolune desktop app (a desktop target, #17). Both are driven by a
+pinned [Cua Driver](https://github.com/trycua/cua) through the one typed
+protocol in `cua-protocol/`, so one policy decides what the companion may do
+on either kind of machine, and the companion reaches both through the same
+four typed tools and the same loop rules ([Typed machine
+tools](#typed-machine-tools-18)). This page is the whole of it: the privacy
+model first, where computer use is supported, how the driver is pinned, each
+kind of target, the permissions, how a computer is chosen, what the tools
+enforce, and the manual release check.
 
-## When the target exists
+## Privacy
+
+Computer use is explicit and permissioned, on the server-local target and on
+a remote desktop alike, and Nolune does not continuously record the screen.
+What each of those means, and what the code enforces:
+
+- Explicit. The companion sees or acts in a window only when it calls one of
+  the typed machine tools in a turn of the agent loop, on the computer the
+  user chose for that conversation ([Choosing a
+  computer](#choosing-a-computer)). Nothing picks a computer for the user,
+  nothing observes a window outside a tool call, and every call is one line
+  in the activity trail ("observing a window on studio", "click on the
+  server home") beside the message it belongs to. On the server machine
+  every call is one run with a session that ends with it; on a desktop the
+  app's overlay shows every action as it happens.
+- Permissioned. Every action is authorized against the target's descriptor
+  before it is sent: the Cua Driver's own Accessibility and Screen Recording
+  grants (macOS attributes them to `CuaDriver.app`, see
+  [Permissions](#permissions-20)), the capabilities those grants allow and
+  the driver's health. A grant that is missing refuses the action with
+  `permission_denied` before a frame is sent or a session opens, on both
+  kinds of target, and a desktop checks the same descriptor again on its own
+  side before its driver sees a request. Nothing is granted through Nolune:
+  the grants are made by the user, in System Settings, to the driver's
+  bundle, and the Computers page shows them as the driver reports them.
+- One-shot screenshots, during an action only. The only image the companion
+  ever gets is a one-shot screenshot of one window, taken by the driver
+  during an action the model asked for: `get_window_state` with
+  `include_screenshot: true`, which is off unless the model asks. It is the
+  only capture there is. The image reaches the model once, beside the
+  window's elements, and is saved among the companion's uploads so the user
+  can open what the companion saw (the result names the upload and a
+  link); it travels to the model provider the way any other image does, as
+  a provider-reachable URL or inlined on a local install ([Typed machine
+  tools](#typed-machine-tools-18)).
+- Never continuous. Nolune does not continuously record the screen, on
+  either kind of target: there is no continuous capture, no recording, no
+  frame stream and no watcher, neither in the server nor in the desktop
+  app, and neither runtime ever starts the driver's own recorder. The
+  protocol names no recording or replay action, the tools offer none, a
+  descriptor that claims one is refused at registration, and
+  `scripts/tests/no-continuous-screen-recording.py` together with
+  `server/tests/cua_privacy_docs.rs` fail the build when a Cua file or any
+  shipped copy says otherwise.
+- Background only, and verified. Every action is delivered in the
+  background (`delivery_mode: background` is the only value the tools
+  accept), so the companion never fronts a window or moves the user's
+  focus, and an action is reported as done only once it is verified ([the
+  loop](#the-loop-the-orchestrator-enforces)).
+- A pinned driver. The Cua Driver behind all of this is one fixed release,
+  verified by checksum and never updated on its own ([The Cua Driver
+  pin](#the-cua-driver-pin)).
+
+`server/test-support/cua_end_to_end.rs` walks every one of these through
+the tool layer with a fake driver and a fake desktop, refusals included.
+
+## Platform status
+
+- macOS is supported, for the server machine and for the desktop app, with
+  the two grants above. The manual [release check](#release-check) runs
+  there.
+- Linux and Windows are unsupported for now. `nolune cua install` installs
+  the pinned driver on them all the same, so a later release can turn
+  computer use on without a new download, but `nolune cua status` reports
+  the host as unsupported, the server registers no target, the desktop app
+  registers legacy-only, and its Settings window says there is nothing to
+  grant. `remote_bash` and `remote_files` work there as they always did.
+- A headless host registers no target and never starts the driver, whatever
+  the platform: a Linux session without `DISPLAY` or `WAYLAND_DISPLAY`, a
+  macOS process outside an Aqua login (over SSH, as a daemon), a Windows
+  session without `SESSIONNAME`, or a process inside a container. The server
+  keeps serving, `list_machines` and the Computers page simply show no
+  server-local entry, and a remote desktop can still register and be driven
+  ([The server machine](#the-server-machine-16)).
+
+## The Cua Driver pin
+
+One Cua Driver release is what Nolune ships, verifies and accepts. The pin
+lives in `cua_protocol::cua_driver_pin` (`cua-protocol/src/cua_driver_pin.rs`:
+the version, the release tag and commit, and one asset name, sha256 and size
+per target) with a shell-readable copy in `cua-protocol/cua-driver.pin` that
+`scripts/cua-driver.sh` reads for the release workflow; a cua-protocol test
+fails whenever the two disagree, so the pin moves in both places at once.
+
+- `nolune cua install` downloads the asset the pin names for this host,
+  checks its size and sha256 before a byte is kept, asks the extracted
+  binary for its version and refuses anything but the pin, then records the
+  install under the workspace (`cua-driver/install.json`).
+- `nolune cua status` prints the pin, the installed driver checked against
+  it (verified, not the pinned version, checksum mismatch, binary missing),
+  the driver the server would run, and the driver's own health and grants.
+- The driver is never updated on its own: not by Nolune, and not through
+  the driver's self-updater, which nothing in Nolune ever invokes. A driver
+  that reports any other version is incompatible, named as such with the
+  install command, and never fixed silently. A new pin ships with a new
+  Nolune release (`docs/release-checklist.md`), whose workflow fetches
+  and verifies the driver archive for every desktop target and carries
+  it beside the desktop bundle; `nolune cua install` then installs that
+  one, on the server machine and on a desktop alike.
+
+## The server machine (#16)
+
+The server machine itself can be one of the computers the companion uses,
+without the desktop app. The server drives it through a local `cua-driver`
+process and registers it as a machine target beside the desktops connected
+through the app, under the reserved `server-local:` prefix. To the
+composer, the prompt, the tool results and the trail it is "the server
+home", whatever its hostname: the place `run_command` and the file tools
+already act.
+
+### When the target exists
 
 At startup the gateway looks for a driver and a desktop session, in this
 order (the same facts `nolune cua status` prints, see [the `nolune`
@@ -56,7 +168,7 @@ health report: a driver that stalls (a wrapper script, a process blocked on a
 permission prompt) costs nothing but its own deadline, `/healthz` answers at
 once, and the target appears in the listings the moment it is registered.
 
-## While it runs
+### While it runs
 
 The advertised descriptor stays honest for as long as the driver does:
 
@@ -71,7 +183,7 @@ The advertised descriptor stays honest for as long as the driver does:
   next run authorizes against the new descriptor; a report that cannot be
   read keeps the last one. Only an exit drops the target.
 
-## Identity
+### Identity
 
 The target registers as `server-local:<hostname>`, the hostname reduced to
 the protocol's identifier grammar (letters, digits, `-`, `_`, `.`), at most
@@ -83,7 +195,7 @@ prefix does not shadow the real target in the listing, and a desktop Cua
 descriptor under that prefix is refused outright (below), so the target
 registers whether the desktop connected before or after it.
 
-## How it appears
+### How it appears
 
 - `list_machines` (the companion's tool) lists it with
   `location: "server_local"`, its `os`, `driver_version`, `health`,
@@ -94,7 +206,7 @@ registers whether the desktop connected before or after it.
   nothing about it is written to `machines.json`, it disappears when the
   driver stops, and it cannot be renamed or forgotten like a desktop record.
 
-## Sessions
+### Sessions
 
 Every piece of work on the target is one run. The first action of a run
 calls the driver's `start_session` with the run's label (`nolune-run-<n>`),
@@ -106,7 +218,7 @@ child before connections drain. Runs cannot open or close sessions
 themselves; the runtime refuses `start_session` and `end_session` from a
 run so cleanup stays deterministic.
 
-## Policy
+### Policy
 
 Every action is authorized against the advertised descriptor before it is
 sent: an action whose capability the target does not advertise, whose
@@ -117,10 +229,11 @@ verification capabilities, and a click is refused while listing apps still
 works. Driver answers pass through the same size, depth, shape and
 correlation checks as any remote target's answers.
 
-Computer use here is explicit and bounded: the companion takes a one-shot
-screenshot of one window when it asks for one (`get_window_state` with
-`include_screenshot`), inside a session that ends with the run. There is no
-continuous capture, no recording, and no observation outside a run.
+Computer use here is explicit and bounded ([Privacy](#privacy)): the
+companion takes a one-shot screenshot of one window when it asks for one
+(`get_window_state` with `include_screenshot`), inside a session that ends
+with the run. There is no continuous capture, no recording, and no
+observation outside a run.
 
 ## Desktop targets (#17)
 
@@ -348,19 +461,23 @@ builds the tools around it.
   `remote_bash` and `remote_files` answer `server_home` until a desktop is
   chosen. The typed machine tools (below) drive its Cua target instead,
   when the server machine has one.
-- The trail names the computer: each desktop tool's activity entry reads
-  "<action> on <name>" (the user's name for it, else its hostname; with
-  nothing chosen, the only desktop connected when the turn started; with a
-  computer chosen, that computer whatever `machine_id` the model passed,
-  since the call acts there or is refused), the
+- The trail names the computer: each machine tool's activity entry reads
+  "<action> on <name>" (the user's name for it, else its hostname; the
+  server machine is "the server home" whether the user chose it or the
+  model named its `server-local:` id; with nothing chosen, the only
+  desktop connected when the turn started for `remote_bash` and
+  `remote_files`, and the only computer with a Cua driver for the typed
+  tools, which may be the server home; with a computer chosen, that
+  computer whatever `machine_id` the model passed, since the call acts
+  there or is refused), the
   chat bar shows "working on <name>" while the companion works, and an
   Activity run that acted on a computer says "On <name>". The line is
   persisted beside the tool call in the conversation's history (`tool_trail`,
   by tool-call id; the model replays only the message itself), so the trail
   reads the same after a reload, and a call recorded without one still names
   the computer its arguments name. "on the connected computer" appears only
-  while the choice is genuinely open (none or several connected), where the
-  call itself is refused.
+  while the choice is genuinely open (none or several to choose from),
+  where the call itself is refused.
 - A handoff continued on a computer (#82) targets that computer: an
   acceptance that starts the conversation's loop starts it with the
   destination, and one queued on a conversation that is already running
@@ -470,7 +587,9 @@ target whose driver reports the machine unavailable is refused with
 `driver_unavailable`; a call that names another computer than the chosen one
 with `target_mismatch`; no target at all with `no_cua_target`. On the server
 machine every tool call is one run of the runtime, sessioned and ended with
-it ([Sessions](#sessions)); a desktop's own driver keeps its session.
+it ([Sessions](#sessions)), and the results, refusals and trail call it
+the server home; a desktop's own driver keeps its session and is named
+by the user's name for it, else its hostname.
 
 ### The loop the orchestrator enforces
 
@@ -524,6 +643,23 @@ it ([Sessions](#sessions)); a desktop's own driver keeps its session.
    and before anything is sent; the driver's own errors keep their code
    (`stale_snapshot`, `timeout`, ...).
 
+## Release check
+
+The scenarios above run on every CI platform against a fake driver and a
+fake desktop (`server/test-support/cua_end_to_end.rs`), which proves the
+policy but not a real window. Before a release, and after the Cua Driver pin
+moves, a macOS machine with a graphical session walks the same steps against
+the real driver with `scripts/release-check-computer-use.sh`: it checks the
+prerequisites (macOS, an Aqua login, a `nolune` binary, `nolune cua status`
+reporting the pinned driver healthy with both grants) and exits non-zero when
+one is missing, then prints what to verify, in order: `list_machines` shows
+the server machine, `get_window_state` on a background window keeps it in
+the background, a verified click, a stale element token refused, a denied
+permission refused before the driver, and disconnect cleanup. It runs
+nothing on the user's behalf beyond `nolune cua status`; every observation
+and action goes through the companion, in a conversation, the way a user's
+would. `docs/release-checklist.md` names it beside the pin.
+
 ## Related
 
 - [`docs/companion-storage.md`](companion-storage.md) — the known machines
@@ -534,3 +670,8 @@ it ([Sessions](#sessions)); a desktop's own driver keeps its session.
   sessions; `desktop.rs` is the typed-frame link a desktop target answers
   through; `orchestrator.rs` is the loop policy the typed machine tools
   (`server/src/services/tools/cua.rs`) enforce on every target.
+- `server/test-support/cua_end_to_end.rs` — the end-to-end scenarios, one
+  per promise above, with their refusals; `server/tests/cua_privacy_docs.rs`
+  and `scripts/tests/no-continuous-screen-recording.py` keep this page,
+  the README, the settings page and every Cua file to the privacy model;
+  `scripts/release-check-computer-use.sh` is the manual macOS check.

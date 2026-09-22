@@ -2,6 +2,7 @@
 """Regression contract: Nolune has no passive screen capture stack."""
 
 from pathlib import Path
+import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -154,6 +155,90 @@ class NoContinuousScreenRecordingTest(unittest.TestCase):
         self.assertIn("com.trycua.driver", permissions)
         self.assertIn("one-shot", permissions)
         self.assertNotIn("continuous capture", permissions.replace("no continuous capture", ""))
+
+    # Every file that speaks to, describes or drives a Cua driver (#21). A
+    # file that moves must move here too: a missing path fails the test
+    # rather than silently leaving the guard.
+    CUA_FILES = (
+        "cua-protocol/src/lib.rs",
+        "cua-protocol/src/driver_mcp.rs",
+        "cua-protocol/src/cua_driver_pin.rs",
+        "server/src/services/cua/daemon.rs",
+        "server/src/services/cua/desktop.rs",
+        "server/src/services/cua/discovery.rs",
+        "server/src/services/cua/driver.rs",
+        "server/src/services/cua/host.rs",
+        "server/src/services/cua/install.rs",
+        "server/src/services/cua/mod.rs",
+        "server/src/services/cua/orchestrator.rs",
+        "server/src/services/cua/runtime.rs",
+        "server/src/services/cua/session.rs",
+        "server/src/services/cua/transport.rs",
+        "server/src/services/tools/cua.rs",
+        "server/src/services/tools/computer.rs",
+        "server/src/services/machine_registry.rs",
+        "server/src/routes/machine_agents.rs",
+        "desktop/src-tauri/src/cua_runtime.rs",
+        "desktop/src-tauri/src/cua_permissions.rs",
+        "desktop/src-tauri/src/computer_use_bridge.rs",
+        "desktop/src/lib/cua-permissions.js",
+        "client/src/lib/computers/spaces.js",
+        "scripts/cua-driver.sh",
+        "scripts/release-check-computer-use.sh",
+    )
+
+    def test_every_cua_file_takes_one_shot_captures_only(self) -> None:
+        # No Cua file names a recorder, a frame stream or a passive capture
+        # API: the only capture anywhere is the window snapshot a
+        # `get_window_state` asks for by name, and the driver is only ever
+        # run as `mcp` (the desktop and the server), `serve` (the macOS
+        # daemon `nolune cua status` starts by path) or `permissions grant`.
+        cua_dir = ROOT / "server/src/services/cua"
+        listed = {path for path in self.CUA_FILES if path.startswith("server/src/services/cua/")}
+        present = {
+            f"server/src/services/cua/{path.name}" for path in cua_dir.glob("*.rs")
+        }
+        self.assertEqual(present, listed, "every module under services/cua is listed")
+        protocol_dir = ROOT / "cua-protocol/src"
+        self.assertEqual(
+            {f"cua-protocol/src/{path.name}" for path in protocol_dir.glob("*.rs")},
+            {path for path in self.CUA_FILES if path.startswith("cua-protocol/src/")},
+            "every module of cua-protocol is listed",
+        )
+        for relative in self.CUA_FILES:
+            self.assertTrue((ROOT / relative).is_file(), f"{relative} is missing")
+            self.assert_tokens_absent(
+                relative,
+                (
+                    "start_recording",
+                    "stop_recording",
+                    "begin_recording",
+                    "screen_frame",
+                    "ScreenFrame",
+                    "screen_recorder",
+                    "CGDisplayStream",
+                    "SCStream",
+                    "AVCaptureScreen",
+                    "CollectScreenRecording",
+                    "live-frame",
+                    ".arg(\"record\")",
+                    ".arg(\"recording\")",
+                    ".arg(\"stream\")",
+                    ".arg(\"watch\")",
+                    ".arg(\"update\")",
+                ),
+            )
+        # The protocol names no recording or replay action, so no runtime can
+        # send one: every tool name the driver mapping emits is a discovery,
+        # observation, action, verification, session or health call.
+        mapping = (ROOT / "cua-protocol/src/driver_mcp.rs").read_text()
+        emitted = set(re.findall(r'\.finish\("([a-z_]+)"\)', mapping))
+        self.assertTrue(emitted, "the driver mapping names its tools")
+        for name in emitted:
+            with self.subTest(tool=name):
+                for forbidden in ("record", "replay", "stream", "watch", "kill", "clipboard"):
+                    self.assertNotIn(forbidden, name)
+        self.assertIn("get_window_state", emitted)
 
 
 if __name__ == "__main__":
