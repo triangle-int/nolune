@@ -23,8 +23,16 @@ fn production(path: &str) -> String {
 }
 
 #[test]
-fn shared_scene_reads_the_companion_state_not_the_thinking_flag() {
-    let scene = read("client/src/lib/components/SharedScene.svelte");
+fn the_chat_moon_reads_the_companion_state_not_the_thinking_flag() {
+    // The moon lives in the chat, under the last message; the full-screen
+    // scene moon is gone.
+    assert!(
+        !repo()
+            .join("client/src/lib/components/SharedScene.svelte")
+            .exists(),
+        "the full-screen scene moon is retired; the chat carries the only moon"
+    );
+    let presence = read("client/src/lib/components/companion/CompanionPresence.svelte");
     for forbidden in [
         "store.thinking",
         "scene.thinking",
@@ -33,20 +41,21 @@ fn shared_scene_reads_the_companion_state_not_the_thinking_flag() {
         "\"Nolune is thinking\"",
     ] {
         assert!(
-            !scene.contains(forbidden),
-            "SharedScene must not derive the moon from the raw thinking flag ({forbidden} found)"
+            !presence.contains(forbidden),
+            "CompanionPresence must not derive the moon from the raw thinking flag ({forbidden} found)"
         );
     }
-    assert!(
-        scene.contains("store.companion"),
-        "SharedScene reads the reducer state held by the scene store"
-    );
     for component in ["MoonExpression", "CompanionStatus"] {
         assert!(
-            scene.contains(component),
-            "SharedScene renders the shared {component} component"
+            presence.contains(component),
+            "CompanionPresence renders the shared {component} component"
         );
     }
+    let chat = read("client/src/lib/components/chat/ChatView.svelte");
+    assert!(
+        chat.contains("<CompanionPresence") && chat.contains("state={scene.companion}"),
+        "ChatView renders CompanionPresence from the reducer state held by the scene store"
+    );
 
     let store = production("client/src/lib/stores/scene.svelte.ts");
     assert!(

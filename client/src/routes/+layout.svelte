@@ -14,7 +14,6 @@
 	import AuthGate from "$lib/components/auth/AuthGate.svelte";
 	import Toast from "$lib/components/layout/Toast.svelte";
 	import SecretDialog from "$lib/components/layout/SecretDialog.svelte";
-	import SharedScene from "$lib/components/SharedScene.svelte";
 	import FileViewer from "$lib/components/FileViewer.svelte";
 
 	let { children } = $props();
@@ -123,7 +122,6 @@
 </svelte:head>
 
 <div class="relative h-dvh w-full overflow-hidden" style="padding-top: env(safe-area-inset-top); padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right);">
-	{#if !isDesignSystem && sceneStore.mode !== "home"}<SharedScene />{/if}
 
 	{#if needsAuth && !isDesignSystem}
 		<AuthGate onauth={handleAuth} />

@@ -114,20 +114,16 @@ import McpAppViewer from "./McpAppViewer.svelte";
 		streamingMessageId = "";
 	}
 
-	// ── Sync state to shared 3D scene ──
-	// Keep mood/voice synced to scene store. What the companion is doing
-	// (thinking, working, blocked…) reaches the scene through the reducer,
+	// ── Companion state ──
+	// What the companion is doing (thinking, working, blocked…) reaches the
+	// scene store through the reducer,
 	// fed by the root layout from the websocket; this view adds the persisted
 	// `agent_running` of each snapshot it loads (initial load, reconnect,
 	// resync), so a run the socket missed still shows and one that ended
 	// while away is over without being claimed. The `chat_snapshot` the server
 	// broadcasts is not loaded state: it precedes `agent_stopped` in the stop
 	// sequence, which the layout already feeds, so it is not fed here.
-	$effect(() => { scene.setMood(mood); });
-	$effect(() => { scene.setVoiceAmplitude(voice.amplitude); });
 	$effect(() => { if (companionName) scene.setCompanionName(companionName); });
-	// Sync presentation mode to scene (camera targets blob)
-	$effect(() => { scene.presenting = presentation.active; });
 
 	const ws = getWebSocket();
 	let hadConnection = false;
@@ -777,7 +773,7 @@ import McpAppViewer from "./McpAppViewer.svelte";
 	/>
 {:else}
 
-<div class="chat-space" class:chat-active={sending || agentRunning} class:chat-intro-playing={scene.mode !== "chat"}>
+<div class="chat-space" class:chat-active={sending || agentRunning}>
 
 	<header class="chat-bar">
 		<div class="bar-left">
@@ -895,18 +891,6 @@ import McpAppViewer from "./McpAppViewer.svelte";
 			<ChatInput {slug} chatId={activeChatId} onSend={handleSend} onStop={handleStop} onTargetChange={(target) => (chatTarget = target)} disabled={sending || agentRunning} {agentRunning} {uploadProgress} />
 		</div>
 	</div>
-
-	<!-- Intro overlay UI (skip + name) -->
-	{#if scene.mode === "intro" || scene.mode === "selecting"}
-		<div class="intro-overlay-ui">
-			{#if scene.introPhase === "settling"}
-				<div class="intro-name">{slug}</div>
-			{/if}
-			{#if scene.mode === "intro"}
-				<button class="intro-skip" onclick={() => scene.skipIntro()}>skip</button>
-			{/if}
-		</div>
-	{/if}
 </div>
 
 {#if showContextStats}
@@ -925,61 +909,6 @@ import McpAppViewer from "./McpAppViewer.svelte";
 		max-width: 100%;
 		overflow: hidden;
 	}
-
-	/* --- Intro: hide all chat UI until scene is in chat mode --- */
-	.chat-intro-playing > * {
-		opacity: 0;
-		pointer-events: none;
-		transition: opacity 0.35s ease;
-	}
-	.chat-space:not(.chat-intro-playing) > * {
-		opacity: 1;
-		transition: opacity 0.35s ease;
-	}
-
-	/* --- Intro overlay UI --- */
-	.intro-overlay-ui {
-		position: absolute;
-		inset: 0;
-		z-index: 20;
-		pointer-events: none;
-	}
-	.intro-name {
-		position: absolute;
-		bottom: 38%;
-		left: 50%;
-		transform: translateX(-50%);
-		font-family: var(--font-display);
-		font-size: clamp(1.5rem, 4vw, 2.5rem);
-		font-weight: 300;
-		font-style: normal;
-		letter-spacing: 0.06em;
-		color: var(--text-secondary);
-		white-space: nowrap;
-		animation: intro-name-in 1s cubic-bezier(0.16, 1, 0.3, 1) both;
-	}
-	@keyframes intro-name-in {
-		from { opacity: 0; transform: translateX(-50%) translateY(10px); }
-		to { opacity: 1; transform: translateX(-50%) translateY(0); }
-	}
-	.intro-skip {
-		position: absolute;
-		bottom: calc(2rem + env(safe-area-inset-bottom, 0px));
-		right: 2rem;
-		pointer-events: auto;
-		padding: 0.4rem 1rem;
-		border-radius: 2rem;
-		background: var(--card);
-
-		border: 1px solid var(--border);
-		color: var(--text-secondary);
-		font-family: var(--font-body);
-		font-size: 0.8125rem;
-		letter-spacing: 0.08em;
-		cursor: pointer;
-		transition: all 0.3s ease;
-	}
-	.intro-skip:hover { background: var(--card); color: var(--text-secondary); }
 
 	/* --- Perimeter ambient glow (Siri-style) --- */
 	.chat-space::before {
@@ -1299,8 +1228,6 @@ import McpAppViewer from "./McpAppViewer.svelte";
 :global(.dark) .chat-space::before{display:none}:global(.dark) header.chat-bar{padding:12px 20px;background:var(--surface-tab);border-bottom:1px solid var(--border)}:global(.dark) .bar-left{font:400 13px var(--font-body);color:var(--text-secondary)}
 
 
- .intro-name {font-style:normal;letter-spacing:-.025em;color:var(--foreground)}
- .intro-skip {min-height:44px;background:var(--card);color:var(--foreground);border-radius:8px;font-size:14px}
  .bar-led {background:var(--text-muted);width:6px;height:6px}
  .bar-led-on,.bar-activity-dot,.loading-dot {background:var(--primary)}
  .bar-mood[data-mood],.bar-activity {color:var(--text-muted);font-size:12px;letter-spacing:0}
