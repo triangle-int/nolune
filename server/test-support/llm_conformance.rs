@@ -157,7 +157,7 @@ pub(super) fn backend(provider: LlmProvider, url: &str) -> LlmBackend {
     config.llm.tokens.open_router = "test".into();
     let preset = match provider {
         LlmProvider::Anthropic => "sonnet".to_owned(),
-        LlmProvider::Openai => "gpt".to_owned(),
+        LlmProvider::Openai => "gpt-sol".to_owned(),
         LlmProvider::Openrouter | LlmProvider::Codex => {
             crate::config::default_presets(provider)[0].id.clone()
         }
@@ -950,7 +950,7 @@ async fn completes_with_tools_and_usage(provider: LlmProvider) {
 }
 
 async fn structured_output(provider: LlmProvider) {
-    let schema = json!({"type":"object","properties":{}});
+    let schema = json!({"type":"object","properties":{},"additionalProperties":false});
     if provider == LlmProvider::Codex {
         let harness = codex_harness();
         let (text, tokens) = harness
@@ -979,7 +979,13 @@ async fn structured_output(provider: LlmProvider) {
             assert_eq!(requests[0]["output_config"]["format"]["schema"], schema);
         }
         LlmProvider::Openai => {
-            assert_eq!(requests[0]["text"]["format"]["type"], "json_object");
+            // Responses looks for the word "json" only in `input`, so the
+            // schema travels as the format itself, enforced.
+            let format = &requests[0]["text"]["format"];
+            assert_eq!(format["type"], "json_schema");
+            assert_eq!(format["schema"], schema);
+            assert_eq!(format["strict"], true);
+            assert!(format["name"].is_string());
             assert_eq!(requests[0]["store"], false);
         }
         LlmProvider::Openrouter => {

@@ -562,9 +562,9 @@ mod tests {
             (LlmProvider::Anthropic, "heavy") => "opus",
             (LlmProvider::Anthropic, "fast") => "sonnet",
             (LlmProvider::Anthropic, _) => "haiku",
-            (LlmProvider::Openai, "cheap") => "gpt-mini",
-            (LlmProvider::Openai, _) => "gpt",
-            (LlmProvider::Openrouter, "cheap") => "openrouter-gpt-mini",
+            (LlmProvider::Openai, "cheap") => "gpt-luna",
+            (LlmProvider::Openai, _) => "gpt-sol",
+            (LlmProvider::Openrouter, "cheap") => "openrouter-gpt-luna",
             (LlmProvider::Openrouter, _) => "openrouter-sonnet",
             (LlmProvider::Codex, "cheap") => "codex-luna",
             (LlmProvider::Codex, _) => "codex-astra",
@@ -588,7 +588,7 @@ mod tests {
     fn make_backend(provider: LlmProvider) -> LlmBackend {
         let id = match provider {
             LlmProvider::Anthropic => "sonnet",
-            LlmProvider::Openai => "gpt",
+            LlmProvider::Openai => "gpt-sol",
             LlmProvider::Openrouter => "openrouter-sonnet",
             LlmProvider::Codex => "codex-astra",
         };
@@ -641,7 +641,7 @@ mod tests {
         // Every other preset still needs its key.
         config.llm.seed_presets(LlmProvider::Openai);
         assert_eq!(
-            LlmBackend::for_preset(&config, reqwest::Client::new(), "gpt").err(),
+            LlmBackend::for_preset(&config, reqwest::Client::new(), "gpt-sol").err(),
             Some(PresetError::MissingKey(LlmProvider::Openai))
         );
     }
@@ -703,7 +703,7 @@ mod tests {
             Some(PresetError::Unknown("nope".into()))
         );
         assert_eq!(
-            LlmBackend::for_preset(&config, http.clone(), "gpt").err(),
+            LlmBackend::for_preset(&config, http.clone(), "gpt-sol").err(),
             Some(PresetError::MissingKey(LlmProvider::Openai))
         );
         let opus = LlmBackend::for_preset(&config, http, "opus").unwrap();
@@ -720,7 +720,7 @@ mod tests {
             "claude-sonnet-4-6"
         );
         // A first key: no preset for the provider yet, so its default chat model.
-        assert_eq!(probe_model(&config.llm, LlmProvider::Openai), "gpt-5.4");
+        assert_eq!(probe_model(&config.llm, LlmProvider::Openai), "gpt-5.6-sol");
         // A preset for the provider that is not the chat slot.
         config.llm.presets.push(crate::config::ModelPreset {
             id: "custom".into(),
@@ -741,11 +741,11 @@ mod tests {
     fn chat_and_background_builders_follow_their_slots_independently() {
         let mut config = keyed_config(LlmProvider::Anthropic);
         config.llm.seed_presets(LlmProvider::Openai);
-        config.llm.chat_preset = "gpt".into();
+        config.llm.chat_preset = "gpt-sol".into();
         config.llm.background_preset = "haiku".into();
         let chat = LlmBackend::from_config(&config).unwrap();
         assert_eq!(chat.provider, LlmProvider::Openai);
-        assert_eq!(chat.model, "gpt-5.4");
+        assert_eq!(chat.model, "gpt-5.6-sol");
         let background = LlmBackend::background(&config).unwrap();
         assert_eq!(background.provider, LlmProvider::Anthropic);
         assert_eq!(background.model, "claude-haiku-4-5-20251001");
@@ -754,6 +754,74 @@ mod tests {
         config.llm.background_preset = "gone".into();
         assert!(LlmBackend::background(&config).is_none());
         assert!(LlmBackend::from_config(&config).is_some());
+    }
+
+    // ── OpenAI structured outputs ──────────────────────────────────────
+
+    /// Strict mode has no optional property: every object names all of its
+    /// properties in `required` and forbids extra ones, nested objects and
+    /// array items included.
+    #[test]
+    fn openai_strict_schema_violation_points_at_the_offending_field() {
+        let strict = serde_json::json!({
+            "type": "object",
+            "properties": { "color": { "type": "string" } },
+            "required": ["color"],
+            "additionalProperties": false
+        });
+        assert_eq!(openai::strict_schema_violation(&strict, "$"), None);
+
+        // A property left out of `required`.
+        let optional = serde_json::json!({
+            "type": "object",
+            "properties": { "a": { "type": "string" }, "b": { "type": "string" } },
+            "required": ["a"],
+            "additionalProperties": false
+        });
+        assert_eq!(
+            openai::strict_schema_violation(&optional, "$").as_deref(),
+            Some("$.b is not in required")
+        );
+
+        // Extra properties allowed, at the root and nested in array items.
+        let open = serde_json::json!({
+            "type": "object",
+            "properties": { "a": { "type": "string" } },
+            "required": ["a"]
+        });
+        assert_eq!(
+            openai::strict_schema_violation(&open, "$").as_deref(),
+            Some("$ does not set additionalProperties to false")
+        );
+        let nested = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "ops": {
+                    "type": "array",
+                    "items": { "type": "object", "properties": { "x": { "type": "string" } } }
+                }
+            },
+            "required": ["ops"],
+            "additionalProperties": false
+        });
+        assert_eq!(
+            openai::strict_schema_violation(&nested, "$").as_deref(),
+            Some("$.ops[] does not set additionalProperties to false")
+        );
+
+        // A schema with no object to constrain is nothing to enforce.
+        assert_eq!(
+            openai::strict_schema_violation(&serde_json::json!({"type": "string"}), "$"),
+            None
+        );
+    }
+
+    /// The schema the memory librarian is handed is enforceable, so memory
+    /// extraction gets the schema honoured rather than merely suggested.
+    #[test]
+    fn the_memory_extraction_schema_is_strictly_enforceable() {
+        let schema = crate::services::memory::extraction_schema();
+        assert_eq!(openai::strict_schema_violation(&schema, "$"), None);
     }
 
     // ── OpenAI Responses API message conversion ────────────────────────
@@ -1370,7 +1438,8 @@ mod tests {
         let schema = serde_json::json!({
             "type": "object",
             "properties": { "color": { "type": "string" } },
-            "required": ["color"]
+            "required": ["color"],
+            "additionalProperties": false
         });
         let (text, _) = b
             .chat_json(
@@ -1455,7 +1524,8 @@ mod tests {
         let schema = serde_json::json!({
             "type": "object",
             "properties": { "color": { "type": "string" } },
-            "required": ["color"]
+            "required": ["color"],
+            "additionalProperties": false
         });
         let (text, _) = b
             .chat_json(

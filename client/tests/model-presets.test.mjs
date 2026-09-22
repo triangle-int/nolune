@@ -21,7 +21,7 @@ import {
 const presets = [
 	{ id: 'sonnet', name: 'Claude Sonnet', provider: 'anthropic', model: 'claude-sonnet-4-6' },
 	{ id: 'haiku', name: 'Claude Haiku', provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
-	{ id: 'gpt', name: 'GPT-5.4', provider: 'openai', model: 'gpt-5.4' },
+	{ id: 'gpt', name: 'GPT-5.6 Sol', provider: 'openai', model: 'gpt-5.6-sol' },
 	{ id: 'router', name: 'Sonnet via OpenRouter', provider: 'openrouter', model: 'anthropic/claude-sonnet-4.6' },
 ];
 const slots = { chat_preset: 'sonnet', background_preset: 'haiku' };
@@ -55,7 +55,7 @@ test('a slot on a codex preset needs no key (#27)', () => {
 	const mixed = [...codex, presets[2]];
 	const errors = validatePresets(mixed, { chat_preset: 'codex-astra', background_preset: 'gpt' }, []);
 	assert.equal(errors.length, 1, errors.join('\n'));
-	assert.match(errors[0], /Background uses GPT-5\.4, but no OpenAI API key/);
+	assert.match(errors[0], /Background uses GPT-5\.6 Sol, but no OpenAI API key/);
 	// A codex preset still needs a model id.
 	assert.match(validatePresets([{ ...codex[0], model: '' }], { chat_preset: 'codex-astra', background_preset: 'codex-astra' }, []).join('\n'), /model id/);
 });
@@ -69,7 +69,7 @@ test('the preset editor knows the models the pinned codex release lists (#27)', 
 	assert.equal(modelPlaceholder('codex'), 'gpt-6-astra');
 	assert.equal(modelPlaceholder('openrouter'), 'vendor/model');
 	assert.equal(modelPlaceholder('anthropic'), 'claude-sonnet-4-6');
-	assert.equal(modelPlaceholder('openai'), 'gpt-5.4');
+	assert.equal(modelPlaceholder('openai'), 'gpt-5.6-sol');
 });
 
 test('valid presets and slots produce no errors', () => {
@@ -77,16 +77,16 @@ test('valid presets and slots produce no errors', () => {
 });
 
 test('an OpenRouter preset names its model as vendor/model (#26)', () => {
-	const bare = [{ id: 'router', name: 'Router', provider: 'openrouter', model: 'gpt-5.4' }];
+	const bare = [{ id: 'router', name: 'Router', provider: 'openrouter', model: 'gpt-5.6-sol' }];
 	const errors = validatePresets(bare, { chat_preset: 'router', background_preset: 'router' }, ['openrouter']);
 	assert.equal(errors.length, 1, errors.join('\n'));
 	assert.match(errors[0], /vendor\/model/);
-	for (const model of ['openai/gpt-5.4-mini', 'meta-llama/llama-4-maverick:free']) {
+	for (const model of ['openai/gpt-5.6-luna', 'meta-llama/llama-4-maverick:free']) {
 		const ok = [{ id: 'router', name: 'Router', provider: 'openrouter', model }];
 		assert.deepEqual(validatePresets(ok, { chat_preset: 'router', background_preset: 'router' }, ['openrouter']), [], model);
 	}
 	// Other providers keep their plain ids.
-	assert.deepEqual(validatePresets([{ id: 'gpt', name: 'GPT', provider: 'openai', model: 'gpt-5.4' }], { chat_preset: 'gpt', background_preset: 'gpt' }, ['openai']), []);
+	assert.deepEqual(validatePresets([{ id: 'gpt', name: 'GPT', provider: 'openai', model: 'gpt-5.6-sol' }], { chat_preset: 'gpt', background_preset: 'gpt' }, ['openai']), []);
 });
 
 test('a slot on an OpenRouter preset needs the OpenRouter key', () => {
@@ -137,8 +137,8 @@ test('labels stay human: preset label and short model names', () => {
 	assert.equal(modelShortLabel('claude-sonnet-4-6'), 'Sonnet 4.6');
 	assert.equal(modelShortLabel('claude-haiku-4-5-20251001'), 'Haiku 4.5');
 	assert.equal(modelShortLabel('claude-opus-4-6'), 'Opus 4.6');
-	assert.equal(modelShortLabel('gpt-5.4-mini'), 'GPT-5.4 mini');
-	assert.equal(modelShortLabel('gpt-5.4'), 'GPT-5.4');
+	assert.equal(modelShortLabel('gpt-5.6-mini'), 'GPT-5.6 mini');
+	assert.equal(modelShortLabel('gpt-5.6'), 'GPT-5.6');
 	assert.equal(modelShortLabel('some-custom-model'), 'some-custom-model');
 	// The codex models carry a name after the version (#27).
 	assert.equal(modelShortLabel('gpt-6-astra'), 'GPT-6 Astra');
@@ -147,14 +147,14 @@ test('labels stay human: preset label and short model names', () => {
 	assert.equal(modelShortLabel(''), '');
 	// OpenRouter ids carry the vendor and spell versions with dots.
 	assert.equal(modelShortLabel('anthropic/claude-sonnet-4.6'), 'Sonnet 4.6');
-	assert.equal(modelShortLabel('openai/gpt-5.4-mini'), 'GPT-5.4 mini');
+	assert.equal(modelShortLabel('openai/gpt-5.6-luna'), 'GPT-5.6 Luna');
 	assert.equal(modelShortLabel('meta-llama/llama-4-maverick:free'), 'meta-llama/llama-4-maverick:free');
 });
 
 test('ids are derived from names and stay unique', () => {
 	assert.equal(suggestPresetId('Claude Sonnet', []), 'claude-sonnet');
 	assert.equal(suggestPresetId('Claude Sonnet', ['claude-sonnet']), 'claude-sonnet-2');
-	assert.equal(suggestPresetId('  GPT 5.4 mini!! ', ['gpt-5-4-mini', 'gpt-5-4-mini-2']), 'gpt-5-4-mini-3');
+	assert.equal(suggestPresetId('  GPT 5.6 Sol!! ', ['gpt-5-6-sol', 'gpt-5-6-sol-2']), 'gpt-5-6-sol-3');
 	assert.equal(suggestPresetId('', []), 'preset');
 });
 
@@ -181,7 +181,7 @@ test('capability warnings name what a model cannot do, in chip and sentence form
 	const gpt = capabilityWarnings(presets[2], caps.gpt);
 	assert.deepEqual(gpt.map((w) => w.id), ['documents']);
 	assert.equal(gpt[0].chip, 'no documents');
-	assert.match(gpt[0].detail, /GPT-5\.4/);
+	assert.match(gpt[0].detail, /GPT-5\.6 Sol/);
 	assert.match(gpt[0].detail, /PDF|document/i);
 	const text = capabilityWarnings({ id: 'text', name: 'Plain text', provider: 'openrouter', model: 'vendor/text-only' }, caps.text);
 	assert.deepEqual(text.map((w) => w.id), ['vision', 'documents', 'tools']);
@@ -190,7 +190,7 @@ test('capability warnings name what a model cannot do, in chip and sentence form
 	assert.match(text[2].detail, /tool/i);
 	for (const w of text) assert.match(w.detail, /Plain text/);
 	// A model whose name is blank is called by its id.
-	assert.match(capabilityWarnings({ id: 'x', name: '  ', provider: 'openai', model: 'gpt-5.4' }, caps.gpt)[0].detail, /gpt-5\.4/);
+	assert.match(capabilityWarnings({ id: 'x', name: '  ', provider: 'openai', model: 'gpt-5.6-sol' }, caps.gpt)[0].detail, /gpt-5\.6-sol/);
 });
 
 test('unknown capabilities warn about nothing', () => {
@@ -207,13 +207,13 @@ test('the composer picker carries each preset with what its model cannot do (#28
 	const options = pickerPresets(models);
 	assert.deepEqual(options.map((o) => o.id), ['sonnet', 'haiku', 'gpt', 'router']);
 	// The row keeps the preset's own fields so the picker can show name and model.
-	assert.equal(options[2].name, 'GPT-5.4');
-	assert.equal(options[2].model, 'gpt-5.4');
+	assert.equal(options[2].name, 'GPT-5.6 Sol');
+	assert.equal(options[2].model, 'gpt-5.6-sol');
 	assert.deepEqual(options[0].warnings, []);
 	// A preset with no capabilities yet (haiku) warns about nothing.
 	assert.deepEqual(options[1].warnings, []);
 	assert.deepEqual(options[2].warnings.map((w) => w.chip), ['no documents']);
-	assert.match(options[2].warnings[0].detail, /GPT-5\.4 cannot read PDFs/);
+	assert.match(options[2].warnings[0].detail, /GPT-5\.6 Sol cannot read PDFs/);
 	assert.deepEqual(options[3].warnings.map((w) => w.chip), ['no vision', 'no documents', 'no tools']);
 	// Listings without capabilities (an older server) and nothing at all still render.
 	assert.deepEqual(pickerPresets({ presets: presets.slice(0, 1) })[0].warnings, []);
@@ -223,9 +223,9 @@ test('the composer picker carries each preset with what its model cannot do (#28
 
 test('connection test outcomes read as one sentence each, typed by the server error', () => {
 	const gpt = presets[2];
-	const ok = presetTestCopy({ ok: true, preset: 'gpt', provider: 'openai', model: 'gpt-5.4', usage: { input_tokens: 8, output_tokens: 1 }, capabilities: caps.gpt }, gpt);
+	const ok = presetTestCopy({ ok: true, preset: 'gpt', provider: 'openai', model: 'gpt-5.6-sol', usage: { input_tokens: 8, output_tokens: 1 }, capabilities: caps.gpt }, gpt);
 	assert.equal(ok.tone, 'ok');
-	assert.match(ok.text, /gpt-5\.4/);
+	assert.match(ok.text, /gpt-5\.6-sol/);
 	assert.match(ok.text, /answered/);
 	assert.match(ok.text, /9 tokens/);
 	// [error, what the server says, what the person reads]
@@ -233,13 +233,13 @@ test('connection test outcomes read as one sentence each, typed by the server er
 		['setup_required', 'no OpenAI API key is configured', /no OpenAI API key.*API keys/i],
 		['authentication', 'OpenAI rejected the API key: Incorrect API key provided', /OpenAI rejected the API key\. Change it under API keys\./],
 		['rate_limited', 'OpenAI accepted the key but is rate limiting: slow down', /key works.*in a moment/],
-		['model_not_found', 'OpenAI has no model "gpt-5.4": The model does not exist', /no model "gpt-5\.4"\. Check the model id\./],
+		['model_not_found', 'OpenAI has no model "gpt-5.6-sol": The model does not exist', /no model "gpt-5\.6-sol"\. Check the model id\./],
 		['provider_rejected', 'OpenAI rejected the request (402): Insufficient credits', /^OpenAI rejected the request \(402\): Insufficient credits$/],
 		['provider_unavailable', 'OpenAI answered 503: down', /^OpenAI answered 503: down\. Try again/],
 		['unreachable', 'failed to reach OpenAI: connection refused', /^failed to reach OpenAI: connection refused\. Check/],
 		['timeout', 'OpenAI did not answer in time', /OpenAI did not answer in time\. Try again\./],
 		['invalid_response', 'OpenAI answered with something unexpected: no choices', /^OpenAI answered with something unexpected: no choices$/],
-		['unsupported', 'OpenAI does not support tools for "gpt-5.4"', /^OpenAI does not support tools/],
+		['unsupported', 'OpenAI does not support tools for "gpt-5.6-sol"', /^OpenAI does not support tools/],
 		['unknown_preset', 'model preset "gpt" does not exist', /Save the preset first/],
 	];
 	for (const [error, message, pattern] of cases) {

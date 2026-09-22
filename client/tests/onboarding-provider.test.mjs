@@ -5,7 +5,7 @@ import { connectOnboardingCodex, onboardingTestPreset, resumeOnboarding, saveOnb
 const seeded = (provider) => ({
 	presets: [
 		{ id: 'sonnet', name: 'Claude Sonnet', provider: 'anthropic', model: 'claude-sonnet-4-6' },
-		{ id: 'gpt', name: 'GPT-5.4', provider: 'openai', model: 'gpt-5.4' },
+		{ id: 'gpt-sol', name: 'GPT-5.6 Sol', provider: 'openai', model: 'gpt-5.6-sol' },
 		{ id: 'openrouter-sonnet', name: 'Sonnet via OpenRouter', provider: 'openrouter', model: 'anthropic/claude-sonnet-4.6' },
 	].filter((p) => p.provider === provider || p.provider === 'anthropic'),
 	chat_preset: 'sonnet',
@@ -15,7 +15,7 @@ const seeded = (provider) => ({
 	added: 2,
 });
 
-for (const [provider, field, preset] of [['openai', 'openai', 'gpt'], ['anthropic', 'api_key', 'sonnet'], ['openrouter', 'openrouter', 'openrouter-sonnet']]) {
+for (const [provider, field, preset] of [['openai', 'openai', 'gpt-sol'], ['anthropic', 'api_key', 'sonnet'], ['openrouter', 'openrouter', 'openrouter-sonnet']]) {
 	test(`${provider} onboarding saves only its own credential, seeds its presets, then tests the new provider's preset (#28)`, async () => {
 		const calls = [];
 		const result = await saveOnboardingProvider(provider, 'test-only-key', {
@@ -41,14 +41,14 @@ test('the slots follow the provider that answered when the one they pointed at d
 	// answered took both slots; the next provider's preset answers.
 	const models = {
 		presets: [
-			{ id: 'gpt', name: 'GPT-5.4', provider: 'openai', model: 'gpt-5.4' },
-			{ id: 'gpt-mini', name: 'GPT-5.4 mini', provider: 'openai', model: 'gpt-5.4-mini' },
+			{ id: 'gpt-sol', name: 'GPT-5.6 Sol', provider: 'openai', model: 'gpt-5.6-sol' },
+			{ id: 'gpt-luna', name: 'GPT-5.6 Luna', provider: 'openai', model: 'gpt-5.6-luna' },
 			{ id: 'sonnet', name: 'Claude Sonnet', provider: 'anthropic', model: 'claude-sonnet-4-6' },
 			{ id: 'opus', name: 'Claude Opus', provider: 'anthropic', model: 'claude-opus-4-6' },
 			{ id: 'haiku', name: 'Claude Haiku', provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
 		],
-		chat_preset: 'gpt',
-		background_preset: 'gpt-mini',
+		chat_preset: 'gpt-sol',
+		background_preset: 'gpt-luna',
 	};
 	assert.deepEqual(slotsAfterOnboardingTest(models, 'sonnet'), { chat_preset: 'sonnet', background_preset: 'opus' });
 	// The tested preset already is the Chat slot: nothing moves.
@@ -74,7 +74,7 @@ test('slots move only after the preset answered, and a failed move is reported',
 	await assert.rejects(saveOnboardingProvider('openai', 'test-only-key', {
 		updateLlmConfig: async () => {},
 		seedModelPresets: async (provider) => seeded(provider),
-		testPreset: async (id) => ({ ok: true, preset: id, provider: 'openai', model: 'gpt-5.4', usage: { input_tokens: 1, output_tokens: 1 } }),
+		testPreset: async (id) => ({ ok: true, preset: id, provider: 'openai', model: 'gpt-5.6-sol', usage: { input_tokens: 1, output_tokens: 1 } }),
 		updateModelPresets: async () => { throw new Error('Could not save the model slots'); },
 	}), /Could not save the model slots/);
 });
@@ -105,18 +105,18 @@ test('a preset that does not answer keeps onboarding on the key step with the ty
 	const error = await saveOnboardingProvider('openai', 'test-only-key', {
 		updateLlmConfig: async () => {},
 		seedModelPresets: async (provider) => seeded(provider),
-		testPreset: async () => ({ ok: false, error: 'model_not_found', message: 'OpenAI has no model gpt-5.4', status: 404 }),
+		testPreset: async () => ({ ok: false, error: 'model_not_found', message: 'OpenAI has no model gpt-5.6-sol', status: 404 }),
 	}).then(() => null, (e) => e);
 	assert.ok(error instanceof Error);
-	assert.match(error.message, /gpt-5\.4|OpenAI/);
+	assert.match(error.message, /gpt-5\.6-sol|OpenAI/);
 	assert.equal(error.outcome.error, 'model_not_found');
 });
 
 test('the preset onboarding tests is the new provider\'s, the Chat slot when it already runs there', () => {
 	const models = seeded('openai');
-	assert.equal(onboardingTestPreset(models, 'openai'), 'gpt');
+	assert.equal(onboardingTestPreset(models, 'openai'), 'gpt-sol');
 	assert.equal(onboardingTestPreset(models, 'anthropic'), 'sonnet');
-	assert.equal(onboardingTestPreset({ ...models, chat_preset: 'gpt' }, 'openai'), 'gpt');
+	assert.equal(onboardingTestPreset({ ...models, chat_preset: 'gpt-sol' }, 'openai'), 'gpt-sol');
 	assert.equal(onboardingTestPreset({ ...models, presets: [] }, 'openai'), null);
 });
 
@@ -125,36 +125,36 @@ test('the preset onboarding tests is the new provider\'s, the Chat slot when it 
 // `llm_configured` even when the preset never answered; onboarding must
 // test again instead of trusting the flag.
 
-const gpt = { id: 'gpt', name: 'GPT-5.4', provider: 'openai', model: 'gpt-5.4' };
+const gpt = { id: 'gpt-sol', name: 'GPT-5.6 Sol', provider: 'openai', model: 'gpt-5.6-sol' };
 
 test('a companion without a provider goes to the provider step', () => {
 	assert.deepEqual(resumeOnboarding({ llm_configured: false }, null, null), { step: 'provider', reason: null });
-	assert.deepEqual(resumeOnboarding({ llm_configured: false, chat_preset: 'gpt' }, { ok: true, preset: 'gpt', provider: 'openai', model: 'gpt-5.4', usage: { input_tokens: 1, output_tokens: 1 } }, gpt), { step: 'provider', reason: null });
+	assert.deepEqual(resumeOnboarding({ llm_configured: false, chat_preset: 'gpt-sol' }, { ok: true, preset: 'gpt-sol', provider: 'openai', model: 'gpt-5.6-sol', usage: { input_tokens: 1, output_tokens: 1 } }, gpt), { step: 'provider', reason: null });
 });
 
 test('a configured provider skips to the first message only when its Chat preset answered', () => {
-	const ok = { ok: true, preset: 'gpt', provider: 'openai', model: 'gpt-5.4', usage: { input_tokens: 8, output_tokens: 1 } };
-	assert.deepEqual(resumeOnboarding({ llm_configured: true, chat_preset: 'gpt' }, ok, gpt), { step: 'first-message' });
+	const ok = { ok: true, preset: 'gpt-sol', provider: 'openai', model: 'gpt-5.6-sol', usage: { input_tokens: 8, output_tokens: 1 } };
+	assert.deepEqual(resumeOnboarding({ llm_configured: true, chat_preset: 'gpt-sol' }, ok, gpt), { step: 'first-message' });
 });
 
 test('a configured provider whose preset does not answer returns to the provider step with the typed outcome', () => {
 	for (const [error, message, pattern] of [
-		['model_not_found', 'OpenAI has no model "gpt-5.4": does not exist', /no model "gpt-5\.4"/],
+		['model_not_found', 'OpenAI has no model "gpt-5.6-sol": does not exist', /no model "gpt-5\.6-sol"/],
 		['rate_limited', 'OpenAI accepted the key but is rate limiting', /rate limiting/],
 		['provider_rejected', 'OpenAI rejected the request (402): Insufficient credits', /Insufficient credits/],
 		['authentication', 'OpenAI rejected the API key.', /rejected the API key/],
 	]) {
-		const next = resumeOnboarding({ llm_configured: true, chat_preset: 'gpt' }, { ok: false, error, message, status: 422 }, gpt);
+		const next = resumeOnboarding({ llm_configured: true, chat_preset: 'gpt-sol' }, { ok: false, error, message, status: 422 }, gpt);
 		assert.equal(next.step, 'provider', error);
 		assert.match(next.reason, pattern, `${error}: ${next.reason}`);
 	}
 	// A test that could not run at all is not a pass either.
-	const failed = resumeOnboarding({ llm_configured: true, chat_preset: 'gpt' }, null, gpt);
+	const failed = resumeOnboarding({ llm_configured: true, chat_preset: 'gpt-sol' }, null, gpt);
 	assert.equal(failed.step, 'provider');
 	assert.match(failed.reason, /could not be tested/i);
 	// Without the preset row, the sentence still names the provider from the status.
-	const bare = resumeOnboarding({ llm_configured: true, chat_preset: 'gpt', chat_provider: 'openai', model: 'gpt-5.4' }, { ok: false, error: 'model_not_found', message: 'nope', status: 404 }, null);
-	assert.match(bare.reason, /OpenAI has no model "gpt-5\.4"/);
+	const bare = resumeOnboarding({ llm_configured: true, chat_preset: 'gpt-sol', chat_provider: 'openai', model: 'gpt-5.6-sol' }, { ok: false, error: 'model_not_found', message: 'nope', status: 404 }, null);
+	assert.match(bare.reason, /OpenAI has no model "gpt-5\.6-sol"/);
 });
 
 // --- Codex (#27): the gate is the login AND the connection test ---

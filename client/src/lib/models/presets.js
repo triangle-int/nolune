@@ -63,7 +63,7 @@ export function modelPlaceholder(provider) {
 		case "codex":
 			return CODEX_MODELS[0];
 		case "openai":
-			return "gpt-5.4";
+			return "gpt-5.6-sol";
 		default:
 			return "claude-sonnet-4-6";
 	}

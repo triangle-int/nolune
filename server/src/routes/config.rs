@@ -1024,11 +1024,11 @@ mod embedding_status_tests {
         let mut cfg = config::Config::default();
         cfg.llm.tokens.open_ai = "secret-openai-key".into();
         cfg.llm.seed_presets(config::LlmProvider::Openai);
-        cfg.llm.chat_preset = "gpt".into();
+        cfg.llm.chat_preset = "gpt-sol".into();
         let Json(status) = get_status(State(AppState::new(cfg).await)).await;
         assert_eq!(status["llm_configured"], true, "{status}");
         assert_eq!(status["chat_provider"], "openai", "{status}");
-        assert_eq!(status["chat_preset"], "gpt", "{status}");
+        assert_eq!(status["chat_preset"], "gpt-sol", "{status}");
         assert!(!status.to_string().contains("secret-"));
     }
 
@@ -1526,9 +1526,9 @@ mod preset_test_tests {
     fn test_outcomes_are_typed_by_variant() {
         let preset = config::ModelPreset {
             id: "gpt".into(),
-            name: "GPT-5.4".into(),
+            name: "GPT-5.6 Sol".into(),
             provider: config::LlmProvider::Openai,
-            model: "gpt-5.4".into(),
+            model: "gpt-5.6-sol".into(),
         };
         let Json(ok) = test_outcome(
             &preset,
@@ -1542,7 +1542,7 @@ mod preset_test_tests {
         assert_eq!(ok["ok"], true);
         assert_eq!(ok["preset"], "gpt");
         assert_eq!(ok["provider"], "openai");
-        assert_eq!(ok["model"], "gpt-5.4");
+        assert_eq!(ok["model"], "gpt-5.6-sol");
         assert_eq!(ok["usage"]["input_tokens"], 8);
         assert_eq!(ok["usage"]["output_tokens"], 1);
         assert_eq!(ok["capabilities"]["documents"], false);
@@ -1570,7 +1570,7 @@ mod preset_test_tests {
             (
                 LlmError::Http {
                     status: 404,
-                    message: "The model `gpt-5.4` does not exist".into(),
+                    message: "The model `gpt-5.6-sol` does not exist".into(),
                 },
                 StatusCode::NOT_FOUND,
                 "model_not_found",
@@ -1626,7 +1626,7 @@ mod preset_test_tests {
                 assert_eq!(body["retry_after_seconds"], 7, "{label}");
             }
             if expected_error == "model_not_found" {
-                assert!(message.contains("gpt-5.4"), "{label}: {message}");
+                assert!(message.contains("gpt-5.6-sol"), "{label}: {message}");
             }
             if expected_error == "provider_rejected" {
                 assert!(
@@ -1659,8 +1659,8 @@ mod preset_test_tests {
         );
         // Text that merely shares letters with the key is left alone.
         assert_eq!(
-            scrub_key_echo("The model `gpt-5.4` does not exist", key),
-            "The model `gpt-5.4` does not exist"
+            scrub_key_echo("The model `gpt-5.6-sol` does not exist", key),
+            "The model `gpt-5.6-sol` does not exist"
         );
         assert_eq!(
             scrub_key_echo("sk-test is a prefix, 9c1d a suffix", key),
@@ -1689,11 +1689,11 @@ mod preset_test_tests {
         assert_eq!(body["ok"], false);
         assert_eq!(body["error"], "unknown_preset");
 
-        let (status, body) = post_test(state.clone(), "gpt").await;
+        let (status, body) = post_test(state.clone(), "gpt-sol").await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
         assert_eq!(body["ok"], false);
         assert_eq!(body["error"], "setup_required");
-        assert_eq!(body["preset"], "gpt");
+        assert_eq!(body["preset"], "gpt-sol");
         assert!(
             body["message"].as_str().unwrap().contains("OpenAI"),
             "{body}"
@@ -1876,9 +1876,9 @@ mod preset_test_tests {
         }
         assert_eq!(capabilities["sonnet"]["documents"], true);
         assert_eq!(capabilities["sonnet"]["vision"], true);
-        assert_eq!(capabilities["gpt"]["documents"], false);
-        assert_eq!(capabilities["gpt"]["tools"], true);
-        assert_eq!(capabilities["gpt"]["reasoning_controls"], true);
+        assert_eq!(capabilities["gpt-sol"]["documents"], false);
+        assert_eq!(capabilities["gpt-sol"]["tools"], true);
+        assert_eq!(capabilities["gpt-sol"]["reasoning_controls"], true);
         assert_eq!(capabilities["openrouter-sonnet"]["documents"], false);
         for provider in [
             config::LlmProvider::Anthropic,

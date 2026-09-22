@@ -173,7 +173,7 @@ The `openrouter` provider sends OpenAI-style chat completions to
 `openrouter.ai` with the `OPENROUTER` token (`OPENROUTER_API_KEY` overrides
 it), streams answers and tool calls like the other adapters, and records the
 usage and cost OpenRouter returns. Model ids are `vendor/model`, for example
-`anthropic/claude-sonnet-4.6` or `openai/gpt-5.4-mini`; the seeded presets
+`anthropic/claude-sonnet-4.6` or `openai/gpt-5.6-luna`; the seeded presets
 name both. The model catalog (`GET /api/v1/models`) is read once an hour and a
 preset whose model lacks tools, image input or reasoning controls is refused
 before the request goes out.

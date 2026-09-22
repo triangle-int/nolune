@@ -476,8 +476,8 @@ pub fn default_presets(provider: LlmProvider) -> Vec<ModelPreset> {
             ),
         ],
         LlmProvider::Openai => vec![
-            ModelPreset::seeded("gpt", "GPT-5.4", provider, "gpt-5.4"),
-            ModelPreset::seeded("gpt-mini", "GPT-5.4 mini", provider, "gpt-5.4-mini"),
+            ModelPreset::seeded("gpt-sol", "GPT-5.6 Sol", provider, "gpt-5.6-sol"),
+            ModelPreset::seeded("gpt-luna", "GPT-5.6 Luna", provider, "gpt-5.6-luna"),
         ],
         // OpenRouter ids are `vendor/model`; the ids stay clear of the
         // vendors' own seeds so both can coexist.
@@ -489,10 +489,10 @@ pub fn default_presets(provider: LlmProvider) -> Vec<ModelPreset> {
                 "anthropic/claude-sonnet-4.6",
             ),
             ModelPreset::seeded(
-                "openrouter-gpt-mini",
-                "GPT-5.4 mini via OpenRouter",
+                "openrouter-gpt-luna",
+                "GPT-5.6 Luna via OpenRouter",
                 provider,
-                "openai/gpt-5.4-mini",
+                "openai/gpt-5.6-luna",
             ),
         ],
         // Codex (#27) names the models the pinned codex release lists; a
@@ -518,8 +518,8 @@ pub fn default_presets(provider: LlmProvider) -> Vec<ModelPreset> {
 fn default_slots(provider: LlmProvider) -> (&'static str, &'static str) {
     match provider {
         LlmProvider::Anthropic => ("sonnet", "haiku"),
-        LlmProvider::Openai => ("gpt", "gpt-mini"),
-        LlmProvider::Openrouter => ("openrouter-sonnet", "openrouter-gpt-mini"),
+        LlmProvider::Openai => ("gpt-sol", "gpt-luna"),
+        LlmProvider::Openrouter => ("openrouter-sonnet", "openrouter-gpt-luna"),
         LlmProvider::Codex => ("codex-astra", "codex-luna"),
     }
 }
@@ -1659,7 +1659,7 @@ custom_token = "retained"
             id: "gpt".into(),
             name: "GPT".into(),
             provider: LlmProvider::Openai,
-            model: "gpt-5.4".into(),
+            model: "gpt-5.6-sol".into(),
         });
         mixed.llm.background_preset = "gpt".into();
         assert!(
@@ -1812,7 +1812,7 @@ custom_token = "retained"
     fn openrouter_presets_name_models_as_vendor_slash_model() {
         for ok in [
             "anthropic/claude-sonnet-4.6",
-            "openai/gpt-5.4-mini",
+            "openai/gpt-5.6-luna",
             "meta-llama/llama-4-maverick:free",
         ] {
             assert!(is_openrouter_model_id(ok), "{ok}");
@@ -1827,7 +1827,7 @@ custom_token = "retained"
             assert!(!is_openrouter_model_id(bad), "{bad:?}");
         }
         let mut config: Config = toml::from_str(
-            "[llm]\nchat_preset='r'\nbackground_preset='r'\n[llm.tokens]\nOPENROUTER='k'\nOPEN_AI='o'\n[[llm.presets]]\nid='r'\nname='Router'\nprovider='openrouter'\nmodel='gpt-5.4'",
+            "[llm]\nchat_preset='r'\nbackground_preset='r'\n[llm.tokens]\nOPENROUTER='k'\nOPEN_AI='o'\n[[llm.presets]]\nid='r'\nname='Router'\nprovider='openrouter'\nmodel='gpt-5.6-sol'",
         )
         .unwrap();
         let error = config.llm.validate_presets().unwrap_err();
@@ -1903,8 +1903,8 @@ custom_token = "retained"
         let mut config: Config = toml::from_str("[llm]\n[llm.tokens]\nOPEN_AI='k'").unwrap();
         assert!(config.llm.presets.is_empty());
         assert_eq!(config.llm.seed_for_keys(), 2);
-        assert_eq!(config.llm.chat_preset, "gpt");
-        assert_eq!(config.llm.background_preset, "gpt-mini");
+        assert_eq!(config.llm.chat_preset, "gpt-sol");
+        assert_eq!(config.llm.background_preset, "gpt-luna");
         assert!(config.llm.is_configured());
         assert_eq!(config.llm.setup_required(), None);
         assert_eq!(config.llm.seed_for_keys(), 0, "seeding is idempotent");
@@ -1923,8 +1923,8 @@ custom_token = "retained"
             toml::from_str("[llm]\nprovider='openai'\n[llm.tokens]\nOPEN_AI='k'\nANTHROPIC='a'")
                 .unwrap();
         assert_eq!(openai_user.llm.seed_for_keys(), 5);
-        assert_eq!(openai_user.llm.chat_preset, "gpt");
-        assert_eq!(openai_user.llm.background_preset, "gpt-mini");
+        assert_eq!(openai_user.llm.chat_preset, "gpt-sol");
+        assert_eq!(openai_user.llm.background_preset, "gpt-luna");
         assert!(
             !openai_user.llm.extra.contains_key("provider"),
             "the retired key must not be written back"
@@ -1972,14 +1972,14 @@ custom_token = "retained"
         assert!(config.llm.setup_required().unwrap().contains("preset"));
 
         assert_eq!(config.llm.seed_presets(LlmProvider::Openai), 2);
-        assert_eq!(config.llm.chat_preset, "gpt");
-        assert_eq!(config.llm.background_preset, "gpt-mini");
+        assert_eq!(config.llm.chat_preset, "gpt-sol");
+        assert_eq!(config.llm.background_preset, "gpt-luna");
         assert!(config.llm.is_configured());
         assert_eq!(config.llm.setup_required(), None);
 
         // A second provider adds its presets but leaves the chosen slots alone.
         assert_eq!(config.llm.seed_presets(LlmProvider::Anthropic), 3);
-        assert_eq!(config.llm.chat_preset, "gpt");
+        assert_eq!(config.llm.chat_preset, "gpt-sol");
         assert_eq!(config.llm.seed_presets(LlmProvider::Anthropic), 0);
         assert_eq!(config.llm.presets.len(), 5);
 
@@ -1994,13 +1994,13 @@ custom_token = "retained"
         let mut config = Config::default();
         keyed(&mut config, true, true);
         config.llm.seed_presets(LlmProvider::Openai);
-        config.llm.chat_preset = "gpt".into();
+        config.llm.chat_preset = "gpt-sol".into();
         config.llm.background_preset = "haiku".into();
         assert_eq!(
             config.llm.chat_preset().unwrap().provider,
             LlmProvider::Openai
         );
-        assert_eq!(config.llm.chat_model(), Some("gpt-5.4"));
+        assert_eq!(config.llm.chat_model(), Some("gpt-5.6-sol"));
         assert_eq!(
             config.llm.background_preset().unwrap().model,
             "claude-haiku-4-5-20251001"
@@ -2069,7 +2069,7 @@ custom_token = "retained"
 
         let mut no_key = config.clone();
         no_key.llm.seed_presets(LlmProvider::Openai);
-        no_key.llm.chat_preset = "gpt".into();
+        no_key.llm.chat_preset = "gpt-sol".into();
         let error = no_key.llm.validate_presets().unwrap_err();
         assert!(error.contains("OpenAI") && error.contains("key"), "{error}");
 
