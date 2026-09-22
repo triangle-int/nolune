@@ -69,10 +69,22 @@ case "${1:-}" in
   *) printf 'nolune %s\n' "$*" >> "${MOCK_CALLS:?}" ;;
 esac
 BIN
+    # Successive upstream builds differ; an updater must notice from the bytes.
+    printf '# build %s\n' "${MOCK_BIN_MARK:-base}" >> "$out"
+    ;;
+  *'api.github.com/repos/'*'/releases/tags/nightly'*)
+    # A rolling tag: the build is named only in the release body.
+    printf '{\n  "tag_name": "nightly",\n  "name": "Nightly 2026-09-23",\n  "body": "Auto-built from main (%s)"\n}\n' \
+      "${MOCK_NIGHTLY_COMMIT-abc1234}"
     ;;
   *'-fsSIL '*)
     # Real chain: latest/download -> /releases/download/<tag>/ -> signed CDN URL.
-    printf 'HTTP/2 302 \r\nlocation: https://github.com/triangle-int/nolune/releases/download/v0.33.0/artifact\r\n'
+    # A URL that already names its tag (nightly) skips that first hop, so there
+    # is no version to read out of the redirect at all.
+    case "$*" in
+      *'/releases/download/'*) ;;
+      *) printf 'HTTP/2 302 \r\nlocation: https://github.com/triangle-int/nolune/releases/download/v0.33.0/artifact\r\n' ;;
+    esac
     printf 'HTTP/2 302 \r\nlocation: https://release-assets.githubusercontent.com/github-production-release-asset/1/abc?sig=x%%2By&response-content-disposition=attachment%%3B%%20filename%%3Dartifact\r\n'
     printf 'HTTP/2 200 \r\n'
     ;;
@@ -134,6 +146,21 @@ assert_order() {
   fi
 }
 
+assert_version() {
+  local name=$1 expected=$2 actual
+  actual=$(cat "$tmp/$name/data/bin/.version")
+  if [[ "$actual" != "$expected" ]]; then
+    printf 'FAIL: recorded version is %q, expected %q\n' "$actual" "$expected" >&2
+    exit 1
+  fi
+}
+
+# Which upstream build the installed binary came from.
+assert_binary_build() {
+  local name=$1 expected=$2
+  assert_contains "$tmp/$name/data/bin/nolune" "# build $expected"
+}
+
 assert_status() {
   local name=$1 expected=$2 actual
   actual=$(cat "$tmp/$name/status")
@@ -167,12 +194,12 @@ assert_no_service_management() {
 }
 
 run_installer() {
-  local name=$1 os=$2 arch=$3 healthy=${4:-1}
+  local name=$1 os=$2 arch=$3 healthy=${4:-1} channel=${5:-stable}
   local home="$tmp/$name/home" data="$tmp/$name/data" calls="$tmp/$name/calls"
   mkdir -p "$home"
   : > "$calls"
   set +e
-  HOME="$home" NOLUNE_DIR="$data" SHELL=/bin/bash \
+  HOME="$home" NOLUNE_DIR="$data" SHELL=/bin/bash NOLUNE_CHANNEL="$channel" \
     MOCK_OS="$os" MOCK_ARCH="$arch" MOCK_HEALTHY="$healthy" MOCK_CALLS="$calls" \
     PATH="$mock_bin:/usr/bin:/bin:/usr/sbin:/sbin" \
     bash "$root/scripts/install.sh" > "$tmp/$name/output" 2>&1 < /dev/null
@@ -195,10 +222,7 @@ assert_contains "$tmp/macos/output" 'http://localhost:26559'
 # Fresh installs and their generated updater use the Nolune distribution contract.
 assert_contains "$tmp/macos/calls" 'https://github.com/triangle-int/nolune/releases/latest/download/nolune-server-aarch64-apple-darwin'
 assert_contains "$tmp/macos/data/bin/update" 'nolune-server-'
-if [[ "$(cat "$tmp/macos/data/bin/.version")" != v0.33.0 ]]; then
-  printf 'FAIL: recorded version is %q, expected v0.33.0\n' "$(cat "$tmp/macos/data/bin/.version")" >&2
-  exit 1
-fi
+assert_version macos v0.33.0
 if ! grep -Fq $'downloaded \033[1mv0.33.0\033[0m' "$tmp/macos/output"; then
   echo 'FAIL: installer did not report the resolved release tag' >&2
   exit 1
@@ -207,6 +231,65 @@ assert_contains "$tmp/macos/calls" '--connect-timeout 15 --retry 3'
 bash -n "$tmp/macos/data/bin/update"
 MOCK_CALLS="$tmp/macos/calls" PATH="$mock_bin:$PATH" bash "$tmp/macos/data/bin/update" > "$tmp/macos/update-output"
 assert_contains "$tmp/macos/update-output" 'already at v0.33.0'
+
+# ── Nightly: a rolling tag names no build ────────────────────────────────────
+# A nightly download URL already carries its tag, so there is no
+# /releases/download/<tag>/ redirect hop to read a version out of. An updater
+# that resolves the version that way records "unknown" on its first run and
+# then matches "unknown" on every run after it, leaving the binary untouched
+# forever. The build is named by the commit in the release body instead, and
+# whether to replace is decided on the bytes that were downloaded.
+export MOCK_NIGHTLY_COMMIT=aaaaaaa MOCK_BIN_MARK=aaaaaaa
+run_installer nightly Darwin arm64 1 nightly
+unset MOCK_NIGHTLY_COMMIT MOCK_BIN_MARK
+assert_status nightly 0
+assert_contains "$tmp/nightly/calls" 'https://github.com/triangle-int/nolune/releases/download/nightly/nolune-server-aarch64-apple-darwin'
+assert_version nightly nightly-aaaaaaa
+assert_binary_build nightly aaaaaaa
+bash -n "$tmp/nightly/data/bin/update"
+
+# Run the generated updater against one upstream nightly build.
+run_update() {
+  local label=$1 commit=$2 mark=$3
+  MOCK_CALLS="$tmp/nightly/$label-calls" MOCK_NIGHTLY_COMMIT="$commit" MOCK_BIN_MARK="$mark" \
+    PATH="$mock_bin:$PATH" \
+    bash "$tmp/nightly/data/bin/update" > "$tmp/nightly/$label-output" 2>&1
+}
+
+# The same build upstream: nothing is replaced, and no download is left behind.
+run_update unchanged aaaaaaa aaaaaaa
+assert_contains "$tmp/nightly/unchanged-output" 'already at nightly-aaaaaaa'
+assert_version nightly nightly-aaaaaaa
+assert_binary_build nightly aaaaaaa
+[[ ! -e "$tmp/nightly/data/bin/nolune.tmp" ]]
+
+# A new build lands: the binary is replaced and its commit recorded, so the
+# server sees bin/.version move and restarts onto it.
+run_update first bbbbbbb bbbbbbb
+assert_contains "$tmp/nightly/first-output" 'updated to nightly-bbbbbbb'
+assert_version nightly nightly-bbbbbbb
+assert_binary_build nightly bbbbbbb
+
+# And so does the run after it — the regression this guards. The tag is still
+# `nightly`, so an updater comparing tags reports "already at" here and keeps
+# the stale binary.
+run_update second ccccccc ccccccc
+assert_contains "$tmp/nightly/second-output" 'updated to nightly-ccccccc'
+assert_version nightly nightly-ccccccc
+assert_binary_build nightly ccccccc
+
+# A release body naming no commit must not read as "nothing changed" either.
+run_update unnamed '' ddddddd
+assert_contains "$tmp/nightly/unnamed-output" 'updated to nightly —'
+assert_version nightly nightly
+assert_binary_build nightly ddddddd
+
+# Nightly never probes for a redirect it does not have, and never reports a
+# version it could not resolve as the installed one.
+for label in unchanged first second unnamed; do
+  assert_absent "$tmp/nightly/$label-calls" '-fsSIL'
+  assert_absent "$tmp/nightly/$label-output" 'unknown'
+done
 
 # Re-running keeps the existing config: onboard sees it and the script does not rewrite it.
 run_installer macos Darwin arm64

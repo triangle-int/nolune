@@ -203,11 +203,18 @@ if [ "$CHANNEL" = "nightly" ]; then
     if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
         fail "could not find a nightly release"
     fi
+    # "nightly" is a rolling tag: every build reuses it, so the tag alone names
+    # no build. The release body carries the commit ("Auto-built from main
+    # (abc1234)") — the same string server/src/routes/update.rs parses — so the
+    # recorded version is what actually moves between nightly builds.
+    COMMIT=$(echo "$RELEASE_JSON" | grep '"body"' | head -1 | sed -n 's/[^(]*(\([0-9a-f]\{7,40\}\)).*/\1/p')
+    VERSION="$TAG${COMMIT:+-$COMMIT}"
     DOWNLOAD_URL="https://github.com/$REPO/releases/download/$TAG/$ASSET_NAME"
 else
     # Stable: use redirect URL — no API call, no rate limit
     DOWNLOAD_URL="https://github.com/$REPO/releases/latest/download/$ASSET_NAME"
     TAG="latest"
+    VERSION=""
 fi
 
 mkdir -p "$BIN_DIR" "$NOLUNE_DIR"
@@ -216,18 +223,18 @@ info "downloading ${BOLD}$CHANNEL${NC} for $TARGET..."
 curl -fL --progress-bar $CURL_NET_OPTS "$DOWNLOAD_URL" -o "$BIN" || \
     fail "download failed — could not fetch $DOWNLOAD_URL (check that github.com is reachable, then see https://github.com/$REPO/releases)"
 
-# Resolve actual version from downloaded binary or GitHub redirect
-if [ "$TAG" = "latest" ]; then
+# Stable resolves its version from the GitHub redirect; nightly already has it.
+if [ "$CHANNEL" != "nightly" ]; then
     # HEAD -L follows two redirects: /releases/download/<tag>/... and then the
     # signed CDN URL. Only the first carries the tag.
     RESOLVED=$(curl -fsSIL $CURL_NET_OPTS "$DOWNLOAD_URL" 2>/dev/null | grep -i '^location:' | grep '/releases/download/' | head -1 | sed 's|.*/releases/download/\([^/]*\)/.*|\1|' | tr -d '\r')
-    TAG="${RESOLVED:-latest}"
+    VERSION="${RESOLVED:-latest}"
 fi
 
 chmod +x "$BIN"
-echo "$TAG" > "$BIN_DIR/.version"
+echo "$VERSION" > "$BIN_DIR/.version"
 
-log "downloaded ${BOLD}$TAG${NC}"
+log "downloaded ${BOLD}$VERSION${NC}"
 
 # ─── Update script ────────────────────────────────────────────────────────────
 cat > "$BIN_DIR/update" <<UPDATESCRIPT
@@ -235,33 +242,54 @@ cat > "$BIN_DIR/update" <<UPDATESCRIPT
 set -e
 REPO="$REPO"
 BIN="$BIN"
+VERSION_FILE="$BIN_DIR/.version"
 CHANNEL="\${NOLUNE_CHANNEL:-$CHANNEL}"
 TARGET="$TARGET"
 CURL_NET_OPTS="$CURL_NET_OPTS"
 # Use redirect URL for stable — no API call, no rate limit
 DOWNLOAD_URL="https://github.com/\$REPO/releases/latest/download/nolune-server-\$TARGET"
+VERSION=""
 if [ "\$CHANNEL" = "nightly" ]; then
     API_URL="https://api.github.com/repos/\$REPO/releases/tags/nightly"
     RELEASE_JSON=\$(curl -fsSL \$CURL_NET_OPTS "\$API_URL") || { echo "could not fetch release info"; exit 1; }
     TAG=\$(echo "\$RELEASE_JSON" | grep '"tag_name"' | head -1 | sed 's/.*: "//;s/".*//')
+    if [ -z "\$TAG" ] || [ "\$TAG" = "null" ]; then
+        echo "could not find a nightly release"
+        exit 1
+    fi
+    # "nightly" is a rolling tag, so it names no single build and the download
+    # URL carries no version hop. The release body names the commit
+    # ("Auto-built from main (abc1234)"), the same string
+    # server/src/routes/update.rs parses.
+    COMMIT=\$(echo "\$RELEASE_JSON" | grep '"body"' | head -1 | sed -n 's/[^(]*(\([0-9a-f]\{7,40\}\)).*/\1/p')
+    VERSION="\$TAG\${COMMIT:+-\$COMMIT}"
     DOWNLOAD_URL="https://github.com/\$REPO/releases/download/\$TAG/nolune-server-\$TARGET"
 fi
 echo "checking for updates..."
 curl -fsSL \$CURL_NET_OPTS "\$DOWNLOAD_URL" -o "\$BIN.tmp" 2>/dev/null || \
     { echo "download failed — could not fetch \$DOWNLOAD_URL"; exit 1; }
-# Resolve version from the /releases/download/<tag>/ redirect hop (the final hop is the CDN URL)
-TAG=\$(curl -fsSIL \$CURL_NET_OPTS "\$DOWNLOAD_URL" 2>/dev/null | grep -i '^location:' | grep '/releases/download/' | head -1 | sed 's|.*/releases/download/\([^/]*\)/.*|\1|' | tr -d '\r')
-TAG="\${TAG:-unknown}"
-CURRENT=\$(cat "$BIN_DIR/.version" 2>/dev/null || echo "none")
-if [ "\$TAG" = "\$CURRENT" ]; then
+if [ "\$CHANNEL" != "nightly" ]; then
+    # Stable resolves its version from the /releases/download/<tag>/ redirect
+    # hop (the final hop is the CDN URL, which carries no tag).
+    VERSION=\$(curl -fsSIL \$CURL_NET_OPTS "\$DOWNLOAD_URL" 2>/dev/null | grep -i '^location:' | grep '/releases/download/' | head -1 | sed 's|.*/releases/download/\([^/]*\)/.*|\1|' | tr -d '\r')
+fi
+CURRENT=\$(cat "\$VERSION_FILE" 2>/dev/null || echo "none")
+# Decide on the bytes we just downloaded, never on the version strings: a
+# rolling tag stays the same across builds, and a version we failed to resolve
+# must not be mistaken for "nothing changed".
+if cmp -s "\$BIN.tmp" "\$BIN"; then
     rm -f "\$BIN.tmp"
-    echo "already at \$TAG"
+    echo "already at \$CURRENT"
     exit 0
 fi
+# The binary really did change. If the build could not be named, record one
+# that still differs from what is on disk, so the server sees the change and
+# restarts onto the new binary (server/src/routes/update.rs).
+[ -n "\$VERSION" ] || VERSION="unknown-\$(date +%s)"
 chmod +x "\$BIN.tmp"
 mv "\$BIN.tmp" "\$BIN"
-echo "\$TAG" > "$BIN_DIR/.version"
-echo "updated to \$TAG — restart nolune to apply"
+echo "\$VERSION" > "\$VERSION_FILE"
+echo "updated to \$VERSION — restart nolune to apply"
 UPDATESCRIPT
 chmod +x "$BIN_DIR/update"
 
