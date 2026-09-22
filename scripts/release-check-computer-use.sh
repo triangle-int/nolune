@@ -165,7 +165,21 @@ step "5. a denied permission refused before the driver" \
     "Computers page shows the grant as denied. Turn CuaDriver back on and" \
     "confirm \`nolune cua status\` reports health ok again."
 
-step "6. disconnect cleanup" \
+step "6. the desktop app installs its own driver" \
+    "On a Mac with no driver (move ~/.nolune/cua-driver aside and quit CuaDriver)," \
+    "open the Nolune desktop app's Settings > Computer use. Expect: the status" \
+    "says no driver is installed and offers Install driver; no line anywhere on" \
+    "that page names a terminal command. Press it." \
+    "Expect: the steps are narrated (downloading with the pinned size, checksum" \
+    "matches, the driver reports the pinned version), then the outcome names" \
+    "where it landed and asks for the two grants. Grant them from the same page:" \
+    "the macOS prompts and the System Settings entries name CuaDriver" \
+    "(com.trycua.driver), never Nolune. Refresh: the driver reports the pin and" \
+    "health ok. Within a few seconds the companion sees the computer with a" \
+    "driver (list_machines and the Computers page), without reconnecting by hand," \
+    "and an action on one of its windows now runs."
+
+step "7. disconnect cleanup" \
     "Stop the gateway (Ctrl-C, or \`nolune gateway stop\` for the service)." \
     "Expect: the log ends the open sessions, unregisters the target and stops the" \
     "driver child before connections drain; after a restart the row is back." \

@@ -16,12 +16,16 @@
 //! machine tools (#18) enforce on either kind: the snapshot ledger, the
 //! verification gate and background-only delivery.
 
-pub mod daemon;
+/// The macOS `CuaDriver.app` daemon `cua-driver mcp` proxies to, shared
+/// with the desktop app so both bring it up by path.
+pub use cua_protocol::cua_driver_daemon as daemon;
 pub mod desktop;
 pub mod discovery;
 pub mod driver;
 pub mod host;
-pub mod install;
+/// The verified install of the pinned driver, shared with the desktop app
+/// so both put the same driver under a workspace the same way.
+pub use cua_protocol::cua_driver_install as install;
 pub mod orchestrator;
 pub mod runtime;
 pub mod session;

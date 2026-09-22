@@ -1,11 +1,24 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
   import { local, background, canToggleBackground, refreshLocalStatus, refreshBackgroundStatus, setBackgroundService } from "$lib/local.svelte";
-  import { DRIVER_BUNDLE, grantOutcomeText, intro, pageState, permissionRows, statusLines } from "$lib/cua-permissions";
+  import {
+    DRIVER_BUNDLE,
+    grantOutcomeText,
+    installAction,
+    installOutcomeText,
+    installProgressText,
+    intro,
+    pageState,
+    permissionRows,
+    statusLines,
+  } from "$lib/cua-permissions";
 
   type CuaReport = import("$lib/cua-permissions").CuaPermissionsReport;
   type GrantOutcome = import("$lib/cua-permissions").GrantOutcome;
+  type InstallProgress = import("$lib/cua-permissions").InstallProgress;
+  type InstallReport = import("$lib/cua-permissions").InstallReport;
   type PermissionKey = "accessibility" | "screen_recording";
 
   /** This app's own grants: used by nothing inside the app and not reported to the companion (#19). */
@@ -21,10 +34,22 @@
   let granting = $state<PermissionKey | null>(null);
   let appPermissions = $state<AppPermissions | null>(null);
   let appError = $state<string | null>(null);
+  let installing = $state(false);
+  let installStep = $state<string | null>(null);
+  let installNote = $state<string | null>(null);
+  let installError = $state<string | null>(null);
 
-  onMount(async () => {
+  onMount(() => {
     refresh();
     refreshServer();
+    // The install narrates itself while it runs; the promise only resolves
+    // at the end, and a 70 MB download is a long silence otherwise.
+    const unlisten = listen<InstallProgress>("cua-install-progress", (event) => {
+      installStep = installProgressText(event.payload);
+    });
+    return () => {
+      unlisten.then((stop) => stop());
+    };
   });
 
   async function refreshServer() {
@@ -48,7 +73,7 @@
       report = await invoke<CuaReport>("cua_permissions");
     } catch (e) {
       console.error("cua_permissions failed", e);
-      error = "Could not read the driver's permission status. Retry, or run `nolune cua status` in a terminal.";
+      error = "Could not read the driver's permission status. Retry; if it keeps failing, restart this app.";
     } finally {
       checking = false;
     }
@@ -86,8 +111,34 @@
     setTimeout(refreshApp, 3000);
   }
 
+  /**
+   * Put the pinned driver on this computer from here (#231). A desktop
+   * user has no `nolune` on their PATH, so the page does the install
+   * itself rather than printing a command they cannot run.
+   */
+  async function install() {
+    const action = installOffer;
+    if (!action || installing) return;
+    installing = true;
+    installStep = null;
+    installNote = null;
+    installError = null;
+    try {
+      const outcome = await invoke<InstallReport>("cua_install_driver", { force: action.force });
+      installNote = installOutcomeText(outcome);
+    } catch (e) {
+      console.error("cua_install_driver failed", e);
+      installError = typeof e === "string" ? e : "The driver could not be installed. Check your connection and try again.";
+    } finally {
+      installing = false;
+      installStep = null;
+    }
+    await refresh();
+  }
+
   const kind = $derived(report ? pageState(report) : null);
   const lines = $derived(report ? statusLines(report) : []);
+  const installOffer = $derived(report ? installAction(report) : null);
   const rows = $derived(report ? permissionRows(report) : []);
   const lead = $derived(intro(report ?? { driver_bundle: DRIVER_BUNDLE }));
   const onMacos = $derived(report?.platform.os === "macos");
@@ -169,7 +220,7 @@
 
     <section class="section" aria-labelledby="permissions-title">
       <p class="nl-eyebrow">Computer use</p>
-      <h2 id="permissions-title" class="section-title">Permissions</h2>
+      <h2 id="permissions-title" class="section-title">Driver &amp; permissions</h2>
       <p class="section-desc">{lead}</p>
 
       {#if error}
@@ -182,6 +233,35 @@
             <li class="status-line" class:status-ok={line.tone === "ok"} class:status-muted={line.tone === "muted"} class:status-error={line.tone === "error"} role={line.tone === "error" ? "alert" : undefined}>{line.text}</li>
           {/each}
         </ul>
+
+        {#if installOffer}
+          <div class="install">
+            <div class="perm-icon" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 3v12M7 11l5 5 5-5M5 20h14" />
+              </svg>
+            </div>
+            <div class="perm-info">
+              <span class="perm-name">Cua Driver {report.pinned_version}</span>
+              <span class="perm-desc">{installOffer.note}</span>
+              {#if installing && installStep}
+                <span class="perm-hint" role="status">{installStep}</span>
+              {/if}
+            </div>
+            <div class="perm-status">
+              <button class="nl-button install-button" onclick={install} disabled={installing}>
+                {installing ? "Installing…" : installOffer.label}
+              </button>
+            </div>
+          </div>
+        {/if}
+
+        {#if installError}
+          <p class="section-error" role="alert">{installError}</p>
+        {/if}
+        {#if installNote}
+          <p class="section-hint" role="status">{installNote}</p>
+        {/if}
 
         {#if rows.length > 0}
           <ul class="perm-list">
@@ -217,7 +297,11 @@
             {/each}
           </ul>
         {:else if kind === "incompatible" || kind === "absent" || kind === "unreachable"}
-          <p class="section-hint">Nothing can be granted until the pinned driver reports; the lines above say what to run.</p>
+          <p class="section-hint">
+            Nothing can be granted until the pinned driver reports.{#if installOffer}
+              Install it above, then grant Accessibility and Screen recording.{:else}
+              The lines above say why.{/if}
+          </p>
         {/if}
 
         {#if grantNote}
@@ -321,6 +405,21 @@
     line-height: 1.5;
     color: var(--destructive);
     margin: 0 0 16px;
+  }
+
+  .install {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 0 0 16px;
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-panel);
+    background: var(--card);
+  }
+
+  .install-button {
+    white-space: nowrap;
   }
 
   .perm-list {

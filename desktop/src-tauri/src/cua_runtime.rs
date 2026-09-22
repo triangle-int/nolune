@@ -21,6 +21,7 @@ use std::{
 };
 
 use cua_protocol::{
+    cua_driver_daemon as daemon,
     driver_mcp::{
         descriptor_from_health, error_response, response_for, tool_call, DriverCallFailure,
     },
@@ -339,7 +340,7 @@ impl DriverTransport for StdioDriverTransport {
 
 /// Names the driver binary explicitly, as for the server.
 pub const DRIVER_ENV: &str = "NOLUNE_CUA_DRIVER";
-/// The manifest `nolune cua install` writes under the workspace (#20).
+/// The manifest an install writes under the workspace (#20).
 pub const INSTALL_MANIFEST: &str = "cua-driver/install.json";
 const DRIVER_BINARY: &str = "cua-driver";
 
@@ -359,8 +360,9 @@ fn is_executable(path: &Path) -> bool {
 }
 
 /// The driver this desktop runs: `NOLUNE_CUA_DRIVER` when set, else the
-/// driver `nolune cua install` recorded under the workspace, else an
-/// executable `cua-driver` on `path`. `None` when there is none.
+/// driver an install recorded under the workspace (the settings window's
+/// own, or `nolune cua install` on a machine that also runs the server),
+/// else an executable `cua-driver` on `path`. `None` when there is none.
 pub fn locate_driver(
     workspace: &Path,
     env_override: Option<&std::ffi::OsStr>,
@@ -387,7 +389,7 @@ pub fn locate_driver(
         match installed {
             Some(driver) if is_executable(&driver) => return Some(driver),
             Some(driver) => eprintln!(
-                "[cua] {} names {} which is gone; run nolune cua install",
+                "[cua] {} names {} which is gone; install the driver again from Settings",
                 manifest.display(),
                 driver.display()
             ),
@@ -970,6 +972,38 @@ impl CuaRuntime {
         }
     }
 
+    /// Let go of the driver that runs, so the next start or request spawns
+    /// the one on disk now. What an install has to do (#231): a driver
+    /// replaced under the workspace changes nothing while the old child is
+    /// still answering, and after a reinstall over a stale version that
+    /// child is exactly the version the install was meant to replace.
+    ///
+    /// Not a stop: the runtime stays usable, and nothing here is terminal.
+    /// The open sessions are ended first, because the socket that owns them
+    /// is not going away and nobody else would. A runtime that never
+    /// started, or one the app is already exiting, is left alone.
+    pub async fn replace_driver(&self) {
+        if self.stopping() {
+            return;
+        }
+        let driver = {
+            let mut slot = self.driver.lock().await;
+            match self.live(&mut slot) {
+                Some(driver) => {
+                    *slot = Slot::None;
+                    Some(driver)
+                }
+                None => None,
+            }
+        };
+        let Some(driver) = driver else {
+            return;
+        };
+        let ended = self.end_open_sessions(&driver).await;
+        driver.transport.close();
+        eprintln!("[cua] the running driver was released for the newly installed one; {ended} open session(s) ended");
+    }
+
     /// Kill the driver without ending anything: the exit's last resort
     /// when a graceful `shutdown` was cut short. Terminal like `shutdown`,
     /// closes the driver synchronously, whatever else is in flight, and
@@ -1129,6 +1163,40 @@ async fn end_session(driver: &Driver, label: &SessionLabel) {
 
 static RUNTIME: std::sync::OnceLock<CuaRuntime> = std::sync::OnceLock::new();
 
+/// How long the daemon gets to come up after `open` on macOS.
+const DAEMON_START_WAIT: Duration = Duration::from_secs(15);
+
+/// Bring up the macOS daemon `<driver> mcp` proxies to, by path, when the
+/// driver runs from a genuine `CuaDriver.app` and none is running.
+///
+/// `mcp` would start one itself, but by name through LaunchServices, which
+/// resolves whichever `CuaDriver.app` the system knows — on a Mac that has
+/// only ever had the driver Nolune installed, that is nothing at all. This
+/// is what makes the settings window's Install driver button (#231) work on
+/// its own: the driver it just put under the workspace is the daemon that
+/// answers, and macOS attributes Accessibility and Screen Recording to that
+/// bundle. A failure is logged, never fatal: the handshake below says what
+/// the driver itself reported, which is the more useful error.
+async fn ensure_daemon(driver: &Path) {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let Some(bundle) = daemon::app_bundle(driver) else {
+        return;
+    };
+    match daemon::state(driver).await {
+        daemon::DaemonState::Running => {}
+        daemon::DaemonState::NotRunning => {
+            let launch = daemon::launch_command(&bundle);
+            match daemon::start(driver, launch, DAEMON_START_WAIT).await {
+                Ok(()) => eprintln!("[cua] daemon started: {}", bundle.display()),
+                Err(error) => eprintln!("[cua] the driver's daemon did not start: {error:#}"),
+            }
+        }
+        daemon::DaemonState::Unknown(why) => eprintln!("[cua] daemon: {why}"),
+    }
+}
+
 /// The driver this desktop runs, from [`locate_driver`] under the workspace
 /// `local_server::nolune_home` names, started with the default deadlines.
 async fn spawn_installed_driver() -> Result<Arc<dyn DriverTransport>, String> {
@@ -1140,10 +1208,12 @@ async fn spawn_installed_driver() -> Result<Arc<dyn DriverTransport>, String> {
     )
     .ok_or_else(|| {
         format!(
-            "no cua-driver installed: run `nolune cua install` (looked at {DRIVER_ENV}, {} and PATH)",
+            "no cua-driver installed: install one from Settings > Computer use (looked at \
+             {DRIVER_ENV}, {} and PATH)",
             workspace.join(INSTALL_MANIFEST).display()
         )
     })?;
+    ensure_daemon(&driver).await;
     let transport = StdioDriverTransport::spawn_with(&driver, DriverTimeouts::default()).await?;
     Ok(Arc::new(transport))
 }
@@ -1980,6 +2050,49 @@ mod tests {
             2,
             "the reconnect keeps the restarted driver"
         );
+    }
+
+    /// Installing a driver from the settings window (#231) replaces the
+    /// file on disk; the child that is running is still the old one, and
+    /// after a reinstall over a stale version it is the very version the
+    /// install was meant to replace. `replace_driver` lets it go — ending
+    /// what it held open first, since the socket that owns those sessions
+    /// stays — and the next start spawns the driver on disk now.
+    #[tokio::test]
+    async fn an_installed_driver_replaces_the_one_that_runs_without_stopping_the_runtime() {
+        let stale = FakeTransport::answering([
+            Ok(payload(HEALTHY)),
+            Ok(started("nolune-run-1")),
+            Ok(ended("nolune-run-1")),
+        ]);
+        let installed = FakeTransport::answering([Ok(payload(HEALTHY))]);
+        let (runtime, spawns) = runtime_over(vec![stale.clone(), installed.clone()]);
+        runtime.start(STUDIO).await.unwrap();
+        runtime
+            .handle(&request("s-1", STUDIO, start_session("nolune-run-1")))
+            .await;
+        assert_eq!(runtime.open_sessions(), labels(&["nolune-run-1"]));
+
+        runtime.replace_driver().await;
+        assert_eq!(runtime.open_sessions(), Vec::<SessionLabel>::new());
+        assert!(stale.closed(), "the old child is let go, not left running");
+        assert!(!runtime.is_running().await);
+        assert_eq!(spawns.load(Ordering::SeqCst), 1, "nothing is started yet");
+
+        // Not a stop: the next registration brings up the new driver.
+        runtime.start(STUDIO).await.unwrap();
+        assert_eq!(spawns.load(Ordering::SeqCst), 2);
+        assert!(!installed.closed());
+        assert_eq!(
+            installed.calls().len(),
+            1,
+            "the newly installed driver described the machine"
+        );
+
+        // Nothing to let go of is a no-op, and an exiting app is left alone.
+        runtime.shutdown().await;
+        runtime.replace_driver().await;
+        assert_eq!(spawns.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

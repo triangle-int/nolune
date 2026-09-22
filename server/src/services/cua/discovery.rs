@@ -13,8 +13,8 @@ use std::{
 /// The environment variable that names the driver binary outright.
 pub const DRIVER_ENV: &str = "NOLUNE_CUA_DRIVER";
 
-/// The binary name looked up on `PATH`.
-pub const DRIVER_BINARY: &str = "cua-driver";
+/// The binary name looked up on `PATH`, as the shared installer names it.
+pub use cua_protocol::cua_driver_install::DRIVER_BINARY;
 
 /// Where a lookup may find the driver, in precedence order.
 #[derive(Clone, Copy, Debug, Default)]

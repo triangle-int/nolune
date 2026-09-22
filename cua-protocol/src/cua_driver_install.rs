@@ -1,14 +1,17 @@
 //! Installing the pinned Cua Driver under a workspace (#20).
 //!
-//! `nolune cua install` downloads the release asset the pin names for this
-//! host, verifies its size and sha256 before a single byte is kept, extracts
-//! it under `<workspace>/cua-driver/releases/<version>/`, asks the extracted
-//! binary for its version and refuses anything but the pin, then records
-//! what it installed in `<workspace>/cua-driver/install.json` for discovery
-//! and `nolune cua status`. A failure at any step leaves nothing installed.
+//! One installer, shared by everything that can put a driver on a computer:
+//! the server's `nolune cua install`, and the desktop app's own Install
+//! driver button (#231), so a desktop user never opens a terminal to get
+//! one. Both download the release asset the pin names for this host, verify
+//! its size and sha256 before a single byte is kept, extract it under
+//! `<workspace>/cua-driver/releases/<version>/`, ask the extracted binary
+//! for its version and refuse anything but the pin, then record what was
+//! installed in `<workspace>/cua-driver/install.json` for discovery and
+//! `nolune cua status`. A failure at any step leaves nothing installed.
 //!
 //! Nolune never updates the driver on its own: a new pin ships with a new
-//! Nolune release, and `nolune cua install` then installs that one.
+//! Nolune release, and installing again then installs that one.
 
 use std::{
     fs, io,
@@ -18,15 +21,17 @@ use std::{
 };
 
 use anyhow::Context as _;
-use cua_protocol::{
+use serde::{Deserialize, Serialize};
+
+use crate::{
     DriverVersion,
     cua_driver_pin::{
         PINNED_VERSION, PinnedAsset, RELEASE_REPOSITORY, RELEASE_TAG, Target, check_driver_version,
     },
 };
-use serde::{Deserialize, Serialize};
 
-use super::discovery::DRIVER_BINARY;
+/// The driver binary's file name, as every release ships it.
+pub const DRIVER_BINARY: &str = "cua-driver";
 
 /// The directory under the workspace root that holds the driver.
 pub const INSTALL_DIR: &str = "cua-driver";
@@ -176,7 +181,7 @@ async fn download(
     expected_size: u64,
     limits: DownloadLimits,
 ) -> anyhow::Result<Vec<u8>> {
-    use futures::StreamExt as _;
+    use futures_util::StreamExt as _;
 
     let client = reqwest::Client::builder()
         .connect_timeout(limits.connect)
@@ -333,7 +338,9 @@ pub async fn reported_version(driver: &Path) -> anyhow::Result<DriverVersion> {
 /// Download, verify, extract, check and record the driver.
 pub async fn install(
     request: &InstallRequest<'_>,
-    progress: &mut dyn FnMut(InstallStep),
+    // `Send` so the whole install can be awaited from a Tauri command, which
+    // is how the desktop app's Install driver button runs it.
+    progress: &mut (dyn FnMut(InstallStep) + Send),
 ) -> anyhow::Result<InstallOutcome> {
     let InstallRequest {
         root,
@@ -426,7 +433,7 @@ pub async fn install(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cua_protocol::cua_driver_pin::asset_for;
+    use crate::cua_driver_pin::asset_for;
     use std::{fs, io::Write as _};
 
     #[test]

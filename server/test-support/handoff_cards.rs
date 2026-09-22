@@ -996,7 +996,8 @@ async fn stale_and_unfit_destinations_are_refused_with_reasons_before_any_work()
     );
     assert!(
         blocking_detail(&preview).contains("bare runs no Cua driver")
-            && blocking_detail(&preview).contains("nolune cua install"),
+            && blocking_detail(&preview).contains("Settings > Computer use > Install driver")
+            && !blocking_detail(&preview).contains("nolune cua"),
         "{preview}"
     );
     let (status, refused) = h.accept(&task.id, "mac-e").await;

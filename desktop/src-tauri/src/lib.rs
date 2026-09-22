@@ -1,6 +1,7 @@
 mod companion_relay;
 mod computer_use_bridge;
 mod credentials;
+mod cua_install;
 mod cua_permissions;
 mod cua_runtime;
 mod local_server;
@@ -489,6 +490,7 @@ pub fn run() {
             permissions::open_permission_settings,
             cua_permissions::cua_permissions,
             cua_permissions::cua_grant_permission,
+            cua_install::cua_install_driver,
             local_server::local_server_status,
             local_server::install_local_server,
             local_server::start_local_gateway,

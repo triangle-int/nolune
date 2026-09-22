@@ -65,9 +65,13 @@ fn production(path: &Path) -> String {
 fn server_depends_on_and_uses_the_shared_cua_protocol() {
     let repo = repo();
     let manifest = fs::read_to_string(repo.join("server/Cargo.toml")).unwrap();
+    // The `install` feature carries the shared driver installer (#231):
+    // one implementation for `nolune cua install` and for the desktop
+    // app's own Install driver button.
     assert!(
-        manifest.contains("cua-protocol = { path = \"../cua-protocol\" }"),
-        "server/Cargo.toml must depend on the workspace cua-protocol crate"
+        manifest
+            .contains("cua-protocol = { path = \"../cua-protocol\", features = [\"install\"] }"),
+        "server/Cargo.toml must depend on the workspace cua-protocol crate with the installer"
     );
 
     let registry = production(&repo.join("server/src/services/machine_registry.rs"));

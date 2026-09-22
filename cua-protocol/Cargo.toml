@@ -2,8 +2,25 @@
 name = "cua-protocol"
 version = "0.1.0"
 edition = "2024"
-description = "Shared Nolune Cua machine protocol and capability policy"
+description = "Shared Nolune Cua machine protocol, driver pin and driver installer"
 license = "MIT"
+
+[features]
+default = []
+# The verified install of the pinned driver under a workspace. Off by default
+# so a consumer that only speaks the protocol pays for none of it; the server
+# and the desktop app both turn it on so there is one installer, not two.
+install = [
+    "dep:anyhow",
+    "dep:chrono",
+    "dep:flate2",
+    "dep:futures-util",
+    "dep:reqwest",
+    "dep:tar",
+    "dep:tempfile",
+    "dep:tokio",
+    "dep:zip",
+]
 
 [dependencies]
 base64 = "0.22"
@@ -11,5 +28,20 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 
+anyhow = { version = "1", optional = true }
+chrono = { version = "0.4", optional = true }
+flate2 = { version = "1", optional = true }
+futures-util = { version = "0.3", optional = true }
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "stream"], optional = true }
+tar = { version = "0.4", optional = true }
+tempfile = { version = "3", optional = true }
+tokio = { version = "1", features = ["process", "time"], optional = true }
+zip = { version = "8", optional = true }
+
 [dev-dependencies]
 serde_json = "1"
+flate2 = "1"
+tar = "0.4"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt"] }
+zip = "8"

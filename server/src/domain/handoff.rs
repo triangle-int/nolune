@@ -456,7 +456,9 @@ fn driver_checks(
             CheckKind::DriverMissing,
             Blocking,
             format!(
-                "{name} runs no Cua driver, so it cannot see or act in windows; install one there with nolune cua install, then reconnect"
+                "{name} runs no Cua driver, so it cannot see or act in windows; install one \
+                 there from the Nolune app (Settings > Computer use > Install driver), then \
+                 reconnect"
             ),
         ));
         return checks;
@@ -834,7 +836,10 @@ mod tests {
         assert!(
             missing.detail.contains("mac-b name")
                 && missing.detail.contains("Cua driver")
-                && missing.detail.contains("nolune cua install"),
+                // The remedy is a button in the destination's own app, never
+                // a command: a desktop user has no `nolune` on their PATH.
+                && missing.detail.contains("Settings > Computer use > Install driver")
+                && !missing.detail.contains("nolune cua"),
             "{}",
             missing.detail
         );

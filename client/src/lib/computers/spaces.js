@@ -118,6 +118,7 @@ function agentCopy(machine) {
 				host: "the server",
 				restart: "Restart it on the server.",
 				grant: "run cua-driver permissions grant on the server",
+				install: "install it on the server with nolune cua install",
 			}
 		: {
 				app: "the Nolune desktop app",
@@ -125,6 +126,9 @@ function agentCopy(machine) {
 				host: "the computer",
 				restart: "Restart the Nolune desktop app there.",
 				grant: "grant it from the Nolune desktop app's Settings there",
+				// The app installs the driver itself (#231); a desktop user has no
+				// nolune on their PATH, so never answer them with a command.
+				install: "open the Nolune desktop app there and press Install driver under Settings \u2192 Computer use",
 			};
 }
 
@@ -280,7 +284,7 @@ export function spaceHints(machine, nowSeconds) {
 		return hints;
 	}
 
-	const { app, there, host, restart, grant } = agentCopy(machine);
+	const { app, there, host, restart, grant, install } = agentCopy(machine);
 	const home = isHome(machine);
 
 	if (health === "unavailable") {
@@ -324,7 +328,7 @@ export function spaceHints(machine, nowSeconds) {
 		if (!home) {
 			hints.push({
 				level: "info",
-				text: `${name} has no Cua driver: ${app} runs commands and files ${there}, but it cannot see or act in windows. Install the driver ${there} with nolune cua install, then reconnect.`,
+				text: `${name} has no Cua driver: ${app} runs commands and files ${there}, but it cannot see or act in windows. To give it one, ${install}.`,
 			});
 		}
 	} else if (machine.cua_health === "degraded") {
