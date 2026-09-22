@@ -67,6 +67,10 @@ pub struct MachineTarget {
     selection: TargetSelection,
     names: BTreeMap<String, String>,
     live: Vec<String>,
+    /// The ids of the Cua targets registered when the target was resolved
+    /// (#18): the server-local one and every desktop with a driver, so the
+    /// typed tools' trail names the only one while nothing is chosen.
+    cua: Vec<String>,
 }
 
 /// The desktop one call acts on.
@@ -163,6 +167,7 @@ impl MachineTarget {
             selection,
             names: BTreeMap::new(),
             live: Vec::new(),
+            cua: Vec::new(),
         }
     }
 
@@ -172,6 +177,7 @@ impl MachineTarget {
             selection,
             names,
             live: Vec::new(),
+            cua: Vec::new(),
         }
     }
 
@@ -179,6 +185,13 @@ impl MachineTarget {
     /// `describe` names the only one while nothing is chosen.
     pub fn with_live(mut self, live: Vec<String>) -> Self {
         self.live = live;
+        self
+    }
+
+    /// The ids of the Cua targets registered when the target was resolved,
+    /// so `describe_typed` names the only one while nothing is chosen.
+    pub fn with_cua(mut self, cua: Vec<String>) -> Self {
+        self.cua = cua;
         self
     }
 
