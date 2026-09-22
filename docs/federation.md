@@ -226,25 +226,39 @@ response fail-closed, and checks it against the intent it answers.
 `accepted` and `denied` settle the entry; `needs_owner` leaves it waiting
 and asks again every fifteen minutes until the other owner decides or the
 intent expires. A peer that could not be reached, that answered something
-that did not verify or decode, or that refused with a transient code
-(`rate_limited`, `replayed`, `federation_unavailable`) is tried again
-after a backoff that starts at thirty seconds and doubles up to an hour;
-after eight such failures the entry is visibly `failed`, and a refusal
-that will not change (the peer no longer knows this companion, a
-malformed intent, a policy denial of an unknown name) fails it at once.
-An intent that expires before it was delivered is `expired`. Retrying is
-safe because the correlation id never changes: an attempt is written
-down as in flight before the envelope leaves, a process that dies there
-marks it interrupted at the next start and retries the same request,
-and the receiving side answers a request it already settled with the
-same response again, so the other owner never sees a message twice.
+that did not verify or decode, that refused with a transient code
+(`rate_limited`, `replayed`, `federation_unavailable`), or that answered
+`denied` with its rate limit (the entry then waits out the larger of the
+window the peer named and the backoff) is tried again after a backoff
+that starts at thirty seconds and doubles up to an hour; after sixteen
+such failures, about nine hours of trying (a peer that is away for a
+night is reached in the morning), the entry is visibly `failed`. An
+error status is a failed attempt like those, not a verdict, whenever it
+could have come from something in front of the peer rather than from its
+route: any server error or `429`, and any status whose body names no
+code (a reverse proxy's or a tunnel's own page); the status is kept on
+the attempt. A refusal that will not change (a `4xx` from the peer's
+route naming a condition: the peer no longer knows this companion, a
+malformed intent, a policy denial of an unknown name) fails the entry at
+once. An intent that expires before it was delivered is `expired`.
+Retrying is safe because the correlation id never changes: an attempt is
+written down as in flight before the envelope leaves, a process that dies
+there marks it interrupted at the next start and retries the same
+request, and the receiving side answers a request it already settled with
+the same response again, so the other owner never sees a message twice.
+A pass that fails as a whole (the store cannot be written) is not run
+again at once: the loop waits the base backoff first.
 
 Every settled outcome, and the first `needs_owner`, writes a
 requesting-side audit receipt and an intent receipt naming what was
 requested and what the peer disclosed, read off the typed response only
 (an accepted availability answer that carries no windows is `granted
 none`); a request the peer never answered is recorded as denied,
-`unreachable`. `GET /api/federation/outbox` lists the entries (where each
+`unreachable`, and one that lapsed after the peer did answer is recorded
+as denied with the peer's last word as the reason (`default` or the
+rule's reason when its owner never allowed what the peer had to ask them
+about, `rate_limited` when its window never lifted), with that typed
+answer kept on the entry. `GET /api/federation/outbox` lists the entries (where each
 stands, every attempt, the peer's typed response) and the receipts,
 newest first, and every change is broadcast as `outbox_updated`, so the
 Activity page's "Sent to companions" section shows where each request

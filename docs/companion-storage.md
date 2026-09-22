@@ -1187,19 +1187,23 @@ the `intent` as it is sent, which is this owner's own words and has to be
 here because every retry sends it again, `status` of `queued`,
 `waiting_owner`, `delivered`, `denied`, `failed`, or `expired`, the
 `attempts` with when each was made and how it ended (`in_flight`,
-`interrupted`, `unreachable`, `refused` with the peer's code, `malformed`,
-or `answered` with the outcome and reason), `next_attempt_at` while it is
-open, the peer's typed `response` once there is one, the `receipt_id`, and
-the `chat_id` it was asked in) and one intent receipt per settled outcome
-and per first `needs_owner`, on the requesting side. An entry carries
-nothing the peer said beyond its typed response, and unknown fields are
-refused. The entry's correlation id never changes: an attempt is written
-as in flight before the envelope leaves, and a restart marks an attempt
-left that way `interrupted` and retries the same request, which the
-peer's `inbound.json` answers from its record. Open entries stay until
-their intent expires (a day after it was queued); settled ones are kept
-30 days, the newest 1000 overall, and receipts are bounded like the
-inbound ones. `GET /api/federation/outbox` lists both newest first. A
+`interrupted`, `unreachable`, `refused` with the HTTP `status` and the
+typed `code`, which is `unknown` when whatever answered in front of the
+peer named none, `malformed`, or `answered` with the outcome and reason),
+`next_attempt_at` while it is open, the peer's typed `response` once
+there is one (its last word, kept whatever the entry became), the
+`receipt_id`, and the `chat_id` it was asked in) and one intent receipt
+per settled outcome and per first `needs_owner`, on the requesting side.
+An entry carries nothing the peer said beyond its typed response, and
+unknown fields are refused. The entry's correlation id never changes: an
+attempt is written as in flight before the envelope leaves, and a restart
+marks an attempt left that way `interrupted` and retries the same
+request, which the peer's `inbound.json` answers from its record. An
+entry fails after sixteen failed attempts (unreachable, undecodable,
+transiently refused, or answered with the peer's rate limit), about nine
+hours of trying. Open entries stay until their intent expires (a day
+after it was queued); settled ones are kept 30 days, the newest 1000
+overall, and receipts are bounded like the inbound ones. `GET /api/federation/outbox` lists both newest first. A
 file this build cannot load refuses every request and every delivery
 while being neither repaired nor overwritten. See
 [federation.md](federation.md) "Sending".

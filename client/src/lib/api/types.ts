@@ -937,7 +937,7 @@ export type FederationOutboxAttemptOutcome =
 	| { kind: "in_flight" }
 	| { kind: "interrupted" }
 	| { kind: "unreachable" }
-	| { kind: "refused"; code: string }
+	| { kind: "refused"; status?: number; code: string }
 	| { kind: "malformed" }
 	| { kind: "answered"; outcome: "accepted" | "denied" | "needs_owner"; reason?: string };
 

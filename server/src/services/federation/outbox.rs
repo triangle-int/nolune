@@ -23,13 +23,19 @@
 //! `needs_owner` leaves it waiting and asks again every
 //! [`OWNER_RETRY_SECS`] until the peer's owner decides or the intent
 //! expires. A peer that could not be reached, that answered something that
-//! did not verify or decode, or that refused with a transient code is
-//! tried again after [`backoff_secs`] (doubling from [`RETRY_BASE_SECS`],
-//! capped at [`RETRY_MAX_SECS`]); after [`MAX_DELIVERY_ATTEMPTS`] such
-//! failures the entry is visibly `failed`. An intent that expires before it
-//! was delivered is `expired`. Every change to an entry is broadcast as
-//! `ServerEvent::OutboxUpdated`, so the activity page shows where each
-//! request stands.
+//! did not verify or decode, that refused with a transient code, that
+//! answered `denied` with its rate limit (the entry waits out the larger
+//! of the peer's window and the backoff), or in front of which something
+//! else answered with an error status (a server error, `429`, or a status
+//! whose body names no code: a proxy's own page, never a verdict on the
+//! request) is tried again after [`backoff_secs`] (doubling from
+//! [`RETRY_BASE_SECS`], capped at [`RETRY_MAX_SECS`]); after
+//! [`MAX_DELIVERY_ATTEMPTS`] such failures, about nine hours of trying,
+//! the entry is visibly `failed`. A `4xx` from the peer's route that
+//! names a lasting condition fails it at once. An intent that expires
+//! before it was delivered is `expired`. Every change to an entry is
+//! broadcast as `ServerEvent::OutboxUpdated`, so the activity page shows
+//! where each request stands.
 //!
 //! Delivery is idempotent end to end: the correlation id never changes
 //! across retries or a restart, and the receiving side answers a request it
@@ -42,7 +48,10 @@
 //! Every settled outcome, and the first `needs_owner`, writes a
 //! requesting-side audit receipt through the gate and an [`IntentReceipt`]
 //! naming what was requested and what the peer disclosed, read off the
-//! typed response only. `federation/outbox.json` (`0600`, written through
+//! typed response only; a request that lapsed unanswered is recorded as
+//! denied, `unreachable`, and one that lapsed after the peer did answer
+//! (its owner never decided, its rate limit never lifted) with the peer's
+//! last reason. `federation/outbox.json` (`0600`, written through
 //! a temporary file and a rename) holds the entries and the receipts. An
 //! entry carries the intent it sends (this owner's own words, which the
 //! sender needs again for every retry), its attempt history, and the
@@ -87,14 +96,21 @@ use crate::domain::{
 pub const OUTBOX_FILE: &str = "outbox.json";
 /// Version of the store file and of every entry in it.
 pub const OUTBOX_VERSION: u32 = 1;
-/// How long a queued intent stands: it may wait out an outage, and the
-/// peer's owner may take a while, but not forever. Below the decoder's
-/// week-long maximum, which the line after it pins at compile time.
+/// How long a queued intent stands: a day. The retry ladder below (about
+/// nine hours of trying) fits inside it, so an outage or a peer asleep
+/// for a night is waited out, and a request the peer's owner has to
+/// answer is asked again for the rest of the day, but not forever. Below
+/// the decoder's week-long maximum, which the line after it pins at
+/// compile time.
 pub const OUTBOX_INTENT_LIFETIME_SECS: u64 = 24 * 60 * 60;
 const _: () = assert!(OUTBOX_INTENT_LIFETIME_SECS <= MAX_INTENT_LIFETIME_SECS);
-/// Failed attempts (unreachable, undecodable, transiently refused) before
-/// an entry is given up on and shown as failed.
-pub const MAX_DELIVERY_ATTEMPTS: u32 = 8;
+/// Failed attempts (unreachable, undecodable, transiently refused, or
+/// answered with the peer's rate limit) before an entry is given up on
+/// and shown as failed. With [`RETRY_BASE_SECS`] doubling to
+/// [`RETRY_MAX_SECS`], the waits before the last attempt add up to about
+/// nine hours: a peer that is away for a night is reached in the morning,
+/// and a failure is visible the same day.
+pub const MAX_DELIVERY_ATTEMPTS: u32 = 16;
 /// Wait after the first failed attempt; doubled after each one after it.
 pub const RETRY_BASE_SECS: u64 = 30;
 /// Longest wait between two attempts.
@@ -159,8 +175,16 @@ pub enum AttemptOutcome {
     Interrupted {},
     /// No approved origin answered.
     Unreachable {},
-    /// The peer's route refused with a typed code.
-    Refused { code: String },
+    /// An error status came back: from the peer's route with a typed
+    /// `code`, or from whatever answers in front of the peer (a proxy's
+    /// or a tunnel's own error page carries no code and is `unknown`).
+    /// `status` is absent for a refusal this side settled on because the
+    /// peer is gone or no longer paired.
+    Refused {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<u16>,
+        code: String,
+    },
     /// The peer's answer did not verify or decode as a response to this
     /// intent.
     Malformed {},
@@ -232,15 +256,19 @@ impl OutboxEntry {
         &self.intent.correlation_id
     }
 
-    /// Attempts that count towards giving up: everything but an answer.
+    /// Attempts that count towards giving up: everything but the in-flight
+    /// mark and an answer, except that an answer of `denied, rate_limited`
+    /// counts too (the peer was reached but took nothing, and a peer over
+    /// its budget for good has to bound the entry like one that is away).
     pub fn failures(&self) -> u32 {
         self.attempts
             .iter()
-            .filter(|attempt| {
-                !matches!(
-                    attempt.outcome,
-                    AttemptOutcome::Answered { .. } | AttemptOutcome::InFlight {}
-                )
+            .filter(|attempt| match &attempt.outcome {
+                AttemptOutcome::InFlight {} => false,
+                AttemptOutcome::Answered { reason, .. } => {
+                    *reason == Some(DecisionReason::RateLimited)
+                }
+                _ => true,
             })
             .count() as u32
     }
@@ -581,7 +609,10 @@ impl Outbox {
 
     /// Starts the sender loop: interrupted attempts are recovered, then
     /// the loop runs a pass whenever something is queued or due, until
-    /// [`shutdown`](Self::shutdown).
+    /// [`shutdown`](Self::shutdown). A pass that fails as a whole (the
+    /// store cannot be written, the identity cannot be read) leaves the
+    /// due entry due, so the next pass waits at least
+    /// [`RETRY_BASE_SECS`] rather than running again at once.
     pub fn start(self: &Arc<Self>, federation: Arc<FederationState>, gate: Arc<FederationGate>) {
         let cancel = CancellationToken::new();
         let token = cancel.clone();
@@ -594,19 +625,23 @@ impl Outbox {
                 ),
                 Err(error) => log::warn!("[federation] outbox recovery failed: {error}"),
             }
+            let mut last_pass_failed = false;
             loop {
-                let wait = match outbox.next_due() {
-                    Ok(Some(at)) => at.saturating_sub(outbox.now()).min(IDLE_POLL_SECS),
-                    Ok(None) | Err(_) => IDLE_POLL_SECS,
-                };
+                // A store that cannot be read is nothing due: polled again.
+                let next_due = outbox.next_due().unwrap_or_default();
+                let wait = pass_wait_secs(next_due, outbox.now(), last_pass_failed);
                 tokio::select! {
                     _ = token.cancelled() => break,
                     _ = outbox.wake.notified() => {}
                     _ = tokio::time::sleep(Duration::from_secs(wait)) => {}
                 }
-                if let Err(error) = outbox.run_due(&federation, &gate).await {
-                    log::warn!("[federation] outbox delivery pass failed: {error}");
-                }
+                last_pass_failed = match outbox.run_due(&federation, &gate).await {
+                    Ok(_) => false,
+                    Err(error) => {
+                        log::warn!("[federation] outbox delivery pass failed: {error}");
+                        true
+                    }
+                };
             }
         });
         *self.running.lock().unwrap() = Some((cancel, handle));
@@ -640,14 +675,15 @@ impl Outbox {
             return Ok(());
         }
         if expired(&entry, now) {
-            let local = never_answered(&entry, DecisionReason::Unreachable);
+            let reason = lapse_reason(&entry);
+            let local = never_answered(&entry, reason);
             return self.settle(
                 gate,
                 me,
                 entry,
                 OutboxStatus::Expired,
                 &local,
-                Decision::deny(DecisionReason::Unreachable),
+                Decision::deny(reason),
             );
         }
         // The peer as it stands now: the entry follows its pairing through
@@ -664,11 +700,15 @@ impl Outbox {
                     PeerState::Revoked => ("peer_revoked", DecisionReason::PeerRevoked),
                     _ => ("peer_not_paired", DecisionReason::PeerNotPaired),
                 };
-                let refused = AttemptOutcome::Refused { code: code.into() };
+                let refused = AttemptOutcome::Refused {
+                    status: None,
+                    code: code.into(),
+                };
                 return self.give_up(gate, me, entry, now, refused, reason);
             }
             None => {
                 let refused = AttemptOutcome::Refused {
+                    status: None,
                     code: "unknown_peer".into(),
                 };
                 return self.give_up(gate, me, entry, now, refused, DecisionReason::PeerRevoked);
@@ -712,8 +752,9 @@ impl Outbox {
                 }
                 Ok(_) | Err(_) => Err(AttemptOutcome::Malformed {}),
             },
-            Err(FederationError::PeerRefused { error, .. }) => Err(AttemptOutcome::Refused {
-                code: crate::domain::federation_policy::sanitize_name(&error),
+            Err(FederationError::PeerRefused { status, error }) => Err(AttemptOutcome::Refused {
+                status: Some(status),
+                code: refusal_code(&error),
             }),
             Err(FederationError::Transport(_)) => Err(AttemptOutcome::Unreachable {}),
             Err(_) => Err(AttemptOutcome::Malformed {}),
@@ -721,18 +762,27 @@ impl Outbox {
         let now = self.now();
         match answered {
             Ok(response) => self.answered(gate, me, entry, now, response),
-            Err(AttemptOutcome::Refused { code }) if !transient_refusal(&code) => {
-                let refused = AttemptOutcome::Refused { code };
+            Err(AttemptOutcome::Refused {
+                status: Some(status),
+                code,
+            }) if !transient_refusal(status, &code) => {
+                let refused = AttemptOutcome::Refused {
+                    status: Some(status),
+                    code,
+                };
                 self.give_up(gate, me, entry, now, refused, DecisionReason::PeerRefused)
             }
             Err(failure) => self.failed_attempt(gate, me, entry, now, failure),
         }
     }
 
-    /// The peer answered with a typed response: `accepted` and `denied`
-    /// settle the entry, a rate limit is a failed attempt that waits out
-    /// the peer's window, and `needs_owner` holds the entry until the
-    /// peer's owner decides, with one receipt when it first waits.
+    /// The peer answered with a typed response, which the entry keeps as
+    /// the peer's last word: `accepted` and `denied` settle the entry; a
+    /// rate limit is a failed attempt that waits out the larger of the
+    /// peer's window and the backoff and, past [`MAX_DELIVERY_ATTEMPTS`],
+    /// fails the entry with the peer's rate limit as the reason; and
+    /// `needs_owner` holds the entry until the peer's owner decides, with
+    /// one receipt when it first waits.
     fn answered(
         &self,
         gate: &FederationGate,
@@ -753,6 +803,7 @@ impl Outbox {
             now,
             AttemptOutcome::Answered { outcome, reason },
         );
+        entry.response = Some(response.clone());
         match &response {
             IntentResponse::Accepted { .. } => self.settle(
                 gate,
@@ -767,8 +818,17 @@ impl Outbox {
                 retry_after_secs,
                 ..
             } => {
-                let wait = backoff_secs(entry.failures()).max(retry_after_secs.unwrap_or(0));
-                self.hold(entry, now, Some(response), Some(now.saturating_add(wait)))
+                let failures = entry.failures();
+                if failures >= MAX_DELIVERY_ATTEMPTS {
+                    let recipient = &entry.recipient;
+                    log::warn!(
+                        "[federation] outbox: giving up on a request to companion {recipient} after {failures} attempts it refused under its rate limit"
+                    );
+                    let decision = Decision::deny(DecisionReason::RateLimited);
+                    return self.settle(gate, me, entry, OutboxStatus::Failed, &response, decision);
+                }
+                let wait = backoff_secs(failures).max(retry_after_secs.unwrap_or(0));
+                self.hold(entry, now, Some(now.saturating_add(wait)))
             }
             IntentResponse::Denied { reason, .. } => {
                 let decision = Decision::deny(*reason);
@@ -795,7 +855,7 @@ impl Outbox {
                         decision,
                     )
                 } else {
-                    self.hold(entry, now, Some(response), next)
+                    self.hold(entry, now, next)
                 }
             }
         }
@@ -834,7 +894,7 @@ impl Outbox {
             "[federation] outbox: a request to companion {recipient} did not go through ({kind}, attempt {failures}); trying again in {wait}s"
         );
         let next = Some(now.saturating_add(wait));
-        self.hold(entry, now, None, next)
+        self.hold(entry, now, next)
     }
 
     /// A refusal that will not change, or a peer that is gone: the entry
@@ -860,27 +920,24 @@ impl Outbox {
         )
     }
 
-    /// Keeps an entry open: the last attempt as recorded, the peer's
-    /// answer if there was one, and when to try again.
+    /// Keeps an entry open: the last attempt as recorded, and when to try
+    /// again.
     fn hold(
         &self,
         mut entry: OutboxEntry,
         now: u64,
-        response: Option<IntentResponse>,
         next: Option<u64>,
     ) -> Result<(), FederationError> {
-        if response.is_some() {
-            entry.response = response;
-        }
         entry.next_attempt_at = next;
         entry.updated_at = now;
         self.save(entry, None)
     }
 
-    /// Settles an entry as `status` on `response` (the peer's, or a local
-    /// one for a request the peer never answered): the requesting-side
-    /// audit line first, then the intent receipt, then the entry. A
-    /// decision is not made without its receipt.
+    /// Settles an entry as `status` on `response` (the peer's, which the
+    /// caller has kept on the entry, or a local one built for a request
+    /// the peer never answered, which is never kept as the peer's): the
+    /// requesting-side audit line first, then the intent receipt, then
+    /// the entry. A decision is not made without its receipt.
     fn settle(
         &self,
         gate: &FederationGate,
@@ -914,14 +971,6 @@ impl Outbox {
         )
         .map_err(FederationError::Intent)?;
         entry.status = status;
-        // Only the peer's own answer is kept as the response; the local
-        // one built for a request the peer never answered is not.
-        if matches!(
-            status,
-            OutboxStatus::Delivered | OutboxStatus::Denied | OutboxStatus::WaitingOwner
-        ) {
-            entry.response = Some(response.clone());
-        }
         if status.is_settled() {
             entry.next_attempt_at = None;
         }
@@ -1084,11 +1133,63 @@ fn never_answered(entry: &OutboxEntry, reason: DecisionReason) -> IntentResponse
     }
 }
 
-/// Refusal codes from the peer's route that may pass: its rate limit, a
-/// nonce it has seen (the envelope is sealed afresh next time), and its
-/// own federation state being unavailable.
-fn transient_refusal(code: &str) -> bool {
-    matches!(code, "rate_limited" | "replayed" | "federation_unavailable")
+/// Why a request that lapsed unanswered ended, for its receipt: the
+/// peer's own last word when it gave one (its owner never allowed what it
+/// had to ask them about, or its rate limit never lifted), and
+/// `unreachable` when nothing typed ever came back.
+fn lapse_reason(entry: &OutboxEntry) -> DecisionReason {
+    match &entry.response {
+        Some(IntentResponse::NeedsOwner { reason, .. })
+        | Some(IntentResponse::Denied { reason, .. }) => *reason,
+        Some(IntentResponse::Accepted { .. }) | None => DecisionReason::Unreachable,
+    }
+}
+
+/// The typed code an error status carried, when it carried one: the
+/// peer's route answers a name in `[a-z0-9_]`, and a body that names
+/// anything else (a proxy's own JSON, an empty field, no JSON at all,
+/// which the transport already reports as `unknown`) is `unknown`.
+fn refusal_code(error: &str) -> String {
+    let code = crate::domain::federation_policy::sanitize_name(error);
+    if code.is_empty() || code != error {
+        "unknown".to_owned()
+    } else {
+        code
+    }
+}
+
+/// Whether an error status is a failed attempt to try again rather than
+/// a verdict on the request: any server error and `429` (from the peer
+/// or from whatever stands in front of it), a status whose body named no
+/// code (a proxy's or a tunnel's own page, so nothing the peer's route
+/// said), and the peer's own transient codes: its rate limit, a nonce it
+/// has seen (the envelope is sealed afresh next time), and its federation
+/// state being unavailable. Everything else names a condition that will
+/// not change by trying again.
+fn transient_refusal(status: u16, code: &str) -> bool {
+    status >= 500
+        || status == 429
+        || matches!(
+            code,
+            "unknown" | "rate_limited" | "replayed" | "federation_unavailable"
+        )
+}
+
+/// How long the sender loop sleeps before its next pass: until the
+/// earliest due entry, at most [`IDLE_POLL_SECS`] (and that long when
+/// nothing is due or the store cannot be read), and at least
+/// [`RETRY_BASE_SECS`] after a pass that failed as a whole, whose due
+/// entry is still due and would otherwise be tried again at once.
+fn pass_wait_secs(next_due: Option<u64>, now: u64, last_pass_failed: bool) -> u64 {
+    let wait = match next_due {
+        Some(at) => at.saturating_sub(now).min(IDLE_POLL_SECS),
+        None => IDLE_POLL_SECS,
+    };
+    if last_pass_failed {
+        wait.max(RETRY_BASE_SECS)
+    } else {
+        wait
+    }
 }
 
 /// Drops what retention says goes: settled entries older than
@@ -1331,10 +1432,118 @@ mod tests {
         assert_eq!(backoff_secs(40), RETRY_MAX_SECS, "no overflow");
         assert_eq!(backoff_secs(u32::MAX), RETRY_MAX_SECS);
         assert_eq!(backoff_secs(0), RETRY_BASE_SECS, "before any failure");
-        // The whole retry ladder fits inside the intent's lifetime with
-        // room for the peer's owner to answer.
+        // The whole retry ladder spans a night (a peer that is away until
+        // the morning is still reached) and fits inside the intent's
+        // lifetime with room for the peer's owner to answer.
         let ladder: u64 = (1..MAX_DELIVERY_ATTEMPTS).map(backoff_secs).sum();
+        assert!(ladder >= 8 * 60 * 60, "{ladder}");
         assert!(ladder < OUTBOX_INTENT_LIFETIME_SECS / 2, "{ladder}");
+    }
+
+    #[test]
+    fn the_loop_waits_for_the_next_due_entry_and_never_spins_after_a_failed_pass() {
+        assert_eq!(pass_wait_secs(Some(T0 + 10), T0, false), 10);
+        assert_eq!(pass_wait_secs(Some(T0), T0, false), 0, "due now");
+        assert_eq!(pass_wait_secs(Some(T0 - 5), T0, false), 0, "overdue");
+        assert_eq!(
+            pass_wait_secs(Some(T0 + 10 * IDLE_POLL_SECS), T0, false),
+            IDLE_POLL_SECS,
+            "looks again at least once a poll"
+        );
+        assert_eq!(pass_wait_secs(None, T0, false), IDLE_POLL_SECS);
+        // A pass that failed as a whole left its entry due: the next pass
+        // waits the base backoff instead of running again at once.
+        assert_eq!(pass_wait_secs(Some(T0), T0, true), RETRY_BASE_SECS);
+        assert_eq!(pass_wait_secs(Some(T0 - 5), T0, true), RETRY_BASE_SECS);
+        assert_eq!(pass_wait_secs(Some(T0 + 10), T0, true), RETRY_BASE_SECS);
+        assert_eq!(pass_wait_secs(None, T0, true), IDLE_POLL_SECS);
+    }
+
+    #[test]
+    fn a_status_is_a_verdict_only_when_the_peers_route_named_a_lasting_one() {
+        // A typed code from the peer's route that will not change.
+        for code in [
+            "policy_denied",
+            "sender_mismatch",
+            "unknown_peer",
+            "invalid_intent",
+        ] {
+            assert!(!transient_refusal(403, code), "{code}");
+            assert!(!transient_refusal(400, code), "{code}");
+        }
+        // The peer's own transient codes, whatever the status.
+        for code in ["rate_limited", "replayed", "federation_unavailable"] {
+            assert!(transient_refusal(429, code), "{code}");
+            assert!(transient_refusal(409, code), "{code}");
+        }
+        // Something in front of the peer: a server error or a rate limit
+        // whatever the body, and a body that named no code at all.
+        for status in [500, 502, 503, 504, 429] {
+            assert!(transient_refusal(status, "unknown"), "{status}");
+            assert!(transient_refusal(status, "policy_denied"), "{status}");
+        }
+        assert!(transient_refusal(404, "unknown"));
+        assert!(transient_refusal(403, "unknown"));
+        // Only a name the route could have answered is a code.
+        assert_eq!(refusal_code("policy_denied"), "policy_denied");
+        assert_eq!(refusal_code("unknown"), "unknown");
+        assert_eq!(refusal_code("Bad Gateway"), "unknown");
+        assert_eq!(refusal_code("Internal Server Error"), "unknown");
+        assert_eq!(refusal_code(""), "unknown");
+        assert_eq!(refusal_code("<html>"), "unknown");
+    }
+
+    #[test]
+    fn a_rate_limited_answer_counts_as_a_failure_and_names_why_a_lapsed_entry_ended() {
+        let mut waiting = entry("req-1", OutboxStatus::WaitingOwner, T0);
+        for (outcome, reason) in [
+            (IntentOutcome::NeedsOwner, Some(DecisionReason::Default)),
+            (IntentOutcome::Denied, Some(DecisionReason::RateLimited)),
+            (IntentOutcome::Denied, Some(DecisionReason::RateLimited)),
+            (IntentOutcome::NeedsOwner, Some(DecisionReason::QuietHours)),
+        ] {
+            waiting.attempts.push(Attempt {
+                at: T0,
+                outcome: AttemptOutcome::Answered { outcome, reason },
+            });
+        }
+        waiting.attempts.push(Attempt {
+            at: T0,
+            outcome: AttemptOutcome::Unreachable {},
+        });
+        waiting.attempts.push(Attempt {
+            at: T0,
+            outcome: AttemptOutcome::InFlight {},
+        });
+        assert_eq!(
+            waiting.failures(),
+            3,
+            "two rate-limited answers and one unreachable attempt"
+        );
+
+        // Nothing typed ever came back: unreachable.
+        assert_eq!(
+            lapse_reason(&entry("req-2", OutboxStatus::Queued, T0)),
+            DecisionReason::Unreachable
+        );
+        // The peer's owner never decided: the reason the peer gave for
+        // asking them.
+        waiting.response = Some(IntentResponse::NeedsOwner {
+            version: INTENT_VERSION,
+            correlation_id: "req-1".into(),
+            responder: PEER.into(),
+            reason: DecisionReason::QuietHours,
+        });
+        assert_eq!(lapse_reason(&waiting), DecisionReason::QuietHours);
+        // The peer's rate limit never lifted.
+        waiting.response = Some(IntentResponse::Denied {
+            version: INTENT_VERSION,
+            correlation_id: "req-1".into(),
+            responder: PEER.into(),
+            reason: DecisionReason::RateLimited,
+            retry_after_secs: Some(30),
+        });
+        assert_eq!(lapse_reason(&waiting), DecisionReason::RateLimited);
     }
 
     #[test]

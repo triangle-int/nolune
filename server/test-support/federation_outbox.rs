@@ -37,7 +37,7 @@ use crate::{
             outbox::{
                 AttemptOutcome, MAX_DELIVERY_ATTEMPTS, OUTBOX_INTENT_LIFETIME_SECS,
                 OWNER_RETRY_SECS, Outbox, OutboxEntry, OutboxRequest, OutboxStatus, Outgoing,
-                backoff_secs,
+                RETRY_MAX_SECS, backoff_secs,
             },
             pairing::FederationState,
             peers::Clock,
@@ -364,7 +364,11 @@ async fn a_failed_delivery_is_retried_with_bounded_backoff_and_becomes_visibly_f
         assert_eq!(a.state.federation_outbox.get(&key).unwrap().unwrap(), entry);
         now.store(expected_next, Ordering::SeqCst);
     }
-    assert_eq!(backoff_secs(MAX_DELIVERY_ATTEMPTS - 1), 64 * 30);
+    assert_eq!(
+        backoff_secs(MAX_DELIVERY_ATTEMPTS - 1),
+        RETRY_MAX_SECS,
+        "the ladder reaches the cap before the last attempt"
+    );
     assert_eq!(
         a.state.federation_outbox.next_due().unwrap(),
         Some(expected_next)
@@ -435,6 +439,340 @@ async fn a_failed_delivery_is_retried_with_bounded_backoff_and_becomes_visibly_f
     let (records, receipts) = inbox(&b).await;
     assert!(records.is_empty() && receipts.is_empty());
     assert!(requesting_audit(&b).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_status_from_something_in_front_of_the_peer_is_a_transient_failure_not_a_verdict() {
+    let now = Arc::new(AtomicU64::new(T0));
+    let (a, b, wire) = paired(&now).await;
+    let (a_id, b_id) = (a.companion_id(), b.companion_id());
+    allow(&b, &a_id, IntentClass::Message, DisclosureClass::None);
+    let mut events = a.state.events.subscribe();
+    let key = enqueue(&a, message(&b, "see you on Friday at the lake"))
+        .correlation_id()
+        .to_owned();
+
+    // A reverse proxy's or a tunnel's own error page (no typed code in
+    // the body), a rate limit imposed in front of the peer, and a proxy
+    // that does not route the path: each is one failed attempt with the
+    // status on record, backed off like an unreachable peer, never a
+    // verdict on the request.
+    let mut expected_next = T0;
+    for (failure, (status, body)) in [
+        (502u16, "<html><body><h1>502 Bad Gateway</h1></body></html>"),
+        (429, "<html><body>Too Many Requests</body></html>"),
+        (404, "<html><body>Not Found</body></html>"),
+        (503, r#"{"error":"federation_unavailable","message":"..."}"#),
+        (500, r#"{"error":"Internal Server Error"}"#),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let failure = failure as u32 + 1;
+        wire.answered_in_front
+            .lock()
+            .unwrap()
+            .insert(ORIGIN_B.to_owned(), (status, body.to_owned()));
+        now.store(expected_next, Ordering::SeqCst);
+        assert_eq!(run(&a).await, 1, "attempt {failure} is due");
+        let entry = a.state.federation_outbox.get(&key).unwrap().unwrap();
+        assert_eq!(entry.status, OutboxStatus::Queued, "HTTP {status}");
+        assert_eq!(entry.failures(), failure, "HTTP {status} counts");
+        let code = match status {
+            503 => "federation_unavailable",
+            _ => "unknown",
+        };
+        assert_eq!(
+            entry.attempts.last().unwrap().outcome,
+            AttemptOutcome::Refused {
+                status: Some(status),
+                code: code.into()
+            },
+            "the record says what answered"
+        );
+        expected_next = now.load(Ordering::SeqCst) + backoff_secs(failure);
+        assert_eq!(entry.next_attempt_at, Some(expected_next), "HTTP {status}");
+        assert!(entry.response.is_none() && entry.receipt_id.is_none());
+        assert!(outbox(&a).await.1.is_empty(), "no receipt while retrying");
+        assert_eq!(
+            broadcast_entries(&mut events).last(),
+            Some(&entry),
+            "HTTP {status}"
+        );
+    }
+    assert!(chat_messages(&b).is_empty(), "nothing reached B");
+    assert!(requesting_audit(&a).await.is_empty());
+
+    // The proxy is fixed: the next attempt reaches B and is delivered
+    // once, with one receipt.
+    wire.answered_in_front.lock().unwrap().clear();
+    now.store(expected_next, Ordering::SeqCst);
+    assert_eq!(run(&a).await, 1);
+    let delivered = a.state.federation_outbox.get(&key).unwrap().unwrap();
+    assert_eq!(delivered.status, OutboxStatus::Delivered);
+    assert_eq!(delivered.attempts.len(), 6);
+    assert_eq!(chat_messages(&b).len(), 1);
+    let (_, receipts) = outbox(&a).await;
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].outcome, IntentOutcome::Accepted);
+
+    // A typed refusal from the peer's own route that will not change (a
+    // 4xx naming a condition) fails the entry at once, as `peer_refused`,
+    // with the status and the code on record.
+    wire.answered_in_front.lock().unwrap().insert(
+        ORIGIN_B.to_owned(),
+        (
+            403,
+            r#"{"error":"policy_denied","message":"..."}"#.to_owned(),
+        ),
+    );
+    now.store(expected_next + 1, Ordering::SeqCst);
+    let refused = enqueue(&a, message(&b, "one more thing"))
+        .correlation_id()
+        .to_owned();
+    assert_eq!(run(&a).await, 1);
+    let failed = a.state.federation_outbox.get(&refused).unwrap().unwrap();
+    assert_eq!(failed.status, OutboxStatus::Failed);
+    assert_eq!(
+        outcomes(&failed),
+        [AttemptOutcome::Refused {
+            status: Some(403),
+            code: "policy_denied".into()
+        }]
+    );
+    assert_eq!(failed.next_attempt_at, None);
+    assert!(failed.response.is_none());
+    let (_, receipts) = outbox(&a).await;
+    assert_eq!(receipts.len(), 2);
+    assert_eq!(receipts[0].correlation_id, refused);
+    assert_eq!(receipts[0].outcome, IntentOutcome::Denied);
+    assert_eq!(
+        receipts[0].basis,
+        ReceiptBasis::Policy {
+            reason: DecisionReason::PeerRefused,
+            rule_id: None
+        }
+    );
+    let lines = requesting_audit(&a).await;
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[1].decision.reason, DecisionReason::PeerRefused);
+    assert_eq!(chat_messages(&b).len(), 1, "B saw nothing more");
+    assert_eq!(b_id, failed.recipient);
+}
+
+#[tokio::test]
+async fn a_peer_over_its_rate_limit_is_asked_again_with_a_growing_wait_and_still_bounds_the_entry()
+{
+    let now = Arc::new(AtomicU64::new(T0));
+    let (a, b, _wire) = paired(&now).await;
+    let (a_id, b_id) = (a.companion_id(), b.companion_id());
+    allow(&b, &a_id, IntentClass::Message, DisclosureClass::None);
+    // B admits nothing from A for now: every request is answered with
+    // B's rate limit and how long its window has left.
+    const WINDOW: u64 = 45;
+    b.state
+        .federation_gate
+        .update_policy(|document| {
+            document.peers.entry(a_id.clone()).or_default().rate_limit =
+                Some(crate::domain::federation_policy::RateLimitPolicy {
+                    max_requests: 0,
+                    window_secs: WINDOW,
+                });
+            Ok(())
+        })
+        .unwrap();
+    let mut events = a.state.events.subscribe();
+    let key = enqueue(&a, message(&b, "see you on Friday at the lake"))
+        .correlation_id()
+        .to_owned();
+
+    // Each rate-limited answer is a failed attempt: the entry waits out
+    // the larger of B's window and the backoff, which grows, and B's
+    // typed answer is kept, with no receipt yet.
+    let mut expected_next = T0;
+    for failure in 1..MAX_DELIVERY_ATTEMPTS {
+        now.store(expected_next, Ordering::SeqCst);
+        assert_eq!(run(&a).await, 1, "attempt {failure} is due");
+        let entry = a.state.federation_outbox.get(&key).unwrap().unwrap();
+        assert_eq!(entry.status, OutboxStatus::Queued, "attempt {failure}");
+        assert_eq!(entry.failures(), failure, "a rate-limited answer counts");
+        assert_eq!(
+            entry.attempts.last().unwrap().outcome,
+            AttemptOutcome::Answered {
+                outcome: IntentOutcome::Denied,
+                reason: Some(DecisionReason::RateLimited)
+            }
+        );
+        assert!(
+            matches!(
+                &entry.response,
+                Some(IntentResponse::Denied {
+                    reason: DecisionReason::RateLimited,
+                    retry_after_secs: Some(WINDOW),
+                    responder,
+                    ..
+                }) if responder == &b_id
+            ),
+            "{:?}",
+            entry.response
+        );
+        expected_next = now.load(Ordering::SeqCst) + backoff_secs(failure).max(WINDOW);
+        assert_eq!(
+            entry.next_attempt_at,
+            Some(expected_next),
+            "attempt {failure} waits out the larger of the window and the backoff"
+        );
+        assert!(entry.receipt_id.is_none());
+        now.store(expected_next - 1, Ordering::SeqCst);
+        assert_eq!(run(&a).await, 0, "not due yet");
+    }
+    assert!(
+        (2..MAX_DELIVERY_ATTEMPTS).any(|n| backoff_secs(n) > WINDOW),
+        "the backoff outgrows the window"
+    );
+    assert!(outbox(&a).await.1.is_empty());
+    assert!(requesting_audit(&a).await.is_empty());
+
+    // Past the budget: visibly failed, with one receipt naming B's rate
+    // limit as the reason and B's last typed answer kept, never retried.
+    now.store(expected_next, Ordering::SeqCst);
+    assert_eq!(run(&a).await, 1);
+    let failed = a.state.federation_outbox.get(&key).unwrap().unwrap();
+    assert_eq!(failed.status, OutboxStatus::Failed);
+    assert_eq!(failed.attempts.len() as u32, MAX_DELIVERY_ATTEMPTS);
+    assert_eq!(failed.next_attempt_at, None);
+    assert!(
+        matches!(
+            &failed.response,
+            Some(IntentResponse::Denied {
+                reason: DecisionReason::RateLimited,
+                ..
+            })
+        ),
+        "{:?}",
+        failed.response
+    );
+    let (_, receipts) = outbox(&a).await;
+    assert_eq!(receipts.len(), 1, "{receipts:?}");
+    assert_eq!(receipts[0].id, failed.receipt_id.clone().unwrap());
+    assert_eq!(receipts[0].outcome, IntentOutcome::Denied);
+    assert_eq!(receipts[0].responder, b_id);
+    assert_eq!(
+        receipts[0].basis,
+        ReceiptBasis::Policy {
+            reason: DecisionReason::RateLimited,
+            rule_id: None
+        }
+    );
+    let lines = requesting_audit(&a).await;
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0].decision.verdict, Verdict::Deny);
+    assert_eq!(lines[0].decision.reason, DecisionReason::RateLimited);
+    assert_eq!(
+        broadcast_entries(&mut events)
+            .last()
+            .map(|entry| entry.status),
+        Some(OutboxStatus::Failed)
+    );
+    now.store(expected_next + 24 * 60 * 60, Ordering::SeqCst);
+    assert_eq!(run(&a).await, 0, "never retried");
+    assert!(chat_messages(&b).is_empty(), "nothing reached B");
+    let (records, _) = inbox(&b).await;
+    assert!(
+        records.is_empty(),
+        "a rate-limited request is not settled on B"
+    );
+}
+
+#[tokio::test]
+async fn an_entry_that_expires_while_its_peers_owner_never_decided_says_so() {
+    let now = Arc::new(AtomicU64::new(T0));
+    let (a, b, _wire) = paired(&now).await;
+    let mut events = a.state.events.subscribe();
+
+    // No rule on B: B's owner has to answer, and denies once. B keeps
+    // answering `needs_owner` (#219 keeps the owner's word off the wire),
+    // so on A the request waits until its intent expires.
+    let key = enqueue(&a, message(&b, "coffee on Saturday?"))
+        .correlation_id()
+        .to_owned();
+    assert_eq!(run(&a).await, 1);
+    let entry = a.state.federation_outbox.get(&key).unwrap().unwrap();
+    assert_eq!(entry.status, OutboxStatus::WaitingOwner);
+    let first_receipt = entry.receipt_id.clone().expect("a receipt for the wait");
+    let (status, body) = b
+        .owner(Method::GET, "/api/federation/approvals", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let approval_id = body["approvals"][0]["id"].as_str().unwrap().to_owned();
+    let (status, body) = b
+        .owner(
+            Method::POST,
+            &format!("/api/federation/approvals/{approval_id}/deny"),
+            Some(json!({"scope": "once"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["approval"]["status"], "denied");
+    now.store(T0 + OWNER_RETRY_SECS, Ordering::SeqCst);
+    assert_eq!(run(&a).await, 1);
+    let entry = a.state.federation_outbox.get(&key).unwrap().unwrap();
+    assert_eq!(entry.status, OutboxStatus::WaitingOwner, "B says the same");
+    assert_eq!(entry.failures(), 0);
+    assert_eq!(entry.receipt_id.as_deref(), Some(first_receipt.as_str()));
+
+    // Expired while waiting: settled once as such, with a receipt whose
+    // reason is the one B gave for asking its owner, not `unreachable`,
+    // and B's last typed answer kept on the entry.
+    now.store(
+        T0 + OUTBOX_INTENT_LIFETIME_SECS + MAX_INTENT_CLOCK_SKEW_SECS + 1,
+        Ordering::SeqCst,
+    );
+    assert_eq!(run(&a).await, 1);
+    let expired = a.state.federation_outbox.get(&key).unwrap().unwrap();
+    assert_eq!(expired.status, OutboxStatus::Expired);
+    assert_eq!(expired.attempts.len(), 2, "no attempt past the expiry");
+    assert_eq!(expired.next_attempt_at, None);
+    assert!(
+        matches!(
+            &expired.response,
+            Some(IntentResponse::NeedsOwner {
+                reason: DecisionReason::Default,
+                ..
+            })
+        ),
+        "{:?}",
+        expired.response
+    );
+    let receipt_id = expired.receipt_id.clone().unwrap();
+    assert_ne!(receipt_id, first_receipt);
+    let (_, receipts) = outbox(&a).await;
+    assert_eq!(receipts.len(), 2, "{receipts:?}");
+    assert_eq!(receipts[0].id, receipt_id);
+    assert_eq!(receipts[0].outcome, IntentOutcome::Denied);
+    assert_eq!(receipts[0].responder, b.companion_id());
+    assert_eq!(
+        receipts[0].basis,
+        ReceiptBasis::Policy {
+            reason: DecisionReason::Default,
+            rule_id: None
+        },
+        "the reason is the peer's own word, not unreachable"
+    );
+    assert_eq!(receipts[1].outcome, IntentOutcome::NeedsOwner);
+    let lines = requesting_audit(&a).await;
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines[0].decision.verdict, Verdict::Ask);
+    assert_eq!(lines[1].decision.verdict, Verdict::Deny);
+    assert_eq!(lines[1].decision.reason, DecisionReason::Default);
+    assert_eq!(
+        broadcast_entries(&mut events)
+            .last()
+            .map(|entry| entry.status),
+        Some(OutboxStatus::Expired)
+    );
+    assert_eq!(run(&a).await, 0);
+    assert!(chat_messages(&b).is_empty());
 }
 
 #[tokio::test]
@@ -574,8 +912,39 @@ async fn an_interrupted_delivery_finishes_once_after_a_restart_and_the_peer_neve
 #[tokio::test]
 async fn the_sending_tools_are_gated_by_this_owners_policy_and_queue_typed_intents() {
     let now = Arc::new(AtomicU64::new(T0));
-    let (a, b, _wire) = paired(&now).await;
+    let (a, b, wire) = paired(&now).await;
     let (a_id, b_id) = (a.companion_id(), b.companion_id());
+    // C accepted an invite from A, which A has not confirmed: pending on
+    // A's side, with keys exchanged and an origin on record.
+    let c = start_in(
+        &wire,
+        TOKEN_A,
+        "http://c.test",
+        tempfile::tempdir().unwrap(),
+        clock(&now),
+    )
+    .await;
+    let invite = mint_invite(&a).await;
+    let (status, body) = c
+        .owner(
+            Method::POST,
+            "/api/federation/accept",
+            Some(accept_body(&invite)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let c_id = c.companion_id();
+    assert_eq!(
+        a.state
+            .federation
+            .overview()
+            .unwrap()
+            .peers
+            .iter()
+            .find(|peer| peer.companion_id == c_id)
+            .map(|peer| peer.state),
+        Some(crate::domain::federation::PeerState::Pending)
+    );
     let send = tool(&a, "send_peer_message");
     let names: Vec<String> =
         federation_tools(sending(&a), a.workspace.path(), CANONICAL_SLUG, "default")
@@ -601,18 +970,23 @@ async fn the_sending_tools_are_gated_by_this_owners_policy_and_queue_typed_inten
         .to_string()
     };
 
-    // A stranger, a prefix too short to name anyone, a pending peer, a
-    // revoked peer, and a peer the owner denied: refused with a word on
-    // why, and nothing is queued, written, or broadcast.
+    // A stranger, a prefix too short to name anyone, a pending peer (by
+    // its id and by a prefix), and a peer the owner denied: refused with
+    // a word on why, and nothing is queued, written, or broadcast. (A
+    // revoked peer is refused the same way below, in
+    // `each_answer_settles_or_holds_the_entry...`.)
     let mut events = a.state.events.subscribe();
     let stranger = "SN7Fvp7FYlYfvTUUW4vPFzy1jh9gtfDVlA7I3_QSj4U";
     for (peer, expect) in [
         (stranger.to_owned(), "unknown"),
         (b_id[..5].to_owned(), "unknown"),
+        (c_id.clone(), "not paired"),
+        (c_id[..8].to_owned(), "not paired"),
     ] {
         let refused = send.call(args(&peer)).await.unwrap_err().to_string();
         assert!(refused.to_lowercase().contains(expect), "{peer}: {refused}");
     }
+    assert!(chat_messages(&c).is_empty());
     rule(
         &a,
         &b_id,

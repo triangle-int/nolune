@@ -303,6 +303,16 @@ export function outboxStatusLabel(entry) {
 }
 
 /**
+ * Whether a refused attempt was answered by something in front of the
+ * companion (a proxy's or a tunnel's own error page) rather than by its
+ * route: the body named no code, and the status is on record.
+ * @param {{ status?: number; code: string }} refusal
+ */
+function answeredInFront(refusal) {
+	return refusal.code === "unknown" && typeof refusal.status === "number";
+}
+
+/**
  * Why the last attempt did not deliver, from its recorded outcome.
  * @param {OutboxEntry} entry
  */
@@ -311,7 +321,7 @@ function lastFailure(entry) {
 	if (!last) return "Could not reach it";
 	switch (last.outcome.kind) {
 		case "refused":
-			return `Their companion refused for now (${last.outcome.code})`;
+			return answeredInFront(last.outcome) ? `Something in front of it answered HTTP ${last.outcome.status}` : `Their companion refused for now (${last.outcome.code})`;
 		case "answered":
 			return last.outcome.reason ? `Their companion refused for now (${last.outcome.reason})` : "Their companion answered";
 		default:
@@ -378,10 +388,14 @@ export function outboxNote(entry, nowSeconds) {
 		}
 		case "failed": {
 			const last = entry.attempts[count - 1];
+			if (last?.outcome.kind === "refused" && answeredInFront(last.outcome)) return `Could not reach it after ${attempts(count)}, the last answered by HTTP ${last.outcome.status} from in front of it; nothing was delivered · ${ago}.`;
 			if (last?.outcome.kind === "refused") return `Their companion refused it (${last.outcome.code}); nothing was delivered · ${ago}.`;
+			if (last?.outcome.kind === "answered" && last.outcome.reason === "rate_limited") return `Their companion was over its limit for ${attempts(count)} in a row; nothing was delivered · ${ago}.`;
 			return `Could not reach it after ${attempts(count)}; nothing was delivered · ${ago}.`;
 		}
 		case "expired":
+			if (response?.outcome === "needs_owner") return response.reason === "quiet_hours" ? `Expired while held during their quiet hours, ${attempts(count)} · ${ago}.` : `Expired before their owner allowed it, ${attempts(count)} · ${ago}.`;
+			if (response?.outcome === "denied" && response.reason === "rate_limited") return `Expired while their companion was over its limit, ${attempts(count)} · ${ago}.`;
 			return `Expired before it could be delivered, ${attempts(count)} · ${ago}.`;
 		default:
 			return "";

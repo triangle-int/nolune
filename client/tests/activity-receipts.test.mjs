@@ -141,8 +141,15 @@ test('outbox notes say what happened, how often it was tried, and what comes nex
 	assert.equal(outboxNote({ ...tried, next_attempt_at: 900 }, 1000), 'Could not reach it, 2 attempts · next try now.');
 	const interrupted = { ...tried, attempts: [{ at: 1000, outcome: { kind: 'interrupted' } }], next_attempt_at: 1100 };
 	assert.equal(outboxNote(interrupted, 1000), 'Could not reach it, 1 attempt · next try in 1m.');
-	const refused = { ...tried, attempts: [{ at: 1000, outcome: { kind: 'refused', code: 'rate_limited' } }], next_attempt_at: 1060 };
+	const refused = { ...tried, attempts: [{ at: 1000, outcome: { kind: 'refused', status: 429, code: 'rate_limited' } }], next_attempt_at: 1060 };
 	assert.equal(outboxNote(refused, 1000), 'Their companion refused for now (rate_limited), 1 attempt · next try in 1m.');
+	assert.equal(outboxNote({ ...refused, attempts: [{ at: 1000, outcome: { kind: 'refused', code: 'peer_not_paired' } }] }, 1000), 'Their companion refused for now (peer_not_paired), 1 attempt · next try in 1m.');
+	// A proxy's or a tunnel's own error page in front of the companion is
+	// named by its status, not read as the companion's word.
+	const inFront = { ...tried, attempts: [{ at: 1000, outcome: { kind: 'unreachable' } }, { at: 1030, outcome: { kind: 'refused', status: 502, code: 'unknown' } }], next_attempt_at: 1090 };
+	assert.equal(outboxNote(inFront, 1040), 'Something in front of it answered HTTP 502, 2 attempts · next try in 50s.');
+	const overLimit = { ...tried, attempts: [{ at: 1000, outcome: { kind: 'answered', outcome: 'denied', reason: 'rate_limited' } }], next_attempt_at: 1045, response: { outcome: 'denied', version: 1, correlation_id: 'c0ffee', responder: PEER, reason: 'rate_limited', retry_after_secs: 45 } };
+	assert.equal(outboxNote(overLimit, 1000), 'Their companion refused for now (rate_limited), 1 attempt · next try in 45s.');
 	const waiting = { ...outboxBase, status: 'waiting_owner', attempts: [{ at: 1000, outcome: { kind: 'answered', outcome: 'needs_owner', reason: 'default' } }], next_attempt_at: 1900, response: { outcome: 'needs_owner', version: 1, correlation_id: 'c0ffee', responder: PEER, reason: 'default' }, updated_at: 1000 };
 	assert.equal(outboxNote(waiting, 1000), 'Their owner has to allow it first · asks again in 15m.');
 	assert.equal(outboxNote({ ...waiting, response: { ...waiting.response, reason: 'quiet_hours' } }, 1000), 'Held during their quiet hours · asks again in 15m.');
@@ -159,12 +166,22 @@ test('outbox notes say what happened, how often it was tried, and what comes nex
 	assert.equal(outboxNote({ ...denied, response: { ...denied.response, reason: 'default' } }, 1300), 'Refused by their defaults · 5m ago.');
 	assert.equal(outboxNote({ ...denied, response: { ...denied.response, reason: 'owner_denied' } }, 1300), 'Refused by their owner · 5m ago.');
 	assert.equal(outboxNote({ ...denied, response: { ...denied.response, reason: 'peer_revoked' } }, 1300), 'Refused (peer_revoked) · 5m ago.');
-	const failed = { ...outboxBase, status: 'failed', attempts: Array.from({ length: 8 }, (_, i) => ({ at: 900 + i, outcome: { kind: 'unreachable' } })), updated_at: 1000 };
-	assert.equal(outboxNote(failed, 1300), 'Could not reach it after 8 attempts; nothing was delivered · 5m ago.');
-	const refusedForGood = { ...failed, attempts: [{ at: 1000, outcome: { kind: 'refused', code: 'sender_mismatch' } }], updated_at: 1000 };
+	const failed = { ...outboxBase, status: 'failed', attempts: Array.from({ length: 16 }, (_, i) => ({ at: 900 + i, outcome: { kind: 'unreachable' } })), updated_at: 1000 };
+	assert.equal(outboxNote(failed, 1300), 'Could not reach it after 16 attempts; nothing was delivered · 5m ago.');
+	const refusedForGood = { ...failed, attempts: [{ at: 1000, outcome: { kind: 'refused', status: 403, code: 'sender_mismatch' } }], updated_at: 1000 };
 	assert.equal(outboxNote(refusedForGood, 1300), 'Their companion refused it (sender_mismatch); nothing was delivered · 5m ago.');
+	const behindAProxy = { ...failed, attempts: [...failed.attempts.slice(0, 15), { at: 1000, outcome: { kind: 'refused', status: 503, code: 'unknown' } }], updated_at: 1000 };
+	assert.equal(outboxNote(behindAProxy, 1300), 'Could not reach it after 16 attempts, the last answered by HTTP 503 from in front of it; nothing was delivered · 5m ago.');
+	const overLimitForGood = { ...failed, attempts: Array.from({ length: 16 }, (_, i) => ({ at: 900 + i, outcome: { kind: 'answered', outcome: 'denied', reason: 'rate_limited' } })), response: { outcome: 'denied', version: 1, correlation_id: 'c0ffee', responder: PEER, reason: 'rate_limited', retry_after_secs: 45 }, updated_at: 1000 };
+	assert.equal(outboxNote(overLimitForGood, 1300), 'Their companion was over its limit for 16 attempts in a row; nothing was delivered · 5m ago.');
 	const expired = { ...failed, status: 'expired', attempts: failed.attempts.slice(0, 3), updated_at: 1000 };
 	assert.equal(outboxNote(expired, 1300), 'Expired before it could be delivered, 3 attempts · 5m ago.');
+	// Expired while the companion kept answering: the note says what it
+	// last said, never that it could not be reached.
+	const expiredWaiting = { ...expired, attempts: [{ at: 900, outcome: { kind: 'answered', outcome: 'needs_owner', reason: 'default' } }, { at: 1800, outcome: { kind: 'answered', outcome: 'needs_owner', reason: 'default' } }], response: { outcome: 'needs_owner', version: 1, correlation_id: 'c0ffee', responder: PEER, reason: 'default' } };
+	assert.equal(outboxNote(expiredWaiting, 1300), 'Expired before their owner allowed it, 2 attempts · 5m ago.');
+	assert.equal(outboxNote({ ...expiredWaiting, response: { ...expiredWaiting.response, reason: 'quiet_hours' } }, 1300), 'Expired while held during their quiet hours, 2 attempts · 5m ago.');
+	assert.equal(outboxNote({ ...expiredWaiting, response: overLimitForGood.response }, 1300), 'Expired while their companion was over its limit, 2 attempts · 5m ago.');
 });
 
 test('live outbox updates replace entries by request id and keep newest first', () => {

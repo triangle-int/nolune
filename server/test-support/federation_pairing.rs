@@ -41,6 +41,11 @@ pub(super) struct Wire {
     /// failure, the way a connection that drops after the peer acted looks
     /// (#110's outbox retries into the peer's dedupe).
     pub(super) lost_answers: Mutex<std::collections::HashSet<String>>,
+    /// Origins in front of which something else answers: the status and
+    /// body it gives instead of routing to the server there (a reverse
+    /// proxy's or a tunnel's own error page, or a typed refusal), read the
+    /// way `HttpTransport` reads a non-success answer.
+    pub(super) answered_in_front: Mutex<HashMap<String, (u16, String)>>,
 }
 
 impl Wire {
@@ -56,24 +61,34 @@ impl Wire {
             .find("/federation/")
             .expect("peer URL has a federation path");
         let (origin, path) = (&url[..at], &url[at..]);
-        let state = self
-            .servers
-            .lock()
-            .unwrap()
-            .get(origin)
-            .cloned()
-            .ok_or_else(|| FederationError::Transport(format!("no route to {origin}")))?;
-        let request = Request::builder()
-            .method(Method::POST)
-            .uri(path)
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(json))
-            .unwrap();
-        let response = build_router(state, None).oneshot(request).await.unwrap();
-        let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), MAX_BODY)
-            .await
-            .unwrap();
+        let in_front = self.answered_in_front.lock().unwrap().get(origin).cloned();
+        let (status, bytes) = match in_front {
+            Some((status, body)) => (
+                StatusCode::from_u16(status).unwrap(),
+                axum::body::Bytes::from(body),
+            ),
+            None => {
+                let state = self
+                    .servers
+                    .lock()
+                    .unwrap()
+                    .get(origin)
+                    .cloned()
+                    .ok_or_else(|| FederationError::Transport(format!("no route to {origin}")))?;
+                let request = Request::builder()
+                    .method(Method::POST)
+                    .uri(path)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(json))
+                    .unwrap();
+                let response = build_router(state, None).oneshot(request).await.unwrap();
+                let status = response.status();
+                let bytes = axum::body::to_bytes(response.into_body(), MAX_BODY)
+                    .await
+                    .unwrap();
+                (status, bytes)
+            }
+        };
         if self.lost_answers.lock().unwrap().contains(origin) {
             return Err(FederationError::Transport(format!(
                 "the answer from {origin} was lost on the wire"
