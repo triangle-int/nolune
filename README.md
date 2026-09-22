@@ -99,7 +99,7 @@ Our [design system](docs/design-system.md) documents the visual language, reusab
 
 ## Capabilities
 
-- **Computer use** — See the screen, click, type, scroll, and use apps on connected machines.
+- **Computer use** — Observe a window, click, type, scroll, and use apps on the server machine or a connected desktop, explicitly and with the permissions you grant; a screenshot is a one-shot capture of one window taken during an action, never a recording ([docs/computer-use.md](docs/computer-use.md#privacy)).
 - **Remote files and shell** — Read and edit files or run commands on the server and connected computers.
 - **Persistent memory** — Remember people, preferences, projects, and shared moments across conversations.
 - **Voice** — Speak through optional text-to-speech and voice mode.
@@ -269,7 +269,7 @@ Use `pnpm`, not npm, for the JavaScript workspaces. See [CONTRIBUTING.md](CONTRI
 
 ## Security
 
-Computer use and remote access are powerful capabilities. Only connect machines you control, keep your authentication token private, and review the permissions granted to the desktop app.
+Computer use and remote access are powerful capabilities. Only connect machines you control, keep your authentication token private, and review the permissions granted to the Cua Driver on each machine. Nolune never records the screen: computer use is explicit and permissioned, a screenshot is a one-shot capture of one window taken during an action, and there is no continuous capture; see [docs/computer-use.md](docs/computer-use.md#privacy).
 
 See [SECURITY.md](SECURITY.md) to report a vulnerability.
 

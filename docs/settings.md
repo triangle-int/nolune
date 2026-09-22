@@ -14,7 +14,7 @@ Defined once in `client/src/lib/companion/navigation.js` and rendered by
 | Chat | `/{slug}/chat` | Talk with your companion. |
 | Activity | `/{slug}/activity` | What it did on its own, why, and what it made. Drops live here (`/{slug}/drops`), not as a tab. |
 | Memory | `/{slug}/memory` | What it remembers; inspect, correct, forget. |
-| Computers | `/{slug}/computers` | Connected spaces (#80): the server home (the server machine itself when it has a Cua driver, [computer-use.md](computer-use.md)) and every desktop that connected through the desktop app, from `GET /api/instances/{slug}/machines`, with state, permissions, capabilities, hints, an inline rename (`PUT …/machines/{id}`) and Forget on offline rows (`DELETE …/machines/{id}`). |
+| Computers | `/{slug}/computers` | Connected spaces (#80): the server home (the server machine itself when it has a Cua driver, [computer-use.md](computer-use.md)) and every desktop that connected through the desktop app, from `GET /api/instances/{slug}/machines`, with state, permissions, capabilities, hints, an inline rename (`PUT …/machines/{id}`) and Forget on offline rows (`DELETE …/machines/{id}`). Computer use on any of them is explicit and permissioned: a screenshot is a one-shot capture of one window taken during an action, never a recording ([computer-use.md#privacy](computer-use.md#privacy)). |
 | Settings | `/{slug}/settings` | How it behaves and what it may use. |
 
 There is no Agents, Thoughts, Stats, Skills, or Drops tab. Skills are a

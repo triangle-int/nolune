@@ -456,6 +456,9 @@ pub fn tool_summary(name: &str, args: &str) -> String {
 pub fn tool_summary_on(name: &str, args: &str, target: &MachineTarget) -> String {
     let v: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
     let on_machine = || target.describe(v["machine_id"].as_str());
+    // The typed tools act on the only Cua target while nothing is chosen,
+    // which may be the server machine: named as the server home.
+    let on_cua_target = || target.describe_typed(v["machine_id"].as_str());
     match name {
         "list_machines" => "listing computers".into(),
         "computer_use" => format!(
@@ -472,15 +475,15 @@ pub fn tool_summary_on(name: &str, args: &str, target: &MachineTarget) -> String
                 Some("list_windows") => "listing windows",
                 _ => "listing apps",
             },
-            on_machine()
+            on_cua_target()
         ),
-        "get_window_state" => format!("observing a window {}", on_machine()),
+        "get_window_state" => format!("observing a window {}", on_cua_target()),
         "act" => format!(
             "{} {}",
             v["action"]["kind"].as_str().unwrap_or("acting"),
-            on_machine()
+            on_cua_target()
         ),
-        "verify_state" => format!("verifying a window {}", on_machine()),
+        "verify_state" => format!("verifying a window {}", on_cua_target()),
         "remote_files" => {
             let verb = match v["operation"].as_str() {
                 Some("read") => "reading",
@@ -1500,6 +1503,7 @@ mod tool_result_bound_tests {
 mod tool_summary_tests {
     //! #80: the activity trail names the computer a desktop tool acted on.
     use super::*;
+    use crate::services::tools::computer::SERVER_HOME_TARGET;
 
     const STUDIO: &str = "4f3c1c2e-9b5e-4d2b-8f0a-1c2d3e4f5a6b";
 
@@ -1649,5 +1653,92 @@ mod tool_summary_tests {
                 "{name} persists a trail line naming the computer"
             );
         }
+    }
+
+    /// #21: with nothing chosen, a typed-tool call on the server-local
+    /// target trails "on the server home", the composer's and the
+    /// reducer's word for this machine: when the model names a
+    /// `server-local:` id, and when it names nothing while the server
+    /// machine is the only Cua target. A desktop that is the only Cua
+    /// target is named; several leave the choice open. The remote shell
+    /// and file tools keep naming the only connected desktop, since that
+    /// is where they act.
+    #[test]
+    fn the_typed_tools_trail_the_server_home_for_the_server_local_target() {
+        const LOCAL: &str = "server-local:home-mini";
+        let names = || {
+            [
+                (LOCAL.to_owned(), "home-mini".to_owned()),
+                (STUDIO.to_owned(), "Studio Mac".to_owned()),
+            ]
+            .into()
+        };
+        let observe = |machine_id: Option<&str>| match machine_id {
+            Some(id) => format!(r#"{{"machine_id":"{id}","target":{{"pid":1,"window_id":2}}}}"#),
+            None => r#"{"target":{"pid":1,"window_id":2}}"#.to_owned(),
+        };
+
+        // Only the server machine has a driver: named or not, it is the home.
+        let only_local = MachineTarget::with_names(TargetSelection::Unselected, names())
+            .with_cua(vec![LOCAL.to_owned()]);
+        assert_eq!(
+            tool_summary_on("get_window_state", &observe(Some(LOCAL)), &only_local),
+            "observing a window on the server home"
+        );
+        assert_eq!(
+            tool_summary_on("get_window_state", &observe(None), &only_local),
+            "observing a window on the server home"
+        );
+        assert_eq!(
+            tool_trail_line("act", r#"{"action":{"kind":"click"}}"#, &only_local).as_deref(),
+            Some("click on the server home")
+        );
+        // The synthesized home id reads the same way.
+        assert_eq!(
+            tool_summary_on(
+                "verify_state",
+                &observe(Some(SERVER_HOME_TARGET)),
+                &only_local
+            ),
+            "verifying a window on the server home"
+        );
+
+        // A desktop with a driver beside a driverless connected one: the
+        // typed tools act on the desktop with the driver, and say so.
+        let only_desktop = MachineTarget::with_names(TargetSelection::Unselected, names())
+            .with_live(vec![STUDIO.to_owned()])
+            .with_cua(vec![STUDIO.to_owned()]);
+        assert_eq!(
+            tool_summary_on("get_window_state", &observe(None), &only_desktop),
+            "observing a window on Studio Mac"
+        );
+
+        // The server machine and a desktop both have drivers: the choice is
+        // open for the typed tools, while the remote tools still act on the
+        // only connected desktop.
+        let several = MachineTarget::with_names(TargetSelection::Unselected, names())
+            .with_live(vec![STUDIO.to_owned()])
+            .with_cua(vec![LOCAL.to_owned(), STUDIO.to_owned()]);
+        assert_eq!(
+            tool_summary_on("get_window_state", &observe(None), &several),
+            "observing a window on the connected computer"
+        );
+        assert_eq!(
+            tool_summary_on("get_window_state", &observe(Some(LOCAL)), &several),
+            "observing a window on the server home"
+        );
+        assert_eq!(
+            tool_summary_on("remote_bash", r#"{"command":"ls"}"#, &several),
+            "running a command on Studio Mac"
+        );
+        assert_eq!(
+            tool_summary_on(
+                "remote_bash",
+                &format!(r#"{{"machine_id":"{LOCAL}","command":"ls"}}"#),
+                &several
+            ),
+            "running a command on the server home",
+            "a remote tool the model points at the home is refused there, and the trail says where"
+        );
     }
 }

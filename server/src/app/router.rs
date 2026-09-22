@@ -148,3 +148,7 @@ mod resume_ritual_tests;
 #[cfg(test)]
 #[path = "../../test-support/cua_desktop_frames.rs"]
 mod cua_desktop_frames_tests;
+
+#[cfg(test)]
+#[path = "../../test-support/cua_end_to_end.rs"]
+mod cua_end_to_end_tests;

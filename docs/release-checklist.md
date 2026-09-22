@@ -99,3 +99,7 @@ To move it:
   `CLAUDE.md` says.
 - The Cua Driver has a pin of its own (`docs/computer-use.md`); a release
   that moves it follows that page.
+- Computer use is checked by hand on a macOS machine with a graphical
+  session: `scripts/release-check-computer-use.sh` checks the
+  prerequisites and prints the steps to verify against the real driver
+  (`docs/computer-use.md`, "Release check").
