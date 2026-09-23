@@ -2205,7 +2205,10 @@ mod self_hosted_prompt_tests {
         let prompt = load_autonomy_prompt(workspace.path(), "moon");
 
         for retired in ["visual form", "cube", "pyramid", "sphere"] {
-            assert!(!prompt.contains(retired), "prompt still mentions {retired:?}");
+            assert!(
+                !prompt.contains(retired),
+                "prompt still mentions {retired:?}"
+            );
         }
     }
 
