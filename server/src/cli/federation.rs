@@ -63,13 +63,14 @@ pub enum FederationAction {
     /// Pair a peer that redeemed an invite this server minted
     Confirm {
         /// The peer's companion id, as `nolune federation peers` lists it
-        #[arg(value_name = "COMPANION_ID")]
+        // A companion id is base64url, so one in 64 starts with `-`.
+        #[arg(value_name = "COMPANION_ID", allow_hyphen_values = true)]
         companion_id: String,
     },
     /// Withdraw trust from a peer and tell it
     Revoke {
         /// The peer's companion id
-        #[arg(value_name = "COMPANION_ID")]
+        #[arg(value_name = "COMPANION_ID", allow_hyphen_values = true)]
         companion_id: String,
     },
     /// Replace this companion's signing key and tell every paired peer
@@ -708,6 +709,26 @@ fn encode_path(segment: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Companion ids are base64url, whose alphabet has `-`: an id that
+    /// starts with one is still the id, not an unknown flag.
+    #[test]
+    fn a_companion_id_that_starts_with_a_hyphen_is_an_id() {
+        use clap::Parser as _;
+        let id = "-6Qx0bW9vbi1jb21wYW5pb24taWQtZm9yLXRlc3Rz";
+        for command in ["confirm", "revoke"] {
+            let cli = crate::cli::Cli::try_parse_from(["nolune", "federation", command, id])
+                .unwrap_or_else(|error| panic!("{command}: {error}"));
+            let Some(crate::cli::CliCommand::Federation { action }) = cli.command else {
+                panic!("{command}: not a federation command");
+            };
+            match action {
+                FederationAction::Confirm { companion_id }
+                | FederationAction::Revoke { companion_id } => assert_eq!(companion_id, id),
+                _ => panic!("{command}: parsed as another action"),
+            }
+        }
+    }
 
     #[test]
     fn connect_base_follows_the_bind_address() {
