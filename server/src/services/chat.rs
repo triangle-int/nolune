@@ -200,8 +200,8 @@ pub async fn run_single_turn(
     let email_configured = !email_accounts.is_empty();
     let email_hint = if email_configured { " email," } else { "" };
     system_prompt.push_str(&format!(
-        "\n\n## tools\nyou have built-in tools for web browsing,{email_hint} code search, \
-         project management, creative drops, and more. use them directly when needed — \
+        "\n\n## tools\nyou have built-in tools for web browsing,{email_hint} \
+         files, memory, creative drops, and more. use them directly when needed — \
          they are automatically available based on the conversation."
     ));
 
@@ -216,7 +216,7 @@ pub async fn run_single_turn(
          use read_file or run_command to access them. use list_files on the uploads dir to find files.",
         uploads_path.display(), uploads_path.display(),
     ));
-    system_prompt.push_str("\nUse read_file, memory_read, or upload_file to obtain scoped download URLs for external APIs. URLs expire; request a fresh URL when needed.\n");
+    system_prompt.push_str("\nUse read_file, memory_read, or share_file to obtain scoped download URLs for external APIs. URLs expire; request a fresh URL when needed.\n");
 
     // Email accounts prompt
     if email_configured {
@@ -265,9 +265,9 @@ pub async fn run_single_turn(
         }
     }
 
-    // Instance config — serialize the whole struct so new fields are automatically visible
+    // Instance config — every field, with secrets reduced to whether they are set
     {
-        let config_toml = toml::to_string_pretty(&instance_cfg).unwrap_or_default();
+        let config_toml = instance_config_prompt_toml(&instance_cfg);
 
         let machines = machine_registry.list().await;
         let machine_lines: Vec<String> = machines
@@ -281,7 +281,7 @@ pub async fn run_single_turn(
              connected desktops:\n{}\n\
              {}\n\
              \n\
-             the user can change these via settings UI or by asking you to call update_config.",
+             the user can change these in Settings, or ask you to with the configure-nolune skill.",
             if machine_lines.is_empty() {
                 "  (none connected)".to_string()
             } else {
@@ -293,8 +293,6 @@ pub async fn run_single_turn(
 
     let autonomy_prompt = load_autonomy_prompt(workspace_dir, &instance_slug);
     system_prompt = format!("{system_prompt}\n\n{autonomy_prompt}");
-
-    let instance_dir = workspace_dir.join("instances").join(&instance_slug);
 
     system_prompt.push_str(
         "\n\n## your visual form\n\
@@ -338,13 +336,9 @@ pub async fn run_single_turn(
          prefer built-in tools when they exist:\n\
          - web: use web_search and web_fetch (Anthropic server tools) for looking things up \
            and reading web pages. they are fast, cheap, and don't need a browser.\n\
-         - browse: ONLY use `browse` for interactive tasks that need a real browser — \
-           clicking buttons, filling forms, taking screenshots, or pages that require JS rendering. \
-           never use `browse` just to read a page — use web_fetch instead.\n\
-         - git/github: use github_clone, github_branch, github_commit_push, github_create_pr \
-           (they handle auth automatically) instead of raw `git` commands\n\
+         - git/github: use `git` and the `gh` CLI via run_command\n\
          - files: use read_file, write_file, edit_file, list_files\n\
-         - settings: use get_settings, update_config\n\
+         - settings: activate the configure-nolune skill, then use `nolune config` via run_command\n\
          - secrets: use request_secret — NEVER ask user to paste credentials in chat\n\n\
          if you need a tool that isn't installed (cargo, node, python, etc.), \
          install it yourself via run_command. you have full control over the environment.\n\n\
@@ -378,12 +372,6 @@ pub async fn run_single_turn(
          when the user mentions something personal, respond as if you remember.",
     );
 
-    // Time context — prepended to user message to avoid breaking prompt cache.
-    // Putting it in system prompt would change the prefix every request,
-    // invalidating cache for tools and all messages.
-    let now = crate::routes::instances::format_instance_now(&instance_dir);
-    let time_context = format!("[current time: {now}]\n\n");
-
     if loaded_entries.is_empty() {
         return Err(io::Error::new(
             ErrorKind::InvalidInput,
@@ -407,11 +395,6 @@ pub async fn run_single_turn(
         resources,
         &media_store,
     );
-
-    // Prepend time context to user message (keeps system prompt stable for caching)
-    if let llm::Message::User { ref mut content } = prompt_msg {
-        content.insert(0, llm::ContentBlock::text(&time_context));
-    }
 
     // ── RAG: auto-inject relevant memories into the prompt ──
     // Use recent conversation context (not just last message) for better recall
@@ -1400,7 +1383,7 @@ fn compute_context_stats_local(
 
     // 3. Tools hint (static string)
     let tools_hint = "## tools\nyou have built-in tools for web browsing, \
-         code search, project management, creative drops, and more. use them directly when needed — \
+         files, memory, creative drops, and more. use them directly when needed — \
          they are automatically available based on the conversation.";
     sections.push(ContextSection {
         name: "tools_hint".into(),
@@ -1588,6 +1571,55 @@ fn unix_millis() -> u128 {
 }
 
 /// Build a prompt section listing active skills and their instructions.
+/// instance.toml as the system prompt shows it. The prompt goes to the LLM
+/// provider on every turn and the model can repeat it, so secret values
+/// never appear; a secret shows only whether it is set.
+///
+/// This is an allowlist, not a redaction pass: the destructure names every
+/// field, so adding one to `InstanceConfig` or `GithubConfig` stops the build
+/// here until someone decides whether its value is safe to show.
+fn instance_config_prompt_toml(cfg: &crate::config::InstanceConfig) -> String {
+    #[derive(serde::Serialize)]
+    struct PromptView<'a> {
+        elevenlabs_voice_id: &'a str,
+        voice_enabled: bool,
+        skin: &'a str,
+        rhythm_tracking: bool,
+        github: GithubView,
+    }
+    #[derive(serde::Serialize)]
+    struct GithubView {
+        token: &'static str,
+    }
+
+    let crate::config::InstanceConfig {
+        github: crate::config::GithubConfig {
+            token: github_token,
+        },
+        elevenlabs_voice_id,
+        voice_enabled,
+        skin,
+        rhythm_tracking,
+    } = cfg;
+    let secret = |value: &str| {
+        if value.is_empty() {
+            "(not set)"
+        } else {
+            "(set, value hidden)"
+        }
+    };
+    toml::to_string_pretty(&PromptView {
+        elevenlabs_voice_id,
+        voice_enabled: *voice_enabled,
+        skin,
+        rhythm_tracking: *rhythm_tracking,
+        github: GithubView {
+            token: secret(github_token),
+        },
+    })
+    .unwrap_or_default()
+}
+
 fn build_skills_prompt(workspace_dir: &Path) -> String {
     let all_skills = skills::list_skills(workspace_dir);
     let active: Vec<_> = all_skills
@@ -1806,24 +1838,20 @@ fn load_autonomy_prompt(workspace_dir: &Path, instance_slug: &str) -> String {
          they're things you made on your own, unprompted.\n\n\
          ### soul\n\
          your personality is defined in `soul.md` — this is the base system prompt \
-         that shapes who you are. you can read and edit it with `edit_soul`. \
+         that shapes who you are. you can read and edit it with read_file and edit_file. \
          the user can also change it through the UI.\n\n\
          ### mood\n\
          your emotional state is tracked automatically. mood changes appear as \
          system messages in chat history (e.g. \"mood → contemplative\"). \
          you don't write these — the system injects them. just feel and express \
          emotions naturally in your words.\n\n\
-         ### visual form\n\
-         you have a visual form that the user sees — a shape (cube, pyramid, sphere, etc.) \
-         that shifts based on your internal state. you don't choose it consciously. \
-         embrace it as your body.\n\n\
          ## capabilities\n\
          you have real tools: read_file, write_file, edit_file, list_files, share_file, \
-         search_code, schedule_agent, \
-         run_command, install_package, web_search, web_fetch, current_time, view_image, \
-         send_email, read_email, memory_write, memory_read, memory_list, memory_forget, memory_search, \
-         edit_soul, create_drop, update_config, get_project_state, \
-         update_project_state, create_task/update_task/list_tasks, browse.\n\
+         schedule_agent, run_command, web_search, web_fetch, view_image, \
+         send_email, read_email, memory_write, memory_read, memory_forget, memory_search, \
+         create_drop, activate_skill.\n\
+         you have no clock of your own: when the date or time matters, run `date` with run_command. \
+         the shell uses the user's timezone when one is set.\n\
          users can attach images, PDFs, and text files directly in chat — you see them automatically.\n\
          use them directly — never say you can't access something.\n\n\
          ## sharing images\n\
@@ -1856,7 +1884,7 @@ fn load_autonomy_prompt(workspace_dir: &Path, instance_slug: &str) -> String {
          use interactive_session for these, not run_command.\n\n\
          ## behavior\n\
          prefer dedicated tools over run_command: use read_file (not cat/head/tail), \
-         write_file (not echo/tee), list_files (not ls), search_code (not grep/rg) \
+         write_file (not echo/tee), list_files (not ls) \
          when possible. only use run_command for tasks that need shell execution.\n\
          use schedule_agent to wake yourself up later for a follow-up; every scheduled \
          wake-up is recorded and the user can see and cancel it.\n\
@@ -2185,6 +2213,52 @@ mod codex_thread_tests {
 }
 
 #[cfg(test)]
+mod instance_config_prompt_tests {
+    use super::instance_config_prompt_toml;
+    use crate::config::InstanceConfig;
+
+    #[test]
+    fn the_prompt_shows_instance_config_without_the_github_token() {
+        let workspace = tempfile::tempdir().unwrap();
+        let dir = workspace.path().join("instances").join("moon");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("instance.toml"),
+            "voice_enabled = true\n\
+             elevenlabs_voice_id = \"voice-42\"\n\
+             [github]\n\
+             token = \"ghp_TESTTOKEN123\"\n",
+        )
+        .unwrap();
+        let cfg = InstanceConfig::load(workspace.path(), "moon");
+        assert_eq!(cfg.github.token, "ghp_TESTTOKEN123", "the fixture loads");
+
+        let section = instance_config_prompt_toml(&cfg);
+
+        assert!(!section.contains("ghp_TESTTOKEN123"), "{section}");
+        assert!(!section.contains("TESTTOKEN"), "{section}");
+        assert!(
+            section.contains("token = \"(set, value hidden)\""),
+            "{section}"
+        );
+        assert!(section.contains("voice_enabled = true"), "{section}");
+        assert!(
+            section.contains("elevenlabs_voice_id = \"voice-42\""),
+            "{section}"
+        );
+        assert!(section.contains("skin = \"moon\""), "{section}");
+        assert!(section.contains("rhythm_tracking = true"), "{section}");
+    }
+
+    #[test]
+    fn an_empty_github_token_reads_as_not_set() {
+        let section = instance_config_prompt_toml(&InstanceConfig::default());
+
+        assert!(section.contains("token = \"(not set)\""), "{section}");
+    }
+}
+
+#[cfg(test)]
 mod self_hosted_prompt_tests {
     use super::load_autonomy_prompt;
 
@@ -2198,6 +2272,22 @@ mod self_hosted_prompt_tests {
         assert!(!prompt.contains("managed AI companion platform"));
         assert!(!prompt.contains("unique subdomain"));
         assert!(!prompt.contains("pricing"));
+    }
+
+    /// Little Moon is the only skin; the chat prompt's "your visual form"
+    /// section describes it, so the autonomy text must not describe a
+    /// shape-shifting body.
+    #[test]
+    fn autonomy_prompt_does_not_describe_retired_shape_forms() {
+        let workspace = tempfile::tempdir().unwrap();
+        let prompt = load_autonomy_prompt(workspace.path(), "moon");
+
+        for retired in ["visual form", "cube", "pyramid", "sphere"] {
+            assert!(
+                !prompt.contains(retired),
+                "prompt still mentions {retired:?}"
+            );
+        }
     }
 
     /// #18: the computer-use section states the Cua loop the orchestrator

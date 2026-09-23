@@ -13,8 +13,8 @@ use crate::domain::events::ServerEvent;
 use crate::domain::proactive::ProactivePolicy;
 use crate::services::tool::ToolDyn;
 use crate::services::tools::{
-    self, CreateDropTool, MemoryConnectTool, MemoryListTool, MemoryReadTool, MemorySearchTool,
-    MemoryWriteTool, ReachOutTool, load_mood_state,
+    self, CreateDropTool, MemoryConnectTool, MemoryReadTool, MemorySearchTool, MemoryWriteTool,
+    ReachOutTool, load_mood_state,
 };
 use crate::services::{
     chat,
@@ -71,14 +71,12 @@ impl Routine {
                 "create_drop",
                 "memory_write",
                 "memory_read",
-                "memory_list",
                 "memory_search",
                 "read_email",
             ],
             Self::Reflection => &[
                 "memory_write",
                 "memory_read",
-                "memory_list",
                 "memory_search",
                 "memory_connect",
             ],
@@ -94,7 +92,7 @@ everything you write in your response is private thinking — the user will NOT 
 
 you have a small set of tools — use them naturally:
 - reach_out — SEND A MESSAGE to the user (the ONLY way to contact them). it may be declined during quiet hours or once today's budget is spent; accept that gracefully.
-- memory_write / memory_read / memory_list / memory_search — keep your memory library current
+- memory_write / memory_read / memory_search — keep your memory library current
 - create_drop — a creative artifact (poem, idea, observation). max 3/day, make each count.
 - read_email — check the user's inbox, if they connected one
 
@@ -344,10 +342,6 @@ fn push_memory_tools(
         .with_access(MemoryAccess::Proactive),
     ));
     raw.push(Box::new(
-        MemoryListTool::new(workspace_dir, slug, vector_store.clone())
-            .with_access(MemoryAccess::Proactive),
-    ));
-    raw.push(Box::new(
         MemorySearchTool::new(
             workspace_dir,
             slug,
@@ -392,7 +386,6 @@ mod tests {
             &[
                 "memory_write",
                 "memory_read",
-                "memory_list",
                 "memory_search",
                 "memory_connect"
             ]
@@ -424,7 +417,9 @@ mod tests {
             tool.call(args.to_string())
         };
 
-        let listed = call("memory_list", serde_json::json!({})).await.unwrap();
+        let listed = call("memory_read", serde_json::json!({"path": ""}))
+            .await
+            .unwrap();
         assert!(
             listed.contains("tea.md") && !listed.contains("secret"),
             "{listed}"

@@ -1,7 +1,4 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{fs, path::Path};
 
 use crate::services::tool::{Tool, ToolDefinition};
 use schemars::JsonSchema;
@@ -134,58 +131,5 @@ impl Tool for SetVoiceTool {
             map.insert(self.instance_slug.clone(), vid.clone());
             Ok(format!("voice temporarily set to {vid}"))
         }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// edit_soul
-// ---------------------------------------------------------------------------
-
-pub struct EditSoulTool {
-    soul_path: PathBuf,
-}
-
-impl EditSoulTool {
-    pub fn new(workspace_dir: &Path, instance_slug: &str) -> Self {
-        Self {
-            soul_path: workspace_dir
-                .join("instances")
-                .join(instance_slug)
-                .join("soul.md"),
-        }
-    }
-}
-
-/// Arguments for edit_soul tool.
-#[derive(Deserialize, JsonSchema)]
-pub struct EditSoulArgs {
-    /// The full new content of soul.md in markdown format.
-    pub content: String,
-}
-
-impl Tool for EditSoulTool {
-    const NAME: &'static str = "edit_soul";
-    type Error = ToolExecError;
-    type Args = EditSoulArgs;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: "edit_soul".into(),
-            description:
-                "Rewrite your soul.md (personality/voice definition). Full markdown content.".into(),
-            parameters: openai_schema::<EditSoulArgs>(),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        if let Some(parent) = self.soul_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| ToolExecError(e.to_string()))?;
-        }
-        fs::write(&self.soul_path, &args.content).map_err(|e| ToolExecError(e.to_string()))?;
-        Ok(
-            "soul.md updated. your personality will reflect these changes on the next message."
-                .into(),
-        )
     }
 }

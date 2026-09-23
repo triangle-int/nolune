@@ -308,6 +308,16 @@ pub(super) fn dynamic_tools(tools: &[ToolDefinition]) -> Vec<Value> {
 /// removes nothing (verified against the pinned release: every configured
 /// server still started for the thread), `mcp_servers.<name>.enabled =
 /// false` does.
+///
+/// Each switch was checked against the pinned release by the tool list it
+/// sends the model. Web search is the top-level `web_search` mode:
+/// `tools.web_search = false` parses and is dropped, which leaves the
+/// cached search on. `goals` and `tools.experimental_request_user_input`
+/// are on by default and each adds tools. The skills catalog is a block
+/// of instructions (`skills.include_instructions`) and, on a thread without
+/// an environment, a `skills` tool namespace (`orchestrator.skills`).
+/// `apply_patch` follows the model, not a flag: [`NO_ENVIRONMENTS`] is what
+/// takes it away.
 pub(super) fn thread_config(mcp_servers: &[String]) -> Value {
     let disabled: serde_json::Map<String, Value> = mcp_servers
         .iter()
@@ -316,6 +326,7 @@ pub(super) fn thread_config(mcp_servers: &[String]) -> Value {
     json!({
         "project_doc_max_bytes": 0,
         "mcp_servers": disabled,
+        "web_search": "disabled",
         "features": {
             "shell_tool": false,
             "unified_exec": false,
@@ -333,13 +344,26 @@ pub(super) fn thread_config(mcp_servers: &[String]) -> Value {
             "hooks": false,
             "sleep_tool": false,
             "tool_suggest": false,
+            "goals": false,
         },
         "tools": {
-            "web_search": false,
-            "view_image": false,
+            "experimental_request_user_input": {"enabled": false},
+        },
+        "skills": {
+            "include_instructions": false,
+        },
+        "orchestrator": {
+            "skills": {"enabled": false},
         },
     })
 }
+
+/// The `environments` every thread starts with and every turn carries: none,
+/// so codex has no workspace to act in and offers no tool that needs one
+/// (`apply_patch` above all, which every catalog model gets otherwise). A
+/// thread's own list does not survive `thread/resume`, which takes none, so
+/// each turn repeats it.
+const NO_ENVIRONMENTS: [Value; 0] = [];
 
 /// The MCP servers a `config/read` answer lists, sorted: the names the
 /// thread config has to disable. A server that is not in the table cannot
@@ -604,8 +628,8 @@ struct Placement {
     mcp_servers: Vec<String>,
 }
 
-/// The `thread/start` params: read-only, no approvals, codex's surfaces
-/// off, Nolune's tools, on the preset's model.
+/// The `thread/start` params: read-only, no approvals, no environment,
+/// codex's surfaces off, Nolune's tools, on the preset's model.
 fn thread_start_params(
     backend: &LlmBackend,
     request: &LlmRequest<'_>,
@@ -618,6 +642,7 @@ fn thread_start_params(
         "cwd": placement.cwd.to_string_lossy(),
         "developerInstructions": developer_instructions(request.system, request.json_schema),
         "dynamicTools": dynamic_tools(request.tools),
+        "environments": NO_ENVIRONMENTS,
         "ephemeral": ephemeral,
         "model": backend.model,
         "sandbox": "read-only",
@@ -1081,33 +1106,79 @@ impl Turn<'_> {
 }
 
 /// Send `turn/interrupt` and drain `events` until that turn completes, or
-/// the grace period ends. Errors are logged: the turn may be over already,
-/// or the child gone, and either way there is nothing left to stop.
+/// the grace period ends. `turn/start` answers before the turn runs, and an
+/// interrupt in between is refused (`no active turn to interrupt`), so a
+/// refusal waits for the turn's `turn/started` and asks once more. Other
+/// errors are logged: the turn may be over already, or the child gone, and
+/// either way there is nothing left to stop.
 async fn interrupt_turn(
     server: &AppServer,
     thread_id: &str,
     turn_id: &str,
     events: &mut ThreadEvents,
 ) {
-    if let Err(error) = server
-        .request(
-            super::protocol::TURN_INTERRUPT,
-            json!({"threadId": thread_id, "turnId": turn_id}),
-        )
+    let deadline = Instant::now() + INTERRUPT_GRACE;
+    let params = json!({"threadId": thread_id, "turnId": turn_id});
+    match server
+        .request(super::protocol::TURN_INTERRUPT, params.clone())
         .await
     {
-        log::warn!("[codex] turn/interrupt for {turn_id}: {error}");
-        return;
+        Ok(_) => {}
+        Err(AppServerError::Rpc(refusal)) => match next_turn_event(events, turn_id, deadline).await
+        {
+            Some("turn/started") => {
+                if let Err(error) = server
+                    .request(super::protocol::TURN_INTERRUPT, params)
+                    .await
+                {
+                    log::warn!("[codex] turn/interrupt for {turn_id}: {error}");
+                    return;
+                }
+            }
+            // It ended on its own meanwhile.
+            Some(_) => return,
+            None => {
+                log::warn!(
+                    "[codex] turn/interrupt for {turn_id}: {}",
+                    AppServerError::Rpc(refusal)
+                );
+                return;
+            }
+        },
+        Err(error) => {
+            log::warn!("[codex] turn/interrupt for {turn_id}: {error}");
+            return;
+        }
     }
-    let deadline = Instant::now() + INTERRUPT_GRACE;
+    while let Some(method) = next_turn_event(events, turn_id, deadline).await {
+        if method == "turn/completed" {
+            return;
+        }
+    }
+}
+
+/// Drain `events` up to the next `turn/started` or `turn/completed` of
+/// `turn_id` and say which it was; `None` when the child is gone or
+/// `deadline` passed first.
+async fn next_turn_event(
+    events: &mut ThreadEvents,
+    turn_id: &str,
+    deadline: Instant,
+) -> Option<&'static str> {
     loop {
         match tokio::time::timeout_at(deadline, events.recv()).await {
             Ok(Some(TurnEvent::Incoming(Incoming::Notification { method, params })))
-                if method == "turn/completed" && params["turn"]["id"] == turn_id =>
+                if params["turn"]["id"] == turn_id =>
             {
-                return;
+                match method.as_str() {
+                    "turn/started" => return Some("turn/started"),
+                    "turn/completed" => return Some("turn/completed"),
+                    _ => {}
+                }
             }
-            Ok(Some(TurnEvent::Incoming(Incoming::Exited { .. }))) | Ok(None) | Err(_) => return,
+            Ok(Some(TurnEvent::Incoming(Incoming::Exited { .. }))) | Ok(None) | Err(_) => {
+                return None;
+            }
             Ok(Some(_)) => {}
         }
     }
@@ -1229,6 +1300,7 @@ impl CodexAdapter {
         let mut params = json!({
             "threadId": thread_id,
             "input": turn_input(request.messages, fresh),
+            "environments": NO_ENVIRONMENTS,
         });
         if let Some(schema) = request.json_schema {
             params["outputSchema"] = schema.clone();
@@ -1634,7 +1706,7 @@ mod tests {
             let mut config = Config::default();
             config.llm.add_test_presets(LlmProvider::Codex);
             let mut backend =
-                LlmBackend::for_preset(&config, reqwest::Client::new(), "codex-astra").unwrap();
+                LlmBackend::for_preset(&config, reqwest::Client::new(), "codex-sol").unwrap();
             backend.codex = self.runtime.clone();
             backend
         }
@@ -1785,8 +1857,9 @@ mod tests {
                     "description": "test",
                     "inputSchema": {"type": "object", "properties": {"q": {"type": "string"}}},
                 }],
+                "environments": [],
                 "ephemeral": false,
-                "model": "gpt-6-astra",
+                "model": "gpt-6-sol",
                 "sandbox": "read-only",
             })
         );
@@ -1820,10 +1893,15 @@ mod tests {
         ] {
             assert_eq!(config["features"][feature], false, "{feature}");
         }
-        assert_eq!(config["tools"]["web_search"], false);
+        assert_eq!(config["web_search"], "disabled");
         assert_eq!(
             harness.sent("turn/start")[0],
-            json!({"threadId": "thr_fixture_1", "input": [{"type": "text", "text": "hello"}]})
+            json!({
+                "threadId": "thr_fixture_1",
+                "input": [{"type": "text", "text": "hello"}],
+                "environments": [],
+            }),
+            "every turn runs without an environment, so codex has nowhere to apply a patch"
         );
         assert_eq!(
             harness.remembered_thread().as_deref(),
@@ -1867,7 +1945,7 @@ mod tests {
                 "cwd": harness.durable_cwd().to_string_lossy(),
                 "developerInstructions": "soul",
                 "excludeTurns": true,
-                "model": "gpt-6-astra",
+                "model": "gpt-6-sol",
                 "sandbox": "read-only",
             })
         );
@@ -1881,7 +1959,12 @@ mod tests {
         // no recap.
         assert_eq!(
             harness.sent("turn/start")[0],
-            json!({"threadId": "thr_saved_7", "input": [{"type": "text", "text": "hi"}]})
+            json!({
+                "threadId": "thr_saved_7",
+                "input": [{"type": "text", "text": "hi"}],
+                "environments": [],
+            }),
+            "a resumed thread keeps no environment of its own: the turn says none again"
         );
 
         // A second turn in the same process needs no resume; changed
@@ -2312,6 +2395,41 @@ mod tests {
             1,
             "nothing left to interrupt"
         );
+        harness.runtime.close();
+    }
+
+    /// `turn/start` answers before its turn runs, and an interrupt that lands
+    /// in between is refused (`no active turn to interrupt`, the live shape):
+    /// the cancel waits for `turn/started` and interrupts the turn then,
+    /// rather than leaving it running in codex with nobody reading it.
+    #[tokio::test]
+    async fn a_cancel_before_the_turn_started_interrupts_it_once_it_has() {
+        let harness = Harness::new();
+        let backend = harness.backend();
+        let messages = [Message::user("cancel early")];
+        let mut request = LlmRequest::new(ExecutionScope::Conversation, &[], &messages, &[]);
+        request.conversation = Some(harness.conversation());
+        let token = request.cancellation.clone();
+        let cancel_on_send = async {
+            while harness.sent("turn/start").is_empty() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            token.cancel();
+        };
+        let ((result, _), ()) = tokio::join!(stream(&backend, request), cancel_on_send);
+        assert!(matches!(result, Err(LlmError::Cancelled)), "{result:?}");
+        let interrupt = json!({"threadId": "thr_fixture_1", "turnId": "turn_fixture_early"});
+        assert_eq!(
+            harness.sent("turn/interrupt"),
+            [interrupt.clone(), interrupt],
+            "refused before the turn started, sent again once it had"
+        );
+        // The turn is over in codex: the thread takes the next one.
+        let messages = [Message::user("cancel early"), Message::user("hi")];
+        let mut request = LlmRequest::new(ExecutionScope::Conversation, &[], &messages, &[]);
+        request.conversation = Some(harness.conversation());
+        let response = stream(&backend, request).await.0.unwrap();
+        assert_eq!(response.text, "Hello from the fixture");
         harness.runtime.close();
     }
 
@@ -3179,14 +3297,17 @@ mod tests {
         ] {
             assert!(!is_forbidden_item(kind), "{kind}");
         }
-        assert!(
-            config["tools"]
-                .as_object()
-                .unwrap()
-                .values()
-                .all(|flag| *flag == false),
-            "{config}"
+        // The switches that take the rest of codex's tools away, each one
+        // checked against the pinned release by the tool list the model got.
+        assert_eq!(config["web_search"], "disabled", "{config}");
+        assert_eq!(
+            config["tools"],
+            json!({"experimental_request_user_input": {"enabled": false}}),
+            "no tools.* key the release ignores: tools.web_search = false parses and is dropped"
         );
+        assert_eq!(config["features"]["goals"], false);
+        assert_eq!(config["skills"]["include_instructions"], false);
+        assert_eq!(config["orchestrator"]["skills"]["enabled"], false);
         assert_eq!(developer_instructions(&["a", "", "b"], None), "a\n\nb");
         let with_schema = developer_instructions(&["a"], Some(&json!({"type": "object"})));
         assert!(with_schema.starts_with("a\n\n"), "{with_schema}");

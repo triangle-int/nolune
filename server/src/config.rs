@@ -973,8 +973,8 @@ pub fn test_presets(provider: LlmProvider) -> Vec<ModelPreset> {
             preset("haiku", "Claude Haiku", "claude-haiku-4-5-20251001"),
         ],
         LlmProvider::Openai => vec![
-            preset("gpt-sol", "GPT-5.6 Sol", "gpt-5.6-sol"),
-            preset("gpt-luna", "GPT-5.6 Luna", "gpt-5.6-luna"),
+            preset("gpt-sol", "GPT-6 Sol", "gpt-6-sol"),
+            preset("gpt-luna", "GPT-6 Luna", "gpt-6-luna"),
         ],
         LlmProvider::Openrouter => vec![
             preset(
@@ -989,8 +989,8 @@ pub fn test_presets(provider: LlmProvider) -> Vec<ModelPreset> {
             ),
         ],
         LlmProvider::Codex => vec![
-            preset("codex-astra", "GPT-6 Astra via Codex", "gpt-6-astra"),
-            preset("codex-luna", "GPT-5.6 Luna via Codex", "gpt-5.6-luna"),
+            preset("codex-sol", "GPT-6 Sol via Codex", "gpt-6-sol"),
+            preset("codex-luna", "GPT-6 Luna via Codex", "gpt-6-luna"),
         ],
     }
 }
@@ -1987,7 +1987,7 @@ custom_token = "retained"
             config.llm.chat_preset().unwrap().provider,
             LlmProvider::Openai
         );
-        assert_eq!(config.llm.chat_model(), Some("gpt-5.6-sol"));
+        assert_eq!(config.llm.chat_model(), Some("gpt-6-sol"));
         assert_eq!(
             config.llm.background_preset().unwrap().model,
             "claude-haiku-4-5-20251001"

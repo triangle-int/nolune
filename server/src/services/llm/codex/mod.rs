@@ -39,7 +39,7 @@ use protocol::RpcError;
 /// started, because the app-server protocol is experimental and the
 /// fixtures under `fixtures/codex-<version>.jsonl` were recorded against
 /// this release only.
-pub const CODEX_VERSION: &str = "0.155.0";
+pub const CODEX_VERSION: &str = "0.156.1";
 
 /// The binary name looked up on `PATH`.
 pub const CODEX_BINARY: &str = "codex";

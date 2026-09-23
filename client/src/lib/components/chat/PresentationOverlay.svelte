@@ -267,6 +267,11 @@
 		outline: none;
 		resize: none;
 		caret-color: var(--primary);
+		overflow-x: hidden;
+		scrollbar-width: none;
+	}
+	.present-textarea::-webkit-scrollbar {
+		display: none;
 	}
 
 	.present-textarea::placeholder {

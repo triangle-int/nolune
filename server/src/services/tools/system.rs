@@ -21,6 +21,7 @@ use crate::domain::events::ServerEvent;
 // ---------------------------------------------------------------------------
 
 pub struct RunCommandTool {
+    workspace_dir: PathBuf,
     instance_dir: PathBuf,
     events: broadcast::Sender<ServerEvent>,
     instance_slug: String,
@@ -37,6 +38,7 @@ impl RunCommandTool {
         github_token: Option<String>,
     ) -> Self {
         Self {
+            workspace_dir: workspace_dir.to_path_buf(),
             instance_dir: workspace_dir.join("instances").join(instance_slug),
             events,
             instance_slug: instance_slug.to_string(),
@@ -68,9 +70,10 @@ impl Tool for RunCommandTool {
         ToolDefinition {
             name: "run_command".into(),
             description:
-                "Run a shell command. Prefer built-in tools when available (github_* for git, \
-                edit_file for editing, web_fetch for HTTP). Use run_command for everything else: \
-                builds, tests, scripts, system commands."
+                "Run a shell command. Prefer built-in tools when available (edit_file for \
+                editing, web_fetch for HTTP). Use run_command for everything else: builds, \
+                tests, scripts, system commands, and the current date and time (`date`, \
+                in the user's timezone when one is set)."
                     .into(),
             parameters: openai_schema::<RunCommandArgs>(),
         }
@@ -99,7 +102,11 @@ impl Tool for RunCommandTool {
             use_pty
         );
 
-        let github_token = self.github_token.clone();
+        let mut env_pairs = shell_env(&self.workspace_dir, &self.instance_dir);
+        if let Some(ref t) = self.github_token {
+            env_pairs.push(("GITHUB_TOKEN".into(), t.clone()));
+            env_pairs.push(("GH_TOKEN".into(), t.clone()));
+        }
 
         if use_pty {
             let cmd = command.clone();
@@ -115,14 +122,6 @@ impl Tool for RunCommandTool {
                     chunk: redacted,
                 });
             });
-            let env_pairs: Vec<(String, String)> = if let Some(ref t) = github_token {
-                vec![
-                    ("GITHUB_TOKEN".into(), t.clone()),
-                    ("GH_TOKEN".into(), t.clone()),
-                ]
-            } else {
-                vec![]
-            };
             let result = tokio::task::spawn_blocking(move || {
                 let env_refs: Vec<(&str, &str)> = env_pairs
                     .iter()
@@ -155,10 +154,8 @@ impl Tool for RunCommandTool {
             cmd.arg("-c")
                 .arg(&command)
                 .current_dir(&work_dir)
-                .stdin(std::process::Stdio::null());
-            if let Some(ref token) = github_token {
-                cmd.env("GITHUB_TOKEN", token).env("GH_TOKEN", token);
-            }
+                .stdin(std::process::Stdio::null())
+                .envs(env_pairs);
             let output =
                 tokio::time::timeout(std::time::Duration::from_secs(timeout), cmd.output())
                     .await
@@ -195,6 +192,117 @@ impl Tool for RunCommandTool {
 
             Ok(result)
         }
+    }
+}
+
+/// What every shell the model runs gets on top of the server's environment:
+/// the user's timezone, and `nolune` on PATH addressing this server's own
+/// data root, so `date` and `nolune config` answer for this companion.
+fn shell_env(workspace_dir: &Path, instance_dir: &Path) -> Vec<(String, String)> {
+    let mut env = vec![(
+        "NOLUNE_HOME".to_owned(),
+        workspace_dir.to_string_lossy().into_owned(),
+    )];
+    if let Some(tz) = shell_timezone(instance_dir) {
+        env.push(("TZ".into(), tz));
+    }
+    if let Some(path) = shell_path() {
+        env.push(("PATH".into(), path));
+    }
+    env
+}
+
+/// PATH with the running binary's directory first, so `nolune` in the shell
+/// is this server's own build.
+fn shell_path() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let mut dirs = vec![exe.parent()?.to_path_buf()];
+    if let Some(path) = std::env::var_os("PATH") {
+        dirs.extend(std::env::split_paths(&path));
+    }
+    std::env::join_paths(dirs).ok()?.into_string().ok()
+}
+
+/// The user's timezone for shell commands, so `date` answers in their time.
+/// The terminal is the only clock the model has; an unset or unknown zone
+/// leaves the server's own.
+fn shell_timezone(instance_dir: &Path) -> Option<String> {
+    crate::routes::instances::read_timezone(instance_dir)
+        .filter(|tz| tz.parse::<chrono_tz::Tz>().is_ok())
+}
+
+#[cfg(test)]
+mod run_command_shell_tests {
+    use super::*;
+
+    fn instance_with_timezone(workspace: &Path, timezone: Option<&str>) -> PathBuf {
+        let instance = workspace.join("instances/companion");
+        fs::create_dir_all(&instance).unwrap();
+        if let Some(timezone) = timezone {
+            fs::write(
+                instance.join("project_state.json"),
+                serde_json::json!({ "timezone": timezone }).to_string(),
+            )
+            .unwrap();
+        }
+        instance
+    }
+
+    #[tokio::test]
+    async fn the_terminal_clock_answers_in_the_users_timezone() {
+        let workspace = tempfile::tempdir().unwrap();
+        // Kathmandu keeps +05:45 all year, so no host zone matches it by chance.
+        instance_with_timezone(workspace.path(), Some("Asia/Kathmandu"));
+        let (events, _) = broadcast::channel(8);
+        let tool = RunCommandTool::new(workspace.path(), "companion", "default", events, None);
+
+        for pty in [false, true] {
+            let output = tool
+                .call(RunCommandArgs {
+                    command: "date +%z".into(),
+                    cwd: None,
+                    timeout_secs: Some(10),
+                    pty: Some(pty),
+                })
+                .await
+                .unwrap();
+            assert_eq!(output.trim(), "+0545", "pty: {pty}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_shell_addresses_this_servers_data_root_and_binary() {
+        let workspace = tempfile::tempdir().unwrap();
+        instance_with_timezone(workspace.path(), None);
+        let (events, _) = broadcast::channel(8);
+        let tool = RunCommandTool::new(workspace.path(), "companion", "default", events, None);
+
+        let output = tool
+            .call(RunCommandArgs {
+                command: "printf '%s\\n%s\\n' \"$NOLUNE_HOME\" \"${PATH%%:*}\"".into(),
+                cwd: None,
+                timeout_secs: Some(10),
+                pty: Some(false),
+            })
+            .await
+            .unwrap();
+        let exe = std::env::current_exe().unwrap();
+        let expected = format!(
+            "{}\n{}\n",
+            workspace.path().display(),
+            exe.parent().unwrap().display()
+        );
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn an_unset_or_unknown_timezone_leaves_the_servers_clock() {
+        let workspace = tempfile::tempdir().unwrap();
+        let unset = instance_with_timezone(workspace.path(), None);
+        assert_eq!(shell_timezone(&unset), None);
+
+        let unknown = instance_with_timezone(workspace.path(), Some("Mars/Olympus_Mons"));
+        assert_eq!(shell_timezone(&unknown), None);
     }
 }
 
@@ -521,12 +629,14 @@ static PTY_SESSIONS: LazyLock<Mutex<HashMap<String, PtySession>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub struct InteractiveSessionTool {
+    workspace_dir: PathBuf,
     instance_dir: PathBuf,
 }
 
 impl InteractiveSessionTool {
     pub fn new(workspace_dir: &Path, instance_slug: &str) -> Self {
         Self {
+            workspace_dir: workspace_dir.to_path_buf(),
             instance_dir: workspace_dir.join("instances").join(instance_slug),
         }
     }
@@ -592,6 +702,7 @@ impl Tool for InteractiveSessionTool {
                 let cmd = command.clone();
                 let dir = work_dir.clone();
                 let sid = session_id.clone();
+                let env = shell_env(&self.workspace_dir, &self.instance_dir);
 
                 let initial_output =
                     tokio::task::spawn_blocking(move || -> Result<String, String> {
@@ -610,6 +721,9 @@ impl Tool for InteractiveSessionTool {
                         let mut pty_cmd = CommandBuilder::new("sh");
                         pty_cmd.args(["-c", &cmd]);
                         pty_cmd.cwd(&dir);
+                        for (key, value) in env {
+                            pty_cmd.env(key, value);
+                        }
 
                         let child = pair
                             .slave
@@ -825,439 +939,6 @@ fn unescape_input(s: &str) -> Vec<u8> {
 }
 
 // ---------------------------------------------------------------------------
-// get_settings
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// get_time
-// ---------------------------------------------------------------------------
-
-pub struct GetTimeTool {
-    instance_dir: PathBuf,
-}
-
-impl GetTimeTool {
-    pub fn new(workspace_dir: &Path, instance_slug: &str) -> Self {
-        Self {
-            instance_dir: workspace_dir.join("instances").join(instance_slug),
-        }
-    }
-}
-
-#[derive(Deserialize, JsonSchema)]
-pub struct GetTimeArgs {}
-
-impl Tool for GetTimeTool {
-    const NAME: &'static str = "get_time";
-    type Error = ToolExecError;
-    type Args = GetTimeArgs;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: "get_time".into(),
-            description: "Get the current date and time in the user's timezone.".into(),
-            parameters: openai_schema::<GetTimeArgs>(),
-        }
-    }
-
-    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let now = crate::routes::instances::format_instance_now(&self.instance_dir);
-        Ok(now)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// get_settings
-// ---------------------------------------------------------------------------
-
-pub struct GetSettingsTool {
-    config_path: PathBuf,
-    workspace_dir: PathBuf,
-    instance_slug: String,
-    instance_dir: PathBuf,
-}
-
-impl GetSettingsTool {
-    pub fn new(config_path: &Path, workspace_dir: &Path, instance_slug: &str) -> Self {
-        Self {
-            config_path: config_path.to_path_buf(),
-            workspace_dir: workspace_dir.to_path_buf(),
-            instance_slug: instance_slug.to_string(),
-            instance_dir: workspace_dir.join("instances").join(instance_slug),
-        }
-    }
-}
-
-#[derive(Deserialize, JsonSchema)]
-pub struct GetSettingsArgs {}
-
-impl Tool for GetSettingsTool {
-    const NAME: &'static str = "get_settings";
-    type Error = ToolExecError;
-    type Args = GetSettingsArgs;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: "get_settings".into(),
-            description: "Get all current settings and status: companion name, timezone, LLM model, connected email and GitHub accounts, MCP servers, mood.".into(),
-            parameters: openai_schema::<GetSettingsArgs>(),
-        }
-    }
-
-    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let mut lines = Vec::new();
-
-        // Companion name
-        let state_path = self.instance_dir.join("project_state.json");
-        let project_state: serde_json::Value = fs::read_to_string(&state_path)
-            .ok()
-            .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_else(|| serde_json::json!({}));
-
-        let name = project_state
-            .get("identity")
-            .and_then(|i| i.get("name"))
-            .and_then(|n| n.as_str())
-            .unwrap_or("(not set)");
-        lines.push(format!("companion name: {name}"));
-
-        // Timezone
-        let tz = project_state
-            .get("timezone")
-            .and_then(|t| t.as_str())
-            .unwrap_or("UTC (default)");
-        lines.push(format!("timezone: {tz}"));
-
-        // Mood
-        let mood = load_mood_state(&self.instance_dir);
-        lines.push(format!("mood: {}", mood.companion_mood));
-
-        // LLM
-        if let Ok(raw) = fs::read_to_string(&self.config_path) {
-            if let Ok(config) = toml::from_str::<crate::config::Config>(&raw) {
-                if let Some(reason) = config.llm.setup_required() {
-                    lines.push(format!("llm: setup required: {reason}"));
-                } else {
-                    for (slot, preset) in [
-                        ("chat", config.llm.chat_preset()),
-                        ("background", config.llm.background_preset()),
-                    ] {
-                        match preset {
-                            Some(p) => lines.push(format!(
-                                "{slot} model: {} ({} / {})",
-                                p.name,
-                                p.provider.label(),
-                                p.model
-                            )),
-                            None => lines.push(format!("{slot} model: not set")),
-                        }
-                    }
-                }
-
-                let keys = config.llm.configured_providers();
-                if keys.is_empty() {
-                    lines.push("api keys: none configured".into());
-                } else {
-                    lines.push(format!("api keys: {}", keys.join(", ")));
-                }
-
-                // GitHub
-                // GitHub — check instance config first, then fall back to global
-                let instance_cfg =
-                    crate::config::InstanceConfig::load(&self.workspace_dir, &self.instance_slug);
-                let github_token_set =
-                    !instance_cfg.github.token.is_empty() || !config.github.token.is_empty();
-                if github_token_set {
-                    lines.push("github: token configured".into());
-                } else {
-                    lines.push("github: not connected".into());
-                }
-
-                // MCP servers
-                if config.mcp_servers.is_empty() {
-                    lines.push("extensions (mcp): none".into());
-                } else {
-                    let names: Vec<&str> =
-                        config.mcp_servers.iter().map(|s| s.name.as_str()).collect();
-                    lines.push(format!("extensions (mcp): {}", names.join(", ")));
-                }
-            }
-        }
-
-        // Email accounts (SMTP/IMAP)
-        let email_accounts =
-            crate::config::EmailAccounts::load(&self.workspace_dir, &self.instance_slug);
-        if email_accounts.is_empty() {
-            lines.push("email accounts (smtp/imap): none configured".into());
-        } else {
-            let emails: Vec<String> = email_accounts
-                .iter()
-                .map(|a| {
-                    let addr = if a.smtp_from.is_empty() {
-                        &a.smtp_user
-                    } else {
-                        &a.smtp_from
-                    };
-                    addr.to_string()
-                })
-                .collect();
-            lines.push(format!("email accounts (smtp/imap): {}", emails.join(", ")));
-        }
-
-        // Soul
-        let soul_exists = self.instance_dir.join("soul.md").exists();
-        lines.push(format!(
-            "soul.md: {}",
-            if soul_exists { "exists" } else { "not created" }
-        ));
-
-        Ok(lines.join("\n"))
-    }
-}
-
-// ---------------------------------------------------------------------------
-// update_config
-// ---------------------------------------------------------------------------
-
-pub struct UpdateConfigTool {
-    config_path: PathBuf,
-    workspace_dir: PathBuf,
-    instance_slug: String,
-    instance_dir: PathBuf,
-}
-
-impl UpdateConfigTool {
-    pub fn new(config_path: &Path, workspace_dir: &Path, instance_slug: &str) -> Self {
-        Self {
-            config_path: config_path.to_path_buf(),
-            workspace_dir: workspace_dir.to_path_buf(),
-            instance_slug: instance_slug.to_string(),
-            instance_dir: workspace_dir.join("instances").join(instance_slug),
-        }
-    }
-}
-
-/// Arguments for update_config tool.
-#[derive(Deserialize, JsonSchema)]
-pub struct UpdateConfigArgs {
-    /// OpenAI API key. Leave null to keep current.
-    pub openai_key: Option<String>,
-    /// Anthropic API key. Leave null to keep current.
-    pub anthropic_key: Option<String>,
-    /// Brave Search API key. Leave null to keep current.
-    pub brave_search_key: Option<String>,
-    /// Set the user's timezone (IANA format, e.g. "Asia/Bishkek", "Europe/Moscow"). Leave null to keep current.
-    pub timezone: Option<String>,
-    /// Set the companion's display name. Leave null to keep current.
-    pub companion_name: Option<String>,
-    /// Set the GitHub personal access token. Leave null to keep current.
-    pub github_token: Option<String>,
-    /// Add an email account (SMTP/IMAP). Provide as {"smtp_host": "...", "smtp_port": 587, "smtp_user": "...", "smtp_password": "...", "smtp_from": "...", "imap_host": "...", "imap_port": 993, "imap_user": "...", "imap_password": "..."}.
-    pub add_email_account: Option<EmailAccountArg>,
-    /// Remove an email account by address (matches smtp_from or smtp_user).
-    pub remove_email_account: Option<String>,
-}
-
-#[derive(Deserialize, JsonSchema)]
-pub struct EmailAccountArg {
-    pub smtp_host: String,
-    #[serde(default = "default_587")]
-    pub smtp_port: u16,
-    pub smtp_user: String,
-    pub smtp_password: String,
-    pub smtp_from: String,
-    #[serde(default)]
-    pub imap_host: String,
-    #[serde(default = "default_993")]
-    pub imap_port: u16,
-    #[serde(default)]
-    pub imap_user: String,
-    #[serde(default)]
-    pub imap_password: String,
-}
-
-fn default_587() -> u16 {
-    587
-}
-fn default_993() -> u16 {
-    993
-}
-
-impl Tool for UpdateConfigTool {
-    const NAME: &'static str = "update_config";
-    type Error = ToolExecError;
-    type Args = UpdateConfigArgs;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: "update_config".into(),
-            description: "Update config and instance settings (API keys, MCP servers, timezone, companion name, GitHub token). Only provided fields change.".into(),
-            parameters: openai_schema::<UpdateConfigArgs>(),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let raw = fs::read_to_string(&self.config_path)
-            .map_err(|e| ToolExecError(format!("failed to read config: {e}")))?;
-        let mut config: crate::config::Config = toml::from_str(&raw)
-            .map_err(|e| ToolExecError(format!("failed to parse config: {e}")))?;
-
-        let mut changes = Vec::new();
-
-        if let Some(key) = &args.openai_key {
-            let k = key.trim().to_string();
-            config.llm.tokens.open_ai = k.clone();
-            changes.push(if k.is_empty() {
-                "openai key cleared".into()
-            } else {
-                "openai key updated".into()
-            });
-        }
-
-        if let Some(key) = &args.anthropic_key {
-            let k = key.trim().to_string();
-            config.llm.tokens.anthropic = k.clone();
-            changes.push(if k.is_empty() {
-                "anthropic key cleared".into()
-            } else {
-                "anthropic key updated".into()
-            });
-        }
-
-        if let Some(key) = &args.brave_search_key {
-            let k = key.trim().to_string();
-            config.llm.tokens.brave_search = k.clone();
-            changes.push(if k.is_empty() {
-                "brave search key cleared".into()
-            } else {
-                "brave search key updated".into()
-            });
-        }
-
-        // --- Instance-specific settings (project_state.json) ---
-        let mut instance_changes = false;
-
-        if args.timezone.is_some() || args.companion_name.is_some() {
-            let state_path = self.instance_dir.join("project_state.json");
-            let mut project_state: serde_json::Value = fs::read_to_string(&state_path)
-                .ok()
-                .and_then(|raw| serde_json::from_str(&raw).ok())
-                .unwrap_or_else(|| serde_json::json!({}));
-
-            if let Some(tz) = &args.timezone {
-                let tz = tz.trim().to_string();
-                if !tz.is_empty() {
-                    if tz.parse::<chrono_tz::Tz>().is_err() {
-                        return Err(ToolExecError(format!(
-                            "invalid timezone \"{tz}\". use IANA format like \"Asia/Bishkek\""
-                        )));
-                    }
-                }
-                project_state["timezone"] = serde_json::Value::String(tz.clone());
-                changes.push(format!(
-                    "timezone → {}",
-                    if tz.is_empty() { "UTC" } else { &tz }
-                ));
-                instance_changes = true;
-            }
-
-            if let Some(name) = &args.companion_name {
-                let name = name.trim().to_string();
-                if project_state.get("identity").is_none() {
-                    project_state["identity"] = serde_json::json!({});
-                }
-                project_state["identity"]["name"] = serde_json::Value::String(name.clone());
-                changes.push(format!("companion name → {name}"));
-                instance_changes = true;
-            }
-
-            if instance_changes {
-                fs::create_dir_all(&self.instance_dir).ok();
-                let body = serde_json::to_string_pretty(&project_state)
-                    .map_err(|e| ToolExecError(format!("failed to serialize state: {e}")))?;
-                fs::write(&state_path, body)
-                    .map_err(|e| ToolExecError(format!("failed to write state: {e}")))?;
-            }
-        }
-
-        if let Some(token) = &args.github_token {
-            let token = token.trim().to_string();
-            // Write github token to per-instance config, not global
-            let mut instance_cfg =
-                crate::config::InstanceConfig::load(&self.workspace_dir, &self.instance_slug);
-            instance_cfg.github.token = token.clone();
-            instance_cfg
-                .save(&self.workspace_dir, &self.instance_slug)
-                .map_err(|e| ToolExecError(format!("failed to save instance config: {e}")))?;
-            changes.push(if token.is_empty() {
-                "github token removed".into()
-            } else {
-                "github token updated".into()
-            });
-        }
-
-        // --- Email account management ---
-        if let Some(acct) = &args.add_email_account {
-            let mut accounts =
-                crate::config::EmailAccounts::load(&self.workspace_dir, &self.instance_slug);
-            let email_cfg = crate::config::EmailConfig {
-                smtp_host: acct.smtp_host.clone(),
-                smtp_port: acct.smtp_port,
-                smtp_user: acct.smtp_user.clone(),
-                smtp_password: acct.smtp_password.clone(),
-                smtp_from: acct.smtp_from.clone(),
-                imap_host: acct.imap_host.clone(),
-                imap_port: acct.imap_port,
-                imap_user: acct.imap_user.clone(),
-                imap_password: acct.imap_password.clone(),
-            };
-            accounts.push(email_cfg);
-            crate::config::EmailAccounts::save(&accounts, &self.workspace_dir, &self.instance_slug)
-                .map_err(|e| ToolExecError(format!("failed to save email account: {e}")))?;
-            changes.push(format!("added email account {}", acct.smtp_from));
-        }
-
-        if let Some(email) = &args.remove_email_account {
-            let email = email.trim().to_string();
-            let mut accounts =
-                crate::config::EmailAccounts::load(&self.workspace_dir, &self.instance_slug);
-            let before = accounts.len();
-            accounts
-                .retain(|a| a.smtp_from != email && a.smtp_user != email && a.imap_user != email);
-            if accounts.len() == before {
-                return Err(ToolExecError(format!("email account '{email}' not found")));
-            }
-            crate::config::EmailAccounts::save(&accounts, &self.workspace_dir, &self.instance_slug)
-                .map_err(|e| ToolExecError(format!("failed to save email config: {e}")))?;
-            changes.push(format!("removed email account {email}"));
-        }
-
-        if changes.is_empty() {
-            return Ok("nothing to change — all fields were null".into());
-        }
-
-        // Save global config if anything changed there
-        if args.openai_key.is_some()
-            || args.anthropic_key.is_some()
-            || args.brave_search_key.is_some()
-        {
-            let output = toml::to_string_pretty(&config)
-                .map_err(|e| ToolExecError(format!("failed to serialize config: {e}")))?;
-            fs::write(&self.config_path, &output)
-                .map_err(|e| ToolExecError(format!("failed to write config: {e}")))?;
-        }
-
-        Ok(format!(
-            "updated: {}. changes take effect on next message.",
-            changes.join(", ")
-        ))
-    }
-}
-
-// ---------------------------------------------------------------------------
 // clear_context
 // ---------------------------------------------------------------------------
 
@@ -1420,165 +1101,6 @@ impl Tool for CreateDropTool {
             drop.title,
             drop.kind.as_str()
         ))
-    }
-}
-
-// ---------------------------------------------------------------------------
-// explore_code + search_code
-// ---------------------------------------------------------------------------
-
-#[allow(dead_code)]
-pub struct SearchCodeTool {
-    instance_dir: PathBuf,
-}
-
-impl SearchCodeTool {
-    #[allow(dead_code)]
-    pub fn new(workspace_dir: &Path, instance_slug: &str) -> Self {
-        Self {
-            instance_dir: workspace_dir.join("instances").join(instance_slug),
-        }
-    }
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[allow(dead_code)]
-pub struct SearchCodeArgs {
-    /// Text or pattern to search for (case-insensitive substring match).
-    pub query: String,
-    /// Directory to search in. Absolute path (e.g. "/Users/timur/projects/app") or relative to instance root. Default: instance directory.
-    pub path: Option<String>,
-}
-
-impl Tool for SearchCodeTool {
-    const NAME: &'static str = "search_code";
-    type Error = ToolExecError;
-    type Args = SearchCodeArgs;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: "search_code".into(),
-            description: "Search files for a text pattern. Returns matching lines with paths and line numbers.".into(),
-            parameters: openai_schema::<SearchCodeArgs>(),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let query = args.query.trim().to_lowercase();
-        if query.is_empty() {
-            return Err(ToolExecError("query cannot be empty".into()));
-        }
-
-        let search_dir = if let Some(ref p) = args.path {
-            if p.starts_with('/') {
-                PathBuf::from(p)
-            } else {
-                self.instance_dir.join(p)
-            }
-        } else {
-            self.instance_dir.clone()
-        };
-
-        if !search_dir.exists() {
-            return Err(ToolExecError(format!(
-                "path does not exist: {}",
-                search_dir.display()
-            )));
-        }
-
-        let mut results = Vec::new();
-        search_files_recursive(&search_dir, &query, &search_dir, &mut results, 0);
-
-        if results.is_empty() {
-            return Ok(format!("no matches for '{}'", args.query));
-        }
-
-        let truncated = results.len() > 50;
-        let output: String = results
-            .iter()
-            .take(50)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join("\n");
-        if truncated {
-            Ok(format!(
-                "{output}\n... ({} total matches, showing first 50)",
-                results.len()
-            ))
-        } else {
-            Ok(output)
-        }
-    }
-}
-
-#[allow(dead_code)]
-fn search_files_recursive(
-    dir: &Path,
-    query: &str,
-    base: &Path,
-    results: &mut Vec<String>,
-    depth: usize,
-) {
-    if depth > 10 || results.len() > 200 {
-        return;
-    }
-
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-
-    for entry in entries.filter_map(Result::ok) {
-        let path = entry.path();
-        if path.is_dir() {
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if matches!(
-                name,
-                "node_modules"
-                    | ".git"
-                    | "target"
-                    | ".next"
-                    | "dist"
-                    | "build"
-                    | ".svelte-kit"
-                    | "__pycache__"
-                    | ".venv"
-                    | "venv"
-            ) {
-                continue;
-            }
-            search_files_recursive(&path, query, base, results, depth + 1);
-        } else if path.is_file() {
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if matches!(
-                ext,
-                "json"
-                    | "md"
-                    | "txt"
-                    | "toml"
-                    | "yaml"
-                    | "yml"
-                    | "rs"
-                    | "ts"
-                    | "js"
-                    | "svelte"
-                    | "css"
-                    | "html"
-                    | "py"
-                    | "sh"
-                    | ""
-            ) {
-                if let Ok(content) = fs::read_to_string(&path) {
-                    let rel = path.strip_prefix(base).unwrap_or(&path);
-                    for (i, line) in content.lines().enumerate() {
-                        if line.to_lowercase().contains(query) {
-                            results.push(format!("{}:{}: {}", rel.display(), i + 1, line.trim()));
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 

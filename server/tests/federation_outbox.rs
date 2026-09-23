@@ -416,7 +416,6 @@ fn the_sending_tools_are_thin_typed_wrappers_gated_by_this_owners_policy() {
             "\"create_drop\"",
             "\"memory_write\"",
             "\"memory_read\"",
-            "\"memory_list\"",
             "\"memory_search\"",
             "\"read_email\"",
         ]

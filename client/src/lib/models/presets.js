@@ -47,9 +47,9 @@ export function modelPlaceholder(provider) {
 		case "openrouter":
 			return "vendor/model";
 		case "codex":
-			return "gpt-6-astra";
+			return "gpt-6-sol";
 		case "openai":
-			return "gpt-5.6-sol";
+			return "gpt-6-sol";
 		default:
 			return "claude-sonnet-4-6";
 	}

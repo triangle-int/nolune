@@ -74,21 +74,21 @@ test('a picked model that does not answer rejects with the typed outcome, naming
 // `llm_configured` even when the preset never answered; onboarding must
 // test again instead of trusting the flag.
 
-const gpt = { id: 'gpt-sol', name: 'GPT-5.6 Sol', provider: 'openai', model: 'gpt-5.6-sol' };
+const gpt = { id: 'gpt-sol', name: 'GPT-6 Sol', provider: 'openai', model: 'gpt-6-sol' };
 
 test('a companion without a provider goes to the provider step', () => {
 	assert.deepEqual(resumeOnboarding({ llm_configured: false }, null, null), { step: 'provider', reason: null });
-	assert.deepEqual(resumeOnboarding({ llm_configured: false, chat_preset: 'gpt-sol' }, { ok: true, preset: 'gpt-sol', provider: 'openai', model: 'gpt-5.6-sol', usage: { input_tokens: 1, output_tokens: 1 } }, gpt), { step: 'provider', reason: null });
+	assert.deepEqual(resumeOnboarding({ llm_configured: false, chat_preset: 'gpt-sol' }, { ok: true, preset: 'gpt-sol', provider: 'openai', model: 'gpt-6-sol', usage: { input_tokens: 1, output_tokens: 1 } }, gpt), { step: 'provider', reason: null });
 });
 
 test('a configured provider skips to the first message only when its Chat preset answered', () => {
-	const ok = { ok: true, preset: 'gpt-sol', provider: 'openai', model: 'gpt-5.6-sol', usage: { input_tokens: 8, output_tokens: 1 } };
+	const ok = { ok: true, preset: 'gpt-sol', provider: 'openai', model: 'gpt-6-sol', usage: { input_tokens: 8, output_tokens: 1 } };
 	assert.deepEqual(resumeOnboarding({ llm_configured: true, chat_preset: 'gpt-sol' }, ok, gpt), { step: 'first-message' });
 });
 
 test('a configured provider whose preset does not answer returns to the provider step with the typed outcome', () => {
 	for (const [error, message, pattern] of [
-		['model_not_found', 'OpenAI has no model "gpt-5.6-sol": does not exist', /no model "gpt-5\.6-sol"/],
+		['model_not_found', 'OpenAI has no model "gpt-6-sol": does not exist', /no model "gpt-6-sol"/],
 		['rate_limited', 'OpenAI accepted the key but is rate limiting', /rate limiting/],
 		['provider_rejected', 'OpenAI rejected the request (402): Insufficient credits', /Insufficient credits/],
 		['authentication', 'OpenAI rejected the API key.', /rejected the API key/],
@@ -102,14 +102,14 @@ test('a configured provider whose preset does not answer returns to the provider
 	assert.equal(failed.step, 'provider');
 	assert.match(failed.reason, /could not be tested/i);
 	// Without the preset row, the sentence still names the provider from the status.
-	const bare = resumeOnboarding({ llm_configured: true, chat_preset: 'gpt-sol', chat_provider: 'openai', model: 'gpt-5.6-sol' }, { ok: false, error: 'model_not_found', message: 'nope', status: 404 }, null);
-	assert.match(bare.reason, /OpenAI has no model "gpt-5\.6-sol"/);
+	const bare = resumeOnboarding({ llm_configured: true, chat_preset: 'gpt-sol', chat_provider: 'openai', model: 'gpt-6-sol' }, { ok: false, error: 'model_not_found', message: 'nope', status: 404 }, null);
+	assert.match(bare.reason, /OpenAI has no model "gpt-6-sol"/);
 });
 
 // --- Codex (#27): the gate is the login, then a model that answers ---
 
 const codexStatus = (over = {}) => ({
-	binary: { state: 'ready', pinned_version: '0.155.0', path: '/opt/homebrew/bin/codex', version: '0.155.0' },
+	binary: { state: 'ready', pinned_version: '0.156.1', path: '/opt/homebrew/bin/codex', version: '0.156.1' },
 	installed: true,
 	compatible: true,
 	logged_in: true,
@@ -128,8 +128,8 @@ test('codex onboarding goes on to its models once codex holds a login (#27)', as
 
 test('codex onboarding stops when the binary is missing, mismatched, silent, or holds no login', async () => {
 	for (const [name, status, kind, pattern] of [
-		['missing', codexStatus({ binary: { state: 'not_installed', pinned_version: '0.155.0', message: 'codex is not installed: no `codex` on PATH and NOLUNE_CODEX_BIN is unset' }, installed: false, compatible: false, logged_in: false, account: null }), 'binary', /not installed/i],
-		['mismatched', codexStatus({ binary: { state: 'incompatible', pinned_version: '0.155.0', path: '/usr/local/bin/codex', version: '0.154.0', message: '/usr/local/bin/codex is codex 0.154.0; Nolune supports codex 0.155.0 only' }, compatible: false, logged_in: false, account: null }), 'binary', /0\.154\.0.*0\.155\.0/],
+		['missing', codexStatus({ binary: { state: 'not_installed', pinned_version: '0.156.1', message: 'codex is not installed: no `codex` on PATH and NOLUNE_CODEX_BIN is unset' }, installed: false, compatible: false, logged_in: false, account: null }), 'binary', /not installed/i],
+		['mismatched', codexStatus({ binary: { state: 'incompatible', pinned_version: '0.156.1', path: '/usr/local/bin/codex', version: '0.155.0', message: '/usr/local/bin/codex is codex 0.155.0; Nolune supports codex 0.156.1 only' }, compatible: false, logged_in: false, account: null }), 'binary', /0\.155\.0.*0\.156\.1/],
 		['silent', codexStatus({ logged_in: false, account: null, error: 'codex app-server handshake failed: exited with status 1' }), 'unavailable', /handshake failed/],
 		['logged out', codexStatus({ logged_in: false, account: null }), 'login', /not logged in/i],
 	]) {
@@ -152,11 +152,11 @@ test('a codex model that does not answer keeps onboarding open with the login se
 });
 
 test('a configured codex preset whose login is gone returns to the provider step with the login sentence', () => {
-	const astra = { id: 'codex-astra', name: 'GPT-6 Astra via Codex', provider: 'codex', model: 'gpt-6-astra' };
+	const sol = { id: 'codex-sol', name: 'GPT-6 Sol via Codex', provider: 'codex', model: 'gpt-6-sol' };
 	const outcome = { ok: false, error: 'setup_required', message: 'Codex login required: sign in with ChatGPT from Settings › Connections, or run `codex login` on this machine.', status: 503 };
-	const next = resumeOnboarding({ llm_configured: true, chat_preset: 'codex-astra', chat_provider: 'codex' }, outcome, astra);
+	const next = resumeOnboarding({ llm_configured: true, chat_preset: 'codex-sol', chat_provider: 'codex' }, outcome, sol);
 	assert.equal(next.step, 'provider');
 	assert.match(next.reason, /Codex login required/);
 	assert.doesNotMatch(next.reason, /API key/);
-	assert.deepEqual(resumeOnboarding({ llm_configured: true, chat_preset: 'codex-astra' }, { ok: true, preset: 'codex-astra', provider: 'codex', model: 'gpt-6-astra', usage: { input_tokens: 1, output_tokens: 1 } }, astra), { step: 'first-message' });
+	assert.deepEqual(resumeOnboarding({ llm_configured: true, chat_preset: 'codex-sol' }, { ok: true, preset: 'codex-sol', provider: 'codex', model: 'gpt-6-sol', usage: { input_tokens: 1, output_tokens: 1 } }, sol), { step: 'first-message' });
 });
