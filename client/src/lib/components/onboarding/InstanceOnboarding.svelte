@@ -830,7 +830,11 @@
 		font-style: normal;
 		line-height: 1.6;
 		padding: 0.875rem 1.25rem;
+		overflow-x: hidden;
 	}
+	/* Onboarding scrolls on short screens, but without a visible bar. */
+	.ob, .ob-textarea { scrollbar-width: none; }
+	.ob::-webkit-scrollbar, .ob-textarea::-webkit-scrollbar { display: none; }
 
 	.ob-go {
 		position: absolute;
