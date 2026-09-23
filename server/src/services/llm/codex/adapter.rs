@@ -54,6 +54,7 @@ use super::super::contract::{
     Capabilities, ConversationRef, EventSink, LlmError, LlmEvent, LlmRequest, ModelListing,
     ProviderAdapter, StopReason, Usage,
 };
+use super::super::helpers::is_context_block;
 use super::super::types::{
     ContentBlock, ImageSource, LlmBackend, LlmResponse, Message, ToolCall, ToolOutputContent,
 };
@@ -431,13 +432,14 @@ fn tool_output_text(content: &ToolOutputContent) -> String {
 }
 
 /// The conversation before `messages`' last turn, told as text for a
-/// thread that was not there for it.
+/// thread that was not there for it. Each user message is what the person
+/// wrote; the turn context and memories replayed with it are left out.
 fn recap(earlier: &[Message]) -> String {
     let mut lines = vec!["Earlier in this conversation, before this thread:".to_owned()];
     for message in earlier {
         match message {
             Message::User { content } => {
-                for block in content {
+                for block in content.iter().filter(|block| !is_context_block(block)) {
                     match block {
                         ContentBlock::Text { text } => lines.push(format!("user: {text}")),
                         ContentBlock::ToolOutput { call_id, content } => {

@@ -221,35 +221,13 @@ pub(crate) fn tool_use_summary(name: &str, input: &serde_json::Value) -> String 
     name.to_string()
 }
 
-/// Merge timestamps from old entries into a new message list from the LLM.
-/// Old entries that match by position keep their ts/id; new entries get fresh values.
-/// Strip injected context blocks from user messages before saving to history.
-/// Removes [turn context ...] and [system: auto-recalled memories ...] blocks.
-pub(crate) fn strip_context_blocks(msg: &Message) -> Message {
-    match msg {
-        Message::User { content } => {
-            let cleaned: Vec<ContentBlock> = content
-                .iter()
-                .filter(|b| {
-                    if let ContentBlock::Text { text } = b {
-                        !text.starts_with("[turn context")
-                            && !text.starts_with("[system: auto-recalled")
-                    } else {
-                        true
-                    }
-                })
-                .cloned()
-                .collect();
-            Message::User {
-                content: if cleaned.is_empty() {
-                    content.clone()
-                } else {
-                    cleaned
-                },
-            }
-        }
-        other => other.clone(),
-    }
+/// Whether a user-message block is one a turn adds around what the person
+/// wrote: the turn context (`[turn context …]`) or the recalled memories
+/// (`[system: auto-recalled memories …]`). Providers replay those as they
+/// were sent; this is for retelling a conversation as who said what.
+pub(crate) fn is_context_block(block: &ContentBlock) -> bool {
+    matches!(block, ContentBlock::Text { text }
+        if text.starts_with("[turn context") || text.starts_with("[system: auto-recalled"))
 }
 
 /// Convert HistoryEntry slice to ChatMessage vec for UI display.
@@ -583,6 +561,18 @@ fn inline_upload_block(
     }
 }
 
+/// `[attached: name (upload_id)]`, as the composer writes an attachment into
+/// the message.
+static ATTACHMENT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"\[attached:\s*(.+?)\s*\(([^)]+)\)\]").expect("attachment pattern")
+});
+
+/// Whether `text` names an attachment, which [`build_multimodal_prompt`]
+/// sends as the file itself.
+pub fn has_attachments(text: &str) -> bool {
+    ATTACHMENT.is_match(text)
+}
+
 /// Build a multimodal Message from text + file attachments.
 /// Files are referenced via public URL so the LLM provider can fetch them directly.
 /// When the public URL is unset or points at this machine (localhost, loopback),
@@ -595,7 +585,7 @@ pub fn build_multimodal_prompt(
     resources: &crate::services::resource_access::ResourceAccess,
     media_store: &crate::services::media_text::MediaStore,
 ) -> Message {
-    let re = regex::Regex::new(r"\[attached:\s*(.+?)\s*\(([^)]+)\)\]").unwrap();
+    let re = &*ATTACHMENT;
     let provider_url = crate::config::provider_reachable_public_url(public_url);
 
     let mut contents: Vec<ContentBlock> = Vec::new();

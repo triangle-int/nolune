@@ -27,8 +27,8 @@ pub use anthropic::{MAX_INLINE_IMAGE_BASE64_BYTES, MAX_INLINE_IMAGE_BYTES};
 #[allow(unused_imports)]
 pub use helpers::DEFAULT_ONBOARDING_PROMPT;
 pub use helpers::{
-    build_multimodal_prompt, get_real_input_tokens, history_to_chat_messages, load_system_prompt,
-    refresh_resource_messages,
+    build_multimodal_prompt, get_real_input_tokens, has_attachments, history_to_chat_messages,
+    load_system_prompt, refresh_resource_messages,
 };
 pub use types::{ContentBlock, HistoryEntry, LlmBackend, Message, ToolChatResult};
 #[allow(unused_imports)]

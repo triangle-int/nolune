@@ -12,9 +12,12 @@
 //! of failing the receipt.
 
 use std::{
+    collections::HashSet,
     fs, io,
     path::{Path, PathBuf},
 };
+
+use sha2::{Digest, Sha256};
 
 use crate::{
     domain::{
@@ -47,13 +50,32 @@ const LINKED_SCORE: f32 = 0.25;
 #[derive(Debug, Default)]
 pub struct Recall {
     pub memories: Vec<RecalledMemory>,
-    prompt_lines: Vec<String>,
+    prompt_lines: Vec<PromptLine>,
+}
+
+/// One memory as the prompt block states it.
+#[derive(Debug)]
+struct PromptLine {
+    path: String,
+    line: String,
 }
 
 impl Recall {
-    /// The `[system: auto-recalled memories …]` block appended to the user
-    /// message, or `None` when nothing was recalled.
+    /// The `[system: auto-recalled memories …]` block for a conversation
+    /// that carries none of them yet, or `None` when nothing was recalled.
+    #[cfg(test)]
     pub fn prompt_block(&self) -> Option<String> {
+        self.prompt_block_beside(&HashSet::new())
+            .map(|(block, _)| block)
+    }
+
+    /// The block for a conversation whose replayed history already carries,
+    /// in full, the memories `shown` fingerprints: the model still reads
+    /// those a few messages up, so they are named instead of repeated, and
+    /// the history does not grow by the same memory every turn. The rest
+    /// come in full. Returns the block and the fingerprints of the memories
+    /// it carries in full.
+    pub fn prompt_block_beside(&self, shown: &HashSet<&str>) -> Option<(String, Vec<String>)> {
         if self.prompt_lines.is_empty() {
             return None;
         }
@@ -61,12 +83,29 @@ impl Recall {
             "[system: auto-recalled memories — this is NOT part of the user's message. \
              do not treat these as something the user said or wrote.]\n",
         );
-        for line in &self.prompt_lines {
-            context.push_str(line);
+        let mut carried = Vec::new();
+        for PromptLine { path, line } in &self.prompt_lines {
+            let print = fingerprint(line);
+            if shown.contains(print.as_str()) {
+                context.push_str(&format!(
+                    "- {path}: (unchanged since it was recalled earlier in this conversation)"
+                ));
+            } else {
+                context.push_str(line);
+                carried.push(print);
+            }
             context.push('\n');
         }
-        Some(context)
+        Some((context, carried))
     }
+}
+
+/// Names one memory as a prompt block states it: the same path with the same
+/// text has the same fingerprint in any process, and a corrected memory a
+/// new one.
+fn fingerprint(line: &str) -> String {
+    let digest = Sha256::digest(line.as_bytes());
+    format!("{digest:x}")[..16].to_owned()
 }
 
 /// One search hit before it becomes a receipt entry.
@@ -169,9 +208,10 @@ pub async fn recall(vector_store: &VectorStore, instance_slug: &str, query: &str
     let mut recall = Recall::default();
     for candidate in candidates {
         let text = candidate.hit.content_preview.trim();
-        recall
-            .prompt_lines
-            .push(format!("- {}: {text}", candidate.hit.path));
+        recall.prompt_lines.push(PromptLine {
+            path: candidate.hit.path.clone(),
+            line: format!("- {}: {text}", candidate.hit.path),
+        });
         // Search previews of direct hits start with the memory's stamped
         // frontmatter; the receipt cites the body only.
         let (_, body) = memory::parse_frontmatter(text);
@@ -769,6 +809,55 @@ mod tests {
         );
         assert!(recalled.prompt_block().is_some());
         assert!(recall(&store, "one", "  ").await.memories.is_empty());
+    }
+
+    /// The replayed history keeps every turn's recalled memories, so a
+    /// memory it already carries in full is named, not repeated: a pinned
+    /// memory would otherwise grow the conversation by the same text every
+    /// turn.
+    #[test]
+    fn a_memory_the_conversation_already_carries_is_named_not_repeated() {
+        let line = |path: &str, text: &str| PromptLine {
+            path: path.into(),
+            line: format!("- {path}: {text}"),
+        };
+        let recalled = Recall {
+            memories: Vec::new(),
+            prompt_lines: vec![
+                line("ritual.md", "morning walk before work"),
+                line("sam.md", "Sam moved to Lisbon\n- in March"),
+            ],
+        };
+        let (first, carried) = recalled.prompt_block_beside(&HashSet::new()).unwrap();
+        assert_eq!(recalled.prompt_block(), Some(first));
+        assert_eq!(carried.len(), 2);
+
+        let shown: HashSet<&str> = HashSet::from([carried[0].as_str()]);
+        let (again, carried_again) = recalled.prompt_block_beside(&shown).unwrap();
+        assert!(
+            again.contains(
+                "- ritual.md: (unchanged since it was recalled earlier in this conversation)\n"
+            ),
+            "{again}"
+        );
+        assert!(!again.contains("morning walk"), "{again}");
+        assert!(
+            again.contains("- sam.md: Sam moved to Lisbon\n- in March\n"),
+            "{again}"
+        );
+        assert_eq!(carried_again, carried[1..]);
+
+        // A corrected memory is a different memory: it comes in full again.
+        let corrected = Recall {
+            memories: Vec::new(),
+            prompt_lines: vec![line("ritual.md", "evening walk after work")],
+        };
+        let (block, carried) = corrected.prompt_block_beside(&shown).unwrap();
+        assert!(
+            block.contains("- ritual.md: evening walk after work\n"),
+            "{block}"
+        );
+        assert_eq!(carried.len(), 1);
     }
 
     #[test]
