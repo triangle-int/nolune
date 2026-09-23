@@ -39,7 +39,7 @@ To change one:
 
 ## The pinned Codex release
 
-Nolune speaks to one `codex` release, `0.155.0`, pinned as `CODEX_VERSION`
+Nolune speaks to one `codex` release, `0.156.1`, pinned as `CODEX_VERSION`
 in `server/src/services/llm/codex/mod.rs`, and the fake app-server the
 tests use plays `server/src/services/llm/fixtures/codex-<version>.jsonl`.
 A newer codex on the machine is refused by discovery until the pin moves.
@@ -63,11 +63,21 @@ To move it:
    events, `turn/interrupt`, the failed and interrupted `turn/completed`,
    the pre-initialize and unknown-method errors. Nothing under `~/.codex`
    is read or written when `CODEX_HOME` points elsewhere.
-4. If `model/list` changed, update the seeded Codex presets in
+4. Check the tool surface: give a scratch `CODEX_HOME` a `config.toml`
+   whose `model_provider` is a local Responses stub (`wire_api =
+   "responses"`, a `base_url` on `127.0.0.1`) that records each request
+   body, start a thread with the adapter's `thread/start` params and one
+   turn with its `turn/start` params, then resume the thread in a new
+   app-server and run another turn. Every body's `tools` must list
+   Nolune's dynamic tools and nothing else, the instructions must carry no
+   skills catalog, and no `configWarning` may name one of the overrides as
+   ignored; a tool that appears is a new switch in `thread_config` (or in
+   the `environments` the adapter sends) before the pin moves.
+5. If `model/list` changed, update the seeded Codex presets in
    `default_presets` (the Model defaults list above applies) and the
    `CODEX_MODELS` catalog in `client/src/lib/models/presets.js` that the
    preset editor and onboarding offer.
-5. Run the fixture-driven suite, then the live tests against the new
+6. Run the fixture-driven suite, then the live tests against the new
    binary: `cargo test --locked --manifest-path server/Cargo.toml -- codex`
    without credentials; the smoke test with a scratch home,
    `cargo test --locked --manifest-path server/Cargo.toml --bin nolune --
@@ -77,16 +87,16 @@ To move it:
    services::llm::codex` for discovery, the handshake and, with a login in
    codex's home, the tool round trip through the real app-server. Check
    that no `codex app-server` child is left running afterwards.
-6. Update the pinned version wherever the docs name it: the Codex setup
+7. Update the pinned version wherever the docs name it: the Codex setup
    step and the process section in `docs/providers.md`, and this page;
    `server/tests/provider_docs.rs` fails when either page names another
    release. `docs/settings.md` describes the login routes and needs a change
    only when their shapes did.
-7. Smoke the Codex section of Settings → Connections and the Codex
+8. Smoke the Codex section of Settings → Connections and the Codex
    choice in onboarding with the real binary (`docs/settings.md` lists the
    states), and the incompatible state with the previous release still
    installed.
-8. Say in the release notes which codex release is now required: people
+9. Say in the release notes which codex release is now required: people
    who installed the previous one see `codex_incompatible` from
    `GET /api/config/codex/status` until they upgrade.
 

@@ -16,11 +16,11 @@
  import CodexLogin from '$lib/components/settings/CodexLogin.svelte';
  import type { CodexStatus } from '$lib/api/client.js';
  // Sample Codex statuses (#27): the tile reads them through the real `codexView`; nothing is fetched and the actions do nothing.
- const codexReadyBinary = { state: 'ready', pinned_version: '0.155.0', path: '/opt/homebrew/bin/codex', version: '0.155.0' } as const;
+ const codexReadyBinary = { state: 'ready', pinned_version: '0.156.1', path: '/opt/homebrew/bin/codex', version: '0.156.1' } as const;
  const codexSamples: Record<string, CodexStatus> = {
   pending: { binary: codexReadyBinary, installed: true, compatible: true, logged_in: false, account: null, login: { id: 'login_example', method: 'device_code', state: 'pending', verification_url: 'https://auth.openai.com/codex/device', user_code: 'NLNE-FXTR' } },
   loggedIn: { binary: codexReadyBinary, installed: true, compatible: true, logged_in: true, account: { kind: 'chatgpt', email: 'companion@example.test', plan: 'plus' }, login: null },
-  missing: { binary: { state: 'not_installed', pinned_version: '0.155.0', message: 'codex is not installed: no `codex` on PATH and NOLUNE_CODEX_BIN is unset' }, installed: false, compatible: false, logged_in: false, account: null, login: null },
+  missing: { binary: { state: 'not_installed', pinned_version: '0.156.1', message: 'codex is not installed: no `codex` on PATH and NOLUNE_CODEX_BIN is unset' }, installed: false, compatible: false, logged_in: false, account: null, login: null },
  };
  let codexSample = $state<keyof typeof codexSamples>('pending');
  // Sample preset row (#28): chips from the real helper, a test result that never leaves the page.

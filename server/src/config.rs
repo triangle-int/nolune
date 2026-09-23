@@ -476,8 +476,8 @@ pub fn default_presets(provider: LlmProvider) -> Vec<ModelPreset> {
             ),
         ],
         LlmProvider::Openai => vec![
-            ModelPreset::seeded("gpt-sol", "GPT-5.6 Sol", provider, "gpt-5.6-sol"),
-            ModelPreset::seeded("gpt-luna", "GPT-5.6 Luna", provider, "gpt-5.6-luna"),
+            ModelPreset::seeded("gpt-sol", "GPT-6 Sol", provider, "gpt-6-sol"),
+            ModelPreset::seeded("gpt-luna", "GPT-6 Luna", provider, "gpt-6-luna"),
         ],
         // OpenRouter ids are `vendor/model`; the ids stay clear of the
         // vendors' own seeds so both can coexist.
@@ -498,18 +498,8 @@ pub fn default_presets(provider: LlmProvider) -> Vec<ModelPreset> {
         // Codex (#27) names the models the pinned codex release lists; a
         // ChatGPT login pays for none of them per token.
         LlmProvider::Codex => vec![
-            ModelPreset::seeded(
-                "codex-astra",
-                "GPT-6 Astra via Codex",
-                provider,
-                "gpt-6-astra",
-            ),
-            ModelPreset::seeded(
-                "codex-luna",
-                "GPT-5.6 Luna via Codex",
-                provider,
-                "gpt-5.6-luna",
-            ),
+            ModelPreset::seeded("codex-sol", "GPT-6 Sol via Codex", provider, "gpt-6-sol"),
+            ModelPreset::seeded("codex-luna", "GPT-6 Luna via Codex", provider, "gpt-6-luna"),
         ],
     }
 }
@@ -520,7 +510,7 @@ fn default_slots(provider: LlmProvider) -> (&'static str, &'static str) {
         LlmProvider::Anthropic => ("sonnet", "haiku"),
         LlmProvider::Openai => ("gpt-sol", "gpt-luna"),
         LlmProvider::Openrouter => ("openrouter-sonnet", "openrouter-gpt-luna"),
-        LlmProvider::Codex => ("codex-astra", "codex-luna"),
+        LlmProvider::Codex => ("codex-sol", "codex-luna"),
     }
 }
 
@@ -2000,7 +1990,7 @@ custom_token = "retained"
             config.llm.chat_preset().unwrap().provider,
             LlmProvider::Openai
         );
-        assert_eq!(config.llm.chat_model(), Some("gpt-5.6-sol"));
+        assert_eq!(config.llm.chat_model(), Some("gpt-6-sol"));
         assert_eq!(
             config.llm.background_preset().unwrap().model,
             "claude-haiku-4-5-20251001"

@@ -708,11 +708,16 @@ const CAPABILITIES: Capabilities = Capabilities {
 };
 
 /// `reasoning.effort` is a Responses API parameter only reasoning models
-/// accept: the GPT-5 family and the o-series. Other models answer it with
-/// a 400, so the contract refuses it for them before the network.
+/// accept: GPT-5 and every later generation, and the o-series. Other models
+/// answer it with a 400, so the contract refuses it for them before the
+/// network.
 fn supports_reasoning(model: &str) -> bool {
     let model = model.trim().to_ascii_lowercase();
-    model.starts_with("gpt-5")
+    let generation = model.strip_prefix("gpt-").and_then(|rest| {
+        let digits = rest.split(|c: char| !c.is_ascii_digit()).next()?;
+        digits.parse::<u32>().ok()
+    });
+    generation.is_some_and(|generation| generation >= 5)
         || (model.starts_with('o') && model[1..].starts_with(|c: char| c.is_ascii_digit()))
 }
 

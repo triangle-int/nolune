@@ -6,7 +6,7 @@ import { CODEX_LOGIN_POLL_MS, codexAccountLabel, codexErrorCopy, codexReady, cod
 // What `GET /api/config/codex/status` answers (#27), one status per state
 // the tile shows. Nothing here carries a token; the guard in
 // server/tests/codex_auth.rs keeps the client's types that way too.
-const PIN = '0.155.0';
+const PIN = '0.156.1';
 const ready = { state: 'ready', pinned_version: PIN, path: '/opt/homebrew/bin/codex', version: PIN };
 const base = { binary: ready, installed: true, compatible: true, logged_in: false, account: null, login: null };
 const chatgpt = { kind: 'chatgpt', email: 'companion@example.test', plan: 'plus' };
@@ -16,7 +16,7 @@ const browser = { id: 'login_2', method: 'browser', state: 'pending', auth_url: 
 const statuses = {
 	loading: null,
 	notInstalled: { binary: { state: 'not_installed', pinned_version: PIN, message: 'codex is not installed: no `codex` on PATH and NOLUNE_CODEX_BIN is unset' }, installed: false, compatible: false, logged_in: false, account: null, login: null },
-	incompatible: { binary: { state: 'incompatible', pinned_version: PIN, path: '/usr/local/bin/codex', version: '0.154.0', message: '/usr/local/bin/codex is codex 0.154.0; Nolune supports codex 0.155.0 only' }, installed: true, compatible: false, logged_in: false, account: null, login: null },
+	incompatible: { binary: { state: 'incompatible', pinned_version: PIN, path: '/usr/local/bin/codex', version: '0.155.0', message: '/usr/local/bin/codex is codex 0.155.0; Nolune supports codex 0.156.1 only' }, installed: true, compatible: false, logged_in: false, account: null, login: null },
 	unusable: { binary: { state: 'unusable', pinned_version: PIN, path: '/usr/local/bin/codex', message: '/usr/local/bin/codex cannot report its version: --version failed (1): boom' }, installed: true, compatible: false, logged_in: false, account: null, login: null },
 	unavailable: { ...base, error: 'codex app-server handshake failed: exited with status 1' },
 	loggedOut: base,
@@ -46,8 +46,8 @@ test('the tile reads one state per status, with a headline, what to do, and whic
 
 	const older = view('incompatible');
 	assert.equal(older.state, 'incompatible');
-	assert.match(older.headline, /0\.154\.0/);
 	assert.match(older.headline, /0\.155\.0/);
+	assert.match(older.headline, /0\.156\.1/);
 	assert.match(older.detail, /\/usr\/local\/bin\/codex/);
 	assert.equal(older.canLogin, false);
 
@@ -69,7 +69,7 @@ test('the tile reads one state per status, with a headline, what to do, and whic
 	assert.match(out.headline, /not logged in/i);
 	assert.equal(out.canLogin, true);
 	assert.equal(out.canLogout, false);
-	assert.match(out.binary, /codex 0\.155\.0/);
+	assert.match(out.binary, /codex 0\.156\.1/);
 	assert.match(out.binary, /\/opt\/homebrew\/bin\/codex/);
 
 	const pending = view('pendingDevice');
@@ -177,7 +177,7 @@ test('ready means the pinned binary, a login, and an app-server that answered', 
 test('a typed login or logout error reads as one sentence with what to do', () => {
 	const cases = [
 		['codex_not_installed', 'codex is not installed: no `codex` on PATH and NOLUNE_CODEX_BIN is unset', /not installed.*NOLUNE_CODEX_BIN/],
-		['codex_incompatible', '/usr/local/bin/codex is codex 0.154.0; Nolune supports codex 0.155.0 only', /0\.154\.0.*0\.155\.0/],
+		['codex_incompatible', '/usr/local/bin/codex is codex 0.155.0; Nolune supports codex 0.156.1 only', /0\.155\.0.*0\.156\.1/],
 		['codex_unusable', '/usr/local/bin/codex cannot report its version: boom', /cannot report its version/],
 		['codex_unavailable', 'codex app-server handshake failed: exited', /handshake failed.*try again/i],
 		['codex_refused', 'codex app-server error -32000: login already in flight', /already in flight/],

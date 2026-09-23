@@ -25,7 +25,8 @@
 //! turn that streams more than a subscriber's buffer), `reply` (the
 //! result), `error` (an error object), `ask` (a request the client must
 //! answer before the next step), `delay_ms`, `exit` (die), or `raw` (a
-//! verbatim line with `$ID` replaced by the request id); or, without
+//! verbatim line with `$ID` replaced by the request id), a step's `set`
+//! rewriting the state before the rest of it plays; or, without
 //! `steps`, the older shape: `reply` |
 //! `echo` (the request params as the result) | `error`; `notify` events
 //! before the answer and `then` events after it, after `then_delay_ms`
@@ -209,6 +210,10 @@ struct Ask {
 /// One step of a scripted answer, played in order.
 #[derive(Clone, Deserialize)]
 struct Step {
+    /// State members rewritten when the step plays, before anything else
+    /// it does.
+    #[serde(default)]
+    set: Option<Map<String, Value>>,
     #[serde(default)]
     notify: Option<Event>,
     /// How many times `notify` is emitted; once when absent.
@@ -463,6 +468,7 @@ fn handle(
     };
     if let Some(steps) = &entry.steps {
         for step in steps {
+            rewrite(&state, step.set.as_ref());
             if let Some(event) = &step.notify {
                 for _ in 0..step.repeat.unwrap_or(1) {
                     emit(notification(event));

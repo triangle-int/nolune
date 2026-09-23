@@ -172,14 +172,14 @@ mod tests {
 
     #[test]
     fn a_result_answers_the_request_with_that_id() {
-        // The live shape of the `initialize` answer from codex-cli 0.155.0.
-        let line = r#"{"id":1,"result":{"userAgent":"nolune/0.155.0 (Mac OS 27.0.0; arm64)","codexHome":"/home/u/.codex","platformFamily":"unix","platformOs":"macos"}}"#;
+        // The live shape of the `initialize` answer from codex-cli 0.156.1.
+        let line = r#"{"id":1,"result":{"userAgent":"nolune/0.156.1 (Mac OS 26.5.2; arm64)","codexHome":"/home/u/.codex","platformFamily":"unix","platformOs":"macos"}}"#;
         assert_eq!(
             parse_frame(line),
             Ok(Frame::Response {
                 id: 1,
                 outcome: Ok(json!({
-                    "userAgent": "nolune/0.155.0 (Mac OS 27.0.0; arm64)",
+                    "userAgent": "nolune/0.156.1 (Mac OS 26.5.2; arm64)",
                     "codexHome": "/home/u/.codex",
                     "platformFamily": "unix",
                     "platformOs": "macos"
