@@ -341,8 +341,8 @@ system prompt and every message after it (on Codex it reconfigures the
 thread). `build_system_sections` in `server/src/services/chat.rs` therefore
 holds only what changes when the companion itself changes: its soul, skills
 and integrations. What differs from turn to turn (the time, voice mode, the
-chosen computer and the connected desktops, the instance config, the project
-and its open tasks) is the turn context, the first block of the current
+chosen computer and the connected desktops, the settings in `instance.toml`,
+the project and its open tasks) is the turn context, the first block of the current
 message, which is never saved into the history. Voice mode's rules stay in
 the system prompt; the turn context only says when they apply.
 
