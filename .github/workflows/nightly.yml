@@ -1,0 +1,139 @@
+name: Nightly
+
+# Every push to main rebuilds the server binaries and refreshes the rolling
+# `nightly` prerelease. The installer (scripts/install.sh and the `update`
+# script it writes), the server's update check (server/src/routes/update.rs)
+# and the desktop app (desktop/src-tauri/src/local_server.rs) all read that
+# release: the assets are named `nolune-server-<target>` and the body is exactly
+# "Auto-built from main (<short sha>)", which is how they tell builds apart.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - 'landing/**'
+      - 'desktop/**'
+      - '**/*.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # A newer push cancels builds still running, so only the tip of main ships.
+  server:
+    concurrency:
+      group: nightly-build-${{ matrix.target }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: nolune-server-x86_64-unknown-linux-gnu
+            ext: ''
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: nolune-server-aarch64-unknown-linux-gnu
+            ext: ''
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: nolune-server-aarch64-apple-darwin
+            ext: ''
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: nolune-server-x86_64-apple-darwin
+            ext: ''
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: nolune-server-x86_64-pc-windows-msvc.exe
+            ext: '.exe'
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+
+      - name: Build client
+        run: |
+          cd client
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install protoc
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update -qq && sudo apt-get install -y protobuf-compiler
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            brew install protobuf
+          elif [ "$RUNNER_OS" = "Windows" ]; then
+            choco install protoc -y
+          fi
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      # GIT_HASH is what a running nightly compares against the release body.
+      - name: Build server
+        run: cargo build --release -p server --target ${{ matrix.target }}
+        env:
+          GIT_HASH: ${{ github.sha }}
+
+      - name: Stage artifact
+        shell: bash
+        run: |
+          cp target/${{ matrix.target }}/release/nolune${{ matrix.ext }} ${{ matrix.artifact }}
+          chmod +x ${{ matrix.artifact }} 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error
+          retention-days: 3
+
+  # Publish only once every target built, so the release never mixes commits.
+  # A publish already under way always finishes; a newer one waits for it.
+  publish:
+    needs: server
+    concurrency:
+      group: nightly-publish
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Refresh the nightly release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: bash scripts/release-workflow.sh nightly dist

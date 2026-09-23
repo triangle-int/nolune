@@ -129,7 +129,7 @@ The script does the same on macOS or Linux and leaves the server running in the 
 curl -fsSL https://nolune.dev/install.sh | bash
 ```
 
-It is a thin wrapper: it downloads the binary and hands over to `nolune onboard` and `nolune gateway`. Set `NOLUNE_CHANNEL=nightly` for nightly builds or `NOLUNE_DIR` for a custom directory. `NOLUNE_INSTALL_CUA_DRIVER=1` also runs `nolune cua install` for computer use; it is off by default, so headless servers install nothing they cannot use.
+It is a thin wrapper: it downloads the binary and hands over to `nolune onboard` and `nolune gateway`. Set `NOLUNE_CHANNEL=nightly` for nightly builds (rebuilt from every push to `main`) or `NOLUNE_DIR` for a custom directory. `NOLUNE_INSTALL_CUA_DRIVER=1` also runs `nolune cua install` for computer use; it is off by default, so headless servers install nothing they cannot use.
 
 ### The `nolune` command
 
