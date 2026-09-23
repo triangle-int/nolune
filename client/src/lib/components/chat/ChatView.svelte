@@ -321,11 +321,14 @@ import McpAppViewer from "./McpAppViewer.svelte";
 			};
 		}
 		if (msg.content.startsWith("[system]") || msg.content.startsWith("[restart]")) {
+			const label = msg.content.replace(/^\[(system|restart)\]\s*/, "");
 			return {
 				type: "activity" as const,
 				id: msg.id,
-				kind: "state" as const,
-				label: msg.content.replace(/^\[(system|restart)\]\s*/, ""),
+				// The mood extract saves `[system] mood → …` and also sends mood_updated;
+				// as a "mood" row the live event dedups against it instead of adding a second line.
+				kind: label.startsWith("mood →") ? "mood" as const : "state" as const,
+				label,
 				timestamp: ts,
 			};
 		}
