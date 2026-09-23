@@ -9,8 +9,12 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tower::Service;
 
+// A debug build compiles without client/build, so a fresh checkout can `cargo
+// run` and use the vite dev server (scripts/dev.sh); a release build still
+// refuses to ship without the client.
 #[derive(Embed)]
 #[folder = "../client/build"]
+#[cfg_attr(debug_assertions, allow_missing = true)]
 struct StaticAssets;
 
 /// Tower service that serves embedded static files with SPA fallback.
@@ -53,6 +57,14 @@ fn serve_embedded(path: &str) -> Response<Body> {
             .unwrap();
     }
 
+    if cfg!(debug_assertions) {
+        return (
+            StatusCode::NOT_FOUND,
+            "The web client is not built. Run ./scripts/dev.sh and open http://localhost:5173, \
+             or build it with `pnpm --dir client build`.",
+        )
+            .into_response();
+    }
     StatusCode::NOT_FOUND.into_response()
 }
 

@@ -4,10 +4,31 @@ Thanks for your interest in contributing! Here's how to get started.
 
 ## Development Setup
 
-### Prerequisites
+### Quick start
 
-- **Rust** (latest stable)
-- **Node.js** (LTS) + **pnpm**
+You need [rustup](https://rustup.rs) and Node.js 22 LTS; on Linux also
+`pkg-config` and `libssl-dev`. rustup picks up the Rust version from
+`rust-toolchain.toml`, and the script enables the pinned pnpm through corepack.
+
+```bash
+./scripts/dev.sh
+```
+
+That installs the client dependencies, builds and starts the server, and runs
+the web client with hot reload. Open `http://localhost:5173`.
+
+- **Separate data.** The dev server keeps its data in `.dev/home` inside the
+  checkout (`--fresh` wipes it), never in `~/.nolune`.
+- **Runs beside an install.** It listens on port 26560 (`NOLUNE_DEV_PORT`), so
+  an installed Nolune on 26559 keeps running.
+- **No pairing.** The dev server listens on loopback only with auth disabled.
+- **Model keys.** Put `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or
+  `OPENROUTER_API_KEY` in a `.env` file at the repo root (it is gitignored), or
+  add a provider under **Settings → Connections**.
+- **Restart after Rust changes.** Client changes reload in place; after
+  changing Rust, stop with Ctrl-C and rerun the script.
+
+The sections below run each piece by hand.
 
 ### Server
 
