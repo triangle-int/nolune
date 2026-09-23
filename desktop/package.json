@@ -1,6 +1,6 @@
 {
   "name": "nolune-desktop",
-  "version": "0.37.0",
+  "version": "0.38.0",
   "description": "",
   "type": "module",
   "packageManager": "pnpm@10.34.5",
