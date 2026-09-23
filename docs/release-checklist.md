@@ -1,41 +1,55 @@
-# Release checklist: model defaults and the Codex pin
+# Release checklist: model ids and the Codex pin
 
 `scripts/bump-version.sh` moves the version number; it knows nothing about
-which models Nolune seeds or which `codex` release it speaks to. Those are
-source constants with tests and docs around them, so a release that changes
-either walks this list before the tag. [providers.md](providers.md) is the
-page the entries below keep true.
+which model ids the source names or which `codex` release Nolune speaks
+to. Those are source constants with tests and docs around them, so a
+release that changes either walks this list before the tag.
+[providers.md](providers.md) is the page the entries below keep true.
 
-## Model defaults
+## Model ids in the source
 
-Where a default model id lives:
+Nothing is seeded (#156): a preset is a model someone picked from what the
+provider lists, so no release has to follow a model that retires upstream.
+What still names model ids:
 
-- `default_presets` in `server/src/config.rs`: the presets seeded when a
-  provider is first set up, and `default_slots` next to it (which seeded
-  preset fills the chat and background slots).
-- `server/src/onboard.rs` (the `config.toml` template `nolune onboard`
-  writes) and `server/config.example.toml`: the Anthropic defaults again.
-- `client/src/lib/components/chat/ChatExample.svelte` and the Model id
-  placeholder in the Connections settings page: display examples only.
+- `TOP_MODELS` in `server/src/services/llm/openrouter.rs`: the OpenRouter
+  models onboarding offers, the most-used tool-calling models on
+  openrouter.ai's rankings. An id the live catalog drops, or lists without
+  tool calling, is hidden automatically, so the list can go stale but never
+  offers a model that is gone.
+- `first_key_probe_model` in `server/src/services/llm/mod.rs`: the model a
+  first key's probe names before any preset exists. It is a probe only,
+  never saved or offered, and any id the provider authenticates before
+  checking is fine.
+- The commented example preset in `server/src/onboard.rs` (the
+  `config.toml` template `nolune onboard` writes) and the example presets
+  in `server/config.example.toml`.
+- `modelPlaceholder` in `client/src/lib/models/presets.js` (the Model id
+  placeholder in the Connections settings page) and
+  `client/src/lib/components/chat/ChatExample.svelte`: display only.
+- `config::test_presets` in `server/src/config.rs`: a test fixture that
+  stands in for presets someone picked; the `network_*` tests call its
+  models.
 
-To change one:
+Each release, or sooner when the rankings have moved:
 
-1. Change the id in `default_presets` (and `default_slots` if the seeded
-   preset ids change), then the onboarding template and the example config
-   when the Anthropic defaults moved.
-2. Run the ignored network test for that provider with a real key so the
-   new id answers: `ANTHROPIC_API_KEY=... cargo test --manifest-path
-   server/Cargo.toml --bin nolune -- --ignored network_anthropic`, and the
-   same for `network_openai` / `network_openrouter` with their keys. The
-   seeded ids are also what `probe_model` uses for a first key's probe, so
-   a retired id would break onboarding, not only the chat.
-3. Update the seeded-models table and the per-provider setup sections in
+1. Refresh `TOP_MODELS` from <https://openrouter.ai/rankings>: the most-used
+   models that call tools, best first, as the `vendor/model` ids the
+   catalog (`GET /api/v1/models`) lists with `tools` in
+   `supported_parameters`. Update the month in its doc comment.
+2. Run the ignored network test for each provider with a real key so the
+   fixture ids still answer: `ANTHROPIC_API_KEY=... cargo test
+   --manifest-path server/Cargo.toml --bin nolune -- --ignored
+   network_anthropic`, and the same for `network_openai` /
+   `network_openrouter` with their keys. A fixture id retired upstream is a
+   change to `config::test_presets`, not to anyone's config.
+3. Update the OpenRouter top models and the per-provider setup sections in
    `docs/providers.md`; `server/tests/provider_docs.rs` fails until every
-   seeded id appears there.
-4. Existing installs are not touched: seeding only runs for a provider with
-   no presets, so a person's `config.toml` keeps its ids. Say so in the
-   release notes when a default is retired upstream, so people know to edit
-   their presets.
+   `TOP_MODELS` id appears there.
+4. Existing installs are not touched: a preset keeps its model id until
+   someone edits it. Say so in the release notes when a widely picked model
+   is retired upstream, so people know to pick another (the connection test
+   in Settings › Connections names a missing model).
 
 ## The pinned Codex release
 
@@ -63,10 +77,11 @@ To move it:
    events, `turn/interrupt`, the failed and interrupted `turn/completed`,
    the pre-initialize and unknown-method errors. Nothing under `~/.codex`
    is read or written when `CODEX_HOME` points elsewhere.
-4. If `model/list` changed, update the seeded Codex presets in
-   `default_presets` (the Model defaults list above applies) and the
-   `CODEX_MODELS` catalog in `client/src/lib/models/presets.js` that the
-   preset editor and onboarding offer.
+4. If `model/list` changed its models, nothing needs to follow: nothing is
+   seeded, and onboarding and the preset editor list the live answer. If
+   it changed its shape, `listed_models` in
+   `server/src/services/llm/codex/adapter.rs` reads it (`id`,
+   `displayName`, `description`, `hidden`, `isDefault`) and changes first.
 5. Run the fixture-driven suite, then the live tests against the new
    binary: `cargo test --locked --manifest-path server/Cargo.toml -- codex`
    without credentials; the smoke test with a scratch home,

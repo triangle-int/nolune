@@ -40,7 +40,7 @@
 	<h2 id="pair-a-browser">Pair a browser</h2>
 	<p>The first browser has to be paired. On the computer running the server:</p>
 	<pre><code>nolune pair</code></pre>
-	<p>It prints a one-time code. Enter that code in the browser at <code>http://localhost:26559</code>, then follow the onboarding: choose a name, add your model provider key, and meet your companion. The code works once and expires after a few minutes; run <code>nolune pair</code> again for each additional browser or device.</p>
+	<p>It prints a one-time code. Enter that code in the browser at <code>http://localhost:26559</code>, then follow the onboarding: choose a model provider, add its key (or log in to Codex), pick a model it lists, and meet your companion. The code works once and expires after a few minutes; run <code>nolune pair</code> again for each additional browser or device.</p>
 	<p>The desktop app pairs the same way: enter the server's address and a code from <code>nolune pair</code>. Paired browsers and desktop apps stay signed in. Review or revoke them, or mint a code for the next device, under <strong>Settings → Connections → Pair a device</strong>. Until you open a new terminal, the command is <code>~/.nolune/bin/nolune pair</code>.</p>
 
 	<h2 id="background-service">Keep it running</h2>

@@ -1,18 +1,18 @@
 //! Guard for #29: the provider documentation keeps up with the code. The
 //! lists it checks against are read from the source, not repeated here,
 //! so a new `LlmProvider` variant, a new `LlmTokens` field, a new
-//! `Capabilities` flag, a changed adapter constant or a new seeded model
-//! fails this test until the docs say so.
+//! `Capabilities` flag, a changed adapter constant or a new OpenRouter top
+//! model fails this test until the docs say so.
 //!
 //! - `README.md` lists every API-key environment override in its
 //!   configuration table, one row per variable.
 //! - `docs/providers.md` covers every provider, every token key with its
-//!   environment override, where the keys live, the seeded model ids, the
-//!   retired `[llm]` keys, a capability table that matches each adapter's
-//!   `Capabilities`, and the Codex process model.
-//! - `docs/release-checklist.md` says how to bump the model defaults and
-//!   the pinned Codex version, and `CLAUDE.md` points at it from the
-//!   versioning section.
+//!   environment override, where the keys live, the OpenRouter top models
+//!   onboarding offers, the retired `[llm]` keys, a capability table that
+//!   matches each adapter's `Capabilities`, and the Codex process model.
+//! - `docs/release-checklist.md` says where model ids still live in the
+//!   source (nothing is seeded, #156) and how to bump the pinned Codex
+//!   version, and `CLAUDE.md` points at it from the versioning section.
 
 use std::{
     collections::BTreeMap,
@@ -23,6 +23,8 @@ use std::{
 const CONFIG: &str = "server/src/config.rs";
 const CONTRACT: &str = "server/src/services/llm/contract.rs";
 const CODEX_MOD: &str = "server/src/services/llm/codex/mod.rs";
+const OPENROUTER: &str = "server/src/services/llm/openrouter.rs";
+const BACKEND: &str = "server/src/services/llm/mod.rs";
 const README: &str = "README.md";
 const PROVIDERS_DOC: &str = "docs/providers.md";
 const CHECKLIST_DOC: &str = "docs/release-checklist.md";
@@ -40,11 +42,7 @@ const ADAPTER_CAPABILITIES: &[(&str, &str, &str)] = &[
         "server/src/services/llm/openai.rs",
         "CAPABILITIES",
     ),
-    (
-        "OpenRouter",
-        "server/src/services/llm/openrouter.rs",
-        "DEFAULT_CAPABILITIES",
-    ),
+    ("OpenRouter", OPENROUTER, "DEFAULT_CAPABILITIES"),
     (
         "Codex",
         "server/src/services/llm/codex/adapter.rs",
@@ -198,33 +196,29 @@ fn retired_keys(config: &str) -> Vec<String> {
     out
 }
 
-/// The model ids `default_presets` seeds, per provider variant: the last
-/// string literal of every `ModelPreset::seeded(..)` call.
-fn seeded_models(config: &str) -> Vec<(String, String)> {
-    let body = item_body(config, "pub fn default_presets(provider: LlmProvider)");
-    let mut out = Vec::new();
-    let mut provider = String::new();
-    let mut last_literal = None;
-    for line in body.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix("LlmProvider::") {
-            provider = rest
-                .split(|c: char| !c.is_ascii_alphanumeric())
-                .next()
-                .unwrap()
-                .to_owned();
-        }
-        if let Some(literal) = line.rsplit('"').nth(1) {
-            last_literal = Some(literal.to_owned());
-        }
-        if line.ends_with("),")
-            && line.contains(')')
-            && let Some(model) = last_literal.take()
-        {
-            out.push((provider.clone(), model));
-        }
-    }
-    assert!(!out.is_empty(), "default_presets seeds nothing");
+/// The OpenRouter model ids onboarding offers first: every string literal
+/// in `pub(crate) const TOP_MODELS: &[&str] = &[ ... ];`. Nothing else in
+/// the source names a model a person is offered (#156).
+fn top_models(openrouter: &str) -> Vec<String> {
+    let header = "const TOP_MODELS: &[&str] = &[";
+    let start = openrouter
+        .find(header)
+        .unwrap_or_else(|| panic!("{header:?} not found in {OPENROUTER}"))
+        + header.len();
+    let end = start
+        + openrouter[start..]
+            .find("];")
+            .unwrap_or_else(|| panic!("TOP_MODELS is not closed in {OPENROUTER}"));
+    // A model id has one '/', so "//" starts a comment.
+    let out: Vec<String> = openrouter[start..end]
+        .lines()
+        .filter_map(|line| line.split("//").next())
+        .flat_map(|line| line.split(','))
+        .map(str::trim)
+        .filter_map(|item| item.strip_prefix('"')?.strip_suffix('"'))
+        .map(str::to_owned)
+        .collect();
+    assert!(!out.is_empty(), "TOP_MODELS names no model");
     out
 }
 
@@ -299,8 +293,9 @@ fn readme_lists_every_key_override_in_its_own_row() {
 }
 
 #[test]
-fn providers_doc_covers_every_provider_key_and_seeded_model() {
+fn providers_doc_covers_every_provider_key_and_top_model() {
     let config = read(CONFIG);
+    let openrouter = read(OPENROUTER);
     let doc = read(PROVIDERS_DOC);
     let mut violations = Vec::new();
     for (variant, label) in providers(&config) {
@@ -340,6 +335,10 @@ fn providers_doc_covers_every_provider_key_and_seeded_model() {
         "enabled = false",
         "dynamicTools",
         "release-checklist.md",
+        "TOP_MODELS",
+        "first_key_probe_model",
+        "/api/config/models/available",
+        "/api/config/models/choose",
     ] {
         if !doc.contains(required) {
             violations.push(format!("docs/providers.md is missing {required:?}"));
@@ -352,10 +351,23 @@ fn providers_doc_covers_every_provider_key_and_seeded_model() {
             ));
         }
     }
-    for (provider, model) in seeded_models(&config) {
+    for model in top_models(&openrouter) {
         if !doc.contains(&format!("`{model}`")) {
             violations.push(format!(
-                "docs/providers.md does not list the seeded {provider} model `{model}`"
+                "docs/providers.md does not list the OpenRouter top model `{model}`"
+            ));
+        }
+    }
+    // Nothing is seeded (#156): the retired seeding API must not come back
+    // as documentation.
+    for retired in [
+        "default_presets",
+        "seed_for_keys",
+        "/api/config/models/seed",
+    ] {
+        if doc.contains(retired) {
+            violations.push(format!(
+                "docs/providers.md still names the retired {retired:?}"
             ));
         }
     }
@@ -432,24 +444,49 @@ fn providers_doc_capability_table_matches_the_adapters() {
 }
 
 #[test]
-fn release_checklist_covers_model_defaults_and_the_codex_pin() {
-    let config = read(CONFIG);
+fn release_checklist_covers_model_ids_and_the_codex_pin() {
+    let openrouter = read(OPENROUTER);
+    let backend = read(BACKEND);
     let codex = read(CODEX_MOD);
     let checklist = read(CHECKLIST_DOC);
     let conventions = read(CONVENTIONS);
     let mut violations = Vec::new();
     let pin = quoted_after(&codex, "pub const CODEX_VERSION: &str").expect("the codex pin");
+    // The model ids a release still has to look after live in these two
+    // items: they must exist where the checklist says they are.
+    for (source, path, item) in [
+        (&openrouter, OPENROUTER, "const TOP_MODELS"),
+        (&backend, BACKEND, "fn first_key_probe_model("),
+    ] {
+        if !source.contains(item) {
+            violations.push(format!(
+                "{path} no longer has {item:?}; update docs/release-checklist.md"
+            ));
+        }
+        if !checklist.contains(path) {
+            violations.push(format!(
+                "docs/release-checklist.md does not say {item:?} lives in {path}"
+            ));
+        }
+    }
     for required in [
-        "CODEX_VERSION",
-        "default_presets",
+        "TOP_MODELS",
+        "first_key_probe_model",
         "bump-version.sh",
         "fixtures/codex-",
         "providers.md",
         "docs/providers.md",
-        "seeded",
+        "CODEX_VERSION",
     ] {
         if !checklist.contains(required) {
             violations.push(format!("docs/release-checklist.md is missing {required:?}"));
+        }
+    }
+    for retired in ["default_presets", "CODEX_MODELS"] {
+        if checklist.contains(retired) {
+            violations.push(format!(
+                "docs/release-checklist.md still names the retired {retired:?}"
+            ));
         }
     }
     if !checklist.contains(pin) {
@@ -462,13 +499,6 @@ fn release_checklist_covers_model_defaults_and_the_codex_pin() {
         violations.push(format!(
             "docs/providers.md does not name the pinned codex release {pin}"
         ));
-    }
-    for (_, model) in seeded_models(&config) {
-        if !checklist.contains(&format!("`{model}`")) && !checklist.contains("default_presets") {
-            violations.push(format!(
-                "the checklist neither lists `{model}` nor default_presets"
-            ));
-        }
     }
     let versioning = conventions
         .split("## Versioning")

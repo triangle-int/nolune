@@ -102,11 +102,42 @@ preset does which job:
 Presets carry their own provider, so Anthropic, OpenAI and OpenRouter presets
 coexist; API keys stay per provider. `GET/PUT /api/config/models` reads and
 replaces presets plus slots atomically (validated: unique ids, known provider,
-non-empty model, slots pointing at presets whose provider has a key), and
-`POST /api/config/models/seed` adds a provider's defaults, which onboarding
-calls after saving the first key. A new key is checked with its provider
-before it is saved (`PUT /api/config/llm`, one-token completion); a rejected
-key answers 401 and stores nothing.
+non-empty model, slots pointing at presets whose provider has a key). Nothing
+is seeded: a fresh config has no presets, and a preset is a model someone
+picked from what the provider lists or typed
+([providers.md](providers.md#where-keys-and-model-choices-live) says what
+each listing offers and how a picked model's preset id is made). A new key is
+checked with its provider before it is saved (`PUT /api/config/llm`,
+one-token completion); a rejected key answers 401 and stores nothing.
+
+Two routes serve the pick:
+
+- `GET /api/config/models/available?provider=<p>` answers
+  `{provider, models: [{id, name, description?}]}`, the provider's listing
+  in the order to offer it, and saves nothing. A key provider needs its key
+  (409 `setup_required`), an unknown provider is 400 `unknown_provider`,
+  and a provider that refuses or does not answer is typed like the
+  connection test below (`authentication`, `rate_limited`, `unreachable`,
+  `timeout`, …), with the key scrubbed.
+- `POST /api/config/models/choose` with `{provider, model, name?}` tests the
+  model as the preset it would become, on a copy of the config, and saves
+  nothing unless it answers. Then the model becomes a preset (the one
+  already naming it, if any) in the Chat slot; the Background slot follows
+  unless it points at a ready preset on another provider than the one the
+  Chat slot is leaving. `config.toml` is written, the backends are rebuilt,
+  and the answer is the test's `ok` body plus `preset` (the id) and `models`
+  (the `GET /api/config/models` body). A model that does not answer gets
+  the test's typed outcome; no key is 409 `setup_required`, and an unknown
+  provider or an invalid preset is 400 (`unknown_provider`,
+  `invalid_presets`).
+
+In Settings › Connections the preset editor has **Add preset** and no
+per-provider defaults; with no presets it says "No presets yet. Add one and
+pick a model your provider lists." Its Model id field suggests (a datalist)
+what the row's provider lists for this account, fetched once per provider
+the first time a model field on it is focused, and only when that provider
+has a key or is Codex. Any other id is still accepted, and a suggested model
+picked into a preset with no name names it after the model.
 
 ### Connection test and capability warnings (#28)
 
@@ -147,25 +178,33 @@ the composer while such a model is the conversation's. OpenRouter presets
 report the catalog's answer once it has loaded, and the adapter defaults
 until then.
 
-Onboarding runs the same test after the first key is saved and its
-presets are seeded (`saveOnboardingProvider` in
-`client/src/lib/components/onboarding/provider.js`, on the Chat slot when it
-runs on that provider, else the provider's first preset). "connected." is
-typed only after the model answered; a failure keeps the key step open
-with the outcome sentence, so onboarding cannot finish with a provider
-that does not reply, and "choose another provider" leads back to the
-provider step. A key can pass the probe and still have no usable model (no
-credits, a rate limit, a retired id), and `llm_configured` then reads true
-on a reload; onboarding therefore tests the Chat preset again whenever the
-status says a provider is configured (`resumeOnboarding`) and skips to the
-first message only on an answer, otherwise typing the outcome and
-returning to the provider step. Once a preset answers, the slots follow it
-(`slotsAfterOnboardingTest`): the Chat slot moves to that preset, and the
-Background slot to the provider's second preset when it pointed at the
-provider being left, so the first message never goes through a provider
-that did not answer. A provider that was already working is untouched: a
-new key is stored only when its probe passes, its own presets are the ones
-tested, and the test itself saves nothing.
+Onboarding gates on the same test, run by `POST /api/config/models/choose`
+when a model is picked (helpers in
+`client/src/lib/components/onboarding/provider.js`). The companion is named
+Nolune and gets the `moon` skin after the intro lines, with no language,
+name or skin step, and the first message is sent as typed. After the soul
+template and the provider, a key provider asks for its key
+(`saveOnboardingKey`, probed before it is saved) unless the server already
+has one (`configured_keys` from `/api/config/status`, such as an environment
+variable; `stepAfterProvider`), and Codex goes through its login (below).
+The model step then lists the provider's models (`listOnboardingModels`) in
+one scrolling column: the name, the model id in mono when it differs, and
+Codex's description, with a "Find a model" filter once there are nine or
+more, and a note that more models or a separate background model can be
+added later in Settings. A pick goes to `chooseOnboardingModel`, and
+"<model name>. connected." is typed only after the model answered. A model
+that does not answer keeps the list open with the outcome sentence above
+it, so onboarding cannot finish with a model that does not reply; a
+listing that fails shows its sentence with "try again" and "another
+provider"; "choose another provider" leads back to the provider step from
+the key, login and model steps. A model can answer once and still stop
+later (no credits, a rate limit, a retired id), and `llm_configured` then
+reads true on a reload; onboarding therefore tests the Chat preset again
+whenever the status says a provider is configured (`resumeOnboarding`) and
+skips to the first message only on an answer, otherwise typing the outcome
+and returning to the provider step. A provider that was already working
+stays as it was until something new answers: a new key is stored only when
+its probe passes, and a picked model is saved only when it answers.
 
 ### OpenRouter (#26)
 
@@ -173,10 +212,12 @@ The `openrouter` provider sends OpenAI-style chat completions to
 `openrouter.ai` with the `OPENROUTER` token (`OPENROUTER_API_KEY` overrides
 it), streams answers and tool calls like the other adapters, and records the
 usage and cost OpenRouter returns. Model ids are `vendor/model`, for example
-`anthropic/claude-sonnet-4.6` or `openai/gpt-5.6-luna`; the seeded presets
-name both. The model catalog (`GET /api/v1/models`) is read once an hour and a
-preset whose model lacks tools, image input or reasoning controls is refused
-before the request goes out.
+`anthropic/claude-sonnet-4.6` or `openai/gpt-5.6-luna`; onboarding offers
+the curated top models the live catalog still lists
+([providers.md](providers.md#where-keys-and-model-choices-live)). The model
+catalog (`GET /api/v1/models`) is read once an hour and a preset whose model
+lacks tools, image input or reasoning controls is refused before the request
+goes out.
 
 Attribution and routing are off until `config.toml` names them; the
 server's `public_url` is never sent:
@@ -232,22 +273,22 @@ pending login, Log out forgets the login. A typed refusal (`codex_not_installed`
 `codex_unusable`, `codex_unavailable`, `codex_refused`) reads as one
 sentence with what to do. Model presets treat `codex` as a login provider
 (`PROVIDERS` in `client/src/lib/models/presets.js`, `auth: "login"`): a
-slot on a Codex preset needs no key, the editor offers the models the pinned
-release lists as hints, and the capability chips (`no vision`,
+slot on a Codex preset needs no key, the editor suggests the models codex's
+`model/list` answers, and the capability chips (`no vision`,
 `no documents`) come from the server's `capabilities` like any other
 preset's. A connection test on a Codex preset answers the server's own
 setup sentence (no binary, another release, no login) instead of asking for
 a key.
 
 Onboarding offers Codex as its own choice ("your ChatGPT login"). The gate
-is the login AND the connection test (`connectOnboardingCodex` in
-`client/src/lib/components/onboarding/provider.js`): the status is read
-first, a binary that is missing or another release stops there with the
-reason and "choose another provider", no login starts one and shows the URL
-and code until the poll sees it completed, and only then are the Codex
-presets seeded and one tested; "connected." is typed once a model answered,
-and a failed login or test offers "try again", "use a device code" and
-another provider. While the browser flow waits (the server's `auto` picks it
+is the login (`connectOnboardingCodex` in
+`client/src/lib/components/onboarding/provider.js`), then a model that
+answers, as for any provider: the status is read first, a binary that is
+missing or another release stops there with the reason and "choose another
+provider", no login starts one and shows the URL and code until the poll
+sees it completed, and only then does the model step list what codex
+offers; a failed login offers "try again", "use a device code" and another
+provider. While the browser flow waits (the server's `auto` picks it
 on a host with a display, and its URL only works on that machine), the
 login step offers "on another device? use a device code", which starts a
 device-code login in its place (the server cancels the pending one) and

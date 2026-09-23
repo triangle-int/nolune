@@ -60,6 +60,13 @@ pub fn provider_capabilities(
     }
 }
 
+/// The OpenRouter models onboarding offers first, when the live catalog
+/// still lists them.
+#[cfg(test)]
+pub fn openrouter_top_models() -> &'static [&'static str] {
+    openrouter::TOP_MODELS
+}
+
 /// The base URL each provider's adapter posts to; none for Codex, whose
 /// app-server is a local child process (#27).
 fn provider_base_url(provider: crate::config::LlmProvider) -> String {
@@ -73,8 +80,8 @@ fn provider_base_url(provider: crate::config::LlmProvider) -> String {
 }
 
 /// The model a key probe for `provider` should name: the chat preset when it
-/// runs on that provider, else the provider's first preset, else the model
-/// its default chat preset would use (a first key has no presets yet).
+/// runs on that provider, else the provider's first preset, else
+/// [`first_key_probe_model`] (a first key has no presets yet).
 pub fn probe_model(
     config: &crate::config::LlmConfig,
     provider: crate::config::LlmProvider,
@@ -89,13 +96,20 @@ pub fn probe_model(
                 .find(|preset| preset.provider == provider)
         })
         .map(|preset| preset.model.clone())
-        .or_else(|| {
-            crate::config::default_presets(provider)
-                .into_iter()
-                .next()
-                .map(|preset| preset.model)
-        })
-        .unwrap_or_default()
+        .unwrap_or_else(|| first_key_probe_model(provider).to_owned())
+}
+
+/// The model a first key's probe names before the person has picked one.
+/// It is never saved or offered: each provider checks the key before the
+/// model, and `probe_key` accepts any answer past authentication, so a
+/// model this account cannot call still proves the key.
+fn first_key_probe_model(provider: crate::config::LlmProvider) -> &'static str {
+    match provider {
+        crate::config::LlmProvider::Anthropic => "claude-sonnet-4-6",
+        crate::config::LlmProvider::Openai => "gpt-5.6-sol",
+        crate::config::LlmProvider::Openrouter => "anthropic/claude-sonnet-4.6",
+        crate::config::LlmProvider::Codex => "",
+    }
 }
 
 /// Why a preset cannot become a backend (#156).
@@ -205,6 +219,39 @@ impl LlmBackend {
             openrouter: Default::default(),
             codex: codex::Runtime::shared(),
         }
+    }
+
+    /// A backend for asking `provider` which models it offers, with the key
+    /// the config holds for it (a login provider needs none here), before
+    /// any preset names a model.
+    pub fn for_listing(
+        config: &Config,
+        http: reqwest::Client,
+        provider: crate::config::LlmProvider,
+    ) -> Result<Self, PresetError> {
+        let api_key = match provider.auth() {
+            crate::config::ProviderAuth::ApiKey => config
+                .llm
+                .key_for(provider)
+                .ok_or(PresetError::MissingKey(provider))?
+                .to_owned(),
+            crate::config::ProviderAuth::Login => String::new(),
+        };
+        let mut backend = Self::probe(http, provider, "", &api_key);
+        backend.preset = "listing".into();
+        backend.openrouter = config.llm.openrouter.clone();
+        Ok(backend)
+    }
+
+    /// The models the provider offers this account, in the order to offer
+    /// them; past `deadline` the answer is `Timeout`.
+    pub async fn list_models(
+        &self,
+        deadline: Duration,
+    ) -> Result<Vec<contract::ModelListing>, LlmError> {
+        tokio::time::timeout(deadline, async { self.adapter()?.discover_models().await })
+            .await
+            .unwrap_or(Err(LlmError::Timeout))
     }
 
     /// The smallest completion the provider accepts, through the adapter:
@@ -569,7 +616,7 @@ mod tests {
             (LlmProvider::Codex, "cheap") => "codex-luna",
             (LlmProvider::Codex, _) => "codex-astra",
         };
-        crate::config::default_presets(provider)
+        crate::config::test_presets(provider)
             .into_iter()
             .find(|preset| preset.id == id)
             .unwrap()
@@ -578,7 +625,7 @@ mod tests {
 
     fn keyed_config(provider: LlmProvider) -> Config {
         let mut config = Config::default();
-        config.llm.seed_presets(provider);
+        config.llm.add_test_presets(provider);
         config.llm.tokens.anthropic = "test-key".into();
         config.llm.tokens.open_ai = "test-key".into();
         config.llm.tokens.open_router = "test-key".into();
@@ -597,19 +644,19 @@ mod tests {
 
     #[test]
     fn seeded_presets_name_real_models_per_provider() {
-        for preset in crate::config::default_presets(LlmProvider::Anthropic) {
+        for preset in crate::config::test_presets(LlmProvider::Anthropic) {
             assert!(preset.model.starts_with("claude-"), "{preset:?}");
         }
-        for preset in crate::config::default_presets(LlmProvider::Openai) {
+        for preset in crate::config::test_presets(LlmProvider::Openai) {
             assert!(preset.model.starts_with("gpt-"), "{preset:?}");
         }
-        for preset in crate::config::default_presets(LlmProvider::Openrouter) {
+        for preset in crate::config::test_presets(LlmProvider::Openrouter) {
             assert!(
                 crate::config::is_openrouter_model_id(&preset.model),
                 "{preset:?}"
             );
         }
-        for preset in crate::config::default_presets(LlmProvider::Codex) {
+        for preset in crate::config::test_presets(LlmProvider::Codex) {
             assert!(preset.model.starts_with("gpt-"), "{preset:?}");
         }
     }
@@ -620,7 +667,7 @@ mod tests {
     #[test]
     fn backend_codex_needs_no_key_and_runs_on_the_local_app_server() {
         let mut config = Config::default();
-        config.llm.seed_presets(LlmProvider::Codex);
+        config.llm.add_test_presets(LlmProvider::Codex);
         assert_eq!(config.llm.key_for(LlmProvider::Codex), None);
         let b = LlmBackend::for_preset(&config, reqwest::Client::new(), "codex-astra").unwrap();
         assert_eq!(b.provider, LlmProvider::Codex);
@@ -639,7 +686,7 @@ mod tests {
         config.llm.chat_preset = "codex-astra".into();
         assert!(LlmBackend::from_config(&config).is_some());
         // Every other preset still needs its key.
-        config.llm.seed_presets(LlmProvider::Openai);
+        config.llm.add_test_presets(LlmProvider::Openai);
         assert_eq!(
             LlmBackend::for_preset(&config, reqwest::Client::new(), "gpt-sol").err(),
             Some(PresetError::MissingKey(LlmProvider::Openai))
@@ -695,7 +742,7 @@ mod tests {
     #[test]
     fn for_preset_reports_unknown_ids_and_missing_keys() {
         let mut config = keyed_config(LlmProvider::Anthropic);
-        config.llm.seed_presets(LlmProvider::Openai);
+        config.llm.add_test_presets(LlmProvider::Openai);
         config.llm.tokens.open_ai.clear();
         let http = reqwest::Client::new();
         assert_eq!(
@@ -740,7 +787,7 @@ mod tests {
     #[test]
     fn chat_and_background_builders_follow_their_slots_independently() {
         let mut config = keyed_config(LlmProvider::Anthropic);
-        config.llm.seed_presets(LlmProvider::Openai);
+        config.llm.add_test_presets(LlmProvider::Openai);
         config.llm.chat_preset = "gpt-sol".into();
         config.llm.background_preset = "haiku".into();
         let chat = LlmBackend::from_config(&config).unwrap();

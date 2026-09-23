@@ -27,7 +27,7 @@ git tag vX.Y.Z
 git push && git push origin vX.Y.Z
 ```
 
-The script moves version numbers only. A release that changes a seeded model id or the pinned `codex` release (`CODEX_VERSION`) walks [docs/release-checklist.md](docs/release-checklist.md) first: where the defaults live, how to re-record the Codex fixture, which live tests to run and which docs name the values.
+The script moves version numbers only. Nothing seeds model presets; a release that refreshes OpenRouter's top models (`TOP_MODELS`), changes another model id the source names, or moves the pinned `codex` release (`CODEX_VERSION`) walks [docs/release-checklist.md](docs/release-checklist.md) first: where model ids still live, how to re-record the Codex fixture, which live tests to run and which docs name the values.
 
 ## Package manager
 

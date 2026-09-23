@@ -371,15 +371,6 @@ export function updateModelPresets(payload: {
 	});
 }
 
-/** Add a provider's default presets and fill empty slots. Safe to repeat. */
-export function seedModelPresets(provider: LlmProvider): Promise<ModelPresets & { added: number }> {
-	return json("/api/config/models/seed", {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ provider }),
-	});
-}
-
 /** Why a connection test failed (#28), as the server types it. */
 export type PresetTestError =
 	| "unknown_preset"
@@ -432,6 +423,78 @@ export async function testPreset(id: string): Promise<PresetTestResult> {
 			retry_after_seconds: typeof body.retry_after_seconds === "number" ? body.retry_after_seconds : null,
 		};
 	}
+	if (res.status === 401) throw new AuthError();
+	throw new Error(text || res.statusText);
+}
+
+/** One model a provider offers this account, as its listing names it. */
+export interface AvailableModel {
+	id: string;
+	/** The provider's display name, or the id when it has none. */
+	name: string;
+	description?: string;
+}
+
+/** Read a typed failure body the way `testPreset` does; `null` when there is none. */
+function typedFailure(res: Response, text: string): Extract<PresetTestResult, { ok: false }> | null {
+	let body: Record<string, unknown> | null = null;
+	try {
+		body = text ? JSON.parse(text) : null;
+	} catch {
+		body = null;
+	}
+	if (!body || typeof body.error !== "string") return null;
+	return {
+		ok: false,
+		error: body.error,
+		message: typeof body.message === "string" ? body.message : text,
+		status: res.status,
+		retry_after_seconds: typeof body.retry_after_seconds === "number" ? body.retry_after_seconds : null,
+	};
+}
+
+/**
+ * The models a provider offers this account, in the order to offer them:
+ * everything Anthropic, OpenAI and Codex list for it, and OpenRouter's top
+ * models. A key provider needs its key saved first. A refusal comes back
+ * typed like a connection test's.
+ */
+export async function fetchAvailableModels(
+	provider: LlmProvider,
+): Promise<{ ok: true; models: AvailableModel[] } | Extract<PresetTestResult, { ok: false }>> {
+	const res = await authedFetch(`/api/config/models/available?provider=${encodeURIComponent(provider)}`);
+	const text = await res.text().catch(() => "");
+	if (res.ok) {
+		const body = JSON.parse(text) as { models: AvailableModel[] };
+		return { ok: true, models: body.models };
+	}
+	const failure = typedFailure(res, text);
+	if (failure) return failure;
+	if (res.status === 401) throw new AuthError();
+	throw new Error(text || res.statusText);
+}
+
+/**
+ * Make a listed model the one conversations use. The server tests it first
+ * and saves nothing unless it answers: then it becomes a preset (the one
+ * already naming it, if any) in the Chat slot, and the Background slot
+ * follows unless it runs on another provider that is ready. A model that
+ * does not answer comes back as the connection test's typed outcome.
+ */
+export async function chooseModel(choice: {
+	provider: LlmProvider;
+	model: string;
+	name?: string;
+}): Promise<(Extract<PresetTestResult, { ok: true }> & { models: ModelPresets }) | Extract<PresetTestResult, { ok: false }>> {
+	const res = await authedFetch("/api/config/models/choose", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(choice),
+	});
+	const text = await res.text().catch(() => "");
+	if (res.ok) return { ok: true, ...JSON.parse(text) };
+	const failure = typedFailure(res, text);
+	if (failure) return failure;
 	if (res.status === 401) throw new AuthError();
 	throw new Error(text || res.statusText);
 }

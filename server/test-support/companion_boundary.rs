@@ -749,12 +749,25 @@ async fn proactive_activity_api_lists_cancels_retries_and_exposes_policy() {
 }
 
 #[tokio::test]
-async fn model_presets_api_validates_seeds_and_pins_per_chat() {
+async fn model_presets_api_validates_choices_and_pins_per_chat() {
     let h = harness().await;
     companion::ensure_identity(h.workspace.path()).unwrap();
     h.state.config.write().await.llm.tokens.anthropic = "anthropic-key".into();
 
-    // Defaults: the Anthropic seeds, both slots filled, only Anthropic keyed.
+    // Nothing is seeded: a key alone leaves the person to pick a model.
+    let (status, body) = h.json(Method::GET, "/api/config/models", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["presets"], serde_json::json!([]));
+    assert_eq!(body["chat_preset"], "");
+    assert!(body["setup_required"].is_string(), "{body}");
+    h.state
+        .config
+        .write()
+        .await
+        .llm
+        .add_test_presets(crate::config::LlmProvider::Anthropic);
+
+    // Picked presets: both slots filled, only Anthropic keyed.
     let (status, body) = h.json(Method::GET, "/api/config/models", None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["chat_preset"], "sonnet");
@@ -821,26 +834,41 @@ async fn model_presets_api_validates_seeds_and_pins_per_chat() {
     assert_eq!(persisted.llm.chat_preset, "opus");
     assert_eq!(persisted.llm.presets.len(), 2);
 
-    // Seeding adds a provider's defaults without touching chosen slots.
-    let (status, body) = h
-        .json(
+    // Listing and choosing name a provider the server knows, and a key
+    // provider needs its key before either reaches it.
+    for (method, uri, body) in [
+        (
+            Method::GET,
+            "/api/config/models/available?provider=gemini",
+            None,
+        ),
+        (
             Method::POST,
-            "/api/config/models/seed",
-            Some(serde_json::json!({ "provider": "openai" })),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["added"], 2);
-    assert_eq!(body["chat_preset"], "opus");
-    let (status, body) = h
-        .json(
+            "/api/config/models/choose",
+            Some(serde_json::json!({ "provider": "gemini", "model": "g" })),
+        ),
+    ] {
+        let (status, body) = h.json(method, uri, body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {body}");
+        assert_eq!(body["error"], "unknown_provider");
+    }
+    for (method, uri, body) in [
+        (
+            Method::GET,
+            "/api/config/models/available?provider=openai",
+            None,
+        ),
+        (
             Method::POST,
-            "/api/config/models/seed",
-            Some(serde_json::json!({ "provider": "gemini" })),
-        )
-        .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    assert_eq!(body["error"], "unknown_provider");
+            "/api/config/models/choose",
+            Some(serde_json::json!({ "provider": "openai", "model": "gpt-6-sol" })),
+        ),
+    ] {
+        let (status, body) = h.json(method, uri, body).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{uri}: {body}");
+        assert_eq!(body["error"], "setup_required");
+    }
+    assert_eq!(h.state.config.read().await.llm.chat_preset, "opus");
 
     // Per-conversation pins: absent by default, validated, clearable.
     let (status, body) = h

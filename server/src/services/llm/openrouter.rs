@@ -11,8 +11,8 @@ use futures::future::BoxFuture;
 use crate::services::tool::ToolDefinition;
 
 use super::contract::{
-    Capabilities, EventSink, LlmError, LlmEvent, LlmRequest, ProviderAdapter, StopReason, Usage,
-    retry_after,
+    Capabilities, EventSink, LlmError, LlmEvent, LlmRequest, ModelListing, ProviderAdapter,
+    StopReason, Usage, retry_after,
 };
 use super::types::{
     ContentBlock, ImageSource, LlmBackend, LlmResponse, Message, OPENROUTER_BASE_URL, ToolCall,
@@ -713,6 +713,16 @@ fn parse_catalog(json: &serde_json::Value) -> Result<HashMap<String, ModelInfo>,
 
 /// `GET /api/v1/models`, cached per base URL.
 async fn fetch_catalog(backend: &LlmBackend) -> Result<Catalog, LlmError> {
+    fetch_catalog_json(backend)
+        .await
+        .map(|(catalog, _)| catalog)
+}
+
+/// `GET /api/v1/models`: the capability catalog, cached per base URL, and
+/// the listing it was parsed from.
+async fn fetch_catalog_json(
+    backend: &LlmBackend,
+) -> Result<(Catalog, serde_json::Value), LlmError> {
     let url = format!("{}{MODELS}", backend.base_url);
     let response = with_headers(backend, backend.http.get(&url))
         .send()
@@ -734,7 +744,81 @@ async fn fetch_catalog(backend: &LlmBackend) -> Result<Catalog, LlmError> {
             models: Some(models.clone()),
         },
     );
-    Ok(models)
+    Ok((models, json))
+}
+
+/// The models onboarding offers for OpenRouter, best first: the most used
+/// tool-calling models on openrouter.ai's rankings in September 2026.
+/// OpenRouter lists hundreds of models; the preset editor still takes any
+/// other `vendor/model` id. An id the live catalog no longer lists, or
+/// lists without tool calling, is left out, so a model retiring is never
+/// offered.
+pub(crate) const TOP_MODELS: &[&str] = &[
+    "anthropic/claude-opus-5.5",
+    "anthropic/claude-fable-5.1",
+    "anthropic/claude-sonnet-5",
+    "openai/gpt-6-astra",
+    "openai/gpt-6-sol",
+    "google/gemini-3.8-flash",
+    "qwen/qwen3.8-max-0902",
+    "x-ai/grok-4.7",
+    "moonshotai/kimi-k3",
+    "deepseek/deepseek-v4.1-flash",
+    "z-ai/glm-5.3",
+    "xiaomi/mimo-v2.6-pro",
+];
+
+/// How many of the newest tool-calling models stand in when the catalog
+/// lists none of [`TOP_MODELS`] any more.
+const NEWEST_FALLBACK: usize = 12;
+
+/// [`TOP_MODELS`] as the catalog lists them, under the catalog's names;
+/// when none is listed, the newest tool-calling models instead, leaving
+/// out variants (`:free`, `:batch`) and floating aliases (`~vendor/...`).
+fn top_models(listing: &serde_json::Value) -> Vec<ModelListing> {
+    let entries: Vec<(&str, &str, i64)> = listing["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|model| {
+            model["supported_parameters"]
+                .as_array()
+                .is_some_and(|list| list.iter().any(|p| p == "tools"))
+        })
+        .filter_map(|model| {
+            let id = model["id"].as_str()?;
+            let name = model["name"]
+                .as_str()
+                .filter(|name| !name.trim().is_empty());
+            Some((
+                id,
+                name.unwrap_or(id),
+                model["created"].as_i64().unwrap_or(0),
+            ))
+        })
+        .collect();
+    let listed = |(id, name, _): &(&str, &str, i64)| ModelListing {
+        id: (*id).into(),
+        name: name.trim().into(),
+        description: None,
+    };
+    let top: Vec<ModelListing> = TOP_MODELS
+        .iter()
+        .filter_map(|top| entries.iter().find(|(id, ..)| id == top).map(listed))
+        .collect();
+    if !top.is_empty() {
+        return top;
+    }
+    let mut newest: Vec<&(&str, &str, i64)> = entries
+        .iter()
+        .filter(|(id, ..)| !id.contains(':') && !id.starts_with('~'))
+        .collect();
+    newest.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(b.0)));
+    newest
+        .into_iter()
+        .take(NEWEST_FALLBACK)
+        .map(listed)
+        .collect()
 }
 
 /// Loads the catalog when the cached one is stale. A catalog that cannot
@@ -826,12 +910,10 @@ impl ProviderAdapter for OpenrouterAdapter {
             }
         })
     }
-    fn discover_models(&self) -> BoxFuture<'_, Result<Vec<String>, LlmError>> {
+    fn discover_models(&self) -> BoxFuture<'_, Result<Vec<ModelListing>, LlmError>> {
         Box::pin(async move {
-            let catalog = fetch_catalog(&self.0).await?;
-            let mut ids: Vec<String> = catalog.keys().cloned().collect();
-            ids.sort();
-            Ok(ids)
+            let (_, listing) = fetch_catalog_json(&self.0).await?;
+            Ok(top_models(&listing))
         })
     }
 }
@@ -1005,6 +1087,51 @@ mod tests {
                 "supported_parameters": ["max_tokens", "temperature"]
             }
         ]})
+    }
+
+    /// The top models come in their curated order under the catalog's
+    /// names, without the ones the catalog no longer lists or lists
+    /// without tool calling; with none left, the newest tool-calling
+    /// models stand in, variants and floating aliases left out.
+    #[test]
+    fn top_models_follow_the_curated_order_and_the_live_catalog() {
+        let model = |id: &str, created: i64, tools: bool| {
+            let parameters = if tools {
+                json!(["tools"])
+            } else {
+                json!(["max_tokens"])
+            };
+            json!({"id": id, "name": format!("Name of {id}"), "created": created, "supported_parameters": parameters})
+        };
+        let listing = json!({"data": [
+            model("zz/unranked", 9, true),
+            model(TOP_MODELS[2], 1, true),
+            model(TOP_MODELS[0], 2, true),
+            model(TOP_MODELS[1], 3, false),
+        ]});
+        let top = top_models(&listing);
+        let ids: Vec<&str> = top.iter().map(|model| model.id.as_str()).collect();
+        assert_eq!(ids, [TOP_MODELS[0], TOP_MODELS[2]]);
+        assert_eq!(top[0].name, format!("Name of {}", TOP_MODELS[0]));
+        assert!(
+            TOP_MODELS
+                .iter()
+                .all(|id| crate::config::is_openrouter_model_id(id))
+        );
+
+        let unranked = json!({"data": [
+            model("old/model", 1, true),
+            model("new/model", 3, true),
+            model("new/model:free", 4, true),
+            model("~new/latest", 5, true),
+            model("new/no-tools", 6, false),
+        ]});
+        let ids: Vec<String> = top_models(&unranked)
+            .into_iter()
+            .map(|model| model.id)
+            .collect();
+        assert_eq!(ids, ["new/model", "old/model"]);
+        assert!(top_models(&json!({})).is_empty());
     }
 
     #[tokio::test]
@@ -1382,8 +1509,8 @@ mod tests {
             ..Config::default()
         };
         config.llm.tokens.open_router = "test-key".into();
-        config.llm.seed_presets(LlmProvider::Openrouter);
-        let preset = crate::config::default_presets(LlmProvider::Openrouter)[0]
+        config.llm.add_test_presets(LlmProvider::Openrouter);
+        let preset = crate::config::test_presets(LlmProvider::Openrouter)[0]
             .id
             .clone();
         let ok = completion(
@@ -1483,8 +1610,12 @@ mod tests {
         let (url, requests, task) = mock(Some(catalog()), 200, vec![], String::new()).await;
         let adapter = backend(&url, "test/text-only").adapter().unwrap();
         assert!(adapter.capabilities().model_discovery);
-        let ids = adapter.discover_models().await.unwrap();
-        assert_eq!(ids, ["test/full", "test/text-only"]);
+        // None of the top models is in this catalog: the newest model
+        // that calls tools stands in, and the text-only one is left out.
+        let listed = adapter.discover_models().await.unwrap();
+        let ids: Vec<&str> = listed.iter().map(|model| model.id.as_str()).collect();
+        assert_eq!(ids, ["test/full"]);
+        assert_eq!(listed[0].name, "Full");
         assert_eq!(paths(&requests), ["GET /api/v1/models"]);
 
         let text_only = adapter.capabilities();

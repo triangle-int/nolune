@@ -52,14 +52,3 @@ export function introGreeting(preferredName) {
 	const name = preferredName?.trim();
 	return name ? `hey, ${name}.` : "hey.";
 }
-
-/**
- * Prefix of the first message sent on the user's behalf after onboarding.
- * @param {string | null | undefined} preferredName
- * @param {string} languageLabel
- */
-export function onboardingHandshake(preferredName, languageLabel) {
-	const name = preferredName?.trim();
-	const language = `please speak to me in ${languageLabel}.`;
-	return name ? `my name is ${name}. ${language}` : language;
-}

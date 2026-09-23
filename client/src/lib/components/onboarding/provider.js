@@ -1,111 +1,92 @@
 import { codexView } from "../../models/codex.js";
-import { presetTestCopy, providerLabel } from "../../models/presets.js";
+import { presetTestCopy, providerAuth, providerLabel } from "../../models/presets.js";
 
 /**
  * @typedef {import("../../models/presets.js").ModelPreset} ModelPreset
- * @typedef {{ presets: ModelPreset[], chat_preset: string, background_preset: string }} SeededModels
  * @typedef {import("../../models/presets.js").PresetTestOk} PresetTestOk
  * @typedef {import("../../models/presets.js").PresetTestFailure} PresetTestFailure
  * @typedef {import("../../models/codex.js").CodexStatus} CodexStatus
- * @typedef {'anthropic' | 'openai' | 'openrouter' | 'codex'} SeedProvider
- * @typedef {{ seedModelPresets: (provider: SeedProvider) => Promise<SeededModels>, testPreset: (id: string) => Promise<PresetTestOk | PresetTestFailure>, updateModelPresets: (payload: { presets: ModelPreset[], chat_preset: string, background_preset: string }) => Promise<unknown> }} SeedAndTestApi
+ * @typedef {'anthropic' | 'openai' | 'openrouter' | 'codex'} OnboardingProvider
+ * @typedef {{ id: string, name: string, description?: string }} AvailableModel
  */
 
 /**
- * The preset onboarding tests once a provider is keyed (#28): the Chat slot
- * when it already runs on that provider, else the provider's first preset.
- * Mirrors the server's `probe_model`.
- * @param {SeededModels} models
- * @param {string} provider
- * @returns {string | null}
+ * The step after a provider is picked: its key, unless one is already
+ * saved (a key from an earlier visit, or one the server reads from its
+ * environment), the Codex login, or straight to its models.
+ * @param {OnboardingProvider} provider
+ * @param {readonly string[] | null | undefined} configuredKeys `configured_keys` from the config status
+ * @returns {'key' | 'codex' | 'models'}
  */
-export function onboardingTestPreset(models, provider) {
-	const chat = models.presets.find((p) => p.id === models.chat_preset);
-	if (chat?.provider === provider) return chat.id;
-	return models.presets.find((p) => p.provider === provider)?.id ?? null;
+export function stepAfterProvider(provider, configuredKeys) {
+	if (providerAuth(provider) === "login") return "codex";
+	return configuredKeys?.includes(provider) ? "models" : "key";
 }
 
 /**
- * Where the slots go once `presetId` answered (#28). Onboarding only reaches
- * a key step while the Chat slot points nowhere or at a preset that did not
- * answer (a key can pass the probe and still have no usable model: no
- * credits, a rate limit, a retired id), so a preset that answers takes the
- * Chat slot, and the Background slot follows to the provider's second
- * preset when it pointed at the provider being left. A slot on any other
- * provider stays. `null` when the Chat slot already is `presetId`.
- * @param {SeededModels} models
- * @param {string} presetId
- * @returns {{ chat_preset: string, background_preset: string } | null}
- */
-export function slotsAfterOnboardingTest(models, presetId) {
-	if (models.chat_preset === presetId) return null;
-	const preset = models.presets.find((p) => p.id === presetId);
-	if (!preset) return null;
-	const leaving = models.presets.find((p) => p.id === models.chat_preset)?.provider;
-	const background = models.presets.find((p) => p.id === models.background_preset);
-	const own = models.presets.filter((p) => p.provider === preset.provider);
-	const follows = !background || background.provider === leaving;
-	return {
-		chat_preset: presetId,
-		background_preset: follows ? (own.find((p) => p.id !== presetId) ?? preset).id : background.id,
-	};
-}
-
-/**
- * Save the credential in its provider's slot, seed that provider's default
- * model presets (#156) so chat and background work have a model, then run
- * the connection test on one of them (#28): onboarding cannot finish with a
- * provider that does not answer. A failure rejects with the typed outcome
- * on `error.outcome`; the key stays saved, so a valid provider configured
- * earlier is untouched and the person can retry from the key step. Once a
- * preset answered, the slots follow it (`slotsAfterOnboardingTest`) so the
- * first message does not go through the provider that did not.
+ * Save the provider's key. The server probes it before saving (a wrong key
+ * is refused with the reason), and nothing else changes: the person picks
+ * a model next.
  * @param {'anthropic' | 'openai' | 'openrouter'} provider
  * @param {string} key
- * @param {{ updateLlmConfig: (payload: {api_key?: string, openai?: string, openrouter?: string}) => Promise<void> } & SeedAndTestApi} api
- * @returns {Promise<PresetTestOk>}
+ * @param {{ updateLlmConfig: (payload: {api_key?: string, openai?: string, openrouter?: string}) => Promise<void> }} api
  */
-export async function saveOnboardingProvider(provider, key, api) {
-	const payload = provider === 'openai' ? { openai: key } : provider === 'openrouter' ? { openrouter: key } : { api_key: key };
+export async function saveOnboardingKey(provider, key, api) {
+	const payload = provider === "openai" ? { openai: key } : provider === "openrouter" ? { openrouter: key } : { api_key: key };
 	await api.updateLlmConfig(payload);
-	return seedAndTest(provider, api);
 }
 
 /**
- * Seed a provider's default presets and run the connection test on one of
- * them; the slots follow the preset that answered. Shared by the key
- * providers and Codex, whose credential is not saved here.
- * @param {SeedProvider} provider
- * @param {SeedAndTestApi} api
+ * The models the provider offers this account, to pick one from. A refusal
+ * rejects with the sentence onboarding shows and the typed outcome on
+ * `error.outcome`; a listing with nothing in it rejects too, since there is
+ * nothing to pick.
+ * @param {OnboardingProvider} provider
+ * @param {{ fetchAvailableModels: (provider: OnboardingProvider) => Promise<{ ok: true, models: AvailableModel[] } | PresetTestFailure> }} api
+ * @returns {Promise<AvailableModel[]>}
+ */
+export async function listOnboardingModels(provider, api) {
+	const listed = await api.fetchAvailableModels(provider);
+	if (!listed.ok) {
+		const row = { id: "", name: "", provider, model: "" };
+		const error = /** @type {Error & { outcome?: PresetTestFailure }} */ (new Error(presetTestCopy(listed, row).text));
+		error.outcome = listed;
+		throw error;
+	}
+	if (listed.models.length === 0) throw new Error(`${providerLabel(provider)} lists no models this account can use.`);
+	return listed.models;
+}
+
+/**
+ * Make the picked model the one conversations use (#28): the server tests
+ * it and saves nothing unless it answers, so onboarding cannot finish on a
+ * model that does not. A refusal rejects with the connection test's
+ * sentence and the typed outcome on `error.outcome`; the person can pick
+ * another model or another provider.
+ * @param {OnboardingProvider} provider
+ * @param {AvailableModel} model
+ * @param {{ chooseModel: (choice: { provider: OnboardingProvider, model: string, name?: string }) => Promise<PresetTestOk | PresetTestFailure> }} api
  * @returns {Promise<PresetTestOk>}
  */
-async function seedAndTest(provider, api) {
-	const models = await api.seedModelPresets(provider);
-	const presetId = onboardingTestPreset(models, provider);
-	if (!presetId) throw new Error(`No ${provider} preset to test; add one under Settings.`);
-	const outcome = await api.testPreset(presetId);
+export async function chooseOnboardingModel(provider, model, api) {
+	const outcome = await api.chooseModel({ provider, model: model.id, name: model.name });
 	if (!outcome.ok) {
-		const preset = models.presets.find((p) => p.id === presetId);
-		const error = /** @type {Error & { outcome?: PresetTestFailure }} */ (new Error(presetTestCopy(outcome, /** @type {ModelPreset} */ (preset)).text));
+		const row = { id: "", name: model.name, provider, model: model.id };
+		const error = /** @type {Error & { outcome?: PresetTestFailure }} */ (new Error(presetTestCopy(outcome, row).text));
 		error.outcome = outcome;
 		throw error;
 	}
-	const slots = slotsAfterOnboardingTest(models, presetId);
-	if (slots) await api.updateModelPresets({ presets: models.presets, ...slots });
 	return outcome;
 }
 
 /**
- * Finish Codex onboarding (#27): the gate is the login AND the connection
- * test. Nothing is saved for the credential, which lives with codex; the
- * status is read first, and a binary that is missing or another release
- * (`error.codex === 'binary'`), an app-server that could not answer
+ * Check Codex before its models are listed (#27): the credential lives
+ * with codex, so nothing is saved here. A binary that is missing or another
+ * release (`error.codex === 'binary'`), an app-server that could not answer
  * (`'unavailable'`) or no login yet (`'login'`, the caller starts one)
- * rejects before anything is seeded. With a login, the Codex presets are
- * seeded and one is tested like any other provider's; a preset that does
- * not answer rejects with the typed outcome on `error.outcome`.
- * @param {{ fetchCodexStatus: () => Promise<CodexStatus> } & SeedAndTestApi} api
- * @returns {Promise<PresetTestOk>}
+ * rejects; a login resolves with the status.
+ * @param {{ fetchCodexStatus: () => Promise<CodexStatus> }} api
+ * @returns {Promise<CodexStatus>}
  */
 export async function connectOnboardingCodex(api) {
 	const status = await api.fetchCodexStatus();
@@ -119,7 +100,7 @@ export async function connectOnboardingCodex(api) {
 	if (!status.compatible) throw refuse("binary", `${view.headline} ${view.detail ?? ""}`.trim());
 	if (status.error) throw refuse("unavailable", `${view.headline} ${view.detail ?? ""}`.trim());
 	if (!status.logged_in) throw refuse("login", "Codex is not logged in yet.");
-	return seedAndTest("codex", api);
+	return status;
 }
 
 /**

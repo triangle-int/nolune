@@ -6,8 +6,9 @@
 		updateLlmConfig,
 		fetchModelPresets,
 		updateModelPresets,
-		seedModelPresets,
+		fetchAvailableModels,
 		testPreset,
+		type AvailableModel,
 		type ModelPreset,
 		type ModelPresets,
 		fetchPairedDevices,
@@ -23,7 +24,7 @@
 	import Companions from "$lib/components/federation/Companions.svelte";
 	import CodexLogin from "$lib/components/settings/CodexLogin.svelte";
 	import SettingSelect from "$lib/components/settings/SettingSelect.svelte";
-	import { PROVIDERS, capabilityWarnings, modelHints, modelPlaceholder, presetCapabilities, presetTestCopy, suggestPresetId, validatePresets } from "$lib/models/presets.js";
+	import { PROVIDERS, capabilityWarnings, modelPlaceholder, presetCapabilities, presetTestCopy, providerAuth, suggestPresetId, validatePresets } from "$lib/models/presets.js";
 
 	// Connections (#98): what this server talks to. The provider and keys are
 	// server-global; computers and browsers are the places the companion is.
@@ -130,17 +131,35 @@
 		}
 	}
 
-	async function seedDefaults(provider: ModelPreset["provider"]) {
-		modelsSaving = true;
-		modelsError = "";
+	// --- what each provider lists, suggested in the model id field ---
+	// Nothing is seeded: a preset names a model the provider lists for this
+	// account (or any id typed). Each provider is asked once, the first time
+	// a model field on it is focused, and only once it can answer.
+	let listedModels = $state<Record<string, AvailableModel[]>>({});
+	const listing = new Set<string>();
+
+	function canList(provider: string): boolean {
+		return providerAuth(provider) === "login" || configuredKeys.includes(provider);
+	}
+
+	async function suggestModels(provider: string) {
+		if (listing.has(provider) || !canList(provider)) return;
+		listing.add(provider);
 		try {
-			applyModels(await seedModelPresets(provider));
-			setupRequired = (await fetchConfigStatus()).setup_required ?? null;
-		} catch (e) {
-			modelsError = e instanceof Error ? e.message : "Could not add default presets.";
-		} finally {
-			modelsSaving = false;
+			const listed = await fetchAvailableModels(provider as ModelPreset["provider"]);
+			if (listed.ok) listedModels = { ...listedModels, [provider]: listed.models };
+			else listing.delete(provider);
+		} catch {
+			listing.delete(provider);
 		}
+	}
+
+	/** A model picked from the suggestions names a nameless preset after it. */
+	function adoptListedName(index: number) {
+		const preset = draft.presets[index];
+		if (preset.name.trim()) return;
+		const listed = listedModels[preset.provider]?.find((m) => m.id === preset.model.trim());
+		if (listed) renamePreset(index, listed.name);
 	}
 
 	// --- connection tests and capability warnings (#28) ---
@@ -343,7 +362,7 @@
 		<div class="setting-row">
 			<span class="setting-label" id="presets-label">Presets</span>
 			{#if draft.presets.length === 0}
-				<p class="setting-hint">No presets yet. Add your provider's defaults or create one.</p>
+				<p class="setting-hint">No presets yet. Add one and pick a model your provider lists.</p>
 			{:else}
 				<ul class="preset-list" aria-labelledby="presets-label">
 					{#each draft.presets as preset, index (preset.id)}
@@ -353,7 +372,7 @@
 						<li class="preset-row">
 							<label class="preset-field">Name<input class="ext-input" type="text" placeholder="Claude Sonnet" value={preset.name} oninput={(e) => renamePreset(index, (e.currentTarget as HTMLInputElement).value)} disabled={modelsSaving} /></label>
 							<div class="preset-field"><span id={`preset-provider-${index}`}>Provider</span><SettingSelect aria-labelledby={`preset-provider-${index}`} bind:value={preset.provider} disabled={modelsSaving} options={PROVIDER_OPTIONS} /></div>
-							<label class="preset-field preset-field-model">Model id<input class="ext-input" type="text" placeholder={modelPlaceholder(preset.provider)} list={modelHints(preset.provider).length ? `models-${preset.provider}` : undefined} bind:value={preset.model} disabled={modelsSaving} spellcheck="false" /></label>
+							<label class="preset-field preset-field-model">Model id<input class="ext-input" type="text" placeholder={modelPlaceholder(preset.provider)} list={listedModels[preset.provider]?.length ? `models-${preset.provider}` : undefined} bind:value={preset.model} onfocus={() => suggestModels(preset.provider)} onchange={() => adoptListedName(index)} disabled={modelsSaving} spellcheck="false" /></label>
 							<button class="setting-btn setting-btn-danger preset-remove" onclick={() => removePreset(index)} disabled={modelsSaving} title={inUse ? "In use by a slot; the slot moves to the first preset" : "Remove preset"}>Remove</button>
 							<div class="preset-foot">
 								{#each warningsFor(preset) as warning (warning.id)}
@@ -372,13 +391,12 @@
 					{/each}
 				</ul>
 			{/if}
-			<!-- The models the pinned codex release lists (#27); the other providers take any id. -->
-			<datalist id="models-codex">{#each modelHints("codex") as model (model)}<option value={model}></option>{/each}</datalist>
+			<!-- What each provider lists for this account; any other id is accepted too. -->
+			{#each Object.entries(listedModels) as [provider, models] (provider)}
+				<datalist id={`models-${provider}`}>{#each models as model (model.id)}<option value={model.id}>{model.name}</option>{/each}</datalist>
+			{/each}
 			<div class="settings-links">
 				<button class="nl-button-secondary" onclick={() => addPreset()} disabled={modelsSaving}>Add preset</button>
-				{#each PROVIDERS as provider (provider.id)}
-					<button class="nl-button-secondary" onclick={() => seedDefaults(provider.id as ModelPreset["provider"])} disabled={modelsSaving}>Add {provider.label} defaults</button>
-				{/each}
 			</div>
 		</div>
 

@@ -28,15 +28,6 @@ export const PROVIDERS = Object.freeze([
 ]);
 
 /**
- * The models the pinned codex release lists (`model/list`, recorded in
- * `server/src/services/llm/fixtures/codex-<version>.jsonl`), the default
- * first; the seeded presets use the first and the last but one. Offered
- * as hints in the preset editor, since Codex has no model discovery.
- * @type {readonly string[]}
- */
-export const CODEX_MODELS = Object.freeze(["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"]);
-
-/**
  * How a provider authenticates; a provider the client does not know is
  * treated as a key provider, so validation still asks for one.
  * @param {string} id
@@ -47,21 +38,16 @@ export function providerAuth(id) {
 }
 
 /**
- * Known model ids for the editor's datalist: only Codex has a fixed list.
+ * An example model id for the editor's placeholder; display only. The
+ * editor suggests what the provider really lists (`fetchAvailableModels`).
  * @param {string} provider
- * @returns {readonly string[]}
  */
-export function modelHints(provider) {
-	return provider === "codex" ? CODEX_MODELS : [];
-}
-
-/** An example model id for the editor's placeholder. @param {string} provider */
 export function modelPlaceholder(provider) {
 	switch (provider) {
 		case "openrouter":
 			return "vendor/model";
 		case "codex":
-			return CODEX_MODELS[0];
+			return "gpt-6-astra";
 		case "openai":
 			return "gpt-5.6-sol";
 		default:

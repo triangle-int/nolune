@@ -3,8 +3,8 @@ use futures::StreamExt;
 use crate::services::tool::ToolDefinition;
 
 use super::contract::{
-    Capabilities, EventSink, LlmError, LlmEvent, LlmRequest, ProviderAdapter, StopReason, Usage,
-    retry_after,
+    Capabilities, EventSink, LlmError, LlmEvent, LlmRequest, ModelListing, ProviderAdapter,
+    StopReason, Usage, retry_after,
 };
 use super::types::LlmBackend;
 use super::types::{ContentBlock, DocumentSource, ImageSource, LlmResponse, Message, ToolCall};
@@ -703,9 +703,90 @@ const CAPABILITIES: Capabilities = Capabilities {
     tools: true,
     streaming: true,
     reasoning_controls: false,
-    model_discovery: false,
+    model_discovery: true,
     token_counting: false,
 };
+
+/// Parts of an OpenAI model id that mark a model a conversation cannot run
+/// on through the Responses API: audio, speech, images, embeddings,
+/// moderation, search and legacy completion models.
+const NOT_CHAT: &[&str] = &[
+    "audio",
+    "babbage",
+    "dall-e",
+    "davinci",
+    "embedding",
+    "image",
+    "instruct",
+    "moderation",
+    "realtime",
+    "search",
+    "transcribe",
+    "tts",
+    "whisper",
+];
+
+/// Whether a listed OpenAI model is one to offer for a conversation: the
+/// GPT family and the o-series, without the variants in [`NOT_CHAT`] and
+/// without dated snapshots (`gpt-4o-2024-08-06`, `gpt-4-0613`), whose
+/// undated alias is listed beside them.
+fn offered_model(id: &str) -> bool {
+    static SNAPSHOT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"-(\d{4}-\d{2}-\d{2}|\d{4})(-|$)").expect("a valid pattern")
+    });
+    let id = id.to_ascii_lowercase();
+    let family = id.starts_with("gpt-")
+        || (id.starts_with('o') && id[1..].starts_with(|c: char| c.is_ascii_digit()));
+    family && !SNAPSHOT.is_match(&id) && !NOT_CHAT.iter().any(|part| id.contains(part))
+}
+
+/// `GET /v1/models`, narrowed to [`offered_model`], newest first. OpenAI
+/// names models by id only, so the id is the name.
+async fn openai_models(
+    http: &reqwest::Client,
+    api_key: &str,
+    base_url: &str,
+) -> Result<Vec<ModelListing>, LlmError> {
+    let resp = http
+        .get(format!("{base_url}/v1/models"))
+        .header("Authorization", format!("Bearer {api_key}"))
+        .send()
+        .await
+        .map_err(|error| LlmError::Transport(error.to_string()))?;
+    let status = resp.status();
+    let retry_after = retry_after(resp.headers());
+    let text = resp
+        .text()
+        .await
+        .map_err(|error| LlmError::Transport(error.to_string()))?;
+    if !status.is_success() {
+        return Err(openai_error(status.as_u16(), retry_after, &text));
+    }
+    let data: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|error| LlmError::InvalidResponse(format!("model list: {error}")))?;
+    let models = data["data"]
+        .as_array()
+        .ok_or_else(|| LlmError::InvalidResponse("model list without data".into()))?;
+    let mut offered: Vec<(i64, &str)> = models
+        .iter()
+        .filter_map(|model| {
+            Some((
+                model["created"].as_i64().unwrap_or(0),
+                model["id"].as_str()?.trim(),
+            ))
+        })
+        .filter(|(_, id)| offered_model(id))
+        .collect();
+    offered.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(b.1)));
+    Ok(offered
+        .into_iter()
+        .map(|(_, id)| ModelListing {
+            id: id.into(),
+            name: id.into(),
+            description: None,
+        })
+        .collect())
+}
 
 /// `reasoning.effort` is a Responses API parameter only reasoning models
 /// accept: the GPT-5 family and the o-series. Other models answer it with
@@ -762,5 +843,14 @@ impl ProviderAdapter for OpenaiAdapter {
                 result = openai_stream(&b.http, &b.api_key, &b.model, request.system, request.tools, request.messages, request.max_tokens, request.reasoning, events, &b.base_url) => result.map_err(LlmError::from),
             }
         })
+    }
+    fn discover_models(
+        &self,
+    ) -> futures::future::BoxFuture<'_, Result<Vec<ModelListing>, LlmError>> {
+        Box::pin(openai_models(
+            &self.0.http,
+            &self.0.api_key,
+            &self.0.base_url,
+        ))
     }
 }

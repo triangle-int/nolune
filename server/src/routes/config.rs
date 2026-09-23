@@ -1,6 +1,6 @@
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
     routing::{delete, get, post, put},
 };
@@ -16,7 +16,8 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/config/status", get(get_status))
         .route("/api/config/models", get(get_models).put(update_models))
-        .route("/api/config/models/seed", post(seed_models))
+        .route("/api/config/models/available", get(available_models))
+        .route("/api/config/models/choose", post(choose_model))
         .route("/api/config/models/{id}/test", post(test_model_preset))
         .route(
             "/api/config/embedding",
@@ -666,33 +667,150 @@ async fn update_models(
     Ok(Json(models_json(&*state.config.read().await)))
 }
 
+fn parse_provider(provider: &str) -> Result<config::LlmProvider, ModelsError> {
+    config::LlmProvider::parse(provider.trim()).ok_or_else(|| {
+        models_error(
+            StatusCode::BAD_REQUEST,
+            "unknown_provider",
+            format!("unknown provider: {provider}"),
+        )
+    })
+}
+
+/// A key provider without its key cannot list or run anything yet.
+fn missing_key(provider: config::LlmProvider) -> ModelsError {
+    models_error(
+        StatusCode::CONFLICT,
+        "setup_required",
+        format!("Add an API key for {} first.", provider.label()),
+    )
+}
+
 #[derive(Deserialize)]
-struct SeedModelsRequest {
+struct AvailableModelsQuery {
     provider: String,
 }
 
-/// Add a provider's default presets and fill empty slots. Idempotent.
-async fn seed_models(
+/// `GET /api/config/models/available?provider=`: the models the provider
+/// offers this account, in the order to offer them, which onboarding and
+/// the preset editor pick from. Nothing is saved. A failure is typed like
+/// a connection test's, so the client words it the same way.
+async fn available_models(
     State(state): State<AppState>,
-    Json(request): Json<SeedModelsRequest>,
+    Query(query): Query<AvailableModelsQuery>,
 ) -> Result<Json<serde_json::Value>, ModelsError> {
-    let Some(provider) = config::LlmProvider::parse(request.provider.trim()) else {
+    list_available_models(&state, &query.provider, Probe::LIVE).await
+}
+
+async fn list_available_models(
+    state: &AppState,
+    provider: &str,
+    probe: Probe<'_>,
+) -> Result<Json<serde_json::Value>, ModelsError> {
+    let provider = parse_provider(provider)?;
+    let backend = {
+        let cfg = state.config.read().await;
+        crate::services::llm::LlmBackend::for_listing(&cfg, state.http_client.clone(), provider)
+    };
+    let mut backend = backend.map_err(|_| missing_key(provider))?;
+    if let Some(base_url) = probe.base_url {
+        backend.base_url = base_url.to_owned();
+    }
+    match backend.list_models(probe.deadline).await {
+        Ok(models) => Ok(Json(json!({ "provider": provider, "models": models }))),
+        Err(error) => {
+            // As with a connection test, the provider's text stays in the log.
+            if let crate::services::llm::contract::LlmError::Authentication(detail) = &error {
+                log::warn!(
+                    "[llm] {} rejected the API key listing models: {detail}",
+                    provider.label()
+                );
+            }
+            let (status, error, message, retry_after) = llm_failure(provider, "", error);
+            let message = scrub_key_echo(&message, &backend.api_key);
+            Err((
+                status,
+                Json(json!({
+                    "ok": false,
+                    "error": error,
+                    "provider": provider,
+                    "message": message,
+                    "retry_after_seconds": retry_after,
+                })),
+            ))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ChooseModelRequest {
+    provider: String,
+    model: String,
+    /// The provider's display name for the model; the id when blank.
+    #[serde(default)]
+    name: String,
+}
+
+/// `POST /api/config/models/choose`: make a model the provider listed the
+/// one conversations use (onboarding's model step). It is tested first as
+/// the preset it would become, and nothing is saved unless it answers;
+/// then it becomes a preset (the one already naming it, if any) in the
+/// Chat slot, and the Background slot follows it by
+/// [`config::LlmConfig::choose_chat_model`]'s rule. A model that does not
+/// answer is refused with the connection test's typed outcome.
+async fn choose_model(
+    State(state): State<AppState>,
+    Json(request): Json<ChooseModelRequest>,
+) -> Result<Json<serde_json::Value>, ModelsError> {
+    choose_chat_model(&state, request, Probe::LIVE).await
+}
+
+async fn choose_chat_model(
+    state: &AppState,
+    request: ChooseModelRequest,
+    probe: Probe<'_>,
+) -> Result<Json<serde_json::Value>, ModelsError> {
+    let provider = parse_provider(&request.provider)?;
+    let model = request.model.trim();
+    let name = request.name.trim();
+    if model.is_empty() {
         return Err(models_error(
             StatusCode::BAD_REQUEST,
-            "unknown_provider",
-            format!("unknown provider: {}", request.provider),
+            "invalid_presets",
+            "choose a model".into(),
         ));
+    }
+    // The model is tested as the preset it would become, on a copy of the
+    // config; the saved one is untouched until it answers.
+    let prepared = {
+        let cfg = state.config.read().await;
+        if !cfg.llm.provider_ready(provider) {
+            return Err(missing_key(provider));
+        }
+        let mut candidate = cfg.clone();
+        let id = candidate.llm.adopt_model(provider, model, name);
+        candidate
+            .llm
+            .validate_preset_shapes()
+            .map_err(|message| models_error(StatusCode::BAD_REQUEST, "invalid_presets", message))?;
+        prepare_test(state, &candidate, &id)?
     };
-    let added = {
+    let tested = finish_test(prepared, probe).await?;
+    let id = {
         let mut cfg = state.config.write().await;
-        let added = cfg.llm.seed_presets(provider);
+        let mut next = cfg.llm.clone();
+        let id = next.choose_chat_model(provider, model, name);
+        next.validate_presets()
+            .map_err(|message| models_error(StatusCode::BAD_REQUEST, "invalid_presets", message))?;
+        cfg.llm = next;
         save_config_at(&cfg, &state.workspace_dir.join("config.toml"))
             .map_err(|(code, message)| models_error(code, "save_failed", message))?;
-        added
+        id
     };
     state.rebuild_llm().await;
-    let mut body = models_json(&*state.config.read().await);
-    body["added"] = json!(added);
+    let Json(mut body) = tested;
+    body["preset"] = json!(id);
+    body["models"] = models_json(&*state.config.read().await);
     Ok(Json(body))
 }
 
@@ -717,23 +835,48 @@ async fn run_preset_test(
     id: &str,
     probe: Probe<'_>,
 ) -> Result<Json<serde_json::Value>, ModelsError> {
-    use crate::services::llm::{LlmBackend, PresetError, contract::LlmError};
-    let (preset, backend) = {
+    let prepared = {
         let cfg = state.config.read().await;
-        let Some(preset) = cfg.llm.preset(id.trim()) else {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(json!({
-                    "ok": false,
-                    "error": "unknown_preset",
-                    "preset": id,
-                    "message": format!("model preset {id:?} does not exist"),
-                })),
-            ));
-        };
-        let backend = LlmBackend::for_preset(&cfg, state.http_client.clone(), &preset.id);
-        (preset.clone(), backend)
+        prepare_test(state, &cfg, id)?
     };
+    finish_test(prepared, probe).await
+}
+
+/// A connection test ready to run: the preset and its backend, or why the
+/// preset cannot have one.
+type PreparedTest = (
+    config::ModelPreset,
+    Result<crate::services::llm::LlmBackend, crate::services::llm::PresetError>,
+);
+
+/// The preset `id` in `cfg` and the backend a test of it runs on.
+fn prepare_test(
+    state: &AppState,
+    cfg: &config::Config,
+    id: &str,
+) -> Result<PreparedTest, ModelsError> {
+    let Some(preset) = cfg.llm.preset(id.trim()) else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "ok": false,
+                "error": "unknown_preset",
+                "preset": id,
+                "message": format!("model preset {id:?} does not exist"),
+            })),
+        ));
+    };
+    let backend =
+        crate::services::llm::LlmBackend::for_preset(cfg, state.http_client.clone(), &preset.id);
+    Ok((preset.clone(), backend))
+}
+
+/// Runs a prepared connection test and answers with its typed outcome.
+async fn finish_test(
+    (preset, backend): PreparedTest,
+    probe: Probe<'_>,
+) -> Result<Json<serde_json::Value>, ModelsError> {
+    use crate::services::llm::{PresetError, contract::LlmError};
     let key = backend.as_ref().ok().map(|backend| backend.api_key.clone());
     let outcome = match backend {
         Ok(mut backend) => {
@@ -806,10 +949,7 @@ fn test_outcome(
         crate::services::llm::contract::LlmError,
     >,
 ) -> Result<Json<serde_json::Value>, ModelsError> {
-    use crate::services::llm::contract::LlmError;
-    let provider = preset.provider.label();
-    let model = preset.model.as_str();
-    let (status, error, message, retry_after) = match outcome {
+    let error = match outcome {
         Ok(usage) => {
             return Ok(Json(json!({
                 "ok": true,
@@ -826,81 +966,9 @@ fn test_outcome(
                 ),
             })));
         }
-        Err(LlmError::SetupRequired(message)) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "setup_required",
-            message,
-            None,
-        ),
-        // The provider's text is logged by the caller, never answered: it
-        // can quote the key it refused.
-        Err(LlmError::Authentication(_)) => (
-            StatusCode::UNAUTHORIZED,
-            "authentication",
-            format!("{provider} rejected the API key."),
-            None,
-        ),
-        Err(LlmError::RateLimited {
-            retry_after,
-            message,
-        }) => (
-            StatusCode::TOO_MANY_REQUESTS,
-            "rate_limited",
-            format!("{provider} accepted the key but is rate limiting: {message}"),
-            retry_after.map(|wait| wait.as_secs()),
-        ),
-        Err(LlmError::Http {
-            status: 404,
-            message,
-        }) => (
-            StatusCode::NOT_FOUND,
-            "model_not_found",
-            format!("{provider} has no model {model:?}: {message}"),
-            None,
-        ),
-        Err(LlmError::Http { status, message }) if status < 500 => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "provider_rejected",
-            format!("{provider} rejected the request ({status}): {message}"),
-            None,
-        ),
-        Err(LlmError::Http { status, message }) => (
-            StatusCode::BAD_GATEWAY,
-            "provider_unavailable",
-            format!("{provider} answered {status}: {message}"),
-            None,
-        ),
-        Err(LlmError::Transport(message)) => (
-            StatusCode::BAD_GATEWAY,
-            "unreachable",
-            format!("failed to reach {provider}: {message}"),
-            None,
-        ),
-        Err(LlmError::Timeout) => (
-            StatusCode::GATEWAY_TIMEOUT,
-            "timeout",
-            format!("{provider} did not answer in time"),
-            None,
-        ),
-        Err(LlmError::UnsupportedCapability(capability)) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "unsupported",
-            format!("{provider} does not support {capability} for {model:?}"),
-            None,
-        ),
-        Err(LlmError::ContextLength(message)) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "provider_rejected",
-            format!("{provider} rejected the request: {message}"),
-            None,
-        ),
-        Err(error @ (LlmError::InvalidResponse(_) | LlmError::Cancelled)) => (
-            StatusCode::BAD_GATEWAY,
-            "invalid_response",
-            format!("{provider} answered with something unexpected: {error}"),
-            None,
-        ),
+        Err(error) => error,
     };
+    let (status, error, message, retry_after) = llm_failure(preset.provider, &preset.model, error);
     Err((
         status,
         Json(json!({
@@ -913,6 +981,94 @@ fn test_outcome(
             "retry_after_seconds": retry_after,
         })),
     ))
+}
+
+/// The status, error name, sentence and retry hint every failed provider
+/// call answers with, by variant (#24, #25): a connection test, and a
+/// model listing (`model` empty). The sentence names the provider.
+fn llm_failure(
+    provider: config::LlmProvider,
+    model: &str,
+    error: crate::services::llm::contract::LlmError,
+) -> (StatusCode, &'static str, String, Option<u64>) {
+    use crate::services::llm::contract::LlmError;
+    let provider = provider.label();
+    match error {
+        LlmError::SetupRequired(message) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "setup_required",
+            message,
+            None,
+        ),
+        // The provider's text is logged by the caller, never answered: it
+        // can quote the key it refused.
+        LlmError::Authentication(_) => (
+            StatusCode::UNAUTHORIZED,
+            "authentication",
+            format!("{provider} rejected the API key."),
+            None,
+        ),
+        LlmError::RateLimited {
+            retry_after,
+            message,
+        } => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            format!("{provider} accepted the key but is rate limiting: {message}"),
+            retry_after.map(|wait| wait.as_secs()),
+        ),
+        LlmError::Http {
+            status: 404,
+            message,
+        } => (
+            StatusCode::NOT_FOUND,
+            "model_not_found",
+            format!("{provider} has no model {model:?}: {message}"),
+            None,
+        ),
+        LlmError::Http { status, message } if status < 500 => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "provider_rejected",
+            format!("{provider} rejected the request ({status}): {message}"),
+            None,
+        ),
+        LlmError::Http { status, message } => (
+            StatusCode::BAD_GATEWAY,
+            "provider_unavailable",
+            format!("{provider} answered {status}: {message}"),
+            None,
+        ),
+        LlmError::Transport(message) => (
+            StatusCode::BAD_GATEWAY,
+            "unreachable",
+            format!("failed to reach {provider}: {message}"),
+            None,
+        ),
+        LlmError::Timeout => (
+            StatusCode::GATEWAY_TIMEOUT,
+            "timeout",
+            format!("{provider} did not answer in time"),
+            None,
+        ),
+        LlmError::UnsupportedCapability(capability) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "unsupported",
+            format!("{provider} does not support {capability} for {model:?}"),
+            None,
+        ),
+        LlmError::ContextLength(message) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "provider_rejected",
+            format!("{provider} rejected the request: {message}"),
+            None,
+        ),
+        error @ (LlmError::InvalidResponse(_) | LlmError::Cancelled) => (
+            StatusCode::BAD_GATEWAY,
+            "invalid_response",
+            format!("{provider} answered with something unexpected: {error}"),
+            None,
+        ),
+    }
 }
 
 fn save_config(config: &config::Config) -> Result<(), (StatusCode, String)> {
@@ -1023,7 +1179,7 @@ mod embedding_status_tests {
         assert!(bare["model"].is_null(), "{bare}");
         let mut cfg = config::Config::default();
         cfg.llm.tokens.open_ai = "secret-openai-key".into();
-        cfg.llm.seed_presets(config::LlmProvider::Openai);
+        cfg.llm.add_test_presets(config::LlmProvider::Openai);
         cfg.llm.chat_preset = "gpt-sol".into();
         let Json(status) = get_status(State(AppState::new(cfg).await)).await;
         assert_eq!(status["llm_configured"], true, "{status}");
@@ -1498,7 +1654,7 @@ mod preset_test_tests {
             config::LlmProvider::Openai,
             config::LlmProvider::Openrouter,
         ] {
-            cfg.llm.seed_presets(provider);
+            cfg.llm.add_test_presets(provider);
         }
         cfg
     }
@@ -1716,8 +1872,8 @@ mod preset_test_tests {
             let workspace = tempfile::tempdir().unwrap();
             let state = AppState::new_in(configured(), workspace.path().to_owned()).await;
             let before = tree(workspace.path());
-            let preset_id = config::default_presets(provider)[0].id.clone();
-            let model = config::default_presets(provider)[0].model.clone();
+            let preset_id = config::test_presets(provider)[0].id.clone();
+            let model = config::test_presets(provider)[0].model.clone();
             let name = match provider {
                 config::LlmProvider::Anthropic => "anthropic",
                 config::LlmProvider::Openai => "openai",
@@ -1860,6 +2016,222 @@ mod preset_test_tests {
             assert_no_chat_files(workspace.path());
             assert!(!workspace.path().join("config.toml").exists());
         }
+    }
+
+    /// A provider stand-in that answers its model listing (`GET`) with
+    /// `listing` and every completion (`POST`) with `status` and `answer`.
+    async fn listing_stub(
+        listing: serde_json::Value,
+        status: u16,
+        answer: String,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let app = axum::Router::new().fallback(
+            axum::routing::get(move || {
+                let listing = listing.clone();
+                async move { Json(listing) }
+            })
+            .post(move || {
+                let answer = answer.clone();
+                async move { (StatusCode::from_u16(status).unwrap(), answer) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (url, task)
+    }
+
+    fn listed_ids(body: &serde_json::Value) -> Vec<String> {
+        body["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|model| model["id"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    /// Each provider lists what the key may call, in the order to offer it:
+    /// Anthropic's models under their display names, OpenAI's conversation
+    /// models newest first without snapshots or audio and image models, and
+    /// OpenRouter's top models. Nothing is saved.
+    #[tokio::test]
+    async fn available_models_come_from_each_provider_and_save_nothing() {
+        let workspace = tempfile::tempdir().unwrap();
+        let state = AppState::new_in(configured(), workspace.path().to_owned()).await;
+        let before = tree(workspace.path());
+
+        let anthropic = json!({"data": [
+            {"id": "claude-opus-5-5", "display_name": "Claude Opus 5.5", "type": "model"},
+            {"id": "claude-haiku-4-5", "display_name": "", "type": "model"}
+        ]});
+        let (url, task) = listing_stub(anthropic, 200, String::new()).await;
+        let Json(body) = list_available_models(&state, "anthropic", Probe::at(&url))
+            .await
+            .unwrap_or_else(|(status, Json(body))| panic!("{status} {body}"));
+        task.abort();
+        assert_eq!(body["provider"], "anthropic");
+        assert_eq!(listed_ids(&body), ["claude-opus-5-5", "claude-haiku-4-5"]);
+        assert_eq!(body["models"][0]["name"], "Claude Opus 5.5");
+        assert_eq!(
+            body["models"][1]["name"], "claude-haiku-4-5",
+            "no name: the id"
+        );
+
+        let openai = json!({"data": [
+            {"id": "gpt-5.6-luna", "created": 10},
+            {"id": "gpt-6-sol", "created": 30},
+            {"id": "gpt-6-sol-2026-09-22", "created": 31},
+            {"id": "gpt-4-0613", "created": 1},
+            {"id": "o5-mini", "created": 20},
+            {"id": "gpt-6-realtime", "created": 32},
+            {"id": "gpt-image-2", "created": 33},
+            {"id": "text-embedding-4", "created": 34},
+            {"id": "whisper-2", "created": 35},
+            {"id": "davinci-002", "created": 2}
+        ]});
+        let (url, task) = listing_stub(openai, 200, String::new()).await;
+        let Json(body) = list_available_models(&state, "openai", Probe::at(&url))
+            .await
+            .unwrap_or_else(|(status, Json(body))| panic!("{status} {body}"));
+        task.abort();
+        assert_eq!(listed_ids(&body), ["gpt-6-sol", "o5-mini", "gpt-5.6-luna"]);
+
+        let top = crate::services::llm::openrouter_top_models();
+        let openrouter = json!({"data": [
+            {"id": "someone/else", "name": "Else", "supported_parameters": ["tools"]},
+            {"id": top[1], "name": "Second", "supported_parameters": ["tools"]},
+            {"id": top[0], "name": "First", "supported_parameters": ["tools", "reasoning"]}
+        ]});
+        let (url, task) = listing_stub(openrouter, 200, String::new()).await;
+        let Json(body) = list_available_models(&state, "openrouter", Probe::at(&url))
+            .await
+            .unwrap_or_else(|(status, Json(body))| panic!("{status} {body}"));
+        task.abort();
+        assert_eq!(listed_ids(&body), [top[0], top[1]]);
+        assert_eq!(body["models"][0]["name"], "First");
+
+        for provider in [
+            config::LlmProvider::Anthropic,
+            config::LlmProvider::Openai,
+            config::LlmProvider::Openrouter,
+        ] {
+            assert_no_key(&body, key_for(provider), "listing");
+        }
+        assert_eq!(tree(workspace.path()), before, "listing wrote a file");
+    }
+
+    /// A listing needs the provider's key, names only providers it knows,
+    /// and answers a refusal with the typed sentence and never the key.
+    #[tokio::test]
+    async fn a_listing_without_a_key_or_with_a_rejected_one_is_typed() {
+        let workspace = tempfile::tempdir().unwrap();
+        let state = AppState::new_in(config::Config::default(), workspace.path().to_owned()).await;
+        let (status, Json(body)) =
+            list_available_models(&state, "openai", Probe::at("http://127.0.0.1:1"))
+                .await
+                .unwrap_err();
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"], "setup_required");
+        assert!(
+            body["message"].as_str().unwrap().contains("OpenAI"),
+            "{body}"
+        );
+        let (status, Json(body)) =
+            list_available_models(&state, "gemini", Probe::at("http://127.0.0.1:1"))
+                .await
+                .unwrap_err();
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "unknown_provider");
+
+        let state = AppState::new_in(configured(), workspace.path().to_owned()).await;
+        let key = key_for(config::LlmProvider::Openai);
+        let app = axum::Router::new().fallback(axum::routing::get(move || async move {
+            (
+                StatusCode::UNAUTHORIZED,
+                format!("Incorrect API key provided: {}.", masked(key)),
+            )
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let (status, Json(body)) = list_available_models(&state, "openai", Probe::at(&url))
+            .await
+            .unwrap_err();
+        task.abort();
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body["error"], "authentication");
+        assert_no_key(&body, key, "rejected listing");
+    }
+
+    /// Choosing a model tests it before anything is saved: one that answers
+    /// becomes a preset in both slots of a fresh config and is written to
+    /// config.toml; one that does not is refused with the typed outcome and
+    /// leaves the config as it was.
+    #[tokio::test]
+    async fn a_chosen_model_is_tested_before_it_is_saved_in_the_chat_slot() {
+        let workspace = tempfile::tempdir().unwrap();
+        let mut cfg = config::Config::default();
+        cfg.llm.tokens.open_ai = key_for(config::LlmProvider::Openai).into();
+        let state = AppState::new_in(cfg, workspace.path().to_owned()).await;
+        let choice = |model: &str| ChooseModelRequest {
+            provider: "openai".into(),
+            model: model.into(),
+            name: String::new(),
+        };
+
+        let refusal =
+            json!({"error": {"message": "The model does not exist", "code": "model_not_found"}});
+        let (url, task) = listing_stub(json!({"data": []}), 404, refusal.to_string()).await;
+        let (status, Json(body)) = choose_chat_model(&state, choice("gpt-7"), Probe::at(&url))
+            .await
+            .unwrap_err();
+        task.abort();
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["error"], "model_not_found");
+        assert!(
+            state.config.read().await.llm.presets.is_empty(),
+            "nothing saved"
+        );
+        assert!(!workspace.path().join("config.toml").exists());
+
+        let answer = json!({"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":8,"output_tokens":1}}).to_string();
+        let (url, task) = listing_stub(json!({"data": []}), 200, answer).await;
+        let Json(body) = choose_chat_model(&state, choice("gpt-6-sol"), Probe::at(&url))
+            .await
+            .unwrap_or_else(|(status, Json(body))| panic!("{status} {body}"));
+        task.abort();
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["preset"], "gpt-6-sol");
+        assert_eq!(body["models"]["chat_preset"], "gpt-6-sol");
+        assert_eq!(body["models"]["background_preset"], "gpt-6-sol");
+        assert_no_key(&body, key_for(config::LlmProvider::Openai), "choice");
+        let saved: config::Config =
+            toml::from_str(&std::fs::read_to_string(workspace.path().join("config.toml")).unwrap())
+                .unwrap();
+        assert_eq!(saved.llm.chat_model(), Some("gpt-6-sol"));
+        assert!(saved.llm.is_configured());
+        assert_eq!(
+            state.llm.read().await.as_ref().unwrap().model,
+            "gpt-6-sol",
+            "the backends were rebuilt"
+        );
+
+        // A provider without its key cannot be chosen.
+        let (status, Json(body)) = choose_chat_model(
+            &state,
+            ChooseModelRequest {
+                provider: "anthropic".into(),
+                model: "claude-opus-5-5".into(),
+                name: String::new(),
+            },
+            Probe::at("http://127.0.0.1:1"),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"], "setup_required");
     }
 
     /// `GET /api/config/models` says what each preset's provider offers for
