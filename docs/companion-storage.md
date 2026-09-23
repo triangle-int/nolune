@@ -468,8 +468,8 @@ likes tea, lives in Lisbon
   conversation matches it (up to eight, by path).
 - `exclude_from_proactive: true` — the memory never reaches the companion's
   own routines: the check-in and reflection catalog omits it, and their
-  `memory_list`, `memory_search`, `memory_read`, and `memory_write` tools
-  never list, return, read, or rewrite it. The user's chat, auto-recall, and
+  `memory_search`, `memory_read`, and `memory_write` tools never list,
+  return, read, or rewrite it. The user's chat, auto-recall, and
   the library (`GET …/memory`, `GET …/memory/search`) still see it, and the
   listing reports both flags per entry.
 - Flags apply to text memories; a media memory's flag request answers `422`.

@@ -90,8 +90,8 @@ agent TOML, no tool groups, and no `call_agent` tool.
 
 | Routine | Trigger `agent` | Default interval | Tools |
 | --- | --- | --- | --- |
-| Check-in | `companion` | `check_in_interval_hours` = 1 | `reach_out`, `create_drop`, `memory_write`, `memory_read`, `memory_list`, `memory_search`, `read_email` (only with a configured account) |
-| Reflection (opt-in) | `reflection` | `reflection_interval_hours` = 72 | `memory_write`, `memory_read`, `memory_list`, `memory_search`, `memory_connect` |
+| Check-in | `companion` | `check_in_interval_hours` = 1 | `reach_out`, `create_drop`, `memory_write`, `memory_read`, `memory_search`, `read_email` (only with a configured account) |
+| Reflection (opt-in) | `reflection` | `reflection_interval_hours` = 72 | `memory_write`, `memory_read`, `memory_search`, `memory_connect` |
 
 Neither routine can run commands, touch files or connected computers, send
 email, or call `memory_forget`; bulk memory rewriting by a background job is

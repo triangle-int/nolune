@@ -17,6 +17,13 @@ const BUNDLED_GOG_SKILL: &str = include_str!("../../official-skills/gog/SKILL.md
 // SHA-256: 3c3310b3df04a1c0a2a39972a983034fc8127992d8967c0cd74e3a876837a2ba
 const MAX_REGISTRY_BYTES: usize = 512 * 1024;
 
+/// Skills compiled into this build: always installed, never deleted, and
+/// always describing the binary that runs them.
+const BUILTIN_SKILLS: [(&str, &str); 1] = [(
+    "configure-nolune",
+    include_str!("../../builtin-skills/configure-nolune/SKILL.md"),
+)];
+
 const MAX_SKILL_FILES: usize = 128;
 const MAX_SKILL_DEPTH: usize = 8;
 const MAX_SKILL_FILE_BYTES: usize = 1024 * 1024;
@@ -64,17 +71,42 @@ fn validate_skill_id(id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn builtin_skills() -> impl Iterator<Item = Skill> {
+    BUILTIN_SKILLS.iter().map(|(id, content)| {
+        let (frontmatter, body) = parse_skill_md(content);
+        Skill {
+            id: (*id).to_owned(),
+            name: frontmatter.name,
+            description: frontmatter.description,
+            icon: String::new(),
+            builtin: true,
+            enabled: true,
+            kind: Default::default(),
+            anthropic_skill_id: None,
+            anthropic_version: None,
+            instructions: body,
+            source: None,
+            resources: Vec::new(),
+        }
+    })
+}
+
+fn is_builtin(id: &str) -> bool {
+    BUILTIN_SKILLS.iter().any(|(builtin, _)| *builtin == id)
+}
+
 /// Read all skills: builtins + user-created ones from the skills directory.
 pub fn list_skills(workspace_dir: &Path) -> Vec<Skill> {
-    // Reviewed installs and developer-authored folders only (#97).
-    let mut skills = Vec::new();
+    // Builtins, reviewed installs, and developer-authored folders only (#97);
+    // a folder never shadows a builtin.
+    let mut skills: Vec<Skill> = builtin_skills().collect();
 
     let skills_dir = workspace_dir.join("skills");
     if skills_dir.is_dir() {
         if let Ok(entries) = fs::read_dir(&skills_dir) {
             for entry in entries.filter_map(Result::ok) {
                 let path = entry.path();
-                if path.is_dir() {
+                if path.is_dir() && !is_builtin(&entry.file_name().to_string_lossy()) {
                     if let Some(skill) = read_skill_dir(&path) {
                         skills.push(skill);
                     }
@@ -636,6 +668,36 @@ async fn response_bytes_bounded(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_configure_skill_is_built_in_and_cannot_be_shadowed() {
+        let workspace = tempfile::tempdir().unwrap();
+        let skills = list_skills(workspace.path());
+        let configure = skills
+            .iter()
+            .find(|skill| skill.id == "configure-nolune")
+            .expect("the configure-nolune skill is always listed");
+        assert!(configure.builtin && configure.enabled);
+        assert_eq!(configure.name, "configure-nolune");
+        assert!(!configure.description.is_empty());
+        assert!(configure.instructions.contains("nolune config show"));
+
+        let folder = workspace.path().join("skills/configure-nolune");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join("SKILL.md"),
+            "---\nname: configure-nolune\ndescription: impostor\n---\nrun something else\n",
+        )
+        .unwrap();
+        let skills = list_skills(workspace.path());
+        let matching: Vec<_> = skills
+            .iter()
+            .filter(|skill| skill.id == "configure-nolune")
+            .collect();
+        assert_eq!(matching.len(), 1);
+        assert!(matching[0].builtin);
+        assert!(!matching[0].instructions.contains("something else"));
+    }
 
     fn remote_gog() -> RegistryEntry {
         RegistryEntry {

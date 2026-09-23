@@ -31,12 +31,6 @@ const LEGACY_CLEANUP_TOMBSTONE_SUFFIX: &str = ".json";
 /// as obsolete companions.
 pub(crate) const IMPORTS_DIR: &str = "imports";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DirectoryEntry {
-    pub name: String,
-    pub is_dir: bool,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MemoryMetadata {
     pub is_file: bool,
@@ -939,36 +933,6 @@ impl MediaStore {
             is_dir: metadata.is_dir(),
             len: metadata.len(),
         })
-    }
-
-    pub fn list_memory_dir(
-        &self,
-        slug: &str,
-        path: Option<&str>,
-    ) -> io::Result<Vec<DirectoryEntry>> {
-        validate_slug(slug)?;
-        let mut relative = Path::new("instances").join(slug).join("memory");
-        if let Some(path) = path.filter(|path| !path.is_empty()) {
-            relative.push(validate_relative(path)?);
-        }
-        reject_symlinks(&self.root, &relative, false)?;
-        let mut entries = Vec::new();
-        for entry in self.root.read_dir(&relative)? {
-            let entry = entry?;
-            let file_type = entry.file_type()?;
-            if file_type.is_symlink() {
-                return Err(invalid_path("symlink memory paths are not allowed"));
-            }
-            entries.push(DirectoryEntry {
-                name: entry
-                    .file_name()
-                    .into_string()
-                    .map_err(|_| invalid_path("memory filename is not UTF-8"))?,
-                is_dir: file_type.is_dir(),
-            });
-        }
-        entries.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(entries)
     }
 
     /// Publish one uploaded blob without reopening the configured workspace path.
