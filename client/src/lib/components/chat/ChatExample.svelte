@@ -21,7 +21,7 @@
  const presets = [
   { id: 'sonnet', name: 'Claude Sonnet', model: 'claude-sonnet-4-6', warnings: [] },
   { id: 'opus', name: 'Claude Opus', model: 'claude-opus-4-6', warnings: [] },
-  { id: 'gpt', name: 'GPT-5.6 Sol', model: 'gpt-5.6-sol', warnings: capabilityWarnings({ id: 'gpt', name: 'GPT-5.6 Sol', provider: 'openai', model: 'gpt-5.6-sol' }, { vision: true, documents: false, tools: true }) },
+  { id: 'openrouter-sonnet', name: 'Claude Sonnet via OpenRouter', model: 'anthropic/claude-sonnet-4.6', warnings: capabilityWarnings({ id: 'openrouter-sonnet', name: 'Claude Sonnet via OpenRouter', provider: 'openrouter', model: 'anthropic/claude-sonnet-4.6' }, { vision: true, documents: false, tools: true }) },
  ];
  let presetId = $state('sonnet');
  // Sample computers for the selector (#80): the same helpers as the live composer, at a fixed clock.

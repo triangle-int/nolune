@@ -1545,7 +1545,7 @@ mod preset_test_tests {
         assert_eq!(ok["model"], "gpt-5.6-sol");
         assert_eq!(ok["usage"]["input_tokens"], 8);
         assert_eq!(ok["usage"]["output_tokens"], 1);
-        assert_eq!(ok["capabilities"]["documents"], false);
+        assert_eq!(ok["capabilities"]["documents"], true);
         assert_eq!(ok["capabilities"]["tools"], true);
 
         let cases: Vec<(LlmError, StatusCode, &str)> = vec![
@@ -1750,7 +1750,7 @@ mod preset_test_tests {
             assert_eq!(ok["usage"]["output_tokens"], 1, "{provider:?}");
             assert_eq!(
                 ok["capabilities"]["documents"],
-                provider == config::LlmProvider::Anthropic,
+                provider != config::LlmProvider::Openrouter,
                 "{provider:?}"
             );
             assert_no_key(&ok, key_for(provider), name);
@@ -1876,7 +1876,7 @@ mod preset_test_tests {
         }
         assert_eq!(capabilities["sonnet"]["documents"], true);
         assert_eq!(capabilities["sonnet"]["vision"], true);
-        assert_eq!(capabilities["gpt-sol"]["documents"], false);
+        assert_eq!(capabilities["gpt-sol"]["documents"], true);
         assert_eq!(capabilities["gpt-sol"]["tools"], true);
         assert_eq!(capabilities["gpt-sol"]["reasoning_controls"], true);
         assert_eq!(capabilities["openrouter-sonnet"]["documents"], false);

@@ -380,6 +380,52 @@ mod tests {
         );
     }
 
+    #[test]
+    fn documents_convert_to_openai_input_files() {
+        let inline = ContentBlock::Document {
+            source: DocumentSource::Base64 {
+                media_type: "application/pdf".into(),
+                data: "JVBERi0=".into(),
+            },
+            resource_provenance: None,
+        };
+        let linked = ContentBlock::Document {
+            source: DocumentSource::Url {
+                url: "https://example.test/doc.pdf".into(),
+            },
+            resource_provenance: None,
+        };
+        let messages = [Message::User {
+            content: vec![
+                inline.clone(),
+                linked,
+                ContentBlock::ToolOutput {
+                    call_id: "call1".into(),
+                    content: super::super::types::ToolOutputContent::Blocks(vec![
+                        ContentBlock::text("read report.pdf"),
+                        inline,
+                    ]),
+                },
+            ],
+        }];
+        let (_, input) = messages_to_openai(&[], &messages);
+        assert_eq!(
+            input[0]["content"][0],
+            json!({
+                "type": "input_file",
+                "filename": "document.pdf",
+                "file_data": "data:application/pdf;base64,JVBERi0=",
+            })
+        );
+        assert_eq!(
+            input[1]["content"][0],
+            json!({"type": "input_file", "file_url": "https://example.test/doc.pdf"})
+        );
+        assert_eq!(input[2]["output"], "read report.pdf");
+        assert_eq!(input[3]["content"][0]["type"], "input_file");
+        assert_eq!(input.len(), 4);
+    }
+
     // ── The conformance matrix (#29) ─────────────────────────────────────
     //
     // Each test below is one case of `conformance::Case`, run for every
@@ -388,7 +434,7 @@ mod tests {
 
     #[tokio::test]
     async fn capabilities_and_cancellation_reject_before_network() {
-        let adapter = backend(LlmProvider::Openai, "http://127.0.0.1:1")
+        let adapter = backend(LlmProvider::Openrouter, "http://127.0.0.1:1")
             .adapter()
             .unwrap();
         let messages = [Message::User {
@@ -414,12 +460,13 @@ mod tests {
         plain.model = "gpt-4.1".into();
         let mut request = LlmRequest::new(ExecutionScope::Subagent, &[], &[], &[]);
         request.reasoning = Some("high");
+        let plain = plain.adapter().unwrap();
         assert!(matches!(
-            plain.adapter().unwrap().complete(request).await,
+            plain.complete(request).await,
             Err(LlmError::UnsupportedCapability("reasoning controls"))
         ));
         assert!(matches!(
-            adapter.discover_models().await,
+            plain.discover_models().await,
             Err(LlmError::UnsupportedCapability("model discovery"))
         ));
         run_case(Case::CancellationBeforeNetwork).await;

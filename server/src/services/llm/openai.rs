@@ -7,7 +7,7 @@ use super::contract::{
     retry_after,
 };
 use super::types::LlmBackend;
-use super::types::{ContentBlock, ImageSource, LlmResponse, Message, ToolCall};
+use super::types::{ContentBlock, DocumentSource, ImageSource, LlmResponse, Message, ToolCall};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // OpenAI Responses API
@@ -22,6 +22,19 @@ fn image_source_to_openai(source: &ImageSource) -> serde_json::Value {
         ImageSource::Url { url } => url.clone(),
     };
     serde_json::json!({"type": "input_image", "image_url": url})
+}
+
+/// Convert a canonical document source to an OpenAI `input_file` content part.
+/// Inline data needs a filename; the block carries none, so one is derived.
+fn document_source_to_openai(source: &DocumentSource) -> serde_json::Value {
+    match source {
+        DocumentSource::Base64 { media_type, data } => serde_json::json!({
+            "type": "input_file",
+            "filename": "document.pdf",
+            "file_data": format!("data:{media_type};base64,{data}"),
+        }),
+        DocumentSource::Url { url } => serde_json::json!({"type": "input_file", "file_url": url}),
+    }
 }
 
 fn tool_output_to_string(content: &super::types::ToolOutputContent) -> String {
@@ -170,9 +183,16 @@ pub(crate) fn messages_to_openai(
                             }));
                             if let super::types::ToolOutputContent::Blocks(blocks) = content {
                                 for block in blocks {
-                                    if let ContentBlock::Image { source, .. } = block {
-                                        input.push(serde_json::json!({"type": "message", "role": "user", "content": [image_source_to_openai(&source)]}));
-                                    }
+                                    let part = match block {
+                                        ContentBlock::Image { source, .. } => {
+                                            image_source_to_openai(source)
+                                        }
+                                        ContentBlock::Document { source, .. } => {
+                                            document_source_to_openai(source)
+                                        }
+                                        _ => continue,
+                                    };
+                                    input.push(serde_json::json!({"type": "message", "role": "user", "content": [part]}));
                                 }
                             }
                         }
@@ -188,6 +208,13 @@ pub(crate) fn messages_to_openai(
                                 "type": "message",
                                 "role": "user",
                                 "content": [image_source_to_openai(source)],
+                            }));
+                        }
+                        ContentBlock::Document { source, .. } => {
+                            input.push(serde_json::json!({
+                                "type": "message",
+                                "role": "user",
+                                "content": [document_source_to_openai(source)],
                             }));
                         }
                         ContentBlock::ContextSummary { content }
@@ -672,7 +699,7 @@ pub(crate) async fn openai_stream(
 
 const CAPABILITIES: Capabilities = Capabilities {
     vision: true,
-    documents: false,
+    documents: true,
     tools: true,
     streaming: true,
     reasoning_controls: false,
