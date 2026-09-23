@@ -97,7 +97,7 @@ printf '%s\n' "$*" >> "$CALLS"
 case "$1 $2" in
   'release view')
     case "$SCENARIO" in
-      existing|tag_error) printf 'nolune-server-x86_64-unknown-linux-gnu\nbolly-server-x86_64-unknown-linux-gnu\n' ;;
+      existing|tag_error) printf 'nolune-server-x86_64-unknown-linux-gnu\nnolune-server-retired-target\n' ;;
       absent) echo 'release not found' >&2; exit 1 ;;
       *) echo 'network unavailable' >&2; exit 1 ;;
     esac ;;
@@ -126,7 +126,7 @@ edit=$(grep -n '^release edit nightly ' "$CALLS" | cut -d: -f1)
 grep -Fq -- '--clobber' "$CALLS"
 grep -Fq -- "$notes" "$CALLS"
 [[ $(grep -c '^release delete-asset ' "$CALLS") -eq 1 ]]
-grep -Fxq 'release delete-asset nightly bolly-server-x86_64-unknown-linux-gnu --repo triangle-int/nolune --yes' "$CALLS"
+grep -Fxq 'release delete-asset nightly nolune-server-retired-target --repo triangle-int/nolune --yes' "$CALLS"
 grep -Fxq 'api --method PATCH repos/triangle-int/nolune/git/refs/tags/nightly -f sha=0123456789abcdef0123456789abcdef01234567 -F force=true' "$CALLS"
 
 # A tag that cannot move only warns; the release already serves the build.
