@@ -149,7 +149,7 @@
 <div class="msg" class:consecutive={isConsecutive()} data-mood={mood} data-active={active}>
  <Message from={isUser && !peer ? 'user' : 'assistant'} class={isUser && !peer ? "max-w-full items-end gap-1" : "max-w-full gap-1"}>
   {#if !isUser && !isConsecutive()}
-   <div class="author"><img src="/skins/moon/character.svg" width="22" height="22" alt="" /><span>Nolune</span></div>
+   <div class="author"><span>Nolune</span></div>
   {/if}
   {#if peer}
    <!-- Delivered by a paired companion: the server's line, then the peer's text as plain, labeled data. -->
