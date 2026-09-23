@@ -333,6 +333,30 @@ Differences that are not capability flags:
 | Conversation history | sent in full each turn, compacted by Nolune | sent in full each turn | sent in full each turn | kept by codex; the new message only |
 | Runs where | api.anthropic.com | api.openai.com | openrouter.ai | a local process on the server machine |
 
+## Prompt cache
+
+Every provider caches a request as a prefix, and the system prompt is at its
+head: a system prompt that changes mid-conversation throws away the cached
+system prompt and every message after it (on Codex it reconfigures the
+thread). `build_system_sections` in `server/src/services/chat.rs` therefore
+holds only what changes when the companion itself changes: its soul, skills
+and integrations. What differs from turn to turn (the time, voice mode, the
+chosen computer and the connected desktops, the instance config, the project
+and its open tasks) is the turn context, the first block of the current
+message, which is never saved into the history. Voice mode's rules stay in
+the system prompt; the turn context only says when they apply.
+
+Each chat turn compares its system prompt with the previous turn's, section
+by section, and logs a `[cache] … system prompt changed since the last turn
+(skills)` warning naming what changed. Every request logs one `[cache]` line:
+hit or miss, how many input tokens were read from the cache, written to it
+and left uncached (`services/llm/prompt_cache.rs`). The same readout goes to
+the client as `prompt_cache_updated`: the chat bar shows the latest request
+as "cache 93%" or "cache miss", and the context panel adds the split, the
+latest requests, the totals since the server started and whether the system
+prompt stayed the same. It is kept in memory and resets when the server
+restarts or the chat's context is cleared.
+
 ## Errors every adapter reports the same way
 
 Callers match on `LlmError` variants, never on status strings

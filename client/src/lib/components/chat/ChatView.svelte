@@ -4,7 +4,8 @@
 	import { untrack } from "svelte";
 	import { goto } from "$app/navigation";
 	import { clearContext, fetchChats, fetchCompanionName, fetchMemoryReceipts, fetchMessages, fetchMood, sendMessage, stopAgent, uploadFile } from "$lib/api/client.js";
-	import type { ChatMessage, ChatSummary, RecalledMemory, ServerEvent } from "$lib/api/types.js";
+	import type { ChatMessage, ChatSummary, PromptCacheStats, RecalledMemory, ServerEvent } from "$lib/api/types.js";
+	import { cacheChipLabel, lastRequestSentence } from "$lib/chat/prompt-cache.js";
 	import { receiptsByMessage } from "$lib/memory/receipts.js";
 	import { getWebSocket } from "$lib/stores/websocket.svelte.js";
 	import MessageBubble from "./MessageBubble.svelte";
@@ -63,6 +64,11 @@ import McpAppViewer from "./McpAppViewer.svelte";
 	let showChatList = $state(false);
 	let clearDialogOpen = $state(false);
 	let showContextStats = $state(false);
+	// The latest prompt-cache readout the server sent (`prompt_cache_updated`),
+	// kept with the chat it belongs to so a switch never shows another chat's.
+	let promptCache = $state<{ key: string; stats: PromptCacheStats } | null>(null);
+	const chatCache = $derived(promptCache?.key === `${slug}/${activeChatId}` ? promptCache.stats : null);
+	const cacheLabel = $derived(cacheChipLabel(chatCache));
 	let showToolActivity = $state(
 		typeof localStorage !== "undefined"
 			? (localStorage.getItem("nolune:showToolActivity") ?? "false") === "true"
@@ -597,6 +603,8 @@ import McpAppViewer from "./McpAppViewer.svelte";
 					item.id = event.message_id; // promote to persisted id
 					stream = stream; // trigger reactivity
 				}
+			} else if (event.type === "prompt_cache_updated") {
+				promptCache = { key: `${event.instance_slug}/${event.chat_id}`, stats: event.cache };
 			} else if (event.type === "context_compacting") {
 				stream = [...stream, {
 					type: "compaction",
@@ -682,6 +690,7 @@ import McpAppViewer from "./McpAppViewer.svelte";
 		await clearContext(slug, activeChatId);
 		messages = [];
 		stream = [];
+		promptCache = null;
 	}
 
 	/** Is this message waiting for or currently playing TTS? */
@@ -798,8 +807,9 @@ import McpAppViewer from "./McpAppViewer.svelte";
 			<button onclick={() => { showToolActivity = !showToolActivity; localStorage.setItem("nolune:showToolActivity", String(showToolActivity)); }} onmousedown={(e) => e.preventDefault()} class="bar-btn" class:bar-btn-active={showToolActivity} title="Toggle tool activity">
 				<TerminalSquare size={18} />
 			</button>
-			<button onclick={() => showContextStats = true} onmousedown={(e) => e.preventDefault()} class="bar-btn" title="Context stats">
+			<button onclick={() => showContextStats = true} onmousedown={(e) => e.preventDefault()} class="bar-btn" class:bar-btn-labeled={cacheLabel} title={cacheLabel ? `Context stats. ${lastRequestSentence(chatCache)}` : "Context stats"} aria-label={cacheLabel ? `Context stats, ${cacheLabel}` : "Context stats"}>
 				<BarChart3 size={18} />
+				{#if cacheLabel}<span class="bar-cache">{cacheLabel}</span>{/if}
 			</button>
 			<AlertDialog.Root bind:open={clearDialogOpen}>
 				<AlertDialog.Trigger class="bar-btn" title="Clear context">
@@ -894,7 +904,7 @@ import McpAppViewer from "./McpAppViewer.svelte";
 </div>
 
 {#if showContextStats}
-	<ContextStats {slug} chatId={activeChatId} onclose={() => showContextStats = false} />
+	<ContextStats {slug} chatId={activeChatId} liveCache={chatCache} onclose={() => showContextStats = false} />
 {/if}
 
 {/if}<!-- end presentation else -->
@@ -1234,6 +1244,9 @@ import McpAppViewer from "./McpAppViewer.svelte";
  .bar-btn {width:44px;height:44px;border-radius:8px;flex-shrink:0}
  .bar-btn-active {color:var(--primary);background:var(--accent)}
  .bar-btn:hover {background:var(--accent)}
+ /* The latest request's prompt-cache share beside the context stats icon, in words. */
+ .bar-btn-labeled {width:auto;padding:0 10px;gap:6px}
+ .bar-cache {font:500 12px var(--font-mono);color:var(--text-secondary);white-space:nowrap}
  .chat-empty p {font:400 18px var(--font-body);line-height:1.6}
  .chat-empty {padding:48px 24px;text-align:center}
  .compaction-notice {background:var(--card);border:1px solid var(--border);border-radius:12px}

@@ -488,8 +488,10 @@ the log. Until the browser's first listing of the computers arrives, a
 remembered choice is sent as it is, so a computer that turns out to be
 offline is refused by name rather than replaced by the only connected one;
 a computer a listing no longer has reads as no choice. The agent loop
-resolves the choice once per turn, states it in the system prompt, and
-builds the tools around it.
+resolves the choice once per turn, states it in the turn context at the
+head of the user's message (never the system prompt, which stays a stable
+cached prefix; see [providers.md](providers.md#prompt-cache)), and builds the
+tools around it.
 
 - Nothing chosen: the only connected desktop is used. With several connected
   the tools refuse with `choose_a_computer`, naming them, and the companion

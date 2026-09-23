@@ -79,6 +79,13 @@ pub enum ServerEvent {
         chat_id: String,
         messages_compacted: usize,
     },
+    /// A chat request came back: how much of its input the provider read
+    /// from the prompt cache, with the chat's readout so far.
+    PromptCacheUpdated {
+        instance_slug: String,
+        chat_id: String,
+        cache: crate::services::llm::prompt_cache::PromptCacheStats,
+    },
     ChatStreamDelta {
         instance_slug: String,
         chat_id: String,
