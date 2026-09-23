@@ -2,9 +2,10 @@
 	// What one peer companion may do (#109): presentational. One row per
 	// pair the server could ever allow, built by capabilityRows in
 	// lib/federation/policy.js: the sentence, what applies now and where it
-	// comes from, and a native select that writes one rule (Allowed, Asks
+	// comes from, and a shared Select that writes one rule (Allowed, Asks
 	// you, Denied) or takes it back (Default). The list is folded until the
 	// owner opens it, so a row stays short.
+	import SettingSelect from "$lib/components/settings/SettingSelect.svelte";
 	import { accessLabel, type CapabilityRow } from "$lib/federation/policy.js";
 	import { decisionErrorText } from "$lib/federation/policy.js";
 
@@ -65,15 +66,11 @@
 						{#if errorByKey[row.key]}<p class="capability-error" role="alert">{errorByKey[row.key]}</p>{/if}
 					</div>
 					{#if editable}
-						<label class="capability-control">
-							<span class="capability-control-label">Rule</span>
-							<select class="setting-input" value={row.source === "rule" ? row.effective : "default"} disabled={busyKey === row.key} aria-label={`Rule for: ${row.label}`} onchange={(e) => change(row, (e.currentTarget as HTMLSelectElement).value)}>
-								<option value="default">Default ({accessLabel(row.defaultAccess)})</option>
-								<option value="allow">Allowed</option>
-								<option value="ask">Asks you</option>
-								<option value="deny">Denied</option>
-							</select>
-						</label>
+						<div class="capability-control">
+							<span class="capability-control-label" aria-hidden="true">Rule</span>
+							<SettingSelect class="w-44 max-w-full" value={row.source === "rule" ? row.effective : "default"} disabled={busyKey === row.key} aria-label={`Rule for: ${row.label}`} onValueChange={(v) => change(row, v)}
+								options={[{ value: "default", label: `Default (${accessLabel(row.defaultAccess)})` }, { value: "allow", label: "Allowed" }, { value: "ask", label: "Asks you" }, { value: "deny", label: "Denied" }]} />
+						</div>
 					{/if}
 				</li>
 			{/each}
@@ -102,7 +99,6 @@
 	.capability-error { font: 400 13px/1.5 var(--font-body); color: var(--destructive); margin: 2px 0 0; }
 	.capability-control { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 	.capability-control-label { font: 500 12px/1.4 var(--font-body); color: var(--text-muted); letter-spacing: 0.03em; }
-	.capability-control select { min-height: 44px; max-width: 100%; }
 	@media (max-width: 480px) {
 		.capability-control { width: 100%; }
 	}

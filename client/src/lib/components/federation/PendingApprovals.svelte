@@ -5,6 +5,7 @@
 	// offers one bounded scope and Allow or Deny; a decided row can be taken
 	// back. Nothing here ever shows what a peer sent: the server keeps the
 	// intent and class, never a text.
+	import SettingSelect from "$lib/components/settings/SettingSelect.svelte";
 	import { approvalScopes, decisionErrorText, type ApprovalView } from "$lib/federation/policy.js";
 
 	let {
@@ -60,12 +61,10 @@
 						</div>
 						{#if onapprove && ondeny}
 							<div class="approval-actions">
-								<label class="approval-scope">
-									<span class="approval-scope-label">Scope</span>
-									<select class="setting-input" value={scopeFor(request.id)} disabled={busyId === request.id} onchange={(e) => (scopeById = { ...scopeById, [request.id]: (e.currentTarget as HTMLSelectElement).value })}>
-										{#each scopes as scope (scope.value)}<option value={scope.value}>{scope.label}</option>{/each}
-									</select>
-								</label>
+								<div class="approval-scope">
+									<span class="approval-scope-label" id={`approval-scope-${request.id}`}>Scope</span>
+									<SettingSelect class="w-72 max-w-full" aria-labelledby={`approval-scope-${request.id}`} value={scopeFor(request.id)} options={scopes} disabled={busyId === request.id} onValueChange={(v) => (scopeById = { ...scopeById, [request.id]: v })} />
+								</div>
 								<button class="nl-button approval-primary" type="button" disabled={busyId === request.id} aria-label={`Allow ${request.peerShortId} to ${request.label}`} onclick={() => act(request.id, () => onapprove(request.id, scopeFor(request.id)))}>{busyId === request.id ? "Saving…" : "Allow"}</button>
 								<button class="nl-button-secondary approval-secondary" type="button" disabled={busyId === request.id} aria-label={`Deny ${request.peerShortId} to ${request.label}`} onclick={() => act(request.id, () => ondeny(request.id, scopeFor(request.id)))}>Deny</button>
 							</div>
@@ -112,7 +111,6 @@
 	.approval-actions { display: flex; flex: 0 1 auto; flex-wrap: wrap; align-items: end; gap: 8px; }
 	.approval-scope { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 	.approval-scope-label { font: 500 12px/1.4 var(--font-body); color: var(--text-muted); letter-spacing: 0.03em; }
-	.approval-scope select { min-height: 44px; max-width: 100%; }
 	.approval-primary { min-height: 44px; padding: 0 14px; font: 500 13px/1.5 var(--font-body); }
 	.approval-secondary { min-height: 44px; }
 	.approval-link-btn { min-height: 44px; padding: 0 12px; border: 1px solid transparent; border-radius: var(--radius-control, 8px); background: none; color: var(--text-secondary); font: 500 13px/1.5 var(--font-body); cursor: pointer; }

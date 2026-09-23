@@ -1,5 +1,6 @@
 <script lang="ts">
 	import * as Select from "$lib/components/ui/select/index.js";
+	import SettingSelect from "$lib/components/settings/SettingSelect.svelte";
 	import { page } from "$app/state";
 	import {
 		fetchTimezone,
@@ -71,6 +72,12 @@
 		try { resume = await updateResumePolicy(slug, next); }
 		catch { getToasts().error("Could not save Resume my work settings."); }
 		finally { resumeSaving = false; }
+	}
+	// A value saved outside the presets stays listed first so the picker still shows it.
+	function withCurrent(options: { value: number; label: string }[], current: number) {
+		const listed = options.map((o) => ({ value: String(o.value), label: o.label }));
+		if (options.some((o) => o.value === current)) return listed;
+		return [{ value: String(current), label: optionLabel(options, current) }, ...listed];
 	}
 	async function snoozeRitual(until: number | null) {
 		if (resumeSaving) return;
@@ -241,25 +248,22 @@
 
 		<div class="setting-row">
 			<label class="setting-label" for="check-in-interval">Check-in</label>
-			<select id="check-in-interval" class="setting-input" disabled={!policy.enabled || policySaving} value={String(policy.check_in_interval_hours)} onchange={(e) => policy && savePolicy({ ...policy, check_in_interval_hours: Number((e.currentTarget as HTMLSelectElement).value) })}>
-				{#each CHECK_IN_OPTIONS as option (option.value)}
-					<option value={String(option.value)}>{option.label}</option>
-				{/each}
-			</select>
+			<SettingSelect id="check-in-interval" disabled={!policy.enabled || policySaving} value={String(policy.check_in_interval_hours)}
+				options={CHECK_IN_OPTIONS.map((o) => ({ value: String(o.value), label: o.label }))}
+				onValueChange={(v) => policy && savePolicy({ ...policy, check_in_interval_hours: Number(v) })} />
 		</div>
 
 		<div class="setting-row">
 			<span class="setting-label" id="quiet-hours-label">Quiet hours</span>
 			<div class="setting-input-row" aria-labelledby="quiet-hours-label">
 				<label class="sr-only" for="quiet-start">Quiet from</label>
-				<select id="quiet-start" class="setting-input" disabled={policySaving} value={policy.quiet_hours ? String(policy.quiet_hours.start_hour) : ""} onchange={(e) => { const v = (e.currentTarget as HTMLSelectElement).value; setQuietHours(v === "" ? null : Number(v), policy?.quiet_hours?.end_hour ?? 7); }}>
-					<option value="">Off</option>
-					{#each HOURS as h (h)}<option value={String(h)}>from {h}:00</option>{/each}
-				</select>
+				<SettingSelect id="quiet-start" disabled={policySaving} value={policy.quiet_hours ? String(policy.quiet_hours.start_hour) : "off"}
+					options={[{ value: "off", label: "Off" }, ...HOURS.map((h) => ({ value: String(h), label: `from ${h}:00` }))]}
+					onValueChange={(v) => setQuietHours(v === "off" ? null : Number(v), policy?.quiet_hours?.end_hour ?? 7)} />
 				<label class="sr-only" for="quiet-end">Quiet until</label>
-				<select id="quiet-end" class="setting-input" disabled={!policy.quiet_hours || policySaving} value={policy.quiet_hours ? String(policy.quiet_hours.end_hour) : "7"} onchange={(e) => setQuietHours(policy?.quiet_hours?.start_hour ?? 22, Number((e.currentTarget as HTMLSelectElement).value))}>
-					{#each HOURS as h (h)}<option value={String(h)}>until {h}:00</option>{/each}
-				</select>
+				<SettingSelect id="quiet-end" disabled={!policy.quiet_hours || policySaving} value={policy.quiet_hours ? String(policy.quiet_hours.end_hour) : "7"}
+					options={HOURS.map((h) => ({ value: String(h), label: `until ${h}:00` }))}
+					onValueChange={(v) => setQuietHours(policy?.quiet_hours?.start_hour ?? 22, Number(v))} />
 			</div>
 			<p class="setting-hint">No spontaneous check-ins or messages during quiet hours, in your companion's timezone. A commitment that comes due then waits for the morning.</p>
 		</div>
@@ -306,27 +310,17 @@
 
 			<div class="setting-row">
 				<label class="setting-label" for="resume-break">After a break of</label>
-				<select id="resume-break" class="setting-input" disabled={!resume.enabled || resumeSaving} value={String(resume.break_minutes)} onchange={(e) => resume && saveResume({ ...resume, break_minutes: Number((e.currentTarget as HTMLSelectElement).value) })}>
-					{#if !BREAK_OPTIONS.some((o) => o.value === resume?.break_minutes)}
-						<option value={String(resume.break_minutes)}>{optionLabel(BREAK_OPTIONS, resume.break_minutes)}</option>
-					{/if}
-					{#each BREAK_OPTIONS as option (option.value)}
-						<option value={String(option.value)}>{option.label}</option>
-					{/each}
-				</select>
+				<SettingSelect id="resume-break" disabled={!resume.enabled || resumeSaving} value={String(resume.break_minutes)}
+					options={withCurrent(BREAK_OPTIONS, resume.break_minutes)}
+					onValueChange={(v) => resume && saveResume({ ...resume, break_minutes: Number(v) })} />
 				<p class="setting-hint">Opening Nolune after this long away counts as coming back. A computer reconnecting counts only when a waiting task names it.</p>
 			</div>
 
 			<div class="setting-row">
 				<label class="setting-label" for="resume-cooldown">At most one every</label>
-				<select id="resume-cooldown" class="setting-input" disabled={!resume.enabled || resumeSaving} value={String(resume.cooldown_secs)} onchange={(e) => resume && saveResume({ ...resume, cooldown_secs: Number((e.currentTarget as HTMLSelectElement).value) })}>
-					{#if !COOLDOWN_OPTIONS.some((o) => o.value === resume?.cooldown_secs)}
-						<option value={String(resume.cooldown_secs)}>{optionLabel(COOLDOWN_OPTIONS, resume.cooldown_secs)}</option>
-					{/if}
-					{#each COOLDOWN_OPTIONS as option (option.value)}
-						<option value={String(option.value)}>{option.label}</option>
-					{/each}
-				</select>
+				<SettingSelect id="resume-cooldown" disabled={!resume.enabled || resumeSaving} value={String(resume.cooldown_secs)}
+					options={withCurrent(COOLDOWN_OPTIONS, resume.cooldown_secs)}
+					onValueChange={(v) => resume && saveResume({ ...resume, cooldown_secs: Number(v) })} />
 				<p class="setting-hint">The gap after a suggestion, or after you say not now. Quiet hours above hold suggestions too; asking with Suggest now always answers.</p>
 			</div>
 
@@ -342,12 +336,9 @@
 						<span class="setting-hint" role="status">{snoozeStatus(resume, resumeNow)}</span>
 						<button class="setting-btn" aria-describedby="resume-snooze-label" disabled={resumeSaving} onclick={() => snoozeRitual(null)}>End snooze</button>
 					{:else}
-						<select id="resume-snooze" class="setting-input" disabled={!resume.enabled || resumeSaving} value="" onchange={(e) => { const v = (e.currentTarget as HTMLSelectElement).value; if (v) snoozeRitual(Number(v)); }}>
-							<option value="">Not snoozed</option>
-							{#each snoozePresets(resumeNow) as preset (preset.label)}
-								<option value={String(preset.until)}>For {preset.label.toLowerCase() === "tomorrow" ? "a day" : preset.label}</option>
-							{/each}
-						</select>
+						<SettingSelect id="resume-snooze" disabled={!resume.enabled || resumeSaving} value="none"
+							options={[{ value: "none", label: "Not snoozed" }, ...snoozePresets(resumeNow).map((preset) => ({ value: String(preset.until), label: `For ${preset.label.toLowerCase() === "tomorrow" ? "a day" : preset.label}` }))]}
+							onValueChange={(v) => { if (v !== "none") snoozeRitual(Number(v)); }} />
 					{/if}
 				</div>
 				<p class="setting-hint">No suggestions on their own until the snooze ends. Tasks you answered with Never this task stay in Unfinished tasks{resume.dismissed_record_ids.length > 0 ? ` (${resume.dismissed_record_ids.length} so far)` : ""}.</p>
