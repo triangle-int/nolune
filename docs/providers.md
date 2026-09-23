@@ -129,9 +129,9 @@ status or mid-stream as an SSE `error` event, is reported as a rate limit.
    `o3`.
 
 The adapter speaks the Responses API (`/v1/responses`, `store: false`,
-streaming SSE). Images go out as `input_image`; documents do not (the
-capability table says so and the settings page warns before you pick
-such a preset). `reasoning.effort` is forwarded for the GPT-5 family and
+streaming SSE). Images go out as `input_image` and PDFs as `input_file`:
+inline as `file_data`, or by `file_url` when the public URL is reachable
+by the provider, including PDFs a tool returns. `reasoning.effort` is forwarded for the GPT-5 family and
 the o-series and refused before the network for other models. There is
 no token-counting endpoint, so the context meter is a local estimate for
 OpenAI presets. An OpenAI key is OpenAI's only: it is never used for
@@ -316,7 +316,7 @@ chips. This table is checked against the adapters' constants by
 | Capability | Anthropic | OpenAI | OpenRouter | Codex |
 | --- | --- | --- | --- | --- |
 | `vision` | yes | yes | per model from the catalog (yes until it says otherwise) | no |
-| `documents` | yes (PDF) | no | no | no |
+| `documents` | yes (PDF) | yes (PDF) | no | no |
 | `tools` | yes | yes | per model from the catalog (yes until it says otherwise) | yes |
 | `streaming` | yes | yes | yes | yes |
 | `reasoning_controls` | no | per model: the GPT-5 family and the o-series | per model from the catalog (yes until it says otherwise) | no |
