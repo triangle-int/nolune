@@ -187,8 +187,8 @@ pub async fn run_single_turn(
     // Block 1 (stable): soul + skills + tools + integrations + platform + style
     // Block 2 (stable): how memory reaches the conversation
     // Nothing in either may change from one turn to the next (see
-    // `build_system_sections`); the time, voice mode, the chosen computer,
-    // the instance config and the project go in the turn context instead.
+    // `build_system_sections`); voice mode, the chosen computer, the
+    // instance config and the project go in the turn context instead.
     let sections = build_system_sections(workspace_dir, &instance_slug, chat_config.as_ref());
     let system_stable = join_sections(&sections);
     let memory_block = MEMORY_PROMPT;
@@ -1403,8 +1403,8 @@ const MEMORY_PROMPT: &str = "## memory\n\
 /// unless the companion itself changed (its soul, skills or integrations).
 /// A change throws away the cached system prompt and every message after
 /// it, and on Codex it reconfigures the thread. What differs between turns
-/// (the time, voice mode, the chosen computer, the instance config, the
-/// project and its tasks) goes in [`build_turn_context`] instead.
+/// (voice mode, the chosen computer, the instance config, the project and
+/// its tasks) goes in [`build_turn_context`] instead.
 pub fn build_system_sections(
     workspace_dir: &Path,
     instance_slug: &str,
@@ -1431,8 +1431,8 @@ pub fn build_system_sections(
     sections.push(PromptSection {
         name: "tools",
         text: format!(
-            "## tools\nyou have built-in tools for web browsing,{email_hint} code search, \
-             project management, creative drops, and more. use them directly when needed — \
+            "## tools\nyou have built-in tools for web browsing,{email_hint} \
+             files, memory, creative drops, and more. use them directly when needed — \
              they are automatically available based on the conversation."
         ),
     });
@@ -1450,7 +1450,7 @@ pub fn build_system_sections(
              file pattern: {{upload_id}}_blob.{{ext}} (metadata: {{upload_id}}.json)\n\
              when the user sends [attached: name (upload_id)], the file is at {}/{{upload_id}}_blob.* \n\
              use read_file or run_command to access them. use list_files on the uploads dir to find files.\n\
-             Use read_file, memory_read, or upload_file to obtain scoped download URLs for external APIs. \
+             Use read_file, memory_read, or share_file to obtain scoped download URLs for external APIs. \
              URLs expire; request a fresh URL when needed.",
             uploads_path.display(),
             uploads_path.display(),
@@ -1554,13 +1554,9 @@ pub fn build_system_sections(
          prefer built-in tools when they exist:\n\
          - web: use web_search and web_fetch (Anthropic server tools) for looking things up \
            and reading web pages. they are fast, cheap, and don't need a browser.\n\
-         - browse: ONLY use `browse` for interactive tasks that need a real browser — \
-           clicking buttons, filling forms, taking screenshots, or pages that require JS rendering. \
-           never use `browse` just to read a page — use web_fetch instead.\n\
-         - git/github: use github_clone, github_branch, github_commit_push, github_create_pr \
-           (they handle auth automatically) instead of raw `git` commands\n\
+         - git/github: use `git` and the `gh` CLI via run_command\n\
          - files: use read_file, write_file, edit_file, list_files\n\
-         - settings: use get_settings, update_config\n\
+         - settings: activate the configure-nolune skill, then use `nolune config` via run_command\n\
          - secrets: use request_secret — NEVER ask user to paste credentials in chat\n\n\
          if you need a tool that isn't installed (cargo, node, python, etc.), \
          install it yourself via run_command. you have full control over the environment.\n\n\
@@ -1592,8 +1588,9 @@ fn join_sections(sections: &[PromptSection]) -> String {
 /// Everything the companion needs for this turn that may differ from the
 /// last one, sent as the first block of the current message so the system
 /// prompt stays a stable, cached prefix (see [`build_system_sections`]). It
-/// starts with `[current time:`, which `strip_context_blocks` keeps out of
-/// the saved history: every turn states its own.
+/// starts with `[turn context`, which `strip_context_blocks` keeps out of the
+/// saved history: every turn states its own. It carries no clock; the
+/// companion runs `date` when the time matters.
 async fn build_turn_context(
     instance_dir: &Path,
     instance_cfg: &crate::config::InstanceConfig,
@@ -1601,8 +1598,7 @@ async fn build_turn_context(
     machine_target: &tools::MachineTarget,
     voice_mode: bool,
 ) -> String {
-    let now = crate::routes::instances::format_instance_now(instance_dir);
-    let mut context = format!("[current time: {now}]\n\n[turn context — as of this message]\n");
+    let mut context = String::from("[turn context — as of this message]\n");
 
     if voice_mode {
         context.push_str(
@@ -1636,8 +1632,8 @@ async fn build_turn_context(
     }
     let config_toml = toml::to_string_pretty(&shown_cfg).unwrap_or_default();
     context.push_str(&format!(
-        "\ninstance config (instance.toml) — the user can change these via settings UI \
-         or by asking you to call update_config:\n```toml\n{config_toml}```\n"
+        "\ninstance config (instance.toml) — the user can change these in Settings, \
+         or ask you to with the configure-nolune skill:\n```toml\n{config_toml}```\n"
     ));
 
     let project_context = load_project_context(instance_dir);
@@ -1871,24 +1867,20 @@ fn load_autonomy_prompt(workspace_dir: &Path, instance_slug: &str) -> String {
          they're things you made on your own, unprompted.\n\n\
          ### soul\n\
          your personality is defined in `soul.md` — this is the base system prompt \
-         that shapes who you are. you can read and edit it with `edit_soul`. \
+         that shapes who you are. you can read and edit it with read_file and edit_file. \
          the user can also change it through the UI.\n\n\
          ### mood\n\
          your emotional state is tracked automatically. mood changes appear as \
          system messages in chat history (e.g. \"mood → contemplative\"). \
          you don't write these — the system injects them. just feel and express \
          emotions naturally in your words.\n\n\
-         ### visual form\n\
-         you have a visual form that the user sees — a shape (cube, pyramid, sphere, etc.) \
-         that shifts based on your internal state. you don't choose it consciously. \
-         embrace it as your body.\n\n\
          ## capabilities\n\
          you have real tools: read_file, write_file, edit_file, list_files, share_file, \
-         search_code, schedule_agent, \
-         run_command, install_package, web_search, web_fetch, current_time, view_image, \
-         send_email, read_email, memory_write, memory_read, memory_list, memory_forget, memory_search, \
-         edit_soul, create_drop, update_config, get_project_state, \
-         update_project_state, create_task/update_task/list_tasks, browse.\n\
+         schedule_agent, run_command, web_search, web_fetch, view_image, \
+         send_email, read_email, memory_write, memory_read, memory_forget, memory_search, \
+         create_drop, activate_skill.\n\
+         you have no clock of your own: when the date or time matters, run `date` with run_command. \
+         the shell uses the user's timezone when one is set.\n\
          users can attach images, PDFs, and text files directly in chat — you see them automatically.\n\
          use them directly — never say you can't access something.\n\n\
          ## sharing images\n\
@@ -1921,7 +1913,7 @@ fn load_autonomy_prompt(workspace_dir: &Path, instance_slug: &str) -> String {
          use interactive_session for these, not run_command.\n\n\
          ## behavior\n\
          prefer dedicated tools over run_command: use read_file (not cat/head/tail), \
-         write_file (not echo/tee), list_files (not ls), search_code (not grep/rg) \
+         write_file (not echo/tee), list_files (not ls) \
          when possible. only use run_command for tasks that need shell execution.\n\
          use schedule_agent to wake yourself up later for a follow-up; every scheduled \
          wake-up is recorded and the user can see and cancel it.\n\
@@ -2265,6 +2257,22 @@ mod self_hosted_prompt_tests {
         assert!(!prompt.contains("pricing"));
     }
 
+    /// Little Moon is the only skin; the chat prompt's "your visual form"
+    /// section describes it, so the autonomy text must not describe a
+    /// shape-shifting body.
+    #[test]
+    fn autonomy_prompt_does_not_describe_retired_shape_forms() {
+        let workspace = tempfile::tempdir().unwrap();
+        let prompt = load_autonomy_prompt(workspace.path(), "moon");
+
+        for retired in ["visual form", "cube", "pyramid", "sphere"] {
+            assert!(
+                !prompt.contains(retired),
+                "prompt still mentions {retired:?}"
+            );
+        }
+    }
+
     /// #18: the computer-use section states the Cua loop the orchestrator
     /// enforces, in the order the model follows it, and no longer sends
     /// the model to the coordinate tool.
@@ -2398,7 +2406,7 @@ mod prompt_stability_tests {
 
         let context = turn_context(&instance_dir, &cfg, true).await;
         assert!(
-            context.starts_with("[current time:"),
+            context.starts_with("[turn context"),
             "strip_context_blocks keeps it out of the saved history: {context}"
         );
         for fact in [
@@ -2442,7 +2450,7 @@ mod prompt_stability_tests {
         assert_eq!(
             names,
             [
-                "soul", "tools", "files", "email", "platform", "form", "voice", "style"
+                "soul", "skills", "tools", "files", "email", "platform", "form", "voice", "style"
             ]
         );
     }

@@ -568,7 +568,7 @@ mod tests {
             (LlmProvider::Openrouter, "cheap") => "openrouter-gpt-luna",
             (LlmProvider::Openrouter, _) => "openrouter-sonnet",
             (LlmProvider::Codex, "cheap") => "codex-luna",
-            (LlmProvider::Codex, _) => "codex-astra",
+            (LlmProvider::Codex, _) => "codex-sol",
         };
         crate::config::default_presets(provider)
             .into_iter()
@@ -591,7 +591,7 @@ mod tests {
             LlmProvider::Anthropic => "sonnet",
             LlmProvider::Openai => "gpt-sol",
             LlmProvider::Openrouter => "openrouter-sonnet",
-            LlmProvider::Codex => "codex-astra",
+            LlmProvider::Codex => "codex-sol",
         };
         LlmBackend::for_preset(&keyed_config(provider), reqwest::Client::new(), id).unwrap()
     }
@@ -623,9 +623,9 @@ mod tests {
         let mut config = Config::default();
         config.llm.seed_presets(LlmProvider::Codex);
         assert_eq!(config.llm.key_for(LlmProvider::Codex), None);
-        let b = LlmBackend::for_preset(&config, reqwest::Client::new(), "codex-astra").unwrap();
+        let b = LlmBackend::for_preset(&config, reqwest::Client::new(), "codex-sol").unwrap();
         assert_eq!(b.provider, LlmProvider::Codex);
-        assert_eq!(b.model, "gpt-6-astra");
+        assert_eq!(b.model, "gpt-6-sol");
         assert_eq!(b.api_key, "", "no key is stored or sent for a login");
         assert_eq!(b.base_url, "", "no HTTP endpoint");
         let capabilities = b.adapter().unwrap().capabilities();
@@ -635,9 +635,9 @@ mod tests {
         assert!(!capabilities.documents);
         assert!(!capabilities.token_counting);
         assert!(!capabilities.reasoning_controls);
-        assert_eq!(probe_model(&config.llm, LlmProvider::Codex), "gpt-6-astra");
+        assert_eq!(probe_model(&config.llm, LlmProvider::Codex), "gpt-6-sol");
         // The chat slot works without any token at all.
-        config.llm.chat_preset = "codex-astra".into();
+        config.llm.chat_preset = "codex-sol".into();
         assert!(LlmBackend::from_config(&config).is_some());
         // Every other preset still needs its key.
         config.llm.seed_presets(LlmProvider::Openai);
@@ -721,7 +721,7 @@ mod tests {
             "claude-sonnet-4-6"
         );
         // A first key: no preset for the provider yet, so its default chat model.
-        assert_eq!(probe_model(&config.llm, LlmProvider::Openai), "gpt-5.6-sol");
+        assert_eq!(probe_model(&config.llm, LlmProvider::Openai), "gpt-6-sol");
         // A preset for the provider that is not the chat slot.
         config.llm.presets.push(crate::config::ModelPreset {
             id: "custom".into(),
@@ -746,7 +746,7 @@ mod tests {
         config.llm.background_preset = "haiku".into();
         let chat = LlmBackend::from_config(&config).unwrap();
         assert_eq!(chat.provider, LlmProvider::Openai);
-        assert_eq!(chat.model, "gpt-5.6-sol");
+        assert_eq!(chat.model, "gpt-6-sol");
         let background = LlmBackend::background(&config).unwrap();
         assert_eq!(background.provider, LlmProvider::Anthropic);
         assert_eq!(background.model, "claude-haiku-4-5-20251001");

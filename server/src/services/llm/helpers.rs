@@ -224,7 +224,7 @@ pub(crate) fn tool_use_summary(name: &str, input: &serde_json::Value) -> String 
 /// Merge timestamps from old entries into a new message list from the LLM.
 /// Old entries that match by position keep their ts/id; new entries get fresh values.
 /// Strip injected context blocks from user messages before saving to history.
-/// Removes [current time: ...] and [system: auto-recalled memories ...] blocks.
+/// Removes [turn context ...] and [system: auto-recalled memories ...] blocks.
 pub(crate) fn strip_context_blocks(msg: &Message) -> Message {
     match msg {
         Message::User { content } => {
@@ -232,7 +232,7 @@ pub(crate) fn strip_context_blocks(msg: &Message) -> Message {
                 .iter()
                 .filter(|b| {
                     if let ContentBlock::Text { text } = b {
-                        !text.starts_with("[current time:")
+                        !text.starts_with("[turn context")
                             && !text.starts_with("[system: auto-recalled")
                     } else {
                         true

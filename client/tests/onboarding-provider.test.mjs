@@ -5,7 +5,7 @@ import { connectOnboardingCodex, onboardingTestPreset, resumeOnboarding, saveOnb
 const seeded = (provider) => ({
 	presets: [
 		{ id: 'sonnet', name: 'Claude Sonnet', provider: 'anthropic', model: 'claude-sonnet-4-6' },
-		{ id: 'gpt-sol', name: 'GPT-5.6 Sol', provider: 'openai', model: 'gpt-5.6-sol' },
+		{ id: 'gpt-sol', name: 'GPT-6 Sol', provider: 'openai', model: 'gpt-6-sol' },
 		{ id: 'openrouter-sonnet', name: 'Sonnet via OpenRouter', provider: 'openrouter', model: 'anthropic/claude-sonnet-4.6' },
 	].filter((p) => p.provider === provider || p.provider === 'anthropic'),
 	chat_preset: 'sonnet',
@@ -41,8 +41,8 @@ test('the slots follow the provider that answered when the one they pointed at d
 	// answered took both slots; the next provider's preset answers.
 	const models = {
 		presets: [
-			{ id: 'gpt-sol', name: 'GPT-5.6 Sol', provider: 'openai', model: 'gpt-5.6-sol' },
-			{ id: 'gpt-luna', name: 'GPT-5.6 Luna', provider: 'openai', model: 'gpt-5.6-luna' },
+			{ id: 'gpt-sol', name: 'GPT-6 Sol', provider: 'openai', model: 'gpt-6-sol' },
+			{ id: 'gpt-luna', name: 'GPT-6 Luna', provider: 'openai', model: 'gpt-6-luna' },
 			{ id: 'sonnet', name: 'Claude Sonnet', provider: 'anthropic', model: 'claude-sonnet-4-6' },
 			{ id: 'opus', name: 'Claude Opus', provider: 'anthropic', model: 'claude-opus-4-6' },
 			{ id: 'haiku', name: 'Claude Haiku', provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
@@ -74,7 +74,7 @@ test('slots move only after the preset answered, and a failed move is reported',
 	await assert.rejects(saveOnboardingProvider('openai', 'test-only-key', {
 		updateLlmConfig: async () => {},
 		seedModelPresets: async (provider) => seeded(provider),
-		testPreset: async (id) => ({ ok: true, preset: id, provider: 'openai', model: 'gpt-5.6-sol', usage: { input_tokens: 1, output_tokens: 1 } }),
+		testPreset: async (id) => ({ ok: true, preset: id, provider: 'openai', model: 'gpt-6-sol', usage: { input_tokens: 1, output_tokens: 1 } }),
 		updateModelPresets: async () => { throw new Error('Could not save the model slots'); },
 	}), /Could not save the model slots/);
 });
@@ -105,10 +105,10 @@ test('a preset that does not answer keeps onboarding on the key step with the ty
 	const error = await saveOnboardingProvider('openai', 'test-only-key', {
 		updateLlmConfig: async () => {},
 		seedModelPresets: async (provider) => seeded(provider),
-		testPreset: async () => ({ ok: false, error: 'model_not_found', message: 'OpenAI has no model gpt-5.6-sol', status: 404 }),
+		testPreset: async () => ({ ok: false, error: 'model_not_found', message: 'OpenAI has no model gpt-6-sol', status: 404 }),
 	}).then(() => null, (e) => e);
 	assert.ok(error instanceof Error);
-	assert.match(error.message, /gpt-5\.6-sol|OpenAI/);
+	assert.match(error.message, /gpt-6-sol|OpenAI/);
 	assert.equal(error.outcome.error, 'model_not_found');
 });
 
@@ -125,21 +125,21 @@ test('the preset onboarding tests is the new provider\'s, the Chat slot when it 
 // `llm_configured` even when the preset never answered; onboarding must
 // test again instead of trusting the flag.
 
-const gpt = { id: 'gpt-sol', name: 'GPT-5.6 Sol', provider: 'openai', model: 'gpt-5.6-sol' };
+const gpt = { id: 'gpt-sol', name: 'GPT-6 Sol', provider: 'openai', model: 'gpt-6-sol' };
 
 test('a companion without a provider goes to the provider step', () => {
 	assert.deepEqual(resumeOnboarding({ llm_configured: false }, null, null), { step: 'provider', reason: null });
-	assert.deepEqual(resumeOnboarding({ llm_configured: false, chat_preset: 'gpt-sol' }, { ok: true, preset: 'gpt-sol', provider: 'openai', model: 'gpt-5.6-sol', usage: { input_tokens: 1, output_tokens: 1 } }, gpt), { step: 'provider', reason: null });
+	assert.deepEqual(resumeOnboarding({ llm_configured: false, chat_preset: 'gpt-sol' }, { ok: true, preset: 'gpt-sol', provider: 'openai', model: 'gpt-6-sol', usage: { input_tokens: 1, output_tokens: 1 } }, gpt), { step: 'provider', reason: null });
 });
 
 test('a configured provider skips to the first message only when its Chat preset answered', () => {
-	const ok = { ok: true, preset: 'gpt-sol', provider: 'openai', model: 'gpt-5.6-sol', usage: { input_tokens: 8, output_tokens: 1 } };
+	const ok = { ok: true, preset: 'gpt-sol', provider: 'openai', model: 'gpt-6-sol', usage: { input_tokens: 8, output_tokens: 1 } };
 	assert.deepEqual(resumeOnboarding({ llm_configured: true, chat_preset: 'gpt-sol' }, ok, gpt), { step: 'first-message' });
 });
 
 test('a configured provider whose preset does not answer returns to the provider step with the typed outcome', () => {
 	for (const [error, message, pattern] of [
-		['model_not_found', 'OpenAI has no model "gpt-5.6-sol": does not exist', /no model "gpt-5\.6-sol"/],
+		['model_not_found', 'OpenAI has no model "gpt-6-sol": does not exist', /no model "gpt-6-sol"/],
 		['rate_limited', 'OpenAI accepted the key but is rate limiting', /rate limiting/],
 		['provider_rejected', 'OpenAI rejected the request (402): Insufficient credits', /Insufficient credits/],
 		['authentication', 'OpenAI rejected the API key.', /rejected the API key/],
@@ -153,8 +153,8 @@ test('a configured provider whose preset does not answer returns to the provider
 	assert.equal(failed.step, 'provider');
 	assert.match(failed.reason, /could not be tested/i);
 	// Without the preset row, the sentence still names the provider from the status.
-	const bare = resumeOnboarding({ llm_configured: true, chat_preset: 'gpt-sol', chat_provider: 'openai', model: 'gpt-5.6-sol' }, { ok: false, error: 'model_not_found', message: 'nope', status: 404 }, null);
-	assert.match(bare.reason, /OpenAI has no model "gpt-5\.6-sol"/);
+	const bare = resumeOnboarding({ llm_configured: true, chat_preset: 'gpt-sol', chat_provider: 'openai', model: 'gpt-6-sol' }, { ok: false, error: 'model_not_found', message: 'nope', status: 404 }, null);
+	assert.match(bare.reason, /OpenAI has no model "gpt-6-sol"/);
 });
 
 // --- Codex (#27): the gate is the login AND the connection test ---
@@ -162,8 +162,8 @@ test('a configured provider whose preset does not answer returns to the provider
 const codexSeeded = () => ({
 	presets: [
 		{ id: 'sonnet', name: 'Claude Sonnet', provider: 'anthropic', model: 'claude-sonnet-4-6' },
-		{ id: 'codex-astra', name: 'GPT-6 Astra via Codex', provider: 'codex', model: 'gpt-6-astra' },
-		{ id: 'codex-luna', name: 'GPT-5.6 Luna via Codex', provider: 'codex', model: 'gpt-5.6-luna' },
+		{ id: 'codex-sol', name: 'GPT-6 Sol via Codex', provider: 'codex', model: 'gpt-6-sol' },
+		{ id: 'codex-luna', name: 'GPT-6 Luna via Codex', provider: 'codex', model: 'gpt-6-luna' },
 	],
 	chat_preset: 'sonnet',
 	background_preset: 'sonnet',
@@ -172,7 +172,7 @@ const codexSeeded = () => ({
 	added: 2,
 });
 const codexStatus = (over = {}) => ({
-	binary: { state: 'ready', pinned_version: '0.155.0', path: '/opt/homebrew/bin/codex', version: '0.155.0' },
+	binary: { state: 'ready', pinned_version: '0.156.1', path: '/opt/homebrew/bin/codex', version: '0.156.1' },
 	installed: true,
 	compatible: true,
 	logged_in: true,
@@ -186,20 +186,20 @@ test('codex onboarding seeds its presets and tests one only once codex holds a l
 	const result = await connectOnboardingCodex({
 		fetchCodexStatus: async () => { calls.push(['status']); return codexStatus(); },
 		seedModelPresets: async (provider) => { calls.push(['seed', provider]); return codexSeeded(); },
-		testPreset: async (id) => { calls.push(['test', id]); return { ok: true, preset: id, provider: 'codex', model: 'gpt-6-astra', usage: { input_tokens: 10, output_tokens: 4 } }; },
+		testPreset: async (id) => { calls.push(['test', id]); return { ok: true, preset: id, provider: 'codex', model: 'gpt-6-sol', usage: { input_tokens: 10, output_tokens: 4 } }; },
 		updateModelPresets: async (payload) => { calls.push(['slots', payload.chat_preset, payload.background_preset]); return { ...codexSeeded(), ...payload }; },
 	});
 	// No key is ever saved: the login lives in codex. The slots follow the
 	// preset that answered, the Background slot to the second codex preset.
-	assert.deepEqual(calls, [['status'], ['seed', 'codex'], ['test', 'codex-astra'], ['slots', 'codex-astra', 'codex-luna']]);
+	assert.deepEqual(calls, [['status'], ['seed', 'codex'], ['test', 'codex-sol'], ['slots', 'codex-sol', 'codex-luna']]);
 	assert.equal(result.ok, true);
-	assert.equal(result.preset, 'codex-astra');
+	assert.equal(result.preset, 'codex-sol');
 });
 
 test('codex onboarding stops before seeding when the binary is missing, mismatched, silent, or holds no login', async () => {
 	for (const [name, status, kind, pattern] of [
-		['missing', codexStatus({ binary: { state: 'not_installed', pinned_version: '0.155.0', message: 'codex is not installed: no `codex` on PATH and NOLUNE_CODEX_BIN is unset' }, installed: false, compatible: false, logged_in: false, account: null }), 'binary', /not installed/i],
-		['mismatched', codexStatus({ binary: { state: 'incompatible', pinned_version: '0.155.0', path: '/usr/local/bin/codex', version: '0.154.0', message: '/usr/local/bin/codex is codex 0.154.0; Nolune supports codex 0.155.0 only' }, compatible: false, logged_in: false, account: null }), 'binary', /0\.154\.0.*0\.155\.0/],
+		['missing', codexStatus({ binary: { state: 'not_installed', pinned_version: '0.156.1', message: 'codex is not installed: no `codex` on PATH and NOLUNE_CODEX_BIN is unset' }, installed: false, compatible: false, logged_in: false, account: null }), 'binary', /not installed/i],
+		['mismatched', codexStatus({ binary: { state: 'incompatible', pinned_version: '0.156.1', path: '/usr/local/bin/codex', version: '0.155.0', message: '/usr/local/bin/codex is codex 0.155.0; Nolune supports codex 0.156.1 only' }, compatible: false, logged_in: false, account: null }), 'binary', /0\.155\.0.*0\.156\.1/],
 		['silent', codexStatus({ logged_in: false, account: null, error: 'codex app-server handshake failed: exited with status 1' }), 'unavailable', /handshake failed/],
 		['logged out', codexStatus({ logged_in: false, account: null }), 'login', /not logged in/i],
 	]) {
@@ -233,13 +233,13 @@ test('a codex preset that does not answer keeps onboarding open with the typed o
 });
 
 test('a configured codex preset whose login is gone returns to the provider step with the login sentence', () => {
-	const astra = { id: 'codex-astra', name: 'GPT-6 Astra via Codex', provider: 'codex', model: 'gpt-6-astra' };
+	const sol = { id: 'codex-sol', name: 'GPT-6 Sol via Codex', provider: 'codex', model: 'gpt-6-sol' };
 	const outcome = { ok: false, error: 'setup_required', message: 'Codex login required: sign in with ChatGPT from Settings › Connections, or run `codex login` on this machine.', status: 503 };
-	const next = resumeOnboarding({ llm_configured: true, chat_preset: 'codex-astra', chat_provider: 'codex' }, outcome, astra);
+	const next = resumeOnboarding({ llm_configured: true, chat_preset: 'codex-sol', chat_provider: 'codex' }, outcome, sol);
 	assert.equal(next.step, 'provider');
 	assert.match(next.reason, /Codex login required/);
 	assert.doesNotMatch(next.reason, /API key/);
-	assert.deepEqual(resumeOnboarding({ llm_configured: true, chat_preset: 'codex-astra' }, { ok: true, preset: 'codex-astra', provider: 'codex', model: 'gpt-6-astra', usage: { input_tokens: 1, output_tokens: 1 } }, astra), { step: 'first-message' });
+	assert.deepEqual(resumeOnboarding({ llm_configured: true, chat_preset: 'codex-sol' }, { ok: true, preset: 'codex-sol', provider: 'codex', model: 'gpt-6-sol', usage: { input_tokens: 1, output_tokens: 1 } }, sol), { step: 'first-message' });
 	// The new provider's preset is the one tested.
-	assert.equal(onboardingTestPreset(codexSeeded(), 'codex'), 'codex-astra');
+	assert.equal(onboardingTestPreset(codexSeeded(), 'codex'), 'codex-sol');
 });
