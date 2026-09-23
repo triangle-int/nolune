@@ -184,7 +184,7 @@ pub async fn run_single_turn(
     let instance_dir = workspace_dir.join("instances").join(&instance_slug);
 
     // The system prompt is two blocks, each a prompt-cache breakpoint:
-    // Block 1 (stable): soul + skills + tools + integrations + platform + style
+    // Block 1 (stable): soul + built-in skills + tools + integrations + platform + style
     // Block 2 (stable): how memory reaches the conversation
     // Nothing in either may change from one turn to the next (see
     // `build_system_sections`); voice mode, the chosen computer, the
@@ -1399,7 +1399,8 @@ const MEMORY_PROMPT: &str = "## memory\n\
 ///
 /// Providers cache every request as a prefix and the system prompt is at its
 /// head, so everything here must be byte-identical from one turn to the next
-/// unless the companion itself changed (its soul, skills or integrations).
+/// unless the companion itself changed (its soul or integrations, or the
+/// binary and its built-in skills).
 /// A change throws away the cached system prompt and every message after
 /// it, and on Codex it reconfigures the thread. What differs between turns
 /// (voice mode, the chosen computer, the instance config, the project and
@@ -1418,13 +1419,11 @@ pub fn build_system_sections(
         text: llm::load_system_prompt(workspace_dir, instance_slug),
     }];
 
-    let skills_prompt = build_skills_prompt(workspace_dir);
-    if !skills_prompt.is_empty() {
-        sections.push(PromptSection {
-            name: "skills",
-            text: skills_prompt,
-        });
-    }
+    // Built-in skills only: installing one never changes the prompt (see list_skills).
+    sections.push(PromptSection {
+        name: "skills",
+        text: build_skills_prompt(),
+    });
 
     let email_hint = if email_configured { " email," } else { "" };
     sections.push(PromptSection {
@@ -1687,31 +1686,21 @@ fn instance_config_prompt_toml(cfg: &crate::config::InstanceConfig) -> String {
     .unwrap_or_default()
 }
 
-/// Build a prompt section listing active skills and their instructions.
-fn build_skills_prompt(workspace_dir: &Path) -> String {
-    let all_skills = skills::list_skills(workspace_dir);
-    let active: Vec<_> = all_skills
-        .into_iter()
-        .filter(|s| s.enabled && !s.instructions.is_empty())
-        .collect();
-
-    if active.is_empty() {
-        return String::new();
-    }
-
+/// The skills section of the system prompt. It names only the skills built
+/// into this binary, so installing, removing, or disabling one mid-conversation
+/// never changes the prompt or breaks its cache; the model finds installed
+/// skills with `list_skills`, which reads them on every call.
+fn build_skills_prompt() -> String {
     let mut out = String::from(
-        "## skills\nyou have the following skills installed. \
-        call `activate_skill` to use any skill — it will return instructions for execution.\n\n",
+        "## skills\n\
+         skills are instructions for particular tasks. call `list_skills` to see the \
+         installed ones: check it when a task might match a skill, and before saying \
+         you can't do something. call `activate_skill` to use one; it returns the \
+         skill's instructions.\n\
+         built in:\n",
     );
-    for skill in &active {
-        let has_refs = skill.resources.iter().any(|r| r.starts_with("references/"));
-        out.push_str(&format!(
-            "- **{}** (id: `{}`): {}{}\n",
-            skill.name,
-            skill.id,
-            skill.description,
-            if has_refs { " [has references]" } else { "" },
-        ));
+    for skill in skills::builtin_skills() {
+        out.push_str(&format!("- **{}**: {}\n", skill.name, skill.description));
     }
     out
 }
@@ -2466,8 +2455,8 @@ mod prompt_stability_tests {
 
     /// The system prompt is the cached prefix of every request: what the
     /// companion rewrites with its own tools mid-conversation (the project,
-    /// its tasks) and what changes between turns (voice mode, the config,
-    /// the computers) goes in the turn context and never reaches it.
+    /// its tasks, an installed skill) and what changes between turns (voice
+    /// mode, the config, the computers) never reaches it.
     #[tokio::test]
     async fn what_changes_between_turns_stays_out_of_the_system_prompt() {
         let workspace = tempfile::tempdir().unwrap();
@@ -2491,6 +2480,19 @@ mod prompt_stability_tests {
             ..InstanceConfig::default()
         };
         cfg.save(workspace.path(), "moon").unwrap();
+        let skill = workspace.path().join("skills/poems");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: poems\ndescription: write short poems\n---\nwrite a poem.\n",
+        )
+        .unwrap();
+        assert!(
+            skills::list_skills(workspace.path())
+                .iter()
+                .any(|skill| skill.id == "poems"),
+            "the fixture installs a skill"
+        );
 
         assert_eq!(system_prompt(workspace.path()), before);
 
@@ -2546,5 +2548,21 @@ mod prompt_stability_tests {
                 "soul", "skills", "tools", "files", "email", "platform", "form", "voice", "style"
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod skills_prompt_tests {
+    use super::build_skills_prompt;
+
+    /// The prompt names only built-in skills, so installing one
+    /// mid-conversation leaves it (and its cache) unchanged; the model is
+    /// pointed at list_skills for the rest.
+    #[test]
+    fn skills_prompt_names_built_in_skills_and_points_at_list_skills() {
+        let prompt = build_skills_prompt();
+        assert!(prompt.contains("`list_skills`"), "{prompt}");
+        assert!(prompt.contains("`activate_skill`"), "{prompt}");
+        assert!(prompt.contains("- **configure-nolune**: "), "{prompt}");
     }
 }

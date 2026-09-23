@@ -349,8 +349,9 @@ Every provider caches a request as a prefix, and the system prompt is at its
 head: a system prompt that changes mid-conversation throws away the cached
 system prompt and every message after it (on Codex it reconfigures the
 thread). `build_system_sections` in `server/src/services/chat.rs` therefore
-holds only what changes when the companion itself changes: its soul, skills
-and integrations. What differs from turn to turn (voice mode, the chosen
+holds only what changes when the companion itself changes: its soul, its
+integrations and the built-in skills (installed skills are found with
+`list_skills`, so installing one never touches the prompt). What differs from turn to turn (voice mode, the chosen
 computer and the connected desktops, the settings in `instance.toml`, the
 project and its open tasks) is the turn context, the first block of the
 current message, which is never saved into the history. Voice mode's rules stay in
