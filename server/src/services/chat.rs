@@ -1813,10 +1813,6 @@ fn load_autonomy_prompt(workspace_dir: &Path, instance_slug: &str) -> String {
          system messages in chat history (e.g. \"mood → contemplative\"). \
          you don't write these — the system injects them. just feel and express \
          emotions naturally in your words.\n\n\
-         ### visual form\n\
-         you have a visual form that the user sees — a shape (cube, pyramid, sphere, etc.) \
-         that shifts based on your internal state. you don't choose it consciously. \
-         embrace it as your body.\n\n\
          ## capabilities\n\
          you have real tools: read_file, write_file, edit_file, list_files, share_file, \
          search_code, schedule_agent, \
@@ -2198,6 +2194,22 @@ mod self_hosted_prompt_tests {
         assert!(!prompt.contains("managed AI companion platform"));
         assert!(!prompt.contains("unique subdomain"));
         assert!(!prompt.contains("pricing"));
+    }
+
+    /// Little Moon is the only skin; the chat prompt's "your visual form"
+    /// section describes it, so the autonomy text must not describe a
+    /// shape-shifting body.
+    #[test]
+    fn autonomy_prompt_does_not_describe_retired_shape_forms() {
+        let workspace = tempfile::tempdir().unwrap();
+        let prompt = load_autonomy_prompt(workspace.path(), "moon");
+
+        for retired in ["visual form", "cube", "pyramid", "sphere"] {
+            assert!(
+                !prompt.contains(retired),
+                "prompt still mentions {retired:?}"
+            );
+        }
     }
 
     /// #18: the computer-use section states the Cua loop the orchestrator
