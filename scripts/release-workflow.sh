@@ -42,20 +42,51 @@ case "${1:?Expected release, publish or nightly}" in
     dir=${2:?Expected the directory of nightly assets}
     notes="Auto-built from main (${SHA:0:7})"
     title="Nightly $(date -u +%Y-%m-%d)"
-    existing=$(mktemp)
+    suffix=.nightly-upload
+    assets=$(mktemp)
     error=$(mktemp)
-    trap 'rm -f "$existing" "$error"' EXIT
-    if gh release view nightly --repo "${GH_REPO:?}" --json assets --jq '.assets[].name' > "$existing" 2> "$error"; then
+    trap 'rm -f "$assets" "$error"' EXIT
+
+    # Only the id comes from the tag lookup: GitHub serves /releases/tags/<tag>
+    # (and so `gh release view/upload/edit`) with a stale asset list for a while
+    # after assets change, so every other call addresses the release by id.
+    if id=$(gh release view nightly --repo "${GH_REPO:?}" --json databaseId --jq .databaseId 2> "$error"); then
+      delete_asset() {
+        gh api --method DELETE "repos/$GH_REPO/releases/assets/$1" < /dev/null 2> "$error" ||
+          grep -Fq 'HTTP 404' "$error" || { cat "$error" >&2; exit 1; }
+      }
+      gh api --paginate "repos/$GH_REPO/releases/$id/assets" \
+        --jq '.[] | "\(.id)\t\(.name)"' > "$assets"
+
+      # An upload left behind by a failed run would block this one.
+      while IFS=$'\t' read -r asset name; do
+        [[ "$name" != *"$suffix" ]] || delete_asset "$asset"
+      done < "$assets"
+
+      # Upload under a temporary name, then swap it in: the old binary serves
+      # downloads until the new one takes its name.
+      for file in "$dir"/*; do
+        name=$(basename "$file")
+        new=$(gh api --method POST \
+          "https://uploads.github.com/repos/$GH_REPO/releases/$id/assets?name=$name$suffix" \
+          -H 'Content-Type: application/octet-stream' --input "$file" --jq .id < /dev/null)
+        while IFS=$'\t' read -r asset existing; do
+          [[ "$existing" != "$name" ]] || delete_asset "$asset"
+        done < "$assets"
+        gh api --method PATCH "repos/$GH_REPO/releases/assets/$new" -f name="$name" < /dev/null > /dev/null
+      done
+
+      # Drop binaries this build no longer produces.
+      while IFS=$'\t' read -r asset name; do
+        [[ "$name" == *"$suffix" || -e "$dir/$name" ]] || delete_asset "$asset"
+      done < "$assets"
+
       # Binaries first, body second: a client that reads the new commit always
       # finds its binary.
-      gh release upload nightly "$dir"/* --repo "$GH_REPO" --clobber
-      while read -r name; do
-        [[ -z "$name" || -e "$dir/$name" ]] || gh release delete-asset nightly "$name" --repo "$GH_REPO" --yes
-      done < "$existing"
-      gh release edit nightly --repo "$GH_REPO" \
-        --title "$title" --notes "$notes" --prerelease --latest=false
+      gh api --method PATCH "repos/$GH_REPO/releases/$id" \
+        -f name="$title" -f body="$notes" -F prerelease=true -f make_latest=false > /dev/null
       # Clients read the body, not the tag, so moving the tag is cosmetic.
-      gh api --method PATCH "repos/${GH_REPO}/git/refs/tags/nightly" \
+      gh api --method PATCH "repos/$GH_REPO/git/refs/tags/nightly" \
         -f sha="${SHA:?}" -F force=true > /dev/null ||
         echo '::warning::Could not move the nightly tag; the release still serves this build'
     elif grep -Fxq 'release not found' "$error"; then

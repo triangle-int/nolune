@@ -86,24 +86,35 @@ run publish publish_error failure
 [[ $(wc -l < "$CALLS") -eq 2 ]]
 
 # ── nightly: the rolling prerelease .github/workflows/nightly.yml refreshes ──
-# Its own gh mock: the release lists one current asset and one left over from a
-# renamed target.
+# Its own gh mock. The release (id 7) holds a current binary (11), one from a
+# retired target (12), and a temporary upload a failed run left behind (13).
 mkdir -p "$tmp/nightly-bin" "$tmp/dist"
 touch "$tmp/dist/nolune-server-x86_64-unknown-linux-gnu" "$tmp/dist/nolune-server-aarch64-apple-darwin"
 cat > "$tmp/nightly-bin/gh" <<'MOCK'
 #!/usr/bin/env bash
 set -eu
 printf '%s\n' "$*" >> "$CALLS"
-case "$1 $2" in
-  'release view')
+case "$*" in
+  'release view nightly '*)
     case "$SCENARIO" in
-      existing|tag_error) printf 'nolune-server-x86_64-unknown-linux-gnu\nnolune-server-retired-target\n' ;;
       absent) echo 'release not found' >&2; exit 1 ;;
-      *) echo 'network unavailable' >&2; exit 1 ;;
+      lookup_error) echo 'network unavailable' >&2; exit 1 ;;
+      *) echo 7 ;;
     esac ;;
-  'api --method') [[ "$SCENARIO" != tag_error ]] ;;
-  'release upload'|'release delete-asset'|'release edit'|'release create') ;;
-  *) exit 99 ;;
+  'api --paginate repos/triangle-int/nolune/releases/7/assets '*)
+    printf '11\tnolune-server-x86_64-unknown-linux-gnu\n'
+    printf '12\tnolune-server-retired-target\n'
+    printf '13\tnolune-server-aarch64-apple-darwin.nightly-upload\n' ;;
+  'api --method POST https://uploads.github.com/repos/triangle-int/nolune/releases/7/assets?name='*)
+    echo 90 ;;
+  'api --method DELETE repos/triangle-int/nolune/releases/assets/11')
+    case "$SCENARIO" in
+      gone) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;
+      delete_error) echo 'gh: Server Error (HTTP 500)' >&2; exit 1 ;;
+    esac ;;
+  'api --method DELETE '*|'api --method PATCH repos/triangle-int/nolune/releases/'*|'release create '*) ;;
+  'api --method PATCH repos/triangle-int/nolune/git/refs/tags/nightly '*) [[ "$SCENARIO" != tag_error ]] ;;
+  *) echo "unexpected: $*" >&2; exit 99 ;;
 esac
 MOCK
 chmod +x "$tmp/nightly-bin/gh"
@@ -116,18 +127,39 @@ nightly() {
   [[ "$2" == success && $status -eq 0 ]] || [[ "$2" == failure && $status -ne 0 ]] ||
     { cat "$tmp/log" >&2; echo "FAIL: nightly $1 ($status)" >&2; exit 1; }
 }
-notes="--notes Auto-built from main (0123456) --prerelease --latest=false"
+line_of() { grep -nF -- "$1" "$CALLS" | head -1 | cut -d: -f1; }
+body='releases/7 -f name=Nightly '
+flags='-f body=Auto-built from main (0123456) -F prerelease=true -f make_latest=false'
 
 nightly existing success
-# Binaries go up before the body names the new commit; the stale asset goes.
-upload=$(grep -n '^release upload nightly ' "$CALLS" | cut -d: -f1)
-edit=$(grep -n '^release edit nightly ' "$CALLS" | cut -d: -f1)
-[[ -n "$upload" && -n "$edit" && $upload -lt $edit ]]
-grep -Fq -- '--clobber' "$CALLS"
-grep -Fq -- "$notes" "$CALLS"
-[[ $(grep -c '^release delete-asset ' "$CALLS") -eq 1 ]]
-grep -Fxq 'release delete-asset nightly nolune-server-retired-target --repo triangle-int/nolune --yes' "$CALLS"
+# Nothing reads the stale asset list the tag lookup returns.
+[[ $(grep -c '^release ' "$CALLS") -eq 1 ]]
+grep -Fq -- "$flags" "$CALLS"
+# The leftover upload goes before anything new is uploaded.
+leftover=$(grep -nFx 'api --method DELETE repos/triangle-int/nolune/releases/assets/13' "$CALLS" | cut -d: -f1)
+[[ -n "$leftover" && $leftover -lt $(line_of 'method POST') ]]
+# The linux binary is uploaded under a temporary name, the old one deleted,
+# then the upload renamed into place.
+post=$(line_of 'name=nolune-server-x86_64-unknown-linux-gnu.nightly-upload')
+delete=$(line_of 'method DELETE repos/triangle-int/nolune/releases/assets/11')
+rename=$(grep -nFx 'api --method PATCH repos/triangle-int/nolune/releases/assets/90 -f name=nolune-server-x86_64-unknown-linux-gnu' "$CALLS" | cut -d: -f1)
+[[ -n "$post" && -n "$delete" && -n "$rename" && $post -lt $delete && $delete -lt $rename ]]
+[[ $(grep -c 'method POST' "$CALLS") -eq 2 ]]
+# The retired target goes; the body names the new commit only after every binary.
+grep -Fxq 'api --method DELETE repos/triangle-int/nolune/releases/assets/12' "$CALLS"
+[[ $(grep -n 'method POST' "$CALLS" | tail -1 | cut -d: -f1) -lt $(line_of "$body") ]]
 grep -Fxq 'api --method PATCH repos/triangle-int/nolune/git/refs/tags/nightly -f sha=0123456789abcdef0123456789abcdef01234567 -F force=true' "$CALLS"
+
+# An asset another run already removed is not an error.
+nightly gone success
+grep -Fq -- "$flags" "$CALLS"
+
+# Any other failure stops before the body names a build that is not there.
+nightly delete_error failure
+if grep -Fq -- "$body" "$CALLS"; then
+  echo 'FAIL: nightly delete error still updated the body' >&2
+  exit 1
+fi
 
 # A tag that cannot move only warns; the release already serves the build.
 nightly tag_error success
@@ -136,10 +168,10 @@ grep -Fq '::warning::' "$tmp/log"
 nightly absent success
 [[ $(grep -c '^release create nightly ' "$CALLS") -eq 1 ]]
 grep -Fq -- '--target 0123456789abcdef0123456789abcdef01234567' "$CALLS"
-grep -Fq -- "$notes" "$CALLS"
+grep -Fq -- '--notes Auto-built from main (0123456) --prerelease --latest=false' "$CALLS"
 
 nightly lookup_error failure
-if grep -Eq '^release (upload|create|edit)' "$CALLS"; then
+if grep -Eq 'release create|method (POST|PATCH|DELETE)' "$CALLS"; then
   echo 'FAIL: nightly lookup error still published' >&2
   exit 1
 fi
