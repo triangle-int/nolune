@@ -86,7 +86,7 @@ async fn main() {
 
     let state = app::state::AppState::new(config).await;
 
-    // Paired browsers survive restarts; the file holds only hashes.
+    // Paired browsers and desktop apps survive restarts; the file holds only hashes.
     state
         .browser_sessions
         .attach_storage(state.workspace_dir.join("browser_sessions.json"));

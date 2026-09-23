@@ -164,7 +164,7 @@ fn settings_is_split_by_owner_and_common_setup_hides_raw_fields() {
         ),
         (
             "client/src/routes/[slug]/settings/connections/+page.svelte",
-            &["presets", "apiKeyDefs", "Paired browsers", "computers"][..],
+            &["presets", "apiKeyDefs", "Paired devices", "computers"][..],
         ),
         (
             "client/src/routes/[slug]/settings/capabilities/+page.svelte",
