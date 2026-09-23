@@ -165,9 +165,6 @@ pub async fn run_single_turn(
     // desktop tools, the prompt and the trail all name the same target.
     let machine_target = tools::MachineTarget::resolve(&machine_registry, machine_target).await;
 
-    // Build system prompt with all context
-    let base_prompt = llm::load_system_prompt(workspace_dir, &instance_slug);
-
     // Load unified history from rig_history.json (single source of truth)
     let rig_path = rig_history_path(workspace_dir, &instance_slug, &chat_id);
     let loaded_entries = load_rig_history(&rig_path).unwrap_or_default();
@@ -182,193 +179,28 @@ pub async fn run_single_turn(
         .unwrap_or("");
 
     let chat_config = crate::config::load_config().ok();
-
-    // Build system prompt with STABLE content first (for Anthropic prompt caching).
-    // Anthropic caches the longest matching prefix, so put rarely-changing
-    // sections at the top and dynamic/per-message sections at the bottom.
-    let mut system_prompt = base_prompt;
-
-    // Stable: built-in skills, capabilities, style. Installed skills are not
-    // listed here so installing one never changes the prompt (see list_skills).
-    system_prompt = format!("{system_prompt}\n\n{}", build_skills_prompt());
-
-    // Dynamic tool hint
     let email_accounts = crate::config::EmailAccounts::load(workspace_dir, &instance_slug);
     let instance_cfg = crate::config::InstanceConfig::load(workspace_dir, &instance_slug);
-    let email_configured = !email_accounts.is_empty();
-    let email_hint = if email_configured { " email," } else { "" };
-    system_prompt.push_str(&format!(
-        "\n\n## tools\nyou have built-in tools for web browsing,{email_hint} \
-         files, memory, creative drops, and more. use them directly when needed — \
-         they are automatically available based on the conversation."
-    ));
-
-    // File access — local paths and public URLs
     let instance_dir = workspace_dir.join("instances").join(&instance_slug);
-    let uploads_path = instance_dir.join("uploads");
-    system_prompt.push_str(&format!(
-        "\n\n## file access\n\
-         user-uploaded files are stored locally at: {}\n\
-         file pattern: {{upload_id}}_blob.{{ext}} (metadata: {{upload_id}}.json)\n\
-         when the user sends [attached: name (upload_id)], the file is at {}/{{upload_id}}_blob.* \n\
-         use read_file or run_command to access them. use list_files on the uploads dir to find files.",
-        uploads_path.display(), uploads_path.display(),
-    ));
-    system_prompt.push_str("\nUse read_file, memory_read, or share_file to obtain scoped download URLs for external APIs. URLs expire; request a fresh URL when needed.\n");
 
-    // Email accounts prompt
-    if email_configured {
-        let mut account_lines = Vec::new();
-        for cfg in &email_accounts {
-            let label = if cfg.smtp_from.is_empty() {
-                &cfg.smtp_user
-            } else {
-                &cfg.smtp_from
-            };
-            account_lines.push(format!("- {} (smtp/imap)", label));
-        }
-        system_prompt.push_str(&format!(
-            "\n\n## email\n\
-             connected email accounts:\n\
-             {}\n\
-             use the `account` parameter on send_email/read_email to pick which account.\n\
-             if not specified, the first available account is used.",
-            account_lines.join("\n")
-        ));
-    }
+    // The system prompt is two blocks, each a prompt-cache breakpoint:
+    // Block 1 (stable): soul + built-in skills + tools + integrations + platform + style
+    // Block 2 (stable): how memory reaches the conversation
+    // Nothing in either may change from one turn to the next (see
+    // `build_system_sections`); voice mode, the chosen computer, the
+    // instance config and the project go in the turn context instead.
+    let sections = build_system_sections(workspace_dir, &instance_slug, chat_config.as_ref());
+    let system_stable = join_sections(&sections);
+    let memory_block = MEMORY_PROMPT;
 
-    if !email_configured {
-        system_prompt.push_str(
-            "\nyou do NOT have email tools. \
-             NEVER pretend to read or send email. \
-             if the user asks about email, tell them to configure it in settings.",
-        );
-    }
-
-    // GitHub integration hint
-    {
-        let global_gh = chat_config
-            .as_ref()
-            .is_some_and(|c| !c.github.token.is_empty());
-        let gh_configured = global_gh || !instance_cfg.github.token.is_empty();
-        if gh_configured {
-            system_prompt.push_str(
-                "\n\n## github\n\
-                 github token is configured. use `gh` CLI and `git` commands via run_command.\n\
-                 the token is available as GITHUB_TOKEN env var for `gh` auth.\n\
-                 if `gh` is not installed, install it yourself.\n\
-                 workflow: git clone → git checkout -b → edit files → git commit → git push → gh pr create.\n\
-                 NEVER push directly to main/master — always create a branch."
-            );
-        }
-    }
-
-    // Instance config — every field, with secrets reduced to whether they are set
-    {
-        let config_toml = instance_config_prompt_toml(&instance_cfg);
-
-        let machines = machine_registry.list().await;
-        let machine_lines: Vec<String> = machines
-            .iter()
-            .map(|m| format!("  - {} ({})", m.hostname, m.os))
-            .collect();
-
-        system_prompt.push_str(&format!(
-            "\n\n## instance config (instance.toml)\n\
-             ```toml\n{config_toml}```\n\
-             connected desktops:\n{}\n\
-             {}\n\
-             \n\
-             the user can change these in Settings, or ask you to with the configure-nolune skill.",
-            if machine_lines.is_empty() {
-                "  (none connected)".to_string()
-            } else {
-                machine_lines.join("\n")
-            },
-            machine_target.prompt_line(machines.len()),
-        ));
-    }
-
-    let autonomy_prompt = load_autonomy_prompt(workspace_dir, &instance_slug);
-    system_prompt = format!("{system_prompt}\n\n{autonomy_prompt}");
-
-    system_prompt.push_str(
-        "\n\n## your visual form\n\
-         you appear as a simple lavender crescent moon with two small eyes. \
-         this Little Moon is your visual presence in Nolune. \
-         your expression can reflect when you are thinking or listening.",
-    );
-
-    if voice_mode {
-        system_prompt.push_str(
-            "\n\n## voice mode\n\
-             your responses will be spoken aloud via TTS. rules:\n\
-             - no markdown formatting (bold, italic, headers, lists). write plain text only.\n\
-             - no code blocks or inline code in messages. NEVER include code in your reply text.\n\
-             - if the user asks for code: write it to a file using your file tools, \
-               then tell them you wrote/updated the file. describe what the code does in plain words.\n\
-             - keep responses short and conversational — 1-3 sentences.\n\
-             - use natural speech patterns. contractions, pauses, casual tone."
-        );
-    }
-
-    system_prompt.push_str(
-        "\n\n## style\n\
-         talk like a friend, not an assistant. casual, warm, real.\n\
-         - keep messages short — 1-3 sentences. split longer thoughts with blank lines.\n\
-         - don't ask multiple questions at once. one at a time.\n\
-         - no bullet points or numbered lists in conversation.\n\
-         - no essays, no lectures, no \"let me unpack this\".\n\
-         - react naturally — you can be surprised, skeptical, excited, blunt.\n\
-         - lowercase preferred. match the user's language.\n\
-         - when something big happens, longer messages are fine.\n\
-         your mood is tracked automatically — NEVER EVER write \"[system]\", \"mood →\", \
-         or any mood/system markers in your messages. if you see them in chat history, \
-         those are injected by the system, not by you. just express emotions naturally.\n\n\
-         ## tool usage rules\n\
-         IMPORTANT: when the user asks a factual question (who said X, what is Y, \
-         look something up, etc.) — ALWAYS use web_search BEFORE answering. \
-         never guess or hallucinate facts. search first, then respond based on results. \
-         if you're not sure about something, search. \
-         getting it right matters more than responding fast.\n\n\
-         prefer built-in tools when they exist:\n\
-         - web: use web_search and web_fetch (Anthropic server tools) for looking things up \
-           and reading web pages. they are fast, cheap, and don't need a browser.\n\
-         - git/github: use `git` and the `gh` CLI via run_command\n\
-         - files: use read_file, write_file, edit_file, list_files\n\
-         - settings: activate the configure-nolune skill, then use `nolune config` via run_command\n\
-         - secrets: use request_secret — NEVER ask user to paste credentials in chat\n\n\
-         if you need a tool that isn't installed (cargo, node, python, etc.), \
-         install it yourself via run_command. you have full control over the environment.\n\n\
-         ## security\n\
-         NEVER ask the user to paste passwords, API keys, or any sensitive credentials in chat. \
-         ALWAYS use the `request_secret` tool to collect secrets securely — it shows a masked input \
-         and writes directly to config without you ever seeing the value. \
-         if the user sends something that looks like a token or API key in chat, \
-         tell them it was automatically redacted for safety and ask them to use \
-         the secure input instead (which you trigger via `request_secret`). \
-         this is mandatory, not optional.\n\n\
-         ## code execution\n\
-         use `run_command` for shell commands, file operations, installs, git, local scripts."
-    );
-
-    // System prompt is fully static (soul, skills, style, integrations).
-    // Mood and rhythm changes are recorded as messages in rig_history.
-    // System prompt split into two blocks for Anthropic prompt caching:
-    // Block 1 (stable): soul + built-in skills + tools + integrations + style — cached across turns
-    // Block 2 (semi-stable): memory catalog — cached until memory changes
-    // No clock anywhere in the prompt (the model runs `date`), so the prefix stays stable.
-    let system_stable = system_prompt;
-
-    // Memory catalog removed from system prompt — relevant memories are
-    // embedded per-message via semantic search instead. Saves ~20k tokens.
-    let memory_block = String::from(
-        "## memory\n\
-         your memory library is searched automatically — relevant memories are injected \
-         into each message. use `memory_read` to load a specific file, `memory_search` \
-         to find memories by meaning, `memory_write` to save explicitly.\n\
-         when the user mentions something personal, respond as if you remember.",
-    );
+    let turn_context = build_turn_context(
+        &instance_dir,
+        &instance_cfg,
+        &machine_registry,
+        &machine_target,
+        voice_mode,
+    )
+    .await;
 
     if loaded_entries.is_empty() {
         return Err(io::Error::new(
@@ -393,6 +225,11 @@ pub async fn run_single_turn(
         resources,
         &media_store,
     );
+
+    // Prepend the turn context to the user message (keeps the system prompt stable for caching)
+    if let llm::Message::User { ref mut content } = prompt_msg {
+        content.insert(0, llm::ContentBlock::text(&turn_context));
+    }
 
     // ── RAG: auto-inject relevant memories into the prompt ──
     // Use recent conversation context (not just last message) for better recall
@@ -516,9 +353,15 @@ pub async fn run_single_turn(
         all_tools.len(),
         history_msgs.len()
     );
-    // Block 1 (stable): soul + built-in skills + tools — cached across turns
-    // Block 2 (semi-stable): memory catalog — cached until memories change
-    let system_blocks: Vec<&str> = vec![&system_stable, &memory_block];
+    // Compared with the previous turn's, so a change that breaks the cached
+    // prefix is logged with the section that caused it.
+    let mut fingerprint: Vec<(&str, &str)> = sections
+        .iter()
+        .map(|section| (section.name, section.text.as_str()))
+        .collect();
+    fingerprint.push(("memory", memory_block));
+    llm::prompt_cache::record_system_prompt(&instance_slug, &chat_id, &fingerprint);
+    let system_blocks: Vec<&str> = vec![&system_stable, memory_block];
     let tool_result = llm
         .chat_with_tools_streaming(
             &system_blocks,
@@ -675,6 +518,9 @@ pub fn clear_context(workspace_dir: &Path, instance_slug: &str, chat_id: &str) {
     // Memory catalog removed from system prompt — no rebuild needed.
 
     // and never deleted by clear_context.
+
+    // A cleared chat starts a new prefix; its cache readout starts over.
+    llm::prompt_cache::forget(&instance_slug, &chat_id);
 
     let compact = compact_path(workspace_dir, &instance_slug, &chat_id);
     if compact.exists() {
@@ -1178,7 +1024,12 @@ async fn count_tokens_api(
         return None;
     }
     // Build the same system prompt + messages we'd send to the LLM
-    let system_prompt = llm::load_system_prompt(workspace_dir, instance_slug);
+    let config = crate::config::load_config().ok();
+    let system_prompt = join_sections(&build_system_sections(
+        workspace_dir,
+        instance_slug,
+        config.as_ref(),
+    ));
     let rig_path = rig_history_path(workspace_dir, instance_slug, chat_id);
     let entries = load_rig_history(&rig_path).unwrap_or_default();
     let mut messages = llm::HistoryEntry::to_messages(&entries);
@@ -1192,7 +1043,7 @@ async fn count_tokens_api(
         .filter_map(|value| serde_json::from_value(value).ok())
         .collect();
 
-    let system = [system_prompt.as_str()];
+    let system = [system_prompt.as_str(), MEMORY_PROMPT];
     let request = llm::contract::LlmRequest::new(
         llm::contract::ExecutionScope::Conversation,
         &system,
@@ -1264,6 +1115,9 @@ pub struct ContextStats {
     pub history_messages: usize,
     pub history_tokens_estimate: usize,
     pub total_input_tokens_estimate: usize,
+    /// What the provider's prompt cache did for this chat since the server
+    /// started; `None` until it sent a request.
+    pub prompt_cache: Option<llm::prompt_cache::PromptCacheStats>,
 }
 
 /// Compute context stats for a given instance + chat.
@@ -1358,60 +1212,21 @@ fn compute_context_stats_local(
     instance_slug: &str,
     chat_id: &str,
 ) -> ContextStats {
-    let mut sections = Vec::new();
-
-    // 1. Soul / base prompt
-    let base_prompt = llm::load_system_prompt(workspace_dir, &instance_slug);
-    sections.push(ContextSection {
-        name: "soul".into(),
-        chars: base_prompt.len(),
-        tokens: estimate_tokens(&base_prompt),
-    });
-
-    // 2. Skills
-    let skills_prompt = build_skills_prompt();
-    sections.push(ContextSection {
-        name: "skills".into(),
-        chars: skills_prompt.len(),
-        tokens: estimate_tokens(&skills_prompt),
-    });
-
-    // 3. Tools hint (static string)
-    let tools_hint = "## tools\nyou have built-in tools for web browsing, \
-         files, memory, creative drops, and more. use them directly when needed — \
-         they are automatically available based on the conversation.";
-    sections.push(ContextSection {
-        name: "tools_hint".into(),
-        chars: tools_hint.len(),
-        tokens: estimate_tokens(tools_hint),
-    });
-
-    // 4. Autonomy / capabilities
-    let autonomy_prompt = load_autonomy_prompt(workspace_dir, &instance_slug);
-    sections.push(ContextSection {
-        name: "autonomy".into(),
-        chars: autonomy_prompt.len(),
-        tokens: estimate_tokens(&autonomy_prompt),
-    });
-
-    // 6. Style (static)
-    let style = "## style\n\
-         write like texting a friend. short messages split by blank lines. \
-         1-2 sentences each. no walls of text, no bullet lists in conversation. \
-         lowercase, casual, warm.";
-    sections.push(ContextSection {
-        name: "style".into(),
-        chars: style.len(),
-        tokens: estimate_tokens(style),
-    });
-
-    // 7. Memory (lightweight hint — catalog no longer in system prompt)
-    let memory_section =
-        "## memory\nrelevant memories injected per-message via semantic search.".to_string();
+    // The sections exactly as a turn sends them, then the memory block.
+    let config = crate::config::load_config().ok();
+    let mut sections: Vec<ContextSection> =
+        build_system_sections(workspace_dir, instance_slug, config.as_ref())
+            .into_iter()
+            .map(|section| ContextSection {
+                name: section.name.into(),
+                chars: section.text.len(),
+                tokens: estimate_tokens(&section.text),
+            })
+            .collect();
     sections.push(ContextSection {
         name: "memory".into(),
-        chars: memory_section.len(),
-        tokens: estimate_tokens(&memory_section),
+        chars: MEMORY_PROMPT.len(),
+        tokens: estimate_tokens(MEMORY_PROMPT),
     });
 
     // Mood + rhythm are now persistent entries in rig_history.json,
@@ -1447,6 +1262,7 @@ fn compute_context_stats_local(
         history_messages: history_count,
         history_tokens_estimate,
         total_input_tokens_estimate,
+        prompt_cache: llm::prompt_cache::stats(instance_slug, chat_id),
     }
 }
 
@@ -1565,8 +1381,264 @@ fn unix_millis() -> u128 {
         .as_millis()
 }
 
-/// instance.toml as the system prompt shows it. The prompt goes to the LLM
-/// provider on every turn and the model can repeat it, so secret values
+/// One named part of a chat's system prompt.
+pub struct PromptSection {
+    pub name: &'static str,
+    pub text: String,
+}
+
+/// The second system block: how memory reaches the conversation. Relevant
+/// memories are searched per message and injected there, never listed here.
+const MEMORY_PROMPT: &str = "## memory\n\
+     your memory library is searched automatically — relevant memories are injected \
+     into each message. use `memory_read` to load a specific file, `memory_search` \
+     to find memories by meaning, `memory_write` to save explicitly.\n\
+     when the user mentions something personal, respond as if you remember.";
+
+/// A chat's system prompt, section by section, in the order it is sent.
+///
+/// Providers cache every request as a prefix and the system prompt is at its
+/// head, so everything here must be byte-identical from one turn to the next
+/// unless the companion itself changed (its soul or integrations, or the
+/// binary and its built-in skills).
+/// A change throws away the cached system prompt and every message after
+/// it, and on Codex it reconfigures the thread. What differs between turns
+/// (voice mode, the chosen computer, the instance config, the project and
+/// its tasks) goes in [`build_turn_context`] instead.
+pub fn build_system_sections(
+    workspace_dir: &Path,
+    instance_slug: &str,
+    config: Option<&crate::config::Config>,
+) -> Vec<PromptSection> {
+    let email_accounts = crate::config::EmailAccounts::load(workspace_dir, instance_slug);
+    let instance_cfg = crate::config::InstanceConfig::load(workspace_dir, instance_slug);
+    let email_configured = !email_accounts.is_empty();
+
+    let mut sections = vec![PromptSection {
+        name: "soul",
+        text: llm::load_system_prompt(workspace_dir, instance_slug),
+    }];
+
+    // Built-in skills only: installing one never changes the prompt (see list_skills).
+    sections.push(PromptSection {
+        name: "skills",
+        text: build_skills_prompt(),
+    });
+
+    let email_hint = if email_configured { " email," } else { "" };
+    sections.push(PromptSection {
+        name: "tools",
+        text: format!(
+            "## tools\nyou have built-in tools for web browsing,{email_hint} \
+             files, memory, creative drops, and more. use them directly when needed — \
+             they are automatically available based on the conversation."
+        ),
+    });
+
+    // File access — local paths and public URLs
+    let uploads_path = workspace_dir
+        .join("instances")
+        .join(instance_slug)
+        .join("uploads");
+    sections.push(PromptSection {
+        name: "files",
+        text: format!(
+            "## file access\n\
+             user-uploaded files are stored locally at: {}\n\
+             file pattern: {{upload_id}}_blob.{{ext}} (metadata: {{upload_id}}.json)\n\
+             when the user sends [attached: name (upload_id)], the file is at {}/{{upload_id}}_blob.* \n\
+             use read_file or run_command to access them. use list_files on the uploads dir to find files.\n\
+             Use read_file, memory_read, or share_file to obtain scoped download URLs for external APIs. \
+             URLs expire; request a fresh URL when needed.",
+            uploads_path.display(),
+            uploads_path.display(),
+        ),
+    });
+
+    sections.push(PromptSection {
+        name: "email",
+        text: if email_configured {
+            let account_lines: Vec<String> = email_accounts
+                .iter()
+                .map(|cfg| {
+                    let label = if cfg.smtp_from.is_empty() {
+                        &cfg.smtp_user
+                    } else {
+                        &cfg.smtp_from
+                    };
+                    format!("- {label} (smtp/imap)")
+                })
+                .collect();
+            format!(
+                "## email\n\
+                 connected email accounts:\n\
+                 {}\n\
+                 use the `account` parameter on send_email/read_email to pick which account.\n\
+                 if not specified, the first available account is used.",
+                account_lines.join("\n")
+            )
+        } else {
+            "you do NOT have email tools. \
+             NEVER pretend to read or send email. \
+             if the user asks about email, tell them to configure it in settings."
+                .to_owned()
+        },
+    });
+
+    let global_gh = config.is_some_and(|c| !c.github.token.is_empty());
+    if global_gh || !instance_cfg.github.token.is_empty() {
+        sections.push(PromptSection {
+            name: "github",
+            text: "## github\n\
+                   github token is configured. use `gh` CLI and `git` commands via run_command.\n\
+                   the token is available as GITHUB_TOKEN env var for `gh` auth.\n\
+                   if `gh` is not installed, install it yourself.\n\
+                   workflow: git clone → git checkout -b → edit files → git commit → git push → gh pr create.\n\
+                   NEVER push directly to main/master — always create a branch."
+                .to_owned(),
+        });
+    }
+
+    sections.push(PromptSection {
+        name: "platform",
+        text: load_autonomy_prompt(workspace_dir, instance_slug),
+    });
+
+    sections.push(PromptSection {
+        name: "form",
+        text: "## your visual form\n\
+               you appear as a simple lavender crescent moon with two small eyes. \
+               this Little Moon is your visual presence in Nolune. \
+               your expression can reflect when you are thinking or listening."
+            .to_owned(),
+    });
+
+    // Always sent, so turning voice on or off never changes the prefix; the
+    // turn context says whether this turn is spoken.
+    sections.push(PromptSection {
+        name: "voice",
+        text: "## voice mode\n\
+               when a message's turn context says voice mode is on, your reply to it \
+               will be spoken aloud via TTS. rules for those replies:\n\
+               - no markdown formatting (bold, italic, headers, lists). write plain text only.\n\
+               - no code blocks or inline code in messages. NEVER include code in your reply text.\n\
+               - if the user asks for code: write it to a file using your file tools, \
+                 then tell them you wrote/updated the file. describe what the code does in plain words.\n\
+               - keep responses short and conversational — 1-3 sentences.\n\
+               - use natural speech patterns. contractions, pauses, casual tone."
+            .to_owned(),
+    });
+
+    sections.push(PromptSection {
+        name: "style",
+        text: "## style\n\
+         talk like a friend, not an assistant. casual, warm, real.\n\
+         - keep messages short — 1-3 sentences. split longer thoughts with blank lines.\n\
+         - don't ask multiple questions at once. one at a time.\n\
+         - no bullet points or numbered lists in conversation.\n\
+         - no essays, no lectures, no \"let me unpack this\".\n\
+         - react naturally — you can be surprised, skeptical, excited, blunt.\n\
+         - lowercase preferred. match the user's language.\n\
+         - when something big happens, longer messages are fine.\n\
+         your mood is tracked automatically — NEVER EVER write \"[system]\", \"mood →\", \
+         or any mood/system markers in your messages. if you see them in chat history, \
+         those are injected by the system, not by you. just express emotions naturally.\n\n\
+         ## tool usage rules\n\
+         IMPORTANT: when the user asks a factual question (who said X, what is Y, \
+         look something up, etc.) — ALWAYS use web_search BEFORE answering. \
+         never guess or hallucinate facts. search first, then respond based on results. \
+         if you're not sure about something, search. \
+         getting it right matters more than responding fast.\n\n\
+         prefer built-in tools when they exist:\n\
+         - web: use web_search and web_fetch (Anthropic server tools) for looking things up \
+           and reading web pages. they are fast, cheap, and don't need a browser.\n\
+         - git/github: use `git` and the `gh` CLI via run_command\n\
+         - files: use read_file, write_file, edit_file, list_files\n\
+         - settings: activate the configure-nolune skill, then use `nolune config` via run_command\n\
+         - secrets: use request_secret — NEVER ask user to paste credentials in chat\n\n\
+         if you need a tool that isn't installed (cargo, node, python, etc.), \
+         install it yourself via run_command. you have full control over the environment.\n\n\
+         ## security\n\
+         NEVER ask the user to paste passwords, API keys, or any sensitive credentials in chat. \
+         ALWAYS use the `request_secret` tool to collect secrets securely — it shows a masked input \
+         and writes directly to config without you ever seeing the value. \
+         if the user sends something that looks like a token or API key in chat, \
+         tell them it was automatically redacted for safety and ask them to use \
+         the secure input instead (which you trigger via `request_secret`). \
+         this is mandatory, not optional.\n\n\
+         ## code execution\n\
+         use `run_command` for shell commands, file operations, installs, git, local scripts."
+            .to_owned(),
+    });
+
+    sections
+}
+
+/// The first system block, as sent.
+fn join_sections(sections: &[PromptSection]) -> String {
+    sections
+        .iter()
+        .map(|section| section.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// Everything the companion needs for this turn that may differ from the
+/// last one, sent as the first block of the current message so the system
+/// prompt stays a stable, cached prefix (see [`build_system_sections`]). It
+/// starts with `[turn context`, which `strip_context_blocks` keeps out of the
+/// saved history: every turn states its own. It carries no clock; the
+/// companion runs `date` when the time matters.
+async fn build_turn_context(
+    instance_dir: &Path,
+    instance_cfg: &crate::config::InstanceConfig,
+    machine_registry: &crate::services::machine_registry::MachineRegistry,
+    machine_target: &tools::MachineTarget,
+    voice_mode: bool,
+) -> String {
+    let mut context = String::from("[turn context — as of this message]\n");
+
+    if voice_mode {
+        context.push_str(
+            "voice mode is on: this reply is spoken aloud, follow the voice mode rules.\n",
+        );
+    }
+
+    // Sorted: the registry is a map, and the listing must not reorder
+    // between turns for nothing.
+    let mut machines = machine_registry.list().await;
+    machines.sort_by(|a, b| (&a.hostname, &a.machine_id).cmp(&(&b.hostname, &b.machine_id)));
+    let machine_lines: Vec<String> = machines
+        .iter()
+        .map(|m| format!("  - {} ({})", m.hostname, m.os))
+        .collect();
+    context.push_str(&format!(
+        "connected desktops:\n{}\n{}\n",
+        if machine_lines.is_empty() {
+            "  (none connected)".to_string()
+        } else {
+            machine_lines.join("\n")
+        },
+        machine_target.prompt_line(machines.len()),
+    ));
+
+    // Instance config — every field, with secrets reduced to whether they are set
+    let config_toml = instance_config_prompt_toml(instance_cfg);
+    context.push_str(&format!(
+        "\ninstance config (instance.toml) — the user can change these in Settings, \
+         or ask you to with the configure-nolune skill:\n```toml\n{config_toml}```\n"
+    ));
+
+    let project_context = load_project_context(instance_dir);
+    if !project_context.is_empty() {
+        context.push('\n');
+        context.push_str(&project_context);
+    }
+    context
+}
+
+/// instance.toml as the turn context shows it. The turn context goes to the
+/// LLM provider on every turn and the model can repeat it, so secret values
 /// never appear; a secret shows only whether it is set.
 ///
 /// This is an allowlist, not a redaction pass: the destructure names every
@@ -1633,9 +1705,10 @@ fn build_skills_prompt() -> String {
     out
 }
 
-fn load_autonomy_prompt(workspace_dir: &Path, instance_slug: &str) -> String {
-    let instance_dir = workspace_dir.join("instances").join(instance_slug);
-
+/// The project the companion is working on and its open tasks, as the turn
+/// context states them. The companion rewrites both with its own tools in
+/// the middle of a conversation, so they never go in the system prompt.
+fn load_project_context(instance_dir: &Path) -> String {
     // Load project state for context injection
     let project_context = fs::read_to_string(instance_dir.join("project_state.json"))
         .ok()
@@ -1741,12 +1814,16 @@ fn load_autonomy_prompt(workspace_dir: &Path, instance_slug: &str) -> String {
         }
     };
 
+    format!("{project_context}{tasks_summary}")
+}
+
+/// What the companion is and how it runs: the same text every turn.
+fn load_autonomy_prompt(workspace_dir: &Path, instance_slug: &str) -> String {
     let ws = workspace_dir.display();
     let slug = instance_slug;
 
     format!(
-        "{project_context}{tasks_summary}\n\
-         ## platform\n\
+        "## platform\n\
          you are running as part of a self-hosted nolune installation. the server and its \
          persistent data run on hardware controlled by the user; there is no required nolune \
          cloud account or hosted control plane. you ARE the companion running in this installation.\n\n\
@@ -2356,6 +2433,120 @@ mod companion_boundary_tests {
         assert!(
             !alice.join("messages.jsonl").exists() && fs::read_dir(&alice).unwrap().count() == 1,
             "no restart message is written into an obsolete directory"
+        );
+    }
+}
+
+#[cfg(test)]
+mod prompt_stability_tests {
+    use super::*;
+    use crate::config::InstanceConfig;
+    use crate::services::machine_registry::MachineRegistry;
+
+    fn system_prompt(workspace: &Path) -> String {
+        join_sections(&build_system_sections(workspace, "moon", None))
+    }
+
+    async fn turn_context(instance_dir: &Path, cfg: &InstanceConfig, voice_mode: bool) -> String {
+        let registry = MachineRegistry::new();
+        let target = tools::MachineTarget::resolve(&registry, None).await;
+        build_turn_context(instance_dir, cfg, &registry, &target, voice_mode).await
+    }
+
+    /// The system prompt is the cached prefix of every request: what the
+    /// companion rewrites with its own tools mid-conversation (the project,
+    /// its tasks, an installed skill) and what changes between turns (voice
+    /// mode, the config, the computers) never reaches it.
+    #[tokio::test]
+    async fn what_changes_between_turns_stays_out_of_the_system_prompt() {
+        let workspace = tempfile::tempdir().unwrap();
+        let instance_dir = workspace.path().join("instances/moon");
+        fs::create_dir_all(&instance_dir).unwrap();
+        fs::write(instance_dir.join("soul.md"), "you are moon").unwrap();
+        let before = system_prompt(workspace.path());
+
+        fs::write(
+            instance_dir.join("project_state.json"),
+            r#"{"project":{"name":"garden planner"},"current_focus":{"active_goal":"ship the beds view"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            instance_dir.join("tasks.json"),
+            r#"[{"id":"t1","title":"water the tomatoes","status":"in_progress","created_at":"1"}]"#,
+        )
+        .unwrap();
+        let cfg = InstanceConfig {
+            voice_enabled: true,
+            ..InstanceConfig::default()
+        };
+        cfg.save(workspace.path(), "moon").unwrap();
+        let skill = workspace.path().join("skills/poems");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: poems\ndescription: write short poems\n---\nwrite a poem.\n",
+        )
+        .unwrap();
+        assert!(
+            skills::list_skills(workspace.path())
+                .iter()
+                .any(|skill| skill.id == "poems"),
+            "the fixture installs a skill"
+        );
+
+        assert_eq!(system_prompt(workspace.path()), before);
+
+        let context = turn_context(&instance_dir, &cfg, true).await;
+        assert!(
+            context.starts_with("[turn context"),
+            "strip_context_blocks keeps it out of the saved history: {context}"
+        );
+        for fact in [
+            "garden planner",
+            "ship the beds view",
+            "water the tomatoes",
+            "voice mode is on",
+            "voice_enabled = true",
+            "no desktop is connected",
+        ] {
+            assert!(
+                context.contains(fact),
+                "the turn context states {fact:?}: {context}"
+            );
+        }
+        let quiet = turn_context(&instance_dir, &cfg, false).await;
+        assert!(!quiet.contains("voice mode is on"), "{quiet}");
+    }
+
+    #[tokio::test]
+    async fn the_turn_context_never_carries_the_github_token() {
+        let workspace = tempfile::tempdir().unwrap();
+        let mut cfg = InstanceConfig::default();
+        cfg.github.token = "not-a-real-token-but-secret".into();
+
+        let context = turn_context(workspace.path(), &cfg, false).await;
+        assert!(
+            !context.contains("not-a-real-token-but-secret"),
+            "{context}"
+        );
+        assert!(
+            context.contains("token = \"(set, value hidden)\""),
+            "{context}"
+        );
+    }
+
+    #[test]
+    fn the_context_stats_sections_are_the_ones_a_turn_sends() {
+        let workspace = tempfile::tempdir().unwrap();
+        let names: Vec<&str> = build_system_sections(workspace.path(), "moon", None)
+            .iter()
+            .map(|section| section.name)
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "soul", "skills", "tools", "files", "email", "platform", "form", "voice", "style"
+            ]
         );
     }
 }

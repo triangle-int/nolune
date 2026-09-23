@@ -464,6 +464,12 @@ pub(crate) async fn stream_once(
                 usage.cost
             );
             super::helpers::cache_real_input_tokens(instance_slug, chat_id, usage.input_tokens);
+            let cache = super::prompt_cache::record_request(instance_slug, chat_id, &usage);
+            let _ = events.send(ServerEvent::PromptCacheUpdated {
+                instance_slug: instance_slug.into(),
+                chat_id: chat_id.into(),
+                cache,
+            });
         }
     };
     let mut request = LlmRequest::new(scope, system, messages, tool_defs);

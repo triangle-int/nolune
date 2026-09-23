@@ -1,18 +1,30 @@
 <script lang="ts">
 	import { fetchContextStats } from "$lib/api/client.js";
-	import type { ContextStats } from "$lib/api/types.js";
+	import type { ContextStats, PromptCacheStats } from "$lib/api/types.js";
+	import {
+		cacheSegments,
+		hitPercent,
+		lastRequestSentence,
+		recentRequestLabel,
+		sessionSentence,
+		systemPromptStatus,
+	} from "$lib/chat/prompt-cache.js";
 
 	interface Props {
 		slug: string;
 		chatId: string;
+		/** The readout from the latest `prompt_cache_updated`, newer than the fetched one while the panel is open. */
+		liveCache?: PromptCacheStats | null;
 		onclose: () => void;
 	}
 
-	let { slug, chatId, onclose }: Props = $props();
+	let { slug, chatId, liveCache = null, onclose }: Props = $props();
 
 	let stats = $state<ContextStats | null>(null);
 	let error = $state("");
 	let loading = $state(true);
+	const cache = $derived(liveCache ?? stats?.prompt_cache ?? null);
+	const promptStatus = $derived(systemPromptStatus(cache));
 
 	$effect(() => {
 		loading = true;
@@ -65,6 +77,41 @@
 				<span class="total-label">total input estimate</span>
 				<span class="total-value">{fmt(stats.total_input_tokens_estimate)} tokens</span>
 			</div>
+
+			<!-- prompt cache: how much of each request the provider read back -->
+			<div class="section-header">
+				<span>prompt cache</span>
+				{#if cache?.last}
+					<span class="section-total">{hitPercent(cache.last)}% last request</span>
+				{/if}
+			</div>
+			<p class="cache-line">{lastRequestSentence(cache)}</p>
+			{#if cache?.last}
+				{@const segments = cacheSegments(cache.last)}
+				<div class="comp-bar" aria-hidden="true">
+					{#each segments as segment (segment.kind)}
+						<div class="comp-fill cache-{segment.kind}" style="width: {segment.percent}%"></div>
+					{/each}
+				</div>
+				<div class="comp-legend">
+					{#each segments as segment (segment.kind)}
+						<span class="legend-item"><span class="dot cache-{segment.kind}"></span>{segment.label} {fmt(segment.tokens)}</span>
+					{/each}
+				</div>
+				<div class="cache-recent" role="list" aria-label="Latest requests, oldest first">
+					{#each cache.recent as reading, i (i)}
+						<span
+							class="cache-tick"
+							class:cache-tick-miss={reading.cache_read_tokens === 0}
+							role="listitem"
+							title={recentRequestLabel(reading, i)}
+							aria-label={recentRequestLabel(reading, i)}
+						><span class="cache-tick-fill" style="height: {hitPercent(reading)}%"></span></span>
+					{/each}
+				</div>
+				<p class="cache-line">{sessionSentence(cache)}</p>
+			{/if}
+			<p class="cache-line" class:cache-changed={promptStatus.changed}>{promptStatus.text}</p>
 
 			<!-- system prompt breakdown -->
 			<div class="section-header">
@@ -360,5 +407,14 @@
  .error-msg {color:var(--destructive)}
  .comp-legend {flex-wrap:wrap}
  .total-value,.bar-value,.tool-tag {font-family:var(--font-mono)}
+ .cache-line {margin:0 0 8px;font:400 13px/1.5 var(--font-body);color:var(--text-secondary)}
+ .cache-changed {color:var(--destructive)}
+ .cache-read {background:var(--primary)}
+ .cache-write {background:var(--text-secondary)}
+ .cache-uncached {background:var(--input)}
+ .cache-recent {display:flex;align-items:flex-end;gap:3px;height:24px;margin:12px 0 8px}
+ .cache-tick {position:relative;display:flex;align-items:flex-end;width:8px;height:100%;border-radius:2px;background:var(--secondary);overflow:hidden}
+ .cache-tick-miss {box-shadow:inset 0 0 0 1px var(--input)}
+ .cache-tick-fill {width:100%;background:var(--primary)}
 
 </style>

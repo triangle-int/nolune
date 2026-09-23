@@ -397,6 +397,35 @@ export interface ContextStats {
 	history_messages: number;
 	history_tokens_estimate: number;
 	total_input_tokens_estimate: number;
+	/** What the provider's prompt cache did for this chat since the server started; null until it sent a request. */
+	prompt_cache: PromptCacheStats | null;
+}
+
+/** One request's input as the provider accounted for it. */
+export interface PromptCacheReading {
+	/** Every input token, read from the cache or not. */
+	input_tokens: number;
+	cache_read_tokens: number;
+	cache_write_tokens: number;
+	output_tokens: number;
+}
+
+/** A chat's prompt-cache readout (`prompt_cache_updated`, `ContextStats.prompt_cache`). */
+export interface PromptCacheStats {
+	last: PromptCacheReading | null;
+	/** Summed over every request since the server started. */
+	total: PromptCacheReading;
+	requests: number;
+	/** Requests that read anything from the cache. */
+	hits: number;
+	/** The latest requests, oldest first. */
+	recent: PromptCacheReading[];
+	system_prompt: {
+		turns: number;
+		/** Turns whose system prompt differed from the turn before: each one breaks the cached prefix. */
+		changes: number;
+		last_changed_sections: string[];
+	};
 }
 
 /** User-set flags on a text memory (#84); a media memory carries none. */
@@ -621,6 +650,13 @@ export type ServerEvent =
 			instance_slug: string;
 			chat_id: string;
 			messages_compacted: number;
+	  }
+	| {
+			/** A chat request came back: how much of its input came from the prompt cache. */
+			type: "prompt_cache_updated";
+			instance_slug: string;
+			chat_id: string;
+			cache: PromptCacheStats;
 	  }
 	| {
 			type: "chat_stream_delta";

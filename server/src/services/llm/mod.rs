@@ -10,6 +10,7 @@ pub mod contract;
 mod helpers;
 mod openai;
 mod openrouter;
+pub mod prompt_cache;
 mod types;
 
 use std::path::Path;
