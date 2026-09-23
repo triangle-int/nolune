@@ -182,6 +182,43 @@ pub fn answers(log: &Path) -> Vec<(Value, Result<Value, Value>)> {
         .collect()
 }
 
+/// Write `script` to `path` as an executable stand-in for `codex` itself,
+/// the binary discovery asks for `--version`, and run it once before
+/// returning so the probe's deadline only ever times the script. macOS
+/// scans a freshly written executable on its first run and those scans
+/// queue machine-wide: with other suites writing executables at the same
+/// time, one first run has outlasted the whole `--version` deadline. On
+/// Linux a child another test forked while the script was still open for
+/// writing holds that descriptor until it execs, and running the script
+/// meanwhile fails with ETXTBSY; the warm-up waits that window out.
+pub fn codex_script(path: &Path, script: &str) {
+    std::fs::write(path, script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let warm_up = std::process::Command::new(path)
+            .arg("--version")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        match warm_up {
+            Ok(_) => return,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && std::time::Instant::now() < deadline =>
+            {
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) => panic!("{}: {error}", path.display()),
+        }
+    }
+}
+
 /// The test that is the fake: a no-op in a normal run, the server when
 /// [`FIXTURE_ENV`] is set. It never returns in that case.
 #[test]

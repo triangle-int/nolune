@@ -183,22 +183,18 @@ pub async fn discover() -> Result<LocatedBinary, AppServerError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::llm::codex::fake;
     use std::fs;
 
     /// An executable script named `name` under `dir` that prints `version`
     /// for `--version`, or fails when `version` is `None`.
     fn fake_binary(dir: &Path, name: &str, version: Option<&str>) -> PathBuf {
         let path = dir.join(name);
-        let body = match version {
+        let script = match version {
             Some(version) => format!("#!/bin/sh\necho 'codex-cli {version}'\n"),
             None => "#!/bin/sh\necho 'no such command' >&2\nexit 2\n".to_owned(),
         };
-        fs::write(&path, body).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        fake::codex_script(&path, &script);
         path
     }
 
@@ -325,10 +321,10 @@ mod tests {
         })
         .await
         .unwrap_err();
-        assert!(matches!(
-            error,
-            AppServerError::Incompatible { found, .. } if found == "9.0.0"
-        ));
+        assert!(
+            matches!(&error, AppServerError::Incompatible { found, .. } if found == "9.0.0"),
+            "{error:?}"
+        );
     }
 
     #[cfg(unix)]
@@ -350,11 +346,7 @@ mod tests {
         // Output in another format is unusable too, not "version unknown".
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(CODEX_BINARY);
-        fs::write(&path, "#!/bin/sh\necho 'something else entirely'\n").unwrap();
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        fake::codex_script(&path, "#!/bin/sh\necho 'something else entirely'\n");
         let error = reported_version(&path).await.unwrap_err();
         assert!(
             matches!(&error, AppServerError::Unusable { reason, .. } if reason.contains("something else entirely")),
