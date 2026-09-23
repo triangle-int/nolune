@@ -102,7 +102,7 @@ fn unreachable_legacy_clusters_media_and_placeholder_packaging_are_gone() {
         "landing/src/lib/components/Install.svelte",
         "landing/static/assets/favicon.svg",
         "landing/static/apple-touch-icon.png",
-        "client/src/lib/components/SharedScene.svelte",
+        "client/src/lib/components/companion/CompanionPresence.svelte",
     ] {
         if !repo.join(required).exists() {
             violations.push(format!("missing: {required}"));

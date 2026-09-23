@@ -22,6 +22,7 @@
 	import ConnectedComputers from "$lib/components/computers/ConnectedComputers.svelte";
 	import Companions from "$lib/components/federation/Companions.svelte";
 	import CodexLogin from "$lib/components/settings/CodexLogin.svelte";
+	import SettingSelect from "$lib/components/settings/SettingSelect.svelte";
 	import { PROVIDERS, capabilityWarnings, modelHints, modelPlaceholder, presetCapabilities, presetTestCopy, suggestPresetId, validatePresets } from "$lib/models/presets.js";
 
 	// Connections (#98): what this server talks to. The provider and keys are
@@ -161,6 +162,8 @@
 		const chips = warningsFor(preset).map((w) => w.chip).join(", ");
 		return `${preset.name || "(unnamed)"} · ${preset.model || "no model"}${chips ? ` — ${chips}` : ""}`;
 	}
+	const presetOptions = $derived(draft.presets.map((preset) => ({ value: preset.id, label: optionLabel(preset) })));
+	const PROVIDER_OPTIONS = PROVIDERS.map((provider) => ({ value: provider.id, label: provider.label }));
 
 	async function runTest(preset: ModelPreset) {
 		if (testingId) return;
@@ -317,11 +320,7 @@
 		{#if draft.presets.length > 0}
 			<div class="setting-row">
 				<label class="setting-label" for="chat-preset-slot">Chat</label>
-				<select id="chat-preset-slot" class="setting-input" bind:value={draft.chat_preset} disabled={modelsSaving}>
-					{#each draft.presets as preset (preset.id)}
-						<option value={preset.id}>{optionLabel(preset)}</option>
-					{/each}
-				</select>
+				<SettingSelect id="chat-preset-slot" bind:value={draft.chat_preset} disabled={modelsSaving} options={presetOptions} />
 				<p class="setting-hint">Used for conversations unless a chat picks another preset.</p>
 				{#each slotWarnings(draft.chat_preset) as warning (warning.id)}
 					<p class="setting-hint setting-warning" role="status">{warning.detail}</p>
@@ -329,11 +328,7 @@
 			</div>
 			<div class="setting-row">
 				<label class="setting-label" for="background-preset-slot">Background</label>
-				<select id="background-preset-slot" class="setting-input" bind:value={draft.background_preset} disabled={modelsSaving}>
-					{#each draft.presets as preset (preset.id)}
-						<option value={preset.id}>{optionLabel(preset)}</option>
-					{/each}
-				</select>
+				<SettingSelect id="background-preset-slot" bind:value={draft.background_preset} disabled={modelsSaving} options={presetOptions} />
 				<p class="setting-hint">Memory extraction, chat titles, check-ins, and reflection. Never the chat preset unless you choose it here.</p>
 				{#each slotWarnings(draft.background_preset) as warning (warning.id)}
 					<p class="setting-hint setting-warning" role="status">{warning.detail}</p>
@@ -353,7 +348,7 @@
 						{@const result = testResults[preset.id]}
 						<li class="preset-row">
 							<label class="preset-field">Name<input class="ext-input" type="text" placeholder="Claude Sonnet" value={preset.name} oninput={(e) => renamePreset(index, (e.currentTarget as HTMLInputElement).value)} disabled={modelsSaving} /></label>
-							<label class="preset-field">Provider<select class="setting-input" bind:value={preset.provider} disabled={modelsSaving}>{#each PROVIDERS as provider (provider.id)}<option value={provider.id}>{provider.label}</option>{/each}</select></label>
+							<div class="preset-field"><span id={`preset-provider-${index}`}>Provider</span><SettingSelect aria-labelledby={`preset-provider-${index}`} bind:value={preset.provider} disabled={modelsSaving} options={PROVIDER_OPTIONS} /></div>
 							<label class="preset-field preset-field-model">Model id<input class="ext-input" type="text" placeholder={modelPlaceholder(preset.provider)} list={modelHints(preset.provider).length ? `models-${preset.provider}` : undefined} bind:value={preset.model} disabled={modelsSaving} spellcheck="false" /></label>
 							<button class="setting-btn setting-btn-danger preset-remove" onclick={() => removePreset(index)} disabled={modelsSaving} title={inUse ? "In use by a slot; the slot moves to the first preset" : "Remove preset"}>Remove</button>
 							<div class="preset-foot">

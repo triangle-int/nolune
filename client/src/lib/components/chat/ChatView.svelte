@@ -12,6 +12,7 @@
 	import PresentationOverlay from "./PresentationOverlay.svelte";
 	import { getPresentationState } from "$lib/stores/presentation.svelte.js";
 	import CreatureBubble from "./CreatureBubble.svelte";
+	import CompanionPresence from "$lib/components/companion/CompanionPresence.svelte";
 	import StreamActivity from "./StreamActivity.svelte";
 	import ContextStats from "./ContextStats.svelte";
 import McpAppViewer from "./McpAppViewer.svelte";
@@ -113,20 +114,16 @@ import McpAppViewer from "./McpAppViewer.svelte";
 		streamingMessageId = "";
 	}
 
-	// ── Sync state to shared 3D scene ──
-	// Keep mood/voice synced to scene store. What the companion is doing
-	// (thinking, working, blocked…) reaches the scene through the reducer,
+	// ── Companion state ──
+	// What the companion is doing (thinking, working, blocked…) reaches the
+	// scene store through the reducer,
 	// fed by the root layout from the websocket; this view adds the persisted
 	// `agent_running` of each snapshot it loads (initial load, reconnect,
 	// resync), so a run the socket missed still shows and one that ended
 	// while away is over without being claimed. The `chat_snapshot` the server
 	// broadcasts is not loaded state: it precedes `agent_stopped` in the stop
 	// sequence, which the layout already feeds, so it is not fed here.
-	$effect(() => { scene.setMood(mood); });
-	$effect(() => { scene.setVoiceAmplitude(voice.amplitude); });
 	$effect(() => { if (companionName) scene.setCompanionName(companionName); });
-	// Sync presentation mode to scene (camera targets blob)
-	$effect(() => { scene.presenting = presentation.active; });
 
 	const ws = getWebSocket();
 	let hadConnection = false;
@@ -188,6 +185,17 @@ import McpAppViewer from "./McpAppViewer.svelte";
 	function scrollToBottomIfNear() {
 		if (!userScrolledUp) scrollToBottom();
 	}
+
+	// Late growth (receipt panels, rendered markdown, images, the moon's status
+	// and memories) or a taller composer keeps the bottom of the conversation in view.
+	$effect(() => {
+		const content = scrollContainer?.firstElementChild;
+		if (!scrollContainer || !content || typeof ResizeObserver === "undefined") return;
+		const observer = new ResizeObserver(() => scrollToBottomIfNear());
+		observer.observe(content);
+		observer.observe(scrollContainer);
+		return () => observer.disconnect();
+	});
 
 	function now() {
 		return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -376,6 +384,8 @@ import McpAppViewer from "./McpAppViewer.svelte";
 			const list = await fetchMemoryReceipts(currentSlug, currentChat);
 			if (currentSlug !== slug || currentChat !== chatId) return;
 			receipts = receiptsByMessage(list, currentChat);
+			// Receipt panels grow the last turn; keep the moon under it in view.
+			scrollToBottomIfNear();
 		} catch {
 			// Receipts are additive: a failed read leaves the bubbles without a panel.
 		}
@@ -763,7 +773,7 @@ import McpAppViewer from "./McpAppViewer.svelte";
 	/>
 {:else}
 
-<div class="chat-space" class:chat-active={sending || agentRunning} class:chat-intro-playing={scene.mode !== "chat"}>
+<div class="chat-space" class:chat-active={sending || agentRunning}>
 
 	<header class="chat-bar">
 		<div class="bar-left">
@@ -871,37 +881,16 @@ import McpAppViewer from "./McpAppViewer.svelte";
 						{/each}
 					{/if}
 
-					{#if sending || agentRunning}
-						<div class="chat-thinking" role="status" aria-label="Nolune is thinking">
-							<div class="think-dot" style="animation-delay: 0ms"></div>
-							<div class="think-dot" style="animation-delay: 200ms"></div>
-							<div class="think-dot" style="animation-delay: 400ms"></div>
-						</div>
+					{#if !loading && !historyError}
+						<!-- The only moon in the chat: under the last message, with what the companion is doing in words. -->
+						<CompanionPresence state={scene.companion} name={companionName || scene.companionName} {slug} memories={scene.recalledMemories} />
 					{/if}
 				</ConversationContent>
 			</Conversation>
 
 			<ChatInput {slug} chatId={activeChatId} onSend={handleSend} onStop={handleStop} onTargetChange={(target) => (chatTarget = target)} disabled={sending || agentRunning} {agentRunning} {uploadProgress} />
 		</div>
-
-		<aside class="chat-sidebar">
-			<div class="sidebar-banners">
-
-			</div>
-		</aside>
 	</div>
-
-	<!-- Intro overlay UI (skip + name) -->
-	{#if scene.mode === "intro" || scene.mode === "selecting"}
-		<div class="intro-overlay-ui">
-			{#if scene.introPhase === "settling"}
-				<div class="intro-name">{slug}</div>
-			{/if}
-			{#if scene.mode === "intro"}
-				<button class="intro-skip" onclick={() => scene.skipIntro()}>skip</button>
-			{/if}
-		</div>
-	{/if}
 </div>
 
 {#if showContextStats}
@@ -920,61 +909,6 @@ import McpAppViewer from "./McpAppViewer.svelte";
 		max-width: 100%;
 		overflow: hidden;
 	}
-
-	/* --- Intro: hide all chat UI until scene is in chat mode --- */
-	.chat-intro-playing > * {
-		opacity: 0;
-		pointer-events: none;
-		transition: opacity 0.35s ease;
-	}
-	.chat-space:not(.chat-intro-playing) > * {
-		opacity: 1;
-		transition: opacity 0.35s ease;
-	}
-
-	/* --- Intro overlay UI --- */
-	.intro-overlay-ui {
-		position: absolute;
-		inset: 0;
-		z-index: 20;
-		pointer-events: none;
-	}
-	.intro-name {
-		position: absolute;
-		bottom: 38%;
-		left: 50%;
-		transform: translateX(-50%);
-		font-family: var(--font-display);
-		font-size: clamp(1.5rem, 4vw, 2.5rem);
-		font-weight: 300;
-		font-style: normal;
-		letter-spacing: 0.06em;
-		color: var(--text-secondary);
-		white-space: nowrap;
-		animation: intro-name-in 1s cubic-bezier(0.16, 1, 0.3, 1) both;
-	}
-	@keyframes intro-name-in {
-		from { opacity: 0; transform: translateX(-50%) translateY(10px); }
-		to { opacity: 1; transform: translateX(-50%) translateY(0); }
-	}
-	.intro-skip {
-		position: absolute;
-		bottom: calc(2rem + env(safe-area-inset-bottom, 0px));
-		right: 2rem;
-		pointer-events: auto;
-		padding: 0.4rem 1rem;
-		border-radius: 2rem;
-		background: var(--card);
-
-		border: 1px solid var(--border);
-		color: var(--text-secondary);
-		font-family: var(--font-body);
-		font-size: 0.8125rem;
-		letter-spacing: 0.08em;
-		cursor: pointer;
-		transition: all 0.3s ease;
-	}
-	.intro-skip:hover { background: var(--card); color: var(--text-secondary); }
 
 	/* --- Perimeter ambient glow (Siri-style) --- */
 	.chat-space::before {
@@ -1113,37 +1047,16 @@ import McpAppViewer from "./McpAppViewer.svelte";
 		flex: 1;
 		min-height: 0;
 		min-width: 0;
-		display: grid;
-		grid-template-columns: 1fr 1fr;
+		display: flex;
+		flex-direction: column;
 	}
 
 	.chat-main {
 		display: flex;
 		flex-direction: column;
+		flex: 1;
 		min-height: 0;
 		min-width: 0;
-		border-right: 1px solid var(--border);
-	}
-
-	.chat-sidebar {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: center;
-		padding: 1rem;
-		gap: 1rem;
-		overflow: hidden;
-		position: relative;
-
-	}
-
-	.sidebar-banners {
-		width: 100%;
-		max-width: 220px;
-		display: flex;
-		flex-direction: column;
-		gap: 0.5rem;
-		z-index: 2;
 	}
 
 
@@ -1203,29 +1116,6 @@ import McpAppViewer from "./McpAppViewer.svelte";
 		to { opacity: 1; transform: translateY(0); }
 	}
 
-	.chat-thinking {
-		display: flex;
-		gap: 0.4rem;
-		padding: 0.8rem 0;
-		justify-content: flex-end;
-		align-self: flex-end;
-		animation: fade-up 0.3s ease both;
-	}
-
-	.think-dot {
-		width: 4px;
-		height: 4px;
-		border-radius: 50%;
-		background: var(--card);
-		box-shadow: none;
-		animation: bounce 1.4s ease-in-out infinite;
-	}
-
-	@keyframes bounce {
-		0%, 60%, 100% { transform: translateY(0); opacity: 0.25; }
-		30% { transform: translateY(-5px); opacity: 1; }
-	}
-
 	/* --- compaction notice --- */
 
 	.compaction-notice {
@@ -1259,18 +1149,6 @@ import McpAppViewer from "./McpAppViewer.svelte";
 	}
 
 	/* --- responsive --- */
-
-	@media (max-width: 900px) {
-		.chat-columns {
-			grid-template-columns: 1fr;
-		}
-		.chat-sidebar {
-			display: none;
-		}
-		.chat-main {
-			border-right: none;
-		}
-	}
 
 	@media (max-width: 720px) {
 		header.chat-bar {
@@ -1350,17 +1228,14 @@ import McpAppViewer from "./McpAppViewer.svelte";
 :global(.dark) .chat-space::before{display:none}:global(.dark) header.chat-bar{padding:12px 20px;background:var(--surface-tab);border-bottom:1px solid var(--border)}:global(.dark) .bar-left{font:400 13px var(--font-body);color:var(--text-secondary)}
 
 
- .intro-name {font-style:normal;letter-spacing:-.025em;color:var(--foreground)}
- .intro-skip {min-height:44px;background:var(--card);color:var(--foreground);border-radius:8px;font-size:14px}
  .bar-led {background:var(--text-muted);width:6px;height:6px}
- .bar-led-on,.bar-activity-dot,.loading-dot,.think-dot {background:var(--primary)}
+ .bar-led-on,.bar-activity-dot,.loading-dot {background:var(--primary)}
  .bar-mood[data-mood],.bar-activity {color:var(--text-muted);font-size:12px;letter-spacing:0}
  .bar-btn {width:44px;height:44px;border-radius:8px;flex-shrink:0}
  .bar-btn-active {color:var(--primary);background:var(--accent)}
  .bar-btn:hover {background:var(--accent)}
  .chat-empty p {font:400 18px var(--font-body);line-height:1.6}
  .chat-empty {padding:48px 24px;text-align:center}
- .sidebar-banners {max-width:320px}
  .compaction-notice {background:var(--card);border:1px solid var(--border);border-radius:12px}
  :global(.clear-dialog-title) {font-size:18px;color:var(--foreground);letter-spacing:0}
  :global(.clear-dialog-desc) {font-size:14px;color:var(--text-secondary)}
