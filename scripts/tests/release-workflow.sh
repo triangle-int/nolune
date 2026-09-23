@@ -85,6 +85,68 @@ run publish lookup_error failure
 run publish publish_error failure
 [[ $(wc -l < "$CALLS") -eq 2 ]]
 
+# ── nightly: the rolling prerelease .github/workflows/nightly.yml refreshes ──
+# Its own gh mock: the release lists one current asset and one left over from a
+# renamed target.
+mkdir -p "$tmp/nightly-bin" "$tmp/dist"
+touch "$tmp/dist/nolune-server-x86_64-unknown-linux-gnu" "$tmp/dist/nolune-server-aarch64-apple-darwin"
+cat > "$tmp/nightly-bin/gh" <<'MOCK'
+#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >> "$CALLS"
+case "$1 $2" in
+  'release view')
+    case "$SCENARIO" in
+      existing|tag_error) printf 'nolune-server-x86_64-unknown-linux-gnu\nnolune-server-retired-target\n' ;;
+      absent) echo 'release not found' >&2; exit 1 ;;
+      *) echo 'network unavailable' >&2; exit 1 ;;
+    esac ;;
+  'api --method') [[ "$SCENARIO" != tag_error ]] ;;
+  'release upload'|'release delete-asset'|'release edit'|'release create') ;;
+  *) exit 99 ;;
+esac
+MOCK
+chmod +x "$tmp/nightly-bin/gh"
+nightly() {
+  local status=0
+  export SCENARIO=$1
+  : > "$CALLS"
+  PATH="$tmp/nightly-bin:$PATH" SHA=0123456789abcdef0123456789abcdef01234567 \
+    bash "$root/scripts/release-workflow.sh" nightly "$tmp/dist" > "$tmp/log" 2>&1 || status=$?
+  [[ "$2" == success && $status -eq 0 ]] || [[ "$2" == failure && $status -ne 0 ]] ||
+    { cat "$tmp/log" >&2; echo "FAIL: nightly $1 ($status)" >&2; exit 1; }
+}
+notes="--notes Auto-built from main (0123456) --prerelease --latest=false"
+
+nightly existing success
+# Binaries go up before the body names the new commit; the stale asset goes.
+upload=$(grep -n '^release upload nightly ' "$CALLS" | cut -d: -f1)
+edit=$(grep -n '^release edit nightly ' "$CALLS" | cut -d: -f1)
+[[ -n "$upload" && -n "$edit" && $upload -lt $edit ]]
+grep -Fq -- '--clobber' "$CALLS"
+grep -Fq -- "$notes" "$CALLS"
+[[ $(grep -c '^release delete-asset ' "$CALLS") -eq 1 ]]
+grep -Fxq 'release delete-asset nightly nolune-server-retired-target --repo triangle-int/nolune --yes' "$CALLS"
+grep -Fxq 'api --method PATCH repos/triangle-int/nolune/git/refs/tags/nightly -f sha=0123456789abcdef0123456789abcdef01234567 -F force=true' "$CALLS"
+
+# A tag that cannot move only warns; the release already serves the build.
+nightly tag_error success
+grep -Fq '::warning::' "$tmp/log"
+
+nightly absent success
+[[ $(grep -c '^release create nightly ' "$CALLS") -eq 1 ]]
+grep -Fq -- '--target 0123456789abcdef0123456789abcdef01234567' "$CALLS"
+grep -Fq -- "$notes" "$CALLS"
+
+nightly lookup_error failure
+if grep -Eq '^release (upload|create|edit)' "$CALLS"; then
+  echo 'FAIL: nightly lookup error still published' >&2
+  exit 1
+fi
+
+# The body format is the contract the server's update check parses.
+grep -Fq '"Auto-built from main (abc1234)"' "$root/server/src/routes/update.rs"
+
 # ── scripts/cua-driver.sh: the pinned Cua Driver fetch the desktop job runs (#20) ──
 # curl is a mock that copies a local file; the pin file under test carries the
 # digest of that file, so a matching download passes and a tampered one fails
