@@ -251,6 +251,10 @@ The script delegates to `nolune uninstall --keep-data` or `nolune uninstall --ye
 
 See the [Nolune launch cutover checklist](docs/nolune-cutover.md) for repository, domain, and release setup.
 
+`./scripts/dev.sh` runs the server and the web client together with hot reload,
+against a throwaway workspace; see [CONTRIBUTING.md](CONTRIBUTING.md#quick-start).
+To run each piece by hand:
+
 ```bash
 # Server
 cd server && cargo run

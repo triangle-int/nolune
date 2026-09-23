@@ -6,3 +6,6 @@ target/
 
 .DS_Store
 .env.test_token
+
+.dev/
+.env
