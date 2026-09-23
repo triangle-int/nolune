@@ -1,10 +1,42 @@
 //! Shared, replaceable capability authority. Cloned producers observe rotations.
 use super::resource_capability::*;
 use sha2::{Digest, Sha256};
-use std::sync::{Arc, RwLock};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, RwLock};
+
+/// A model-provider link with at least this long left to live is handed out
+/// again instead of a fresh one. Providers cache a conversation by its exact
+/// bytes, and the history carries these links (an image a tool read): signed
+/// afresh every turn, they would throw away the cached history from the
+/// first of them on. Reused, a turn that starts within five minutes of the
+/// signing repeats the link byte for byte, and the margin still leaves every
+/// request of a long turn a link that opens.
+const PROVIDER_LINK_REUSE_MARGIN_SECONDS: u64 = 10 * 60;
 
 #[derive(Clone)]
-pub(crate) struct ResourceAccess(Arc<RwLock<Option<CapabilityService>>>);
+pub(crate) struct ResourceAccess(Arc<RwLock<Option<Generation>>>);
+
+/// One signing key and the model-provider links minted with it; a rotation
+/// replaces both, so no link outlives the key that signed it.
+struct Generation {
+    service: CapabilityService,
+    provider_links: Mutex<HashMap<String, ProviderLink>>,
+}
+
+struct ProviderLink {
+    url: String,
+    cap: String,
+    expires_at: u64,
+}
+
+impl Generation {
+    fn new(service: CapabilityService) -> Self {
+        Self {
+            service,
+            provider_links: Mutex::new(HashMap::new()),
+        }
+    }
+}
 
 impl ResourceAccess {
     pub(crate) fn new(token: &str) -> Self {
@@ -23,14 +55,17 @@ impl ResourceAccess {
             key.update(b"nolune/resource-generation/v1");
             key.update(uuid::Uuid::new_v4().as_bytes());
             key.update(token.as_bytes());
-            Some(
+            Some(Generation::new(
                 CapabilityService::new(&format!("{:x}", key.finalize()), 65536)
                     .expect("fixed-size capability signing key"),
-            )
+            ))
         };
         *self.0.write().expect("capability lock") = service;
     }
 
+    /// A link to `resource` for `audience`. A model-provider link is the one
+    /// already handed out while it has the reuse margin left to live (see
+    /// [`PROVIDER_LINK_REUSE_MARGIN_SECONDS`]); every other link is new.
     pub(crate) fn url(
         &self,
         base: &str,
@@ -40,24 +75,53 @@ impl ResourceAccess {
     ) -> Result<String, CapabilityError> {
         CapabilityTarget::new(slug, resource.clone(), CapabilityMethod::Get, audience)?;
         let path = resource_path(slug, &resource, audience);
+        let unsigned = format!("{base}{path}");
         let guard = self.0.read().expect("capability lock");
-        let Some(service) = guard.as_ref() else {
-            return Ok(format!("{base}{path}"));
+        let Some(generation) = guard.as_ref() else {
+            return Ok(unsigned);
         };
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let cap = service.mint(CapabilityGrant {
+        let now = generation.service.now();
+        let reusable = audience == CapabilityAudience::ModelProvider;
+        if reusable {
+            let links = generation
+                .provider_links
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(link) = links.get(&unsigned)
+                && link.expires_at >= now + PROVIDER_LINK_REUSE_MARGIN_SECONDS
+            {
+                // Still exempt from redaction when it goes out again.
+                super::tools::register_capability_token(&link.cap);
+                return Ok(link.url.clone());
+            }
+        }
+        let expires_at = now + MAX_TTL_SECONDS;
+        let cap = generation.service.mint(CapabilityGrant {
             instance_slug: slug.into(),
             resource,
             method: CapabilityMethod::Get,
             audience,
-            expires_at: now + MAX_TTL_SECONDS,
+            expires_at,
             replay: ReplayPolicy::ReusableWithinExpiry,
         })?;
         super::tools::register_capability_token(cap.as_str());
-        Ok(format!("{base}{path}?cap={}", cap.as_str()))
+        let url = format!("{unsigned}?cap={}", cap.as_str());
+        if reusable {
+            let mut links = generation
+                .provider_links
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            links.retain(|_, link| link.expires_at > now);
+            links.insert(
+                unsigned,
+                ProviderLink {
+                    url: url.clone(),
+                    cap: cap.as_str().to_owned(),
+                    expires_at,
+                },
+            );
+        }
+        Ok(url)
     }
 
     pub(crate) fn verify(
@@ -74,12 +138,14 @@ impl ResourceAccess {
             return Err(CapabilityError::WrongResource);
         }
         let guard = self.0.read().expect("capability lock");
-        if let Some(service) = guard.as_ref() {
+        if let Some(generation) = guard.as_ref() {
             let cap = uri
                 .query()
                 .and_then(|q| q.strip_prefix("cap="))
                 .ok_or(CapabilityError::MalformedToken)?;
-            service.verify_request_method(cap, &target, method)?;
+            generation
+                .service
+                .verify_request_method(cap, &target, method)?;
         } else if uri.query().is_some() {
             return Err(CapabilityError::MalformedToken);
         }
@@ -174,6 +240,81 @@ mod tests {
     }
 
     #[test]
+    fn a_model_provider_link_is_reused_while_it_has_the_margin_left() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        struct TestClock(AtomicU64);
+        impl Clock for TestClock {
+            fn now(&self) -> u64 {
+                self.0.load(Ordering::SeqCst)
+            }
+        }
+        struct Counter(AtomicU64);
+        impl NonceSource for Counter {
+            fn nonce(&self) -> Result<[u8; NONCE_BYTES], CapabilityError> {
+                Ok([self.0.fetch_add(1, Ordering::SeqCst) as u8; NONCE_BYTES])
+            }
+        }
+        let clock = Arc::new(TestClock(AtomicU64::new(1_000)));
+        let service = CapabilityService::with_sources(
+            "secret",
+            clock.clone(),
+            Arc::new(Counter(1.into())),
+            8,
+        )
+        .unwrap();
+        let access = ResourceAccess(Arc::new(RwLock::new(Some(Generation::new(service)))));
+        let resource = || CapabilityResource::uploaded_file("photo.png").unwrap();
+        let link = |audience| {
+            access
+                .url("https://self.test", "moon", resource(), audience)
+                .unwrap()
+        };
+
+        let first = link(CapabilityAudience::ModelProvider);
+        clock.0.store(1_000 + 5 * 60, Ordering::SeqCst);
+        assert_eq!(
+            link(CapabilityAudience::ModelProvider),
+            first,
+            "five minutes on, the history repeats the link it already carries"
+        );
+        assert_ne!(
+            link(CapabilityAudience::Browser),
+            link(CapabilityAudience::Browser),
+            "only model-provider links are reused"
+        );
+
+        clock.0.store(1_000 + 5 * 60 + 1, Ordering::SeqCst);
+        let renewed = link(CapabilityAudience::ModelProvider);
+        assert_ne!(renewed, first, "less than the margin left: a fresh link");
+        let uri: axum::http::Uri = renewed
+            .strip_prefix("https://self.test")
+            .unwrap()
+            .parse()
+            .unwrap();
+        for _ in 0..2 {
+            assert!(
+                access
+                    .verify(
+                        "moon",
+                        resource(),
+                        CapabilityAudience::ModelProvider,
+                        &uri,
+                        "GET"
+                    )
+                    .is_ok(),
+                "a reused link opens every time until it expires"
+            );
+        }
+
+        access.replace("rotated-secret");
+        assert_ne!(
+            link(CapabilityAudience::ModelProvider),
+            renewed,
+            "a rotation drops the links the old key signed"
+        );
+    }
+
+    #[test]
     fn maximum_control_token_does_not_overflow_generation_key() {
         let access = ResourceAccess::new(&"x".repeat(4096));
         assert!(
@@ -219,7 +360,7 @@ mod tests {
                     replay,
                 })
                 .unwrap();
-            let access = ResourceAccess(Arc::new(RwLock::new(Some(service))));
+            let access = ResourceAccess(Arc::new(RwLock::new(Some(Generation::new(service)))));
             let path = resource_path("moon", &resource, CapabilityAudience::ModelProvider);
             let uri: axum::http::Uri = format!("{path}?cap={}", cap.as_str()).parse().unwrap();
             for altered in [

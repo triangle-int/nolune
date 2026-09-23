@@ -218,6 +218,18 @@ pub struct HistoryEntry {
     /// Beside the message, never inside it: the model replays only `message`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_trail: Option<std::collections::BTreeMap<String, String>>,
+    /// A user message as the provider received it, when that is more than
+    /// what the person wrote: the turn context before it and the memories
+    /// recalled after it. Every later turn replays this instead of
+    /// `message`, byte for byte, so the provider's prompt cache keeps the
+    /// conversation up to the newest message. `message` stays what the
+    /// person wrote, for the chat and everything else that reads it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent: Option<Vec<ContentBlock>>,
+    /// Fingerprints of the memories `sent` carries in full, so a later turn
+    /// that recalls one of them again names it instead of repeating it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recalled: Option<Vec<String>>,
 }
 
 impl HistoryEntry {
@@ -231,12 +243,25 @@ impl HistoryEntry {
             mcp_app_input: None,
             model: None,
             tool_trail: None,
+            sent: None,
+            recalled: None,
         }
     }
 
-    /// Extract just the Messages from a slice of entries.
+    /// The message as a provider replays it: what it was sent as, when
+    /// that was recorded, else as stored.
+    pub fn replayed(&self) -> Message {
+        match (&self.message, &self.sent) {
+            (Message::User { .. }, Some(sent)) => Message::User {
+                content: sent.clone(),
+            },
+            (message, _) => message.clone(),
+        }
+    }
+
+    /// The conversation as a provider replays it.
     pub fn to_messages(entries: &[HistoryEntry]) -> Vec<Message> {
-        entries.iter().map(|e| e.message.clone()).collect()
+        entries.iter().map(HistoryEntry::replayed).collect()
     }
 }
 

@@ -396,8 +396,34 @@ integrations and the built-in skills (installed skills are found with
 `list_skills`, so installing one never touches the prompt). What differs from turn to turn (voice mode, the chosen
 computer and the connected desktops, the settings in `instance.toml`, the
 project and its open tasks) is the turn context, the first block of the
-current message, which is never saved into the history. Voice mode's rules stay in
-the system prompt; the turn context only says when they apply.
+current message. Voice mode's rules stay in the system prompt; the turn
+context only says when they apply.
+
+The history after the system prompt is cached the same way, so every message
+replays byte for byte what it was sent as. A user message goes out as its
+turn context, what the person wrote and the memories recalled for it, and is
+saved that way beside the text the chat shows (`sent` on the history entry),
+so the next request repeats the last one up to the new message and reads all
+of it from the cache. A message replayed without what it was sent with would
+break the prefix there: on Anthropic, whose reads land only where an earlier
+request wrote, nothing past the system prompt would be read back. Three
+things keep what is saved small:
+
+- A turn context that reads exactly as the conversation last stated it in
+  full is sent as one line saying it is unchanged.
+- A memory the replayed history already carries in full is named, not
+  repeated (`recalled` on the history entry holds their fingerprints). A
+  corrected memory has new text and comes in full again; the earlier turns
+  keep the old wording until the history is compacted or cleared.
+- Attached files go out with their message once. Later turns replay the
+  `[attached: …]` marker the person wrote, as before, so an image or a PDF
+  is not paid for again every turn; the turn after one rewrites the cache
+  from that message once.
+
+Capability links in the history (an image a tool read) are renewed every
+turn so the provider can still fetch them. A model-provider link is reused
+while it has ten minutes of its fifteen left, so turns within five minutes
+of each other repeat it byte for byte.
 
 Each chat turn compares its system prompt with the previous turn's, section
 by section, and logs a `[cache] … system prompt changed since the last turn

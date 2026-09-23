@@ -338,6 +338,11 @@ impl CapabilityService {
         })
     }
 
+    /// The time this service mints and verifies against.
+    pub(crate) fn now(&self) -> u64 {
+        self.clock.now()
+    }
+
     pub(crate) fn mint(&self, grant: CapabilityGrant) -> Result<CapabilityToken, CapabilityError> {
         validate_instance_slug(&grant.instance_slug)?;
         grant.resource.validate()?;

@@ -7,7 +7,6 @@ use crate::domain::events::ServerEvent;
 use crate::services::tool::{ToolDefinition, ToolDyn};
 
 use super::contract::{ConversationRef, ExecutionScope, LlmEvent, LlmRequest, StopReason};
-use super::helpers::strip_context_blocks;
 
 use super::types::{ContentBlock, HistoryEntry, LlmBackend, LlmResponse, Message, ToolCall};
 
@@ -255,7 +254,7 @@ pub(crate) async fn streaming_agent_loop(
         // The assistant message (with tool_use) was pushed to messages a few lines above
         let assistant_msg = &messages[messages.len() - 2]; // assistant before tool_result
         let mut assistant_entry = HistoryEntry::new(
-            strip_context_blocks(assistant_msg),
+            assistant_msg.clone(),
             ts.clone(),
             format!("tool_{}", crate::services::tools::unix_millis()),
         );
@@ -266,7 +265,7 @@ pub(crate) async fn streaming_agent_loop(
         crate::services::chat::append_to_rig_history(
             &rig_path,
             &HistoryEntry::new(
-                strip_context_blocks(&tool_result_msg),
+                tool_result_msg,
                 ts,
                 format!("tool_{}", crate::services::tools::unix_millis()),
             ),
@@ -310,7 +309,7 @@ pub(crate) async fn streaming_agent_loop(
         if matches!(last_msg, Message::Assistant { .. }) {
             let ts = crate::services::tools::unix_millis().to_string();
             let mut entry = HistoryEntry::new(
-                strip_context_blocks(last_msg),
+                last_msg.clone(),
                 ts,
                 format!("msg_{}", crate::services::tools::unix_millis()),
             );

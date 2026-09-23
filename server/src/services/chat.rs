@@ -193,15 +193,6 @@ pub async fn run_single_turn(
     let system_stable = join_sections(&sections);
     let memory_block = MEMORY_PROMPT;
 
-    let turn_context = build_turn_context(
-        &instance_dir,
-        &instance_cfg,
-        &machine_registry,
-        &machine_target,
-        voice_mode,
-    )
-    .await;
-
     if loaded_entries.is_empty() {
         return Err(io::Error::new(
             ErrorKind::InvalidInput,
@@ -216,20 +207,84 @@ pub async fn run_single_turn(
         .find(|m| m.role == ChatRole::User)
         .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "no user message to process"))?;
     let public_url = public_url.to_string();
+
+    // All entries except the last user message → history; that one becomes
+    // the prompt.
+    let prompt_entry = loaded_entries
+        .last()
+        .filter(|e| matches!(e.message, llm::Message::User { .. }));
+    let history_entries = match prompt_entry {
+        Some(_) => &loaded_entries[..loaded_entries.len() - 1],
+        None => &loaded_entries[..],
+    };
+
+    // The history exactly as the provider received it. The provider caches
+    // the request as a prefix, so every message replays byte for byte what
+    // it was sent as (`HistoryEntry::sent`): the cache then covers the whole
+    // conversation up to this turn's message, not just the system prompt.
+    let history_msgs: Vec<llm::Message> = {
+        let mut msgs: Vec<llm::Message> = history_entries
+            .iter()
+            .map(|entry| {
+                let mut message = entry.replayed();
+                // Strip [context] blocks from historical user messages saved
+                // before messages were kept as sent.
+                if let (None, llm::Message::User { content }) = (&entry.sent, &mut message) {
+                    for block in content.iter_mut() {
+                        if let llm::ContentBlock::Text { text } = block
+                            && let Some(ctx_pos) = text.find("\n\n[context]\n")
+                        {
+                            text.truncate(ctx_pos);
+                        }
+                    }
+                }
+                message
+            })
+            .collect();
+
+        llm::refresh_resource_messages(&mut msgs, &public_url, &instance_slug, resources);
+        log::info!("loaded {} rig history messages from disk", msgs.len());
+        msgs
+    };
+
+    // The turn context goes first in the user message, which keeps the
+    // system prompt stable for caching.
+    let turn_context = state_turn_context(
+        &build_turn_context(
+            &instance_dir,
+            &instance_cfg,
+            &machine_registry,
+            &machine_target,
+            voice_mode,
+        )
+        .await,
+        &history_msgs,
+    );
+
     let media_store = vector_store.media_store();
-    let mut prompt_msg = llm::build_multimodal_prompt(
+    let llm::Message::User { content: attached } = llm::build_multimodal_prompt(
         &last_user.content,
         workspace_dir,
         &instance_slug,
         &public_url,
         resources,
         &media_store,
-    );
-
-    // Prepend the turn context to the user message (keeps the system prompt stable for caching)
-    if let llm::Message::User { ref mut content } = prompt_msg {
-        content.insert(0, llm::ContentBlock::text(&turn_context));
-    }
+    ) else {
+        unreachable!("the prompt is a user message")
+    };
+    // What later turns replay in place of the files this message sends: the
+    // `[attached: …]` markers the person wrote, as before. The files
+    // themselves are this turn's alone, so an image or a PDF is not paid for
+    // again every turn; the turn after one rewrites the cache from it once.
+    let written = if llm::has_attachments(&last_user.content) {
+        vec![llm::ContentBlock::text(&last_user.content)]
+    } else {
+        attached.clone()
+    };
+    let mut sent = vec![llm::ContentBlock::text(&turn_context)];
+    sent.extend(attached);
+    let mut replay = vec![llm::ContentBlock::text(&turn_context)];
+    replay.extend(written);
 
     // ── RAG: auto-inject relevant memories into the prompt ──
     // Use recent conversation context (not just last message) for better recall
@@ -248,14 +303,23 @@ pub async fn run_single_turn(
     // recall carries the receipt shape (#84) so the event and the receipt
     // persisted after the turn describe exactly what was injected.
     let recall = memory_receipts::recall(&vector_store, &instance_slug, &rag_query).await;
-    if let Some(context) = recall.prompt_block() {
-        if let llm::Message::User { ref mut content } = prompt_msg {
-            content.push(llm::ContentBlock::text(context));
-        }
+    // A memory the replayed history already carries in full is named, not
+    // repeated.
+    let shown: std::collections::HashSet<&str> = history_entries
+        .iter()
+        .flat_map(|entry| entry.recalled.iter().flatten())
+        .map(String::as_str)
+        .collect();
+    let mut recalled = Vec::new();
+    if let Some((context, carried)) = recall.prompt_block_beside(&shown) {
         log::info!(
-            "[rag] injected {} memories (hybrid search) into prompt",
-            recall.memories.len()
+            "[rag] injected {} memories (hybrid search) into prompt, {} already in the conversation",
+            recall.memories.len(),
+            recall.memories.len().saturating_sub(carried.len())
         );
+        sent.push(llm::ContentBlock::text(&context));
+        replay.push(llm::ContentBlock::text(context));
+        recalled = carried;
         let _ = events.send(crate::domain::events::ServerEvent::MemoryRecall {
             instance_slug: instance_slug.to_string(),
             chat_id: chat_id.to_string(),
@@ -263,38 +327,15 @@ pub async fn run_single_turn(
         });
     }
 
-    // Extract Messages from entries, stripping [context] blocks and excluding the last user message
-    // (which becomes the prompt).
-    let history_msgs: Vec<llm::Message> = {
-        // All entries except the last user message → history
-        let history_entries = if loaded_entries
-            .last()
-            .is_some_and(|e| matches!(e.message, llm::Message::User { .. }))
-        {
-            &loaded_entries[..loaded_entries.len() - 1]
-        } else {
-            &loaded_entries[..]
-        };
-
-        let mut msgs = llm::HistoryEntry::to_messages(history_entries);
-
-        // Strip [context] blocks from historical user messages.
-        for msg in msgs.iter_mut() {
-            if let llm::Message::User { content } = msg {
-                for block in content.iter_mut() {
-                    if let llm::ContentBlock::Text { text } = block {
-                        if let Some(ctx_pos) = text.find("\n\n[context]\n") {
-                            text.truncate(ctx_pos);
-                        }
-                    }
-                }
-            }
-        }
-
-        llm::refresh_resource_messages(&mut msgs, &public_url, &instance_slug, resources);
-        log::info!("loaded {} rig history messages from disk", msgs.len());
-        msgs
-    };
+    // Kept with the message before it goes out, so the next turn replays it
+    // as this one sends it.
+    if let Some(id) = prompt_entry
+        .and_then(|entry| entry.id.as_deref())
+        .filter(|id| *id == last_user.id)
+    {
+        record_sent(&rig_path, id, replay, recalled);
+    }
+    let prompt_msg = llm::Message::User { content: sent };
 
     log::info!(
         "context: model={} history_msgs={} system_prompt_len={}",
@@ -1245,7 +1286,7 @@ fn compute_context_stats_local(
         let entries = load_rig_history(&rig_path).unwrap_or_default();
         let total_chars: usize = entries
             .iter()
-            .map(|e| extract_message_text_len(&e.message))
+            .map(|e| extract_message_text_len(&e.replayed()))
             .sum();
         (entries.len(), estimate_tokens_from_chars(total_chars))
     };
@@ -1351,6 +1392,22 @@ pub fn save_rig_history(path: &Path, history: &[llm::HistoryEntry]) {
 pub fn append_to_rig_history(path: &Path, entry: &llm::HistoryEntry) {
     let mut entries = load_rig_history(path).unwrap_or_default();
     entries.push(entry.clone());
+    save_rig_history(path, &entries);
+}
+
+/// Records how the user message `id` goes to the provider (see
+/// [`llm::HistoryEntry::sent`]) and which memories it carries in full.
+fn record_sent(path: &Path, id: &str, sent: Vec<llm::ContentBlock>, recalled: Vec<String>) {
+    let mut entries = load_rig_history(path).unwrap_or_default();
+    let Some(entry) = entries
+        .iter_mut()
+        .rev()
+        .find(|entry| entry.id.as_deref() == Some(id))
+    else {
+        return;
+    };
+    entry.sent = Some(sent);
+    entry.recalled = (!recalled.is_empty()).then_some(recalled);
     save_rig_history(path, &entries);
 }
 
@@ -1583,12 +1640,44 @@ fn join_sections(sections: &[PromptSection]) -> String {
         .join("\n\n")
 }
 
+/// Sent in place of a turn context that reads exactly as the conversation
+/// last stated it in full.
+const TURN_CONTEXT_UNCHANGED: &str =
+    "[turn context — unchanged since it was last stated in full]\n";
+
+/// The turn context as this message sends it. Every message keeps its turn
+/// context in the replayed history, so one that reads exactly as the
+/// conversation last stated it in full is sent as a line saying so: the
+/// history does not grow by the same config and desktops every turn. `full`
+/// is [`build_turn_context`]'s, `earlier` the replayed history.
+fn state_turn_context(full: &str, earlier: &[llm::Message]) -> String {
+    let last_stated = earlier
+        .iter()
+        .rev()
+        .filter_map(|message| match message {
+            llm::Message::User { content } => content.iter().find_map(|block| match block {
+                llm::ContentBlock::Text { text } if text.starts_with("[turn context") => {
+                    Some(text.as_str())
+                }
+                _ => None,
+            }),
+            llm::Message::Assistant { .. } => None,
+        })
+        .find(|stated| *stated != TURN_CONTEXT_UNCHANGED);
+    if last_stated == Some(full) {
+        TURN_CONTEXT_UNCHANGED.to_owned()
+    } else {
+        full.to_owned()
+    }
+}
+
 /// Everything the companion needs for this turn that may differ from the
 /// last one, sent as the first block of the current message so the system
 /// prompt stays a stable, cached prefix (see [`build_system_sections`]). It
-/// starts with `[turn context`, which `strip_context_blocks` keeps out of the
-/// saved history: every turn states its own. It carries no clock; the
-/// companion runs `date` when the time matters.
+/// starts with `[turn context` and stays with its message in the replayed
+/// history; [`state_turn_context`] shortens it to one line when it is what
+/// the conversation last stated. It carries no clock; the companion runs
+/// `date` when the time matters.
 async fn build_turn_context(
     instance_dir: &Path,
     instance_cfg: &crate::config::InstanceConfig,
@@ -2499,7 +2588,7 @@ mod prompt_stability_tests {
         let context = turn_context(&instance_dir, &cfg, true).await;
         assert!(
             context.starts_with("[turn context"),
-            "strip_context_blocks keeps it out of the saved history: {context}"
+            "a retelling tells it apart from what the person wrote: {context}"
         );
         for fact in [
             "garden planner",
@@ -2564,5 +2653,315 @@ mod skills_prompt_tests {
         assert!(prompt.contains("`list_skills`"), "{prompt}");
         assert!(prompt.contains("`activate_skill`"), "{prompt}");
         assert!(prompt.contains("- **configure-nolune**: "), "{prompt}");
+    }
+}
+
+#[cfg(test)]
+mod prompt_replay_tests {
+    //! The provider caches a conversation as a prefix: a turn reads back only
+    //! the part of its request that an earlier request sent byte for byte.
+    //! These run real turns against a stand-in for Anthropic and compare the
+    //! requests they send.
+    use super::*;
+    use crate::config::{Config, LlmProvider};
+    use crate::services::{
+        machine_registry::MachineRegistry, mcp::McpRegistry, resource_access::ResourceAccess,
+        uploads::save_upload, vector::VectorStore,
+    };
+    use serde_json::{Value, json};
+    use std::collections::{HashMap, VecDeque};
+    use std::sync::{Arc, Mutex};
+
+    const SLUG: &str = "moon";
+    const CHAT: &str = "default";
+
+    fn sse(events: &[(&str, Value)]) -> String {
+        events
+            .iter()
+            .map(|(event, data)| format!("event: {event}\ndata: {data}\n\n"))
+            .collect()
+    }
+
+    fn text_reply(text: &str) -> String {
+        sse(&[
+            (
+                "message_start",
+                json!({"message": {"usage": {"input_tokens": 5}}}),
+            ),
+            (
+                "content_block_start",
+                json!({"content_block": {"type": "text"}}),
+            ),
+            (
+                "content_block_delta",
+                json!({"delta": {"type": "text_delta", "text": text}}),
+            ),
+            ("content_block_stop", json!({})),
+            (
+                "message_delta",
+                json!({"delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 3}}),
+            ),
+            ("message_stop", json!({})),
+        ])
+    }
+
+    fn tool_reply(id: &str, name: &str, input: Value) -> String {
+        sse(&[
+            (
+                "message_start",
+                json!({"message": {"usage": {"input_tokens": 5}}}),
+            ),
+            (
+                "content_block_start",
+                json!({"content_block": {"type": "tool_use", "id": id, "name": name}}),
+            ),
+            (
+                "content_block_delta",
+                json!({"delta": {"type": "input_json_delta", "partial_json": input.to_string()}}),
+            ),
+            ("content_block_stop", json!({})),
+            (
+                "message_delta",
+                json!({"delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 3}}),
+            ),
+            ("message_stop", json!({})),
+        ])
+    }
+
+    /// Records every request and answers each with the next reply.
+    async fn anthropic(replies: Vec<String>) -> (String, Arc<Mutex<Vec<Value>>>) {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let replies = Arc::new(Mutex::new(VecDeque::from(replies)));
+        let captured = requests.clone();
+        let app = axum::Router::new().route(
+            "/v1/messages",
+            axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
+                let captured = captured.clone();
+                let replies = replies.clone();
+                async move {
+                    captured.lock().unwrap().push(body);
+                    let next = replies.lock().unwrap().pop_front();
+                    next.unwrap_or_else(|| text_reply("(no reply left)"))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (url, requests)
+    }
+
+    struct Companion {
+        workspace: tempfile::TempDir,
+        backend: LlmBackend,
+        store: Arc<VectorStore>,
+        resources: ResourceAccess,
+        mcp: McpRegistry,
+    }
+
+    impl Companion {
+        /// A companion with one pinned memory, talking to nobody until
+        /// `backend.base_url` names a stand-in.
+        async fn new() -> Self {
+            let workspace = tempfile::tempdir().unwrap();
+            let memory = workspace.path().join("instances").join(SLUG).join("memory");
+            fs::create_dir_all(&memory).unwrap();
+            // Pinned, so every turn recalls it.
+            fs::write(
+                memory.join("garden.md"),
+                "---\npinned: true\n---\nthe tomatoes grow in the north bed\n",
+            )
+            .unwrap();
+            let mut config = Config::default();
+            config.llm.add_test_presets(LlmProvider::Anthropic);
+            config.llm.tokens.anthropic = "test".into();
+            let backend =
+                LlmBackend::for_preset(&config, reqwest::Client::new(), "sonnet").unwrap();
+            let store = Arc::new(VectorStore::connect(workspace.path()).await);
+            Self {
+                workspace,
+                backend,
+                store,
+                resources: ResourceAccess::new("control-secret"),
+                mcp: McpRegistry::new(Vec::new(), Vec::new()),
+            }
+        }
+
+        fn path(&self) -> &Path {
+            self.workspace.path()
+        }
+
+        async fn turn(&self, text: &str) {
+            save_user_message(self.path(), SLUG, CHAT, text).unwrap();
+            run_single_turn(
+                self.path(),
+                &self.path().join("config.toml"),
+                SLUG,
+                CHAT,
+                &self.backend,
+                None,
+                broadcast::channel(64).0,
+                Default::default(),
+                &self.mcp,
+                false,
+                self.store.clone(),
+                Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+                MachineRegistry::new(),
+                None,
+                // Provider-reachable, so files go by capability link.
+                "https://moon.example",
+                &self.resources,
+                None,
+            )
+            .await
+            .unwrap();
+        }
+    }
+
+    /// The request as the cache sees it: the breakpoints move every
+    /// request and are no part of the prefix.
+    fn cached_prefix(mut request: Value) -> Value {
+        fn strip(value: &mut Value) {
+            match value {
+                Value::Object(map) => {
+                    map.remove("cache_control");
+                    map.values_mut().for_each(strip);
+                }
+                Value::Array(items) => items.iter_mut().for_each(strip),
+                _ => {}
+            }
+        }
+        strip(&mut request);
+        request
+    }
+
+    /// `later` repeats all of `earlier` (system, tools and every message) and
+    /// adds messages after it.
+    fn assert_replays(earlier: &Value, later: &Value) {
+        let (earlier, later) = (cached_prefix(earlier.clone()), cached_prefix(later.clone()));
+        assert_eq!(later["system"], earlier["system"]);
+        assert_eq!(later["tools"], earlier["tools"]);
+        let (earlier, later) = (
+            earlier["messages"].as_array().unwrap(),
+            later["messages"].as_array().unwrap(),
+        );
+        assert!(later.len() > earlier.len(), "{later:#?}");
+        for (i, (sent, replayed)) in earlier.iter().zip(later).enumerate() {
+            assert_eq!(
+                replayed, sent,
+                "message {i} is replayed differently from how it was sent"
+            );
+        }
+    }
+
+    fn text_of(message: &Value) -> String {
+        message["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|block| block["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Each request here takes seconds: the adapter redacts the whole
+    /// request before sending it. So one conversation covers it all.
+    #[tokio::test]
+    async fn the_next_turn_repeats_the_last_request_up_to_its_new_message() {
+        let mut companion = Companion::new().await;
+        let north = save_upload(
+            companion.path(),
+            SLUG,
+            "north.png",
+            b"\x89PNG\r\n\x1a\nnorth",
+        )
+        .unwrap();
+        let south = save_upload(
+            companion.path(),
+            SLUG,
+            "south.png",
+            b"\x89PNG\r\n\x1a\nsouth",
+        )
+        .unwrap();
+        let (url, requests) = anthropic(vec![
+            // The tool reads a photo, so the history carries a capability link.
+            tool_reply(
+                "call_1",
+                "read_file",
+                json!({"path": format!("uploads/{}", north.stored_name)}),
+            ),
+            text_reply("tomatoes, by the look of it"),
+            text_reply("beans, it seems"),
+            text_reply("any time"),
+        ])
+        .await;
+        companion.backend.base_url = url;
+
+        companion
+            .turn("what grows in the north bed? check the photo")
+            .await;
+        companion
+            .turn(&format!(
+                "and here is the south bed [attached: south.png ({})]",
+                south.id
+            ))
+            .await;
+        companion.turn("thanks").await;
+
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(
+            requests.len(),
+            4,
+            "a tool round, its answer, two more turns"
+        );
+        let (first_turn, with_photo, after_photo) = (&requests[1], &requests[2], &requests[3]);
+        assert!(
+            serde_json::to_string(first_turn)
+                .unwrap()
+                .contains("/resources/model-provider/files/moon/"),
+            "the tool result carries a capability link"
+        );
+
+        // Everything the first turn sent, its tool round included, comes back
+        // byte for byte ahead of the new message.
+        assert_replays(first_turn, with_photo);
+        let new_message = with_photo["messages"].as_array().unwrap().last().unwrap();
+        let text = text_of(new_message);
+        assert!(
+            text.starts_with(TURN_CONTEXT_UNCHANGED),
+            "the turn context did not change: {text}"
+        );
+        assert!(
+            text.contains(
+                "- garden.md: (unchanged since it was recalled earlier in this conversation)"
+            ),
+            "the pinned memory is in the history already: {text}"
+        );
+        assert!(!text.contains("north bed"), "{text}");
+
+        // The photo went out with its message once. Later turns replay the
+        // message with the marker the person wrote instead, so the cache is
+        // rewritten from that message one time, and not paid again after.
+        let (sent, replayed) = (
+            with_photo["messages"].as_array().unwrap(),
+            after_photo["messages"].as_array().unwrap(),
+        );
+        let photo_at = sent.len() - 1;
+        assert_eq!(
+            cached_prefix(json!(replayed[..photo_at])),
+            cached_prefix(json!(sent[..photo_at]))
+        );
+        let has_image = |message: &Value| {
+            serde_json::to_string(message)
+                .unwrap()
+                .contains("\"image\"")
+        };
+        assert!(has_image(&sent[photo_at]), "{:#}", sent[photo_at]);
+        assert!(!has_image(&replayed[photo_at]), "{:#}", replayed[photo_at]);
+        assert!(
+            text_of(&replayed[photo_at]).contains(&format!("[attached: south.png ({})]", south.id)),
+            "{:#}",
+            replayed[photo_at]
+        );
     }
 }
