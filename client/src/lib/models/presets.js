@@ -29,12 +29,13 @@ export const PROVIDERS = Object.freeze([
 
 /**
  * The models the pinned codex release lists (`model/list`, recorded in
- * `server/src/services/llm/fixtures/codex-<version>.jsonl`), the default
- * first; the seeded presets use the first and the last but one. Offered
- * as hints in the preset editor, since Codex has no model discovery.
+ * `server/src/services/llm/fixtures/codex-<version>.jsonl`), in its order,
+ * codex's own default first; the seeded presets use `gpt-6-sol` and
+ * `gpt-6-luna`. Offered as hints in the preset editor, since Codex has no
+ * model discovery.
  * @type {readonly string[]}
  */
-export const CODEX_MODELS = Object.freeze(["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"]);
+export const CODEX_MODELS = Object.freeze(["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"]);
 
 /**
  * How a provider authenticates; a provider the client does not know is
@@ -61,9 +62,9 @@ export function modelPlaceholder(provider) {
 		case "openrouter":
 			return "vendor/model";
 		case "codex":
-			return CODEX_MODELS[0];
+			return "gpt-6-sol";
 		case "openai":
-			return "gpt-5.6-sol";
+			return "gpt-6-sol";
 		default:
 			return "claude-sonnet-4-6";
 	}

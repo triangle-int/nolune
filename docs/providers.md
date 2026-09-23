@@ -68,9 +68,9 @@ presets you can rename, edit or delete:
 | Provider | Seeded preset ids | Models | Slots filled |
 | --- | --- | --- | --- |
 | Anthropic | `sonnet`, `opus`, `haiku` | `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-haiku-4-5-20251001` | chat `sonnet`, background `haiku` |
-| OpenAI | `gpt-sol`, `gpt-luna` | `gpt-5.6-sol`, `gpt-5.6-luna` | chat `gpt-sol`, background `gpt-luna` |
+| OpenAI | `gpt-sol`, `gpt-luna` | `gpt-6-sol`, `gpt-6-luna` | chat `gpt-sol`, background `gpt-luna` |
 | OpenRouter | `openrouter-sonnet`, `openrouter-gpt-luna` | `anthropic/claude-sonnet-4.6`, `openai/gpt-5.6-luna` | chat `openrouter-sonnet`, background `openrouter-gpt-luna` |
-| Codex | `codex-astra`, `codex-luna` | `gpt-6-astra`, `gpt-5.6-luna` | chat `codex-astra`, background `codex-luna` |
+| Codex | `codex-sol`, `codex-luna` | `gpt-6-sol`, `gpt-6-luna` | chat `codex-sol`, background `codex-luna` |
 
 The defaults are `default_presets` in `server/src/config.rs`; the
 onboarding template in `server/src/onboard.rs` and
@@ -125,14 +125,14 @@ status or mid-stream as an SSE `error` event, is reported as a rate limit.
 1. Create a key at <https://platform.openai.com/api-keys>.
 2. Enter it under Settings → Connections (or `OPEN_AI` in `[llm.tokens]`,
    or `OPENAI_API_KEY`). Saving seeds `gpt-sol` and `gpt-luna`.
-3. Model ids are the Responses API ids: `gpt-5.6-sol`, `gpt-5.6-luna`,
-   `o3`.
+3. Model ids are the Responses API ids: `gpt-6-sol`, `gpt-6-luna`,
+   `gpt-5.6-sol`, `o3`.
 
 The adapter speaks the Responses API (`/v1/responses`, `store: false`,
 streaming SSE). Images go out as `input_image` and PDFs as `input_file`:
 inline as `file_data`, or by `file_url` when the public URL is reachable
-by the provider, including PDFs a tool returns. `reasoning.effort` is forwarded for the GPT-5 family and
-the o-series and refused before the network for other models. There is
+by the provider, including PDFs a tool returns. `reasoning.effort` is forwarded for GPT-5 and every later
+generation and the o-series, and refused before the network for other models. There is
 no token-counting endpoint, so the context meter is a local estimate for
 OpenAI presets. An OpenAI key is OpenAI's only: it is never used for
 Codex, and a Codex login never fills `OPEN_AI`.
@@ -170,8 +170,8 @@ directory; Nolune never reads, copies or logs its tokens.
 
 ### Setup
 
-1. Install the Codex CLI at the release Nolune is pinned to, `0.155.0`
-   (`npm install -g @openai/codex@0.155.0`, or the release's binary), on
+1. Install the Codex CLI at the release Nolune is pinned to, `0.156.1`
+   (`npm install -g @openai/codex@0.156.1`, or the release's binary), on
    the machine that runs the Nolune server. Discovery runs
    `codex --version` and refuses any other release with an error that
    names both versions; `NOLUNE_CODEX_BIN` points at a binary that is not
@@ -182,8 +182,8 @@ directory; Nolune never reads, copies or logs its tokens.
    Connections tile that drives it is the remaining slice of #27. Nothing
    is entered in Nolune and nothing is written to `config.toml`.
 3. Seed the Codex presets (`POST /api/config/models/seed` with
-   `{"provider": "codex"}`: `codex-astra` on `gpt-6-astra`, `codex-luna`
-   on `gpt-5.6-luna`) or write `provider = "codex"` presets in
+   `{"provider": "codex"}`: `codex-sol` on `gpt-6-sol`, `codex-luna`
+   on `gpt-6-luna`) or write `provider = "codex"` presets in
    `config.toml`; the model ids are what `model/list` of the pinned
    release returns.
 
@@ -226,7 +226,7 @@ layer run, as the next sections say.
 the config is concerned. Whether a login is there is runtime state, read
 from the app-server (`account/read`) before every turn and never stored;
 without one a turn fails with a typed setup error that says to log in.
-`codex-astra` and `codex-luna` are the seeded presets, on the models the
+`codex-sol` and `codex-luna` are the seeded presets, on the models the
 pinned release lists.
 
 Each conversation runs in one app-server thread. The first turn starts it
@@ -240,10 +240,20 @@ connection test) use ephemeral threads.
 ### Sandbox and safety
 
 A thread is started read-only (`sandbox: read-only`), with no approvals
-(`approvalPolicy: never`), with codex's own shell, file, browser, plugin,
-hook and sub-agent surfaces switched off in the thread's config, and with
-Nolune's tool definitions as `dynamicTools`: the only tools the model can
-call. The MCP servers in the user's own codex config need more than a
+(`approvalPolicy: never`), with no environment (`environments: []`,
+repeated on every `turn/start` because `thread/resume` does not keep it),
+with codex's own shell, file, web search, browser, plugin, hook, goal,
+skill, user-input and sub-agent surfaces switched off in the thread's
+config, and with Nolune's tool definitions as `dynamicTools`: the only
+tools the model can call. That is checked against the pinned release by
+the tool list the model is actually sent (the release checklist says how),
+because some switches are not where their names suggest:
+`tools.web_search = false` parses and is dropped, which leaves cached web
+search on, so the thread sets the top-level `web_search = "disabled"`;
+`apply_patch` comes with the model rather than a feature flag, and only
+the empty environment list takes it away; the skills catalog is both a
+block of instructions (`skills.include_instructions`) and, on a thread
+without an environment, a tool namespace (`orchestrator.skills`). The MCP servers in the user's own codex config need more than a
 switch: the app-server merges the thread's config overrides into
 `config.toml` per key, so an empty `mcp_servers` table disables nothing
 (verified against the pinned release: every configured server still
@@ -362,7 +372,7 @@ network, through the conformance harness in
 provider. The HTTP adapters answer in-process mock servers that return
 the provider's own wire shapes (SSE for streams, JSON for completions,
 status codes and headers for errors); Codex answers a fake app-server that
-plays `fixtures/codex-0.155.0.jsonl`, the answers and events recorded from
+plays `fixtures/codex-0.156.1.jsonl`, the answers and events recorded from
 the pinned release. Each case runs once per provider it applies to:
 
 - completion with a tool call and usage, structured output, and the

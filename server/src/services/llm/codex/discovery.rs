@@ -103,7 +103,7 @@ pub fn locate(lookup: BinaryLookup<'_>) -> Result<(PathBuf, BinarySource), AppSe
         .ok_or(AppServerError::NotInstalled)
 }
 
-/// The version from `codex --version` output (`codex-cli 0.155.0`): the
+/// The version from `codex --version` output (`codex-cli 0.156.1`): the
 /// last whitespace-separated token of the first non-empty line, without a
 /// `v` prefix, when it starts with a digit.
 pub fn parse_version_output(stdout: &str) -> Option<String> {
@@ -205,12 +205,12 @@ mod tests {
     #[test]
     fn parse_version_output_reads_the_cli_format() {
         assert_eq!(
-            parse_version_output("codex-cli 0.155.0\n").as_deref(),
-            Some("0.155.0")
+            parse_version_output("codex-cli 0.156.1\n").as_deref(),
+            Some("0.156.1")
         );
         assert_eq!(
-            parse_version_output("\ncodex-cli v0.155.0\n").as_deref(),
-            Some("0.155.0")
+            parse_version_output("\ncodex-cli v0.156.1\n").as_deref(),
+            Some("0.156.1")
         );
         assert_eq!(parse_version_output("codex-cli").as_deref(), None);
         assert_eq!(parse_version_output("").as_deref(), None);
