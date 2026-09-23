@@ -76,6 +76,9 @@
 <style>
  /* The form provides the focus border; an inner outline would divide the composer. */
  .composer :global(textarea:focus-visible){outline:none}
+ /* Long drafts still scroll; the bar would only cut across the text. */
+ .composer :global(textarea){overflow-x:hidden;scrollbar-width:none}
+ .composer :global(textarea::-webkit-scrollbar){display:none}
 
  .composer{width:100%;min-width:0}.hint{font-size:12px;color:var(--text-muted)}.error{font-size:13px;color:var(--destructive);padding:8px 4px;margin:0}.limit{font-size:13px;line-height:1.5;color:var(--text-secondary);padding:8px 4px 0;margin:0}
 </style>
