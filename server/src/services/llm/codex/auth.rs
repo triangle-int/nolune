@@ -859,12 +859,7 @@ mod tests {
     /// `version` for `--version`.
     fn fake_binary(dir: &Path, version: &str) -> PathBuf {
         let path = dir.join("codex");
-        std::fs::write(&path, format!("#!/bin/sh\necho 'codex-cli {version}'\n")).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        fake::codex_script(&path, &format!("#!/bin/sh\necho 'codex-cli {version}'\n"));
         path
     }
 

@@ -224,12 +224,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let binary = dir.path().join("codex");
-        std::fs::write(&binary, "#!/bin/sh\necho 'codex-cli 9.0.0'\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        fake::codex_script(&binary, "#!/bin/sh\necho 'codex-cli 9.0.0'\n");
         let auth = Auth::with_lookup(Some(binary.as_os_str().to_owned()), None);
         let (_workspace, state) = state_with(auth).await;
         let (code, body) = call(
