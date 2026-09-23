@@ -299,29 +299,49 @@ pub(crate) fn redact_value(mut value: serde_json::Value) -> serde_json::Value {
     value
 }
 
+/// The key and connection-string shapes `redact_secrets` masks, compiled
+/// once: every request body is redacted string by string, and compiling
+/// them per string cost milliseconds each in a debug build, synchronous
+/// work that no probe deadline can interrupt.
+fn secret_patterns() -> &'static [Regex] {
+    static PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
+    PATTERNS.get_or_init(|| {
+        [
+            r#"sk-ant-api03-[A-Za-z0-9_\-]{80,}"#,
+            r#"sk-ant-[A-Za-z0-9_\-]{20,}"#,
+            r#"sk-proj-[A-Za-z0-9_\-]{20,}"#,
+            r"sk-[A-Za-z0-9]{20,}",
+            r"ghp_[A-Za-z0-9]{36,}",
+            r"github_pat_[A-Za-z0-9_]{80,}",
+            r"gho_[A-Za-z0-9]{36,}",
+            r#"postgresql://[^\s"']+[^\s"'.]"#,
+            r#"postgres://[^\s"']+[^\s"'.]"#,
+            r"AIza[A-Za-z0-9_\-]{30,}",
+        ]
+        .iter()
+        .map(|pattern| Regex::new(pattern).expect("secret pattern"))
+        .collect()
+    })
+}
+
 /// Redact known secret patterns and exact env var values from text.
 pub fn redact_secrets(text: &str) -> String {
-    let patterns = [
-        r#"sk-ant-api03-[A-Za-z0-9_\-]{80,}"#,
-        r#"sk-ant-[A-Za-z0-9_\-]{20,}"#,
-        r#"sk-proj-[A-Za-z0-9_\-]{20,}"#,
-        r"sk-[A-Za-z0-9]{20,}",
-        r"ghp_[A-Za-z0-9]{36,}",
-        r"github_pat_[A-Za-z0-9_]{80,}",
-        r"gho_[A-Za-z0-9]{36,}",
-        r#"postgresql://[^\s"']+[^\s"'.]"#,
-        r#"postgres://[^\s"']+[^\s"'.]"#,
-        r"AIza[A-Za-z0-9_\-]{30,}",
-    ];
-
-    let capability_tokens = CAPABILITY_TOKENS
-        .get_or_init(Default::default)
-        .lock()
-        .expect("capability token lock")
-        .tokens
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>();
+    // Only a `cap=` can exempt a registered capability, and `[REDACTED]`
+    // never forms one, so text without it skips the registry: up to 4096
+    // tokens, otherwise searched once per secret and pattern for every
+    // string of every request.
+    let capability_tokens = if text.contains("cap=") {
+        CAPABILITY_TOKENS
+            .get_or_init(Default::default)
+            .lock()
+            .expect("capability token lock")
+            .tokens
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     let mut result = text.to_string();
     for secret in CONTROL_SECRETS
         .get_or_init(Default::default)
@@ -333,9 +353,10 @@ pub fn redact_secrets(text: &str) -> String {
         result = replace_exact_secret(&result, secret, &capability_tokens);
     }
 
-    for pat in &patterns {
-        if let Ok(re) = Regex::new(pat) {
-            result = replace_regex_preserving_capabilities(&result, &re, &capability_tokens);
+    for re in secret_patterns() {
+        // Unanchored, so no match in the whole text means none in a part.
+        if re.is_match(&result) {
+            result = replace_regex_preserving_capabilities(&result, re, &capability_tokens);
         }
     }
 
@@ -347,7 +368,7 @@ pub fn redact_secrets(text: &str) -> String {
 }
 
 fn replace_exact_secret(text: &str, secret: &str, capability_tokens: &[String]) -> String {
-    if secret.is_empty() {
+    if secret.is_empty() || !text.contains(secret) {
         return text.to_owned();
     }
 
