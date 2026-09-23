@@ -188,11 +188,9 @@ pub async fn run_single_turn(
     // sections at the top and dynamic/per-message sections at the bottom.
     let mut system_prompt = base_prompt;
 
-    // Stable: skills, capabilities, style (rarely change)
-    let skills_prompt = build_skills_prompt(workspace_dir);
-    if !skills_prompt.is_empty() {
-        system_prompt = format!("{system_prompt}\n\n{skills_prompt}");
-    }
+    // Stable: built-in skills, capabilities, style. Installed skills are not
+    // listed here so installing one never changes the prompt (see list_skills).
+    system_prompt = format!("{system_prompt}\n\n{}", build_skills_prompt());
 
     // Dynamic tool hint
     let email_accounts = crate::config::EmailAccounts::load(workspace_dir, &instance_slug);
@@ -357,9 +355,9 @@ pub async fn run_single_turn(
     // System prompt is fully static (soul, skills, style, integrations).
     // Mood and rhythm changes are recorded as messages in rig_history.
     // System prompt split into two blocks for Anthropic prompt caching:
-    // Block 1 (stable): soul + skills + tools + integrations + style — cached across turns
+    // Block 1 (stable): soul + built-in skills + tools + integrations + style — cached across turns
     // Block 2 (semi-stable): memory catalog — cached until memory changes
-    // Time is injected into the user message (not system) to keep the entire system prefix stable.
+    // No clock anywhere in the prompt (the model runs `date`), so the prefix stays stable.
     let system_stable = system_prompt;
 
     // Memory catalog removed from system prompt — relevant memories are
@@ -518,9 +516,8 @@ pub async fn run_single_turn(
         all_tools.len(),
         history_msgs.len()
     );
-    // Block 1 (stable): soul + skills + tools — cached across turns
+    // Block 1 (stable): soul + built-in skills + tools — cached across turns
     // Block 2 (semi-stable): memory catalog — cached until memories change
-    // Time is in the user message, not here — keeps the prefix stable for caching.
     let system_blocks: Vec<&str> = vec![&system_stable, &memory_block];
     let tool_result = llm
         .chat_with_tools_streaming(
@@ -1372,14 +1369,12 @@ fn compute_context_stats_local(
     });
 
     // 2. Skills
-    let skills_prompt = build_skills_prompt(workspace_dir);
-    if !skills_prompt.is_empty() {
-        sections.push(ContextSection {
-            name: "skills".into(),
-            chars: skills_prompt.len(),
-            tokens: estimate_tokens(&skills_prompt),
-        });
-    }
+    let skills_prompt = build_skills_prompt();
+    sections.push(ContextSection {
+        name: "skills".into(),
+        chars: skills_prompt.len(),
+        tokens: estimate_tokens(&skills_prompt),
+    });
 
     // 3. Tools hint (static string)
     let tools_hint = "## tools\nyou have built-in tools for web browsing, \
@@ -1570,31 +1565,21 @@ fn unix_millis() -> u128 {
         .as_millis()
 }
 
-/// Build a prompt section listing active skills and their instructions.
-fn build_skills_prompt(workspace_dir: &Path) -> String {
-    let all_skills = skills::list_skills(workspace_dir);
-    let active: Vec<_> = all_skills
-        .into_iter()
-        .filter(|s| s.enabled && !s.instructions.is_empty())
-        .collect();
-
-    if active.is_empty() {
-        return String::new();
-    }
-
+/// The skills section of the system prompt. It names only the skills built
+/// into this binary, so installing, removing, or disabling one mid-conversation
+/// never changes the prompt or breaks its cache; the model finds installed
+/// skills with `list_skills`, which reads them on every call.
+fn build_skills_prompt() -> String {
     let mut out = String::from(
-        "## skills\nyou have the following skills installed. \
-        call `activate_skill` to use any skill — it will return instructions for execution.\n\n",
+        "## skills\n\
+         skills are instructions for particular tasks. call `list_skills` to see the \
+         installed ones: check it when a task might match a skill, and before saying \
+         you can't do something. call `activate_skill` to use one; it returns the \
+         skill's instructions.\n\
+         built in:\n",
     );
-    for skill in &active {
-        let has_refs = skill.resources.iter().any(|r| r.starts_with("references/"));
-        out.push_str(&format!(
-            "- **{}** (id: `{}`): {}{}\n",
-            skill.name,
-            skill.id,
-            skill.description,
-            if has_refs { " [has references]" } else { "" },
-        ));
+    for skill in skills::builtin_skills() {
+        out.push_str(&format!("- **{}**: {}\n", skill.name, skill.description));
     }
     out
 }
@@ -2277,5 +2262,21 @@ mod companion_boundary_tests {
             !alice.join("messages.jsonl").exists() && fs::read_dir(&alice).unwrap().count() == 1,
             "no restart message is written into an obsolete directory"
         );
+    }
+}
+
+#[cfg(test)]
+mod skills_prompt_tests {
+    use super::build_skills_prompt;
+
+    /// The prompt names only built-in skills, so installing one
+    /// mid-conversation leaves it (and its cache) unchanged; the model is
+    /// pointed at list_skills for the rest.
+    #[test]
+    fn skills_prompt_names_built_in_skills_and_points_at_list_skills() {
+        let prompt = build_skills_prompt();
+        assert!(prompt.contains("`list_skills`"), "{prompt}");
+        assert!(prompt.contains("`activate_skill`"), "{prompt}");
+        assert!(prompt.contains("- **configure-nolune**: "), "{prompt}");
     }
 }

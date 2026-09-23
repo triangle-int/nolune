@@ -71,7 +71,8 @@ fn validate_skill_id(id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn builtin_skills() -> impl Iterator<Item = Skill> {
+/// The skills compiled into this build; they change only with the binary.
+pub fn builtin_skills() -> impl Iterator<Item = Skill> {
     BUILTIN_SKILLS.iter().map(|(id, content)| {
         let (frontmatter, body) = parse_skill_md(content);
         Skill {

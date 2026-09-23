@@ -105,7 +105,7 @@ pub use memory_tools::{
     MemoryConnectTool, MemoryForgetTool, MemoryReadTool, MemorySearchTool, MemoryWriteTool,
 };
 pub use project::{TaskItem, TaskStatus};
-pub use skills::ActivateSkillTool;
+pub use skills::{ActivateSkillTool, ListSkillsTool};
 pub use system::{
     ClearContextTool, CreateDropTool, ExportProfileTool, ImportProfileTool, InteractiveSessionTool,
     RequestSecretTool, RunCommandTool,
@@ -955,6 +955,7 @@ pub fn build_tools(
     }
 
     // ── Skills ──
+    tools.push(wrap(Box::new(ListSkillsTool::new(workspace_dir))));
     tools.push(wrap(Box::new(ActivateSkillTool::new(
         workspace_dir,
         &llm.api_key,

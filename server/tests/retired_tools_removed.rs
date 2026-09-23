@@ -1,11 +1,11 @@
 //! Guard for trimmed tool surface: the model reads the clock from the
 //! terminal (`date` via run_command), not from a `get_time` tool or a
 //! `[current time: …]` block on every user message; tools that duplicated a
-//! general one stay gone (edit_soul → edit_file, list_skills → the skills
-//! prompt, read_skill_reference → read_file, memory_list → memory_read on a
-//! folder); settings go through `nolune config` and the configure-nolune
-//! skill, not get_settings/update_config; and the prompt names no tool that
-//! is not registered.
+//! general one stay gone (edit_soul → edit_file, read_skill_reference →
+//! read_file, memory_list → memory_read on a folder); settings go through
+//! `nolune config` and the configure-nolune skill, not
+//! get_settings/update_config; and the prompt names no tool that is not
+//! registered.
 
 #[path = "../test-support/source_scan.rs"]
 mod source_scan;
@@ -49,8 +49,6 @@ fn retired_and_phantom_tool_names_are_absent() {
         "`browse`",
         "EditSoulTool",
         "\"edit_soul\"",
-        "ListSkillsTool",
-        "\"list_skills\"",
         "ReadSkillReferenceTool",
         "\"read_skill_reference\"",
         "MemoryListTool",
