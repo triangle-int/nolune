@@ -265,9 +265,9 @@ pub async fn run_single_turn(
         }
     }
 
-    // Instance config — serialize the whole struct so new fields are automatically visible
+    // Instance config — every field, with secrets reduced to whether they are set
     {
-        let config_toml = toml::to_string_pretty(&instance_cfg).unwrap_or_default();
+        let config_toml = instance_config_prompt_toml(&instance_cfg);
 
         let machines = machine_registry.list().await;
         let machine_lines: Vec<String> = machines
@@ -1571,6 +1571,55 @@ fn unix_millis() -> u128 {
 }
 
 /// Build a prompt section listing active skills and their instructions.
+/// instance.toml as the system prompt shows it. The prompt goes to the LLM
+/// provider on every turn and the model can repeat it, so secret values
+/// never appear; a secret shows only whether it is set.
+///
+/// This is an allowlist, not a redaction pass: the destructure names every
+/// field, so adding one to `InstanceConfig` or `GithubConfig` stops the build
+/// here until someone decides whether its value is safe to show.
+fn instance_config_prompt_toml(cfg: &crate::config::InstanceConfig) -> String {
+    #[derive(serde::Serialize)]
+    struct PromptView<'a> {
+        elevenlabs_voice_id: &'a str,
+        voice_enabled: bool,
+        skin: &'a str,
+        rhythm_tracking: bool,
+        github: GithubView,
+    }
+    #[derive(serde::Serialize)]
+    struct GithubView {
+        token: &'static str,
+    }
+
+    let crate::config::InstanceConfig {
+        github: crate::config::GithubConfig {
+            token: github_token,
+        },
+        elevenlabs_voice_id,
+        voice_enabled,
+        skin,
+        rhythm_tracking,
+    } = cfg;
+    let secret = |value: &str| {
+        if value.is_empty() {
+            "(not set)"
+        } else {
+            "(set, value hidden)"
+        }
+    };
+    toml::to_string_pretty(&PromptView {
+        elevenlabs_voice_id,
+        voice_enabled: *voice_enabled,
+        skin,
+        rhythm_tracking: *rhythm_tracking,
+        github: GithubView {
+            token: secret(github_token),
+        },
+    })
+    .unwrap_or_default()
+}
+
 fn build_skills_prompt(workspace_dir: &Path) -> String {
     let all_skills = skills::list_skills(workspace_dir);
     let active: Vec<_> = all_skills
@@ -2160,6 +2209,52 @@ mod codex_thread_tests {
         .unwrap();
         assert_eq!(get_chat_codex_thread(ws, "moon", "chat-1").unwrap(), None);
         assert_eq!(get_chat_title(ws, "moon", "chat-1").unwrap(), "old");
+    }
+}
+
+#[cfg(test)]
+mod instance_config_prompt_tests {
+    use super::instance_config_prompt_toml;
+    use crate::config::InstanceConfig;
+
+    #[test]
+    fn the_prompt_shows_instance_config_without_the_github_token() {
+        let workspace = tempfile::tempdir().unwrap();
+        let dir = workspace.path().join("instances").join("moon");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("instance.toml"),
+            "voice_enabled = true\n\
+             elevenlabs_voice_id = \"voice-42\"\n\
+             [github]\n\
+             token = \"ghp_TESTTOKEN123\"\n",
+        )
+        .unwrap();
+        let cfg = InstanceConfig::load(workspace.path(), "moon");
+        assert_eq!(cfg.github.token, "ghp_TESTTOKEN123", "the fixture loads");
+
+        let section = instance_config_prompt_toml(&cfg);
+
+        assert!(!section.contains("ghp_TESTTOKEN123"), "{section}");
+        assert!(!section.contains("TESTTOKEN"), "{section}");
+        assert!(
+            section.contains("token = \"(set, value hidden)\""),
+            "{section}"
+        );
+        assert!(section.contains("voice_enabled = true"), "{section}");
+        assert!(
+            section.contains("elevenlabs_voice_id = \"voice-42\""),
+            "{section}"
+        );
+        assert!(section.contains("skin = \"moon\""), "{section}");
+        assert!(section.contains("rhythm_tracking = true"), "{section}");
+    }
+
+    #[test]
+    fn an_empty_github_token_reads_as_not_set() {
+        let section = instance_config_prompt_toml(&InstanceConfig::default());
+
+        assert!(section.contains("token = \"(not set)\""), "{section}");
     }
 }
 
