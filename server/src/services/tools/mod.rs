@@ -90,7 +90,7 @@ pub mod system;
 // Re-export public items so external code uses `tools::FooTool` paths
 pub use communication::{ReachOutTool, ReadEmailTool, ScheduledTask, SendEmailTool};
 pub use companion::{
-    ALLOWED_MOODS, EditSoulTool, SetVoiceTool, get_voice_override, load_mood_state, save_mood_state,
+    ALLOWED_MOODS, SetVoiceTool, get_voice_override, load_mood_state, save_mood_state,
 };
 pub use computer::{
     ListMachinesTool, MachineTarget, RemoteBashTool, RemoteFilesTool, TargetSelection,
@@ -102,14 +102,13 @@ pub use cua::{
 pub use files::{EditFileTool, ListFilesTool, ReadFileTool, UploadFileTool, WriteFileTool};
 pub use image::ViewImageTool;
 pub use memory_tools::{
-    MemoryConnectTool, MemoryForgetTool, MemoryListTool, MemoryReadTool, MemorySearchTool,
-    MemoryWriteTool,
+    MemoryConnectTool, MemoryForgetTool, MemoryReadTool, MemorySearchTool, MemoryWriteTool,
 };
 pub use project::{TaskItem, TaskStatus};
-pub use skills::{ActivateSkillTool, ListSkillsTool, ReadSkillReferenceTool};
+pub use skills::ActivateSkillTool;
 pub use system::{
-    ClearContextTool, CreateDropTool, ExportProfileTool, GetSettingsTool, GetTimeTool,
-    ImportProfileTool, InteractiveSessionTool, RequestSecretTool, RunCommandTool, UpdateConfigTool,
+    ClearContextTool, CreateDropTool, ExportProfileTool, ImportProfileTool, InteractiveSessionTool,
+    RequestSecretTool, RunCommandTool,
 };
 // ---------------------------------------------------------------------------
 // Cached tool definitions snapshot (populated by build_tools, read by stats)
@@ -502,15 +501,12 @@ pub fn tool_summary_on(name: &str, args: &str, target: &MachineTarget) -> String
         "edit_file" => format!("editing {}", v["path"].as_str().unwrap_or("?")),
         "list_files" => format!("listing {}", v["path"].as_str().unwrap_or(".")),
         "run_command" => "running command".into(),
-        "edit_soul" => "rewriting soul.md".into(),
         "set_mood" => format!("mood → {}", v["mood"].as_str().unwrap_or("?")),
         "remember" => "storing a memory".into(),
         "recall" => format!("recalling '{}'", v["query"].as_str().unwrap_or("?")),
         "web_search" => format!("web search: {}", v["query"].as_str().unwrap_or("?")),
         "web_fetch" => "fetching URL".into(),
-        "update_config" => "updating config".into(),
         "create_drop" => format!("creating drop: {}", v["title"].as_str().unwrap_or("?")),
-        "get_settings" => "reading current settings".into(),
         "task_continuity_update" => "recording task progress".into(),
         "commitment_create" => format!("committing to: {}", v["promise"].as_str().unwrap_or("?")),
         "commitment_update" => "editing a commitment".into(),
@@ -541,11 +537,6 @@ pub fn tool_summary_on(name: &str, args: &str, target: &MachineTarget) -> String
             }
         }
         "request_secret" => format!("requesting secret: {}", v["prompt"].as_str().unwrap_or("?")),
-        "read_skill_reference" => format!(
-            "reading skill ref {}/{}",
-            v["skill_id"].as_str().unwrap_or("?"),
-            v["filename"].as_str().unwrap_or("?")
-        ),
         // send_file removed
         _ => format!("calling {name}"),
     }
@@ -914,11 +905,6 @@ pub fn build_tools(
             vector_store.clone(),
             resources,
         ))),
-        wrap(Box::new(MemoryListTool::new(
-            workspace_dir,
-            instance_slug,
-            vector_store.clone(),
-        ))),
         wrap(Box::new(MemoryForgetTool::new(
             workspace_dir,
             instance_slug,
@@ -936,7 +922,6 @@ pub fn build_tools(
             vector_store.clone(),
         ))),
         // Mood is managed by background sentiment extraction + heartbeat, not tools.
-        wrap(Box::new(EditSoulTool::new(workspace_dir, instance_slug))),
         wrap(Box::new(SetVoiceTool::new(workspace_dir, instance_slug))),
         wrap(Box::new(RunCommandTool::new(
             workspace_dir,
@@ -959,20 +944,6 @@ pub fn build_tools(
         instance_slug,
     ))));
     // send_file removed — images from tool results are auto-attached (see llm.rs)
-    tools.push(wrap(Box::new(GetTimeTool::new(
-        workspace_dir,
-        instance_slug,
-    ))));
-    tools.push(wrap(Box::new(GetSettingsTool::new(
-        config_path,
-        workspace_dir,
-        instance_slug,
-    ))));
-    tools.push(wrap(Box::new(UpdateConfigTool::new(
-        config_path,
-        workspace_dir,
-        instance_slug,
-    ))));
     if let Some(ps) = pending_secrets {
         tools.push(wrap(Box::new(RequestSecretTool::new(
             workspace_dir,
@@ -984,15 +955,10 @@ pub fn build_tools(
     }
 
     // ── Skills ──
-    tools.push(wrap(Box::new(ListSkillsTool::new(
-        workspace_dir,
-        &llm.api_key,
-    ))));
     tools.push(wrap(Box::new(ActivateSkillTool::new(
         workspace_dir,
         &llm.api_key,
     ))));
-    tools.push(wrap(Box::new(ReadSkillReferenceTool::new(workspace_dir))));
 
     // ── Web ──
     // web_search and web_fetch are native Anthropic server tools (added in llm.rs)

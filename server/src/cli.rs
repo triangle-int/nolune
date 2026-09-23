@@ -16,6 +16,7 @@ use cua_protocol::{
 };
 
 mod federation;
+mod settings;
 
 use crate::{
     config::{self, Profile},
@@ -109,6 +110,11 @@ pub enum CliCommand {
         #[command(subcommand)]
         action: federation::FederationAction,
     },
+    /// Show or change the companion's settings: timezone, name, API keys, GitHub, email
+    Config {
+        #[command(subcommand)]
+        action: settings::ConfigAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -168,6 +174,7 @@ pub fn run(cmd: CliCommand, profile: &Profile) -> i32 {
         CliCommand::Cua { action } => cua(action, profile),
         CliCommand::Restore { archive, yes } => restore_cmd(&archive, yes, profile),
         CliCommand::Federation { action } => federation::run(action, profile),
+        CliCommand::Config { action } => settings::run(action, profile),
     }
 }
 

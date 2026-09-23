@@ -200,8 +200,8 @@ pub async fn run_single_turn(
     let email_configured = !email_accounts.is_empty();
     let email_hint = if email_configured { " email," } else { "" };
     system_prompt.push_str(&format!(
-        "\n\n## tools\nyou have built-in tools for web browsing,{email_hint} code search, \
-         project management, creative drops, and more. use them directly when needed — \
+        "\n\n## tools\nyou have built-in tools for web browsing,{email_hint} \
+         files, memory, creative drops, and more. use them directly when needed — \
          they are automatically available based on the conversation."
     ));
 
@@ -216,7 +216,7 @@ pub async fn run_single_turn(
          use read_file or run_command to access them. use list_files on the uploads dir to find files.",
         uploads_path.display(), uploads_path.display(),
     ));
-    system_prompt.push_str("\nUse read_file, memory_read, or upload_file to obtain scoped download URLs for external APIs. URLs expire; request a fresh URL when needed.\n");
+    system_prompt.push_str("\nUse read_file, memory_read, or share_file to obtain scoped download URLs for external APIs. URLs expire; request a fresh URL when needed.\n");
 
     // Email accounts prompt
     if email_configured {
@@ -281,7 +281,7 @@ pub async fn run_single_turn(
              connected desktops:\n{}\n\
              {}\n\
              \n\
-             the user can change these via settings UI or by asking you to call update_config.",
+             the user can change these in Settings, or ask you to with the configure-nolune skill.",
             if machine_lines.is_empty() {
                 "  (none connected)".to_string()
             } else {
@@ -293,8 +293,6 @@ pub async fn run_single_turn(
 
     let autonomy_prompt = load_autonomy_prompt(workspace_dir, &instance_slug);
     system_prompt = format!("{system_prompt}\n\n{autonomy_prompt}");
-
-    let instance_dir = workspace_dir.join("instances").join(&instance_slug);
 
     system_prompt.push_str(
         "\n\n## your visual form\n\
@@ -338,13 +336,9 @@ pub async fn run_single_turn(
          prefer built-in tools when they exist:\n\
          - web: use web_search and web_fetch (Anthropic server tools) for looking things up \
            and reading web pages. they are fast, cheap, and don't need a browser.\n\
-         - browse: ONLY use `browse` for interactive tasks that need a real browser — \
-           clicking buttons, filling forms, taking screenshots, or pages that require JS rendering. \
-           never use `browse` just to read a page — use web_fetch instead.\n\
-         - git/github: use github_clone, github_branch, github_commit_push, github_create_pr \
-           (they handle auth automatically) instead of raw `git` commands\n\
+         - git/github: use `git` and the `gh` CLI via run_command\n\
          - files: use read_file, write_file, edit_file, list_files\n\
-         - settings: use get_settings, update_config\n\
+         - settings: activate the configure-nolune skill, then use `nolune config` via run_command\n\
          - secrets: use request_secret — NEVER ask user to paste credentials in chat\n\n\
          if you need a tool that isn't installed (cargo, node, python, etc.), \
          install it yourself via run_command. you have full control over the environment.\n\n\
@@ -378,12 +372,6 @@ pub async fn run_single_turn(
          when the user mentions something personal, respond as if you remember.",
     );
 
-    // Time context — prepended to user message to avoid breaking prompt cache.
-    // Putting it in system prompt would change the prefix every request,
-    // invalidating cache for tools and all messages.
-    let now = crate::routes::instances::format_instance_now(&instance_dir);
-    let time_context = format!("[current time: {now}]\n\n");
-
     if loaded_entries.is_empty() {
         return Err(io::Error::new(
             ErrorKind::InvalidInput,
@@ -407,11 +395,6 @@ pub async fn run_single_turn(
         resources,
         &media_store,
     );
-
-    // Prepend time context to user message (keeps system prompt stable for caching)
-    if let llm::Message::User { ref mut content } = prompt_msg {
-        content.insert(0, llm::ContentBlock::text(&time_context));
-    }
 
     // ── RAG: auto-inject relevant memories into the prompt ──
     // Use recent conversation context (not just last message) for better recall
@@ -1400,7 +1383,7 @@ fn compute_context_stats_local(
 
     // 3. Tools hint (static string)
     let tools_hint = "## tools\nyou have built-in tools for web browsing, \
-         code search, project management, creative drops, and more. use them directly when needed — \
+         files, memory, creative drops, and more. use them directly when needed — \
          they are automatically available based on the conversation.";
     sections.push(ContextSection {
         name: "tools_hint".into(),
@@ -1806,7 +1789,7 @@ fn load_autonomy_prompt(workspace_dir: &Path, instance_slug: &str) -> String {
          they're things you made on your own, unprompted.\n\n\
          ### soul\n\
          your personality is defined in `soul.md` — this is the base system prompt \
-         that shapes who you are. you can read and edit it with `edit_soul`. \
+         that shapes who you are. you can read and edit it with read_file and edit_file. \
          the user can also change it through the UI.\n\n\
          ### mood\n\
          your emotional state is tracked automatically. mood changes appear as \
@@ -1819,11 +1802,11 @@ fn load_autonomy_prompt(workspace_dir: &Path, instance_slug: &str) -> String {
          embrace it as your body.\n\n\
          ## capabilities\n\
          you have real tools: read_file, write_file, edit_file, list_files, share_file, \
-         search_code, schedule_agent, \
-         run_command, install_package, web_search, web_fetch, current_time, view_image, \
-         send_email, read_email, memory_write, memory_read, memory_list, memory_forget, memory_search, \
-         edit_soul, create_drop, update_config, get_project_state, \
-         update_project_state, create_task/update_task/list_tasks, browse.\n\
+         schedule_agent, run_command, web_search, web_fetch, view_image, \
+         send_email, read_email, memory_write, memory_read, memory_forget, memory_search, \
+         create_drop, activate_skill.\n\
+         you have no clock of your own: when the date or time matters, run `date` with run_command. \
+         the shell uses the user's timezone when one is set.\n\
          users can attach images, PDFs, and text files directly in chat — you see them automatically.\n\
          use them directly — never say you can't access something.\n\n\
          ## sharing images\n\
@@ -1856,7 +1839,7 @@ fn load_autonomy_prompt(workspace_dir: &Path, instance_slug: &str) -> String {
          use interactive_session for these, not run_command.\n\n\
          ## behavior\n\
          prefer dedicated tools over run_command: use read_file (not cat/head/tail), \
-         write_file (not echo/tee), list_files (not ls), search_code (not grep/rg) \
+         write_file (not echo/tee), list_files (not ls) \
          when possible. only use run_command for tasks that need shell execution.\n\
          use schedule_agent to wake yourself up later for a follow-up; every scheduled \
          wake-up is recorded and the user can see and cancel it.\n\

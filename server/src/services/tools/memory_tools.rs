@@ -201,7 +201,8 @@ impl MemoryReadTool {
 #[derive(Deserialize, JsonSchema)]
 pub struct MemoryReadArgs {
     /// Path to read — a file path (e.g. "about/basics.md") returns its content,
-    /// a folder path (e.g. "about/") lists its contents.
+    /// a folder path (e.g. "about/") lists every memory under it with its summary,
+    /// and "" lists the whole library.
     pub path: String,
 }
 
@@ -215,7 +216,9 @@ impl Tool for MemoryReadTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "memory_read".into(),
-            description: "Read a memory file or list folder contents.".into(),
+            description: "Read a memory file, or list the memories in a folder (\"\" for the \
+                whole library) with their summaries."
+                .into(),
             parameters: openai_schema::<MemoryReadArgs>(),
         }
     }
@@ -232,40 +235,24 @@ impl Tool for MemoryReadTool {
             )
         };
         if clean_path.is_empty() || metadata.is_some_and(|metadata| metadata.is_dir) {
-            // List directory contents, minus what this reader may not see.
-            let items = self
-                .media
-                .list_memory_dir(
-                    &self.instance_slug,
-                    (!clean_path.is_empty()).then_some(clean_path),
-                )
-                .map_err(|error| ToolExecError(error.to_string()))?
-                .into_iter()
-                .filter(|entry| {
-                    entry.is_dir
-                        || crate::services::memory::visible_to(
-                            &self.media,
-                            &self.instance_slug,
-                            &if clean_path.is_empty() {
-                                entry.name.clone()
-                            } else {
-                                format!("{clean_path}/{}", entry.name)
-                            },
-                            self.access,
-                        )
-                })
-                .map(|entry| {
-                    if entry.is_dir {
-                        format!("{}/", entry.name)
-                    } else {
-                        entry.name
-                    }
-                })
-                .collect::<Vec<_>>();
-            if items.is_empty() {
-                Ok("(empty folder)".into())
+            // A folder lists every memory under it with its summary, minus
+            // what this reader may not see.
+            let folder = format!("{clean_path}/");
+            let listing: String = crate::services::memory::scan_library_for(
+                &self.media,
+                &self.instance_slug,
+                self.access,
+            )
+            .into_iter()
+            .filter(|entry| clean_path.is_empty() || entry.path.starts_with(&folder))
+            .map(|entry| format!("{} — {}\n", entry.path, entry.summary))
+            .collect();
+            if !listing.is_empty() {
+                Ok(listing)
+            } else if clean_path.is_empty() {
+                Ok("(empty library — no memories yet)".into())
             } else {
-                Ok(items.join("\n"))
+                Ok("(empty folder)".into())
             }
         } else if metadata.is_some_and(|metadata| metadata.is_file) {
             if !crate::services::memory::visible_to(
@@ -358,87 +345,6 @@ impl Tool for MemoryReadTool {
         } else {
             Err(ToolExecError(format!("not found: {clean_path}")))
         }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// memory_list — browse the full library structure
-// ---------------------------------------------------------------------------
-
-pub struct MemoryListTool {
-    media: Arc<crate::services::media_text::MediaStore>,
-    instance_slug: String,
-    access: MemoryAccess,
-}
-
-impl MemoryListTool {
-    pub fn new(_workspace_dir: &Path, instance_slug: &str, vector_store: Arc<VectorStore>) -> Self {
-        Self {
-            media: vector_store.media_store(),
-            instance_slug: instance_slug.to_string(),
-            access: MemoryAccess::Direct,
-        }
-    }
-
-    /// Who is listing: a routine never sees memories excluded from
-    /// proactive use (#84).
-    pub fn with_access(mut self, access: MemoryAccess) -> Self {
-        self.access = access;
-        self
-    }
-}
-
-#[derive(Deserialize, JsonSchema)]
-pub struct MemoryListArgs {
-    /// Optional: filter by folder prefix (e.g. "moments/"). Omit to list everything.
-    #[serde(default)]
-    pub prefix: String,
-}
-
-impl Tool for MemoryListTool {
-    const NAME: &'static str = "memory_list";
-    type Error = ToolExecError;
-    type Args = MemoryListArgs;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: "memory_list".into(),
-            description: "List all memory files with summaries. Optional folder filter.".into(),
-            parameters: openai_schema::<MemoryListArgs>(),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let entries = crate::services::memory::scan_library_for(
-            &self.media,
-            &self.instance_slug,
-            self.access,
-        );
-
-        if entries.is_empty() {
-            return Ok("(empty library — no memories yet)".into());
-        }
-
-        let prefix = args.prefix.trim().trim_start_matches('/');
-        let filtered: Vec<_> = if prefix.is_empty() {
-            entries
-        } else {
-            entries
-                .into_iter()
-                .filter(|e| e.path.starts_with(prefix))
-                .collect()
-        };
-
-        if filtered.is_empty() {
-            return Ok(format!("no memories under \"{prefix}\""));
-        }
-
-        let mut result = String::new();
-        for entry in &filtered {
-            result.push_str(&format!("{} — {}\n", entry.path, entry.summary));
-        }
-        Ok(result)
     }
 }
 
@@ -611,7 +517,7 @@ impl Tool for MemorySearchTool {
             description: "Search the memory library using natural language. \
                 Finds relevant memories by matching words and concepts across all files. \
                 Large files are searched at chunk level for precise results. \
-                Use this instead of memory_list when looking for something specific."
+                Use this instead of listing with memory_read when looking for something specific."
                 .into(),
             parameters: openai_schema::<MemorySearchArgs>(),
         }
@@ -1495,10 +1401,11 @@ mod proactive_access_tests {
         // Proactive first: the direct pass at the end is allowed to rewrite.
         for access in [MemoryAccess::Proactive, MemoryAccess::Direct] {
             let proactive = access == MemoryAccess::Proactive;
-            let listed = MemoryListTool::new(ws, "one", store.clone())
-                .with_access(access)
-                .call(MemoryListArgs {
-                    prefix: String::new(),
+            let reader =
+                MemoryReadTool::new(ws, "one", "", store.clone(), &resources).with_access(access);
+            let listed = reader
+                .call(MemoryReadArgs {
+                    path: String::new(),
                 })
                 .await
                 .unwrap();
@@ -1520,8 +1427,6 @@ mod proactive_access_tests {
             assert!(found.contains("about/tea.md"), "{access:?}: {found}");
             assert_eq!(found.contains("secret"), !proactive, "{access:?}: {found}");
 
-            let reader =
-                MemoryReadTool::new(ws, "one", "", store.clone(), &resources).with_access(access);
             let read = reader
                 .call(MemoryReadArgs {
                     path: "about/secret.md".into(),
