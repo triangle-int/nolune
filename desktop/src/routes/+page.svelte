@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import Moon from "$lib/components/Moon.svelte";
-  import { auth, init, saveConnection, testConnection, openConnection, disconnect } from "$lib/auth.svelte";
+  import { auth, init, saveConnection, pairConnection, testConnection, openConnection, disconnect, formatPairingCode, isCompletePairingCode } from "$lib/auth.svelte";
   import { updater, checkForUpdates, installUpdate, dismissUpdate } from "$lib/updater.svelte";
   import { local, background, canInstall, refreshLocalStatus, refreshBackgroundStatus, subscribeLocalEvents, installLocal, startLocalGateway, toggleLogs } from "$lib/local.svelte";
 
@@ -10,6 +10,9 @@
   let editing = $state(false);
   let shUrl = $state("");
   let shToken = $state("");
+  let shCode = $state("");
+  /** Pairing codes are the default; the raw API token is for headless setups. */
+  let useToken = $state(false);
   let splashAudio = $state<HTMLAudioElement | null>(null);
 
   onMount(() => {
@@ -71,6 +74,7 @@
   function edit() {
     shUrl = auth.connection?.url ?? "";
     shToken = "";
+    shCode = "";
     auth.error = null;
     auth.message = null;
     editing = true;
@@ -79,6 +83,7 @@
   function cancelEdit() {
     editing = false;
     shToken = "";
+    shCode = "";
     auth.error = null;
     auth.message = null;
   }
@@ -90,8 +95,23 @@
     }
   }
 
+  async function pair() {
+    // A revoked app pairs again with the server it already knows.
+    const url = shUrl.trim() || (auth.signedOut ? auth.connection?.url ?? "" : "");
+    if (await pairConnection(url, shCode)) {
+      editing = false;
+      shCode = "";
+      shToken = "";
+    }
+  }
+
+  function onCodeInput(event: Event) {
+    shCode = formatPairingCode((event.currentTarget as HTMLInputElement).value);
+  }
+
   async function forget() {
     shToken = "";
+    shCode = "";
     if (await disconnect()) {
       editing = false;
       shUrl = "";
@@ -99,6 +119,8 @@
   }
 
   const canSubmit = $derived(!auth.loading && !!shUrl.trim() && (!!shToken.trim() || !!auth.connection));
+  const canPair = $derived(!auth.loading && isCompletePairingCode(shCode) && (!!shUrl.trim() || auth.signedOut));
+  const showForm = $derived(!auth.connection || editing || auth.signedOut);
 </script>
 
 <!-- Audio lives outside the splash so it is not destroyed on transition; played from onMount, not autoplay -->
@@ -197,11 +219,11 @@
           <p class="divider" role="separator"><span>or connect to an existing server</span></p>
         {/if}
 
-        {#if auth.connection && !editing}
+        {#if !showForm}
           <p class="connect-desc">Your companion is saved on this computer. Open it to keep talking.</p>
           <div class="server">
             <span class="nl-label">Server</span>
-            <code class="server-url">{auth.connection.url}</code>
+            <code class="server-url">{auth.connection?.url}</code>
             {#if localMode}<p class="server-mode">{localMode}</p>{/if}
           </div>
           <div class="actions">
@@ -209,15 +231,43 @@
             <button class="nl-button-secondary" onclick={() => testConnection(auth.connection!.url)} disabled={auth.loading}>Test connection</button>
             <button class="nl-button-secondary" onclick={edit} disabled={auth.loading}>Edit connection</button>
           </div>
+        {:else if !useToken}
+          <p class="connect-desc">
+            {auth.signedOut ? "Pair this app again to keep using" : "Pair this app with"} your own Nolune server. Get a one-time code from somewhere that already has access:
+          </p>
+          <ul class="steps">
+            <li>On the computer running the server, run <code>nolune pair</code>.</li>
+            <li>Or, in a browser that is already connected, open <strong>Settings → Connections → Pair a device</strong>.</li>
+          </ul>
+          <form class="form" onsubmit={(event) => { event.preventDefault(); pair(); }}>
+            <div class="field">
+              <label class="nl-label" for="server-url">Server URL</label>
+              <input id="server-url" class="nl-input" bind:value={shUrl} placeholder={auth.signedOut ? auth.connection?.url : "http://localhost:26559"} disabled={auth.loading} required={!auth.signedOut} autocomplete="url" spellcheck="false" />
+            </div>
+            <div class="field">
+              <label class="nl-label" for="pairing-code">Pairing code</label>
+              <input id="pairing-code" class="nl-input code-input" value={shCode} oninput={onCodeInput} type="text" inputmode="numeric" autocomplete="one-time-code" spellcheck="false" placeholder="1234-5678" disabled={auth.loading} required />
+            </div>
+            <div class="actions">
+              <button class="nl-button" type="submit" disabled={!canPair}>Pair and connect</button>
+              {#if editing}
+                <button class="nl-button-secondary" type="button" onclick={cancelEdit} disabled={auth.loading}>Cancel</button>
+              {/if}
+            </div>
+          </form>
+          <p class="fineprint">
+            Codes expire after 5 minutes and work once. This app gets its own sign-in, which you can revoke under Settings → Connections.
+          </p>
+          <button class="link-button" type="button" onclick={() => { useToken = true; auth.error = null; }} disabled={auth.loading}>Use an API token instead</button>
         {:else}
-          <p class="connect-desc">Connect to your own Nolune server. Your connection is saved on this computer.</p>
+          <p class="connect-desc">Connect with the server's API token, <code>auth_token</code> in its <code>config.toml</code>. Your connection is saved on this computer.</p>
           <form class="form" onsubmit={(event) => { event.preventDefault(); save(); }}>
             <div class="field">
               <label class="nl-label" for="server-url">Server URL</label>
-              <input id="server-url" class="nl-input" bind:value={shUrl} placeholder="http://localhost:3000" disabled={auth.loading} required autocomplete="url" spellcheck="false" />
+              <input id="server-url" class="nl-input" bind:value={shUrl} placeholder="http://localhost:26559" disabled={auth.loading} required autocomplete="url" spellcheck="false" />
             </div>
             <div class="field">
-              <label class="nl-label" for="auth-token">Auth token</label>
+              <label class="nl-label" for="auth-token">API token</label>
               <input id="auth-token" class="nl-input" bind:value={shToken} type="password" autocomplete="off" placeholder={auth.connection ? "Leave blank to keep the saved token" : "Token from config.toml"} disabled={auth.loading} required={!auth.connection} />
             </div>
             <div class="actions">
@@ -228,6 +278,7 @@
               {/if}
             </div>
           </form>
+          <button class="link-button" type="button" onclick={() => { useToken = false; auth.error = null; }} disabled={auth.loading}>Use a pairing code instead</button>
         {/if}
 
         {#if auth.loading}
@@ -476,6 +527,69 @@
     display: flex;
     flex-direction: column;
     gap: 16px;
+  }
+
+  .steps {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: -8px 0 24px;
+    padding-left: 20px;
+    list-style: disc;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+  }
+
+  .steps strong {
+    color: var(--foreground);
+    font-weight: 500;
+  }
+
+  .steps code,
+  .connect-desc code {
+    font: 400 13px/1.5 var(--font-mono);
+    padding: 1px 6px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--popover);
+    color: var(--foreground);
+  }
+
+  .code-input {
+    font: 400 20px/1.2 var(--font-mono);
+    letter-spacing: 0.12em;
+    text-align: center;
+  }
+
+  .fineprint {
+    margin: 16px 0 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-muted);
+  }
+
+  .link-button {
+    min-height: 44px;
+    margin-top: 8px;
+    padding: 0;
+    border: none;
+    background: none;
+    font-size: 13px;
+    color: var(--text-secondary);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    cursor: pointer;
+  }
+
+  .link-button:hover:not(:disabled) {
+    color: var(--foreground);
+  }
+
+  .link-button:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    border-radius: 4px;
   }
 
   .actions {

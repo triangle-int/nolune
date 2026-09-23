@@ -60,7 +60,7 @@ pub struct AppState {
     pub proactive: crate::services::proactive::ProactiveLoop,
     /// Commitments the companion follows through on (#85); the record is the source of truth.
     pub commitments: crate::services::commitments::CommitmentStore,
-    /// Paired browsers and pending pairing codes (#112). In memory until
+    /// Paired browsers, desktop apps and pending pairing codes (#112). In memory until
     /// `attach_storage` is called by the server entrypoint.
     pub browser_sessions: Arc<BrowserSessionStore>,
     /// Federation identity and peers (#108); the keystore under `workspace_dir` opens on first use.

@@ -8,7 +8,7 @@
 	<h2 id="layout">What is where</h2>
 	<pre><code>~/.nolune/
 ├── config.toml               port, auth token, provider keys
-├── browser_sessions.json     paired browsers (hashes only)
+├── browser_sessions.json     paired devices (hashes only)
 ├── federation/               the companion's signing identity and private key
 ├── skills/                   installed skills
 ├── vectors/                  derived search index, rebuilt automatically
@@ -35,14 +35,14 @@ nolune gateway start</code></pre>
 		<li>Stop the server on the target machine, or <a href="/docs/install">install</a> it there first; <code>nolune onboard</code> is safe to rerun and keeps an existing <code>config.toml</code>.</li>
 		<li>Replace <code>~/.nolune</code> with the copy: <code>tar xzf nolune-backup.tgz -C ~</code>.</li>
 		<li>Start the server again. Because <code>federation/</code> came along, the companion keeps its identity; nothing in it names the old host, port, or path.</li>
-		<li>Browsers that reach the server at a new address pair again with <code>nolune pair</code>; the desktop app only needs the new address.</li>
+		<li>Browsers and desktop apps that reach the server at a new address pair again with a code from <code>nolune pair</code>; the app never sends its saved sign-in to an address it was not paired with.</li>
 	</ol>
 
 	<h2 id="export">Export the companion as one archive</h2>
 	<p>Under <strong>Settings → Data</strong>, <strong>Export</strong> downloads <code>companion.tar.gz</code>: the companion directory verbatim, rooted at <code>companion/</code>, with a small manifest (<code>companion/companion.json</code>) that names the format version. The same file comes from the API with the auth token from <code>config.toml</code>:</p>
 	<pre><code>curl -H "Authorization: Bearer $TOKEN" \
   http://localhost:26559/api/instances/companion/export -o companion.tar.gz</code></pre>
-	<p>The archive is built in-process and contains only regular files and directories. If an export fails part-way, the archive is deliberately left without its closing blocks, so a reader rejects it as truncated instead of restoring it with files missing; a complete download always restores. It does <em>not</em> contain <code>config.toml</code>, the paired browsers, the federation identity, or globally installed skills: it carries the companion's memory and settings, not the server's. For a full backup, copy the directory as above.</p>
+	<p>The archive is built in-process and contains only regular files and directories. If an export fails part-way, the archive is deliberately left without its closing blocks, so a reader rejects it as truncated instead of restoring it with files missing; a complete download always restores. It does <em>not</em> contain <code>config.toml</code>, the paired devices, the federation identity, or globally installed skills: it carries the companion's memory and settings, not the server's. For a full backup, copy the directory as above.</p>
 	<p>Restoring the archive with <strong>Import</strong> under Settings → Data is still being finished (<a href="https://github.com/triangle-int/nolune/issues/74" target="_blank" rel="noopener">issue #74</a>); until it lands, the server answers that import is unavailable. You can always restore by hand: stop the server, replace <code>~/.nolune/instances/companion/</code> with the <code>companion/</code> directory from the archive, and start again. The search index rebuilds itself.</p>
 
 	<h2 id="memory">Memory is plain text</h2>

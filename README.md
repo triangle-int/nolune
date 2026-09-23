@@ -43,7 +43,7 @@ curl -fsSL https://nolune.dev/install.sh | bash
 
 The installer downloads the server, prepares `~/.nolune`, starts the server in the foreground so you can watch its logs, and opens `http://localhost:26559`. The first browser has to be paired: run `nolune pair` on the machine you just installed on and enter the eight-digit code it prints. Then follow the onboarding.
 
-Paired browsers stay signed in. Review or revoke them, or mint a code for another device, under **Settings → Connections**. The installer adds `~/.nolune/bin` to your `PATH`; until you open a new shell, use `~/.nolune/bin/nolune pair`.
+Paired browsers and desktop apps stay signed in. The desktop app pairs with the same codes: enter the server URL and a code from `nolune pair`. Review or revoke devices, or mint a code for the next one, under **Settings → Connections → Pair a device**. The installer adds `~/.nolune/bin` to your `PATH`; until you open a new shell, use `~/.nolune/bin/nolune pair`.
 
 Press Ctrl-C to stop the server and `nolune gateway` to start it again. To keep it running without a terminal, opt in to the background service with `nolune gateway install` (see [Install](#install)).
 
@@ -142,7 +142,7 @@ Everything the installers do, you can do yourself:
 | `nolune gateway install` | Registers a user-level launchd agent (macOS) or systemd user unit (Linux) that runs the gateway, and starts it |
 | `nolune gateway uninstall` | Stops and removes that service; data is untouched |
 | `nolune gateway start` / `stop` / `restart` / `nolune gateway status` / `nolune gateway logs` | Manage the service once installed |
-| `nolune pair` | Prints a one-time code so a browser can sign in |
+| `nolune pair` | Prints a one-time code so a browser or the desktop app can sign in |
 | `nolune restore <archive>` | Replaces the companion with a `companion.tar.gz` backup (from Export in **Settings → Data** or the `create_backup` tool) by sending it to the running server, which validates it and swaps it in; the current data is not kept. Asks first; `--yes` skips the question |
 | `nolune federation invite` / `accept` / `peers` / `confirm` / `revoke` / `rotate` | Pairs this companion with another one, on this machine or elsewhere, through the running server: `invite` prints a one-time invite line once, `accept` redeems one given as an argument or on stdin (never from a URL), `peers` lists peers with their state and last sighting, `confirm` pairs a peer that redeemed your invite, `revoke` withdraws trust, `rotate` replaces the signing key and tells every peer. The same actions live under **Settings → Connections → Companions**; see [docs/federation.md](docs/federation.md) |
 | `nolune cua install` | Downloads the Cua Driver release this version of Nolune is pinned to (refusing a mirror that announces another size, a body that grows past it, or one that stalls), verifies its size and sha256 before anything is written, installs it under `~/.nolune/cua-driver/`, and refuses a driver that reports any other version. `--force` reinstalls; `NOLUNE_CUA_RELEASE_URL` names a mirror. On a computer running the desktop app the same install is **Settings › Computer use › Install driver**, which needs no terminal |
@@ -183,7 +183,7 @@ Everything important is stored as files under `~/.nolune`:
 ```text
 ~/.nolune/
 ├── config.toml
-├── browser_sessions.json    paired browsers (hashes only)
+├── browser_sessions.json    paired browsers and desktop apps (hashes only)
 └── instances/
     └── companion/               the one companion this server hosts
         ├── soul.md              personality definition
@@ -205,7 +205,7 @@ Most settings are available through the interface. Advanced configuration lives 
 | Environment variable | Description |
 |----------------------|-------------|
 | `NOLUNE_HOME` | Data directory, defaults to `~/.nolune` |
-| `NOLUNE_AUTH_TOKEN` | API token override. The token is for automation, the CLI and the desktop app; browsers pair for a revocable session instead and are unaffected when it changes |
+| `NOLUNE_AUTH_TOKEN` | API token override. The token is for automation and the CLI; browsers and the desktop app pair for a revocable session instead and are unaffected when it changes |
 | `NOLUNE_PUBLIC_URL` | Public URL for the server. Defaults to `http://localhost:<port>`; set it when you reach Nolune through another address so shared file links work |
 | `NOLUNE_CUA_DRIVER` | Path of a [Cua Driver](https://github.com/trycua/cua) binary to use instead of the one `nolune cua install` put under the workspace or the one on `PATH`. The driver lets the companion use the server machine itself; a headless server simply has no such target. See [docs/computer-use.md](docs/computer-use.md) |
 | `NOLUNE_CUA_RELEASE_URL` | Mirror that `nolune cua install` fetches the pinned Cua Driver assets from (`<url>/<asset name>`) instead of the upstream GitHub release; the pinned checksum is enforced either way |

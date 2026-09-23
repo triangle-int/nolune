@@ -29,12 +29,35 @@ already listening on the port is refused with a message, so a foreground
 
 ## Connecting to an existing server
 
-Enter the **root** HTTP(S) origin of your own Nolune server and its auth token.
-Localhost, IPv4, bracketed IPv6, hostnames, and explicit ports are supported.
-Base paths such as `/nolune` are rejected because the client uses root-relative
-routes. **Test connection** checks authenticated metadata without saving or
-enabling computer use. **Save connection** stores the connection, and **Open /
-Reconnect** opens the companion and starts the existing machine WebSocket bridge.
+The app pairs the same way a browser does. Enter the **root** HTTP(S) origin of
+your own Nolune server and a one-time pairing code: run `nolune pair` on the
+server, or open **Settings → Connections → Pair a device** on a browser or
+desktop app that is already connected. Localhost, IPv4, bracketed IPv6,
+hostnames, and explicit ports are supported. Base paths such as `/nolune` are
+rejected because the client uses root-relative routes.
+
+**Pair and connect** runs in Rust: it posts the code to the public
+`POST /api/session/pair-device` route (no `Origin` header; the server refuses
+that route to browsers), receives a device token of its own, validates it
+against `/api/meta`, and stores it in the OS credential store. The webview only
+ever sees the origin and a stable error code (`invalid_code`, `rate_limited`,
+`auth_disabled`, `pairing_unsupported`, `unreachable`), which the dashboard maps
+to its own copy. The server lists the app as a **Desktop app** under **Paired
+devices**, named `Nolune Desktop on <hostname>`. A code minted by a browser is
+bound to that browser's address, so the app must use the same server URL.
+
+Desktop tokens are not bound to a host and do not rotate; they expire after 90
+days without use. Revoking the app in Settings closes its relay and machine
+sockets. The next open or test gets `401`, which the native side reports as
+`signed_out`, and the dashboard asks to pair again with the saved server URL
+prefilled.
+
+**Use an API token instead** keeps the older form for headless or scripted
+setups: the server's `auth_token` from `config.toml`. **Test connection** checks
+authenticated metadata without saving or enabling computer use. **Save
+connection** stores the connection, and **Open / Reconnect** opens the companion
+and starts the existing machine WebSocket bridge. **Install on this computer**
+still uses the local server's API token, read from `nolune onboard --json`.
 
 ## Credentials and authentication
 
@@ -53,7 +76,8 @@ invalid records or an unavailable keychain require re-entry. Interrupted writes
 and superseded secrets are cleaned up through the reference journal. Failed
 cleanup remains retryable rather than silently dropping the last reference.
 
-The server auth middleware accepts Bearer headers. Tauri 2.10's
+The server auth middleware accepts Bearer headers, either the API token or a
+paired desktop's device token. Tauri 2.10's
 `set_cookie(Cookie)` API has no source URL or portable
 host-only flag: Wry's WebKit, WebView2, and WebKitGTK adapters construct cookies
 from a domain. Moreover, even host-only cookies cannot isolate ports or HTTP from
@@ -61,7 +85,7 @@ HTTPS. Therefore **the desktop never sets a server-token cookie**.
 
 Instead, a native relay listens on a random IPv4 loopback port and forwards to
 exactly the configured upstream scheme, host and port. Only native requests get
-the server Bearer token; redirects are rejected, browser cookies are not forwarded,
+the saved Bearer token; redirects are rejected, browser cookies are not forwarded,
 and upstream `Set-Cookie` headers are stripped. Metadata validation, keychain
 reads, machine connection and relay configuration run in Rust. Saved reconnect
 sends only an opaque reference over IPC. Blank-token edits send the new origin

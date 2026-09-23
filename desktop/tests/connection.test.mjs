@@ -16,6 +16,11 @@ async function setup(options = {}) {
   const invoke = async (name, args) => {
     calls.push({ name, args });
     if (options.fail === name) throw Error("TOP_SECRET");
+    if (options.reject?.[name] !== undefined) throw options.reject[name];
+    if (name === "pair_connection") {
+      savedOrigin = args.url;
+      return savedOrigin;
+    }
     if (name === "initialize_saved_connection") return savedOrigin;
     if (name === "save_connection") {
       savedOrigin = args.url;
@@ -146,4 +151,44 @@ test("disconnect deletes native credentials despite transport failure", async ()
   assert.equal(await api.disconnect(), false);
   assert.equal(calls.some(({ name }) => name === "delete_saved_connection"), true);
   assert.equal(api.auth.connection, null);
+});
+
+test("pairing sends only the canonical origin and the formatted code to native", async () => {
+  const { api, calls } = await init();
+  assert.equal(await api.pairConnection(" localhost:26559/ ", "1234 5678"), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [{ name: "pair_connection", args: { url: "http://localhost:26559", code: "1234-5678" } }]);
+  assert.equal(JSON.stringify(api.auth.connection), JSON.stringify({ url: "http://localhost:26559" }));
+  assert.equal(api.auth.signedOut, false);
+});
+
+test("pairing rejects incomplete codes before calling native", async () => {
+  const { api, calls } = await init();
+  assert.equal(await api.pairConnection("localhost:26559", "1234-56"), false);
+  assert.equal(calls.length, 0);
+  assert.match(api.auth.error, /eight-digit/);
+});
+
+test("pairing refusals map to dashboard copy and never echo native text", async () => {
+  for (const [code, pattern] of [["invalid_code", /didn't work/], ["rate_limited", /Too many attempts/], ["pairing_unsupported", /too old/], ["TOP_SECRET", /Could not pair/]]) {
+    const { api } = await init({ reject: { pair_connection: code } });
+    assert.equal(await api.pairConnection("localhost:26559", "12345678"), false);
+    assert.match(api.auth.error, pattern);
+    assert.equal(api.auth.error.includes("TOP_SECRET"), false);
+    assert.equal(api.auth.connection, null);
+  }
+});
+
+test("a revoked app is asked to pair again", async () => {
+  const { api } = await init({ savedOrigin: "http://localhost:3000", reject: { open_saved_connection: "signed_out" } });
+  assert.equal(await api.openConnection(), false);
+  assert.equal(api.auth.signedOut, true);
+  assert.match(api.auth.error, /Pair it again/);
+});
+
+test("pairing code formatting matches the browser gate", async () => {
+  const { api } = await setup();
+  assert.equal(api.formatPairingCode("12a34 56-789"), "1234-5678");
+  assert.equal(api.formatPairingCode("123"), "123");
+  assert.equal(api.isCompletePairingCode("1234-5678"), true);
+  assert.equal(api.isCompletePairingCode("1234-567"), false);
 });

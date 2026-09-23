@@ -80,7 +80,8 @@ const BASE = "";
 // Browsers authenticate with a paired-session cookie (HttpOnly, set by the
 // server after `POST /api/session/pair`). The client never holds a credential:
 // same-origin fetches and WebSockets carry the cookie automatically. The
-// server API token stays with automation, the CLI and the desktop relay.
+// desktop app pairs with the same codes and keeps its own device token; the
+// server API token stays with automation and the CLI.
 // ---------------------------------------------------------------------------
 
 function clearLegacyAuth() {
@@ -108,10 +109,11 @@ export async function memoryMediaUrl(slug: string, path: string): Promise<Resour
     });
 }
 
-export type AuthKind = "disabled" | "token" | "session";
+export type AuthKind = "disabled" | "token" | "session" | "desktop";
 
 export interface PairedDevice {
 	id: string;
+	kind: "browser" | "desktop";
 	label: string;
 	paired_via: string;
 	host: string;

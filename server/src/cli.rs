@@ -65,7 +65,7 @@ pub enum CliCommand {
     Logs,
     /// Print version
     Version,
-    /// Create a one-time code so a browser can sign in to this server
+    /// Create a one-time code so a browser or the desktop app can sign in to this server
     Pair,
     /// Prepare ~/.nolune (config, data directories, auth token) without starting anything
     Onboard {
@@ -554,7 +554,7 @@ fn pair(profile: &Profile) -> i32 {
     };
     if config.auth_token.is_empty() {
         println!(
-            "Authentication is disabled (auth_token is empty in {}), so browsers can open Nolune without pairing.",
+            "Authentication is disabled (auth_token is empty in {}), so browsers and the desktop app can open Nolune without pairing.",
             config::config_path().display()
         );
         return 0;
@@ -628,9 +628,10 @@ If the service was started with NOLUNE_AUTH_TOKEN, run `nolune pair{flag}` with 
             println!();
             println!("  Pairing code:  {code}");
             println!();
-            println!("  Open {open_url} in the browser you want to connect and enter this code.");
+            println!("  In a browser: open {open_url} and enter this code.");
+            println!("  In the desktop app: enter {open_url} as the server and this code.");
             println!(
-                "  It works once and expires in {minutes} minutes. Run `nolune pair{flag}` again for another browser."
+                "  It works once and expires in {minutes} minutes. Run `nolune pair{flag}` again for another device."
             );
             println!();
             0

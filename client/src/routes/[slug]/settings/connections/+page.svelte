@@ -194,7 +194,7 @@
 		}
 	}
 
-	// --- paired browsers (#112) ---
+	// --- paired devices: browsers and desktop apps (#112) ---
 	let sessionAuth = $state<AuthKind>("disabled");
 	let devices = $state<PairedDevice[]>([]);
 	let devicesLoading = $state(true);
@@ -213,7 +213,7 @@
 			sessionAuth = res.auth;
 			devices = res.devices;
 		} catch {
-			devicesError = "Could not load paired browsers.";
+			devicesError = "Could not load paired devices.";
 		} finally {
 			devicesLoading = false;
 		}
@@ -259,7 +259,7 @@
 			}
 			devices = devices.filter((d) => d.id !== device.id);
 		} catch {
-			devicesError = "Could not revoke that browser.";
+			devicesError = "Could not revoke that device.";
 		} finally {
 			revokingId = "";
 		}
@@ -289,9 +289,13 @@
 
 	function pairedViaText(device: PairedDevice): string {
 		if (device.paired_via === "cli") return "paired from the command line";
-		if (device.paired_via.startsWith("browser:")) return "paired from another browser";
-		if (device.paired_via === "desktop") return "paired from the desktop app";
+		if (device.paired_via.startsWith("browser:")) return "paired from a browser";
+		if (device.paired_via === "desktop" || device.paired_via.startsWith("desktop:")) return "paired from the desktop app";
 		return "paired with the API token";
+	}
+
+	function currentDeviceText(device: PairedDevice): string {
+		return device.kind === "desktop" ? "This app" : "This browser";
 	}
 
 	$effect(() => {
@@ -502,22 +506,22 @@
 	</div>
 </section>
 
-<!-- Paired browsers -->
+<!-- Paired devices -->
 <section class="settings-section">
 	<div class="section-header">
 		<div>
-			<h3 class="section-label">Paired browsers</h3>
-			<p class="section-desc">Browsers that stay signed in to this server.</p>
+			<h3 class="section-label">Paired devices</h3>
+			<p class="section-desc">Browsers and desktop apps that stay signed in to this server. One code pairs either.</p>
 		</div>
 	</div>
 	<div class="section-body">
 		{#if devicesLoading}
 			<p class="dim-text">Loading...</p>
 		{:else if sessionAuth === "disabled"}
-			<p class="setting-hint">This server accepts any browser. Set an API token under <a class="settings-link" href={`/${slug}/settings/advanced`}>Advanced</a> to require pairing.</p>
+			<p class="setting-hint">This server accepts any browser or desktop app. Set an API token under <a class="settings-link" href={`/${slug}/settings/advanced`}>Advanced</a> to require pairing.</p>
 		{:else}
 			{#if devices.length === 0}
-				<p class="setting-hint">No browsers are paired yet.</p>
+				<p class="setting-hint">No devices are paired yet.</p>
 			{:else}
 				<ul class="device-list">
 					{#each devices as device (device.id)}
@@ -525,9 +529,9 @@
 							<div class="device-info">
 								<span class="device-label">
 									{device.label}
-									{#if device.current}<span class="device-current">This browser</span>{/if}
+									{#if device.current}<span class="device-current">{currentDeviceText(device)}</span>{/if}
 								</span>
-								<span class="device-meta">{device.host} · {pairedViaText(device)} · last seen {timeAgo(device.last_seen_at)}</span>
+								<span class="device-meta">{device.kind === "desktop" ? "Desktop app" : "Browser"} · {device.host} · {pairedViaText(device)} · last seen {timeAgo(device.last_seen_at)}</span>
 							</div>
 							<button class="setting-btn setting-btn-danger" onclick={() => revokeDevice(device)} disabled={revokingId === device.id}>
 								{device.current ? "Sign out" : "Revoke"}
@@ -540,15 +544,15 @@
 				<div class="pairing-panel" aria-live="polite">
 					<span class="pairing-code">{pairingCode.code}</span>
 					<p class="setting-hint">
-						Enter this code on the new device within {pairingCountdown(pairingSecondsLeft)}. It works once.
-						{#if pairingCode.bound_host}Open Nolune there at the same address, <strong>{pairingCode.bound_host}</strong>.{/if}
+						Enter this code in the new browser, or in the Nolune desktop app, within {pairingCountdown(pairingSecondsLeft)}. It works once.
+						{#if pairingCode.bound_host}Use the same server address there, <strong>{pairingCode.bound_host}</strong>.{/if}
 					</p>
 					<button class="setting-btn" onclick={dismissPairingCode}>Done</button>
 				</div>
 			{:else}
 				<div class="setting-input-row">
 					<button class="setting-btn" onclick={startPairing} disabled={pairingBusy}>
-						{pairingBusy ? "..." : "Pair another browser"}
+						{pairingBusy ? "..." : "Pair a device"}
 					</button>
 					{#if sessionAuth === "session" && devices.length === 0}
 						<button class="setting-btn setting-btn-danger" onclick={signOut}>Sign out</button>

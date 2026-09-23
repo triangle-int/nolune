@@ -12,7 +12,7 @@ use axum::{
 
 use crate::app::{auth::AuthContext, state::AppState};
 
-/// Close code sent when the browser session behind a socket is revoked.
+/// Close code sent when the paired session behind a socket is revoked.
 pub const CLOSE_SESSION_REVOKED: u16 = 4401;
 const SESSION_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -25,10 +25,7 @@ async fn upgrade(
     State(state): State<AppState>,
     context: Option<Extension<AuthContext>>,
 ) -> Response {
-    let session_id = match context {
-        Some(Extension(AuthContext::BrowserSession { id })) => Some(id),
-        _ => None,
-    };
+    let session_id = context.and_then(|Extension(c)| c.session_id().map(str::to_string));
     ws.on_upgrade(move |socket| handle_socket(socket, state, session_id))
 }
 

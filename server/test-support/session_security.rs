@@ -580,3 +580,177 @@ async fn malformed_pair_bodies_are_rejected_cleanly() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body:?}");
     }
 }
+
+async fn pair_device(
+    state: &AppState,
+    code: &str,
+    headers: &[(&str, &str)],
+) -> (StatusCode, axum::http::HeaderMap, serde_json::Value) {
+    send(
+        state,
+        request(
+            Method::POST,
+            "/api/session/pair-device",
+            headers,
+            Some(
+                serde_json::json!({ "code": code, "label": "Nolune Desktop on macOS" }).to_string(),
+            ),
+        ),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn the_desktop_app_pairs_with_the_same_code_and_gets_a_bearer_token() {
+    let state = seeded_state().await;
+    let code = mint_code(&state).await;
+    let (status, headers, body) = pair_device(&state, &code, &[]).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        headers.get(header::SET_COOKIE).is_none(),
+        "the desktop gets a token, not a cookie"
+    );
+    assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+    assert_eq!(body["session"]["kind"], "desktop");
+    assert_eq!(body["session"]["label"], "Nolune Desktop on macOS");
+    assert_eq!(body["session"]["paired_via"], "cli");
+    let token = body["token"].as_str().unwrap().to_string();
+    let bearer = format!("Bearer {token}");
+
+    let (status, _, _) = pair_device(&state, &code, &[]).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "codes still work once");
+
+    // The token works from any address the app reaches the server by.
+    for host in [HOST, "nolune.lan:26559"] {
+        let (status, _, body) = send(
+            &state,
+            request(
+                Method::GET,
+                "/api/session",
+                &[("authorization", &bearer), ("host", host)],
+                None,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["auth"], "desktop");
+        assert_eq!(body["session"]["kind"], "desktop");
+    }
+
+    // A paired desktop can pair the next device; its codes are not host-bound.
+    let (status, _, body) = send(
+        &state,
+        request(
+            Method::POST,
+            "/api/session/pairing",
+            &[("authorization", &bearer)],
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.get("bound_host").is_none());
+    let next = body["code"].as_str().unwrap().to_string();
+    let (status, _, body) = pair(&state, &next, &[("origin", ORIGIN)]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["session"]["paired_via"]
+            .as_str()
+            .unwrap()
+            .starts_with("desktop:")
+    );
+}
+
+#[tokio::test]
+async fn browsers_cannot_take_a_desktop_token() {
+    let state = seeded_state().await;
+    let code = mint_code(&state).await;
+    for headers in [
+        &[("origin", ORIGIN)][..],
+        &[("sec-fetch-site", "same-origin")][..],
+    ] {
+        let (status, _, body) = pair_device(&state, &code, headers).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body["error"], "browser_not_allowed");
+    }
+    // The refused attempts did not burn the code.
+    let (status, _, _) = pair_device(&state, &code, &[]).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn revoking_a_desktop_signs_it_out_and_cookies_are_not_bearer_tokens() {
+    let state = seeded_state().await;
+    let cookie = paired_cookie(&state).await;
+    let cookie_value = cookie.split_once('=').unwrap().1.to_string();
+    let (status, _, _) = send(
+        &state,
+        request(
+            Method::GET,
+            "/api/session",
+            &[("authorization", &format!("Bearer {cookie_value}"))],
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "a browser cookie is not a desktop token"
+    );
+
+    let code = mint_code(&state).await;
+    let (_, _, body) = pair_device(&state, &code, &[]).await;
+    let bearer = format!("Bearer {}", body["token"].as_str().unwrap());
+    let id = body["session"]["id"].as_str().unwrap().to_string();
+
+    let (status, _, body) = send(
+        &state,
+        request(
+            Method::GET,
+            "/api/session/devices",
+            &[("cookie", &cookie)],
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let kinds: Vec<_> = body["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["kind"].as_str().unwrap().to_string())
+        .collect();
+    assert!(kinds.contains(&"browser".to_string()) && kinds.contains(&"desktop".to_string()));
+
+    let (status, _, _) = send(
+        &state,
+        request(
+            Method::DELETE,
+            &format!("/api/session/devices/{id}"),
+            &[("cookie", &cookie), ("origin", ORIGIN)],
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _, _) = send(
+        &state,
+        request(
+            Method::GET,
+            "/api/session",
+            &[("authorization", &bearer)],
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn desktop_pairing_is_off_when_auth_is_disabled() {
+    let state = AppState::new(crate::config::Config::default()).await;
+    let (status, _, body) = pair_device(&state, "1234-5678", &[]).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "auth_disabled");
+}
