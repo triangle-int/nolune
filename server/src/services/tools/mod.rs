@@ -1,17 +1,18 @@
 use std::{
+    cell::OnceCell,
     collections::{HashMap, VecDeque},
     fmt,
     future::Future,
     path::{Path, PathBuf},
     pin::Pin,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, LazyLock, Mutex, OnceLock},
 };
 
 use crate::services::tool::{ToolDefinition, ToolDyn, ToolError};
 use schemars::JsonSchema;
 use tokio::sync::broadcast;
 
-use regex::Regex;
+use regex::{Regex, RegexSet};
 
 use crate::domain::events::ServerEvent;
 
@@ -269,102 +270,150 @@ fn secret_values() -> &'static Vec<String> {
     })
 }
 
-pub(crate) fn redact_value(mut value: serde_json::Value) -> serde_json::Value {
-    match &mut value {
-        serde_json::Value::String(s) => *s = redact_secrets(s),
-        serde_json::Value::Array(items) => {
-            for item in items {
-                *item = redact_value(std::mem::take(item));
-            }
-        }
-        serde_json::Value::Object(map) => {
-            *map = std::mem::take(map)
-                .into_iter()
-                .map(|(key, value)| {
-                    let sensitive = matches!(
-                        key.to_ascii_lowercase().as_str(),
-                        "authorization" | "token" | "auth_token" | "control_token"
-                    );
-                    let value = if sensitive && value.is_string() {
-                        serde_json::Value::String("[REDACTED]".into())
-                    } else {
-                        redact_value(value)
-                    };
-                    (redact_secrets(&key), value)
-                })
-                .collect();
-        }
-        _ => {}
-    }
-    value
-}
+/// Credential shapes redacted wherever they appear, applied in this order.
+/// None looks past its own match (`^`, `$`, `\b`): a pattern that misses the
+/// whole text then misses every piece of it, which lets `Redactor::redact`
+/// skip it.
+const SECRET_PATTERNS: [&str; 10] = [
+    r#"sk-ant-api03-[A-Za-z0-9_\-]{80,}"#,
+    r#"sk-ant-[A-Za-z0-9_\-]{20,}"#,
+    r#"sk-proj-[A-Za-z0-9_\-]{20,}"#,
+    r"sk-[A-Za-z0-9]{20,}",
+    r"ghp_[A-Za-z0-9]{36,}",
+    r"github_pat_[A-Za-z0-9_]{80,}",
+    r"gho_[A-Za-z0-9]{36,}",
+    r#"postgresql://[^\s"']+[^\s"'.]"#,
+    r#"postgres://[^\s"']+[^\s"'.]"#,
+    r"AIza[A-Za-z0-9_\-]{30,}",
+];
 
-/// The key and connection-string shapes `redact_secrets` masks, compiled
-/// once: every request body is redacted string by string, and compiling
-/// them per string cost milliseconds each in a debug build, synchronous
-/// work that no probe deadline can interrupt.
-fn secret_patterns() -> &'static [Regex] {
-    static PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
-    PATTERNS.get_or_init(|| {
-        [
-            r#"sk-ant-api03-[A-Za-z0-9_\-]{80,}"#,
-            r#"sk-ant-[A-Za-z0-9_\-]{20,}"#,
-            r#"sk-proj-[A-Za-z0-9_\-]{20,}"#,
-            r"sk-[A-Za-z0-9]{20,}",
-            r"ghp_[A-Za-z0-9]{36,}",
-            r"github_pat_[A-Za-z0-9_]{80,}",
-            r"gho_[A-Za-z0-9]{36,}",
-            r#"postgresql://[^\s"']+[^\s"'.]"#,
-            r#"postgres://[^\s"']+[^\s"'.]"#,
-            r"AIza[A-Za-z0-9_\-]{30,}",
-        ]
+/// `SECRET_PATTERNS`, compiled once: every provider request runs them over
+/// each of its strings.
+static SECRET_REGEXES: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    SECRET_PATTERNS
         .iter()
         .map(|pattern| Regex::new(pattern).expect("secret pattern"))
         .collect()
-    })
+});
+
+/// One scan for whether any of `SECRET_PATTERNS` occurs; most strings hold none.
+static ANY_SECRET_PATTERN: LazyLock<RegexSet> =
+    LazyLock::new(|| RegexSet::new(SECRET_PATTERNS).expect("secret patterns"));
+
+/// Every exempt capability value follows this marker.
+const CAPABILITY_MARKER: &str = "cap=";
+
+/// The registered secrets, read once per redaction so a whole request body
+/// takes the locks once rather than once per string.
+struct Redactor {
+    control_secrets: Vec<String>,
+    /// Read on first need: only a text carrying `cap=` can hold an exempt
+    /// capability, so most redactions never copy the registry.
+    capability_tokens: OnceCell<Vec<String>>,
+}
+
+impl Redactor {
+    fn new() -> Self {
+        let control_secrets = CONTROL_SECRETS
+            .get_or_init(Default::default)
+            .lock()
+            .expect("secrets lock")
+            .secrets
+            .iter()
+            .cloned()
+            .collect();
+        Self {
+            control_secrets,
+            capability_tokens: OnceCell::new(),
+        }
+    }
+
+    /// The registered capabilities that can exempt a span of `text`.
+    fn capability_tokens(&self, text: &str) -> &[String] {
+        if !text.contains(CAPABILITY_MARKER) {
+            return &[];
+        }
+        self.capability_tokens.get_or_init(|| {
+            CAPABILITY_TOKENS
+                .get_or_init(Default::default)
+                .lock()
+                .expect("capability token lock")
+                .tokens
+                .iter()
+                .cloned()
+                .collect()
+        })
+    }
+
+    fn redact(&self, text: &str) -> String {
+        // Each pass runs only where it can change the text: a pass that
+        // finds nothing returns its input unchanged.
+        let mut result = text.to_string();
+        for secret in &self.control_secrets {
+            if result.contains(secret.as_str()) {
+                result = replace_exact_secret(&result, secret, self.capability_tokens(&result));
+            }
+        }
+
+        if ANY_SECRET_PATTERN.is_match(&result) {
+            for regex in SECRET_REGEXES.iter() {
+                if regex.is_match(&result) {
+                    result = replace_regex_preserving_capabilities(
+                        &result,
+                        regex,
+                        self.capability_tokens(&result),
+                    );
+                }
+            }
+        }
+
+        for secret in secret_values() {
+            if result.contains(secret.as_str()) {
+                result = replace_exact_secret(&result, secret, self.capability_tokens(&result));
+            }
+        }
+
+        result
+    }
+
+    fn redact_value(&self, mut value: serde_json::Value) -> serde_json::Value {
+        match &mut value {
+            serde_json::Value::String(s) => *s = self.redact(s),
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    *item = self.redact_value(std::mem::take(item));
+                }
+            }
+            serde_json::Value::Object(map) => {
+                *map = std::mem::take(map)
+                    .into_iter()
+                    .map(|(key, value)| {
+                        let sensitive = matches!(
+                            key.to_ascii_lowercase().as_str(),
+                            "authorization" | "token" | "auth_token" | "control_token"
+                        );
+                        let value = if sensitive && value.is_string() {
+                            serde_json::Value::String("[REDACTED]".into())
+                        } else {
+                            self.redact_value(value)
+                        };
+                        (self.redact(&key), value)
+                    })
+                    .collect();
+            }
+            _ => {}
+        }
+        value
+    }
+}
+
+pub(crate) fn redact_value(value: serde_json::Value) -> serde_json::Value {
+    Redactor::new().redact_value(value)
 }
 
 /// Redact known secret patterns and exact env var values from text.
 pub fn redact_secrets(text: &str) -> String {
-    // Only a `cap=` can exempt a registered capability, and `[REDACTED]`
-    // never forms one, so text without it skips the registry: up to 4096
-    // tokens, otherwise searched once per secret and pattern for every
-    // string of every request.
-    let capability_tokens = if text.contains("cap=") {
-        CAPABILITY_TOKENS
-            .get_or_init(Default::default)
-            .lock()
-            .expect("capability token lock")
-            .tokens
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-    let mut result = text.to_string();
-    for secret in CONTROL_SECRETS
-        .get_or_init(Default::default)
-        .lock()
-        .expect("secrets lock")
-        .secrets
-        .iter()
-    {
-        result = replace_exact_secret(&result, secret, &capability_tokens);
-    }
-
-    for re in secret_patterns() {
-        // Unanchored, so no match in the whole text means none in a part.
-        if re.is_match(&result) {
-            result = replace_regex_preserving_capabilities(&result, re, &capability_tokens);
-        }
-    }
-
-    for secret in secret_values() {
-        result = replace_exact_secret(&result, secret, &capability_tokens);
-    }
-
-    result
+    Redactor::new().redact(text)
 }
 
 fn replace_exact_secret(text: &str, secret: &str, capability_tokens: &[String]) -> String {
@@ -398,13 +447,23 @@ fn capability_ranges(text: &str, capability_tokens: &[String]) -> Vec<std::ops::
         byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'~' | b'-')
     }
 
+    // A token can only match where a `cap=` starts, and texts hold few of
+    // those, so each token is compared there instead of searched for.
+    let markers: Vec<usize> = text
+        .match_indices(CAPABILITY_MARKER)
+        .map(|(index, _)| index)
+        .collect();
     let mut ranges = Vec::new();
+    if markers.is_empty() {
+        return ranges;
+    }
     for token in capability_tokens {
-        let needle = format!("cap={token}");
         let mut cursor = 0;
-        while let Some(relative) = text[cursor..].find(&needle) {
-            let cap_start = cursor + relative;
-            let value_start = cap_start + 4;
+        for &cap_start in &markers {
+            let value_start = cap_start + CAPABILITY_MARKER.len();
+            if cap_start < cursor || !text[value_start..].starts_with(token.as_str()) {
+                continue;
+            }
             let value_end = value_start + token.len();
             let left_is_name = cap_start > 0
                 && (text.as_bytes()[cap_start - 1].is_ascii_alphanumeric()

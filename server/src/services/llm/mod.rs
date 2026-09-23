@@ -1671,3 +1671,166 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod redaction_bench {
+    //! Times `redact_value` over a realistic Anthropic request body, as the
+    //! adapter runs it before every send: the real tool set, a long system
+    //! prompt and a history with tool calls, results and capability URLs. Run with
+    //! `cargo test -p server redaction_bench -- --ignored --nocapture`.
+    use super::types::{ContentBlock, Message};
+    use super::*;
+    use crate::services::tools;
+    use std::time::{Duration, Instant};
+
+    fn count_strings(value: &serde_json::Value) -> usize {
+        match value {
+            serde_json::Value::String(_) => 1,
+            serde_json::Value::Array(items) => items.iter().map(count_strings).sum(),
+            serde_json::Value::Object(map) => {
+                map.len() + map.values().map(count_strings).sum::<usize>()
+            }
+            _ => 0,
+        }
+    }
+
+    fn time(label: &str, body: &serde_json::Value) {
+        let mut runs = 0u32;
+        let started = Instant::now();
+        while runs == 0 || (started.elapsed() < Duration::from_secs(3) && runs < 200) {
+            std::hint::black_box(tools::redact_value(body.clone()));
+            runs += 1;
+        }
+        let per = started.elapsed() / runs;
+        println!("{label}: {per:?} per redact_value ({runs} runs)");
+    }
+
+    #[tokio::test]
+    #[ignore = "benchmark; run explicitly"]
+    async fn redact_value_over_a_realistic_request_body() {
+        let workspace = tempfile::tempdir().unwrap();
+        let (events, _rx) = tokio::sync::broadcast::channel(16);
+        let llm = LlmBackend::probe(
+            reqwest::Client::new(),
+            crate::config::LlmProvider::Anthropic,
+            "model",
+            "provider-key",
+        );
+        let store = std::sync::Arc::new(
+            crate::services::vector::VectorStore::connect(workspace.path()).await,
+        );
+        let resources =
+            crate::services::resource_access::ResourceAccess::new("bench-control-secret-value");
+        let (all_tools, _) = tools::build_tools(
+            workspace.path(),
+            "moon",
+            "default",
+            &workspace.path().join("config.toml"),
+            events,
+            &llm,
+            Some(Default::default()),
+            Vec::new(),
+            Default::default(),
+            None,
+            Vec::new(),
+            None,
+            store,
+            Default::default(),
+            crate::services::machine_registry::MachineRegistry::new(),
+            tools::MachineTarget::default(),
+            "https://public.invalid",
+            &resources,
+            None,
+        );
+        let mut defs = Vec::new();
+        for tool in &all_tools {
+            defs.push(tool.definition(String::new()).await);
+        }
+
+        let system = "you are Little Moon, a companion who remembers. ".repeat(600);
+        let prose = "the quick brown fox jumps over the lazy dog while the moon rises. ";
+        let mut messages = Vec::new();
+        for turn in 0..40 {
+            let url = tools::public_file_url(
+                "https://public.invalid",
+                "moon",
+                &format!("upload_{turn}.png"),
+                &resources,
+            );
+            messages.push(Message::user(format!(
+                "turn {turn}: {} see {url}",
+                prose.repeat(4)
+            )));
+            let id = format!("toolu_{turn:04}");
+            messages.push(Message::Assistant {
+                content: vec![
+                    ContentBlock::text(prose.repeat(2)),
+                    ContentBlock::ToolCall {
+                        id: id.clone(),
+                        name: "read_file".into(),
+                        arguments: serde_json::json!({"path": format!("notes/{turn}.md"), "offset": 0}),
+                    },
+                ],
+            });
+            messages.push(Message::User {
+                content: vec![ContentBlock::tool_output(
+                    id,
+                    format!("{}\nfile at {url}", prose.repeat(60)),
+                    false,
+                )],
+            });
+            messages.push(Message::assistant(prose.repeat(3)));
+        }
+
+        let body = anthropic::build_anthropic_request(
+            "model",
+            &[&system],
+            &defs,
+            &messages,
+            8192,
+            contract::ExecutionScope::Conversation,
+            true,
+            "provider-key",
+        );
+        println!(
+            "body: {} tools, {} messages, {} bytes, {} strings+keys",
+            defs.len(),
+            messages.len(),
+            serde_json::to_string(&body).unwrap().len(),
+            count_strings(&body)
+        );
+        time("40 capability tokens registered", &body);
+
+        // A long-running server keeps up to 4096 minted capabilities; the
+        // 40 in the history stay registered.
+        for index in 0..4096 - 40 {
+            tools::public_file_url(
+                "https://public.invalid",
+                "moon",
+                &format!("filler_{index}"),
+                &resources,
+            );
+        }
+        time("4096 capability tokens registered", &body);
+
+        // Worst case: every capability URL sits beside a key-shaped secret,
+        // so each of those strings is scanned for exempt capabilities. The
+        // secrets go into the built body: building it already redacts.
+        fn leak(value: &mut serde_json::Value) {
+            match value {
+                serde_json::Value::String(s) if s.contains("?cap=") => {
+                    s.push_str(&format!(" key sk-{}", "a".repeat(40)));
+                }
+                serde_json::Value::Array(items) => items.iter_mut().for_each(leak),
+                serde_json::Value::Object(map) => map.values_mut().for_each(leak),
+                _ => {}
+            }
+        }
+        let mut body = body;
+        leak(&mut body);
+        let redacted = serde_json::to_string(&tools::redact_value(body.clone())).unwrap();
+        assert_eq!(redacted.matches("key [REDACTED]").count(), 80);
+        assert_eq!(redacted.matches("?cap=v1.").count(), 80);
+        time("4096 tokens, a secret beside every capability URL", &body);
+    }
+}
