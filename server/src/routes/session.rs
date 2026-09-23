@@ -1,11 +1,14 @@
-//! Browser pairing and session management (#112).
+//! Device pairing and session management (#112).
 //!
-//! * `POST /api/session/pair` (public) redeems a pairing code for a cookie.
-//! * `POST /api/session/pairing` (authenticated) mints a pairing code; the
-//!   CLI and desktop app call it with the API token, a paired browser calls
-//!   it from Settings.
+//! One pairing code pairs either kind of device:
+//!
+//! * `POST /api/session/pair` (public) redeems a code in a browser for a cookie.
+//! * `POST /api/session/pair-device` (public) redeems a code in the desktop
+//!   app for a bearer token.
+//! * `POST /api/session/pairing` (authenticated) mints a code; the CLI calls
+//!   it with the API token, a paired browser or desktop app from Settings.
 //! * `GET /api/session`, `POST /api/session/logout` and the
-//!   `/api/session/devices` routes let owners see and revoke paired browsers.
+//!   `/api/session/devices` routes let owners see and revoke paired devices.
 
 use axum::{
     Extension, Json, Router,
@@ -37,9 +40,11 @@ pub fn router() -> Router<AppState> {
         .route("/api/session/devices/{id}", delete(revoke_device))
 }
 
-/// Mounted outside the auth middleware: a browser has no credential yet.
+/// Mounted outside the auth middleware: a new device has no credential yet.
 pub fn public_router() -> Router<AppState> {
-    Router::new().route("/api/session/pair", post(pair))
+    Router::new()
+        .route("/api/session/pair", post(pair))
+        .route("/api/session/pair-device", post(pair_device))
 }
 
 fn auth_kind(context: Option<&AuthContext>) -> &'static str {
@@ -47,14 +52,12 @@ fn auth_kind(context: Option<&AuthContext>) -> &'static str {
         None | Some(AuthContext::Disabled) => "disabled",
         Some(AuthContext::ApiToken) => "token",
         Some(AuthContext::BrowserSession { .. }) => "session",
+        Some(AuthContext::DesktopSession { .. }) => "desktop",
     }
 }
 
 fn current_session_id(context: Option<&AuthContext>) -> Option<&str> {
-    match context {
-        Some(AuthContext::BrowserSession { id }) => Some(id),
-        _ => None,
-    }
+    context.and_then(AuthContext::session_id)
 }
 
 async fn current_session(
@@ -129,6 +132,9 @@ async fn create_pairing_code(
             })?;
             (Some(host), format!("browser:{id}"))
         }
+        // The desktop app reaches the server through its own relay, so the
+        // host it sees says nothing about where the new device will connect.
+        Some(AuthContext::DesktopSession { id }) => (None, format!("desktop:{id}")),
         Some(AuthContext::ApiToken) => {
             let body: CreatePairingRequest =
                 match axum::body::to_bytes(request.into_body(), 4096).await {
@@ -143,7 +149,7 @@ async fn create_pairing_code(
                 StatusCode::BAD_REQUEST,
                 Json(json!({
                     "error": "auth_disabled",
-                    "message": "authentication is disabled; browsers do not need pairing",
+                    "message": "authentication is disabled; devices do not need pairing",
                 })),
             ));
         }
@@ -228,12 +234,26 @@ async fn pair(State(state): State<AppState>, request: Request) -> Response {
             Json(json!({ "session": issued.summary })),
         )
             .into_response(),
-        Err(PairingError::Invalid) => (
+        Err(error) => pairing_error_response(error),
+    }
+}
+
+#[derive(Deserialize)]
+struct PairDeviceRequest {
+    code: String,
+    /// How the app names itself in the devices list, e.g. "Nolune Desktop on macOS".
+    #[serde(default)]
+    label: String,
+}
+
+fn pairing_error_response(error: PairingError) -> Response {
+    match error {
+        PairingError::Invalid => (
             StatusCode::UNAUTHORIZED,
             Json(json!({ "error": "invalid_code" })),
         )
             .into_response(),
-        Err(PairingError::RateLimited) => (
+        PairingError::RateLimited => (
             StatusCode::TOO_MANY_REQUESTS,
             [(
                 header::RETRY_AFTER,
@@ -242,6 +262,61 @@ async fn pair(State(state): State<AppState>, request: Request) -> Response {
             Json(json!({ "error": "rate_limited" })),
         )
             .into_response(),
+    }
+}
+
+/// The desktop app redeems a pairing code for a bearer token it keeps in the
+/// OS credential store. Browsers are refused: a token readable by page script
+/// is exactly what the cookie flow exists to avoid.
+async fn pair_device(State(state): State<AppState>, request: Request) -> Response {
+    if state.config.read().await.auth_token.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "auth_disabled" })),
+        )
+            .into_response();
+    }
+    let from_browser = request.headers().contains_key(header::ORIGIN)
+        || request.headers().contains_key("sec-fetch-site");
+    if from_browser {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "browser_not_allowed" })),
+        )
+            .into_response();
+    }
+    let Some(host) = auth::request_host(request.headers(), &request) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "missing_host" })),
+        )
+            .into_response();
+    };
+    let body: PairDeviceRequest = match axum::body::to_bytes(request.into_body(), 4096)
+        .await
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+    {
+        Some(body) => body,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "invalid_body" })),
+            )
+                .into_response();
+        }
+    };
+    match state
+        .browser_sessions
+        .confirm_device_challenge(&body.code, &host, &body.label)
+    {
+        Ok(issued) => (
+            StatusCode::OK,
+            [(header::CACHE_CONTROL, "no-store")],
+            Json(json!({ "token": issued.token, "session": issued.summary })),
+        )
+            .into_response(),
+        Err(error) => pairing_error_response(error),
     }
 }
 

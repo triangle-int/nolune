@@ -1,11 +1,19 @@
-//! Explicit browser pairing and revocable session authentication (#112).
+//! Explicit device pairing and revocable session authentication (#112).
 //!
-//! Browsers never receive the server API token. Instead an owner creates a
-//! short-lived, single-use pairing code (from the CLI, the desktop app, or an
-//! already-paired browser), the new browser exchanges that code for a session,
-//! and the session travels in an `HttpOnly` cookie. Sessions are bound to the
-//! exact host they were issued on, rotate periodically, expire after idle and
-//! absolute lifetimes, and can be listed and revoked individually.
+//! Browsers and desktop apps never need the server API token. Instead an
+//! owner creates a short-lived, single-use pairing code (from the CLI or an
+//! already-paired device), and the new device exchanges that code for a
+//! session. The same code works for either kind of device:
+//!
+//! * A browser gets an `HttpOnly` cookie. Browser sessions are bound to the
+//!   exact host they were issued on, rotate periodically, and expire after
+//!   idle and absolute lifetimes.
+//! * A desktop app gets a bearer token it keeps in the OS credential store.
+//!   Desktop sessions are not host-bound (the app may reach the server by
+//!   more than one address), do not rotate, and expire only after a long idle
+//!   period.
+//!
+//! Every session can be listed and revoked individually.
 //!
 //! Only SHA-256 hashes of session secrets and pairing codes are kept in memory
 //! or on disk. Nothing in this module logs a secret.
@@ -31,6 +39,8 @@ pub const MAX_CHALLENGE_ATTEMPTS: u32 = 5;
 pub const MAX_PENDING_CHALLENGES: usize = 8;
 /// A session that is not used for this long expires.
 pub const SESSION_IDLE_SECS: u64 = 30 * 24 * 60 * 60;
+/// A desktop app that is not opened for this long has to pair again.
+pub const DESKTOP_IDLE_SECS: u64 = 90 * 24 * 60 * 60;
 /// A session never outlives this, however active it is.
 pub const SESSION_ABSOLUTE_SECS: u64 = 90 * 24 * 60 * 60;
 /// The cookie secret is replaced once it is older than this.
@@ -48,6 +58,8 @@ const STORE_VERSION: u32 = 1;
 const CODE_DIGITS: usize = 8;
 const CODE_HASH_DOMAIN: &[u8] = b"nolune/browser-pairing-code/v1\0";
 const SECRET_HASH_DOMAIN: &[u8] = b"nolune/browser-session-secret/v1\0";
+/// Longest label a device may give itself.
+const MAX_LABEL_CHARS: usize = 64;
 
 pub(crate) trait Clock: Send + Sync {
     fn now(&self) -> u64;
@@ -64,9 +76,22 @@ impl Clock for SystemClock {
     }
 }
 
+/// What kind of client holds a session.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionKind {
+    /// A browser holding the `HttpOnly` cookie.
+    #[default]
+    Browser,
+    /// The desktop app holding a bearer token.
+    Desktop,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct StoredSession {
     id: String,
+    #[serde(default)]
+    kind: SessionKind,
     secret_hash: String,
     #[serde(default)]
     previous_hash: Option<String>,
@@ -82,7 +107,12 @@ struct StoredSession {
 
 impl StoredSession {
     fn expires_at(&self) -> u64 {
-        (self.last_seen_at + SESSION_IDLE_SECS).min(self.created_at + SESSION_ABSOLUTE_SECS)
+        match self.kind {
+            SessionKind::Browser => {
+                (self.last_seen_at + SESSION_IDLE_SECS).min(self.created_at + SESSION_ABSOLUTE_SECS)
+            }
+            SessionKind::Desktop => self.last_seen_at + DESKTOP_IDLE_SECS,
+        }
     }
 
     fn is_expired(&self, now: u64) -> bool {
@@ -103,8 +133,8 @@ struct Challenge {
     expires_at: u64,
     attempts: u32,
     /// Host the code was created on by a browser session, if any. The
-    /// redeeming browser must use the same host. Codes created by the API
-    /// token (CLI, desktop app) are not host-bound.
+    /// redeeming browser or desktop app must use the same host. Codes
+    /// created by the API token (CLI) or a desktop app are not host-bound.
     bound_host: Option<String>,
     created_by: String,
 }
@@ -116,10 +146,11 @@ struct Inner {
     failures: Vec<u64>,
 }
 
-/// Public view of a paired browser.
+/// Public view of a paired device.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SessionSummary {
     pub id: String,
+    pub kind: SessionKind,
     pub label: String,
     pub paired_via: String,
     pub host: String,
@@ -144,6 +175,14 @@ pub struct PairingChallenge {
 pub struct IssuedSession {
     pub cookie_value: String,
     pub max_age_secs: u64,
+    pub summary: SessionSummary,
+}
+
+/// A desktop session issued by a successful pairing. `token` is returned to
+/// the app exactly once.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IssuedDevice {
+    pub token: String,
     pub summary: SessionSummary,
 }
 
@@ -312,6 +351,40 @@ impl BrowserSessionStore {
         host: &str,
         label: &str,
     ) -> Result<IssuedSession, PairingError> {
+        let (session, secret) = self.redeem(code, host, label, SessionKind::Browser)?;
+        let max_age_secs = session.expires_at().saturating_sub(session.created_at);
+        Ok(IssuedSession {
+            cookie_value: format!("{}.{secret}", session.id),
+            max_age_secs,
+            summary: summarize(&session),
+        })
+    }
+
+    /// Redeem a pairing code from the desktop app and issue a bearer token.
+    /// `host` is the address the app used; it must match a host-bound code
+    /// but does not bind the resulting session.
+    pub fn confirm_device_challenge(
+        &self,
+        code: &str,
+        host: &str,
+        label: &str,
+    ) -> Result<IssuedDevice, PairingError> {
+        let (session, secret) = self.redeem(code, host, label, SessionKind::Desktop)?;
+        Ok(IssuedDevice {
+            token: format!("{}.{secret}", session.id),
+            summary: summarize(&session),
+        })
+    }
+
+    /// Check and consume a pairing code, then store a new session of `kind`.
+    /// Returns the stored session and its plaintext secret.
+    fn redeem(
+        &self,
+        code: &str,
+        host: &str,
+        label: &str,
+        kind: SessionKind,
+    ) -> Result<(StoredSession, String), PairingError> {
         let now = self.clock.now();
         let normalized = normalize_code(code);
         let mut inner = self.inner.lock().unwrap();
@@ -374,37 +447,32 @@ impl BrowserSessionStore {
 
         // Single use: the code is gone before the session exists.
         let challenge = inner.challenges.remove(index);
-        let secret = random_bytes(32);
-        let secret_encoded = URL_SAFE_NO_PAD.encode(secret);
+        let secret = URL_SAFE_NO_PAD.encode(random_bytes(32));
         let id = hex(&random_bytes(8));
         let session = StoredSession {
             id: id.clone(),
-            secret_hash: hash_secret(&secret_encoded),
+            kind,
+            secret_hash: hash_secret(&secret),
             previous_hash: None,
             previous_valid_until: 0,
             host: host.to_string(),
-            label: label.to_string(),
+            label: sanitize_label(label, kind),
             paired_via: challenge.created_by.clone(),
             created_at: now,
             last_seen_at: now,
             rotated_at: now,
         };
-        let summary = summarize(&session);
         inner.sessions.retain(|s| !s.is_expired(now));
-        inner.sessions.push(session);
+        inner.sessions.push(session.clone());
         drop(inner);
         self.persist();
         log::info!(
-            "[sessions] browser {id} paired on host {host} via code {} (created by {}, {}s after creation)",
+            "[sessions] {kind:?} {id} paired on host {host} via code {} (created by {}, {}s after creation)",
             challenge.id,
             challenge.created_by,
             now.saturating_sub(challenge.created_at)
         );
-        Ok(IssuedSession {
-            cookie_value: format!("{id}.{secret_encoded}"),
-            max_age_secs: summary.expires_at.saturating_sub(now),
-            summary,
-        })
+        Ok((session, secret))
     }
 
     /// Validate a cookie value presented on `host`. Touches the session and
@@ -427,7 +495,7 @@ impl BrowserSessionStore {
                 self.persist();
                 return None;
             }
-            if !session.host.eq_ignore_ascii_case(host) {
+            if session.kind != SessionKind::Browser || !session.host.eq_ignore_ascii_case(host) {
                 return None;
             }
             let current_ok = constant_time_eq(session.secret_hash.as_bytes(), presented.as_bytes());
@@ -469,6 +537,44 @@ impl BrowserSessionStore {
         Some(result)
     }
 
+    /// Validate a desktop bearer token. Touches the session; desktop tokens
+    /// never rotate and are not bound to a host. Returns the session id.
+    pub fn authenticate_device(&self, token: &str) -> Option<String> {
+        let (id, secret) = token.split_once('.')?;
+        if id.is_empty() || secret.is_empty() || token.len() > 256 {
+            return None;
+        }
+        let presented = hash_secret(secret);
+        let now = self.clock.now();
+        let mut persist = false;
+        let result = {
+            let mut inner = self.inner.lock().unwrap();
+            let index = inner
+                .sessions
+                .iter()
+                .position(|s| s.id == id && s.kind == SessionKind::Desktop)?;
+            let session = &mut inner.sessions[index];
+            if session.is_expired(now) {
+                inner.sessions.remove(index);
+                drop(inner);
+                self.persist();
+                return None;
+            }
+            if !constant_time_eq(session.secret_hash.as_bytes(), presented.as_bytes()) {
+                return None;
+            }
+            if now.saturating_sub(session.last_seen_at) >= 60 {
+                session.last_seen_at = now;
+                persist = true;
+            }
+            id.to_string()
+        };
+        if persist {
+            self.persist();
+        }
+        Some(result)
+    }
+
     /// Whether a session id still authenticates. Used to close live
     /// WebSockets after revocation.
     pub fn is_active(&self, id: &str) -> bool {
@@ -502,7 +608,7 @@ impl BrowserSessionStore {
         };
         if removed {
             self.persist();
-            log::info!("[sessions] browser session {id} revoked");
+            log::info!("[sessions] session {id} revoked");
         }
         removed
     }
@@ -516,7 +622,7 @@ impl BrowserSessionStore {
         };
         if removed > 0 {
             self.persist();
-            log::info!("[sessions] revoked all {removed} browser session(s)");
+            log::info!("[sessions] revoked all {removed} session(s)");
         }
         removed
     }
@@ -525,6 +631,7 @@ impl BrowserSessionStore {
 fn summarize(session: &StoredSession) -> SessionSummary {
     SessionSummary {
         id: session.id.clone(),
+        kind: session.kind,
         label: session.label.clone(),
         paired_via: session.paired_via.clone(),
         host: session.host.clone(),
@@ -601,6 +708,25 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         return false;
     }
     a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// A device label safe to show in the devices list: printable, trimmed and
+/// short. Empty labels fall back to the kind's name.
+fn sanitize_label(label: &str, kind: SessionKind) -> String {
+    let cleaned: String = label
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_LABEL_CHARS)
+        .collect::<String>()
+        .trim()
+        .to_string();
+    if !cleaned.is_empty() {
+        return cleaned;
+    }
+    match kind {
+        SessionKind::Browser => "Browser".into(),
+        SessionKind::Desktop => "Desktop app".into(),
+    }
 }
 
 /// `1234-5678` presentation of an eight-digit code.
@@ -875,6 +1001,104 @@ mod tests {
         }
         clock.advance(SESSION_ABSOLUTE_SECS - elapsed);
         assert!(store.authenticate(&cookie, "h").is_none());
+    }
+
+    #[test]
+    fn one_code_pairs_a_desktop_with_a_bearer_token() {
+        let (store, clock) = fresh_store();
+        let challenge = store.create_challenge(None, "cli");
+        let issued = store
+            .confirm_device_challenge(
+                &challenge.code,
+                "nolune.local:26559",
+                "Nolune Desktop on macOS",
+            )
+            .unwrap();
+        assert_eq!(issued.summary.kind, SessionKind::Desktop);
+        assert_eq!(issued.summary.label, "Nolune Desktop on macOS");
+        assert_eq!(
+            store.confirm_device_challenge(&challenge.code, "nolune.local:26559", "again"),
+            Err(PairingError::Invalid),
+            "a redeemed code must not work twice"
+        );
+
+        let id = store
+            .authenticate_device(&issued.token)
+            .expect("the token authenticates from any address");
+        assert_eq!(id, issued.summary.id);
+        assert!(
+            store
+                .authenticate(&issued.token, "nolune.local:26559")
+                .is_none(),
+            "a desktop token is not a browser cookie"
+        );
+        assert!(store.authenticate_device(&format!("{id}.wrong")).is_none());
+
+        clock.advance(SESSION_ABSOLUTE_SECS);
+        assert!(
+            store.authenticate_device(&issued.token).is_none(),
+            "an unused desktop session still expires"
+        );
+    }
+
+    #[test]
+    fn desktop_sessions_live_while_used_and_never_rotate() {
+        let (store, clock) = fresh_store();
+        let code = store.create_challenge(None, "cli").code;
+        let issued = store.confirm_device_challenge(&code, "h", "").unwrap();
+        assert_eq!(
+            issued.summary.label, "Desktop app",
+            "empty labels fall back"
+        );
+        for _ in 0..6 {
+            clock.advance(DESKTOP_IDLE_SECS / 2);
+            assert!(
+                store.authenticate_device(&issued.token).is_some(),
+                "an active desktop has no absolute lifetime and keeps its token"
+            );
+        }
+        assert!(store.revoke(&issued.summary.id));
+        assert!(store.authenticate_device(&issued.token).is_none());
+    }
+
+    #[test]
+    fn browser_cookies_are_not_desktop_tokens() {
+        let (store, _) = fresh_store();
+        let code = store.create_challenge(None, "cli").code;
+        let issued = store.confirm_challenge(&code, "h", "Safari").unwrap();
+        assert_eq!(issued.summary.kind, SessionKind::Browser);
+        assert!(store.authenticate_device(&issued.cookie_value).is_none());
+    }
+
+    #[test]
+    fn host_bound_codes_bind_the_desktop_redeem_too() {
+        let (store, _) = fresh_store();
+        let challenge = store.create_challenge(Some("nolune.local:26559".into()), "browser:abc");
+        assert_eq!(
+            store.confirm_device_challenge(&challenge.code, "localhost:26559", "l"),
+            Err(PairingError::Invalid)
+        );
+        let issued = store
+            .confirm_device_challenge(&challenge.code, "nolune.local:26559", "l")
+            .unwrap();
+        assert_eq!(issued.summary.paired_via, "browser:abc");
+    }
+
+    #[test]
+    fn labels_are_trimmed_and_bounded() {
+        assert_eq!(sanitize_label("  My\nMac  ", SessionKind::Desktop), "MyMac");
+        assert_eq!(
+            sanitize_label(&"x".repeat(200), SessionKind::Desktop).len(),
+            MAX_LABEL_CHARS
+        );
+        assert_eq!(sanitize_label("\u{7}", SessionKind::Browser), "Browser");
+    }
+
+    #[test]
+    fn stores_written_before_desktop_sessions_still_load() {
+        let raw = r#"{"version":1,"sessions":[{"id":"a","secret_hash":"x","host":"h","label":"Safari","paired_via":"cli","created_at":1,"last_seen_at":1,"rotated_at":1}]}"#;
+        let file: StoreFile = serde_json::from_str(raw).unwrap();
+        assert_eq!(file.sessions[0].kind, SessionKind::Browser);
     }
 
     #[test]

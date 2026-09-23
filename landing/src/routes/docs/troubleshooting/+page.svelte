@@ -14,16 +14,17 @@
 	</ol>
 	<p>The desktop app never shadows a server you started yourself: installing again over its own server is an upgrade, but anything else on the port makes it stop and tell you.</p>
 
-	<h2 id="pairing">The browser asks for a pairing code</h2>
-	<p>Every new browser pairs once. On the computer running the server:</p>
+	<h2 id="pairing">The browser or desktop app asks for a pairing code</h2>
+	<p>Every new browser and desktop app pairs once, with the same kind of code. On the computer running the server:</p>
 	<pre><code>nolune pair</code></pre>
 	<ul>
 		<li><strong>The code was refused or expired.</strong> A code works once and expires after a few minutes; run <code>nolune pair</code> again and enter the new one.</li>
 		<li><strong><code>nolune pair</code> says the server is not reachable.</strong> It talks to the running server; start it with <code>nolune gateway</code> (or <code>nolune gateway start</code>) and retry.</li>
 		<li><strong><code>nolune pair</code> says the server rejected the token.</strong> The service was started with a different <code>NOLUNE_AUTH_TOKEN</code> than the one in <code>config.toml</code>; run <code>nolune pair</code> with the same value, or start the server without the override.</li>
-		<li><strong>It says pairing is disabled.</strong> <code>auth_token</code> is empty in <code>config.toml</code>, so browsers open Nolune without pairing. Only leave it that way on a machine nobody else can reach.</li>
+		<li><strong>It says pairing is disabled.</strong> <code>auth_token</code> is empty in <code>config.toml</code>, so browsers open Nolune without pairing (the desktop app then connects with <strong>Use an API token instead</strong> and any value). Only leave it that way on a machine nobody else can reach.</li>
+		<li><strong>A code made in a browser is refused by the desktop app.</strong> Codes from <strong>Settings → Connections → Pair a device</strong> in a browser only work at that browser's address. Enter the same server URL in the app, or use <code>nolune pair</code>, whose codes work at any address.</li>
 	</ul>
-	<p>Paired browsers, and a code for the next device, are under <strong>Settings → Connections</strong> once you are in.</p>
+	<p>Paired devices, and a code for the next one, are under <strong>Settings → Connections</strong> once you are in.</p>
 
 	<h2 id="path">nolune: command not found</h2>
 	<p>The installer added <code>~/.nolune/bin</code> to the <code>PATH</code> in your shell's rc file, but the terminal you ran it in was opened before that. Open a new terminal, or in the current one:</p>
@@ -43,7 +44,8 @@ nolune gateway logs</code></pre>
 	<h2 id="desktop-app">The desktop app cannot connect</h2>
 	<ul>
 		<li>Enter the server's <strong>root</strong> address, scheme and port included, such as <code>http://192.168.1.20:26559</code>. A path after the port (<code>/nolune</code>) is rejected.</li>
-		<li>The token is <code>auth_token</code> from <code>~/.nolune/config.toml</code> on the server, not a pairing code. <strong>Test connection</strong> checks it without saving.</li>
+		<li>Pair it with a one-time code, just like a browser: see <a href="#pairing">above</a>. If the app says it is <strong>no longer paired</strong>, it was revoked under <strong>Settings → Connections</strong>; get a fresh code and pair again.</li>
+		<li><strong>This server is too old for pairing codes</strong> means the server predates desktop pairing. Update it, or choose <strong>Use an API token instead</strong> and enter <code>auth_token</code> from <code>~/.nolune/config.toml</code> on the server. <strong>Test connection</strong> checks a token without saving.</li>
 		<li>From another computer the server must be reachable over the network: firewalls on the server, and a server bound to a different <code>host</code> in <code>config.toml</code>, are the usual causes.</li>
 		<li>Computer use needs the operating-system permissions the app lists in its settings; a granted permission shows as a badge, the rest have a <strong>Grant</strong> button.</li>
 	</ul>

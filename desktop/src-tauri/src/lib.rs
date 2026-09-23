@@ -166,6 +166,11 @@ pub(crate) fn connection_url(input: &str) -> Result<url::Url, String> {
 // finish after a newer disconnect.
 static CONNECTION_LIFECYCLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// The server no longer accepts the saved credential: the device was revoked
+/// from Settings, or the API token changed. The dashboard matches on this
+/// code (and the pairing codes below) and shows its own copy.
+pub(crate) const SIGNED_OUT: &str = "signed_out";
+
 pub(crate) async fn validate_connection(url: &str, token: &str) -> Result<(), String> {
     let mut target = connection_url(url)?;
     if token.trim().is_empty() || token.contains(['\r', '\n']) {
@@ -182,6 +187,9 @@ pub(crate) async fn validate_connection(url: &str, token: &str) -> Result<(), St
         .send()
         .await
         .map_err(|_| "Could not reach server")?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(SIGNED_OUT.into());
+    }
     if !response.status().is_success() {
         return Err("Server rejected connection".into());
     }
@@ -256,6 +264,78 @@ async fn save_connection(
     } else {
         token
     };
+    validate_connection(&origin, &token).await?;
+    computer_use_bridge::disconnect_computer_use(app.clone()).await?;
+    close_companion(&app)?;
+    credentials::store(credentials::SavedConnection {
+        origin: origin.clone(),
+        token,
+    })
+    .await?;
+    Ok(origin)
+}
+
+/// How this app names itself in the server's devices list.
+fn device_label() -> String {
+    let host = gethostname::gethostname()
+        .to_string_lossy()
+        .trim()
+        .to_string();
+    if host.is_empty() {
+        "Nolune Desktop".into()
+    } else {
+        format!("Nolune Desktop on {host}")
+    }
+}
+
+/// Redeem a one-time pairing code (from `nolune pair` or Settings on a paired
+/// device) for this app's own device token. The token goes straight to the
+/// OS credential store and never reaches the webview. Errors are stable codes
+/// the dashboard maps to its own copy.
+pub(crate) async fn redeem_pairing_code(origin: &str, code: &str) -> Result<String, String> {
+    let digits: String = code.chars().filter(char::is_ascii_digit).collect();
+    if digits.len() != 8 || code.len() > 64 {
+        return Err("invalid_code".into());
+    }
+    let mut target = connection_url(origin)?;
+    target.set_path("/api/session/pair-device");
+    let response = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|_| "pairing_failed")?
+        .post(target)
+        .json(&serde_json::json!({ "code": digits, "label": device_label() }))
+        .send()
+        .await
+        .map_err(|_| "unreachable")?;
+    let status = response.status();
+    let body: serde_json::Value = response.json().await.unwrap_or_default();
+    if status.is_success() {
+        return body["token"]
+            .as_str()
+            .filter(|token| !token.is_empty() && !token.contains(['\r', '\n']))
+            .map(str::to_owned)
+            .ok_or_else(|| "pairing_failed".into());
+    }
+    Err(match (status.as_u16(), body["error"].as_str()) {
+        (_, Some(code @ ("invalid_code" | "rate_limited" | "auth_disabled"))) => code,
+        // A server from before device pairing has no such route.
+        (404 | 405, _) => "pairing_unsupported",
+        _ => "pairing_failed",
+    }
+    .into())
+}
+
+#[tauri::command]
+async fn pair_connection(
+    app: tauri::AppHandle,
+    url: String,
+    code: String,
+) -> Result<String, String> {
+    let _guard = CONNECTION_LIFECYCLE.lock().await;
+    let origin = connection_url(&url)?.origin().ascii_serialization();
+    let token = redeem_pairing_code(&origin, &code).await?;
     validate_connection(&origin, &token).await?;
     computer_use_bridge::disconnect_computer_use(app.clone()).await?;
     close_companion(&app)?;
@@ -406,6 +486,69 @@ mod tests {
             assert!(connection_url(input).is_err());
         }
     }
+
+    #[tokio::test]
+    async fn pairing_redeems_the_code_natively_and_explains_refusals() {
+        use axum::{http::StatusCode, routing::post, Json, Router};
+        for (status, body, expected) in [
+            (
+                200,
+                serde_json::json!({ "token": "abc.def" }),
+                Ok("abc.def".to_string()),
+            ),
+            (
+                401,
+                serde_json::json!({ "error": "invalid_code" }),
+                Err("invalid_code"),
+            ),
+            (
+                429,
+                serde_json::json!({ "error": "rate_limited" }),
+                Err("rate_limited"),
+            ),
+            (404, serde_json::json!(null), Err("pairing_unsupported")),
+            (
+                500,
+                serde_json::json!({ "error": "TOP_SECRET" }),
+                Err("pairing_failed"),
+            ),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let origin = format!("http://{}", listener.local_addr().unwrap());
+            let app = Router::new().route(
+                "/api/session/pair-device",
+                post(
+                    move |headers: axum::http::HeaderMap,
+                          Json(request): Json<serde_json::Value>| async move {
+                        assert!(
+                            headers.get("origin").is_none(),
+                            "the app does not look like a browser"
+                        );
+                        assert_eq!(
+                            request["code"], "12345678",
+                            "the code is sent as bare digits"
+                        );
+                        assert!(request["label"]
+                            .as_str()
+                            .unwrap()
+                            .starts_with("Nolune Desktop"));
+                        (StatusCode::from_u16(status).unwrap(), Json(body))
+                    },
+                ),
+            );
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let result = redeem_pairing_code(&format!("{origin}/"), "1234-5678").await;
+            match expected {
+                Ok(token) => assert_eq!(result.unwrap(), token),
+                Err(code) => assert_eq!(result.unwrap_err(), code),
+            }
+            server.abort();
+        }
+        assert_eq!(
+            redeem_pairing_code("http://127.0.0.1:1/", "1234").await,
+            Err("invalid_code".into())
+        );
+    }
 }
 
 fn navigate_home(app: &tauri::AppHandle) -> Result<(), String> {
@@ -479,6 +622,7 @@ pub fn run() {
             test_connection,
             initialize_saved_connection,
             save_connection,
+            pair_connection,
             test_saved_connection,
             open_saved_connection,
             delete_saved_connection,

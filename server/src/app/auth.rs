@@ -1,14 +1,16 @@
 //! Request authentication for `/api/*`.
 //!
-//! Two credentials exist and they never mix:
+//! Three credentials exist and they never mix:
 //!
 //! * The server API token, sent as `Authorization: Bearer`. It is the
-//!   automation/admin credential used by the CLI, the desktop relay and
-//!   machine agents. Browsers never receive it.
-//! * A paired browser session, sent as the `nolune_session` cookie (see
-//!   [`crate::services::browser_sessions`]). Sessions are bound to the exact
-//!   host they were issued on and rotate on a schedule; a rotated cookie is
-//!   returned on the same response.
+//!   automation/admin credential used by the CLI and scripts. Browsers never
+//!   receive it.
+//! * A paired desktop app's token, also sent as `Authorization: Bearer` (see
+//!   [`crate::services::browser_sessions`]). The desktop relay and its
+//!   machine agent use it in place of the API token.
+//! * A paired browser session, sent as the `nolune_session` cookie. Sessions
+//!   are bound to the exact host they were issued on and rotate on a
+//!   schedule; a rotated cookie is returned on the same response.
 //!
 //! Credentials in query strings are not accepted anywhere.
 
@@ -32,6 +34,18 @@ pub enum AuthContext {
     ApiToken,
     /// A paired browser session.
     BrowserSession { id: String },
+    /// A paired desktop app.
+    DesktopSession { id: String },
+}
+
+impl AuthContext {
+    /// The paired session behind this request, browser or desktop.
+    pub fn session_id(&self) -> Option<&str> {
+        match self {
+            Self::BrowserSession { id } | Self::DesktopSession { id } => Some(id),
+            Self::Disabled | Self::ApiToken => None,
+        }
+    }
 }
 
 pub async fn auth_middleware(
@@ -57,7 +71,13 @@ pub async fn auth_middleware(
             request.extensions_mut().insert(AuthContext::ApiToken);
             return Ok(next.run(request).await);
         }
-        return Err(StatusCode::UNAUTHORIZED);
+        let Some(id) = state.browser_sessions.authenticate_device(bearer) else {
+            return Err(StatusCode::UNAUTHORIZED);
+        };
+        request
+            .extensions_mut()
+            .insert(AuthContext::DesktopSession { id });
+        return Ok(next.run(request).await);
     }
 
     let Some(cookie) = cookie_value(request.headers(), COOKIE_NAME) else {

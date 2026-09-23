@@ -49,14 +49,14 @@
 		<img class="auth-icon" src="/skins/moon/character.svg" alt="Nolune" />
 		<h1>Pair this browser</h1>
 		{#if isDesktopRelay()}
-			<p class="auth-label">Return to the desktop dashboard to update your token and reconnect.</p>
+			<p class="auth-label">This desktop app was signed out. Return to the desktop dashboard and pair it again.</p>
 		{:else}
 			<p class="auth-label">
 				Nolune only lets in browsers you have paired. Get a one-time code from somewhere that already has access:
 			</p>
 			<ul class="auth-steps">
 				<li>On the computer where Nolune is installed, run <code>nolune pair</code>.</li>
-				<li>Or, on a device that is already connected, open <strong>Settings → Connections → Pair another browser</strong>.</li>
+				<li>Or, on a device that is already connected, open <strong>Settings → Connections → Pair a device</strong>.</li>
 			</ul>
 			<form class="auth-form" onsubmit={onSubmit}>
 				<label for="pairing-code" class="auth-label">Enter the code</label>
@@ -80,7 +80,7 @@
 					{busy ? "Connecting…" : "Connect"}
 				</button>
 			</form>
-			<p class="auth-fineprint">Codes expire after 5 minutes and work once. Paired browsers can be reviewed and revoked from Settings.</p>
+			<p class="auth-fineprint">Codes expire after 5 minutes and work once. Paired devices can be reviewed and revoked from Settings.</p>
 		{/if}
 	</div>
 </div>

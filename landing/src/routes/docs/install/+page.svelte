@@ -41,7 +41,7 @@
 	<p>The first browser has to be paired. On the computer running the server:</p>
 	<pre><code>nolune pair</code></pre>
 	<p>It prints a one-time code. Enter that code in the browser at <code>http://localhost:26559</code>, then follow the onboarding: choose a name, add your model provider key, and meet your companion. The code works once and expires after a few minutes; run <code>nolune pair</code> again for each additional browser or device.</p>
-	<p>Paired browsers stay signed in. Review or revoke them, or mint a code for another device, under <strong>Settings → Connections</strong>. Until you open a new terminal, the command is <code>~/.nolune/bin/nolune pair</code>.</p>
+	<p>The desktop app pairs the same way: enter the server's address and a code from <code>nolune pair</code>. Paired browsers and desktop apps stay signed in. Review or revoke them, or mint a code for the next device, under <strong>Settings → Connections → Pair a device</strong>. Until you open a new terminal, the command is <code>~/.nolune/bin/nolune pair</code>.</p>
 
 	<h2 id="background-service">Keep it running</h2>
 	<p>To keep the server running without a terminal, opt in to the background service:</p>
@@ -60,7 +60,7 @@
 				<tr><td><code>nolune gateway uninstall</code></td><td>Stops and removes that service; data is untouched.</td></tr>
 				<tr><td><code>nolune gateway start</code> / <code>stop</code> / <code>restart</code></td><td>Control the service once installed.</td></tr>
 				<tr><td><code>nolune gateway status</code> / <code>logs</code></td><td>Show whether the service is installed and running, or stream its logs.</td></tr>
-				<tr><td><code>nolune pair</code></td><td>Prints a one-time code so a browser can sign in.</td></tr>
+				<tr><td><code>nolune pair</code></td><td>Prints a one-time code so a browser or the desktop app can sign in.</td></tr>
 				<tr><td><code>nolune version</code></td><td>Prints the installed server version.</td></tr>
 				<tr><td><code>nolune uninstall --keep-data</code></td><td>Removes the service, binary, and log but keeps <code>~/.nolune</code>.</td></tr>
 				<tr><td><code>nolune uninstall --yes</code></td><td>Removes everything, including your data.</td></tr>

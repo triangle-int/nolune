@@ -33,8 +33,12 @@ test('every server reason has a sentence and unknown reasons are honest', () => 
 
 test('the pairing hint points at Settings → Connections, where the button lives (#37 follow-up)', () => {
 	const gate = readFileSync(new URL('../src/lib/components/auth/AuthGate.svelte', import.meta.url), 'utf8');
-	assert.match(gate, /Settings → Connections → Pair another browser/);
+	assert.match(gate, /Settings → Connections → Pair a device/);
 	assert.doesNotMatch(gate, /Settings → Server/, 'there is no Server settings page with a pairing button');
 	const connections = readFileSync(new URL('../src/routes/[slug]/settings/connections/+page.svelte', import.meta.url), 'utf8');
-	assert.match(connections, /Pair another browser/, 'the hint must name the page that actually has the button');
+	assert.match(connections, /Pair a device/, 'the hint must name the page that actually has the button');
+	// One flow: the desktop app asks for the same code, from the same places.
+	const desktop = readFileSync(new URL('../../desktop/src/routes/+page.svelte', import.meta.url), 'utf8');
+	assert.match(desktop, /Settings → Connections → Pair a device/);
+	assert.match(desktop, /nolune pair/);
 });

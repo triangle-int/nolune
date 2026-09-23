@@ -1,5 +1,5 @@
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{
         Path, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -10,7 +10,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::app::state::AppState;
+use crate::app::{auth::AuthContext, state::AppState};
 use crate::domain::machine::{KnownMachine, validate_machine_id};
 use crate::services::machine_registry::{ActionResult, MachineError, MachineInfo};
 
@@ -238,8 +238,14 @@ async fn machine_bye(
     Ok(StatusCode::OK)
 }
 
-async fn upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
-    ws.on_upgrade(move |socket| handle_agent(socket, state))
+async fn upgrade(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    context: Option<Extension<AuthContext>>,
+) -> Response {
+    // A paired desktop's agent is dropped once its device is revoked.
+    let session_id = context.and_then(|Extension(c)| c.session_id().map(str::to_string));
+    ws.on_upgrade(move |socket| handle_agent(socket, state, session_id))
 }
 
 /// What a desktop sends first on its socket. `machine_id` is the desktop's
@@ -317,7 +323,7 @@ enum AgentMessage {
     Heartbeat { machine_id: String },
 }
 
-async fn handle_agent(mut socket: WebSocket, state: AppState) {
+async fn handle_agent(mut socket: WebSocket, state: AppState, session_id: Option<String>) {
     // The agent must send a Register message first.
     let (machine_id, connection, mut agent_rx) =
         match wait_for_registration(&mut socket, &state).await {
@@ -390,6 +396,18 @@ async fn handle_agent(mut socket: WebSocket, state: AppState) {
             }
             // Periodic ping to detect dead connections
             _ = ping_interval.tick() => {
+                if let Some(id) = &session_id
+                    && !state.browser_sessions.is_active(id)
+                {
+                    log::info!("[machine-ws] device for '{machine_id}' was revoked, disconnecting");
+                    let _ = socket
+                        .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                            code: super::ws::CLOSE_SESSION_REVOKED,
+                            reason: "session revoked".into(),
+                        })))
+                        .await;
+                    break;
+                }
                 if socket.send(Message::Ping(vec![].into())).await.is_err() {
                     log::warn!("[machine-ws] ping failed for '{machine_id}', disconnecting");
                     break;
