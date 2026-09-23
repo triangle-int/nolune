@@ -20,6 +20,19 @@ pub struct Capabilities {
     pub token_counting: bool,
 }
 
+/// One model a provider offers to this account, as its listing names it:
+/// what onboarding and the preset editor pick from instead of seeded ids.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct ModelListing {
+    /// The id a preset stores and the provider is called with.
+    pub id: String,
+    /// The provider's display name, or the id when it has none.
+    pub name: String,
+    /// The provider's one-line description, when it gives one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Usage {
     /// Total input, including cache reads and writes.
@@ -278,9 +291,9 @@ pub trait ProviderAdapter: Send + Sync {
         let _ = request;
         Box::pin(async { Err(LlmError::UnsupportedCapability("token counting")) })
     }
-    // Reserved extension point; current adapters advertise discovery as unsupported.
-    #[allow(dead_code)]
-    fn discover_models(&self) -> BoxFuture<'_, Result<Vec<String>, LlmError>> {
+    /// The models this account can pick, in the order to offer them, when
+    /// `Capabilities::model_discovery` says the provider lists them.
+    fn discover_models(&self) -> BoxFuture<'_, Result<Vec<ModelListing>, LlmError>> {
         Box::pin(async { Err(LlmError::UnsupportedCapability("model discovery")) })
     }
 }
@@ -464,10 +477,6 @@ mod tests {
         assert!(matches!(
             plain.complete(request).await,
             Err(LlmError::UnsupportedCapability("reasoning controls"))
-        ));
-        assert!(matches!(
-            plain.discover_models().await,
-            Err(LlmError::UnsupportedCapability("model discovery"))
         ));
         run_case(Case::CancellationBeforeNetwork).await;
     }

@@ -123,18 +123,22 @@ fn presets_have_a_config_shape_an_api_and_a_client_module() {
         "pub chat_preset: String",
         "pub background_preset: String",
         "pub fn preset(",
-        "pub fn seed_presets(",
+        "pub fn choose_chat_model(",
     ] {
         if !config.contains(required) {
             violations.push(format!("server/src/config.rs is missing {required:?}"));
         }
     }
     let onboard = without_cfg_test_items(&read(repo, "server/src/onboard.rs"));
-    if !onboard.contains("[[llm.presets]]") {
-        violations.push("nolune onboard must write example presets into the fresh config".into());
+    if !onboard.contains("# [[llm.presets]]") {
+        violations.push("nolune onboard must document the preset shape in the fresh config".into());
     }
     let routes = without_cfg_test_items(&read(repo, "server/src/routes/config.rs"));
-    for required in ["\"/api/config/models\"", "\"/api/config/models/seed\""] {
+    for required in [
+        "\"/api/config/models\"",
+        "\"/api/config/models/available\"",
+        "\"/api/config/models/choose\"",
+    ] {
         if !routes.contains(required) {
             violations.push(format!("routes/config.rs is missing route {required}"));
         }
@@ -165,7 +169,8 @@ fn presets_have_a_config_shape_an_api_and_a_client_module() {
     for required in [
         "export function fetchModelPresets(",
         "export function updateModelPresets(",
-        "export function seedModelPresets(",
+        "export async function fetchAvailableModels(",
+        "export async function chooseModel(",
         "export function fetchChatPreset(",
         "export function updateChatPreset(",
     ] {

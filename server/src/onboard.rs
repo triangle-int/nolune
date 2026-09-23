@@ -109,26 +109,23 @@ port = {port}
 auth_token = "{token}"
 
 [llm]
-# Model presets (#156): name the models you want, then pick which preset
-# handles conversations and which does background work.
-chat_preset = "sonnet"
-background_preset = "haiku"
-
-[[llm.presets]]
-id = "sonnet"
-name = "Claude Sonnet"
-provider = "anthropic"
-model = "claude-sonnet-4-6"
-
-[[llm.presets]]
-id = "haiku"
-name = "Claude Haiku"
-provider = "anthropic"
-model = "claude-haiku-4-5-20251001"
+# Model presets (#156): nothing is preset. Pick a model from what your
+# provider lists in the web onboarding or under Settings › Connections
+# and it is written here. By hand, a preset and the two slots look like:
+#
+# chat_preset = "claude-sonnet-5"
+# background_preset = "claude-sonnet-5"
+#
+# [[llm.presets]]
+# id = "claude-sonnet-5"
+# name = "Claude Sonnet 5"
+# provider = "anthropic"
+# model = "claude-sonnet-5"
 
 [llm.tokens]
-ANTHROPIC = ""       # Required — get a key at https://console.anthropic.com
-OPEN_AI = ""         # Optional — text embeddings for memory search
+ANTHROPIC = ""       # One provider key, or a Codex login in the app — https://console.anthropic.com
+OPEN_AI = ""         # Optional — OpenAI models, and text embeddings for memory search
+OPENROUTER = ""      # Optional — models from many vendors with one key
 ELEVENLABS = ""      # Optional — text-to-speech
 "#
     )

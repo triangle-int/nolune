@@ -38,10 +38,8 @@ test('onboarding is offered only once the server says the companion does not exi
 });
 
 test('onboarding never greets the user by the companion slug when no name was given', async () => {
-	const { introGreeting, onboardingHandshake } = await import('../src/lib/companion/context.js');
+	const { introGreeting } = await import('../src/lib/companion/context.js');
 	assert.equal(introGreeting('Tim'), 'hey, Tim.');
 	assert.equal(introGreeting(''), 'hey.');
 	assert.equal(introGreeting(null), 'hey.');
-	assert.equal(onboardingHandshake('Tim', 'English'), 'my name is Tim. please speak to me in English.');
-	assert.equal(onboardingHandshake(null, 'Deutsch'), 'please speak to me in Deutsch.');
 });

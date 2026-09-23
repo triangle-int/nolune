@@ -151,7 +151,7 @@ pub(super) async fn run_case(case: Case) {
 /// app-server of its own instead (nothing is started until a turn).
 pub(super) fn backend(provider: LlmProvider, url: &str) -> LlmBackend {
     let mut config = Config::default();
-    config.llm.seed_presets(provider);
+    config.llm.add_test_presets(provider);
     config.llm.tokens.anthropic = "test".into();
     config.llm.tokens.open_ai = "test".into();
     config.llm.tokens.open_router = "test".into();
@@ -159,7 +159,7 @@ pub(super) fn backend(provider: LlmProvider, url: &str) -> LlmBackend {
         LlmProvider::Anthropic => "sonnet".to_owned(),
         LlmProvider::Openai => "gpt-sol".to_owned(),
         LlmProvider::Openrouter | LlmProvider::Codex => {
-            crate::config::default_presets(provider)[0].id.clone()
+            crate::config::test_presets(provider)[0].id.clone()
         }
     };
     let mut backend = LlmBackend::for_preset(&config, reqwest::Client::new(), &preset).unwrap();
@@ -1977,7 +1977,7 @@ mod tests {
             let reported = backend(provider, "").adapter().unwrap().capabilities();
             let documented = super::super::provider_capabilities(
                 provider,
-                &crate::config::default_presets(provider)[0].model,
+                &crate::config::test_presets(provider)[0].model,
             );
             let same = |a: Capabilities, b: Capabilities| {
                 (
@@ -2054,7 +2054,7 @@ mod tests {
             .iter()
             .filter_map(|model| model["id"].as_str())
             .collect();
-        for preset in crate::config::default_presets(LlmProvider::Codex) {
+        for preset in crate::config::test_presets(LlmProvider::Codex) {
             assert!(
                 ids.contains(&preset.model.as_str()),
                 "the pinned release does not list the seeded model {}: {ids:?}",

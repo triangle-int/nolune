@@ -1,6 +1,6 @@
 <script lang="ts">
 	import MoonBirth from "./MoonBirth.svelte";
-	import { connectOnboardingCodex, resumeOnboarding, saveOnboardingProvider } from "./provider.js";
+	import { chooseOnboardingModel, connectOnboardingCodex, listOnboardingModels, resumeOnboarding, saveOnboardingKey, stepAfterProvider, type AvailableModel } from "./provider.js";
 	import { CODEX_LOGIN_POLL_MS, codexErrorCopy, loginInstructions, loginProgress, offersDeviceCode } from "$lib/models/codex.js";
 	import ArrowRight from "@lucide/svelte/icons/arrow-right";
 	import {
@@ -12,9 +12,9 @@
 		fetchConfigStatus,
 		fetchModelPresets,
 		updateLlmConfig,
-		seedModelPresets,
 		testPreset,
-		updateModelPresets,
+		fetchAvailableModels,
+		chooseModel,
 		fetchCodexStatus,
 		startCodexLogin,
 		type CodexLoginMethod,
@@ -22,7 +22,7 @@
 	} from "$lib/api/client.js";
 	import type { SoulTemplate } from "$lib/api/types.js";
 	import { getCompanion } from "$lib/stores/companion.svelte.js";
-	import { introGreeting, onboardingHandshake } from "$lib/companion/context.js";
+	import { introGreeting } from "$lib/companion/context.js";
 	import { getSceneStore } from "$lib/stores/scene.svelte.js";
 	import { getSkinStore, SKINS } from "$lib/stores/skin.svelte.js";
 	import { getToasts } from "$lib/stores/toast.svelte.js";
@@ -34,6 +34,9 @@
 	const skinStore = getSkinStore();
 
 	let { slug, oncomplete }: { slug: string; oncomplete: () => void } = $props();
+
+	/** The companion is Nolune until someone renames it; onboarding no longer asks. */
+	const COMPANION_NAME = "Nolune";
 
 	// Optional: set by an earlier visit; never falls back to the companion slug.
 	function readPreferredName(): string | null {
@@ -51,14 +54,13 @@
 		| "intro"
 		| "waiting-key"
 		| "testing"
-		| "picking-language"
-		| "naming-companion"
-		| "picking-skin"
 		| "being-born"
 		| "picking-soul"
 		| "picking-provider"
 		| "codex-login"
 		| "codex-blocked"
+		| "picking-model"
+		| "models-blocked"
 		| "waiting-first"
 		| "sending"
 		| "departing";
@@ -66,42 +68,38 @@
 	let stage = $state<Stage>("reveal");
 	let revealed = $state(false);
 	let firstMessage = $state("");
-	let companionNameInput = $state("");
 	type KeyProvider = "anthropic" | "openai" | "openrouter";
 	type OnboardingProvider = KeyProvider | "codex";
-	const providerInfo: Record<KeyProvider, { label: string; keyUrl: string; placeholder: string }> = {
+	const providerInfo: Record<OnboardingProvider, { label: string; keyUrl: string; placeholder: string }> = {
 		anthropic: { label: "Anthropic", keyUrl: "https://console.anthropic.com/settings/keys", placeholder: "sk-ant-..." },
 		openai: { label: "OpenAI", keyUrl: "https://platform.openai.com/api-keys", placeholder: "sk-..." },
 		openrouter: { label: "OpenRouter", keyUrl: "https://openrouter.ai/settings/keys", placeholder: "sk-or-..." },
+		codex: { label: "Codex", keyUrl: "", placeholder: "" },
 	};
-	let selectedProvider = $state<KeyProvider>("anthropic");
+	let selectedProvider = $state<OnboardingProvider>("anthropic");
 	const providerLabel = $derived(providerInfo[selectedProvider].label);
 	const providerKeyUrl = $derived(providerInfo[selectedProvider].keyUrl);
+	/** Providers whose key the server already holds (an earlier visit, or its environment). */
+	let configuredKeys = $state<string[]>([]);
 	let apiKeyInput = $state("");
 	let apiKeyError = $state("");
 	let messageInput: HTMLTextAreaElement | undefined = $state();
-	let nameInputEl: HTMLInputElement | undefined = $state();
 	let apiKeyInputEl: HTMLInputElement | undefined = $state();
-	let chosenLanguage = $state(
-		typeof localStorage !== "undefined" ? (localStorage.getItem("nolune:language") ?? "english") : "english",
-	);
 	let lines = $state<{ text: string; revealed: string; done: boolean }[]>([]);
 	let soulTemplates = $state<SoulTemplate[]>([]);
-
-	const LANGUAGES = [
-		{ id: "english", label: "English" },
-		{ id: "russian", label: "Русский" },
-		{ id: "spanish", label: "Español" },
-		{ id: "french", label: "Français" },
-		{ id: "german", label: "Deutsch" },
-		{ id: "japanese", label: "日本語" },
-		{ id: "chinese", label: "中文" },
-		{ id: "korean", label: "한국어" },
-		{ id: "portuguese", label: "Português" },
-		{ id: "italian", label: "Italiano" },
-		{ id: "turkish", label: "Türkçe" },
-		{ id: "arabic", label: "العربية" },
-	];
+	/** What the spinner says while the server works. */
+	let busyLabel = $state("connecting");
+	// The model step: what the provider lists, a filter for long lists, and
+	// why the last listing or pick did not go through.
+	let models = $state<AvailableModel[]>([]);
+	let modelFilter = $state("");
+	let modelError = $state("");
+	const MODEL_FILTER_FROM = 9;
+	const shownModels = $derived.by(() => {
+		const query = modelFilter.trim().toLowerCase();
+		if (!query) return models;
+		return models.filter((m) => m.name.toLowerCase().includes(query) || m.id.toLowerCase().includes(query));
+	});
 
 	function typewrite(text: string, speed = 38): Promise<void> {
 		return new Promise((resolve) => {
@@ -139,48 +137,13 @@
 		await pause(400);
 		await typewrite(introGreeting(readPreferredName()));
 		await pause(400);
-		await typewrite("a new space, just for us.");
+		await typewrite("i'm nolune. a new space, just for us.");
 		await pause(600);
 
-		await typewrite("what language should we speak?");
-		stage = "picking-language";
-	}
-
-	async function pickLanguage(langId: string) {
-		chosenLanguage = langId;
-		localStorage.setItem("nolune:language", langId);
-		stage = "intro";
-		await pause(300);
-		const lang = LANGUAGES.find((l) => l.id === langId);
-		await typewrite(`${lang?.label ?? langId}.`);
-		await pause(400);
-		await typewrite("what should i call myself?");
-		stage = "naming-companion";
-		await pause(100);
-		nameInputEl?.focus();
-	}
-
-	async function submitCompanionName() {
-		const name = companionNameInput.trim();
-		if (!name) return;
-		stage = "intro";
-		await pause(200);
-		await typewrite(`${name}. i like that.`);
-		try { await setCompanionName(slug, name); } catch {}
-		await pause(400);
-
-		await typewrite("how should i look?");
-		stage = "picking-skin";
-	}
-
-	async function pickSkin(skinId: string) {
-		if (stage !== "picking-skin") return;
-		skinStore.setSkin(skinId);
-		stage = "intro";
-		await pause(200);
-		const skin = SKINS.find((s) => s.id === skinId);
-		await typewrite(`${skin?.label ?? skinId}. let me show you.`);
-		await pause(400);
+		// Little Moon is the only skin and Nolune the default name: both are
+		// saved as the choices the removed steps used to make.
+		skinStore.setSkin(SKINS[0].id);
+		try { await setCompanionName(slug, COMPANION_NAME); } catch {}
 
 		play("intro_reveal");
 		stage = "being-born";
@@ -210,8 +173,6 @@
 		}
 	}
 
-	function handleNameKeydown(e: KeyboardEvent) { if (e.key === "Enter") { e.preventDefault(); submitCompanionName(); } }
-
 	async function pickSoul(template: SoulTemplate) {
 		stage = "intro";
 		await pause(200);
@@ -227,19 +188,21 @@
 
 	async function checkKeyThenAsk() {
 		// A provider may already be configured (self-hosted users write
-		// config.toml, and a key saved on an earlier visit stays saved).
+		// config.toml, and a model picked on an earlier visit stays picked).
 		// `llm_configured` only says a key and a Chat preset exist (#28): the
 		// preset is tested again, and only an answer skips this step.
 		let next: ReturnType<typeof resumeOnboarding> = { step: "provider", reason: null };
 		try {
 			const status = await fetchConfigStatus();
+			configuredKeys = status.configured_keys ?? [];
 			if (status.llm_configured && status.chat_preset) {
+				busyLabel = "connecting";
 				stage = "testing";
-				const [outcome, models] = await Promise.all([
+				const [outcome, presets] = await Promise.all([
 					testPreset(status.chat_preset).catch(() => null),
 					fetchModelPresets().catch(() => null),
 				]);
-				const preset = models?.presets.find((p) => p.id === status.chat_preset) ?? null;
+				const preset = presets?.presets.find((p) => p.id === status.chat_preset) ?? null;
 				next = resumeOnboarding(status, outcome, preset);
 				stage = "intro";
 			}
@@ -259,37 +222,46 @@
 	}
 
 	async function pickProvider(provider: OnboardingProvider) {
-		if (provider === "codex") {
-			await startCodex();
-			return;
-		}
 		selectedProvider = provider;
 		apiKeyInput = "";
 		apiKeyError = "";
+		const step = stepAfterProvider(provider, configuredKeys);
+		if (step === "codex") {
+			await startCodex();
+			return;
+		}
 		stage = "intro";
+		if (step === "models") {
+			await typewrite(`got it. your ${providerLabel} key is already here.`);
+			await loadModels();
+			return;
+		}
 		await typewrite(`got it. i'll need an ${providerLabel} API key.`);
 		stage = "waiting-key";
 		await pause(100);
 		apiKeyInputEl?.focus();
 	}
 
-	/** Back from the key or codex step: a provider that will not answer is not the only way on. */
+	/** Back from the key, codex or model step: a provider that will not answer is not the only way on. */
 	async function chooseAnotherProvider() {
-		if (stage !== "waiting-key" && stage !== "codex-login" && stage !== "codex-blocked") return;
+		if (!["waiting-key", "codex-login", "codex-blocked", "picking-model", "models-blocked"].includes(stage)) return;
 		stopCodexPoll();
 		apiKeyInput = "";
 		apiKeyError = "";
 		codexError = "";
 		codexLogin = null;
+		modelError = "";
+		models = [];
 		stage = "intro";
 		await typewrite("how should i think, then?");
 		stage = "picking-provider";
 	}
 
 	// --- Codex (#27): a ChatGPT login through the local codex binary ---
-	// The gate is the login AND the connection test (`connectOnboardingCodex`):
-	// no key is typed here; a login is started on the server, its URL and
-	// code are shown, and the status is polled until codex has the login.
+	// The gate is the login (`connectOnboardingCodex`), then a model that
+	// answers, like any provider: no key is typed here; a login is started
+	// on the server, its URL and code are shown, and the status is polled
+	// until codex has the login.
 	let codexLogin = $state<CodexLoginStatus | null>(null);
 	let codexError = $state("");
 	let codexPoll: ReturnType<typeof setInterval> | null = null;
@@ -303,15 +275,6 @@
 		codexPoll = null;
 	}
 
-	const codexApi = {
-		fetchCodexStatus,
-		seedModelPresets,
-		testPreset,
-		// The seeded rows came from the server, so their providers are its union.
-		updateModelPresets: (payload: { presets: unknown[]; chat_preset: string; background_preset: string }) =>
-			updateModelPresets(payload as Parameters<typeof updateModelPresets>[0]),
-	};
-
 	/** Codex was picked: say so, then check the binary and the login. */
 	async function startCodex() {
 		codexError = "";
@@ -322,13 +285,14 @@
 	}
 
 	/**
-	 * Check the binary and the login, then finish or log in. "try again"
-	 * comes back here, so a binary installed meanwhile or a login done
+	 * Check the binary and the login, then list the models or log in. "try
+	 * again" comes back here, so a binary installed meanwhile or a login done
 	 * elsewhere (`codex login`) is picked up without starting another.
 	 */
 	async function checkCodex(method: "auto" | CodexLoginMethod) {
 		stopCodexPoll();
 		codexError = "";
+		busyLabel = "connecting";
 		stage = "testing";
 		try {
 			await finishCodex();
@@ -343,21 +307,21 @@
 		}
 	}
 
-	/** Seed the Codex presets and test one; "connected." only once a model answered. */
+	/** Codex holds a login: on to its models. */
 	async function finishCodex() {
-		await connectOnboardingCodex(codexApi);
+		await connectOnboardingCodex({ fetchCodexStatus });
 		stopCodexPoll();
 		codexLogin = null;
 		stage = "intro";
 		await pause(200);
-		await typewrite("connected.");
-		await pause(400);
-		await askFirstMessage();
+		await typewrite("logged in.");
+		await loadModels();
 	}
 
 	async function beginCodexLogin(method: "auto" | CodexLoginMethod) {
 		stopCodexPoll();
 		codexError = "";
+		busyLabel = "connecting";
 		stage = "testing";
 		try {
 			const started = await startCodexLogin(method);
@@ -406,25 +370,19 @@
 		const key = apiKeyInput.trim();
 		if (!key || stage !== "waiting-key") return;
 		apiKeyError = "";
+		busyLabel = "checking the key";
 		stage = "testing";
 
 		try {
-			// The key is probed before it is saved, and a seeded preset must
-			// answer before "connected." (#28): a provider that cannot reply
-			// keeps this step open, with what to fix in the error line.
-			await saveOnboardingProvider(selectedProvider, key, {
-				updateLlmConfig,
-				seedModelPresets,
-				testPreset,
-				// The seeded rows came from the server, so their providers are its union.
-				updateModelPresets: (payload) => updateModelPresets(payload as Parameters<typeof updateModelPresets>[0]),
-			});
+			// The key is probed before it is saved; a wrong one keeps this
+			// step open with the reason in the error line.
+			await saveOnboardingKey(selectedProvider as KeyProvider, key, { updateLlmConfig });
 			apiKeyInput = "";
+			if (!configuredKeys.includes(selectedProvider)) configuredKeys = [...configuredKeys, selectedProvider];
 			stage = "intro";
 			await pause(200);
-			await typewrite("connected.");
-			await pause(400);
-			await askFirstMessage();
+			await typewrite("that works.");
+			await loadModels();
 		} catch (e) {
 			apiKeyError = e instanceof Error ? e.message : "invalid key";
 			stage = "waiting-key";
@@ -435,6 +393,48 @@
 
 	function handleKeyKeydown(e: KeyboardEvent) {
 		if (e.key === "Enter") { e.preventDefault(); submitApiKey(); }
+	}
+
+	/** Ask the provider which models this account has, then offer them. */
+	async function loadModels() {
+		modelError = "";
+		modelFilter = "";
+		busyLabel = "looking for models";
+		stage = "testing";
+		try {
+			models = await listOnboardingModels(selectedProvider, { fetchAvailableModels });
+		} catch (e) {
+			models = [];
+			modelError = e instanceof Error ? e.message : `${providerLabel} did not list its models.`;
+			stage = "models-blocked";
+			return;
+		}
+		stage = "intro";
+		await typewrite("which model should i think with?");
+		stage = "picking-model";
+	}
+
+	/**
+	 * The server tests the model and saves it only when it answers (#28);
+	 * one that does not keeps the list open, with what went wrong.
+	 */
+	async function pickModel(model: AvailableModel) {
+		if (stage !== "picking-model") return;
+		modelError = "";
+		busyLabel = "connecting";
+		stage = "testing";
+		try {
+			await chooseOnboardingModel(selectedProvider, model, { chooseModel });
+		} catch (e) {
+			modelError = e instanceof Error ? e.message : `${model.name} did not answer.`;
+			stage = "picking-model";
+			return;
+		}
+		stage = "intro";
+		await pause(200);
+		await typewrite(`${model.name}. connected.`);
+		await pause(400);
+		await askFirstMessage();
 	}
 
 	async function askFirstMessage() {
@@ -448,10 +448,8 @@
 		const content = firstMessage.trim();
 		if (!content) return;
 		stage = "sending";
-		const langLabel = LANGUAGES.find((l) => l.id === chosenLanguage)?.label ?? chosenLanguage;
-		const combined = `${onboardingHandshake(readPreferredName(), langLabel)}\n\n${content}`;
 		try {
-			await sendMessage(slug, combined);
+			await sendMessage(slug, content);
 			await companion.refresh();
 		} catch {
 			toast.error("setup failed — try sending a message after");
@@ -472,7 +470,7 @@
 </script>
 
 {#if stage === "being-born"}
-	<MoonBirth name={companionNameInput.trim() || "Nolune"} oncomplete={finishBirth} />
+	<MoonBirth name={COMPANION_NAME} oncomplete={finishBirth} />
 {/if}
 <div class="ob" inert={stage === "being-born"} class:ob-birthing={stage === "being-born"} class:ob-depart={stage === "departing"} class:ob-hidden={stage === "reveal" && !revealed}>
 	<div class="ob-content">
@@ -499,41 +497,6 @@
 				<div class="ob-enter ob-center">
 					<div class="ob-spinner"></div>
 					<span class="ob-spinner-label">thinking</span>
-				</div>
-			{/if}
-
-			{#if stage === "picking-language"}
-				<div class="ob-enter">
-					<div class="ob-pills ob-pills-lang">
-						{#each LANGUAGES as lang}
-							<button onclick={() => pickLanguage(lang.id)} class="ob-pill" class:ob-pill-active={chosenLanguage === lang.id}>{lang.label}</button>
-						{/each}
-					</div>
-				</div>
-			{/if}
-
-			{#if stage === "naming-companion"}
-				<div class="ob-enter">
-					<div class="ob-field">
-						<label class="ob-label" for="companion-name">Companion name</label>
-                        <input id="companion-name" bind:this={nameInputEl} bind:value={companionNameInput} onkeydown={handleNameKeydown} placeholder="A name for your companion" class="ob-input" />
-						{#if companionNameInput.trim()}
-							<button onclick={submitCompanionName} class="ob-go" aria-label="Confirm"><ArrowRight size={18} aria-hidden="true" /></button>
-						{/if}
-					</div>
-				</div>
-			{/if}
-
-			{#if stage === "picking-skin"}
-				<div class="ob-enter">
-					<div class="ob-pills ob-pills-skin">
-						{#each SKINS as skin (skin.id)}
-							<button onclick={() => pickSkin(skin.id)} class="ob-pill ob-pill-col ob-pill-skin" class:ob-pill-active={skinStore.skinId === skin.id}>
-								<img src={skin.thumbnail} alt={skin.label} class="ob-skin-thumb" />
-								<span class="ob-pill-label">{skin.label}</span>
-							</button>
-						{/each}
-					</div>
 				</div>
 			{/if}
 
@@ -630,9 +593,52 @@
 			{/if}
 
 			{#if stage === "testing"}
-				<div class="ob-enter ob-center">
+				<div class="ob-enter ob-center" role="status">
 					<div class="ob-spinner"></div>
-					<span class="ob-spinner-label">connecting</span>
+					<span class="ob-spinner-label">{busyLabel}</span>
+				</div>
+			{/if}
+
+			{#if stage === "picking-model"}
+				<div class="ob-enter">
+					{#if models.length >= MODEL_FILTER_FROM}
+						<div class="ob-field ob-model-filter">
+							<label class="ob-label" for="model-filter">Find a model</label>
+							<input id="model-filter" bind:value={modelFilter} placeholder="Name or model id" class="ob-input" autocomplete="off" spellcheck="false" />
+						</div>
+					{/if}
+					{#if modelError}
+						<p class="ob-error ob-model-error" role="alert">{modelError}</p>
+					{/if}
+					<ul class="ob-models" aria-label="{providerLabel} models">
+						{#each shownModels as model (model.id)}
+							<li>
+								<button type="button" onclick={() => pickModel(model)} class="ob-pill ob-pill-col ob-pill-soul ob-model">
+									<span class="ob-pill-label">{model.name}</span>
+									{#if model.name !== model.id}
+										<span class="ob-model-id">{model.id}</span>
+									{/if}
+									{#if model.description}
+										<span class="ob-pill-note">{model.description}</span>
+									{/if}
+								</button>
+							</li>
+						{:else}
+							<li class="ob-models-empty">No model matches “{modelFilter.trim()}”.</li>
+						{/each}
+					</ul>
+					<p class="ob-models-note">You can add more models or a separate background model later in Settings.</p>
+					<button type="button" onclick={chooseAnotherProvider} class="ob-hint ob-hint-button">choose another provider</button>
+				</div>
+			{/if}
+
+			{#if stage === "models-blocked"}
+				<div class="ob-enter">
+					<p class="ob-error" role="alert">{modelError}</p>
+					<div class="ob-pills ob-pills-soul ob-pills-providers">
+						<button type="button" onclick={loadModels} class="ob-pill">try again</button>
+						<button type="button" onclick={chooseAnotherProvider} class="ob-pill">another provider</button>
+					</div>
 				</div>
 			{/if}
 
@@ -732,7 +738,6 @@
 
 	/* Companion preferences */
 	.ob-pills { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-	.ob-pills-lang { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.375rem; }
 	.ob-pills-soul { display: grid; grid-template-columns: repeat(2, 1fr); }
 	.ob-pills-providers { grid-template-columns: repeat(2, 1fr); }
 
@@ -762,11 +767,6 @@
 		background: var(--accent);
 		color: var(--text-secondary);
 		box-shadow: none;
-	}
-	.ob-pill-active {
-		border-color: var(--text-secondary);
-		background: var(--accent);
-		color: var(--text-secondary);
 	}
 
 	.ob-pill-col {
@@ -884,21 +884,6 @@
 		color: var(--text-secondary);
 	}
 
-	/* ── Skin picker ── */
-	.ob-pills-skin { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5rem; }
-	.ob-pill-skin {
-		border-radius: 1rem;
-		padding: 0.75rem;
-		align-items: center;
-		gap: 0.5rem;
-	}
-	.ob-skin-thumb {
-		width: 64px;
-		height: 64px;
-		border-radius: 0.5rem;
-		object-fit: cover;
-	}
-
 	/* ── Depart ── */
 	.ob-depart { animation: depart 0.5s cubic-bezier(0.55, 0, 1, 0.45) forwards; }
 	@keyframes depart { to { opacity: 0; transform: scale(0.98); } }
@@ -909,7 +894,6 @@
     .ob-text { font-size: 1rem; }
     .ob-pill { background: var(--card); border-color: var(--border); box-shadow: none; backdrop-filter: none; }
     .ob-pill:hover { background: var(--popover); border-color: var(--primary); box-shadow: none; color: var(--foreground); }
-    .ob-pill-active { background: var(--accent); border-color: var(--primary); color: var(--foreground); }
     .ob-pill-label { color: var(--foreground); }
     .ob-pill-note { color: var(--text-secondary); line-height: 1.5; }
     .ob-label { display: block; margin-bottom: 8px; color: var(--text-secondary); font-size: 14px; }
@@ -933,5 +917,15 @@
     .ob-codex-code { font-family: var(--font-mono); font-size: 1.75rem; letter-spacing: 0.14em; color: var(--foreground); }
     .ob-codex-note { margin: 0; font-size: 13px; line-height: 1.5; color: var(--text-secondary); text-align: center; }
     .ob-codex-note, .ob-codex-link { user-select: text; }
-    @media (max-width: 480px) { .ob-pills-lang { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ob-pills-soul { grid-template-columns: 1fr; } .ob-pills-providers { grid-template-columns: repeat(2, 1fr); } }
+    /* The model step: one column of the provider's models, scrolling on its own when long. */
+    .ob-models { list-style: none; margin: 0; padding: 2px; display: flex; flex-direction: column; gap: 8px; max-height: min(52vh, 440px); overflow-y: auto; overscroll-behavior: contain; }
+    .ob-model { width: 100%; text-align: left; }
+    .ob-model:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+    .ob-model-id { font-family: var(--font-mono); font-size: 12px; line-height: 1.4; color: var(--text-muted); overflow-wrap: anywhere; }
+    .ob-model-filter { margin-bottom: 12px; }
+    .ob-model-filter .ob-input { padding-right: 16px; }
+    .ob-model-error { margin: 0 0 12px; }
+    .ob-models-empty { padding: 12px; font-size: 14px; color: var(--text-muted); text-align: center; }
+    .ob-models-note { margin: 12px 0 0; font-size: 13px; line-height: 1.5; color: var(--text-muted); text-align: center; }
+    @media (max-width: 480px) { .ob-pills-soul { grid-template-columns: 1fr; } .ob-pills-providers { grid-template-columns: repeat(2, 1fr); } }
 </style>

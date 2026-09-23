@@ -51,8 +51,8 @@ use tokio_util::sync::CancellationToken;
 use crate::services::tool::ToolDefinition;
 
 use super::super::contract::{
-    Capabilities, ConversationRef, EventSink, LlmError, LlmEvent, LlmRequest, ProviderAdapter,
-    StopReason, Usage,
+    Capabilities, ConversationRef, EventSink, LlmError, LlmEvent, LlmRequest, ModelListing,
+    ProviderAdapter, StopReason, Usage,
 };
 use super::super::types::{
     ContentBlock, ImageSource, LlmBackend, LlmResponse, Message, ToolCall, ToolOutputContent,
@@ -68,9 +68,42 @@ pub const CAPABILITIES: Capabilities = Capabilities {
     tools: true,
     streaming: true,
     reasoning_controls: false,
-    model_discovery: false,
+    model_discovery: true,
     token_counting: false,
 };
+
+/// The `model/list` answer as listings: the login's default model first,
+/// then the rest in codex's order, without the ones codex hides.
+fn listed_models(answer: &Value) -> Vec<ModelListing> {
+    let mut models: Vec<(bool, ModelListing)> = answer["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|model| model["hidden"] != true)
+        .filter_map(|model| {
+            let id = model["id"].as_str().or(model["model"].as_str())?.trim();
+            let text = |key: &str| {
+                model[key]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+            };
+            (!id.is_empty()).then(|| {
+                (
+                    model["isDefault"] == true,
+                    ModelListing {
+                        id: id.into(),
+                        name: text("displayName").unwrap_or(id).into(),
+                        description: text("description").map(Into::into),
+                    },
+                )
+            })
+        })
+        .collect();
+    // A stable sort keeps codex's order behind the default.
+    models.sort_by_key(|(default, _)| !default);
+    models.into_iter().map(|(_, model)| model).collect()
+}
 
 /// How long a turn may go without a single event before it is interrupted
 /// and reported as timed out; a model that thinks for minutes still emits
@@ -1614,6 +1647,18 @@ impl ProviderAdapter for CodexAdapter {
             self.turn(&request, events).await
         })
     }
+    fn discover_models(&self) -> BoxFuture<'_, Result<Vec<ModelListing>, LlmError>> {
+        Box::pin(async move {
+            let answer = self
+                .0
+                .codex
+                .app_server()
+                .await?
+                .request("model/list", json!({}))
+                .await?;
+            Ok(listed_models(&answer))
+        })
+    }
 }
 
 #[cfg(test)]
@@ -1659,7 +1704,7 @@ mod tests {
 
         fn backend(&self) -> LlmBackend {
             let mut config = Config::default();
-            config.llm.seed_presets(LlmProvider::Codex);
+            config.llm.add_test_presets(LlmProvider::Codex);
             let mut backend =
                 LlmBackend::for_preset(&config, reqwest::Client::new(), "codex-sol").unwrap();
             backend.codex = self.runtime.clone();
@@ -2883,7 +2928,7 @@ mod tests {
             .expect("codex at the pin");
         let runtime = Runtime::for_launch(super::super::process::Launch::new(found.path));
         let mut config = Config::default();
-        config.llm.seed_presets(LlmProvider::Codex);
+        config.llm.add_test_presets(LlmProvider::Codex);
         let mut backend =
             LlmBackend::for_preset(&config, reqwest::Client::new(), "codex-luna").unwrap();
         backend.codex = runtime.clone();

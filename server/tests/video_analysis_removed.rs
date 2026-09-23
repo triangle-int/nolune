@@ -62,7 +62,10 @@ fn video_analysis_stack_and_runtime_installers_are_absent() {
             .unwrap()
             .to_string_lossy()
             .into_owned();
-        let production = without_cfg_test_items(&fs::read_to_string(&path).unwrap());
+        // A Gemini chat model reached through OpenRouter (`google/gemini-…`,
+        // one of its top models) is a model id, not the retired stack.
+        let production = without_cfg_test_items(&fs::read_to_string(&path).unwrap())
+            .replace("\"google/gemini-", "\"google/");
         for token in server_forbidden {
             if production.contains(token) {
                 violations.push(format!("{relative} contains {token:?}"));

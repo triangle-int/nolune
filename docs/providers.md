@@ -9,7 +9,7 @@ for all four providers, where their secrets live, what each one can and
 cannot do, how Codex runs as a local process, what happens to a
 configuration from before presets, and how the adapters are tested.
 [release-checklist.md](release-checklist.md) says what to check when a
-model default or the pinned Codex release changes.
+model id named in the source or the pinned Codex release changes.
 
 | Provider | Authenticates with | Model ids | Wire format lives in |
 | --- | --- | --- | --- |
@@ -36,8 +36,8 @@ and is never written back by the override itself.
 
 ```toml
 [llm]
-chat_preset = "sonnet"
-background_preset = "haiku"
+chat_preset = "claude-sonnet-5"
+background_preset = "claude-sonnet-5"
 
 [llm.tokens]
 ANTHROPIC = "sk-ant-..."
@@ -45,41 +45,80 @@ OPEN_AI = ""
 OPENROUTER = ""
 
 [[llm.presets]]
-id = "sonnet"
-name = "Claude Sonnet"
+id = "claude-sonnet-5"
+name = "Claude Sonnet 5"
 provider = "anthropic"
-model = "claude-sonnet-4-6"
+model = "claude-sonnet-5"
 ```
 
 The keys are read by the server only: the API answers which providers
 have a key (`configured_keys`, `keyed_providers`), never the key, and a
 new key is checked with its provider (one short completion) before it is
-saved, so a rejected key is never stored. Codex has no row in the table:
+saved, so a rejected key is never stored. The probe names the Chat
+preset's model when it runs on that provider, else the provider's first
+preset's; a first key has neither, so it names
+`first_key_probe_model` in `services/llm/mod.rs` (`claude-sonnet-4-6`,
+`gpt-5.6-sol`, `anthropic/claude-sonnet-4.6`). That id is never saved or
+offered: each provider checks the key before the model, and the probe
+accepts any answer past authentication. Codex has no row in the table:
 its login lives in codex's own home directory and Nolune never reads it
 (see [Codex](#codex)).
 
 Model choices are `[[llm.presets]]` entries (`id`, `name`, `provider`,
 `model`) and the two slots, `chat_preset` for conversations and
 `background_preset` for memory extraction, titles, check-ins and
-reflection; a chat may pin its own preset from the composer. Setting up a
-provider for the first time seeds its defaults, which are ordinary
-presets you can rename, edit or delete:
+reflection; a chat may pin its own preset from the composer. Nothing is
+seeded (#156): a fresh `config.toml` has no presets and empty slots, and a
+key alone, from `config.toml` or the environment, runs nothing until a
+model is picked (`setup_required` says "Add a model preset and an API key
+for its provider."). A preset comes from one of three places:
 
-| Provider | Seeded preset ids | Models | Slots filled |
-| --- | --- | --- | --- |
-| Anthropic | `sonnet`, `opus`, `haiku` | `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-haiku-4-5-20251001` | chat `sonnet`, background `haiku` |
-| OpenAI | `gpt-sol`, `gpt-luna` | `gpt-6-sol`, `gpt-6-luna` | chat `gpt-sol`, background `gpt-luna` |
-| OpenRouter | `openrouter-sonnet`, `openrouter-gpt-luna` | `anthropic/claude-sonnet-4.6`, `openai/gpt-5.6-luna` | chat `openrouter-sonnet`, background `openrouter-gpt-luna` |
-| Codex | `codex-sol`, `codex-luna` | `gpt-6-sol`, `gpt-6-luna` | chat `codex-sol`, background `codex-luna` |
+- Onboarding's model step lists what the provider offers
+  (`GET /api/config/models/available`) and sends the pick to
+  `POST /api/config/models/choose`, which tests the model and saves it
+  only when it answers. The new preset's id is the model id in lowercase,
+  every run of other characters turned into `-` (`claude-sonnet-5`), after
+  `openrouter-` or `codex-` for the providers that relay another vendor's
+  model (`openrouter-anthropic-claude-sonnet-5`, `codex-gpt-6-astra`), and
+  numbered `-2`, `-3` when the id is taken; its name is the provider's
+  display name, else the model id. A model a preset already names reuses
+  that preset. It takes the Chat slot, and the Background slot follows
+  unless it points at a ready preset on another provider than the one the
+  Chat slot is leaving (`choose_chat_model` in `server/src/config.rs`).
+- The preset editor in Settings → Connections suggests the same listing
+  in its Model id field ([settings.md](settings.md#model-presets-156)).
+- Any preset typed in the editor or written in `config.toml` by hand.
 
-The defaults are `default_presets` in `server/src/config.rs`; the
-onboarding template in `server/src/onboard.rs` and
-`server/config.example.toml` repeat the Anthropic ones. A slot is only
-valid when its preset's provider is ready: a key provider needs its key,
-Codex needs nothing in the config (its login is runtime state). Presets
-of different providers coexist; a preset's model id is not validated
-against the provider beyond its shape (OpenRouter's `vendor/model`), so
-the connection test in Settings → Connections is how a typo is found.
+What each provider's listing offers:
+
+| Provider | Listing | Offered |
+| --- | --- | --- |
+| Anthropic | `GET /v1/models?limit=1000` | every model the key may call, newest first, under Anthropic's display name |
+| OpenAI | `GET /v1/models` | the GPT family and the o-series, newest first by `created`, without dated snapshots (`-2026-09-22`, `-0613`) and without audio, speech, realtime, transcription, image, embedding, moderation, search, instruct and legacy completion models; the id is the name |
+| OpenRouter | `GET /api/v1/models` | the top models below that the live catalog still lists, in their order, under the catalog's names |
+| Codex | the app-server's `model/list` | what the logged-in codex offers, hidden models left out, its default first, with codex's display name and description |
+
+OpenRouter lists hundreds of models, so the listing offers `TOP_MODELS` in
+`services/llm/openrouter.rs`: the most-used tool-calling models on
+openrouter.ai's rankings as of September 2026, best first:
+`anthropic/claude-opus-5.5`, `anthropic/claude-fable-5.1`,
+`anthropic/claude-sonnet-5`, `openai/gpt-6-astra`, `openai/gpt-6-sol`,
+`google/gemini-3.8-flash`, `qwen/qwen3.8-max-0902`, `x-ai/grok-4.7`,
+`moonshotai/kimi-k3`, `deepseek/deepseek-v4.1-flash`, `z-ai/glm-5.3` and
+`xiaomi/mimo-v2.6-pro`. An id the live catalog no longer lists, or lists
+without `tools` in its `supported_parameters`, is left out, so a retired
+model is never offered; when none is left, the 12 newest tool-calling
+models stand in, without `:variant` ids or `~` aliases. The editor still
+takes any other `vendor/model` id.
+
+`nolune onboard` writes no presets, only a commented example of one
+(`server/src/onboard.rs`); `server/config.example.toml` shows hand-written
+ones. A slot is only valid when its preset's provider is ready: a key
+provider needs its key, Codex needs nothing in the config (its login is
+runtime state). Presets of different providers coexist; a typed model id
+is not validated against the provider beyond its shape (OpenRouter's
+`vendor/model`), so the connection test in Settings → Connections is how
+a typo is found.
 
 ### Configurations from before presets
 
@@ -89,11 +128,11 @@ keys are retired and `load_config` handles them the same way every time:
 - `provider`, `model_mode`, `profiles`, `model` and `heavy_multiplier`
   under `[llm]` are dropped on load and never written back; the server
   logs one warning naming them (`config.llm.<key> (model presets replaced
-  model modes, #156)`). A `provider` value is read once before it is
-  dropped: when the config has no presets yet, `seed_for_keys` seeds the
-  defaults of every provider that has a key and puts the named provider
-  (`api`, `cli` and `claude_cli` still mean Anthropic) in the slots, so a
-  pre-presets install boots into a working chat rather than into setup.
+  model modes, #156)`). None of them is read for anything, and a key
+  seeds nothing: a pre-presets install keeps its keys and asks for a
+  model like a fresh one, picked in Settings → Connections or in
+  onboarding's model step, which skips the key step for a provider whose
+  key the server already has.
 - `GOOGLE_AI`, `google_ai` and `gemini` under `[llm.tokens]` powered the
   retired video analysis (#91); they are dropped on load and on save and
   reported the same way.
@@ -104,9 +143,9 @@ keys are retired and `load_config` handles them the same way every time:
 ## Anthropic
 
 1. Create a key at <https://console.anthropic.com/settings/keys>.
-2. Enter it under Settings → Connections (or set `ANTHROPIC` in
-   `[llm.tokens]`, or `ANTHROPIC_API_KEY` in the environment). Saving
-   seeds `sonnet`, `opus` and `haiku`.
+2. Enter it in onboarding or under Settings → Connections (or set
+   `ANTHROPIC` in `[llm.tokens]`, or `ANTHROPIC_API_KEY` in the
+   environment), then pick a model from Anthropic's listing.
 3. Model ids are the Messages API ids: `claude-sonnet-4-6`,
    `claude-opus-4-6`, `claude-haiku-4-5-20251001`.
 
@@ -116,15 +155,17 @@ provider's own token count for the context meter
 (`/v1/messages/count_tokens`), and asks for prompt caching by execution
 scope: one-hour cache breakpoints on the conversation path, five-minute
 ones for one-shots and companion routines (#137). Reasoning effort is not
-a parameter here; the model catalog is not discoverable, so a model id is
-checked by the connection test. Anthropic's 529 `overloaded_error`, in a
-status or mid-stream as an SSE `error` event, is reported as a rate limit.
+a parameter here. The models come from `GET /v1/models`, and a model id
+typed by hand is checked by the connection test. Anthropic's 529
+`overloaded_error`, in a status or mid-stream as an SSE `error` event, is
+reported as a rate limit.
 
 ## OpenAI
 
 1. Create a key at <https://platform.openai.com/api-keys>.
-2. Enter it under Settings → Connections (or `OPEN_AI` in `[llm.tokens]`,
-   or `OPENAI_API_KEY`). Saving seeds `gpt-sol` and `gpt-luna`.
+2. Enter it in onboarding or under Settings → Connections (or `OPEN_AI`
+   in `[llm.tokens]`, or `OPENAI_API_KEY`), then pick a model from
+   OpenAI's listing.
 3. Model ids are the Responses API ids: `gpt-6-sol`, `gpt-6-luna`,
    `gpt-5.6-sol`, `o3`.
 
@@ -140,9 +181,10 @@ Codex, and a Codex login never fills `OPEN_AI`.
 ## OpenRouter
 
 1. Create a key at <https://openrouter.ai/settings/keys>.
-2. Enter it under Settings → Connections (or `OPENROUTER` in
-   `[llm.tokens]`, or `OPENROUTER_API_KEY`). Saving seeds
-   `openrouter-sonnet` and `openrouter-gpt-luna`.
+2. Enter it in onboarding or under Settings → Connections (or
+   `OPENROUTER` in `[llm.tokens]`, or `OPENROUTER_API_KEY`), then pick
+   one of the top models the listing offers, or type any other id in the
+   preset editor.
 3. Model ids are `vendor/model`, optionally with a `:variant` suffix:
    `anthropic/claude-sonnet-4.6`, `openai/gpt-5.6-luna`,
    `meta-llama/llama-4:free`. A bare id is refused when the preset is
@@ -181,11 +223,11 @@ directory; Nolune never reads, copies or logs its tokens.
    with a display, a device code on a headless server); the Settings →
    Connections tile that drives it is the remaining slice of #27. Nothing
    is entered in Nolune and nothing is written to `config.toml`.
-3. Seed the Codex presets (`POST /api/config/models/seed` with
-   `{"provider": "codex"}`: `codex-sol` on `gpt-6-sol`, `codex-luna`
-   on `gpt-6-luna`) or write `provider = "codex"` presets in
-   `config.toml`; the model ids are what `model/list` of the pinned
-   release returns.
+3. Pick a model: onboarding's model step lists what `model/list` of the
+   pinned release returns for the login
+   (`GET /api/config/models/available?provider=codex`, then
+   `POST /api/config/models/choose`), or write `provider = "codex"`
+   presets in `config.toml` with those ids.
 
 `GET /api/config/codex/status` says whether the binary is installed at the
 pin, whether codex holds a login and its label (`kind`, `email`, `plan`),
@@ -226,8 +268,8 @@ layer run, as the next sections say.
 the config is concerned. Whether a login is there is runtime state, read
 from the app-server (`account/read`) before every turn and never stored;
 without one a turn fails with a typed setup error that says to log in.
-`codex-sol` and `codex-luna` are the seeded presets, on the models the
-pinned release lists.
+Nothing is seeded for Codex either: its models are what `model/list`
+answers, hidden ones left out and the login's default first.
 
 Each conversation runs in one app-server thread. The first turn starts it
 (`thread/start`) and the id is kept in the chat's `meta.json`
@@ -330,7 +372,7 @@ chips. This table is checked against the adapters' constants by
 | `tools` | yes | yes | per model from the catalog (yes until it says otherwise) | yes |
 | `streaming` | yes | yes | yes | yes |
 | `reasoning_controls` | no | per model: the GPT-5 family and the o-series | per model from the catalog (yes until it says otherwise) | no |
-| `model_discovery` | no | no | yes (`/api/v1/models`, cached an hour) | no |
+| `model_discovery` | yes (`/v1/models`) | yes (`/v1/models`, conversation models only) | yes (`/api/v1/models`, the top models) | yes (`model/list`) |
 | `token_counting` | yes (`count_tokens`) | no (local estimate) | no (local estimate) | no (local estimate) |
 
 Differences that are not capability flags:

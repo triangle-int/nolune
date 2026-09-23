@@ -5,8 +5,8 @@ use futures::StreamExt;
 use crate::services::tool::ToolDefinition;
 
 use super::contract::{
-    Capabilities, EventSink, ExecutionScope, LlmError, LlmEvent, LlmRequest, ProviderAdapter,
-    StopReason, Usage, retry_after,
+    Capabilities, EventSink, ExecutionScope, LlmError, LlmEvent, LlmRequest, ModelListing,
+    ProviderAdapter, StopReason, Usage, retry_after,
 };
 use super::types::LlmBackend;
 use super::types::{ContentBlock, LlmResponse, Message, ToolCall};
@@ -791,6 +791,51 @@ pub(crate) async fn anthropic_count_tokens(
         .ok_or_else(|| LlmError::InvalidResponse("count_tokens: missing input_tokens".into()))
 }
 
+/// `GET /v1/models`: every model the key may call, newest first as the API
+/// orders them, under the display name Anthropic gives each.
+pub(crate) async fn anthropic_models(
+    http: &reqwest::Client,
+    api_key: &str,
+    base_url: &str,
+) -> Result<Vec<ModelListing>, LlmError> {
+    let resp = http
+        .get(format!("{base_url}/v1/models?limit=1000"))
+        .headers(anthropic_headers(api_key)?)
+        .send()
+        .await
+        .map_err(|error| LlmError::Transport(error.to_string()))?;
+    let status = resp.status();
+    let retry_after = retry_after(resp.headers());
+    let text = resp
+        .text()
+        .await
+        .map_err(|error| LlmError::Transport(error.to_string()))?;
+    if !status.is_success() {
+        return Err(anthropic_error(status.as_u16(), retry_after, &text));
+    }
+    let data: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|error| LlmError::InvalidResponse(format!("model list: {error}")))?;
+    let models = data["data"]
+        .as_array()
+        .ok_or_else(|| LlmError::InvalidResponse("model list without data".into()))?;
+    Ok(models
+        .iter()
+        .filter_map(|model| {
+            let id = model["id"].as_str()?.trim();
+            let name = model["display_name"]
+                .as_str()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .unwrap_or(id);
+            (!id.is_empty()).then(|| ModelListing {
+                id: id.into(),
+                name: name.into(),
+                description: None,
+            })
+        })
+        .collect())
+}
+
 /// Reads a small response in full. A count is a few bytes and an error body
 /// needs no more; anything larger is not read into memory (#120).
 async fn bounded_text(resp: reqwest::Response) -> Result<String, LlmError> {
@@ -820,7 +865,7 @@ pub(super) const CAPABILITIES: Capabilities = Capabilities {
     tools: true,
     streaming: true,
     reasoning_controls: false,
-    model_discovery: false,
+    model_discovery: true,
     token_counting: true,
 };
 
@@ -872,6 +917,15 @@ impl ProviderAdapter for AnthropicAdapter {
                 result = anthropic_count_tokens(&b.http, &b.api_key, &b.model, request.system, request.tools, request.messages, request.scope, &b.base_url) => result,
             }
         })
+    }
+    fn discover_models(
+        &self,
+    ) -> futures::future::BoxFuture<'_, Result<Vec<ModelListing>, LlmError>> {
+        Box::pin(anthropic_models(
+            &self.0.http,
+            &self.0.api_key,
+            &self.0.base_url,
+        ))
     }
 }
 

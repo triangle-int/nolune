@@ -1,11 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-	CODEX_MODELS,
 	PROVIDERS,
 	capabilityWarnings,
 	effectivePresetId,
-	modelHints,
 	modelPlaceholder,
 	modelShortLabel,
 	pickerPresets,
@@ -60,12 +58,7 @@ test('a slot on a codex preset needs no key (#27)', () => {
 	assert.match(validatePresets([{ ...codex[0], model: '' }], { chat_preset: 'codex-sol', background_preset: 'codex-sol' }, []).join('\n'), /model id/);
 });
 
-test('the preset editor knows the models the pinned codex release lists (#27)', () => {
-	assert.equal(CODEX_MODELS[0], 'gpt-6-astra', 'the default model first');
-	assert.ok(CODEX_MODELS.includes('gpt-6-luna'), 'the seeded background preset');
-	assert.deepEqual(modelHints('codex'), CODEX_MODELS);
-	assert.deepEqual(modelHints('openai'), []);
-	assert.deepEqual(modelHints('anthropic'), []);
+test('the preset editor shows an example model id per provider', () => {
 	assert.equal(modelPlaceholder('codex'), 'gpt-6-sol');
 	assert.equal(modelPlaceholder('openrouter'), 'vendor/model');
 	assert.equal(modelPlaceholder('anthropic'), 'claude-sonnet-4-6');
