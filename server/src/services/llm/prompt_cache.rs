@@ -59,11 +59,9 @@ impl CacheReading {
 
     /// Share of the input read from the cache, in whole percent.
     pub fn hit_percent(&self) -> u64 {
-        if self.input_tokens == 0 {
-            0
-        } else {
-            self.cache_read_tokens * 100 / self.input_tokens
-        }
+        (self.cache_read_tokens * 100)
+            .checked_div(self.input_tokens)
+            .unwrap_or(0)
     }
 
     fn add(&mut self, other: &Self) {
