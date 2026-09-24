@@ -142,7 +142,7 @@ def _plain_text(value: str) -> bool:
         or unicodedata.category(character) in {"Zl", "Zp"}
         for character in value
     ) and not re.search(
-        r"(?:@|[`\[\]<>#*_~|\\])",
+        r"(?:@|[`\[\]<>#*~|\\])",
         value,
         re.IGNORECASE,
     ) and not _AUTOLINK.search(value)
@@ -158,8 +158,14 @@ def _safe_trusted_text(value: str) -> str:
     )
     value = _AUTOLINK.sub("", value)
     value = " ".join(value.split())
-    value = re.sub(r"[@`\[\]<>#*_~|\\]", "", value).strip()
+    value = re.sub(r"[@`\[\]<>#*~|\\]", "", value).strip()
     return value[:MAX_FALLBACK_TEXT_CHARS].rstrip() or "Unlabelled change"
+
+
+def _markdown_text(value: str) -> str:
+    # Plain text keeps underscores so identifiers like list_skills survive; escaped, they
+    # can never open emphasis. Both sanitizers drop backslashes, so `\_` is always literal.
+    return value.replace("_", r"\_")
 
 
 def _fallback_category(pr: PullRequest) -> str:
@@ -317,12 +323,12 @@ def generate_notes(
     grouped: dict[str, list[str]] = {category: [] for category in CATEGORIES}
     for item in result["pull_requests"]:  # type: ignore[index]
         pr = trusted[item["number"]]
-        grouped[item["category"]].append(f'{item["summary"]} [#{pr.number}]({pr.url})')
+        grouped[item["category"]].append(f'{_markdown_text(item["summary"])} [#{pr.number}]({pr.url})')
     grouped["Other changes"].extend(
-        f"{_safe_trusted_text(commit.subject)} (`{commit.sha[:7]}`)" for commit in direct_commits
+        f"{_markdown_text(_safe_trusted_text(commit.subject))} (`{commit.sha[:7]}`)" for commit in direct_commits
     )
 
-    lines: list[str] = [str(result["overview"])]
+    lines: list[str] = [_markdown_text(str(result["overview"]))]
     for category in CATEGORIES:
         if grouped[category]:
             lines.extend(["", f"## {category}", *[f"- {entry}" for entry in grouped[category]]])
