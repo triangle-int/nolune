@@ -1,11 +1,14 @@
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { defineConfig } from 'drizzle-kit';
 
-if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is not set');
-
 export default defineConfig({
-	schema: './src/lib/server/db/schema.ts',
+	schema: './packages/core/src/db/schema.ts',
+	out: './packages/core/drizzle',
 	dialect: 'sqlite',
-	dbCredentials: { url: process.env.DATABASE_URL },
+	dbCredentials: {
+		url: join(process.env.BTW_HOME || join(homedir(), '.btw-agent'), 'btw.db')
+	},
 	verbose: true,
 	strict: true
 });

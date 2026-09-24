@@ -1,0 +1,307 @@
+import { randomUUID } from 'node:crypto';
+import type Anthropic from '@anthropic-ai/sdk';
+import { and, desc, eq, isNotNull, isNull, max } from 'drizzle-orm';
+import type { Effort } from './anthropic.ts';
+import { getDb } from './db/index.ts';
+import { conversation, message, profile, profileMember } from './db/schema.ts';
+import { buildSystemPrompt } from './prompt.ts';
+import { effectiveContextWindow, getPreset } from './presets.ts';
+import type { Profile } from './profiles.ts';
+
+export type Conversation = typeof conversation.$inferSelect;
+export type MessageRow = typeof message.$inferSelect;
+
+export interface Usage {
+	input: number;
+	cacheRead: number;
+	cacheWrite: number;
+	output: number;
+}
+
+export type DisplayBlock =
+	| { type: 'text'; text: string }
+	| { type: 'thinking'; text: string }
+	| { type: 'tool'; id: string; command: string; cwd?: string };
+
+export type DisplayMessage =
+	| {
+			id: number;
+			kind: 'human';
+			senderName: string;
+			text: string;
+			queued: boolean;
+			createdAt: number;
+	  }
+	| {
+			id: number;
+			kind: 'assistant';
+			blocks: DisplayBlock[];
+			stopReason: string | null;
+			usage: Usage | null;
+			createdAt: number;
+	  }
+	| {
+			id: number;
+			kind: 'tool_results';
+			results: { id: string; output: string; isError: boolean }[];
+			createdAt: number;
+	  };
+
+export function createConversation(input: {
+	profile: Profile;
+	presetId: string;
+	userId: string;
+	effort?: Effort;
+}): Conversation {
+	const preset = getPreset(input.presetId);
+	if (!preset) throw new Error('Unknown model preset');
+	const now = new Date();
+	const created: Conversation = {
+		id: randomUUID(),
+		profileId: input.profile.id,
+		title: '',
+		presetId: preset.id,
+		presetName: preset.name,
+		provider: preset.provider,
+		model: preset.model,
+		contextWindow: effectiveContextWindow(preset),
+		effort: input.effort ?? 'medium',
+		systemPrompt: buildSystemPrompt(input.profile.slug),
+		createdBy: input.userId,
+		createdAt: now,
+		updatedAt: now
+	};
+	getDb().insert(conversation).values(created).run();
+	return created;
+}
+
+export function listConversations(profileId: string) {
+	return getDb()
+		.select({
+			id: conversation.id,
+			title: conversation.title,
+			presetName: conversation.presetName,
+			updatedAt: conversation.updatedAt
+		})
+		.from(conversation)
+		.where(eq(conversation.profileId, profileId))
+		.orderBy(desc(conversation.updatedAt))
+		.all();
+}
+
+export function getConversation(id: string): Conversation | undefined {
+	return getDb().select().from(conversation).where(eq(conversation.id, id)).get();
+}
+
+export function listAllConversationIds(): string[] {
+	return getDb()
+		.select({ id: conversation.id })
+		.from(conversation)
+		.all()
+		.map((r) => r.id);
+}
+
+/** The conversation and its profile, if the user is a member of that profile. */
+export function getConversationForUser(id: string, userId: string) {
+	return getDb()
+		.select({ conversation, profile })
+		.from(conversation)
+		.innerJoin(profile, eq(profile.id, conversation.profileId))
+		.innerJoin(
+			profileMember,
+			and(eq(profileMember.profileId, profile.id), eq(profileMember.userId, userId))
+		)
+		.where(eq(conversation.id, id))
+		.get();
+}
+
+/** On Claude, changing effort mid-conversation rebuilds that conversation's cache once. */
+export function setEffort(id: string, effort: Effort): void {
+	getDb().update(conversation).set({ effort }).where(eq(conversation.id, id)).run();
+}
+
+export function deleteConversation(id: string): void {
+	getDb().delete(conversation).where(eq(conversation.id, id)).run();
+}
+
+export function touchConversation(id: string, title?: string): void {
+	getDb()
+		.update(conversation)
+		.set({ updatedAt: new Date(), ...(title !== undefined ? { title } : {}) })
+		.where(eq(conversation.id, id))
+		.run();
+}
+
+export function committedRows(conversationId: string): MessageRow[] {
+	return getDb()
+		.select()
+		.from(message)
+		.where(and(eq(message.conversationId, conversationId), isNotNull(message.seq)))
+		.orderBy(message.seq)
+		.all();
+}
+
+export function queuedRows(conversationId: string): MessageRow[] {
+	return getDb()
+		.select()
+		.from(message)
+		.where(and(eq(message.conversationId, conversationId), isNull(message.seq)))
+		.orderBy(message.id)
+		.all();
+}
+
+export function lastCommittedRow(conversationId: string): MessageRow | undefined {
+	return getDb()
+		.select()
+		.from(message)
+		.where(and(eq(message.conversationId, conversationId), isNotNull(message.seq)))
+		.orderBy(desc(message.seq))
+		.limit(1)
+		.get();
+}
+
+function nextSeq(conversationId: string): number {
+	const row = getDb()
+		.select({ seq: max(message.seq) })
+		.from(message)
+		.where(eq(message.conversationId, conversationId))
+		.get();
+	return (row?.seq ?? 0) + 1;
+}
+
+export function insertQueued(input: {
+	conversationId: string;
+	senderId: string;
+	senderName: string;
+	text: string;
+}): MessageRow {
+	return getDb()
+		.insert(message)
+		.values({
+			conversationId: input.conversationId,
+			seq: null,
+			role: 'user',
+			kind: 'human',
+			senderId: input.senderId,
+			senderName: input.senderName,
+			text: input.text,
+			// The model sees only the sender's name and what they wrote.
+			content: JSON.stringify([{ type: 'text', text: `${input.senderName}: ${input.text}` }]),
+			createdAt: new Date()
+		})
+		.returning()
+		.get();
+}
+
+/** Moves queued messages into the transcript, in the order they were sent. */
+export function commitQueuedRows(conversationId: string): MessageRow[] {
+	return getDb().transaction((tx) => {
+		const queued = tx
+			.select()
+			.from(message)
+			.where(and(eq(message.conversationId, conversationId), isNull(message.seq)))
+			.orderBy(message.id)
+			.all();
+		if (queued.length === 0) return [];
+		let seq = nextSeq(conversationId);
+		return queued.map((row) =>
+			tx.update(message).set({ seq: seq++ }).where(eq(message.id, row.id)).returning().get()
+		);
+	});
+}
+
+export function appendRow(input: {
+	conversationId: string;
+	role: 'user' | 'assistant';
+	kind: 'tool_results' | 'assistant';
+	content: string;
+	stopReason?: string | null;
+	usage?: Usage | null;
+}): MessageRow {
+	return getDb().transaction((tx) =>
+		tx
+			.insert(message)
+			.values({
+				conversationId: input.conversationId,
+				seq: nextSeq(input.conversationId),
+				role: input.role,
+				kind: input.kind,
+				content: input.content,
+				stopReason: input.stopReason ?? null,
+				usage: input.usage ? JSON.stringify(input.usage) : null,
+				createdAt: new Date()
+			})
+			.returning()
+			.get()
+	);
+}
+
+/** Exactly what was stored, so the request prefix is byte-identical to the previous call. */
+export function toMessageParam(row: MessageRow): Anthropic.MessageParam {
+	return { role: row.role, content: JSON.parse(row.content) };
+}
+
+export function summarizeUsage(usage: Anthropic.Usage): Usage {
+	return {
+		input: usage.input_tokens,
+		cacheRead: usage.cache_read_input_tokens ?? 0,
+		cacheWrite: usage.cache_creation_input_tokens ?? 0,
+		output: usage.output_tokens
+	};
+}
+
+function toolResultText(content: Anthropic.ToolResultBlockParam['content']): string {
+	if (typeof content === 'string') return content;
+	return (content ?? []).map((b) => (b.type === 'text' ? b.text : `[${b.type}]`)).join('\n');
+}
+
+export function toDisplay(row: MessageRow): DisplayMessage {
+	const createdAt = row.createdAt.getTime();
+	if (row.kind === 'human') {
+		return {
+			id: row.id,
+			kind: 'human',
+			senderName: row.senderName ?? 'Someone',
+			text: row.text ?? '',
+			queued: row.seq === null,
+			createdAt
+		};
+	}
+	if (row.kind === 'tool_results') {
+		const blocks = JSON.parse(row.content) as Anthropic.ToolResultBlockParam[];
+		return {
+			id: row.id,
+			kind: 'tool_results',
+			results: blocks.map((b) => ({
+				id: b.tool_use_id,
+				output: toolResultText(b.content),
+				isError: b.is_error === true
+			})),
+			createdAt
+		};
+	}
+	const content = JSON.parse(row.content) as Anthropic.ContentBlock[];
+	const blocks: DisplayBlock[] = [];
+	for (const block of content) {
+		if (block.type === 'text' && block.text.trim()) blocks.push({ type: 'text', text: block.text });
+		else if (block.type === 'thinking' && block.thinking.trim()) {
+			blocks.push({ type: 'thinking', text: block.thinking });
+		} else if (block.type === 'tool_use') {
+			const input = (block.input ?? {}) as { command?: unknown; cwd?: unknown };
+			blocks.push({
+				type: 'tool',
+				id: block.id,
+				command: typeof input.command === 'string' ? input.command : JSON.stringify(block.input),
+				...(typeof input.cwd === 'string' ? { cwd: input.cwd } : {})
+			});
+		}
+	}
+	return {
+		id: row.id,
+		kind: 'assistant',
+		blocks,
+		stopReason: row.stopReason,
+		usage: row.usage ? (JSON.parse(row.usage) as Usage) : null,
+		createdAt
+	};
+}

@@ -1,0 +1,145 @@
+# btw-agent design
+
+A small agent that runs on one Mac and does things on it for a family. One gateway process serves
+a web UI. Family members share **profiles**. Each profile has its own conversations, workspace
+folder, skills and memory. The agent has a single tool, `run_command`.
+
+## Decisions
+
+| Area             | Decision                                                                                                                                                                                                                                                                                                                                              |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Execution        | Commands run as the gateway's macOS user with full access to the disk and no approval step. There is no sandbox. The profile folder is only the default working folder. A "smart mode" that auto-approves or rejects commands may come later.                                                                                                         |
+| Clients          | Family members use the web UI only. The CLI is for the owner and for the agent itself (skill templates, self-configuration).                                                                                                                                                                                                                          |
+| Exposure         | Public through a tunnel on a VPS. Every route requires login. The sign-up endpoint is disabled: accounts are created only with the local CLI, and passwords must be long and strong.                                                                                                                                                                  |
+| Profiles         | Any user can create a profile. Any member can add or remove members, rename the profile, or delete it. Deleting moves the folder to `~/.btw-agent/trash/` instead of erasing it.                                                                                                                                                                      |
+| Conversations    | Shared by every member of the profile. Messages go through a queue, and a message sent while the agent is working is fed into its next step (steering). Anyone can press Stop.                                                                                                                                                                        |
+| Sender identity  | Every human message is sent to the model as `Name: text`, with nothing else added. Display names are unique across the gateway.                                                                                                                                                                                                                       |
+| Providers        | Anthropic only for now (API key). Model presets are global and managed by the admin with the CLI or the `/admin` page. A preset has a name (default `<model> (anthropic)`), a model, and an optional context-window override.                                                                                                                         |
+| Preset switching | Not allowed. A conversation keeps its provider and model for its whole life.                                                                                                                                                                                                                                                                          |
+| Reasoning        | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once.                                                                                                                                                                          |
+| System prompt    | Built once when the conversation is created: instructions, the skills catalog and the contents of `MEMORY.md`. **It is never changed afterwards, and no update notices are added.** If memory or skills change in another conversation, this conversation only sees it by running commands.                                                           |
+| Skills           | Follow [agentskills.io](https://agentskills.io/client-implementation/adding-skills-support). They are read from `~/.btw-agent/profiles/<slug>/skills` and `~/.agents/skills`, and a profile skill overrides a global skill with the same name. The agent loads a skill by running `cat` on its `SKILL.md`, and creates new ones with `btw skill new`. |
+| Web search       | Handled by a skill that uses the firecrawl CLI. The gateway has no code for it.                                                                                                                                                                                                                                                                       |
+
+## Files on disk
+
+```
+~/.btw-agent/                 (override with BTW_HOME)
+  config.json                 auth secret, Anthropic key, extra env vars for commands (mode 600)
+  btw.db                      SQLite: users, sessions, profiles, presets, conversations, messages
+  bin/btw                     shim so the agent can run `btw` from any command
+  profiles/<slug>/            default working folder for commands in this profile
+    MEMORY.md
+    skills/<name>/SKILL.md
+  trash/<slug>-<timestamp>/   deleted profiles
+~/.agents/skills/<name>/SKILL.md   global skills, visible to every profile
+```
+
+The folder name is a slug that is fixed when the profile is created. Renaming a profile changes
+only its display name, so the skill paths already in system prompts stay valid.
+
+## Prompt caching
+
+The rule: **the request prefix must stay byte-identical, so history is only ever appended to.**
+
+- Order of the request: `tools` (just `run_command`, a constant) → `system` (the conversation's saved
+  copy) → `messages`.
+- Each assistant response is stored as the exact `content` JSON the API returned, thinking blocks and
+  their signatures included, and is sent back unchanged. Messages are never rebuilt from normalized
+  columns. Command output is truncated once, when the tool result is created, and never later.
+- Cache markers: `cache_control: {type: "ephemeral", ttl: "1h"}` on the system block, plus the same
+  setting at the top level of the request (automatic caching of the growing tail). Both use 1h,
+  because the API requires longer-TTL entries to come before shorter ones.
+- The model, tool definition and system prompt are fixed per conversation. Thinking uses
+  `adaptive` with `display: "summarized"`, the same for every conversation. The only per-conversation
+  knob is `effort`.
+- Steering messages, stop results and restart-recovery results are **appended** as new rows. Nothing
+  is ever edited or deleted. Opus 5.5 and Fable 5.1 require this anyway for "preserved thinking":
+  replaying a thinking block after its prefix changed returns a 400 on newer accounts.
+- Every assistant row stores `usage`, and the gateway logs `cache_read` / `cache_write` for every call.
+
+## Agent loop
+
+This is a hand-written loop over `client.messages.stream()` rather than the SDK's Tool Runner, because
+each step must be saved to SQLite and resumed from there, including after a gateway restart.
+
+```
+kick(conversation):                     one loop per conversation at a time
+  loop:
+    commit queued human messages        (assigns seq; this is how steering happens)
+    if the last committed row isn't a user row: stop
+    stream a model call → append an assistant row
+    if it contains tool_use blocks:
+      run them one after another → append one user row with every tool_result
+      (if stop_reason isn't tool_use, the calls are answered with "not run" instead)
+```
+
+- **Stop** aborts the stream (the partial reply is dropped, nothing is appended) or kills the running
+  command's process group. Unfinished calls are answered with `Stopped by <name>.` Queued messages
+  are committed without calling the model, and the next message continues the conversation.
+- **API errors** leave the transcript ending on a user row. The UI then shows a **Continue** button,
+  which calls `kick` again.
+- **Gateway restart:** an assistant `tool_use` with no result gets an appended "interrupted" result,
+  and conversations with queued messages are started again.
+- Several consecutive user rows (for example tool results followed by steering texts) are sent as
+  separate messages. The API merges them into one turn.
+
+### `run_command`
+
+- Input: `{command, cwd?, timeout_seconds?}`. Runs as `$SHELL -lc <command>`, so every call starts a
+  fresh login shell and `cd` doesn't carry over between calls.
+- Default timeout 120 s, maximum 1800 s. On timeout or Stop, the whole process group is killed.
+  Background processes that a command detaches keep running.
+- No stdin. `TERM=dumb`, `NO_COLOR=1`, `PAGER=cat`.
+- Output is stdout and stderr interleaved, with ANSI codes removed, capped at 30 KB (the first 10 KB and
+  the last 20 KB are kept), followed by an exit-code line.
+- The environment is the gateway's own, minus its secrets (`ANTHROPIC_API_KEY`, `BETTER_AUTH_SECRET`, …),
+  plus the `commandEnv` values from `config.json` (for example `FIRECRAWL_API_KEY`), plus
+  `BTW_PROFILE`, `BTW_PROFILE_DIR` and `BTW_CONVERSATION_ID`.
+- `eager_input_streaming` is left off: the input is one short command, and leaving it off keeps the API's
+  own input validation.
+
+## Code layout
+
+```
+packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_command, Anthropic call,
+                runner, users/profiles/presets. Plain TypeScript run by Node with type stripping
+                (no enums or parameter properties; imports use .ts extensions).
+packages/cli    btw: setup, start, service, config, key, env, user, preset, profile, skill
+src/            SvelteKit gateway (adapter-node). @btw/core is bundled into the server build.
+scripts/        build-cli.mjs bundles the CLI and core into dist/cli.js with esbuild.
+```
+
+Core finds the package root by walking up to the `package.json` named `btw-agent`. That works
+from source, from the SvelteKit build and from the bundled CLI, and gives the paths to the
+migrations, `build/index.js` and the CLI entry.
+
+## Distribution
+
+Published to npm as `btw-agent` (not yet). `npm install -g btw-agent` gives the `btw` command.
+
+- The package ships `build/` (the web app), `dist/cli.js` and `packages/core/drizzle`. Its only
+  runtime dependency is `better-sqlite3` (a native module with prebuilt binaries). Everything else is
+  bundled. Node won't strip types inside `node_modules`, which is why the CLI ships as JavaScript.
+- `btw setup` is the first-run wizard: config, API key, admin account, default preset, public URL.
+- `btw start` reads host, port and origin from `config.json` (default `127.0.0.1:5780`), sets
+  `HOST` / `PORT` / `ORIGIN` for adapter-node and imports `build/index.js`.
+- `btw service install` writes a LaunchAgent (`~/Library/LaunchAgents/dev.btw-agent.gateway.plist`)
+  that runs `node dist/cli.js start` with `KeepAlive` and logs to `~/.btw-agent/logs/gateway.log`.
+  It's a LaunchAgent, not a LaunchDaemon, so commands run as the user. It records the absolute
+  node path, so switching Node versions needs a reinstall.
+- On shutdown, the gateway kills the process groups of commands that are still running.
+- Remote access is the user's tunnel (Tailscale Funnel, Cloudflare Tunnel, a VPS). The gateway only
+  binds to localhost by default.
+- macOS privacy (TCC): the background `node` process needs Full Disk Access to reach Documents,
+  Desktop, Photos and Mail. Setup prints the path. Granting it applies to everything that node
+  binary runs.
+
+## Not done yet
+
+- **Compaction.** The context window is already stored on each conversation and shown in the UI.
+  The next step is server-side compaction (beta `compact-2026-01-12`), triggered at about 85% of the
+  window.
+- Other providers (OpenRouter, ChatGPT). Each will get its own adapter and keep history in its own format.
+- Smart approval mode.
+- Refusal fallbacks (`fallbacks: "default"`) for models that support them. Refusals are shown in the UI today.

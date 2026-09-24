@@ -1,0 +1,15 @@
+{
+	"name": "@btw/cli",
+	"private": true,
+	"version": "0.0.1",
+	"type": "module",
+	"bin": {
+		"btw": "./src/index.ts"
+	},
+	"scripts": {
+		"check": "tsc -p ."
+	},
+	"dependencies": {
+		"@btw/core": "workspace:*"
+	}
+}

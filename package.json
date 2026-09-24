@@ -1,35 +1,56 @@
 {
 	"name": "btw-agent",
-	"private": true,
 	"version": "0.0.1",
+	"description": "A small agent that lives on your computer and does things for your family, from a shared web chat.",
+	"private": true,
 	"type": "module",
+	"keywords": [
+		"agent",
+		"claude",
+		"anthropic",
+		"family",
+		"self-hosted",
+		"llm"
+	],
+	"bin": {
+		"btw": "dist/cli.js"
+	},
+	"files": [
+		"build",
+		"dist",
+		"packages/core/drizzle",
+		"DESIGN.md"
+	],
+	"engines": {
+		"node": ">=22.18"
+	},
 	"scripts": {
 		"dev": "vite dev",
-		"build": "vite build",
+		"build": "vite build && node scripts/build-cli.mjs",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
-		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json && tsc -p packages/core && tsc -p packages/cli",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"lint": "prettier --check . && eslint .",
 		"format": "prettier --write .",
-		"db:push": "drizzle-kit push",
 		"db:generate": "drizzle-kit generate",
-		"db:migrate": "drizzle-kit migrate",
 		"db:studio": "drizzle-kit studio",
-		"auth:schema": "auth generate --config src/lib/server/auth.ts --output src/lib/server/db/auth.schema.ts --yes"
+		"btw": "node --no-warnings packages/cli/src/index.ts",
+		"start": "node --no-warnings packages/cli/src/index.ts start",
+		"prepack": "pnpm build"
 	},
 	"devDependencies": {
+		"@btw/core": "workspace:*",
 		"@eslint/js": "^10.0.1",
-		"@sveltejs/adapter-auto": "^7.0.1",
+		"@sveltejs/adapter-node": "^5.5.7",
 		"@sveltejs/kit": "^2.63.0",
 		"@sveltejs/vite-plugin-svelte": "^7.1.2",
 		"@tailwindcss/vite": "^4.3.0",
-		"@types/better-sqlite3": "^7.6.13",
 		"@types/node": "^22",
-		"auth": "^1.6.23",
 		"better-auth": "^1.6.23",
 		"drizzle-kit": "^0.31.10",
 		"drizzle-orm": "^0.45.2",
+		"esbuild": "^0.28.2",
 		"eslint": "^10.4.1",
 		"eslint-config-prettier": "^10.1.8",
 		"eslint-plugin-svelte": "^3.19.0",

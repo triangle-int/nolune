@@ -1,0 +1,183 @@
+import { relations, sql } from 'drizzle-orm';
+import { sqliteTable, text, integer, index, primaryKey } from 'drizzle-orm/sqlite-core';
+
+const now = sql`(cast(unixepoch('subsecond') * 1000 as integer))`;
+
+// --- better-auth tables (keep in sync with the better-auth config in src/lib/server/auth.ts) ---
+
+export const user = sqliteTable('user', {
+	id: text('id').primaryKey(),
+	name: text('name').notNull(),
+	email: text('email').notNull().unique(),
+	emailVerified: integer('email_verified', { mode: 'boolean' }).default(false).notNull(),
+	image: text('image'),
+	isAdmin: integer('is_admin', { mode: 'boolean' }).default(false).notNull(),
+	createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull(),
+	updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
+		.default(now)
+		.$onUpdate(() => /* @__PURE__ */ new Date())
+		.notNull()
+});
+
+export const session = sqliteTable(
+	'session',
+	{
+		id: text('id').primaryKey(),
+		expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+		token: text('token').notNull().unique(),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull(),
+		updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
+			.$onUpdate(() => /* @__PURE__ */ new Date())
+			.notNull(),
+		ipAddress: text('ip_address'),
+		userAgent: text('user_agent'),
+		userId: text('user_id')
+			.notNull()
+			.references(() => user.id, { onDelete: 'cascade' })
+	},
+	(table) => [index('session_userId_idx').on(table.userId)]
+);
+
+export const account = sqliteTable(
+	'account',
+	{
+		id: text('id').primaryKey(),
+		accountId: text('account_id').notNull(),
+		providerId: text('provider_id').notNull(),
+		userId: text('user_id')
+			.notNull()
+			.references(() => user.id, { onDelete: 'cascade' }),
+		accessToken: text('access_token'),
+		refreshToken: text('refresh_token'),
+		idToken: text('id_token'),
+		accessTokenExpiresAt: integer('access_token_expires_at', { mode: 'timestamp_ms' }),
+		refreshTokenExpiresAt: integer('refresh_token_expires_at', { mode: 'timestamp_ms' }),
+		scope: text('scope'),
+		password: text('password'),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull(),
+		updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
+			.$onUpdate(() => /* @__PURE__ */ new Date())
+			.notNull()
+	},
+	(table) => [index('account_userId_idx').on(table.userId)]
+);
+
+export const verification = sqliteTable(
+	'verification',
+	{
+		id: text('id').primaryKey(),
+		identifier: text('identifier').notNull(),
+		value: text('value').notNull(),
+		expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull(),
+		updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
+			.default(now)
+			.$onUpdate(() => /* @__PURE__ */ new Date())
+			.notNull()
+	},
+	(table) => [index('verification_identifier_idx').on(table.identifier)]
+);
+
+export const userRelations = relations(user, ({ many }) => ({
+	sessions: many(session),
+	accounts: many(account)
+}));
+
+export const sessionRelations = relations(session, ({ one }) => ({
+	user: one(user, { fields: [session.userId], references: [user.id] })
+}));
+
+export const accountRelations = relations(account, ({ one }) => ({
+	user: one(user, { fields: [account.userId], references: [user.id] })
+}));
+
+// --- app tables ---
+
+export const profile = sqliteTable('profile', {
+	id: text('id').primaryKey(),
+	/** Folder name under ~/.btw-agent/profiles. Fixed at creation. */
+	slug: text('slug').notNull().unique(),
+	name: text('name').notNull(),
+	createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
+	createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull()
+});
+
+export const profileMember = sqliteTable(
+	'profile_member',
+	{
+		profileId: text('profile_id')
+			.notNull()
+			.references(() => profile.id, { onDelete: 'cascade' }),
+		userId: text('user_id')
+			.notNull()
+			.references(() => user.id, { onDelete: 'cascade' }),
+		addedAt: integer('added_at', { mode: 'timestamp_ms' }).default(now).notNull()
+	},
+	(table) => [
+		primaryKey({ columns: [table.profileId, table.userId] }),
+		index('profile_member_userId_idx').on(table.userId)
+	]
+);
+
+export const modelPreset = sqliteTable('model_preset', {
+	id: text('id').primaryKey(),
+	name: text('name').notNull().unique(),
+	provider: text('provider', { enum: ['anthropic'] }).notNull(),
+	model: text('model').notNull(),
+	/** Admin override. Wins over modelContextWindow. */
+	contextWindow: integer('context_window'),
+	/** From the provider's models API when the preset was created. */
+	modelContextWindow: integer('model_context_window'),
+	createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull()
+});
+
+export const conversation = sqliteTable(
+	'conversation',
+	{
+		id: text('id').primaryKey(),
+		profileId: text('profile_id')
+			.notNull()
+			.references(() => profile.id, { onDelete: 'cascade' }),
+		title: text('title').notNull().default(''),
+		presetId: text('preset_id').references(() => modelPreset.id, { onDelete: 'set null' }),
+		// Snapshot of the preset at creation: a conversation never changes model.
+		presetName: text('preset_name').notNull(),
+		provider: text('provider', { enum: ['anthropic'] }).notNull(),
+		model: text('model').notNull(),
+		contextWindow: integer('context_window'),
+		effort: text('effort', { enum: ['low', 'medium', 'high', 'xhigh', 'max'] })
+			.notNull()
+			.default('medium'),
+		/** Frozen at creation so the prompt cache prefix never changes. */
+		systemPrompt: text('system_prompt').notNull(),
+		createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull(),
+		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).default(now).notNull()
+	},
+	(table) => [index('conversation_profileId_idx').on(table.profileId)]
+);
+
+export const message = sqliteTable(
+	'message',
+	{
+		id: integer('id').primaryKey({ autoIncrement: true }),
+		conversationId: text('conversation_id')
+			.notNull()
+			.references(() => conversation.id, { onDelete: 'cascade' }),
+		/** Position in the transcript. Null while the message is still queued. */
+		seq: integer('seq'),
+		role: text('role', { enum: ['user', 'assistant'] }).notNull(),
+		kind: text('kind', { enum: ['human', 'tool_results', 'assistant'] }).notNull(),
+		senderId: text('sender_id').references(() => user.id, { onDelete: 'set null' }),
+		/** Sender's display name when the message was sent. */
+		senderName: text('sender_name'),
+		/** What the human typed (without the "Name: " prefix). */
+		text: text('text'),
+		/** Exact API content blocks as JSON. Replayed byte-for-byte; never rewritten. */
+		content: text('content').notNull(),
+		stopReason: text('stop_reason'),
+		usage: text('usage'),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull()
+	},
+	(table) => [index('message_conversation_seq_idx').on(table.conversationId, table.seq)]
+);

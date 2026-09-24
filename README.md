@@ -1,42 +1,77 @@
-# sv
+# btw
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+A small agent that lives on your computer and does things for your family. One gateway serves a
+web chat; family members share profiles with their own conversations, skills and memory. The agent
+has one tool, `run_command`, with full access to the computer. See [DESIGN.md](DESIGN.md) for how
+it works and why.
 
-## Creating a project
+> **It can do anything your user account can.** Everyone you add can ask it to read, change or
+> delete your files. Only add people you trust, and keep the web address behind a login you control.
 
-If you're seeing this, you've probably already done this step. Congrats!
+## Install
 
-```sh
-# create a new project
-npx sv create my-app
-```
-
-To recreate this project with the same configuration:
-
-```sh
-# recreate this project
-pnpm dlx sv@0.17.1 create --template minimal --types ts --add prettier eslint tailwindcss="plugins:none" drizzle="database:sqlite+sqlite:better-sqlite3" better-auth="demo:password" ai-tools="ide:claude-code,other+delivery:plugin" --install pnpm btw-agent
-```
-
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+Needs macOS (Linux works without the background service), Node 22.18+ and an
+[Anthropic API key](https://console.anthropic.com/).
 
 ```sh
-npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
+npm install -g btw-agent
+btw setup                      # API key, your account, default model, public URL
+btw service install            # run in the background, start at login
+btw user create Anna anna@example.com   # add family members (prints their password)
 ```
 
-## Building
+Then open the address `btw setup` printed and sign in.
 
-To create a production version of your app:
+**Reaching it from outside your home.** The gateway listens on `127.0.0.1:5780`. Put a tunnel in
+front of it, e.g. [Tailscale Funnel](https://tailscale.com/kb/1223/funnel),
+[Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/),
+or your own VPS, and tell btw the public URL:
 
 ```sh
-npm run build
+btw config set origin https://btw.example.com
+btw service restart
 ```
 
-You can preview the production build with `npm run preview`.
+**Files in Documents, Desktop, Photos, Mail.** macOS blocks background processes from these until
+you give the `node` binary Full Disk Access (System Settings > Privacy & Security > Full Disk
+Access). `btw setup` prints the exact path.
 
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+**Keep the Mac awake** if people should reach it at any time (System Settings > Energy).
+
+## Using it
+
+- `btw help` lists every command: users, model presets, profiles, skills, settings.
+- Skills live in `~/.btw-agent/profiles/<profile>/skills` and `~/.agents/skills`
+  ([Agent Skills](https://agentskills.io) format). The agent creates its own with `btw skill new`.
+- Extra environment variables for the agent's commands, e.g. for a firecrawl web-search skill:
+  `btw env set FIRECRAWL_API_KEY fc-...`
+- Logs: `btw service logs -f`. Data: `~/.btw-agent` (override with `BTW_HOME`).
+- Update: `npm install -g btw-agent@latest && btw service restart`.
+
+## Development
+
+Requires pnpm. Node runs the TypeScript in `packages/` directly (type stripping), so no build step
+is needed for the CLI while developing.
+
+```sh
+pnpm install
+pnpm btw setup          # same CLI, from source
+cp .env.example .env    # ORIGIN=http://localhost:5173
+pnpm dev
+```
+
+```sh
+pnpm check                          # svelte-check + tsc for packages/core and packages/cli
+pnpm lint
+pnpm db:generate --name <change>    # after editing packages/core/src/db/schema.ts
+pnpm build                          # web build + dist/cli.js (what the npm package ships)
+pnpm start                          # run the built gateway with the settings from btw config
+```
+
+Migrations are applied automatically when the gateway or the CLI opens the database.
+
+### Publishing
+
+`npm pack` builds and packs `build/`, `dist/cli.js` and the migrations. Before the first
+`npm publish`: pick a license, add `license` and `repository` to `package.json`, and remove
+`"private": true`.
