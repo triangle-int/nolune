@@ -14,7 +14,10 @@
 //! install` verified. So Nolune starts the daemon itself, by path, from the
 //! bundle the located driver runs from, and only when none is running: the
 //! driver keeps one daemon per login session (its pid file is not per
-//! socket), so a running foreign daemon is reported, not replaced.
+//! socket), so a running foreign daemon is reported, not replaced, unless
+//! the user asks for it to be ([`foreign_daemon`], [`stop`]). A foreign
+//! daemon of another release can refuse the located driver outright (its
+//! contract version differs), and then nothing but stopping it helps.
 //!
 //! The daemon has to be launched through LaunchServices, not spawned: only
 //! then does macOS attribute Accessibility and Screen Recording to the
@@ -78,6 +81,11 @@ pub fn bundle_identifier(info_plist: &str) -> Option<String> {
 
 /// Ask `<driver> status` whether the daemon it proxies to is running.
 pub async fn state(driver: &Path) -> DaemonState {
+    status(driver).await.0
+}
+
+/// [`state`], with the text `<driver> status` printed.
+async fn status(driver: &Path) -> (DaemonState, String) {
     let output = tokio::time::timeout(
         STATUS_TIMEOUT,
         tokio::process::Command::new(driver)
@@ -90,16 +98,16 @@ pub async fn state(driver: &Path) -> DaemonState {
     let output = match output {
         Ok(Ok(output)) => output,
         Ok(Err(error)) => {
-            return DaemonState::Unknown(format!(
-                "cannot run {} status: {error}",
-                driver.display()
-            ));
+            let state =
+                DaemonState::Unknown(format!("cannot run {} status: {error}", driver.display()));
+            return (state, String::new());
         }
         Err(_elapsed) => {
-            return DaemonState::Unknown(format!(
+            let state = DaemonState::Unknown(format!(
                 "{} status did not answer within {STATUS_TIMEOUT:?}",
                 driver.display()
             ));
+            return (state, String::new());
         }
     };
     let text = format!(
@@ -107,7 +115,7 @@ pub async fn state(driver: &Path) -> DaemonState {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    if output.status.success() {
+    let state = if output.status.success() {
         DaemonState::Running
     } else if text.contains("not running") {
         DaemonState::NotRunning
@@ -118,6 +126,89 @@ pub async fn state(driver: &Path) -> DaemonState {
             output.status,
             text.split_whitespace().collect::<Vec<_>>().join(" ")
         ))
+    };
+    (state, text)
+}
+
+/// The daemon's pid from `<driver> status` text (`  pid: 10497`).
+pub fn status_pid(status: &str) -> Option<u32> {
+    status
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("pid:"))
+        .and_then(|pid| pid.trim().parse().ok())
+}
+
+/// The executable process `pid` runs, from `ps`.
+async fn process_executable(pid: u32) -> Option<PathBuf> {
+    let output = tokio::time::timeout(
+        STATUS_TIMEOUT,
+        tokio::process::Command::new("ps")
+            .args(["-o", "comm=", "-p", &pid.to_string()])
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (output.status.success() && path.starts_with('/')).then(|| PathBuf::from(path))
+}
+
+/// Whether `executable` runs from inside `bundle`.
+fn runs_from(executable: &Path, bundle: &Path) -> bool {
+    let canonical = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    canonical(executable).starts_with(canonical(bundle))
+}
+
+/// The executable of a running daemon that is not `driver`'s own: another
+/// `CuaDriver.app` owns this login session's socket, so `<driver> mcp`
+/// talks to it (or, when its release speaks another contract, refuses to).
+/// `None` when no daemon runs, when it runs from the bundle `driver` runs
+/// from, or when its executable cannot be told.
+pub async fn foreign_daemon(driver: &Path) -> Option<PathBuf> {
+    let bundle = app_bundle(driver)?;
+    let (DaemonState::Running, text) = status(driver).await else {
+        return None;
+    };
+    let executable = process_executable(status_pid(&text)?).await?;
+    (!runs_from(&executable, &bundle)).then_some(executable)
+}
+
+/// Stop the daemon `executable` runs as with its own `stop`, so the request
+/// speaks its release's protocol whatever that is, then wait until `driver`
+/// sees none running, at most `wait`.
+pub async fn stop(executable: &Path, driver: &Path, wait: Duration) -> anyhow::Result<()> {
+    let output = tokio::time::timeout(
+        STATUS_TIMEOUT,
+        tokio::process::Command::new(executable)
+            .arg("stop")
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .with_context(|| format!("`{} stop` did not answer", executable.display()))?
+    .with_context(|| format!("cannot run `{} stop`", executable.display()))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "`{} stop` failed ({}): {}",
+            executable.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let deadline = Instant::now() + wait;
+    loop {
+        match state(driver).await {
+            DaemonState::NotRunning => return Ok(()),
+            _ if Instant::now() < deadline => tokio::time::sleep(POLL_INTERVAL).await,
+            _ => anyhow::bail!(
+                "the daemon {} runs was still up {wait:?} after `{} stop`",
+                executable.display(),
+                executable.display()
+            ),
+        }
     }
 }
 
@@ -339,6 +430,122 @@ mod tests {
             panic!("a driver that cannot run has no known daemon");
         };
         assert!(text.contains("missing"), "{text}");
+    }
+
+    #[test]
+    fn status_pid_reads_the_pid_line_the_driver_prints() {
+        let text = "Cua Driver daemon is running\n  socket: /Users/me/Library/Caches/cua-driver/cua-driver.sock\n  pid: 10497\n  permission mode: standard (built_in_default)\n";
+        assert_eq!(status_pid(text), Some(10497));
+        assert_eq!(status_pid("Cua Driver daemon is not running\n"), None);
+        assert_eq!(status_pid("  pid: unknown\n"), None);
+    }
+
+    #[test]
+    fn runs_from_is_inside_the_bundle_and_nothing_beside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let ours = bundle_with(&dir.path().join("nolune"), Some(REAL_PLIST));
+        let other = bundle_with(&dir.path().join("applications"), Some(REAL_PLIST));
+        let executable = ours.join("Contents/MacOS/cua-driver");
+        assert!(runs_from(&executable, &ours));
+        assert!(!runs_from(&executable, &other));
+        assert!(!runs_from(Path::new("/bin/sleep"), &ours));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn foreign_daemon_names_a_daemon_running_from_another_executable() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = bundle_with(dir.path(), Some(REAL_PLIST));
+        // Something that runs from outside the bundle, standing in for
+        // `/Applications/CuaDriver.app`'s daemon.
+        let mut elsewhere = tokio::process::Command::new("/bin/sleep")
+            .arg("30")
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let pid = elsewhere.id().unwrap();
+        let driver = fake_driver(
+            &bundle.join("Contents/MacOS"),
+            &format!("printf 'Cua Driver daemon is running\\n  pid: {pid}\\n'; exit 0"),
+        );
+        assert_eq!(
+            foreign_daemon(&driver).await,
+            Some(PathBuf::from("/bin/sleep"))
+        );
+        elsewhere.kill().await.unwrap();
+
+        let stopped = fake_driver(
+            &bundle.join("Contents/MacOS"),
+            "echo 'Cua Driver daemon is not running'; exit 1",
+        );
+        assert_eq!(foreign_daemon(&stopped).await, None, "no daemon runs");
+
+        let bare = fake_driver(
+            &dir.path().join("bare"),
+            &format!("printf 'running\\n  pid: {pid}\\n'; exit 0"),
+        );
+        assert_eq!(
+            foreign_daemon(&bare).await,
+            None,
+            "a bare binary has no bundle to compare"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_asks_the_daemons_own_executable_and_waits_for_it_to_go() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("up");
+        fs::write(&marker, "").unwrap();
+        let driver = fake_driver(
+            &dir.path().join("ours"),
+            &format!(
+                "if [ -e '{}' ]; then echo running; exit 0; else echo 'not running'; exit 1; fi",
+                marker.display()
+            ),
+        );
+        let write_foreign = |body: &str| {
+            let foreign = dir.path().join("foreign-cua-driver");
+            fs::write(
+                &foreign,
+                format!("#!/bin/sh\ncase \"$1\" in\n  stop) {body} ;;\n  *) exit 2 ;;\nesac\n"),
+            )
+            .unwrap();
+            fs::set_permissions(&foreign, fs::Permissions::from_mode(0o755)).unwrap();
+            foreign
+        };
+
+        // Its `stop` takes the daemon down a moment later.
+        let foreign = write_foreign(&format!(
+            "(sleep 0.3; rm -f '{}') >/dev/null 2>&1 & exit 0",
+            marker.display()
+        ));
+        stop(&foreign, &driver, Duration::from_secs(10))
+            .await
+            .expect("the daemon went");
+        assert!(!marker.exists());
+
+        // A `stop` that fails says so, with what it printed.
+        fs::write(&marker, "").unwrap();
+        let foreign = write_foreign("echo 'no daemon socket' >&2; exit 1");
+        let message = format!(
+            "{:#}",
+            stop(&foreign, &driver, Duration::from_secs(10))
+                .await
+                .unwrap_err()
+        );
+        assert!(message.contains("no daemon socket"), "{message}");
+
+        // A `stop` that answers but leaves the daemon up gives up at `wait`.
+        let foreign = write_foreign("exit 0");
+        let message = format!(
+            "{:#}",
+            stop(&foreign, &driver, Duration::from_millis(600))
+                .await
+                .unwrap_err()
+        );
+        assert!(message.contains("still up"), "{message}");
     }
 
     #[test]

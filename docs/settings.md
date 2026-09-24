@@ -409,7 +409,12 @@ Nolune release.
   (`answered by: …`): when it is not the driver above, another
   `CuaDriver.app` owns the session's daemon (the driver keeps one per login
   session), the line says so and how to stop it, and the version check still
-  applies to it. Nolune never stops or replaces a daemon it did not start.
+  applies to it. A foreign daemon of another release can refuse the driver
+  above outright (`incompatible daemon: contract version … does not match
+  SDK …`) before any report, so the `daemon:` line names it too. The CLI
+  never stops or replaces a daemon it did not start; the desktop app's
+  settings window does, but only when its button is pressed (see
+  [computer-use.md](computer-use.md)).
 - Platform status: macOS is supported. Linux and Windows report
   `platform: unsupported`; the pinned driver still installs there so a later
   release can turn computer use on without moving the pin. A host without a

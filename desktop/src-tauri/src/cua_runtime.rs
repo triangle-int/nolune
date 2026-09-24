@@ -1197,6 +1197,44 @@ async fn ensure_daemon(driver: &Path) {
     }
 }
 
+/// How long a foreign daemon gets to go after its own `stop`.
+const DAEMON_STOP_WAIT: Duration = Duration::from_secs(10);
+
+/// Make the daemon `driver` runs from the one that answers: stop the
+/// daemon another `CuaDriver.app` runs, with its own `stop`, and start
+/// `driver`'s bundle in its place. Only the settings window's install
+/// button calls this, because the user asked for Nolune's driver there:
+/// the login session has one daemon, and another release's can refuse
+/// Nolune's driver outright (its contract version differs), so without
+/// this an install changes nothing. Returns the executable it stopped;
+/// `None` when no foreign daemon was running.
+pub async fn take_over_daemon(driver: &Path) -> Result<Option<PathBuf>, String> {
+    if !cfg!(target_os = "macos") {
+        return Ok(None);
+    }
+    let Some(bundle) = daemon::app_bundle(driver) else {
+        return Ok(None);
+    };
+    let Some(foreign) = daemon::foreign_daemon(driver).await else {
+        return Ok(None);
+    };
+    daemon::stop(&foreign, driver, DAEMON_STOP_WAIT)
+        .await
+        .map_err(|error| {
+            format!(
+                "The Cua Driver at {} is running and Nolune could not stop it ({error:#}); \
+                 quit it, then try again.",
+                foreign.display()
+            )
+        })?;
+    eprintln!("[cua] stopped the daemon {} ran", foreign.display());
+    daemon::start(driver, daemon::launch_command(&bundle), DAEMON_START_WAIT)
+        .await
+        .map_err(|error| format!("Nolune's driver did not start: {error:#}"))?;
+    eprintln!("[cua] daemon started: {}", bundle.display());
+    Ok(Some(foreign))
+}
+
 /// The driver this desktop runs, from [`locate_driver`] under the workspace
 /// `local_server::nolune_home` names, started with the default deadlines.
 async fn spawn_installed_driver() -> Result<Arc<dyn DriverTransport>, String> {

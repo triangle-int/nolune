@@ -21,6 +21,7 @@ use std::{
 };
 
 use cua_protocol::{
+    cua_driver_daemon,
     cua_driver_pin::{check_driver_version, Target, PINNED_VERSION},
     driver_mcp::permissions_from_health,
     HealthCheckData, HealthCheckStatus, HealthOverall, HealthReportResult, Permission,
@@ -32,6 +33,9 @@ use crate::cua_runtime::{self, CuaRuntime};
 /// What this page calls its own install, so every sentence asking for one
 /// names the button and never a shell command (#231).
 pub const INSTALL_ACTION: &str = "Install driver";
+/// The same button when another `CuaDriver.app`'s daemon is in the way: it
+/// installs as before, then stops that daemon and starts Nolune's.
+pub const TAKE_OVER_ACTION: &str = "Use Nolune's driver";
 /// The same install from a terminal: what a server host without a settings
 /// window runs, and what the docs name. The page never asks for it.
 pub const INSTALL_COMMAND: &str = "nolune cua install";
@@ -260,8 +264,15 @@ pub enum DriverState {
     /// install, not on `PATH`.
     Absent,
     /// A driver was found but could not report (a failed handshake, a
-    /// stalled report); `error` repeats what it said.
-    Unreachable { path: String, error: String },
+    /// stalled report); `error` repeats what it said. `foreign_daemon`
+    /// names the executable of another `CuaDriver.app` whose daemon owns
+    /// the login session, when one does: another release's refuses the
+    /// driver outright, and only stopping it helps.
+    Unreachable {
+        path: String,
+        error: String,
+        foreign_daemon: Option<String>,
+    },
     /// The driver reported. Its version and the bundle its grants are
     /// under are each checked against the pin; either mismatch is the
     /// report's headline, with the install command.
@@ -294,7 +305,13 @@ pub fn driver_state(path: &Path, probe: Result<&HealthReportResult, String>) -> 
     let path = path.display().to_string();
     let report = match probe {
         Ok(report) => report,
-        Err(error) => return DriverState::Unreachable { path, error },
+        Err(error) => {
+            return DriverState::Unreachable {
+                path,
+                error,
+                foreign_daemon: None,
+            };
+        }
     };
     let incompatibility = check_driver_version(&report.driver_version)
         .err()
@@ -383,6 +400,9 @@ pub struct CuaPermissionsReport {
     /// What the page's own install is called, so its copy and its button
     /// agree (#231).
     pub install_action: &'static str,
+    /// What the same button is called when another driver's daemon is in
+    /// the way ([`DriverState::Unreachable`]'s `foreign_daemon`).
+    pub take_over_action: &'static str,
     /// The same install from a terminal. Shown nowhere on the page; kept
     /// so a support answer can name it.
     pub install_command: &'static str,
@@ -414,6 +434,7 @@ pub fn assemble(
         platform,
         pinned_version: PINNED_VERSION,
         install_action: INSTALL_ACTION,
+        take_over_action: TAKE_OVER_ACTION,
         install_command: INSTALL_COMMAND,
         can_install,
         driver_bundle: DRIVER_BUNDLE,
@@ -443,7 +464,15 @@ fn summary(
             "No Cua Driver is installed on this computer; {INSTALL_ACTION} puts the pinned \
              one here."
         ),
-        DriverState::Unreachable { path, error } => {
+        DriverState::Unreachable {
+            path,
+            error,
+            foreign_daemon: Some(foreign),
+        } => format!(
+            "Another Cua Driver ({foreign}) is running, and the driver at {path} cannot work \
+             through it: {error}. {TAKE_OVER_ACTION} below stops it and starts Nolune's."
+        ),
+        DriverState::Unreachable { path, error, .. } => {
             format!("The driver at {path} could not report: {error}")
         }
         DriverState::Reported {
@@ -517,8 +546,15 @@ pub async fn gather(
     };
     let probe = runtime.probe(machine_id).await;
     let permissions = probe.as_ref().ok().map(driver_permissions);
-    let driver = driver_state(&driver, probe.as_ref().map_err(Clone::clone));
-    assemble(platform, install, driver, permissions)
+    let mut state = driver_state(&driver, probe.as_ref().map_err(Clone::clone));
+    // A driver that cannot report may be refused by a daemon it does not
+    // own; the page names that daemon so the button can stop it.
+    if let DriverState::Unreachable { foreign_daemon, .. } = &mut state {
+        *foreign_daemon = cua_driver_daemon::foreign_daemon(&driver)
+            .await
+            .map(|path| path.display().to_string());
+    }
+    assemble(platform, install, state, permissions)
 }
 
 // ---------------------------------------------------------------------------
@@ -1141,11 +1177,20 @@ mod tests {
                 .to_owned(),
         ))]);
         let (report, _, _) = gathered(Some(fake), true).await;
-        let DriverState::Unreachable { path, error } = &report.driver else {
+        let DriverState::Unreachable {
+            path,
+            error,
+            foreign_daemon,
+        } = &report.driver
+        else {
             panic!("expected unreachable, got {:?}", report.driver);
         };
         assert!(path.ends_with("cua-driver"), "{path}");
         assert!(error.contains("CuaDriver daemon is not running"), "{error}");
+        assert_eq!(
+            foreign_daemon, &None,
+            "a bare driver has no daemon to compare"
+        );
         assert_eq!(report.permissions, None);
         assert!(
             report.summary.contains("could not report"),
@@ -1157,6 +1202,41 @@ mod tests {
             "{}",
             report.summary
         );
+    }
+
+    /// The upstream installer's `/Applications/CuaDriver.app` of another
+    /// release owns the login session's daemon, and the pinned driver
+    /// refuses its contract: a reinstall would change nothing, so the page
+    /// names that daemon and the button that stops it.
+    #[test]
+    fn a_driver_refused_by_another_drivers_daemon_names_it_and_the_way_out() {
+        let foreign = "/Applications/CuaDriver.app/Contents/MacOS/cua-driver";
+        let report = assemble(
+            platform_state(&macos()),
+            InstallState::None,
+            DriverState::Unreachable {
+                path: "/ws/cua-driver/releases/0.28.2/CuaDriver.app/Contents/MacOS/cua-driver"
+                    .to_owned(),
+                error: "cua-driver-rs: invalid daemon response: incompatible daemon: contract \
+                        version 0.7.0 does not match SDK 0.8.0"
+                    .to_owned(),
+                foreign_daemon: Some(foreign.to_owned()),
+            },
+            None,
+        );
+        assert!(report.summary.contains(foreign), "{}", report.summary);
+        assert!(
+            report.summary.contains("contract version 0.7.0"),
+            "what the driver said stays: {}",
+            report.summary
+        );
+        assert!(
+            report.summary.contains(TAKE_OVER_ACTION),
+            "{}",
+            report.summary
+        );
+        assert_eq!(report.take_over_action, TAKE_OVER_ACTION);
+        assert!(report.can_install);
     }
 
     #[tokio::test]

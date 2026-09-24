@@ -26,6 +26,8 @@ const source = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const PIN = "0.28.2";
 const INSTALL = "nolune cua install";
 const ACTION = "Install driver";
+const TAKE_OVER = "Use Nolune's driver";
+const UPSTREAM = "/Applications/CuaDriver.app/Contents/MacOS/cua-driver";
 const BUNDLE = "com.trycua.driver";
 const DRIVER = "/Users/me/.nolune/cua-driver/releases/0.28.2/CuaDriver.app/Contents/MacOS/cua-driver";
 
@@ -49,6 +51,7 @@ const report = (over = {}) => ({
   platform: macos(),
   pinned_version: PIN,
   install_action: ACTION,
+  take_over_action: TAKE_OVER,
   install_command: INSTALL,
   can_install: true,
   driver_bundle: BUNDLE,
@@ -94,9 +97,22 @@ const ABSENT = report({
 });
 
 const UNREACHABLE = report({
-  driver: { kind: "unreachable", path: DRIVER, error: 'the MCP handshake timed out; the driver said: "CuaDriver daemon is not running"' },
+  driver: {
+    kind: "unreachable",
+    path: DRIVER,
+    error: 'the MCP handshake timed out; the driver said: "CuaDriver daemon is not running"',
+    foreign_daemon: null,
+  },
   permissions: null,
   summary: `The driver at ${DRIVER} could not report: the MCP handshake timed out; the driver said: "CuaDriver daemon is not running"`,
+});
+
+const CONTRACT = "cua-driver-rs: invalid daemon response: incompatible daemon: contract version 0.7.0 does not match SDK 0.8.0";
+
+const REFUSED = report({
+  driver: { kind: "unreachable", path: DRIVER, error: CONTRACT, foreign_daemon: UPSTREAM },
+  permissions: null,
+  summary: `Another Cua Driver (${UPSTREAM}) is running, and the driver at ${DRIVER} cannot work through it: ${CONTRACT}. ${TAKE_OVER} below stops it and starts Nolune's.`,
 });
 
 const LINUX = report({
@@ -152,7 +168,7 @@ const OTHER_BUNDLE = report({
   summary: `The driver at ${PATH_DRIVER} holds its grants as ${FORK}, not as CuaDriver (${BUNDLE}), the bundle Nolune's pinned driver runs as; nothing is granted through it (${ACTION} below installs the pinned release)`,
 });
 
-const ALL = { READY: report(), DENIED, NEVER_ASKED, MISMATCH, OTHER_BUNDLE, ABSENT, UNREACHABLE, LINUX, WINDOWS, HEADLESS };
+const ALL = { READY: report(), DENIED, NEVER_ASKED, MISMATCH, OTHER_BUNDLE, ABSENT, UNREACHABLE, REFUSED, LINUX, WINDOWS, HEADLESS };
 
 test("a driver holding both grants shows two granted rows with nothing to grant", () => {
   const ready = report();
@@ -308,6 +324,14 @@ test("a driver that cannot report shows what it said", () => {
   assert.ok(line && line.text.includes("CuaDriver daemon is not running"), JSON.stringify(statusLines(UNREACHABLE)));
 });
 
+test("a driver another driver's daemon refuses names that daemon, not a bare handshake error", () => {
+  assert.equal(pageState(REFUSED), "unreachable");
+  const line = statusLines(REFUSED).find((line) => line.tone === "error");
+  assert.ok(line, JSON.stringify(statusLines(REFUSED)));
+  assert.ok(line.text.startsWith(`Another Cua Driver (${UPSTREAM}) is running`), line.text);
+  assert.ok(line.text.includes("contract version 0.7.0"), line.text);
+});
+
 test("Linux and Windows are named as unsupported with what still works", () => {
   for (const [name, unsupported] of [["Linux", LINUX], ["Windows", WINDOWS]]) {
     assert.equal(pageState(unsupported), "unsupported", name);
@@ -418,6 +442,16 @@ test("a finished install says what to do next and whether the companion already 
   const offline = installOutcomeText({ version: PIN, driver: DRIVER, already_installed: true, reannounced: false });
   assert.ok(offline.includes("was already installed"), offline);
   assert.ok(offline.includes("next time this app connects"), offline);
+  assert.ok(!offline.includes("Stopped"), offline);
+
+  const takenOver = installOutcomeText({
+    version: PIN,
+    driver: DRIVER,
+    already_installed: true,
+    reannounced: true,
+    stopped_daemon: UPSTREAM,
+  });
+  assert.ok(takenOver.includes(`Stopped the Cua Driver at ${UPSTREAM}`), takenOver);
 });
 
 test("a ready computer is not offered a download it does not need", () => {
@@ -426,6 +460,12 @@ test("a ready computer is not offered a download it does not need", () => {
   const stuck = installAction(UNREACHABLE);
   assert.ok(stuck && stuck.force, JSON.stringify(stuck));
   assert.ok(stuck.label.toLowerCase().includes("reinstall"), stuck.label);
+  // Unless another driver's daemon is what refuses it: a download changes
+  // nothing then, stopping that daemon does, and the note says so first.
+  const refused = installAction(REFUSED);
+  assert.ok(refused && !refused.force, JSON.stringify(refused));
+  assert.equal(refused.label, TAKE_OVER);
+  assert.ok(refused.note.includes(`Stops the Cua Driver at ${UPSTREAM}`), refused.note);
   // A host the pin covers no driver for is never offered one, whatever it reports.
   assert.equal(installAction({ ...ABSENT, can_install: false }), null);
 });

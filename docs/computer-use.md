@@ -117,6 +117,16 @@ fails whenever the two disagree, so the pin moves in both places at once.
   lets the Install driver button work on its own: the driver it just
   installed is the daemon that answers, and macOS attributes Accessibility
   and Screen Recording to that bundle.
+- A login session has one daemon, so another `CuaDriver.app` that is
+  already running one (the upstream installer's `/Applications` copy, say)
+  keeps answering whatever Nolune installed, and one of another release
+  refuses Nolune's driver outright (`incompatible daemon: contract version
+  … does not match SDK …`). Nothing starts or stops on its own over this.
+  The settings window names that daemon, and its button (`Use Nolune's
+  driver` then, `Install driver` otherwise) installs as before, stops the
+  foreign daemon with that daemon's own `stop`, and starts Nolune's by
+  path (`take_over_daemon` in `desktop/src-tauri/src/cua_runtime.rs`).
+  `nolune cua status` names it and prints the `stop` to run.
 - Which entry point to point a user at follows from who they are. A server
   host has a shell and `nolune` on its `PATH`, so it runs
   `nolune cua install`. A desktop user has neither: the app's in-app server
