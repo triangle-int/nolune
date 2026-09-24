@@ -68,10 +68,13 @@ pub struct InstallReport {
     /// The machine socket was told to register this computer again, so the
     /// companion learns about the driver without the user reconnecting.
     pub reannounced: bool,
+    /// The executable of another `CuaDriver.app` whose daemon was stopped
+    /// so this driver's could answer.
+    pub stopped_daemon: Option<String>,
 }
 
 impl InstallReport {
-    fn new(outcome: InstallOutcome, reannounced: bool) -> Self {
+    fn new(outcome: InstallOutcome, reannounced: bool, stopped_daemon: Option<PathBuf>) -> Self {
         let (installed, already_installed): (InstalledDriver, bool) = match outcome {
             InstallOutcome::AlreadyInstalled(installed) => (installed, true),
             InstallOutcome::Installed(installed) => (installed, false),
@@ -81,6 +84,7 @@ impl InstallReport {
             driver: installed.driver.display().to_string(),
             already_installed,
             reannounced,
+            stopped_daemon: stopped_daemon.map(|path| path.display().to_string()),
         }
     }
 }
@@ -159,8 +163,17 @@ pub async fn cua_install_driver(
     // on disk now, then have the socket register this computer again with
     // that driver's descriptor.
     crate::cua_runtime::runtime().replace_driver().await;
+    // The daemon has to be this driver's too: another `CuaDriver.app`'s
+    // (the upstream installer's, say) would keep answering, or refusing,
+    // whatever was installed here.
+    let driver = match &outcome {
+        InstallOutcome::AlreadyInstalled(installed) | InstallOutcome::Installed(installed) => {
+            installed.driver.clone()
+        }
+    };
+    let stopped_daemon = crate::cua_runtime::take_over_daemon(&driver).await?;
     let reannounced = crate::computer_use_bridge::reannounce();
-    Ok(InstallReport::new(outcome, reannounced))
+    Ok(InstallReport::new(outcome, reannounced, stopped_daemon))
 }
 
 #[cfg(test)]
@@ -213,14 +226,26 @@ mod tests {
             driver: PathBuf::from("/ws/cua-driver/releases/x/cua-driver"),
             installed_at: "2026-09-23T00:00:00Z".to_owned(),
         };
-        let fresh = InstallReport::new(InstallOutcome::Installed(installed.clone()), true);
+        let fresh = InstallReport::new(InstallOutcome::Installed(installed.clone()), true, None);
         assert!(!fresh.already_installed);
         assert!(fresh.reannounced);
         assert_eq!(fresh.version, PINNED_VERSION);
         assert_eq!(fresh.driver, "/ws/cua-driver/releases/x/cua-driver");
+        assert_eq!(fresh.stopped_daemon, None);
 
-        let again = InstallReport::new(InstallOutcome::AlreadyInstalled(installed), false);
+        let again = InstallReport::new(
+            InstallOutcome::AlreadyInstalled(installed),
+            false,
+            Some(PathBuf::from(
+                "/Applications/CuaDriver.app/Contents/MacOS/cua-driver",
+            )),
+        );
         assert!(again.already_installed);
         assert!(!again.reannounced);
+        assert_eq!(
+            again.stopped_daemon.as_deref(),
+            Some("/Applications/CuaDriver.app/Contents/MacOS/cua-driver"),
+            "the page says whose daemon made way"
+        );
     }
 }

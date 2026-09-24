@@ -20,19 +20,21 @@
  *   | { kind: "none" } | { kind: "unreadable", detail: string }} InstallState
  * @typedef {{ name: string, message: string, hint: string | null }} FailedCheck
  * @typedef {{ kind: "skipped" } | { kind: "absent" }
- *   | { kind: "unreachable", path: string, error: string }
+ *   | { kind: "unreachable", path: string, error: string, foreign_daemon: string | null }
  *   | { kind: "reported", path: string, version: string, compatible: boolean, incompatibility: string | null,
  *       health: "ok" | "degraded" | "failed", bundle: string | null, bundle_mismatch: string | null,
  *       failed_checks: FailedCheck[] }} DriverState
  * @typedef {{ accessibility: Permission, screen_recording: Permission }} DriverPermissions
- * @typedef {{ platform: PlatformState, pinned_version: string, install_action: string, install_command: string,
+ * @typedef {{ platform: PlatformState, pinned_version: string, install_action: string, take_over_action: string,
+ *   install_command: string,
  *   can_install: boolean, driver_bundle: string, install: InstallState, driver: DriverState,
  *   permissions: DriverPermissions | null, summary: string }} CuaPermissionsReport
  * @typedef {{ label: string, force: boolean, note: string }} InstallAction
  * @typedef {{ step: "downloading", url: string, size: number }
  *   | { step: "verified", sha256: string }
  *   | { step: "version_checked", version: string }} InstallProgress
- * @typedef {{ version: string, driver: string, already_installed: boolean, reannounced: boolean }} InstallReport
+ * @typedef {{ version: string, driver: string, already_installed: boolean, reannounced: boolean,
+ *   stopped_daemon: string | null }} InstallReport
  * @typedef {{ permission: string, driver_grant: boolean, opened_settings: boolean }} GrantOutcome
  * @typedef {"unsupported" | "headless" | "absent" | "unreachable" | "incompatible" | "ready"} PageState
  * @typedef {Pick<CuaPermissionsReport, "driver_bundle"> & Partial<Pick<CuaPermissionsReport, "driver">>} BundleSource
@@ -173,7 +175,12 @@ export function statusLines(report) {
     case "skipped":
       break;
     case "unreachable":
-      lines.push({ tone: "error", text: `The driver at ${driver.path} could not report: ${driver.error}` });
+      lines.push({
+        tone: "error",
+        text: driver.foreign_daemon
+          ? `Another Cua Driver (${driver.foreign_daemon}) is running, and the driver at ${driver.path} cannot work through it: ${driver.error}`
+          : `The driver at ${driver.path} could not report: ${driver.error}`,
+      });
       break;
     case "reported": {
       if (driver.compatible) {
@@ -235,6 +242,15 @@ export function installAction(report) {
         note: `${verified} It is installed for Nolune only, under your home folder. ${never}`,
       };
     case "unreachable":
+      // Another driver's daemon owns the login session and refuses this
+      // one: a download would change nothing, stopping that daemon does.
+      if (report.driver.kind === "unreachable" && report.driver.foreign_daemon) {
+        return {
+          label: report.take_over_action,
+          force: false,
+          note: `Stops the Cua Driver at ${report.driver.foreign_daemon} and starts Nolune's ${pinned} in its place; the login session runs one at a time. ${never}`,
+        };
+      }
       return { label: "Reinstall driver", force: true, note: `${verified} ${never}` };
     case "incompatible":
       return { label: `Install ${pinned}`, force: true, note: `${verified} ${never}` };
@@ -278,10 +294,11 @@ export function installOutcomeText(outcome) {
   const lead = outcome.already_installed
     ? `Cua Driver ${outcome.version} was already installed at ${outcome.driver}.`
     : `Installed Cua Driver ${outcome.version} at ${outcome.driver}.`;
+  const stopped = outcome.stopped_daemon ? ` Stopped the Cua Driver at ${outcome.stopped_daemon} so Nolune's runs instead.` : "";
   const reach = outcome.reannounced
     ? "This computer is registering with your companion again, so it can drive it in a moment."
     : "Your companion picks it up the next time this app connects.";
-  return `${lead} Grant Accessibility and Screen recording below, then refresh the status. ${reach}`;
+  return `${lead}${stopped} Grant Accessibility and Screen recording below, then refresh the status. ${reach}`;
 }
 
 /**

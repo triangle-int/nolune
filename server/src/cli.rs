@@ -949,7 +949,19 @@ async fn probe_driver(driver: PathBuf) -> Probe {
         && let Some(bundle) = daemon::app_bundle(&driver)
     {
         match daemon::state(&driver).await {
-            DaemonState::Running => notes.push("daemon: running".to_owned()),
+            // Another CuaDriver.app's daemon of another release refuses the
+            // driver above before it can report, so it is named here, where
+            // the `answered by` line below never gets to.
+            DaemonState::Running => match daemon::foreign_daemon(&driver).await {
+                None => notes.push("daemon: running".to_owned()),
+                Some(foreign) => notes.push(format!(
+                    "daemon: running from {}, another CuaDriver.app, not the driver above; \
+                     `{} stop` stops it, and the next `nolune cua status` starts the driver \
+                     above instead",
+                    foreign.display(),
+                    foreign.display()
+                )),
+            },
             DaemonState::NotRunning => {
                 let launch = daemon::launch_command(&bundle);
                 if let Err(error) = daemon::start(&driver, launch, DAEMON_START_WAIT).await {
