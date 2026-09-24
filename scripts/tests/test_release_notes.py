@@ -655,6 +655,53 @@ class ReleaseNotesTests(unittest.TestCase):
         self.assertIn("Plain fallback", notes)
         self.assertNotIn("**bold**", notes)
 
+    def test_fallback_and_direct_change_text_keep_escaped_underscores(self):
+        pull_requests = [
+            release_notes.PullRequest(
+                265,
+                "Keep the prompt stable; restore list_skills",
+                "",
+                ("bug",),
+                "owner",
+                False,
+                "https://github.com/o/r/pull/265",
+            )
+        ]
+        direct = [release_notes.DirectCommit("abc1234", "Rename the snake_case field")]
+
+        notes = release_notes.generate_notes(
+            pull_requests,
+            direct,
+            repository_owner="owner",
+            api_key="",
+            request_json=lambda *_args: self.fail("missing key must not call OpenAI"),
+        )
+
+        self.assertIn(r"restore list\_skills [#265](https://github.com/o/r/pull/265)", notes)
+        self.assertIn(r"- Rename the snake\_case field (`abc1234`)", notes)
+
+    def test_model_text_with_underscores_is_accepted_and_escaped(self):
+        pull_requests = [
+            release_notes.PullRequest(234, "Plain fallback", "", (), "owner", False, "https://github.com/o/r/pull/234")
+        ]
+        response = {
+            "overview": "Adds file_search and an _important_ fix.",
+            "pull_requests": [
+                {"number": 234, "category": "New features", "summary": "Sends PDFs as input_file parts."}
+            ],
+        }
+        notes = release_notes.generate_notes(
+            pull_requests,
+            [],
+            repository_owner="owner",
+            api_key="secret",
+            request_json=lambda *_args: {"choices": [{"message": {"content": json.dumps(response)}}]},
+        )
+
+        self.assertNotIn("Plain fallback", notes)
+        self.assertIn(r"Adds file\_search and an \_important\_ fix.", notes)
+        self.assertIn(r"Sends PDFs as input\_file parts. [#234](https://github.com/o/r/pull/234)", notes)
+
 
 if __name__ == "__main__":
     unittest.main()
