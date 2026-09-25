@@ -1,11 +1,19 @@
 import { listNotificationsForUser } from '@btw/core';
+import { PREFERENCES_COOKIE, parsePreferences } from '$lib/preferences.svelte';
 import type { LayoutServerLoad } from './$types';
 
-export const load: LayoutServerLoad = ({ locals, depends }) => {
+export const load: LayoutServerLoad = ({ locals, depends, cookies }) => {
 	depends('btw:notifications');
-	if (!locals.user) return { user: null, notifications: null };
+	const prefs = parsePreferences(cookies.get(PREFERENCES_COOKIE));
+	if (!locals.user) return { user: null, notifications: null, prefs };
 	return {
-		user: { id: locals.user.id, name: locals.user.name, isAdmin: locals.user.isAdmin === true },
-		notifications: listNotificationsForUser(locals.user.id)
+		user: {
+			id: locals.user.id,
+			name: locals.user.name,
+			email: locals.user.email,
+			isAdmin: locals.user.isAdmin === true
+		},
+		notifications: listNotificationsForUser(locals.user.id),
+		prefs
 	};
 };

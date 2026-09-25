@@ -41,6 +41,9 @@ Access). `btw setup` prints the exact path.
 ## Using it
 
 - `btw help` lists every command: users, model presets, profiles, skills, settings.
+- The chat keeps what btw did folded under each reply ("Worked for 12s"), with plain-language
+  steps. To see the exact commands, token usage and prompt caching, turn on **Show technical
+  details** in Settings (click your name at the bottom of the sidebar).
 - Skills live in `~/.btw-agent/profiles/<profile>/skills` and `~/.agents/skills`
   ([Agent Skills](https://agentskills.io) format). The agent creates its own with `btw skill new`.
 - **Automations.** Ask btw in a conversation ("every weekday at 7:30, tell us if we need umbrellas",

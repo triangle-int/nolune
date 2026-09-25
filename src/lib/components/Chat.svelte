@@ -1,9 +1,32 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
+	import { enhance } from '$app/forms';
 	import { invalidate } from '$app/navigation';
-	import type { DisplayBlock, LiveBlock, Usage } from '@btw/core';
+	import type { Usage } from '@btw/core';
 	import { CACHE_TTL_MS, cacheHitRate, cacheMissTokens, promptTokens } from '@btw/core/usage';
+	import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
+	import ClockIcon from '@lucide/svelte/icons/clock';
+	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
+	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
+	import InfoIcon from '@lucide/svelte/icons/info';
+	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
+	import Trash2Icon from '@lucide/svelte/icons/trash-2';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { Button } from '$lib/components/ui/button';
 	import { ChatState } from '$lib/chat.svelte';
 	import { formatPercent, formatTokens } from '$lib/format';
+	import { getPreferences } from '$lib/preferences.svelte';
+	import { buildTranscript, replyText, type Reply } from '$lib/transcript';
+	import { cn } from '$lib/utils';
+	import Activity from './chat/Activity.svelte';
+	import Composer from './chat/Composer.svelte';
+	import CopyButton from './chat/CopyButton.svelte';
+	import Markdown from './chat/Markdown.svelte';
+	import ModelMenu from './chat/ModelMenu.svelte';
+	import PageHeader from './PageHeader.svelte';
+	import UserAvatar from './UserAvatar.svelte';
 
 	interface Props {
 		conversation: {
@@ -21,6 +44,7 @@
 
 	let { conversation, efforts, me }: Props = $props();
 
+	const prefs = getPreferences();
 	const chat = new ChatState();
 	let text = $state('');
 	let sending = $state(false);
@@ -28,14 +52,20 @@
 	let stickToBottom = $state(true);
 	/** Sending a message turns a background run into a normal conversation. */
 	let continued = $state(false);
+	let effort = $state(untrack(() => conversation.effort));
+	let deleteOpen = $state(false);
+	let scroller = $state<HTMLElement>();
+	let textarea = $state<HTMLTextAreaElement | null>(null);
 
 	$effect(() => chat.connect(conversation.id));
 
 	const title = $derived(
 		conversation.title ||
 			chat.messages.find((m) => m.kind === 'human')?.text.slice(0, 80) ||
-			'New conversation'
+			'New chat'
 	);
+
+	const entries = $derived(buildTranscript(chat.messages, chat.live, chat.running));
 
 	/** Usage of the last reply, and summed over the whole conversation. */
 	const usage = $derived.by(() => {
@@ -84,10 +114,16 @@
 		return `${label}: ${formatPercent(cacheHitRate(u))} cached (${formatTokens(u.cacheRead)} read, ${formatTokens(u.cacheWrite)} written, ${formatTokens(u.input)} uncached)`;
 	}
 
-	function missReason(miss: { expired: boolean }): string {
-		return miss.expired
-			? 'Over an hour passed since the previous step, so the cached conversation expired and was processed again (slower and costlier).'
-			: 'Context that should have come from the cache was processed again (slower and costlier). Changing the reasoning level causes this once.';
+	/** Cache misses within one reply, which may span several model calls. */
+	function replyMiss(reply: Reply): { tokens: number; reason: string } | null {
+		const misses = reply.messageIds.flatMap((id) => cacheMisses[id] ?? []);
+		if (!misses.length) return null;
+		return {
+			tokens: misses.reduce((n, m) => n + m.tokens, 0),
+			reason: misses.some((m) => m.expired)
+				? 'Over an hour passed since the previous step, so the cached conversation expired and was processed again (slower and costlier).'
+				: 'Context that should have come from the cache was processed again (slower and costlier). Changing the reasoning level causes this once.'
+		};
 	}
 
 	const unanswered = $derived(
@@ -101,7 +137,8 @@
 		chat.messages.length +
 			chat.queued.length +
 			chat.live.reduce((n, b) => n + (b?.text.length ?? 0), 0) +
-			(chat.toolOutput?.text.length ?? 0)
+			(chat.toolOutput?.text.length ?? 0) +
+			(chat.running ? 1 : 0)
 	);
 
 	/** Keeps the view pinned to the newest content unless the reader scrolled up. */
@@ -113,6 +150,10 @@
 	function onScroll(event: Event & { currentTarget: HTMLElement }) {
 		const node = event.currentTarget;
 		stickToBottom = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
+	}
+
+	function scrollToBottom() {
+		scroller?.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
 	}
 
 	async function post(path: string, body?: unknown): Promise<boolean> {
@@ -137,243 +178,296 @@
 			invalidate('btw:conversations');
 		}
 		sending = false;
+		textarea?.focus();
 	}
 
-	function onKeydown(event: KeyboardEvent) {
-		if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-			event.preventDefault();
-			send();
-		}
-	}
-
-	function firstLine(command: string): string {
-		const line = command.split('\n')[0];
-		return line.length > 120 ? line.slice(0, 120) + '…' : line;
-	}
-
-	function resultStatus(result: {
-		output: string;
-		isError: boolean;
-	}): 'done' | 'failed' | 'stopped' {
-		if (!result.isError) return 'done';
-		return /Stopped by [^\n]*$/.test(result.output) ? 'stopped' : 'failed';
+	async function changeEffort(value: string) {
+		const previous = effort;
+		effort = value;
+		if (!(await post('effort', { effort: value }))) effort = previous;
 	}
 </script>
 
-{#snippet toolCard(id: string, command: string | null)}
-	{@const result = chat.results[id]}
-	{@const liveOutput = chat.toolOutput?.id === id ? chat.toolOutput.text : null}
-	<details class="rounded-lg border border-stone-200 bg-stone-50 text-sm">
-		<summary class="flex cursor-pointer items-center gap-2 px-3 py-2">
-			<span class="min-w-0 flex-1 truncate font-mono text-xs text-stone-700">
-				{command === null ? 'Preparing a command…' : `$ ${firstLine(command)}`}
-			</span>
-			{#if result}
-				{@const status = resultStatus(result)}
-				<span class={status === 'failed' ? 'text-red-600' : 'text-stone-400'}>{status}</span>
-			{:else if liveOutput !== null}
-				<span class="animate-pulse text-amber-600">running</span>
-			{/if}
-		</summary>
-		<div class="border-t border-stone-200">
-			{#if command && command.includes('\n')}
-				<pre class="overflow-x-auto px-3 py-2 font-mono text-xs text-stone-700">{command}</pre>
-			{/if}
-			<pre
-				class="max-h-80 overflow-auto px-3 py-2 font-mono text-xs whitespace-pre-wrap text-stone-600">{result?.output ??
-					liveOutput ??
-					''}</pre>
+{#snippet humanBubble(senderName: string, body: string, pending: boolean)}
+	{@const mine = senderName === me}
+	<div class="group/human flex flex-col items-end gap-1">
+		{#if !mine || pending}
+			<div class="flex items-center gap-1.5 px-1 text-xs text-muted-foreground">
+				{#if pending}
+					<ClockIcon class="size-3" />
+					{mine ? '' : `${senderName} · `}btw reads this after its current step
+				{:else}
+					<UserAvatar name={senderName} class="size-4 text-[9px]" />
+					{senderName}
+				{/if}
+			</div>
+		{/if}
+		<div
+			class={cn(
+				'max-w-[85%] rounded-[22px] px-4 py-2.5 leading-relaxed break-words whitespace-pre-wrap sm:max-w-[70%]',
+				pending ? 'border border-dashed opacity-70' : 'bg-bubble'
+			)}
+		>
+			{body}
 		</div>
-	</details>
+		{#if !pending}
+			<div
+				class="-mr-1.5 opacity-100 transition-opacity md:opacity-0 md:group-hover/human:opacity-100"
+			>
+				<CopyButton text={body} />
+			</div>
+		{/if}
+	</div>
 {/snippet}
 
-{#snippet blocks(items: (DisplayBlock | LiveBlock | null)[])}
-	{#each items as block, i (i)}
-		{#if block?.type === 'text'}
-			<div class="leading-relaxed whitespace-pre-wrap">{block.text}</div>
-		{:else if block?.type === 'thinking' && block.text.trim()}
-			<div class="text-sm whitespace-pre-wrap text-stone-500 italic">{block.text}</div>
-		{:else if block?.type === 'tool'}
-			{#if 'command' in block}
-				{@render toolCard(block.id, block.command)}
-			{:else if block.id}
-				{@render toolCard(block.id, null)}
+{#snippet reply(r: Reply, last: boolean)}
+	{@const copyable = replyText(r)}
+	{@const miss = prefs.technical ? replyMiss(r) : null}
+	{@const tail = r.parts.at(-1)}
+	<div class="group/reply flex flex-col gap-3">
+		{#each r.parts as part, i (part.key)}
+			{#if part.type === 'text'}
+				<Markdown text={part.text} />
+			{:else}
+				<Activity
+					{part}
+					results={chat.results}
+					toolOutput={chat.toolOutput}
+					active={r.live && i === r.parts.length - 1}
+					running={chat.running}
+				/>
 			{/if}
+		{/each}
+
+		{#if r.live && (!tail || (tail.type === 'text' && chat.live.every((b) => !b)))}
+			<span class="my-1 block size-3.5 animate-pulse rounded-full bg-foreground" role="status">
+				<span class="sr-only">btw is working</span>
+			</span>
 		{/if}
-	{/each}
+
+		{#if r.stopReasons.includes('max_tokens')}
+			<p class="text-sm text-warning">The reply was cut off because it got too long.</p>
+		{/if}
+		{#if r.stopReasons.includes('refusal')}
+			<p class="text-sm text-warning">btw declined to continue this request.</p>
+		{/if}
+
+		{#if !r.live && (copyable || (prefs.technical && r.usage))}
+			<div
+				class={cn(
+					'-mt-1 -ml-1.5 flex items-center gap-0.5 transition-opacity',
+					!last && 'md:opacity-0 md:group-hover/reply:opacity-100 md:focus-within:opacity-100'
+				)}
+			>
+				{#if copyable}
+					<CopyButton text={copyable} />
+				{/if}
+				{#if prefs.technical && r.usage}
+					<Tooltip.Root>
+						<Tooltip.Trigger
+							class="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
+							aria-label="Usage"
+						>
+							<InfoIcon class="size-4" />
+						</Tooltip.Trigger>
+						<Tooltip.Content class="max-w-xs flex-col items-start gap-0.5">
+							<span
+								>{formatTokens(promptTokens(r.usage))} tokens in, {formatTokens(r.usage.output)} out</span
+							>
+							<span>{cacheSummary('Cache', r.usage)}</span>
+						</Tooltip.Content>
+					</Tooltip.Root>
+				{/if}
+				{#if miss}
+					<Tooltip.Root>
+						<Tooltip.Trigger class="px-1.5 text-xs text-warning">
+							Cache miss · {formatTokens(miss.tokens)} tokens processed again
+						</Tooltip.Trigger>
+						<Tooltip.Content class="max-w-xs">{miss.reason}</Tooltip.Content>
+					</Tooltip.Root>
+				{/if}
+			</div>
+		{/if}
+	</div>
 {/snippet}
 
-<div class="flex h-full flex-col">
-	<header class="flex items-center gap-3 border-b border-stone-200 bg-white px-4 py-2 text-sm">
-		<h1 class="min-w-0 flex-1 truncate font-medium">{title}</h1>
-		<span class="hidden text-stone-500 sm:inline">{conversation.presetName}</span>
-		{#if usage}
-			<span class="text-stone-400" title="Context used by the last reply">
-				{formatTokens(contextUsed)} / {formatTokens(conversation.contextWindow)}
-			</span>
-			<span
-				class="hidden text-stone-400 sm:inline"
-				title={[
-					'Prompt cache',
-					cacheSummary('Last reply', usage.last),
-					cacheSummary('Whole conversation', usage.total)
-				].join('\n')}
+<PageHeader>
+	<h1 class="min-w-0 truncate text-base font-medium sm:text-lg">{title}</h1>
+	{#if prefs.technical && usage}
+		<Tooltip.Root>
+			<Tooltip.Trigger
+				class="hidden shrink-0 rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground sm:block"
 			>
-				{formatPercent(cacheHitRate(usage.last))} cached
-			</span>
-		{/if}
-		<label
-			class="flex items-center gap-1 text-stone-500"
-			title="Changing this makes the next reply re-read the whole conversation once (slower and costlier)."
-		>
-			Reasoning
-			<select
-				value={conversation.effort}
-				onchange={(event) => post('effort', { effort: event.currentTarget.value })}
-				class="rounded border border-stone-300 bg-white px-1 py-0.5"
-			>
-				{#each efforts as level (level)}
-					<option value={level}>{level}</option>
-				{/each}
-			</select>
-		</label>
-		<form
-			method="POST"
-			action="?/delete"
-			onsubmit={(event) => {
-				if (!confirm('Delete this conversation for everyone in the profile?'))
-					event.preventDefault();
-			}}
-		>
-			<button class="text-stone-400 hover:text-red-600" title="Delete conversation">Delete</button>
-		</form>
-	</header>
-
-	{#if conversation.hidden && !continued}
-		<p class="border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-sm text-amber-800">
-			A background run from an automation. It isn't in your conversation list; sending a message
-			adds it there.
-		</p>
+				{formatTokens(contextUsed)} / {formatTokens(conversation.contextWindow)} · {formatPercent(
+					cacheHitRate(usage.last)
+				)} cached
+			</Tooltip.Trigger>
+			<Tooltip.Content class="max-w-sm flex-col items-start gap-0.5">
+				<span
+					>Context used by the last reply: {formatTokens(contextUsed)} of {formatTokens(
+						conversation.contextWindow
+					)}</span
+				>
+				<span>{cacheSummary('Last reply', usage.last)}</span>
+				<span>{cacheSummary('Whole conversation', usage.total)}</span>
+			</Tooltip.Content>
+		</Tooltip.Root>
 	{/if}
 
-	<div {@attach autoscroll} onscroll={onScroll} class="min-h-0 flex-1 overflow-y-auto">
-		<div class="mx-auto max-w-3xl space-y-4 px-4 py-6">
-			{#if !chat.loaded}
-				<p class="text-center text-sm text-stone-400">Loading…</p>
-			{:else if chat.messages.length === 0 && chat.queued.length === 0}
-				<p class="text-center text-sm text-stone-400">Ask for something to get started.</p>
+	{#snippet actions()}
+		<DropdownMenu.Root>
+			<DropdownMenu.Trigger
+				class="flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground aria-expanded:bg-muted"
+				aria-label="Chat options"
+			>
+				<EllipsisIcon class="size-5" />
+			</DropdownMenu.Trigger>
+			<DropdownMenu.Content align="end" class="w-60">
+				{#if prefs.technical}
+					<DropdownMenu.Label class="font-normal">
+						<span class="block truncate text-foreground">{conversation.presetName}</span>
+						{#if usage}
+							<span class="block"
+								>Context {formatTokens(contextUsed)} / {formatTokens(
+									conversation.contextWindow
+								)}</span
+							>
+							<span class="block">{formatPercent(cacheHitRate(usage.total))} cached overall</span>
+						{/if}
+					</DropdownMenu.Label>
+					<DropdownMenu.Separator />
+				{/if}
+				<DropdownMenu.Item variant="destructive" onSelect={() => (deleteOpen = true)}>
+					<Trash2Icon />
+					Delete
+				</DropdownMenu.Item>
+			</DropdownMenu.Content>
+		</DropdownMenu.Root>
+	{/snippet}
+</PageHeader>
+
+{#if conversation.hidden && !continued}
+	<div class="mx-auto w-full max-w-3xl px-4">
+		<p class="rounded-2xl bg-muted px-4 py-2 text-center text-sm text-muted-foreground">
+			A background run from an automation. Send a message to keep it in your chats.
+		</p>
+	</div>
+{/if}
+
+<div class="relative min-h-0 flex-1">
+	<div
+		bind:this={scroller}
+		{@attach autoscroll}
+		onscroll={onScroll}
+		class="h-full overflow-y-auto [overflow-anchor:none]"
+	>
+		<div class="mx-auto flex max-w-3xl flex-col gap-7 px-4 pt-4 pb-12 sm:px-6">
+			{#if chat.loaded && chat.messages.length === 0 && chat.queued.length === 0 && !chat.running}
+				<p class="py-16 text-center text-muted-foreground">Ask for something to get started.</p>
 			{/if}
 
-			{#each chat.messages as message (message.id)}
-				{#if message.kind === 'human'}
-					{@const mine = message.senderName === me}
-					<div class={['flex', mine ? 'justify-end' : 'justify-start']}>
-						<div
-							class={[
-								'max-w-[85%] rounded-2xl px-4 py-2',
-								mine ? 'bg-stone-900 text-white' : 'border border-stone-200 bg-white'
-							]}
-						>
-							{#if !mine}
-								<div class="text-xs font-medium text-stone-500">{message.senderName}</div>
-							{/if}
-							<div class="whitespace-pre-wrap">{message.text}</div>
+			{#each entries as entry, index (entry.key)}
+				{#if entry.type === 'human'}
+					{@render humanBubble(entry.message.senderName, entry.message.text, false)}
+				{:else if entry.type === 'trigger'}
+					<div class="rounded-2xl border px-4 py-3 text-sm">
+						<div class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+							<ClockIcon class="size-3.5" />
+							Automation · {entry.message.title}
 						</div>
+						<div class="mt-1.5 leading-relaxed whitespace-pre-wrap">{entry.message.text}</div>
 					</div>
-				{:else if message.kind === 'trigger'}
-					<div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm">
-						<div class="text-xs font-medium text-amber-800">Automation · {message.title}</div>
-						<div class="whitespace-pre-wrap text-stone-700">{message.text}</div>
-					</div>
-				{:else if message.kind === 'assistant'}
-					{@const miss = cacheMisses[message.id]}
-					<div class="space-y-2">
-						{@render blocks(message.blocks)}
-						{#if message.stopReason === 'max_tokens'}
-							<p class="text-sm text-amber-700">The reply was cut off because it got too long.</p>
-						{:else if message.stopReason === 'refusal'}
-							<p class="text-sm text-amber-700">The model declined to continue this request.</p>
-						{/if}
-						{#if miss}
-							<p class="text-xs text-amber-700" title={missReason(miss)}>
-								Cache miss · {formatTokens(miss.tokens)} tokens processed again
-							</p>
-						{/if}
-					</div>
+				{:else}
+					{@render reply(entry, index === entries.length - 1)}
 				{/if}
 			{/each}
 
-			{#if chat.live.length}
-				<div class="space-y-2">{@render blocks(chat.live)}</div>
-			{:else if chat.running && !chat.toolOutput}
-				<p class="animate-pulse text-sm text-stone-400">Thinking…</p>
-			{/if}
-
 			{#each chat.queued as message (message.id)}
 				{#if message.kind === 'human'}
-					<div class="flex justify-end opacity-60">
-						<div class="max-w-[85%] rounded-2xl border border-dashed border-stone-300 px-4 py-2">
-							<div class="text-xs text-stone-500">
-								{message.senderName} · waiting for the next step
-							</div>
-							<div class="whitespace-pre-wrap">{message.text}</div>
-						</div>
-					</div>
+					{@render humanBubble(message.senderName, message.text, true)}
 				{/if}
 			{/each}
 
 			{#if chat.error}
 				<div
-					class="flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+					class="flex flex-wrap items-center gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm"
 				>
-					<span class="flex-1">{chat.error}</span>
-					<button class="font-medium underline" onclick={() => post('continue')}>Try again</button>
+					<CircleAlertIcon class="size-4 shrink-0 text-destructive" />
+					<span class="min-w-0 flex-1">
+						<span class="block font-medium">Something went wrong while btw was answering.</span>
+						<span class="block text-muted-foreground">{chat.error}</span>
+					</span>
+					<Button size="sm" variant="outline" onclick={() => post('continue')}>
+						<RotateCcwIcon />
+						Try again
+					</Button>
 				</div>
 			{:else if unanswered}
-				<div class="text-center text-sm text-stone-500">
-					Not answered yet. <button class="underline" onclick={() => post('continue')}
-						>Continue</button
-					>
+				<div class="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+					btw hasn't answered this yet.
+					<Button size="sm" variant="outline" onclick={() => post('continue')}>Continue</Button>
 				</div>
 			{/if}
 		</div>
 	</div>
 
-	<form
-		class="border-t border-stone-200 bg-white p-3"
-		onsubmit={(event) => {
-			event.preventDefault();
-			send();
-		}}
-	>
-		<div class="mx-auto flex max-w-3xl items-end gap-2">
-			<textarea
-				bind:value={text}
-				onkeydown={onKeydown}
-				rows="2"
-				placeholder={chat.running ? 'Add something while it works…' : 'Message'}
-				class="min-h-11 flex-1 resize-y rounded-lg border border-stone-300 px-3 py-2 focus:border-stone-500 focus:outline-none"
-			></textarea>
-			{#if chat.running}
-				<button
-					type="button"
-					onclick={() => post('stop')}
-					class="rounded-lg border border-stone-300 px-4 py-2 text-sm hover:bg-stone-50"
-				>
-					Stop
-				</button>
-			{/if}
-			<button
-				disabled={!text.trim() || sending}
-				class="rounded-lg bg-stone-900 px-4 py-2 text-sm font-medium text-white hover:bg-stone-700 disabled:opacity-40"
-			>
-				Send
-			</button>
-		</div>
-		{#if actionError}
-			<p class="mx-auto mt-2 max-w-3xl text-sm text-red-600">{actionError}</p>
-		{:else if !chat.connected && chat.loaded}
-			<p class="mx-auto mt-2 max-w-3xl text-sm text-amber-700">Reconnecting…</p>
-		{/if}
-	</form>
+	{#if !stickToBottom}
+		<button
+			onclick={scrollToBottom}
+			class="absolute bottom-3 left-1/2 flex size-9 -translate-x-1/2 items-center justify-center rounded-full border bg-background text-foreground shadow-md hover:bg-muted"
+			aria-label="Scroll to the newest message"
+		>
+			<ArrowDownIcon class="size-4" />
+		</button>
+	{/if}
 </div>
+
+<div class="px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-4">
+	<div class="mx-auto max-w-3xl">
+		<Composer
+			bind:value={text}
+			bind:textarea
+			running={chat.running}
+			busy={sending}
+			placeholder={chat.running ? 'Add something while btw works…' : 'Ask btw'}
+			onsubmit={send}
+			onstop={() => post('stop')}
+		>
+			{#snippet tools()}
+				<ModelMenu
+					{efforts}
+					{effort}
+					onEffortChange={changeEffort}
+					presets={[{ id: 'current', name: conversation.presetName }]}
+					presetId="current"
+				/>
+			{/snippet}
+		</Composer>
+		{#if actionError}
+			<p class="mt-2 text-center text-sm text-destructive">{actionError}</p>
+		{:else if !chat.connected && chat.loaded}
+			<p class="mt-2 text-center text-xs text-warning">Reconnecting…</p>
+		{:else}
+			<p class="mt-2 hidden text-center text-xs text-muted-foreground sm:block">
+				btw can make mistakes, and it can change files on this computer.
+			</p>
+		{/if}
+	</div>
+</div>
+
+<AlertDialog.Root bind:open={deleteOpen}>
+	<AlertDialog.Content>
+		<AlertDialog.Header>
+			<AlertDialog.Title>Delete chat?</AlertDialog.Title>
+			<AlertDialog.Description>
+				This deletes <strong class="text-foreground">{title}</strong> for everyone in the profile.
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+		<form method="POST" action="?/delete" use:enhance>
+			<AlertDialog.Footer>
+				<AlertDialog.Cancel type="button">Cancel</AlertDialog.Cancel>
+				<AlertDialog.Action type="submit" variant="destructive">Delete</AlertDialog.Action>
+			</AlertDialog.Footer>
+		</form>
+	</AlertDialog.Content>
+</AlertDialog.Root>
