@@ -43,6 +43,11 @@ Access). `btw setup` prints the exact path.
 - `btw help` lists every command: users, model presets, profiles, skills, settings.
 - Skills live in `~/.btw-agent/profiles/<profile>/skills` and `~/.agents/skills`
   ([Agent Skills](https://agentskills.io) format). The agent creates its own with `btw skill new`.
+- **Automations.** Ask btw in a conversation ("every weekday at 7:30, tell us if we need umbrellas",
+  "check my email every 10 minutes and tell me when the school writes"). It sets up a trigger that
+  runs in the background, and what it finds shows up under the bell at the top; open a notification
+  to continue it as a conversation. Each profile's Automations page lists them. From the terminal:
+  `btw trigger list`.
 - Extra environment variables for the agent's commands, e.g. for a firecrawl web-search skill:
   `btw env set FIRECRAWL_API_KEY fc-...`
 - Logs: `btw service logs -f`. Data: `~/.btw-agent` (override with `BTW_HOME`).

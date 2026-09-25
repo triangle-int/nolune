@@ -1,15 +1,17 @@
 import { error, redirect, type Handle, type ServerInit } from '@sveltejs/kit';
 import { building } from '$app/environment';
 import { svelteKitHandler } from 'better-auth/svelte-kit';
-import { installCliShim, recoverAfterRestart } from '@btw/core';
+import { installCliShim, recoverAfterRestart, startScheduler } from '@btw/core';
 import { getAuth } from '$lib/server/auth';
 
 export const init: ServerInit = () => {
 	installCliShim();
 	recoverAfterRestart();
+	startScheduler();
 };
 
-const PUBLIC_PATHS = ['/login', '/api/auth/'];
+/** Webhook URLs carry their own secret token instead of a login. */
+const PUBLIC_PATHS = ['/login', '/api/auth/', '/api/hooks/'];
 
 export const handle: Handle = async ({ event, resolve }) => {
 	const auth = getAuth();

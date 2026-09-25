@@ -37,6 +37,8 @@ export const paths = {
 	profiles: join(home, 'profiles'),
 	trash: join(home, 'trash'),
 	globalSkills: process.env.BTW_GLOBAL_SKILLS || join(homedir(), '.agents', 'skills'),
+	/** Skills that ship with btw, such as `automations`. */
+	builtinSkills: join(packageRoot, 'packages', 'core', 'skills'),
 	migrations: join(packageRoot, 'packages', 'core', 'drizzle'),
 	/** adapter-node output; `btw start` runs it. */
 	server: join(packageRoot, 'build', 'index.js')

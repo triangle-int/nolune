@@ -12,7 +12,8 @@ export const load: PageServerLoad = ({ locals, params }) => {
 			title: conversation.title,
 			presetName: conversation.presetName,
 			effort: conversation.effort,
-			contextWindow: conversation.contextWindow
+			contextWindow: conversation.contextWindow,
+			hidden: conversation.hidden
 		},
 		efforts: [...EFFORTS]
 	};

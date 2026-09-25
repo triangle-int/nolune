@@ -30,6 +30,18 @@
 		>
 			New conversation
 		</a>
+		<a
+			href={resolve('/p/[slug]/automations', { slug: data.profile.slug })}
+			onclick={() => (menuOpen = false)}
+			class={[
+				'mx-3 mb-2 rounded-md px-2 py-1.5 text-sm',
+				page.route.id === '/p/[slug]/automations'
+					? 'bg-stone-100 font-medium'
+					: 'text-stone-600 hover:bg-stone-50'
+			]}
+		>
+			Automations
+		</a>
 		<nav class="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
 			{#each data.conversations as conversation (conversation.id)}
 				<a

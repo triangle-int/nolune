@@ -150,6 +150,8 @@ export const conversation = sqliteTable(
 			.default('medium'),
 		/** Frozen at creation so the prompt cache prefix never changes. */
 		systemPrompt: text('system_prompt').notNull(),
+		/** Background runs started by triggers stay out of the list until someone continues them. */
+		hidden: integer('hidden', { mode: 'boolean' }).notNull().default(false),
 		createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull(),
 		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).default(now).notNull()
@@ -167,11 +169,12 @@ export const message = sqliteTable(
 		/** Position in the transcript. Null while the message is still queued. */
 		seq: integer('seq'),
 		role: text('role', { enum: ['user', 'assistant'] }).notNull(),
-		kind: text('kind', { enum: ['human', 'tool_results', 'assistant'] }).notNull(),
+		/** `trigger`: the first message of a background run, written by the gateway, not a person. */
+		kind: text('kind', { enum: ['human', 'trigger', 'tool_results', 'assistant'] }).notNull(),
 		senderId: text('sender_id').references(() => user.id, { onDelete: 'set null' }),
-		/** Sender's display name when the message was sent. */
+		/** Sender's display name when the message was sent. Trigger rows: the trigger's name. */
 		senderName: text('sender_name'),
-		/** What the human typed (without the "Name: " prefix). */
+		/** What the human typed (without the "Name: " prefix). Trigger rows: the trigger's prompt. */
 		text: text('text'),
 		/** Exact API content blocks as JSON. Replayed byte-for-byte; never rewritten. */
 		content: text('content').notNull(),
@@ -181,3 +184,123 @@ export const message = sqliteTable(
 	},
 	(table) => [index('message_conversation_seq_idx').on(table.conversationId, table.seq)]
 );
+
+export const trigger = sqliteTable(
+	'trigger',
+	{
+		id: text('id').primaryKey(),
+		profileId: text('profile_id')
+			.notNull()
+			.references(() => profile.id, { onDelete: 'cascade' }),
+		name: text('name').notNull(),
+		/** When it fires: on a cron schedule, once at `runAt`, or when its webhook URL is called. */
+		kind: text('kind', { enum: ['cron', 'once', 'webhook'] }).notNull(),
+		/** 5-field cron expression in the gateway's local time zone. */
+		cron: text('cron'),
+		runAt: integer('run_at', { mode: 'timestamp_ms' }),
+		webhookToken: text('webhook_token').unique(),
+		/** What it does: wake the agent with `prompt`, or run `command` without the model. */
+		action: text('action', { enum: ['agent', 'script'] }).notNull(),
+		prompt: text('prompt'),
+		command: text('command'),
+		presetId: text('preset_id').references(() => modelPreset.id, { onDelete: 'set null' }),
+		effort: text('effort', { enum: ['low', 'medium', 'high', 'xhigh', 'max'] })
+			.notNull()
+			.default('medium'),
+		enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+		/** The scheduler fires the trigger once this has passed. Null: nothing scheduled. */
+		nextRunAt: integer('next_run_at', { mode: 'timestamp_ms' }),
+		lastRunAt: integer('last_run_at', { mode: 'timestamp_ms' }),
+		createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull()
+	},
+	(table) => [
+		index('trigger_profileId_idx').on(table.profileId),
+		index('trigger_nextRunAt_idx').on(table.nextRunAt)
+	]
+);
+
+export const triggerRun = sqliteTable(
+	'trigger_run',
+	{
+		id: text('id').primaryKey(),
+		profileId: text('profile_id')
+			.notNull()
+			.references(() => profile.id, { onDelete: 'cascade' }),
+		/** Null for `btw wake` outside a trigger, or after the trigger was deleted. */
+		triggerId: text('trigger_id').references(() => trigger.id, { onDelete: 'set null' }),
+		/** The trigger's name at the time; titles the notification and the conversation. */
+		title: text('title').notNull(),
+		action: text('action', { enum: ['agent', 'script'] }).notNull(),
+		source: text('source', { enum: ['cron', 'once', 'webhook', 'wake', 'manual'] }).notNull(),
+		status: text('status', {
+			enum: ['pending', 'running', 'ok', 'notified', 'silent', 'stopped', 'failed']
+		}).notNull(),
+		/** Agent runs: what the agent is asked to do (the trigger's prompt or the `btw wake` text). */
+		prompt: text('prompt'),
+		/** The webhook request body, for runs started by a webhook. */
+		payload: text('payload'),
+		presetId: text('preset_id').references(() => modelPreset.id, { onDelete: 'set null' }),
+		effort: text('effort', { enum: ['low', 'medium', 'high', 'xhigh', 'max'] })
+			.notNull()
+			.default('medium'),
+		/** Agent runs: the hidden conversation the run happens in. */
+		conversationId: text('conversation_id').references(() => conversation.id, {
+			onDelete: 'set null'
+		}),
+		/** Script runs: the end of the command's output. Failed runs: what went wrong. */
+		output: text('output'),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull(),
+		startedAt: integer('started_at', { mode: 'timestamp_ms' }),
+		finishedAt: integer('finished_at', { mode: 'timestamp_ms' })
+	},
+	(table) => [
+		index('trigger_run_triggerId_idx').on(table.triggerId, table.createdAt),
+		index('trigger_run_status_idx').on(table.status),
+		index('trigger_run_conversationId_idx').on(table.conversationId)
+	]
+);
+
+export const notification = sqliteTable(
+	'notification',
+	{
+		id: text('id').primaryKey(),
+		profileId: text('profile_id')
+			.notNull()
+			.references(() => profile.id, { onDelete: 'cascade' }),
+		triggerId: text('trigger_id').references(() => trigger.id, { onDelete: 'set null' }),
+		/** The run's hidden conversation; "Continue in chat" makes it visible. */
+		conversationId: text('conversation_id').references(() => conversation.id, {
+			onDelete: 'set null'
+		}),
+		title: text('title').notNull(),
+		body: text('body').notNull(),
+		level: text('level', { enum: ['info', 'error'] })
+			.notNull()
+			.default('info'),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull()
+	},
+	(table) => [index('notification_profileId_idx').on(table.profileId, table.createdAt)]
+);
+
+/** Notifications are shared by the profile; each member can dismiss them for themselves. */
+export const notificationDismissal = sqliteTable(
+	'notification_dismissal',
+	{
+		notificationId: text('notification_id')
+			.notNull()
+			.references(() => notification.id, { onDelete: 'cascade' }),
+		userId: text('user_id')
+			.notNull()
+			.references(() => user.id, { onDelete: 'cascade' })
+	},
+	(table) => [primaryKey({ columns: [table.notificationId, table.userId] })]
+);
+
+/** When each user last opened the notification menu. Newer notifications count as unread. */
+export const notificationSeen = sqliteTable('notification_seen', {
+	userId: text('user_id')
+		.primaryKey()
+		.references(() => user.id, { onDelete: 'cascade' }),
+	seenAt: integer('seen_at', { mode: 'timestamp_ms' }).notNull()
+});

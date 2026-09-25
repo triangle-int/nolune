@@ -24,6 +24,7 @@ export {
 	addMember,
 	createProfile,
 	deleteProfile,
+	getProfile,
 	getProfileBySlug,
 	getProfileForUser,
 	isMember,
@@ -51,6 +52,7 @@ export {
 	getConversationForUser,
 	listConversations,
 	setEffort,
+	setHidden,
 	type Conversation,
 	type DisplayBlock,
 	type DisplayMessage,
@@ -60,6 +62,7 @@ export {
 	getSnapshot,
 	isRunning,
 	kick,
+	onLoopEnd,
 	recoverAfterRestart,
 	sendMessage,
 	stop,
@@ -72,3 +75,45 @@ export { EFFORTS, type Effort } from './anthropic.ts';
 export { createSkill, isValidSkillName, scanSkills, type Skill } from './skills.ts';
 export { buildSystemPrompt } from './prompt.ts';
 export { installCliShim } from './shim.ts';
+export {
+	SILENT_REPLY,
+	createTrigger,
+	deleteTrigger,
+	describeWhen,
+	findTrigger,
+	formatLocalTime,
+	getTrigger,
+	isFinished,
+	listRuns,
+	listTriggers,
+	parseRunAt,
+	queueRun,
+	queueWake,
+	resolvePreset,
+	setTriggerEnabled,
+	updateTrigger,
+	webhookUrl,
+	type RunSource,
+	type RunStatus,
+	type Trigger,
+	type TriggerRun,
+	type TriggerWhat,
+	type TriggerWhen
+} from './triggers.ts';
+export {
+	continueNotification,
+	dismissAllNotifications,
+	dismissNotification,
+	listNotificationsForUser,
+	markNotificationsSeen,
+	onNotificationsChanged,
+	type Notification,
+	type NotificationItem
+} from './notifications.ts';
+export {
+	MAX_PAYLOAD_BYTES,
+	fireWebhook,
+	processQueue,
+	runTriggerNow,
+	startScheduler
+} from './scheduler.ts';

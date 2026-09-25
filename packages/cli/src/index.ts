@@ -29,6 +29,7 @@ import {
 	updateConfig
 } from '@btw/core';
 import { ask, askHidden } from './input.ts';
+import { TRIGGER_HELP, triggerCommand, wakeCommand } from './triggers.ts';
 import {
 	installService,
 	logFile,
@@ -69,6 +70,8 @@ Profiles and skills
   btw profile list
   btw skill new <name> [--description D] [--profile SLUG | --global]
   btw skill list [--profile SLUG]
+
+${TRIGGER_HELP}
 
 Inside agent commands BTW_PROFILE is set, so --profile can be left out.`;
 
@@ -461,6 +464,14 @@ async function main(argv: string[]): Promise<void> {
 			} else fail('usage: btw skill new|list');
 			return;
 		}
+
+		case 'trigger':
+			requireInit();
+			return triggerCommand(action, rest);
+
+		case 'wake':
+			requireInit();
+			return wakeCommand(argv.slice(1));
 
 		default:
 			fail(`unknown command "${group}". See \`btw help\`.`);
