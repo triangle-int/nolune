@@ -4,7 +4,8 @@
 	"version": "0.0.1",
 	"type": "module",
 	"exports": {
-		".": "./src/index.ts"
+		".": "./src/index.ts",
+		"./usage": "./src/usage.ts"
 	},
 	"scripts": {
 		"check": "tsc -p ."

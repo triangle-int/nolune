@@ -24,6 +24,7 @@ import { profile } from './db/schema.ts';
 import { eq } from 'drizzle-orm';
 import { profileDir } from './paths.ts';
 import { RUN_COMMAND_TOOL, commandEnv, parseRunCommandInput, runCommand } from './run-command.ts';
+import { cacheHitRate } from './usage.ts';
 
 export interface LiveBlock {
 	type: 'text' | 'thinking' | 'tool';
@@ -290,7 +291,7 @@ async function loop(conversationId: string): Promise<void> {
 
 			const usage = summarizeUsage(reply.usage);
 			console.log(
-				`[btw] ${conversationId.slice(0, 8)} ${conv.model} in=${usage.input} cache_read=${usage.cacheRead} cache_write=${usage.cacheWrite} out=${usage.output} stop=${reply.stop_reason}`
+				`[btw] ${conversationId.slice(0, 8)} ${conv.model} in=${usage.input} cache_read=${usage.cacheRead} cache_write=${usage.cacheWrite} hit=${Math.floor(cacheHitRate(usage) * 100)}% out=${usage.output} stop=${reply.stop_reason}`
 			);
 			const assistantRow = appendRow({
 				conversationId,

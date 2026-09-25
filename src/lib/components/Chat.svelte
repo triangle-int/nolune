@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { invalidate } from '$app/navigation';
-	import type { DisplayBlock, LiveBlock } from '@btw/core';
+	import type { DisplayBlock, LiveBlock, Usage } from '@btw/core';
+	import { CACHE_TTL_MS, cacheHitRate, cacheMissTokens, promptTokens } from '@btw/core/usage';
 	import { ChatState } from '$lib/chat.svelte';
-	import { formatTokens } from '$lib/format';
+	import { formatPercent, formatTokens } from '$lib/format';
 
 	interface Props {
 		conversation: {
@@ -36,15 +37,58 @@
 			'New conversation'
 	);
 
-	const contextUsed = $derived.by(() => {
-		for (let i = chat.messages.length - 1; i >= 0; i--) {
-			const m = chat.messages[i];
-			if (m.kind === 'assistant' && m.usage) {
-				return m.usage.input + m.usage.cacheRead + m.usage.cacheWrite + m.usage.output;
-			}
+	/** Usage of the last reply, and summed over the whole conversation. */
+	const usage = $derived.by(() => {
+		let last: Usage | null = null;
+		const total: Usage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
+		for (const m of chat.messages) {
+			if (m.kind !== 'assistant' || !m.usage) continue;
+			last = m.usage;
+			total.input += m.usage.input;
+			total.cacheRead += m.usage.cacheRead;
+			total.cacheWrite += m.usage.cacheWrite;
+			total.output += m.usage.output;
 		}
-		return null;
+		return last && { last, total };
 	});
+
+	const contextUsed = $derived(usage && promptTokens(usage.last) + usage.last.output);
+
+	/**
+	 * Replies whose request processed again what the previous request had cached, keyed by id.
+	 * `expired`: the conversation sat idle past the cache's lifetime before that request.
+	 */
+	const cacheMisses = $derived.by(() => {
+		const misses: Record<number, { tokens: number; expired: boolean }> = {};
+		let previous: { usage: Usage; at: number } | null = null;
+		// When the rows that led to the next request (a message, command output) arrived.
+		let resumedAt = 0;
+		for (const m of chat.messages) {
+			if (m.kind !== 'assistant') {
+				resumedAt = Math.max(resumedAt, m.createdAt);
+				continue;
+			}
+			if (!m.usage) continue;
+			if (previous) {
+				const tokens = cacheMissTokens(previous.usage, m.usage);
+				const expired = resumedAt - previous.at > CACHE_TTL_MS;
+				if (tokens > 0) misses[m.id] = { tokens, expired };
+			}
+			previous = { usage: m.usage, at: m.createdAt };
+			resumedAt = 0;
+		}
+		return misses;
+	});
+
+	function cacheSummary(label: string, u: Usage): string {
+		return `${label}: ${formatPercent(cacheHitRate(u))} cached (${formatTokens(u.cacheRead)} read, ${formatTokens(u.cacheWrite)} written, ${formatTokens(u.input)} uncached)`;
+	}
+
+	function missReason(miss: { expired: boolean }): string {
+		return miss.expired
+			? 'Over an hour passed since the previous step, so the cached conversation expired and was processed again (slower and costlier).'
+			: 'Context that should have come from the cache was processed again (slower and costlier). Changing the reasoning level causes this once.';
+	}
 
 	const unanswered = $derived(
 		!chat.running &&
@@ -163,9 +207,19 @@
 	<header class="flex items-center gap-3 border-b border-stone-200 bg-white px-4 py-2 text-sm">
 		<h1 class="min-w-0 flex-1 truncate font-medium">{title}</h1>
 		<span class="hidden text-stone-500 sm:inline">{conversation.presetName}</span>
-		{#if contextUsed !== null}
+		{#if usage}
 			<span class="text-stone-400" title="Context used by the last reply">
 				{formatTokens(contextUsed)} / {formatTokens(conversation.contextWindow)}
+			</span>
+			<span
+				class="hidden text-stone-400 sm:inline"
+				title={[
+					'Prompt cache',
+					cacheSummary('Last reply', usage.last),
+					cacheSummary('Whole conversation', usage.total)
+				].join('\n')}
+			>
+				{formatPercent(cacheHitRate(usage.last))} cached
 			</span>
 		{/if}
 		<label
@@ -232,12 +286,18 @@
 						<div class="whitespace-pre-wrap text-stone-700">{message.text}</div>
 					</div>
 				{:else if message.kind === 'assistant'}
+					{@const miss = cacheMisses[message.id]}
 					<div class="space-y-2">
 						{@render blocks(message.blocks)}
 						{#if message.stopReason === 'max_tokens'}
 							<p class="text-sm text-amber-700">The reply was cut off because it got too long.</p>
 						{:else if message.stopReason === 'refusal'}
 							<p class="text-sm text-amber-700">The model declined to continue this request.</p>
+						{/if}
+						{#if miss}
+							<p class="text-xs text-amber-700" title={missReason(miss)}>
+								Cache miss · {formatTokens(miss.tokens)} tokens processed again
+							</p>
 						{/if}
 					</div>
 				{/if}
