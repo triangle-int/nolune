@@ -57,7 +57,10 @@ The rule: **the request prefix must stay byte-identical, so history is only ever
 - Steering messages, stop results and restart-recovery results are **appended** as new rows. Nothing
   is ever edited or deleted. Opus 5.5 and Fable 5.1 require this anyway for "preserved thinking":
   replaying a thinking block after its prefix changed returns a 400 on newer accounts.
-- Every assistant row stores `usage`, and the gateway logs `cache_read` / `cache_write` for every call.
+- Every assistant row stores `usage`, and the gateway logs `cache_read` / `cache_write` and the hit
+  rate for every call. The chat header shows the hit rate (tooltip: last reply and whole conversation),
+  and a reply is marked as a cache miss when it read less than the previous call read or wrote, with
+  the likely cause: over an hour idle (the TTL) or a changed request such as a new reasoning level.
 
 ## Agent loop
 
