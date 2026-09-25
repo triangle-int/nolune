@@ -111,7 +111,9 @@ into conversations.
   a prompt for the agent, or a shell command that runs without the model. Script triggers make
   polling cheap: the script checks the email, the price or the page, and runs
   `btw wake "<what happened>"` only when the agent is needed.
-- **Who sets them up:** the agent, with `btw trigger add` (the system prompt explains how). Members
+- **Who sets them up:** the agent, with the `btw trigger` command. There is no new tool: the system
+  prompt only says the command exists and to read `btw trigger help` first, so the details cost
+  context only when an automation is being set up. Members
   see, edit, run, pause and delete them on the profile's Automations page. There is no create form.
 - **Runs.** Every firing (schedule, webhook, `btw wake`, Run now) inserts a `pending` row in
   `trigger_run`. The gateway's scheduler ticks every 5 s: it fires triggers whose `nextRunAt` has
