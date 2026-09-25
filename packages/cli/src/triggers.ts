@@ -29,7 +29,6 @@ import {
 } from '@btw/core';
 
 export const TRIGGER_HELP = `Automations (results show up as notifications in the web UI)
-  btw trigger help                           how triggers work (read before adding one)
   btw trigger add <name> WHEN WHAT [--preset NAME] [--effort LEVEL] [--profile SLUG]
       WHEN: --cron "<min hour day month weekday>" (local time) | --at "YYYY-MM-DD HH:MM"
             | --in 30m|2h|1d | --webhook
@@ -39,32 +38,6 @@ export const TRIGGER_HELP = `Automations (results show up as notifications in th
   btw trigger edit <name|id> [--name N] [WHEN] [WHAT] [--preset NAME] [--effort LEVEL]
   btw wake <message> [--title T] [--profile SLUG]
       start a background agent run now; trigger scripts call this (\`btw wake -\` reads stdin)`;
-
-/** Read by the agent on demand (the system prompt only points here), so it stays out of every conversation. */
-const TRIGGER_GUIDE = `${TRIGGER_HELP}
-
-How triggers work
-  A trigger runs the agent in the background, in a new conversation that starts with an
-  "[Automation ...]" message. Nobody watches it: its final reply becomes a notification for
-  everyone in the profile, who can open it to continue the conversation.
-
-  - The --prompt is all a run gets; it doesn't see the conversation that created it. Make it
-    self-contained: who asked, what to do, and when there is nothing worth reporting (the run
-    then stays silent).
-  - Times are in this computer's time zone. --cron has 5 fields: minute hour day month weekday.
-  - --webhook prints a secret URL that other services can POST JSON to; the body is added to
-    the prompt.
-  - For frequent checks (new email, a price, a web page changing), use --script instead of
-    --prompt: the command runs on the schedule without the model, which costs nothing, and calls
-    \`btw wake "<what happened and what to do>"\` when the agent is needed. Put the script in a
-    file in the profile folder, keep its state (like what it has already seen) in files next to
-    it, and run it by hand once before adding the trigger. Scripts run in the profile folder
-    with BTW_PROFILE, BTW_TRIGGER_ID and, for webhooks, BTW_PAYLOAD set, and time out after
-    10 minutes.
-  - Runs use the current conversation's model unless --preset is given, with reasoning medium
-    unless --effort is given.
-  - Members see, edit, run, pause and delete triggers on the profile's Automations page.
-  - Tell the person what you set up in plain words, like "every weekday at 8:00".`;
 
 const OPTIONS = {
 	cron: { type: 'string' },
@@ -159,7 +132,7 @@ export function triggerCommand(action: string | undefined, args: string[]): void
 	switch (action) {
 		case undefined:
 		case 'help':
-			console.log(TRIGGER_GUIDE);
+			console.log(TRIGGER_HELP);
 			return;
 
 		case 'add': {

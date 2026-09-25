@@ -8,7 +8,7 @@ export interface Skill {
 	description: string;
 	/** Absolute path to SKILL.md. */
 	location: string;
-	scope: 'profile' | 'global';
+	scope: 'profile' | 'global' | 'builtin';
 }
 
 const SKIP_DIRS = new Set(['.git', 'node_modules']);
@@ -79,22 +79,34 @@ function scanDir(
 	}
 }
 
-/** Profile skills override global ones with the same name. Sorted by name for a stable prompt. */
+/**
+ * Profile skills override global ones with the same name, and both override the skills that ship
+ * with btw. Sorted by name for a stable prompt.
+ */
 export function scanSkills(profileSkillsDir: string): { skills: Skill[]; warnings: string[] } {
 	const warnings: string[] = [];
 	const profileSkills: Skill[] = [];
 	const globalSkills: Skill[] = [];
+	const builtinSkills: Skill[] = [];
 	scanDir(profileSkillsDir, 'profile', profileSkills, warnings);
 	scanDir(paths.globalSkills, 'global', globalSkills, warnings);
+	scanDir(paths.builtinSkills, 'builtin', builtinSkills, warnings);
 
-	const byName = new Map<string, Skill>();
+	const byName = new Map<string, Skill>(builtinSkills.map((skill) => [skill.name, skill]));
 	for (const skill of globalSkills) {
-		if (byName.has(skill.name)) warnings.push(`duplicate global skill "${skill.name}"`);
-		else byName.set(skill.name, skill);
+		const existing = byName.get(skill.name);
+		if (existing?.scope === 'global') {
+			warnings.push(`duplicate global skill "${skill.name}"`);
+			continue;
+		}
+		if (existing) warnings.push(`global skill "${skill.name}" shadows the built-in one`);
+		byName.set(skill.name, skill);
 	}
 	for (const skill of profileSkills) {
-		if (byName.get(skill.name)?.scope === 'global') {
-			warnings.push(`profile skill "${skill.name}" shadows the global one`);
+		const shadowed = byName.get(skill.name)?.scope;
+		if (shadowed === 'global' || shadowed === 'builtin') {
+			const label = shadowed === 'builtin' ? 'built-in' : 'global';
+			warnings.push(`profile skill "${skill.name}" shadows the ${label} one`);
 		}
 		byName.set(skill.name, skill);
 	}
