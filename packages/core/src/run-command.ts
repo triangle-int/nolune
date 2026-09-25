@@ -157,6 +157,8 @@ export interface RunCommandResult {
 	/** Text sent back to the model. */
 	content: string;
 	isError: boolean;
+	/** Null when the command didn't exit by itself (not started, timed out, stopped, killed). */
+	exitCode: number | null;
 }
 
 export function runCommand(
@@ -172,7 +174,11 @@ export function runCommand(
 ): Promise<RunCommandResult> {
 	const cwd = resolveCwd(input.cwd, options.defaultCwd);
 	if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
-		return Promise.resolve({ content: `Working folder does not exist: ${cwd}`, isError: true });
+		return Promise.resolve({
+			content: `Working folder does not exist: ${cwd}`,
+			isError: true,
+			exitCode: null
+		});
 	}
 	const timeoutSeconds = Math.min(
 		input.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS,
@@ -245,7 +251,7 @@ export function runCommand(
 			} else {
 				text += sig ? `\n[killed by ${sig}]` : `\n[exit code ${code}]`;
 			}
-			done({ content: text, isError });
+			done({ content: text, isError, exitCode: ended || spawnError || sig ? null : code });
 		};
 
 		child.on('error', (err) => finish(null, null, err));

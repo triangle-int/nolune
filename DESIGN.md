@@ -26,7 +26,8 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 ```
 ~/.btw-agent/                 (override with BTW_HOME)
   config.json                 auth secret, Anthropic key, extra env vars for commands (mode 600)
-  btw.db                      SQLite: users, sessions, profiles, presets, conversations, messages
+  btw.db                      SQLite: users, sessions, profiles, presets, conversations, messages,
+                              triggers, trigger runs, notifications
   bin/btw                     shim so the agent can run `btw` from any command
   profiles/<slug>/            default working folder for commands in this profile
     MEMORY.md
@@ -99,13 +100,55 @@ kick(conversation):                     one loop per conversation at a time
 - `eager_input_streaming` is left off: the input is one short command, and leaving it off keeps the API's
   own input validation.
 
+## Automations
+
+Triggers run the agent without anyone sending a message. What they find goes to notifications, not
+into conversations.
+
+- **Trigger** (per profile). _When_: a 5-field cron expression in the gateway's local time zone, a
+  one-time `runAt`, or a webhook: `POST /api/hooks/<secret token>` with a JSON body (64 KB max;
+  SvelteKit's cross-site check refuses form-encoded and text/plain bodies in production). _What_:
+  a prompt for the agent, or a shell command that runs without the model. Script triggers make
+  polling cheap: the script checks the email, the price or the page, and runs
+  `btw wake "<what happened>"` only when the agent is needed.
+- **Who sets them up:** the agent, with `btw trigger add` (the system prompt explains how). Members
+  see, edit, run, pause and delete them on the profile's Automations page. There is no create form.
+- **Runs.** Every firing (schedule, webhook, `btw wake`, Run now) inserts a `pending` row in
+  `trigger_run`. The gateway's scheduler ticks every 5 s: it fires triggers whose `nextRunAt` has
+  passed and starts pending runs. The CLI only writes rows, so `btw wake` from a script is picked up
+  within a tick. At most 3 agent runs go at once, a script trigger runs one at a time, and a
+  scheduled firing is skipped while the trigger's previous run of the same kind is unfinished.
+- **Missed firings** (Mac asleep, gateway down) collapse into one catch-up run, because the next time
+  is computed from when the trigger actually fired.
+- **Agent runs** happen in a hidden conversation (`conversation.hidden`) through the normal runner.
+  Its first row has kind `trigger`: the model sees `[Automation "<name>" · <why> · <time>]`, the
+  prompt, the webhook body, and instructions to keep the final reply short or answer only
+  `NO_NOTIFICATION`. The system prompt is the ordinary one, so runs share the profile's cached prefix.
+- **Finishing.** When a run's loop ends (`onLoopEnd`): an API error becomes an error notification, a
+  final reply becomes a notification with that text, `NO_NOTIFICATION` on the last line (or no text)
+  is recorded as `silent`, and a run someone stopped is `stopped`. None of these notify twice.
+- **Script runs** execute like `run_command` (login shell, profile folder, the same environment plus
+  `BTW_TRIGGER_ID` and `BTW_PAYLOAD`) with a 10-minute timeout, keeping the last 4 KB of output. A
+  failing script notifies once, when it starts failing, not on every run.
+- **Notifications** belong to the profile, like conversations. Dismissing is per person
+  (`notification_dismissal`), and unread means newer than when that person last opened the menu
+  (`notification_seen`). The bell listens on `/api/notifications/events` (SSE) and reloads on change.
+- **Continue in chat** unhides the run's conversation, which moves into the sidebar with its whole
+  transcript; sending a message into a hidden run does the same. A notification without a
+  conversation (script failures, or the run was deleted) starts a new conversation whose first
+  reply is the notification text.
+- **After a restart**, agent runs that were in progress continue (the interrupted command gets the
+  usual "restarted" result) and script runs in progress are marked failed.
+- **Retention:** finished runs, notifications and hidden conversations are deleted after 30 days, and
+  only the last 100 runs of each trigger are kept.
+
 ## Code layout
 
 ```
 packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_command, Anthropic call,
-                runner, users/profiles/presets. Plain TypeScript run by Node with type stripping
+                runner, users/profiles/presets, triggers, scheduler, notifications. Plain TypeScript run by Node with type stripping
                 (no enums or parameter properties; imports use .ts extensions).
-packages/cli    btw: setup, start, service, config, key, env, user, preset, profile, skill
+packages/cli    btw: setup, start, service, config, key, env, user, preset, profile, skill, trigger, wake
 src/            SvelteKit gateway (adapter-node). @btw/core is bundled into the server build.
 scripts/        build-cli.mjs bundles the CLI and core into dist/cli.js with esbuild.
 ```
@@ -143,3 +186,5 @@ Published to npm as `btw-agent` (not yet). `npm install -g btw-agent` gives the 
 - Other providers (OpenRouter, ChatGPT). Each will get its own adapter and keep history in its own format.
 - Smart approval mode.
 - Refusal fallbacks (`fallbacks: "default"`) for models that support them. Refusals are shown in the UI today.
+- Push notifications (Web Push) for the bell. Today it only updates while a page is open.
+- A `btw notify` command for scripts that only need to say something, without waking the agent.

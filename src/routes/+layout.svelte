@@ -2,6 +2,7 @@
 	import './layout.css';
 	import favicon from '$lib/assets/favicon.svg';
 	import { resolve } from '$app/paths';
+	import Notifications from '$lib/components/Notifications.svelte';
 
 	let { data, children } = $props();
 </script>
@@ -16,6 +17,9 @@
 		<header class="flex h-12 shrink-0 items-center gap-4 border-b border-stone-200 bg-white px-4">
 			<a href={resolve('/')} class="font-semibold tracking-tight">btw</a>
 			<div class="ml-auto flex items-center gap-4 text-sm text-stone-600">
+				{#if data.notifications}
+					<Notifications items={data.notifications.items} seenAt={data.notifications.seenAt} />
+				{/if}
 				{#if data.user.isAdmin}
 					<a href={resolve('/admin')} class="hover:text-stone-900">Models</a>
 				{/if}

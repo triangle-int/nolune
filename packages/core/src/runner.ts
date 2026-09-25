@@ -11,6 +11,7 @@ import {
 	lastCommittedRow,
 	listAllConversationIds,
 	queuedRows,
+	setHidden,
 	summarizeUsage,
 	toDisplay,
 	toMessageParam,
@@ -60,8 +61,20 @@ interface State {
 
 const LIVE_OUTPUT_LIMIT = 100_000;
 
-const holder = globalThis as unknown as { __btwRunner?: Map<string, State> };
+const holder = globalThis as unknown as {
+	__btwRunner?: Map<string, State>;
+	__btwLoopEnd?: Set<LoopEndListener>;
+};
 const states = (holder.__btwRunner ??= new Map());
+
+/** Called whenever a conversation's agent loop stops, with the error if a model call failed. */
+export type LoopEndListener = (conversationId: string, error: string | null) => void;
+const loopEndListeners = (holder.__btwLoopEnd ??= new Set());
+
+export function onLoopEnd(listener: LoopEndListener): () => void {
+	loopEndListeners.add(listener);
+	return () => loopEndListeners.delete(listener);
+}
 
 function stateFor(conversationId: string): State {
 	let st = states.get(conversationId);
@@ -153,6 +166,8 @@ export function sendMessage(
 	if (!trimmed) throw new Error('Message is empty');
 	const conv = getConversation(conversationId);
 	if (!conv) throw new Error('No such conversation');
+	// Writing into a background run turns it into a normal conversation.
+	if (conv.hidden) setHidden(conversationId, false);
 	insertQueued({ conversationId, senderId: sender.id, senderName: sender.name, text: trimmed });
 	touchConversation(conversationId, conv.title ? undefined : trimmed.slice(0, 80));
 	emitQueued(conversationId);
@@ -314,6 +329,13 @@ async function loop(conversationId: string): Promise<void> {
 		st.live = [];
 		st.toolOutput = null;
 		emit(conversationId, { type: 'status', running: false, error: st.error });
+		for (const listener of loopEndListeners) {
+			try {
+				listener(conversationId, st.error);
+			} catch (err) {
+				console.error(`[btw] loop-end listener failed for ${conversationId}:`, err);
+			}
+		}
 	}
 }
 

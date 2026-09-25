@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type Anthropic from '@anthropic-ai/sdk';
-import { and, desc, eq, isNotNull, isNull, max } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull, lt, max } from 'drizzle-orm';
 import type { Effort } from './anthropic.ts';
 import { getDb } from './db/index.ts';
-import { conversation, message, profile, profileMember } from './db/schema.ts';
+import { conversation, message, profile, profileMember, triggerRun } from './db/schema.ts';
 import { buildSystemPrompt } from './prompt.ts';
 import { effectiveContextWindow, getPreset } from './presets.ts';
 import type { Profile } from './profiles.ts';
@@ -34,6 +34,14 @@ export type DisplayMessage =
 	  }
 	| {
 			id: number;
+			kind: 'trigger';
+			/** The trigger's name. */
+			title: string;
+			text: string;
+			createdAt: number;
+	  }
+	| {
+			id: number;
 			kind: 'assistant';
 			blocks: DisplayBlock[];
 			stopReason: string | null;
@@ -50,8 +58,11 @@ export type DisplayMessage =
 export function createConversation(input: {
 	profile: Profile;
 	presetId: string;
-	userId: string;
+	/** Null for background runs, which no person started. */
+	userId: string | null;
 	effort?: Effort;
+	title?: string;
+	hidden?: boolean;
 }): Conversation {
 	const preset = getPreset(input.presetId);
 	if (!preset) throw new Error('Unknown model preset');
@@ -59,7 +70,7 @@ export function createConversation(input: {
 	const created: Conversation = {
 		id: randomUUID(),
 		profileId: input.profile.id,
-		title: '',
+		title: input.title ?? '',
 		presetId: preset.id,
 		presetName: preset.name,
 		provider: preset.provider,
@@ -67,6 +78,7 @@ export function createConversation(input: {
 		contextWindow: effectiveContextWindow(preset),
 		effort: input.effort ?? 'medium',
 		systemPrompt: buildSystemPrompt(input.profile.slug),
+		hidden: input.hidden ?? false,
 		createdBy: input.userId,
 		createdAt: now,
 		updatedAt: now
@@ -84,7 +96,7 @@ export function listConversations(profileId: string) {
 			updatedAt: conversation.updatedAt
 		})
 		.from(conversation)
-		.where(eq(conversation.profileId, profileId))
+		.where(and(eq(conversation.profileId, profileId), eq(conversation.hidden, false)))
 		.orderBy(desc(conversation.updatedAt))
 		.all();
 }
@@ -120,8 +132,28 @@ export function setEffort(id: string, effort: Effort): void {
 	getDb().update(conversation).set({ effort }).where(eq(conversation.id, id)).run();
 }
 
+/** A background run becomes a normal conversation once someone continues it. */
+export function setHidden(id: string, hidden: boolean): void {
+	getDb().update(conversation).set({ hidden }).where(eq(conversation.id, id)).run();
+}
+
+/** Background runs nobody continued, last active before `before`. */
+export function deleteHiddenConversations(before: Date): void {
+	getDb()
+		.delete(conversation)
+		.where(and(eq(conversation.hidden, true), lt(conversation.updatedAt, before)))
+		.run();
+}
+
 export function deleteConversation(id: string): void {
-	getDb().delete(conversation).where(eq(conversation.id, id)).run();
+	getDb().transaction((tx) => {
+		// A background run deleted mid-way never reaches its end, so it's settled here.
+		tx.update(triggerRun)
+			.set({ status: 'stopped', finishedAt: new Date() })
+			.where(and(eq(triggerRun.conversationId, id), eq(triggerRun.status, 'running')))
+			.run();
+		tx.delete(conversation).where(eq(conversation.id, id)).run();
+	});
 }
 
 export function touchConversation(id: string, title?: string): void {
@@ -213,8 +245,11 @@ export function commitQueuedRows(conversationId: string): MessageRow[] {
 export function appendRow(input: {
 	conversationId: string;
 	role: 'user' | 'assistant';
-	kind: 'tool_results' | 'assistant';
+	kind: 'trigger' | 'tool_results' | 'assistant';
 	content: string;
+	/** Trigger rows: the trigger's name and prompt, for display. */
+	senderName?: string;
+	text?: string;
 	stopReason?: string | null;
 	usage?: Usage | null;
 }): MessageRow {
@@ -226,6 +261,8 @@ export function appendRow(input: {
 				seq: nextSeq(input.conversationId),
 				role: input.role,
 				kind: input.kind,
+				senderName: input.senderName ?? null,
+				text: input.text ?? null,
 				content: input.content,
 				stopReason: input.stopReason ?? null,
 				usage: input.usage ? JSON.stringify(input.usage) : null,
@@ -255,8 +292,26 @@ function toolResultText(content: Anthropic.ToolResultBlockParam['content']): str
 	return (content ?? []).map((b) => (b.type === 'text' ? b.text : `[${b.type}]`)).join('\n');
 }
 
+/** The text blocks of an assistant row: what the agent said, without thinking or commands. */
+export function replyText(row: MessageRow): string {
+	const content = JSON.parse(row.content) as Anthropic.ContentBlock[];
+	return content
+		.flatMap((b) => (b.type === 'text' ? [b.text] : []))
+		.join('\n\n')
+		.trim();
+}
+
 export function toDisplay(row: MessageRow): DisplayMessage {
 	const createdAt = row.createdAt.getTime();
+	if (row.kind === 'trigger') {
+		return {
+			id: row.id,
+			kind: 'trigger',
+			title: row.senderName ?? 'Automation',
+			text: row.text ?? '',
+			createdAt
+		};
+	}
 	if (row.kind === 'human') {
 		return {
 			id: row.id,

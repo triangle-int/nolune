@@ -63,6 +63,10 @@ export function listProfilesForUser(userId: string): Profile[] {
 		.map((row) => row.profile);
 }
 
+export function getProfile(id: string): Profile | undefined {
+	return getDb().select().from(profile).where(eq(profile.id, id)).get();
+}
+
 export function getProfileBySlug(slug: string): Profile | undefined {
 	return getDb().select().from(profile).where(eq(profile.slug, slug)).get();
 }

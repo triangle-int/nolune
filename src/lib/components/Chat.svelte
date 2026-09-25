@@ -11,6 +11,8 @@
 			presetName: string;
 			effort: string;
 			contextWindow: number | null;
+			/** A background run nobody has continued yet. */
+			hidden: boolean;
 		};
 		efforts: string[];
 		me: string;
@@ -23,6 +25,8 @@
 	let sending = $state(false);
 	let actionError = $state<string | null>(null);
 	let stickToBottom = $state(true);
+	/** Sending a message turns a background run into a normal conversation. */
+	let continued = $state(false);
 
 	$effect(() => chat.connect(conversation.id));
 
@@ -85,6 +89,7 @@
 		stickToBottom = true;
 		if (await post('messages', { text: message })) {
 			text = '';
+			continued = true;
 			invalidate('btw:conversations');
 		}
 		sending = false;
@@ -190,6 +195,13 @@
 		</form>
 	</header>
 
+	{#if conversation.hidden && !continued}
+		<p class="border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-sm text-amber-800">
+			A background run from an automation. It isn't in your conversation list; sending a message
+			adds it there.
+		</p>
+	{/if}
+
 	<div {@attach autoscroll} onscroll={onScroll} class="min-h-0 flex-1 overflow-y-auto">
 		<div class="mx-auto max-w-3xl space-y-4 px-4 py-6">
 			{#if !chat.loaded}
@@ -213,6 +225,11 @@
 							{/if}
 							<div class="whitespace-pre-wrap">{message.text}</div>
 						</div>
+					</div>
+				{:else if message.kind === 'trigger'}
+					<div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm">
+						<div class="text-xs font-medium text-amber-800">Automation · {message.title}</div>
+						<div class="whitespace-pre-wrap text-stone-700">{message.text}</div>
 					</div>
 				{:else if message.kind === 'assistant'}
 					<div class="space-y-2">
