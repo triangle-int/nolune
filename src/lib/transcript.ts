@@ -1,5 +1,5 @@
 import type { DisplayMessage, LiveBlock, Usage } from '@btw/core';
-import { partialCommand } from './commands';
+import { partialToolInput } from './commands';
 
 /**
  * Turns the stored rows into what the chat shows: people's messages, and btw's replies as a run
@@ -14,7 +14,16 @@ export interface ToolResult {
 
 export type Step =
 	| { type: 'thinking'; text: string }
-	| { type: 'command'; id: string; command: string | null; cwd?: string };
+	| {
+			type: 'command';
+			id: string;
+			command: string | null;
+			cwd?: string;
+			/** What the model said the command does, in plain words. */
+			summary: string | null;
+			/** Lucide icon name the model picked. */
+			icon: string | null;
+	  };
 
 export interface TextPart {
 	type: 'text';
@@ -128,7 +137,14 @@ export function buildTranscript(
 				else
 					addStep(
 						r,
-						{ type: 'command', id: block.id, command: block.command, cwd: block.cwd },
+						{
+							type: 'command',
+							id: block.id,
+							command: block.command,
+							cwd: block.cwd,
+							summary: block.summary ?? null,
+							icon: block.icon ?? null
+						},
 						message.createdAt
 					);
 			}
@@ -149,7 +165,7 @@ export function buildTranscript(
 			if (block.type === 'text') addText(r, block.text);
 			else if (block.type === 'thinking') addStep(r, { type: 'thinking', text: block.text }, now);
 			else if (block.id)
-				addStep(r, { type: 'command', id: block.id, command: partialCommand(block.text) }, now);
+				addStep(r, { type: 'command', id: block.id, ...partialToolInput(block.text) }, now);
 		}
 		r.live = running;
 	}

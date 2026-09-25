@@ -1,7 +1,7 @@
 <script lang="ts">
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import * as Collapsible from '$lib/components/ui/collapsible';
-	import { describeCommand, firstLine } from '$lib/commands';
+	import { firstLine } from '$lib/commands';
 	import { getPreferences } from '$lib/preferences.svelte';
 	import {
 		formatDuration,
@@ -46,7 +46,7 @@
 			const last = part.steps.at(-1);
 			if (last?.type === 'command' && !results[last.id]) {
 				if (prefs.technical && last.command) return `Running ${firstLine(last.command, 80)}`;
-				return describeCommand(last.command).label;
+				return last.summary ?? 'Running a command';
 			}
 			return 'Thinking';
 		}
@@ -87,7 +87,7 @@
 						class="absolute top-0.5 -left-7 flex size-5 items-center justify-center bg-background text-muted-foreground"
 					>
 						{#if step.type === 'command'}
-							<StepIcon icon={describeCommand(step.command).icon} class="size-3.5" />
+							<StepIcon name={step.icon} class="size-3.5" />
 						{:else}
 							<span class="size-1.5 rounded-full bg-muted-foreground/60"></span>
 						{/if}
@@ -102,6 +102,7 @@
 						<CommandStep
 							command={step.command}
 							cwd={step.cwd}
+							summary={step.summary}
 							result={results[step.id]}
 							liveOutput={toolOutput?.id === step.id ? toolOutput.text : null}
 							{running}

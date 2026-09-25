@@ -44,7 +44,8 @@ only its display name, so the skill paths already in system prompts stay valid.
 The rule: **the request prefix must stay byte-identical, so history is only ever appended to.**
 
 - Order of the request: `tools` (just `run_command`, a constant) → `system` (the conversation's saved
-  copy) → `messages`.
+  copy) → `messages`. Editing the tool definition therefore costs every conversation one cache
+  miss after the upgrade (adding `summary` and `icon` did).
 - Each assistant response is stored as the exact `content` JSON the API returned, thinking blocks and
   their signatures included, and is sent back unchanged. Messages are never rebuilt from normalized
   columns. Command output is truncated once, when the tool result is created, and never later.
@@ -90,8 +91,12 @@ kick(conversation):                     one loop per conversation at a time
 
 ### `run_command`
 
-- Input: `{command, cwd?, timeout_seconds?}`. Runs as `$SHELL -lc <command>`, so every call starts a
-  fresh login shell and `cd` doesn't carry over between calls.
+- Input: `{summary, icon, command, cwd?, timeout_seconds?}`. Runs as `$SHELL -lc <command>`, so every
+  call starts a fresh login shell and `cd` doesn't carry over between calls.
+- `summary` (what the command does, in plain words and the conversation's language) and `icon` (a
+  Lucide icon name) are only for the web UI, which shows them instead of the command. They come
+  first in the schema so they stream in before the command. Required in the schema so the model
+  always writes them, but a call without them still runs.
 - Default timeout 120 s, maximum 1800 s. On timeout or Stop, the whole process group is killed.
   Background processes that a command detaches keep running.
 - No stdin. `TERM=dumb`, `NO_COLOR=1`, `PAGER=cat`.
@@ -160,9 +165,11 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   Markdown (`marked` + DOMPurify), and every run of thinking and commands between two texts is one
   collapsible group, "Worked for 12s" when done and a live "Thinking" / current step while running.
   Durations come from row timestamps, so they're approximate.
-- **Steps** get plain-language labels guessed from the command (`src/lib/commands.ts`): "Reading
-  notes.txt", "Visiting wttr.in", "Setting up an automation". Opening a step shows the command and
-  its output.
+- **Steps** show the `summary` and `icon` the model wrote with each `run_command` call ("Checking
+  tomorrow's weather in Berlin" with `cloud-sun-rain`), in the conversation's language. Opening a
+  step shows the command and its output. Calls from before summaries existed say "Ran a command".
+  Any Lucide icon works: `/api/icons/<name>` serves one icon's drawing from the `lucide` package, so
+  pages don't download all two thousand; unknown names fall back to a terminal icon.
 - **Technical details** (Settings, per device, in the `btw-prefs` cookie so the server renders it
   too) switch the labels to the raw commands and add context size, prompt-cache hit rate, cache
   misses, per-reply token usage and the model name. "Always show steps" opens the groups by default.

@@ -2,15 +2,16 @@
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
 	import * as Collapsible from '$lib/components/ui/collapsible';
-	import { describeCommand, firstLine } from '$lib/commands';
+	import { firstLine } from '$lib/commands';
 	import { getPreferences } from '$lib/preferences.svelte';
 	import { resultStatus, type ToolResult } from '$lib/transcript';
 	import { cn } from '$lib/utils';
-	import StepIcon from './StepIcon.svelte';
 
 	interface Props {
 		command: string | null;
 		cwd?: string;
+		/** What the model said the command does, in plain words. */
+		summary: string | null;
 		result: ToolResult | undefined;
 		/** Output streamed so far while the command runs. */
 		liveOutput: string | null;
@@ -18,13 +19,21 @@
 		running: boolean;
 	}
 
-	let { command, cwd, result, liveOutput, running }: Props = $props();
+	let { command, cwd, summary, result, liveOutput, running }: Props = $props();
 
 	const prefs = getPreferences();
 	let open = $state(false);
 
-	const description = $derived(describeCommand(command));
 	const status = $derived(result ? resultStatus(result) : running ? 'running' : 'not run');
+	/** Calls from before the model wrote summaries have none. */
+	const label = $derived(
+		summary ??
+			(command === null
+				? 'Getting ready…'
+				: status === 'running'
+					? 'Running a command'
+					: 'Ran a command')
+	);
 	const output = $derived(result?.output ?? liveOutput ?? '');
 	/** The technical label already shows a short command in full. */
 	const showCommand = $derived(!prefs.technical || !command || command !== firstLine(command));
@@ -39,7 +48,7 @@
 				{command === null ? 'Preparing a command…' : `$ ${firstLine(command)}`}
 			</span>
 		{:else}
-			<span class="min-w-0 truncate">{description.label}</span>
+			<span class="min-w-0 truncate">{label}</span>
 		{/if}
 		{#if status === 'running'}
 			<LoaderIcon class="size-3.5 shrink-0 animate-spin" />
@@ -56,12 +65,9 @@
 	</Collapsible.Trigger>
 	<Collapsible.Content>
 		<div class="mt-2 mb-1 overflow-hidden rounded-xl border bg-muted/40 text-xs">
-			{#if !prefs.technical}
-				<div class="flex items-center gap-1.5 border-b px-3 py-1.5 text-muted-foreground">
-					<StepIcon icon={description.icon} class="size-3.5" />
-					The command btw ran
-				</div>
-			{/if}
+			<div class="border-b px-3 py-1.5 text-muted-foreground">
+				{prefs.technical ? (summary ?? 'Command') : 'The command btw ran'}
+			</div>
 			{#if showCommand}
 				<pre
 					class="overflow-x-auto border-b px-3 py-2 font-mono break-all whitespace-pre-wrap">{command ??
