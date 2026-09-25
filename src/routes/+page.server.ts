@@ -1,25 +1,14 @@
-import { fail, redirect } from '@sveltejs/kit';
-import { createProfile, listMembers, listProfilesForUser } from '@btw/core';
+import { redirect } from '@sveltejs/kit';
+import { listProfilesForUser } from '@btw/core';
 import { requireUser } from '$lib/server/access';
-import type { Actions, PageServerLoad } from './$types';
+import { LAST_PROFILE_COOKIE } from '$lib/server/last-profile';
+import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = ({ locals }) => {
+/** Opening the app goes straight to a chat, like ChatGPT: the last profile, or the only one. */
+export const load: PageServerLoad = ({ locals, cookies }) => {
 	const user = requireUser(locals);
-	return {
-		profiles: listProfilesForUser(user.id).map((p) => ({
-			slug: p.slug,
-			name: p.name,
-			members: listMembers(p.id).map((m) => m.name)
-		}))
-	};
-};
-
-export const actions: Actions = {
-	create: async ({ locals, request }) => {
-		const user = requireUser(locals);
-		const name = (await request.formData()).get('name')?.toString() ?? '';
-		if (!name.trim()) return fail(400, { message: 'Give the profile a name.' });
-		const profile = createProfile(name, user.id);
-		redirect(303, `/p/${profile.slug}`);
-	}
+	const profiles = listProfilesForUser(user.id);
+	const last = profiles.find((p) => p.slug === cookies.get(LAST_PROFILE_COOKIE));
+	const target = last ?? (profiles.length === 1 ? profiles[0] : undefined);
+	redirect(303, target ? `/p/${target.slug}` : '/profiles');
 };

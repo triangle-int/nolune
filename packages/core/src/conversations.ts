@@ -21,7 +21,15 @@ export interface Usage {
 export type DisplayBlock =
 	| { type: 'text'; text: string }
 	| { type: 'thinking'; text: string }
-	| { type: 'tool'; id: string; command: string; cwd?: string };
+	| {
+			type: 'tool';
+			id: string;
+			command: string;
+			cwd?: string;
+			/** Plain-language description and Lucide icon name the model wrote with the call. */
+			summary?: string;
+			icon?: string;
+	  };
 
 export type DisplayMessage =
 	| {
@@ -342,12 +350,16 @@ export function toDisplay(row: MessageRow): DisplayMessage {
 		else if (block.type === 'thinking' && block.thinking.trim()) {
 			blocks.push({ type: 'thinking', text: block.thinking });
 		} else if (block.type === 'tool_use') {
-			const input = (block.input ?? {}) as { command?: unknown; cwd?: unknown };
+			const input = (block.input ?? {}) as Record<string, unknown>;
+			const text = (key: string) =>
+				typeof input[key] === 'string' && input[key].trim() ? { [key]: input[key].trim() } : {};
 			blocks.push({
 				type: 'tool',
 				id: block.id,
 				command: typeof input.command === 'string' ? input.command : JSON.stringify(block.input),
-				...(typeof input.cwd === 'string' ? { cwd: input.cwd } : {})
+				...text('cwd'),
+				...text('summary'),
+				...text('icon')
 			});
 		}
 	}

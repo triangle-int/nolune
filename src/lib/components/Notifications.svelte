@@ -2,6 +2,10 @@
 	import { goto, invalidate } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import type { NotificationItem } from '@btw/core';
+	import BellIcon from '@lucide/svelte/icons/bell';
+	import XIcon from '@lucide/svelte/icons/x';
+	import * as Popover from '$lib/components/ui/popover';
+	import { cn } from '$lib/utils';
 
 	interface Props {
 		items: NotificationItem[];
@@ -17,7 +21,6 @@
 	let expanded = $state<string | null>(null);
 	let busy = $state<string | null>(null);
 	let actionError = $state<string | null>(null);
-	let container = $state<HTMLElement>();
 
 	const unseen = $derived(items.filter((n) => n.createdAt > seenAt).length);
 
@@ -42,17 +45,12 @@
 		await invalidate('btw:notifications');
 	}
 
-	function toggle() {
-		if (open) return close();
-		open = true;
-		newAfter = seenAt;
-		expanded = null;
-		actionError = null;
-		markSeen();
-	}
-
-	function close() {
-		open = false;
+	function onOpenChange(value: boolean) {
+		if (value) {
+			newAfter = seenAt;
+			expanded = null;
+			actionError = null;
+		}
 		markSeen();
 	}
 
@@ -88,126 +86,104 @@
 		if (seconds < 86_400) return `${Math.floor(seconds / 3600)} h ago`;
 		return new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 	}
-
-	function onWindowClick(event: MouseEvent) {
-		if (open && container && !container.contains(event.target as Node)) close();
-	}
 </script>
 
-<svelte:window
-	onclick={onWindowClick}
-	onkeydown={(event) => {
-		if (open && event.key === 'Escape') close();
-	}}
-/>
-
-<div class="relative" bind:this={container}>
-	<button
-		onclick={toggle}
-		class="relative flex items-center rounded-md p-1.5 text-stone-600 hover:bg-stone-100 hover:text-stone-900"
+<Popover.Root bind:open {onOpenChange}>
+	<Popover.Trigger
+		class="relative flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground"
 		aria-label={unseen ? `Notifications, ${unseen} new` : 'Notifications'}
-		aria-expanded={open}
-		title="Notifications"
 	>
-		<svg
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			stroke-width="1.8"
-			stroke-linecap="round"
-			stroke-linejoin="round"
-			class="size-5"
-			aria-hidden="true"
-		>
-			<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
-			<path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
-		</svg>
+		<BellIcon class="size-5" />
 		{#if unseen}
 			<span
-				class="absolute -top-0.5 -right-0.5 min-w-4 rounded-full bg-red-600 px-1 text-center text-[10px] leading-4 font-semibold text-white"
+				class="absolute top-1 right-1 min-w-4 rounded-full bg-red-600 px-1 text-center text-[10px] leading-4 font-semibold text-white"
 			>
 				{unseen > 9 ? '9+' : unseen}
 			</span>
 		{/if}
-	</button>
-
-	{#if open}
-		<div
-			class="fixed inset-x-2 top-12 z-30 flex max-h-[75vh] flex-col overflow-hidden rounded-xl border border-stone-200 bg-white text-stone-900 shadow-lg sm:absolute sm:inset-x-auto sm:top-10 sm:right-0 sm:w-96"
-		>
-			<div class="flex items-center justify-between border-b border-stone-200 px-4 py-2 text-sm">
-				<span class="font-medium">Notifications</span>
-				{#if items.length}
-					<button onclick={clearAll} class="text-stone-500 hover:text-stone-900">Clear all</button>
-				{/if}
-			</div>
-			<ul class="min-h-0 flex-1 divide-y divide-stone-100 overflow-y-auto">
-				{#each items as item (item.id)}
-					{@const isNew = item.createdAt > newAfter}
-					<li class={['px-4 py-3 text-sm', isNew && 'bg-amber-50']}>
-						<div class="flex items-start gap-2">
-							{#if isNew}
-								<span class="mt-1.5 size-2 shrink-0 rounded-full bg-red-600" title="New"></span>
-							{/if}
-							<button
-								class="min-w-0 flex-1 text-left"
-								onclick={() => (expanded = expanded === item.id ? null : item.id)}
-								title={expanded === item.id ? 'Show less' : 'Show all'}
-							>
-								<span class="flex items-baseline gap-2">
-									<span
-										class={[
-											'truncate font-medium',
-											item.level === 'error' ? 'text-red-700' : 'text-stone-900'
-										]}>{item.title}</span
-									>
-									<span class="ml-auto shrink-0 text-xs text-stone-400">{ago(item.createdAt)}</span>
-								</span>
-								<span
-									class={[
-										'mt-0.5 block whitespace-pre-wrap text-stone-600',
-										expanded !== item.id && 'line-clamp-3'
-									]}>{item.body}</span
-								>
-							</button>
-							<button
-								onclick={() => dismiss(item.id)}
-								disabled={busy === item.id}
-								class="-mt-0.5 shrink-0 rounded px-1 text-lg leading-none text-stone-400 hover:text-stone-900"
-								aria-label="Dismiss"
-								title="Dismiss">×</button
-							>
-						</div>
-						<div class="mt-2 flex items-center gap-3 text-xs">
-							{#if item.conversationId}
-								<a
-									href={resolve('/p/[slug]/c/[id]', {
-										slug: item.profile.slug,
-										id: item.conversationId
-									})}
-									onclick={() => (open = false)}
-									class="font-medium text-stone-900 underline">Open chat</a
-								>
-							{:else}
-								<button
-									onclick={() => continueInChat(item)}
-									disabled={busy === item.id}
-									class="font-medium text-stone-900 underline disabled:opacity-50"
-									>Continue in chat</button
-								>
-							{/if}
-							<span class="truncate text-stone-400">{item.profile.name}</span>
-						</div>
-					</li>
-				{:else}
-					<li class="px-4 py-8 text-center text-sm text-stone-500">
-						Nothing yet. Ask btw for a reminder or a daily check, and what it finds shows up here.
-					</li>
-				{/each}
-			</ul>
-			{#if actionError}
-				<p class="border-t border-stone-200 px-4 py-2 text-sm text-red-600">{actionError}</p>
+	</Popover.Trigger>
+	<Popover.Content
+		align="end"
+		collisionPadding={8}
+		class="flex max-h-[min(75vh,36rem)] w-[calc(100vw-1rem)] flex-col gap-0 overflow-hidden p-0 sm:w-96"
+	>
+		<div class="flex items-center justify-between px-4 pt-3 pb-2">
+			<span class="font-semibold">Notifications</span>
+			{#if items.length}
+				<button onclick={clearAll} class="text-sm text-muted-foreground hover:text-foreground">
+					Clear all
+				</button>
 			{/if}
 		</div>
-	{/if}
-</div>
+		<ul class="min-h-0 flex-1 space-y-1 overflow-y-auto px-1.5 pb-1.5">
+			{#each items as item (item.id)}
+				{@const isNew = item.createdAt > newAfter}
+				<li class={cn('rounded-2xl px-3 py-2.5 text-sm', isNew ? 'bg-muted' : 'hover:bg-muted/60')}>
+					<div class="flex items-start gap-2">
+						{#if isNew}
+							<span class="mt-1.5 size-2 shrink-0 rounded-full bg-red-600" title="New"></span>
+						{/if}
+						<button
+							class="min-w-0 flex-1 text-left"
+							onclick={() => (expanded = expanded === item.id ? null : item.id)}
+							title={expanded === item.id ? 'Show less' : 'Show all'}
+						>
+							<span class="flex items-baseline gap-2">
+								<span
+									class={cn('truncate font-medium', item.level === 'error' && 'text-destructive')}
+									>{item.title}</span
+								>
+								<span class="ml-auto shrink-0 text-xs text-muted-foreground"
+									>{ago(item.createdAt)}</span
+								>
+							</span>
+							<span
+								class={cn(
+									'mt-0.5 block whitespace-pre-wrap text-muted-foreground',
+									expanded !== item.id && 'line-clamp-3'
+								)}>{item.body}</span
+							>
+						</button>
+						<button
+							onclick={() => dismiss(item.id)}
+							disabled={busy === item.id}
+							class="-mt-0.5 -mr-1 flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-background hover:text-foreground"
+							aria-label="Dismiss"
+							title="Dismiss"
+						>
+							<XIcon class="size-3.5" />
+						</button>
+					</div>
+					<div class="mt-2 flex items-center gap-3 text-xs">
+						{#if item.conversationId}
+							<a
+								href={resolve('/p/[slug]/c/[id]', {
+									slug: item.profile.slug,
+									id: item.conversationId
+								})}
+								onclick={() => (open = false)}
+								class="rounded-full border bg-background px-3 py-1 font-medium hover:bg-muted"
+								>Open chat</a
+							>
+						{:else}
+							<button
+								onclick={() => continueInChat(item)}
+								disabled={busy === item.id}
+								class="rounded-full border bg-background px-3 py-1 font-medium hover:bg-muted disabled:opacity-50"
+								>Continue in chat</button
+							>
+						{/if}
+						<span class="truncate text-muted-foreground">{item.profile.name}</span>
+					</div>
+				</li>
+			{:else}
+				<li class="px-4 py-8 text-center text-sm text-muted-foreground">
+					Nothing yet. Ask btw for a reminder or a daily check, and what it finds shows up here.
+				</li>
+			{/each}
+		</ul>
+		{#if actionError}
+			<p class="border-t px-4 py-2 text-sm text-destructive">{actionError}</p>
+		{/if}
+	</Popover.Content>
+</Popover.Root>

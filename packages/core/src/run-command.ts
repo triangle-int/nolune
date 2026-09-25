@@ -20,7 +20,19 @@ export const RUN_COMMAND_TOOL: Anthropic.Tool = {
 		'Run a shell command on this computer and return its combined stdout and stderr plus the exit code. Each call is a fresh login shell with no keyboard input. Output longer than 30,000 characters is cut in the middle.',
 	input_schema: {
 		type: 'object',
+		// `summary` and `icon` come first so they stream in before the command: the web UI shows
+		// them in place of the command for people who don't read shell.
 		properties: {
+			summary: {
+				type: 'string',
+				description:
+					'What this command does, in a few plain words for someone who doesn\'t read shell, in the language of the conversation. Starts with a verb in the -ing form, no jargon, no file paths unless they matter to the person, e.g. "Checking tomorrow\'s weather" or "Looking for the tax PDF".'
+			},
+			icon: {
+				type: 'string',
+				description:
+					'A Lucide icon name (lucide.dev/icons, kebab-case) that fits the summary, e.g. calendar, mail, cloud-sun, file-search, folder-open, globe, printer, image, music, trash-2, clock, terminal.'
+			},
 			command: { type: 'string', description: 'The shell command to run.' },
 			cwd: {
 				type: 'string',
@@ -32,7 +44,7 @@ export const RUN_COMMAND_TOOL: Anthropic.Tool = {
 				description: `Seconds before the command is killed. Default ${DEFAULT_TIMEOUT_SECONDS}, max ${MAX_TIMEOUT_SECONDS}.`
 			}
 		},
-		required: ['command'],
+		required: ['summary', 'icon', 'command'],
 		additionalProperties: false
 	}
 };
@@ -43,7 +55,10 @@ export interface RunCommandInput {
 	timeoutSeconds?: number;
 }
 
-/** Validates model-supplied input. Returns an error message for the model on failure. */
+/**
+ * Validates model-supplied input. Returns an error message for the model on failure. `summary`
+ * and `icon` are only for display, so a missing one never stops the command.
+ */
 export function parseRunCommandInput(input: unknown): RunCommandInput | string {
 	if (!input || typeof input !== 'object') return 'Input must be an object.';
 	const { command, cwd, timeout_seconds } = input as Record<string, unknown>;

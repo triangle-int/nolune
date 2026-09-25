@@ -1,10 +1,15 @@
 <script lang="ts">
 	import './layout.css';
+	import { untrack } from 'svelte';
+	import { ModeWatcher } from 'mode-watcher';
 	import favicon from '$lib/assets/favicon.svg';
-	import { resolve } from '$app/paths';
-	import Notifications from '$lib/components/Notifications.svelte';
+	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { Preferences, setPreferences } from '$lib/preferences.svelte';
 
 	let { data, children } = $props();
+
+	// The cookie is only read once; after that this object is the source of truth.
+	setPreferences(new Preferences(untrack(() => data.prefs)));
 </script>
 
 <svelte:head>
@@ -12,25 +17,10 @@
 	<title>btw</title>
 </svelte:head>
 
-<div class="flex h-dvh flex-col bg-stone-50 text-stone-900">
-	{#if data.user}
-		<header class="flex h-12 shrink-0 items-center gap-4 border-b border-stone-200 bg-white px-4">
-			<a href={resolve('/')} class="font-semibold tracking-tight">btw</a>
-			<div class="ml-auto flex items-center gap-4 text-sm text-stone-600">
-				{#if data.notifications}
-					<Notifications items={data.notifications.items} seenAt={data.notifications.seenAt} />
-				{/if}
-				{#if data.user.isAdmin}
-					<a href={resolve('/admin')} class="hover:text-stone-900">Models</a>
-				{/if}
-				<span>{data.user.name}</span>
-				<form method="POST" action="/logout">
-					<button class="hover:text-stone-900">Sign out</button>
-				</form>
-			</div>
-		</header>
-	{/if}
-	<div class="min-h-0 flex-1">
+<ModeWatcher themeColors={{ light: '#ffffff', dark: '#212121' }} />
+
+<Tooltip.Provider delayDuration={300}>
+	<div class="h-dvh">
 		{@render children()}
 	</div>
-</div>
+</Tooltip.Provider>
