@@ -52,6 +52,10 @@ Access). `btw setup` prints the exact path.
   ([Agent Skills](https://agentskills.io) format). The agent creates its own with `btw skill new`.
   Each skill's name and description go into every new chat, so turn off the ones a profile doesn't
   need on its **Skills** page (or `btw skill disable <name> --profile <slug>`).
+- **Memory.** btw keeps what it learns about the family (preferences, who's who, where things are)
+  in small notes per topic, and reads the ones it needs when a chat starts. The profile's Memory
+  page shows every fact as a dot, darker the newer it is, and lets you fix or delete a note. Files:
+  `~/.btw-agent/profiles/<profile>/memories`.
 - **Automations.** Ask btw in a conversation ("every weekday at 7:30, tell us if we need umbrellas",
   "check my email every 10 minutes and tell me when the school writes"). It sets up a trigger that
   runs in the background, and what it finds shows up under the bell at the top; open a notification

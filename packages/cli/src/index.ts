@@ -35,6 +35,7 @@ import {
 	ViewLimitError
 } from '@btw/core';
 import { ask, askHidden } from './input.ts';
+import { MEMORY_HELP, memoryCommand } from './memory.ts';
 import { TRIGGER_HELP, triggerCommand, wakeCommand } from './triggers.ts';
 import {
 	installService,
@@ -81,6 +82,8 @@ Profiles and skills
   btw skill disable <name>... [--profile SLUG]  leave out of the profile's new chats
 
 ${TRIGGER_HELP}
+
+${MEMORY_HELP}
 
 Inside agent commands (BTW_PROFILE is set, so --profile can be left out)
   btw view <image>...                        show images to the agent: they're attached to the
@@ -513,6 +516,10 @@ async function main(argv: string[]): Promise<void> {
 		case 'trigger':
 			requireInit();
 			return triggerCommand(action, rest);
+
+		case 'memory':
+			requireInit();
+			return memoryCommand(argv.slice(1));
 
 		case 'wake':
 			requireInit();

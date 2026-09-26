@@ -1,4 +1,11 @@
-export { cliCommand, packageRoot, paths, profileDir, profileSkillsDir } from './paths.ts';
+export {
+	cliCommand,
+	packageRoot,
+	paths,
+	profileDir,
+	profileMemoryDir,
+	profileSkillsDir
+} from './paths.ts';
 export {
 	DEFAULT_PORT,
 	configExists,
@@ -85,6 +92,23 @@ export {
 	type Skill
 } from './skills.ts';
 export { buildSystemPrompt } from './prompt.ts';
+export {
+	MemoryConflictError,
+	MemoryError,
+	addMemoryFact,
+	forgetMemoryFact,
+	forgetMemoryFile,
+	listMemoryFiles,
+	listMemoryNotes,
+	readMemoryNote,
+	removeMemoryNote,
+	renameMemoryNote,
+	replaceInMemory,
+	writeMemoryFile,
+	writeMemoryNote,
+	type MemoryFact,
+	type MemoryFile
+} from './memory.ts';
 export { ViewLimitError, viewImage } from './images.ts';
 export { installCliShim } from './shim.ts';
 export {
