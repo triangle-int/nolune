@@ -126,8 +126,10 @@
 		dropTarget = target;
 	}
 
-	function dragLeave(event: DragEvent & { currentTarget: HTMLElement }, target: string) {
-		if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+	/** Moving between the parts of one target (a folder's row and its chats) doesn't leave it. */
+	function dragLeave(event: DragEvent, target: string) {
+		const next = (event.relatedTarget as Element | null)?.closest?.('[data-drop-target]');
+		if (next?.getAttribute('data-drop-target') === target) return;
 		if (dropTarget === target) dropTarget = null;
 	}
 
@@ -364,6 +366,7 @@
 					{@const open = expanded.has(folder.id)}
 					{@const inside = chatsIn(folder.id)}
 					<Sidebar.MenuItem
+						data-drop-target={folder.id}
 						ondragover={(event) => dragOver(event, folder.id)}
 						ondragleave={(event) => dragLeave(event, folder.id)}
 						ondrop={(event) => drop(event, folder.id)}
@@ -429,8 +432,17 @@
 						</DropdownMenu.Root>
 					</Sidebar.MenuItem>
 					{#if open}
-						<!-- A sibling of the folder's item, so pointing at a chat doesn't highlight the folder. -->
-						<li>
+						<!--
+							A sibling of the folder's item, so pointing at a chat doesn't highlight the folder.
+							Chats dropped on the list go into the folder too.
+						-->
+						<li
+							data-drop-target={folder.id}
+							ondragover={(event) => dragOver(event, folder.id)}
+							ondragleave={(event) => dragLeave(event, folder.id)}
+							ondrop={(event) => drop(event, folder.id)}
+							class={cn('rounded-xl', dropTarget === folder.id && 'bg-sidebar-accent/60')}
+						>
 							<Sidebar.MenuSub class="mr-0 pr-0">
 								{#each inside as conversation (conversation.id)}
 									{@render chatItem(conversation)}
@@ -454,6 +466,7 @@
 				'rounded-xl px-2 group-data-[collapsible=icon]:hidden',
 				dropTarget === '' && 'bg-sidebar-accent/60 ring-2 ring-sidebar-ring ring-inset'
 			)}
+			data-drop-target=""
 			ondragover={(event) => dragOver(event, '')}
 			ondragleave={(event) => dragLeave(event, '')}
 			ondrop={(event) => drop(event, '')}
