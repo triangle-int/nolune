@@ -24,7 +24,7 @@
 		const end = key.hint ? ` ending in ${key.hint}` : '';
 		if (key.source === 'config') return `Saved in btw${end}`;
 		if (key.source === 'env') return `From the ${key.env} environment variable${end}`;
-		return key.required ? 'Not set: btw can’t answer until there is one' : 'Not set';
+		return 'Not set';
 	}
 </script>
 
@@ -58,12 +58,7 @@
 									<KeyRoundIcon class="size-4" />
 								</span>
 								<div class="min-w-0 flex-1">
-									<div class="flex items-center gap-2">
-										<span class="font-medium">{key.label}</span>
-										{#if key.required}
-											<Badge variant="secondary">Required</Badge>
-										{/if}
-									</div>
+									<div class="font-medium">{key.label}</div>
 									<div class="text-muted-foreground">{key.purpose}</div>
 									<div class={cn(key.source ? 'text-muted-foreground' : 'text-warning')}>
 										{sourceText(key)}
@@ -272,10 +267,8 @@
 			<AlertDialog.Description>
 				{#if removing?.envSet}
 					btw will use the key in the {removing.env} environment variable instead.
-				{:else if removing?.required}
-					Chats and automations stop working until a new key is added.
 				{:else}
-					btw can't make pictures until a new key is added.
+					{removing?.withoutIt}
 				{/if}
 			</AlertDialog.Description>
 		</AlertDialog.Header>

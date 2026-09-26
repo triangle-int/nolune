@@ -1,18 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-
-const home = mkdtempSync(join(tmpdir(), 'btw-keys-'));
-vi.stubEnv('BTW_HOME', home);
-vi.stubEnv('ANTHROPIC_API_KEY', '');
-vi.stubEnv('OPENAI_API_KEY', '');
-
-// Imported after BTW_HOME is set: paths are fixed when paths.ts loads.
-const { initConfig, readConfig, writeConfig, configuredApiKey } = await import('./config.ts');
-const keys = await import('./api-keys.ts');
+import * as keys from './api-keys.ts';
+import { configuredApiKey, initConfig, readConfig } from './config.ts';
+import { paths } from './paths.ts';
 
 /** Plays both providers: answers by the key it's given. */
 const ANSWERS: Record<string, [number, object]> = {
@@ -44,14 +36,14 @@ beforeAll(async () => {
 
 afterAll(() => {
 	server.close();
-	rmSync(home, { recursive: true, force: true });
 	vi.unstubAllEnvs();
 });
 
 beforeEach(() => {
+	// The test setup empties the btw home before each test: a fresh config.json without keys.
 	initConfig();
-	writeConfig({ authSecret: readConfig().authSecret });
 	vi.stubEnv('ANTHROPIC_API_KEY', '');
+	vi.stubEnv('OPENAI_API_KEY', '');
 	seen.length = 0;
 });
 
@@ -61,7 +53,7 @@ describe('apiKeyStatuses', () => {
 	it('says where each key comes from and shows only its end', () => {
 		keys.saveApiKey('anthropic', 'sk-ant-good-0000000000001234');
 		vi.stubEnv('OPENAI_API_KEY', 'sk-openai-good-000000005678');
-		expect(status('anthropic')).toMatchObject({ source: 'config', hint: '1234', required: true });
+		expect(status('anthropic')).toMatchObject({ source: 'config', hint: '1234' });
 		expect(status('openai')).toMatchObject({ source: 'env', hint: '5678', envSet: true });
 		expect(JSON.stringify(keys.apiKeyStatuses())).not.toContain('good');
 		vi.stubEnv('OPENAI_API_KEY', '');
@@ -82,10 +74,10 @@ describe('apiKeyStatuses', () => {
 
 	it('keeps config.json private', () => {
 		keys.saveApiKey('openai', 'sk-openai-good-000000005678');
-		expect(JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')).openaiApiKey).toBe(
+		expect(JSON.parse(readFileSync(paths.config, 'utf8')).openaiApiKey).toBe(
 			'sk-openai-good-000000005678'
 		);
-		expect(statSync(join(home, 'config.json')).mode & 0o777).toBe(0o600);
+		expect(statSync(paths.config).mode & 0o777).toBe(0o600);
 	});
 });
 

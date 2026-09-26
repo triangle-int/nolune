@@ -12,7 +12,8 @@ export interface ApiKeyStatus {
 	label: string;
 	/** What btw uses it for. */
 	purpose: string;
-	required: boolean;
+	/** What stops working without it. */
+	withoutIt: string;
 	/** Where to make one. */
 	consoleUrl: string;
 	/** Where the key in use comes from, or null without one. */
@@ -24,15 +25,15 @@ export interface ApiKeyStatus {
 	envSet: boolean;
 }
 
-const ABOUT: Record<ApiKeyProvider, Pick<ApiKeyStatus, 'purpose' | 'required' | 'consoleUrl'>> = {
+const ABOUT: Record<ApiKeyProvider, Pick<ApiKeyStatus, 'purpose' | 'withoutIt' | 'consoleUrl'>> = {
 	anthropic: {
-		purpose: 'Runs every chat and automation.',
-		required: true,
+		purpose: 'Runs chats and automations on Claude models.',
+		withoutIt: 'Chats and automations on Claude models stop working until a new key is added.',
 		consoleUrl: 'https://console.anthropic.com/settings/keys'
 	},
 	openai: {
 		purpose: 'Makes pictures, for the Images page and when the agent draws.',
-		required: false,
+		withoutIt: "btw can't make pictures until a new key is added.",
 		consoleUrl: 'https://platform.openai.com/api-keys'
 	}
 };
