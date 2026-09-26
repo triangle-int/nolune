@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
+	import { flushSync, untrack } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { enhance } from '$app/forms';
 	import { afterNavigate, goto, invalidate } from '$app/navigation';
@@ -67,6 +67,8 @@
 	/** The chat being dragged, and where it would land: a folder's id, or '' for no folder. */
 	let dragging = $state<ChatItem | null>(null);
 	let dropTarget = $state<string | null>(null);
+	/** What the pointer carries while a chat is dragged (see the bottom of the page). */
+	let dragPreview = $state<HTMLElement>();
 
 	const looseChats = $derived(conversations.filter((c) => !c.folderId));
 	const chatsIn = (folderId: string) => conversations.filter((c) => c.folderId === folderId);
@@ -109,6 +111,10 @@
 		event.dataTransfer.setData(CHAT_DRAG_TYPE, chat.id);
 		event.dataTransfer.effectAllowed = 'move';
 		dragging = chat;
+		// Without this the browser shows its picture of a link (or its address). The preview has to
+		// show the chat's title before the browser takes its picture, which is right after this.
+		flushSync();
+		if (dragPreview) event.dataTransfer.setDragImage(dragPreview, 22, 26);
 	}
 
 	/** A folder (or '' for the chat list) takes the dragged chat unless it's already there. */
@@ -584,3 +590,20 @@
 />
 <RenameFolderDialog bind:folder={renamingFolder} slug={profile.slug} />
 <DeleteFolderDialog bind:folder={deletingFolder} slug={profile.slug} />
+
+<!--
+	A dragged chat's picture under the pointer. It stays off screen; the browser only takes a
+	picture of it. The padding leaves room for the shadow, which the picture would cut off.
+-->
+<div
+	bind:this={dragPreview}
+	aria-hidden="true"
+	class="pointer-events-none fixed top-0 -left-[9999px] p-2"
+>
+	<div
+		class="flex h-9 max-w-64 items-center gap-2 rounded-xl border bg-sidebar px-3 text-sm text-sidebar-foreground shadow-md"
+	>
+		<MessageCircleIcon class="size-4 shrink-0 text-muted-foreground" />
+		<span class="truncate">{dragging?.title ?? ''}</span>
+	</div>
+</div>
