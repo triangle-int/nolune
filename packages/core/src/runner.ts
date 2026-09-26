@@ -6,6 +6,7 @@ import {
 	appendRow,
 	commitQueuedRows,
 	committedRows,
+	foundText,
 	getConversation,
 	insertQueued,
 	lastCommittedRow,
@@ -318,11 +319,12 @@ async function loop(conversationId: string): Promise<void> {
 			}
 
 			// Pictures and files the reply links to are copied before it's saved (the live reply
-			// stays on screen meanwhile), so the saved reply never points at a missing copy.
+			// stays on screen meanwhile), so the saved reply never points at a missing copy. Web
+			// pictures only if their link appeared in what the model read before this reply.
 			const texts = reply.content.flatMap((b) => (b.type === 'text' ? [b.text] : []));
 			const slug = profileSlug(conv.profileId);
 			const media: PreparedMedia[] = slug
-				? await copyReplyMedia(texts, profileDir(slug), abort.signal)
+				? await copyReplyMedia(texts, profileDir(slug), abort.signal, () => foundText(rows))
 				: [];
 			clearLive(conversationId);
 
