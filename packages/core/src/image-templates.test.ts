@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-	buildTemplatePrompt,
 	checkTemplateImages,
+	fillTemplate,
 	resolveImageTemplate,
 	scanImageTemplates,
 	templateMessage,
@@ -10,56 +10,47 @@ import {
 
 function template(overrides: Partial<ImageTemplate> = {}): ImageTemplate {
 	return {
-		id: 'poster',
-		name: 'Poster',
-		title: 'Make a poster',
+		id: 'stickers',
+		name: 'Sticker pack',
+		title: 'Make a sticker pack',
 		description: '',
-		sentence: null,
-		category: 'Templates',
+		sentence:
+			'Create a {{style}} sticker pack{{#image}} based on {{image}}{{/image}}{{#remix}}, remixing with {{remix}}{{/remix}}.',
+		category: 'Trending',
 		icon: null,
 		color: null,
 		image: 'optional',
-		imageLabel: 'Photo to feature',
+		imageLabel: 'Photo to start from',
 		imageSource: 'photo',
-		maxImages: 1,
-		size: 'portrait',
-		quality: 'high',
-		background: null,
-		format: null,
+		maxImages: 3,
+		size: 'square',
 		settings: [
 			{
 				type: 'select',
 				id: 'style',
 				label: 'Style',
-				default: 'swiss',
+				default: '3d',
 				options: [
-					{ value: 'swiss', label: 'Swiss', prompt: 'a Swiss grid', background: null },
-					{
-						value: 'sticker',
-						label: 'Sticker',
-						prompt: 'a die-cut sticker',
-						background: 'transparent'
-					}
+					{ value: '3d', label: '3D', prompt: 'Use rounded, toy-like forms.' },
+					{ value: 'pixel', label: 'Pixel Art', prompt: 'Use crisp square pixels.' }
 				]
 			},
 			{
 				type: 'text',
-				id: 'headline',
-				label: 'Headline',
-				placeholder: 'BLOOM',
+				id: 'remix',
+				label: 'Remix with',
+				placeholder: '💀🍓',
 				required: false,
 				default: ''
 			}
 		],
 		prompt: [
-			'A poster.',
-			'{{#image}}Built around the attached picture.{{/image}}',
-			'Style: {{style}}.',
-			'{{#headline}}Headline: "{{headline}}".{{/headline}}',
-			'{{^headline}}No text.{{/headline}}'
+			'{{style}}',
+			'{{#image}}Keep the subject of the picture recognizable.{{/image}}',
+			'Nine distinct stickers in a 3×3 grid on a transparent background.'
 		].join('\n'),
 		order: 1,
-		location: '/templates/poster/TEMPLATE.md',
+		location: '/templates/stickers/TEMPLATE.md',
 		cover: null,
 		scope: 'builtin',
 		...overrides
@@ -70,75 +61,79 @@ describe('resolveImageTemplate', () => {
 	it('uses the defaults when nothing is picked', () => {
 		const resolved = resolveImageTemplate(template(), {});
 		expect(resolved.choices.map((c) => [c.setting.id, c.value])).toEqual([
-			['style', 'swiss'],
-			['headline', '']
+			['style', '3d'],
+			['remix', '']
 		]);
-		expect(resolved.background).toBeNull();
 	});
 
 	it('matches settings and choices by id or label, ignoring case', () => {
-		const resolved = resolveImageTemplate(template(), { STYLE: 'sticker', Headline: ' BLOOM ' });
-		expect(resolved.choices.map((c) => c.display)).toEqual(['Sticker', 'BLOOM']);
-	});
-
-	it("takes an option's background", () => {
-		expect(resolveImageTemplate(template(), { style: 'Sticker' }).background).toBe('transparent');
+		const resolved = resolveImageTemplate(template(), { STYLE: 'pixel art', 'Remix with': ' 💀 ' });
+		expect(resolved.choices.map((c) => c.display)).toEqual(['Pixel Art', '💀']);
 	});
 
 	it('refuses unknown settings and choices, saying what there is', () => {
 		expect(() => resolveImageTemplate(template(), { color: 'red' })).toThrow(
-			'Settings: style, headline'
+			'Settings: style, remix'
 		);
 		expect(() => resolveImageTemplate(template(), { style: 'Gothic' })).toThrow(
-			'Choices: Swiss, Sticker'
+			'Choices: 3D, Pixel Art'
 		);
 	});
 
 	it('requires required text', () => {
 		const t = template();
 		t.settings[1] = { ...t.settings[1], required: true } as ImageTemplate['settings'][number];
-		expect(() => resolveImageTemplate(t, {})).toThrow('needs "Headline"');
+		expect(() => resolveImageTemplate(t, {})).toThrow('needs "Remix with"');
 	});
 });
 
-describe('buildTemplatePrompt', () => {
-	it('fills in choices and keeps the sections that apply', () => {
-		const resolved = resolveImageTemplate(template(), { headline: 'BLOOM' });
-		expect(buildTemplatePrompt(resolved, { hasImages: true })).toBe(
-			'A poster.\nBuilt around the attached picture.\nStyle: a Swiss grid.\nHeadline: "BLOOM".'
-		);
+describe('fillTemplate', () => {
+	const source = 'A.\n{{#x}}Has {{x}}.{{/x}}\n{{^x}}No x.{{/x}}\nB {{#y}}and {{y}}{{/y}}.';
+
+	it('keeps the sections that apply', () => {
+		expect(fillTemplate(source, { x: 'one', y: 'two' })).toBe('A.\nHas one.\nB and two.');
 	});
 
-	it('drops the lines of sections left out instead of leaving them blank', () => {
-		const resolved = resolveImageTemplate(template(), {});
-		expect(buildTemplatePrompt(resolved, { hasImages: false })).toBe(
-			'A poster.\nStyle: a Swiss grid.\nNo text.'
-		);
-	});
-
-	it('adds what the person asked for at the end', () => {
-		const resolved = resolveImageTemplate(template(), {});
-		expect(buildTemplatePrompt(resolved, { hasImages: false, extra: ' make it pink ' })).toMatch(
-			/No text\.\n\nAlso: make it pink$/
-		);
+	it('drops lines that only held sections left out, not other lines', () => {
+		expect(fillTemplate(source, {})).toBe('A.\nNo x.\nB .');
 	});
 });
 
 describe('templateMessage', () => {
-	it('puts the options before the prompt', () => {
-		const resolved = resolveImageTemplate(template(), { style: 'sticker' });
-		expect(templateMessage(resolved, { shape: 'square', hasImages: false })).toBe(
+	it('is the sentence with labels, then the instructions, the shape and extra wishes', () => {
+		const resolved = resolveImageTemplate(template(), { remix: '💀🍓🛼💨' });
+		expect(
+			templateMessage(resolved, { shape: 'square', images: 2, extra: ' Make it pink. ' })
+		).toBe(
 			[
-				'Make an image with the Poster template.',
-				'Size: square',
-				'Quality: high',
-				'Background: transparent',
+				'Create a 3D sticker pack based on the attached pictures, remixing with 💀🍓🛼💨.',
 				'',
-				'Prompt:',
-				'A poster.',
-				'Style: a die-cut sticker.',
-				'No text.'
+				'Use rounded, toy-like forms.',
+				'Keep the subject of the picture recognizable.',
+				'Nine distinct stickers in a 3×3 grid on a transparent background.',
+				'Make it square (1:1).',
+				'',
+				'Make it pink.'
 			].join('\n')
+		);
+	});
+
+	it('leaves out what was not given', () => {
+		const resolved = resolveImageTemplate(template(), { style: 'pixel' });
+		expect(templateMessage(resolved, { shape: 'auto', images: 0 })).toBe(
+			[
+				'Create a Pixel Art sticker pack.',
+				'',
+				'Use crisp square pixels.',
+				'Nine distinct stickers in a 3×3 grid on a transparent background.'
+			].join('\n')
+		);
+	});
+
+	it('is just the instructions without a sentence', () => {
+		const resolved = resolveImageTemplate(template({ sentence: null }), {});
+		expect(templateMessage(resolved, { shape: 'portrait', images: 1 })).toMatch(
+			/^Use rounded, toy-like forms\.\n.*\nMake it portrait \(2:3\)\.$/s
 		);
 	});
 });
@@ -151,11 +146,11 @@ describe('checkTemplateImages', () => {
 	});
 
 	it('refuses more pictures than the template takes', () => {
-		expect(() => checkTemplateImages(template(), 2)).toThrow('at most 1 picture');
+		expect(() => checkTemplateImages(template(), 4)).toThrow('at most 3 pictures');
 		expect(() => checkTemplateImages(template({ image: 'none', maxImages: 0 }), 1)).toThrow(
 			"doesn't use pictures"
 		);
-		expect(() => checkTemplateImages(template(), 1)).not.toThrow();
+		expect(() => checkTemplateImages(template(), 3)).not.toThrow();
 	});
 });
 
@@ -172,12 +167,13 @@ describe('the built-in templates', () => {
 		expect(categories.slice(0, 2)).toEqual(['Templates', 'Trending']);
 	});
 
-	it('build a prompt with their defaults', () => {
+	it('make a finished message with their defaults', () => {
 		for (const t of templates) {
-			const prompt = buildTemplatePrompt(resolveImageTemplate(t, requiredText(t)), {
-				hasImages: t.image !== 'none'
+			const message = templateMessage(resolveImageTemplate(t, requiredText(t)), {
+				shape: t.size,
+				images: t.image === 'none' ? 0 : 1
 			});
-			expect(prompt, t.id).not.toMatch(/\{\{|\}\}/);
+			expect(message, t.id).not.toMatch(/\{\{|\}\}|\s[.,]/);
 		}
 	});
 

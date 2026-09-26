@@ -9,7 +9,6 @@ color: '#ecd6ae'
 image: required
 image-label: Photo of the item
 size: square
-quality: high
 ---
 
 Make a professional product photo of the item in the attached photo, on a seamless white background like a marketplace listing. Keep the item exactly as it is: its shape, colors, materials, labels and any text on it.

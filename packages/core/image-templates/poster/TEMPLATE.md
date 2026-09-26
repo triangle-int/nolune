@@ -1,7 +1,7 @@
 ---
 name: Poster
 title: Make a poster
-sentence: 'Make a {{style}} poster of {{subject}} {{image}} with the headline {{headline}}.'
+sentence: 'Create a {{style}} poster{{#subject}} of {{subject}}{{/subject}}{{#image}} based on {{image}}{{/image}}{{#headline}} with the headline "{{headline}}"{{/headline}}.'
 description: A bold printed poster built around a photo or an idea.
 category: Templates
 order: 1
@@ -10,14 +10,7 @@ color: '#e8956b'
 image: optional
 image-label: Photo or picture to feature
 size: portrait
-quality: high
 settings:
-  - id: subject
-    label: What it shows
-    placeholder: a red poppy
-  - id: headline
-    label: Headline
-    placeholder: BLOOM
   - id: style
     label: Style
     options:
@@ -29,16 +22,21 @@ settings:
         prompt: a risograph print in two or three bright spot inks, with visible grain, slight misregistration and playful overprinting
       - label: Bauhaus
         prompt: Bauhaus, with primary colors, circles, squares and triangles and a bold asymmetric layout
-      - label: Vintage travel
+      - label: vintage travel
         prompt: a 1950s vintage travel poster, with a painted scene, warm sunlit colors and flat lithographic shading
-      - label: Minimal
+      - label: minimal
         prompt: modern minimalism, with one bold shape, one accent color and a quiet off-white background
+  - id: subject
+    label: What it shows
+    placeholder: a red poppy
+  - id: headline
+    label: Headline
+    placeholder: BLOOM
 ---
 
-Design a striking printed poster, ready to hang on a wall.
-{{#image}}Build it around the main subject of the attached picture, redrawn to fit the poster's style.{{/image}}
-{{#subject}}The poster shows {{subject}}.{{/subject}}
+Design it as a striking printed poster, ready to hang on a wall.
+{{#image}}Build it around the main subject of the picture, redrawn to fit the poster's style.{{/image}}
 Style: {{style}}.
-{{#headline}}Set the headline "{{headline}}" in large, bold type as a key part of the composition, spelled exactly as written.{{/headline}}
+{{#headline}}Set the headline in large, bold type as a key part of the composition, spelled exactly as written.{{/headline}}
 {{^headline}}No text on the poster.{{/headline}}
 Strong composition with generous margins, a limited color palette and a subtle paper texture. No watermark, no signature, no mockup: just the poster, filling the whole image.

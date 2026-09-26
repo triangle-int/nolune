@@ -1,7 +1,7 @@
 ---
 name: Pixel art
 title: Make game-ready pixel art
-sentence: 'Create a {{palette}} pixel art {{kind}} of {{subject}} {{image}}.'
+sentence: 'Create a {{palette}} pixel art {{kind}}{{#subject}} of {{subject}}{{/subject}}{{#image}} based on {{image}}{{/image}}.'
 description: Game-ready pixel art, from a single sprite to a whole scene.
 category: Templates
 order: 8
@@ -10,22 +10,7 @@ color: '#9dd4c6'
 image: optional
 image-label: Photo or drawing to turn into pixels
 size: square
-format: png
 settings:
-  - id: subject
-    label: What to draw
-    placeholder: a knight with a lantern
-  - id: kind
-    label: Kind
-    options:
-      - label: character sprite
-        prompt: a single full-body character sprite in a three-quarter front view, centered, with nothing behind it
-        background: transparent
-      - label: item icon
-        prompt: a single game item icon with a bold dark outline, centered, with nothing behind it
-        background: transparent
-      - label: scene
-        prompt: a complete game scene with a detailed background, like a screenshot from a side-scrolling game
   - id: palette
     label: Palette
     options:
@@ -37,10 +22,21 @@ settings:
         prompt: only four shades of green, like the original Game Boy
       - label: PICO-8
         prompt: the 16-color PICO-8 palette, bold and cute
+  - id: kind
+    label: Kind
+    options:
+      - label: character sprite
+        prompt: a single full-body character sprite in a three-quarter front view, centered, on a transparent background
+      - label: item icon
+        prompt: a single game item icon with a bold dark outline, centered, on a transparent background
+      - label: scene
+        prompt: a complete game scene with a detailed background, like a screenshot from a side-scrolling game
+  - id: subject
+    label: What to draw
+    placeholder: a knight with a lantern
 ---
 
-Create pixel art: {{kind}}.
-{{#subject}}Subject: {{subject}}.{{/subject}}
-{{#image}}Base it on the attached picture, keeping its main shapes and colors recognizable.{{/image}}
+Make {{kind}}.
+{{#image}}Base it on the picture, keeping its main shapes and colors recognizable.{{/image}}
 Palette and era: {{palette}}.
 Crisp square pixels on a clear grid, no anti-aliasing, no blur, no smooth gradients, no text.

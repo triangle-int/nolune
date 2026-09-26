@@ -285,30 +285,35 @@ an image", with the chat's paperclip) does the same with the person's own words.
 
 - **A template** is a folder with a `TEMPLATE.md`: YAML frontmatter (name for its card, `title`
   for its sheet, description, category, a Lucide `icon` and hex `color`, whether it needs a
-  picture and whether that's a photo or a drawing (`image-source`), the default shape, quality,
-  background and format, its settings: `options` with a label and the `prompt` fragment each
-  stands for, or free text, and the `sentence` that shows them as chips), then the prompt. `{{setting}}` is replaced by the
-  choice, `{{#setting}}…{{/setting}}` is kept only when it has a value and `{{^setting}}…{{/setting}}`
-  only when it doesn't; `{{#image}}` tests whether a picture was given. A line that held only
-  sections that were left out disappears. An option can also switch the background (a pixel-art
-  sprite is transparent, a scene isn't). A `cover.png|jpg|webp` next to it replaces the icon.
+  picture and whether that's a photo or a drawing (`image-source`), the default shape, its
+  settings: `options` with a label and the `prompt` fragment each stands for, or free text, and
+  the `sentence` that shows them as chips), then the prompt: the instructions for the image
+  model. `{{setting}}` is replaced by the choice, `{{#setting}}…{{/setting}}` is kept only when
+  it has a value and `{{^setting}}…{{/setting}}` only when it doesn't; `{{image}}` is "the
+  attached picture" when one was given. A line that held only sections left out disappears. A
+  `cover.png|jpg|webp` next to it replaces the icon.
 - **Sources**, like skills: the 15 that ship with btw (`packages/core/image-templates`),
   `~/.btw-agent/image-templates`, and the profile's `image-templates` folder; a later one
   overrides an earlier one with the same id.
-- **The message** is plain text the family reads in the chat, e.g.
+- **Applying a template just sends a prompt.** The message is the finished prompt, as the family
+  reads it in the chat: the sentence with the choices' labels, the instructions with the
+  choices' prompts, the shape in words, and what the person typed.
 
   ```
-  Make an image with the Poster template.
-  Size: portrait
-  Quality: high
+  Create a Risograph poster of our garden based on the attached picture with the headline "BLOOM".
 
-  Prompt:
-  Design a striking printed poster, ready to hang on a wall. …
+  Design it as a striking printed poster, ready to hang on a wall.
+  …
+  Make it portrait (2:3).
+
+  Make it pink.
   ```
 
-  The skill tells the agent to pass the prompt unchanged on stdin (a heredoc, so quotes can't
-  break the command) and the option lines as flags. Templates are therefore only the page's
-  business: `btw generate image` takes a prompt and pictures, whoever wrote them.
+  The skill tells the agent to pass a detailed prompt like this unchanged on stdin (a heredoc,
+  so quotes can't break the command), to turn "square (1:1)", "portrait (2:3)", "landscape
+  (3:2)" and "transparent background" into flags, and to pass the attached pictures as
+  `--image`. Templates are only the page's business: `btw generate image` takes a prompt and
+  pictures, whoever wrote them.
 
 - **Pictures** go through the chat's attachments: they upload as soon as they're picked, and the
   message carries their ids, so the model sees each one with the path it was saved at in

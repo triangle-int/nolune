@@ -1,23 +1,16 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import {
-	IMAGE_BACKGROUNDS,
-	IMAGE_FORMATS,
-	IMAGE_SHAPES,
-	type ImageBackground,
-	type ImageFormat,
-	type ImageShape
-} from './image-generation.ts';
+import { IMAGE_SHAPES, type ImageShape } from './image-generation.ts';
 import { paths } from './paths.ts';
 import { isValidSkillName, parseFrontmatter } from './skills.ts';
 
 /*
  * Image templates: the Images page's reusable starting points, like "Poster" or "Stickers". Each
- * is a folder with a TEMPLATE.md: YAML frontmatter for its card and its settings, then the prompt,
- * where `{{setting}}` is replaced by what was picked. The page turns a template and its choices
- * into a finished prompt in the message it sends; the agent passes that prompt to
- * `btw generate image`, which knows nothing about templates. Like skills, templates come from btw
- * itself, from ~/.btw-agent/image-templates (every profile) and from the profile's own
+ * is a folder with a TEMPLATE.md: YAML frontmatter for its card, its sentence and its settings,
+ * then the prompt, where `{{setting}}` is replaced by what was picked. Applying a template sends
+ * one message to a new chat: the finished prompt, with the pictures attached. The agent passes it
+ * to `btw generate image`, which knows nothing about templates. Like skills, templates come from
+ * btw itself, from ~/.btw-agent/image-templates (every profile) and from the profile's own
  * image-templates folder, and a template overrides one with the same id from a source before it.
  */
 
@@ -28,8 +21,6 @@ export interface TemplateOption {
 	label: string;
 	/** What `{{setting}}` becomes in the prompt. Defaults to the label. */
 	prompt: string;
-	/** Overrides the template's background when picked, e.g. transparent for a sprite. */
-	background: ImageBackground | null;
 }
 
 export type TemplateSetting =
@@ -53,9 +44,10 @@ export interface ImageTemplate {
 	/** One sentence for the family. */
 	description: string;
 	/**
-	 * What it makes, as a short sentence the Images page shows with a chip for each setting in its
-	 * place and `{{image}}` for the picture: "Turn {{image}} into a {{medium}} sketch." Settings it
-	 * leaves out are shown below it. Only for people: the model gets `prompt`.
+	 * What it makes, as the sentence that opens the message: "Create a {{style}} sticker pack based
+	 * on {{image}}." The Images page shows it with a chip for each setting in its place; in the
+	 * message a choice becomes its label and `{{image}}` "the attached picture". Sections work as
+	 * in the prompt. Settings it leaves out are shown below it.
 	 */
 	sentence: string | null;
 	/** The tab it's listed under on the Images page. */
@@ -70,12 +62,10 @@ export interface ImageTemplate {
 	/** Where the picture comes from: a photo, or a drawing made on the page. */
 	imageSource: 'photo' | 'drawing';
 	maxImages: number;
+	/** The shape it starts with; the message says it in words, like "Make it square (1:1)." */
 	size: ImageShape;
-	quality: string | null;
-	background: ImageBackground | null;
-	format: ImageFormat | null;
 	settings: TemplateSetting[];
-	/** The prompt, with `{{setting}}` placeholders. */
+	/** The instructions after the sentence, with `{{setting}}` placeholders. */
 	prompt: string;
 	/** Lower comes first within its category. */
 	order: number;
@@ -125,7 +115,7 @@ function oneOf<T extends string>(value: unknown, allowed: readonly T[], what: st
 function parseOption(raw: unknown, setting: string): TemplateOption {
 	if (typeof raw === 'string' || typeof raw === 'number') {
 		const label = String(raw).trim();
-		return { value: slugify(label), label, prompt: label, background: null };
+		return { value: slugify(label), label, prompt: label };
 	}
 	const o = (raw ?? {}) as Record<string, unknown>;
 	const label = text(o.label) ?? text(o.value);
@@ -133,8 +123,7 @@ function parseOption(raw: unknown, setting: string): TemplateOption {
 	return {
 		value: text(o.value) ?? slugify(label),
 		label,
-		prompt: text(o.prompt) ?? label,
-		background: oneOf(o.background, IMAGE_BACKGROUNDS, `background of "${label}"`)
+		prompt: text(o.prompt) ?? label
 	};
 }
 
@@ -218,9 +207,6 @@ function parseTemplate(
 				oneOf(meta['image-source'], ['photo', 'drawing'] as const, 'image-source') ?? 'photo',
 			maxImages: Number.isInteger(maxImages) && maxImages >= 0 ? maxImages : 1,
 			size: oneOf(meta.size, IMAGE_SHAPES, 'size') ?? 'auto',
-			quality: text(meta.quality),
-			background: oneOf(meta.background, IMAGE_BACKGROUNDS, 'background'),
-			format: oneOf(meta.format, IMAGE_FORMATS, 'format'),
 			settings,
 			prompt,
 			order: Number.isFinite(Number(meta.order)) ? Number(meta.order) : 100,
@@ -300,7 +286,6 @@ export interface TemplateChoice {
 export interface ResolvedTemplate {
 	template: ImageTemplate;
 	choices: TemplateChoice[];
-	background: ImageBackground | null;
 }
 
 /**
@@ -325,7 +310,6 @@ export function resolveImageTemplate(
 		given.set(setting, value.trim());
 	}
 
-	let background = template.background;
 	const choices = template.settings.map((setting): TemplateChoice => {
 		const input = given.get(setting);
 		if (setting.type === 'text') {
@@ -342,10 +326,9 @@ export function resolveImageTemplate(
 			const labels = setting.options.map((o) => o.label).join(', ');
 			throw new Error(`"${input}" isn't a choice for ${setting.label}. Choices: ${labels}.`);
 		}
-		if (option.background) background = option.background;
 		return { setting, value: option.value, display: option.label, prompt: option.prompt };
 	});
-	return { template, choices, background };
+	return { template, choices };
 }
 
 /** Throws when the pictures given don't fit the template. */
@@ -366,28 +349,20 @@ export function checkTemplateImages(template: ImageTemplate, count: number): voi
 }
 
 /**
- * The template's prompt with the choices filled in. `{{#key}}…{{/key}}` is kept only when the
- * setting has a value (or, for `image`, when pictures were given), `{{^key}}…{{/key}}` only when
- * it doesn't. `extra`: what the person asked for on top, added at the end.
+ * Fills in `{{key}}` from `vars`. `{{#key}}…{{/key}}` is kept only when the key has a value,
+ * `{{^key}}…{{/key}}` only when it doesn't, and a line that held only sections left out goes away
+ * instead of staying blank.
  */
-export function buildTemplatePrompt(
-	resolved: ResolvedTemplate,
-	options: { hasImages: boolean; extra?: string }
-): string {
-	const vars: Record<string, string> = { [IMAGE_VAR]: options.hasImages ? 'yes' : '' };
-	for (const choice of resolved.choices) vars[choice.setting.id] = choice.prompt;
-
-	// A left-out section leaves a marker, so a line that held only sections disappears whole
-	// instead of becoming a blank line.
+export function fillTemplate(source: string, vars: Record<string, string>): string {
 	const GONE = '\u0000';
-	let prompt = resolved.template.prompt;
-	for (let previous = ''; previous !== prompt;) {
-		previous = prompt;
-		prompt = prompt.replace(SECTION, (_, kind: string, key: string, body: string) =>
+	let text = source;
+	for (let previous = ''; previous !== text;) {
+		previous = text;
+		text = text.replace(SECTION, (_, kind: string, key: string, body: string) =>
 			(kind === '#') === Boolean(vars[key]) ? body : GONE
 		);
 	}
-	prompt = prompt
+	return text
 		.replace(PLACEHOLDER, (_, key: string) => vars[key] ?? '')
 		.split('\n')
 		.filter((line) => !line.includes(GONE) || line.replaceAll(GONE, '').trim())
@@ -395,23 +370,44 @@ export function buildTemplatePrompt(
 		.join('\n')
 		.replace(/\n{3,}/g, '\n\n')
 		.trim();
-	const extra = options.extra?.trim();
-	return extra ? `${prompt}\n\nAlso: ${extra}` : prompt;
 }
 
+/** How the message asks for each shape; the skill maps these back to `--size`. */
+const SHAPE_WORDS: Record<ImageShape, string | null> = {
+	square: 'Make it square (1:1).',
+	portrait: 'Make it portrait (2:3).',
+	landscape: 'Make it landscape (3:2).',
+	auto: null
+};
+
 /**
- * The message the Images page sends: the options that aren't part of the prompt, as the flags of
- * `btw generate image` they stand for, then the finished prompt. The generate-images skill tells
- * the agent to pass both on unchanged. The family sees the same text in the chat.
+ * What applying a template sends: a finished prompt the family can read in the chat. The sentence
+ * with the choices' labels (and "the attached picture" for `{{image}}`), then the template's
+ * instructions with the choices' prompts, the shape in words, and what the person typed.
  */
 export function templateMessage(
 	resolved: ResolvedTemplate,
-	options: { shape: ImageShape; hasImages: boolean; extra?: string }
+	options: { shape: ImageShape; images: number; extra?: string }
 ): string {
-	const { template } = resolved;
-	const lines = [`Make an image with the ${template.name} template.`, `Size: ${options.shape}`];
-	if (template.quality) lines.push(`Quality: ${template.quality}`);
-	if (resolved.background) lines.push(`Background: ${resolved.background}`);
-	if (template.format) lines.push(`Format: ${template.format}`);
-	return `${lines.join('\n')}\n\nPrompt:\n${buildTemplatePrompt(resolved, options)}`;
+	const { template, choices } = resolved;
+	const pictures =
+		options.images === 0
+			? ''
+			: options.images === 1
+				? 'the attached picture'
+				: 'the attached pictures';
+	const opening = template.sentence
+		? fillTemplate(template.sentence, {
+				[IMAGE_VAR]: pictures,
+				...Object.fromEntries(choices.map((c) => [c.setting.id, c.display]))
+			})
+		: '';
+	const body = fillTemplate(template.prompt, {
+		[IMAGE_VAR]: pictures,
+		...Object.fromEntries(choices.map((c) => [c.setting.id, c.prompt]))
+	});
+	const shape = SHAPE_WORDS[options.shape];
+	return [opening, shape ? `${body}\n${shape}` : body, options.extra?.trim()]
+		.filter(Boolean)
+		.join('\n\n');
 }

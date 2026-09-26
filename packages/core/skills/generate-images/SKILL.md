@@ -1,6 +1,6 @@
 ---
 name: generate-images
-description: Make or change pictures with `btw generate image`, from a description or from photos (restyle, edit, combine, turn into a poster, sticker, sketch...). Use whenever someone asks to make, draw, design, generate or edit a picture, and for "Make an image with the ... template" messages from the Images page.
+description: Make or change pictures with `btw generate image`, from a description, a detailed prompt or photos (restyle, edit, combine, turn into a poster, sticker, sketch...). Use whenever someone asks to make, draw, design, generate or edit a picture, including the prompts the Images page's templates send.
 ---
 
 # Making pictures
@@ -19,41 +19,40 @@ To show the result, put it in your reply as a picture, with the exact path it pr
 `![Poster with the headline BLOOM](/Users/anna/.btw-agent/profiles/family/images/2026-09-26-143512-design-a-striking-printed.png)`.
 Don't paste the command or the prompt unless someone asks.
 
-## Requests from the Images page
+## Prompts from the Images page
 
-The family picks a template on the Images page (Poster, Stickers, Sketch...), chooses its
-settings and a photo, and the page sends a message with the photo attached and the finished
-prompt:
+The Images page has templates (Poster, Stickers, '80s flashback...). Applying one starts a new
+chat with a finished prompt, and the photo attached when the template uses one:
 
 ```
 [Anna attached IMG_0142.jpg, saved at /Users/anna/.btw-agent/profiles/family/attachments/IMG_0142.jpg]
 (the photo)
-Anna: Make an image with the Poster template.
-Size: portrait
-Quality: high
+Anna: Create a Risograph poster of our garden based on the attached picture with the headline "BLOOM".
 
-Prompt:
-Design a striking printed poster, ready to hang on a wall.
-Build it around the main subject of the attached picture, redrawn to fit the poster's style.
+Design it as a striking printed poster, ready to hang on a wall.
+Build it around the main subject of the picture, redrawn to fit the poster's style.
 Style: a risograph print in two or three bright spot inks, with visible grain...
+Make it portrait (2:3).
 
-Also: make it pink
+Make it pink.
 ```
 
-Run it exactly as asked: the lines before `Prompt:` are options (`Size` is `--size`, `Quality`
-`--quality`, `Background` `--background`, `Format` `--format`), everything after `Prompt:` is
-the prompt, and each attached picture is an `--image`, by the path it was saved at.
-Don't reword the prompt: it's the template's, tested to work. Pass it on stdin so its quotes
-can't break the command:
+A detailed prompt like this, from the Images page or written by someone themselves, is used as
+it is: don't reword, shorten or translate it. Pass everything after `Anna: ` on stdin, so its
+quotes can't break the command, and each attached picture as an `--image`, by the path it was
+saved at. Set the flags the prompt asks for in words:
+
+- "square (1:1)" is `--size square`, "portrait (2:3)" `--size portrait`, "landscape (3:2)"
+  `--size landscape`. Without a shape, leave `--size` out.
+- "transparent background" is `--background transparent`.
 
 ```sh
-btw generate image - --size portrait --quality high \
+btw generate image - --size portrait \
   --image /Users/anna/.btw-agent/profiles/family/attachments/IMG_0142.jpg <<'PROMPT'
-Design a striking printed poster, ready to hang on a wall.
-Build it around the main subject of the attached picture, redrawn to fit the poster's style.
-Style: a risograph print in two or three bright spot inks, with visible grain...
+Create a Risograph poster of our garden based on the attached picture with the headline "BLOOM".
 
-Also: make it pink
+Design it as a striking printed poster, ready to hang on a wall.
+...
 PROMPT
 ```
 

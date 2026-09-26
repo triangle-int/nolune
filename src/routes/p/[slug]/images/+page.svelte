@@ -81,7 +81,10 @@
 
 	/** The template's sentence split into words and chips; settings it leaves out come after. */
 	function sentenceParts(template: Template): { parts: Part[]; rest: Setting[] } {
-		const source = template.sentence ?? `${template.title}.`;
+		// Every section's chips show, so its markers go; `{{^key}}` sections are for the message.
+		const source = (template.sentence ?? `${template.title}.`)
+			.replace(/\{\{\^\s*([\w-]+)\s*\}\}[\s\S]*?\{\{\/\s*\1\s*\}\}/g, '')
+			.replace(/\{\{[#/]\s*[\w-]+\s*\}\}/g, '');
 		const parts: Part[] = [];
 		const used: string[] = [];
 		let last = 0;

@@ -9,7 +9,6 @@ color: '#c5d8c3'
 image: required
 image-label: Photo of the person
 size: square
-quality: high
 ---
 
 Turn the attached photo into a professional headshot of the same person. Keep their face, features, skin tone, hair and age exactly as they are: it must look like them.

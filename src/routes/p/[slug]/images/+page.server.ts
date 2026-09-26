@@ -114,7 +114,7 @@ export const actions: Actions = {
 				checkTemplateImages(template, uploads.length);
 				text = templateMessage(resolved, {
 					shape,
-					hasImages: uploads.length > 0,
+					images: uploads.length,
 					extra: form.get('extra')?.toString()
 				});
 			} catch (err) {

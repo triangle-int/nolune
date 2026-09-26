@@ -9,7 +9,6 @@ color: '#f0c486'
 image: required
 image-label: Photo of the person
 size: portrait
-quality: high
 ---
 
 Turn the person in the attached photo into a collectible action figure in its retail blister pack, as a product photo. The figure looks like them, with the same face, hair and clothes, made of glossy plastic.
