@@ -98,6 +98,11 @@ export const profile = sqliteTable('profile', {
 	/** Folder name under ~/.btw-agent/profiles. Fixed at creation. */
 	slug: text('slug').notNull().unique(),
 	name: text('name').notNull(),
+	/** Skill names left out of new chats' prompts. Skills are on unless listed, new ones included. */
+	disabledSkills: text('disabled_skills', { mode: 'json' })
+		.$type<string[]>()
+		.notNull()
+		.default(sql`'[]'`),
 	createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull()
 });
@@ -187,6 +192,47 @@ export const message = sqliteTable(
 	(table) => [index('message_conversation_seq_idx').on(table.conversationId, table.seq)]
 );
 
+/**
+ * A picture (`![alt](src)`) or file (`[label](src)`) in one of the agent's replies, copied when
+ * the reply was saved so the chat keeps showing it after the original moves or disappears.
+ */
+export const media = sqliteTable(
+	'media',
+	{
+		/** Random; the only handle the web UI gets. */
+		id: text('id').primaryKey(),
+		conversationId: text('conversation_id')
+			.notNull()
+			.references(() => conversation.id, { onDelete: 'cascade' }),
+		messageId: integer('message_id')
+			.notNull()
+			.references(() => message.id, { onDelete: 'cascade' }),
+		/** The link target exactly as the Markdown lexer read it from the reply. */
+		src: text('src').notNull(),
+		status: text('status', {
+			enum: ['ok', 'missing', 'unsupported', 'too_large', 'blocked', 'failed']
+		}).notNull(),
+		/** What went wrong, in plain words, when status isn't `ok`. */
+		error: text('error'),
+		/** File name for downloads. */
+		name: text('name').notNull(),
+		/** The original, byte for byte: `~/.btw-agent/media/<sha256>`. */
+		sha256: text('sha256'),
+		mime: text('mime'),
+		bytes: integer('bytes'),
+		/** Pictures: pixel size as displayed (EXIF rotation applied), when it could be read. */
+		width: integer('width'),
+		height: integer('height'),
+		/** A full-size JPEG copy for pictures browsers can't show (HEIC, TIFF). */
+		previewSha256: text('preview_sha256'),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull()
+	},
+	(table) => [
+		index('media_messageId_idx').on(table.messageId),
+		index('media_conversationId_idx').on(table.conversationId)
+	]
+);
+
 export const trigger = sqliteTable(
 	'trigger',
 	{
@@ -195,6 +241,10 @@ export const trigger = sqliteTable(
 			.notNull()
 			.references(() => profile.id, { onDelete: 'cascade' }),
 		name: text('name').notNull(),
+		/** What it does in one plain sentence, for the family on the Automations page. */
+		summary: text('summary'),
+		/** A Lucide icon name (`umbrella`) for the Automations page. */
+		icon: text('icon'),
 		/** When it fires: on a cron schedule, once at `runAt`, or when its webhook URL is called. */
 		kind: text('kind', { enum: ['cron', 'once', 'webhook'] }).notNull(),
 		/** 5-field cron expression in the gateway's local time zone. */

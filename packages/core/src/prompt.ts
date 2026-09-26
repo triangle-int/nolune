@@ -1,8 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir, type, userInfo } from 'node:os';
 import { join } from 'node:path';
+import { MAX_MEDIA_BYTES } from './media.ts';
 import { profileDir, profileSkillsDir } from './paths.ts';
-import { renderSkillsCatalog, scanSkills } from './skills.ts';
+import type { Profile } from './profiles.ts';
+import { listProfileSkills, renderSkillsCatalog } from './skills.ts';
 import { MAX_TIMEOUT_SECONDS, DEFAULT_TIMEOUT_SECONDS, commandShell } from './run-command.ts';
 
 const MEMORY_LIMIT = 8000;
@@ -23,9 +25,12 @@ function readMemory(dir: string): string {
  * Built once per conversation and stored with it. Everything here must be stable for the life of
  * the conversation: no dates, no user names, nothing that varies per request.
  */
-export function buildSystemPrompt(profileSlug: string): string {
-	const dir = profileDir(profileSlug);
-	const { skills } = scanSkills(profileSkillsDir(profileSlug));
+export function buildSystemPrompt(profile: Pick<Profile, 'slug' | 'disabledSkills'>): string {
+	const dir = profileDir(profile.slug);
+	const skills = listProfileSkills(
+		profileSkillsDir(profile.slug),
+		profile.disabledSkills
+	).skills.filter((s) => s.enabled);
 	const skillsSection = skills.length
 		? `When a task matches a skill's description, read its SKILL.md with \`cat\` before doing anything else, and follow it. Relative paths in a skill are relative to that skill's folder.
 
@@ -45,7 +50,11 @@ Before your first command in a turn, say in one short sentence what you are abou
 - This profile's folder is \`${dir}\`. Commands start there unless you pass \`cwd\`. Put files you make for the family there unless asked otherwise.
 - Every command runs in a fresh login shell (\`${commandShell()} -lc\`): \`cd\` and variables don't carry over between calls, so chain with \`&&\` or pass \`cwd\`. There is no keyboard input, so interactive programs, password prompts and \`sudo\` fail. Commands time out after ${DEFAULT_TIMEOUT_SECONDS} seconds unless you pass \`timeout_seconds\` (max ${MAX_TIMEOUT_SECONDS}).
 - Messages don't include the date or time. Run \`date\` when it matters.
-- To look at an image (a photo, a screenshot, a scan), run \`btw view <file>...\`. The images are attached to that command's result, so you see them in your next step. Other formats such as HEIC are converted and big images are shrunk automatically. Every image stays in the conversation and is sent again with each step, so view only what you need.
+
+# Pictures and files
+To look at a picture yourself (a photo, a screenshot, a scan), run \`btw view <file>...\`: the pictures are attached to that command's result, so you see them in your next step. HEIC and other formats are converted and big pictures are shrunk automatically. Every picture you view stays in the conversation and is sent again with each step, so view only what you need.
+
+To show a picture in the chat, put it in your reply as a Markdown image: \`![what it shows](path)\`. To give someone a file (a PDF, a spreadsheet, a video), link it and it becomes a download: \`[Filled-in tax form](path)\`. A path can be absolute, start with \`~/\`, or be relative to the profile folder, and a picture can also be an https URL. Wrap paths that contain spaces in angle brackets: \`![Beach](</Users/anna/Pictures/Summer 2025/IMG_0142.HEIC>)\`. Only link files you have checked exist. They are copied when you send the reply, in full size and up to ${MAX_MEDIA_BYTES / (1024 * 1024)} MB each, so temporary files are fine and later changes to a file don't change what was sent.${process.platform === 'darwin' ? ' HEIC photos are converted so every browser can show them.' : ''}
 
 # Memory
 \`${dir}/MEMORY.md\` is this profile's long-term memory, shared by all its conversations. Its content when this conversation started is below. When you learn something that will matter in future conversations (preferences, facts about the family, where things are kept), update the file. Keep it short, a few hundred words at most: rewrite and merge rather than append.

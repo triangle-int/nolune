@@ -18,6 +18,7 @@ import {
 	initConfig,
 	installCliShim,
 	listPresets,
+	listProfileSkills,
 	listProfiles,
 	listUsers,
 	paths,
@@ -28,6 +29,7 @@ import {
 	setAdmin,
 	setDefaultPreset,
 	setPassword,
+	setSkillsEnabled,
 	updateConfig,
 	viewImage,
 	ViewLimitError
@@ -75,6 +77,8 @@ Profiles and skills
   btw profile list
   btw skill new <name> [--description D] [--profile SLUG | --global]
   btw skill list [--profile SLUG]
+  btw skill enable <name>... [--profile SLUG]
+  btw skill disable <name>... [--profile SLUG]  leave out of the profile's new chats
 
 ${TRIGGER_HELP}
 
@@ -460,20 +464,49 @@ async function main(argv: string[]): Promise<void> {
 			});
 			if (action === 'new') {
 				const name = positional(positionals, 0, 'name');
-				const dir = values.global
-					? paths.globalSkills
-					: profileSkillsDir(resolveProfileSlug(values.profile));
+				const slug = values.global ? null : resolveProfileSlug(values.profile);
+				const dir = slug ? profileSkillsDir(slug) : paths.globalSkills;
 				const location = createSkill(dir, name, values.description ?? '');
 				console.log(`Created ${location}`);
+				if (slug && getProfileBySlug(slug)?.disabledSkills.includes(name)) {
+					console.log(
+						`"${name}" is turned off in this profile, so new chats won't list it. Turn it on with \`btw skill enable ${name}\`.`
+					);
+				}
 			} else if (action === 'list') {
 				const slug = values.profile || process.env.BTW_PROFILE;
-				const { skills, warnings } = scanSkills(slug ? profileSkillsDir(slug) : '/nonexistent');
+				const profile = slug ? getProfileBySlug(slug) : undefined;
+				const { skills, warnings } = listProfileSkills(
+					slug ? profileSkillsDir(slug) : '/nonexistent',
+					profile?.disabledSkills ?? []
+				);
 				for (const s of skills) {
-					console.log(`${s.name}\t${s.scope}\t${s.location}\n  ${s.description}`);
+					const state = profile ? `${s.enabled ? 'on' : 'off'}\t` : '';
+					console.log(
+						`${s.name}\t${state}${s.scope}\t~${s.tokens} tokens\t${s.location}\n  ${s.description}`
+					);
 				}
 				for (const w of warnings) console.error(`warning: ${w}`);
 				if (!skills.length) console.log('No skills.');
-			} else fail('usage: btw skill new|list');
+				else if (profile) {
+					const on = skills.filter((s) => s.enabled);
+					const tokens = on.reduce((n, s) => n + s.tokens, 0);
+					console.log(
+						`\n${on.length} of ${skills.length} on in ${profile.name}, about ${formatTokens(tokens)} tokens in every new chat.`
+					);
+				}
+			} else if (action === 'enable' || action === 'disable') {
+				if (values.global) fail('skills are turned on and off per profile. Pass --profile <slug>.');
+				const profile = getProfileBySlug(resolveProfileSlug(values.profile))!;
+				if (!positionals.length) fail('missing <name>. See `btw help`.');
+				const known = new Set(scanSkills(profileSkillsDir(profile.slug)).skills.map((s) => s.name));
+				const unknown = positionals.filter((name) => !known.has(name));
+				if (unknown.length) fail(`no skill named ${unknown.join(', ')}. See \`btw skill list\`.`);
+				setSkillsEnabled(profile.id, positionals, action === 'enable');
+				console.log(
+					`${positionals.join(', ')}: ${action === 'enable' ? 'on' : 'off'} for new chats in ${profile.name}.`
+				);
+			} else fail('usage: btw skill new|list|enable|disable');
 			return;
 		}
 

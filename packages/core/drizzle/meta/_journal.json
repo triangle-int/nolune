@@ -22,6 +22,27 @@
 			"when": 1790431369649,
 			"tag": "0002_default_preset",
 			"breakpoints": true
+		},
+		{
+			"idx": 3,
+			"version": "6",
+			"when": 1790434092670,
+			"tag": "0003_trigger_summary",
+			"breakpoints": true
+		},
+		{
+			"idx": 4,
+			"version": "6",
+			"when": 1790434409093,
+			"tag": "0004_skill_toggles",
+			"breakpoints": true
+		},
+		{
+			"idx": 5,
+			"version": "6",
+			"when": 1790435525214,
+			"tag": "0005_media",
+			"breakpoints": true
 		}
 	]
 }

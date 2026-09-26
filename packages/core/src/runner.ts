@@ -23,6 +23,7 @@ import { getDb } from './db/index.ts';
 import { profile } from './db/schema.ts';
 import { eq } from 'drizzle-orm';
 import { collectViewedImages, createViewDir, imageUse, type ImageUse } from './images.ts';
+import { copyReplyMedia, listMedia, mediaByMessage, type PreparedMedia } from './media.ts';
 import { profileDir } from './paths.ts';
 import { RUN_COMMAND_TOOL, commandEnv, parseRunCommandInput, runCommand } from './run-command.ts';
 import { cacheHitRate } from './usage.ts';
@@ -111,18 +112,22 @@ export function subscribe(
 
 export function getSnapshot(conversationId: string): Snapshot {
 	const st = stateFor(conversationId);
+	const media = mediaByMessage(conversationId);
 	return {
 		running: st.running,
 		error: st.error,
-		messages: committedRows(conversationId).map(toDisplay),
-		queued: queuedRows(conversationId).map(toDisplay),
+		messages: committedRows(conversationId).map((row) => toDisplay(row, media.get(row.id))),
+		queued: queuedRows(conversationId).map((row) => toDisplay(row)),
 		live: st.live,
 		toolOutput: st.toolOutput
 	};
 }
 
 function emitQueued(conversationId: string): void {
-	emit(conversationId, { type: 'queued', queued: queuedRows(conversationId).map(toDisplay) });
+	emit(conversationId, {
+		type: 'queued',
+		queued: queuedRows(conversationId).map((row) => toDisplay(row))
+	});
 }
 
 function commitQueued(conversationId: string): void {
@@ -198,6 +203,11 @@ function stoppedText(st: State): string {
 	return `Stopped by ${st.stoppedBy ?? 'a user'}.`;
 }
 
+function profileSlug(profileId: string): string | undefined {
+	return getDb().select({ slug: profile.slug }).from(profile).where(eq(profile.id, profileId)).get()
+		?.slug;
+}
+
 function toolResult(
 	id: string,
 	text: string,
@@ -231,11 +241,7 @@ async function runToolCall(
 	const input = parseRunCommandInput(call.input);
 	if (typeof input === 'string') return toolResult(call.id, `Invalid input: ${input}`, true);
 
-	const slug = getDb()
-		.select({ slug: profile.slug })
-		.from(profile)
-		.where(eq(profile.id, conv.profileId))
-		.get()?.slug;
+	const slug = profileSlug(conv.profileId);
 	if (!slug) return toolResult(call.id, 'Not run: the profile no longer exists.', true);
 	const dir = profileDir(slug);
 	mkdirSync(dir, { recursive: true });
@@ -310,6 +316,14 @@ async function loop(conversationId: string): Promise<void> {
 				console.error(`[btw] ${conversationId.slice(0, 8)} model call failed:`, err);
 				return;
 			}
+
+			// Pictures and files the reply links to are copied before it's saved (the live reply
+			// stays on screen meanwhile), so the saved reply never points at a missing copy.
+			const texts = reply.content.flatMap((b) => (b.type === 'text' ? [b.text] : []));
+			const slug = profileSlug(conv.profileId);
+			const media: PreparedMedia[] = slug
+				? await copyReplyMedia(texts, profileDir(slug), abort.signal)
+				: [];
 			clearLive(conversationId);
 
 			const usage = summarizeUsage(reply.usage);
@@ -322,9 +336,13 @@ async function loop(conversationId: string): Promise<void> {
 				kind: 'assistant',
 				content: JSON.stringify(reply.content),
 				stopReason: reply.stop_reason,
-				usage
+				usage,
+				media
 			});
-			emit(conversationId, { type: 'message', message: toDisplay(assistantRow) });
+			emit(conversationId, {
+				type: 'message',
+				message: toDisplay(assistantRow, media.length ? listMedia(assistantRow.id) : [])
+			});
 			touchConversation(conversationId);
 
 			const calls = reply.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');

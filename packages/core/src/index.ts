@@ -33,6 +33,7 @@ export {
 	listProfilesForUser,
 	removeMember,
 	renameProfile,
+	setSkillsEnabled,
 	type Profile
 } from './profiles.ts';
 export {
@@ -60,6 +61,7 @@ export {
 	type DisplayMessage,
 	type Usage
 } from './conversations.ts';
+export { MAX_MEDIA_BYTES, getMedia, mediaFile, type DisplayMedia, type MediaRow } from './media.ts';
 export {
 	getSnapshot,
 	isRunning,
@@ -74,13 +76,21 @@ export {
 	type Snapshot
 } from './runner.ts';
 export { EFFORTS, type Effort } from './anthropic.ts';
-export { createSkill, isValidSkillName, scanSkills, type Skill } from './skills.ts';
+export {
+	createSkill,
+	isValidSkillName,
+	listProfileSkills,
+	scanSkills,
+	type ProfileSkill,
+	type Skill
+} from './skills.ts';
 export { buildSystemPrompt } from './prompt.ts';
 export { ViewLimitError, viewImage } from './images.ts';
 export { installCliShim } from './shim.ts';
 export {
 	SILENT_REPLY,
 	createTrigger,
+	cronRunsBetween,
 	deleteTrigger,
 	describeWhen,
 	findTrigger,
@@ -88,6 +98,7 @@ export {
 	getTrigger,
 	isFinished,
 	listRuns,
+	listRunsBetween,
 	listTriggers,
 	parseRunAt,
 	queueRun,
@@ -103,6 +114,15 @@ export {
 	type TriggerWhat,
 	type TriggerWhen
 } from './triggers.ts';
+export {
+	dayKey,
+	describeCron,
+	formatClock,
+	formatDate,
+	formatDay,
+	formatDayTime,
+	formatWeekday
+} from './schedule.ts';
 export {
 	continueNotification,
 	dismissAllNotifications,

@@ -24,6 +24,7 @@
 	import Composer from './chat/Composer.svelte';
 	import CopyButton from './chat/CopyButton.svelte';
 	import Markdown from './chat/Markdown.svelte';
+	import MediaViewer, { pictureClicks, type ViewedPicture } from './chat/MediaViewer.svelte';
 	import ModelMenu from './chat/ModelMenu.svelte';
 	import PageHeader from './PageHeader.svelte';
 	import UserAvatar from './UserAvatar.svelte';
@@ -54,6 +55,7 @@
 	let continued = $state(false);
 	let effort = $state(untrack(() => conversation.effort));
 	let deleteOpen = $state(false);
+	let viewing = $state<ViewedPicture | null>(null);
 	let scroller = $state<HTMLElement>();
 	let textarea = $state<HTMLTextAreaElement | null>(null);
 
@@ -227,7 +229,10 @@
 	<div class="group/reply flex flex-col gap-3">
 		{#each r.parts as part, i (part.key)}
 			{#if part.type === 'text'}
-				<Markdown text={part.text} />
+				<Markdown
+					text={part.text}
+					media={{ conversationId: conversation.id, media: part.media, pending: part.pending }}
+				/>
 			{:else}
 				<Activity
 					{part}
@@ -358,6 +363,7 @@
 	<div
 		bind:this={scroller}
 		{@attach autoscroll}
+		{@attach pictureClicks((picture) => (viewing = picture))}
 		onscroll={onScroll}
 		class="h-full overflow-y-auto [overflow-anchor:none]"
 	>
@@ -454,6 +460,8 @@
 		{/if}
 	</div>
 </div>
+
+<MediaViewer bind:picture={viewing} />
 
 <AlertDialog.Root bind:open={deleteOpen}>
 	<AlertDialog.Content>

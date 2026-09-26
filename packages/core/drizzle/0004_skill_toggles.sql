@@ -1,0 +1,1 @@
+ALTER TABLE `profile` ADD `disabled_skills` text DEFAULT '[]' NOT NULL;
