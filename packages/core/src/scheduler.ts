@@ -7,6 +7,7 @@ import {
 	lastCommittedRow,
 	replyText
 } from './conversations.ts';
+import { pruneMedia } from './media.ts';
 import { createNotification, pruneNotifications } from './notifications.ts';
 import { profileDir } from './paths.ts';
 import { getDefaultPreset, getPreset } from './presets.ts';
@@ -288,6 +289,7 @@ function prune(): void {
 		pruneRuns(before);
 		pruneNotifications(before);
 		deleteHiddenConversations(before);
+		pruneMedia();
 	} catch (err) {
 		console.error('[btw] pruning old runs failed:', err);
 	}

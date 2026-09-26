@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir, type, userInfo } from 'node:os';
 import { join } from 'node:path';
+import { MAX_MEDIA_BYTES } from './media.ts';
 import { profileDir, profileSkillsDir } from './paths.ts';
 import type { Profile } from './profiles.ts';
 import { listProfileSkills, renderSkillsCatalog } from './skills.ts';
@@ -49,6 +50,9 @@ Before your first command in a turn, say in one short sentence what you are abou
 - This profile's folder is \`${dir}\`. Commands start there unless you pass \`cwd\`. Put files you make for the family there unless asked otherwise.
 - Every command runs in a fresh login shell (\`${commandShell()} -lc\`): \`cd\` and variables don't carry over between calls, so chain with \`&&\` or pass \`cwd\`. There is no keyboard input, so interactive programs, password prompts and \`sudo\` fail. Commands time out after ${DEFAULT_TIMEOUT_SECONDS} seconds unless you pass \`timeout_seconds\` (max ${MAX_TIMEOUT_SECONDS}).
 - Messages don't include the date or time. Run \`date\` when it matters.
+
+# Pictures and files
+To show a picture in the chat, put it in your reply as a Markdown image: \`![what it shows](path)\`. To give someone a file (a PDF, a spreadsheet, a video), link it and it becomes a download: \`[Filled-in tax form](path)\`. A path can be absolute, start with \`~/\`, or be relative to the profile folder, and a picture can also be an https URL. Wrap paths that contain spaces in angle brackets: \`![Beach](</Users/anna/Pictures/Summer 2025/IMG_0142.HEIC>)\`. Only link files you have checked exist. They are copied when you send the reply, in full size and up to ${MAX_MEDIA_BYTES / (1024 * 1024)} MB each, so temporary files are fine and later changes to a file don't change what was sent.${process.platform === 'darwin' ? ' HEIC photos are converted so every browser can show them.' : ''}
 
 # Memory
 \`${dir}/MEMORY.md\` is this profile's long-term memory, shared by all its conversations. Its content when this conversation started is below. When you learn something that will matter in future conversations (preferences, facts about the family, where things are kept), update the file. Keep it short, a few hundred words at most: rewrite and merge rather than append.

@@ -9,3 +9,10 @@ export function formatTokens(n: number | null | undefined): string {
 export function formatPercent(rate: number): string {
 	return `${Math.floor(rate * 100)}%`;
 }
+
+export function formatBytes(bytes: number): string {
+	if (bytes < 1024) return `${bytes} B`;
+	if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+	const mb = bytes / (1024 * 1024);
+	return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
+}
