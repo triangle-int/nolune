@@ -66,17 +66,24 @@ function picture(media: CopiedMedia, alt: string): string {
 	return `<button type="button" data-media-view data-name="${escapeHtml(media.name)}" data-download="${mediaUrl(media.id, true)}" aria-label="${escapeHtml(`Open ${alt || media.name}`)}" class="my-1 mr-1.5 inline-block max-w-full cursor-zoom-in overflow-hidden rounded-xl align-top"><img src="${mediaUrl(media.id)}" alt="${escapeHtml(alt)}"${size} loading="lazy" decoding="async" class="block h-auto max-h-[28rem] max-w-full bg-muted"></button>`;
 }
 
+/**
+ * File cards go on a line of their own, under the text that introduces them ("It's here:"),
+ * rather than in the middle of the sentence. Pictures stay inline so they can sit side by side.
+ */
+const OWN_LINE = 'my-2 flex w-fit';
+const INLINE = 'my-1 mr-1.5 inline-flex align-middle';
+
 /** `label` is HTML. */
 function fileCard(media: CopiedMedia, label: string): string {
 	const name = escapeHtml(media.name);
 	const details =
 		label === name ? formatBytes(media.bytes) : `${name} · ${formatBytes(media.bytes)}`;
-	return `<a href="${mediaUrl(media.id, true)}" download="${name}" data-media-file class="my-1 mr-1.5 inline-flex max-w-full items-center gap-3 rounded-xl border px-3 py-2 align-middle leading-snug hover:bg-muted">${FILE_ICON}<span class="min-w-0"><span class="block truncate font-medium">${label}</span><span class="block truncate text-xs text-muted-foreground">${details}</span></span>${DOWNLOAD_ICON}</a>`;
+	return `<a href="${mediaUrl(media.id, true)}" download="${name}" data-media-file class="${OWN_LINE} max-w-full items-center gap-3 rounded-xl border px-3 py-2 leading-snug hover:bg-muted">${FILE_ICON}<span class="min-w-0"><span class="block truncate font-medium">${label}</span><span class="block truncate text-xs text-muted-foreground">${details}</span></span>${DOWNLOAD_ICON}</a>`;
 }
 
 /** Something the reply links to that couldn't be copied. `label` is HTML. */
-function problem(icon: string, label: string, reason: string): string {
-	return `<span data-media-problem class="my-1 mr-1.5 inline-flex max-w-full items-center gap-2 rounded-xl border border-dashed px-3 py-2 align-middle text-sm leading-snug">${icon}<span class="min-w-0"><span class="font-medium">${label}</span> <span class="text-muted-foreground">· ${escapeHtml(reason)}</span></span></span>`;
+function problem(icon: string, label: string, reason: string, layout: string): string {
+	return `<span data-media-problem class="${layout} max-w-full items-center gap-2 rounded-xl border border-dashed px-3 py-2 text-sm leading-snug">${icon}<span class="min-w-0"><span class="font-medium">${label}</span> <span class="text-muted-foreground">· ${escapeHtml(reason)}</span></span></span>`;
 }
 
 function pendingPicture(alt: string): string {
@@ -84,7 +91,7 @@ function pendingPicture(alt: string): string {
 }
 
 function pendingFile(label: string): string {
-	return `<span data-media-pending class="my-1 mr-1.5 inline-flex max-w-full animate-pulse items-center gap-3 rounded-xl border px-3 py-2 align-middle leading-snug">${FILE_ICON}<span class="min-w-0 truncate font-medium">${label}</span></span>`;
+	return `<span data-media-pending class="${OWN_LINE} max-w-full animate-pulse items-center gap-3 rounded-xl border px-3 py-2 leading-snug">${FILE_ICON}<span class="min-w-0 truncate font-medium">${label}</span></span>`;
 }
 
 const marked = new Marked({
@@ -106,9 +113,11 @@ const marked = new Marked({
 					? picture(media, alt)
 					: fileCard(media, escapeHtml(alt || media.name));
 			}
-			if (media) return problem(IMAGE_OFF_ICON, escapeHtml(alt || media.name), media.error);
+			if (media) {
+				return problem(IMAGE_OFF_ICON, escapeHtml(alt || media.name), media.error, INLINE);
+			}
 			if (context?.pending && isMediaHref(href, 'image')) return pendingPicture(alt);
-			return problem(IMAGE_OFF_ICON, escapeHtml(alt || 'Picture'), 'Not available');
+			return problem(IMAGE_OFF_ICON, escapeHtml(alt || 'Picture'), 'Not available', INLINE);
 		},
 		// Links to files on the computer become downloads of the copy; web links stay links.
 		link(token) {
@@ -116,7 +125,7 @@ const marked = new Marked({
 			const label = this.parser.parseInline(token.tokens);
 			const media = context.media?.[token.href];
 			if (media?.status === 'ok') return fileCard(media, label);
-			if (media) return problem(FILE_X_ICON, label, media.error);
+			if (media) return problem(FILE_X_ICON, label, media.error, OWN_LINE);
 			// Written before files were copied: the path means nothing to the browser.
 			return context.pending ? pendingFile(label) : label;
 		}
