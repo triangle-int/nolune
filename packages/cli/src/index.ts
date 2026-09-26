@@ -421,6 +421,7 @@ async function main(argv: string[]): Promise<void> {
 			} else if (action === 'set') {
 				const name = positional(rest, 0, 'NAME');
 				const value = rest[1] ?? (await askHidden(name));
+				if (!value) fail('no value given');
 				updateConfig((c) => {
 					c.commandEnv = { ...c.commandEnv, [name]: value };
 				});

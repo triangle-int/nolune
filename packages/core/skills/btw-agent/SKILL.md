@@ -23,7 +23,7 @@ Other parts of the CLI have their own instructions: automations (`btw trigger`, 
   Models & keys. `btw user list` marks the admins, and the name on a message is who is asking.
   When someone else asks, don't do it: tell them which admin can.
 - Your commands have no keyboard, so give every value on the command line. `btw env set` without a
-  value saves an empty one.
+  value fails.
 - Use `btw`, not the files. Don't edit `config.json` or `btw.db` in `$BTW_HOME` by hand, and don't
   print `config.json`: it holds the API keys.
 - API keys, environment variables and the image model apply from the next command or message. The
