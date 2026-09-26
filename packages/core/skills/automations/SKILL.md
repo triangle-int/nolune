@@ -33,16 +33,32 @@ be left out; it defaults to this profile.
   `btw wake "<what happened and what to do>"` only when you are needed; that starts a run of this
   trigger with the message as its prompt (`btw wake -` reads the message from stdin).
 
+## How it looks to the family
+
+The profile's Automations page shows each trigger's name, its schedule in plain words ("Every
+weekday at 07:30") and a calendar of what runs in the coming week. The prompt and script are
+hidden behind Edit, so always give:
+
+- `--summary "<one sentence>"`: what it does and for whom, in plain words and the language you
+  are speaking with them. No URLs, commands, cron or instructions to yourself: "Tells Timur and
+  Polina each weekday morning whether they need umbrellas, with the day's temperatures."
+- `--icon <name>`: a [Lucide](https://lucide.dev/icons) icon name that fits, like `umbrella`,
+  `bell`, `mail`, `package`, `cake` or `pill`.
+
 ## Examples
 
 ```sh
-btw trigger add "Umbrella check" --cron "30 7 * * 1-5" \
+btw trigger add "Umbrella check" --cron "30 7 * * 1-5" --icon umbrella \
+  --summary "Tells the family each weekday morning whether they need umbrellas." \
   --prompt "Check today's weather for Berlin. If it will rain, tell the family to take umbrellas. Otherwise there is nothing to report."
 
-btw trigger add "Parcel" --at "2026-09-26 17:00" \
+btw trigger add "Parcel" --at "2026-09-26 17:00" --icon package \
+  --summary "Reminds Anna to pick up the parcel." \
   --prompt "Remind Anna to pick up the parcel at the post office."
 
-btw trigger add "School mail" --cron "*/10 * * * *" --script "./automations/school-mail.sh"
+btw trigger add "School mail" --cron "*/10 * * * *" --icon mail \
+  --summary "Watches the inbox and tells you when the school writes." \
+  --script "./automations/school-mail.sh"
 ```
 
 For a script trigger:
@@ -61,7 +77,9 @@ For a script trigger:
 - `btw trigger list`, and `btw trigger show <name>` for details, recent runs and the last script
   output.
 - `btw trigger run|pause|resume|rm <name>`.
-- `btw trigger edit <name> --prompt ... | --script ... | --cron ... | --at ... | --name ...`.
+- `btw trigger edit <name> --prompt ... | --script ... | --cron ... | --at ... | --name ... |
+--summary ... | --icon ...`. Triggers made before summaries existed have none; add one when
+  you touch them.
 - Runs use this conversation's model unless `--preset` is given, with reasoning `medium` unless
   `--effort` is given.
 - Members see, edit, run, pause and delete triggers on the profile's Automations page.

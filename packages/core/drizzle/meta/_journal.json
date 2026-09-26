@@ -22,6 +22,13 @@
 			"when": 1790431369649,
 			"tag": "0002_default_preset",
 			"breakpoints": true
+		},
+		{
+			"idx": 3,
+			"version": "6",
+			"when": 1790434092670,
+			"tag": "0003_trigger_summary",
+			"breakpoints": true
 		}
 	]
 }

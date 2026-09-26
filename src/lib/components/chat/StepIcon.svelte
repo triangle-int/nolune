@@ -23,9 +23,11 @@
 		/** A Lucide icon name picked by the model, like `cloud-sun`. */
 		name: string | null | undefined;
 		class?: string;
+		/** Shown when there is no name or Lucide has no icon by that name. */
+		fallback?: typeof TerminalIcon;
 	}
 
-	let { name, class: className = 'size-4' }: Props = $props();
+	let { name, class: className = 'size-4', fallback: Fallback = TerminalIcon }: Props = $props();
 
 	const key = $derived(name?.trim().toLowerCase() ?? '');
 	/** Undefined while loading. */
@@ -55,7 +57,7 @@
 		{/each}
 	</svg>
 {:else if node === null}
-	<TerminalIcon class={className} />
+	<Fallback class={className} />
 {:else}
 	<!-- Loading: keep the space so the row doesn't shift. -->
 	<span class={className}></span>
