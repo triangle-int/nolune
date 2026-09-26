@@ -85,7 +85,7 @@ export function createConversation(input: {
 		model: preset.model,
 		contextWindow: effectiveContextWindow(preset),
 		effort: input.effort ?? 'medium',
-		systemPrompt: buildSystemPrompt(input.profile.slug),
+		systemPrompt: buildSystemPrompt(input.profile),
 		hidden: input.hidden ?? false,
 		createdBy: input.userId,
 		createdAt: now,
