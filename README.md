@@ -92,6 +92,9 @@ pnpm start                          # run the built gateway with the settings fr
 
 Migrations are applied automatically when the gateway or the CLI opens the database.
 
+Every test starts with an empty `BTW_HOME` in a temp folder (`packages/core/src/test/setup.ts`), so
+tests of the database code run against a fresh, migrated SQLite file and never touch your data.
+
 CI (`.github/workflows/ci.yml`) runs format, lint, types, tests and the build on every pull request
 and on pushes to `main`.
 
