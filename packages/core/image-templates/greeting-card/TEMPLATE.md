@@ -3,8 +3,7 @@ name: Greeting card
 title: Make a greeting card
 sentence: 'Make a {{style}} {{occasion}} card{{#image}} featuring {{image}}{{/image}}{{#message}} that says "{{message}}"{{/message}}.'
 description: A card for a birthday, a holiday or a thank-you.
-category: Templates
-order: 7
+order: 13
 icon: gift
 color: '#f1b9c7'
 image: optional

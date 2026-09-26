@@ -2,8 +2,7 @@
 name: Stickers
 title: Turn anyone into stickers
 description: A sheet of die-cut stickers of a person, a pet or a thing.
-category: Trending
-order: 3
+order: 2
 icon: sticker
 color: '#f3dc86'
 image: required

@@ -2,8 +2,7 @@
 name: Headshot
 title: Get a polished headshot
 description: A professional profile photo from any snapshot of a person.
-category: Templates
-order: 5
+order: 8
 icon: user-round
 color: '#c5d8c3'
 image: required

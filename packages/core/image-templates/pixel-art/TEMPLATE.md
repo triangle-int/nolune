@@ -3,8 +3,7 @@ name: Pixel art
 title: Make game-ready pixel art
 sentence: 'Create a {{palette}} pixel art {{kind}}{{#subject}} of {{subject}}{{/subject}}{{#image}} based on {{image}}{{/image}}.'
 description: Game-ready pixel art, from a single sprite to a whole scene.
-category: Templates
-order: 8
+order: 14
 icon: gamepad-2
 color: '#9dd4c6'
 image: optional

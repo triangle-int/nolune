@@ -2,7 +2,6 @@
 name: "'80s flashback"
 title: Travel back to the '80s
 description: A portrait from a 1980s mall photo studio, big hair included.
-category: Trending
 order: 4
 icon: cassette-tape
 color: '#f2a7c3'

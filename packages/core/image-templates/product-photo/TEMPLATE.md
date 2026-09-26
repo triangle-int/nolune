@@ -2,8 +2,7 @@
 name: Product photo
 title: Make it shop-ready
 description: A clean product photo of something you want to sell or show off.
-category: Templates
-order: 6
+order: 15
 icon: package
 color: '#ecd6ae'
 image: required

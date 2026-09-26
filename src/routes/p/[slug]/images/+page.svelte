@@ -367,7 +367,10 @@
 			</div>
 		{/if}
 
-		<div role="tabpanel" class="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4">
+		<div
+			role={categories.length > 1 ? 'tabpanel' : undefined}
+			class="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4"
+		>
 			{#each shown as template (template.id)}
 				<button
 					type="button"

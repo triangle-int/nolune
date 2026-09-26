@@ -16,7 +16,7 @@ function template(overrides: Partial<ImageTemplate> = {}): ImageTemplate {
 		description: '',
 		sentence:
 			'Create a {{style}} sticker pack{{#image}} based on {{image}}{{/image}}{{#remix}}, remixing with {{remix}}{{/remix}}.',
-		category: 'Trending',
+		category: 'Templates',
 		icon: null,
 		color: null,
 		image: 'optional',
@@ -162,9 +162,10 @@ describe('the built-in templates', () => {
 		expect(templates.length).toBeGreaterThanOrEqual(15);
 	});
 
-	it('list Templates before Trending', () => {
-		const categories = [...new Set(templates.map((t) => t.category))];
-		expect(categories.slice(0, 2)).toEqual(['Templates', 'Trending']);
+	it('share one grid, in a fixed order', () => {
+		expect(new Set(templates.map((t) => t.category))).toEqual(new Set(['Templates']));
+		const orders = templates.map((t) => t.order);
+		expect(new Set(orders).size, 'each built-in has its own place').toBe(orders.length);
 	});
 
 	it('make a finished message with their defaults', () => {

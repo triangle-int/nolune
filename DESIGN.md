@@ -263,9 +263,10 @@ how to write prompts, and how to run the Images page's messages.
 
 ### Templates and the Images page
 
-The Images page (sidebar, `/p/<slug>/images`) is a grid of templates in tabs (Templates,
-Trending, then any other category), like ChatGPT's. Opening one shows a sheet (from the bottom on
-phones): its picture, title and description, and what to do next, which depends on the template.
+The Images page (sidebar, `/p/<slug>/images`) is one grid of templates, like ChatGPT's; tabs
+appear only when templates name more than one category. Opening one shows a sheet (from the
+bottom on phones): its picture, title and description, and what to do next, which depends on the
+template.
 
 - **Most templates are one tap**: "Take a photo" (phones) or "Choose a photo" for those that
   start from a photo, "Start drawing" for those that start from a drawing, "Try it" for the rest.

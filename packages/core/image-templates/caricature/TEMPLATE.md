@@ -2,8 +2,7 @@
 name: Caricature
 title: Get a fun caricature
 description: A big-head caricature, cheerful and kind.
-category: Trending
-order: 5
+order: 6
 icon: smile
 color: '#a9cfee'
 image: required

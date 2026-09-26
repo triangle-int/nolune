@@ -2,8 +2,7 @@
 name: Coloring page
 title: Make a coloring page
 description: A printable black-and-white coloring page for kids.
-category: Trending
-order: 7
+order: 12
 icon: brush
 color: '#cfe7ac'
 image: required

@@ -3,8 +3,7 @@ name: Poster
 title: Make a poster
 sentence: 'Create a {{style}} poster{{#subject}} of {{subject}}{{/subject}}{{#image}} based on {{image}}{{/image}}{{#headline}} with the headline "{{headline}}"{{/headline}}.'
 description: A bold printed poster built around a photo or an idea.
-category: Templates
-order: 1
+order: 3
 icon: frame
 color: '#e8956b'
 image: optional

@@ -3,8 +3,7 @@ name: Logo
 title: Design a logo
 sentence: 'Design a {{style}} logo for "{{name}}"{{#about}}, {{about}}{{/about}}{{#colors}}, in {{colors}}{{/colors}}{{#image}}, based on {{image}}{{/image}}.'
 description: A clean logo for a club, a business or a project.
-category: Templates
-order: 3
+order: 10
 icon: badge
 color: '#c3cfdb'
 image: optional

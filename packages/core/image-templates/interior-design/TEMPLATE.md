@@ -3,8 +3,7 @@ name: Interior design
 title: Redesign your room
 sentence: 'Redesign the room in {{image}} in {{style}} style, shown as {{look}}.'
 description: See one of your rooms redone in a new style.
-category: Templates
-order: 2
+order: 7
 icon: sofa
 color: '#d4b6e6'
 image: required

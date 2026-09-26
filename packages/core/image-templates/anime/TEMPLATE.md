@@ -2,8 +2,7 @@
 name: Anime
 title: See yourself in anime
 description: Turn a photo into a scene from a hand-painted anime film.
-category: Templates
-order: 4
+order: 1
 icon: sparkles
 color: '#b8b2e3'
 image: required

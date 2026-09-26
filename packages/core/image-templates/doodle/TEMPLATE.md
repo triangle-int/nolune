@@ -2,8 +2,7 @@
 name: Doodle
 title: Turn a doodle into art
 description: Draw something rough and get it back as a finished picture.
-category: Trending
-order: 1
+order: 5
 icon: pen-line
 color: '#f5f5f0'
 image: required

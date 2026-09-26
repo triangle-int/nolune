@@ -2,8 +2,7 @@
 name: Action figure
 title: Become an action figure
 description: Someone as a boxed collectible toy, accessories included.
-category: Trending
-order: 6
+order: 9
 icon: toy-brick
 color: '#f0c486'
 image: required

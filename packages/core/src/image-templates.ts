@@ -76,10 +76,11 @@ export interface ImageTemplate {
 	scope: TemplateScope;
 }
 
-/** Tabs on the Images page come in this order; other categories follow, alphabetically. */
-export const TEMPLATE_CATEGORIES = ['Templates', 'Trending'];
-/** For templates that don't name a category. */
-export const DEFAULT_TEMPLATE_CATEGORY = 'Yours';
+/**
+ * Where templates go when they don't name a category, the built-in ones included. The Images page
+ * shows tabs only when templates name more than one; this one comes first.
+ */
+export const DEFAULT_TEMPLATE_CATEGORY = 'Templates';
 
 const COVER_FILES = ['cover.png', 'cover.jpg', 'cover.jpeg', 'cover.webp'];
 const HEX_COLOR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
@@ -240,8 +241,7 @@ function scanDir(dir: string, scope: TemplateScope, warnings: string[]): ImageTe
 }
 
 function categoryRank(category: string): number {
-	const i = TEMPLATE_CATEGORIES.indexOf(category);
-	return i === -1 ? TEMPLATE_CATEGORIES.length : i;
+	return category === DEFAULT_TEMPLATE_CATEGORY ? 0 : 1;
 }
 
 /**

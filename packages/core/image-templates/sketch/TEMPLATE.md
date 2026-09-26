@@ -2,8 +2,7 @@
 name: Sketch
 title: See it hand-drawn
 description: A photo turned into a careful pencil drawing.
-category: Trending
-order: 2
+order: 11
 icon: pencil
 color: '#e2e2dc'
 image: required
