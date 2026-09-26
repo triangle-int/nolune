@@ -98,6 +98,11 @@ export const profile = sqliteTable('profile', {
 	/** Folder name under ~/.btw-agent/profiles. Fixed at creation. */
 	slug: text('slug').notNull().unique(),
 	name: text('name').notNull(),
+	/** Skill names left out of new chats' prompts. Skills are on unless listed, new ones included. */
+	disabledSkills: text('disabled_skills', { mode: 'json' })
+		.$type<string[]>()
+		.notNull()
+		.default(sql`'[]'`),
 	createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull()
 });

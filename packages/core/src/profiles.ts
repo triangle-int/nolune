@@ -37,6 +37,7 @@ export function createProfile(name: string, creatorId: string): Profile {
 		id: randomUUID(),
 		slug: slugify(trimmed),
 		name: trimmed,
+		disabledSkills: [],
 		createdBy: creatorId,
 		createdAt: new Date()
 	};
@@ -118,6 +119,23 @@ export function renameProfile(profileId: string, name: string): void {
 	const trimmed = name.trim();
 	if (!trimmed) throw new Error('Profile name is required');
 	getDb().update(profile).set({ name: trimmed }).where(eq(profile.id, profileId)).run();
+}
+
+/** Turns skills on or off for this profile's new chats. Chats already started keep their prompt. */
+export function setSkillsEnabled(profileId: string, names: string[], enabled: boolean): void {
+	getDb().transaction((tx) => {
+		const found = tx.select().from(profile).where(eq(profile.id, profileId)).get();
+		if (!found) throw new Error('No such profile');
+		const disabled = new Set(found.disabledSkills);
+		for (const name of names) {
+			if (enabled) disabled.delete(name);
+			else disabled.add(name);
+		}
+		tx.update(profile)
+			.set({ disabledSkills: [...disabled].sort() })
+			.where(eq(profile.id, profileId))
+			.run();
+	});
 }
 
 /** Deletes the profile and its conversations; the folder is moved to ~/.btw-agent/trash. */
