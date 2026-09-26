@@ -1,16 +1,15 @@
 import { statSync } from 'node:fs';
 import { fail, redirect } from '@sveltejs/kit';
 import {
+	AttachmentError,
 	IMAGE_SHAPES,
-	MAX_UPLOAD_BYTES,
-	MAX_UPLOADS,
 	checkTemplateImages,
 	createConversation,
+	findUploads,
 	getDefaultPreset,
 	imageGenerationStatus,
 	profileImageTemplatesDir,
 	resolveImageTemplate,
-	saveUploads,
 	scanImageTemplates,
 	sendMessage,
 	templateMessage,
@@ -26,6 +25,7 @@ function templatesFor(slug: string) {
 export const load: PageServerLoad = ({ locals, params }) => {
 	const { profile } = requireProfile(locals, params.slug);
 	const status = imageGenerationStatus();
+	const preset = getDefaultPreset();
 	return {
 		templates: templatesFor(profile.slug).map((t) => ({
 			id: t.id,
@@ -59,10 +59,8 @@ export const load: PageServerLoad = ({ locals, params }) => {
 						}
 			)
 		})),
-		ready: status.ready && !!getDefaultPreset(),
-		problem: getDefaultPreset() ? status.problem : 'No chat model is set up yet.',
-		maxUploads: MAX_UPLOADS,
-		maxUploadBytes: MAX_UPLOAD_BYTES
+		ready: status.ready && !!preset,
+		problem: preset ? status.problem : 'No chat model is set up yet.'
 	};
 };
 
@@ -73,27 +71,32 @@ function message(err: unknown): string {
 export const actions: Actions = {
 	/**
 	 * Starts a new chat that asks btw for a picture: with the prompt a template builds from its
-	 * settings, or from a description. Attached pictures are saved in the profile folder and
-	 * attached to the message.
+	 * settings, or from a description. Pictures were uploaded already (like files in the chat
+	 * composer) and are attached to the message by their upload ids.
 	 */
 	default: async ({ locals, params, request }) => {
 		const { user, profile } = requireProfile(locals, params.slug);
 		const form = await request.formData();
 		const templateId = form.get('template')?.toString() ?? '';
-		const files = form
-			.getAll('image')
-			.filter((f): f is File => f instanceof File && f.size > 0 && f.name !== '');
+		const uploads = form.getAll('upload').map(String);
+		const problem = (text: string) => fail(400, { template: templateId, message: text });
 		const preset = getDefaultPreset();
-		if (!preset)
-			return fail(400, { template: templateId, message: 'No chat model is set up yet.' });
+		if (!preset) return problem('No chat model is set up yet.');
+		try {
+			// Checked before the conversation exists, so a stale file doesn't leave an empty chat.
+			const notPicture = findUploads(profile.id, user.id, uploads).find(
+				(u) => !u.mime.startsWith('image/')
+			);
+			if (templateId && notPicture) return problem(`${notPicture.name} is not a picture.`);
+		} catch (err) {
+			if (err instanceof AttachmentError) return problem(err.message);
+			throw err;
+		}
 
 		let text: string;
-		let title: string;
 		if (templateId) {
 			const template = templatesFor(profile.slug).find((t) => t.id === templateId);
-			if (!template) {
-				return fail(400, { template: templateId, message: 'That template no longer exists.' });
-			}
+			if (!template) return problem('That template no longer exists.');
 			const values: Record<string, string> = {};
 			for (const setting of template.settings) {
 				const value = form.get(`setting:${setting.id}`)?.toString();
@@ -105,33 +108,19 @@ export const actions: Actions = {
 				: template.size;
 			try {
 				const resolved = resolveImageTemplate(template, values);
-				checkTemplateImages(template, files.length);
+				checkTemplateImages(template, uploads.length);
 				text = templateMessage(resolved, {
 					shape,
-					hasImages: files.length > 0,
+					hasImages: uploads.length > 0,
 					extra: form.get('extra')?.toString()
 				});
 			} catch (err) {
-				return fail(400, { template: templateId, message: message(err) });
+				return problem(message(err));
 			}
-			title = template.name;
 		} else {
 			const description = form.get('text')?.toString().trim() ?? '';
-			if (!description) return fail(400, { template: '', message: 'Describe the picture first.' });
+			if (!description) return problem('Describe the picture first.');
 			text = `Make an image: ${description}`;
-			title = description.slice(0, 80);
-		}
-
-		let attachments;
-		try {
-			attachments = await saveUploads(
-				profile.slug,
-				await Promise.all(
-					files.map(async (f) => ({ name: f.name, data: new Uint8Array(await f.arrayBuffer()) }))
-				)
-			);
-		} catch (err) {
-			return fail(400, { template: templateId, message: message(err) });
 		}
 
 		// Low reasoning: the work is one command, and the picture itself takes long enough.
@@ -139,10 +128,9 @@ export const actions: Actions = {
 			profile,
 			presetId: preset.id,
 			userId: user.id,
-			effort: 'low',
-			title
+			effort: 'low'
 		});
-		sendMessage(conversation.id, { id: user.id, name: user.name }, text, attachments);
+		await sendMessage(conversation.id, { id: user.id, name: user.name }, text, uploads);
 		redirect(303, `/p/${profile.slug}/c/${conversation.id}`);
 	}
 };

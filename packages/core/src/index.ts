@@ -4,6 +4,7 @@ export {
 	paths,
 	profileDir,
 	profileImageTemplatesDir,
+	profileMemoryDir,
 	profileSkillsDir
 } from './paths.ts';
 export {
@@ -64,11 +65,19 @@ export {
 	setEffort,
 	setHidden,
 	type Conversation,
+	type DisplayAttachment,
 	type DisplayBlock,
 	type DisplayMessage,
 	type Usage
 } from './conversations.ts';
-export { MAX_MEDIA_BYTES, getMedia, mediaFile, type DisplayMedia, type MediaRow } from './media.ts';
+export {
+	MAX_MEDIA_BYTES,
+	TooLargeError,
+	getMedia,
+	mediaFile,
+	type DisplayMedia,
+	type MediaRow
+} from './media.ts';
 export {
 	getSnapshot,
 	isRunning,
@@ -92,7 +101,33 @@ export {
 	type Skill
 } from './skills.ts';
 export { buildSystemPrompt } from './prompt.ts';
+export {
+	MemoryConflictError,
+	MemoryError,
+	addMemoryFact,
+	forgetMemoryFact,
+	forgetMemoryFile,
+	listMemoryFiles,
+	listMemoryNotes,
+	readMemoryNote,
+	removeMemoryNote,
+	renameMemoryNote,
+	replaceInMemory,
+	writeMemoryFile,
+	writeMemoryNote,
+	type MemoryFact,
+	type MemoryFile
+} from './memory.ts';
 export { ViewLimitError, inspectImage, viewImage } from './images.ts';
+export {
+	AttachmentError,
+	MAX_ATTACHMENTS,
+	createUpload,
+	deleteUpload,
+	findUploads,
+	type MessageAttachment,
+	type UploadRow
+} from './attachments.ts';
 export {
 	DEFAULT_IMAGE_MODEL,
 	IMAGE_BACKGROUNDS,
@@ -120,7 +155,6 @@ export {
 	type ResolvedTemplate,
 	type TemplateSetting
 } from './image-templates.ts';
-export { MAX_UPLOAD_BYTES, MAX_UPLOADS, saveUploads, type Attachment } from './uploads.ts';
 export { installCliShim } from './shim.ts';
 export {
 	SILENT_REPLY,

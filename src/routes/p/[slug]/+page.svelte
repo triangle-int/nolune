@@ -8,6 +8,7 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Composer from '$lib/components/chat/Composer.svelte';
 	import ModelMenu from '$lib/components/chat/ModelMenu.svelte';
+	import { Attachments } from '$lib/uploads.svelte';
 
 	let { data, form } = $props();
 
@@ -30,6 +31,7 @@
 	const STORAGE_KEY = 'btw-new-chat';
 
 	let text = $state('');
+	const attachments = new Attachments(() => data.profile.slug);
 	let presetId = $state(untrack(() => data.defaultPresetId));
 	let effort = $state('medium');
 	let submitting = $state(false);
@@ -89,6 +91,9 @@
 	>
 		<input type="hidden" name="preset" value={presetId} />
 		<input type="hidden" name="effort" value={effort} />
+		{#each attachments.ids as id (id)}
+			<input type="hidden" name="upload" value={id} />
+		{/each}
 
 		<!-- Phones: greeting in the middle, composer at the bottom. Desktop: both centered. -->
 		<div class="flex-1"></div>
@@ -116,6 +121,7 @@
 				bind:textarea
 				name="text"
 				placeholder="Ask btw"
+				{attachments}
 				busy={submitting}
 				autofocus
 				onsubmit={() => formEl?.requestSubmit()}

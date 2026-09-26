@@ -1,9 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import type Anthropic from '@anthropic-ai/sdk';
-import { and, desc, eq, isNotNull, isNull, lt, max } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, lt, max } from 'drizzle-orm';
 import type { Effort } from './anthropic.ts';
+import { parseAttachments, type MessageAttachment } from './attachments.ts';
 import { getDb } from './db/index.ts';
-import { conversation, media, message, profile, profileMember, triggerRun } from './db/schema.ts';
+import {
+	conversation,
+	media,
+	message,
+	profile,
+	profileMember,
+	triggerRun,
+	upload
+} from './db/schema.ts';
 import {
 	newMediaId,
 	toDisplayMedia,
@@ -14,7 +23,6 @@ import {
 import { buildSystemPrompt } from './prompt.ts';
 import { effectiveContextWindow, getPreset } from './presets.ts';
 import type { Profile } from './profiles.ts';
-import type { Attachment } from './uploads.ts';
 
 export type Conversation = typeof conversation.$inferSelect;
 export type MessageRow = typeof message.$inferSelect;
@@ -39,14 +47,20 @@ export type DisplayBlock =
 			icon?: string;
 	  };
 
+/** A file someone attached, as the chat shows it. */
+export type DisplayAttachment = Extract<DisplayMedia, { status: 'ok' }> & {
+	sentAs: MessageAttachment['sentAs'];
+	/** Why the model got only its name and path. */
+	note?: string;
+};
+
 export type DisplayMessage =
 	| {
 			id: number;
 			kind: 'human';
 			senderName: string;
 			text: string;
-			/** Pictures attached to the message, in order. */
-			attachments: DisplayMedia[];
+			attachments: DisplayAttachment[];
 			queued: boolean;
 			createdAt: number;
 	  }
@@ -184,6 +198,16 @@ export function touchConversation(id: string, title?: string): void {
 		.run();
 }
 
+/** Sets the title unless it changed since it read `from`. True if it was set. */
+export function replaceTitle(id: string, from: string, to: string): boolean {
+	const result = getDb()
+		.update(conversation)
+		.set({ title: to })
+		.where(and(eq(conversation.id, id), eq(conversation.title, from)))
+		.run();
+	return result.changes > 0;
+}
+
 export function committedRows(conversationId: string): MessageRow[] {
 	return getDb()
 		.select()
@@ -221,25 +245,31 @@ function nextSeq(conversationId: string): number {
 	return (row?.seq ?? 0) + 1;
 }
 
-/** What the model reads for a person's message. */
-function humanContent(senderName: string, text: string, attachments: Attachment[]): string {
-	// The sender's name and what they wrote, then where the attached files were saved. The model
-	// looks at them with `btw view` when it needs to, so they cost nothing until then.
-	const files = attachments.map((a) => `Attached: ${a.path}`).join('\n');
-	return JSON.stringify([
-		{ type: 'text', text: `${senderName}: ${text}${files ? `\n\n${files}` : ''}` }
-	]);
-}
-
 export function insertQueued(input: {
 	conversationId: string;
 	senderId: string;
 	senderName: string;
 	text: string;
-	attachments?: Attachment[];
+	/** With attachments (see prepareMessage): the content, the files, and the uploads they were. */
+	attachments?: {
+		content: unknown[];
+		files: MessageAttachment[];
+		media: (PreparedMedia & { id: string })[];
+		uploadIds: string[];
+	};
 }): MessageRow {
-	const attachments = input.attachments ?? [];
+	const { attachments } = input;
 	return getDb().transaction((tx) => {
+		if (attachments?.uploadIds.length) {
+			const taken = tx
+				.delete(upload)
+				.where(inArray(upload.id, attachments.uploadIds))
+				.returning({ id: upload.id })
+				.all();
+			if (taken.length !== attachments.uploadIds.length) {
+				throw new Error('An attached file was already sent.');
+			}
+		}
 		const row = tx
 			.insert(message)
 			.values({
@@ -250,17 +280,20 @@ export function insertQueued(input: {
 				senderId: input.senderId,
 				senderName: input.senderName,
 				text: input.text,
-				content: humanContent(input.senderName, input.text, attachments),
+				// Without attachments the model sees only the sender's name and what they wrote.
+				content: JSON.stringify(
+					attachments?.content ?? [{ type: 'text', text: `${input.senderName}: ${input.text}` }]
+				),
+				attachments: attachments ? JSON.stringify(attachments.files) : null,
 				createdAt: new Date()
 			})
 			.returning()
 			.get();
-		if (attachments.length) {
+		if (attachments?.media.length) {
 			tx.insert(media)
 				.values(
-					attachments.map((a) => ({
-						...a.media,
-						id: newMediaId(),
+					attachments.media.map((m) => ({
+						...m,
 						conversationId: input.conversationId,
 						messageId: row.id
 					}))
@@ -379,7 +412,16 @@ export function foundText(rows: MessageRow[]): string {
 		.join('\n');
 }
 
-/** `mediaRows`: the row's pictures and files: attachments of a human row, links of a reply. */
+function displayAttachments(row: MessageRow, mediaRows: MediaRow[]): DisplayAttachment[] {
+	return parseAttachments(row.attachments).flatMap((attachment) => {
+		const mediaRow = mediaRows.find((m) => m.id === attachment.mediaId);
+		const shown = mediaRow && toDisplayMedia([mediaRow])[mediaRow.src];
+		if (shown?.status !== 'ok') return [];
+		return [{ ...shown, sentAs: attachment.sentAs, note: attachment.note }];
+	});
+}
+
+/** `mediaRows`: the row's pictures and files (a reply's links, a message's attachments). */
 export function toDisplay(row: MessageRow, mediaRows: MediaRow[] = []): DisplayMessage {
 	const createdAt = row.createdAt.getTime();
 	if (row.kind === 'trigger') {
@@ -397,7 +439,7 @@ export function toDisplay(row: MessageRow, mediaRows: MediaRow[] = []): DisplayM
 			kind: 'human',
 			senderName: row.senderName ?? 'Someone',
 			text: row.text ?? '',
-			attachments: Object.values(toDisplayMedia(mediaRows)),
+			attachments: displayAttachments(row, mediaRows),
 			queued: row.seq === null,
 			createdAt
 		};

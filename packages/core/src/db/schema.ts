@@ -187,6 +187,11 @@ export const message = sqliteTable(
 		content: text('content').notNull(),
 		stopReason: text('stop_reason'),
 		usage: text('usage'),
+		/**
+		 * Human rows: the files attached to the message, in order, as `MessageAttachment[]` JSON.
+		 * Provider-neutral, unlike `content`, which says the same in the provider's own format.
+		 */
+		attachments: text('attachments'),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull()
 	},
 	(table) => [index('message_conversation_seq_idx').on(table.conversationId, table.seq)]
@@ -194,8 +199,7 @@ export const message = sqliteTable(
 
 /**
  * A picture (`![alt](src)`) or file (`[label](src)`) in one of the agent's replies, copied when
- * the reply was saved so the chat keeps showing it after the original moves or disappears. Also
- * the pictures people attach to their messages (their `src` is the path of the uploaded file).
+ * the reply was saved so the chat keeps showing it after the original moves or disappears.
  */
 export const media = sqliteTable(
 	'media',
@@ -208,7 +212,7 @@ export const media = sqliteTable(
 		messageId: integer('message_id')
 			.notNull()
 			.references(() => message.id, { onDelete: 'cascade' }),
-		/** The link target exactly as the Markdown lexer read it from the reply, or an upload's path. */
+		/** The link target exactly as the Markdown lexer read it from the reply. */
 		src: text('src').notNull(),
 		status: text('status', {
 			enum: ['ok', 'missing', 'unsupported', 'too_large', 'blocked', 'failed']
@@ -357,3 +361,52 @@ export const notificationSeen = sqliteTable('notification_seen', {
 		.references(() => user.id, { onDelete: 'cascade' }),
 	seenAt: integer('seen_at', { mode: 'timestamp_ms' }).notNull()
 });
+
+/**
+ * Files attached in the composer that aren't sent yet. The bytes are already in the media store;
+ * sending the message turns them into attachments. Rows older than a day are dropped.
+ */
+export const upload = sqliteTable(
+	'upload',
+	{
+		id: text('id').primaryKey(),
+		profileId: text('profile_id')
+			.notNull()
+			.references(() => profile.id, { onDelete: 'cascade' }),
+		/** Only the person who uploaded a file can send it. */
+		userId: text('user_id')
+			.notNull()
+			.references(() => user.id, { onDelete: 'cascade' }),
+		/** The file's name on the person's device, cleaned up. */
+		name: text('name').notNull(),
+		sha256: text('sha256').notNull(),
+		/** Sniffed from the content. */
+		mime: text('mime').notNull(),
+		bytes: integer('bytes').notNull(),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull()
+	},
+	(table) => [index('upload_profileId_idx').on(table.profileId)]
+);
+
+/**
+ * Files uploaded to a provider (Anthropic's Files API), so requests refer to them by id instead
+ * of carrying their bytes. One upload per content and account; the hourly prune deletes the
+ * ones no message refers to any more.
+ */
+export const providerFile = sqliteTable(
+	'provider_file',
+	{
+		provider: text('provider', { enum: ['anthropic'] }).notNull(),
+		/** The account the file lives in (a hash of the API key): ids are only valid there. */
+		account: text('account').notNull(),
+		/** SHA-256 of the bytes that were uploaded. */
+		sha256: text('sha256').notNull(),
+		fileId: text('file_id').notNull(),
+		/** When a message last took this id. The prune leaves files used in the last hour alone. */
+		usedAt: integer('used_at', { mode: 'timestamp_ms' }).default(now).notNull()
+	},
+	(table) => [
+		primaryKey({ columns: [table.provider, table.account, table.sha256] }),
+		index('provider_file_fileId_idx').on(table.fileId)
+	]
+);

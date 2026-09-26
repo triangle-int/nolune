@@ -13,7 +13,23 @@ export const init: ServerInit = () => {
 /** Webhook URLs carry their own secret token instead of a login. */
 const PUBLIC_PATHS = ['/login', '/api/auth/', '/api/hooks/'];
 
+/**
+ * `btw start` raises adapter-node's body limit so attachments can be uploaded. Every other route
+ * keeps a small one, including the public ones that read a body before checking anything.
+ */
+const UPLOAD_PATH = /^\/api\/p\/[^/]+\/uploads$/;
+const MAX_BODY_BYTES = 1024 * 1024;
+
+function bodyTooLarge(request: Request, path: string): boolean {
+	if (UPLOAD_PATH.test(path)) return false;
+	const length = request.headers.get('content-length');
+	if (length === null) return request.headers.has('transfer-encoding');
+	return Number(length) > MAX_BODY_BYTES;
+}
+
 export const handle: Handle = async ({ event, resolve }) => {
+	if (bodyTooLarge(event.request, event.url.pathname)) error(413, 'Request body too large');
+
 	const auth = getAuth();
 	const session = await auth.api.getSession({ headers: event.request.headers });
 	if (session) {

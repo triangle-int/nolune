@@ -70,3 +70,8 @@ export function profileSkillsDir(slug: string): string {
 export function profileImageTemplatesDir(slug: string): string {
 	return join(paths.profiles, slug, 'image-templates');
 }
+
+/** Long-term memory: one Markdown note per topic. */
+export function profileMemoryDir(slug: string): string {
+	return join(paths.profiles, slug, 'memories');
+}

@@ -2,7 +2,8 @@
 	import { untrack } from 'svelte';
 	import { enhance } from '$app/forms';
 	import { invalidate } from '$app/navigation';
-	import type { DisplayMedia, Usage } from '@btw/core';
+	import { page } from '$app/state';
+	import type { DisplayAttachment, Usage } from '@btw/core';
 	import { CACHE_TTL_MS, cacheHitRate, cacheMissTokens, promptTokens } from '@btw/core/usage';
 	import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
 	import ClockIcon from '@lucide/svelte/icons/clock';
@@ -19,14 +20,17 @@
 	import { formatPercent, formatTokens } from '$lib/format';
 	import { getPreferences } from '$lib/preferences.svelte';
 	import { buildTranscript, replyText, type Reply } from '$lib/transcript';
+	import { Attachments } from '$lib/uploads.svelte';
 	import { cn } from '$lib/utils';
 	import Activity from './chat/Activity.svelte';
 	import Composer from './chat/Composer.svelte';
 	import CopyButton from './chat/CopyButton.svelte';
 	import Markdown from './chat/Markdown.svelte';
 	import MediaViewer, { pictureClicks, type ViewedPicture } from './chat/MediaViewer.svelte';
+	import MessageAttachments from './chat/MessageAttachments.svelte';
 	import ModelMenu from './chat/ModelMenu.svelte';
 	import PageHeader from './PageHeader.svelte';
+	import TypedText from './TypedText.svelte';
 	import UserAvatar from './UserAvatar.svelte';
 
 	interface Props {
@@ -48,6 +52,7 @@
 	const prefs = getPreferences();
 	const chat = new ChatState();
 	let text = $state('');
+	const attachments = new Attachments(() => page.params.slug ?? '');
 	let sending = $state(false);
 	let actionError = $state<string | null>(null);
 	let stickToBottom = $state(true);
@@ -62,10 +67,19 @@
 	$effect(() => chat.connect(conversation.id));
 
 	const title = $derived(
-		conversation.title ||
+		chat.title ||
+			conversation.title ||
 			chat.messages.find((m) => m.kind === 'human')?.text.slice(0, 80) ||
 			'New chat'
 	);
+
+	// btw names a chat shortly after its first message; the sidebar lists the title too.
+	let listedTitle = untrack(() => conversation.title);
+	$effect(() => {
+		if (!chat.title || chat.title === listedTitle) return;
+		listedTitle = chat.title;
+		invalidate('btw:conversations');
+	});
 
 	const entries = $derived(buildTranscript(chat.messages, chat.live, chat.running));
 
@@ -135,23 +149,59 @@
 			chat.messages[chat.messages.length - 1].kind !== 'assistant'
 	);
 
-	const contentSize = $derived(
-		chat.messages.length +
-			chat.queued.length +
-			chat.live.reduce((n, b) => n + (b?.text.length ?? 0), 0) +
-			(chat.toolOutput?.text.length ?? 0) +
-			(chat.running ? 1 : 0)
-	);
+	/** How close to the end the chat has to be to count as scrolled to the bottom. */
+	const BOTTOM_SLACK = 80;
+	let lastScrollTop = 0;
 
-	/** Keeps the view pinned to the newest content unless the reader scrolled up. */
+	/**
+	 * Keeps the view pinned to the newest content while the reader is at the bottom, whenever
+	 * anything changes size: new messages and streamed text, but also pictures that finish loading.
+	 * Starting to scroll up (wheel, trackpad or finger) lets go right away, before the view has
+	 * moved far.
+	 */
 	function autoscroll(node: HTMLElement) {
-		void contentSize;
-		if (stickToBottom) node.scrollTop = node.scrollHeight;
+		const observer = new ResizeObserver(() => {
+			if (stickToBottom) node.scrollTop = node.scrollHeight;
+		});
+		observer.observe(node);
+		for (const child of node.children) observer.observe(child);
+
+		const release = () => {
+			if (node.scrollTop > 0) stickToBottom = false;
+		};
+		let touchY = 0;
+		const onWheel = (event: WheelEvent) => {
+			if (event.deltaY < 0) release();
+		};
+		const onTouchStart = (event: TouchEvent) => (touchY = event.touches[0]?.clientY ?? 0);
+		const onTouchMove = (event: TouchEvent) => {
+			const y = event.touches[0]?.clientY ?? touchY;
+			if (y > touchY) release(); // a finger moving down scrolls up
+			touchY = y;
+		};
+		node.addEventListener('wheel', onWheel, { passive: true });
+		node.addEventListener('touchstart', onTouchStart, { passive: true });
+		node.addEventListener('touchmove', onTouchMove, { passive: true });
+		return () => {
+			observer.disconnect();
+			node.removeEventListener('wheel', onWheel);
+			node.removeEventListener('touchstart', onTouchStart);
+			node.removeEventListener('touchmove', onTouchMove);
+		};
 	}
 
+	/**
+	 * Only the reader decides: scrolling down to the end sticks to the bottom, scrolling up lets
+	 * go. When the browser moves the view by itself (content changing size, focus), the choice
+	 * stays, so the chat never jumps to the bottom on its own.
+	 */
 	function onScroll(event: Event & { currentTarget: HTMLElement }) {
 		const node = event.currentTarget;
-		stickToBottom = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
+		const top = node.scrollTop;
+		const atBottom = node.scrollHeight - top - node.clientHeight < BOTTOM_SLACK;
+		if (top > lastScrollTop && atBottom) stickToBottom = true;
+		else if (top < lastScrollTop && !atBottom) stickToBottom = false;
+		lastScrollTop = top;
 	}
 
 	function scrollToBottom() {
@@ -165,17 +215,28 @@
 			headers: { 'content-type': 'application/json' },
 			body: body === undefined ? undefined : JSON.stringify(body)
 		});
-		if (!res.ok) actionError = (await res.text()) || `Request failed (${res.status})`;
+		if (!res.ok) {
+			const body = await res.text();
+			let message = body;
+			try {
+				message = (JSON.parse(body) as { message?: string }).message ?? body;
+			} catch {
+				// plain text
+			}
+			actionError = message || `Request failed (${res.status})`;
+		}
 		return res.ok;
 	}
 
 	async function send() {
 		const message = text.trim();
-		if (!message || sending) return;
+		const uploads = attachments.ids;
+		if ((!message && !uploads.length) || sending || attachments.uploading) return;
 		sending = true;
 		stickToBottom = true;
-		if (await post('messages', { text: message })) {
+		if (await post('messages', { text: message, uploads })) {
 			text = '';
+			attachments.clear();
 			continued = true;
 			invalidate('btw:conversations');
 		}
@@ -193,7 +254,7 @@
 {#snippet humanBubble(
 	senderName: string,
 	body: string,
-	attachments: DisplayMedia[],
+	files: DisplayAttachment[],
 	pending: boolean
 )}
 	{@const mine = senderName === me}
@@ -209,46 +270,20 @@
 				{/if}
 			</div>
 		{/if}
-		{#if attachments.length}
-			<div class="flex max-w-[85%] flex-wrap justify-end gap-1.5 sm:max-w-[70%]">
-				{#each attachments as picture, i (i)}
-					{#if picture.status === 'ok' && picture.viewable}
-						{@const src = `/api/c/${conversation.id}/media/${encodeURIComponent(picture.id)}`}
-						<!-- Opens in the viewer through pictureClicks, like pictures in replies. -->
-						<button
-							type="button"
-							data-media-view
-							data-name={picture.name}
-							data-download={`${src}?download`}
-							class="cursor-zoom-in overflow-hidden rounded-2xl"
-							aria-label={`Open ${picture.name}`}
-						>
-							<img
-								{src}
-								alt={picture.name}
-								width={picture.width ?? undefined}
-								height={picture.height ?? undefined}
-								loading="lazy"
-								class="block h-auto max-h-60 w-auto max-w-full bg-muted object-cover"
-							/>
-						</button>
-					{:else}
-						<span class="rounded-2xl border border-dashed px-3 py-2 text-sm text-muted-foreground">
-							{picture.name}
-						</span>
-					{/if}
-				{/each}
+		{#if files.length}
+			<MessageAttachments conversationId={conversation.id} attachments={files} />
+		{/if}
+		{#if body}
+			<div
+				class={cn(
+					'max-w-[85%] rounded-[22px] px-4 py-2.5 leading-relaxed break-words whitespace-pre-wrap sm:max-w-[70%]',
+					pending ? 'border border-dashed opacity-70' : 'bg-bubble'
+				)}
+			>
+				{body}
 			</div>
 		{/if}
-		<div
-			class={cn(
-				'max-w-[85%] rounded-[22px] px-4 py-2.5 leading-relaxed break-words whitespace-pre-wrap sm:max-w-[70%]',
-				pending ? 'border border-dashed opacity-70' : 'bg-bubble'
-			)}
-		>
-			{body}
-		</div>
-		{#if !pending}
+		{#if !pending && body}
 			<div
 				class="-mr-1.5 opacity-100 transition-opacity md:opacity-0 md:group-hover/human:opacity-100"
 			>
@@ -333,7 +368,7 @@
 {/snippet}
 
 <PageHeader>
-	<h1 class="min-w-0 truncate text-base font-medium sm:text-lg">{title}</h1>
+	<h1 class="min-w-0 truncate text-base font-medium sm:text-lg"><TypedText text={title} /></h1>
 	{#if prefs.technical && usage}
 		<Tooltip.Root>
 			<Tooltip.Trigger
@@ -413,7 +448,7 @@
 					{@render humanBubble(
 						entry.message.senderName,
 						entry.message.text,
-						entry.message.attachments ?? [],
+						entry.message.attachments,
 						false
 					)}
 				{:else if entry.type === 'trigger'}
@@ -431,7 +466,7 @@
 
 			{#each chat.queued as message (message.id)}
 				{#if message.kind === 'human'}
-					{@render humanBubble(message.senderName, message.text, message.attachments ?? [], true)}
+					{@render humanBubble(message.senderName, message.text, message.attachments, true)}
 				{/if}
 			{/each}
 
@@ -474,6 +509,7 @@
 		<Composer
 			bind:value={text}
 			bind:textarea
+			{attachments}
 			running={chat.running}
 			busy={sending}
 			placeholder={chat.running ? 'Add something while btw works…' : 'Ask btw'}

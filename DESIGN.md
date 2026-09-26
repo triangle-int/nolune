@@ -13,11 +13,13 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | Exposure           | Public through a tunnel on a VPS. Every route requires login. The sign-up endpoint is disabled: accounts are created only with the local CLI, and passwords must be long and strong.                                                                                                                                                                                                                                                                                                          |
 | Profiles           | Any user can create a profile. Any member can add or remove members, rename the profile, or delete it. Deleting moves the folder to `~/.btw-agent/trash/` instead of erasing it.                                                                                                                                                                                                                                                                                                              |
 | Conversations      | Shared by every member of the profile. Messages go through a queue, and a message sent while the agent is working is fed into its next step (steering). Anyone can press Stop.                                                                                                                                                                                                                                                                                                                |
-| Sender identity    | Every human message is sent to the model as `Name: text`, with nothing else added but the paths of pictures attached to it. Display names are unique across the gateway.                                                                                                                                                                                                                                                                                                                      |
+| Sender identity    | Every human message is sent to the model as `Name: text`. Attached files come first, each as a line saying who attached it and where it was saved, followed by the picture or PDF itself when the model gets one. Display names are unique across the gateway.                                                                                                                                                                                                                                |
+| Attachments        | Any file, up to 100 MB and 10 per message, saved in the profile's `attachments` folder. The model gets pictures and PDFs through the provider's Files API, never as base64 unless an upload fails, and every other file as its path.                                                                                                                                                                                                                                                          |
 | Providers          | Anthropic only for now (API key). Model presets are global and managed by the admin with the CLI or the `/admin` page. A preset has a name (default `<model> (anthropic)`), a model, and an optional context-window override. One preset is the default (the oldest until an admin picks another): new chats start with it, and automations without a preset use it.                                                                                                                          |
 | Preset switching   | Not allowed. A conversation keeps its provider and model for its whole life.                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Reasoning          | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once.                                                                                                                                                                                                                                                                                                                  |
-| System prompt      | Built once when the conversation is created: instructions, the skills catalog and the contents of `MEMORY.md`. **It is never changed afterwards, and no update notices are added.** If memory or skills change in another conversation, this conversation only sees it by running commands.                                                                                                                                                                                                   |
+| System prompt      | Built once when the conversation is created: instructions and the skills catalog. **It is never changed afterwards, and no update notices are added.** If skills change in another conversation, this conversation only sees it by running commands. Memory isn't in it, so every conversation of a profile starts with the same prompt until its skills change.                                                                                                                              |
+| Memory             | Short Markdown notes per profile, one per topic, that the agent reads and changes with `btw memory`, like any other command. The system prompt lists the notes by name only, so the agent reads the ones it needs. The family sees and edits them on the Memory page. See [Memory](#memory).                                                                                                                                                                                                  |
 | Skills             | Follow [agentskills.io](https://agentskills.io/client-implementation/adding-skills-support). They are read from `~/.btw-agent/profiles/<slug>/skills`, `~/.agents/skills` and the skills that ship with btw (`packages/core/skills`: `automations`, `view-images` and `generate-images`); a profile skill overrides a global one, and both override a built-in one with the same name. The agent loads a skill by running `cat` on its `SKILL.md`, and creates new ones with `btw skill new`. |
 | Pictures and files | The agent writes Markdown: `![alt](path or URL)` shows a picture, `[label](path)` hands over a file. The gateway copies each one, byte for byte, when the reply is saved, and the chat only ever loads those copies. Web pictures only from links the agent found, never from the local network. The agent looks at pictures itself with `btw view`, which attaches them to that command's result. There is no tool for either.                                                               |
 | Web search         | Handled by a skill that uses the firecrawl CLI. The gateway has no code for it.                                                                                                                                                                                                                                                                                                                                                                                                               |
@@ -30,15 +32,17 @@ folder, skills and memory. The agent has a single tool, `run_command`.
   config.json                 auth secret, Anthropic and OpenAI keys, image model, extra env vars
                               for commands (mode 600)
   btw.db                      SQLite: users, sessions, profiles, presets, conversations, messages,
-                              media, triggers, trigger runs, notifications
-  media/<sha256>              copies of the pictures and files shown in chats
+                              media, uploads, provider files, triggers, trigger runs, notifications
+  media/<sha256>              copies of the pictures and files shown in chats, and of attached
+                              files not sent yet
   image-templates/<id>/       Images page templates for every profile (TEMPLATE.md, cover.png)
   bin/btw                     shim so the agent can run `btw` from any command
   profiles/<slug>/            default working folder for commands in this profile
-    MEMORY.md
+    memories/<topic>.md       long-term memory: one note per topic
+    memories/.facts.json      when each fact in memory was first seen
     skills/<name>/SKILL.md
+    attachments/              files people attached to messages
     image-templates/<id>/     this profile's own templates
-    uploads/<date>/           pictures people attached on the Images page
     images/                   what `btw generate image` made
   trash/<slug>-<timestamp>/   deleted profiles
 ~/.agents/skills/<name>/SKILL.md   global skills, visible to every profile
@@ -88,7 +92,8 @@ kick(conversation):                     one loop per conversation at a time
     if the last committed row isn't a user row: stop
     stream a model call → append an assistant row
     if it contains tool_use blocks:
-      run them one after another → append one user row with every tool_result
+      run them one after another (run_command, or a memory operation) → append one user row with
+      every tool_result
       (if stop_reason isn't tool_use, the calls are answered with "not run" instead)
 ```
 
@@ -146,11 +151,91 @@ doesn't learn about `btw view`. Showing pictures to people is the other directio
 - **Why 2000 px**, although newer models take 2576: a request with more than 20 images, the history
   included, rejects any image over 2000 px. History is never edited, so a larger image would break
   the conversation for good once it holds 21.
-- **Limits.** 10 images per command. Per conversation 100 images and 20 MB of base64, because every
-  request resends the whole history and is capped at 32 MB (and at 100 images on 200k-context
-  models). Past a limit `btw view` fails with an explanation; nothing is dropped silently.
-- Images are stored as base64 in the `tool_results` row like any other content and replayed
-  byte-for-byte, so after the first call they're read from the cache.
+- **Limits.** 10 images per command, and 100 per conversation counting attached pictures (the API's
+  limit on 200k-context models, and every request carries the whole history). Past a limit
+  `btw view` fails with an explanation; nothing is dropped silently.
+- **Uploaded, not inline.** The gateway uploads each image through the Files API (see
+  [Attachments](#attachments)) and the `tool_results` row refers to it by `file_id`, so the history
+  doesn't resend the bytes. Only if the upload fails does the image go inline as base64, and the
+  conversation's inline images are capped at 20 MB, since a request is capped at 32 MB.
+
+## Attachments
+
+People attach files in the composer: the paperclip button, pasting, or dropping them on it. Any
+kind of file, up to 100 MB each (the same as pictures in replies) and 10 per message.
+
+- **Uploaded when attached.** Each file streams to `POST /api/p/<profile>/uploads` as soon as it's
+  added, into the media store, with an `upload` row. Sending the message then carries only the
+  upload ids, and only the person who attached a file can send it. Uploads never sent are dropped
+  after a day. `btw start` raises adapter-node's 512 KB body limit for this; `hooks.server.ts`
+  keeps a 1 MB limit on every other route, including the public ones that read a body first.
+- **Saved for the agent.** On send, each file is copied into `profiles/<slug>/attachments/` under
+  its own name (`name (2).ext` when another file has it), gets a media row so the chat shows it (see [Pictures and files](#pictures-and-files)), and the message's content gets, per file, a line saying who
+  attached it and where it was saved, then the file itself when the model can have it:
+  - **pictures** go through `prepareImage` (converted, at most 2000 px, upright) and become an
+    `image` block with a `file_id`;
+  - **PDFs** become a `document` block with a `file_id`, after a free `count_tokens` call that
+    checks the model can read it and says what it costs;
+  - **other files**, text included, are only named, and the agent opens them with commands.
+- **Limits, because history is never edited.** A file the API refuses would fail every later
+  request, so pictures count against the 100 per conversation, and a conversation's PDFs share
+  25% of the model's context window (about 250k tokens on 1M-context models, 50k on 200k ones;
+  well under the API's 600 and 100 pages). A PDF over the rest of that budget, or one
+  `count_tokens` rejects, is sent as its path with the reason in its line, and the chat shows the
+  same note under the file.
+- **Files API.** Uploaded once per content and account: `provider_file` maps provider, a hash of
+  the API key (files live in its workspace) and the content's SHA-256 to the `file_id`. Requests
+  stay small whatever the history holds, and a reference is part of the cached prefix like any
+  other block. A cached id is checked (one metadata request) before it's reused, and the file
+  uploaded again if it's gone, since a message referring to a missing file would fail every later
+  request. The hourly prune deletes files no message refers to any more, leaving those used in
+  the last hour and those in another key's workspace alone. The Files API isn't eligible for zero
+  data retention, and a conversation whose files are gone (another workspace's key, deleted in the
+  Console) can't recover, since its history can't be rewritten.
+- **Other providers.** `message.attachments` is the provider-neutral record (saved path, type,
+  what the model got), while `content` holds the provider's own blocks, like the rest of the
+  history. A provider brings a `FileStore` (`provider-files.ts`) and its own branch in
+  `prepareMessage`; one without a files API would send pictures inline.
+
+## Memory
+
+Each profile's memory is a folder of short Markdown notes, `~/.btw-agent/profiles/<slug>/memories`,
+one per topic (`family.md`, `people/anna.md`). There is no memory tool: like automations and
+`btw view`, it is files plus a CLI command, so it works the same with any model provider.
+
+- **In the prompt:** a short Memory section that names the notes as they were when the
+  conversation started (`Notes when this conversation started: family, food, people/anna.`), says
+  how to read and save them, and what is worth saving. Only names, never facts, so the prompt
+  changes when a note is added or removed and not with every fact, and nothing is read until the
+  agent needs it: before answering, it reads the notes that could matter
+  (`btw memory show family food`).
+- **`btw memory`** (`packages/cli/src/memory.ts`, on top of `packages/core/src/memory.ts`): `list`,
+  `show <topic>...`, `add <topic> <fact>` (one bullet; creates the note, skips a fact it already
+  has), `replace <topic> <old> <new>` (text that appears exactly once), `forget <topic> <text>` (the
+  one line containing it), `write <topic>` (the whole note, from stdin), `rm` and `mv`. Topics are
+  paths inside the folder; `..`, names starting with a dot and symbolic links are refused. Notes are
+  written atomically and hold at most 50,000 characters. The agent can also edit the files
+  directly; `btw memory` is preferred because it dates each fact.
+- **What goes in:** one fact per bullet, updated rather than repeated. Secrets such as passwords
+  and door codes are allowed when someone asks: a profile is only shared by people who trust each
+  other, and models tend to refuse them in memory unless told so. The exception is something one
+  member wants kept from the others (a surprise), since every member can read the memory.
+- **Older conversations** keep their frozen prompt, which has the old `MEMORY.md` pasted in.
+  Whenever a `MEMORY.md` shows up in the profile folder (the old file on the first use, or one an
+  older chat writes later), it is moved into the folder as `general.md` (or `general-2.md`, …).
+- **Fact dates.** Every list item, paragraph or table row in a note is a fact, and a hidden
+  `.facts.json` in the folder records when each was first seen (matched by its words, ignoring
+  case and spacing). `btw memory` and the page update it with each change; facts that reached the
+  files some other way are dated by their file's modification time, and whatever was in memory
+  before dates were kept has none. A fact that moves to another file, or leaves one and comes
+  back, keeps its date. Names starting with a dot are reserved, so `btw memory` can't touch it.
+- **Memory page** (`/p/<slug>/memory`): a grid of dots, one row per note and one dot per fact,
+  oldest on the left. A dot's shade is its age: black today (with a halo), fading to light grey
+  over about three months, and lightest when undated. Rows are ordered by the latest change, notes
+  in a folder are grouped under its name, and past 12 rows the rest fold away. Pointing at (or
+  tapping) a dot shows the fact and when it was learned. Below the grid, every note is rendered as
+  Markdown and can be edited or forgotten. An edit is refused if the agent changed the note after
+  it was opened; saving again then replaces the agent's version.
 
 ## Making pictures
 
@@ -181,9 +266,10 @@ how to write prompts, and how to run the Images page's messages.
 The Images page (sidebar, `/p/<slug>/images`) is a grid of templates in tabs (Templates,
 Trending, then any other category), like ChatGPT's. Picking one opens a dialog: the picture it
 starts from (most need one), its settings as chips or text fields, the shape and "Anything
-else?". Generate starts a new chat (default model, reasoning `low`, titled after the template)
-whose first message holds the picture and the finished prompt. A text box below the grid
-("Describe an image", with a paperclip) does the same with the person's own words.
+else?". Generate starts a new chat (default model, reasoning `low`)
+whose first message holds the picture and the finished prompt; the model names the chat as
+usual. A text box below the grid ("Describe an image", with the chat's paperclip) does the same
+with the person's own words.
 
 - **A template** is a folder with a `TEMPLATE.md`: YAML frontmatter (name, description, category,
   a Lucide `icon` and hex `color` for its card, whether it needs a picture, the default shape,
@@ -211,14 +297,10 @@ whose first message holds the picture and the finished prompt. A text box below 
   break the command) and the option lines as flags. Templates are therefore only the page's
   business: `btw generate image` takes a prompt and pictures, whoever wrote them.
 
-- **Attached pictures** are saved in the profile's `uploads/<date>/` (names made shell-safe), where
-  the agent can use them like any file, and copied into the media store with `media` rows on the
-  human message, so the chat shows them above the bubble even if the file moves. The model sees
-  one `Attached: <path>` line per picture after the text, not the picture itself: the image model
-  gets it directly, and the agent can `btw view` it when the request depends on it. At most 4
-  pictures of 25 MB each; anything that isn't a picture is refused and nothing is kept.
-  `btw start` raises adapter-node's body limit (512 KB) to fit them; requests without a login are
-  refused before their body is read.
+- **Pictures** go through the chat's attachments: they upload as soon as they're picked, and the
+  message carries their ids, so the model sees each one with the path it was saved at in
+  `attachments/` (see [Attachments](#attachments)); the skill passes that path as `--image`.
+  Templates take only pictures.
 
 ## Automations
 
@@ -366,14 +448,15 @@ composer. Most of the family doesn't read shell, so the default view hides the m
 ## Code layout
 
 ```
-packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_command, btw view images,
-                Anthropic call, runner, media, uploads, users/profiles/presets, triggers, scheduler,
-                notifications, image generation (providers: openai.ts) and image templates.
-                Built-in skills in packages/core/skills, built-in templates in
-                packages/core/image-templates. Plain TypeScript run by Node with type stripping (no
-                enums or parameter properties; imports use .ts extensions).
+packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_command, memory notes,
+                btw view images, attachments, Anthropic call and Files API, provider file cache,
+                runner, media, users/profiles/presets, triggers, scheduler, notifications, image
+                generation (providers: openai.ts) and image templates. Built-in skills in
+                packages/core/skills, built-in templates in packages/core/image-templates. Plain
+                TypeScript run by Node with type stripping (no enums or parameter properties;
+                imports use .ts extensions).
 packages/cli    btw: setup, start, service, config, key, env, user, preset, profile, skill, trigger, wake,
-                view, generate
+                view, memory, generate
 src/            SvelteKit gateway (adapter-node). @btw/core is bundled into the server build.
                 UI components in src/lib/components (shadcn-svelte primitives in ui/).
 scripts/        build-cli.mjs bundles the CLI and core into dist/cli.js with esbuild.
@@ -414,8 +497,6 @@ Published to npm as `btw-agent` (not yet). `npm install -g btw-agent` gives the 
 - Other providers (OpenRouter, ChatGPT). Each will get its own adapter and keep history in its own format.
 - Other image providers (OpenRouter, fal, Higgsfield): a module each next to `openai.ts` and an entry
   in `PROVIDERS`, plus a `btw key set` name.
-- Attaching pictures in ordinary chats. Uploads and attachments already work; only the chat's
-  composer lacks the paperclip.
 - Smart approval mode.
 - Refusal fallbacks (`fallbacks: "default"`) for models that support them. Refusals are shown in the UI today.
 - Push notifications (Web Push) for the bell. Today it only updates while a page is open.

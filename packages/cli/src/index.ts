@@ -6,8 +6,7 @@ import { parseArgs } from 'node:util';
 import {
 	DEFAULT_IMAGE_MODEL,
 	DEFAULT_PORT,
-	MAX_UPLOAD_BYTES,
-	MAX_UPLOADS,
+	MAX_MEDIA_BYTES,
 	addPreset,
 	configExists,
 	createSkill,
@@ -41,6 +40,7 @@ import {
 } from '@btw/core';
 import { GENERATE_HELP, generateCommand } from './generate.ts';
 import { ask, askHidden } from './input.ts';
+import { MEMORY_HELP, memoryCommand } from './memory.ts';
 import { TRIGGER_HELP, triggerCommand, wakeCommand } from './triggers.ts';
 import {
 	installService,
@@ -89,6 +89,8 @@ Profiles and skills
   btw skill disable <name>... [--profile SLUG]  leave out of the profile's new chats
 
 ${TRIGGER_HELP}
+
+${MEMORY_HELP}
 
 ${GENERATE_HELP}
 
@@ -230,9 +232,9 @@ async function start(): Promise<void> {
 	process.env.HOST ??= host;
 	process.env.PORT ??= String(port);
 	process.env.ORIGIN ??= origin;
-	// Room for the pictures the Images page uploads (adapter-node allows 512 KB by default).
-	// Requests without a login are refused before their body is read.
-	process.env.BODY_SIZE_LIMIT ??= String(MAX_UPLOADS * MAX_UPLOAD_BYTES + 1024 * 1024);
+	// adapter-node refuses bodies over 512 KB; attachments go up to MAX_MEDIA_BYTES. Every route
+	// except the upload one keeps a 1 MB limit (src/hooks.server.ts).
+	process.env.BODY_SIZE_LIMIT ??= String(MAX_MEDIA_BYTES + 1024 * 1024);
 	console.log(
 		`btw gateway: ${process.env.ORIGIN} (listening on ${process.env.HOST}:${process.env.PORT})`
 	);
@@ -548,6 +550,10 @@ async function main(argv: string[]): Promise<void> {
 			requireInit();
 			return triggerCommand(action, rest);
 
+		case 'memory':
+			requireInit();
+			return memoryCommand(argv.slice(1));
+
 		case 'wake':
 			requireInit();
 			return wakeCommand(argv.slice(1));
@@ -564,7 +570,7 @@ async function main(argv: string[]): Promise<void> {
 			let failed = false;
 			for (const [i, file] of files.entries()) {
 				try {
-					console.log(viewImage(file, dir));
+					console.log(await viewImage(file, dir));
 				} catch (err) {
 					failed = true;
 					const message = err instanceof Error ? err.message : String(err);

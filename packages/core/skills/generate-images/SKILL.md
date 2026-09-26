@@ -22,9 +22,12 @@ Don't paste the command or the prompt unless someone asks.
 ## Requests from the Images page
 
 The family picks a template on the Images page (Poster, Stickers, Sketch...), chooses its
-settings and a photo, and the page sends a message with the finished prompt:
+settings and a photo, and the page sends a message with the photo attached and the finished
+prompt:
 
 ```
+[Anna attached IMG_0142.jpg, saved at /Users/anna/.btw-agent/profiles/family/attachments/IMG_0142.jpg]
+(the photo)
 Anna: Make an image with the Poster template.
 Size: portrait
 Quality: high
@@ -35,19 +38,17 @@ Build it around the main subject of the attached picture, redrawn to fit the pos
 Style: a risograph print in two or three bright spot inks, with visible grain...
 
 Also: make it pink
-
-Attached: /Users/anna/.btw-agent/profiles/family/uploads/2026-09-26/143201-IMG_0142.jpg
 ```
 
 Run it exactly as asked: the lines before `Prompt:` are options (`Size` is `--size`, `Quality`
-`--quality`, `Background` `--background`, `Format` `--format`), everything from the line after
-`Prompt:` up to the `Attached:` lines is the prompt, and each `Attached:` file is an `--image`.
+`--quality`, `Background` `--background`, `Format` `--format`), everything after `Prompt:` is
+the prompt, and each attached picture is an `--image`, by the path it was saved at.
 Don't reword the prompt: it's the template's, tested to work. Pass it on stdin so its quotes
 can't break the command:
 
 ```sh
 btw generate image - --size portrait --quality high \
-  --image /Users/anna/.btw-agent/profiles/family/uploads/2026-09-26/143201-IMG_0142.jpg <<'PROMPT'
+  --image /Users/anna/.btw-agent/profiles/family/attachments/IMG_0142.jpg <<'PROMPT'
 Design a striking printed poster, ready to hang on a wall.
 Build it around the main subject of the attached picture, redrawn to fit the poster's style.
 Style: a risograph print in two or three bright spot inks, with visible grain...
@@ -103,8 +104,8 @@ prompt again with the change worked in.
   once without asking.
 - If you need to check a result (text spelled right, the right number of things), look at it
   with `btw view <path>` before showing it; otherwise just show it.
-- The model sees the pictures you pass directly, so you don't need to look at an attached photo
-  first. Look at it only if the request depends on what's in it.
+- The image model gets the pictures you pass with `--image` itself, so your prompt doesn't need to
+  describe what's in them, only what to make of them.
 - **No API key**: tell the person that an admin has to run `btw key set openai` on this computer.
 - **Refused by the safety system**: say so plainly. Don't reword the prompt to get around it.
 - **Photos of people**: the model keeps faces close, but not perfectly. Say so if it matters.

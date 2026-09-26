@@ -7,6 +7,7 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import ClockIcon from '@lucide/svelte/icons/clock';
 	import ImagesIcon from '@lucide/svelte/icons/images';
+	import BrainIcon from '@lucide/svelte/icons/brain';
 	import PuzzleIcon from '@lucide/svelte/icons/puzzle';
 	import UsersIcon from '@lucide/svelte/icons/users';
 	import CheckIcon from '@lucide/svelte/icons/check';
@@ -22,6 +23,7 @@
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { Kbd } from '$lib/components/ui/kbd';
+	import TypedText from './TypedText.svelte';
 	import UserMenu from './UserMenu.svelte';
 
 	interface Props {
@@ -160,6 +162,19 @@
 				</Sidebar.MenuItem>
 				<Sidebar.MenuItem>
 					<Sidebar.MenuButton
+						tooltipContent="Memory"
+						isActive={page.route.id === '/p/[slug]/memory'}
+					>
+						{#snippet child({ props })}
+							<a href={resolve('/p/[slug]/memory', { slug: profile.slug })} {...props}>
+								<BrainIcon />
+								<span>Memory</span>
+							</a>
+						{/snippet}
+					</Sidebar.MenuButton>
+				</Sidebar.MenuItem>
+				<Sidebar.MenuItem>
+					<Sidebar.MenuButton
 						tooltipContent="Skills"
 						isActive={page.route.id === '/p/[slug]/skills'}
 					>
@@ -197,7 +212,7 @@
 						<Sidebar.MenuButton isActive={page.params.id === conversation.id}>
 							{#snippet child({ props })}
 								<a href={chatHref(conversation.id)} {...props}>
-									<span>{conversation.title}</span>
+									<span><TypedText text={conversation.title} /></span>
 								</a>
 							{/snippet}
 						</Sidebar.MenuButton>

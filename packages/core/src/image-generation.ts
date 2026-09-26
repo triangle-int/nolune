@@ -1,7 +1,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { basename, extname } from 'node:path';
 import { readConfig } from './config.ts';
-import { inspectImage, prepareImage, stripJpegMetadata, type MediaType } from './images.ts';
+import { inspectImage, prepareImage, stripJpegMetadata, type ImageMediaType } from './images.ts';
 import {
 	OPENAI_MAX_INPUT_IMAGES,
 	OPENAI_QUALITIES,
@@ -36,7 +36,7 @@ export const MAX_IMAGE_COUNT = 4;
 export interface InputImage {
 	name: string;
 	data: Buffer;
-	mediaType: MediaType;
+	mediaType: ImageMediaType;
 }
 
 /** One call to a provider, with the choices already checked. */
@@ -69,7 +69,7 @@ interface ProviderModule {
 	qualities: readonly string[];
 	maxInputImages: number;
 	/** Formats it accepts for input images; others are converted first. */
-	inputTypes: readonly MediaType[];
+	inputTypes: readonly ImageMediaType[];
 	generate: (request: ImageRequest) => Promise<GeneratedImage[]>;
 }
 
@@ -187,7 +187,10 @@ const MAX_INPUT_BYTES = 25 * 1024 * 1024;
  * Reads an input image. PNG, JPEG and WebP go as they are, JPEGs without their EXIF (it carries
  * GPS positions); other formats, sideways photos and huge files are converted like `btw view`'s.
  */
-function readInputImage(path: string, accept: readonly MediaType[]): InputImage {
+async function readInputImage(
+	path: string,
+	accept: readonly ImageMediaType[]
+): Promise<InputImage> {
 	let data: Buffer;
 	try {
 		if (statSync(path).isDirectory()) throw new Error("it's a folder");
@@ -211,7 +214,7 @@ function readInputImage(path: string, accept: readonly MediaType[]): InputImage 
 		return { name, data: clean, mediaType: info.mediaType };
 	}
 	try {
-		const prepared = prepareImage(path, accept);
+		const prepared = await prepareImage(path, accept);
 		const ext = prepared.info.mediaType.slice('image/'.length);
 		return {
 			name: `${basename(name, extname(name))}.${ext === 'jpeg' ? 'jpg' : ext}`,
@@ -264,7 +267,8 @@ export async function generateImages(options: GenerateOptions): Promise<{
 		throw new Error(`${provider.label} takes at most ${provider.maxInputImages} input images.`);
 	}
 
-	const inputs = paths.map((path) => readInputImage(path, provider.inputTypes));
+	const inputs: InputImage[] = [];
+	for (const path of paths) inputs.push(await readInputImage(path, provider.inputTypes));
 	options.onStart?.(model);
 	const images = await provider.generate({
 		model: providerModel,

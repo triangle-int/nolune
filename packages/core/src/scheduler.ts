@@ -7,7 +7,9 @@ import {
 	lastCommittedRow,
 	replyText
 } from './conversations.ts';
+import { pruneUploads } from './attachments.ts';
 import { pruneMedia } from './media.ts';
+import { pruneProviderFiles } from './provider-files.ts';
 import { createNotification, pruneNotifications } from './notifications.ts';
 import { profileDir } from './paths.ts';
 import { getDefaultPreset, getPreset } from './presets.ts';
@@ -289,8 +291,12 @@ function prune(): void {
 		pruneRuns(before);
 		pruneNotifications(before);
 		deleteHiddenConversations(before);
+		pruneUploads();
 		pruneMedia();
 	} catch (err) {
 		console.error('[btw] pruning old runs failed:', err);
 	}
+	pruneProviderFiles().catch((err) => {
+		console.error('[btw] pruning uploaded files failed:', err);
+	});
 }
