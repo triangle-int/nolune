@@ -4,10 +4,14 @@ import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
+	API_KEYS,
+	ApiKeyError,
 	DEFAULT_IMAGE_MODEL,
 	DEFAULT_PORT,
 	MAX_MEDIA_BYTES,
 	addPreset,
+	apiKeyStatuses,
+	checkApiKey,
 	configExists,
 	createSkill,
 	createUser,
@@ -20,15 +24,19 @@ import {
 	imageGenerationStatus,
 	initConfig,
 	installCliShim,
+	isApiKeyProvider,
 	listPresets,
 	listProfileSkills,
 	listProfiles,
 	listUsers,
+	normalizeApiKey,
 	parseImageModel,
 	paths,
 	profileSkillsDir,
 	readConfig,
+	removeApiKey,
 	removePreset,
+	saveApiKey,
 	scanSkills,
 	setAdmin,
 	setDefaultPreset,
@@ -36,7 +44,8 @@ import {
 	setSkillsEnabled,
 	updateConfig,
 	viewImage,
-	ViewLimitError
+	ViewLimitError,
+	type ApiKeyProvider
 } from '@btw/core';
 import { GENERATE_HELP, generateCommand } from './generate.ts';
 import { ask, askHidden } from './input.ts';
@@ -63,8 +72,10 @@ Settings (${paths.home})
   btw config                                 show address, port and what's configured
   btw config set <host|port|origin> <value>  origin = the public URL people open
   btw config set image-model <provider/model>  for pictures, e.g. openai/gpt-image-2.5-flare
-  btw key set <anthropic|openai> [key]       store an API key (prompts if omitted); OpenAI's is
-                                             for pictures
+  btw key set <anthropic|openai> [key]       store an API key (prompts if omitted) after checking
+                                             it; OpenAI's is for pictures. Admins can also do this
+                                             on the web, under Models & keys
+  btw key rm <anthropic|openai>              remove a stored key (the environment's is used, if set)
   btw env set <NAME> <value>                 extra env var for agent commands (e.g. FIRECRAWL_API_KEY)
   btw env rm <NAME> | btw env list
 
@@ -100,12 +111,6 @@ Inside agent commands (BTW_PROFILE is set, so --profile can be left out)
 
 const DEFAULT_MODEL = 'claude-opus-5-5';
 
-/** `btw key set <provider>`: where each provider's key goes in config.json. */
-const API_KEYS = {
-	anthropic: { field: 'anthropicApiKey', label: 'Anthropic' },
-	openai: { field: 'openaiApiKey', label: 'OpenAI' }
-} as const;
-
 function fail(message: string): never {
 	console.error(`btw: ${message}`);
 	process.exit(1);
@@ -115,6 +120,29 @@ function positional(args: string[], index: number, name: string): string {
 	const value = args[index];
 	if (!value) fail(`missing <${name}>. See \`btw help\`.`);
 	return value;
+}
+
+/**
+ * Checks a pasted key with its provider and saves it. A key the provider rejects isn't saved; one
+ * it couldn't be asked about is, with a warning, so setup works while the provider is unreachable.
+ */
+async function storeApiKey(provider: ApiKeyProvider, pasted: string): Promise<void> {
+	const { label } = API_KEYS[provider];
+	let key: string;
+	try {
+		key = normalizeApiKey(pasted);
+	} catch (err) {
+		fail((err as Error).message);
+	}
+	try {
+		const warning = await checkApiKey(provider, key);
+		saveApiKey(provider, key);
+		console.log(`Saved the ${label} API key.${warning ? ` ${warning}` : ''}`);
+	} catch (err) {
+		if (!(err instanceof ApiKeyError) || err.reason !== 'unchecked') fail((err as Error).message);
+		saveApiKey(provider, key);
+		console.log(`Saved the ${label} API key without checking it. ${err.message}`);
+	}
 }
 
 function requireInit(): void {
@@ -173,10 +201,7 @@ async function setup(args: string[]): Promise<void> {
 		const key =
 			values.key ?? (await askHidden('Anthropic API key (console.anthropic.com > API keys)'));
 		if (!key) fail('an Anthropic API key is required');
-		updateConfig((c) => {
-			c.anthropicApiKey = key;
-		});
-		console.log('Saved the API key.');
+		await storeApiKey('anthropic', key);
 	}
 
 	const admin = listUsers().find((u) => u.isAdmin);
@@ -331,9 +356,14 @@ async function main(argv: string[]): Promise<void> {
 				console.log(`home       ${paths.home}`);
 				console.log(`listen     http://${host}:${port}`);
 				console.log(`origin     ${origin}`);
-				console.log(
-					`anthropic  ${config.anthropicApiKey ? 'key set' : 'no key (btw key set anthropic)'}`
-				);
+				for (const key of apiKeyStatuses()) {
+					const where =
+						key.source === 'config' ? 'key set' : key.source === 'env' ? `key from ${key.env}` : '';
+					const shown = where
+						? `${where}${key.hint ? ` (…${key.hint})` : ''}`
+						: `no key (btw key set ${key.provider})`;
+					console.log(`${key.provider.padEnd(10)} ${shown}`);
+				}
 				const images = imageGenerationStatus();
 				console.log(`images     ${images.model}${images.problem ? ` (${images.problem})` : ''}`);
 				console.log(`env        ${Object.keys(config.commandEnv ?? {}).join(', ') || '-'}`);
@@ -366,17 +396,21 @@ async function main(argv: string[]): Promise<void> {
 
 		case 'key': {
 			requireInit();
-			const provider = rest[0];
-			if (action !== 'set' || !(provider === 'anthropic' || provider === 'openai')) {
-				fail(`usage: btw key set <${Object.keys(API_KEYS).join('|')}> [key]`);
+			const provider = rest[0] ?? '';
+			const names = Object.keys(API_KEYS).join('|');
+			if ((action !== 'set' && action !== 'rm') || !isApiKeyProvider(provider)) {
+				fail(`usage: btw key set <${names}> [key] | btw key rm <${names}>`);
 			}
-			const { field, label } = API_KEYS[provider];
+			const { label, env } = API_KEYS[provider];
+			if (action === 'rm') {
+				removeApiKey(provider);
+				const fallback = process.env[env] ? ` btw uses ${env} from the environment now.` : '';
+				console.log(`Removed the ${label} API key.${fallback}`);
+				return;
+			}
 			const key = rest[1] || (await askHidden(`${label} API key`));
 			if (!key) fail('no key given');
-			updateConfig((c) => {
-				c[field] = key;
-			});
-			console.log(`Saved the ${label} API key.`);
+			await storeApiKey(provider, key);
 			return;
 		}
 
@@ -387,6 +421,7 @@ async function main(argv: string[]): Promise<void> {
 			} else if (action === 'set') {
 				const name = positional(rest, 0, 'NAME');
 				const value = rest[1] ?? (await askHidden(name));
+				if (!value) fail('no value given');
 				updateConfig((c) => {
 					c.commandEnv = { ...c.commandEnv, [name]: value };
 				});

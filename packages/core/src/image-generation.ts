@@ -1,13 +1,8 @@
 import { readFileSync, statSync } from 'node:fs';
 import { basename, extname } from 'node:path';
-import { readConfig } from './config.ts';
+import { apiKeyHelp, configuredApiKey, readConfig, type ApiKeyProvider } from './config.ts';
 import { inspectImage, prepareImage, stripJpegMetadata, type ImageMediaType } from './images.ts';
-import {
-	OPENAI_MAX_INPUT_IMAGES,
-	OPENAI_QUALITIES,
-	generateWithOpenAI,
-	openaiApiKey
-} from './openai.ts';
+import { OPENAI_MAX_INPUT_IMAGES, OPENAI_QUALITIES, generateWithOpenAI } from './openai.ts';
 
 /*
  * `btw generate image`: making pictures with an image model. The agent runs it like any other
@@ -63,9 +58,8 @@ export interface GeneratedImage {
 interface ProviderModule {
 	/** The provider's name for people. */
 	label: string;
-	/** How the person adds the key, for messages. */
-	keyCommand: string;
-	hasKey: () => boolean;
+	/** Whose API key it uses (config.ts's API_KEYS). */
+	key: ApiKeyProvider;
 	qualities: readonly string[];
 	maxInputImages: number;
 	/** Formats it accepts for input images; others are converted first. */
@@ -76,8 +70,7 @@ interface ProviderModule {
 const PROVIDERS: Record<ImageProvider, ProviderModule> = {
 	openai: {
 		label: 'OpenAI',
-		keyCommand: 'btw key set openai',
-		hasKey: () => openaiApiKey() !== null,
+		key: 'openai',
 		qualities: OPENAI_QUALITIES,
 		maxInputImages: OPENAI_MAX_INPUT_IMAGES,
 		inputTypes: ['image/png', 'image/jpeg', 'image/webp'],
@@ -131,8 +124,8 @@ export function checkImageModel(value?: string): string {
 		configuredProvider()
 	);
 	const entry = PROVIDERS[provider];
-	if (!entry.hasKey()) {
-		throw new Error(`No ${entry.label} API key. Set it with \`${entry.keyCommand}\`.`);
+	if (!configuredApiKey(entry.key)) {
+		throw new Error(`No ${entry.label} API key. ${apiKeyHelp(entry.key)}`);
 	}
 	return `${provider}/${model}`;
 }
@@ -152,6 +145,8 @@ export interface ImageGenerationStatus {
 	ready: boolean;
 	/** What's missing, in plain words, when it isn't ready. */
 	problem: string | null;
+	/** The provider whose API key is missing, when that's the problem. */
+	missingKey: ApiKeyProvider | null;
 }
 
 /** Whether `btw generate image` can work, for the Images page and `btw config`. */
@@ -161,12 +156,13 @@ export function imageGenerationStatus(): ImageGenerationStatus {
 	try {
 		provider = PROVIDERS[parseImageModel(model).provider];
 	} catch (err) {
-		return { model, ready: false, problem: (err as Error).message };
+		return { model, ready: false, problem: (err as Error).message, missingKey: null };
 	}
-	if (!provider.hasKey()) {
-		return { model, ready: false, problem: `No API key yet: run \`${provider.keyCommand}\`.` };
+	if (!configuredApiKey(provider.key)) {
+		const problem = `No ${provider.label} API key yet. ${apiKeyHelp(provider.key)}`;
+		return { model, ready: false, problem, missingKey: provider.key };
 	}
-	return { model, ready: true, problem: null };
+	return { model, ready: true, problem: null, missingKey: null };
 }
 
 /** `portrait`, `auto` or `1536x1024`. */

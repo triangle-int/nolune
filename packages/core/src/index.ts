@@ -9,14 +9,27 @@ export {
 	profileSkillsDir
 } from './paths.ts';
 export {
+	API_KEYS,
 	DEFAULT_PORT,
+	apiKeyHelp,
 	configExists,
 	initConfig,
+	isApiKeyProvider,
 	readConfig,
 	updateConfig,
 	writeConfig,
+	type ApiKeyProvider,
 	type Config
 } from './config.ts';
+export {
+	ApiKeyError,
+	apiKeyStatuses,
+	checkApiKey,
+	normalizeApiKey,
+	removeApiKey,
+	saveApiKey,
+	type ApiKeyStatus
+} from './api-keys.ts';
 export { getDb, schema, type DB } from './db/index.ts';
 export {
 	MIN_PASSWORD_LENGTH,
