@@ -30,8 +30,11 @@
 
 	type Template = (typeof data.templates)[number];
 	type Setting = Template['settings'][number];
+	/** A chip's `tail` is the punctuation right after it, kept on its line. */
 	type Part =
-		{ kind: 'text'; text: string } | { kind: 'setting'; setting: Setting } | { kind: 'image' };
+		| { kind: 'text'; text: string }
+		| { kind: 'setting'; setting: Setting; tail: string }
+		| { kind: 'image'; tail: string };
 
 	const SHAPES = [
 		{ value: 'square', label: 'Square', icon: SquareIcon },
@@ -98,13 +101,16 @@
 			last = match.index + match[0].length;
 			const key = match[1];
 			const setting = template.settings.find((s) => s.id === key);
-			if (key === 'image' && template.image !== 'none') parts.push({ kind: 'image' });
-			else if (setting) parts.push({ kind: 'setting', setting });
+			const tail = source.slice(last).match(/^[.,;:!?)…]+/)?.[0] ?? '';
+			last += tail.length;
+			if (key === 'image' && template.image !== 'none') parts.push({ kind: 'image', tail });
+			else if (setting) parts.push({ kind: 'setting', setting, tail });
+			else parts.push({ kind: 'text', text: tail });
 			used.push(key);
 		}
 		if (last < source.length) parts.push({ kind: 'text', text: source.slice(last) });
 		if (template.image !== 'none' && !used.includes('image')) {
-			parts.push({ kind: 'text', text: ' ' }, { kind: 'image' });
+			parts.push({ kind: 'text', text: ' ' }, { kind: 'image', tail: '' });
 		}
 		return { parts, rest: template.settings.filter((s) => !used.includes(s.id)) };
 	}
@@ -617,9 +623,11 @@
 					<div class="min-h-0 flex-1 overflow-y-auto px-6 pt-4 pb-6">
 						<p class="text-[26px] leading-[1.75] font-medium tracking-tight">
 							{#each sentence.parts as part, i (i)}
-								{#if part.kind === 'text'}{part.text}{:else if part.kind === 'image'}{@render imageChip(
-										chosen
-									)}{:else}{@render settingChip(part.setting)}{/if}
+								{#if part.kind === 'text'}{part.text}{:else}<span class="whitespace-nowrap"
+										>{#if part.kind === 'image'}{@render imageChip(
+												chosen
+											)}{:else}{@render settingChip(part.setting)}{/if}{part.tail}</span
+									>{/if}
 							{/each}
 						</p>
 						{#each sentence.rest as setting (setting.id)}
