@@ -3,7 +3,7 @@ name: Dream bouquet
 title: Arrange a dream bouquet
 sentence: 'Arrange {{flowers}}{{#colors}} in {{colors}}{{/colors}} as {{format}}.'
 description: Her favorite flowers as a bouquet, a painting or a pressed-flower frame.
-order: 9
+order: 10
 icon: flower-2
 color: '#f9d2c4'
 image: optional

@@ -1,9 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
 import {
 	checkTemplateImages,
 	fillTemplate,
 	resolveImageTemplate,
 	scanImageTemplates,
+	splitEmoji,
 	templateMessage,
 	type ImageTemplate
 } from './image-templates.ts';
@@ -130,11 +134,97 @@ describe('templateMessage', () => {
 		);
 	});
 
+	it('says the shape where the prompt asks for it, instead of at the end', () => {
+		const t = template({ prompt: 'A single {{#aspect}}{{aspect}} {{/aspect}}sticker sheet.' });
+		expect(templateMessage(resolveImageTemplate(t, {}), { shape: 'square', images: 0 })).toBe(
+			'Create a 3D sticker pack.\n\nA single square (1:1) sticker sheet.'
+		);
+		expect(templateMessage(resolveImageTemplate(t, {}), { shape: 'auto', images: 0 })).toBe(
+			'Create a 3D sticker pack.\n\nA single sticker sheet.'
+		);
+	});
+
 	it('is just the instructions without a sentence', () => {
 		const resolved = resolveImageTemplate(template({ sentence: null }), {});
 		expect(templateMessage(resolved, { shape: 'portrait', images: 1 })).toMatch(
 			/^Use rounded, toy-like forms\.\n.*\nMake it portrait \(2:3\)\.$/s
 		);
+	});
+});
+
+describe('scanImageTemplates', () => {
+	const dir = mkdtempSync(join(tmpdir(), 'btw-templates-'));
+	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+	function write(id: string, frontmatter: string): void {
+		mkdirSync(join(dir, 'image-templates', id), { recursive: true });
+		writeFileSync(
+			join(dir, 'image-templates', id, 'TEMPLATE.md'),
+			`---\nname: ${id}\n${frontmatter}\n---\n\nA sticker of {{remix}}.\n`
+		);
+	}
+
+	it('keeps emoji-only choices apart, each its own value', () => {
+		write('emoji', 'settings:\n  - id: remix\n    options:\n      - 💀🍓\n      - 🌻💥');
+		const { templates } = scanImageTemplates(join(dir, 'image-templates'));
+		const remix = templates.find((t) => t.id === 'emoji')!.settings[0];
+		expect(remix.type === 'select' && remix.options.map((o) => o.value)).toEqual(['💀🍓', '🌻💥']);
+		const resolved = resolveImageTemplate(
+			templates.find((t) => t.id === 'emoji')!,
+			{
+				remix: '🌻💥'
+			}
+		);
+		expect(resolved.choices[0].prompt).toBe('🌻💥');
+	});
+
+	it('reads emoji settings, with their default and how many they hold', () => {
+		write('picker', 'settings:\n  - id: remix\n    type: emoji\n    max: 3\n    default: 🌻💥');
+		const { templates } = scanImageTemplates(join(dir, 'image-templates'));
+		expect(templates.find((t) => t.id === 'picker')!.settings[0]).toEqual({
+			type: 'emoji',
+			id: 'remix',
+			label: 'remix',
+			max: 3,
+			default: '🌻💥'
+		});
+	});
+
+	it("skips a template whose setting takes a name btw fills in, or whose choices can't be told apart", () => {
+		write('aspect', 'settings:\n  - id: aspect\n    label: Aspect');
+		write('words', 'settings:\n  - id: remix\n    type: emoji\n    default: pink');
+		write('twins', 'settings:\n  - id: remix\n    options:\n      - Pink!\n      - pink');
+		const { templates, warnings } = scanImageTemplates(join(dir, 'image-templates'));
+		expect(templates.map((t) => t.id)).not.toContain('aspect');
+		expect(templates.map((t) => t.id)).not.toContain('twins');
+		expect(templates.map((t) => t.id)).not.toContain('words');
+		expect(warnings.join('\n')).toMatch(/invalid setting id "aspect"/);
+		expect(warnings.join('\n')).toMatch(/two options of "remix" are the same/);
+		expect(warnings.join('\n')).toMatch(/"remix" default must be at most 4 emoji/);
+	});
+});
+
+describe('emoji settings', () => {
+	const emoji = template({
+		settings: [{ type: 'emoji', id: 'remix', label: 'Remix with', max: 4, default: '💀🍓' }]
+	});
+
+	it('count each emoji once, whatever it is made of', () => {
+		expect(splitEmoji('👍🏽 🇰🇬1️⃣👨‍👩‍👧')).toEqual(['👍🏽', '🇰🇬', '1️⃣', '👨‍👩‍👧']);
+		expect(splitEmoji('')).toEqual([]);
+		expect(splitEmoji('🍓 and 💀')).toBe(null);
+	});
+
+	it('take what was picked without spaces, or nothing', () => {
+		const pick = (remix: string) => resolveImageTemplate(emoji, { remix }).choices[0].prompt;
+		expect(pick('🌻 💥 🍉')).toBe('🌻💥🍉');
+		expect(pick('')).toBe('');
+		expect(resolveImageTemplate(emoji, {}).choices[0].prompt).toBe('💀🍓');
+	});
+
+	it('refuse words and more emoji than they hold', () => {
+		expect(() => resolveImageTemplate(emoji, { remix: 'pink' })).toThrow('up to 4 emoji');
+		expect(() => resolveImageTemplate(emoji, { remix: '🌻💥🍉🎨🔥' })).toThrow('up to 4 emoji');
 	});
 });
 

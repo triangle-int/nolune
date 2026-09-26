@@ -3,7 +3,7 @@ name: Family crest
 title: Give your family a coat of arms
 sentence: 'Design a {{style}} family crest for the {{surname}} family{{#symbols}} with {{symbols}}{{/symbols}}{{#motto}} and the motto "{{motto}}"{{/motto}}.'
 description: A coat of arms built from your surname, your pets and what you love doing together.
-order: 12
+order: 13
 icon: shield
 color: '#c9b8e8'
 image: none

@@ -44,24 +44,23 @@ export const load: PageServerLoad = ({ locals, params }) => {
 			imageSource: t.imageSource,
 			maxImages: t.maxImages,
 			size: t.size,
-			settings: t.settings.map((s) =>
-				s.type === 'select'
-					? {
-							type: s.type,
-							id: s.id,
-							label: s.label,
-							default: s.default,
-							options: s.options.map((o) => ({ value: o.value, label: o.label }))
-						}
-					: {
-							type: s.type,
-							id: s.id,
-							label: s.label,
-							default: s.default,
-							placeholder: s.placeholder,
-							required: s.required
-						}
-			)
+			settings: t.settings.map((s) => {
+				if (s.type === 'select') {
+					const options = s.options.map((o) => ({ value: o.value, label: o.label }));
+					return { type: s.type, id: s.id, label: s.label, default: s.default, options };
+				}
+				if (s.type === 'emoji') {
+					return { type: s.type, id: s.id, label: s.label, default: s.default, max: s.max };
+				}
+				return {
+					type: s.type,
+					id: s.id,
+					label: s.label,
+					default: s.default,
+					placeholder: s.placeholder,
+					required: s.required
+				};
+			})
 		})),
 		ready: status.ready && !!preset,
 		problem: preset ? status.problem : 'No chat model is set up yet.',

@@ -3,7 +3,7 @@ name: Tileable texture
 title: Make a seamless texture
 sentence: 'Make a seamless {{style}} texture of {{material}}{{#image}}, matching {{image}}{{/image}}.'
 description: A texture that repeats without seams, for games, 3D or a pattern.
-order: 18
+order: 19
 icon: grid-3x3
 color: '#d9cbb4'
 image: optional

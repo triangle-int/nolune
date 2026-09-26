@@ -4,6 +4,7 @@
 	import { enhance } from '$app/forms';
 	import { resolve } from '$app/paths';
 	import type { SubmitFunction } from '@sveltejs/kit';
+	import { Select as SelectPrimitive } from 'bits-ui';
 	import CameraIcon from '@lucide/svelte/icons/camera';
 	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
@@ -18,11 +19,13 @@
 	import XIcon from '@lucide/svelte/icons/x';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+	import * as Select from '$lib/components/ui/select';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Composer from '$lib/components/chat/Composer.svelte';
 	import ComposerDock from '$lib/components/chat/ComposerDock.svelte';
 	import StepIcon from '$lib/components/chat/StepIcon.svelte';
 	import DrawingCanvas from '$lib/components/images/DrawingCanvas.svelte';
+	import EmojiChip from '$lib/components/images/EmojiChip.svelte';
 	import { Attachments } from '$lib/uploads.svelte';
 	import { cn } from '$lib/utils';
 
@@ -30,8 +33,11 @@
 
 	type Template = (typeof data.templates)[number];
 	type Setting = Template['settings'][number];
+	/** A chip's `tail` is the punctuation right after it, kept on its line. */
 	type Part =
-		{ kind: 'text'; text: string } | { kind: 'setting'; setting: Setting } | { kind: 'image' };
+		| { kind: 'text'; text: string }
+		| { kind: 'setting'; setting: Setting; tail: string }
+		| { kind: 'image'; tail: string };
 
 	const SHAPES = [
 		{ value: 'square', label: 'Square', icon: SquareIcon },
@@ -98,13 +104,16 @@
 			last = match.index + match[0].length;
 			const key = match[1];
 			const setting = template.settings.find((s) => s.id === key);
-			if (key === 'image' && template.image !== 'none') parts.push({ kind: 'image' });
-			else if (setting) parts.push({ kind: 'setting', setting });
+			const tail = source.slice(last).match(/^[.,;:!?)…]+/)?.[0] ?? '';
+			last += tail.length;
+			if (key === 'image' && template.image !== 'none') parts.push({ kind: 'image', tail });
+			else if (setting) parts.push({ kind: 'setting', setting, tail });
+			else parts.push({ kind: 'text', text: tail });
 			used.push(key);
 		}
 		if (last < source.length) parts.push({ kind: 'text', text: source.slice(last) });
 		if (template.image !== 'none' && !used.includes('image')) {
-			parts.push({ kind: 'text', text: ' ' }, { kind: 'image' });
+			parts.push({ kind: 'text', text: ' ' }, { kind: 'image', tail: '' });
 		}
 		return { parts, rest: template.settings.filter((s) => !used.includes(s.id)) };
 	}
@@ -330,21 +339,37 @@
 
 {#snippet settingChip(setting: Setting)}
 	{#if setting.type === 'select'}
-		<!-- The chip shows the choice; the invisible select over it opens the system picker. -->
-		<span class={cn(chip, 'relative inline-flex items-center gap-1 whitespace-nowrap')}>
-			{optionLabel(setting, values[setting.id] ?? setting.default)}
-			<ChevronsUpDownIcon class="size-4 shrink-0 text-muted-foreground" />
-			<select
+		<!-- The chip shows the choice and opens a menu of the others; `name` posts it with the form.
+		     Inline-flex, so the whitespace around bits-ui's hidden input doesn't show. -->
+		<span class="inline-flex">
+			<Select.Root
+				type="single"
 				name={`setting:${setting.id}`}
 				bind:value={values[setting.id]}
-				aria-label={setting.label}
-				class="absolute inset-0 cursor-pointer opacity-0"
+				items={setting.options}
 			>
-				{#each setting.options as option (option.value)}
-					<option value={option.value}>{option.label}</option>
-				{/each}
-			</select>
+				<SelectPrimitive.Trigger
+					class={cn(chip, 'inline-flex cursor-pointer items-center gap-1 whitespace-nowrap')}
+					aria-label={setting.label}
+				>
+					{optionLabel(setting, values[setting.id] ?? setting.default)}
+					<ChevronsUpDownIcon class="size-4 shrink-0 text-muted-foreground" />
+				</SelectPrimitive.Trigger>
+				<Select.Content align="start">
+					{#each setting.options as option (option.value)}
+						<Select.Item value={option.value} label={option.label} class="py-2.5 text-base" />
+					{/each}
+				</Select.Content>
+			</Select.Root>
 		</span>
+	{:else if setting.type === 'emoji'}
+		<EmojiChip
+			name={`setting:${setting.id}`}
+			label={setting.label}
+			max={setting.max}
+			bind:value={values[setting.id]}
+			class={chip}
+		/>
 	{:else}
 		<input
 			name={`setting:${setting.id}`}
@@ -617,9 +642,11 @@
 					<div class="min-h-0 flex-1 overflow-y-auto px-6 pt-4 pb-6">
 						<p class="text-[26px] leading-[1.75] font-medium tracking-tight">
 							{#each sentence.parts as part, i (i)}
-								{#if part.kind === 'text'}{part.text}{:else if part.kind === 'image'}{@render imageChip(
-										chosen
-									)}{:else}{@render settingChip(part.setting)}{/if}
+								{#if part.kind === 'text'}{part.text}{:else}<span class="whitespace-nowrap"
+										>{#if part.kind === 'image'}{@render imageChip(
+												chosen
+											)}{:else}{@render settingChip(part.setting)}{/if}{part.tail}</span
+									>{/if}
 							{/each}
 						</p>
 						{#each sentence.rest as setting (setting.id)}
@@ -642,23 +669,26 @@
 					<div
 						class="flex items-center gap-3 border-t px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]"
 					>
-						{#each SHAPES.filter((s) => s.value === shape) as current (current.value)}
-							<span class={cn(chip, 'relative inline-flex items-center gap-1.5 py-1.5 text-sm')}>
-								<current.icon class="size-4" />
-								{current.label}
-								<ChevronsUpDownIcon class="size-3.5 text-muted-foreground" />
-								<select
-									name="shape"
-									bind:value={shape}
+						<Select.Root type="single" name="shape" bind:value={shape} items={[...SHAPES]}>
+							{#each SHAPES.filter((s) => s.value === shape) as current (current.value)}
+								<SelectPrimitive.Trigger
+									class={cn(chip, 'inline-flex cursor-pointer items-center gap-1.5 py-1.5 text-sm')}
 									aria-label="Shape"
-									class="absolute inset-0 cursor-pointer opacity-0"
 								>
-									{#each SHAPES as option (option.value)}
-										<option value={option.value}>{option.label}</option>
-									{/each}
-								</select>
-							</span>
-						{/each}
+									<current.icon class="size-4" />
+									{current.label}
+									<ChevronsUpDownIcon class="size-3.5 text-muted-foreground" />
+								</SelectPrimitive.Trigger>
+							{/each}
+							<Select.Content align="start" side="top">
+								{#each SHAPES as option (option.value)}
+									<Select.Item value={option.value} label={option.label}>
+										<option.icon class="size-4" />
+										{option.label}
+									</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
 						<span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
 							{photos.uploading
 								? 'Uploading the picture…'

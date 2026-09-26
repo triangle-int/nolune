@@ -3,7 +3,7 @@ name: Trip postcard
 title: Send a postcard from your trip
 sentence: 'Turn {{image}} into a vintage "Greetings from {{place}}" postcard.'
 description: A trip photo as a 1950s postcard with big retro letters.
-order: 10
+order: 11
 icon: stamp
 color: '#9fcbe6'
 image: required

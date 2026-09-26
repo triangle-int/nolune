@@ -3,7 +3,7 @@ name: Tattoo
 title: Design a tattoo
 sentence: 'Design a {{style}} tattoo of {{idea}}{{#image}}, based on {{image}}{{/image}}, shown {{show}}.'
 description: A tattoo design from an idea, as a clean stencil or on skin.
-order: 13
+order: 14
 icon: feather
 color: '#cfc3e6'
 image: optional

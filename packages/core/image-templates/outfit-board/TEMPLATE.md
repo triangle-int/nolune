@@ -3,7 +3,7 @@ name: Outfit board
 title: Put together a look
 sentence: 'Put together {{format}} of a {{aesthetic}} outfit{{#occasion}} for {{occasion}}{{/occasion}}{{#image}}, built around {{image}}{{/image}}.'
 description: A styled flat-lay, mood board or lookbook photo of an outfit in any aesthetic.
-order: 11
+order: 12
 icon: shirt
 color: '#e6c9dc'
 image: optional

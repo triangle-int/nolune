@@ -3,7 +3,7 @@ name: Scribble
 title: Bring a drawing to life
 sentence: 'Turn {{image}} into {{result}}.'
 description: Draw something here, or snap a drawing on paper, and see it made real.
-order: 8
+order: 9
 icon: pen-line
 color: '#f1f0ea'
 image: required

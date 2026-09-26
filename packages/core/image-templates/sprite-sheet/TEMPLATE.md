@@ -3,7 +3,7 @@ name: Sprite sheet
 title: Make game-ready sprites
 sentence: 'Make a {{style}} sprite sheet of {{subject}}: {{kind}}{{#image}}, based on {{image}}{{/image}}.'
 description: A character in every pose, or a set of item icons, ready to drop into a game.
-order: 15
+order: 16
 icon: gamepad-2
 color: '#a9dccd'
 image: optional

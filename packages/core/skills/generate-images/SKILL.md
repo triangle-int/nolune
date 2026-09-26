@@ -44,7 +44,8 @@ saved at. Set the flags the prompt asks for in words:
 
 - "square (1:1)" is `--size square`, "portrait (2:3)" `--size portrait`, "landscape (3:2)"
   `--size landscape`. Without a shape, leave `--size` out.
-- "transparent background" is `--background transparent`.
+- A transparent background ("transparent background", "transparent sticker sheet", "no
+  background") is `--background transparent`.
 
 ```sh
 btw generate image - --size portrait \
