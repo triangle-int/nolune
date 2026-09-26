@@ -21,6 +21,7 @@ import {
 import {
 	blobPath,
 	describeStored,
+	keepViewedImage,
 	newMediaId,
 	store,
 	storedType,
@@ -183,11 +184,25 @@ export function saveAttachment(dir: string, name: string, sha256: string, bytes:
 	}
 }
 
-export function parseAttachments(json: string | null): MessageAttachment[] {
+/**
+ * A picture a command looked at with `btw view`. A tool_results row keeps these in
+ * `message.attachments`, so the chat can show each one with the command that looked at it.
+ */
+export interface ViewedAttachment {
+	/** The run_command call whose result has the picture. */
+	toolUseId: string;
+	/** The media row with btw's copy of what the model got. */
+	mediaId: string;
+	/** The path as the command gave it to `btw view`. */
+	path: string;
+}
+
+/** A row's `attachments`: MessageAttachment[] on human rows, ViewedAttachment[] on tool results. */
+export function parseAttachments<T = MessageAttachment>(json: string | null): T[] {
 	if (!json) return [];
 	try {
 		const parsed = JSON.parse(json) as unknown;
-		return Array.isArray(parsed) ? (parsed as MessageAttachment[]) : [];
+		return Array.isArray(parsed) ? (parsed as T[]) : [];
 	} catch {
 		return [];
 	}
@@ -235,25 +250,51 @@ export async function imageBlock(
 	return { block };
 }
 
-/** The images `btw view` left, for the command's tool_result, each after a line naming it. */
-export async function viewedImageBlocks(
+export interface PreparedView {
+	/** For the command's tool_result, after its output. */
+	blocks: (Anthropic.TextBlockParam | ImageBlock)[];
+	/** The pictures that were attached, for the tool_results row. */
+	attachments: ViewedAttachment[];
+	/** Media rows with btw's copies of them, with their ids. */
+	media: (PreparedMedia & { id: string })[];
+}
+
+/**
+ * The images `btw view` left in a call's view folder: for its tool_result, each after a line
+ * naming it, and a copy of each one attached, so the chat shows the call with what it looked at.
+ * A copy is only for the chat: one that fails is left out, and the model still gets the image.
+ */
+export async function prepareViewedImages(
 	provider: Provider,
+	toolUseId: string,
 	images: ViewedImage[],
 	used: ImageUse
-): Promise<(Anthropic.TextBlockParam | ImageBlock)[]> {
-	const blocks: (Anthropic.TextBlockParam | ImageBlock)[] = [];
+): Promise<PreparedView> {
+	const prepared: PreparedView = { blocks: [], attachments: [], media: [] };
+	const notAttached = (name: string, problem: string): Anthropic.TextBlockParam => ({
+		type: 'text',
+		text: `Not attached: ${name} (${problem}).`
+	});
 	for (const image of images) {
-		const result =
-			'problem' in image
-				? { problem: image.problem }
-				: await imageBlock(provider, image.data, image.mediaType, image.name, used);
+		if ('problem' in image) {
+			prepared.blocks.push(notAttached(image.name, image.problem));
+			continue;
+		}
+		const result = await imageBlock(provider, image.data, image.mediaType, image.name, used);
 		if ('problem' in result) {
-			blocks.push({ type: 'text', text: `Not attached: ${image.name} (${result.problem}).` });
-		} else {
-			blocks.push({ type: 'text', text: `Image: ${image.name}` }, result.block);
+			prepared.blocks.push(notAttached(image.name, result.problem));
+			continue;
+		}
+		prepared.blocks.push({ type: 'text', text: `Image: ${image.name}` }, result.block);
+		try {
+			const media = { ...(await keepViewedImage(image)), id: newMediaId() };
+			prepared.media.push(media);
+			prepared.attachments.push({ toolUseId, mediaId: media.id, path: image.name });
+		} catch (err) {
+			console.error(`[btw] couldn't keep a copy of ${image.name} for the chat:`, err);
 		}
 	}
-	return blocks;
+	return prepared;
 }
 
 async function pdfBlock(
@@ -320,6 +361,7 @@ export async function prepareMessage(input: {
 		input.earlier.map((row) => ({ role: row.role, content: JSON.parse(row.content) }))
 	);
 	let documentTokens = input.earlier
+		.filter((row) => row.kind === 'human')
 		.flatMap((row) => parseAttachments(row.attachments))
 		.reduce((sum, a) => sum + (a.sentAs === 'document' ? (a.tokens ?? 0) : 0), 0);
 	const documentBudget = Math.floor(

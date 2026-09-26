@@ -22,7 +22,7 @@ import { get as httpsGet } from 'node:https';
 import { BlockList, isIP, type LookupFunction } from 'node:net';
 import { homedir, networkInterfaces } from 'node:os';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
-import type { Readable } from 'node:stream';
+import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -494,6 +494,25 @@ export async function describeStored(
 		height: size?.height ?? null,
 		previewSha256
 	};
+}
+
+/**
+ * btw's copy of a picture a command looked at with `btw view`: the bytes the model got, kept so
+ * the chat can show it with the command. Named after the file, with the extension of what it is
+ * now (a HEIC photo was sent as a JPEG).
+ */
+export async function keepViewedImage(image: {
+	name: string;
+	data: Buffer;
+	mediaType: string;
+}): Promise<PreparedMedia> {
+	const stored = await store(Readable.from([image.data]));
+	const file = basename(image.name) || 'picture';
+	const ext = extname(file);
+	const wanted = IMAGE_EXTENSIONS[image.mediaType] ?? '';
+	const same = [wanted, wanted === '.jpg' ? '.jpeg' : wanted].includes(ext.toLowerCase());
+	const name = same ? file : `${file.slice(0, file.length - ext.length) || 'picture'}${wanted}`;
+	return describeStored({ ...stored, mime: image.mediaType }, name, image.name);
 }
 
 /**

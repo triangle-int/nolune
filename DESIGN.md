@@ -162,6 +162,13 @@ doesn't learn about `btw view`. Showing pictures to people is the other directio
   [Attachments](#attachments)) and the `tool_results` row refers to it by `file_id`, so the history
   doesn't resend the bytes. Only if the upload fails does the image go inline as base64, and the
   conversation's inline images are capped at 20 MB, since a request is capped at 32 MB.
+- **Shown with the command.** The browser can't load a `file_id`, so the gateway also keeps a copy
+  of each attached image, the bytes the model got, in the media store with a `media` row, and the
+  `tool_results` row lists them in `message.attachments` (`ViewedAttachment[]`: the call's
+  `tool_use_id`, the media id, the path given to `btw view`), like a person's attachments. The chat
+  shows them under the step that looked at them. The copy is only for the chat: if it fails, the
+  model still gets the image. Named after the file with the extension of what was sent
+  (`IMG_0412.HEIC` becomes `IMG_0412.jpg`).
 
 ## Attachments
 
@@ -515,7 +522,9 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   Durations come from row timestamps, so they're approximate.
 - **Steps** show the `summary` and `icon` the model wrote with each `run_command` call ("Checking
   tomorrow's weather in Berlin" with `cloud-sun-rain`), in the conversation's language. Opening a
-  step shows the command and its output. Calls from before summaries existed say "Ran a command".
+  step shows the command and its output. Pictures a command looked at with `btw view` stay in
+  sight under its step, even when it's closed, and open in the chat's viewer. Calls from before
+  summaries existed say "Ran a command".
   Any Lucide icon works: `/api/icons/<name>` serves one icon's drawing from the `lucide` package, so
   pages don't download all two thousand; unknown names fall back to a terminal icon.
 - **Technical details** (Settings, per device, in the `btw-prefs` cookie so the server renders it

@@ -28,7 +28,12 @@ import {
 import { getDb } from './db/index.ts';
 import { profile } from './db/schema.ts';
 import { eq } from 'drizzle-orm';
-import { findUploads, prepareMessage, viewedImageBlocks } from './attachments.ts';
+import {
+	findUploads,
+	prepareMessage,
+	prepareViewedImages,
+	type PreparedView
+} from './attachments.ts';
 import { folderContextFor } from './folders.ts';
 import { createViewDir, imageUse, readViewedImages, type ImageUse } from './images.ts';
 import { copyReplyMedia, listMedia, mediaByMessage, type PreparedMedia } from './media.ts';
@@ -322,7 +327,9 @@ async function runToolCall(
 	signal: AbortSignal,
 	st: State,
 	/** Images already in the conversation; grows by what this call attaches. */
-	images: ImageUse
+	images: ImageUse,
+	/** What the reply's calls looked at, for the chat; grows by this call's pictures. */
+	viewed: Omit<PreparedView, 'blocks'>
 ): Promise<Anthropic.ToolResultBlockParam> {
 	if (stopReason !== 'tool_use') {
 		return toolResult(
@@ -365,8 +372,15 @@ async function runToolCall(
 			}
 		});
 		st.toolOutput = null;
-		const attachments = await viewedImageBlocks(conv.provider, readViewedImages(viewDir), images);
-		return toolResult(call.id, result.content, result.isError, attachments);
+		const prepared = await prepareViewedImages(
+			conv.provider,
+			call.id,
+			readViewedImages(viewDir),
+			images
+		);
+		viewed.attachments.push(...prepared.attachments);
+		viewed.media.push(...prepared.media);
+		return toolResult(call.id, result.content, result.isError, prepared.blocks);
 	} finally {
 		rmSync(viewDir, { recursive: true, force: true });
 	}
@@ -472,6 +486,7 @@ async function loop(conversationId: string): Promise<void> {
 			// Queued messages may carry pictures too; they join the history at the next step.
 			const images = imageUse([...messages, ...queuedRows(conversationId).map(toMessageParam)]);
 			const results: Anthropic.ToolResultBlockParam[] = [];
+			const viewed: Omit<PreparedView, 'blocks'> = { attachments: [], media: [] };
 			for (const call of calls) {
 				// A call that throws still gets its result, or the reply would wait for one forever.
 				const result = await runToolCall(
@@ -480,7 +495,8 @@ async function loop(conversationId: string): Promise<void> {
 					reply.stop_reason,
 					abort.signal,
 					st,
-					images
+					images,
+					viewed
 				).catch((err: unknown) => {
 					st.toolOutput = null;
 					console.error(`[btw] ${conversationId.slice(0, 8)} command failed:`, err);
@@ -493,9 +509,14 @@ async function loop(conversationId: string): Promise<void> {
 				conversationId,
 				role: 'user',
 				kind: 'tool_results',
-				content: JSON.stringify(results)
+				content: JSON.stringify(results),
+				attachments: viewed.attachments,
+				media: viewed.media
 			});
-			emit(conversationId, { type: 'message', message: toDisplay(resultsRow) });
+			emit(conversationId, {
+				type: 'message',
+				message: toDisplay(resultsRow, viewed.media.length ? listMedia(resultsRow.id) : [])
+			});
 			if (abort.signal.aborted) {
 				commitQueued(conversationId);
 				return;

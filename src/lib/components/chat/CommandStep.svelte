@@ -6,8 +6,10 @@
 	import { getPreferences } from '$lib/preferences.svelte';
 	import { resultStatus, type ToolResult } from '$lib/transcript';
 	import { cn } from '$lib/utils';
+	import ViewedImages from './ViewedImages.svelte';
 
 	interface Props {
+		conversationId: string;
 		command: string | null;
 		cwd?: string;
 		/** What the model said the command does, in plain words. */
@@ -19,7 +21,7 @@
 		running: boolean;
 	}
 
-	let { command, cwd, summary, result, liveOutput, running }: Props = $props();
+	let { conversationId, command, cwd, summary, result, liveOutput, running }: Props = $props();
 
 	const prefs = getPreferences();
 	let open = $state(false);
@@ -83,4 +85,8 @@
 				)}>{output || (status === 'running' ? 'No output yet…' : '(no output)')}</pre>
 		</div>
 	</Collapsible.Content>
+	<!-- What it looked at stays in sight when the command and its output are folded away. -->
+	{#if result?.images.length}
+		<ViewedImages {conversationId} images={result.images} />
+	{/if}
 </Collapsible.Root>

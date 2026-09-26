@@ -1,4 +1,4 @@
-import { existsSync, utimesSync } from 'node:fs';
+import { existsSync, readFileSync, utimesSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import { createUpload } from './attachments.ts';
@@ -6,6 +6,7 @@ import { appendRow, createConversation, deleteConversation } from './conversatio
 import {
 	blobPath,
 	getMedia,
+	keepViewedImage,
 	listMedia,
 	mediaByMessage,
 	pruneMedia,
@@ -91,6 +92,19 @@ describe('media rows', () => {
 			},
 			'/Users/anna/gone.png': { status: 'missing', name: 'gone.png', error: 'Not found' }
 		});
+	});
+});
+
+describe('keepViewedImage', () => {
+	it.each([
+		['/Users/anna/Desktop/IMG_0412.HEIC', 'image/jpeg', 'IMG_0412.jpg'],
+		['/tmp/ql/letter.pdf.png', 'image/png', 'letter.pdf.png'],
+		['scan.JPEG', 'image/jpeg', 'scan.JPEG'],
+		['/tmp/frame', 'image/jpeg', 'frame.jpg']
+	])('keeps %s, sent as %s, as %s', async (path, mediaType, name) => {
+		const kept = await keepViewedImage({ name: path, data: PNG, mediaType });
+		expect(kept).toMatchObject({ src: path, status: 'ok', name, mime: mediaType, bytes: 16 });
+		expect(readFileSync(blobPath(kept.sha256!))).toEqual(PNG);
 	});
 });
 

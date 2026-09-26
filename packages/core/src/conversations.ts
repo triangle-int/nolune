@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type Anthropic from '@anthropic-ai/sdk';
 import { and, desc, eq, inArray, isNotNull, isNull, lt, max } from 'drizzle-orm';
 import type { Effort } from './anthropic.ts';
-import { parseAttachments, type MessageAttachment } from './attachments.ts';
+import { parseAttachments, type MessageAttachment, type ViewedAttachment } from './attachments.ts';
 import { getDb } from './db/index.ts';
 import {
 	conversation,
@@ -55,6 +55,12 @@ export type DisplayAttachment = Extract<DisplayMedia, { status: 'ok' }> & {
 	note?: string;
 };
 
+/** A picture a command looked at with `btw view`, as the chat shows it with the command. */
+export type DisplayViewedImage = Extract<DisplayMedia, { status: 'ok' }> & {
+	/** The path as the command gave it to `btw view`. */
+	path: string;
+};
+
 export type DisplayMessage =
 	| {
 			id: number;
@@ -86,7 +92,13 @@ export type DisplayMessage =
 	| {
 			id: number;
 			kind: 'tool_results';
-			results: { id: string; output: string; isError: boolean }[];
+			results: {
+				id: string;
+				output: string;
+				isError: boolean;
+				/** Pictures the command looked at with `btw view`, in order. */
+				images: DisplayViewedImage[];
+			}[];
 			createdAt: number;
 	  };
 
@@ -366,8 +378,13 @@ export function appendRow(input: {
 	text?: string;
 	stopReason?: string | null;
 	usage?: Usage | null;
-	/** Assistant rows: copies of the pictures and files the reply links to, saved with it. */
-	media?: PreparedMedia[];
+	/**
+	 * Assistant rows: copies of the pictures and files the reply links to, saved with it. Tool
+	 * results: copies of what commands looked at, with the ids `attachments` refers to.
+	 */
+	media?: (PreparedMedia & { id?: string })[];
+	/** Tool results: the pictures commands looked at with `btw view`. */
+	attachments?: ViewedAttachment[];
 }): MessageRow {
 	return getDb().transaction((tx) => {
 		const row = tx
@@ -382,6 +399,7 @@ export function appendRow(input: {
 				content: input.content,
 				stopReason: input.stopReason ?? null,
 				usage: input.usage ? JSON.stringify(input.usage) : null,
+				attachments: input.attachments?.length ? JSON.stringify(input.attachments) : null,
 				createdAt: new Date()
 			})
 			.returning()
@@ -391,7 +409,7 @@ export function appendRow(input: {
 				.values(
 					input.media.map((m) => ({
 						...m,
-						id: newMediaId(),
+						id: m.id ?? newMediaId(),
 						conversationId: input.conversationId,
 						messageId: row.id
 					}))
@@ -524,16 +542,38 @@ export function foundText(rows: MessageRow[]): string {
 		.join('\n');
 }
 
+/** The copy with this id, if the chat can show it. */
+function shownMedia(mediaRows: MediaRow[], id: string) {
+	const mediaRow = mediaRows.find((m) => m.id === id);
+	const shown = mediaRow && toDisplayMedia([mediaRow])[mediaRow.src];
+	return shown?.status === 'ok' ? shown : null;
+}
+
 function displayAttachments(row: MessageRow, mediaRows: MediaRow[]): DisplayAttachment[] {
 	return parseAttachments(row.attachments).flatMap((attachment) => {
-		const mediaRow = mediaRows.find((m) => m.id === attachment.mediaId);
-		const shown = mediaRow && toDisplayMedia([mediaRow])[mediaRow.src];
-		if (shown?.status !== 'ok') return [];
-		return [{ ...shown, sentAs: attachment.sentAs, note: attachment.note }];
+		const shown = shownMedia(mediaRows, attachment.mediaId);
+		return shown ? [{ ...shown, sentAs: attachment.sentAs, note: attachment.note }] : [];
 	});
 }
 
-/** `mediaRows`: the row's pictures and files (a reply's links, a message's attachments). */
+/** A tool_results row's pictures from `btw view`, by the call that looked at them. */
+function viewedImages(row: MessageRow, mediaRows: MediaRow[]): Map<string, DisplayViewedImage[]> {
+	const byCall = new Map<string, DisplayViewedImage[]>();
+	for (const viewed of parseAttachments<ViewedAttachment>(row.attachments)) {
+		const shown = shownMedia(mediaRows, viewed.mediaId);
+		if (!shown) continue;
+		byCall.set(viewed.toolUseId, [
+			...(byCall.get(viewed.toolUseId) ?? []),
+			{ ...shown, path: viewed.path }
+		]);
+	}
+	return byCall;
+}
+
+/**
+ * `mediaRows`: the row's pictures and files (a reply's links, a message's attachments, what
+ * commands looked at).
+ */
 export function toDisplay(row: MessageRow, mediaRows: MediaRow[] = []): DisplayMessage {
 	const createdAt = row.createdAt.getTime();
 	if (row.kind === 'trigger') {
@@ -558,13 +598,15 @@ export function toDisplay(row: MessageRow, mediaRows: MediaRow[] = []): DisplayM
 	}
 	if (row.kind === 'tool_results') {
 		const blocks = JSON.parse(row.content) as Anthropic.ToolResultBlockParam[];
+		const images = viewedImages(row, mediaRows);
 		return {
 			id: row.id,
 			kind: 'tool_results',
 			results: blocks.map((b) => ({
 				id: b.tool_use_id,
 				output: toolResultText(b.content),
-				isError: b.is_error === true
+				isError: b.is_error === true,
+				images: images.get(b.tool_use_id) ?? []
 			})),
 			createdAt
 		};

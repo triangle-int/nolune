@@ -82,6 +82,7 @@ export {
 	type DisplayAttachment,
 	type DisplayBlock,
 	type DisplayMessage,
+	type DisplayViewedImage,
 	type Usage
 } from './conversations.ts';
 export {

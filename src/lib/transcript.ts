@@ -1,4 +1,4 @@
-import type { DisplayMedia, DisplayMessage, LiveBlock, Usage } from '@btw/core';
+import type { DisplayMedia, DisplayMessage, DisplayViewedImage, LiveBlock, Usage } from '@btw/core';
 import { partialToolInput } from './commands';
 
 /**
@@ -10,6 +10,8 @@ import { partialToolInput } from './commands';
 export interface ToolResult {
 	output: string;
 	isError: boolean;
+	/** Pictures the command looked at with `btw view`. */
+	images: DisplayViewedImage[];
 }
 
 export type Step =

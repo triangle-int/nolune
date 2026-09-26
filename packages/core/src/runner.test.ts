@@ -1,9 +1,20 @@
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type Anthropic from '@anthropic-ai/sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { streamTurn } from './anthropic.ts';
-import { committedRows, createConversation, insertQueued } from './conversations.ts';
+import {
+	committedRows,
+	createConversation,
+	insertQueued,
+	type DisplayMessage
+} from './conversations.ts';
+import { viewImage } from './images.ts';
+import { getMedia, mediaFile } from './media.ts';
+import { paths } from './paths.ts';
+import { providerFileId } from './provider-files.ts';
 import { runCommand, type RunCommandResult } from './run-command.ts';
-import { kick, onLoopEnd, recoverAfterRestart } from './runner.ts';
+import { getSnapshot, kick, onLoopEnd, recoverAfterRestart, subscribe } from './runner.ts';
 import { makeFamily, makePreset } from './test/fixtures.ts';
 
 vi.mock('./anthropic.ts', async (importOriginal) => ({
@@ -14,6 +25,11 @@ vi.mock('./anthropic.ts', async (importOriginal) => ({
 vi.mock('./run-command.ts', async (importOriginal) => ({
 	...(await importOriginal<typeof import('./run-command.ts')>()),
 	runCommand: vi.fn()
+}));
+
+vi.mock('./provider-files.ts', async (importOriginal) => ({
+	...(await importOriginal<typeof import('./provider-files.ts')>()),
+	providerFileId: vi.fn()
 }));
 
 afterEach(() => {
@@ -34,6 +50,12 @@ function modelReply(content: unknown[], stopReason: Anthropic.StopReason): Anthr
 }
 
 const listFiles = { type: 'tool_use', id: 't1', name: 'run_command', input: { command: 'ls' } };
+
+/** A 1×1 PNG, which `btw view` sends as it is. */
+const DOT = Buffer.from(
+	'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+	'base64'
+);
 
 /** A chat where Anna asked for something, with the model's replies lined up. */
 function chatAsking(...replies: Anthropic.Message[]) {
@@ -109,5 +131,71 @@ describe('the agent loop', () => {
 		expect(streamTurn).toHaveBeenCalledTimes(2);
 		expect(committedRows(chat.id).at(-1)?.kind).toBe('assistant');
 		expect(logged).toHaveBeenCalled();
+	});
+
+	it('keeps what a command looked at with `btw view`, for the chat to show with that command', async () => {
+		const look = {
+			type: 'tool_use',
+			id: 't2',
+			name: 'run_command',
+			input: { summary: 'Looking at the dot', command: 'btw view dot.png' }
+		};
+		const chat = chatAsking(
+			modelReply([listFiles, look], 'tool_use'),
+			modelReply([{ type: 'text', text: 'A dot.' }], 'end_turn')
+		);
+		const picture = join(paths.home, 'dot.png');
+		writeFileSync(picture, DOT);
+		vi.mocked(providerFileId).mockResolvedValue('file_dot');
+		vi.mocked(runCommand).mockImplementation(async (input, { env }) => {
+			if (input.command === 'ls') return { content: 'a.txt', isError: false, exitCode: 0 };
+			const line = await viewImage(picture, env.BTW_VIEW_DIR!);
+			return { content: line, isError: false, exitCode: 0 };
+		});
+		const sent: DisplayMessage[] = [];
+		subscribe(chat.id, (event) => {
+			if (event.type === 'message' && event.message.kind === 'tool_results') {
+				sent.push(event.message);
+			}
+		});
+
+		await run(chat.id);
+
+		// The model gets the picture itself; the chat gets btw's copy of it.
+		expect(results(chat.id)).toEqual([
+			[
+				{ type: 'tool_result', tool_use_id: 't1', content: 'a.txt' },
+				{
+					type: 'tool_result',
+					tool_use_id: 't2',
+					content: [
+						{ type: 'text', text: `Attached ${picture} (1×1 PNG).` },
+						{ type: 'text', text: `Image: ${picture}` },
+						{ type: 'image', source: { type: 'file', file_id: 'file_dot' } }
+					]
+				}
+			]
+		]);
+		const saved = getSnapshot(chat.id).messages.find((m) => m.kind === 'tool_results');
+		expect(sent).toEqual([saved]);
+		expect(saved?.kind === 'tool_results' && saved.results.map((r) => r.images)).toEqual([
+			[],
+			[
+				{
+					status: 'ok',
+					id: expect.any(String),
+					name: 'dot.png',
+					mime: 'image/png',
+					bytes: DOT.length,
+					width: 1,
+					height: 1,
+					viewable: true,
+					path: picture
+				}
+			]
+		]);
+		const [shown] = saved?.kind === 'tool_results' ? saved.results[1].images : [];
+		const file = mediaFile(getMedia(chat.id, shown.id)!, 'view');
+		expect(readFileSync(file!.path)).toEqual(DOT);
 	});
 });

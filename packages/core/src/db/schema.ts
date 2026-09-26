@@ -263,6 +263,7 @@ export const message = sqliteTable(
 		usage: text('usage'),
 		/**
 		 * Human rows: the files attached to the message, in order, as `MessageAttachment[]` JSON.
+		 * Tool results: the pictures commands looked at with `btw view`, as `ViewedAttachment[]`.
 		 * Provider-neutral, unlike `content`, which says the same in the provider's own format.
 		 */
 		attachments: text('attachments'),
@@ -273,7 +274,8 @@ export const message = sqliteTable(
 
 /**
  * A picture (`![alt](src)`) or file (`[label](src)`) in one of the agent's replies, copied when
- * the reply was saved so the chat keeps showing it after the original moves or disappears.
+ * the reply was saved so the chat keeps showing it after the original moves or disappears. Also
+ * the files people attach, and the pictures commands look at with `btw view`.
  */
 export const media = sqliteTable(
 	'media',
@@ -286,7 +288,10 @@ export const media = sqliteTable(
 		messageId: integer('message_id')
 			.notNull()
 			.references(() => message.id, { onDelete: 'cascade' }),
-		/** The link target exactly as the Markdown lexer read it from the reply. */
+		/**
+		 * The link target exactly as the Markdown lexer read it from the reply. Attachments: where
+		 * the file was saved. `btw view`: the path it was given.
+		 */
 		src: text('src').notNull(),
 		status: text('status', {
 			enum: ['ok', 'missing', 'unsupported', 'too_large', 'blocked', 'failed']

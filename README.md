@@ -54,7 +54,8 @@ Access). `btw setup` prints the exact path.
 - btw can look at photos, screenshots and scans on the computer (with `btw view`, which converts
   HEIC and shrinks big photos for it), and it can show pictures and hand over files in the chat
   ("show me the beach photos from August", "fill in this form and give it to me"). It keeps its
-  own copy of each file it shows, so they stay in the chat even if the original moves.
+  own copy of each file it shows, so they stay in the chat even if the original moves. What it
+  looked at shows up under that step in the chat, so you can see what btw saw.
 - **Images.** The Images page in the sidebar has templates for the family (party invitations,
   storybook pages, wanted posters, trip postcards, photo-booth strips, sticker packs, bouquets, nail
   art...) and for making games (sprite sheets, textures, app icons, concept art): tap one and take
