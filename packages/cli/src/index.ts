@@ -47,6 +47,7 @@ import {
 	ViewLimitError,
 	type ApiKeyProvider
 } from '@btw/core';
+import { AGENT_HELP, agentCommand } from './agent.ts';
 import { GENERATE_HELP, generateCommand } from './generate.ts';
 import { ask, askHidden } from './input.ts';
 import { MEMORY_HELP, memoryCommand } from './memory.ts';
@@ -107,7 +108,9 @@ ${GENERATE_HELP}
 
 Inside agent commands (BTW_PROFILE is set, so --profile can be left out)
   btw view <image>...                        show images to the agent: they're attached to the
-                                             command's result (HEIC and big photos are converted)`;
+                                             command's result (HEIC and big photos are converted)
+
+${AGENT_HELP}`;
 
 const DEFAULT_MODEL = 'claude-opus-5-5';
 
@@ -592,6 +595,10 @@ async function main(argv: string[]): Promise<void> {
 		case 'wake':
 			requireInit();
 			return wakeCommand(argv.slice(1));
+
+		case 'agent':
+			requireInit();
+			return agentCommand(action, rest);
 
 		case 'generate':
 			return generateCommand(action, rest);
