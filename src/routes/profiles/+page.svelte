@@ -4,8 +4,8 @@
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import AssistantAvatar from '$lib/components/AssistantAvatar.svelte';
 	import TopBar from '$lib/components/TopBar.svelte';
-	import UserAvatar from '$lib/components/UserAvatar.svelte';
 
 	let { data, form } = $props();
 </script>
@@ -33,7 +33,7 @@
 									href={resolve('/p/[slug]', { slug: profile.slug })}
 									class="flex items-center gap-3 px-4 py-3 hover:bg-muted"
 								>
-									<UserAvatar name={profile.name} class="size-9 rounded-xl text-sm" />
+									<AssistantAvatar avatar={profile.avatar} size={36} />
 									<span class="min-w-0 flex-1">
 										<span class="block truncate font-medium">{profile.name}</span>
 										<span class="block truncate text-sm text-muted-foreground">

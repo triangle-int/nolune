@@ -5,6 +5,7 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import type { DisplayAttachment, Usage } from '@btw/core';
+	import type { Avatar } from '@btw/core/avatars';
 	import { CACHE_TTL_MS, cacheHitRate, cacheMissTokens, promptTokens } from '@btw/core/usage';
 	import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
 	import ClockIcon from '@lucide/svelte/icons/clock';
@@ -23,9 +24,10 @@
 	import { moveChat, type FolderItem } from '$lib/folders';
 	import { formatPercent, formatTokens } from '$lib/format';
 	import { getPreferences } from '$lib/preferences.svelte';
-	import { buildTranscript, replyText, type Reply } from '$lib/transcript';
+	import { activeStepLabel, buildTranscript, replyText, type Reply } from '$lib/transcript';
 	import { Attachments } from '$lib/uploads.svelte';
 	import { cn } from '$lib/utils';
+	import AssistantAvatar, { type Mood } from './AssistantAvatar.svelte';
 	import Activity from './chat/Activity.svelte';
 	import Composer from './chat/Composer.svelte';
 	import ComposerDock from './chat/ComposerDock.svelte';
@@ -56,9 +58,11 @@
 		/** The profile's folders, and the one this chat is in. */
 		folders: FolderItem[];
 		folderId: string | null;
+		/** The profile's assistant avatar, shown with every reply. */
+		avatar: Avatar;
 	}
 
-	let { conversation, efforts, me, folders, folderId }: Props = $props();
+	let { conversation, efforts, me, folders, folderId, avatar }: Props = $props();
 
 	const prefs = getPreferences();
 	const chat = new ChatState();
@@ -164,6 +168,52 @@
 			chat.messages.length > 0 &&
 			chat.messages[chat.messages.length - 1].kind !== 'assistant'
 	);
+
+	/** The newest entry when it's a reply: its avatar shows what btw is doing. Older ones hold still. */
+	const liveReply = $derived.by(() => {
+		const last = entries.at(-1);
+		return last?.type === 'reply' ? last : null;
+	});
+
+	/** The step btw is on while it runs, in the words its group of steps uses. */
+	const step = $derived.by(() => {
+		const tail = chat.running ? liveReply?.parts.at(-1) : undefined;
+		if (!tail || tail.type === 'text') {
+			return chat.running ? { label: tail ? 'Writing' : 'Thinking', command: false } : null;
+		}
+		const last = tail.steps.at(-1);
+		return {
+			label: activeStepLabel(tail, chat.results, prefs.technical),
+			// Running once the model has finished writing it, until its result arrives.
+			command:
+				last?.type === 'command' &&
+				!chat.results[last.id] &&
+				!chat.live.some((block) => block?.type === 'tool' && block.id === last.id)
+		};
+	});
+
+	/** True for a moment after btw finishes a turn, for the avatar's happy squash. */
+	let finished = $state(false);
+	let wasRunning = false;
+	$effect(() => {
+		const running = chat.running;
+		const justFinished = wasRunning && !running && !untrack(() => chat.error);
+		wasRunning = running;
+		if (running) finished = false;
+		if (!justFinished) return;
+		finished = true;
+		const timer = setTimeout(() => (finished = false), 1200);
+		return () => clearTimeout(timer);
+	});
+
+	const mood: Mood = $derived.by(() => {
+		if (chat.error || unanswered) return 'blocked';
+		if (chat.running) {
+			if (chat.queued.length) return 'waiting';
+			return step?.command ? 'working' : 'thinking';
+		}
+		return finished ? 'done' : 'idle';
+	});
 
 	/** How close to the end the chat has to be to count as scrolled to the bottom. */
 	const BOTTOM_SLACK = 80;
@@ -318,11 +368,23 @@
 	</div>
 {/snippet}
 
+<!-- In the margin left of the reply when the chat is wide enough, else on a line of its own. -->
+{#snippet assistant(avatarMood: Mood | undefined, label?: string)}
+	<AssistantAvatar
+		{avatar}
+		mood={avatarMood}
+		{label}
+		size={24}
+		class="@min-[54rem]/chat:absolute @min-[54rem]/chat:top-0.5 @min-[54rem]/chat:-left-11"
+	/>
+{/snippet}
+
 {#snippet reply(r: Reply, last: boolean)}
 	{@const copyable = replyText(r)}
 	{@const miss = prefs.technical ? replyMiss(r) : null}
 	{@const tail = r.parts.at(-1)}
-	<div class="group/reply flex flex-col gap-3">
+	<div class="group/reply relative flex flex-col gap-3">
+		{@render assistant(last ? mood : undefined, last ? step?.label : undefined)}
 		{#each r.parts as part, i (part.key)}
 			{#if part.type === 'text'}
 				<Markdown
@@ -482,7 +544,7 @@
 		{@attach autoscroll}
 		{@attach pictureClicks((picture) => (viewing = picture))}
 		onscroll={onScroll}
-		class="h-full overflow-y-auto [overflow-anchor:none]"
+		class="@container/chat h-full overflow-y-auto [overflow-anchor:none]"
 	>
 		<div
 			class="mx-auto flex max-w-3xl flex-col gap-7 px-4 pt-4 sm:px-6"
@@ -519,24 +581,32 @@
 				{/if}
 			{/each}
 
-			{#if chat.error}
-				<div
-					class="flex flex-wrap items-center gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm"
-				>
-					<CircleAlertIcon class="size-4 shrink-0 text-destructive" />
-					<span class="min-w-0 flex-1">
-						<span class="block font-medium">Something went wrong while btw was answering.</span>
-						<span class="block text-muted-foreground">{chat.error}</span>
-					</span>
-					<Button size="sm" variant="outline" onclick={() => post('continue')}>
-						<RotateCcwIcon />
-						Try again
-					</Button>
-				</div>
-			{:else if unanswered}
-				<div class="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-					btw hasn't answered this yet.
-					<Button size="sm" variant="outline" onclick={() => post('continue')}>Continue</Button>
+			{#if chat.error || unanswered}
+				<div class="relative flex flex-col gap-3">
+					{#if !liveReply}
+						<!-- No reply to carry the avatar, so it waits here, by what to do next. -->
+						{@render assistant(mood)}
+					{/if}
+					{#if chat.error}
+						<div
+							class="flex flex-wrap items-center gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm"
+						>
+							<CircleAlertIcon class="size-4 shrink-0 text-destructive" />
+							<span class="min-w-0 flex-1">
+								<span class="block font-medium">Something went wrong while btw was answering.</span>
+								<span class="block text-muted-foreground">{chat.error}</span>
+							</span>
+							<Button size="sm" variant="outline" onclick={() => post('continue')}>
+								<RotateCcwIcon />
+								Try again
+							</Button>
+						</div>
+					{:else}
+						<div class="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+							btw hasn't answered this yet.
+							<Button size="sm" variant="outline" onclick={() => post('continue')}>Continue</Button>
+						</div>
+					{/if}
 				</div>
 			{/if}
 		</div>
