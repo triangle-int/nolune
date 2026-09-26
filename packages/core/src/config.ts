@@ -24,6 +24,39 @@ export interface Config {
 
 export const DEFAULT_PORT = 5780;
 
+/** Where each provider's API key is kept, and the environment variable used when it isn't. */
+export const API_KEYS = {
+	anthropic: { label: 'Anthropic', field: 'anthropicApiKey', env: 'ANTHROPIC_API_KEY' },
+	openai: { label: 'OpenAI', field: 'openaiApiKey', env: 'OPENAI_API_KEY' }
+} as const satisfies Record<string, { label: string; field: keyof Config; env: string }>;
+
+export type ApiKeyProvider = keyof typeof API_KEYS;
+
+export function isApiKeyProvider(value: string): value is ApiKeyProvider {
+	return Object.hasOwn(API_KEYS, value);
+}
+
+/** The key in use: config.json's, else the environment's. Read on every call, so changes apply at once. */
+export function configuredApiKey(
+	provider: ApiKeyProvider
+): { key: string; source: 'config' | 'env' } | null {
+	const { field, env } = API_KEYS[provider];
+	let saved: string | undefined;
+	try {
+		saved = readConfig()[field];
+	} catch {
+		// not set up yet: only the environment can have one
+	}
+	if (saved) return { key: saved, source: 'config' };
+	const fromEnv = process.env[env];
+	return fromEnv ? { key: fromEnv, source: 'env' } : null;
+}
+
+/** How a missing or rejected key gets fixed, for messages people and the agent see. */
+export function apiKeyHelp(provider: ApiKeyProvider): string {
+	return `An admin can add one under Models & keys in btw, or with \`btw key set ${provider}\`.`;
+}
+
 export function configExists(): boolean {
 	return existsSync(paths.config);
 }

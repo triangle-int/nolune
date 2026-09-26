@@ -2,6 +2,7 @@
 	import { onDestroy } from 'svelte';
 	import { MediaQuery } from 'svelte/reactivity';
 	import { enhance } from '$app/forms';
+	import { resolve } from '$app/paths';
 	import type { SubmitFunction } from '@sveltejs/kit';
 	import CameraIcon from '@lucide/svelte/icons/camera';
 	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
@@ -366,7 +367,16 @@
 				<span class="min-w-0">
 					<span class="block font-medium">btw can't make pictures yet.</span>
 					<span class="block text-muted-foreground">
-						{data.problem} An admin sets this up on the computer btw runs on.
+						{#if data.missingKey && data.user?.isAdmin}
+							It needs an {data.missingKey.label} API key.
+							<a href={resolve('/admin')} class="font-medium text-foreground underline"
+								>Add it under Models & keys</a
+							>.
+						{:else if data.missingKey}
+							It needs an {data.missingKey.label} API key. Ask an admin to add one.
+						{:else}
+							{data.problem} An admin sets this up on the computer btw runs on.
+						{/if}
 					</span>
 				</span>
 			</div>

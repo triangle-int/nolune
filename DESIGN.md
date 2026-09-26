@@ -15,7 +15,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | Conversations      | Shared by every member of the profile. Messages go through a queue, and a message sent while the agent is working is fed into its next step (steering). Anyone can press Stop.                                                                                                                                                                                                                                                                                                                |
 | Sender identity    | Every human message is sent to the model as `Name: text`. Attached files come first, each as a line saying who attached it and where it was saved, followed by the picture or PDF itself when the model gets one. Display names are unique across the gateway.                                                                                                                                                                                                                                |
 | Attachments        | Any file, up to 100 MB and 10 per message, saved in the profile's `attachments` folder. The model gets pictures and PDFs through the provider's Files API, never as base64 unless an upload fails, and every other file as its path.                                                                                                                                                                                                                                                          |
-| Providers          | Anthropic only for now (API key). Model presets are global and managed by the admin with the CLI or the `/admin` page. A preset has a name (default `<model> (anthropic)`), a model, and an optional context-window override. One preset is the default (the oldest until an admin picks another): new chats start with it, and automations without a preset use it.                                                                                                                          |
+| Providers          | Anthropic only for now (API key). Keys and model presets are global and managed by the admin with the CLI or the `/admin` page (Models & keys). A preset has a name (default `<model> (anthropic)`), a model, and an optional context-window override. One preset is the default (the oldest until an admin picks another): new chats start with it, and automations without a preset use it.                                                                                                 |
 | Preset switching   | Not allowed. A conversation keeps its provider and model for its whole life.                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Reasoning          | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once.                                                                                                                                                                                                                                                                                                                  |
 | System prompt      | Built once when the conversation is created: instructions and the skills catalog. **It is never changed afterwards, and no update notices are added.** If skills change in another conversation, this conversation only sees it by running commands. Memory isn't in it, so every conversation of a profile starts with the same prompt until its skills change.                                                                                                                              |
@@ -251,9 +251,9 @@ how to write prompts, and how to run the Images page's messages.
   with plain `fetch` rather than the SDK. OpenRouter, fal or Higgsfield would each add a module;
   shapes (`square`, `portrait`, `landscape`, `auto`) are provider-neutral and each module maps them
   to its own sizes.
-- **Keys** live in `config.json` (`btw key set openai`), with `OPENAI_API_KEY` as a fallback, and
-  are read by the CLI, so the gateway itself never calls the image API. `OPENAI_BASE_URL` points it
-  at a proxy or a compatible server, as in OpenAI's SDKs.
+- **Keys** live in `config.json` (`btw key set openai` or Models & keys), with `OPENAI_API_KEY` as a
+  fallback, and are read by the CLI, so the gateway itself never calls the image API.
+  `OPENAI_BASE_URL` points it at a proxy or a compatible server, as in OpenAI's SDKs.
 - **Input pictures.** PNG, JPEG and WebP are sent as they are (JPEGs without EXIF, which carries GPS
   positions); other formats, sideways photos and files over 25 MB go through `btw view`'s converter.
 - **Output** goes to the profile's `images/` folder (or `--out`), and the command prints a `Saved
@@ -466,14 +466,23 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   reasoning can change.
 - `/` redirects to the last profile opened (`btw-profile` cookie) or the only one, else to
   `/profiles`.
+- **Models & keys** (`/admin`, admins only) has the API keys and the model presets. A key is
+  write-only: the page shows where the key in use comes from (btw's config or an environment
+  variable) and its last four characters, never the key. A new one is checked with its provider
+  first (listing models, which is free), then saved to `config.json`, which is read on every
+  request, so it applies without a restart. A key the provider rejects isn't saved; one that works
+  on an account with a problem (out of credit, a restricted OpenAI key that can't list models) is,
+  with the provider's words. Removing a saved key falls back to the environment's. Replacing the
+  Anthropic key warns to keep the same workspace: pictures and PDFs already sent live in it.
+  `btw key set` does the same check, but saves anyway when the provider can't be reached.
 
 ## Code layout
 
 ```
 packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_command, memory notes,
                 btw view images, attachments, Anthropic call and Files API, provider file cache,
-                runner, media, users/profiles/presets, triggers, scheduler, notifications, image
-                generation (providers: openai.ts) and image templates. Built-in skills in
+                runner, media, users/profiles/presets, API keys, triggers, scheduler, notifications,
+                image generation (providers: openai.ts) and image templates. Built-in skills in
                 packages/core/skills, built-in templates in packages/core/image-templates. Plain
                 TypeScript run by Node with type stripping (no enums or parameter properties;
                 imports use .ts extensions).
@@ -518,7 +527,7 @@ Published to npm as `btw-agent` (not yet). `npm install -g btw-agent` gives the 
   window.
 - Other providers (OpenRouter, ChatGPT). Each will get its own adapter and keep history in its own format.
 - Other image providers (OpenRouter, fal, Higgsfield): a module each next to `openai.ts` and an entry
-  in `PROVIDERS`, plus a `btw key set` name.
+  in `PROVIDERS`, plus one in `API_KEYS` (config.ts) and a check request in `api-keys.ts`.
 - Smart approval mode.
 - Refusal fallbacks (`fallbacks: "default"`) for models that support them. Refusals are shown in the UI today.
 - Push notifications (Web Push) for the bell. Today it only updates while a page is open.

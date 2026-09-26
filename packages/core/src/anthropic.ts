@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import Anthropic, { toFile } from '@anthropic-ai/sdk';
-import { readConfig } from './config.ts';
+import { apiKeyHelp, configuredApiKey } from './config.ts';
 import { RUN_COMMAND_TOOL } from './run-command.ts';
 
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -12,14 +12,14 @@ let cached: { key: string | undefined; client: Anthropic } | undefined;
 
 export class MissingApiKeyError extends Error {
 	constructor() {
-		super('No Anthropic API key. Set it with `btw key set anthropic`.');
+		super(`No Anthropic API key. ${apiKeyHelp('anthropic')}`);
 	}
 }
 
 function apiKey(): string {
-	const key = readConfig().anthropicApiKey || process.env.ANTHROPIC_API_KEY;
-	if (!key) throw new MissingApiKeyError();
-	return key;
+	const found = configuredApiKey('anthropic');
+	if (!found) throw new MissingApiKeyError();
+	return found.key;
 }
 
 export function getClient(): Anthropic {
@@ -147,7 +147,7 @@ export async function fetchContextWindow(model: string): Promise<number | null> 
 export function describeApiError(err: unknown): string {
 	if (err instanceof MissingApiKeyError) return err.message;
 	if (err instanceof Anthropic.AuthenticationError) {
-		return 'The Anthropic API key is missing or invalid. Set it with `btw key set anthropic`.';
+		return `Anthropic didn't accept the API key. ${apiKeyHelp('anthropic')}`;
 	}
 	if (err instanceof Anthropic.RateLimitError)
 		return 'Rate limited by Anthropic. Try again shortly.';

@@ -105,7 +105,8 @@ prompt again with the change worked in.
   with `btw view <path>` before showing it; otherwise just show it.
 - The image model gets the pictures you pass with `--image` itself, so your prompt doesn't need to
   describe what's in them, only what to make of them.
-- **No API key**: tell the person that an admin has to run `btw key set openai` on this computer.
+- **No API key**: tell the person that an admin can add an OpenAI key under Models & keys in btw
+  (or with `btw key set openai` on this computer).
 - **Refused by the safety system**: say so plainly. Don't reword the prompt to get around it.
 - **Photos of people**: the model keeps faces close, but not perfectly. Say so if it matters.
 

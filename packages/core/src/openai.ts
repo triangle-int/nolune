@@ -1,4 +1,4 @@
-import { readConfig } from './config.ts';
+import { apiKeyHelp, configuredApiKey } from './config.ts';
 import type { GeneratedImage, ImageRequest, ImageShape } from './image-generation.ts';
 
 /*
@@ -8,9 +8,12 @@ import type { GeneratedImage, ImageRequest, ImageShape } from './image-generatio
  */
 
 /** OPENAI_BASE_URL, as in OpenAI's own SDKs, points it at a proxy or a compatible server. */
+export function openaiBaseUrl(): string {
+	return (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
+}
+
 function apiUrl(endpoint: 'generations' | 'edits'): string {
-	const base = (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
-	return `${base}/images/${endpoint}`;
+	return `${openaiBaseUrl()}/images/${endpoint}`;
 }
 /** High quality at large sizes can take a couple of minutes. */
 const TIMEOUT_MS = 5 * 60_000;
@@ -26,16 +29,6 @@ const SIZES: Record<Exclude<ImageShape, 'auto'>, string> = {
 };
 
 export class OpenAIError extends Error {}
-
-export function openaiApiKey(): string | null {
-	let key: string | undefined;
-	try {
-		key = readConfig().openaiApiKey;
-	} catch {
-		// not set up yet: only the environment can have one
-	}
-	return key || process.env.OPENAI_API_KEY || null;
-}
 
 function sizeParam(size: ImageRequest['size']): string {
 	if (typeof size === 'object') return `${size.width}x${size.height}`;
@@ -72,7 +65,7 @@ async function describeFailure(res: Response): Promise<string> {
 	const message = body?.error?.message?.trim() || res.statusText || 'no details';
 	const code = body?.error?.code ?? '';
 	if (res.status === 401) {
-		return 'The OpenAI API key is missing or invalid. Set it with `btw key set openai`.';
+		return `OpenAI didn't accept the API key. ${apiKeyHelp('openai')}`;
 	}
 	if (code === 'moderation_blocked' || code === 'content_policy_violation') {
 		return `OpenAI's safety system refused this request: ${message}`;
@@ -84,8 +77,8 @@ async function describeFailure(res: Response): Promise<string> {
 }
 
 export async function generateWithOpenAI(request: ImageRequest): Promise<GeneratedImage[]> {
-	const key = openaiApiKey();
-	if (!key) throw new OpenAIError('No OpenAI API key. Set it with `btw key set openai`.');
+	const key = configuredApiKey('openai')?.key;
+	if (!key) throw new OpenAIError(`No OpenAI API key. ${apiKeyHelp('openai')}`);
 
 	const signal = AbortSignal.any([request.signal, AbortSignal.timeout(TIMEOUT_MS)]);
 	const headers = { authorization: `Bearer ${key}` };
