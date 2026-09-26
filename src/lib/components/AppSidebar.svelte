@@ -253,9 +253,15 @@
 	</Sidebar.Footer>
 </Sidebar.Root>
 
-<Command.Dialog bind:open={searchOpen} title="Search chats" description="Find a chat by its title">
+<!-- Pinned near the top and kept inside the screen: a long list scrolls, the input never moves. -->
+<Command.Dialog
+	bind:open={searchOpen}
+	title="Search chats"
+	description="Find a chat by its title"
+	class="top-[12dvh] flex max-h-[min(36rem,76dvh)] flex-col"
+>
 	<Command.Input placeholder="Search chats…" />
-	<Command.List class="max-h-[60vh]">
+	<Command.List class="max-h-none">
 		<Command.Empty>No chats found.</Command.Empty>
 		<Command.Group>
 			<Command.Item
