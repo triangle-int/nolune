@@ -12,6 +12,7 @@ size: portrait
 settings:
   - id: theme
     label: Theme
+    custom: true
     options:
       - label: dinosaur
         prompt: friendly dinosaurs, volcanoes and big jungle leaves

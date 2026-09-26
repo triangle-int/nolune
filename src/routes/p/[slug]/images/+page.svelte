@@ -5,6 +5,7 @@
 	import { resolve } from '$app/paths';
 	import type { SubmitFunction } from '@sveltejs/kit';
 	import { Select as SelectPrimitive } from 'bits-ui';
+	import { articleBefore } from '@btw/core/articles';
 	import CameraIcon from '@lucide/svelte/icons/camera';
 	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
@@ -12,6 +13,7 @@
 	import ImagePlusIcon from '@lucide/svelte/icons/image-plus';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import PenLineIcon from '@lucide/svelte/icons/pen-line';
+	import PencilLineIcon from '@lucide/svelte/icons/pencil-line';
 	import RectangleHorizontalIcon from '@lucide/svelte/icons/rectangle-horizontal';
 	import RectangleVerticalIcon from '@lucide/svelte/icons/rectangle-vertical';
 	import ScanIcon from '@lucide/svelte/icons/scan';
@@ -68,6 +70,11 @@
 	let templateError = $state<string | null>(null);
 	let templateForm = $state<HTMLFormElement>();
 	let values = $state<Record<string, string>>({});
+	/** What was typed for choices set to "Custom…", by setting; a key here means it's typed. */
+	let custom = $state<Record<string, string>>({});
+	const customInputs: Record<string, HTMLInputElement | undefined> = {};
+	/** What each menu opens under: the whole chip, which stays put when it turns into a field. */
+	const chipAnchors = $state<Record<string, HTMLElement | undefined>>({});
 	let shape = $state('auto');
 
 	/** The template's pictures upload as soon as they're picked, like files in the chat. */
@@ -165,6 +172,7 @@
 	function compose() {
 		if (!chosen) return;
 		values = Object.fromEntries(chosen.settings.map((s) => [s.id, s.default]));
+		custom = {};
 		shape = chosen.size;
 		step = 'compose';
 	}
@@ -208,6 +216,27 @@
 		if (template.cover === null) return null;
 		const slug = encodeURIComponent(data.profile.slug);
 		return `/api/p/${slug}/templates/${encodeURIComponent(template.id)}/cover?v=${template.cover}`;
+	}
+
+	/** The menu's last item, which turns the chip into a field for the person's own choice. */
+	const CUSTOM = '(custom)';
+
+	function choose(setting: Setting, value: string) {
+		if (value === CUSTOM) {
+			custom[setting.id] ??= '';
+			return;
+		}
+		delete custom[setting.id];
+		values[setting.id] = value;
+	}
+
+	/** What a chip reads as now, for "a" or "an" in front of it. */
+	function chipText(part: Part | undefined): string {
+		if (part?.kind !== 'setting') return '';
+		const { setting } = part;
+		if (setting.id in custom) return custom[setting.id];
+		if (setting.type === 'emoji') return '';
+		return optionLabel(setting, values[setting.id] ?? setting.default);
 	}
 
 	function optionLabel(setting: Setting, value: string): string {
@@ -339,26 +368,64 @@
 
 {#snippet settingChip(setting: Setting)}
 	{#if setting.type === 'select'}
-		<!-- The chip shows the choice and opens a menu of the others; `name` posts it with the form.
-		     Inline-flex, so the whitespace around bits-ui's hidden input doesn't show. -->
-		<span class="inline-flex">
+		{@const typing = setting.id in custom}
+		{@const own = `your own ${setting.label.toLowerCase()}`}
+		<!-- The chip shows the choice and opens a menu of the others, and "Custom…" turns it into a
+		     field for the person's own. Inline-flex, so the whitespace between its parts doesn't show. -->
+		<span bind:this={chipAnchors[setting.id]} class="inline-flex">
+			<input
+				type="hidden"
+				name={`setting:${setting.id}`}
+				value={typing ? custom[setting.id] : (values[setting.id] ?? setting.default)}
+			/>
 			<Select.Root
 				type="single"
-				name={`setting:${setting.id}`}
-				bind:value={values[setting.id]}
+				bind:value={() => (typing ? CUSTOM : values[setting.id]), (value) => choose(setting, value)}
 				items={setting.options}
+				onOpenChangeComplete={(open) => {
+					// Straight into the field after "Custom…", once the menu has gone.
+					if (!open && setting.id in custom) customInputs[setting.id]?.focus();
+				}}
 			>
-				<SelectPrimitive.Trigger
-					class={cn(chip, 'inline-flex cursor-pointer items-center gap-1 whitespace-nowrap')}
-					aria-label={setting.label}
-				>
-					{optionLabel(setting, values[setting.id] ?? setting.default)}
-					<ChevronsUpDownIcon class="size-4 shrink-0 text-muted-foreground" />
-				</SelectPrimitive.Trigger>
-				<Select.Content align="start">
+				{#if typing}
+					<span class={cn(chip, 'inline-flex items-center gap-1 pr-1')}>
+						<input
+							bind:this={customInputs[setting.id]}
+							bind:value={custom[setting.id]}
+							required
+							maxlength={120}
+							placeholder={own}
+							aria-label={own}
+							size={Math.max(6, (custom[setting.id] || own).length)}
+							class="min-w-0 bg-transparent outline-none placeholder:text-muted-foreground/70"
+						/>
+						<SelectPrimitive.Trigger
+							class="cursor-pointer rounded-lg p-1 text-muted-foreground hover:text-foreground"
+							aria-label={`Pick a ${setting.label.toLowerCase()} from the list`}
+						>
+							<ChevronsUpDownIcon class="size-4" />
+						</SelectPrimitive.Trigger>
+					</span>
+				{:else}
+					<SelectPrimitive.Trigger
+						class={cn(chip, 'inline-flex cursor-pointer items-center gap-1 whitespace-nowrap')}
+						aria-label={setting.label}
+					>
+						{optionLabel(setting, values[setting.id] ?? setting.default)}
+						<ChevronsUpDownIcon class="size-4 shrink-0 text-muted-foreground" />
+					</SelectPrimitive.Trigger>
+				{/if}
+				<Select.Content align="start" customAnchor={chipAnchors[setting.id]}>
 					{#each setting.options as option (option.value)}
 						<Select.Item value={option.value} label={option.label} class="py-2.5 text-base" />
 					{/each}
+					{#if setting.custom}
+						<Select.Separator />
+						<Select.Item value={CUSTOM} label="Custom…" class="py-2.5 text-base">
+							<PencilLineIcon class="size-4" />
+							Custom…
+						</Select.Item>
+					{/if}
 				</Select.Content>
 			</Select.Root>
 		</span>
@@ -642,7 +709,10 @@
 					<div class="min-h-0 flex-1 overflow-y-auto px-6 pt-4 pb-6">
 						<p class="text-[26px] leading-[1.75] font-medium tracking-tight">
 							{#each sentence.parts as part, i (i)}
-								{#if part.kind === 'text'}{part.text}{:else}<span class="whitespace-nowrap"
+								{#if part.kind === 'text'}{articleBefore(
+										part.text,
+										chipText(sentence.parts[i + 1])
+									)}{:else}<span class="whitespace-nowrap"
 										>{#if part.kind === 'image'}{@render imageChip(
 												chosen
 											)}{:else}{@render settingChip(part.setting)}{/if}{part.tail}</span
