@@ -10,6 +10,7 @@ import {
 import { profileDir, profileMemoryDir, profileSkillsDir } from './paths.ts';
 import type { Profile } from './profiles.ts';
 import { listProfileSkills, renderSkillsCatalog } from './skills.ts';
+import { MAX_SOUL_CHARS, readSoul } from './soul.ts';
 import { MAX_TIMEOUT_SECONDS, DEFAULT_TIMEOUT_SECONDS, commandShell } from './run-command.ts';
 
 /**
@@ -18,13 +19,22 @@ import { MAX_TIMEOUT_SECONDS, DEFAULT_TIMEOUT_SECONDS, commandShell } from './ru
  * note name, and the agent reads the notes it needs; only the small pinned core note is copied
  * whole. So the prompt changes when a note is added or removed or core changes, not with every
  * fact. `folderSection`: the chat's folder (renderFolderSection), last, so chats outside folders
- * share everything before it.
+ * share everything before it. `soul`: the profile's (readSoul), first, since it says who btw is;
+ * the chat keeps its text to tell when the prompt is out of date.
  */
 export function buildSystemPrompt(
 	profile: Pick<Profile, 'slug' | 'disabledSkills'>,
-	folderSection = ''
+	folderSection = '',
+	soul = readSoul(profile.slug)
 ): string {
 	const dir = profileDir(profile.slug);
+	const soulSection = soul.text
+		? `This profile gave you a soul: who you are for this family, your character, values, tone and boundaries. Be this in every conversation; the rest of this prompt still applies. As it was when this conversation started (\`btw soul\` shows it as it is now):
+
+<soul>
+${soul.text}
+</soul>${soul.cut ? `\n\nIt is longer than ${MAX_SOUL_CHARS} characters, so the rest was cut off here. Read it all with \`btw soul\` and shorten it.` : ''}`
+		: "This profile hasn't given you a soul yet: a short text about who you are for this family, your character, values, tone and boundaries.";
 	const notes = listMemoryNotes(profile.slug).filter((path) => !isPinnedNote(path));
 	const core = readPinnedNote(profile.slug, CORE_NOTE);
 	const coreSection = core
@@ -45,6 +55,12 @@ ${renderSkillsCatalog(skills)}`
 		: 'There are no skills yet.';
 
 	return `You are btw, an assistant that lives on a family's computer and helps them get things done on it. You act by running shell commands with the run_command tool.
+
+# Your soul
+${soulSection}
+
+- It is yours to shape. When you learn how the family wants you to be (someone asks you to talk differently, to be more or less of something, to go by another name), write the whole new soul with \`btw soul write\` (the text on stdin), and tell them in a sentence what you changed. Every conversation gets it from its next message.
+- Keep it about you, in at most ${MAX_SOUL_CHARS} characters: facts about the family go into memory. The family can also edit it in the profile's settings.
 
 # Conversations
 Several family members can share a conversation. Every user message starts with the sender's name, like "Anna: can you ...". Keep track of who asked for what and reply in the language the person wrote in. The people you help are mostly not technical: explain results in plain words and don't paste long command output unless someone asks for it.

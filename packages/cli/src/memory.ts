@@ -29,9 +29,9 @@ export const MEMORY_HELP = `Memory (short notes per topic; the agent reads the o
 
 /**
  * `--profile` is picked out by hand: facts are free text and may start with a dash, which an
- * option parser would take for an option.
+ * option parser would take for an option. `btw soul` does the same.
  */
-function split(args: string[]): { profile: string | undefined; words: string[] } {
+export function splitProfile(args: string[]): { profile: string | undefined; words: string[] } {
 	let profile: string | undefined;
 	const words: string[] = [];
 	for (let i = 0; i < args.length; i++) {
@@ -47,7 +47,7 @@ function split(args: string[]): { profile: string | undefined; words: string[] }
 	return { profile, words };
 }
 
-function profileFor(flag: string | undefined): Profile {
+export function profileFor(flag: string | undefined): Profile {
 	const slug = flag || process.env.BTW_PROFILE;
 	if (!slug) throw new Error('which profile? Pass --profile <slug>. See `btw profile list`.');
 	const found = getProfileBySlug(slug);
@@ -64,7 +64,7 @@ function plural(n: number, one: string, many: string): string {
 }
 
 export function memoryCommand(args: string[]): void {
-	const { profile: flag, words } = split(args);
+	const { profile: flag, words } = splitProfile(args);
 	const [action = 'list', ...rest] = words;
 	if (action === 'help') {
 		console.log(MEMORY_HELP);

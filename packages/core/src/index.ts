@@ -6,6 +6,7 @@ export {
 	profileFoldersDir,
 	profileImageTemplatesDir,
 	profileMemoryDir,
+	profileSoulFile,
 	profileSkillsDir
 } from './paths.ts';
 export {
@@ -159,6 +160,7 @@ export {
 	type MemoryFact,
 	type MemoryFile
 } from './memory.ts';
+export { MAX_SOUL_CHARS, SoulError, readSoul, readSoulFile, writeSoul } from './soul.ts';
 export { ViewLimitError, inspectImage, viewImage } from './images.ts';
 export {
 	AttachmentError,

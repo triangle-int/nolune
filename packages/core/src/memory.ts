@@ -34,14 +34,12 @@ import { profileDir, profileMemoryDir } from './paths.ts';
 
 /** Notes are read into the context, so one stays small enough to read in one go. */
 const MAX_NOTE_CHARS = 50_000;
-/** The note with what matters in almost every chat. */
-export const CORE_NOTE = 'core.md';
 /**
- * Pinned notes are copied whole into the system prompt of every new conversation, instead of
- * being read when needed.
+ * The pinned note, with what matters in almost every chat: it is copied whole into the system
+ * prompt of every new conversation, instead of being read when needed.
  */
-export const PINNED_NOTES: readonly string[] = [CORE_NOTE];
-/** A pinned note costs its length in every chat, so it holds a few facts, not a topic's worth. */
+export const CORE_NOTE = 'core.md';
+/** The pinned note costs its length in every chat, so it holds a few facts, not a topic's worth. */
 export const MAX_PINNED_CHARS = 4_000;
 const IMAGE = /\.(jpe?g|png|gif|webp|heic)$/i;
 /** Where memory lived before: one file, pasted into each new system prompt. */
@@ -138,7 +136,15 @@ function titleOf(path: string): string {
 
 /** `path` is relative to the memory folder, like `core.md`. */
 export function isPinnedNote(path: string): boolean {
-	return PINNED_NOTES.includes(path);
+	return path === CORE_NOTE;
+}
+
+/** The start of a text that grew past `max` some other way (an editor), cut at a line. */
+export function cutAtLine(text: string, max: number): { text: string; cut: boolean } {
+	if (text.length <= max) return { text, cut: false };
+	const head = text.slice(0, max);
+	const lastLine = head.lastIndexOf('\n');
+	return { text: (lastLine > 0 ? head.slice(0, lastLine) : head).trimEnd(), cut: true };
 }
 
 function checkSize(text: string, path: string): void {
@@ -325,10 +331,7 @@ export function listMemoryNotes(slug: string): string[] {
 	return readMemoryFiles(openMemory(slug)).map((file) => file.path);
 }
 
-/**
- * A pinned note as the system prompt shows it; null while it is empty or missing. One that grew
- * past the limit some other way (an editor) is cut at a line, and `cut` says so.
- */
+/** The pinned note as the system prompt shows it (see cutAtLine); null while empty or missing. */
 export function readPinnedNote(slug: string, path: string): { text: string; cut: boolean } | null {
 	const root = openMemory(slug);
 	let text: string;
@@ -341,11 +344,7 @@ export function readPinnedNote(slug: string, path: string): { text: string; cut:
 	} catch {
 		return null;
 	}
-	if (!text) return null;
-	if (text.length <= MAX_PINNED_CHARS) return { text, cut: false };
-	const head = text.slice(0, MAX_PINNED_CHARS);
-	const lastLine = head.lastIndexOf('\n');
-	return { text: (lastLine > 0 ? head.slice(0, lastLine) : head).trimEnd(), cut: true };
+	return text ? cutAtLine(text, MAX_PINNED_CHARS) : null;
 }
 
 export function readMemoryNote(slug: string, topic: string): { path: string; text: string } {

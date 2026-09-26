@@ -216,13 +216,15 @@ export const conversation = sqliteTable(
 			.default('medium'),
 		/**
 		 * Frozen at creation so the prompt cache prefix never changes, except when the chat moves
-		 * to another folder or its folder's instructions or files change: then it is built again
-		 * at the start of the next turn.
+		 * to another folder, its folder's instructions or files change, or the profile's soul
+		 * changes: then it is built again at the start of the next turn.
 		 */
 		systemPrompt: text('system_prompt').notNull(),
 		folderId: text('folder_id').references(() => folder.id, { onDelete: 'set null' }),
 		/** The folder's part of `systemPrompt` ('' outside a folder), to tell when it's out of date. */
 		folderContext: text('folder_context').notNull().default(''),
+		/** The profile's soul as `systemPrompt` has it ('' without one), to tell when it's out of date. */
+		soul: text('soul').notNull().default(''),
 		/**
 		 * The last row before the system prompt was built again. Thinking in rows up to it belongs
 		 * to the old prompt, and the API refuses it under a new one, so requests leave it out.

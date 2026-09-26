@@ -24,6 +24,7 @@ import {
 import { buildSystemPrompt } from './prompt.ts';
 import { effectiveContextWindow, getPreset } from './presets.ts';
 import type { Profile } from './profiles.ts';
+import { readSoul } from './soul.ts';
 
 export type Conversation = typeof conversation.$inferSelect;
 export type MessageRow = typeof message.$inferSelect;
@@ -106,6 +107,7 @@ export function createConversation(input: {
 	const folderId = input.folderId ?? null;
 	if (folderId && !getFolder(input.profile.id, folderId)) throw new Error('Unknown folder');
 	const folderContext = folderContextFor(input.profile, folderId);
+	const soul = readSoul(input.profile.slug);
 	const now = new Date();
 	const created: Conversation = {
 		id: randomUUID(),
@@ -117,9 +119,10 @@ export function createConversation(input: {
 		model: preset.model,
 		contextWindow: effectiveContextWindow(preset),
 		effort: input.effort ?? 'medium',
-		systemPrompt: buildSystemPrompt(input.profile, folderContext),
+		systemPrompt: buildSystemPrompt(input.profile, folderContext, soul),
 		folderId,
 		folderContext,
+		soul: soul.text,
 		promptChangedAtSeq: null,
 		hidden: input.hidden ?? false,
 		createdBy: input.userId,
@@ -177,19 +180,22 @@ export function setEffort(id: string, effort: Effort): void {
 }
 
 /**
- * Builds the system prompt again, with the chat's folder as it is now (`folderContext`), and
- * notes the last row before it: its thinking was made under the old prompt (requestMessages).
- * The whole prompt is rebuilt, so the skills catalog and memory notes are current again too.
+ * Builds the system prompt again, with the chat's folder (`folderContext`) and the profile's soul
+ * as they are now, and notes the last row before it: its thinking was made under the old prompt
+ * (requestMessages). The whole prompt is rebuilt, so the skills catalog and memory are current
+ * again too.
  */
 export function rebuildSystemPrompt(
 	conv: Conversation,
 	profile: Pick<Profile, 'slug' | 'disabledSkills'>,
 	folderContext: string,
+	soul: { text: string; cut: boolean },
 	lastSeq: number | null
 ): Conversation {
 	const changed = {
-		systemPrompt: buildSystemPrompt(profile, folderContext),
+		systemPrompt: buildSystemPrompt(profile, folderContext, soul),
 		folderContext,
+		soul: soul.text,
 		promptChangedAtSeq: lastSeq ?? conv.promptChangedAtSeq
 	};
 	getDb().update(conversation).set(changed).where(eq(conversation.id, conv.id)).run();

@@ -1,11 +1,15 @@
 import { fail, redirect } from '@sveltejs/kit';
 import {
+	MAX_SOUL_CHARS,
+	SoulError,
 	addMember,
 	deleteProfile,
 	listMembers,
 	listUsers,
+	readSoulFile,
 	removeMember,
-	renameProfile
+	renameProfile,
+	writeSoul
 } from '@btw/core';
 import { requireProfile } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
@@ -18,7 +22,9 @@ export const load: PageServerLoad = ({ locals, params }) => {
 		members,
 		others: listUsers()
 			.filter((u) => !memberIds.has(u.id))
-			.map((u) => u.name)
+			.map((u) => u.name),
+		soul: readSoulFile(profile.slug),
+		maxSoul: MAX_SOUL_CHARS
 	};
 };
 
@@ -36,6 +42,16 @@ export const actions: Actions = {
 			return fail(400, { message: message(err) });
 		}
 		return { message: 'Renamed.' };
+	},
+	soul: async ({ locals, params, request }) => {
+		const { profile } = requireProfile(locals, params.slug);
+		const text = (await request.formData()).get('soul')?.toString() ?? '';
+		try {
+			return { message: writeSoul(profile.slug, text) ? 'Saved the soul.' : 'Removed the soul.' };
+		} catch (err) {
+			if (err instanceof SoulError) return fail(400, { message: err.message });
+			throw err;
+		}
 	},
 	add: async ({ locals, params, request }) => {
 		const { profile } = requireProfile(locals, params.slug);
