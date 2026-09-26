@@ -460,6 +460,9 @@ composer. Most of the family doesn't read shell, so the default view hides the m
 - **Technical details** (Settings, per device, in the `btw-prefs` cookie so the server renders it
   too) switch the labels to the raw commands and add context size, prompt-cache hit rate, cache
   misses, per-reply token usage and the model name. "Always show steps" opens the groups by default.
+- **The composer** is docked over the end of the chat and of the Images grid (`ComposerDock`):
+  what scrolls under it fades and blurs into it instead of stopping at an edge, and the scroll
+  area pads its end by the composer's height so the newest message still clears it.
 - **New chat** is the empty composer: the first message creates the conversation and is sent in
   the same request. Model and reasoning are picked from the chip in the composer: the model starts
   at the default preset, reasoning at the level last used on this device. In an existing chat only

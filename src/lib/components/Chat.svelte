@@ -24,6 +24,7 @@
 	import { cn } from '$lib/utils';
 	import Activity from './chat/Activity.svelte';
 	import Composer from './chat/Composer.svelte';
+	import ComposerDock from './chat/ComposerDock.svelte';
 	import CopyButton from './chat/CopyButton.svelte';
 	import Markdown from './chat/Markdown.svelte';
 	import MediaViewer, { pictureClicks, type ViewedPicture } from './chat/MediaViewer.svelte';
@@ -62,6 +63,8 @@
 	let deleteOpen = $state(false);
 	let viewing = $state<ViewedPicture | null>(null);
 	let scroller = $state<HTMLElement>();
+	/** The messages scroll under the composer, so they end this far up. */
+	let composerHeight = $state(160);
 	let textarea = $state<HTMLTextAreaElement | null>(null);
 
 	$effect(() => chat.connect(conversation.id));
@@ -438,7 +441,10 @@
 		onscroll={onScroll}
 		class="h-full overflow-y-auto [overflow-anchor:none]"
 	>
-		<div class="mx-auto flex max-w-3xl flex-col gap-7 px-4 pt-4 pb-12 sm:px-6">
+		<div
+			class="mx-auto flex max-w-3xl flex-col gap-7 px-4 pt-4 sm:px-6"
+			style:padding-bottom="{composerHeight + 16}px"
+		>
 			{#if chat.loaded && chat.messages.length === 0 && chat.queued.length === 0 && !chat.running}
 				<p class="py-16 text-center text-muted-foreground">Ask for something to get started.</p>
 			{/if}
@@ -493,19 +499,16 @@
 		</div>
 	</div>
 
-	{#if !stickToBottom}
-		<button
-			onclick={scrollToBottom}
-			class="absolute bottom-3 left-1/2 flex size-9 -translate-x-1/2 items-center justify-center rounded-full border bg-background text-foreground shadow-md hover:bg-muted"
-			aria-label="Scroll to the newest message"
-		>
-			<ArrowDownIcon class="size-4" />
-		</button>
-	{/if}
-</div>
-
-<div class="px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-4">
-	<div class="mx-auto max-w-3xl">
+	<ComposerDock bind:height={composerHeight}>
+		{#if !stickToBottom}
+			<button
+				onclick={scrollToBottom}
+				class="absolute bottom-full left-1/2 mb-3 flex size-9 -translate-x-1/2 items-center justify-center rounded-full border bg-background text-foreground shadow-md hover:bg-muted"
+				aria-label="Scroll to the newest message"
+			>
+				<ArrowDownIcon class="size-4" />
+			</button>
+		{/if}
 		<Composer
 			bind:value={text}
 			bind:textarea
@@ -535,7 +538,7 @@
 				btw can make mistakes, and it can change files on this computer.
 			</p>
 		{/if}
-	</div>
+	</ComposerDock>
 </div>
 
 <MediaViewer bind:picture={viewing} />
