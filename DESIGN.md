@@ -35,7 +35,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
                               media, uploads, provider files, triggers, trigger runs, notifications
   media/<sha256>              copies of the pictures and files shown in chats, and of attached
                               files not sent yet
-  image-templates/<id>/       Images page templates for every profile (TEMPLATE.md, cover.png)
+  image-templates/<id>/       Images page templates for every profile (TEMPLATE.md, cover.webp)
   bin/btw                     shim so the agent can run `btw` from any command
   profiles/<slug>/            default working folder for commands in this profile
     memories/<topic>.md       long-term memory: one note per topic
@@ -294,7 +294,8 @@ an image", with the chat's paperclip) does the same with the person's own words.
   model. `{{setting}}` is replaced by the choice, `{{#setting}}…{{/setting}}` is kept only when
   it has a value and `{{^setting}}…{{/setting}}` only when it doesn't; `{{image}}` is "the
   attached picture" when one was given. A line that held only sections left out disappears. A
-  `cover.png|jpg|webp` next to it replaces the icon.
+  square `cover.png|jpg|webp` next to it replaces the icon; the card's title sits over its
+  bottom fifth. The built-in covers were made with the image model and shrunk to 768px WebP.
 - **Sources**, like skills: the 18 that ship with btw (`packages/core/image-templates`),
   `~/.btw-agent/image-templates`, and the profile's `image-templates` folder; a later one
   overrides an earlier one with the same id.

@@ -403,7 +403,7 @@
 					onclick={() => open(template)}
 					class="group relative block overflow-hidden rounded-3xl text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
 				>
-					{@render tile(template, 'aspect-[4/5]', 'size-16 stroke-[1.5]')}
+					{@render tile(template, 'aspect-square', 'size-16 stroke-[1.5]')}
 					<span
 						class="absolute inset-x-0 bottom-0 bg-linear-to-t from-black/55 to-transparent px-3.5 pt-10 pb-3 text-sm font-semibold text-white"
 					>
@@ -502,7 +502,7 @@
 				{#if step === 'sheet'}
 					{@const busy = starting || autoSend || (photos.uploading && !chosen.settings.length)}
 					<div class="relative">
-						{@render tile(chosen, 'aspect-[5/4] w-full', 'size-24 stroke-[1.25]')}
+						{@render tile(chosen, 'aspect-square max-h-[50dvh] w-full', 'size-24 stroke-[1.25]')}
 						<button
 							type="button"
 							onclick={close}
