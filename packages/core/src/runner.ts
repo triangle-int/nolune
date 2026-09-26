@@ -462,7 +462,21 @@ async function loop(conversationId: string): Promise<void> {
 			const images = imageUse([...messages, ...queuedRows(conversationId).map(toMessageParam)]);
 			const results: Anthropic.ToolResultBlockParam[] = [];
 			for (const call of calls) {
-				results.push(await runToolCall(conv, call, reply.stop_reason, abort.signal, st, images));
+				// A call that throws still gets its result, or the reply would wait for one forever.
+				const result = await runToolCall(
+					conv,
+					call,
+					reply.stop_reason,
+					abort.signal,
+					st,
+					images
+				).catch((err: unknown) => {
+					st.toolOutput = null;
+					console.error(`[btw] ${conversationId.slice(0, 8)} command failed:`, err);
+					const reason = err instanceof Error ? err.message : String(err);
+					return toolResult(call.id, `Not finished: ${reason}`, true);
+				});
+				results.push(result);
 			}
 			const resultsRow = appendRow({
 				conversationId,
@@ -498,6 +512,9 @@ async function loop(conversationId: string): Promise<void> {
  */
 export function recoverAfterRestart(): void {
 	for (const id of listAllConversationIds()) {
+		// `pnpm dev` runs this again when a file changes, without a restart: a loop still running
+		// here answers its own calls, and a second answer would break the conversation.
+		if (isRunning(id)) continue;
 		const last = lastCommittedRow(id);
 		if (last?.kind === 'assistant') {
 			const calls = (JSON.parse(last.content) as Anthropic.ContentBlock[]).filter(

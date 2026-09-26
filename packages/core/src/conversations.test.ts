@@ -16,6 +16,7 @@ import {
 	queuedRows,
 	replaceTitle,
 	replyText,
+	requestMessages,
 	setHidden,
 	toDisplay,
 	touchConversation
@@ -222,6 +223,105 @@ describe('messages', () => {
 		});
 		expect(replyText(assistant)).toBe('Sunny.');
 		expect(foundText([human, assistant, results])).toBe('Anna: weather?\nSunny +21°C');
+	});
+});
+
+describe('requestMessages', () => {
+	const calls = (...ids: string[]) =>
+		ids.map((id) => ({ type: 'tool_use', id, name: 'run_command', input: { command: 'ls' } }));
+	const result = (id: string, content: string, isError = false) => ({
+		type: 'tool_result',
+		tool_use_id: id,
+		content,
+		...(isError ? { is_error: true } : {})
+	});
+	const noResult = (id: string) =>
+		result(id, 'No result came back from this command. It may or may not have run.', true);
+
+	function chatWith(...rows: { role: 'user' | 'assistant'; content: unknown[] }[]) {
+		const { chat, user } = newChat();
+		insertQueued({ conversationId: chat.id, senderId: user.id, senderName: 'Anna', text: 'Hi' });
+		commitQueuedRows(chat.id);
+		for (const row of rows) {
+			appendRow({
+				conversationId: chat.id,
+				role: row.role,
+				kind: row.role === 'assistant' ? 'assistant' : 'tool_results',
+				content: JSON.stringify(row.content)
+			});
+		}
+		return { chat, user };
+	}
+
+	function say(chat: { id: string }, user: { id: string }, text: string) {
+		insertQueued({ conversationId: chat.id, senderId: user.id, senderName: 'Anna', text });
+		commitQueuedRows(chat.id);
+	}
+
+	it('sends a healthy transcript exactly as stored', () => {
+		const { chat, user } = chatWith(
+			{ role: 'assistant', content: calls('t1', 't2') },
+			{ role: 'user', content: [result('t1', 'a'), result('t2', 'b')] },
+			{ role: 'assistant', content: [{ type: 'text', text: 'Done.' }] }
+		);
+		say(chat, user, 'Thanks');
+		const rows = committedRows(chat.id);
+		expect(requestMessages(rows, null)).toEqual(
+			rows.map((row) => ({ role: row.role, content: JSON.parse(row.content) }))
+		);
+	});
+
+	it('leaves out a second result for the same call', () => {
+		// The results of a command that was still running when the dev server reloaded, after
+		// the ones the reload's recovery wrote.
+		const { chat, user } = chatWith(
+			{ role: 'assistant', content: calls('t1', 't2') },
+			{ role: 'user', content: [result('t1', 'Not finished.', true), result('t2', 'x', true)] },
+			{ role: 'user', content: [result('t1', 'a'), result('t2', 'b')] }
+		);
+		say(chat, user, 'Hello?');
+		expect(requestMessages(committedRows(chat.id), null).slice(1)).toEqual([
+			{ role: 'assistant', content: calls('t1', 't2') },
+			{ role: 'user', content: [result('t1', 'Not finished.', true), result('t2', 'x', true)] },
+			{ role: 'user', content: [{ type: 'text', text: 'Anna: Hello?' }] }
+		]);
+	});
+
+	it('answers calls that never got a result before what comes next', () => {
+		const { chat, user } = chatWith(
+			{ role: 'assistant', content: calls('t1', 't2') },
+			{ role: 'user', content: [result('t1', 'a')] }
+		);
+		expect(requestMessages(committedRows(chat.id), null).slice(1)).toEqual([
+			{ role: 'assistant', content: calls('t1', 't2') },
+			{ role: 'user', content: [result('t1', 'a')] },
+			{ role: 'user', content: [noResult('t2')] }
+		]);
+
+		say(chat, user, 'Hello?');
+		appendRow({
+			conversationId: chat.id,
+			role: 'user',
+			kind: 'tool_results',
+			content: JSON.stringify([result('t2', 'late'), result('t9', 'from nowhere')])
+		});
+		expect(requestMessages(committedRows(chat.id), null).slice(1)).toEqual([
+			{ role: 'assistant', content: calls('t1', 't2') },
+			{ role: 'user', content: [result('t1', 'a')] },
+			{ role: 'user', content: [noResult('t2'), { type: 'text', text: 'Anna: Hello?' }] }
+		]);
+	});
+
+	it('answers calls of a reply followed straight by another', () => {
+		const { chat } = chatWith(
+			{ role: 'assistant', content: calls('t1') },
+			{ role: 'assistant', content: [{ type: 'text', text: 'Hm.' }] }
+		);
+		expect(requestMessages(committedRows(chat.id), null).slice(1)).toEqual([
+			{ role: 'assistant', content: calls('t1') },
+			{ role: 'user', content: [noResult('t1')] },
+			{ role: 'assistant', content: [{ type: 'text', text: 'Hm.' }] }
+		]);
 	});
 });
 

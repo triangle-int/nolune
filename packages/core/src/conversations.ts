@@ -413,7 +413,7 @@ export function requestMessages(
 	rows: MessageRow[],
 	promptChangedAtSeq: number | null
 ): Anthropic.MessageParam[] {
-	return rows.flatMap((row): Anthropic.MessageParam[] => {
+	const messages = rows.flatMap((row): Anthropic.MessageParam[] => {
 		if (promptChangedAtSeq === null || row.role !== 'assistant' || row.seq === null) {
 			return [toMessageParam(row)];
 		}
@@ -424,6 +424,59 @@ export function requestMessages(
 		// A reply that was only thinking (cut off, say) has nothing left to send.
 		return content.length ? [{ role: 'assistant', content }] : [];
 	});
+	return pairToolResults(messages);
+}
+
+function noResult(toolUseId: string): Anthropic.ToolResultBlockParam {
+	return {
+		type: 'tool_result',
+		tool_use_id: toolUseId,
+		content: 'No result came back from this command. It may or may not have run.',
+		is_error: true
+	};
+}
+
+/**
+ * The API refuses the whole transcript unless every tool call has exactly one result, right
+ * after the reply that made it and before anything else. A crash or restart in the middle of a
+ * command could break that for good: a call left without a result, or one answered twice (the
+ * dev server's reload answered a call that was still running). So a call without a result gets
+ * one saying so, and a result that's a second one, late, or for no call is left out. Messages
+ * that need no mending are passed through as they are, so healthy transcripts don't change.
+ */
+function pairToolResults(messages: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
+	const out: Anthropic.MessageParam[] = [];
+	/** Calls of the latest reply that have no result yet. */
+	let open: string[] = [];
+	for (const m of messages) {
+		if (m.role === 'assistant') {
+			if (open.length) out.push({ role: 'user', content: open.map(noResult) });
+			open =
+				typeof m.content === 'string'
+					? []
+					: m.content.flatMap((b) => (b.type === 'tool_use' ? [b.id] : []));
+			out.push(m);
+			continue;
+		}
+		const blocks: Anthropic.ContentBlockParam[] =
+			typeof m.content === 'string' ? [{ type: 'text', text: m.content }] : m.content;
+		const content: Anthropic.ContentBlockParam[] = [];
+		for (const b of blocks) {
+			if (b.type !== 'tool_result') {
+				content.push(...open.map(noResult), b);
+				open = [];
+			} else if (open.includes(b.tool_use_id)) {
+				content.push(b);
+				open = open.filter((id) => id !== b.tool_use_id);
+			}
+		}
+		if (content.length === blocks.length && content.every((b, i) => b === blocks[i])) out.push(m);
+		else if (content.length) out.push({ role: 'user', content });
+	}
+	if (open.length && out.at(-1)?.role === 'user') {
+		out.push({ role: 'user', content: open.map(noResult) });
+	}
+	return out;
 }
 
 export function summarizeUsage(usage: Anthropic.Usage): Usage {
