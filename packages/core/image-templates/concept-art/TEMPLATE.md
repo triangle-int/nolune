@@ -12,6 +12,7 @@ size: landscape
 settings:
   - id: style
     label: Style
+    custom: true
     options:
       - label: painterly
         prompt: loose, painterly digital concept art with visible brushwork

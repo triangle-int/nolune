@@ -12,6 +12,7 @@ size: square
 settings:
   - id: style
     label: Style
+    custom: true
     options:
       - label: glossy 3D
         prompt: glossy 3D with soft gradients and gentle highlights

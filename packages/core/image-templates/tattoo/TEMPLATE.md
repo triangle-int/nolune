@@ -12,6 +12,7 @@ size: portrait
 settings:
   - id: style
     label: Style
+    custom: true
     options:
       - label: fine-line
         prompt: delicate fine-line work with thin, even lines

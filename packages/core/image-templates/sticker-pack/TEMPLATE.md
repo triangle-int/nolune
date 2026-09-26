@@ -13,6 +13,7 @@ size: square
 settings:
   - id: style
     label: Style
+    custom: 'Style: {{style}}.'
     options:
       - label: 3D
         prompt: Use rounded, toy-like forms, smooth polished materials, soft studio lighting, subtle ambient occlusion.

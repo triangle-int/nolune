@@ -12,6 +12,7 @@ size: landscape
 settings:
   - id: style
     label: Style
+    custom: true
     options:
       - label: pixel art
         prompt: 16-bit pixel art with crisp square pixels, a limited palette and no anti-aliasing
