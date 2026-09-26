@@ -26,6 +26,7 @@ import { promisify } from 'node:util';
 import { and, eq } from 'drizzle-orm';
 import { getDb } from './db/index.ts';
 import { media } from './db/schema.ts';
+import { inspectImage } from './images.ts';
 import { isRemoteHref, mediaRefs } from './media-refs.ts';
 import { paths } from './paths.ts';
 
@@ -432,86 +433,20 @@ interface Size {
 
 /** Pixel size from the header, as displayed (a rotated JPEG's sides swapped). */
 function imageSize(head: Buffer, mime: string): Size | null {
-	let size: Size | null = null;
-	try {
-		if (mime === 'image/png')
-			size = { width: head.readUInt32BE(16), height: head.readUInt32BE(20) };
-		else if (mime === 'image/gif') {
-			size = { width: head.readUInt16LE(6), height: head.readUInt16LE(8) };
-		} else if (mime === 'image/bmp') {
-			size = { width: head.readInt32LE(18), height: Math.abs(head.readInt32LE(22)) };
-		} else if (mime === 'image/webp') size = webpSize(head);
-		else if (mime === 'image/jpeg') size = jpegSize(head);
-	} catch {
-		// truncated or unusual header
-	}
-	return size && size.width > 0 && size.height > 0 ? size : null;
-}
-
-function webpSize(buf: Buffer): Size | null {
-	const chunk = buf.toString('latin1', 12, 16);
-	if (chunk === 'VP8 ') {
-		return { width: buf.readUInt16LE(26) & 0x3fff, height: buf.readUInt16LE(28) & 0x3fff };
-	}
-	if (chunk === 'VP8L') {
-		const bits = buf.readUInt32LE(21);
-		return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 };
-	}
-	if (chunk === 'VP8X')
-		return { width: buf.readUIntLE(24, 3) + 1, height: buf.readUIntLE(27, 3) + 1 };
-	return null;
-}
-
-const JPEG_FRAME_MARKERS = new Set([
-	0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf
-]);
-
-function jpegSize(buf: Buffer): Size | null {
-	let orientation = 1;
-	let i = 2;
-	while (i + 9 < buf.length) {
-		if (buf[i] !== 0xff) return null;
-		const marker = buf[i + 1];
-		if (marker === 0xff) {
-			i++;
-			continue;
+	if (mime === 'image/bmp') {
+		try {
+			const size = { width: head.readInt32LE(18), height: Math.abs(head.readInt32LE(22)) };
+			return size.width > 0 && size.height > 0 ? size : null;
+		} catch {
+			return null; // truncated header
 		}
-		if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
-			i += 2;
-			continue;
-		}
-		if (marker === 0xda) return null; // image data starts: no frame header found
-		const length = buf.readUInt16BE(i + 2);
-		if (marker === 0xe1 && buf.toString('latin1', i + 4, i + 10) === 'Exif\0\0') {
-			orientation = exifOrientation(buf.subarray(i + 10, i + 2 + length)) ?? orientation;
-		}
-		if (JPEG_FRAME_MARKERS.has(marker)) {
-			const height = buf.readUInt16BE(i + 5);
-			const width = buf.readUInt16BE(i + 7);
-			// Orientations 5-8 turn the picture by 90°, which browsers apply when showing it.
-			return orientation >= 5 && orientation <= 8
-				? { width: height, height: width }
-				: { width, height };
-		}
-		i += 2 + length;
 	}
-	return null;
-}
-
-function exifOrientation(tiff: Buffer): number | null {
-	try {
-		const little = tiff.toString('latin1', 0, 2) === 'II';
-		const u16 = (at: number) => (little ? tiff.readUInt16LE(at) : tiff.readUInt16BE(at));
-		const ifd = little ? tiff.readUInt32LE(4) : tiff.readUInt32BE(4);
-		const count = u16(ifd);
-		for (let k = 0; k < count; k++) {
-			const entry = ifd + 2 + k * 12;
-			if (u16(entry) === 0x0112) return u16(entry + 8);
-		}
-	} catch {
-		// malformed EXIF
-	}
-	return null;
+	const info = inspectImage(head);
+	if (!info || info.mediaType !== mime) return null;
+	// Orientations 5-8 turn the picture by 90°, which browsers apply when showing it.
+	return info.orientation >= 5 && info.orientation <= 8
+		? { width: info.height, height: info.width }
+		: { width: info.width, height: info.height };
 }
 
 // --- database ---
