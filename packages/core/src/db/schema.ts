@@ -187,6 +187,47 @@ export const message = sqliteTable(
 	(table) => [index('message_conversation_seq_idx').on(table.conversationId, table.seq)]
 );
 
+/**
+ * A picture (`![alt](src)`) or file (`[label](src)`) in one of the agent's replies, copied when
+ * the reply was saved so the chat keeps showing it after the original moves or disappears.
+ */
+export const media = sqliteTable(
+	'media',
+	{
+		/** Random; the only handle the web UI gets. */
+		id: text('id').primaryKey(),
+		conversationId: text('conversation_id')
+			.notNull()
+			.references(() => conversation.id, { onDelete: 'cascade' }),
+		messageId: integer('message_id')
+			.notNull()
+			.references(() => message.id, { onDelete: 'cascade' }),
+		/** The link target exactly as the Markdown lexer read it from the reply. */
+		src: text('src').notNull(),
+		status: text('status', {
+			enum: ['ok', 'missing', 'unsupported', 'too_large', 'blocked', 'failed']
+		}).notNull(),
+		/** What went wrong, in plain words, when status isn't `ok`. */
+		error: text('error'),
+		/** File name for downloads. */
+		name: text('name').notNull(),
+		/** The original, byte for byte: `~/.btw-agent/media/<sha256>`. */
+		sha256: text('sha256'),
+		mime: text('mime'),
+		bytes: integer('bytes'),
+		/** Pictures: pixel size as displayed (EXIF rotation applied), when it could be read. */
+		width: integer('width'),
+		height: integer('height'),
+		/** A full-size JPEG copy for pictures browsers can't show (HEIC, TIFF). */
+		previewSha256: text('preview_sha256'),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull()
+	},
+	(table) => [
+		index('media_messageId_idx').on(table.messageId),
+		index('media_conversationId_idx').on(table.conversationId)
+	]
+);
+
 export const trigger = sqliteTable(
 	'trigger',
 	{

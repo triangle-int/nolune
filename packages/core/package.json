@@ -5,7 +5,8 @@
 	"type": "module",
 	"exports": {
 		".": "./src/index.ts",
-		"./usage": "./src/usage.ts"
+		"./usage": "./src/usage.ts",
+		"./media-refs": "./src/media-refs.ts"
 	},
 	"scripts": {
 		"check": "tsc -p ."
@@ -16,6 +17,7 @@
 		"better-sqlite3": "^13.0.2",
 		"croner": "^10.0.1",
 		"drizzle-orm": "^0.45.2",
+		"marked": "^18.0.14",
 		"yaml": "^2.9.1"
 	},
 	"devDependencies": {

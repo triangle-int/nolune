@@ -36,6 +36,8 @@ export const paths = {
 	logs: join(home, 'logs'),
 	profiles: join(home, 'profiles'),
 	trash: join(home, 'trash'),
+	/** Copies of the pictures and files shown in chats, named by their SHA-256. */
+	media: join(home, 'media'),
 	globalSkills: process.env.BTW_GLOBAL_SKILLS || join(homedir(), '.agents', 'skills'),
 	/** Skills that ship with btw, such as `automations`. */
 	builtinSkills: join(packageRoot, 'packages', 'core', 'skills'),

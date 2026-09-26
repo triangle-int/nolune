@@ -1,4 +1,4 @@
-import type { DisplayMessage, LiveBlock, Usage } from '@btw/core';
+import type { DisplayMedia, DisplayMessage, LiveBlock, Usage } from '@btw/core';
 import { partialToolInput } from './commands';
 
 /**
@@ -29,6 +29,10 @@ export interface TextPart {
 	type: 'text';
 	key: string;
 	text: string;
+	/** Copies of the pictures and files the text links to, keyed by link target. */
+	media?: Record<string, DisplayMedia>;
+	/** Still streaming: its pictures and files aren't copied until the reply is saved. */
+	pending?: boolean;
 }
 
 export interface ActivityPart {
@@ -113,8 +117,8 @@ export function buildTranscript(
 		}
 	};
 
-	const addText = (r: Reply, text: string) => {
-		r.parts.push({ type: 'text', key: `${r.key}-${r.parts.length}`, text });
+	const addText = (r: Reply, text: string, media: Pick<TextPart, 'media' | 'pending'>) => {
+		r.parts.push({ type: 'text', key: `${r.key}-${r.parts.length}`, text, ...media });
 	};
 
 	for (const message of messages) {
@@ -132,7 +136,7 @@ export function buildTranscript(
 			r.usage = addUsage(r.usage, message.usage);
 			if (message.stopReason) r.stopReasons.push(message.stopReason);
 			for (const block of message.blocks) {
-				if (block.type === 'text') addText(r, block.text);
+				if (block.type === 'text') addText(r, block.text, { media: message.media });
 				else if (block.type === 'thinking') addStep(r, block, message.createdAt);
 				else
 					addStep(
@@ -162,7 +166,7 @@ export function buildTranscript(
 		const r = openReply();
 		const now = Date.now();
 		for (const block of streaming) {
-			if (block.type === 'text') addText(r, block.text);
+			if (block.type === 'text') addText(r, block.text, { pending: true });
 			else if (block.type === 'thinking') addStep(r, { type: 'thinking', text: block.text }, now);
 			else if (block.id)
 				addStep(r, { type: 'command', id: block.id, ...partialToolInput(block.text) }, now);

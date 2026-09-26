@@ -60,6 +60,7 @@ export {
 	type DisplayMessage,
 	type Usage
 } from './conversations.ts';
+export { MAX_MEDIA_BYTES, getMedia, mediaFile, type DisplayMedia, type MediaRow } from './media.ts';
 export {
 	getSnapshot,
 	isRunning,

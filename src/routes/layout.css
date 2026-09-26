@@ -272,4 +272,8 @@
 		max-width: 100%;
 		border-radius: 0.75rem;
 	}
+	/* Download cards for files in a reply (src/lib/markdown.ts). */
+	& a[data-media-file] {
+		text-decoration: none;
+	}
 }
