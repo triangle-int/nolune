@@ -20,6 +20,7 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Composer from '$lib/components/chat/Composer.svelte';
+	import ComposerDock from '$lib/components/chat/ComposerDock.svelte';
 	import StepIcon from '$lib/components/chat/StepIcon.svelte';
 	import DrawingCanvas from '$lib/components/images/DrawingCanvas.svelte';
 	import { Attachments } from '$lib/uploads.svelte';
@@ -433,26 +434,19 @@
 		</div>
 	</div>
 
-	<form
-		bind:this={describeForm}
-		bind:clientHeight={composerHeight}
-		method="POST"
-		use:enhance={submit(
-			(busy) => (describing = busy),
-			(message) => (describeError = message),
-			describeFiles
-		)}
-		class="pointer-events-none absolute inset-x-0 bottom-0 px-3 pt-12 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-4"
-	>
-		<!-- The grid fades and blurs into the composer instead of stopping at an edge. -->
-		<div
-			aria-hidden="true"
-			class="absolute inset-0 bg-background/80 [mask-image:linear-gradient(to_bottom,transparent,black_55%)] backdrop-blur-md"
-		></div>
-		{#each describeFiles.ids as id (id)}
-			<input type="hidden" name="upload" value={id} />
-		{/each}
-		<div class="pointer-events-auto relative mx-auto max-w-3xl">
+	<ComposerDock bind:height={composerHeight}>
+		<form
+			bind:this={describeForm}
+			method="POST"
+			use:enhance={submit(
+				(busy) => (describing = busy),
+				(message) => (describeError = message),
+				describeFiles
+			)}
+		>
+			{#each describeFiles.ids as id (id)}
+				<input type="hidden" name="upload" value={id} />
+			{/each}
 			<Composer
 				bind:value={text}
 				name="text"
@@ -468,8 +462,8 @@
 					btw makes the picture in a new chat, where you can ask for changes.
 				</p>
 			{/if}
-		</div>
-	</form>
+		</form>
+	</ComposerDock>
 </div>
 
 <!-- Outside the dialog, so the drawing screen can use them too. -->
