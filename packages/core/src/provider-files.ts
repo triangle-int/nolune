@@ -15,6 +15,8 @@ export interface FileStore {
 	account(): string;
 	/** Returns the provider's id for the file. */
 	upload(data: Buffer, name: string, mime: string): Promise<string>;
+	/** Whether the file is still there. */
+	exists(fileId: string): Promise<boolean>;
 	remove(fileId: string): Promise<void>;
 }
 
@@ -26,7 +28,10 @@ const inFlight = new Map<string, Promise<string>>();
 /** A message is about to be saved with an id: files in use this recently are never deleted. */
 const IN_USE_MS = 60 * 60 * 1000;
 
-/** The provider's id for this content, uploading it the first time it's needed. */
+/**
+ * The provider's id for this content, uploading it the first time it's needed. A cached id is
+ * checked first: a message referring to a file that's gone would fail every later request.
+ */
 export async function providerFileId(
 	provider: Provider,
 	data: Buffer,
@@ -41,13 +46,17 @@ export async function providerFileId(
 		eq(providerFile.account, account),
 		eq(providerFile.sha256, sha256)
 	);
+	// Marked as used before the check, so the prune leaves it alone from here on.
 	const known = getDb()
 		.update(providerFile)
 		.set({ usedAt: new Date() })
 		.where(where)
 		.returning({ fileId: providerFile.fileId })
 		.get();
-	if (known) return known.fileId;
+	if (known) {
+		if (await store.exists(known.fileId)) return known.fileId;
+		getDb().delete(providerFile).where(where).run();
+	}
 
 	const key = `${provider}:${account}:${sha256}`;
 	let pending = inFlight.get(key);
@@ -106,6 +115,18 @@ export async function pruneProviderFiles(): Promise<void> {
 	for (const row of rows) {
 		if (used.has(row.fileId)) continue;
 		const store = stores[row.provider];
+		const where = and(
+			eq(providerFile.provider, row.provider),
+			eq(providerFile.account, row.account),
+			eq(providerFile.sha256, row.sha256)
+		);
+		// A message may have picked it up again since the list was read.
+		const current = getDb()
+			.select({ usedAt: providerFile.usedAt })
+			.from(providerFile)
+			.where(where)
+			.get();
+		if (!current || current.usedAt.getTime() >= Date.now() - IN_USE_MS) continue;
 		try {
 			if (store.account() !== row.account) continue;
 			await store.remove(row.fileId);
@@ -113,15 +134,6 @@ export async function pruneProviderFiles(): Promise<void> {
 			console.error(`[btw] couldn't delete ${row.provider} file ${row.fileId}:`, err);
 			continue;
 		}
-		getDb()
-			.delete(providerFile)
-			.where(
-				and(
-					eq(providerFile.provider, row.provider),
-					eq(providerFile.account, row.account),
-					eq(providerFile.sha256, row.sha256)
-				)
-			)
-			.run();
+		getDb().delete(providerFile).where(where).run();
 	}
 }

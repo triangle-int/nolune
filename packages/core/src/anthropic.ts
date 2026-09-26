@@ -105,6 +105,16 @@ export const anthropicFiles = {
 		const file = await toFile(data, filesApiName(name), { type: mime });
 		return (await getClient().files.upload({ file })).id;
 	},
+	/** False once the file was deleted (in the Console, say); other failures throw. */
+	async exists(fileId: string): Promise<boolean> {
+		try {
+			await getClient().files.retrieveMetadata(fileId);
+			return true;
+		} catch (err) {
+			if (err instanceof Anthropic.NotFoundError) return false;
+			throw err;
+		}
+	},
 	/** Resolves when the file is gone, also when it already was. */
 	async remove(fileId: string): Promise<void> {
 		try {
