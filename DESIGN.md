@@ -127,9 +127,11 @@ a profile's conversations.
   `..`, paths outside it and anything going through a symbolic link are refused. Files are written
   atomically and hold at most 50,000 characters. Errors come back as `is_error` results.
 - **What goes in:** the prompt asks for one Markdown file per topic (`family.md`, `home.md`) with
-  one fact per bullet, updated rather than repeated, and no secrets, since every member can read
-  it. It also asks the agent not to log ordinary requests, which the API's memory protocol would
-  otherwise encourage.
+  one fact per bullet, updated rather than repeated. Secrets such as passwords and door codes are
+  allowed when someone asks: a profile is only shared by people who trust each other, and Claude
+  tends to refuse them in memory unless told so. The exception is something one member wants kept
+  from the others (a surprise), since every member can read the memory. The prompt also asks the
+  agent not to log ordinary requests, which the API's memory protocol would otherwise encourage.
 - **Older conversations** keep their frozen prompt, which has the old `MEMORY.md` pasted in, and
   their tools (`conversation.memory_tool` is false), so their cache stays valid. Whenever a
   `MEMORY.md` shows up in the profile folder (the old file on the first use, or one an older chat
