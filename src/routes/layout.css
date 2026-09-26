@@ -1,6 +1,12 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 @import 'shadcn-svelte/tailwind.css';
+/* Bundled so every device shows the same fonts. Fira Mono rather than Fira Code: its ligatures
+   would draw `!=` in a shown command as `≠`. */
+@import '@fontsource-variable/figtree';
+@import '@fontsource-variable/figtree/wght-italic.css';
+@import '@fontsource/fira-mono/400.css';
+@import '@fontsource/fira-mono/500.css';
 
 @custom-variant dark (&:is(.dark *));
 
@@ -118,9 +124,13 @@
 	--color-bubble: var(--bubble);
 	--color-composer: var(--composer);
 	--color-warning: var(--warning);
+	/* Figtree has no Cyrillic or Greek, and neither font has emoji; those come from the rest. */
 	--font-sans:
-		ui-sans-serif, -apple-system, system-ui, 'Segoe UI', Helvetica, 'Apple Color Emoji', Arial,
-		sans-serif, 'Segoe UI Emoji', 'Segoe UI Symbol';
+		'Figtree Variable', ui-sans-serif, -apple-system, system-ui, 'Segoe UI', Helvetica,
+		'Apple Color Emoji', Arial, sans-serif, 'Segoe UI Emoji', 'Segoe UI Symbol';
+	--font-mono:
+		'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
+		'Courier New', monospace;
 
 	/* The moving highlight on "Thinking…" labels. The gradient is wider than the label and moves
 	   only between 0% and 100%, so it covers the whole label on every frame without repeating. */
