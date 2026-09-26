@@ -65,7 +65,7 @@
 		{#if user.isAdmin}
 			<DropdownMenu.Item>
 				{#snippet child({ props })}
-					<a {...props} href={resolve('/admin')}><BoxIcon />Models</a>
+					<a {...props} href={resolve('/admin')}><BoxIcon />Models & keys</a>
 				{/snippet}
 			</DropdownMenu.Item>
 		{/if}

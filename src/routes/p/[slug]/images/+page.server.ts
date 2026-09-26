@@ -1,6 +1,7 @@
 import { statSync } from 'node:fs';
 import { fail, redirect } from '@sveltejs/kit';
 import {
+	API_KEYS,
 	AttachmentError,
 	IMAGE_SHAPES,
 	checkTemplateImages,
@@ -63,7 +64,9 @@ export const load: PageServerLoad = ({ locals, params }) => {
 			)
 		})),
 		ready: status.ready && !!preset,
-		problem: preset ? status.problem : 'No chat model is set up yet.'
+		problem: preset ? status.problem : 'No chat model is set up yet.',
+		/** The provider whose key is missing, so the page can say who adds it and where. */
+		missingKey: status.missingKey && { label: API_KEYS[status.missingKey].label }
 	};
 };
 

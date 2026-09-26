@@ -2,6 +2,7 @@
 	import { onDestroy } from 'svelte';
 	import { MediaQuery } from 'svelte/reactivity';
 	import { enhance } from '$app/forms';
+	import { resolve } from '$app/paths';
 	import type { SubmitFunction } from '@sveltejs/kit';
 	import CameraIcon from '@lucide/svelte/icons/camera';
 	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
@@ -78,6 +79,8 @@
 	let describing = $state(false);
 	let describeError = $state<string | null>(null);
 	let describeForm = $state<HTMLFormElement>();
+	/** The grid scrolls under the composer, so it ends this far up. */
+	let composerHeight = $state(160);
 	const describeFiles = new Attachments(() => data.profile.slug);
 
 	/** The template's sentence split into words and chips; settings it leaves out come after. */
@@ -358,96 +361,116 @@
 	<span class="truncate text-lg font-medium">Images</span>
 </PageHeader>
 
-<div class="min-h-0 flex-1 overflow-y-auto">
-	<div class="mx-auto max-w-4xl space-y-5 px-4 pt-2 pb-8">
-		{#if !data.ready}
-			<div class="flex items-start gap-3 rounded-2xl bg-muted px-4 py-3 text-sm">
-				<CircleAlertIcon class="mt-0.5 size-4 shrink-0 text-warning" />
-				<span class="min-w-0">
-					<span class="block font-medium">btw can't make pictures yet.</span>
-					<span class="block text-muted-foreground">
-						{data.problem} An admin sets this up on the computer btw runs on.
+<div class="relative min-h-0 flex-1">
+	<div class="h-full overflow-y-auto">
+		<div
+			class="mx-auto max-w-4xl space-y-5 px-4 pt-2"
+			style:padding-bottom="{composerHeight + 16}px"
+		>
+			{#if !data.ready}
+				<div class="flex items-start gap-3 rounded-2xl bg-muted px-4 py-3 text-sm">
+					<CircleAlertIcon class="mt-0.5 size-4 shrink-0 text-warning" />
+					<span class="min-w-0">
+						<span class="block font-medium">btw can't make pictures yet.</span>
+						<span class="block text-muted-foreground">
+							{#if data.missingKey && data.user?.isAdmin}
+								It needs an {data.missingKey.label} API key.
+								<a href={resolve('/admin')} class="font-medium text-foreground underline"
+									>Add it under Models & keys</a
+								>.
+							{:else if data.missingKey}
+								It needs an {data.missingKey.label} API key. Ask an admin to add one.
+							{:else}
+								{data.problem} An admin sets this up on the computer btw runs on.
+							{/if}
+						</span>
 					</span>
-				</span>
-			</div>
-		{/if}
+				</div>
+			{/if}
 
-		{#if categories.length > 1}
-			<div role="tablist" aria-label="Template groups" class="flex gap-1">
-				{#each categories as category (category)}
+			{#if categories.length > 1}
+				<div role="tablist" aria-label="Template groups" class="flex gap-1">
+					{#each categories as category (category)}
+						<button
+							type="button"
+							role="tab"
+							aria-selected={category === activeTab}
+							onclick={() => (tab = category)}
+							class={cn(
+								'rounded-full px-4 py-2 text-[15px] transition-colors',
+								category === activeTab
+									? 'bg-muted font-medium text-foreground'
+									: 'text-muted-foreground hover:text-foreground'
+							)}
+						>
+							{category}
+						</button>
+					{/each}
+				</div>
+			{/if}
+
+			<div
+				role={categories.length > 1 ? 'tabpanel' : undefined}
+				class="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4"
+			>
+				{#each shown as template (template.id)}
 					<button
 						type="button"
-						role="tab"
-						aria-selected={category === activeTab}
-						onclick={() => (tab = category)}
-						class={cn(
-							'rounded-full px-4 py-2 text-[15px] transition-colors',
-							category === activeTab
-								? 'bg-muted font-medium text-foreground'
-								: 'text-muted-foreground hover:text-foreground'
-						)}
+						onclick={() => open(template)}
+						class="group relative block overflow-hidden rounded-3xl text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
 					>
-						{category}
+						{@render tile(template, 'aspect-square', 'size-16 stroke-[1.5]')}
+						<span
+							class="absolute inset-x-0 bottom-0 bg-linear-to-t from-black/55 to-transparent px-3.5 pt-10 pb-3 text-sm font-semibold text-white"
+						>
+							{template.name}
+						</span>
 					</button>
+				{:else}
+					<p class="col-span-full py-10 text-center text-muted-foreground">No templates yet.</p>
 				{/each}
 			</div>
-		{/if}
-
-		<div
-			role={categories.length > 1 ? 'tabpanel' : undefined}
-			class="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4"
-		>
-			{#each shown as template (template.id)}
-				<button
-					type="button"
-					onclick={() => open(template)}
-					class="group relative block overflow-hidden rounded-3xl text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-				>
-					{@render tile(template, 'aspect-square', 'size-16 stroke-[1.5]')}
-					<span
-						class="absolute inset-x-0 bottom-0 bg-linear-to-t from-black/55 to-transparent px-3.5 pt-10 pb-3 text-sm font-semibold text-white"
-					>
-						{template.name}
-					</span>
-				</button>
-			{:else}
-				<p class="col-span-full py-10 text-center text-muted-foreground">No templates yet.</p>
-			{/each}
 		</div>
 	</div>
-</div>
 
-<form
-	bind:this={describeForm}
-	method="POST"
-	use:enhance={submit(
-		(busy) => (describing = busy),
-		(message) => (describeError = message),
-		describeFiles
-	)}
-	class="px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-4"
->
-	{#each describeFiles.ids as id (id)}
-		<input type="hidden" name="upload" value={id} />
-	{/each}
-	<div class="mx-auto max-w-3xl">
-		<Composer
-			bind:value={text}
-			name="text"
-			placeholder="Describe an image"
-			busy={describing || !data.ready}
-			attachments={describeFiles}
-			onsubmit={() => describeForm?.requestSubmit()}
-		/>
-		{#if describeError}
-			<p class="mt-2 text-center text-sm text-destructive">{describeError}</p>
-		{:else}
-			<p class="mt-2 hidden text-center text-xs text-muted-foreground sm:block">
-				btw makes the picture in a new chat, where you can ask for changes.
-			</p>
-		{/if}
-	</div>
-</form>
+	<form
+		bind:this={describeForm}
+		bind:clientHeight={composerHeight}
+		method="POST"
+		use:enhance={submit(
+			(busy) => (describing = busy),
+			(message) => (describeError = message),
+			describeFiles
+		)}
+		class="pointer-events-none absolute inset-x-0 bottom-0 px-3 pt-12 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-4"
+	>
+		<!-- The grid fades and blurs into the composer instead of stopping at an edge. -->
+		<div
+			aria-hidden="true"
+			class="absolute inset-0 bg-background/80 [mask-image:linear-gradient(to_bottom,transparent,black_55%)] backdrop-blur-md"
+		></div>
+		{#each describeFiles.ids as id (id)}
+			<input type="hidden" name="upload" value={id} />
+		{/each}
+		<div class="pointer-events-auto relative mx-auto max-w-3xl">
+			<Composer
+				bind:value={text}
+				name="text"
+				placeholder="Describe an image"
+				busy={describing || !data.ready}
+				attachments={describeFiles}
+				onsubmit={() => describeForm?.requestSubmit()}
+			/>
+			{#if describeError}
+				<p class="mt-2 text-center text-sm text-destructive">{describeError}</p>
+			{:else}
+				<p class="mt-2 hidden text-center text-xs text-muted-foreground sm:block">
+					btw makes the picture in a new chat, where you can ask for changes.
+				</p>
+			{/if}
+		</div>
+	</form>
+</div>
 
 <!-- Outside the dialog, so the drawing screen can use them too. -->
 <input

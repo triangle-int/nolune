@@ -21,7 +21,8 @@ btw service install            # run in the background, start at login
 btw user create Anna anna@example.com   # add family members (prints their password)
 ```
 
-Then open the address `btw setup` printed and sign in.
+Then open the address `btw setup` printed and sign in. As the admin you can also add or replace
+API keys and models on the web, under Models & keys in your account menu.
 
 **Reaching it from outside your home.** The gateway listens on `127.0.0.1:5780`. Put a tunnel in
 front of it, e.g. [Tailscale Funnel](https://tailscale.com/kb/1223/funnel),
@@ -58,7 +59,7 @@ Access). `btw setup` prints the exact path.
   photo, draw something, or press Try it; many ask for a few choices first. btw starts a new chat
   with the picture and the template's prompt, makes the picture with `btw generate image` and
   shows it there, where you can ask for changes. You can also just describe a picture, there or
-  in any chat. It needs an OpenAI key (`btw key set openai`); the
+  in any chat. It needs an OpenAI key (Models & keys, or `btw key set openai`); the
   model is `openai/gpt-image-2.5-flare` unless you pick another with
   `btw config set image-model`. Templates are folders with a `TEMPLATE.md`; add your own in
   `~/.btw-agent/image-templates` or a profile's `image-templates` folder (see DESIGN.md).
