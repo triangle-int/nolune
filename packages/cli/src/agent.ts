@@ -1,22 +1,29 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { parseArgs } from 'node:util';
 import {
+	EFFORTS,
 	findSubagent,
 	getConversation,
 	listSubagents,
 	requestSubagentStop,
+	resolvePreset,
 	runSubagent,
 	steerSubagent,
 	subagentLogPath,
 	subagentResult,
+	type Effort,
 	type Subagent
 } from '@btw/core';
 import { readStdin } from './input.ts';
 
 export const AGENT_HELP = `Subagents (in agent commands: agents that work on a task in the background, in a
 conversation of their own that starts with only the task)
-  btw agent run [<id>] --prompt "<task>"     start a subagent, or give one that finished more work;
-                                             prints its id and its log file (--prompt - reads stdin)
+  btw agent run [<id>] --prompt "<task>" [--preset NAME] [--effort LEVEL]
+                                             start a subagent, or give one that finished more work;
+                                             prints its id and its log file (--prompt - reads stdin).
+                                             It uses this chat's model and reasoning unless given:
+                                             --preset takes a name from \`btw preset list\`, --effort
+                                             one of ${EFFORTS.join(', ')}
   btw agent watch <id>                       wait until it's done and print its last message; run
                                              it with run_in_background to be told when it's done
   btw agent steer <id> --prompt "<message>"  message a subagent while it works
@@ -59,18 +66,36 @@ export async function agentCommand(action: string | undefined, args: string[]): 
 	const { values, positionals } = parseArgs({
 		args,
 		allowPositionals: true,
-		options: { prompt: { type: 'string' } }
+		options: {
+			prompt: { type: 'string' },
+			preset: { type: 'string' },
+			effort: { type: 'string' }
+		}
 	});
 	switch (action) {
 		case 'run': {
-			const usage = 'btw agent run [<id>] --prompt "<task>" (or --prompt - to read stdin)';
+			const usage =
+				'btw agent run [<id>] --prompt "<task>" [--preset NAME] [--effort LEVEL] (--prompt - reads stdin)';
 			const prompt = await promptFrom(values.prompt, usage);
-			const { subagent: s, created } = runSubagent({
+			if (values.effort !== undefined && !EFFORTS.includes(values.effort as Effort)) {
+				throw new Error(`--effort must be one of ${EFFORTS.join(', ')}.`);
+			}
+			const {
+				subagent: s,
+				conversation,
+				created
+			} = runSubagent({
 				parentId: parentId(),
 				name: positionals[0],
-				prompt
+				prompt,
+				// Names as `btw preset list` shows them; an unknown one says to look there.
+				presetId: values.preset ? resolvePreset(values.preset)?.id : undefined,
+				effort: values.effort as Effort | undefined
 			});
-			console.log(created ? `Started subagent ${s.name}.` : `Gave ${s.name} more work.`);
+			const model = `${conversation.presetName}, reasoning ${conversation.effort}`;
+			console.log(
+				created ? `Started subagent ${s.name} (${model}).` : `Gave ${s.name} more work (${model}).`
+			);
 			const log = subagentLogPath(s);
 			if (log) {
 				console.log(
@@ -123,10 +148,11 @@ export async function agentCommand(action: string | undefined, args: string[]): 
 				return;
 			}
 			for (const s of all) {
-				const title = getConversation(s.conversationId)?.title ?? '';
+				const conv = getConversation(s.conversationId);
 				const status = s.error && s.status !== 'done' ? `${s.status} (${s.error})` : s.status;
 				console.log(`${s.name}  ${status}`);
-				if (title) console.log(`  ${title}`);
+				if (conv?.title) console.log(`  ${conv.title}`);
+				if (conv) console.log(`  ${conv.presetName}, reasoning ${conv.effort}`);
 				const log = subagentLogPath(s);
 				if (log) console.log(`  log: ${log}`);
 			}

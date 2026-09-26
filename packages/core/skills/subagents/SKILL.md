@@ -36,8 +36,27 @@ for each.
 EOF
 ```
 
-It prints the subagent's id (`agent-1`, or the one you give: `btw agent run flights --prompt ...`)
-and the path of its log.
+It prints the subagent's id (`agent-1`, or the one you give: `btw agent run flights --prompt ...`),
+its model and reasoning level, and the path of its log.
+
+## Model and reasoning
+
+A subagent runs on this chat's model and reasoning level unless you choose others:
+
+- `--preset <name>` picks one of the model presets this computer has. Run `btw preset list` first:
+  it shows each preset's name, model and context window, and which is the default. Pass a name
+  from that list exactly as it's written there; never make one up from a model you know of. A
+  smaller, faster model often does well on simple jobs with a lot of reading (going through
+  files, collecting prices from pages); keep this chat's model for jobs that need judgment.
+- `--effort low|medium|high|xhigh|max` sets how hard it thinks. `low` suits simple, clearly
+  described jobs and costs less; raise it for hard ones.
+
+```sh
+btw preset list
+btw agent run invoices --preset "Haiku" --effort low --prompt - <<'EOF'
+...
+EOF
+```
 
 ## Hearing back
 
@@ -60,7 +79,10 @@ A background command is killed after an hour unless you pass `timeout_seconds` (
 ## Afterwards
 
 A subagent that finished keeps its conversation. `btw agent run <id> --prompt "..."` gives it more
-work that builds on what it did (then `watch` it again); a new id starts from nothing.
+work that builds on what it did (then `watch` it again); a new id starts from nothing. It keeps
+its model for good, so leave out `--preset` then (a different one is refused: start a new
+subagent for another model). `--effort` can change, but then its next step rereads its whole
+conversation without the cache once.
 
 ## Limits
 

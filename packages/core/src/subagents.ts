@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { and, asc, eq, inArray } from 'drizzle-orm';
+import { EFFORTS, type Effort } from './anthropic.ts';
 import {
 	committedRows,
 	createConversation,
@@ -10,11 +11,13 @@ import {
 	isSubagentConversation,
 	queuedRows,
 	replyText,
+	setEffort,
 	type Conversation
 } from './conversations.ts';
 import { getDb } from './db/index.ts';
 import { subagent } from './db/schema.ts';
 import { profileDir } from './paths.ts';
+import { getPreset } from './presets.ts';
 import { getProfile } from './profiles.ts';
 
 /**
@@ -177,14 +180,29 @@ function firstLine(text: string, max = 60): string {
 /**
  * `btw agent run [name]`: starts a subagent with `prompt` as its task, or gives one that finished
  * more work in the same conversation (it keeps what it learned). Returns at once; the gateway
- * starts it within seconds.
+ * starts it within seconds. It runs on the chat's model and reasoning level unless `presetId` or
+ * `effort` say otherwise; like every conversation, it keeps its model for good.
  */
-export function runSubagent(input: { parentId: string; name?: string; prompt: string }): {
-	subagent: Subagent;
-	created: boolean;
-} {
+export function runSubagent(input: {
+	parentId: string;
+	name?: string;
+	prompt: string;
+	/** A model preset instead of the chat's model (`btw agent run --preset`). */
+	presetId?: string;
+	/** A reasoning level instead of the chat's (`btw agent run --effort`). */
+	effort?: Effort;
+}): { subagent: Subagent; conversation: Conversation; created: boolean } {
 	const prompt = input.prompt.trim();
 	if (!prompt) throw new SubagentError('the prompt is empty.');
+	if (input.effort !== undefined && !EFFORTS.includes(input.effort)) {
+		throw new SubagentError(`the reasoning level must be one of ${EFFORTS.join(', ')}.`);
+	}
+	const preset = input.presetId ? getPreset(input.presetId) : undefined;
+	if (input.presetId && !preset) {
+		throw new SubagentError(
+			'there is no such model preset. `btw preset list` shows the ones this computer has.'
+		);
+	}
 	const name = input.name?.trim().toLowerCase();
 	if (name !== undefined && !NAME.test(name)) {
 		throw new SubagentError(
@@ -203,6 +221,15 @@ export function runSubagent(input: { parentId: string; name?: string; prompt: st
 					`${existing.name} is still working. Steer it with \`btw agent steer ${existing.name} --prompt "..."\`, or wait for its result with \`btw agent watch ${existing.name}\`.`
 				);
 			}
+			const conv = getConversation(existing.conversationId);
+			if (!conv) throw new SubagentError(`${existing.name}'s conversation no longer exists.`);
+			if (preset && preset.id !== conv.presetId) {
+				throw new SubagentError(
+					`${existing.name} keeps the model it started with (${conv.presetName}): a conversation never changes model. Start a new subagent for ${preset.name}, or leave out --preset.`
+				);
+			}
+			// Allowed, like in a chat; its next request reads the conversation again without the cache.
+			if (input.effort && input.effort !== conv.effort) setEffort(conv.id, input.effort);
 			insertQueuedNotice({
 				conversationId: existing.conversationId,
 				kind: 'agent_message',
@@ -211,7 +238,11 @@ export function runSubagent(input: { parentId: string; name?: string; prompt: st
 				content: moreWorkMessage(prompt)
 			});
 			setSubagentStatus(existing.id, 'pending');
-			return { subagent: { ...existing, status: 'pending' as const, error: null }, created: false };
+			return {
+				subagent: { ...existing, status: 'pending' as const, error: null },
+				conversation: { ...conv, effort: input.effort ?? conv.effort },
+				created: false
+			};
 		}
 
 		const active = activeSubagents(parent.id).length;
@@ -222,10 +253,10 @@ export function runSubagent(input: { parentId: string; name?: string; prompt: st
 		}
 		const chosen = name ?? nextName(parent.id);
 		const conv = createConversation({
+			...(preset ? { presetId: preset.id } : { modelOf: parent }),
 			profile,
-			modelOf: parent,
 			userId: null,
-			effort: parent.effort,
+			effort: input.effort ?? parent.effort,
 			title: `${chosen}: ${firstLine(prompt)}`,
 			hidden: true,
 			folderId: parent.folderId,
@@ -249,7 +280,7 @@ export function runSubagent(input: { parentId: string; name?: string; prompt: st
 			text: prompt,
 			content: taskMessage(chosen, prompt)
 		});
-		return { subagent: row, created: true };
+		return { subagent: row, conversation: conv, created: true };
 	}, LOCKED);
 	// So the agent can look at it right away; the gateway fills it in once it starts.
 	appendSubagentLog(started.subagent, '');

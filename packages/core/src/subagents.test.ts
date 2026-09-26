@@ -119,6 +119,56 @@ describe('btw agent run', () => {
 		]);
 	});
 
+	it('runs on another preset and reasoning level when asked', () => {
+		const { chat } = parentChat();
+		const haiku = makePreset('Haiku', 'claude-haiku-4-5');
+		const { conversation } = runSubagent({
+			parentId: chat.id,
+			prompt: 'Sort the invoices.',
+			presetId: haiku.id,
+			effort: 'low'
+		});
+		expect(conversation).toMatchObject({
+			presetId: haiku.id,
+			presetName: 'Haiku',
+			model: 'claude-haiku-4-5',
+			effort: 'low',
+			cacheTtl: '5m'
+		});
+		expect(getConversation(conversation.id)).toMatchObject({ model: 'claude-haiku-4-5' });
+	});
+
+	it('keeps a subagent on its model, but lets its reasoning level change', () => {
+		const { chat } = parentChat();
+		const haiku = makePreset('Haiku', 'claude-haiku-4-5');
+		const { subagent } = runSubagent({ parentId: chat.id, name: 'sorter', prompt: 'Sort.' });
+		setSubagentStatus(subagent.id, 'done');
+
+		expect(() =>
+			runSubagent({ parentId: chat.id, name: 'sorter', prompt: 'More.', presetId: haiku.id })
+		).toThrow(/keeps the model it started with \(Sonnet\)/);
+		expect(findSubagent(chat.id, 'sorter')?.status).toBe('done');
+
+		const again = runSubagent({
+			parentId: chat.id,
+			name: 'sorter',
+			prompt: 'More.',
+			effort: 'max'
+		});
+		expect(again.conversation.effort).toBe('max');
+		expect(getConversation(subagent.conversationId)?.effort).toBe('max');
+	});
+
+	it('refuses an unknown preset or reasoning level', () => {
+		const { chat } = parentChat();
+		expect(() => runSubagent({ parentId: chat.id, prompt: 'x', presetId: 'nope' })).toThrow(
+			/btw preset list/
+		);
+		expect(() =>
+			runSubagent({ parentId: chat.id, prompt: 'x', effort: 'extreme' as never })
+		).toThrow(/low, medium, high, xhigh, max/);
+	});
+
 	it(`allows ${MAX_ACTIVE_SUBAGENTS} working at once`, () => {
 		const { chat } = parentChat();
 		for (let i = 0; i < MAX_ACTIVE_SUBAGENTS; i++) runSubagent({ parentId: chat.id, prompt: 'x' });

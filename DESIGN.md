@@ -487,9 +487,15 @@ automations, it's a CLI command and a built-in skill (`subagents`), not a tool.
   path, and how to hear back. Given the id of one that finished, it queues more work in the same
   conversation instead. At most 5 work at once per chat, and subagents can't start subagents.
 - **It doesn't inherit the chat.** Its conversation has a system prompt built for it from the
-  profile as it is now (skills, memory notes, and the chat's folder if it's in one), the chat's
-  model and reasoning level, the current tools, and a 5-minute cache. Nothing of the parent's
-  transcript comes along: the prompt must say everything it needs.
+  profile as it is now (skills, memory notes, and the chat's folder if it's in one), the current
+  tools, and a 5-minute cache. Nothing of the parent's transcript comes along: the prompt must say
+  everything it needs.
+- **Model and reasoning:** the chat's, unless `--preset <name|id>` (resolved like
+  `btw wake --preset`) or `--effort <level>` say otherwise. The skill tells the agent to run
+  `btw preset list` and pick a name from it, never to make one up, and suggests a smaller model and
+  `low` for simple reading-heavy jobs. Like any conversation, a subagent keeps its model: more work
+  with another `--preset` is refused, while `--effort` may change (one cache rebuild, as in a
+  chat).
 - **The gateway runs it** (`subagent-host.ts`), like `btw wake`: the CLI only writes rows, and the
   scheduler (every tick, and right after each of the agent's commands) starts `pending` subagents
   through the normal runner. When its loop ends it is `done`, `failed` or `stopped`; one still
