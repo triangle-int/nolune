@@ -12,25 +12,35 @@
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Markdown from '$lib/components/chat/Markdown.svelte';
-	import Constellation, { type Topic } from '$lib/components/memory/Constellation.svelte';
+	import DotGrid, { orderTopics, type Topic } from '$lib/components/memory/DotGrid.svelte';
 	import { formatAgo } from '$lib/format';
-	import { memoryAnchor, memoryFacts, memoryTopic } from '$lib/memory';
+	import { memoryAnchor, memoryTopic } from '$lib/memory';
+	import { cn } from '$lib/utils';
 
 	let { data, form } = $props();
 
-	const DAY = 24 * 60 * 60 * 1000;
+	const WEEK = 7 * 24 * 60 * 60 * 1000;
 
 	const topics: Topic[] = $derived(
-		data.files.map((file, i) => ({
+		data.files.map((file) => ({
 			path: file.path,
 			title: memoryTopic(file.path),
-			facts: memoryFacts(file.text),
-			// The golden angle keeps neighbouring colors apart, however many topics there are.
-			hue: Math.round((210 + i * 137.508) % 360),
-			fresh: Date.now() - file.updatedAt < DAY
+			group: file.path.includes('/') ? memoryTopic(file.path.split('/')[0]) : null,
+			updatedAt: file.updatedAt,
+			facts: file.facts
 		}))
 	);
+	/** The notes below follow the grid's order. */
+	const files = $derived.by(() => {
+		const byPath = new Map(data.files.map((file) => [file.path, file]));
+		return orderTopics(topics).map((topic) => ({ topic, file: byPath.get(topic.path)! }));
+	});
 	const total = $derived(topics.reduce((sum, topic) => sum + topic.facts.length, 0));
+	const thisWeek = $derived(
+		topics
+			.flatMap((topic) => topic.facts)
+			.filter((fact) => fact.learnedAt !== null && Date.now() - fact.learnedAt < WEEK).length
+	);
 	const updatedAt = $derived(Math.max(0, ...data.files.map((file) => file.updatedAt)));
 
 	const count = new Tween(0, { duration: 1200, easing: cubicOut });
@@ -40,7 +50,7 @@
 
 	const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
-	/** The topic pointed at, here or in the map. */
+	/** The topic pointed at, here or in the grid. */
 	let focus = $state<string | null>(null);
 	/** A card that was just jumped to. */
 	let flash = $state<string | null>(null);
@@ -103,33 +113,32 @@
 					</span>
 				</p>
 				{#if updatedAt}
-					<p class="text-sm text-muted-foreground">Last updated {formatAgo(updatedAt)}</p>
+					<p class="text-sm text-muted-foreground">
+						{#if thisWeek}{thisWeek} new this week ·{/if}
+						updated {formatAgo(updatedAt)}
+					</p>
 				{/if}
 			</div>
-			<Constellation {topics} name={data.profile.name} bind:focus onpick={pick} />
+			<DotGrid {topics} bind:focus onpick={pick} />
 		</div>
 
 		{#if form?.message && !form.path}
 			<p class="rounded-2xl bg-muted px-4 py-3 text-sm">{form.message}</p>
 		{/if}
 
-		{#each data.files as file, i (file.path)}
-			{@const topic = topics[i]}
+		{#each files as { topic, file } (file.path)}
 			{@const lit = focus === file.path || flash === file.path}
 			<section
 				id={memoryAnchor(file.path)}
 				aria-label={topic.title}
-				class="scroll-mt-6 rounded-3xl border p-4 transition-[border-color,box-shadow] duration-300 sm:p-5"
-				style:border-color={lit ? `hsl(${topic.hue} 65% 55% / 0.7)` : null}
-				style:box-shadow={lit ? `0 0 0 4px hsl(${topic.hue} 65% 55% / 0.15)` : null}
+				class={cn(
+					'scroll-mt-6 rounded-3xl border p-4 transition-[border-color,box-shadow] duration-300 sm:p-5',
+					lit && 'border-foreground/30 shadow-[0_0_0_4px_var(--muted)]'
+				)}
 				onpointerenter={() => (focus = file.path)}
 				onpointerleave={() => (focus = null)}
 			>
 				<div class="flex items-start gap-3">
-					<span
-						class="mt-1.5 size-2.5 shrink-0 rounded-full"
-						style:background-color="hsl({topic.hue} 65% 55%)"
-					></span>
 					<div class="min-w-0 flex-1">
 						<h2 class="font-medium">{topic.title}</h2>
 						<p class="truncate text-xs text-muted-foreground">

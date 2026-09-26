@@ -13,6 +13,17 @@ import {
 } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import type Anthropic from '@anthropic-ai/sdk';
+import {
+	emptyFactIndex,
+	factKey,
+	forgetFacts,
+	moveFacts,
+	noteFacts,
+	parseFactIndex,
+	parseFacts,
+	serializeFactIndex,
+	type FactIndex
+} from './memory-facts.ts';
 import { profileDir, profileMemoryDir } from './paths.ts';
 
 /**
@@ -34,6 +45,8 @@ const MAX_LINES = 999_999;
 const IMAGE = /\.(jpe?g|png|gif|webp)$/i;
 /** Where memory lived before the memory tool: one file, pasted into each new system prompt. */
 const LEGACY_FILE = 'MEMORY.md';
+/** When each fact was first seen. Hidden, so the tool's listings and the page skip it. */
+const FACTS_FILE = '.facts.json';
 
 /** A refused memory operation. The message is what the model (or the person) is told. */
 export class MemoryError extends Error {}
@@ -84,6 +97,13 @@ function resolvePath(root: string, memoryPath: unknown, field = 'path'): string 
 	const full = resolve(base, memoryPath.slice(ROOT.length).replace(/^\/+/, ''));
 	if (full !== base && !full.startsWith(base + sep)) {
 		refuse(`Error: The path ${memoryPath} would leave ${ROOT}.`);
+	}
+	if (
+		relative(base, full)
+			.split(sep)
+			.some((part) => part.startsWith('.'))
+	) {
+		refuse(`Error: Names starting with a dot are reserved in ${ROOT}.`);
 	}
 	for (let current = full; current !== base; current = dirname(current)) {
 		let isLink = false;
@@ -172,6 +192,111 @@ function lineOf(text: string, index: number): number {
 	return text.slice(0, index).split('\n').length;
 }
 
+/** A path relative to /memories, with forward slashes, like `people/anna.md`. */
+function relPath(root: string, full: string): string {
+	return relative(resolve(root), full).split(sep).join('/');
+}
+
+// --- Fact dates ---
+
+/** Deeper than the tool lists, so nothing the agent nests is hidden from the family. */
+const PAGE_DEPTH = 4;
+/** The tool can't write files this big; only something copied in by hand can be. */
+const PAGE_MAX_BYTES = 1_000_000;
+
+interface StoredFile {
+	path: string;
+	text: string;
+	size: number;
+	updatedAt: number;
+}
+
+/** Every text file in memory, sorted by path. */
+function readMemoryFiles(root: string): StoredFile[] {
+	const files: StoredFile[] = [];
+	const walk = (dir: string, depth: number) => {
+		for (const name of readdirSync(dir).sort()) {
+			if (name.startsWith('.') || name === 'node_modules') continue;
+			const full = join(dir, name);
+			let stat;
+			try {
+				stat = lstatSync(full);
+			} catch {
+				continue;
+			}
+			if (stat.isDirectory()) {
+				if (depth < PAGE_DEPTH) walk(full, depth + 1);
+			} else if (stat.isFile() && !IMAGE.test(name) && stat.size <= PAGE_MAX_BYTES) {
+				files.push({
+					path: relPath(root, full),
+					text: readFileSync(full, 'utf8'),
+					size: stat.size,
+					updatedAt: stat.mtimeMs
+				});
+			}
+		}
+	};
+	walk(root, 1);
+	return files;
+}
+
+/**
+ * The fact dates, caught up with the files on disk: facts that got there some other way (a
+ * command, an editor) are dated by their file's modification time. The first time, everything
+ * already in memory is dated 0: before dates were kept. Null if it can't be read, because
+ * this bookkeeping must never stop memory itself from working.
+ */
+function loadFacts(
+	root: string,
+	files = readMemoryFiles(root)
+): { index: FactIndex; changed: boolean } | null {
+	try {
+		const file = join(root, FACTS_FILE);
+		const stored = existsSync(file) ? parseFactIndex(readFileSync(file, 'utf8')) : null;
+		const index = stored ?? emptyFactIndex();
+		let changed = !stored;
+		for (const f of files) {
+			if (noteFacts(index, f.path, f.text, stored ? Math.floor(f.updatedAt) : 0)) changed = true;
+		}
+		const present = new Set(files.map((f) => f.path));
+		for (const path of index.files.keys()) {
+			if (present.has(path)) continue;
+			forgetFacts(index, path);
+			changed = true;
+		}
+		return { index, changed };
+	} catch (err) {
+		console.error('[btw] could not read memory fact dates:', err);
+		return null;
+	}
+}
+
+function saveFacts(root: string, index: FactIndex): void {
+	try {
+		writeAtomic(join(root, FACTS_FILE), serializeFactIndex(index));
+	} catch (err) {
+		console.error('[btw] could not save memory fact dates:', err);
+	}
+}
+
+/**
+ * Makes a change to the memory files and dates it. The dates are caught up first, so a change
+ * is never mistaken for something that happened before.
+ */
+function changing<T>(
+	root: string,
+	change: () => T,
+	record: (index: FactIndex, now: number) => void
+): T {
+	const facts = loadFacts(root);
+	const result = change();
+	if (facts) {
+		record(facts.index, Date.now());
+		saveFacts(root, facts.index);
+	}
+	return result;
+}
+
 function view(root: string, args: Record<string, unknown>): string {
 	const memoryPath = args.path as string;
 	const full = resolvePath(root, memoryPath);
@@ -230,7 +355,11 @@ function create(root: string, args: Record<string, unknown>): string {
 	if (existing?.isDirectory()) refuse(`Error: ${memoryPath} is a directory.`);
 	checkSize(text, memoryPath);
 	// The tool's description says create "creates or overwrites", so overwriting is expected.
-	writeAtomic(full, text);
+	changing(
+		root,
+		() => writeAtomic(full, text),
+		(index, now) => noteFacts(index, relPath(root, full), text, now)
+	);
 	return existing
 		? `File ${memoryPath} has been overwritten.`
 		: `File created successfully at: ${memoryPath}`;
@@ -264,7 +393,11 @@ function strReplace(root: string, args: Record<string, unknown>): string {
 	// Sliced, not String.replace: `$&` and friends in new_str are meant literally.
 	const updated = text.slice(0, hits[0]) + newStr + text.slice(hits[0] + oldStr.length);
 	checkSize(updated, memoryPath);
-	writeAtomic(full, updated);
+	changing(
+		root,
+		() => writeAtomic(full, updated),
+		(index, now) => noteFacts(index, relPath(root, full), updated, now)
+	);
 
 	const lines = updated.split('\n');
 	const first = lineOf(updated, hits[0]);
@@ -289,7 +422,11 @@ function insert(root: string, args: Record<string, unknown>): string {
 	lines.splice(line, 0, insertText.replace(/\n$/, ''));
 	const updated = lines.join('\n');
 	checkSize(updated, memoryPath);
-	writeAtomic(full, updated);
+	changing(
+		root,
+		() => writeAtomic(full, updated),
+		(index, now) => noteFacts(index, relPath(root, full), updated, now)
+	);
 	return `The file ${memoryPath} has been edited.`;
 }
 
@@ -298,7 +435,11 @@ function remove(root: string, args: Record<string, unknown>): string {
 	const full = resolvePath(root, memoryPath);
 	if (full === resolve(root)) refuse(`Error: The ${ROOT} directory itself cannot be deleted.`);
 	if (!existsSync(full)) refuse(`Error: The path ${memoryPath} does not exist`);
-	rmSync(full, { recursive: true });
+	changing(
+		root,
+		() => rmSync(full, { recursive: true }),
+		(index) => forgetFacts(index, relPath(root, full))
+	);
 	return `Successfully deleted ${memoryPath}`;
 }
 
@@ -313,8 +454,14 @@ function rename(root: string, args: Record<string, unknown>): string {
 	if (!existsSync(from)) refuse(`Error: The path ${oldPath} does not exist`);
 	if (existsSync(to)) refuse(`Error: The destination ${newPath} already exists`);
 	if (to.startsWith(from + sep)) refuse(`Error: ${oldPath} cannot be moved into itself.`);
-	mkdirSync(dirname(to), { recursive: true, mode: 0o700 });
-	renameSync(from, to);
+	changing(
+		root,
+		() => {
+			mkdirSync(dirname(to), { recursive: true, mode: 0o700 });
+			renameSync(from, to);
+		},
+		(index) => moveFacts(index, relPath(root, from), relPath(root, to))
+	);
 	return `Successfully renamed ${oldPath} to ${newPath}`;
 }
 
@@ -350,48 +497,39 @@ export function runMemoryCommand(
 
 // --- The Memory page ---
 
+export interface MemoryFact {
+	/** Plain text. */
+	text: string;
+	/** When btw first saw it, in ms. Null: before dates were kept. */
+	learnedAt: number | null;
+}
+
 export interface MemoryFile {
 	/** Relative to /memories, like `family.md` or `people/anna.md`. */
 	path: string;
 	text: string;
+	facts: MemoryFact[];
 	size: number;
 	/** Modification time in ms. Also the version an edit is based on. */
 	updatedAt: number;
 }
 
-/** Deeper than the tool lists, so nothing the agent nests is hidden from the family. */
-const PAGE_DEPTH = 4;
-/** The tool can't write files this big; only something copied in by hand can be. */
-const PAGE_MAX_BYTES = 1_000_000;
-
-/** Every text file in the profile's memory, sorted by path. */
+/** Every text file in the profile's memory, sorted by path, with its facts and their dates. */
 export function listMemoryFiles(slug: string): MemoryFile[] {
 	const root = openMemory(slug);
-	const files: MemoryFile[] = [];
-	const walk = (dir: string, depth: number) => {
-		for (const name of readdirSync(dir).sort()) {
-			if (name.startsWith('.') || name === 'node_modules') continue;
-			const full = join(dir, name);
-			let stat;
-			try {
-				stat = lstatSync(full);
-			} catch {
-				continue;
-			}
-			if (stat.isDirectory()) {
-				if (depth < PAGE_DEPTH) walk(full, depth + 1);
-			} else if (stat.isFile() && !IMAGE.test(name) && stat.size <= PAGE_MAX_BYTES) {
-				files.push({
-					path: relative(root, full).split(sep).join('/'),
-					text: readFileSync(full, 'utf8'),
-					size: stat.size,
-					updatedAt: stat.mtimeMs
-				});
-			}
-		}
-	};
-	walk(root, 1);
-	return files;
+	const files = readMemoryFiles(root);
+	const facts = loadFacts(root, files);
+	if (facts?.changed) saveFacts(root, facts.index);
+	return files.map((file) => {
+		const dates = facts?.index.files.get(file.path);
+		return {
+			...file,
+			facts: parseFacts(file.text).map((text) => ({
+				text,
+				learnedAt: dates?.get(factKey(text)) || null
+			}))
+		};
+	});
 }
 
 function pagePath(root: string, path: string): string {
@@ -414,11 +552,20 @@ export function writeMemoryFile(slug: string, path: string, text: string, basedO
 		throw new MemoryConflictError(`btw changed ${path} while you were editing it.`);
 	}
 	checkSize(text, path);
-	writeAtomic(full, text);
+	changing(
+		root,
+		() => writeAtomic(full, text),
+		(index, now) => noteFacts(index, relPath(root, full), text, now)
+	);
 }
 
 export function forgetMemoryFile(slug: string, path: string): void {
 	const root = openMemory(slug);
 	const full = pagePath(root, path);
-	if (existsSync(full) && statSync(full).isFile()) unlinkSync(full);
+	if (!existsSync(full) || !statSync(full).isFile()) return;
+	changing(
+		root,
+		() => unlinkSync(full),
+		(index) => forgetFacts(index, relPath(root, full))
+	);
 }

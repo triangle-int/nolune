@@ -92,6 +92,7 @@ export {
 	listMemoryFiles,
 	runMemoryCommand,
 	writeMemoryFile,
+	type MemoryFact,
 	type MemoryFile
 } from './memory.ts';
 export { installCliShim } from './shim.ts';

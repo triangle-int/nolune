@@ -33,6 +33,7 @@ folder, skills and memory. The agent has one tool of its own, `run_command`, plu
   bin/btw                     shim so the agent can run `btw` from any command
   profiles/<slug>/            default working folder for commands in this profile
     memories/<topic>.md       long-term memory: what the memory tool calls /memories
+    memories/.facts.json      when each fact in memory was first seen
     skills/<name>/SKILL.md
   trash/<slug>-<timestamp>/   deleted profiles
 ~/.agents/skills/<name>/SKILL.md   global skills, visible to every profile
@@ -136,12 +137,19 @@ a profile's conversations.
   their tools (`conversation.memory_tool` is false), so their cache stays valid. Whenever a
   `MEMORY.md` shows up in the profile folder (the old file on the first use, or one an older chat
   writes later), it is moved into the folder as `general.md` (or `general-2.md`, …).
-- **Memory page** (`/p/<slug>/memory`): a map of the memory, with the profile in the middle, each
-  file as a colored planet and each fact (list item, paragraph or table row) as a star orbiting
-  it. Pointing at a star shows the fact; topics changed in the last day pulse. Below it, every file
-  is rendered as Markdown and can be edited or forgotten. An edit is refused if the agent changed
-  the file after it was opened; saving again then replaces the agent's version. Motion stops while
-  something is pointed at, while the map is scrolled out of view, and with reduced motion.
+- **Fact dates.** Every list item, paragraph or table row in a note is a fact, and a hidden
+  `.facts.json` in the folder records when each was first seen (matched by its words, ignoring
+  case and spacing). The tool and the page update it with each change; facts that reached the
+  files some other way are dated by their file's modification time, and whatever was in memory
+  before dates were kept has none. A fact that moves to another file, or leaves one and comes
+  back, keeps its date. Names starting with a dot are reserved, so the tool can't touch the index.
+- **Memory page** (`/p/<slug>/memory`): a grid of dots, one row per note and one dot per fact,
+  oldest on the left. A dot's shade is its age: black today (with a halo), fading to light grey
+  over about three months, and lightest when undated. Rows are ordered by the latest change, notes
+  in a folder are grouped under its name, and past 12 rows the rest fold away. Pointing at (or
+  tapping) a dot shows the fact and when it was learned. Below the grid, every note is rendered as
+  Markdown and can be edited or forgotten. An edit is refused if the agent changed the note after
+  it was opened; saving again then replaces the agent's version.
 
 ## Automations
 
