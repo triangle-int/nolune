@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Cron } from 'croner';
-import { and, asc, desc, eq, gte, inArray, lt, lte, notInArray } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, notInArray } from 'drizzle-orm';
 import { EFFORTS, type Effort } from './anthropic.ts';
 import { DEFAULT_PORT, readConfig } from './config.ts';
 import { getDb } from './db/index.ts';
@@ -332,7 +332,10 @@ export function markFired(t: Trigger, now: Date): void {
 
 // --- runs ---
 
-/** Queues a run of the trigger; the gateway's scheduler starts it within a few seconds. */
+/**
+ * Refuses a run while too many are waiting: the trigger's own, or for a `btw wake` outside a
+ * trigger, the profile's other such wakes. A busy trigger doesn't block the profile's wakes.
+ */
 function checkPending(profileId: string, triggerId: string | null): void {
 	const waiting = getDb()
 		.select({ id: triggerRun.id })
@@ -340,7 +343,9 @@ function checkPending(profileId: string, triggerId: string | null): void {
 		.where(
 			and(
 				eq(triggerRun.status, 'pending'),
-				triggerId ? eq(triggerRun.triggerId, triggerId) : eq(triggerRun.profileId, profileId)
+				triggerId
+					? eq(triggerRun.triggerId, triggerId)
+					: and(eq(triggerRun.profileId, profileId), isNull(triggerRun.triggerId))
 			)
 		)
 		.all().length;
@@ -349,6 +354,7 @@ function checkPending(profileId: string, triggerId: string | null): void {
 	}
 }
 
+/** Queues a run of the trigger; the gateway's scheduler starts it within a few seconds. */
 export function queueRun(t: Trigger, source: RunSource, payload?: string | null): TriggerRun {
 	checkPending(t.profileId, t.id);
 	if (source !== 'cron' && source !== 'once') {
