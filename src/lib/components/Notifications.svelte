@@ -2,6 +2,7 @@
 	import { goto, invalidate } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import type { NotificationItem } from '@btw/core';
+	import { mediaAsText } from '@btw/core/media-refs';
 	import BellIcon from '@lucide/svelte/icons/bell';
 	import XIcon from '@lucide/svelte/icons/x';
 	import * as Popover from '$lib/components/ui/popover';
@@ -141,7 +142,7 @@
 								class={cn(
 									'mt-0.5 block whitespace-pre-wrap text-muted-foreground',
 									expanded !== item.id && 'line-clamp-3'
-								)}>{item.body}</span
+								)}>{mediaAsText(item.body)}</span
 							>
 						</button>
 						<button

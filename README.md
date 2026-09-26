@@ -44,11 +44,17 @@ Access). `btw setup` prints the exact path.
 - The chat keeps what btw did folded under each reply ("Worked for 12s"), with plain-language
   steps. To see the exact commands, token usage and prompt caching, turn on **Show technical
   details** in Settings (click your name at the bottom of the sidebar).
+- btw can look at photos, screenshots and scans on the computer (with `btw view`, which converts
+  HEIC and shrinks big photos for it), and it can show pictures and hand over files in the chat
+  ("show me the beach photos from August", "fill in this form and give it to me"). It keeps its
+  own copy of each file it shows, so they stay in the chat even if the original moves.
 - Skills live in `~/.btw-agent/profiles/<profile>/skills` and `~/.agents/skills`
   ([Agent Skills](https://agentskills.io) format). The agent creates its own with `btw skill new`.
+  Each skill's name and description go into every new chat, so turn off the ones a profile doesn't
+  need on its **Skills** page (or `btw skill disable <name> --profile <slug>`).
 - **Memory.** btw keeps what it learns about the family (preferences, who's who, where things are)
   in small notes per topic, and reads the ones it needs when a chat starts. The profile's Memory
-  page shows them as a map and lets you fix or delete a note. Files:
+  page shows every fact as a dot, darker the newer it is, and lets you fix or delete a note. Files:
   `~/.btw-agent/profiles/<profile>/memories`.
 - **Automations.** Ask btw in a conversation ("every weekday at 7:30, tell us if we need umbrellas",
   "check my email every 10 minutes and tell me when the school writes"). It sets up a trigger that

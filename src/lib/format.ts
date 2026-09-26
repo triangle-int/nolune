@@ -28,3 +28,10 @@ export function formatAgo(ms: number, now = Date.now()): string {
 	for (const step of steps) if (-seconds >= step[1]) [unit, size] = step;
 	return relative.format(Math.round(seconds / size), unit);
 }
+
+export function formatBytes(bytes: number): string {
+	if (bytes < 1024) return `${bytes} B`;
+	if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+	const mb = bytes / (1024 * 1024);
+	return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
+}

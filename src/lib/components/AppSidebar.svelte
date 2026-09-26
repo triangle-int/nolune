@@ -7,6 +7,7 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import ClockIcon from '@lucide/svelte/icons/clock';
 	import BrainIcon from '@lucide/svelte/icons/brain';
+	import PuzzleIcon from '@lucide/svelte/icons/puzzle';
 	import UsersIcon from '@lucide/svelte/icons/users';
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import PlusIcon from '@lucide/svelte/icons/plus';
@@ -153,6 +154,19 @@
 							<a href={resolve('/p/[slug]/memory', { slug: profile.slug })} {...props}>
 								<BrainIcon />
 								<span>Memory</span>
+							</a>
+						{/snippet}
+					</Sidebar.MenuButton>
+				</Sidebar.MenuItem>
+				<Sidebar.MenuItem>
+					<Sidebar.MenuButton
+						tooltipContent="Skills"
+						isActive={page.route.id === '/p/[slug]/skills'}
+					>
+						{#snippet child({ props })}
+							<a href={resolve('/p/[slug]/skills', { slug: profile.slug })} {...props}>
+								<PuzzleIcon />
+								<span>Skills</span>
 							</a>
 						{/snippet}
 					</Sidebar.MenuButton>

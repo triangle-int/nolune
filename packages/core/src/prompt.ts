@@ -1,6 +1,8 @@
 import { homedir, type, userInfo } from 'node:os';
+import { MAX_MEDIA_BYTES } from './media.ts';
 import { profileDir, profileMemoryDir, profileSkillsDir } from './paths.ts';
-import { renderSkillsCatalog, scanSkills } from './skills.ts';
+import type { Profile } from './profiles.ts';
+import { listProfileSkills, renderSkillsCatalog } from './skills.ts';
 import { MAX_TIMEOUT_SECONDS, DEFAULT_TIMEOUT_SECONDS, commandShell } from './run-command.ts';
 
 /**
@@ -9,9 +11,12 @@ import { MAX_TIMEOUT_SECONDS, DEFAULT_TIMEOUT_SECONDS, commandShell } from './ru
  * the agent reads it with the memory tool, so the prompt is the same for every conversation of a
  * profile until its skills change.
  */
-export function buildSystemPrompt(profileSlug: string): string {
-	const dir = profileDir(profileSlug);
-	const { skills } = scanSkills(profileSkillsDir(profileSlug));
+export function buildSystemPrompt(profile: Pick<Profile, 'slug' | 'disabledSkills'>): string {
+	const dir = profileDir(profile.slug);
+	const skills = listProfileSkills(
+		profileSkillsDir(profile.slug),
+		profile.disabledSkills
+	).skills.filter((s) => s.enabled);
 	const skillsSection = skills.length
 		? `When a task matches a skill's description, read its SKILL.md with \`cat\` before doing anything else, and follow it. Relative paths in a skill are relative to that skill's folder.
 
@@ -32,13 +37,16 @@ Before your first command in a turn, say in one short sentence what you are abou
 - Every command runs in a fresh login shell (\`${commandShell()} -lc\`): \`cd\` and variables don't carry over between calls, so chain with \`&&\` or pass \`cwd\`. There is no keyboard input, so interactive programs, password prompts and \`sudo\` fail. Commands time out after ${DEFAULT_TIMEOUT_SECONDS} seconds unless you pass \`timeout_seconds\` (max ${MAX_TIMEOUT_SECONDS}).
 - Messages don't include the date or time. Run \`date\` when it matters.
 
+# Pictures and files
+To show a picture in the chat, put it in your reply as a Markdown image: \`![what it shows](path)\`. To give someone a file (a PDF, a spreadsheet, a video), link it and it becomes a download: \`[Filled-in tax form](path)\`. A path can be absolute, start with \`~/\`, or be relative to the profile folder, and a picture can also be an https URL you found in a message or in a command's output (to show one from anywhere else, download it and link the file). Wrap paths that contain spaces in angle brackets: \`![Beach](</Users/anna/Pictures/Summer 2025/IMG_0142.HEIC>)\`. Only link files you have checked exist. They are copied when you send the reply, in full size and up to ${MAX_MEDIA_BYTES / (1024 * 1024)} MB each, so temporary files are fine and later changes to a file don't change what was sent.${process.platform === 'darwin' ? ' HEIC photos are converted so every browser can show them.' : ''}
+
 # Memory
 Your memory tool holds this profile's long-term memory: files under /memories, shared by all of its conversations and all of its members. It outlives this conversation, and what other conversations learn shows up there too.
 - At the start of a conversation, view /memories and read the files that look relevant to what was asked. There's no need to look again for every message.
 - When you learn something that will matter in later conversations (preferences, facts about the family, where things are kept, how things are set up), save it right away. Keep one Markdown file per topic with a short name, like /memories/family.md or /memories/home.md, and write short bullet points, one fact each. Update and merge rather than repeat, and delete what is no longer true.
 - Everyone in this profile can read the memory on the Memory page. A profile is only shared by people who trust each other, so private things are fine to save when someone asks: passwords, door codes, account numbers. The one exception is something a person wants kept from the others here, like a surprise.
 - Don't record ordinary one-off requests. For a long job that could be interrupted, a progress note is fine; delete it when the job is done.
-- The files live in \`${profileMemoryDir(profileSlug)}\`, but always read and change them with the memory tool, not with run_command.
+- The files live in \`${profileMemoryDir(profile.slug)}\`, but always read and change them with the memory tool, not with run_command.
 
 # Skills
 Skills are folders with instructions for specific tasks. ${skillsSection}

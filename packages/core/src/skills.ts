@@ -118,12 +118,43 @@ function escapeXml(text: string): string {
 	return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+function renderSkill(s: Skill): string {
+	return `  <skill>\n    <name>${escapeXml(s.name)}</name>\n    <description>${escapeXml(s.description)}</description>\n    <location>${escapeXml(s.location)}</location>\n  </skill>`;
+}
+
 export function renderSkillsCatalog(skills: Skill[]): string {
-	const items = skills.map(
-		(s) =>
-			`  <skill>\n    <name>${escapeXml(s.name)}</name>\n    <description>${escapeXml(s.description)}</description>\n    <location>${escapeXml(s.location)}</location>\n  </skill>`
-	);
-	return `<available_skills>\n${items.join('\n')}\n</available_skills>`;
+	return `<available_skills>\n${skills.map(renderSkill).join('\n')}\n</available_skills>`;
+}
+
+/**
+ * Rough token count for showing what something costs in the prompt. Claude's newer tokenizers
+ * average a bit under 4 characters per token on English, fewer on paths and markup.
+ */
+export function estimateTokens(text: string): number {
+	return Math.ceil(text.length / 3.5);
+}
+
+export interface ProfileSkill extends Skill {
+	enabled: boolean;
+	/** Estimated tokens its catalog entry adds to every new chat while it's on. */
+	tokens: number;
+}
+
+/** Every skill the profile can see, with whether it's on for new chats. */
+export function listProfileSkills(
+	skillsDir: string,
+	disabledSkills: readonly string[]
+): { skills: ProfileSkill[]; warnings: string[] } {
+	const disabled = new Set(disabledSkills);
+	const { skills, warnings } = scanSkills(skillsDir);
+	return {
+		skills: skills.map((s) => ({
+			...s,
+			enabled: !disabled.has(s.name),
+			tokens: estimateTokens(renderSkill(s))
+		})),
+		warnings
+	};
 }
 
 /** Creates <dir>/<name>/SKILL.md from a template and returns its path. */

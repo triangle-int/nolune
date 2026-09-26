@@ -1,11 +1,12 @@
 import { EventEmitter } from 'node:events';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import type Anthropic from '@anthropic-ai/sdk';
 import { describeApiError, isAbortError, streamTurn, type StreamEvent } from './anthropic.ts';
 import {
 	appendRow,
 	commitQueuedRows,
 	committedRows,
+	foundText,
 	getConversation,
 	insertQueued,
 	lastCommittedRow,
@@ -22,6 +23,8 @@ import {
 import { getDb } from './db/index.ts';
 import { profile } from './db/schema.ts';
 import { eq } from 'drizzle-orm';
+import { collectViewedImages, createViewDir, imageUse, type ImageUse } from './images.ts';
+import { copyReplyMedia, listMedia, mediaByMessage, type PreparedMedia } from './media.ts';
 import { MEMORY_TOOL, runMemoryCommand } from './memory.ts';
 import { profileDir } from './paths.ts';
 import { RUN_COMMAND_TOOL, commandEnv, parseRunCommandInput, runCommand } from './run-command.ts';
@@ -113,18 +116,22 @@ export function subscribe(
 
 export function getSnapshot(conversationId: string): Snapshot {
 	const st = stateFor(conversationId);
+	const media = mediaByMessage(conversationId);
 	return {
 		running: st.running,
 		error: st.error,
-		messages: committedRows(conversationId).map(toDisplay),
-		queued: queuedRows(conversationId).map(toDisplay),
+		messages: committedRows(conversationId).map((row) => toDisplay(row, media.get(row.id))),
+		queued: queuedRows(conversationId).map((row) => toDisplay(row)),
 		live: st.live,
 		toolOutput: st.toolOutput
 	};
 }
 
 function emitQueued(conversationId: string): void {
-	emit(conversationId, { type: 'queued', queued: queuedRows(conversationId).map(toDisplay) });
+	emit(conversationId, {
+		type: 'queued',
+		queued: queuedRows(conversationId).map((row) => toDisplay(row))
+	});
 }
 
 function commitQueued(conversationId: string): void {
@@ -208,7 +215,19 @@ function toolsFor(conv: Conversation): Anthropic.ToolUnion[] {
 	return conv.memoryTool ? [RUN_COMMAND_TOOL, MEMORY_TOOL] : [RUN_COMMAND_TOOL];
 }
 
-function toolResult(id: string, content: string, isError: boolean): Anthropic.ToolResultBlockParam {
+function profileSlug(profileId: string): string | undefined {
+	return getDb().select({ slug: profile.slug }).from(profile).where(eq(profile.id, profileId)).get()
+		?.slug;
+}
+
+function toolResult(
+	id: string,
+	text: string,
+	isError: boolean,
+	/** Images from `btw view`, with their labels. They follow the command's output. */
+	attachments: (Anthropic.TextBlockParam | Anthropic.ImageBlockParam)[] = []
+): Anthropic.ToolResultBlockParam {
+	const content = attachments.length ? [{ type: 'text' as const, text }, ...attachments] : text;
 	return { type: 'tool_result', tool_use_id: id, content, ...(isError ? { is_error: true } : {}) };
 }
 
@@ -217,7 +236,9 @@ async function runToolCall(
 	call: Anthropic.ToolUseBlock,
 	stopReason: Anthropic.Message['stop_reason'],
 	signal: AbortSignal,
-	st: State
+	st: State,
+	/** Images already in the conversation; grows by what this call attaches. */
+	images: ImageUse
 ): Promise<Anthropic.ToolResultBlockParam> {
 	if (stopReason !== 'tool_use') {
 		return toolResult(
@@ -231,11 +252,7 @@ async function runToolCall(
 		return toolResult(call.id, `Unknown tool "${call.name}".`, true);
 	if (signal.aborted) return toolResult(call.id, `Not run. ${stoppedText(st)}`, true);
 
-	const slug = getDb()
-		.select({ slug: profile.slug })
-		.from(profile)
-		.where(eq(profile.id, conv.profileId))
-		.get()?.slug;
+	const slug = profileSlug(conv.profileId);
 	if (!slug) return toolResult(call.id, 'Not run: the profile no longer exists.', true);
 
 	if (memory) {
@@ -249,21 +266,33 @@ async function runToolCall(
 	mkdirSync(dir, { recursive: true });
 
 	st.toolOutput = { id: call.id, text: '' };
-	const result = await runCommand(input, {
-		defaultCwd: dir,
-		env: commandEnv({ BTW_PROFILE: slug, BTW_PROFILE_DIR: dir, BTW_CONVERSATION_ID: conv.id }),
-		signal,
-		abortReason: () => stoppedText(st),
-		onOutput: (chunk) => {
-			const live = st.toolOutput;
-			if (!live || live.text.length >= LIVE_OUTPUT_LIMIT) return;
-			const piece = chunk.slice(0, LIVE_OUTPUT_LIMIT - live.text.length);
-			live.text += piece;
-			emit(conv.id, { type: 'tool_output', id: call.id, chunk: piece });
-		}
-	});
-	st.toolOutput = null;
-	return toolResult(call.id, result.content, result.isError);
+	// `btw view` in this command leaves images here, to be attached to its result.
+	const viewDir = createViewDir(images);
+	try {
+		const result = await runCommand(input, {
+			defaultCwd: dir,
+			env: commandEnv({
+				BTW_PROFILE: slug,
+				BTW_PROFILE_DIR: dir,
+				BTW_CONVERSATION_ID: conv.id,
+				BTW_VIEW_DIR: viewDir
+			}),
+			signal,
+			abortReason: () => stoppedText(st),
+			onOutput: (chunk) => {
+				const live = st.toolOutput;
+				if (!live || live.text.length >= LIVE_OUTPUT_LIMIT) return;
+				const piece = chunk.slice(0, LIVE_OUTPUT_LIMIT - live.text.length);
+				live.text += piece;
+				emit(conv.id, { type: 'tool_output', id: call.id, chunk: piece });
+			}
+		});
+		st.toolOutput = null;
+		const attachments = collectViewedImages(viewDir, images);
+		return toolResult(call.id, result.content, result.isError, attachments);
+	} finally {
+		rmSync(viewDir, { recursive: true, force: true });
+	}
 }
 
 async function loop(conversationId: string): Promise<void> {
@@ -284,6 +313,7 @@ async function loop(conversationId: string): Promise<void> {
 
 			const abort = new AbortController();
 			st.abort = abort;
+			const messages = rows.map(toMessageParam);
 			let reply: Anthropic.Message;
 			try {
 				reply = await streamTurn({
@@ -291,7 +321,7 @@ async function loop(conversationId: string): Promise<void> {
 					effort: conv.effort,
 					system: conv.systemPrompt,
 					tools: toolsFor(conv),
-					messages: rows.map(toMessageParam),
+					messages,
 					signal: abort.signal,
 					onEvent: (event) => onStreamEvent(conversationId, event)
 				});
@@ -306,6 +336,15 @@ async function loop(conversationId: string): Promise<void> {
 				console.error(`[btw] ${conversationId.slice(0, 8)} model call failed:`, err);
 				return;
 			}
+
+			// Pictures and files the reply links to are copied before it's saved (the live reply
+			// stays on screen meanwhile), so the saved reply never points at a missing copy. Web
+			// pictures only if their link appeared in what the model read before this reply.
+			const texts = reply.content.flatMap((b) => (b.type === 'text' ? [b.text] : []));
+			const slug = profileSlug(conv.profileId);
+			const media: PreparedMedia[] = slug
+				? await copyReplyMedia(texts, profileDir(slug), abort.signal, () => foundText(rows))
+				: [];
 			clearLive(conversationId);
 
 			const usage = summarizeUsage(reply.usage);
@@ -318,18 +357,23 @@ async function loop(conversationId: string): Promise<void> {
 				kind: 'assistant',
 				content: JSON.stringify(reply.content),
 				stopReason: reply.stop_reason,
-				usage
+				usage,
+				media
 			});
-			emit(conversationId, { type: 'message', message: toDisplay(assistantRow) });
+			emit(conversationId, {
+				type: 'message',
+				message: toDisplay(assistantRow, media.length ? listMedia(assistantRow.id) : [])
+			});
 			touchConversation(conversationId);
 
 			const calls = reply.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
 			// No tool calls: the turn is over. Loop again in case messages arrived meanwhile.
 			if (calls.length === 0) continue;
 
+			const images = imageUse(messages);
 			const results: Anthropic.ToolResultBlockParam[] = [];
 			for (const call of calls) {
-				results.push(await runToolCall(conv, call, reply.stop_reason, abort.signal, st));
+				results.push(await runToolCall(conv, call, reply.stop_reason, abort.signal, st, images));
 			}
 			const resultsRow = appendRow({
 				conversationId,

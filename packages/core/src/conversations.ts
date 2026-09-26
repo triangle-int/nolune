@@ -3,7 +3,14 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { and, desc, eq, isNotNull, isNull, lt, max } from 'drizzle-orm';
 import type { Effort } from './anthropic.ts';
 import { getDb } from './db/index.ts';
-import { conversation, message, profile, profileMember, triggerRun } from './db/schema.ts';
+import { conversation, media, message, profile, profileMember, triggerRun } from './db/schema.ts';
+import {
+	newMediaId,
+	toDisplayMedia,
+	type DisplayMedia,
+	type MediaRow,
+	type PreparedMedia
+} from './media.ts';
 import { buildSystemPrompt } from './prompt.ts';
 import { effectiveContextWindow, getPreset } from './presets.ts';
 import type { Profile } from './profiles.ts';
@@ -67,6 +74,8 @@ export type DisplayMessage =
 			id: number;
 			kind: 'assistant';
 			blocks: DisplayBlock[];
+			/** The pictures and files its text links to, keyed by link target. */
+			media: Record<string, DisplayMedia>;
 			stopReason: string | null;
 			usage: Usage | null;
 			createdAt: number;
@@ -100,7 +109,7 @@ export function createConversation(input: {
 		model: preset.model,
 		contextWindow: effectiveContextWindow(preset),
 		effort: input.effort ?? 'medium',
-		systemPrompt: buildSystemPrompt(input.profile.slug),
+		systemPrompt: buildSystemPrompt(input.profile),
 		memoryTool: true,
 		hidden: input.hidden ?? false,
 		createdBy: input.userId,
@@ -276,9 +285,11 @@ export function appendRow(input: {
 	text?: string;
 	stopReason?: string | null;
 	usage?: Usage | null;
+	/** Assistant rows: copies of the pictures and files the reply links to, saved with it. */
+	media?: PreparedMedia[];
 }): MessageRow {
-	return getDb().transaction((tx) =>
-		tx
+	return getDb().transaction((tx) => {
+		const row = tx
 			.insert(message)
 			.values({
 				conversationId: input.conversationId,
@@ -293,8 +304,21 @@ export function appendRow(input: {
 				createdAt: new Date()
 			})
 			.returning()
-			.get()
-	);
+			.get();
+		if (input.media?.length) {
+			tx.insert(media)
+				.values(
+					input.media.map((m) => ({
+						...m,
+						id: newMediaId(),
+						conversationId: input.conversationId,
+						messageId: row.id
+					}))
+				)
+				.run();
+		}
+		return row;
+	});
 }
 
 /** Exactly what was stored, so the request prefix is byte-identical to the previous call. */
@@ -338,7 +362,25 @@ export function replyText(row: MessageRow): string {
 		.trim();
 }
 
-export function toDisplay(row: MessageRow): DisplayMessage {
+/**
+ * Everything the model read that it didn't write: what people wrote, automation prompts and
+ * events, and command output. A web picture in a reply is downloaded only if its link is in here.
+ */
+export function foundText(rows: MessageRow[]): string {
+	return rows
+		.filter((row) => row.kind !== 'assistant')
+		.flatMap((row) =>
+			(
+				JSON.parse(row.content) as (Anthropic.TextBlockParam | Anthropic.ToolResultBlockParam)[]
+			).map((b) =>
+				b.type === 'tool_result' ? toolResultText(b.content) : b.type === 'text' ? b.text : ''
+			)
+		)
+		.join('\n');
+}
+
+/** `mediaRows`: the row's pictures and files, for assistant rows. */
+export function toDisplay(row: MessageRow, mediaRows: MediaRow[] = []): DisplayMessage {
 	const createdAt = row.createdAt.getTime();
 	if (row.kind === 'trigger') {
 		return {
@@ -398,6 +440,7 @@ export function toDisplay(row: MessageRow): DisplayMessage {
 		id: row.id,
 		kind: 'assistant',
 		blocks,
+		media: toDisplayMedia(mediaRows),
 		stopReason: row.stopReason,
 		usage: row.usage ? (JSON.parse(row.usage) as Usage) : null,
 		createdAt
