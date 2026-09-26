@@ -228,6 +228,11 @@ export function touchConversation(id: string, title?: string): void {
 		.run();
 }
 
+/** Unlike touchConversation, leaves the chat where it is in the list. */
+export function setTitle(id: string, title: string): void {
+	getDb().update(conversation).set({ title }).where(eq(conversation.id, id)).run();
+}
+
 /** Sets the title unless it changed since it read `from`. True if it was set. */
 export function replaceTitle(id: string, from: string, to: string): boolean {
 	const result = getDb()

@@ -119,6 +119,7 @@ export {
 	kick,
 	onLoopEnd,
 	recoverAfterRestart,
+	renameConversation,
 	sendMessage,
 	stop,
 	subscribe,
@@ -126,6 +127,7 @@ export {
 	type LiveEvent,
 	type Snapshot
 } from './runner.ts';
+export { TitleError } from './titles.ts';
 export { EFFORTS, type Effort } from './anthropic.ts';
 export {
 	createSkill,

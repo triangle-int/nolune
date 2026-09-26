@@ -12,6 +12,7 @@
 	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
 	import FolderIcon from '@lucide/svelte/icons/folder';
 	import InfoIcon from '@lucide/svelte/icons/info';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
@@ -35,6 +36,7 @@
 	import MediaViewer, { pictureClicks, type ViewedPicture } from './chat/MediaViewer.svelte';
 	import MessageAttachments from './chat/MessageAttachments.svelte';
 	import ModelMenu from './chat/ModelMenu.svelte';
+	import RenameChatDialog from './chat/RenameChatDialog.svelte';
 	import PageHeader from './PageHeader.svelte';
 	import TypedText from './TypedText.svelte';
 	import UserAvatar from './UserAvatar.svelte';
@@ -68,6 +70,7 @@
 	/** Sending a message turns a background run into a normal conversation. */
 	let continued = $state(false);
 	let effort = $state(untrack(() => conversation.effort));
+	let renaming = $state<{ id: string; title: string } | null>(null);
 	let deleteOpen = $state(false);
 	let creatingFolder = $state(false);
 	const folder = $derived(folders.find((f) => f.id === folderId));
@@ -445,6 +448,10 @@
 					</DropdownMenu.Label>
 					<DropdownMenu.Separator />
 				{/if}
+				<DropdownMenu.Item onSelect={() => (renaming = { id: conversation.id, title })}>
+					<PencilIcon />
+					Rename
+				</DropdownMenu.Item>
 				<MoveToFolderMenu
 					{folders}
 					{folderId}
@@ -578,6 +585,8 @@
 </div>
 
 <MediaViewer bind:picture={viewing} />
+
+<RenameChatDialog bind:chat={renaming} slug={page.params.slug ?? ''} />
 
 <NewFolderDialog
 	bind:open={creatingFolder}

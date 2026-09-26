@@ -16,6 +16,7 @@ import {
 	replaceTitle,
 	requestMessages,
 	setHidden,
+	setTitle,
 	summarizeUsage,
 	toDisplay,
 	toMessageParam,
@@ -34,7 +35,7 @@ import { copyReplyMedia, listMedia, mediaByMessage, type PreparedMedia } from '.
 import { profileDir } from './paths.ts';
 import { getProfile } from './profiles.ts';
 import { RUN_COMMAND_TOOL, commandEnv, parseRunCommandInput, runCommand } from './run-command.ts';
-import { TITLE_LIMIT, suggestTitle } from './titles.ts';
+import { TITLE_LIMIT, suggestTitle, typedTitle } from './titles.ts';
 import { cacheHitRate } from './usage.ts';
 
 export interface LiveBlock {
@@ -264,6 +265,16 @@ function nameConversation(conv: Conversation, text: string, placeholder: string)
 		.catch((err) => {
 			console.error(`[btw] ${conv.id.slice(0, 8)} could not name the chat:`, describeApiError(err));
 		});
+}
+
+/**
+ * Renames the chat for everyone who has it open. A title the model is still thinking of for a
+ * new chat doesn't replace it (replaceTitle).
+ */
+export function renameConversation(conversationId: string, title: string): void {
+	const cleaned = typedTitle(title);
+	setTitle(conversationId, cleaned);
+	emit(conversationId, { type: 'title', title: cleaned });
 }
 
 export function stop(conversationId: string, byName: string): void {
