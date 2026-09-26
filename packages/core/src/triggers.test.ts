@@ -255,6 +255,20 @@ describe('runs', () => {
 		expect(() => queueWake({ profileId: other.id, text: 'hi' })).not.toThrow();
 	});
 
+	it("doesn't count a trigger's waiting runs against the profile's wakes, or the other way round", () => {
+		const t = daily();
+		for (let i = 0; i < MAX_PENDING_RUNS; i++) queueRun(t, 'webhook');
+		expect(() => queueWake({ profileId: profile.id, text: 'hi' })).not.toThrow();
+
+		const other = daily('Bins');
+		for (let i = 1; i < MAX_PENDING_RUNS; i++) queueWake({ profileId: profile.id, text: 'hi' });
+		expect(() => queueRun(other, 'webhook')).not.toThrow();
+		// A wake on behalf of a trigger counts toward that trigger's runs.
+		expect(() => queueWake({ profileId: profile.id, text: 'hi', triggerId: t.id })).toThrow(
+			'already waiting'
+		);
+	});
+
 	it('wakes the agent in the name of a trigger, or on its own', () => {
 		const t = daily();
 		expect(
