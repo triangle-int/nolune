@@ -16,6 +16,7 @@ Needs macOS (Linux works without the background service), Node 22.18+ and an
 ```sh
 npm install -g btw-agent
 btw setup                      # API key, your account, default model, public URL
+btw key set openai             # optional: lets btw make pictures (Images page)
 btw service install            # run in the background, start at login
 btw user create Anna anna@example.com   # add family members (prints their password)
 ```
@@ -51,6 +52,16 @@ Access). `btw setup` prints the exact path.
   HEIC and shrinks big photos for it), and it can show pictures and hand over files in the chat
   ("show me the beach photos from August", "fill in this form and give it to me"). It keeps its
   own copy of each file it shows, so they stay in the chat even if the original moves.
+- **Images.** The Images page in the sidebar has templates for the family (party invitations,
+  storybook pages, wanted posters, trip postcards, sticker packs, bouquets, nail art...) and for
+  making games (sprite sheets, textures, app icons, concept art): tap one and take or choose a
+  photo, draw something, or press Try it; many ask for a few choices first. btw starts a new chat
+  with the picture and the template's prompt, makes the picture with `btw generate image` and
+  shows it there, where you can ask for changes. You can also just describe a picture, there or
+  in any chat. It needs an OpenAI key (`btw key set openai`); the
+  model is `openai/gpt-image-2.5-flare` unless you pick another with
+  `btw config set image-model`. Templates are folders with a `TEMPLATE.md`; add your own in
+  `~/.btw-agent/image-templates` or a profile's `image-templates` folder (see DESIGN.md).
 - Skills live in `~/.btw-agent/profiles/<profile>/skills` and `~/.agents/skills`
   ([Agent Skills](https://agentskills.io) format). The agent creates its own with `btw skill new`.
   Each skill's name and description go into every new chat, so turn off the ones a profile doesn't

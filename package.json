@@ -20,6 +20,7 @@
 		"dist",
 		"packages/core/drizzle",
 		"packages/core/skills",
+		"packages/core/image-templates",
 		"DESIGN.md"
 	],
 	"engines": {

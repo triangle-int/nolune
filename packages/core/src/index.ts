@@ -3,6 +3,7 @@ export {
 	packageRoot,
 	paths,
 	profileDir,
+	profileImageTemplatesDir,
 	profileMemoryDir,
 	profileSkillsDir
 } from './paths.ts';
@@ -117,7 +118,7 @@ export {
 	type MemoryFact,
 	type MemoryFile
 } from './memory.ts';
-export { ViewLimitError, viewImage } from './images.ts';
+export { ViewLimitError, inspectImage, viewImage } from './images.ts';
 export {
 	AttachmentError,
 	MAX_ATTACHMENTS,
@@ -127,6 +128,33 @@ export {
 	type MessageAttachment,
 	type UploadRow
 } from './attachments.ts';
+export {
+	DEFAULT_IMAGE_MODEL,
+	IMAGE_BACKGROUNDS,
+	IMAGE_FORMATS,
+	IMAGE_SHAPES,
+	MAX_IMAGE_COUNT,
+	configuredImageModel,
+	generateImages,
+	imageGenerationStatus,
+	parseImageModel,
+	parseImageSize,
+	type GeneratedImage,
+	type ImageBackground,
+	type ImageFormat,
+	type ImageGenerationStatus,
+	type ImageProvider,
+	type ImageShape
+} from './image-generation.ts';
+export {
+	checkTemplateImages,
+	resolveImageTemplate,
+	scanImageTemplates,
+	templateMessage,
+	type ImageTemplate,
+	type ResolvedTemplate,
+	type TemplateSetting
+} from './image-templates.ts';
 export { installCliShim } from './shim.ts';
 export {
 	SILENT_REPLY,

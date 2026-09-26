@@ -41,6 +41,9 @@ export const paths = {
 	globalSkills: process.env.BTW_GLOBAL_SKILLS || join(homedir(), '.agents', 'skills'),
 	/** Skills that ship with btw, such as `automations`. */
 	builtinSkills: join(packageRoot, 'packages', 'core', 'skills'),
+	/** Image templates for every profile; each profile can add its own (profileImageTemplatesDir). */
+	globalImageTemplates: join(home, 'image-templates'),
+	builtinImageTemplates: join(packageRoot, 'packages', 'core', 'image-templates'),
 	migrations: join(packageRoot, 'packages', 'core', 'drizzle'),
 	/** adapter-node output; `btw start` runs it. */
 	server: join(packageRoot, 'build', 'index.js')
@@ -62,6 +65,10 @@ export function profileDir(slug: string): string {
 
 export function profileSkillsDir(slug: string): string {
 	return join(paths.profiles, slug, 'skills');
+}
+
+export function profileImageTemplatesDir(slug: string): string {
+	return join(paths.profiles, slug, 'image-templates');
 }
 
 /** Long-term memory: one Markdown note per topic. */
