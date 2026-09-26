@@ -43,6 +43,19 @@
 	let savingInstructions = $state(false);
 	let instructionsProblem = $state<string | null>(null);
 
+	/**
+	 * Grows with the text up to its max height, then scrolls. Not with `field-sizing: content`
+	 * (the Textarea's default): Safari then lays the placeholder out wider than the box, cut off
+	 * and scrolling sideways.
+	 */
+	function growWithText(node: HTMLTextAreaElement) {
+		void instructions;
+		node.style.minHeight = '';
+		const border = node.offsetHeight - node.clientHeight;
+		const max = parseFloat(getComputedStyle(node).maxHeight) || Infinity;
+		node.style.minHeight = `${Math.min(node.scrollHeight + border, max)}px`;
+	}
+
 	// --- files ---
 
 	const uploads = new Attachments(() => slug);
@@ -171,9 +184,10 @@
 					<Textarea
 						name="instructions"
 						bind:value={instructions}
+						{@attach growWithText}
 						maxlength={data.maxInstructions}
 						placeholder="We're planning two weeks in Japan in April with the kids (7 and 10). Keep plans relaxed and the budget under ¥600,000."
-						class="max-h-80 min-h-28 flex-1"
+						class="field-sizing-fixed! max-h-80 min-h-28 flex-1"
 					/>
 					{#if instructionsProblem}
 						<p class="mt-2 text-sm text-destructive">{instructionsProblem}</p>
