@@ -2,7 +2,8 @@
 	import { untrack } from 'svelte';
 	import { enhance } from '$app/forms';
 	import { invalidate } from '$app/navigation';
-	import type { Usage } from '@btw/core';
+	import { page } from '$app/state';
+	import type { DisplayAttachment, Usage } from '@btw/core';
 	import { CACHE_TTL_MS, cacheHitRate, cacheMissTokens, promptTokens } from '@btw/core/usage';
 	import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
 	import ClockIcon from '@lucide/svelte/icons/clock';
@@ -19,12 +20,14 @@
 	import { formatPercent, formatTokens } from '$lib/format';
 	import { getPreferences } from '$lib/preferences.svelte';
 	import { buildTranscript, replyText, type Reply } from '$lib/transcript';
+	import { Attachments } from '$lib/uploads.svelte';
 	import { cn } from '$lib/utils';
 	import Activity from './chat/Activity.svelte';
 	import Composer from './chat/Composer.svelte';
 	import CopyButton from './chat/CopyButton.svelte';
 	import Markdown from './chat/Markdown.svelte';
 	import MediaViewer, { pictureClicks, type ViewedPicture } from './chat/MediaViewer.svelte';
+	import MessageAttachments from './chat/MessageAttachments.svelte';
 	import ModelMenu from './chat/ModelMenu.svelte';
 	import PageHeader from './PageHeader.svelte';
 	import UserAvatar from './UserAvatar.svelte';
@@ -48,6 +51,7 @@
 	const prefs = getPreferences();
 	const chat = new ChatState();
 	let text = $state('');
+	const attachments = new Attachments(() => page.params.slug ?? '');
 	let sending = $state(false);
 	let actionError = $state<string | null>(null);
 	let stickToBottom = $state(true);
@@ -165,17 +169,28 @@
 			headers: { 'content-type': 'application/json' },
 			body: body === undefined ? undefined : JSON.stringify(body)
 		});
-		if (!res.ok) actionError = (await res.text()) || `Request failed (${res.status})`;
+		if (!res.ok) {
+			const body = await res.text();
+			let message = body;
+			try {
+				message = (JSON.parse(body) as { message?: string }).message ?? body;
+			} catch {
+				// plain text
+			}
+			actionError = message || `Request failed (${res.status})`;
+		}
 		return res.ok;
 	}
 
 	async function send() {
 		const message = text.trim();
-		if (!message || sending) return;
+		const uploads = attachments.ids;
+		if ((!message && !uploads.length) || sending || attachments.uploading) return;
 		sending = true;
 		stickToBottom = true;
-		if (await post('messages', { text: message })) {
+		if (await post('messages', { text: message, uploads })) {
 			text = '';
+			attachments.clear();
 			continued = true;
 			invalidate('btw:conversations');
 		}
@@ -190,7 +205,12 @@
 	}
 </script>
 
-{#snippet humanBubble(senderName: string, body: string, pending: boolean)}
+{#snippet humanBubble(
+	senderName: string,
+	body: string,
+	files: DisplayAttachment[],
+	pending: boolean
+)}
 	{@const mine = senderName === me}
 	<div class="group/human flex flex-col items-end gap-1">
 		{#if !mine || pending}
@@ -204,15 +224,20 @@
 				{/if}
 			</div>
 		{/if}
-		<div
-			class={cn(
-				'max-w-[85%] rounded-[22px] px-4 py-2.5 leading-relaxed break-words whitespace-pre-wrap sm:max-w-[70%]',
-				pending ? 'border border-dashed opacity-70' : 'bg-bubble'
-			)}
-		>
-			{body}
-		</div>
-		{#if !pending}
+		{#if files.length}
+			<MessageAttachments conversationId={conversation.id} attachments={files} />
+		{/if}
+		{#if body}
+			<div
+				class={cn(
+					'max-w-[85%] rounded-[22px] px-4 py-2.5 leading-relaxed break-words whitespace-pre-wrap sm:max-w-[70%]',
+					pending ? 'border border-dashed opacity-70' : 'bg-bubble'
+				)}
+			>
+				{body}
+			</div>
+		{/if}
+		{#if !pending && body}
 			<div
 				class="-mr-1.5 opacity-100 transition-opacity md:opacity-0 md:group-hover/human:opacity-100"
 			>
@@ -374,7 +399,12 @@
 
 			{#each entries as entry, index (entry.key)}
 				{#if entry.type === 'human'}
-					{@render humanBubble(entry.message.senderName, entry.message.text, false)}
+					{@render humanBubble(
+						entry.message.senderName,
+						entry.message.text,
+						entry.message.attachments,
+						false
+					)}
 				{:else if entry.type === 'trigger'}
 					<div class="rounded-2xl border px-4 py-3 text-sm">
 						<div class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
@@ -390,7 +420,7 @@
 
 			{#each chat.queued as message (message.id)}
 				{#if message.kind === 'human'}
-					{@render humanBubble(message.senderName, message.text, true)}
+					{@render humanBubble(message.senderName, message.text, message.attachments, true)}
 				{/if}
 			{/each}
 
@@ -433,6 +463,7 @@
 		<Composer
 			bind:value={text}
 			bind:textarea
+			{attachments}
 			running={chat.running}
 			busy={sending}
 			placeholder={chat.running ? 'Add something while btw works…' : 'Ask btw'}

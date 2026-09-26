@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
 	DEFAULT_PORT,
+	MAX_MEDIA_BYTES,
 	addPreset,
 	configExists,
 	createSkill,
@@ -214,6 +215,9 @@ async function start(): Promise<void> {
 	process.env.HOST ??= host;
 	process.env.PORT ??= String(port);
 	process.env.ORIGIN ??= origin;
+	// adapter-node refuses bodies over 512 KB; attachments go up to MAX_MEDIA_BYTES. Every route
+	// except the upload one keeps a 1 MB limit (src/hooks.server.ts).
+	process.env.BODY_SIZE_LIMIT ??= String(MAX_MEDIA_BYTES + 1024 * 1024);
 	console.log(
 		`btw gateway: ${process.env.ORIGIN} (listening on ${process.env.HOST}:${process.env.PORT})`
 	);
@@ -527,7 +531,7 @@ async function main(argv: string[]): Promise<void> {
 			let failed = false;
 			for (const [i, file] of files.entries()) {
 				try {
-					console.log(viewImage(file, dir));
+					console.log(await viewImage(file, dir));
 				} catch (err) {
 					failed = true;
 					const message = err instanceof Error ? err.message : String(err);

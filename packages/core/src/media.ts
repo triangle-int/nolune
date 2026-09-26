@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { and, eq } from 'drizzle-orm';
 import { getDb } from './db/index.ts';
-import { media } from './db/schema.ts';
+import { media, upload } from './db/schema.ts';
 import { inspectImage } from './images.ts';
 import { isRemoteHref, mediaRefs } from './media-refs.ts';
 import { paths } from './paths.ts';
@@ -141,10 +141,10 @@ function formatMegabytes(bytes: number): string {
 
 // --- copying ---
 
-class TooLargeError extends Error {}
+export class TooLargeError extends Error {}
 
 /** Streams into the store under the content's SHA-256. The same content is stored once. */
-async function store(
+export async function store(
 	source: Readable,
 	signal?: AbortSignal
 ): Promise<{ sha256: string; bytes: number }> {
@@ -440,8 +440,7 @@ async function copyOne(href: string, baseDir: string, signal: AbortSignal): Prom
 			stored = await store(createReadStream(real), signal);
 		}
 
-		const head = readHead(blobPath(stored.sha256));
-		const mime = sniffType(head, name);
+		const mime = storedType(stored.sha256, name);
 		// A web link in a picture that turns out to be a page gets no row pointing at the copy;
 		// the orphan sweep removes it.
 		if (remote && !mime.startsWith('image/')) {
@@ -450,24 +449,7 @@ async function copyOne(href: string, baseDir: string, signal: AbortSignal): Prom
 		if (remote && !extname(name) && IMAGE_EXTENSIONS[mime]) {
 			name = `${name === 'file' ? 'picture' : name}${IMAGE_EXTENSIONS[mime]}`;
 		}
-		let previewSha256: string | null = null;
-		let size = imageSize(head, mime);
-		if (CONVERTIBLE.has(mime)) {
-			previewSha256 = await convertToJpeg(stored.sha256, mime);
-			if (previewSha256) size = imageSize(readHead(blobPath(previewSha256)), 'image/jpeg');
-		}
-		return {
-			src: href,
-			status: 'ok',
-			error: null,
-			name,
-			sha256: stored.sha256,
-			mime,
-			bytes: stored.bytes,
-			width: size?.width ?? null,
-			height: size?.height ?? null,
-			previewSha256
-		};
+		return describeStored({ ...stored, mime }, name, href);
 	} catch (err) {
 		if (err instanceof TooLargeError) return tooLarge();
 		if (err instanceof LocalAddressError) {
@@ -478,6 +460,40 @@ async function copyOne(href: string, baseDir: string, signal: AbortSignal): Prom
 		}
 		return problem('failed', describeError(err, remote));
 	}
+}
+
+/** The type of content in the store, from its first bytes (the name only for non-pictures). */
+export function storedType(sha256: string, name: string): string {
+	return sniffType(readHead(blobPath(sha256)), name);
+}
+
+/**
+ * The media row for content already in the store: a picture's size, and a JPEG copy of HEIC
+ * and TIFF pictures for browsers. Attachments people send get theirs this way too.
+ */
+export async function describeStored(
+	stored: { sha256: string; bytes: number; mime: string },
+	name: string,
+	src: string
+): Promise<PreparedMedia> {
+	let previewSha256: string | null = null;
+	let size = imageSize(readHead(blobPath(stored.sha256)), stored.mime);
+	if (CONVERTIBLE.has(stored.mime)) {
+		previewSha256 = await convertToJpeg(stored.sha256, stored.mime);
+		if (previewSha256) size = imageSize(readHead(blobPath(previewSha256)), 'image/jpeg');
+	}
+	return {
+		src,
+		status: 'ok',
+		error: null,
+		name,
+		sha256: stored.sha256,
+		mime: stored.mime,
+		bytes: stored.bytes,
+		width: size?.width ?? null,
+		height: size?.height ?? null,
+		previewSha256
+	};
 }
 
 /**
@@ -668,8 +684,9 @@ export function mediaFile(
 }
 
 /**
- * Deletes stored files no row points to any more (their conversations were deleted). Files
- * younger than an hour are kept, since a reply being saved may be about to reference them.
+ * Deletes stored files no row points to any more (their conversations were deleted, or an
+ * upload was never sent). Files younger than an hour are kept, since a reply being saved may be
+ * about to reference them.
  */
 export function pruneMedia(): void {
 	if (!existsSync(paths.media)) return;
@@ -681,6 +698,9 @@ export function pruneMedia(): void {
 	for (const row of rows) {
 		if (row.sha256) used.add(row.sha256);
 		if (row.previewSha256) used.add(row.previewSha256);
+	}
+	for (const row of getDb().select({ sha256: upload.sha256 }).from(upload).all()) {
+		used.add(row.sha256);
 	}
 	const cutoff = Date.now() - ORPHAN_GRACE_MS;
 	for (const name of readdirSync(paths.media)) {

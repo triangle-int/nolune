@@ -57,11 +57,19 @@ export {
 	setEffort,
 	setHidden,
 	type Conversation,
+	type DisplayAttachment,
 	type DisplayBlock,
 	type DisplayMessage,
 	type Usage
 } from './conversations.ts';
-export { MAX_MEDIA_BYTES, getMedia, mediaFile, type DisplayMedia, type MediaRow } from './media.ts';
+export {
+	MAX_MEDIA_BYTES,
+	TooLargeError,
+	getMedia,
+	mediaFile,
+	type DisplayMedia,
+	type MediaRow
+} from './media.ts';
 export {
 	getSnapshot,
 	isRunning,
@@ -86,6 +94,15 @@ export {
 } from './skills.ts';
 export { buildSystemPrompt } from './prompt.ts';
 export { ViewLimitError, viewImage } from './images.ts';
+export {
+	AttachmentError,
+	MAX_ATTACHMENTS,
+	createUpload,
+	deleteUpload,
+	findUploads,
+	type MessageAttachment,
+	type UploadRow
+} from './attachments.ts';
 export { installCliShim } from './shim.ts';
 export {
 	SILENT_REPLY,

@@ -18,9 +18,10 @@ btw view scan-1.png scan-2.png     # up to 10 per command
   pictures are shrunk to 2000 px on the long side, and photos are turned upright.
 - Only you see these pictures. To show one to the family, put it in your reply:
   `![what it shows](path)`.
-- Every picture stays in this conversation and is sent again with each step; a conversation holds
-  at most 100 (20 MB). Look at what the task needs, and at small copies when that's enough. When
-  `btw view` says the conversation is full, say what you need in words or suggest a new chat.
+- Every picture stays in this conversation and is part of each later step; a conversation holds at
+  most 100, counting pictures people attached. Look at what the task needs, and at small copies
+  when that's enough. When `btw view` says the conversation is full, say what you need in words or
+  suggest a new chat.
 - When only the text matters, reading it (`pdftotext doc.pdf -`) is cheaper than looking. If that
   prints nothing, the PDF is a scan: look at its pages.
 
