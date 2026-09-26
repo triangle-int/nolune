@@ -86,6 +86,7 @@ export {
 	getTrigger,
 	isFinished,
 	listRuns,
+	listRunsBetween,
 	listTriggers,
 	parseRunAt,
 	queueRun,

@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Cron } from 'croner';
-import { and, asc, desc, eq, inArray, lt, lte, notInArray } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lt, lte, notInArray } from 'drizzle-orm';
 import { EFFORTS, type Effort } from './anthropic.ts';
 import { DEFAULT_PORT, readConfig } from './config.ts';
 import { getDb } from './db/index.ts';
@@ -416,6 +416,22 @@ export function listRuns(triggerId: string, limit = 10): TriggerRun[] {
 		.where(eq(triggerRun.triggerId, triggerId))
 		.orderBy(desc(triggerRun.createdAt))
 		.limit(limit)
+		.all();
+}
+
+/** A profile's runs started between `from` and `until`, oldest first. */
+export function listRunsBetween(profileId: string, from: Date, until: Date): TriggerRun[] {
+	return getDb()
+		.select()
+		.from(triggerRun)
+		.where(
+			and(
+				eq(triggerRun.profileId, profileId),
+				gte(triggerRun.createdAt, from),
+				lt(triggerRun.createdAt, until)
+			)
+		)
+		.orderBy(asc(triggerRun.createdAt))
 		.all();
 }
 

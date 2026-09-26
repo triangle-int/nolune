@@ -12,23 +12,33 @@ import {
 	getTrigger,
 	isFinished,
 	listRuns,
+	listRunsBetween,
 	listTriggers,
 	runTriggerNow,
 	setTriggerEnabled,
 	updateTrigger,
 	webhookUrl,
+	type RunStatus,
 	type Trigger
 } from '@btw/core';
 import { requireProfile } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
 
-/** Days the "Coming up" calendar covers, today included. */
-const AGENDA_DAYS = 7;
-/** A trigger that runs more often than this in those days is listed once, not at every time. */
-const AGENDA_MAX_RUNS = 28;
+/** A trigger that runs more than this many times a day, on average, is listed once, not every time. */
+const MAX_RUNS_PER_DAY = 4;
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 function capitalize(text: string): string {
 	return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function addDays(date: Date, days: number): Date {
+	return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
+}
+
+/** "2026-09". */
+function monthKey(date: Date): string {
+	return dayKey(date).slice(0, 7);
 }
 
 /** "Every weekday at 07:30", "Once, tomorrow at 17:00". Times are the gateway's, like cron's. */
@@ -38,48 +48,160 @@ function schedule(t: Trigger, now: Date): string {
 	return 'When another app calls its link';
 }
 
-type AgendaItem = { id: string; name: string; icon: string | null; kind: Trigger['kind'] };
+/** Runs and their history are kept this long, so the calendar doesn't go back further. */
+const HISTORY_DAYS = 30;
 
-/** What runs from now to the end of the last day, grouped by day, and what runs too often to list. */
-function agenda(triggers: Trigger[], now: Date) {
-	const until = new Date(now.getFullYear(), now.getMonth(), now.getDate() + AGENDA_DAYS);
-	const runs: (AgendaItem & { at: Date })[] = [];
-	const frequent: (AgendaItem & { schedule: string })[] = [];
-	for (const t of triggers) {
+type CalendarEntry = {
+	/** The trigger, if it still exists: the entry links to its card. */
+	triggerId: string | null;
+	name: string;
+	icon: string | null;
+	kind: Trigger['kind'] | null;
+	at: Date;
+	/** How it went, for runs that already happened. */
+	status: RunStatus | null;
+	conversationId: string | null;
+};
+
+/**
+ * A month as whole weeks, Monday first. Days before now show what ran (agent runs, and scripts
+ * that failed: a script that checked and found nothing isn't news); the rest show what will run.
+ * Triggers that run too often to show on every day are listed once instead.
+ */
+function calendar(profileId: string, triggers: Trigger[], month: string | null, now: Date) {
+	const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+	const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+	const asked = /^(\d{4})-(\d{2})$/.exec(month ?? '');
+	const first = asked ? new Date(Number(asked[1]), Number(asked[2]) - 1, 1) : thisMonth;
+	const last = new Date(first.getFullYear(), first.getMonth() + 1, 0);
+	const gridStart = addDays(first, -((first.getDay() + 6) % 7));
+	// The Monday after the last week.
+	const gridEnd = addDays(last, 7 - ((last.getDay() + 6) % 7));
+	const byId = new Map(triggers.map((t) => [t.id, t]));
+	const entries: CalendarEntry[] = [];
+
+	if (gridStart < now) {
+		// A broken script fails on every run; like its notification, show that once a day.
+		const failedScripts = new Set<string>();
+		for (const run of listRunsBetween(profileId, gridStart, gridEnd < now ? gridEnd : now)) {
+			if (run.action === 'script') {
+				const key = `${dayKey(run.createdAt)} ${run.triggerId}`;
+				if (run.status !== 'failed' || failedScripts.has(key)) continue;
+				failedScripts.add(key);
+			}
+			const t = run.triggerId ? byId.get(run.triggerId) : undefined;
+			entries.push({
+				triggerId: t?.id ?? null,
+				name: run.title,
+				icon: t?.icon ?? null,
+				kind: t?.kind ?? null,
+				at: run.createdAt,
+				status: run.status,
+				conversationId: run.conversationId
+			});
+		}
+	}
+
+	const from = gridStart > now ? gridStart : now;
+	const days = Math.ceil((gridEnd.getTime() - from.getTime()) / 86_400_000);
+	const frequent: {
+		id: string;
+		name: string;
+		icon: string | null;
+		kind: Trigger['kind'];
+		schedule: string;
+	}[] = [];
+	for (const t of days > 0 ? triggers : []) {
 		if (!t.enabled || isFinished(t)) continue;
-		const item = { id: t.id, name: t.name, icon: t.icon, kind: t.kind };
+		const entry = {
+			triggerId: t.id,
+			name: t.name,
+			icon: t.icon,
+			kind: t.kind,
+			status: null,
+			conversationId: null
+		};
 		if (t.kind === 'cron' && t.cron) {
-			const times = cronRunsBetween(t.cron, now, until, AGENDA_MAX_RUNS + 1);
-			if (times.length > AGENDA_MAX_RUNS) frequent.push({ ...item, schedule: schedule(t, now) });
-			else runs.push(...times.map((at) => ({ ...item, at })));
-		} else if (t.kind === 'once' && t.runAt && t.runAt >= now && t.runAt < until) {
-			runs.push({ ...item, at: t.runAt });
+			const limit = MAX_RUNS_PER_DAY * days;
+			const times = cronRunsBetween(t.cron, from, gridEnd, limit + 1);
+			if (times.length > limit) {
+				frequent.push({
+					id: t.id,
+					name: t.name,
+					icon: t.icon,
+					kind: t.kind,
+					schedule: schedule(t, now)
+				});
+			} else {
+				entries.push(...times.map((at) => ({ ...entry, at })));
+			}
+		} else if (t.kind === 'once' && t.runAt && t.runAt >= from && t.runAt < gridEnd) {
+			entries.push({ ...entry, at: t.runAt });
 		}
 	}
-	runs.sort((a, b) => a.at.getTime() - b.at.getTime());
-	const days = new Map<
-		string,
-		{ key: string; label: string; date: string; items: (AgendaItem & { time: string })[] }
-	>();
-	for (const { at, ...item } of runs) {
-		const key = dayKey(at);
-		let day = days.get(key);
-		if (!day) {
-			day = { key, label: capitalize(formatDay(at, now)), date: formatDate(at), items: [] };
-			days.set(key, day);
-		}
-		day.items.push({ ...item, time: formatClock(at) });
+
+	entries.sort((a, b) => a.at.getTime() - b.at.getTime());
+	const byDay = new Map<string, CalendarEntry[]>();
+	for (const entry of entries) {
+		const key = dayKey(entry.at);
+		if (!byDay.has(key)) byDay.set(key, []);
+		byDay.get(key)?.push(entry);
 	}
-	return { days: [...days.values()], frequent };
+
+	const cells = [];
+	for (let date = gridStart; date < gridEnd; date = addDays(date, 1)) {
+		const key = dayKey(date);
+		const dayEntries = byDay.get(key) ?? [];
+		// One icon per automation, however often it runs that day.
+		const icons = [
+			...new Map(
+				dayEntries.map(({ triggerId, name, icon, kind }) => [
+					triggerId ?? name,
+					{ key: triggerId ?? name, icon, kind }
+				])
+			).values()
+		];
+		const relative = formatDay(date, now);
+		cells.push({
+			key,
+			day: date.getDate(),
+			inMonth: date.getMonth() === first.getMonth(),
+			isToday: key === dayKey(today),
+			isPast: date < today,
+			title: `${date.toLocaleDateString('en-GB', { weekday: 'long' })} ${formatDate(date)}`,
+			relative: relative === 'today' || relative === 'tomorrow' ? capitalize(relative) : null,
+			icons: icons.slice(0, 3),
+			more: Math.max(0, icons.length - 3),
+			entries: dayEntries.map(({ at, ...entry }) => ({ ...entry, time: formatClock(at) }))
+		});
+	}
+
+	const oldest = addDays(today, -HISTORY_DAYS);
+	const inMonth = cells.filter((c) => c.inMonth);
+	const current = first.getTime() === thisMonth.getTime();
+	return {
+		title: first.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }),
+		weekdays: WEEKDAYS,
+		cells,
+		frequent,
+		prev:
+			first > new Date(oldest.getFullYear(), oldest.getMonth(), 1)
+				? monthKey(addDays(first, -1))
+				: null,
+		next: monthKey(addDays(last, 1)),
+		current: current ? null : monthKey(thisMonth),
+		/** Today in this month, else its first day with something on it. */
+		selected: current ? dayKey(today) : (inMonth.find((c) => c.entries.length) ?? inMonth[0]).key
+	};
 }
 
-export const load: PageServerLoad = ({ locals, params }) => {
+export const load: PageServerLoad = ({ locals, params, url }) => {
 	const { profile } = requireProfile(locals, params.slug);
 	const now = new Date();
 	const triggers = listTriggers(profile.id);
 	return {
 		timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-		agenda: agenda(triggers, now),
+		calendar: calendar(profile.id, triggers, url.searchParams.get('month'), now),
 		triggers: triggers.map((t) => ({
 			id: t.id,
 			name: t.name,

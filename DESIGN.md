@@ -126,9 +126,12 @@ into conversations.
 - **The Automations page** is for the family, not the agent. Each trigger shows its `icon` and a
   one-sentence `summary` (written by the agent with `--summary` / `--icon`, like `run_command`'s),
   its schedule in plain words (`describeCron`: "Every weekday at 07:30"; the cron itself only with
-  technical details on) and relative times ("next Monday at 07:30"). A "Coming up" calendar lists
-  the next 7 days by day; a trigger firing more than 28 times in that week is listed once under
-  "Often" instead. The prompt, script and webhook URL are behind Edit.
+  technical details on) and relative times ("next Monday at 07:30"). The prompt, script and webhook
+  URL are behind Edit. Above the list, a month calendar (whole weeks, Monday first, `?month=`
+  to page) shows an icon per trigger on each day and the chosen day's list below it: before now,
+  what ran and how it went (agent runs, and failed scripts once a day; runs are kept 30 days, so
+  it goes back no further), after now, what the schedule will run. A trigger firing more than 4
+  times a day on average is listed once above the grid instead.
 - **Runs.** Every firing (schedule, webhook, `btw wake`, Run now) inserts a `pending` row in
   `trigger_run`. The gateway's scheduler ticks every 5 s: it fires triggers whose `nextRunAt` has
   passed and starts pending runs. The CLI only writes rows, so `btw wake` from a script is picked up
