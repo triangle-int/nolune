@@ -93,13 +93,17 @@ pnpm dev
 
 ```sh
 pnpm check                          # svelte-check + tsc for packages/core and packages/cli
-pnpm lint
+pnpm lint                           # prettier --check + eslint (pnpm format to fix formatting)
+pnpm test                           # vitest: *.test.ts next to the code in src/ and packages/
 pnpm db:generate --name <change>    # after editing packages/core/src/db/schema.ts
 pnpm build                          # web build + dist/cli.js (what the npm package ships)
 pnpm start                          # run the built gateway with the settings from btw config
 ```
 
 Migrations are applied automatically when the gateway or the CLI opens the database.
+
+CI (`.github/workflows/ci.yml`) runs format, lint, types, tests and the build on every pull request
+and on pushes to `main`.
 
 ### Publishing
 
