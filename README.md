@@ -42,7 +42,9 @@ Access). `btw setup` prints the exact path.
 
 ## Using it
 
-- `btw help` lists every command: users, model presets, profiles, skills, settings.
+- `btw help` lists every command: users, model presets, profiles, skills, settings. Admins can also
+  ask btw in a chat to change these ("use Sonnet for new chats", "add an account for Grandma"); the
+  built-in `btw-agent` skill tells it how, and it restarts itself only when asked.
 - The chat keeps what btw did folded under each reply ("Worked for 12s"), with plain-language
   steps. To see the exact commands, token usage and prompt caching, turn on **Show technical
   details** in Settings (click your name at the bottom of the sidebar).
