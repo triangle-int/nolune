@@ -1,5 +1,12 @@
 import { relations, sql } from 'drizzle-orm';
-import { sqliteTable, text, integer, index, primaryKey } from 'drizzle-orm/sqlite-core';
+import {
+	sqliteTable,
+	text,
+	integer,
+	index,
+	primaryKey,
+	uniqueIndex
+} from 'drizzle-orm/sqlite-core';
 
 const now = sql`(cast(unixepoch('subsecond') * 1000 as integer))`;
 
@@ -138,6 +145,58 @@ export const modelPreset = sqliteTable('model_preset', {
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull()
 });
 
+/**
+ * A folder of chats in a profile, like a project: its chats share its instructions and files,
+ * which are part of their system prompt.
+ */
+export const folder = sqliteTable(
+	'folder',
+	{
+		id: text('id').primaryKey(),
+		profileId: text('profile_id')
+			.notNull()
+			.references(() => profile.id, { onDelete: 'cascade' }),
+		/** Its files are saved in `profiles/<profile>/folders/<slug>`. Fixed at creation. */
+		slug: text('slug').notNull(),
+		name: text('name').notNull(),
+		/** What btw should know or do in every chat of the folder, in the family's words. */
+		instructions: text('instructions').notNull().default(''),
+		createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull()
+	},
+	(table) => [uniqueIndex('folder_profile_slug_idx').on(table.profileId, table.slug)]
+);
+
+/**
+ * A file the family added to a folder. The agent gets its path (a copy in the folder's own
+ * folder); the page shows the original from the media store.
+ */
+export const folderFile = sqliteTable(
+	'folder_file',
+	{
+		id: text('id').primaryKey(),
+		folderId: text('folder_id')
+			.notNull()
+			.references(() => folder.id, { onDelete: 'cascade' }),
+		name: text('name').notNull(),
+		/** The copy the agent works with. */
+		path: text('path').notNull(),
+		/** The original: `~/.btw-agent/media/<sha256>`. */
+		sha256: text('sha256').notNull(),
+		/** Sniffed from the content. */
+		mime: text('mime').notNull(),
+		bytes: integer('bytes').notNull(),
+		/** Pictures: pixel size as displayed, when it could be read. */
+		width: integer('width'),
+		height: integer('height'),
+		/** A JPEG copy for pictures browsers can't show (HEIC, TIFF). */
+		previewSha256: text('preview_sha256'),
+		createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull()
+	},
+	(table) => [index('folder_file_folderId_idx').on(table.folderId)]
+);
+
 export const conversation = sqliteTable(
 	'conversation',
 	{
@@ -155,15 +214,30 @@ export const conversation = sqliteTable(
 		effort: text('effort', { enum: ['low', 'medium', 'high', 'xhigh', 'max'] })
 			.notNull()
 			.default('medium'),
-		/** Frozen at creation so the prompt cache prefix never changes. */
+		/**
+		 * Frozen at creation so the prompt cache prefix never changes, except when the chat moves
+		 * to another folder or its folder's instructions or files change: then it is built again
+		 * at the start of the next turn.
+		 */
 		systemPrompt: text('system_prompt').notNull(),
+		folderId: text('folder_id').references(() => folder.id, { onDelete: 'set null' }),
+		/** The folder's part of `systemPrompt` ('' outside a folder), to tell when it's out of date. */
+		folderContext: text('folder_context').notNull().default(''),
+		/**
+		 * The last row before the system prompt was built again. Thinking in rows up to it belongs
+		 * to the old prompt, and the API refuses it under a new one, so requests leave it out.
+		 */
+		promptChangedAtSeq: integer('prompt_changed_at_seq'),
 		/** Background runs started by triggers stay out of the list until someone continues them. */
 		hidden: integer('hidden', { mode: 'boolean' }).notNull().default(false),
 		createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull(),
 		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).default(now).notNull()
 	},
-	(table) => [index('conversation_profileId_idx').on(table.profileId)]
+	(table) => [
+		index('conversation_profileId_idx').on(table.profileId),
+		index('conversation_folderId_idx').on(table.folderId)
+	]
 );
 
 export const message = sqliteTable(

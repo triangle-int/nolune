@@ -5,6 +5,7 @@ import {
 	createConversation,
 	findUploads,
 	getDefaultPreset,
+	getFolder,
 	getPreset,
 	listPresets,
 	sendMessage,
@@ -13,17 +14,23 @@ import {
 import { requireProfile } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
 
-export const load: PageServerLoad = ({ locals, params }) => {
-	requireProfile(locals, params.slug);
+export const load: PageServerLoad = ({ locals, params, url }) => {
+	const { profile } = requireProfile(locals, params.slug);
+	// `?folder=<id>` starts the chat in that folder.
+	const folderId = url.searchParams.get('folder');
 	return {
 		presets: listPresets().map((p) => ({ id: p.id, name: p.name })),
 		defaultPresetId: getDefaultPreset()?.id ?? '',
-		efforts: [...EFFORTS]
+		efforts: [...EFFORTS],
+		folderId: folderId && getFolder(profile.id, folderId) ? folderId : null
 	};
 };
 
 export const actions: Actions = {
-	/** Starts a conversation, with its first message when one was typed or files attached. */
+	/**
+	 * Starts a conversation, in a folder if one was picked, with its first message when one was
+	 * typed or files attached. The folder's page posts here too.
+	 */
 	default: async ({ locals, params, request }) => {
 		const { user, profile } = requireProfile(locals, params.slug);
 		const form = await request.formData();
@@ -31,8 +38,12 @@ export const actions: Actions = {
 		const effort = (form.get('effort')?.toString() ?? 'medium') as Effort;
 		const text = form.get('text')?.toString().trim() ?? '';
 		const uploads = form.getAll('upload').map(String);
+		const folderId = form.get('folder')?.toString() || null;
 		if (!getPreset(presetId)) return fail(400, { message: 'Pick a model.' });
 		if (!EFFORTS.includes(effort)) return fail(400, { message: 'Pick a reasoning level.' });
+		if (folderId && !getFolder(profile.id, folderId)) {
+			return fail(400, { message: 'That folder was deleted. Pick another one.' });
+		}
 		try {
 			// Checked before the conversation exists, so a stale file doesn't leave an empty chat.
 			findUploads(profile.id, user.id, uploads);
@@ -40,7 +51,13 @@ export const actions: Actions = {
 			if (err instanceof AttachmentError) return fail(400, { message: err.message });
 			throw err;
 		}
-		const conversation = createConversation({ profile, presetId, userId: user.id, effort });
+		const conversation = createConversation({
+			profile,
+			presetId,
+			userId: user.id,
+			effort,
+			folderId
+		});
 		if (text || uploads.length) {
 			await sendMessage(conversation.id, { id: user.id, name: user.name }, text, uploads);
 		}

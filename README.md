@@ -62,6 +62,12 @@ Access). `btw setup` prints the exact path.
   model is `openai/gpt-image-2.5-flare` unless you pick another with
   `btw config set image-model`. Templates are folders with a `TEMPLATE.md`; add your own in
   `~/.btw-agent/image-templates` or a profile's `image-templates` folder (see DESIGN.md).
+- **Folders.** Keep related chats together, like projects in ChatGPT: make one with **New
+  folder** in the sidebar, give it instructions and files on its page, and every chat in it gets
+  them (files as paths on the computer, which btw opens when they matter). Start a chat in a
+  folder from its page or the folder chip in the composer, or drag chats onto a folder in the
+  sidebar. Moving a chat makes its next reply re-read the conversation once. Files:
+  `~/.btw-agent/profiles/<profile>/folders`.
 - Skills live in `~/.btw-agent/profiles/<profile>/skills` and `~/.agents/skills`
   ([Agent Skills](https://agentskills.io) format). The agent creates its own with `btw skill new`.
   Each skill's name and description go into every new chat, so turn off the ones a profile doesn't

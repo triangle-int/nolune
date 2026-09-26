@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
+	import { SvelteSet } from 'svelte/reactivity';
 	import { enhance } from '$app/forms';
 	import { afterNavigate, goto, invalidate } from '$app/navigation';
 	import { resolve } from '$app/paths';
@@ -17,31 +19,120 @@
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import PanelLeftIcon from '@lucide/svelte/icons/panel-left';
 	import MessageCircleIcon from '@lucide/svelte/icons/message-circle';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import FolderIcon from '@lucide/svelte/icons/folder';
+	import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
+	import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import * as Sidebar from '$lib/components/ui/sidebar';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Command from '$lib/components/ui/command';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { Kbd } from '$lib/components/ui/kbd';
+	import { CHAT_DRAG_TYPE, moveChat, type FolderItem } from '$lib/folders';
+	import { cn } from '$lib/utils';
+	import DeleteFolderDialog from './folders/DeleteFolderDialog.svelte';
+	import MoveToFolderMenu from './folders/MoveToFolderMenu.svelte';
+	import NewFolderDialog from './folders/NewFolderDialog.svelte';
+	import RenameFolderDialog from './folders/RenameFolderDialog.svelte';
 	import TypedText from './TypedText.svelte';
 	import UserMenu from './UserMenu.svelte';
+
+	type ChatItem = { id: string; title: string; folderId: string | null };
 
 	interface Props {
 		profile: { slug: string; name: string };
 		profiles: { slug: string; name: string }[];
-		conversations: { id: string; title: string }[];
+		folders: FolderItem[];
+		conversations: ChatItem[];
 		user: { name: string; email: string; isAdmin: boolean };
 	}
 
-	let { profile, profiles, conversations, user }: Props = $props();
+	let { profile, profiles, folders, conversations, user }: Props = $props();
 
 	const sidebar = Sidebar.useSidebar();
 
 	let searchOpen = $state(false);
 	let deleting = $state<{ id: string; title: string } | null>(null);
+	let creatingFolder = $state(false);
+	/** A chat to move into the folder being made ("New folder…" in its menu). */
+	let movingToNew: string | null = null;
+	let renamingFolder = $state<FolderItem | null>(null);
+	let deletingFolder = $state<FolderItem | null>(null);
+	let moveProblem = $state<string | null>(null);
+
+	/** Folders whose chats are listed under them. */
+	const expanded = new SvelteSet<string>();
+	/** The chat being dragged, and where it would land: a folder's id, or '' for no folder. */
+	let dragging = $state<ChatItem | null>(null);
+	let dropTarget = $state<string | null>(null);
+
+	const looseChats = $derived(conversations.filter((c) => !c.folderId));
+	const chatsIn = (folderId: string) => conversations.filter((c) => c.folderId === folderId);
+	/** The folder of the open page or chat. */
+	const activeFolderId = $derived(
+		page.params.folder ?? conversations.find((c) => c.id === page.params.id)?.folderId ?? null
+	);
+
+	// Opening a folder or one of its chats shows its chats in the sidebar.
+	$effect(() => {
+		const id = activeFolderId;
+		if (id) untrack(() => expanded.add(id));
+	});
 
 	// On phones the sidebar is a drawer; close it once a link has been followed.
 	afterNavigate(() => sidebar.setOpenMobile(false));
+
+	function toggleFolder(id: string) {
+		if (expanded.has(id)) expanded.delete(id);
+		else expanded.add(id);
+	}
+
+	async function move(chatId: string, folderId: string | null) {
+		moveProblem = null;
+		try {
+			await moveChat(chatId, folderId);
+			if (folderId) expanded.add(folderId);
+		} catch (err) {
+			moveProblem = err instanceof Error ? err.message : String(err);
+		}
+	}
+
+	function newFolder(forChat: string | null = null) {
+		movingToNew = forChat;
+		creatingFolder = true;
+	}
+
+	function startDrag(event: DragEvent, chat: ChatItem) {
+		if (!event.dataTransfer) return;
+		event.dataTransfer.setData(CHAT_DRAG_TYPE, chat.id);
+		event.dataTransfer.effectAllowed = 'move';
+		dragging = chat;
+	}
+
+	/** A folder (or '' for the chat list) takes the dragged chat unless it's already there. */
+	function dragOver(event: DragEvent, target: string) {
+		if (!dragging || !event.dataTransfer?.types.includes(CHAT_DRAG_TYPE)) return;
+		if ((dragging.folderId ?? '') === target) return;
+		event.preventDefault();
+		event.dataTransfer.dropEffect = 'move';
+		dropTarget = target;
+	}
+
+	function dragLeave(event: DragEvent & { currentTarget: HTMLElement }, target: string) {
+		if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+		if (dropTarget === target) dropTarget = null;
+	}
+
+	function drop(event: DragEvent, target: string) {
+		const chat = dragging;
+		dragging = null;
+		dropTarget = null;
+		if (!chat || (chat.folderId ?? '') === target) return;
+		event.preventDefault();
+		move(chat.id, target || null);
+	}
 
 	function openSearch() {
 		sidebar.setOpenMobile(false);
@@ -57,7 +148,57 @@
 
 	const newChatHref = $derived(resolve('/p/[slug]', { slug: profile.slug }));
 	const chatHref = (id: string) => resolve('/p/[slug]/c/[id]', { slug: profile.slug, id });
+	const folderHref = (folder: string) =>
+		resolve('/p/[slug]/f/[folder]', { slug: profile.slug, folder });
 </script>
+
+{#snippet chatItem(conversation: ChatItem)}
+	<Sidebar.MenuItem class={cn(dragging?.id === conversation.id && 'opacity-50')}>
+		<Sidebar.MenuButton isActive={page.params.id === conversation.id}>
+			{#snippet child({ props })}
+				<a
+					href={chatHref(conversation.id)}
+					draggable="true"
+					ondragstart={(event) => startDrag(event, conversation)}
+					ondragend={() => {
+						dragging = null;
+						dropTarget = null;
+					}}
+					{...props}
+				>
+					<span><TypedText text={conversation.title} /></span>
+				</a>
+			{/snippet}
+		</Sidebar.MenuButton>
+		<DropdownMenu.Root>
+			<DropdownMenu.Trigger>
+				{#snippet child({ props })}
+					<Sidebar.MenuAction
+						showOnHover
+						{...props}
+						class="top-1/2! size-7 -translate-y-1/2 rounded-lg max-md:hidden"
+					>
+						<EllipsisIcon />
+						<span class="sr-only">More</span>
+					</Sidebar.MenuAction>
+				{/snippet}
+			</DropdownMenu.Trigger>
+			<DropdownMenu.Content side="right" align="start" class="w-48">
+				<MoveToFolderMenu
+					{folders}
+					folderId={conversation.folderId}
+					onmove={(folderId) => move(conversation.id, folderId)}
+					onnew={() => newFolder(conversation.id)}
+				/>
+				<DropdownMenu.Separator />
+				<DropdownMenu.Item variant="destructive" onSelect={() => (deleting = conversation)}>
+					<Trash2Icon />
+					Delete
+				</DropdownMenu.Item>
+			</DropdownMenu.Content>
+		</DropdownMenu.Root>
+	</Sidebar.MenuItem>
+{/snippet}
 
 <svelte:window onkeydown={onWindowKeydown} />
 
@@ -204,25 +345,65 @@
 
 		<Sidebar.Group class="px-2 group-data-[collapsible=icon]:hidden">
 			<Sidebar.GroupLabel class="text-sm font-medium text-muted-foreground"
-				>Chats</Sidebar.GroupLabel
+				>Folders</Sidebar.GroupLabel
 			>
 			<Sidebar.Menu>
-				{#each conversations as conversation (conversation.id)}
-					<Sidebar.MenuItem>
-						<Sidebar.MenuButton isActive={page.params.id === conversation.id}>
+				<Sidebar.MenuItem>
+					<Sidebar.MenuButton onclick={() => newFolder()}>
+						<FolderPlusIcon />
+						<span>New folder</span>
+					</Sidebar.MenuButton>
+				</Sidebar.MenuItem>
+				{#each folders as folder (folder.id)}
+					{@const open = expanded.has(folder.id)}
+					{@const inside = chatsIn(folder.id)}
+					<Sidebar.MenuItem
+						ondragover={(event) => dragOver(event, folder.id)}
+						ondragleave={(event) => dragLeave(event, folder.id)}
+						ondrop={(event) => drop(event, folder.id)}
+					>
+						<Sidebar.MenuButton
+							isActive={page.params.folder === folder.id}
+							class={cn(
+								'pl-9',
+								dropTarget === folder.id && 'bg-sidebar-accent ring-2 ring-sidebar-ring'
+							)}
+						>
 							{#snippet child({ props })}
-								<a href={chatHref(conversation.id)} {...props}>
-									<span><TypedText text={conversation.title} /></span>
+								<a href={folderHref(folder.id)} {...props}>
+									<span>{folder.name}</span>
 								</a>
 							{/snippet}
 						</Sidebar.MenuButton>
+						<!-- The folder's icon; pointing at the row turns it into the show/hide chevron. -->
+						<button
+							type="button"
+							onclick={() => toggleFolder(folder.id)}
+							class="absolute top-1.5 left-1.5 flex size-6 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-border/60 [&>svg]:size-4"
+							aria-expanded={open}
+							aria-label={open
+								? `Hide the chats in ${folder.name}`
+								: `Show the chats in ${folder.name}`}
+						>
+							{#if open}
+								<FolderOpenIcon class="md:group-hover/menu-item:hidden" />
+							{:else}
+								<FolderIcon class="md:group-hover/menu-item:hidden" />
+							{/if}
+							<ChevronRightIcon
+								class={cn(
+									'hidden transition-transform md:group-hover/menu-item:block',
+									open && 'rotate-90'
+								)}
+							/>
+						</button>
 						<DropdownMenu.Root>
 							<DropdownMenu.Trigger>
 								{#snippet child({ props })}
 									<Sidebar.MenuAction
 										showOnHover
 										{...props}
-										class="top-1/2! size-7 -translate-y-1/2 rounded-lg max-md:hidden"
+										class="top-1! size-7 rounded-lg max-md:hidden"
 									>
 										<EllipsisIcon />
 										<span class="sr-only">More</span>
@@ -230,15 +411,59 @@
 								{/snippet}
 							</DropdownMenu.Trigger>
 							<DropdownMenu.Content side="right" align="start" class="w-44">
-								<DropdownMenu.Item variant="destructive" onSelect={() => (deleting = conversation)}>
+								<DropdownMenu.Item onSelect={() => (renamingFolder = folder)}>
+									<PencilIcon />
+									Rename
+								</DropdownMenu.Item>
+								<DropdownMenu.Item variant="destructive" onSelect={() => (deletingFolder = folder)}>
 									<Trash2Icon />
 									Delete
 								</DropdownMenu.Item>
 							</DropdownMenu.Content>
 						</DropdownMenu.Root>
 					</Sidebar.MenuItem>
+					{#if open}
+						<!-- A sibling of the folder's item, so pointing at a chat doesn't highlight the folder. -->
+						<li>
+							<Sidebar.MenuSub class="mr-0 pr-0">
+								{#each inside as conversation (conversation.id)}
+									{@render chatItem(conversation)}
+								{:else}
+									<li class="px-3 py-1.5 text-xs text-muted-foreground">
+										Drag chats here, or start one on the folder's page.
+									</li>
+								{/each}
+							</Sidebar.MenuSub>
+						</li>
+					{/if}
+				{/each}
+			</Sidebar.Menu>
+			{#if moveProblem}
+				<p class="px-3 py-1 text-xs text-destructive">{moveProblem}</p>
+			{/if}
+		</Sidebar.Group>
+
+		<Sidebar.Group
+			class={cn(
+				'rounded-xl px-2 group-data-[collapsible=icon]:hidden',
+				dropTarget === '' && 'bg-sidebar-accent/60 ring-2 ring-sidebar-ring ring-inset'
+			)}
+			ondragover={(event) => dragOver(event, '')}
+			ondragleave={(event) => dragLeave(event, '')}
+			ondrop={(event) => drop(event, '')}
+		>
+			<Sidebar.GroupLabel class="text-sm font-medium text-muted-foreground"
+				>Chats</Sidebar.GroupLabel
+			>
+			<Sidebar.Menu>
+				{#each looseChats as conversation (conversation.id)}
+					{@render chatItem(conversation)}
 				{:else}
-					<p class="px-3 py-2 text-sm text-muted-foreground">Your chats will show up here.</p>
+					<p class="px-3 py-2 text-sm text-muted-foreground">
+						{dragging?.folderId
+							? 'Drop here to take the chat out of its folder.'
+							: 'Your chats will show up here.'}
+					</p>
 				{/each}
 			</Sidebar.Menu>
 		</Sidebar.Group>
@@ -269,18 +494,40 @@
 				New chat
 			</Command.Item>
 		</Command.Group>
+		{#if folders.length}
+			<Command.Group heading="Folders">
+				{#each folders as folder (folder.id)}
+					<Command.Item
+						value={`${folder.name} ${folder.id}`}
+						onSelect={() => {
+							searchOpen = false;
+							goto(folderHref(folder.id));
+						}}
+					>
+						<FolderIcon />
+						<span class="truncate">{folder.name}</span>
+					</Command.Item>
+				{/each}
+			</Command.Group>
+		{/if}
 		{#if conversations.length}
 			<Command.Group heading="Chats">
 				{#each conversations as conversation (conversation.id)}
+					{@const folder = folders.find((f) => f.id === conversation.folderId)}
 					<Command.Item
-						value={`${conversation.title} ${conversation.id}`}
+						value={`${conversation.title} ${folder?.name ?? ''} ${conversation.id}`}
 						onSelect={() => {
 							searchOpen = false;
-							goto(resolve('/p/[slug]/c/[id]', { slug: profile.slug, id: conversation.id }));
+							goto(chatHref(conversation.id));
 						}}
 					>
 						<MessageCircleIcon />
-						<span class="truncate">{conversation.title}</span>
+						<span class="min-w-0 flex-1 truncate">{conversation.title}</span>
+						{#if folder}
+							<span class="max-w-32 shrink-0 truncate text-xs text-muted-foreground"
+								>{folder.name}</span
+							>
+						{/if}
 					</Command.Item>
 				{/each}
 			</Command.Group>
@@ -318,3 +565,16 @@
 		</form>
 	</AlertDialog.Content>
 </AlertDialog.Root>
+
+<NewFolderDialog
+	bind:open={creatingFolder}
+	slug={profile.slug}
+	oncreated={(folder) => {
+		const chat = movingToNew;
+		movingToNew = null;
+		if (chat) move(chat, folder.id);
+		else goto(folderHref(folder.id));
+	}}
+/>
+<RenameFolderDialog bind:folder={renamingFolder} slug={profile.slug} />
+<DeleteFolderDialog bind:folder={deletingFolder} slug={profile.slug} />

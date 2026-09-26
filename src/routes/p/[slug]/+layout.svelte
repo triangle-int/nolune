@@ -13,6 +13,7 @@
 		<AppSidebar
 			profile={data.profile}
 			profiles={data.profiles}
+			folders={data.folders}
 			conversations={data.conversations}
 			user={data.user}
 		/>

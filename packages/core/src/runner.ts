@@ -12,22 +12,27 @@ import {
 	lastCommittedRow,
 	listAllConversationIds,
 	queuedRows,
+	rebuildSystemPrompt,
 	replaceTitle,
+	requestMessages,
 	setHidden,
 	summarizeUsage,
 	toDisplay,
 	toMessageParam,
 	touchConversation,
 	type Conversation,
-	type DisplayMessage
+	type DisplayMessage,
+	type MessageRow
 } from './conversations.ts';
 import { getDb } from './db/index.ts';
 import { profile } from './db/schema.ts';
 import { eq } from 'drizzle-orm';
 import { findUploads, prepareMessage, viewedImageBlocks } from './attachments.ts';
+import { folderContextFor } from './folders.ts';
 import { createViewDir, imageUse, readViewedImages, type ImageUse } from './images.ts';
 import { copyReplyMedia, listMedia, mediaByMessage, type PreparedMedia } from './media.ts';
 import { profileDir } from './paths.ts';
+import { getProfile } from './profiles.ts';
 import { RUN_COMMAND_TOOL, commandEnv, parseRunCommandInput, runCommand } from './run-command.ts';
 import { TITLE_LIMIT, suggestTitle } from './titles.ts';
 import { cacheHitRate } from './usage.ts';
@@ -356,6 +361,28 @@ async function runToolCall(
 	}
 }
 
+/**
+ * The chat with a system prompt that has its folder as it is now. When the chat moved to another
+ * folder, or its folder's instructions or files changed, the prompt is built again, which costs
+ * one prompt cache miss. Only between turns: in the middle of one, the model is still working
+ * under the prompt it started with, and its latest thinking must go back with the tool results.
+ */
+export function withCurrentFolder(conv: Conversation, rows: MessageRow[]): Conversation {
+	const lastReply = rows.findLast((row) => row.role === 'assistant');
+	if (
+		lastReply &&
+		(JSON.parse(lastReply.content) as Anthropic.ContentBlock[]).some((b) => b.type === 'tool_use')
+	) {
+		return conv;
+	}
+	const owner = getProfile(conv.profileId);
+	if (!owner) return conv;
+	const context = folderContextFor(owner, conv.folderId);
+	if (context === conv.folderContext) return conv;
+	console.log(`[btw] ${conv.id.slice(0, 8)} folder changed, system prompt built again`);
+	return rebuildSystemPrompt(conv, owner, context, lastReply?.seq ?? null);
+}
+
 async function loop(conversationId: string): Promise<void> {
 	const st = stateFor(conversationId);
 	if (st.running) return; // the running loop picks up new messages at its next step
@@ -366,15 +393,16 @@ async function loop(conversationId: string): Promise<void> {
 
 	try {
 		for (;;) {
-			const conv = getConversation(conversationId);
-			if (!conv) return;
+			const stored = getConversation(conversationId);
+			if (!stored) return;
 			commitQueued(conversationId);
 			const rows = committedRows(conversationId);
 			if (rows.at(-1)?.role !== 'user') return;
+			const conv = withCurrentFolder(stored, rows);
 
 			const abort = new AbortController();
 			st.abort = abort;
-			const messages = rows.map(toMessageParam);
+			const messages = requestMessages(rows, conv.promptChangedAtSeq);
 			let reply: Anthropic.Message;
 			try {
 				reply = await streamTurn({

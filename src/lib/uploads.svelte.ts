@@ -123,6 +123,14 @@ export class Attachments {
 		this.files = this.files.filter((f) => f.key !== key);
 	}
 
+	/** After these uploads were added somewhere (a folder): the server has taken them. */
+	forget(ids: string[]) {
+		const taken = (f: PendingFile) => !!f.id && ids.includes(f.id);
+		for (const item of this.files)
+			if (taken(item) && item.preview) URL.revokeObjectURL(item.preview);
+		this.files = this.files.filter((f) => !taken(f));
+	}
+
 	/** After sending: the server has taken the files, so they're only forgotten here. */
 	clear() {
 		for (const item of this.files) if (item.preview) URL.revokeObjectURL(item.preview);

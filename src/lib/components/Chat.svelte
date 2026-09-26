@@ -2,6 +2,7 @@
 	import { untrack } from 'svelte';
 	import { enhance } from '$app/forms';
 	import { invalidate } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import type { DisplayAttachment, Usage } from '@btw/core';
 	import { CACHE_TTL_MS, cacheHitRate, cacheMissTokens, promptTokens } from '@btw/core/usage';
@@ -9,6 +10,7 @@
 	import ClockIcon from '@lucide/svelte/icons/clock';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
+	import FolderIcon from '@lucide/svelte/icons/folder';
 	import InfoIcon from '@lucide/svelte/icons/info';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
@@ -17,6 +19,7 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { Button } from '$lib/components/ui/button';
 	import { ChatState } from '$lib/chat.svelte';
+	import { moveChat, type FolderItem } from '$lib/folders';
 	import { formatPercent, formatTokens } from '$lib/format';
 	import { getPreferences } from '$lib/preferences.svelte';
 	import { buildTranscript, replyText, type Reply } from '$lib/transcript';
@@ -25,6 +28,8 @@
 	import Activity from './chat/Activity.svelte';
 	import Composer from './chat/Composer.svelte';
 	import CopyButton from './chat/CopyButton.svelte';
+	import MoveToFolderMenu from './folders/MoveToFolderMenu.svelte';
+	import NewFolderDialog from './folders/NewFolderDialog.svelte';
 	import Markdown from './chat/Markdown.svelte';
 	import MediaViewer, { pictureClicks, type ViewedPicture } from './chat/MediaViewer.svelte';
 	import MessageAttachments from './chat/MessageAttachments.svelte';
@@ -45,9 +50,12 @@
 		};
 		efforts: string[];
 		me: string;
+		/** The profile's folders, and the one this chat is in. */
+		folders: FolderItem[];
+		folderId: string | null;
 	}
 
-	let { conversation, efforts, me }: Props = $props();
+	let { conversation, efforts, me, folders, folderId }: Props = $props();
 
 	const prefs = getPreferences();
 	const chat = new ChatState();
@@ -60,6 +68,8 @@
 	let continued = $state(false);
 	let effort = $state(untrack(() => conversation.effort));
 	let deleteOpen = $state(false);
+	let creatingFolder = $state(false);
+	const folder = $derived(folders.find((f) => f.id === folderId));
 	let viewing = $state<ViewedPicture | null>(null);
 	let scroller = $state<HTMLElement>();
 	let textarea = $state<HTMLTextAreaElement | null>(null);
@@ -138,7 +148,7 @@
 			tokens: misses.reduce((n, m) => n + m.tokens, 0),
 			reason: misses.some((m) => m.expired)
 				? 'Over an hour passed since the previous step, so the cached conversation expired and was processed again (slower and costlier).'
-				: 'Context that should have come from the cache was processed again (slower and costlier). Changing the reasoning level causes this once.'
+				: 'Context that should have come from the cache was processed again (slower and costlier). Changing the reasoning level, moving the chat to another folder or changing its folder cause this once.'
 		};
 	}
 
@@ -242,6 +252,15 @@
 		}
 		sending = false;
 		textarea?.focus();
+	}
+
+	async function move(target: string | null) {
+		actionError = null;
+		try {
+			await moveChat(conversation.id, target);
+		} catch (err) {
+			actionError = err instanceof Error ? err.message : String(err);
+		}
 	}
 
 	async function changeEffort(value: string) {
@@ -368,6 +387,16 @@
 {/snippet}
 
 <PageHeader>
+	{#if folder}
+		<a
+			href={resolve('/p/[slug]/f/[folder]', { slug: page.params.slug ?? '', folder: folder.id })}
+			class="hidden max-w-48 shrink-0 items-center gap-1.5 truncate rounded-lg text-base text-muted-foreground hover:text-foreground sm:flex sm:text-lg"
+		>
+			<FolderIcon class="size-4 shrink-0" />
+			<span class="truncate">{folder.name}</span>
+		</a>
+		<span class="hidden text-muted-foreground sm:inline">/</span>
+	{/if}
 	<h1 class="min-w-0 truncate text-base font-medium sm:text-lg"><TypedText text={title} /></h1>
 	{#if prefs.technical && usage}
 		<Tooltip.Root>
@@ -413,6 +442,13 @@
 					</DropdownMenu.Label>
 					<DropdownMenu.Separator />
 				{/if}
+				<MoveToFolderMenu
+					{folders}
+					{folderId}
+					onmove={move}
+					onnew={() => (creatingFolder = true)}
+				/>
+				<DropdownMenu.Separator />
 				<DropdownMenu.Item variant="destructive" onSelect={() => (deleteOpen = true)}>
 					<Trash2Icon />
 					Delete
@@ -539,6 +575,12 @@
 </div>
 
 <MediaViewer bind:picture={viewing} />
+
+<NewFolderDialog
+	bind:open={creatingFolder}
+	slug={page.params.slug ?? ''}
+	oncreated={(created) => move(created.id)}
+/>
 
 <AlertDialog.Root bind:open={deleteOpen}>
 	<AlertDialog.Content>
