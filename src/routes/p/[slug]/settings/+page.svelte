@@ -3,20 +3,41 @@
 	import { AVATARS } from '@btw/core/avatars';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { Textarea } from '$lib/components/ui/textarea';
 	import * as Select from '$lib/components/ui/select';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import AssistantAvatar from '$lib/components/AssistantAvatar.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import UserAvatar from '$lib/components/UserAvatar.svelte';
 	import { cn } from '$lib/utils';
+	import { getPreferences } from '$lib/preferences.svelte';
 
 	let { data, form } = $props();
 
+	const prefs = getPreferences();
 	let who = $state('');
 	let deleteOpen = $state(false);
 	/** The avatar just clicked, shown as picked until the page has saved it. */
 	let picking = $state<string | null>(null);
 	const avatar = $derived(picking ?? data.profile.avatar);
+
+	/** What's in the box; follows the saved soul until someone types. */
+	let soul = $derived(data.soul);
+	const edited = $derived(soul.trim() !== data.soul);
+	let savingSoul = $state(false);
+	let soulProblem = $state<string | null>(null);
+
+	/**
+	 * Grows with the text up to its max height, then scrolls. Not with `field-sizing: content`
+	 * (the Textarea's default): Safari then lays the placeholder out wider than the box.
+	 */
+	function growWithText(node: HTMLTextAreaElement) {
+		void soul;
+		node.style.minHeight = '';
+		const border = node.offsetHeight - node.clientHeight;
+		const max = parseFloat(getComputedStyle(node).maxHeight) || Infinity;
+		node.style.minHeight = `${Math.min(node.scrollHeight + border, max)}px`;
+	}
 </script>
 
 <PageHeader>
@@ -84,6 +105,59 @@
 				{/each}
 			</div>
 		</form>
+
+		<section class="space-y-3">
+			<div class="space-y-1">
+				<h2 class="font-medium">Soul</h2>
+				<p class="text-sm text-muted-foreground">
+					Who btw is for {data.profile.name}: its character, what it cares about, how it talks.
+					Every chat starts with it, and btw changes it too when you ask it to be different.
+				</p>
+			</div>
+			<form
+				method="POST"
+				action="?/soul"
+				use:enhance={() => {
+					savingSoul = true;
+					soulProblem = null;
+					return async ({ result, update }) => {
+						savingSoul = false;
+						if (result.type === 'failure') {
+							soulProblem = String(result.data?.message ?? 'Could not save.');
+						} else await update({ reset: false });
+					};
+				}}
+			>
+				<Textarea
+					name="soul"
+					bind:value={soul}
+					{@attach growWithText}
+					maxlength={data.maxSoul}
+					aria-label="Soul"
+					placeholder="You're warm and a little playful, and you keep answers short. With the kids you explain things simply and never talk down to them. When you don't know something, you say so."
+					class="field-sizing-fixed! max-h-96 min-h-32"
+				/>
+				{#if soulProblem}
+					<p class="mt-2 text-sm text-destructive">{soulProblem}</p>
+				{/if}
+				<div class="mt-2 flex min-h-8 items-center gap-2">
+					<span class="text-xs text-muted-foreground tabular-nums">
+						{soul.length} / {data.maxSoul} characters
+					</span>
+					{#if edited}
+						<Button variant="ghost" size="sm" class="ml-auto" onclick={() => (soul = data.soul)}
+							>Cancel</Button
+						>
+						<Button type="submit" size="sm" disabled={savingSoul}>Save</Button>
+					{/if}
+				</div>
+			</form>
+			<p class="text-xs text-muted-foreground">
+				{prefs.technical
+					? 'Chats get changes at their next message, which re-reads the conversation once (a prompt cache miss).'
+					: 'Chats get changes at their next message.'}
+			</p>
+		</section>
 
 		<section class="space-y-3">
 			<div class="space-y-1">

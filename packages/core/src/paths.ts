@@ -71,6 +71,11 @@ export function profileImageTemplatesDir(slug: string): string {
 	return join(paths.profiles, slug, 'image-templates');
 }
 
+/** Who btw is for this profile's family; it opens every chat's system prompt. */
+export function profileSoulFile(slug: string): string {
+	return join(paths.profiles, slug, 'soul.md');
+}
+
 /** Long-term memory: one Markdown note per topic. */
 export function profileMemoryDir(slug: string): string {
 	return join(paths.profiles, slug, 'memories');

@@ -51,6 +51,7 @@ import { GENERATE_HELP, generateCommand } from './generate.ts';
 import { ask, askHidden } from './input.ts';
 import { MEMORY_HELP, memoryCommand } from './memory.ts';
 import { PROFILE_HELP, profileCommand } from './profile.ts';
+import { SOUL_HELP, soulCommand } from './soul.ts';
 import { TRIGGER_HELP, triggerCommand, wakeCommand } from './triggers.ts';
 import {
 	installService,
@@ -102,6 +103,8 @@ ${PROFILE_HELP}
 ${TRIGGER_HELP}
 
 ${MEMORY_HELP}
+
+${SOUL_HELP}
 
 ${GENERATE_HELP}
 
@@ -587,6 +590,10 @@ async function main(argv: string[]): Promise<void> {
 		case 'memory':
 			requireInit();
 			return memoryCommand(argv.slice(1));
+
+		case 'soul':
+			requireInit();
+			return soulCommand(argv.slice(1));
 
 		case 'wake':
 			requireInit();

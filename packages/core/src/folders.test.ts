@@ -30,7 +30,7 @@ import {
 } from './folders.ts';
 import { pruneMedia, blobPath } from './media.ts';
 import { paths } from './paths.ts';
-import { withCurrentFolder } from './runner.ts';
+import { withCurrentContext } from './runner.ts';
 import { makeFamily, makePreset } from './test/fixtures.ts';
 
 function upload(profileId: string, userId: string, name: string, data: string) {
@@ -192,12 +192,12 @@ describe('chats in folders', () => {
 
 		moveConversation(profile.id, chat.id, found.id);
 		say(chat.id, user, 'Plan the trip');
-		const moved = withCurrentFolder(getConversation(chat.id)!, committedRows(chat.id));
+		const moved = withCurrentContext(getConversation(chat.id)!, committedRows(chat.id));
 		expect(moved.systemPrompt).toContain('in the folder "Trip"');
 		expect(moved.promptChangedAtSeq).toBe(first.seq);
 		expect(getConversation(chat.id)).toEqual(moved);
 		// Up to date now: nothing changes on the next call.
-		expect(withCurrentFolder(moved, committedRows(chat.id))).toBe(moved);
+		expect(withCurrentContext(moved, committedRows(chat.id))).toBe(moved);
 
 		// The old reply goes without the thinking made under the old prompt.
 		const second = reply(chat.id, [
@@ -215,7 +215,7 @@ describe('chats in folders', () => {
 
 		// Moving back out takes the folder out of the prompt again.
 		moveConversation(profile.id, chat.id, null);
-		const out = withCurrentFolder(getConversation(chat.id)!, committedRows(chat.id));
+		const out = withCurrentContext(getConversation(chat.id)!, committedRows(chat.id));
 		expect(out.folderContext).toBe('');
 		expect(out.systemPrompt).not.toContain('# Folder');
 		expect(out.promptChangedAtSeq).toBe(second.seq);
@@ -241,12 +241,12 @@ describe('chats in folders', () => {
 		});
 
 		setFolderInstructions(found.id, 'Only direct flights.');
-		const during = withCurrentFolder(getConversation(chat.id)!, committedRows(chat.id));
+		const during = withCurrentContext(getConversation(chat.id)!, committedRows(chat.id));
 		expect(during.systemPrompt).not.toContain('Only direct flights.');
 
 		const done = reply(chat.id, [{ type: 'text', text: 'Booked.' }]);
 		say(chat.id, user, 'And the hotel?');
-		const after = withCurrentFolder(getConversation(chat.id)!, committedRows(chat.id));
+		const after = withCurrentContext(getConversation(chat.id)!, committedRows(chat.id));
 		expect(after.systemPrompt).toContain('Only direct flights.');
 		expect(after.promptChangedAtSeq).toBe(done.seq);
 	});

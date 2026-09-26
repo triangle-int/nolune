@@ -1,0 +1,1 @@
+ALTER TABLE `conversation` ADD `soul` text DEFAULT '' NOT NULL;

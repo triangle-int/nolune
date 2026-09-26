@@ -76,9 +76,14 @@ Access). `btw setup` prints the exact path.
   Each skill's name and description go into every new chat, so turn off the ones a profile doesn't
   need on its **Skills** page (or `btw skill disable <name> --profile <slug>`).
 - **Memory.** btw keeps what it learns about the family (preferences, who's who, where things are)
-  in small notes per topic, and reads the ones it needs when a chat starts. The profile's Memory
+  in small notes per topic, and reads the ones it needs when a chat starts. The pinned `core` note
+  (who's who, languages, allergies, anything you want it to always keep in mind) is in every chat
+  from the start, so keep it short: at most 4,000 characters. The profile's Memory
   page shows every fact as a dot, darker the newer it is, and lets you fix or delete a note. Files:
   `~/.btw-agent/profiles/<profile>/memories`.
+- **Soul.** Each profile can tell btw who to be for its family: its character, what it cares about,
+  how it talks. Write it under **People & profile**, or just ask btw to be different and it updates
+  its own soul (`~/.btw-agent/profiles/<profile>/soul.md`). Every chat starts with it.
 - **Automations.** Ask btw in a conversation ("every weekday at 7:30, tell us if we need umbrellas",
   "check my email every 10 minutes and tell me when the school writes"). It sets up a trigger that
   runs in the background, and what it finds shows up under the bell at the top; open a notification

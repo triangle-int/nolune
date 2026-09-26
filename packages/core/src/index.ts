@@ -6,6 +6,7 @@ export {
 	profileFoldersDir,
 	profileImageTemplatesDir,
 	profileMemoryDir,
+	profileSoulFile,
 	profileSkillsDir
 } from './paths.ts';
 export {
@@ -163,14 +164,18 @@ export {
 } from './subagents.ts';
 export { stopConversation } from './subagent-host.ts';
 export {
+	CORE_NOTE,
+	MAX_PINNED_CHARS,
 	MemoryConflictError,
 	MemoryError,
 	addMemoryFact,
 	forgetMemoryFact,
 	forgetMemoryFile,
+	isPinnedNote,
 	listMemoryFiles,
 	listMemoryNotes,
 	readMemoryNote,
+	readPinnedNote,
 	removeMemoryNote,
 	renameMemoryNote,
 	replaceInMemory,
@@ -179,6 +184,7 @@ export {
 	type MemoryFact,
 	type MemoryFile
 } from './memory.ts';
+export { MAX_SOUL_CHARS, SoulError, readSoul, readSoulFile, writeSoul } from './soul.ts';
 export { ViewLimitError, inspectImage, viewImage } from './images.ts';
 export {
 	AttachmentError,

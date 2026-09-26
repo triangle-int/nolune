@@ -1,0 +1,48 @@
+import { readFileSync } from 'node:fs';
+import { MAX_SOUL_CHARS, readSoulFile, writeSoul } from '@btw/core';
+import { profileFor, splitProfile } from './memory.ts';
+
+export const SOUL_HELP = `Soul (who btw is for a profile: character, values, tone; at most ${MAX_SOUL_CHARS} characters)
+  btw soul [show] [--profile SLUG]           print it
+  btw soul write [text]                      replace it (the text, or stdin); every chat gets it
+                                             from its next message
+  btw soul rm                                remove it`;
+
+export function soulCommand(args: string[]): void {
+	const { profile: flag, words } = splitProfile(args);
+	const [action = 'show', ...rest] = words;
+	if (action === 'help') {
+		console.log(SOUL_HELP);
+		return;
+	}
+	const profile = profileFor(flag);
+
+	switch (action) {
+		case 'show': {
+			const text = readSoulFile(profile.slug);
+			if (!text) {
+				console.log(`${profile.name} has no soul yet. Start one with: btw soul write < soul.md`);
+				return;
+			}
+			console.log(text);
+			return;
+		}
+		case 'write': {
+			if (!rest.length && process.stdin.isTTY) {
+				throw new Error('give the soul as text, or pipe it in: btw soul write < soul.md');
+			}
+			const text = rest.length ? rest.join(' ') : readFileSync(0, 'utf8');
+			if (!text.trim()) throw new Error('the soul is empty. To remove it, use `btw soul rm`.');
+			writeSoul(profile.slug, text);
+			console.log(`Saved the soul of ${profile.name}. Every chat gets it from its next message.`);
+			return;
+		}
+		case 'rm': {
+			writeSoul(profile.slug, '');
+			console.log(`Removed the soul of ${profile.name}.`);
+			return;
+		}
+		default:
+			throw new Error(`unknown soul command "${action}". See \`btw soul help\`.`);
+	}
+}

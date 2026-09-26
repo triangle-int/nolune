@@ -11,7 +11,7 @@ itself safely from your own commands.
 
 Other parts of the CLI have their own instructions: automations (`btw trigger`, `btw wake`) in the
 `automations` skill, pictures (`btw generate image`, `btw view`) in `generate-images` and
-`view-images`, and memory (`btw memory`) in your system prompt.
+`view-images`, and memory (`btw memory`) and your soul (`btw soul`) in your system prompt.
 
 ## Before you change anything
 

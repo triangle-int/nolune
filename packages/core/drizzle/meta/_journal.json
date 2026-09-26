@@ -71,6 +71,13 @@
 			"when": 1790465416318,
 			"tag": "0009_subagents",
 			"breakpoints": true
+		},
+		{
+			"idx": 10,
+			"version": "6",
+			"when": 1790466752907,
+			"tag": "0010_soul",
+			"breakpoints": true
 		}
 	]
 }

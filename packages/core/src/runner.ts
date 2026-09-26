@@ -39,6 +39,7 @@ import { profile } from './db/schema.ts';
 import { eq } from 'drizzle-orm';
 import { findUploads, prepareMessage, viewedImageBlocks } from './attachments.ts';
 import { folderContextFor } from './folders.ts';
+import { readSoul } from './soul.ts';
 import { createViewDir, imageUse, readViewedImages, type ImageUse } from './images.ts';
 import { copyReplyMedia, listMedia, mediaByMessage, type PreparedMedia } from './media.ts';
 import { profileDir } from './paths.ts';
@@ -550,12 +551,13 @@ function queueBackgroundResult(
 }
 
 /**
- * The chat with a system prompt that has its folder as it is now. When the chat moved to another
- * folder, or its folder's instructions or files changed, the prompt is built again, which costs
- * one prompt cache miss. Only between turns: in the middle of one, the model is still working
- * under the prompt it started with, and its latest thinking must go back with the tool results.
+ * The chat with a system prompt that has its folder and the profile's soul as they are now. When
+ * the chat moved to another folder, its folder's instructions or files changed, or the soul
+ * changed, the prompt is built again, which costs one prompt cache miss. Only between turns: in
+ * the middle of one, the model is still working under the prompt it started with, and its latest
+ * thinking must go back with the tool results.
  */
-export function withCurrentFolder(conv: Conversation, rows: MessageRow[]): Conversation {
+export function withCurrentContext(conv: Conversation, rows: MessageRow[]): Conversation {
 	const lastReply = rows.findLast((row) => row.role === 'assistant');
 	if (
 		lastReply &&
@@ -566,9 +568,13 @@ export function withCurrentFolder(conv: Conversation, rows: MessageRow[]): Conve
 	const owner = getProfile(conv.profileId);
 	if (!owner) return conv;
 	const context = folderContextFor(owner, conv.folderId);
-	if (context === conv.folderContext) return conv;
-	console.log(`[btw] ${conv.id.slice(0, 8)} folder changed, system prompt built again`);
-	return rebuildSystemPrompt(conv, owner, context, lastReply?.seq ?? null);
+	const soul = readSoul(owner.slug);
+	if (context === conv.folderContext && soul.text === conv.soul) return conv;
+	const what = [context !== conv.folderContext && 'folder', soul.text !== conv.soul && 'soul']
+		.filter(Boolean)
+		.join(' and ');
+	console.log(`[btw] ${conv.id.slice(0, 8)} ${what} changed, system prompt built again`);
+	return rebuildSystemPrompt(conv, owner, context, soul, lastReply?.seq ?? null);
 }
 
 async function loop(conversationId: string): Promise<void> {
@@ -587,7 +593,7 @@ async function loop(conversationId: string): Promise<void> {
 			commitQueued(conversationId);
 			const rows = committedRows(conversationId);
 			if (rows.at(-1)?.role !== 'user') return;
-			const conv = withCurrentFolder(stored, rows);
+			const conv = withCurrentContext(stored, rows);
 
 			const abort = new AbortController();
 			st.abort = abort;
