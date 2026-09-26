@@ -24,7 +24,8 @@ import {
 import { getDb } from './db/index.ts';
 import { profile } from './db/schema.ts';
 import { eq } from 'drizzle-orm';
-import { collectViewedImages, createViewDir, imageUse, type ImageUse } from './images.ts';
+import { findUploads, prepareMessage, viewedImageBlocks } from './attachments.ts';
+import { createViewDir, imageUse, readViewedImages, type ImageUse } from './images.ts';
 import { copyReplyMedia, listMedia, mediaByMessage, type PreparedMedia } from './media.ts';
 import { profileDir } from './paths.ts';
 import { RUN_COMMAND_TOOL, commandEnv, parseRunCommandInput, runCommand } from './run-command.ts';
@@ -123,7 +124,7 @@ export function getSnapshot(conversationId: string): Snapshot {
 		running: st.running,
 		error: st.error,
 		messages: committedRows(conversationId).map((row) => toDisplay(row, media.get(row.id))),
-		queued: queuedRows(conversationId).map((row) => toDisplay(row)),
+		queued: queuedRows(conversationId).map((row) => toDisplay(row, media.get(row.id))),
 		live: st.live,
 		toolOutput: st.toolOutput
 	};
@@ -132,14 +133,16 @@ export function getSnapshot(conversationId: string): Snapshot {
 function emitQueued(conversationId: string): void {
 	emit(conversationId, {
 		type: 'queued',
-		queued: queuedRows(conversationId).map((row) => toDisplay(row))
+		queued: queuedRows(conversationId).map((row) => toDisplay(row, listMedia(row.id)))
 	});
 }
 
 function commitQueued(conversationId: string): void {
 	const rows = commitQueuedRows(conversationId);
 	if (rows.length === 0) return;
-	for (const row of rows) emit(conversationId, { type: 'message', message: toDisplay(row) });
+	for (const row of rows) {
+		emit(conversationId, { type: 'message', message: toDisplay(row, listMedia(row.id)) });
+	}
 	emitQueued(conversationId);
 }
 
@@ -169,25 +172,78 @@ function onStreamEvent(conversationId: string, event: StreamEvent): void {
 	}
 }
 
-/** Queues a message; it joins the transcript at the agent's next step (steering) or starts a turn. */
-export function sendMessage(
+/** Sends to a conversation happen one at a time, so attachments count against its limits in order. */
+const sending = new Map<string, Promise<unknown>>();
+
+/**
+ * Queues a message; it joins the transcript at the agent's next step (steering) or starts a
+ * turn. `uploadIds`: files the sender attached in the composer, in order.
+ */
+export async function sendMessage(
 	conversationId: string,
 	sender: { id: string; name: string },
-	text: string
-): void {
+	text: string,
+	uploadIds: string[] = []
+): Promise<void> {
+	const previous = sending.get(conversationId) ?? Promise.resolve();
+	const send = previous
+		.catch(() => {})
+		.then(() => queueMessage(conversationId, sender, text, uploadIds));
+	sending.set(conversationId, send);
+	try {
+		await send;
+	} finally {
+		if (sending.get(conversationId) === send) sending.delete(conversationId);
+	}
+}
+
+async function queueMessage(
+	conversationId: string,
+	sender: { id: string; name: string },
+	text: string,
+	uploadIds: string[]
+): Promise<void> {
 	const trimmed = text.trim();
-	if (!trimmed) throw new Error('Message is empty');
+	if (!trimmed && !uploadIds.length) throw new Error('Message is empty');
 	const conv = getConversation(conversationId);
 	if (!conv) throw new Error('No such conversation');
+	const uploads = findUploads(conv.profileId, sender.id, uploadIds);
+	let attachments: Parameters<typeof insertQueued>[0]['attachments'];
+	if (uploads.length) {
+		const slug = profileSlug(conv.profileId);
+		if (!slug) throw new Error('The profile no longer exists');
+		const prepared = await prepareMessage({
+			conv,
+			profileSlug: slug,
+			senderName: sender.name,
+			text: trimmed,
+			uploads,
+			earlier: [...committedRows(conversationId), ...queuedRows(conversationId)]
+		});
+		attachments = {
+			content: prepared.content,
+			files: prepared.attachments,
+			media: prepared.media,
+			uploadIds
+		};
+	}
 	// Writing into a background run turns it into a normal conversation.
 	if (conv.hidden) setHidden(conversationId, false);
-	insertQueued({ conversationId, senderId: sender.id, senderName: sender.name, text: trimmed });
-	// The first message stands in as the title until the model has named the chat.
-	const placeholder = conv.title ? undefined : trimmed.slice(0, TITLE_LIMIT);
+	insertQueued({
+		conversationId,
+		senderId: sender.id,
+		senderName: sender.name,
+		text: trimmed,
+		attachments
+	});
+	// The first message stands in as the title until the model has named the chat. A message
+	// with only files is named after them.
+	const opening = trimmed || uploads.map((u) => u.name).join(', ');
+	const placeholder = conv.title ? undefined : opening.slice(0, TITLE_LIMIT);
 	touchConversation(conversationId, placeholder);
 	emitQueued(conversationId);
 	kick(conversationId);
-	if (placeholder !== undefined) nameConversation(conv, trimmed, placeholder);
+	if (placeholder !== undefined) nameConversation(conv, opening, placeholder);
 }
 
 /** Asks the chat's model for a title in the background; the placeholder stays if that fails. */
@@ -293,7 +349,7 @@ async function runToolCall(
 			}
 		});
 		st.toolOutput = null;
-		const attachments = collectViewedImages(viewDir, images);
+		const attachments = await viewedImageBlocks(conv.provider, readViewedImages(viewDir), images);
 		return toolResult(call.id, result.content, result.isError, attachments);
 	} finally {
 		rmSync(viewDir, { recursive: true, force: true });
@@ -374,7 +430,8 @@ async function loop(conversationId: string): Promise<void> {
 			// No tool calls: the turn is over. Loop again in case messages arrived meanwhile.
 			if (calls.length === 0) continue;
 
-			const images = imageUse(messages);
+			// Queued messages may carry pictures too; they join the history at the next step.
+			const images = imageUse([...messages, ...queuedRows(conversationId).map(toMessageParam)]);
 			const results: Anthropic.ToolResultBlockParam[] = [];
 			for (const call of calls) {
 				results.push(await runToolCall(conv, call, reply.stop_reason, abort.signal, st, images));

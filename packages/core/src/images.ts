@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
 	appendFileSync,
@@ -11,12 +11,15 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, extname, join } from 'node:path';
+import { promisify } from 'node:util';
 import type Anthropic from '@anthropic-ai/sdk';
 
 /*
- * `btw view`: how the agent looks at images without a second tool. The gateway gives every
- * run_command call its own folder (BTW_VIEW_DIR); `btw view` prepares images and leaves them
- * there, and after the command exits the gateway attaches them to that call's tool_result.
+ * Pictures for the model: `prepareImage` makes any picture file fit what the API accepts, for
+ * `btw view` and for pictures people attach. `btw view` is how the agent looks at images without
+ * a second tool: the gateway gives every run_command call its own folder (BTW_VIEW_DIR),
+ * `btw view` prepares images and leaves them there, and after the command exits the gateway
+ * attaches them to that call's tool_result.
  */
 
 /**
@@ -24,7 +27,7 @@ import type Anthropic from '@anthropic-ai/sdk';
  * included) reject anything larger, so bigger images would break a conversation later on.
  */
 export const MAX_EDGE = 2000;
-/** Larger files are re-encoded, since every image is resent with each step. */
+/** Larger files are re-encoded: smaller uploads, and a smaller request if one goes inline. */
 const REENCODE_ABOVE_BYTES = 1_500_000;
 /** Largest image after preparing it. The API allows 10 MB of base64 per image. */
 const MAX_IMAGE_BYTES = 5_000_000;
@@ -32,16 +35,17 @@ const JPEG_QUALITY = '85';
 
 export const MAX_IMAGES_PER_COMMAND = 10;
 /**
- * Per conversation. Every request carries the whole history, and a request is capped at 32 MB
- * and, on 200k-context models, 100 images. Counted in base64 characters.
+ * Per conversation, because every request carries the whole history: at most 100 images (the
+ * API's limit on 200k-context models), and 20 MB of the ones sent inline as base64, which only
+ * happens when uploading to the provider failed (a request is capped at 32 MB).
  */
 export const MAX_CONVERSATION_IMAGES = 100;
 export const MAX_CONVERSATION_IMAGE_BYTES = 20_000_000;
 
-type MediaType = Anthropic.Base64ImageSource['media_type'];
+export type ImageMediaType = Anthropic.Base64ImageSource['media_type'];
 
 export interface ImageInfo {
-	mediaType: MediaType;
+	mediaType: ImageMediaType;
 	width: number;
 	height: number;
 	/** EXIF orientation of a JPEG. 1 is upright; the model ignores it and sees the raw pixels. */
@@ -180,32 +184,35 @@ function stripJpegMetadata(buf: Buffer): Buffer {
 
 type Converter = 'sips' | 'magick' | 'convert';
 
-let converter: Converter | null | undefined;
+const execFileAsync = promisify(execFile);
+
+let converter: Promise<Converter | null> | undefined;
 
 /** sips ships with macOS and opens HEIC; elsewhere ImageMagick, if it's installed. */
-function findConverter(): Converter | null {
-	if (converter !== undefined) return converter;
-	converter = null;
-	if (process.platform === 'darwin' && existsSync('/usr/bin/sips')) converter = 'sips';
-	else {
+function findConverter(): Promise<Converter | null> {
+	converter ??= (async () => {
+		if (process.platform === 'darwin' && existsSync('/usr/bin/sips')) return 'sips';
 		for (const command of ['magick', 'convert'] as const) {
 			try {
-				execFileSync(command, ['-version'], { stdio: 'ignore', timeout: 10_000 });
-				converter = command;
-				break;
+				await execFileAsync(command, ['-version'], { timeout: 10_000 });
+				return command;
 			} catch {
 				// not installed
 			}
 		}
-	}
+		return null;
+	})();
 	return converter;
 }
 
-function run(command: string, args: string[]): void {
+/** Asynchronous, so a conversion in the gateway doesn't hold up every other conversation. */
+async function run(command: string, args: string[]): Promise<void> {
 	try {
-		execFileSync(command, args, { stdio: ['ignore', 'ignore', 'pipe'], timeout: 60_000 });
+		await execFileAsync(command, args, { timeout: 60_000 });
 	} catch (err) {
-		const stderr = (err as { stderr?: Buffer }).stderr?.toString().trim().split('\n')[0];
+		const stderr = String((err as { stderr?: string }).stderr ?? '')
+			.trim()
+			.split('\n')[0];
 		throw new Error(`${command} failed: ${stderr || (err as Error).message}`, { cause: err });
 	}
 }
@@ -221,10 +228,15 @@ const SIPS_UPRIGHT: Record<number, string[]> = {
 };
 
 /** Writes `output` as an upright `format` image no larger than MAX_EDGE. */
-function convert(tool: Converter, input: string, output: string, format: 'jpeg' | 'png'): void {
+async function convert(
+	tool: Converter,
+	input: string,
+	output: string,
+	format: 'jpeg' | 'png'
+): Promise<void> {
 	if (tool === 'sips') {
 		const quality = format === 'jpeg' ? ['-s', 'formatOptions', JPEG_QUALITY] : [];
-		run('sips', ['-s', 'format', format, ...quality, input, '--out', output]);
+		await run('sips', ['-s', 'format', format, ...quality, input, '--out', output]);
 		// sips has no auto-orient, and HEIC sizes can't be read up front: fix both on the result.
 		const info = inspectImage(readFileSync(output));
 		if (!info) return;
@@ -232,12 +244,12 @@ function convert(tool: Converter, input: string, output: string, format: 'jpeg' 
 			...(Math.max(info.width, info.height) > MAX_EDGE ? ['-Z', String(MAX_EDGE)] : []),
 			...(SIPS_UPRIGHT[info.orientation] ?? [])
 		];
-		if (ops.length) run('sips', [...ops, ...quality, output]);
+		if (ops.length) await run('sips', [...ops, ...quality, output]);
 		return;
 	}
 	const flatten =
 		format === 'jpeg' ? ['-background', 'white', '-flatten', '-quality', JPEG_QUALITY] : [];
-	run(tool, [
+	await run(tool, [
 		`${input}[0]`, // first frame or page
 		'-auto-orient',
 		'-strip',
@@ -261,7 +273,7 @@ function typeName(info: ImageInfo | null, path: string): string {
 }
 
 /** Makes a file ready for the model: a supported format, at most MAX_EDGE, upright, small. */
-export function prepareImage(path: string): PreparedImage {
+export async function prepareImage(path: string): Promise<PreparedImage> {
 	if (!existsSync(path)) throw new Error('no such file');
 	if (statSync(path).isDirectory()) throw new Error("it's a folder");
 	const original = readFileSync(path);
@@ -279,7 +291,7 @@ export function prepareImage(path: string): PreparedImage {
 	if (original.toString('latin1', 0, 5) === '%PDF-') {
 		throw new Error("it's a PDF. btw view shows images: turn the pages you need into images first");
 	}
-	const tool = findConverter();
+	const tool = await findConverter();
 	if (!tool) {
 		throw new Error(
 			`it has to be converted (to JPEG or PNG, at most ${MAX_EDGE} px) and neither sips nor ImageMagick is available. Convert it first`
@@ -294,7 +306,7 @@ export function prepareImage(path: string): PreparedImage {
 		let data: Buffer | null = null;
 		for (const format of formats) {
 			const output = join(work, `image.${format}`);
-			convert(tool, path, output, format);
+			await convert(tool, path, output, format);
 			data = existsSync(output) ? readFileSync(output) : null;
 			if (data && data.length <= REENCODE_ABOVE_BYTES) break;
 		}
@@ -329,8 +341,13 @@ const MANIFEST_FILE = 'manifest.jsonl';
 /** Images already in a conversation. Each one is resent with every request. */
 export interface ImageUse {
 	count: number;
-	/** Base64 characters. */
+	/** Base64 characters of the ones sent inline. */
 	bytes: number;
+}
+
+interface ViewLimits {
+	/** How many more images the conversation has room for. */
+	count: number;
 }
 
 interface ViewEntry {
@@ -338,11 +355,9 @@ interface ViewEntry {
 	file: string;
 	/** The path as it was given to `btw view`. */
 	name: string;
-	/** Base64 size, for `btw view`'s own count. The gateway measures the file itself. */
-	bytes?: number;
 }
 
-function base64Length(bytes: number): number {
+export function base64Length(bytes: number): number {
 	return 4 * Math.ceil(bytes / 3);
 }
 
@@ -367,10 +382,7 @@ export function imageUse(messages: Anthropic.MessageParam[]): ImageUse {
 /** Gateway, before a command runs: its view folder, with what the conversation has room for. */
 export function createViewDir(used: ImageUse): string {
 	const dir = mkdtempSync(join(tmpdir(), 'btw-view-'));
-	const limits: ImageUse = {
-		count: MAX_CONVERSATION_IMAGES - used.count,
-		bytes: MAX_CONVERSATION_IMAGE_BYTES - used.bytes
-	};
+	const limits: ViewLimits = { count: MAX_CONVERSATION_IMAGES - used.count };
 	writeFileSync(join(dir, LIMITS_FILE), JSON.stringify(limits));
 	return dir;
 }
@@ -395,12 +407,11 @@ function readManifest(dir: string): ViewEntry[] {
 /** A limit that also stops every later image of the same command. */
 export class ViewLimitError extends Error {}
 
-const CONVERSATION_FULL =
-	'this conversation already holds as many images as it can (each step resends all of them). Say what you need to in words, or suggest a new conversation for more images';
+const CONVERSATION_FULL = `this conversation already holds ${MAX_CONVERSATION_IMAGES} images, as many as it can (each step sends all of them again). Say what you need to in words, or suggest a new conversation for more images`;
 
 /** `btw view`, for one file: prepares it and leaves it for the gateway. Returns a line to print. */
-export function viewImage(path: string, dir: string): string {
-	const limits = JSON.parse(readFileSync(join(dir, LIMITS_FILE), 'utf8')) as ImageUse;
+export async function viewImage(path: string, dir: string): Promise<string> {
+	const limits = JSON.parse(readFileSync(join(dir, LIMITS_FILE), 'utf8')) as ViewLimits;
 	const earlier = readManifest(dir);
 	if (earlier.length >= MAX_IMAGES_PER_COMMAND) {
 		throw new ViewLimitError(
@@ -408,14 +419,11 @@ export function viewImage(path: string, dir: string): string {
 		);
 	}
 	if (earlier.length >= limits.count) throw new ViewLimitError(CONVERSATION_FULL);
-	const image = prepareImage(path);
-	const bytes = base64Length(image.data.length);
-	const total = earlier.reduce((sum, entry) => sum + (entry.bytes ?? 0), bytes);
-	if (total > limits.bytes) throw new ViewLimitError(CONVERSATION_FULL);
+	const image = await prepareImage(path);
 
 	const file = `${randomUUID()}.${image.info.mediaType.slice('image/'.length)}`;
 	writeFileSync(join(dir, file), image.data);
-	const entry: ViewEntry = { file, name: path, bytes };
+	const entry: ViewEntry = { file, name: path };
 	appendFileSync(join(dir, MANIFEST_FILE), JSON.stringify(entry) + '\n');
 	const { width, height } = image.info;
 	const details = [`${width}×${height} ${typeName(image.info, path)}`, image.change].filter(
@@ -424,16 +432,16 @@ export function viewImage(path: string, dir: string): string {
 	return `Attached ${path} (${details.join(', ')}).`;
 }
 
+/** An image `btw view` left for the gateway, or why it can't be attached. */
+export type ViewedImage =
+	{ name: string; data: Buffer; mediaType: ImageMediaType } | { name: string; problem: string };
+
 /**
- * Gateway, after the command exited: the images `btw view` left, as content for the tool_result,
- * each after a text line naming it. Checks the limits again and adds what it attached to `used`.
+ * Gateway, after the command exited: the images `btw view` left, in order. Checks them again,
+ * since anything can write into the folder; the provider's code attaches them.
  */
-export function collectViewedImages(
-	dir: string,
-	used: ImageUse
-): (Anthropic.TextBlockParam | Anthropic.ImageBlockParam)[] {
-	const blocks: (Anthropic.TextBlockParam | Anthropic.ImageBlockParam)[] = [];
-	let attached = 0;
+export function readViewedImages(dir: string): ViewedImage[] {
+	const images: ViewedImage[] = [];
 	for (const entry of readManifest(dir)) {
 		if (basename(entry.file) !== entry.file) continue;
 		let data: Buffer;
@@ -443,30 +451,18 @@ export function collectViewedImages(
 			continue;
 		}
 		const info = inspectImage(data);
-		const bytes = base64Length(data.length);
 		const problem = !info
 			? 'not an image'
 			: Math.max(info.width, info.height) > MAX_EDGE || data.length > MAX_IMAGE_BYTES
 				? 'too big'
-				: attached >= MAX_IMAGES_PER_COMMAND ||
-					  used.count >= MAX_CONVERSATION_IMAGES ||
-					  used.bytes + bytes > MAX_CONVERSATION_IMAGE_BYTES
+				: images.length >= MAX_IMAGES_PER_COMMAND
 					? 'over the image limit'
 					: null;
-		if (!info || problem) {
-			blocks.push({ type: 'text', text: `Not attached: ${entry.name} (${problem}).` });
-			continue;
-		}
-		blocks.push(
-			{ type: 'text', text: `Image: ${entry.name}` },
-			{
-				type: 'image',
-				source: { type: 'base64', media_type: info.mediaType, data: data.toString('base64') }
-			}
+		images.push(
+			info && !problem
+				? { name: entry.name, data, mediaType: info.mediaType }
+				: { name: entry.name, problem: problem ?? 'not an image' }
 		);
-		attached++;
-		used.count++;
-		used.bytes += bytes;
 	}
-	return blocks;
+	return images;
 }
