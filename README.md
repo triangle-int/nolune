@@ -84,6 +84,12 @@ Access). `btw setup` prints the exact path.
   runs in the background, and what it finds shows up under the bell at the top; open a notification
   to continue it as a conversation. Each profile's Automations page lists them. From the terminal:
   `btw trigger list`.
+- **Background work and subagents.** btw can run a long command in the background and carry on;
+  its output comes back to the chat when it's done. For big or parallel jobs it starts subagents
+  with `btw agent run` (the built-in `subagents` skill explains when): each works in a hidden
+  conversation of its own that starts with only its task, and reports back to the chat. While they
+  work, the chat lists them under "Working in the background", where you can open a subagent's own
+  chat or stop everything. Logs: `~/.btw-agent/profiles/<profile>/agents`.
 - Extra environment variables for the agent's commands, e.g. for a firecrawl web-search skill:
   `btw env set FIRECRAWL_API_KEY fc-...`
 - Logs: `btw service logs -f`. Data: `~/.btw-agent` (override with `BTW_HOME`).

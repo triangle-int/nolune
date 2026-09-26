@@ -1,4 +1,4 @@
-import type { DisplayMessage, LiveBlock, LiveEvent, Snapshot } from '@btw/core';
+import type { BackgroundItem, DisplayMessage, LiveBlock, LiveEvent, Snapshot } from '@btw/core';
 
 type ServerEvent = LiveEvent | { type: 'snapshot'; snapshot: Snapshot };
 type ToolResult = { output: string; isError: boolean };
@@ -13,6 +13,8 @@ export class ChatState {
 	error = $state<string | null>(null);
 	live = $state<(LiveBlock | null)[]>([]);
 	toolOutput = $state<{ id: string; text: string } | null>(null);
+	/** Background commands and subagents still working for this chat. */
+	background = $state<BackgroundItem[]>([]);
 	connected = $state(false);
 	loaded = $state(false);
 
@@ -35,10 +37,14 @@ export class ChatState {
 				this.error = event.snapshot.error;
 				this.live = event.snapshot.live;
 				this.toolOutput = event.snapshot.toolOutput;
+				this.background = event.snapshot.background;
 				this.loaded = true;
 				break;
 			case 'title':
 				this.title = event.title;
+				break;
+			case 'background':
+				this.background = event.background;
 				break;
 			case 'status':
 				this.running = event.running;

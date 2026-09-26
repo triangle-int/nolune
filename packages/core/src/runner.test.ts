@@ -1,8 +1,11 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { streamTurn } from './anthropic.ts';
+import { eq } from 'drizzle-orm';
 import { committedRows, createConversation, insertQueued } from './conversations.ts';
-import { runCommand, type RunCommandResult } from './run-command.ts';
+import { getDb } from './db/index.ts';
+import { conversation } from './db/schema.ts';
+import { LEGACY_TOOLS, TOOLS, runCommand, type RunCommandResult } from './run-command.ts';
 import {
 	kick,
 	onLoopEnd,
@@ -50,16 +53,22 @@ function chatAsking(...replies: Anthropic.Message[]) {
 	return chat;
 }
 
-/** Starts the agent and resolves when its loop stops. */
-function run(conversationId: string): Promise<void> {
+/** Resolves when the conversation's agent loop next stops. */
+function loopEnd(conversationId: string): Promise<void> {
 	return new Promise((resolve) => {
 		const off = onLoopEnd((id) => {
 			if (id !== conversationId) return;
 			off();
 			resolve();
 		});
-		kick(conversationId);
 	});
+}
+
+/** Starts the agent and resolves when its loop stops. */
+function run(conversationId: string): Promise<void> {
+	const ended = loopEnd(conversationId);
+	kick(conversationId);
+	return ended;
 }
 
 function results(conversationId: string) {
@@ -139,5 +148,62 @@ describe('the agent loop', () => {
 			[chat.id, false]
 		]);
 		expect(runningConversationIds()).not.toContain(chat.id);
+	});
+});
+
+describe('tools and cache', () => {
+	it('sends a chat the tools it was created with, and an hour-long cache', async () => {
+		const chat = chatAsking(modelReply([{ type: 'text', text: 'Hi.' }], 'end_turn'));
+		await run(chat.id);
+		expect(vi.mocked(streamTurn).mock.calls[0][0]).toMatchObject({ tools: TOOLS, cacheTtl: '1h' });
+	});
+
+	it('keeps the first run_command for chats from before tools were saved', async () => {
+		const chat = chatAsking(modelReply([{ type: 'text', text: 'Hi.' }], 'end_turn'));
+		getDb().update(conversation).set({ tools: null }).where(eq(conversation.id, chat.id)).run();
+		await run(chat.id);
+		expect(vi.mocked(streamTurn).mock.calls[0][0].tools).toBe(LEGACY_TOOLS);
+	});
+});
+
+describe('background commands', () => {
+	const download = {
+		type: 'tool_use',
+		id: 'bg1',
+		name: 'run_command',
+		input: { summary: 'Downloading the photos', command: 'fetch-photos', run_in_background: true }
+	};
+
+	it('answers at once, then hands the output over as a message when the command ends', async () => {
+		const chat = chatAsking(
+			modelReply([download], 'tool_use'),
+			modelReply([{ type: 'text', text: "I'll tell you when it's done." }], 'end_turn'),
+			modelReply([{ type: 'text', text: 'All 120 photos are in.' }], 'end_turn')
+		);
+		let finish!: (result: RunCommandResult) => void;
+		vi.mocked(runCommand).mockImplementationOnce((_input, options) => {
+			options.onStart?.(4242);
+			return new Promise((resolve) => (finish = resolve));
+		});
+
+		await run(chat.id);
+		expect(vi.mocked(runCommand).mock.calls[0][0]).toMatchObject({ background: true });
+		const [[started]] = results(chat.id);
+		expect(started).toMatchObject({ tool_use_id: 'bg1' });
+		expect(started.content).toContain('Started in the background (process group 4242)');
+		expect(started.is_error).toBeUndefined();
+
+		// The output starts the agent again.
+		const second = loopEnd(chat.id);
+		finish({ content: 'saved 120 photos\n[exit code 0]', isError: false, exitCode: 0 });
+		await second;
+
+		const notice = committedRows(chat.id).find((row) => row.kind === 'task_result')!;
+		expect(notice).toMatchObject({ senderName: 'Downloading the photos' });
+		const told = vi.mocked(streamTurn).mock.calls[2][0].messages.at(-1);
+		expect(JSON.stringify(told)).toContain(
+			'[Background command finished: Downloading the photos]\\n$ fetch-photos\\nsaved 120 photos'
+		);
+		expect(committedRows(chat.id).at(-1)?.kind).toBe('assistant');
 	});
 });

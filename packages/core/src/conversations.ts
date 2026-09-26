@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type Anthropic from '@anthropic-ai/sdk';
 import { and, desc, eq, inArray, isNotNull, isNull, lt, max } from 'drizzle-orm';
-import type { Effort } from './anthropic.ts';
+import type { CacheTtl, Effort } from './anthropic.ts';
 import { parseAttachments, type MessageAttachment } from './attachments.ts';
 import { getDb } from './db/index.ts';
 import {
@@ -10,6 +10,7 @@ import {
 	message,
 	profile,
 	profileMember,
+	subagent,
 	triggerRun,
 	upload
 } from './db/schema.ts';
@@ -24,6 +25,7 @@ import {
 import { buildSystemPrompt } from './prompt.ts';
 import { effectiveContextWindow, getPreset } from './presets.ts';
 import type { Profile } from './profiles.ts';
+import { LEGACY_TOOLS, TOOLS } from './run-command.ts';
 
 export type Conversation = typeof conversation.$inferSelect;
 export type MessageRow = typeof message.$inferSelect;
@@ -75,6 +77,25 @@ export type DisplayMessage =
 	  }
 	| {
 			id: number;
+			/** In a subagent's chat: its task, or a steer, from the agent that started it. */
+			kind: 'agent_message';
+			/** The subagent's id. */
+			title: string;
+			text: string;
+			createdAt: number;
+	  }
+	| {
+			id: number;
+			/** What a background command printed, handed to the agent when it ended. */
+			kind: 'task_result';
+			/** The command's summary. */
+			title: string;
+			output: string;
+			isError: boolean;
+			createdAt: number;
+	  }
+	| {
+			id: number;
 			kind: 'assistant';
 			blocks: DisplayBlock[];
 			/** The pictures and files its text links to, keyed by link target. */
@@ -90,19 +111,38 @@ export type DisplayMessage =
 			createdAt: number;
 	  };
 
-export function createConversation(input: {
-	profile: Profile;
-	presetId: string;
-	/** Null for background runs, which no person started. */
-	userId: string | null;
-	effort?: Effort;
-	title?: string;
-	hidden?: boolean;
-	/** A folder of the profile: the chat starts in it, with its instructions and files. */
-	folderId?: string | null;
-}): Conversation {
-	const preset = getPreset(input.presetId);
+/** The model a conversation is created with: a preset's, or another conversation's. */
+type ModelChoice = { presetId: string } | { modelOf: Conversation };
+
+function modelColumns(choice: ModelChoice) {
+	if ('modelOf' in choice) {
+		const { presetId, presetName, provider, model, contextWindow } = choice.modelOf;
+		return { presetId, presetName, provider, model, contextWindow };
+	}
+	const preset = getPreset(choice.presetId);
 	if (!preset) throw new Error('Unknown model preset');
+	return {
+		presetId: preset.id,
+		presetName: preset.name,
+		provider: preset.provider,
+		model: preset.model,
+		contextWindow: effectiveContextWindow(preset)
+	};
+}
+
+export function createConversation(
+	input: ModelChoice & {
+		profile: Profile;
+		/** Null for background runs and subagents, which no person started. */
+		userId: string | null;
+		effort?: Effort;
+		title?: string;
+		hidden?: boolean;
+		/** A folder of the profile: the chat starts in it, with its instructions and files. */
+		folderId?: string | null;
+		cacheTtl?: CacheTtl;
+	}
+): Conversation {
 	const folderId = input.folderId ?? null;
 	if (folderId && !getFolder(input.profile.id, folderId)) throw new Error('Unknown folder');
 	const folderContext = folderContextFor(input.profile, folderId);
@@ -111,16 +151,14 @@ export function createConversation(input: {
 		id: randomUUID(),
 		profileId: input.profile.id,
 		title: input.title ?? '',
-		presetId: preset.id,
-		presetName: preset.name,
-		provider: preset.provider,
-		model: preset.model,
-		contextWindow: effectiveContextWindow(preset),
+		...modelColumns(input),
 		effort: input.effort ?? 'medium',
 		systemPrompt: buildSystemPrompt(input.profile, folderContext),
 		folderId,
 		folderContext,
 		promptChangedAtSeq: null,
+		tools: TOOLS,
+		cacheTtl: input.cacheTtl ?? '1h',
 		hidden: input.hidden ?? false,
 		createdBy: input.userId,
 		createdAt: now,
@@ -147,6 +185,20 @@ export function listConversations(profileId: string) {
 
 export function getConversation(id: string): Conversation | undefined {
 	return getDb().select().from(conversation).where(eq(conversation.id, id)).get();
+}
+
+/** The tool definitions the conversation's requests send, as they were when it was created. */
+export function toolsFor(conv: Pick<Conversation, 'tools'>): Anthropic.Tool[] {
+	return conv.tools ?? LEGACY_TOOLS;
+}
+
+/** True for a subagent's own conversation, which only the agent that started it writes to. */
+export function isSubagentConversation(id: string): boolean {
+	return !!getDb()
+		.select({ id: subagent.id })
+		.from(subagent)
+		.where(eq(subagent.conversationId, id))
+		.get();
 }
 
 export function listAllConversationIds(): string[] {
@@ -201,7 +253,7 @@ export function setHidden(id: string, hidden: boolean): void {
 	getDb().update(conversation).set({ hidden }).where(eq(conversation.id, id)).run();
 }
 
-/** Background runs nobody continued, last active before `before`. */
+/** Background runs nobody continued, and subagents, last active before `before`. */
 export function deleteHiddenConversations(before: Date): void {
 	getDb()
 		.delete(conversation)
@@ -216,6 +268,14 @@ export function deleteConversation(id: string): void {
 			.set({ status: 'stopped', finishedAt: new Date() })
 			.where(and(eq(triggerRun.conversationId, id), eq(triggerRun.status, 'running')))
 			.run();
+		// Its subagents' conversations go with it.
+		const children = tx
+			.select({ id: subagent.conversationId })
+			.from(subagent)
+			.where(eq(subagent.parentId, id))
+			.all()
+			.map((row) => row.id);
+		if (children.length) tx.delete(conversation).where(inArray(conversation.id, children)).run();
 		tx.delete(conversation).where(eq(conversation.id, id)).run();
 	});
 }
@@ -337,6 +397,37 @@ export function insertQueued(input: {
 		}
 		return row;
 	});
+}
+
+/**
+ * Queues a message the gateway writes, not a person: a subagent's task or steer, or a background
+ * command's output. Like a person's message, it joins the transcript at the agent's next step, or
+ * starts a turn.
+ */
+export function insertQueuedNotice(input: {
+	conversationId: string;
+	kind: 'agent_message' | 'task_result';
+	/** For display: the subagent's id, or the command's summary. */
+	title: string;
+	/** For display: what the agent wrote, or what the command printed. */
+	text: string;
+	/** What the model reads. */
+	content: string;
+}): MessageRow {
+	return getDb()
+		.insert(message)
+		.values({
+			conversationId: input.conversationId,
+			seq: null,
+			role: 'user',
+			kind: input.kind,
+			senderName: input.title,
+			text: input.text,
+			content: JSON.stringify([{ type: 'text', text: input.content }]),
+			createdAt: new Date()
+		})
+		.returning()
+		.get();
 }
 
 /** Moves queued messages into the transcript, in the order they were sent. */
@@ -510,10 +601,11 @@ export function replyText(row: MessageRow): string {
 /**
  * Everything the model read that it didn't write: what people wrote, automation prompts and
  * events, and command output. A web picture in a reply is downloaded only if its link is in here.
+ * A subagent's task and steers are left out: another agent wrote them.
  */
 export function foundText(rows: MessageRow[]): string {
 	return rows
-		.filter((row) => row.kind !== 'assistant')
+		.filter((row) => row.kind !== 'assistant' && row.kind !== 'agent_message')
 		.flatMap((row) =>
 			(
 				JSON.parse(row.content) as (Anthropic.TextBlockParam | Anthropic.ToolResultBlockParam)[]
@@ -542,6 +634,27 @@ export function toDisplay(row: MessageRow, mediaRows: MediaRow[] = []): DisplayM
 			kind: 'trigger',
 			title: row.senderName ?? 'Automation',
 			text: row.text ?? '',
+			createdAt
+		};
+	}
+	if (row.kind === 'agent_message') {
+		return {
+			id: row.id,
+			kind: 'agent_message',
+			title: row.senderName ?? 'Subagent',
+			text: row.text ?? '',
+			createdAt
+		};
+	}
+	if (row.kind === 'task_result') {
+		const output = row.text ?? '';
+		return {
+			id: row.id,
+			kind: 'task_result',
+			title: row.senderName ?? 'Background command',
+			output,
+			// runCommand ends the output of a command that exited by itself with its exit code.
+			isError: !/\[exit code 0\]$/.test(output),
 			createdAt
 		};
 	}

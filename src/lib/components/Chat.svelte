@@ -6,21 +6,27 @@
 	import { page } from '$app/state';
 	import type { DisplayAttachment, Usage } from '@btw/core';
 	import type { Avatar } from '@btw/core/avatars';
-	import { CACHE_TTL_MS, cacheHitRate, cacheMissTokens, promptTokens } from '@btw/core/usage';
+	import { cacheHitRate, cacheMissTokens, cacheTtlMs, promptTokens } from '@btw/core/usage';
 	import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
+	import BotIcon from '@lucide/svelte/icons/bot';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import ClockIcon from '@lucide/svelte/icons/clock';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
 	import FolderIcon from '@lucide/svelte/icons/folder';
 	import InfoIcon from '@lucide/svelte/icons/info';
+	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
+	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
+	import * as Collapsible from '$lib/components/ui/collapsible';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { Button } from '$lib/components/ui/button';
 	import { ChatState } from '$lib/chat.svelte';
+	import { firstLine } from '$lib/commands';
 	import { moveChat, type FolderItem } from '$lib/folders';
 	import { formatPercent, formatTokens } from '$lib/format';
 	import { getPreferences } from '$lib/preferences.svelte';
@@ -52,6 +58,9 @@
 			contextWindow: number | null;
 			/** A background run nobody has continued yet. */
 			hidden: boolean;
+			cacheTtl: '5m' | '1h';
+			/** A subagent's own chat: only the agent that started it writes here. */
+			subagent: { name: string; parentId: string; parentTitle: string } | null;
 		};
 		efforts: string[];
 		me: string;
@@ -137,7 +146,7 @@
 			if (!m.usage) continue;
 			if (previous) {
 				const tokens = cacheMissTokens(previous.usage, m.usage);
-				const expired = resumedAt - previous.at > CACHE_TTL_MS;
+				const expired = resumedAt - previous.at > cacheTtlMs(conversation.cacheTtl);
 				if (tokens > 0) misses[m.id] = { tokens, expired };
 			}
 			previous = { usage: m.usage, at: m.createdAt };
@@ -157,7 +166,7 @@
 		return {
 			tokens: misses.reduce((n, m) => n + m.tokens, 0),
 			reason: misses.some((m) => m.expired)
-				? 'Over an hour passed since the previous step, so the cached conversation expired and was processed again (slower and costlier).'
+				? `Over ${conversation.cacheTtl === '5m' ? '5 minutes' : 'an hour'} passed since the previous step, so the cached conversation expired and was processed again (slower and costlier).`
 				: 'Context that should have come from the cache was processed again (slower and costlier). Changing the reasoning level, moving the chat to another folder or changing its folder cause this once.'
 		};
 	}
@@ -530,7 +539,20 @@
 	{/snippet}
 </PageHeader>
 
-{#if conversation.hidden && !continued}
+{#if conversation.subagent}
+	<div class="mx-auto w-full max-w-3xl px-4">
+		<p class="rounded-2xl bg-muted px-4 py-2 text-center text-sm text-muted-foreground">
+			Subagent {conversation.subagent.name}: btw started it from
+			<a
+				href={resolve('/p/[slug]/c/[id]', {
+					slug: page.params.slug ?? '',
+					id: conversation.subagent.parentId
+				})}
+				class="text-foreground underline underline-offset-2">{conversation.subagent.parentTitle}</a
+			>, and it reports back there.
+		</p>
+	</div>
+{:else if conversation.hidden && !continued}
 	<div class="mx-auto w-full max-w-3xl px-4">
 		<p class="rounded-2xl bg-muted px-4 py-2 text-center text-sm text-muted-foreground">
 			A background run from an automation. Send a message to keep it in your chats.
@@ -570,10 +592,71 @@
 						</div>
 						<div class="mt-1.5 leading-relaxed whitespace-pre-wrap">{entry.message.text}</div>
 					</div>
+				{:else if entry.type === 'agent_message'}
+					<div class="rounded-2xl border px-4 py-3 text-sm">
+						<div class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+							<BotIcon class="size-3.5" />
+							From btw, to {entry.message.title}
+						</div>
+						<div class="mt-1.5 leading-relaxed whitespace-pre-wrap">{entry.message.text}</div>
+					</div>
+				{:else if entry.type === 'task_result'}
+					<Collapsible.Root class="rounded-2xl border px-4 py-2.5 text-sm">
+						<Collapsible.Trigger
+							class="group/result flex w-full min-w-0 items-center gap-1.5 text-left text-xs font-medium text-muted-foreground hover:text-foreground"
+						>
+							<SquareTerminalIcon class="size-3.5 shrink-0" />
+							<span class="min-w-0 truncate"
+								>Finished in the background · {entry.message.title}</span
+							>
+							{#if entry.message.isError}
+								<span class="shrink-0 text-destructive">
+									{prefs.technical ? 'failed' : "didn't work"}
+								</span>
+							{/if}
+							<ChevronRightIcon
+								class="size-3.5 shrink-0 transition-transform group-data-[state=open]/result:rotate-90"
+							/>
+						</Collapsible.Trigger>
+						<Collapsible.Content>
+							<pre
+								class="mt-2 max-h-72 overflow-auto rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs break-all whitespace-pre-wrap text-muted-foreground">{entry
+									.message.output}</pre>
+						</Collapsible.Content>
+					</Collapsible.Root>
 				{:else}
 					{@render reply(entry, index === entries.length - 1)}
 				{/if}
 			{/each}
+
+			{#if chat.background.length}
+				<div class="flex flex-col gap-1.5 rounded-2xl border px-4 py-3 text-sm">
+					<div class="flex items-center justify-between gap-3">
+						<span class="text-xs font-medium text-muted-foreground">Working in the background</span>
+						<Button size="sm" variant="outline" onclick={() => post('stop')}>Stop</Button>
+					</div>
+					{#each chat.background as item (item.id)}
+						<div class="flex min-w-0 items-center gap-2 text-muted-foreground">
+							<LoaderIcon class="size-3.5 shrink-0 animate-spin" />
+							{#if item.kind === 'command'}
+								<span class={cn('min-w-0 truncate', prefs.technical && 'font-mono text-xs')}>
+									{prefs.technical ? `$ ${firstLine(item.command)}` : (item.summary ?? 'A command')}
+								</span>
+							{:else}
+								<a
+									href={resolve('/p/[slug]/c/[id]', {
+										slug: page.params.slug ?? '',
+										id: item.conversationId
+									})}
+									class="min-w-0 truncate underline-offset-2 hover:text-foreground hover:underline"
+								>
+									Subagent {item.name}{item.status === 'stopping' ? ' · stopping' : ''}
+								</a>
+							{/if}
+						</div>
+					{/each}
+				</div>
+			{/if}
 
 			{#each chat.queued as message (message.id)}
 				{#if message.kind === 'human'}
@@ -581,7 +664,7 @@
 				{/if}
 			{/each}
 
-			{#if chat.error || unanswered}
+			{#if chat.error || (unanswered && !conversation.subagent)}
 				<div class="relative flex flex-col gap-3">
 					{#if !liveReply}
 						<!-- No reply to carry the avatar, so it waits here, by what to do next. -->
@@ -596,10 +679,12 @@
 								<span class="block font-medium">Something went wrong while btw was answering.</span>
 								<span class="block text-muted-foreground">{chat.error}</span>
 							</span>
-							<Button size="sm" variant="outline" onclick={() => post('continue')}>
-								<RotateCcwIcon />
-								Try again
-							</Button>
+							{#if !conversation.subagent}
+								<Button size="sm" variant="outline" onclick={() => post('continue')}>
+									<RotateCcwIcon />
+									Try again
+								</Button>
+							{/if}
 						</div>
 					{:else}
 						<div class="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
@@ -622,26 +707,37 @@
 				<ArrowDownIcon class="size-4" />
 			</button>
 		{/if}
-		<Composer
-			bind:value={text}
-			bind:textarea
-			{attachments}
-			running={chat.running}
-			busy={sending}
-			placeholder={chat.running ? 'Add something while btw works…' : 'Ask btw'}
-			onsubmit={send}
-			onstop={() => post('stop')}
-		>
-			{#snippet tools()}
-				<ModelMenu
-					{efforts}
-					{effort}
-					onEffortChange={changeEffort}
-					presets={[{ id: 'current', name: conversation.presetName }]}
-					presetId="current"
-				/>
-			{/snippet}
-		</Composer>
+		{#if conversation.subagent}
+			<div
+				class="flex items-center justify-between gap-3 rounded-[26px] border bg-background px-5 py-3 text-sm text-muted-foreground shadow-sm"
+			>
+				<span>Only the agent that started {conversation.subagent.name} writes here.</span>
+				{#if chat.running}
+					<Button size="sm" variant="outline" onclick={() => post('stop')}>Stop</Button>
+				{/if}
+			</div>
+		{:else}
+			<Composer
+				bind:value={text}
+				bind:textarea
+				{attachments}
+				running={chat.running}
+				busy={sending}
+				placeholder={chat.running ? 'Add something while btw works…' : 'Ask btw'}
+				onsubmit={send}
+				onstop={() => post('stop')}
+			>
+				{#snippet tools()}
+					<ModelMenu
+						{efforts}
+						{effort}
+						onEffortChange={changeEffort}
+						presets={[{ id: 'current', name: conversation.presetName }]}
+						presetId="current"
+					/>
+				{/snippet}
+			</Composer>
+		{/if}
 		{#if actionError}
 			<p class="mt-2 text-center text-sm text-destructive">{actionError}</p>
 		{:else if !chat.connected && chat.loaded}
