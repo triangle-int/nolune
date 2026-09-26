@@ -5,7 +5,8 @@ import {
 	listMembers,
 	listUsers,
 	removeMember,
-	renameProfile
+	renameProfile,
+	setProfileAvatar
 } from '@btw/core';
 import { requireProfile } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
@@ -36,6 +37,17 @@ export const actions: Actions = {
 			return fail(400, { message: message(err) });
 		}
 		return { message: 'Renamed.' };
+	},
+	avatar: async ({ locals, params, request }) => {
+		const { profile } = requireProfile(locals, params.slug);
+		const avatar = (await request.formData()).get('avatar')?.toString() ?? '';
+		try {
+			setProfileAvatar(profile.id, avatar);
+		} catch (err) {
+			return fail(400, { message: message(err) });
+		}
+		// The picker shows the change; no message needed.
+		return {};
 	},
 	add: async ({ locals, params, request }) => {
 		const { profile } = requireProfile(locals, params.slug);

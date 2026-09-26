@@ -6,6 +6,7 @@
 	import BellIcon from '@lucide/svelte/icons/bell';
 	import XIcon from '@lucide/svelte/icons/x';
 	import * as Popover from '$lib/components/ui/popover';
+	import AssistantAvatar from './AssistantAvatar.svelte';
 	import { cn } from '$lib/utils';
 
 	interface Props {
@@ -24,12 +25,6 @@
 	let actionError = $state<string | null>(null);
 
 	const unseen = $derived(items.filter((n) => n.createdAt > seenAt).length);
-
-	$effect(() => {
-		const source = new EventSource('/api/notifications/events');
-		source.onmessage = () => invalidate('btw:notifications');
-		return () => source.close();
-	});
 
 	async function post(path: string): Promise<Response> {
 		const res = await fetch(`/api/notifications/${path}`, { method: 'POST' });
@@ -124,6 +119,7 @@
 						{#if isNew}
 							<span class="mt-1.5 size-2 shrink-0 rounded-full bg-red-600" title="New"></span>
 						{/if}
+						<AssistantAvatar avatar={item.profile.avatar} size={20} class="mt-px" />
 						<button
 							class="min-w-0 flex-1 text-left"
 							onclick={() => (expanded = expanded === item.id ? null : item.id)}

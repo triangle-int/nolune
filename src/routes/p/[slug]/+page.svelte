@@ -3,6 +3,7 @@
 	import CloudSunIcon from '@lucide/svelte/icons/cloud-sun';
 	import FileSearchIcon from '@lucide/svelte/icons/file-search';
 	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
+	import AssistantAvatar from '$lib/components/AssistantAvatar.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import NewChatForm from '$lib/components/chat/NewChatForm.svelte';
 
@@ -51,6 +52,12 @@
 		{#snippet header()}
 			<!-- Phones: greeting in the middle, composer at the bottom. Desktop: both centered. -->
 			<div class="flex-1"></div>
+			<AssistantAvatar
+				avatar={data.profile.avatar}
+				mood="idle"
+				size={64}
+				class="mx-auto mb-5 block"
+			/>
 			<h1 class="mb-8 text-center text-[28px] leading-tight font-normal tracking-tight">
 				{firstName ? `What can I help with, ${firstName}?` : 'What can I help with?'}
 			</h1>

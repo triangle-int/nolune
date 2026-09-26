@@ -27,7 +27,6 @@ import {
 	isApiKeyProvider,
 	listPresets,
 	listProfileSkills,
-	listProfiles,
 	listUsers,
 	normalizeApiKey,
 	parseImageModel,
@@ -50,6 +49,7 @@ import {
 import { GENERATE_HELP, generateCommand } from './generate.ts';
 import { ask, askHidden } from './input.ts';
 import { MEMORY_HELP, memoryCommand } from './memory.ts';
+import { PROFILE_HELP, profileCommand } from './profile.ts';
 import { TRIGGER_HELP, triggerCommand, wakeCommand } from './triggers.ts';
 import {
 	installService,
@@ -92,8 +92,7 @@ Model presets (shared by all profiles)
   btw preset default <name|id>               the model new chats start with
   btw preset list
 
-Profiles and skills
-  btw profile list
+${PROFILE_HELP}
   btw skill new <name> [--description D] [--profile SLUG | --global]
   btw skill list [--profile SLUG]
   btw skill enable <name>... [--profile SLUG]
@@ -516,12 +515,9 @@ async function main(argv: string[]): Promise<void> {
 			return;
 		}
 
-		case 'profile': {
+		case 'profile':
 			requireInit();
-			if (action !== 'list') fail('usage: btw profile list');
-			for (const p of listProfiles()) console.log(`${p.slug}\t${p.name}`);
-			return;
-		}
+			return profileCommand(action, rest);
 
 		case 'skill': {
 			const { values, positionals } = parseArgs({

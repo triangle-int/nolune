@@ -1,9 +1,9 @@
 <script lang="ts">
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import * as Collapsible from '$lib/components/ui/collapsible';
-	import { firstLine } from '$lib/commands';
 	import { getPreferences } from '$lib/preferences.svelte';
 	import {
+		activeStepLabel,
 		formatDuration,
 		resultStatus,
 		type ActivityPart,
@@ -42,14 +42,7 @@
 	);
 
 	const label = $derived.by(() => {
-		if (active) {
-			const last = part.steps.at(-1);
-			if (last?.type === 'command' && !results[last.id]) {
-				if (prefs.technical && last.command) return `Running ${firstLine(last.command, 80)}`;
-				return last.summary ?? 'Running a command';
-			}
-			return 'Thinking';
-		}
+		if (active) return activeStepLabel(part, results, prefs.technical);
 		if (stopped) return 'Stopped';
 		const duration = formatDuration(part.endedAt - part.startedAt);
 		if (commands.length === 0) return duration ? `Thought for ${duration}` : 'Thought for a moment';
