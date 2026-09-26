@@ -79,6 +79,7 @@ const LIVE_OUTPUT_LIMIT = 100_000;
 const holder = globalThis as unknown as {
 	__btwRunner?: Map<string, State>;
 	__btwLoopEnd?: Set<LoopEndListener>;
+	__btwRunningChange?: Set<RunningChangeListener>;
 };
 const states = (holder.__btwRunner ??= new Map());
 
@@ -89,6 +90,25 @@ const loopEndListeners = (holder.__btwLoopEnd ??= new Set());
 export function onLoopEnd(listener: LoopEndListener): () => void {
 	loopEndListeners.add(listener);
 	return () => loopEndListeners.delete(listener);
+}
+
+/** Called whenever any conversation's agent loop starts or stops. */
+export type RunningChangeListener = (conversationId: string, running: boolean) => void;
+const runningChangeListeners = (holder.__btwRunningChange ??= new Set());
+
+export function onRunningChange(listener: RunningChangeListener): () => void {
+	runningChangeListeners.add(listener);
+	return () => runningChangeListeners.delete(listener);
+}
+
+function runningChanged(conversationId: string, running: boolean): void {
+	for (const listener of runningChangeListeners) {
+		try {
+			listener(conversationId, running);
+		} catch (err) {
+			console.error(`[btw] running listener failed for ${conversationId}:`, err);
+		}
+	}
 }
 
 function stateFor(conversationId: string): State {
@@ -295,6 +315,11 @@ export function isRunning(conversationId: string): boolean {
 	return stateFor(conversationId).running;
 }
 
+/** Every conversation whose agent loop is going right now, in any profile. */
+export function runningConversationIds(): string[] {
+	return [...states].filter(([, st]) => st.running).map(([id]) => id);
+}
+
 function stoppedText(st: State): string {
 	return `Stopped by ${st.stoppedBy ?? 'a user'}.`;
 }
@@ -403,6 +428,7 @@ async function loop(conversationId: string): Promise<void> {
 	st.error = null;
 	st.stoppedBy = null;
 	emit(conversationId, { type: 'status', running: true, error: null });
+	runningChanged(conversationId, true);
 
 	try {
 		for (;;) {
@@ -509,6 +535,7 @@ async function loop(conversationId: string): Promise<void> {
 		st.live = [];
 		st.toolOutput = null;
 		emit(conversationId, { type: 'status', running: false, error: st.error });
+		runningChanged(conversationId, false);
 		for (const listener of loopEndListeners) {
 			try {
 				listener(conversationId, st.error);
