@@ -236,6 +236,10 @@ export const trigger = sqliteTable(
 			.notNull()
 			.references(() => profile.id, { onDelete: 'cascade' }),
 		name: text('name').notNull(),
+		/** What it does in one plain sentence, for the family on the Automations page. */
+		summary: text('summary'),
+		/** A Lucide icon name (`umbrella`) for the Automations page. */
+		icon: text('icon'),
 		/** When it fires: on a cron schedule, once at `runAt`, or when its webhook URL is called. */
 		kind: text('kind', { enum: ['cron', 'once', 'webhook'] }).notNull(),
 		/** 5-field cron expression in the gateway's local time zone. */
