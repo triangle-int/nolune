@@ -22,6 +22,7 @@
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { Kbd } from '$lib/components/ui/kbd';
+	import TypedText from './TypedText.svelte';
 	import UserMenu from './UserMenu.svelte';
 
 	interface Props {
@@ -197,7 +198,7 @@
 						<Sidebar.MenuButton isActive={page.params.id === conversation.id}>
 							{#snippet child({ props })}
 								<a href={chatHref(conversation.id)} {...props}>
-									<span>{conversation.title}</span>
+									<span><TypedText text={conversation.title} /></span>
 								</a>
 							{/snippet}
 						</Sidebar.MenuButton>

@@ -30,6 +30,7 @@
 	import MessageAttachments from './chat/MessageAttachments.svelte';
 	import ModelMenu from './chat/ModelMenu.svelte';
 	import PageHeader from './PageHeader.svelte';
+	import TypedText from './TypedText.svelte';
 	import UserAvatar from './UserAvatar.svelte';
 
 	interface Props {
@@ -367,7 +368,7 @@
 {/snippet}
 
 <PageHeader>
-	<h1 class="min-w-0 truncate text-base font-medium sm:text-lg">{title}</h1>
+	<h1 class="min-w-0 truncate text-base font-medium sm:text-lg"><TypedText text={title} /></h1>
 	{#if prefs.technical && usage}
 		<Tooltip.Root>
 			<Tooltip.Trigger
