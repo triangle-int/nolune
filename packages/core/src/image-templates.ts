@@ -5,7 +5,7 @@ import { paths } from './paths.ts';
 import { isValidSkillName, parseFrontmatter } from './skills.ts';
 
 /*
- * Image templates: the Images page's reusable starting points, like "Poster" or "Stickers". Each
+ * Image templates: the Images page's reusable starting points, like "Storybook page" or "Sticker pack". Each
  * is a folder with a TEMPLATE.md: YAML frontmatter for its card, its sentence and its settings,
  * then the prompt, where `{{setting}}` is replaced by what was picked. Applying a template sends
  * one message to a new chat: the finished prompt, with the pictures attached. The agent passes it
@@ -39,7 +39,7 @@ export interface ImageTemplate {
 	id: string;
 	/** On its card. */
 	name: string;
-	/** The heading when it's opened, like "See yourself in the '80s". Defaults to the name. */
+	/** The heading when it's opened, like "Catch the culprit". Defaults to the name. */
 	title: string;
 	/** One sentence for the family. */
 	description: string;
@@ -59,7 +59,7 @@ export interface ImageTemplate {
 	image: 'required' | 'optional' | 'none';
 	/** What to pick, e.g. "Photo of the room". */
 	imageLabel: string | null;
-	/** Where the picture comes from: a photo, or a drawing made on the page. */
+	/** Where the picture comes from: a photo, or a drawing (made on the page, or a photo of one). */
 	imageSource: 'photo' | 'drawing';
 	maxImages: number;
 	/** The shape it starts with; the message says it in words, like "Make it square (1:1)." */

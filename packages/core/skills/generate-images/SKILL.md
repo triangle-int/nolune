@@ -1,6 +1,6 @@
 ---
 name: generate-images
-description: Make or change pictures with `btw generate image`, from a description, a detailed prompt or photos (restyle, edit, combine, turn into a poster, sticker, sketch...). Use whenever someone asks to make, draw, design, generate or edit a picture, including the prompts the Images page's templates send.
+description: Make or change pictures with `btw generate image`, from a description, a detailed prompt or photos (restyle, edit, combine, turn into stickers, a storybook page, a postcard...). Use whenever someone asks to make, draw, design, generate or edit a picture, including the prompts the Images page's templates send.
 ---
 
 # Making pictures
@@ -9,32 +9,32 @@ description: Make or change pictures with `btw generate image`, from a descripti
 what it makes. It prints one line per picture:
 
 ```
-Saved /Users/anna/.btw-agent/profiles/family/images/2026-09-26-143512-design-a-striking-printed.png (1024×1536, PNG, 1.8 MB)
+Saved /Users/anna/.btw-agent/profiles/family/images/2026-09-26-143512-make-a-watercolor-storybook.png (1024×1536, PNG, 1.8 MB)
 ```
 
 Pictures go to the profile's `images/` folder unless you pass `--out`. It usually takes 20 to 90
 seconds, so always run it with `timeout_seconds` set to 300.
 
 To show the result, put it in your reply as a picture, with the exact path it printed:
-`![Poster with the headline BLOOM](/Users/anna/.btw-agent/profiles/family/images/2026-09-26-143512-design-a-striking-printed.png)`.
+`![Aisha riding a dragon to school](/Users/anna/.btw-agent/profiles/family/images/2026-09-26-143512-make-a-watercolor-storybook.png)`.
 Don't paste the command or the prompt unless someone asks.
 
 ## Prompts from the Images page
 
-The Images page has templates (Poster, Stickers, '80s flashback...). Applying one starts a new
+The Images page has templates (Storybook page, Sticker pack, Trip postcard...). Applying one starts a new
 chat with a finished prompt, and the photo attached when the template uses one:
 
 ```
 [Anna attached IMG_0142.jpg, saved at /Users/anna/.btw-agent/profiles/family/attachments/IMG_0142.jpg]
 (the photo)
-Anna: Create a Risograph poster of our garden based on the attached picture with the headline "BLOOM".
+Anna: Make a watercolor storybook page where the kid in the attached picture rides a dragon to school.
 
-Design it as a striking printed poster, ready to hang on a wall.
-Build it around the main subject of the picture, redrawn to fit the poster's style.
-Style: a risograph print in two or three bright spot inks, with visible grain...
+A full-page children's picture-book illustration of the adventure.
+The kid from the picture is the hero, clearly recognizable...
+Style: soft watercolor with loose washes and fine ink lines.
 Make it portrait (2:3).
 
-Make it pink.
+Give the dragon a backpack.
 ```
 
 A detailed prompt like this, from the Images page or written by someone themselves, is used as
@@ -49,9 +49,9 @@ saved at. Set the flags the prompt asks for in words:
 ```sh
 btw generate image - --size portrait \
   --image /Users/anna/.btw-agent/profiles/family/attachments/IMG_0142.jpg <<'PROMPT'
-Create a Risograph poster of our garden based on the attached picture with the headline "BLOOM".
+Make a watercolor storybook page where the kid in the attached picture rides a dragon to school.
 
-Design it as a striking printed poster, ready to hang on a wall.
+A full-page children's picture-book illustration of the adventure.
 ...
 PROMPT
 ```

@@ -16,6 +16,7 @@
 	import SquareIcon from '@lucide/svelte/icons/square';
 	import XIcon from '@lucide/svelte/icons/x';
 	import * as Dialog from '$lib/components/ui/dialog';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Composer from '$lib/components/chat/Composer.svelte';
 	import StepIcon from '$lib/components/chat/StepIcon.svelte';
@@ -262,40 +263,65 @@
 	</span>
 {/snippet}
 
+{#snippet imageChipFace(template: Template)}
+	{@const picture = photos.files[0]}
+	{#if picture}
+		<span class="relative size-9 overflow-hidden rounded-lg bg-muted">
+			{#if picture.preview}
+				<img src={picture.preview} alt="" class="size-full object-cover" />
+			{:else}
+				<ImageIcon class="m-2 size-5 text-muted-foreground" />
+			{/if}
+			{#if picture.status === 'uploading'}
+				<span class="absolute inset-0 flex items-center justify-center bg-black/40 text-white">
+					<LoaderCircleIcon class="size-4 animate-spin" />
+				</span>
+			{/if}
+		</span>
+	{:else if template.imageSource === 'drawing'}
+		<PenLineIcon class="m-1.5 size-6 text-muted-foreground" />
+	{:else}
+		<ImagePlusIcon class="m-1.5 size-6 text-muted-foreground" />
+	{/if}
+	<ChevronsUpDownIcon class="size-4 text-muted-foreground" />
+{/snippet}
+
 {#snippet imageChip(template: Template)}
 	{@const picture = photos.files[0]}
-	<button
-		type="button"
-		onclick={() => (template.imageSource === 'drawing' ? draw() : photoInput?.click())}
-		class={cn(
-			chip,
-			'inline-flex translate-y-1 items-center gap-1 py-1',
-			picture?.status === 'failed' && 'border-destructive'
-		)}
-		aria-label={picture
-			? `Change ${template.imageLabel ?? 'the picture'}`
-			: (template.imageLabel ?? 'Add a picture')}
-	>
-		{#if picture}
-			<span class="relative size-9 overflow-hidden rounded-lg bg-muted">
-				{#if picture.preview}
-					<img src={picture.preview} alt="" class="size-full object-cover" />
-				{:else}
-					<ImageIcon class="m-2 size-5 text-muted-foreground" />
-				{/if}
-				{#if picture.status === 'uploading'}
-					<span class="absolute inset-0 flex items-center justify-center bg-black/40 text-white">
-						<LoaderCircleIcon class="size-4 animate-spin" />
-					</span>
-				{/if}
-			</span>
-		{:else if template.imageSource === 'drawing'}
-			<PenLineIcon class="m-1.5 size-6 text-muted-foreground" />
-		{:else}
-			<ImagePlusIcon class="m-1.5 size-6 text-muted-foreground" />
-		{/if}
-		<ChevronsUpDownIcon class="size-4 text-muted-foreground" />
-	</button>
+	{@const chipClass = cn(
+		chip,
+		'inline-flex translate-y-1 items-center gap-1 py-1',
+		picture?.status === 'failed' && 'border-destructive'
+	)}
+	{@const label = picture
+		? `Change ${template.imageLabel ?? 'the picture'}`
+		: (template.imageLabel ?? 'Add a picture')}
+	{#if template.imageSource === 'drawing'}
+		<!-- A drawing can be made here, or be a photo of one on paper. -->
+		<DropdownMenu.Root>
+			<DropdownMenu.Trigger>
+				{#snippet child({ props })}
+					<button {...props} type="button" class={chipClass} aria-label={label}>
+						{@render imageChipFace(template)}
+					</button>
+				{/snippet}
+			</DropdownMenu.Trigger>
+			<DropdownMenu.Content align="start" class="w-56">
+				<DropdownMenu.Item onSelect={draw}>
+					<PenLineIcon />
+					Draw
+				</DropdownMenu.Item>
+				<DropdownMenu.Item onSelect={() => photoInput?.click()}>
+					<ImagePlusIcon />
+					Choose a photo of a drawing
+				</DropdownMenu.Item>
+			</DropdownMenu.Content>
+		</DropdownMenu.Root>
+	{:else}
+		<button type="button" onclick={() => photoInput?.click()} class={chipClass} aria-label={label}>
+			{@render imageChipFace(template)}
+		</button>
+	{/if}
 {/snippet}
 
 {#snippet settingChip(setting: Setting)}
@@ -505,6 +531,15 @@
 									{photos.uploading ? 'Uploading…' : 'Starting…'}
 								</div>
 							{:else if chosen.imageSource === 'drawing'}
+								<button
+									type="button"
+									onclick={() => photoInput?.click()}
+									disabled={!data.ready}
+									class={cn(bigButton, 'bg-muted text-foreground')}
+								>
+									<ImagePlusIcon class="size-5" />
+									Use a photo of a drawing
+								</button>
 								<button
 									type="button"
 									onclick={draw}

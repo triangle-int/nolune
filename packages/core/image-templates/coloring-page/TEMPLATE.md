@@ -1,10 +1,10 @@
 ---
 name: Coloring page
 title: Make a coloring page
-description: A printable black-and-white coloring page for kids.
-order: 12
+description: Any photo as a printable black-and-white coloring page for kids.
+order: 14
 icon: brush
-color: '#cfe7ac'
+color: '#d7ecb2'
 image: required
 image-label: Photo to turn into a coloring page
 size: portrait

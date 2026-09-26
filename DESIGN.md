@@ -268,14 +268,16 @@ appear only when templates name more than one category. Opening one shows a shee
 bottom on phones): its picture, title and description, and what to do next, which depends on the
 template.
 
-- **Most templates are one tap**: "Take a photo" (phones) or "Choose a photo" for those that
-  start from a photo, "Start drawing" for those that start from a drawing, "Try it" for the rest.
-  Once the picture has uploaded, the chat starts; there is nothing else to fill in.
-- **Templates with settings** go on to a sentence with a chip for each: "Make a [Risograph ⌃]
-  poster of [our garden] [🖼 ⌃] with the headline [BLOOM]." A choice is a chip over the system's
-  own picker (an invisible `<select>`), free text is an inline field, and the picture is a chip
-  that picks or draws another. Anything typed below the sentence is added to the prompt, and the
-  shape is a chip next to Generate.
+- **The sheet's buttons** depend on where the picture comes from: "Take a photo" (phones) and
+  "Choose a photo" for templates that start from a photo, "Start drawing" and "Use a photo of a
+  drawing" for those that start from a drawing, and "Try it" for the rest. Templates without
+  settings start the chat as soon as the picture has uploaded; there is nothing to fill in.
+- **Templates with settings** go on to a sentence with a chip for each: "Make a [watercolor ⌃]
+  storybook page where the kid in [🖼 ⌃] [rides a dragon to school]." A choice is a chip over the
+  system's own picker (an invisible `<select>`), free text is an inline field, and the picture is
+  a chip that picks another (for drawing templates, a menu: draw, or choose a photo of a
+  drawing). Anything typed below the sentence is added to the prompt, and the shape is a chip
+  next to Generate.
 - **Drawing** is a full-screen canvas: pen with a size slider, eraser, colors, undo. It keeps the
   strokes as fractions of the side, so it survives resizing, and ✓ exports a 1024×1024 PNG that
   is attached like a photo.
@@ -293,7 +295,7 @@ an image", with the chat's paperclip) does the same with the person's own words.
   it has a value and `{{^setting}}…{{/setting}}` only when it doesn't; `{{image}}` is "the
   attached picture" when one was given. A line that held only sections left out disappears. A
   `cover.png|jpg|webp` next to it replaces the icon.
-- **Sources**, like skills: the 15 that ship with btw (`packages/core/image-templates`),
+- **Sources**, like skills: the 18 that ship with btw (`packages/core/image-templates`),
   `~/.btw-agent/image-templates`, and the profile's `image-templates` folder; a later one
   overrides an earlier one with the same id.
 - **Applying a template just sends a prompt.** The message is the finished prompt, as the family
@@ -301,13 +303,13 @@ an image", with the chat's paperclip) does the same with the person's own words.
   choices' prompts, the shape in words, and what the person typed.
 
   ```
-  Create a Risograph poster of our garden based on the attached picture with the headline "BLOOM".
+  Make a watercolor storybook page where the kid in the attached picture rides a dragon to school.
 
-  Design it as a striking printed poster, ready to hang on a wall.
+  A full-page children's picture-book illustration of the adventure.
   …
   Make it portrait (2:3).
 
-  Make it pink.
+  Give the dragon a backpack.
   ```
 
   The skill tells the agent to pass a detailed prompt like this unchanged on stdin (a heredoc,
