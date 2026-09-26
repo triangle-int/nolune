@@ -6,7 +6,13 @@ import { committedRows, createConversation, insertQueued } from './conversations
 import { getDb } from './db/index.ts';
 import { conversation } from './db/schema.ts';
 import { LEGACY_TOOLS, TOOLS, runCommand, type RunCommandResult } from './run-command.ts';
-import { kick, onLoopEnd, recoverAfterRestart } from './runner.ts';
+import {
+	kick,
+	onLoopEnd,
+	onRunningChange,
+	recoverAfterRestart,
+	runningConversationIds
+} from './runner.ts';
 import { makeFamily, makePreset } from './test/fixtures.ts';
 
 vi.mock('./anthropic.ts', async (importOriginal) => ({
@@ -118,6 +124,30 @@ describe('the agent loop', () => {
 		expect(streamTurn).toHaveBeenCalledTimes(2);
 		expect(committedRows(chat.id).at(-1)?.kind).toBe('assistant');
 		expect(logged).toHaveBeenCalled();
+	});
+
+	it('tells listeners when a chat starts and stops working, for the sidebar', async () => {
+		const chat = chatAsking(
+			modelReply([listFiles], 'tool_use'),
+			modelReply([{ type: 'text', text: 'One file.' }], 'end_turn')
+		);
+		let finish!: (result: RunCommandResult) => void;
+		vi.mocked(runCommand).mockReturnValueOnce(new Promise((resolve) => (finish = resolve)));
+		const changes: [string, boolean][] = [];
+		const off = onRunningChange((id, running) => changes.push([id, running]));
+
+		const ended = run(chat.id);
+		await vi.waitFor(() => expect(runCommand).toHaveBeenCalled());
+		expect(runningConversationIds()).toContain(chat.id);
+		finish({ content: 'a.txt', isError: false, exitCode: 0 });
+		await ended;
+		off();
+
+		expect(changes).toEqual([
+			[chat.id, true],
+			[chat.id, false]
+		]);
+		expect(runningConversationIds()).not.toContain(chat.id);
 	});
 });
 

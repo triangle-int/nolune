@@ -119,6 +119,7 @@ const holder = globalThis as unknown as {
 	__btwRunner?: Map<string, State>;
 	__btwLoopEnd?: Set<LoopEndListener>;
 	__btwCommandEnd?: Set<() => void>;
+	__btwRunningChange?: Set<RunningChangeListener>;
 };
 const states = (holder.__btwRunner ??= new Map());
 
@@ -148,6 +149,25 @@ function commandEnded(): void {
 			listener();
 		} catch (err) {
 			console.error('[btw] command-end listener failed:', err);
+		}
+	}
+}
+
+/** Called whenever any conversation's agent loop starts or stops. */
+export type RunningChangeListener = (conversationId: string, running: boolean) => void;
+const runningChangeListeners = (holder.__btwRunningChange ??= new Set());
+
+export function onRunningChange(listener: RunningChangeListener): () => void {
+	runningChangeListeners.add(listener);
+	return () => runningChangeListeners.delete(listener);
+}
+
+function runningChanged(conversationId: string, running: boolean): void {
+	for (const listener of runningChangeListeners) {
+		try {
+			listener(conversationId, running);
+		} catch (err) {
+			console.error(`[btw] running listener failed for ${conversationId}:`, err);
 		}
 	}
 }
@@ -392,6 +412,11 @@ export function stoppedBy(conversationId: string): string | null {
 	return stateFor(conversationId).stoppedBy;
 }
 
+/** Every conversation whose agent loop is going right now, in any profile. */
+export function runningConversationIds(): string[] {
+	return [...states].filter(([, st]) => st.running).map(([id]) => id);
+}
+
 function stoppedText(st: State): string {
 	return `Stopped by ${st.stoppedBy ?? 'a user'}.`;
 }
@@ -553,6 +578,7 @@ async function loop(conversationId: string): Promise<void> {
 	st.error = null;
 	st.stoppedBy = null;
 	emit(conversationId, { type: 'status', running: true, error: null });
+	runningChanged(conversationId, true);
 
 	try {
 		for (;;) {
@@ -661,6 +687,7 @@ async function loop(conversationId: string): Promise<void> {
 		st.live = [];
 		st.toolOutput = null;
 		emit(conversationId, { type: 'status', running: false, error: st.error });
+		runningChanged(conversationId, false);
 		for (const listener of loopEndListeners) {
 			try {
 				listener(conversationId, st.error);
