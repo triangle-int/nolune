@@ -30,7 +30,9 @@ export const load: PageServerLoad = ({ locals, params }) => {
 		templates: templatesFor(profile.slug).map((t) => ({
 			id: t.id,
 			name: t.name,
+			title: t.title,
 			description: t.description,
+			sentence: t.sentence,
 			category: t.category,
 			icon: t.icon,
 			color: t.color,
@@ -38,6 +40,7 @@ export const load: PageServerLoad = ({ locals, params }) => {
 			cover: t.cover ? Math.round(statSync(t.cover).mtimeMs) : null,
 			image: t.image,
 			imageLabel: t.imageLabel,
+			imageSource: t.imageSource,
 			maxImages: t.maxImages,
 			size: t.size,
 			settings: t.settings.map((s) =>

@@ -1,12 +1,14 @@
 ---
 name: Interior design
+title: Redesign your room
+sentence: 'Redesign {{image}} in {{style}} style, shown as {{look}}.'
 description: See one of your rooms redone in a new style.
 category: Templates
 order: 2
 icon: sofa
 color: '#d4b6e6'
 image: required
-image-label: Photo of the room
+image-label: Photo of your room
 size: auto
 quality: high
 settings:
@@ -30,9 +32,9 @@ settings:
   - id: look
     label: Look
     options:
-      - label: Photo
+      - label: a photo
         prompt: Show it as a realistic interior photograph from the same camera angle as the original, in natural daylight.
-      - label: Isometric 3D
+      - label: an isometric 3D model
         prompt: Show it as a cut-away isometric 3D miniature of the room, like a detailed diorama, on a plain soft pastel background.
 ---
 

@@ -264,22 +264,35 @@ how to write prompts, and how to run the Images page's messages.
 ### Templates and the Images page
 
 The Images page (sidebar, `/p/<slug>/images`) is a grid of templates in tabs (Templates,
-Trending, then any other category), like ChatGPT's. Picking one opens a dialog: the picture it
-starts from (most need one), its settings as chips or text fields, the shape and "Anything
-else?". Generate starts a new chat (default model, reasoning `low`)
-whose first message holds the picture and the finished prompt; the model names the chat as
-usual. A text box below the grid ("Describe an image", with the chat's paperclip) does the same
-with the person's own words.
+Trending, then any other category), like ChatGPT's. Opening one shows a sheet (from the bottom on
+phones): its picture, title and description, and what to do next, which depends on the template.
 
-- **A template** is a folder with a `TEMPLATE.md`: YAML frontmatter (name, description, category,
-  a Lucide `icon` and hex `color` for its card, whether it needs a picture, the default shape,
-  quality, background and format, and its settings: `options` with a label and the `prompt`
-  fragment each stands for, or free text), then the prompt. `{{setting}}` is replaced by the
+- **Most templates are one tap**: "Take a photo" (phones) or "Choose a photo" for those that
+  start from a photo, "Start drawing" for those that start from a drawing, "Try it" for the rest.
+  Once the picture has uploaded, the chat starts; there is nothing else to fill in.
+- **Templates with settings** go on to a sentence with a chip for each: "Make a [Risograph ⌃]
+  poster of [our garden] [🖼 ⌃] with the headline [BLOOM]." A choice is a chip over the system's
+  own picker (an invisible `<select>`), free text is an inline field, and the picture is a chip
+  that picks or draws another. Anything typed below the sentence is added to the prompt, and the
+  shape is a chip next to Generate.
+- **Drawing** is a full-screen canvas: pen with a size slider, eraser, colors, undo. It keeps the
+  strokes as fractions of the side, so it survives resizing, and ✓ exports a 1024×1024 PNG that
+  is attached like a photo.
+
+Generate starts a new chat (default model, reasoning `low`) whose first message holds the picture
+and the finished prompt; the model names the chat as usual. A text box below the grid ("Describe
+an image", with the chat's paperclip) does the same with the person's own words.
+
+- **A template** is a folder with a `TEMPLATE.md`: YAML frontmatter (name for its card, `title`
+  for its sheet, description, category, a Lucide `icon` and hex `color`, whether it needs a
+  picture and whether that's a photo or a drawing (`image-source`), the default shape, quality,
+  background and format, its settings: `options` with a label and the `prompt` fragment each
+  stands for, or free text, and the `sentence` that shows them as chips), then the prompt. `{{setting}}` is replaced by the
   choice, `{{#setting}}…{{/setting}}` is kept only when it has a value and `{{^setting}}…{{/setting}}`
   only when it doesn't; `{{#image}}` tests whether a picture was given. A line that held only
   sections that were left out disappears. An option can also switch the background (a pixel-art
   sprite is transparent, a scene isn't). A `cover.png|jpg|webp` next to it replaces the icon.
-- **Sources**, like skills: the 14 that ship with btw (`packages/core/image-templates`),
+- **Sources**, like skills: the 15 that ship with btw (`packages/core/image-templates`),
   `~/.btw-agent/image-templates`, and the profile's `image-templates` folder; a later one
   overrides an earlier one with the same id.
 - **The message** is plain text the family reads in the chat, e.g.

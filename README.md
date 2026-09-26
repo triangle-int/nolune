@@ -52,9 +52,10 @@ Access). `btw setup` prints the exact path.
   HEIC and shrinks big photos for it), and it can show pictures and hand over files in the chat
   ("show me the beach photos from August", "fill in this form and give it to me"). It keeps its
   own copy of each file it shows, so they stay in the chat even if the original moves.
-- **Images.** The Images page in the sidebar has templates (Poster, Interior design, Stickers,
-  '80s flashback, Coloring page and more): pick one, choose a photo and a few settings, and press
-  Generate. btw starts a new chat with the photo and the template's prompt, makes the picture
+- **Images.** The Images page in the sidebar has templates (Anime, Stickers, '80s flashback,
+  Coloring page, Doodle, Poster and more): tap one and take or choose a photo, draw something, or
+  press Try it; a few ask for some choices first. btw starts a new chat with the picture and the
+  template's prompt, makes the picture
   with `btw generate image` and shows it there, where you can ask for changes. You can also just
   describe a picture, there or in any chat. It needs an OpenAI key (`btw key set openai`); the
   model is `openai/gpt-image-2.5-flare` unless you pick another with

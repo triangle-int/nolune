@@ -1,5 +1,7 @@
 ---
 name: Poster
+title: Make a poster
+sentence: 'Make a {{style}} poster of {{subject}} {{image}} with the headline {{headline}}.'
 description: A bold printed poster built around a photo or an idea.
 category: Templates
 order: 1

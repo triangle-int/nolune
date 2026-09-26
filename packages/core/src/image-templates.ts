@@ -46,9 +46,18 @@ export type TemplateSetting =
 export interface ImageTemplate {
 	/** The folder name. */
 	id: string;
+	/** On its card. */
 	name: string;
+	/** The heading when it's opened, like "See yourself in the '80s". Defaults to the name. */
+	title: string;
 	/** One sentence for the family. */
 	description: string;
+	/**
+	 * What it makes, as a short sentence the Images page shows with a chip for each setting in its
+	 * place and `{{image}}` for the picture: "Turn {{image}} into a {{medium}} sketch." Settings it
+	 * leaves out are shown below it. Only for people: the model gets `prompt`.
+	 */
+	sentence: string | null;
 	/** The tab it's listed under on the Images page. */
 	category: string;
 	/** A Lucide icon name and a hex color for its card, when there's no cover picture. */
@@ -58,6 +67,8 @@ export interface ImageTemplate {
 	image: 'required' | 'optional' | 'none';
 	/** What to pick, e.g. "Photo of the room". */
 	imageLabel: string | null;
+	/** Where the picture comes from: a photo, or a drawing made on the page. */
+	imageSource: 'photo' | 'drawing';
 	maxImages: number;
 	size: ImageShape;
 	quality: string | null;
@@ -178,7 +189,11 @@ function parseTemplate(
 			ids.add(s.id);
 		}
 		if (!prompt) throw new Error('the prompt (after the frontmatter) is empty');
-		for (const [, key] of prompt.matchAll(PLACEHOLDER)) {
+		const sentence = text(meta.sentence);
+		for (const [, key] of [
+			...prompt.matchAll(PLACEHOLDER),
+			...(sentence ?? '').matchAll(PLACEHOLDER)
+		]) {
 			if (key !== IMAGE_VAR && !ids.has(key)) {
 				warnings.push(`${location}: {{${key}}} is not one of its settings`);
 			}
@@ -190,13 +205,17 @@ function parseTemplate(
 		return {
 			id,
 			name,
+			title: text(meta.title) ?? name,
 			description: text(meta.description) ?? '',
+			sentence,
 			category: text(meta.category) ?? DEFAULT_TEMPLATE_CATEGORY,
 			icon: icon && ICON_NAME.test(icon) ? icon : null,
 			// Goes into a style attribute, so only a plain hex color.
 			color: color && HEX_COLOR.test(color) ? color : null,
 			image,
 			imageLabel: text(meta['image-label']),
+			imageSource:
+				oneOf(meta['image-source'], ['photo', 'drawing'] as const, 'image-source') ?? 'photo',
 			maxImages: Number.isInteger(maxImages) && maxImages >= 0 ? maxImages : 1,
 			size: oneOf(meta.size, IMAGE_SHAPES, 'size') ?? 'auto',
 			quality: text(meta.quality),

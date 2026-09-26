@@ -1,31 +1,34 @@
 <script lang="ts">
 	import { onDestroy } from 'svelte';
+	import { MediaQuery } from 'svelte/reactivity';
 	import { enhance } from '$app/forms';
 	import type { SubmitFunction } from '@sveltejs/kit';
+	import CameraIcon from '@lucide/svelte/icons/camera';
+	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import ImageIcon from '@lucide/svelte/icons/image';
 	import ImagePlusIcon from '@lucide/svelte/icons/image-plus';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
-	import PlusIcon from '@lucide/svelte/icons/plus';
+	import PenLineIcon from '@lucide/svelte/icons/pen-line';
 	import RectangleHorizontalIcon from '@lucide/svelte/icons/rectangle-horizontal';
 	import RectangleVerticalIcon from '@lucide/svelte/icons/rectangle-vertical';
 	import ScanIcon from '@lucide/svelte/icons/scan';
 	import SquareIcon from '@lucide/svelte/icons/square';
-	import WandSparklesIcon from '@lucide/svelte/icons/wand-sparkles';
 	import XIcon from '@lucide/svelte/icons/x';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import { Textarea } from '$lib/components/ui/textarea';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Composer from '$lib/components/chat/Composer.svelte';
 	import StepIcon from '$lib/components/chat/StepIcon.svelte';
+	import DrawingCanvas from '$lib/components/images/DrawingCanvas.svelte';
 	import { Attachments } from '$lib/uploads.svelte';
 	import { cn } from '$lib/utils';
 
 	let { data } = $props();
 
 	type Template = (typeof data.templates)[number];
+	type Setting = Template['settings'][number];
+	type Part =
+		{ kind: 'text'; text: string } | { kind: 'setting'; setting: Setting } | { kind: 'image' };
 
 	const SHAPES = [
 		{ value: 'square', label: 'Square', icon: SquareIcon },
@@ -34,26 +37,41 @@
 		{ value: 'auto', label: 'Auto', icon: ScanIcon }
 	] as const;
 
+	/** Phones get "Take a photo" next to "Choose a photo". */
+	const touch = new MediaQuery('(pointer: coarse)');
+
 	const categories = $derived([...new Set(data.templates.map((t) => t.category))]);
 	let tab = $state<string | null>(null);
 	const activeTab = $derived(tab && categories.includes(tab) ? tab : categories[0]);
 	const shown = $derived(data.templates.filter((t) => t.category === activeTab));
 
-	/** The template whose dialog is open. */
+	/*
+	 * Opening a template shows its sheet. Most start right away: once the photo is picked (or
+	 * drawn), or with Try it. Templates with settings go on to a sentence with a chip for each.
+	 */
 	let chosen = $state<Template | null>(null);
+	let step = $state<'sheet' | 'compose' | 'draw'>('sheet');
+	/** Where closing the drawing goes back to. */
+	let drawnFrom: 'sheet' | 'compose' = 'sheet';
+	/** Send as soon as the picture has uploaded. */
+	let autoSend = $state(false);
 	let starting = $state(false);
-	/** Errors from the server stay with the form they came from. */
 	let templateError = $state<string | null>(null);
+	let templateForm = $state<HTMLFormElement>();
+	let values = $state<Record<string, string>>({});
+	let shape = $state('auto');
+
 	/** The template's pictures upload as soon as they're picked, like files in the chat. */
 	const photos = new Attachments(() => data.profile.slug);
 	let photoInput = $state<HTMLInputElement>();
+	let cameraInput = $state<HTMLInputElement>();
 	let photoNote = $state<string | null>(null);
-	let dragging = $state(false);
 	const maxPhotos = $derived(Math.max(1, chosen?.maxImages ?? 1));
 	const photoProblem = $derived(
 		photoNote ?? photos.files.find((f) => f.status === 'failed')?.error ?? null
 	);
 	const missingPicture = $derived(chosen?.image === 'required' && photos.ids.length === 0);
+	const sentence = $derived(chosen ? sentenceParts(chosen) : { parts: [], rest: [] });
 
 	let text = $state('');
 	let describing = $state(false);
@@ -61,26 +79,49 @@
 	let describeForm = $state<HTMLFormElement>();
 	const describeFiles = new Attachments(() => data.profile.slug);
 
+	/** The template's sentence split into words and chips; settings it leaves out come after. */
+	function sentenceParts(template: Template): { parts: Part[]; rest: Setting[] } {
+		const source = template.sentence ?? `${template.title}.`;
+		const parts: Part[] = [];
+		const used: string[] = [];
+		let last = 0;
+		for (const match of source.matchAll(/\{\{\s*([\w-]+)\s*\}\}/g)) {
+			if (match.index > last) parts.push({ kind: 'text', text: source.slice(last, match.index) });
+			last = match.index + match[0].length;
+			const key = match[1];
+			const setting = template.settings.find((s) => s.id === key);
+			if (key === 'image' && template.image !== 'none') parts.push({ kind: 'image' });
+			else if (setting) parts.push({ kind: 'setting', setting });
+			used.push(key);
+		}
+		if (last < source.length) parts.push({ kind: 'text', text: source.slice(last) });
+		if (template.image !== 'none' && !used.includes('image')) {
+			parts.push({ kind: 'text', text: ' ' }, { kind: 'image' });
+		}
+		return { parts, rest: template.settings.filter((s) => !used.includes(s.id)) };
+	}
+
 	function isPicture(file: File): boolean {
 		// HEIC from a Mac often has no type; the server checks the content anyway.
 		return file.type.startsWith('image/') || /\.(heic|heif)$/i.test(file.name);
 	}
 
-	/** Adds pictures to the template; with room for one, a new one replaces the old. */
-	function addPhotos(list: FileList | null | undefined) {
+	/** Adds pictures; with room for one, a new one replaces the old. Returns whether any was. */
+	function addPhotos(list: FileList | File[] | null | undefined): boolean {
 		photoNote = null;
 		const files = [...(list ?? [])];
 		const pictures = files.filter(isPicture);
 		if (pictures.length < files.length) photoNote = 'Only pictures can be used here.';
-		if (!pictures.length) return;
+		if (!pictures.length) return false;
 		if (maxPhotos === 1) {
 			for (const file of photos.files) photos.remove(file.key);
 			photos.add(pictures.slice(-1));
-			return;
+			return true;
 		}
 		const room = maxPhotos - photos.files.length;
 		if (pictures.length > room) photoNote = `At most ${maxPhotos} pictures.`;
 		photos.add(pictures.slice(0, Math.max(0, room)));
+		return room > 0;
 	}
 
 	/** Takes the pictures off the server too: they were never sent. */
@@ -89,22 +130,72 @@
 		photoNote = null;
 	}
 
-	function choose(template: Template) {
+	function open(template: Template) {
 		dropPhotos();
 		templateError = null;
+		autoSend = false;
+		step = 'sheet';
 		chosen = template;
 	}
 
 	function close() {
 		if (starting) return;
 		dropPhotos();
+		autoSend = false;
 		chosen = null;
 	}
+
+	function compose() {
+		if (!chosen) return;
+		values = Object.fromEntries(chosen.settings.map((s) => [s.id, s.default]));
+		shape = chosen.size;
+		step = 'compose';
+	}
+
+	/** After the picture from the sheet: settings to pick, or straight to making it. */
+	function next() {
+		if (!chosen) return;
+		if (chosen.settings.length) compose();
+		else if (chosen.image === 'required' && !photos.files.length) return;
+		else if (photos.files.length) autoSend = true;
+		else templateForm?.requestSubmit();
+	}
+
+	function onPicked(event: Event & { currentTarget: HTMLInputElement }) {
+		const added = addPhotos(event.currentTarget.files);
+		event.currentTarget.value = '';
+		if (added && step === 'sheet') next();
+	}
+
+	function draw() {
+		drawnFrom = step === 'compose' ? 'compose' : 'sheet';
+		step = 'draw';
+	}
+
+	function onDrawn(file: File) {
+		addPhotos([file]);
+		step = drawnFrom;
+		if (step === 'sheet') next();
+	}
+
+	// Sends once the picture is on the server, or gives up if it couldn't get there.
+	$effect(() => {
+		if (!autoSend || starting || photos.uploading) return;
+		autoSend = false;
+		if (photos.ids.length && !photos.files.some((f) => f.status === 'failed')) {
+			templateForm?.requestSubmit();
+		}
+	});
 
 	function coverUrl(template: Template): string | null {
 		if (template.cover === null) return null;
 		const slug = encodeURIComponent(data.profile.slug);
 		return `/api/p/${slug}/templates/${encodeURIComponent(template.id)}/cover?v=${template.cover}`;
+	}
+
+	function optionLabel(setting: Setting, value: string): string {
+		if (setting.type !== 'select') return value;
+		return setting.options.find((o) => o.value === value)?.label ?? value;
 	}
 
 	/** On success the server redirects to the new chat; on failure the form stays as it was. */
@@ -138,6 +229,11 @@
 		photos.clear();
 		describeFiles.clear();
 	});
+
+	const chip =
+		'rounded-xl border border-foreground/15 bg-muted/70 px-2 align-baseline transition-colors hover:bg-muted focus-within:ring-2 focus-within:ring-ring';
+	const bigButton =
+		'flex h-12 w-full items-center justify-center gap-2 rounded-full text-base font-medium transition-opacity hover:opacity-85 disabled:opacity-50';
 </script>
 
 {#snippet tile(template: Template, className: string, iconClass: string)}
@@ -161,6 +257,72 @@
 			</span>
 		{/if}
 	</span>
+{/snippet}
+
+{#snippet imageChip(template: Template)}
+	{@const picture = photos.files[0]}
+	<button
+		type="button"
+		onclick={() => (template.imageSource === 'drawing' ? draw() : photoInput?.click())}
+		class={cn(
+			chip,
+			'inline-flex translate-y-1 items-center gap-1 py-1',
+			picture?.status === 'failed' && 'border-destructive'
+		)}
+		aria-label={picture
+			? `Change ${template.imageLabel ?? 'the picture'}`
+			: (template.imageLabel ?? 'Add a picture')}
+	>
+		{#if picture}
+			<span class="relative size-9 overflow-hidden rounded-lg bg-muted">
+				{#if picture.preview}
+					<img src={picture.preview} alt="" class="size-full object-cover" />
+				{:else}
+					<ImageIcon class="m-2 size-5 text-muted-foreground" />
+				{/if}
+				{#if picture.status === 'uploading'}
+					<span class="absolute inset-0 flex items-center justify-center bg-black/40 text-white">
+						<LoaderCircleIcon class="size-4 animate-spin" />
+					</span>
+				{/if}
+			</span>
+		{:else if template.imageSource === 'drawing'}
+			<PenLineIcon class="m-1.5 size-6 text-muted-foreground" />
+		{:else}
+			<ImagePlusIcon class="m-1.5 size-6 text-muted-foreground" />
+		{/if}
+		<ChevronsUpDownIcon class="size-4 text-muted-foreground" />
+	</button>
+{/snippet}
+
+{#snippet settingChip(setting: Setting)}
+	{#if setting.type === 'select'}
+		<!-- The chip shows the choice; the invisible select over it opens the system picker. -->
+		<span class={cn(chip, 'relative inline-flex items-center gap-1 whitespace-nowrap')}>
+			{optionLabel(setting, values[setting.id] ?? setting.default)}
+			<ChevronsUpDownIcon class="size-4 shrink-0 text-muted-foreground" />
+			<select
+				name={`setting:${setting.id}`}
+				bind:value={values[setting.id]}
+				aria-label={setting.label}
+				class="absolute inset-0 cursor-pointer opacity-0"
+			>
+				{#each setting.options as option (option.value)}
+					<option value={option.value}>{option.label}</option>
+				{/each}
+			</select>
+		</span>
+	{:else}
+		<input
+			name={`setting:${setting.id}`}
+			bind:value={values[setting.id]}
+			placeholder={setting.placeholder ?? setting.label.toLowerCase()}
+			aria-label={setting.label}
+			required={setting.required}
+			size={Math.max(4, (values[setting.id] || setting.placeholder || setting.label).length)}
+			class={cn(chip, 'max-w-full py-0 outline-none placeholder:text-muted-foreground/70')}
+		/>
+	{/if}
 {/snippet}
 
 <PageHeader>
@@ -206,7 +368,7 @@
 			{#each shown as template (template.id)}
 				<button
 					type="button"
-					onclick={() => choose(template)}
+					onclick={() => open(template)}
 					class="group relative block overflow-hidden rounded-3xl text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
 				>
 					{@render tile(template, 'aspect-[4/5]', 'size-16 stroke-[1.5]')}
@@ -255,228 +417,211 @@
 	</div>
 </form>
 
-<Dialog.Root open={chosen !== null} onOpenChange={(open) => !open && close()}>
-	<Dialog.Content class="max-h-[calc(100dvh-2rem)] gap-5 overflow-y-auto sm:max-w-lg">
+<!-- Outside the dialog, so the drawing screen can use them too. -->
+<input
+	bind:this={photoInput}
+	data-picker="photo"
+	type="file"
+	accept="image/*"
+	multiple={maxPhotos > 1}
+	class="hidden"
+	onchange={onPicked}
+/>
+<input
+	bind:this={cameraInput}
+	data-picker="camera"
+	type="file"
+	accept="image/*"
+	capture="environment"
+	class="hidden"
+	onchange={onPicked}
+/>
+
+<Dialog.Root
+	open={chosen !== null && step !== 'draw'}
+	onOpenChange={(isOpen) => !isOpen && close()}
+>
+	<Dialog.Content
+		showCloseButton={false}
+		class={cn(
+			'gap-0 overflow-hidden p-0 sm:max-w-md',
+			// Phones: a sheet from the bottom, like the ChatGPT app.
+			'max-sm:top-auto max-sm:bottom-0 max-sm:left-0 max-sm:max-w-full max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-b-none',
+			step === 'compose' &&
+				'flex max-h-[calc(100dvh-1rem)] flex-col max-sm:h-[calc(100dvh-0.5rem)] sm:max-w-xl'
+		)}
+	>
 		{#if chosen}
-			{#key chosen.id}
-				<div class="flex items-center gap-4 pr-8">
-					{@render tile(chosen, 'size-16 shrink-0 rounded-2xl', 'size-8 stroke-[1.5]')}
-					<div class="min-w-0 space-y-1">
-						<Dialog.Title class="text-lg">{chosen.name}</Dialog.Title>
-						{#if chosen.description}
-							<Dialog.Description>{chosen.description}</Dialog.Description>
-						{/if}
+			<form
+				bind:this={templateForm}
+				method="POST"
+				use:enhance={submit(
+					(busy) => (starting = busy),
+					(message) => (templateError = message),
+					photos
+				)}
+				class={cn(step === 'compose' && 'flex min-h-0 flex-1 flex-col')}
+			>
+				<input type="hidden" name="template" value={chosen.id} />
+				{#each photos.ids as id (id)}
+					<input type="hidden" name="upload" value={id} />
+				{/each}
+
+				{#if step === 'sheet'}
+					{@const busy = starting || autoSend || (photos.uploading && !chosen.settings.length)}
+					<div class="relative">
+						{@render tile(chosen, 'aspect-[5/4] w-full', 'size-24 stroke-[1.25]')}
+						<button
+							type="button"
+							onclick={close}
+							class="absolute top-3 right-3 flex size-9 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur hover:bg-black/60"
+							aria-label="Close"
+						>
+							<XIcon class="size-5" />
+						</button>
 					</div>
-				</div>
-
-				<form
-					method="POST"
-					use:enhance={submit(
-						(busy) => (starting = busy),
-						(message) => (templateError = message),
-						photos
-					)}
-					class="grid gap-5"
-				>
-					<input type="hidden" name="template" value={chosen.id} />
-					{#each photos.ids as id (id)}
-						<input type="hidden" name="upload" value={id} />
-					{/each}
-
-					{#if chosen.image !== 'none'}
-						<div class="grid gap-2">
-							<span class="text-sm font-medium">
-								{chosen.imageLabel ?? 'Picture'}
-								{#if chosen.image === 'optional'}
-									<span class="font-normal text-muted-foreground">(optional)</span>
-								{/if}
-							</span>
-							<input
-								bind:this={photoInput}
-								type="file"
-								accept="image/*"
-								multiple={maxPhotos > 1}
-								class="hidden"
-								onchange={(event) => {
-									addPhotos(event.currentTarget.files);
-									event.currentTarget.value = '';
-								}}
-							/>
-							{#if photos.files.length}
-								<div class="flex flex-wrap gap-2">
-									{#each photos.files as file (file.key)}
-										<div class="relative size-28 shrink-0 overflow-hidden rounded-2xl bg-muted">
-											{#if file.preview}
-												<img src={file.preview} alt={file.name} class="size-full object-cover" />
-											{:else}
-												<!-- A format the browser can't show, like HEIC in Chrome. -->
-												<span
-													class="flex size-full items-center justify-center p-2 text-center text-xs break-all text-muted-foreground"
-													>{file.name}</span
-												>
-											{/if}
-											{#if file.status === 'uploading'}
-												<span
-													class="absolute inset-0 flex items-center justify-center bg-black/35 text-white"
-												>
-													<LoaderCircleIcon class="size-6 animate-spin" />
-													<span class="sr-only">Uploading</span>
-												</span>
-											{:else if file.status === 'failed'}
-												<span
-													class="absolute inset-0 flex items-center justify-center bg-destructive/70 p-2 text-center text-xs text-white"
-												>
-													{file.error ?? 'Upload failed'}
-												</span>
-											{/if}
-											<button
-												type="button"
-												onclick={() => photos.remove(file.key)}
-												class="absolute top-1 right-1 flex size-6 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80"
-												aria-label={`Remove ${file.name}`}
-											>
-												<XIcon class="size-3.5" />
-											</button>
-										</div>
-									{/each}
-									{#if maxPhotos > 1 && photos.files.length < maxPhotos}
-										<button
-											type="button"
-											onclick={() => photoInput?.click()}
-											class="flex size-28 items-center justify-center rounded-2xl border border-dashed text-muted-foreground hover:bg-muted"
-											aria-label="Add another picture"
-										>
-											<PlusIcon class="size-6" />
-										</button>
-									{/if}
+					<div
+						class="grid gap-2 px-6 pt-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] text-center"
+					>
+						<Dialog.Title class="text-2xl font-semibold">{chosen.title}</Dialog.Title>
+						{#if chosen.description}
+							<Dialog.Description class="line-clamp-3 text-base">
+								{chosen.description}
+							</Dialog.Description>
+						{/if}
+						{#if templateError || photoProblem}
+							<p class="text-sm text-destructive">{templateError ?? photoProblem}</p>
+						{/if}
+						<div class="mt-4 grid gap-3">
+							{#if busy}
+								<div class={cn(bigButton, 'bg-muted text-muted-foreground')} role="status">
+									<LoaderCircleIcon class="size-5 animate-spin" />
+									{photos.uploading ? 'Uploading…' : 'Starting…'}
 								</div>
-							{:else}
+							{:else if chosen.imageSource === 'drawing'}
+								<button
+									type="button"
+									onclick={draw}
+									disabled={!data.ready}
+									class={cn(bigButton, 'bg-primary text-primary-foreground')}
+								>
+									<PenLineIcon class="size-5" />
+									Start drawing
+								</button>
+							{:else if chosen.image === 'required'}
+								{#if touch.current}
+									<button
+										type="button"
+										onclick={() => cameraInput?.click()}
+										disabled={!data.ready}
+										class={cn(bigButton, 'bg-muted text-foreground')}
+									>
+										<CameraIcon class="size-5" />
+										Take a photo
+									</button>
+								{/if}
 								<button
 									type="button"
 									onclick={() => photoInput?.click()}
-									ondragover={(event) => {
-										if (!event.dataTransfer?.types.includes('Files')) return;
-										event.preventDefault();
-										dragging = true;
-									}}
-									ondragleave={() => (dragging = false)}
-									ondrop={(event) => {
-										event.preventDefault();
-										dragging = false;
-										addPhotos(event.dataTransfer?.files);
-									}}
-									class={cn(
-										'flex h-32 flex-col items-center justify-center gap-1.5 rounded-2xl border border-dashed text-sm text-muted-foreground transition-colors hover:bg-muted',
-										dragging && 'border-primary bg-muted'
-									)}
+									disabled={!data.ready}
+									class={cn(bigButton, 'bg-primary text-primary-foreground')}
 								>
-									<ImagePlusIcon class="size-6" />
-									<span class="font-medium text-foreground">Choose a photo</span>
-									<span class="max-sm:hidden">or drop it here</span>
+									Choose a photo
+								</button>
+							{:else}
+								<button
+									type="button"
+									onclick={next}
+									disabled={!data.ready}
+									class={cn(bigButton, 'bg-primary text-primary-foreground')}
+								>
+									Try it
 								</button>
 							{/if}
-							{#if photoProblem}
-								<p class="text-sm text-destructive">{photoProblem}</p>
-							{/if}
 						</div>
-					{/if}
+					</div>
+				{:else}
+					<div class="flex items-center justify-between px-4 pt-4">
+						<button
+							type="button"
+							onclick={close}
+							class="flex size-10 items-center justify-center rounded-full hover:bg-muted"
+							aria-label="Close"
+						>
+							<XIcon class="size-5" />
+						</button>
+						<Dialog.Title class="text-sm font-medium text-muted-foreground">
+							{chosen.name}
+						</Dialog.Title>
+						<span class="size-10"></span>
+					</div>
 
-					{#each chosen.settings as setting (setting.id)}
-						{#if setting.type === 'select'}
-							<fieldset class="grid gap-2">
-								<legend class="mb-2 text-sm font-medium">{setting.label}</legend>
-								<div class="flex flex-wrap gap-2">
-									{#each setting.options as option (option.value)}
-										<label
-											class="cursor-pointer rounded-full border px-3.5 py-1.5 text-sm transition-colors select-none hover:bg-muted has-checked:border-primary has-checked:bg-primary has-checked:text-primary-foreground has-focus-visible:ring-2 has-focus-visible:ring-ring"
-										>
-											<input
-												type="radio"
-												name={`setting:${setting.id}`}
-												value={option.value}
-												checked={option.value === setting.default}
-												class="sr-only"
-											/>
-											{option.label}
-										</label>
-									{/each}
-								</div>
-							</fieldset>
-						{:else}
-							<label class="grid gap-2">
-								<span class="text-sm font-medium">
-									{setting.label}
-									{#if !setting.required}
-										<span class="font-normal text-muted-foreground">(optional)</span>
-									{/if}
-								</span>
-								<Input
-									name={`setting:${setting.id}`}
-									value={setting.default}
-									placeholder={setting.placeholder ?? ''}
-									required={setting.required}
-									class="h-10 rounded-full px-4"
-								/>
-							</label>
-						{/if}
-					{/each}
-
-					<fieldset class="grid gap-2">
-						<legend class="mb-2 text-sm font-medium">Shape</legend>
-						<div class="flex flex-wrap gap-2">
-							{#each SHAPES as shape (shape.value)}
-								<label
-									class="flex cursor-pointer items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-sm transition-colors select-none hover:bg-muted has-checked:border-primary has-checked:bg-primary has-checked:text-primary-foreground has-focus-visible:ring-2 has-focus-visible:ring-ring"
-								>
-									<input
-										type="radio"
-										name="shape"
-										value={shape.value}
-										checked={shape.value === chosen.size}
-										class="sr-only"
-									/>
-									<shape.icon class="size-4" />
-									{shape.label}
-								</label>
+					<div class="min-h-0 flex-1 overflow-y-auto px-6 pt-4 pb-6">
+						<p class="text-[26px] leading-[1.75] font-medium tracking-tight">
+							{#each sentence.parts as part, i (i)}
+								{#if part.kind === 'text'}{part.text}{:else if part.kind === 'image'}{@render imageChip(
+										chosen
+									)}{:else}{@render settingChip(part.setting)}{/if}
 							{/each}
-						</div>
-					</fieldset>
-
-					<label class="grid gap-2">
-						<span class="text-sm font-medium">
-							Anything else? <span class="font-normal text-muted-foreground">(optional)</span>
-						</span>
-						<Textarea
+						</p>
+						{#each sentence.rest as setting (setting.id)}
+							<p class="mt-3 text-lg leading-loose">
+								<span class="text-muted-foreground">{setting.label}:</span>
+								{@render settingChip(setting)}
+							</p>
+						{/each}
+						<textarea
 							name="extra"
-							rows={2}
-							placeholder="Like “make it pink” or “add our dog”"
-							class="min-h-16 rounded-2xl px-4 py-2.5"
-						/>
-					</label>
+							rows="2"
+							placeholder="Add anything else…"
+							class="mt-4 w-full resize-none bg-transparent text-xl leading-relaxed outline-none placeholder:text-muted-foreground/60"
+						></textarea>
+						{#if templateError || photoProblem}
+							<p class="text-sm text-destructive">{templateError ?? photoProblem}</p>
+						{/if}
+					</div>
 
-					{#if templateError}
-						<p class="text-sm text-destructive">{templateError}</p>
-					{/if}
-
-					<div class="grid gap-2">
-						<Button
+					<div
+						class="flex items-center gap-3 border-t px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]"
+					>
+						{#each SHAPES.filter((s) => s.value === shape) as current (current.value)}
+							<span class={cn(chip, 'relative inline-flex items-center gap-1.5 py-1.5 text-sm')}>
+								<current.icon class="size-4" />
+								{current.label}
+								<ChevronsUpDownIcon class="size-3.5 text-muted-foreground" />
+								<select
+									name="shape"
+									bind:value={shape}
+									aria-label="Shape"
+									class="absolute inset-0 cursor-pointer opacity-0"
+								>
+									{#each SHAPES as option (option.value)}
+										<option value={option.value}>{option.label}</option>
+									{/each}
+								</select>
+							</span>
+						{/each}
+						<span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+							{photos.uploading
+								? 'Uploading the picture…'
+								: missingPicture
+									? `Add ${chosen.imageSource === 'drawing' ? 'a drawing' : 'a photo'} first.`
+									: ''}
+						</span>
+						<button
 							type="submit"
 							disabled={starting || missingPicture || photos.uploading || !data.ready}
-							class="h-11 rounded-full text-base"
+							class="h-10 rounded-full bg-primary px-5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-85 disabled:opacity-40"
 						>
-							<WandSparklesIcon />
 							{starting ? 'Starting…' : 'Generate'}
-						</Button>
-						<p class="text-center text-xs text-muted-foreground">
-							{photos.uploading
-								? 'Uploading the photo…'
-								: missingPicture
-									? 'Choose a photo first.'
-									: 'btw makes it in a new chat, where you can ask for changes.'}
-						</p>
+						</button>
 					</div>
-				</form>
-			{/key}
+				{/if}
+			</form>
 		{/if}
 	</Dialog.Content>
 </Dialog.Root>
+
+{#if chosen && step === 'draw'}
+	<DrawingCanvas ondone={onDrawn} onclose={() => (step = drawnFrom)} />
+{/if}

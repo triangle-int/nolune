@@ -1,5 +1,7 @@
 ---
 name: Pixel art
+title: Make game-ready pixel art
+sentence: 'Create a {{palette}} pixel art {{kind}} of {{subject}} {{image}}.'
 description: Game-ready pixel art, from a single sprite to a whole scene.
 category: Templates
 order: 8
@@ -16,13 +18,13 @@ settings:
   - id: kind
     label: Kind
     options:
-      - label: Character sprite
+      - label: character sprite
         prompt: a single full-body character sprite in a three-quarter front view, centered, with nothing behind it
         background: transparent
-      - label: Item icon
+      - label: item icon
         prompt: a single game item icon with a bold dark outline, centered, with nothing behind it
         background: transparent
-      - label: Scene
+      - label: scene
         prompt: a complete game scene with a detailed background, like a screenshot from a side-scrolling game
   - id: palette
     label: Palette

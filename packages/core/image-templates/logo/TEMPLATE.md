@@ -1,5 +1,7 @@
 ---
 name: Logo
+title: Design a logo
+sentence: 'Design a {{style}} logo for {{name}}, {{about}}, in {{colors}} {{image}}.'
 description: A clean logo for a club, a business or a project.
 category: Templates
 order: 3
@@ -21,15 +23,15 @@ settings:
   - id: style
     label: Style
     options:
-      - label: Minimal
+      - label: minimal
         prompt: a minimal wordmark with a simple symbol, flat, in one or two colors
-      - label: Emblem
+      - label: emblem
         prompt: a round emblem or badge, with the name set along the ring and a symbol in the middle
-      - label: Mascot
+      - label: mascot
         prompt: a friendly mascot character with the name below it, with bold outlines
-      - label: Hand-lettered
+      - label: hand-lettered
         prompt: the name hand-lettered with a brush, lively and warm
-      - label: Geometric
+      - label: geometric
         prompt: a geometric symbol built from simple shapes, with the name in a modern sans serif
   - id: colors
     label: Colors

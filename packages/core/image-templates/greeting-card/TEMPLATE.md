@@ -1,5 +1,7 @@
 ---
 name: Greeting card
+title: Make a greeting card
+sentence: 'Make a {{style}} {{occasion}} card {{image}} that says {{message}}.'
 description: A card for a birthday, a holiday or a thank-you.
 category: Templates
 order: 7
@@ -13,7 +15,7 @@ settings:
   - id: occasion
     label: Occasion
     options:
-      - label: Birthday
+      - label: birthday
         prompt: a birthday, with balloons, cake or confetti
       - label: Christmas
         prompt: Christmas, with snowy winter and festive details
@@ -21,11 +23,11 @@ settings:
         prompt: New Year, with fireworks and sparkle
       - label: Wedding
         prompt: a wedding, elegant and romantic, with flowers
-      - label: Thank you
+      - label: thank-you
         prompt: a thank-you, warm and heartfelt, with flowers
-      - label: New baby
+      - label: new baby
         prompt: a new baby, soft and tender, in pastel colors
-      - label: Get well
+      - label: get-well
         prompt: a get-well wish, cheerful and comforting, with sunshine and flowers
   - id: message
     label: Message
@@ -33,13 +35,13 @@ settings:
   - id: style
     label: Style
     options:
-      - label: Watercolor
+      - label: watercolor
         prompt: soft watercolor with delicate gold accents
-      - label: Cut paper
+      - label: cut-paper
         prompt: a layered cut-paper collage with gentle shadows
-      - label: Vintage
+      - label: vintage
         prompt: a vintage postcard with muted colors and ornate details
-      - label: Playful
+      - label: playful
         prompt: bright, playful hand-drawn doodles
 ---
 
