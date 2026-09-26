@@ -318,11 +318,18 @@ template.
   drawing" for those that start from a drawing, and "Try it" for the rest. Templates without
   settings start the chat as soon as the picture has uploaded; there is nothing to fill in.
 - **Templates with settings** go on to a sentence with a chip for each: "Make a [watercolor ⌃]
-  storybook page where the kid in [🖼 ⌃] [rides a dragon to school]." A choice is a chip over the
-  system's own picker (an invisible `<select>`), free text is an inline field, and the picture is
-  a chip that picks another (for drawing templates, a menu: draw, or choose a photo of a
-  drawing). Anything typed below the sentence is added to the prompt, and the shape is a chip
-  next to Generate.
+  storybook page where the kid in [🖼 ⌃] [rides a dragon to school]." A choice is a chip that
+  opens a menu of the others (bits-ui's Select, which posts it with the form), free text is an
+  inline field, emoji are a chip that opens an emoji picker, and the picture is a chip that picks
+  another (for drawing templates, a menu: draw, or choose a photo of a drawing). Punctuation
+  right after a chip stays on its line. Anything typed below the sentence is added to the
+  prompt, and the shape is a chip next to Generate.
+- **The emoji picker** is [emoji-picker-element](https://github.com/nolanlawson/emoji-picker-element)
+  (search, categories, skin tones), in a popover under the chip: taps add emoji up to the
+  setting's `max`, one more pushes out the oldest, and ⌫ removes the last. Its data
+  (`emoji-picker-element-data`) is bundled and served by btw rather than fetched from a CDN, and
+  the picker keeps it in IndexedDB after the first open. It's styled with btw's colors in both
+  themes.
 - **Drawing** is a full-screen canvas: pen with a size slider, eraser, colors, undo. It keeps the
   strokes as fractions of the side, so it survives resizing, and ✓ exports a 1024×1024 PNG that
   is attached like a photo.
@@ -331,19 +338,20 @@ Generate starts a new chat (default model, reasoning `low`) whose first message 
 and the finished prompt; the model names the chat as usual. A text box below the grid ("Describe
 an image", with the chat's paperclip) does the same with the person's own words.
 
-- **A template** is a folder with a `TEMPLATE.md`: YAML frontmatter (name for its card, `title`
-  for its sheet, description, category, a Lucide `icon` and hex `color`, whether it needs a
-  picture and whether that's a photo or a drawing (`image-source`), the default shape, its
-  settings: `options` with a label and the `prompt` fragment each stands for, or free text, and
-  the `sentence` that shows them as chips), then the prompt: the instructions for the image
-  model. `{{setting}}` is replaced by the choice, `{{#setting}}…{{/setting}}` is kept only when
-  it has a value and `{{^setting}}…{{/setting}}` only when it doesn't; `{{image}}` is "the
-  attached picture" when one was given, and `{{aspect}}` the chosen shape in words ("square
-  (1:1)", empty for auto). A prompt that uses `{{aspect}}` says the shape where it wants ("a
-  single {{aspect}} transparent sticker sheet"); others get "Make it square (1:1)." at the end.
-  Options whose labels have no letters (the Sticker pack's emoji sets) are their own value. A
-  line that held only sections left out disappears. A square `cover.png|jpg|webp` next to it
-  replaces the icon; the card's title sits over its bottom fifth. The built-in covers were made with the image model and shrunk to 768px WebP.
+- **A template** is a folder with a `TEMPLATE.md`: YAML frontmatter (name for its card, `title` for
+  its sheet, description, category, a Lucide `icon` and hex `color`, whether it needs a picture and
+  whether that's a photo or a drawing (`image-source`), the default shape, its settings: `options`
+  with a label and the `prompt` fragment each stands for, free text, or `type: emoji` with a `max`
+  (up to 4 by default), picked with a real emoji picker, and the `sentence` that shows them as
+  chips), then the prompt: the instructions for the image model. `{{setting}}` is replaced by the
+  choice, `{{#setting}}…{{/setting}}` is kept only when it has a value and
+  `{{^setting}}…{{/setting}}` only when it doesn't; `{{image}}` is "the attached picture" when one
+  was given, and `{{aspect}}` the chosen shape in words ("square (1:1)", empty for auto). A prompt
+  that uses `{{aspect}}` says the shape where it wants ("a single {{aspect}} transparent sticker
+  sheet"); others get "Make it square (1:1)." at the end. Options whose labels have no letters are
+  their own value. A line that held only sections left out disappears. A square `cover.png|jpg|webp`
+  next to it replaces the icon; the card's title sits over its bottom fifth. The built-in covers
+  were made with the image model and shrunk to 768px WebP.
 - **Sources**, like skills: the 19 that ship with btw (`packages/core/image-templates`),
   `~/.btw-agent/image-templates`, and the profile's `image-templates` folder; a later one
   overrides an earlier one with the same id.

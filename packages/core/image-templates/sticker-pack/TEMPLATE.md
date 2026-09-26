@@ -1,7 +1,7 @@
 ---
 name: Sticker pack
 title: Make a sticker pack
-sentence: 'Create a {{style}} sticker pack based on {{image}}, remixing with {{remix}}.'
+sentence: 'Create a {{style}} sticker pack based on {{image}}{{#remix}}, remixing with {{remix}}{{/remix}}.'
 description: Nine stickers of a person, a pet or a thing, each with its own expression or pose.
 order: 5
 icon: sticker
@@ -26,13 +26,9 @@ settings:
         prompt: Make them embroidered patches, with visible satin stitches, thread texture and a stitched edge.
   - id: remix
     label: Remix with
-    options:
-      - 💀🍓🛼💨
-      - 🌻💥🍉🎨
-      - 🌈🦄✨🍭
-      - 🍄🌙🔮🐸
-      - 🔥🎸⚡🕶️
-      - 🌊🐚☀️🏄
+    type: emoji
+    max: 4
+    default: 💀🍓🛼💨
 ---
 
 {{style}}

@@ -32,7 +32,9 @@ export type TemplateSetting =
 			placeholder: string | null;
 			required: boolean;
 			default: string;
-	  };
+	  }
+	/** A few emoji, picked with the Images page's emoji picker. */
+	| { type: 'emoji'; id: string; label: string; max: number; default: string };
 
 export interface ImageTemplate {
 	/** The folder name. */
@@ -143,6 +145,18 @@ function parseSetting(raw: unknown): TemplateSetting {
 	if (!/^[\w-]+$/.test(id) || id === IMAGE_VAR || id === ASPECT_VAR) {
 		throw new Error(`invalid setting id "${id}"`);
 	}
+	if (s.type === 'emoji') {
+		const max = Number(s.max ?? 4);
+		if (!Number.isInteger(max) || max < 1 || max > 12) {
+			throw new Error(`"${label}" max must be a whole number from 1 to 12`);
+		}
+		const value = text(s.default) ?? '';
+		const emoji = splitEmoji(value);
+		if (!emoji || emoji.length > max) {
+			throw new Error(`"${label}" default must be at most ${max} emoji`);
+		}
+		return { type: 'emoji', id, label, max, default: emoji.join('') };
+	}
 	if (Array.isArray(s.options)) {
 		const options = s.options.map((o) => parseOption(o, label));
 		if (!options.length) throw new Error(`"${label}" has no options`);
@@ -160,6 +174,17 @@ function parseSetting(raw: unknown): TemplateSetting {
 		required: s.required === true,
 		default: text(s.default) ?? ''
 	};
+}
+
+/** A string's emoji, one per grapheme, or null if it has anything else in it (spaces aside). */
+export function splitEmoji(text: string): string[] | null {
+	const emoji: string[] = [];
+	for (const { segment } of new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(text)) {
+		if (!segment.trim()) continue;
+		if (!/\p{Extended_Pictographic}|\p{Regional_Indicator}|\u20e3/u.test(segment)) return null;
+		emoji.push(segment);
+	}
+	return emoji;
 }
 
 function matches(option: TemplateOption, input: string): boolean {
@@ -328,6 +353,14 @@ export function resolveImageTemplate(
 			if (setting.required && !value) {
 				throw new Error(`The ${template.name} template needs "${setting.label}".`);
 			}
+			return { setting, value, display: value, prompt: value };
+		}
+		if (setting.type === 'emoji') {
+			const emoji = splitEmoji(input ?? setting.default);
+			if (!emoji || emoji.length > setting.max) {
+				throw new Error(`"${setting.label}" takes up to ${setting.max} emoji, and nothing else.`);
+			}
+			const value = emoji.join('');
 			return { setting, value, display: value, prompt: value };
 		}
 		const option = input
