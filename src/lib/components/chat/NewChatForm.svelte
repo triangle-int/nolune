@@ -1,0 +1,146 @@
+<script lang="ts">
+	import { onMount, untrack, type Snippet } from 'svelte';
+	import { enhance } from '$app/forms';
+	import type { FolderItem } from '$lib/folders';
+	import { Attachments } from '$lib/uploads.svelte';
+	import Composer from './Composer.svelte';
+	import FolderMenu from './FolderMenu.svelte';
+	import ModelMenu from './ModelMenu.svelte';
+
+	interface Props {
+		/** The profile the chat is started in. */
+		slug: string;
+		presets: { id: string; name: string }[];
+		defaultPresetId: string;
+		efforts: string[];
+		folders: FolderItem[];
+		/** The folder the chat starts in, until someone picks another. */
+		folderId: string | null;
+		placeholder?: string;
+		autofocus?: boolean;
+		class?: string;
+		/** Before the composer's column, like a greeting. */
+		header?: Snippet;
+		/** In the composer's column, above and below it. `suggest` puts text in the box. */
+		above?: Snippet<[suggest: (text: string) => void]>;
+		below?: Snippet<[suggest: (text: string) => void]>;
+		/** After the composer's column. */
+		footer?: Snippet;
+	}
+
+	let {
+		slug,
+		presets,
+		defaultPresetId,
+		efforts,
+		folders,
+		folderId: initialFolderId,
+		placeholder = 'Ask btw',
+		autofocus = false,
+		class: className,
+		header,
+		above,
+		below,
+		footer
+	}: Props = $props();
+
+	/** The reasoning picked last time on this device. The model always starts at the default. */
+	const STORAGE_KEY = 'btw-new-chat';
+
+	let text = $state('');
+	const attachments = new Attachments(() => slug);
+	let presetId = $state(untrack(() => defaultPresetId));
+	let effort = $state('medium');
+	// Follows the page (`?folder=`) until someone picks another folder in the chip.
+	let folderId = $derived(initialFolderId);
+	let submitting = $state(false);
+	let problem = $state<string | null>(null);
+	let textarea = $state<HTMLTextAreaElement | null>(null);
+	let formEl = $state<HTMLFormElement>();
+
+	onMount(() => {
+		try {
+			const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}');
+			if (efforts.includes(saved.effort)) effort = saved.effort;
+		} catch {
+			// Nothing saved, or storage is blocked.
+		}
+	});
+
+	function remember() {
+		try {
+			localStorage.setItem(STORAGE_KEY, JSON.stringify({ effort }));
+		} catch {
+			// Storage is blocked; the defaults are fine.
+		}
+	}
+
+	function suggest(value: string) {
+		text = value;
+		textarea?.focus();
+		textarea?.setSelectionRange(value.length, value.length);
+	}
+</script>
+
+<form
+	bind:this={formEl}
+	method="POST"
+	action="/p/{slug}"
+	class={className}
+	use:enhance={() => {
+		submitting = true;
+		problem = null;
+		remember();
+		return async ({ result, update }) => {
+			if (result.type === 'failure') {
+				problem = String(result.data?.message ?? 'Could not start the chat.');
+			} else await update();
+			submitting = false;
+		};
+	}}
+>
+	<input type="hidden" name="preset" value={presetId} />
+	<input type="hidden" name="effort" value={effort} />
+	<input type="hidden" name="folder" value={folderId ?? ''} />
+	{#each attachments.ids as id (id)}
+		<input type="hidden" name="upload" value={id} />
+	{/each}
+
+	{@render header?.()}
+
+	<div class="mx-auto w-full max-w-3xl">
+		{@render above?.(suggest)}
+
+		<Composer
+			bind:value={text}
+			bind:textarea
+			name="text"
+			{placeholder}
+			{attachments}
+			busy={submitting}
+			{autofocus}
+			onsubmit={() => formEl?.requestSubmit()}
+		>
+			{#snippet tools()}
+				<ModelMenu
+					{efforts}
+					{effort}
+					onEffortChange={(value) => (effort = value)}
+					{presets}
+					{presetId}
+					{defaultPresetId}
+					onPresetChange={(id) => (presetId = id)}
+				/>
+				<FolderMenu {folders} {folderId} {slug} onchange={(id) => (folderId = id)} />
+			{/snippet}
+		</Composer>
+
+		{@render below?.(suggest)}
+
+		{#if problem}
+			<p class="mt-2 text-center text-sm text-destructive">{problem}</p>
+		{/if}
+	</div>
+
+	{@render footer?.()}
+</form>

@@ -10,9 +10,13 @@ import { MAX_TIMEOUT_SECONDS, DEFAULT_TIMEOUT_SECONDS, commandShell } from './ru
  * Built once per conversation and stored with it. Everything here must be stable for the life of
  * the conversation: no dates, no user names, nothing that varies per request. Memory is only
  * listed by note name, and the agent reads the notes it needs, so the prompt changes only when a
- * note is added or removed, not with every fact.
+ * note is added or removed, not with every fact. `folderSection`: the chat's folder
+ * (renderFolderSection), last, so chats outside folders share everything before it.
  */
-export function buildSystemPrompt(profile: Pick<Profile, 'slug' | 'disabledSkills'>): string {
+export function buildSystemPrompt(
+	profile: Pick<Profile, 'slug' | 'disabledSkills'>,
+	folderSection = ''
+): string {
 	const dir = profileDir(profile.slug);
 	const notes = listMemoryNotes(profile.slug);
 	const skills = listProfileSkills(
@@ -56,5 +60,5 @@ This profile's long-term memory is a set of short Markdown notes, one per topic,
 # Skills
 Skills are folders with instructions for specific tasks. ${skillsSection}
 
-When something took several attempts to get right, or someone asks for the same kind of thing more than once, save the working approach as a skill so it's easy next time: run \`btw skill new <name> --description "<what it does and when to use it>"\` and then fill in the SKILL.md it creates under \`${dir}/skills/<name>/\`. Names use lowercase letters, digits and hyphens. Improve an existing skill rather than creating a near-duplicate.`;
+When something took several attempts to get right, or someone asks for the same kind of thing more than once, save the working approach as a skill so it's easy next time: run \`btw skill new <name> --description "<what it does and when to use it>"\` and then fill in the SKILL.md it creates under \`${dir}/skills/<name>/\`. Names use lowercase letters, digits and hyphens. Improve an existing skill rather than creating a near-duplicate.${folderSection ? `\n\n${folderSection}` : ''}`;
 }

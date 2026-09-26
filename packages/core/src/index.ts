@@ -3,6 +3,7 @@ export {
 	packageRoot,
 	paths,
 	profileDir,
+	profileFoldersDir,
 	profileImageTemplatesDir,
 	profileMemoryDir,
 	profileSkillsDir
@@ -84,9 +85,30 @@ export {
 	type Usage
 } from './conversations.ts';
 export {
+	FolderError,
+	MAX_FOLDER_FILES,
+	MAX_FOLDER_INSTRUCTIONS,
+	MAX_FOLDER_NAME,
+	addFolderFiles,
+	createFolder,
+	deleteFolder,
+	folderDir,
+	getFolder,
+	getFolderFile,
+	listFolderFiles,
+	listFolders,
+	moveConversation,
+	removeFolderFile,
+	renameFolder,
+	setFolderInstructions,
+	type Folder,
+	type FolderFile
+} from './folders.ts';
+export {
 	MAX_MEDIA_BYTES,
 	TooLargeError,
 	getMedia,
+	isViewable,
 	mediaFile,
 	type DisplayMedia,
 	type MediaRow

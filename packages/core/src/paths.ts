@@ -75,3 +75,8 @@ export function profileImageTemplatesDir(slug: string): string {
 export function profileMemoryDir(slug: string): string {
 	return join(paths.profiles, slug, 'memories');
 }
+
+/** Where the files of each chat folder are saved, one folder per chat folder. */
+export function profileFoldersDir(slug: string): string {
+	return join(paths.profiles, slug, 'folders');
+}

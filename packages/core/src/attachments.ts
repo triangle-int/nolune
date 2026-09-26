@@ -150,7 +150,8 @@ export function attachmentsDir(profileSlug: string): string {
 	return join(profileDir(profileSlug), 'attachments');
 }
 
-function sameContent(path: string, sha256: string, bytes: number): boolean {
+/** Whether the file at `path` still holds exactly this content. */
+export function sameContent(path: string, sha256: string, bytes: number): boolean {
 	try {
 		if (statSync(path).size !== bytes) return false;
 		return createHash('sha256').update(readFileSync(path)).digest('hex') === sha256;
@@ -160,10 +161,10 @@ function sameContent(path: string, sha256: string, bytes: number): boolean {
 }
 
 /**
- * Copies the file into the attachments folder under its own name, or `name (2).ext` when another
- * file has that name. The same file sent again is saved once.
+ * Copies the stored file into `dir` (the attachments folder, or a chat folder's) under its own
+ * name, or `name (2).ext` when another file has that name. The same file sent again is saved once.
  */
-function saveAttachment(dir: string, name: string, sha256: string, bytes: number): string {
+export function saveAttachment(dir: string, name: string, sha256: string, bytes: number): string {
 	mkdirSync(dir, { recursive: true });
 	const ext = extname(name);
 	const stem = name.slice(0, name.length - ext.length);

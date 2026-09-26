@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { and, eq } from 'drizzle-orm';
 import { getDb } from './db/index.ts';
-import { media, upload } from './db/schema.ts';
+import { folderFile, media, upload } from './db/schema.ts';
 import { inspectImage } from './images.ts';
 import { isRemoteHref, mediaRefs } from './media-refs.ts';
 import { paths } from './paths.ts';
@@ -667,7 +667,7 @@ export function toDisplayMedia(rows: MediaRow[]): Record<string, DisplayMedia> {
  * original. `inline` is false for anything that isn't a picture a browser shows.
  */
 export function mediaFile(
-	row: MediaRow,
+	row: Pick<MediaRow, 'status' | 'sha256' | 'mime' | 'previewSha256' | 'name'>,
 	purpose: 'view' | 'download'
 ): { path: string; mime: string; name: string; inline: boolean } | null {
 	if (row.status !== 'ok' || !row.sha256 || !row.mime) return null;
@@ -684,9 +684,9 @@ export function mediaFile(
 }
 
 /**
- * Deletes stored files no row points to any more (their conversations were deleted, or an
- * upload was never sent). Files younger than an hour are kept, since a reply being saved may be
- * about to reference them.
+ * Deletes stored files no row points to any more (their conversations or folders were deleted,
+ * or an upload was never sent). Files younger than an hour are kept, since a reply being saved
+ * may be about to reference them.
  */
 export function pruneMedia(): void {
 	if (!existsSync(paths.media)) return;
@@ -701,6 +701,14 @@ export function pruneMedia(): void {
 	}
 	for (const row of getDb().select({ sha256: upload.sha256 }).from(upload).all()) {
 		used.add(row.sha256);
+	}
+	const folderFiles = getDb()
+		.select({ sha256: folderFile.sha256, previewSha256: folderFile.previewSha256 })
+		.from(folderFile)
+		.all();
+	for (const row of folderFiles) {
+		used.add(row.sha256);
+		if (row.previewSha256) used.add(row.previewSha256);
 	}
 	const cutoff = Date.now() - ORPHAN_GRACE_MS;
 	for (const name of readdirSync(paths.media)) {

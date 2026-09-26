@@ -13,6 +13,7 @@ import {
 	triggerRun,
 	upload
 } from './db/schema.ts';
+import { folderContextFor, getFolder } from './folders.ts';
 import {
 	newMediaId,
 	toDisplayMedia,
@@ -97,9 +98,14 @@ export function createConversation(input: {
 	effort?: Effort;
 	title?: string;
 	hidden?: boolean;
+	/** A folder of the profile: the chat starts in it, with its instructions and files. */
+	folderId?: string | null;
 }): Conversation {
 	const preset = getPreset(input.presetId);
 	if (!preset) throw new Error('Unknown model preset');
+	const folderId = input.folderId ?? null;
+	if (folderId && !getFolder(input.profile.id, folderId)) throw new Error('Unknown folder');
+	const folderContext = folderContextFor(input.profile, folderId);
 	const now = new Date();
 	const created: Conversation = {
 		id: randomUUID(),
@@ -111,7 +117,10 @@ export function createConversation(input: {
 		model: preset.model,
 		contextWindow: effectiveContextWindow(preset),
 		effort: input.effort ?? 'medium',
-		systemPrompt: buildSystemPrompt(input.profile),
+		systemPrompt: buildSystemPrompt(input.profile, folderContext),
+		folderId,
+		folderContext,
+		promptChangedAtSeq: null,
 		hidden: input.hidden ?? false,
 		createdBy: input.userId,
 		createdAt: now,
@@ -127,6 +136,7 @@ export function listConversations(profileId: string) {
 			id: conversation.id,
 			title: conversation.title,
 			presetName: conversation.presetName,
+			folderId: conversation.folderId,
 			updatedAt: conversation.updatedAt
 		})
 		.from(conversation)
@@ -164,6 +174,26 @@ export function getConversationForUser(id: string, userId: string) {
 /** On Claude, changing effort mid-conversation rebuilds that conversation's cache once. */
 export function setEffort(id: string, effort: Effort): void {
 	getDb().update(conversation).set({ effort }).where(eq(conversation.id, id)).run();
+}
+
+/**
+ * Builds the system prompt again, with the chat's folder as it is now (`folderContext`), and
+ * notes the last row before it: its thinking was made under the old prompt (requestMessages).
+ * The whole prompt is rebuilt, so the skills catalog and memory notes are current again too.
+ */
+export function rebuildSystemPrompt(
+	conv: Conversation,
+	profile: Pick<Profile, 'slug' | 'disabledSkills'>,
+	folderContext: string,
+	lastSeq: number | null
+): Conversation {
+	const changed = {
+		systemPrompt: buildSystemPrompt(profile, folderContext),
+		folderContext,
+		promptChangedAtSeq: lastSeq ?? conv.promptChangedAtSeq
+	};
+	getDb().update(conversation).set(changed).where(eq(conversation.id, conv.id)).run();
+	return { ...conv, ...changed };
 }
 
 /** A background run becomes a normal conversation once someone continues it. */
@@ -370,6 +400,30 @@ export function appendRow(input: {
 /** Exactly what was stored, so the request prefix is byte-identical to the previous call. */
 export function toMessageParam(row: MessageRow): Anthropic.MessageParam {
 	return { role: row.role, content: JSON.parse(row.content) };
+}
+
+/**
+ * The transcript as a model call sends it: every row exactly as stored, except the thinking in
+ * replies from before the system prompt was last built again (`promptChangedAtSeq`). A thinking
+ * block's signature records the prompt it was made under, and newer models refuse it under
+ * another one, so those are left out. They are always the oldest ones, which the API allows,
+ * and they are left out the same way on every call, so the prefix stays byte-identical.
+ */
+export function requestMessages(
+	rows: MessageRow[],
+	promptChangedAtSeq: number | null
+): Anthropic.MessageParam[] {
+	return rows.flatMap((row): Anthropic.MessageParam[] => {
+		if (promptChangedAtSeq === null || row.role !== 'assistant' || row.seq === null) {
+			return [toMessageParam(row)];
+		}
+		if (row.seq > promptChangedAtSeq) return [toMessageParam(row)];
+		const content = (JSON.parse(row.content) as Anthropic.ContentBlockParam[]).filter(
+			(b) => b.type !== 'thinking' && b.type !== 'redacted_thinking'
+		);
+		// A reply that was only thinking (cut off, say) has nothing left to send.
+		return content.length ? [{ role: 'assistant', content }] : [];
+	});
 }
 
 export function summarizeUsage(usage: Anthropic.Usage): Usage {
