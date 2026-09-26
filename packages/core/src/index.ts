@@ -53,11 +53,15 @@ export {
 	listMembers,
 	listProfiles,
 	listProfilesForUser,
+	noticeProfileChanges,
+	onProfileChanged,
 	removeMember,
 	renameProfile,
+	setProfileAvatar,
 	setSkillsEnabled,
 	type Profile
 } from './profiles.ts';
+export { AVATARS, defaultAvatar, isAvatar, type Avatar } from './avatars.ts';
 export {
 	PROVIDERS,
 	addPreset,

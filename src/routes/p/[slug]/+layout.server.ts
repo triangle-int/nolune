@@ -5,6 +5,8 @@ import type { LayoutServerLoad } from './$types';
 
 export const load: LayoutServerLoad = ({ locals, params, depends, cookies }) => {
 	depends('btw:conversations');
+	// Pushed when someone renames the profile or changes its avatar.
+	depends('btw:profiles');
 	const { user, profile } = requireProfile(locals, params.slug);
 	// Opening the app later lands here again.
 	cookies.set(LAST_PROFILE_COOKIE, profile.slug, {
@@ -14,8 +16,12 @@ export const load: LayoutServerLoad = ({ locals, params, depends, cookies }) => 
 		sameSite: 'lax'
 	});
 	return {
-		profile: { slug: profile.slug, name: profile.name },
-		profiles: listProfilesForUser(user.id).map((p) => ({ slug: p.slug, name: p.name })),
+		profile: { slug: profile.slug, name: profile.name, avatar: profile.avatar },
+		profiles: listProfilesForUser(user.id).map((p) => ({
+			slug: p.slug,
+			name: p.name,
+			avatar: p.avatar
+		})),
 		folders: listFolders(profile.id).map((f) => ({ id: f.id, name: f.name })),
 		conversations: listConversations(profile.id).map((c) => ({
 			id: c.id,

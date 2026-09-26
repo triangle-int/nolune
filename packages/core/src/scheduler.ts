@@ -14,7 +14,7 @@ import { pruneProviderFiles } from './provider-files.ts';
 import { createNotification, pruneNotifications } from './notifications.ts';
 import { profileDir } from './paths.ts';
 import { getDefaultPreset, getPreset } from './presets.ts';
-import { getProfile } from './profiles.ts';
+import { getProfile, noticeProfileChanges } from './profiles.ts';
 import { commandEnv, runCommand, type RunCommandResult } from './run-command.ts';
 import { kick, onLoopEnd } from './runner.ts';
 import { processSubagents, startSubagentHost } from './subagent-host.ts';
@@ -52,8 +52,8 @@ const holder = globalThis as unknown as { __btwScheduler?: boolean };
 
 /**
  * Gateway only. Every few seconds: fires triggers that are due and starts queued runs (including
- * the ones `btw wake` and `btw trigger run` queue from other processes), and the subagents that
- * `btw agent` asks for.
+ * the ones `btw wake` and `btw trigger run` queue from other processes), starts the subagents
+ * that `btw agent` asks for, and notices profiles that `btw profile` changed from another process.
  */
 export function startScheduler(): void {
 	if (holder.__btwScheduler) return;
@@ -72,6 +72,7 @@ function tick(): void {
 		fireDueTriggers(new Date());
 		processQueue();
 		processSubagents();
+		noticeProfileChanges();
 	} catch (err) {
 		console.error('[btw] scheduler tick failed:', err);
 	}

@@ -1,16 +1,22 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { AVATARS } from '@btw/core/avatars';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
+	import AssistantAvatar from '$lib/components/AssistantAvatar.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import UserAvatar from '$lib/components/UserAvatar.svelte';
+	import { cn } from '$lib/utils';
 
 	let { data, form } = $props();
 
 	let who = $state('');
 	let deleteOpen = $state(false);
+	/** The avatar just clicked, shown as picked until the page has saved it. */
+	let picking = $state<string | null>(null);
+	const avatar = $derived(picking ?? data.profile.avatar);
 </script>
 
 <PageHeader>
@@ -38,6 +44,45 @@
 			<p class="text-xs text-muted-foreground">
 				Folder: ~/.btw-agent/profiles/{data.profile.slug} (doesn't change)
 			</p>
+		</form>
+
+		<form
+			method="POST"
+			action="?/avatar"
+			use:enhance={({ submitter }) => {
+				picking = submitter?.getAttribute('value') ?? null;
+				return async ({ update }) => {
+					await update({ reset: false });
+					picking = null;
+				};
+			}}
+			class="space-y-3"
+		>
+			<div class="space-y-1">
+				<h2 class="font-medium">Avatar</h2>
+				<p class="text-sm text-muted-foreground">
+					How btw looks in this profile's chats. Everyone here sees the same one, and btw can change
+					it when asked.
+				</p>
+			</div>
+			<div class="grid grid-cols-4 gap-2 sm:grid-cols-8">
+				{#each AVATARS as name (name)}
+					{@const picked = name === avatar}
+					<button
+						type="submit"
+						name="avatar"
+						value={name}
+						aria-pressed={picked}
+						class={cn(
+							'flex flex-col items-center gap-1.5 rounded-2xl border px-1 pt-3 pb-2 text-xs text-muted-foreground hover:bg-muted',
+							picked && 'border-foreground/60 bg-muted text-foreground'
+						)}
+					>
+						<AssistantAvatar avatar={name} mood={picked ? 'idle' : undefined} size={36} />
+						<span class="capitalize">{name}</span>
+					</button>
+				{/each}
+			</div>
 		</form>
 
 		<section class="space-y-3">

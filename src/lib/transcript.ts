@@ -1,5 +1,5 @@
 import type { DisplayMedia, DisplayMessage, LiveBlock, Usage } from '@btw/core';
-import { partialToolInput } from './commands';
+import { firstLine, partialToolInput } from './commands';
 
 /**
  * Turns the stored rows into what the chat shows: people's messages, and btw's replies as a run
@@ -195,6 +195,23 @@ export function buildTranscript(
 	}
 
 	return entries;
+}
+
+/**
+ * What work in progress is doing, as its collapsed group says it: the summary of the command that
+ * is running, or Thinking. The live avatar shows the same on hover.
+ */
+export function activeStepLabel(
+	part: ActivityPart,
+	results: Record<string, ToolResult>,
+	technical: boolean
+): string {
+	const last = part.steps.at(-1);
+	if (last?.type === 'command' && !results[last.id]) {
+		if (technical && last.command) return `Running ${firstLine(last.command, 80)}`;
+		return last.summary ?? 'Running a command';
+	}
+	return 'Thinking';
 }
 
 /** The reply's visible text, for the copy button. */

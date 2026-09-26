@@ -42,7 +42,7 @@ import { folderContextFor } from './folders.ts';
 import { createViewDir, imageUse, readViewedImages, type ImageUse } from './images.ts';
 import { copyReplyMedia, listMedia, mediaByMessage, type PreparedMedia } from './media.ts';
 import { profileDir } from './paths.ts';
-import { getProfile } from './profiles.ts';
+import { getProfile, noticeProfileChanges } from './profiles.ts';
 import {
 	RUN_COMMAND_TOOL,
 	commandEnv,
@@ -487,6 +487,8 @@ async function runToolCall(
 		return toolResult(call.id, result.content, result.isError, attachments);
 	} finally {
 		rmSync(viewDir, { recursive: true, force: true });
+		// The command may have changed the profile (`btw profile avatar`): show it right away.
+		noticeProfileChanges();
 		commandEnded();
 	}
 }

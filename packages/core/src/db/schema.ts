@@ -8,6 +8,7 @@ import {
 	primaryKey,
 	uniqueIndex
 } from 'drizzle-orm/sqlite-core';
+import { AVATARS } from '../avatars.ts';
 
 const now = sql`(cast(unixepoch('subsecond') * 1000 as integer))`;
 
@@ -106,6 +107,11 @@ export const profile = sqliteTable('profile', {
 	/** Folder name under ~/.btw-agent/profiles. Fixed at creation. */
 	slug: text('slug').notNull().unique(),
 	name: text('name').notNull(),
+	/**
+	 * The assistant's mascot in this profile. Profiles start with one picked from the slug
+	 * (defaultAvatar); the SQL default only lets the column be added to existing rows.
+	 */
+	avatar: text('avatar', { enum: AVATARS }).notNull().default('probe'),
 	/** Skill names left out of new chats' prompts. Skills are on unless listed, new ones included. */
 	disabledSkills: text('disabled_skills', { mode: 'json' })
 		.$type<string[]>()

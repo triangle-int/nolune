@@ -58,6 +58,9 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 The folder name is a slug that is fixed when the profile is created. Renaming a profile changes
 only its display name, so the skill paths already in system prompts stay valid.
 
+The profile also stores its assistant's avatar (`profile.avatar`, one of eight names). A new profile
+gets the one its slug picks; see [Assistant avatars](#assistant-avatars).
+
 Every skill is on in every profile until someone turns it off, on the profile's Skills page or with
 `btw skill disable`. The profile stores the names it turned off (`profile.disabled_skills`), so skills
 added later start out on. Skills that are off are left out of the catalog when a conversation is
@@ -463,7 +466,8 @@ into conversations.
   failing script notifies once, when it starts failing, not on every run.
 - **Notifications** belong to the profile, like conversations. Dismissing is per person
   (`notification_dismissal`), and unread means newer than when that person last opened the menu
-  (`notification_seen`). The bell listens on `/api/notifications/events` (SSE) and reloads on change.
+  (`notification_seen`). Pages listen on `/api/events` (SSE), which also carries profile renames and
+  avatar changes, and reload the bell on change.
 - **Continue in chat** unhides the run's conversation, which moves into the sidebar with its whole
   transcript; sending a message into a hidden run does the same. A notification without a
   conversation (script failures, or the run was deleted) starts a new conversation whose first
@@ -594,7 +598,8 @@ composer. Most of the family doesn't read shell, so the default view hides the m
 - **Replies** are built by `buildTranscript` (`src/lib/transcript.ts`): text blocks are shown as
   Markdown (`marked` + DOMPurify), and every run of thinking and commands between two texts is one
   collapsible group, "Worked for 12s" when done and a live "Thinking" / current step while running.
-  Durations come from row timestamps, so they're approximate.
+  Durations come from row timestamps, so they're approximate. The profile's assistant avatar sits at
+  the top left of each reply: in the margin when the chat is wide, on its own line when it isn't.
 - **Steps** show the `summary` and `icon` the model wrote with each `run_command` call ("Checking
   tomorrow's weather in Berlin" with `cloud-sun-rain`), in the conversation's language. Opening a
   step shows the command and its output. Calls from before summaries existed say "Ran a command".
@@ -629,6 +634,41 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   Anthropic key warns to keep the same workspace: pictures and PDFs already sent live in it.
   `btw key set` does the same check, but saves anyway when the provider can't be reached.
 
+## Assistant avatars
+
+Each profile's assistant has a small mascot: one of eight one-color glyphs (probe, campfire, lantern,
+planet, quantum, comet, moon, satellite), redrawn by hand as SVG from a concept sheet. It shows next
+to every reply, large on the new chat screen, in the profile switcher and the profile list, on
+notifications, and as the tab icon of the profile's pages. People keep `UserAvatar`, their initial
+on a colored circle.
+
+- **Drawing.** `packages/core/src/avatars.ts` has the names and the glyphs: shapes on a 24×24 grid
+  filled with `currentColor`, with no strokes or second tone. Eyes and other details are holes
+  knocked out with a mask, so the page shows through in both themes, and the eyes are shapes of
+  their own so they can move. `AssistantAvatar.svelte` (`avatar`, `mood`, `size`) draws one. Each
+  avatar's color is a `--avatar-<name>` variable in `layout.css`: the dark value is the concept
+  sheet's, the light one the same hue at least 3:1 on white, the sidebar and bubbles. The tab icon
+  reads both from the file and follows the system's theme, like the tab strip.
+- **Choosing.** A new profile gets the avatar its slug picks (`defaultAvatar`, a hash of the slug),
+  so profiles differ without anyone choosing. The migration that added `profile.avatar` gave
+  existing profiles theirs the same way, in SQL. Any member changes it on People & profile, or with
+  `btw profile avatar <name>`, which the agent runs when asked ("switch to the comet"; the
+  `btw-agent` skill explains it).
+- **Moods.** Only the avatar on the newest reply moves; older ones hold still. It follows what the
+  chat already knows: `thinking` while the model streams (eyes up, a gentle bob), `working` while a
+  command runs (a busy hop, and the avatar's own motion: the flame flares, the antenna blinks,
+  quantum's dashes flicker), `waiting` while messages are queued behind the turn (a slow pulse),
+  `blocked` on an API error or when Continue is shown (drooping eyes, a muted color), `done` for a
+  moment after a turn (a squash), then `idle` (an occasional blink). Hovering it shows the current
+  step in the step list's words. It's CSS animation only; with reduced motion each mood keeps its
+  pose and nothing moves.
+- **Live.** A new avatar or name reaches open pages: `/api/events` pings the profile's members and
+  the page loads its data again. The CLI changes the database from another process, so the gateway
+  also looks for changes after every command and on each scheduler tick.
+- **Not for the model.** The avatar and the mood never reach it: nothing goes into the system
+  prompt, the tool or the request, so caching is untouched. Only the `btw-agent` skill's description
+  mentions avatars, so new chats know the command.
+
 ## Code layout
 
 ```
@@ -636,8 +676,8 @@ packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_comm
                 commands, memory notes, btw view images, attachments, Anthropic call and Files API,
                 provider file cache, runner, media, users/profiles/presets, API keys, chat folders,
                 triggers, scheduler, subagents (subagents.ts, and subagent-host.ts in the
-                gateway), notifications, image generation (providers: openai.ts) and image
-                templates.
+                gateway), notifications, image generation (providers: openai.ts), image templates
+                and assistant avatars.
                 Built-in skills in packages/core/skills, built-in templates in
                 packages/core/image-templates. Plain TypeScript run by Node with type stripping
                 (no enums or parameter properties; imports use .ts extensions).
