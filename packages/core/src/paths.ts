@@ -64,7 +64,7 @@ export function profileSkillsDir(slug: string): string {
 	return join(paths.profiles, slug, 'skills');
 }
 
-/** What the memory tool calls /memories. */
+/** Long-term memory: one Markdown note per topic. */
 export function profileMemoryDir(slug: string): string {
 	return join(paths.profiles, slug, 'memories');
 }

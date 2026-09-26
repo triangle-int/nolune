@@ -66,7 +66,6 @@ export {
 	type Conversation,
 	type DisplayBlock,
 	type DisplayMessage,
-	type MemoryCall,
 	type Usage
 } from './conversations.ts';
 export { MAX_MEDIA_BYTES, getMedia, mediaFile, type DisplayMedia, type MediaRow } from './media.ts';
@@ -94,13 +93,19 @@ export {
 } from './skills.ts';
 export { buildSystemPrompt } from './prompt.ts';
 export {
-	MEMORY_TOOL,
 	MemoryConflictError,
 	MemoryError,
+	addMemoryFact,
+	forgetMemoryFact,
 	forgetMemoryFile,
 	listMemoryFiles,
-	runMemoryCommand,
+	listMemoryNotes,
+	readMemoryNote,
+	removeMemoryNote,
+	renameMemoryNote,
+	replaceInMemory,
 	writeMemoryFile,
+	writeMemoryNote,
 	type MemoryFact,
 	type MemoryFile
 } from './memory.ts';

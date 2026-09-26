@@ -1,5 +1,3 @@
-import type { MemoryCall } from '@btw/core';
-
 /** The command's first line, for the compact technical label. */
 export function firstLine(command: string, max = 120): string {
 	const line = command.trim().split('\n')[0];
@@ -44,34 +42,4 @@ export function partialToolInput(json: string): ToolInput {
 	// Only a finished icon name: "cloud" on the way to "cloud-sun" would flash the wrong icon.
 	const icon = input ? field('icon') : (json.match(/"icon"\s*:\s*"([^"\\]+)"/)?.[1] ?? null);
 	return { command: field('command'), summary: field('summary'), icon };
-}
-
-/** The fields of a memory tool call whose input JSON is still streaming in. */
-export function partialMemoryCall(json: string): MemoryCall {
-	let input: Record<string, unknown> | null = null;
-	try {
-		input = JSON.parse(json) as Record<string, unknown>;
-	} catch {
-		// Incomplete; read the fields one by one below.
-	}
-	const field = (key: string) => {
-		const value = input ? input[key] : partialString(json, key);
-		return typeof value === 'string' ? value : undefined;
-	};
-	/** Only whole values: a path cut off halfway would flash the wrong topic. */
-	const whole = (key: string) => {
-		if (input) return field(key);
-		const match = json.match(new RegExp(`"${key}"\\s*:\\s*("(?:[^"\\\\]|\\\\.)*")`));
-		return match ? (JSON.parse(match[1]) as string) : undefined;
-	};
-	const text = field('file_text') ?? field('new_str') ?? field('insert_text');
-	const newPath = whole('new_path');
-	const oldText = field('old_str');
-	return {
-		command: whole('command') ?? null,
-		path: whole('path') ?? whole('old_path') ?? null,
-		...(newPath !== undefined ? { newPath } : {}),
-		...(text !== undefined ? { text } : {}),
-		...(oldText !== undefined ? { oldText } : {})
-	};
 }

@@ -2,7 +2,7 @@
 	import type { MemoryFact } from '@btw/core';
 
 	export interface Topic {
-		/** The file, relative to /memories. */
+		/** The note, relative to the memory folder. */
 		path: string;
 		title: string;
 		/** The folder it's in, like "People" for people/anna.md. */

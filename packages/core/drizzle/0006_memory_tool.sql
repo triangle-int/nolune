@@ -1,1 +1,0 @@
-ALTER TABLE `conversation` ADD `memory_tool` integer DEFAULT false NOT NULL;

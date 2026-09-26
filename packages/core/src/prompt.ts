@@ -1,5 +1,6 @@
 import { homedir, type, userInfo } from 'node:os';
 import { MAX_MEDIA_BYTES } from './media.ts';
+import { listMemoryNotes } from './memory.ts';
 import { profileDir, profileMemoryDir, profileSkillsDir } from './paths.ts';
 import type { Profile } from './profiles.ts';
 import { listProfileSkills, renderSkillsCatalog } from './skills.ts';
@@ -7,12 +8,13 @@ import { MAX_TIMEOUT_SECONDS, DEFAULT_TIMEOUT_SECONDS, commandShell } from './ru
 
 /**
  * Built once per conversation and stored with it. Everything here must be stable for the life of
- * the conversation: no dates, no user names, nothing that varies per request. Memory isn't in it:
- * the agent reads it with the memory tool, so the prompt is the same for every conversation of a
- * profile until its skills change.
+ * the conversation: no dates, no user names, nothing that varies per request. Memory is only
+ * listed by note name, and the agent reads the notes it needs, so the prompt changes only when a
+ * note is added or removed, not with every fact.
  */
 export function buildSystemPrompt(profile: Pick<Profile, 'slug' | 'disabledSkills'>): string {
 	const dir = profileDir(profile.slug);
+	const notes = listMemoryNotes(profile.slug);
 	const skills = listProfileSkills(
 		profileSkillsDir(profile.slug),
 		profile.disabledSkills
@@ -41,12 +43,13 @@ Before your first command in a turn, say in one short sentence what you are abou
 To show a picture in the chat, put it in your reply as a Markdown image: \`![what it shows](path)\`. To give someone a file (a PDF, a spreadsheet, a video), link it and it becomes a download: \`[Filled-in tax form](path)\`. A path can be absolute, start with \`~/\`, or be relative to the profile folder, and a picture can also be an https URL you found in a message or in a command's output (to show one from anywhere else, download it and link the file). Wrap paths that contain spaces in angle brackets: \`![Beach](</Users/anna/Pictures/Summer 2025/IMG_0142.HEIC>)\`. Only link files you have checked exist. They are copied when you send the reply, in full size and up to ${MAX_MEDIA_BYTES / (1024 * 1024)} MB each, so temporary files are fine and later changes to a file don't change what was sent.${process.platform === 'darwin' ? ' HEIC photos are converted so every browser can show them.' : ''}
 
 # Memory
-Your memory tool holds this profile's long-term memory: files under /memories, shared by all of its conversations and all of its members. It outlives this conversation, and what other conversations learn shows up there too.
-- At the start of a conversation, view /memories and read the files that look relevant to what was asked. There's no need to look again for every message.
-- When you learn something that will matter in later conversations (preferences, facts about the family, where things are kept, how things are set up), save it right away. Keep one Markdown file per topic with a short name, like /memories/family.md or /memories/home.md, and write short bullet points, one fact each. Update and merge rather than repeat, and delete what is no longer true.
-- Everyone in this profile can read the memory on the Memory page. A profile is only shared by people who trust each other, so private things are fine to save when someone asks: passwords, door codes, account numbers. The one exception is something a person wants kept from the others here, like a surprise.
-- Don't record ordinary one-off requests. For a long job that could be interrupted, a progress note is fine; delete it when the job is done.
-- The files live in \`${profileMemoryDir(profile.slug)}\`, but always read and change them with the memory tool, not with run_command.
+This profile's long-term memory is a set of short Markdown notes, one per topic, shared by all of its conversations and members and kept in \`${profileMemoryDir(profile.slug)}\`. ${notes.length ? `Notes when this conversation started: ${notes.map((path) => path.replace(/\.md$/, '')).join(', ')}.` : 'There are no notes yet.'}
+- Before you answer, read the notes that could matter for the request, like \`btw memory show family food\`. Once per conversation is enough. \`btw memory\` lists the notes as they are now, in case another conversation added some.
+- When you learn something that will matter in later conversations (preferences, facts about the family, where things are kept, how things are set up), save it right away: \`btw memory add <topic> "<one fact>"\`. The note is created if needed. Keep topics broad, with short names like family, home, school or people/anna.
+- Keep notes true and short. \`btw memory replace <topic> "<old text>" "<new text>"\` corrects a fact, \`btw memory forget <topic> "<text>"\` removes one, and \`btw memory write <topic>\` with the whole note on stdin reorganizes it. Update rather than repeat.
+- Use \`btw memory\` rather than editing the files yourself: it records when each fact was learned, which the family sees on the Memory page.
+- Everyone in this profile can read the memory. A profile is only shared by people who trust each other, so private things are fine to save when someone asks: passwords, door codes, account numbers. The one exception is something a person wants kept from the others here, like a surprise.
+- Don't record ordinary one-off requests.
 
 # Skills
 Skills are folders with instructions for specific tasks. ${skillsSection}

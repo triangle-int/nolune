@@ -9,11 +9,9 @@
 		type ActivityPart,
 		type ToolResult
 	} from '$lib/transcript';
-	import { memoryStepCommand, memoryStepIcon, memoryStepLabel } from '$lib/memory';
 	import { cn } from '$lib/utils';
 	import CommandStep from './CommandStep.svelte';
 	import Markdown from './Markdown.svelte';
-	import MemoryStep from './MemoryStep.svelte';
 	import StepIcon from './StepIcon.svelte';
 
 	interface Props {
@@ -33,16 +31,14 @@
 	let choice = $state<boolean | null>(null);
 	const open = $derived(choice ?? prefs.expandSteps);
 
-	/** Commands and memory calls: the steps that get a result. */
-	const calls = $derived(
-		part.steps.filter((s): s is Exclude<typeof s, { type: 'thinking' }> => s.type !== 'thinking')
+	const commands = $derived(
+		part.steps.filter((s): s is Extract<typeof s, { type: 'command' }> => s.type === 'command')
 	);
-	const commands = $derived(calls.filter((c) => c.type === 'command'));
 	const failed = $derived(
-		calls.filter((c) => results[c.id] && resultStatus(results[c.id]) === 'failed').length
+		commands.filter((c) => results[c.id] && resultStatus(results[c.id]) === 'failed').length
 	);
 	const stopped = $derived(
-		calls.some((c) => results[c.id] && resultStatus(results[c.id]) === 'stopped')
+		commands.some((c) => results[c.id] && resultStatus(results[c.id]) === 'stopped')
 	);
 
 	const label = $derived.by(() => {
@@ -52,15 +48,12 @@
 				if (prefs.technical && last.command) return `Running ${firstLine(last.command, 80)}`;
 				return last.summary ?? 'Running a command';
 			}
-			if (last?.type === 'memory' && !results[last.id]) {
-				return prefs.technical ? memoryStepCommand(last) : memoryStepLabel(last);
-			}
 			return 'Thinking';
 		}
 		if (stopped) return 'Stopped';
 		const duration = formatDuration(part.endedAt - part.startedAt);
-		if (calls.length === 0) return duration ? `Thought for ${duration}` : 'Thought for a moment';
-		if (prefs.technical && commands.length) {
+		if (commands.length === 0) return duration ? `Thought for ${duration}` : 'Thought for a moment';
+		if (prefs.technical) {
 			const ran = `Ran ${commands.length} command${commands.length === 1 ? '' : 's'}`;
 			return duration ? `${ran} · ${duration}` : ran;
 		}
@@ -92,15 +85,13 @@
 		<ol
 			class="relative mt-3 mb-1 space-y-3 pl-7 before:absolute before:top-2.5 before:bottom-2.5 before:left-[9px] before:w-px before:bg-border"
 		>
-			{#each part.steps as step, i (step.type === 'thinking' ? `thinking-${i}` : `${step.type}-${step.id}`)}
+			{#each part.steps as step, i (step.type === 'command' ? `command-${step.id}` : `thinking-${i}`)}
 				<li class="relative min-w-0">
 					<span
 						class="absolute top-0.5 -left-7 flex size-5 items-center justify-center bg-background text-muted-foreground"
 					>
 						{#if step.type === 'command'}
 							<StepIcon name={step.icon} class="size-3.5" />
-						{:else if step.type === 'memory'}
-							<StepIcon name={memoryStepIcon(step)} class="size-3.5" />
 						{:else}
 							<span class="size-1.5 rounded-full bg-muted-foreground/60"></span>
 						{/if}
@@ -111,8 +102,6 @@
 						{:else}
 							<span class="text-sm text-muted-foreground">Thinking…</span>
 						{/if}
-					{:else if step.type === 'memory'}
-						<MemoryStep call={step} result={results[step.id]} {running} />
 					{:else}
 						<CommandStep
 							command={step.command}

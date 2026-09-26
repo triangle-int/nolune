@@ -14,11 +14,8 @@ export const load: PageServerLoad = ({ locals, params }) => {
 	return { files: listMemoryFiles(profile.slug) };
 };
 
-/** Refusals are written for the model ("Error: …"); people get the sentence without the prefix. */
 function message(err: unknown): string {
-	if (err instanceof MemoryError || err instanceof MemoryConflictError) {
-		return err.message.replace(/^Error: /, '');
-	}
+	if (err instanceof MemoryError || err instanceof MemoryConflictError) return err.message;
 	throw err;
 }
 

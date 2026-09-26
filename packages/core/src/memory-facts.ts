@@ -85,7 +85,7 @@ export function factKey(fact: string): string {
  * fact or file name can collide with Object.prototype.
  */
 export interface FactIndex {
-	/** File path relative to /memories → fact key → date. */
+	/** Note path relative to the memory folder → fact key → date. */
 	files: Map<string, Map<string, number>>;
 	/** Facts that recently left a file, so one that moves to another file keeps its date. */
 	removed: Map<string, number>;
