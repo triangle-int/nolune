@@ -36,6 +36,3 @@ export async function moveChat(conversationId: string, folderId: string | null):
 	await post(`/api/c/${conversationId}/folder`, { folderId });
 	await invalidate('btw:conversations');
 }
-
-/** The type used to drag a chat from the sidebar onto a folder. */
-export const CHAT_DRAG_TYPE = 'application/x-btw-chat';

@@ -154,6 +154,12 @@
 	body {
 		@apply bg-background text-foreground antialiased;
 	}
+	/* While a chat is dragged in the sidebar (ChatDrag): no text selection, a grabbing hand. */
+	html.dragging-chat,
+	html.dragging-chat * {
+		cursor: grabbing !important;
+		user-select: none !important;
+	}
 }
 
 /* Not named `shimmer`: shadcn-svelte ships a utility by that name and Tailwind merges the two,
