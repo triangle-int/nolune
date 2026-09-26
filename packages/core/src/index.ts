@@ -76,6 +76,7 @@ export {
 export { EFFORTS, type Effort } from './anthropic.ts';
 export { createSkill, isValidSkillName, scanSkills, type Skill } from './skills.ts';
 export { buildSystemPrompt } from './prompt.ts';
+export { ViewLimitError, viewImage } from './images.ts';
 export { installCliShim } from './shim.ts';
 export {
 	SILENT_REPLY,

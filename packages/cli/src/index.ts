@@ -28,7 +28,9 @@ import {
 	setAdmin,
 	setDefaultPreset,
 	setPassword,
-	updateConfig
+	updateConfig,
+	viewImage,
+	ViewLimitError
 } from '@btw/core';
 import { ask, askHidden } from './input.ts';
 import { TRIGGER_HELP, triggerCommand, wakeCommand } from './triggers.ts';
@@ -76,7 +78,9 @@ Profiles and skills
 
 ${TRIGGER_HELP}
 
-Inside agent commands BTW_PROFILE is set, so --profile can be left out.`;
+Inside agent commands (BTW_PROFILE is set, so --profile can be left out)
+  btw view <image>...                        show images to the agent: they're attached to the
+                                             command's result (HEIC and big photos are converted)`;
 
 const DEFAULT_MODEL = 'claude-opus-5-5';
 
@@ -480,6 +484,31 @@ async function main(argv: string[]): Promise<void> {
 		case 'wake':
 			requireInit();
 			return wakeCommand(argv.slice(1));
+
+		case 'view': {
+			const dir = process.env.BTW_VIEW_DIR;
+			if (!dir)
+				fail("`btw view` only works in the agent's commands: it shows images to the agent.");
+			const files = argv.slice(1);
+			if (!files.length) fail('usage: btw view <image>...');
+			let failed = false;
+			for (const [i, file] of files.entries()) {
+				try {
+					console.log(viewImage(file, dir));
+				} catch (err) {
+					failed = true;
+					const message = err instanceof Error ? err.message : String(err);
+					console.error(`btw: can't show ${file}: ${message.replace(/\.+$/, '')}.`);
+					if (err instanceof ViewLimitError) {
+						const rest = files.slice(i + 1);
+						if (rest.length) console.error(`btw: not shown either: ${rest.join(' ')}`);
+						break;
+					}
+				}
+			}
+			if (failed) process.exit(1);
+			return;
+		}
 
 		default:
 			fail(`unknown command "${group}". See \`btw help\`.`);

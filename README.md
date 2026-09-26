@@ -51,6 +51,8 @@ Access). `btw setup` prints the exact path.
   runs in the background, and what it finds shows up under the bell at the top; open a notification
   to continue it as a conversation. Each profile's Automations page lists them. From the terminal:
   `btw trigger list`.
+- **Images.** btw can look at photos, screenshots and scans on the computer: it runs `btw view`,
+  which attaches them to the command's result. HEIC and big photos are converted with `sips`.
 - Extra environment variables for the agent's commands, e.g. for a firecrawl web-search skill:
   `btw env set FIRECRAWL_API_KEY fc-...`
 - Logs: `btw service logs -f`. Data: `~/.btw-agent` (override with `BTW_HOME`).
