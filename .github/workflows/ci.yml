@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      # Report every check, not just the first one to fail.
+      fail-fast: false
+      matrix:
+        include:
+          - name: Format
+            run: pnpm exec prettier --check .
+          - name: Lint
+            run: pnpm exec eslint .
+          - name: Types
+            run: pnpm check
+          - name: Test
+            run: pnpm test
+          - name: Build
+            run: pnpm build
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: ${{ matrix.run }}
