@@ -66,10 +66,19 @@
 	$effect(() => chat.connect(conversation.id));
 
 	const title = $derived(
-		conversation.title ||
+		chat.title ||
+			conversation.title ||
 			chat.messages.find((m) => m.kind === 'human')?.text.slice(0, 80) ||
 			'New chat'
 	);
+
+	// btw names a chat shortly after its first message; the sidebar lists the title too.
+	let listedTitle = untrack(() => conversation.title);
+	$effect(() => {
+		if (!chat.title || chat.title === listedTitle) return;
+		listedTitle = chat.title;
+		invalidate('btw:conversations');
+	});
 
 	const entries = $derived(buildTranscript(chat.messages, chat.live, chat.running));
 
