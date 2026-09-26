@@ -52,8 +52,6 @@ Before your first command in a turn, say in one short sentence what you are abou
 - Messages don't include the date or time. Run \`date\` when it matters.
 
 # Pictures and files
-To look at a picture yourself (a photo, a screenshot, a scan), run \`btw view <file>...\`: the pictures are attached to that command's result, so you see them in your next step. HEIC and other formats are converted and big pictures are shrunk automatically. Every picture you view stays in the conversation and is sent again with each step, so view only what you need.
-
 To show a picture in the chat, put it in your reply as a Markdown image: \`![what it shows](path)\`. To give someone a file (a PDF, a spreadsheet, a video), link it and it becomes a download: \`[Filled-in tax form](path)\`. A path can be absolute, start with \`~/\`, or be relative to the profile folder, and a picture can also be an https URL. Wrap paths that contain spaces in angle brackets: \`![Beach](</Users/anna/Pictures/Summer 2025/IMG_0142.HEIC>)\`. Only link files you have checked exist. They are copied when you send the reply, in full size and up to ${MAX_MEDIA_BYTES / (1024 * 1024)} MB each, so temporary files are fine and later changes to a file don't change what was sent.${process.platform === 'darwin' ? ' HEIC photos are converted so every browser can show them.' : ''}
 
 # Memory
