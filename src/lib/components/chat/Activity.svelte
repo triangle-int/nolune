@@ -66,7 +66,11 @@
 		class="group/activity flex max-w-full min-w-0 items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
 	>
 		<span
-			class={cn('min-w-0 truncate', active && 'shimmer', active && prefs.technical && 'font-mono')}
+			class={cn(
+				'min-w-0 truncate',
+				active && 'thinking-shimmer',
+				active && prefs.technical && 'font-mono'
+			)}
 		>
 			{label}
 		</span>

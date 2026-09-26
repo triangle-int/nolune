@@ -122,13 +122,14 @@
 		ui-sans-serif, -apple-system, system-ui, 'Segoe UI', Helvetica, 'Apple Color Emoji', Arial,
 		sans-serif, 'Segoe UI Emoji', 'Segoe UI Symbol';
 
-	/* The moving highlight on "Thinking…" labels. */
+	/* The moving highlight on "Thinking…" labels. The gradient is wider than the label and moves
+	   only between 0% and 100%, so it covers the whole label on every frame without repeating. */
 	@keyframes shimmer {
 		from {
 			background-position: 100% 0;
 		}
 		to {
-			background-position: -100% 0;
+			background-position: 0% 0;
 		}
 	}
 }
@@ -145,19 +146,25 @@
 	}
 }
 
-@utility shimmer {
+/* Not named `shimmer`: shadcn-svelte ships a utility by that name and Tailwind merges the two,
+   which mixed its background-repeat and reduced-motion rules into this one. */
+@utility thinking-shimmer {
 	background-image: linear-gradient(
 		90deg,
 		var(--muted-foreground) 0%,
-		var(--muted-foreground) 40%,
+		var(--muted-foreground) 42%,
 		var(--foreground) 50%,
-		var(--muted-foreground) 60%,
+		var(--muted-foreground) 58%,
 		var(--muted-foreground) 100%
 	);
-	background-size: 200% 100%;
+	background-size: 300% 100%;
+	background-repeat: no-repeat;
 	background-clip: text;
 	color: transparent;
 	animation: shimmer 2s linear infinite;
+	@media (prefers-reduced-motion: reduce) {
+		animation: none;
+	}
 }
 
 @utility no-scrollbar {
