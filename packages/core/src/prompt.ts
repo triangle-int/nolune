@@ -3,7 +3,8 @@ import { homedir, type, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { MAX_MEDIA_BYTES } from './media.ts';
 import { profileDir, profileSkillsDir } from './paths.ts';
-import { renderSkillsCatalog, scanSkills } from './skills.ts';
+import type { Profile } from './profiles.ts';
+import { listProfileSkills, renderSkillsCatalog } from './skills.ts';
 import { MAX_TIMEOUT_SECONDS, DEFAULT_TIMEOUT_SECONDS, commandShell } from './run-command.ts';
 
 const MEMORY_LIMIT = 8000;
@@ -24,9 +25,12 @@ function readMemory(dir: string): string {
  * Built once per conversation and stored with it. Everything here must be stable for the life of
  * the conversation: no dates, no user names, nothing that varies per request.
  */
-export function buildSystemPrompt(profileSlug: string): string {
-	const dir = profileDir(profileSlug);
-	const { skills } = scanSkills(profileSkillsDir(profileSlug));
+export function buildSystemPrompt(profile: Pick<Profile, 'slug' | 'disabledSkills'>): string {
+	const dir = profileDir(profile.slug);
+	const skills = listProfileSkills(
+		profileSkillsDir(profile.slug),
+		profile.disabledSkills
+	).skills.filter((s) => s.enabled);
 	const skillsSection = skills.length
 		? `When a task matches a skill's description, read its SKILL.md with \`cat\` before doing anything else, and follow it. Relative paths in a skill are relative to that skill's folder.
 

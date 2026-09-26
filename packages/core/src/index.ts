@@ -33,6 +33,7 @@ export {
 	listProfilesForUser,
 	removeMember,
 	renameProfile,
+	setSkillsEnabled,
 	type Profile
 } from './profiles.ts';
 export {
@@ -75,7 +76,14 @@ export {
 	type Snapshot
 } from './runner.ts';
 export { EFFORTS, type Effort } from './anthropic.ts';
-export { createSkill, isValidSkillName, scanSkills, type Skill } from './skills.ts';
+export {
+	createSkill,
+	isValidSkillName,
+	listProfileSkills,
+	scanSkills,
+	type ProfileSkill,
+	type Skill
+} from './skills.ts';
 export { buildSystemPrompt } from './prompt.ts';
 export { installCliShim } from './shim.ts';
 export {

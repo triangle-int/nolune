@@ -49,6 +49,8 @@ Access). `btw setup` prints the exact path.
   even if the original moves.
 - Skills live in `~/.btw-agent/profiles/<profile>/skills` and `~/.agents/skills`
   ([Agent Skills](https://agentskills.io) format). The agent creates its own with `btw skill new`.
+  Each skill's name and description go into every new chat, so turn off the ones a profile doesn't
+  need on its **Skills** page (or `btw skill disable <name> --profile <slug>`).
 - **Automations.** Ask btw in a conversation ("every weekday at 7:30, tell us if we need umbrellas",
   "check my email every 10 minutes and tell me when the school writes"). It sets up a trigger that
   runs in the background, and what it finds shows up under the bell at the top; open a notification

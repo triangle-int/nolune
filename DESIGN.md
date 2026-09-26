@@ -41,6 +41,11 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 The folder name is a slug that is fixed when the profile is created. Renaming a profile changes
 only its display name, so the skill paths already in system prompts stay valid.
 
+Every skill is on in every profile until someone turns it off, on the profile's Skills page or with
+`btw skill disable`. The profile stores the names it turned off (`profile.disabled_skills`), so skills
+added later start out on. Skills that are off are left out of the catalog when a conversation is
+created; conversations already running keep the catalog they started with.
+
 ## Prompt caching
 
 The rule: **the request prefix must stay byte-identical, so history is only ever appended to.**
