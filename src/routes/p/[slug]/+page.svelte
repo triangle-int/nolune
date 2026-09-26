@@ -26,11 +26,11 @@
 		}
 	];
 
-	/** The model and reasoning picked last time on this device. */
+	/** The reasoning picked last time on this device. The model always starts at the default. */
 	const STORAGE_KEY = 'btw-new-chat';
 
 	let text = $state('');
-	let presetId = $state(untrack(() => data.presets[0]?.id ?? ''));
+	let presetId = $state(untrack(() => data.defaultPresetId));
 	let effort = $state('medium');
 	let submitting = $state(false);
 	let textarea = $state<HTMLTextAreaElement | null>(null);
@@ -41,7 +41,6 @@
 	onMount(() => {
 		try {
 			const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}');
-			if (data.presets.some((p) => p.id === saved.presetId)) presetId = saved.presetId;
 			if (data.efforts.includes(saved.effort)) effort = saved.effort;
 		} catch {
 			// Nothing saved, or storage is blocked.
@@ -50,7 +49,7 @@
 
 	function remember() {
 		try {
-			localStorage.setItem(STORAGE_KEY, JSON.stringify({ presetId, effort }));
+			localStorage.setItem(STORAGE_KEY, JSON.stringify({ effort }));
 		} catch {
 			// Storage is blocked; the defaults are fine.
 		}
@@ -128,6 +127,7 @@
 						onEffortChange={(value) => (effort = value)}
 						presets={data.presets}
 						{presetId}
+						defaultPresetId={data.defaultPresetId}
 						onPresetChange={(id) => (presetId = id)}
 					/>
 				{/snippet}

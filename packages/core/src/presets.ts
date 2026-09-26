@@ -16,6 +16,28 @@ export function getPreset(id: string): Preset | undefined {
 	return getDb().select().from(modelPreset).where(eq(modelPreset.id, id)).get();
 }
 
+/** What new chats start with, and what automations use when they don't name a preset. */
+export function getDefaultPreset(): Preset | undefined {
+	const presets = listPresets();
+	return presets.find((p) => p.isDefault) ?? presets[0];
+}
+
+/** Existing conversations keep their model; automations without a preset pick this up. */
+export function setDefaultPreset(idOrName: string): Preset {
+	const db = getDb();
+	const preset = db
+		.select()
+		.from(modelPreset)
+		.where(or(eq(modelPreset.id, idOrName), eq(modelPreset.name, idOrName)))
+		.get();
+	if (!preset) throw new Error(`No preset "${idOrName}"`);
+	db.transaction((tx) => {
+		tx.update(modelPreset).set({ isDefault: false }).where(eq(modelPreset.isDefault, true)).run();
+		tx.update(modelPreset).set({ isDefault: true }).where(eq(modelPreset.id, preset.id)).run();
+	});
+	return { ...preset, isDefault: true };
+}
+
 export function effectiveContextWindow(preset: Preset): number | null {
 	return preset.contextWindow ?? preset.modelContextWindow;
 }
@@ -53,6 +75,7 @@ export async function addPreset(input: {
 		model,
 		contextWindow: input.contextWindow ?? null,
 		modelContextWindow,
+		isDefault: false,
 		createdAt: new Date()
 	};
 	getDb().insert(modelPreset).values(preset).run();

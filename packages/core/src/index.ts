@@ -39,9 +39,11 @@ export {
 	PROVIDERS,
 	addPreset,
 	effectiveContextWindow,
+	getDefaultPreset,
 	getPreset,
 	listPresets,
 	removePreset,
+	setDefaultPreset,
 	type Preset,
 	type Provider
 } from './presets.ts';

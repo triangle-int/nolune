@@ -29,7 +29,7 @@ export const load: PageServerLoad = ({ locals, params }) => {
 			next: t.kind === 'cron' && t.nextRunAt ? formatLocalTime(t.nextRunAt) : null,
 			action: t.action,
 			text: (t.action === 'agent' ? t.prompt : t.command) ?? '',
-			model: (t.presetId && getPreset(t.presetId)?.name) || 'the first model preset',
+			model: (t.presetId && getPreset(t.presetId)?.name) || 'the default model',
 			effort: t.effort,
 			webhookUrl: t.webhookToken ? webhookUrl(t.webhookToken) : null,
 			runs: listRuns(t.id, 5).map((r) => ({
