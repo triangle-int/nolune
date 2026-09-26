@@ -3,7 +3,7 @@ name: App icon
 title: Design an app icon
 sentence: 'Design a {{style}} app icon for {{name}}{{#idea}}: {{idea}}{{/idea}}{{#image}}, inspired by {{image}}{{/image}}.'
 description: A polished icon for your app or game, from a name and an idea.
-order: 17
+order: 18
 icon: app-window
 color: '#b7c8f5'
 image: optional

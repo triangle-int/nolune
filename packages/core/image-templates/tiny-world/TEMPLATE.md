@@ -2,7 +2,7 @@
 name: Tiny world
 title: Shrink it to a miniature
 description: Your house, your car or your street as a tiny handmade model on a desk.
-order: 3
+order: 4
 icon: house
 color: '#b9dcc2'
 image: required

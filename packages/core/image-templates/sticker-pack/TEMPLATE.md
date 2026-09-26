@@ -3,7 +3,7 @@ name: Sticker pack
 title: Make a sticker pack
 sentence: 'Make a {{style}} sticker pack based on {{image}}{{#remix}}, remixing with {{remix}}{{/remix}}.'
 description: Nine stickers of a person, a pet or a thing, each with its own expression or pose.
-order: 4
+order: 5
 icon: sticker
 color: '#f3dc86'
 image: required

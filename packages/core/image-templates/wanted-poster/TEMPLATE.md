@@ -3,7 +3,7 @@ name: Wanted poster
 title: Catch the culprit
 sentence: 'Make a wanted poster for the culprit in {{image}}{{#name}}, known as "{{name}}"{{/name}}{{#crime}}, wanted for {{crime}}{{/crime}}{{#reward}}, with a reward of {{reward}}{{/reward}}.'
 description: An old-west WANTED poster for whoever ate the last cookie. Cats included.
-order: 7
+order: 8
 icon: scroll
 color: '#e3c29b'
 image: required

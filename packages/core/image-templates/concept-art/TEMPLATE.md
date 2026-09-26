@@ -3,7 +3,7 @@ name: Concept art
 title: Paint a world for your game
 sentence: 'Paint {{style}} concept art of {{world}} in {{mood}}{{#image}}, based on {{image}}{{/image}}.'
 description: Environment concept art for a game world you describe.
-order: 16
+order: 17
 icon: mountain
 color: '#f2b48f'
 image: optional

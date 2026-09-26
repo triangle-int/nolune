@@ -341,7 +341,7 @@ an image", with the chat's paperclip) does the same with the person's own words.
   attached picture" when one was given. A line that held only sections left out disappears. A
   square `cover.png|jpg|webp` next to it replaces the icon; the card's title sits over its
   bottom fifth. The built-in covers were made with the image model and shrunk to 768px WebP.
-- **Sources**, like skills: the 18 that ship with btw (`packages/core/image-templates`),
+- **Sources**, like skills: the 19 that ship with btw (`packages/core/image-templates`),
   `~/.btw-agent/image-templates`, and the profile's `image-templates` folder; a later one
   overrides an earlier one with the same id.
 - **Applying a template just sends a prompt.** The message is the finished prompt, as the family

@@ -3,7 +3,7 @@ name: Nail art
 title: Try a new nail design
 sentence: 'Design {{shape}} nails with {{idea}}{{#image}}, inspired by {{image}}{{/image}}.'
 description: See a nail design on a hand before you book it.
-order: 6
+order: 7
 icon: hand
 color: '#f7c6d9'
 image: optional

@@ -3,7 +3,7 @@ name: Storybook page
 title: Star in a picture book
 sentence: 'Make a {{style}} storybook page where the kid in {{image}} {{adventure}}.'
 description: A picture-book page where your kid goes on any adventure you can think of.
-order: 5
+order: 6
 icon: book-open
 color: '#f3d08a'
 image: required

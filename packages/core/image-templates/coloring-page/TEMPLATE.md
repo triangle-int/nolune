@@ -2,7 +2,7 @@
 name: Coloring page
 title: Make a coloring page
 description: Any photo as a printable black-and-white coloring page for kids.
-order: 14
+order: 15
 icon: brush
 color: '#d7ecb2'
 image: required
