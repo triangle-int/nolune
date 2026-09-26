@@ -5,6 +5,8 @@ type ToolResult = { output: string; isError: boolean };
 
 /** Live state of one conversation, fed by the server-sent event stream. */
 export class ChatState {
+	/** Empty until the first snapshot arrives. */
+	title = $state('');
 	messages = $state<DisplayMessage[]>([]);
 	queued = $state<DisplayMessage[]>([]);
 	running = $state(false);
@@ -26,6 +28,7 @@ export class ChatState {
 	apply(event: ServerEvent) {
 		switch (event.type) {
 			case 'snapshot':
+				this.title = event.snapshot.title;
 				this.messages = event.snapshot.messages;
 				this.queued = event.snapshot.queued;
 				this.running = event.snapshot.running;
@@ -33,6 +36,9 @@ export class ChatState {
 				this.live = event.snapshot.live;
 				this.toolOutput = event.snapshot.toolOutput;
 				this.loaded = true;
+				break;
+			case 'title':
+				this.title = event.title;
 				break;
 			case 'status':
 				this.running = event.running;

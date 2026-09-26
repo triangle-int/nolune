@@ -12,6 +12,7 @@ import {
 	lastCommittedRow,
 	listAllConversationIds,
 	queuedRows,
+	replaceTitle,
 	setHidden,
 	summarizeUsage,
 	toDisplay,
@@ -27,6 +28,7 @@ import { collectViewedImages, createViewDir, imageUse, type ImageUse } from './i
 import { copyReplyMedia, listMedia, mediaByMessage, type PreparedMedia } from './media.ts';
 import { profileDir } from './paths.ts';
 import { RUN_COMMAND_TOOL, commandEnv, parseRunCommandInput, runCommand } from './run-command.ts';
+import { TITLE_LIMIT, suggestTitle } from './titles.ts';
 import { cacheHitRate } from './usage.ts';
 
 export interface LiveBlock {
@@ -42,9 +44,11 @@ export type LiveEvent =
 	| { type: 'live_block'; index: number; block: LiveBlock }
 	| { type: 'live_delta'; index: number; text: string }
 	| { type: 'live_clear' }
-	| { type: 'tool_output'; id: string; chunk: string };
+	| { type: 'tool_output'; id: string; chunk: string }
+	| { type: 'title'; title: string };
 
 export interface Snapshot {
+	title: string;
 	running: boolean;
 	error: string | null;
 	messages: DisplayMessage[];
@@ -115,6 +119,7 @@ export function getSnapshot(conversationId: string): Snapshot {
 	const st = stateFor(conversationId);
 	const media = mediaByMessage(conversationId);
 	return {
+		title: getConversation(conversationId)?.title ?? '',
 		running: st.running,
 		error: st.error,
 		messages: committedRows(conversationId).map((row) => toDisplay(row, media.get(row.id))),
@@ -177,9 +182,27 @@ export function sendMessage(
 	// Writing into a background run turns it into a normal conversation.
 	if (conv.hidden) setHidden(conversationId, false);
 	insertQueued({ conversationId, senderId: sender.id, senderName: sender.name, text: trimmed });
-	touchConversation(conversationId, conv.title ? undefined : trimmed.slice(0, 80));
+	// The first message stands in as the title until the model has named the chat.
+	const placeholder = conv.title ? undefined : trimmed.slice(0, TITLE_LIMIT);
+	touchConversation(conversationId, placeholder);
 	emitQueued(conversationId);
 	kick(conversationId);
+	if (placeholder !== undefined) nameConversation(conv, trimmed, placeholder);
+}
+
+/** Asks the chat's model for a title in the background; the placeholder stays if that fails. */
+function nameConversation(conv: Conversation, text: string, placeholder: string): void {
+	suggestTitle(conv.model, text)
+		.then(({ title, usage }) => {
+			console.log(
+				`[btw] ${conv.id.slice(0, 8)} title ${conv.model} in=${usage.input} out=${usage.output}${title ? '' : ' (none)'}`
+			);
+			if (!title || !replaceTitle(conv.id, placeholder, title)) return;
+			emit(conv.id, { type: 'title', title });
+		})
+		.catch((err) => {
+			console.error(`[btw] ${conv.id.slice(0, 8)} could not name the chat:`, describeApiError(err));
+		});
 }
 
 export function stop(conversationId: string, byName: string): void {
