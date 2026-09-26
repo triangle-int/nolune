@@ -37,6 +37,13 @@ export function nextCronRun(expr: string, from: Date = new Date()): Date | null 
 	return cronJob(expr).nextRun(from);
 }
 
+/** Up to `limit` times a cron expression matches after `from` and before `until`. */
+export function cronRunsBetween(expr: string, from: Date, until: Date, limit: number): Date[] {
+	return cronJob(expr)
+		.nextRuns(limit, from)
+		.filter((date) => date < until);
+}
+
 /** "2026-09-26 17:00" (local time), an ISO timestamp, or a delay from now like "30m", "2h", "1d". */
 export function parseRunAt(text: string, now: Date = new Date()): Date {
 	const trimmed = text.trim();
@@ -119,6 +126,16 @@ function checkName(profileId: string, name: string, exceptId?: string): string {
 	return trimmed;
 }
 
+/** Null when empty. The Automations page falls back to a clock icon for names Lucide doesn't have. */
+function checkIcon(icon: string | null | undefined): string | null {
+	const name = icon?.trim().toLowerCase();
+	if (!name) return null;
+	if (!/^[a-z0-9-]{1,64}$/.test(name)) {
+		throw new Error(`"${icon}" isn't a Lucide icon name. Use one like umbrella or cloud-rain.`);
+	}
+	return name;
+}
+
 function checkEffort(effort: Effort | undefined): Effort {
 	if (effort === undefined) return 'medium';
 	if (!EFFORTS.includes(effort)) throw new Error(`Effort must be one of ${EFFORTS.join(', ')}.`);
@@ -144,6 +161,8 @@ function whatColumns(what: TriggerWhat) {
 export function createTrigger(input: {
 	profileId: string;
 	name: string;
+	summary?: string | null;
+	icon?: string | null;
 	when: TriggerWhen;
 	what: TriggerWhat;
 	presetId?: string | null;
@@ -156,6 +175,8 @@ export function createTrigger(input: {
 		id: randomUUID(),
 		profileId: input.profileId,
 		name: checkName(input.profileId, input.name),
+		summary: input.summary?.trim() || null,
+		icon: checkIcon(input.icon),
 		...whenColumns(input.when),
 		webhookToken: input.when.kind === 'webhook' ? randomBytes(24).toString('base64url') : null,
 		...whatColumns(input.what),
@@ -177,6 +198,8 @@ export function updateTrigger(
 	id: string,
 	patch: {
 		name?: string;
+		summary?: string | null;
+		icon?: string | null;
 		when?: TriggerWhen;
 		what?: TriggerWhat;
 		presetId?: string | null;
@@ -190,6 +213,8 @@ export function updateTrigger(
 	const next = {
 		...current,
 		...(patch.name !== undefined ? { name: checkName(current.profileId, patch.name, id) } : {}),
+		...(patch.summary !== undefined ? { summary: patch.summary?.trim() || null } : {}),
+		...(patch.icon !== undefined ? { icon: checkIcon(patch.icon) } : {}),
 		...(patch.when ? whenColumns(patch.when) : {}),
 		...(patch.what ? whatColumns(patch.what) : {}),
 		...(patch.presetId !== undefined ? { presetId: patch.presetId } : {}),

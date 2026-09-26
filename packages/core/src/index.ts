@@ -78,6 +78,7 @@ export { installCliShim } from './shim.ts';
 export {
 	SILENT_REPLY,
 	createTrigger,
+	cronRunsBetween,
 	deleteTrigger,
 	describeWhen,
 	findTrigger,
@@ -100,6 +101,15 @@ export {
 	type TriggerWhat,
 	type TriggerWhen
 } from './triggers.ts';
+export {
+	dayKey,
+	describeCron,
+	formatClock,
+	formatDate,
+	formatDay,
+	formatDayTime,
+	formatWeekday
+} from './schedule.ts';
 export {
 	continueNotification,
 	dismissAllNotifications,

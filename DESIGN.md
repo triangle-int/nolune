@@ -123,6 +123,12 @@ into conversations.
   in the system prompt beyond the skills catalog: the built-in `automations` skill explains
   `btw trigger` and `btw wake`, and is read only when someone asks for a reminder or a check. Members
   see, edit, run, pause and delete them on the profile's Automations page. There is no create form.
+- **The Automations page** is for the family, not the agent. Each trigger shows its `icon` and a
+  one-sentence `summary` (written by the agent with `--summary` / `--icon`, like `run_command`'s),
+  its schedule in plain words (`describeCron`: "Every weekday at 07:30"; the cron itself only with
+  technical details on) and relative times ("next Monday at 07:30"). A "Coming up" calendar lists
+  the next 7 days by day; a trigger firing more than 28 times in that week is listed once under
+  "Often" instead. The prompt, script and webhook URL are behind Edit.
 - **Runs.** Every firing (schedule, webhook, `btw wake`, Run now) inserts a `pending` row in
   `trigger_run`. The gateway's scheduler ticks every 5 s: it fires triggers whose `nextRunAt` has
   passed and starts pending runs. The CLI only writes rows, so `btw wake` from a script is picked up

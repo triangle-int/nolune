@@ -29,13 +29,17 @@ import {
 } from '@btw/core';
 
 export const TRIGGER_HELP = `Automations (results show up as notifications in the web UI)
-  btw trigger add <name> WHEN WHAT [--preset NAME] [--effort LEVEL] [--profile SLUG]
+  btw trigger add <name> WHEN WHAT [--summary S] [--icon I] [--preset NAME] [--effort LEVEL]
+                  [--profile SLUG]
       WHEN: --cron "<min hour day month weekday>" (local time) | --at "YYYY-MM-DD HH:MM"
             | --in 30m|2h|1d | --webhook
       WHAT: --prompt "<what the agent should do>" | --script "<shell command, no model>"
+      --summary: one plain sentence the family sees on the Automations page
+      --icon: a Lucide icon name for it, like umbrella
   btw trigger list [--profile SLUG]
   btw trigger show|run|pause|resume|rm <name|id>
-  btw trigger edit <name|id> [--name N] [WHEN] [WHAT] [--preset NAME] [--effort LEVEL]
+  btw trigger edit <name|id> [--name N] [--summary S] [--icon I] [WHEN] [WHAT] [--preset NAME]
+                   [--effort LEVEL]
   btw wake <message> [--title T] [--profile SLUG]
       start a background agent run now; trigger scripts call this (\`btw wake -\` reads stdin)`;
 
@@ -47,6 +51,8 @@ const OPTIONS = {
 	prompt: { type: 'string' },
 	script: { type: 'string' },
 	name: { type: 'string' },
+	summary: { type: 'string' },
+	icon: { type: 'string' },
 	title: { type: 'string' },
 	preset: { type: 'string' },
 	effort: { type: 'string' },
@@ -147,6 +153,8 @@ export function triggerCommand(action: string | undefined, args: string[]): void
 			const t = createTrigger({
 				profileId: profile.id,
 				name,
+				summary: values.summary,
+				icon: values.icon,
 				when,
 				what,
 				presetId: preset?.id ?? null,
@@ -178,6 +186,8 @@ export function triggerCommand(action: string | undefined, args: string[]): void
 			const t = ref();
 			const preset = t.presetId ? getPreset(t.presetId) : undefined;
 			console.log(`${t.name} (${t.id})
+  summary  ${t.summary ?? '(none: the Automations page shows only the name)'}
+  icon     ${t.icon ?? '(none)'}
   profile  ${getProfile(t.profileId)?.slug ?? '?'}
   when     ${describeWhen(t)} (${status(t)})
   ${t.action === 'agent' ? `prompt   ${t.prompt}` : `script   ${t.command}`}
@@ -223,6 +233,8 @@ export function triggerCommand(action: string | undefined, args: string[]): void
 			const preset = values.preset ? resolvePreset(values.preset) : undefined;
 			const t = updateTrigger(current.id, {
 				name: values.name,
+				summary: values.summary,
+				icon: values.icon,
 				when: whenFrom(values),
 				what: whatFrom(values),
 				presetId: preset?.id,
