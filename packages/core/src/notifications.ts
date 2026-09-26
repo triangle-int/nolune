@@ -11,7 +11,7 @@ import {
 	profile,
 	profileMember
 } from './db/schema.ts';
-import { getPreset, listPresets } from './presets.ts';
+import { getDefaultPreset, getPreset } from './presets.ts';
 import { formatLocalTime, getTrigger } from './triggers.ts';
 
 export type Notification = typeof notification.$inferSelect;
@@ -169,7 +169,7 @@ export function continueNotification(
 	}
 
 	const t = n.triggerId ? getTrigger(n.triggerId) : undefined;
-	const preset = (t?.presetId && getPreset(t.presetId)) || listPresets()[0];
+	const preset = (t?.presetId && getPreset(t.presetId)) || getDefaultPreset();
 	if (!preset) throw new Error('No models are set up yet.');
 	const conv = createConversation({
 		profile: p,

@@ -128,6 +128,8 @@ export const modelPreset = sqliteTable('model_preset', {
 	contextWindow: integer('context_window'),
 	/** From the provider's models API when the preset was created. */
 	modelContextWindow: integer('model_context_window'),
+	/** Picked for new chats and automations. At most one; with none, the oldest preset is used. */
+	isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull()
 });
 

@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import BoxIcon from '@lucide/svelte/icons/box';
+	import StarIcon from '@lucide/svelte/icons/star';
+	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import TopBar from '$lib/components/TopBar.svelte';
@@ -17,7 +19,8 @@
 			<div class="space-y-1">
 				<h1 class="text-2xl font-semibold">Models</h1>
 				<p class="text-muted-foreground">
-					Presets are shared by every profile. Removing one doesn't affect existing chats.
+					Presets are shared by every profile. New chats start with the default one. Removing a
+					preset doesn't affect existing chats.
 				</p>
 			</div>
 
@@ -34,13 +37,33 @@
 							<BoxIcon class="size-4" />
 						</span>
 						<div class="min-w-0 flex-1">
-							<div class="truncate font-medium">{preset.name}</div>
+							<div class="flex items-center gap-2">
+								<span class="truncate font-medium">{preset.name}</span>
+								{#if preset.isDefault}
+									<Badge variant="secondary">Default</Badge>
+								{/if}
+							</div>
 							<div class="truncate text-muted-foreground">
 								{preset.provider} / {preset.model} · context {formatTokens(
 									preset.contextWindow
 								)}{preset.overridden ? ' (override)' : ''}
 							</div>
 						</div>
+						{#if !preset.isDefault}
+							<form method="POST" action="?/setDefault" use:enhance>
+								<input type="hidden" name="id" value={preset.id} />
+								<Button
+									type="submit"
+									variant="ghost"
+									size="sm"
+									title="Make default"
+									class="text-muted-foreground max-sm:px-2"
+								>
+									<StarIcon />
+									<span class="max-sm:sr-only">Make default</span>
+								</Button>
+							</form>
+						{/if}
 						<form method="POST" action="?/remove" use:enhance>
 							<input type="hidden" name="id" value={preset.id} />
 							<Button type="submit" variant="ghost" size="sm" class="text-muted-foreground"

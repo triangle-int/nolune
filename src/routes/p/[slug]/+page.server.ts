@@ -2,6 +2,7 @@ import { fail, redirect } from '@sveltejs/kit';
 import {
 	EFFORTS,
 	createConversation,
+	getDefaultPreset,
 	getPreset,
 	listPresets,
 	sendMessage,
@@ -14,6 +15,7 @@ export const load: PageServerLoad = ({ locals, params }) => {
 	requireProfile(locals, params.slug);
 	return {
 		presets: listPresets().map((p) => ({ id: p.id, name: p.name })),
+		defaultPresetId: getDefaultPreset()?.id ?? '',
 		efforts: [...EFFORTS]
 	};
 };

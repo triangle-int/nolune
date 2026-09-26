@@ -191,7 +191,7 @@ export function triggerCommand(action: string | undefined, args: string[]): void
   profile  ${getProfile(t.profileId)?.slug ?? '?'}
   when     ${describeWhen(t)} (${status(t)})
   ${t.action === 'agent' ? `prompt   ${t.prompt}` : `script   ${t.command}`}
-  model    ${preset?.name ?? 'first preset'}, reasoning ${t.effort}`);
+  model    ${preset?.name ?? 'default preset'}, reasoning ${t.effort}`);
 			printWebhook(t);
 			const runs = listRuns(t.id, 10);
 			console.log(runs.length ? 'Recent runs:' : 'No runs yet.');
