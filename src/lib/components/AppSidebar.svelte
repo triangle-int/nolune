@@ -32,6 +32,7 @@
 	import { Kbd } from '$lib/components/ui/kbd';
 	import { CHAT_DRAG_TYPE, moveChat, type FolderItem } from '$lib/folders';
 	import { cn } from '$lib/utils';
+	import RenameChatDialog from './chat/RenameChatDialog.svelte';
 	import DeleteFolderDialog from './folders/DeleteFolderDialog.svelte';
 	import MoveToFolderMenu from './folders/MoveToFolderMenu.svelte';
 	import NewFolderDialog from './folders/NewFolderDialog.svelte';
@@ -54,6 +55,7 @@
 	const sidebar = Sidebar.useSidebar();
 
 	let searchOpen = $state(false);
+	let renaming = $state<ChatItem | null>(null);
 	let deleting = $state<{ id: string; title: string } | null>(null);
 	let creatingFolder = $state(false);
 	/** A chat to move into the folder being made ("New folder…" in its menu). */
@@ -190,6 +192,10 @@
 				{/snippet}
 			</DropdownMenu.Trigger>
 			<DropdownMenu.Content side="right" align="start" class="w-48">
+				<DropdownMenu.Item onSelect={() => (renaming = conversation)}>
+					<PencilIcon />
+					Rename
+				</DropdownMenu.Item>
 				<MoveToFolderMenu
 					{folders}
 					folderId={conversation.folderId}
@@ -577,6 +583,8 @@
 		</form>
 	</AlertDialog.Content>
 </AlertDialog.Root>
+
+<RenameChatDialog bind:chat={renaming} slug={profile.slug} />
 
 <NewFolderDialog
 	bind:open={creatingFolder}

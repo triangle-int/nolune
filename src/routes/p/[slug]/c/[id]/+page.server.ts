@@ -1,5 +1,5 @@
-import { error, redirect } from '@sveltejs/kit';
-import { EFFORTS, deleteConversation } from '@btw/core';
+import { error, fail, redirect } from '@sveltejs/kit';
+import { EFFORTS, TitleError, deleteConversation, renameConversation } from '@btw/core';
 import { requireConversation } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -20,6 +20,17 @@ export const load: PageServerLoad = ({ locals, params }) => {
 };
 
 export const actions: Actions = {
+	rename: async ({ locals, params, request }) => {
+		requireConversation(locals, params.id);
+		const form = await request.formData();
+		try {
+			renameConversation(params.id, form.get('title')?.toString() ?? '');
+		} catch (err) {
+			if (err instanceof TitleError) return fail(400, { message: err.message });
+			throw err;
+		}
+	},
+
 	delete: async ({ locals, params }) => {
 		const { profile } = requireConversation(locals, params.id);
 		deleteConversation(params.id);

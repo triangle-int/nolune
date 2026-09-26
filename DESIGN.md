@@ -527,6 +527,10 @@ composer. Most of the family doesn't read shell, so the default view hides the m
 - **The sidebar** lists folders above the chats. A folder's chats show under it when its page or
   one of its chats is open, or when its icon (a chevron on hover) is clicked; chats in folders are
   not in the Chats list.
+- **Chat titles:** the first message stands in until the chat's model names it, in the background.
+  Anyone in the profile can rename a chat from its menu (the sidebar's, or the chat header's). The
+  new name reaches everyone who has the chat open, doesn't move it up the list, and isn't replaced
+  by a name the model was still thinking of.
 - `/` redirects to the last profile opened (`btw-profile` cookie) or the only one, else to
   `/profiles`.
 - **Models & keys** (`/admin`, admins only) has the API keys and the model presets. A key is
