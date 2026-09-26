@@ -13,6 +13,7 @@ import {
 	effectiveContextWindow,
 	generatePassword,
 	getDb,
+	getDefaultPreset,
 	getProfileBySlug,
 	initConfig,
 	installCliShim,
@@ -25,6 +26,7 @@ import {
 	removePreset,
 	scanSkills,
 	setAdmin,
+	setDefaultPreset,
 	setPassword,
 	updateConfig
 } from '@btw/core';
@@ -64,6 +66,7 @@ Users (web sign-up is disabled; this is the only way to add people)
 Model presets (shared by all profiles)
   btw preset add <model> [--name N] [--context-window TOKENS]
   btw preset rm <name|id>
+  btw preset default <name|id>               the model new chats start with
   btw preset list
 
 Profiles and skills
@@ -418,14 +421,19 @@ async function main(argv: string[]): Promise<void> {
 			} else if (action === 'rm') {
 				removePreset(positional(positionals, 0, 'name|id'));
 				console.log('Removed. Existing conversations keep working.');
+			} else if (action === 'default') {
+				const preset = setDefaultPreset(positional(positionals, 0, 'name|id'));
+				console.log(`"${preset.name}" is now the default. New chats start with it.`);
 			} else if (action === 'list') {
+				const defaultId = getDefaultPreset()?.id;
 				for (const p of listPresets()) {
 					const override = p.contextWindow ? ' (override)' : '';
+					const isDefault = p.id === defaultId ? '\tdefault' : '';
 					console.log(
-						`${p.name}\t${p.provider}/${p.model}\tcontext ${formatTokens(effectiveContextWindow(p))}${override}\t${p.id}`
+						`${p.name}\t${p.provider}/${p.model}\tcontext ${formatTokens(effectiveContextWindow(p))}${override}\t${p.id}${isDefault}`
 					);
 				}
-			} else fail('usage: btw preset add|rm|list');
+			} else fail('usage: btw preset add|rm|default|list');
 			return;
 		}
 

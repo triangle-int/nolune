@@ -9,7 +9,7 @@ import {
 } from './conversations.ts';
 import { createNotification, pruneNotifications } from './notifications.ts';
 import { profileDir } from './paths.ts';
-import { getPreset, listPresets } from './presets.ts';
+import { getDefaultPreset, getPreset } from './presets.ts';
 import { getProfile } from './profiles.ts';
 import { commandEnv, runCommand, type RunCommandResult } from './run-command.ts';
 import { kick, onLoopEnd } from './runner.ts';
@@ -155,7 +155,7 @@ function startAgentRun(run: TriggerRun): void {
 		updateRun(run.id, { status: 'failed', output: 'The profile no longer exists.' });
 		return;
 	}
-	const preset = (run.presetId && getPreset(run.presetId)) || listPresets()[0];
+	const preset = (run.presetId && getPreset(run.presetId)) || getDefaultPreset();
 	if (!preset) {
 		failRun(run, 'No models are set up yet. An admin can add one on the Models page.');
 		return;

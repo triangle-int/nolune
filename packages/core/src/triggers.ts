@@ -6,7 +6,7 @@ import { DEFAULT_PORT, readConfig } from './config.ts';
 import { getDb } from './db/index.ts';
 import { trigger, triggerRun } from './db/schema.ts';
 import { getConversation } from './conversations.ts';
-import { getPreset, listPresets, type Preset } from './presets.ts';
+import { getDefaultPreset, getPreset, listPresets, type Preset } from './presets.ts';
 
 export type Trigger = typeof trigger.$inferSelect;
 export type TriggerRun = typeof triggerRun.$inferSelect;
@@ -272,18 +272,18 @@ export function webhookUrl(token: string): string {
 
 /**
  * The preset a trigger created from a conversation should use: the one given, else that
- * conversation's, else the first preset.
+ * conversation's, else the default preset.
  */
 export function resolvePreset(ref?: string, conversationId?: string): Preset | undefined {
-	const presets = listPresets();
 	if (ref) {
+		const presets = listPresets();
 		const needle = ref.toLowerCase();
 		const found = presets.find((p) => p.id === ref || p.name.toLowerCase() === needle);
 		if (!found) throw new Error(`No model preset "${ref}". See \`btw preset list\`.`);
 		return found;
 	}
 	const fromConversation = conversationId ? getConversation(conversationId)?.presetId : null;
-	return (fromConversation && getPreset(fromConversation)) || presets[0];
+	return (fromConversation && getPreset(fromConversation)) || getDefaultPreset();
 }
 
 /** Triggers whose scheduled time has come. Webhook triggers are never scheduled. */

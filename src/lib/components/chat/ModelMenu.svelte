@@ -26,9 +26,19 @@
 		presets: { id: string; name: string }[];
 		presetId: string;
 		onPresetChange?: (id: string) => void;
+		/** Marked in the list so people can find their way back to it. */
+		defaultPresetId?: string;
 	}
 
-	let { efforts, effort, onEffortChange, presets, presetId, onPresetChange }: Props = $props();
+	let {
+		efforts,
+		effort,
+		onEffortChange,
+		presets,
+		presetId,
+		onPresetChange,
+		defaultPresetId
+	}: Props = $props();
 
 	const prefs = getPreferences();
 	const preset = $derived(presets.find((p) => p.id === presetId));
@@ -54,7 +64,12 @@
 			>
 			<DropdownMenu.RadioGroup value={presetId} onValueChange={(id) => onPresetChange?.(id)}>
 				{#each presets as p (p.id)}
-					<DropdownMenu.RadioItem value={p.id}>{shortModelName(p.name)}</DropdownMenu.RadioItem>
+					<DropdownMenu.RadioItem value={p.id}>
+						<span class="min-w-0 flex-1 truncate">{shortModelName(p.name)}</span>
+						{#if p.id === defaultPresetId}
+							<span class="text-xs text-muted-foreground">Default</span>
+						{/if}
+					</DropdownMenu.RadioItem>
 				{/each}
 			</DropdownMenu.RadioGroup>
 			<DropdownMenu.Separator />
