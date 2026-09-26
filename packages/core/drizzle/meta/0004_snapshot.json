@@ -1,8 +1,8 @@
 {
 	"version": "6",
 	"dialect": "sqlite",
-	"id": "3942ec97-d499-4ada-b790-e83e7f49f869",
-	"prevId": "09ceadc9-f114-488f-876e-a081f1d295e4",
+	"id": "2a4496dc-10eb-4fe5-a569-aa275bdb3d65",
+	"prevId": "3942ec97-d499-4ada-b790-e83e7f49f869",
 	"tables": {
 		"account": {
 			"name": "account",
@@ -670,6 +670,14 @@
 					"primaryKey": false,
 					"notNull": true,
 					"autoincrement": false
+				},
+				"disabled_skills": {
+					"name": "disabled_skills",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": "'[]'"
 				},
 				"created_by": {
 					"name": "created_by",
