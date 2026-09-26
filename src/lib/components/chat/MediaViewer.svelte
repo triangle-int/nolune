@@ -5,6 +5,8 @@
 		/** File name of the original, and where to download it. */
 		name: string;
 		download: string;
+		/** The picture's button in the chat, which gets the focus back when the viewer closes. */
+		trigger: HTMLElement;
 	}
 
 	/**
@@ -21,7 +23,8 @@
 					src: img.getAttribute('src') ?? '',
 					alt: img.alt,
 					name: button.dataset.name ?? '',
-					download: button.dataset.download ?? ''
+					download: button.dataset.download ?? '',
+					trigger: button
 				});
 			};
 			node.addEventListener('click', onClick);
@@ -40,10 +43,25 @@
 	}
 
 	let { picture = $bindable() }: Props = $props();
+
+	/** The picture last opened, kept after closing so the focus can go back to it. */
+	let trigger = $state.raw<HTMLElement>();
+	$effect(() => {
+		if (picture) trigger = picture.trigger;
+	});
+
+	function restoreFocus(event: Event) {
+		// Back to the picture without scrolling the chat to it, which the default focus does.
+		event.preventDefault();
+		trigger?.focus({ preventScroll: true });
+	}
 </script>
 
 <Dialog.Root open={picture !== null} onOpenChange={(open) => !open && (picture = null)}>
-	<Dialog.Content class="max-h-[calc(100dvh-2rem)] gap-3 p-3 sm:max-w-[min(72rem,calc(100%-2rem))]">
+	<Dialog.Content
+		onCloseAutoFocus={restoreFocus}
+		class="max-h-[calc(100dvh-2rem)] gap-3 p-3 sm:max-w-[min(72rem,calc(100%-2rem))]"
+	>
 		{#if picture}
 			<Dialog.Title class="sr-only">{picture.alt || picture.name}</Dialog.Title>
 			<img

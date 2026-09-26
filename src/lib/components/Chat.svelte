@@ -135,23 +135,59 @@
 			chat.messages[chat.messages.length - 1].kind !== 'assistant'
 	);
 
-	const contentSize = $derived(
-		chat.messages.length +
-			chat.queued.length +
-			chat.live.reduce((n, b) => n + (b?.text.length ?? 0), 0) +
-			(chat.toolOutput?.text.length ?? 0) +
-			(chat.running ? 1 : 0)
-	);
+	/** How close to the end the chat has to be to count as scrolled to the bottom. */
+	const BOTTOM_SLACK = 80;
+	let lastScrollTop = 0;
 
-	/** Keeps the view pinned to the newest content unless the reader scrolled up. */
+	/**
+	 * Keeps the view pinned to the newest content while the reader is at the bottom, whenever
+	 * anything changes size: new messages and streamed text, but also pictures that finish loading.
+	 * Starting to scroll up (wheel, trackpad or finger) lets go right away, before the view has
+	 * moved far.
+	 */
 	function autoscroll(node: HTMLElement) {
-		void contentSize;
-		if (stickToBottom) node.scrollTop = node.scrollHeight;
+		const observer = new ResizeObserver(() => {
+			if (stickToBottom) node.scrollTop = node.scrollHeight;
+		});
+		observer.observe(node);
+		for (const child of node.children) observer.observe(child);
+
+		const release = () => {
+			if (node.scrollTop > 0) stickToBottom = false;
+		};
+		let touchY = 0;
+		const onWheel = (event: WheelEvent) => {
+			if (event.deltaY < 0) release();
+		};
+		const onTouchStart = (event: TouchEvent) => (touchY = event.touches[0]?.clientY ?? 0);
+		const onTouchMove = (event: TouchEvent) => {
+			const y = event.touches[0]?.clientY ?? touchY;
+			if (y > touchY) release(); // a finger moving down scrolls up
+			touchY = y;
+		};
+		node.addEventListener('wheel', onWheel, { passive: true });
+		node.addEventListener('touchstart', onTouchStart, { passive: true });
+		node.addEventListener('touchmove', onTouchMove, { passive: true });
+		return () => {
+			observer.disconnect();
+			node.removeEventListener('wheel', onWheel);
+			node.removeEventListener('touchstart', onTouchStart);
+			node.removeEventListener('touchmove', onTouchMove);
+		};
 	}
 
+	/**
+	 * Only the reader decides: scrolling down to the end sticks to the bottom, scrolling up lets
+	 * go. When the browser moves the view by itself (content changing size, focus), the choice
+	 * stays, so the chat never jumps to the bottom on its own.
+	 */
 	function onScroll(event: Event & { currentTarget: HTMLElement }) {
 		const node = event.currentTarget;
-		stickToBottom = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
+		const top = node.scrollTop;
+		const atBottom = node.scrollHeight - top - node.clientHeight < BOTTOM_SLACK;
+		if (top > lastScrollTop && atBottom) stickToBottom = true;
+		else if (top < lastScrollTop && !atBottom) stickToBottom = false;
+		lastScrollTop = top;
 	}
 
 	function scrollToBottom() {
