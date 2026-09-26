@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
 import {
 	checkTemplateImages,
 	fillTemplate,
@@ -130,11 +133,58 @@ describe('templateMessage', () => {
 		);
 	});
 
+	it('says the shape where the prompt asks for it, instead of at the end', () => {
+		const t = template({ prompt: 'A single {{#aspect}}{{aspect}} {{/aspect}}sticker sheet.' });
+		expect(templateMessage(resolveImageTemplate(t, {}), { shape: 'square', images: 0 })).toBe(
+			'Create a 3D sticker pack.\n\nA single square (1:1) sticker sheet.'
+		);
+		expect(templateMessage(resolveImageTemplate(t, {}), { shape: 'auto', images: 0 })).toBe(
+			'Create a 3D sticker pack.\n\nA single sticker sheet.'
+		);
+	});
+
 	it('is just the instructions without a sentence', () => {
 		const resolved = resolveImageTemplate(template({ sentence: null }), {});
 		expect(templateMessage(resolved, { shape: 'portrait', images: 1 })).toMatch(
 			/^Use rounded, toy-like forms\.\n.*\nMake it portrait \(2:3\)\.$/s
 		);
+	});
+});
+
+describe('scanImageTemplates', () => {
+	const dir = mkdtempSync(join(tmpdir(), 'btw-templates-'));
+	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+	function write(id: string, frontmatter: string): void {
+		mkdirSync(join(dir, 'image-templates', id), { recursive: true });
+		writeFileSync(
+			join(dir, 'image-templates', id, 'TEMPLATE.md'),
+			`---\nname: ${id}\n${frontmatter}\n---\n\nA sticker of {{remix}}.\n`
+		);
+	}
+
+	it('keeps emoji-only choices apart, each its own value', () => {
+		write('emoji', 'settings:\n  - id: remix\n    options:\n      - 💀🍓\n      - 🌻💥');
+		const { templates } = scanImageTemplates(join(dir, 'image-templates'));
+		const remix = templates.find((t) => t.id === 'emoji')!.settings[0];
+		expect(remix.type === 'select' && remix.options.map((o) => o.value)).toEqual(['💀🍓', '🌻💥']);
+		const resolved = resolveImageTemplate(
+			templates.find((t) => t.id === 'emoji')!,
+			{
+				remix: '🌻💥'
+			}
+		);
+		expect(resolved.choices[0].prompt).toBe('🌻💥');
+	});
+
+	it("skips a template whose setting takes a name btw fills in, or whose choices can't be told apart", () => {
+		write('aspect', 'settings:\n  - id: aspect\n    label: Aspect');
+		write('twins', 'settings:\n  - id: remix\n    options:\n      - Pink!\n      - pink');
+		const { templates, warnings } = scanImageTemplates(join(dir, 'image-templates'));
+		expect(templates.map((t) => t.id)).not.toContain('aspect');
+		expect(templates.map((t) => t.id)).not.toContain('twins');
+		expect(warnings.join('\n')).toMatch(/invalid setting id "aspect"/);
+		expect(warnings.join('\n')).toMatch(/two options of "remix" are the same/);
 	});
 });
 

@@ -89,6 +89,12 @@ const PLACEHOLDER = /\{\{\s*([\w-]+)\s*\}\}/g;
 const SECTION = /\{\{([#^])\s*([\w-]+)\s*\}\}([\s\S]*?)\{\{\/\s*\2\s*\}\}/g;
 /** The placeholder that is set when pictures were given. */
 const IMAGE_VAR = 'image';
+/**
+ * The chosen shape in words ("square (1:1)"), empty for auto. A prompt that uses it says the shape
+ * where it wants; others get a "Make it square (1:1)." line at the end.
+ */
+const ASPECT_VAR = 'aspect';
+const USES_ASPECT = /\{\{\s*[#^]?\s*aspect\s*\}\}/;
 
 function slugify(label: string): string {
 	return label
@@ -116,13 +122,14 @@ function oneOf<T extends string>(value: unknown, allowed: readonly T[], what: st
 function parseOption(raw: unknown, setting: string): TemplateOption {
 	if (typeof raw === 'string' || typeof raw === 'number') {
 		const label = String(raw).trim();
-		return { value: slugify(label), label, prompt: label };
+		return { value: slugify(label) || label, label, prompt: label };
 	}
 	const o = (raw ?? {}) as Record<string, unknown>;
 	const label = text(o.label) ?? text(o.value);
 	if (!label) throw new Error(`an option of "${setting}" has no label`);
 	return {
-		value: text(o.value) ?? slugify(label),
+		// Labels without letters (emoji) are their own value.
+		value: text(o.value) ?? (slugify(label) || label),
 		label,
 		prompt: text(o.prompt) ?? label
 	};
@@ -133,10 +140,14 @@ function parseSetting(raw: unknown): TemplateSetting {
 	const label = text(s.label) ?? text(s.id);
 	if (!label) throw new Error('a setting has no label');
 	const id = text(s.id) ?? slugify(label);
-	if (!/^[\w-]+$/.test(id) || id === IMAGE_VAR) throw new Error(`invalid setting id "${id}"`);
+	if (!/^[\w-]+$/.test(id) || id === IMAGE_VAR || id === ASPECT_VAR) {
+		throw new Error(`invalid setting id "${id}"`);
+	}
 	if (Array.isArray(s.options)) {
 		const options = s.options.map((o) => parseOption(o, label));
 		if (!options.length) throw new Error(`"${label}" has no options`);
+		const values = new Set(options.map((o) => o.value.toLowerCase()));
+		if (values.size < options.length) throw new Error(`two options of "${label}" are the same`);
 		const wanted = text(s.default);
 		const first = options.find((o) => wanted && matches(o, wanted)) ?? options[0];
 		return { type: 'select', id, label, options, default: first.value };
@@ -184,7 +195,7 @@ function parseTemplate(
 			...prompt.matchAll(PLACEHOLDER),
 			...(sentence ?? '').matchAll(PLACEHOLDER)
 		]) {
-			if (key !== IMAGE_VAR && !ids.has(key)) {
+			if (key !== IMAGE_VAR && key !== ASPECT_VAR && !ids.has(key)) {
 				warnings.push(`${location}: {{${key}}} is not one of its settings`);
 			}
 		}
@@ -372,11 +383,11 @@ export function fillTemplate(source: string, vars: Record<string, string>): stri
 		.trim();
 }
 
-/** How the message asks for each shape; the skill maps these back to `--size`. */
+/** How the message names each shape; the skill maps these words back to `--size`. */
 const SHAPE_WORDS: Record<ImageShape, string | null> = {
-	square: 'Make it square (1:1).',
-	portrait: 'Make it portrait (2:3).',
-	landscape: 'Make it landscape (3:2).',
+	square: 'square (1:1)',
+	portrait: 'portrait (2:3)',
+	landscape: 'landscape (3:2)',
 	auto: null
 };
 
@@ -402,12 +413,15 @@ export function templateMessage(
 				...Object.fromEntries(choices.map((c) => [c.setting.id, c.display]))
 			})
 		: '';
+	const shape = SHAPE_WORDS[options.shape];
 	const body = fillTemplate(template.prompt, {
 		[IMAGE_VAR]: pictures,
+		[ASPECT_VAR]: shape ?? '',
 		...Object.fromEntries(choices.map((c) => [c.setting.id, c.prompt]))
 	});
-	const shape = SHAPE_WORDS[options.shape];
-	return [opening, shape ? `${body}\n${shape}` : body, options.extra?.trim()]
+	// A prompt that says the shape itself ("a {{aspect}} sticker sheet") doesn't get it again.
+	const shapeLine = shape && !USES_ASPECT.test(template.prompt) ? `Make it ${shape}.` : null;
+	return [opening, shapeLine ? `${body}\n${shapeLine}` : body, options.extra?.trim()]
 		.filter(Boolean)
 		.join('\n\n');
 }

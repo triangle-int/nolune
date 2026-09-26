@@ -338,9 +338,12 @@ an image", with the chat's paperclip) does the same with the person's own words.
   the `sentence` that shows them as chips), then the prompt: the instructions for the image
   model. `{{setting}}` is replaced by the choice, `{{#setting}}…{{/setting}}` is kept only when
   it has a value and `{{^setting}}…{{/setting}}` only when it doesn't; `{{image}}` is "the
-  attached picture" when one was given. A line that held only sections left out disappears. A
-  square `cover.png|jpg|webp` next to it replaces the icon; the card's title sits over its
-  bottom fifth. The built-in covers were made with the image model and shrunk to 768px WebP.
+  attached picture" when one was given, and `{{aspect}}` the chosen shape in words ("square
+  (1:1)", empty for auto). A prompt that uses `{{aspect}}` says the shape where it wants ("a
+  single {{aspect}} transparent sticker sheet"); others get "Make it square (1:1)." at the end.
+  Options whose labels have no letters (the Sticker pack's emoji sets) are their own value. A
+  line that held only sections left out disappears. A square `cover.png|jpg|webp` next to it
+  replaces the icon; the card's title sits over its bottom fifth. The built-in covers were made with the image model and shrunk to 768px WebP.
 - **Sources**, like skills: the 19 that ship with btw (`packages/core/image-templates`),
   `~/.btw-agent/image-templates`, and the profile's `image-templates` folder; a later one
   overrides an earlier one with the same id.
