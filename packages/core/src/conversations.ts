@@ -333,6 +333,23 @@ export function replyText(row: MessageRow): string {
 		.trim();
 }
 
+/**
+ * Everything the model read that it didn't write: what people wrote, automation prompts and
+ * events, and command output. A web picture in a reply is downloaded only if its link is in here.
+ */
+export function foundText(rows: MessageRow[]): string {
+	return rows
+		.filter((row) => row.kind !== 'assistant')
+		.flatMap((row) =>
+			(
+				JSON.parse(row.content) as (Anthropic.TextBlockParam | Anthropic.ToolResultBlockParam)[]
+			).map((b) =>
+				b.type === 'tool_result' ? toolResultText(b.content) : b.type === 'text' ? b.text : ''
+			)
+		)
+		.join('\n');
+}
+
 /** `mediaRows`: the row's pictures and files, for assistant rows. */
 export function toDisplay(row: MessageRow, mediaRows: MediaRow[] = []): DisplayMessage {
 	const createdAt = row.createdAt.getTime();
