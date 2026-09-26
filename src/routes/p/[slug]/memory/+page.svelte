@@ -7,6 +7,7 @@
 	import type { SubmitFunction } from '@sveltejs/kit';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import EraserIcon from '@lucide/svelte/icons/eraser';
+	import PinIcon from '@lucide/svelte/icons/pin';
 	import { Button } from '$lib/components/ui/button';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
@@ -30,10 +31,28 @@
 			facts: file.facts
 		}))
 	);
-	/** The notes below follow the grid's order. */
+	/**
+	 * The notes below follow the grid's order, after the pinned core note. Core is there even
+	 * before it exists, so people can start it here.
+	 */
 	const files = $derived.by(() => {
 		const byPath = new Map(data.files.map((file) => [file.path, file]));
-		return orderTopics(topics).map((topic) => ({ topic, file: byPath.get(topic.path)! }));
+		const ordered = orderTopics(topics).map((topic) => ({ topic, file: byPath.get(topic.path)! }));
+		const at = ordered.findIndex(({ file }) => file.path === data.core.path);
+		const core =
+			at === -1
+				? {
+						topic: {
+							path: data.core.path,
+							title: memoryTopic(data.core.path),
+							group: null,
+							updatedAt: 0,
+							facts: []
+						},
+						file: { path: data.core.path, text: '', facts: [], size: 0, updatedAt: 0 }
+					}
+				: ordered.splice(at, 1)[0];
+		return [core, ...ordered];
 	});
 	const total = $derived(topics.reduce((sum, topic) => sum + topic.facts.length, 0));
 	const thisWeek = $derived(
@@ -99,9 +118,10 @@
 <div class="min-h-0 flex-1 overflow-y-auto">
 	<div class="mx-auto max-w-3xl space-y-6 px-4 py-6 sm:py-10">
 		<p class="text-muted-foreground">
-			What btw remembers for {data.profile.name}, shared by everyone in it. It looks here when a
-			chat starts and saves what it learns along the way. To add something, just tell it in a chat,
-			like "Remember that Anna is allergic to nuts".
+			What btw remembers for {data.profile.name}, shared by everyone in it. Every chat starts with
+			the pinned Core note; btw reads the others when a chat needs them and saves what it learns
+			along the way. To add something, just tell it in a chat, like "Remember that Anna is allergic
+			to nuts".
 		</p>
 
 		<div class="space-y-3">
@@ -128,6 +148,8 @@
 
 		{#each files as { topic, file } (file.path)}
 			{@const lit = focus === file.path || flash === file.path}
+			{@const pinned = file.path === data.core.path}
+			{@const missing = pinned && !file.updatedAt}
 			<section
 				id={memoryAnchor(file.path)}
 				aria-label={topic.title}
@@ -140,11 +162,19 @@
 			>
 				<div class="flex items-start gap-3">
 					<div class="min-w-0 flex-1">
-						<h2 class="font-medium">{topic.title}</h2>
+						<h2 class="flex items-center gap-1.5 font-medium">
+							{#if pinned}<PinIcon class="size-3.5 text-muted-foreground" />{/if}
+							{topic.title}
+						</h2>
 						<p class="truncate text-xs text-muted-foreground">
-							{file.path} · {plural(topic.facts.length, 'memory', 'memories')} · updated {formatAgo(
-								file.updatedAt
-							)}
+							{[
+								file.path,
+								pinned && 'pinned, in every new chat',
+								!missing && plural(topic.facts.length, 'memory', 'memories'),
+								!missing && `updated ${formatAgo(file.updatedAt)}`
+							]
+								.filter(Boolean)
+								.join(' · ')}
 						</p>
 					</div>
 					{#if editing !== file.path}
@@ -160,15 +190,17 @@
 						>
 							<PencilIcon />
 						</Button>
-						<Button
-							variant="ghost"
-							size="icon-sm"
-							class="-mt-1 -mr-1 text-muted-foreground hover:text-destructive"
-							aria-label="Forget {topic.title}"
-							onclick={() => (forgetting = file.path)}
-						>
-							<EraserIcon />
-						</Button>
+						{#if !missing}
+							<Button
+								variant="ghost"
+								size="icon-sm"
+								class="-mt-1 -mr-1 text-muted-foreground hover:text-destructive"
+								aria-label="Forget {topic.title}"
+								onclick={() => (forgetting = file.path)}
+							>
+								<EraserIcon />
+							</Button>
+						{/if}
 					{/if}
 				</div>
 
@@ -182,24 +214,42 @@
 							rows={Math.min(18, Math.max(5, draft.split('\n').length + 1))}
 							class="rounded-2xl font-mono text-xs"
 							aria-label="{topic.title} note"
+							placeholder={pinned
+								? 'For example:\n- Anna and Ben are the parents, Mia is 7\n- We speak Russian at home\n- Mia is allergic to nuts'
+								: undefined}
 						/>
 						{#if form?.path === file.path && form.message}
 							<p class="text-sm {'conflict' in form ? 'text-warning' : 'text-destructive'}">
 								{form.message}
 							</p>
 						{/if}
-						<div class="flex gap-2">
+						<div class="flex items-center gap-2">
 							<Button type="submit" size="sm" disabled={saving}>Save</Button>
 							<Button type="button" variant="ghost" size="sm" onclick={() => (editing = null)}
 								>Cancel</Button
 							>
+							{#if pinned}
+								<span
+									class={cn(
+										'ml-auto text-xs text-muted-foreground tabular-nums',
+										draft.length > data.core.maxChars && 'text-destructive'
+									)}
+								>
+									{draft.length} / {data.core.maxChars} characters
+								</span>
+							{/if}
 						</div>
 					</form>
 				{:else}
 					{#if form?.path === file.path && form.message}
 						<p class="mt-3 rounded-2xl bg-muted px-4 py-2 text-sm">{form.message}</p>
 					{/if}
-					{#if !mounted}
+					{#if missing}
+						<p class="mt-3 text-sm text-muted-foreground">
+							Nothing yet. Put here what btw should keep in mind in every chat: who's in the family,
+							the languages you speak, allergies. btw adds to it too.
+						</p>
+					{:else if !mounted}
 						<p class="mt-3 text-sm whitespace-pre-line">{file.text}</p>
 					{:else if /\.(md|markdown|txt)$/i.test(file.path) || !/\.[^/]+$/.test(file.path)}
 						<Markdown text={file.text} class="mt-3 text-sm" />

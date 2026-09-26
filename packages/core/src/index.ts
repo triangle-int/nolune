@@ -139,14 +139,18 @@ export {
 } from './skills.ts';
 export { buildSystemPrompt } from './prompt.ts';
 export {
+	CORE_NOTE,
+	MAX_PINNED_CHARS,
 	MemoryConflictError,
 	MemoryError,
 	addMemoryFact,
 	forgetMemoryFact,
 	forgetMemoryFile,
+	isPinnedNote,
 	listMemoryFiles,
 	listMemoryNotes,
 	readMemoryNote,
+	readPinnedNote,
 	removeMemoryNote,
 	renameMemoryNote,
 	replaceInMemory,

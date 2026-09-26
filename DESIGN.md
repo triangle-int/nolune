@@ -18,8 +18,8 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | Providers          | Anthropic only for now (API key). Keys and model presets are global and managed by the admin with the CLI or the `/admin` page (Models & keys). A preset has a name (default `<model> (anthropic)`), a model, and an optional context-window override. One preset is the default (the oldest until an admin picks another): new chats start with it, and automations without a preset use it.                                                                                                                                                                                                        |
 | Preset switching   | Not allowed. A conversation keeps its provider and model for its whole life.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Reasoning          | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once.                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| System prompt      | Built once when the conversation is created: instructions, the skills catalog and, for a chat in a folder, the folder's instructions and file paths. **It is not changed afterwards, and no update notices are added,** with one exception: when the chat moves to another folder or its folder changes, it is built again at the start of the next turn (one cache miss). If skills change in another conversation, this conversation only sees it by running commands. Memory isn't in it, so every conversation of a profile outside folders starts with the same prompt until its skills change. |
-| Memory             | Short Markdown notes per profile, one per topic, that the agent reads and changes with `btw memory`, like any other command. The system prompt lists the notes by name only, so the agent reads the ones it needs. The family sees and edits them on the Memory page. See [Memory](#memory).                                                                                                                                                                                                                                                                                                         |
+| System prompt      | Built once when the conversation is created: instructions, the skills catalog and, for a chat in a folder, the folder's instructions and file paths. **It is not changed afterwards, and no update notices are added,** with one exception: when the chat moves to another folder or its folder changes, it is built again at the start of the next turn (one cache miss). If skills change in another conversation, this conversation only sees it by running commands. Of memory, only `core` and the note names are in it, so chats outside folders share one prompt until they or skills change. |
+| Memory             | Short Markdown notes per profile, one per topic, that the agent reads and changes with `btw memory`, like any other command. The system prompt has the pinned `core` note in full and lists the others by name, so the agent reads the ones it needs. The family sees and edits them on the Memory page. See [Memory](#memory).                                                                                                                                                                                                                                                                      |
 | Folders            | Group a profile's chats, like ChatGPT's projects. A folder has instructions and files; its chats get the instructions and the files' paths (never the files themselves) in their system prompt. Chats are dragged into folders in the sidebar or started in one. See [Folders](#folders).                                                                                                                                                                                                                                                                                                            |
 | Skills             | Follow [agentskills.io](https://agentskills.io/client-implementation/adding-skills-support). They are read from `~/.btw-agent/profiles/<slug>/skills`, `~/.agents/skills` and the built-in skills (`packages/core/skills`: `automations`, `view-images`, `generate-images`, `btw-agent`); a profile skill overrides a global one, and both override a built-in one with the same name. The agent loads a skill by running `cat` on its `SKILL.md`, and creates new ones with `btw skill new`.                                                                                                        |
 | Pictures and files | The agent writes Markdown: `![alt](path or URL)` shows a picture, `[label](path)` hands over a file. The gateway copies each one, byte for byte, when the reply is saved, and the chat only ever loads those copies. Web pictures only from links the agent found, never from the local network. The agent looks at pictures itself with `btw view`, which attaches them to that command's result. There is no tool for either.                                                                                                                                                                      |
@@ -41,6 +41,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
   bin/btw                     shim so the agent can run `btw` from any command
   profiles/<slug>/            default working folder for commands in this profile
     memories/<topic>.md       long-term memory: one note per topic
+    memories/core.md          the pinned note, copied into every new chat's prompt
     memories/.facts.json      when each fact in memory was first seen
     skills/<name>/SKILL.md
     attachments/              files people attached to messages
@@ -213,6 +214,14 @@ one per topic (`family.md`, `people/anna.md`). There is no memory tool: like aut
   changes when a note is added or removed and not with every fact, and nothing is read until the
   agent needs it: before answering, it reads the notes that could matter
   (`btw memory show family food`).
+- **Pinned core note.** `core.md` is the exception: a copy of it, as it is when the conversation
+  starts (or its prompt is built again), goes whole into the Memory section. It is for what matters
+  in almost every chat (who is in the family, languages, allergies, standing preferences, whatever
+  someone asks btw to always keep in mind), and holds at most 4,000 characters: `btw memory` and
+  the page refuse more, and one made longer in an editor is cut at a line in the prompt, with a
+  note telling the agent to read the rest and move it out. The list of other notes leaves it out.
+  Pinned notes are a list (`PINNED_NOTES` in `memory.ts`), so another one only needs its place in
+  the prompt.
 - **`btw memory`** (`packages/cli/src/memory.ts`, on top of `packages/core/src/memory.ts`): `list`,
   `show <topic>...`, `add <topic> <fact>` (one bullet; creates the note, skips a fact it already
   has), `replace <topic> <old> <new>` (text that appears exactly once), `forget <topic> <text>` (the
@@ -238,8 +247,10 @@ one per topic (`family.md`, `people/anna.md`). There is no memory tool: like aut
   over about three months, and lightest when undated. Rows are ordered by the latest change, notes
   in a folder are grouped under its name, and past 12 rows the rest fold away. Pointing at (or
   tapping) a dot shows the fact and when it was learned. Below the grid, every note is rendered as
-  Markdown and can be edited or forgotten. An edit is refused if the agent changed the note after
-  it was opened; saving again then replaces the agent's version.
+  Markdown and can be edited or forgotten. The core note comes first, marked as pinned, even before
+  it exists, so people can start it there; its editor counts characters against the limit. An edit
+  is refused if the agent changed the note after it was opened; saving again then replaces the
+  agent's version.
 
 ## Folders
 

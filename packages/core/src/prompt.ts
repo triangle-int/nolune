@@ -1,6 +1,12 @@
 import { homedir, type, userInfo } from 'node:os';
 import { MAX_MEDIA_BYTES } from './media.ts';
-import { listMemoryNotes } from './memory.ts';
+import {
+	CORE_NOTE,
+	MAX_PINNED_CHARS,
+	isPinnedNote,
+	listMemoryNotes,
+	readPinnedNote
+} from './memory.ts';
 import { profileDir, profileMemoryDir, profileSkillsDir } from './paths.ts';
 import type { Profile } from './profiles.ts';
 import { listProfileSkills, renderSkillsCatalog } from './skills.ts';
@@ -8,17 +14,26 @@ import { MAX_TIMEOUT_SECONDS, DEFAULT_TIMEOUT_SECONDS, commandShell } from './ru
 
 /**
  * Built once per conversation and stored with it. Everything here must be stable for the life of
- * the conversation: no dates, no user names, nothing that varies per request. Memory is only
- * listed by note name, and the agent reads the notes it needs, so the prompt changes only when a
- * note is added or removed, not with every fact. `folderSection`: the chat's folder
- * (renderFolderSection), last, so chats outside folders share everything before it.
+ * the conversation: no dates, no user names, nothing that varies per request. Memory is listed by
+ * note name, and the agent reads the notes it needs; only the small pinned core note is copied
+ * whole. So the prompt changes when a note is added or removed or core changes, not with every
+ * fact. `folderSection`: the chat's folder (renderFolderSection), last, so chats outside folders
+ * share everything before it.
  */
 export function buildSystemPrompt(
 	profile: Pick<Profile, 'slug' | 'disabledSkills'>,
 	folderSection = ''
 ): string {
 	const dir = profileDir(profile.slug);
-	const notes = listMemoryNotes(profile.slug);
+	const notes = listMemoryNotes(profile.slug).filter((path) => !isPinnedNote(path));
+	const core = readPinnedNote(profile.slug, CORE_NOTE);
+	const coreSection = core
+		? `As it was when this conversation started:
+
+<note name="core">
+${core.text}
+</note>${core.cut ? `\n\nIt is longer than ${MAX_PINNED_CHARS} characters, so the rest was cut off here. Read the whole note with \`btw memory show core\` and move what doesn't need to be in every chat to other notes.` : ''}`
+		: 'It is empty so far.';
 	const skills = listProfileSkills(
 		profileSkillsDir(profile.slug),
 		profile.disabledSkills
@@ -49,9 +64,14 @@ Before your first command in a turn, say in one short sentence what you are abou
 To show a picture in the chat, put it in your reply as a Markdown image: \`![what it shows](path)\`. To give someone a file (a PDF, a spreadsheet, a video), link it and it becomes a download: \`[Filled-in tax form](path)\`. A path can be absolute, start with \`~/\`, or be relative to the profile folder, and a picture can also be an https URL you found in a message or in a command's output (to show one from anywhere else, download it and link the file). Wrap paths that contain spaces in angle brackets: \`![Beach](</Users/anna/Pictures/Summer 2025/IMG_0142.HEIC>)\`. Only link files you have checked exist. They are copied when you send the reply, in full size and up to ${MAX_MEDIA_BYTES / (1024 * 1024)} MB each, so temporary files are fine and later changes to a file don't change what was sent.${process.platform === 'darwin' ? ' HEIC photos are converted so every browser can show them.' : ''}
 
 # Memory
-This profile's long-term memory is a set of short Markdown notes, one per topic, shared by all of its conversations and members and kept in \`${profileMemoryDir(profile.slug)}\`. ${notes.length ? `Notes when this conversation started: ${notes.map((path) => path.replace(/\.md$/, '')).join(', ')}.` : 'There are no notes yet.'}
-- Before you answer, read the notes that could matter for the request, like \`btw memory show family food\`. Once per conversation is enough. \`btw memory\` lists the notes as they are now, in case another conversation added some.
+This profile's long-term memory is a set of short Markdown notes, one per topic, shared by all of its conversations and members and kept in \`${profileMemoryDir(profile.slug)}\`.
+
+The note core is pinned: every new conversation starts with a copy of it, so it holds only what matters in almost every one. ${coreSection}
+
+${notes.length ? `Other notes when this conversation started: ${notes.map((path) => path.replace(/\.md$/, '')).join(', ')}.` : 'There are no other notes yet.'}
+- Before you answer, read the other notes that could matter for the request, like \`btw memory show family food\`. Once per conversation is enough. \`btw memory\` lists the notes as they are now, in case another conversation added some.
 - When you learn something that will matter in later conversations (preferences, facts about the family, where things are kept, how things are set up), save it right away: \`btw memory add <topic> "<one fact>"\`. The note is created if needed. Keep topics broad, with short names like family, home, school or people/anna.
+- Save to core (\`btw memory add core "<one fact>"\`) only what you should have in mind in nearly every conversation: who is in the family and how to address them, the languages they use, allergies and health matters, standing preferences. Also anything someone asks you to always keep in mind. It holds at most ${MAX_PINNED_CHARS} characters; everything else goes into topic notes.
 - Keep notes true and short. \`btw memory replace <topic> "<old text>" "<new text>"\` corrects a fact, \`btw memory forget <topic> "<text>"\` removes one, and \`btw memory write <topic>\` with the whole note on stdin reorganizes it. Update rather than repeat.
 - Use \`btw memory\` rather than editing the files yourself: it records when each fact was learned, which the family sees on the Memory page.
 - Everyone in this profile can read the memory. A profile is only shared by people who trust each other, so private things are fine to save when someone asks: passwords, door codes, account numbers. The one exception is something a person wants kept from the others here, like a surprise.

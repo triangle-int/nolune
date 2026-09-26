@@ -28,11 +28,21 @@ import { profileDir, profileMemoryDir } from './paths.ts';
 /*
  * A profile's long-term memory: short Markdown notes, one per topic, in its `memories` folder.
  * The agent reads and changes them with `btw memory` (plain file commands work too); the family
- * sees them on the Memory page. Nothing here depends on the model provider.
+ * sees them on the Memory page. `core.md` is pinned: every new chat starts with it in its prompt,
+ * while the others are read when needed. Nothing here depends on the model provider.
  */
 
 /** Notes are read into the context, so one stays small enough to read in one go. */
 const MAX_NOTE_CHARS = 50_000;
+/** The note with what matters in almost every chat. */
+export const CORE_NOTE = 'core.md';
+/**
+ * Pinned notes are copied whole into the system prompt of every new conversation, instead of
+ * being read when needed.
+ */
+export const PINNED_NOTES: readonly string[] = [CORE_NOTE];
+/** A pinned note costs its length in every chat, so it holds a few facts, not a topic's worth. */
+export const MAX_PINNED_CHARS = 4_000;
 const IMAGE = /\.(jpe?g|png|gif|webp|heic)$/i;
 /** Where memory lived before: one file, pasted into each new system prompt. */
 const LEGACY_FILE = 'MEMORY.md';
@@ -126,8 +136,19 @@ function titleOf(path: string): string {
 	return words ? words.charAt(0).toUpperCase() + words.slice(1) : 'Notes';
 }
 
+/** `path` is relative to the memory folder, like `core.md`. */
+export function isPinnedNote(path: string): boolean {
+	return PINNED_NOTES.includes(path);
+}
+
 function checkSize(text: string, path: string): void {
-	if (text.length > MAX_NOTE_CHARS) {
+	if (isPinnedNote(path)) {
+		if (text.length > MAX_PINNED_CHARS) {
+			refuse(
+				`${path} would be ${text.length} characters; a pinned note can have at most ${MAX_PINNED_CHARS}, because it goes into every chat. Keep only what matters in almost every conversation there, and move the rest to other notes.`
+			);
+		}
+	} else if (text.length > MAX_NOTE_CHARS) {
 		refuse(
 			`${path} would be ${text.length} characters; a note can have at most ${MAX_NOTE_CHARS}. Split it into smaller notes by topic, or shorten it.`
 		);
@@ -304,6 +325,29 @@ export function listMemoryNotes(slug: string): string[] {
 	return readMemoryFiles(openMemory(slug)).map((file) => file.path);
 }
 
+/**
+ * A pinned note as the system prompt shows it; null while it is empty or missing. One that grew
+ * past the limit some other way (an editor) is cut at a line, and `cut` says so.
+ */
+export function readPinnedNote(slug: string, path: string): { text: string; cut: boolean } | null {
+	const root = openMemory(slug);
+	let text: string;
+	try {
+		const full = notePath(root, path);
+		const stat = lstatSync(full);
+		// Like the listing: no links, nothing only a person could have copied in.
+		if (!stat.isFile() || stat.size > MAX_BYTES) return null;
+		text = readFileSync(full, 'utf8').trim();
+	} catch {
+		return null;
+	}
+	if (!text) return null;
+	if (text.length <= MAX_PINNED_CHARS) return { text, cut: false };
+	const head = text.slice(0, MAX_PINNED_CHARS);
+	const lastLine = head.lastIndexOf('\n');
+	return { text: (lastLine > 0 ? head.slice(0, lastLine) : head).trimEnd(), cut: true };
+}
+
 export function readMemoryNote(slug: string, topic: string): { path: string; text: string } {
 	const root = openMemory(slug);
 	const full = notePath(root, topic);
@@ -434,9 +478,10 @@ export function renameMemoryNote(
 	const root = openMemory(slug);
 	const source = notePath(root, from);
 	const target = notePath(root, to);
-	readNote(root, source, from);
+	const text = readNote(root, source, from);
 	if (existsSync(target)) refuse(`There already is a note "${to}".`);
 	const moved = { from: relPath(root, source), to: relPath(root, target) };
+	checkSize(text, moved.to);
 	changing(
 		root,
 		() => {
@@ -451,17 +496,23 @@ export function renameMemoryNote(
 // --- The Memory page ---
 
 /**
- * Saves a note someone edited on the Memory page. `basedOn` is the `updatedAt` they started from;
- * if the agent changed the note since, nothing is written.
+ * Saves a note someone edited on the Memory page. `basedOn` is the `updatedAt` they started from,
+ * or 0 for a note that didn't exist yet (the page offers to start the core note); if the agent
+ * changed the note since, nothing is written.
  */
 export function writeMemoryFile(slug: string, path: string, text: string, basedOn: number): void {
 	const root = openMemory(slug);
 	const full = notePath(root, path);
-	if (!existsSync(full) || !statSync(full).isFile()) {
-		throw new MemoryConflictError(`${path} was deleted while you were editing it.`);
-	}
-	if (statSync(full).mtimeMs !== basedOn) {
-		throw new MemoryConflictError(`btw changed ${path} while you were editing it.`);
+	if (!existsSync(full)) {
+		if (basedOn) throw new MemoryConflictError(`${path} was deleted while you were editing it.`);
+	} else if (!statSync(full).isFile()) {
+		refuse(`"${path}" is a folder, not a note.`);
+	} else if (statSync(full).mtimeMs !== basedOn) {
+		throw new MemoryConflictError(
+			basedOn
+				? `btw changed ${path} while you were editing it.`
+				: `btw started ${path} while you were writing it.`
+		);
 	}
 	saveNote(root, full, text);
 }
