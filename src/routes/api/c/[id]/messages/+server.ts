@@ -1,5 +1,5 @@
 import { error, json } from '@sveltejs/kit';
-import { AttachmentError, sendMessage } from '@btw/core';
+import { AttachmentError, SubagentError, sendMessage } from '@btw/core';
 import { requireConversation } from '$lib/server/access';
 import type { RequestHandler } from './$types';
 
@@ -19,6 +19,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		await sendMessage(params.id, { id: user.id, name: user.name }, text, uploads);
 	} catch (err) {
 		if (err instanceof AttachmentError) error(400, err.message);
+		if (err instanceof SubagentError) error(403, err.message);
 		throw err;
 	}
 	return json({ ok: true });

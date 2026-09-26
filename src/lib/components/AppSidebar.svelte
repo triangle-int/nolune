@@ -24,6 +24,7 @@
 	import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
 	import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
+	import type { Avatar } from '@btw/core/avatars';
 	import * as Sidebar from '$lib/components/ui/sidebar';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Command from '$lib/components/ui/command';
@@ -32,6 +33,7 @@
 	import { Kbd } from '$lib/components/ui/kbd';
 	import { CHAT_DRAG_TYPE, moveChat, type FolderItem } from '$lib/folders';
 	import { cn } from '$lib/utils';
+	import AssistantAvatar from './AssistantAvatar.svelte';
 	import RenameChatDialog from './chat/RenameChatDialog.svelte';
 	import DeleteFolderDialog from './folders/DeleteFolderDialog.svelte';
 	import MoveToFolderMenu from './folders/MoveToFolderMenu.svelte';
@@ -43,8 +45,8 @@
 	type ChatItem = { id: string; title: string; folderId: string | null };
 
 	interface Props {
-		profile: { slug: string; name: string };
-		profiles: { slug: string; name: string }[];
+		profile: { slug: string; name: string; avatar: Avatar };
+		profiles: { slug: string; name: string; avatar: Avatar }[];
 		folders: FolderItem[];
 		conversations: ChatItem[];
 		user: { name: string; email: string; isAdmin: boolean };
@@ -71,6 +73,16 @@
 	let dropTarget = $state<string | null>(null);
 	/** What the pointer carries while a chat is dragged (see the bottom of the page). */
 	let dragPreview = $state<HTMLElement>();
+	/** Chats btw is working in right now, in this profile. */
+	let running = $state<string[]>([]);
+
+	// EventSource reconnects by itself; each (re)connect starts with the whole list.
+	$effect(() => {
+		const source = new EventSource(`/api/p/${profile.slug}/running`);
+		source.onmessage = (event) =>
+			(running = (JSON.parse(event.data) as { running: string[] }).running);
+		return () => source.close();
+	});
 
 	const looseChats = $derived(conversations.filter((c) => !c.folderId));
 	const chatsIn = (folderId: string) => conversations.filter((c) => c.folderId === folderId);
@@ -166,6 +178,7 @@
 	<Sidebar.MenuItem class={cn(dragging?.id === conversation.id && 'opacity-50')}>
 		<Sidebar.MenuButton isActive={page.params.id === conversation.id}>
 			{#snippet child({ props })}
+				{@const working = running.includes(conversation.id)}
 				<a
 					href={chatHref(conversation.id)}
 					draggable="true"
@@ -176,7 +189,11 @@
 					}}
 					{...props}
 				>
-					<span><TypedText text={conversation.title} /></span>
+					<!-- Shimmers like the "Thinking" label while btw works in the chat. -->
+					<span class={cn(working && 'thinking-shimmer')}>
+						<TypedText text={conversation.title} />
+						{#if working}<span class="sr-only">, working</span>{/if}
+					</span>
 				</a>
 			{/snippet}
 		</Sidebar.MenuButton>
@@ -226,6 +243,7 @@
 							{...props}
 							class="flex h-10 min-w-0 items-center gap-1 rounded-xl px-2.5 text-lg font-semibold group-data-[collapsible=icon]:hidden hover:bg-sidebar-accent"
 						>
+							<AssistantAvatar avatar={profile.avatar} size={22} class="mr-1" />
 							<span class="truncate">{profile.name}</span>
 							<ChevronDownIcon class="size-4 shrink-0 text-muted-foreground" />
 						</button>
@@ -237,6 +255,7 @@
 					>
 					{#each profiles as p (p.slug)}
 						<DropdownMenu.Item onSelect={() => goto(resolve('/p/[slug]', { slug: p.slug }))}>
+							<AssistantAvatar avatar={p.avatar} size={16} />
 							<span class="min-w-0 flex-1 truncate">{p.name}</span>
 							{#if p.slug === profile.slug}<CheckIcon class="ml-auto" />{/if}
 						</DropdownMenu.Item>

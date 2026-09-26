@@ -3,12 +3,20 @@ import { mkdirSync, rmSync } from 'node:fs';
 import type Anthropic from '@anthropic-ai/sdk';
 import { describeApiError, isAbortError, streamTurn, type StreamEvent } from './anthropic.ts';
 import {
+	backgroundCommands,
+	startBackgroundCommand,
+	takeInterruptedBackgroundCommands,
+	type BackgroundCommand
+} from './background.ts';
+import {
 	appendRow,
 	commitQueuedRows,
 	committedRows,
 	foundText,
 	getConversation,
 	insertQueued,
+	insertQueuedNotice,
+	isSubagentConversation,
 	lastCommittedRow,
 	listAllConversationIds,
 	queuedRows,
@@ -20,6 +28,7 @@ import {
 	summarizeUsage,
 	toDisplay,
 	toMessageParam,
+	toolsFor,
 	touchConversation,
 	type Conversation,
 	type DisplayMessage,
@@ -34,8 +43,15 @@ import { readSoul } from './soul.ts';
 import { createViewDir, imageUse, readViewedImages, type ImageUse } from './images.ts';
 import { copyReplyMedia, listMedia, mediaByMessage, type PreparedMedia } from './media.ts';
 import { profileDir } from './paths.ts';
-import { getProfile } from './profiles.ts';
-import { RUN_COMMAND_TOOL, commandEnv, parseRunCommandInput, runCommand } from './run-command.ts';
+import { getProfile, noticeProfileChanges } from './profiles.ts';
+import {
+	RUN_COMMAND_TOOL,
+	commandEnv,
+	parseRunCommandInput,
+	runCommand,
+	type RunCommandResult
+} from './run-command.ts';
+import { SubagentError, activeSubagents } from './subagents.ts';
 import { TITLE_LIMIT, suggestTitle, typedTitle } from './titles.ts';
 import { cacheHitRate } from './usage.ts';
 
@@ -53,7 +69,29 @@ export type LiveEvent =
 	| { type: 'live_delta'; index: number; text: string }
 	| { type: 'live_clear' }
 	| { type: 'tool_output'; id: string; chunk: string }
-	| { type: 'title'; title: string };
+	| { type: 'title'; title: string }
+	| { type: 'background'; background: BackgroundItem[] };
+
+/** Work of the conversation's agent that goes on while it does other things, or nothing. */
+export type BackgroundItem =
+	| {
+			kind: 'command';
+			/** The run_command call that started it. */
+			id: string;
+			summary: string | null;
+			command: string;
+			startedAt: number;
+	  }
+	| {
+			kind: 'subagent';
+			id: string;
+			/** What the agent calls it, like agent-1. */
+			name: string;
+			/** Its own chat, which people can open. */
+			conversationId: string;
+			status: 'pending' | 'running' | 'stopping';
+			startedAt: number;
+	  };
 
 export interface Snapshot {
 	title: string;
@@ -63,6 +101,7 @@ export interface Snapshot {
 	queued: DisplayMessage[];
 	live: (LiveBlock | null)[];
 	toolOutput: { id: string; text: string } | null;
+	background: BackgroundItem[];
 }
 
 interface State {
@@ -80,6 +119,8 @@ const LIVE_OUTPUT_LIMIT = 100_000;
 const holder = globalThis as unknown as {
 	__btwRunner?: Map<string, State>;
 	__btwLoopEnd?: Set<LoopEndListener>;
+	__btwCommandEnd?: Set<() => void>;
+	__btwRunningChange?: Set<RunningChangeListener>;
 };
 const states = (holder.__btwRunner ??= new Map());
 
@@ -90,6 +131,46 @@ const loopEndListeners = (holder.__btwLoopEnd ??= new Set());
 export function onLoopEnd(listener: LoopEndListener): () => void {
 	loopEndListeners.add(listener);
 	return () => loopEndListeners.delete(listener);
+}
+
+/**
+ * Called after every command the agent ran (not in the background), so what it asked for with
+ * `btw agent` happens right away rather than at the scheduler's next tick.
+ */
+const commandEndListeners = (holder.__btwCommandEnd ??= new Set());
+
+export function onCommandEnd(listener: () => void): () => void {
+	commandEndListeners.add(listener);
+	return () => commandEndListeners.delete(listener);
+}
+
+function commandEnded(): void {
+	for (const listener of commandEndListeners) {
+		try {
+			listener();
+		} catch (err) {
+			console.error('[btw] command-end listener failed:', err);
+		}
+	}
+}
+
+/** Called whenever any conversation's agent loop starts or stops. */
+export type RunningChangeListener = (conversationId: string, running: boolean) => void;
+const runningChangeListeners = (holder.__btwRunningChange ??= new Set());
+
+export function onRunningChange(listener: RunningChangeListener): () => void {
+	runningChangeListeners.add(listener);
+	return () => runningChangeListeners.delete(listener);
+}
+
+function runningChanged(conversationId: string, running: boolean): void {
+	for (const listener of runningChangeListeners) {
+		try {
+			listener(conversationId, running);
+		} catch (err) {
+			console.error(`[btw] running listener failed for ${conversationId}:`, err);
+		}
+	}
 }
 
 function stateFor(conversationId: string): State {
@@ -133,8 +214,33 @@ export function getSnapshot(conversationId: string): Snapshot {
 		messages: committedRows(conversationId).map((row) => toDisplay(row, media.get(row.id))),
 		queued: queuedRows(conversationId).map((row) => toDisplay(row, media.get(row.id))),
 		live: st.live,
-		toolOutput: st.toolOutput
+		toolOutput: st.toolOutput,
+		background: backgroundItems(conversationId)
 	};
+}
+
+function backgroundItems(conversationId: string): BackgroundItem[] {
+	const commands = backgroundCommands(conversationId).map((c): BackgroundItem => ({
+		kind: 'command',
+		id: c.id,
+		summary: c.summary,
+		command: c.command,
+		startedAt: c.startedAt
+	}));
+	const subagents = activeSubagents(conversationId).map((s): BackgroundItem => ({
+		kind: 'subagent',
+		id: s.id,
+		name: s.name,
+		conversationId: s.conversationId,
+		status: s.status as 'pending' | 'running' | 'stopping',
+		startedAt: s.updatedAt.getTime()
+	}));
+	return [...commands, ...subagents];
+}
+
+/** Tells the conversation's open chats that its background work changed. */
+export function refreshBackground(conversationId: string): void {
+	emit(conversationId, { type: 'background', background: backgroundItems(conversationId) });
 }
 
 function emitQueued(conversationId: string): void {
@@ -214,6 +320,11 @@ async function queueMessage(
 	if (!trimmed && !uploadIds.length) throw new Error('Message is empty');
 	const conv = getConversation(conversationId);
 	if (!conv) throw new Error('No such conversation');
+	if (isSubagentConversation(conversationId)) {
+		throw new SubagentError(
+			"This is a subagent's chat: only the agent that started it writes here."
+		);
+	}
 	const uploads = findUploads(conv.profileId, sender.id, uploadIds);
 	let attachments: Parameters<typeof insertQueued>[0]['attachments'];
 	if (uploads.length) {
@@ -280,7 +391,8 @@ export function renameConversation(conversationId: string, title: string): void 
 
 export function stop(conversationId: string, byName: string): void {
 	const st = stateFor(conversationId);
-	if (!st.running || !st.abort) return;
+	// The first to press Stop is the one the transcript names.
+	if (!st.running || !st.abort || st.abort.signal.aborted) return;
 	st.stoppedBy = byName;
 	st.abort.abort();
 }
@@ -294,6 +406,16 @@ export function kick(conversationId: string): void {
 
 export function isRunning(conversationId: string): boolean {
 	return stateFor(conversationId).running;
+}
+
+/** Who pressed Stop in the conversation's current or latest loop, if anyone. */
+export function stoppedBy(conversationId: string): string | null {
+	return stateFor(conversationId).stoppedBy;
+}
+
+/** Every conversation whose agent loop is going right now, in any profile. */
+export function runningConversationIds(): string[] {
+	return [...states].filter(([, st]) => st.running).map(([id]) => id);
 }
 
 function stoppedText(st: State): string {
@@ -342,6 +464,32 @@ async function runToolCall(
 	if (!slug) return toolResult(call.id, 'Not run: the profile no longer exists.', true);
 	const dir = profileDir(slug);
 	mkdirSync(dir, { recursive: true });
+	const env = {
+		BTW_PROFILE: slug,
+		BTW_PROFILE_DIR: dir,
+		BTW_CONVERSATION_ID: conv.id
+	};
+
+	if (input.background) {
+		// No BTW_VIEW_DIR: nothing collects the pictures of a command nobody waits for.
+		const outcome = await startBackgroundCommand({
+			conversationId: conv.id,
+			toolUseId: call.id,
+			summary: commandSummary(call),
+			input,
+			defaultCwd: dir,
+			env: commandEnv(env),
+			onEnd: backgroundCommandEnded
+		});
+		if ('result' in outcome) return toolResult(call.id, outcome.result.content, true);
+		refreshBackground(conv.id);
+		const { pid } = outcome.started;
+		return toolResult(
+			call.id,
+			`Started in the background (process group ${pid}). When it ends, its output arrives in a message of its own that starts with "[Background command finished"; keep working or end your turn meanwhile. To stop it early: kill -TERM -${pid}`,
+			false
+		);
+	}
 
 	st.toolOutput = { id: call.id, text: '' };
 	// `btw view` in this command leaves images here, to be attached to its result.
@@ -349,12 +497,7 @@ async function runToolCall(
 	try {
 		const result = await runCommand(input, {
 			defaultCwd: dir,
-			env: commandEnv({
-				BTW_PROFILE: slug,
-				BTW_PROFILE_DIR: dir,
-				BTW_CONVERSATION_ID: conv.id,
-				BTW_VIEW_DIR: viewDir
-			}),
+			env: commandEnv({ ...env, BTW_VIEW_DIR: viewDir }),
 			signal,
 			abortReason: () => stoppedText(st),
 			onOutput: (chunk) => {
@@ -370,7 +513,41 @@ async function runToolCall(
 		return toolResult(call.id, result.content, result.isError, attachments);
 	} finally {
 		rmSync(viewDir, { recursive: true, force: true });
+		// The command may have changed the profile (`btw profile avatar`): show it right away.
+		noticeProfileChanges();
+		commandEnded();
 	}
+}
+
+function commandSummary(call: Anthropic.ToolUseBlock): string | null {
+	const summary = (call.input as { summary?: unknown } | null)?.summary;
+	return typeof summary === 'string' && summary.trim() ? summary.trim() : null;
+}
+
+/**
+ * A background command ended: its output joins the conversation like a message, at the agent's
+ * next step or as a new turn. Nothing is handed over for a command someone stopped.
+ */
+function backgroundCommandEnded(command: BackgroundCommand, result: RunCommandResult): void {
+	refreshBackground(command.conversationId);
+	if (command.stoppedBy || !getConversation(command.conversationId)) return;
+	queueBackgroundResult(command, result.content);
+	kick(command.conversationId);
+}
+
+function queueBackgroundResult(
+	command: Pick<BackgroundCommand, 'conversationId' | 'summary' | 'command'>,
+	output: string,
+	heading = 'Background command finished'
+): void {
+	insertQueuedNotice({
+		conversationId: command.conversationId,
+		kind: 'task_result',
+		title: command.summary ?? 'Background command',
+		text: output,
+		content: `[${heading}${command.summary ? `: ${command.summary}` : ''}]\n$ ${command.command}\n${output}`
+	});
+	emitQueued(command.conversationId);
 }
 
 /**
@@ -407,6 +584,7 @@ async function loop(conversationId: string): Promise<void> {
 	st.error = null;
 	st.stoppedBy = null;
 	emit(conversationId, { type: 'status', running: true, error: null });
+	runningChanged(conversationId, true);
 
 	try {
 		for (;;) {
@@ -426,6 +604,8 @@ async function loop(conversationId: string): Promise<void> {
 					model: conv.model,
 					effort: conv.effort,
 					system: conv.systemPrompt,
+					tools: toolsFor(conv),
+					cacheTtl: conv.cacheTtl,
 					messages,
 					signal: abort.signal,
 					onEvent: (event) => onStreamEvent(conversationId, event)
@@ -513,6 +693,7 @@ async function loop(conversationId: string): Promise<void> {
 		st.live = [];
 		st.toolOutput = null;
 		emit(conversationId, { type: 'status', running: false, error: st.error });
+		runningChanged(conversationId, false);
 		for (const listener of loopEndListeners) {
 			try {
 				listener(conversationId, st.error);
@@ -528,6 +709,16 @@ async function loop(conversationId: string): Promise<void> {
  * resume conversations that have queued messages.
  */
 export function recoverAfterRestart(): void {
+	// Their output is lost; the agent hears that they were cut off, like an unfinished command.
+	// The loop below starts their conversations, which now have a queued message.
+	for (const row of takeInterruptedBackgroundCommands()) {
+		if (!getConversation(row.conversationId)) continue;
+		queueBackgroundResult(
+			row,
+			'Not finished: the gateway restarted while it was running.',
+			'Background command cut off'
+		);
+	}
 	for (const id of listAllConversationIds()) {
 		// `pnpm dev` runs this again when a file changes, without a restart: a loop still running
 		// here answers its own calls, and a second answer would break the conversation.
@@ -550,6 +741,7 @@ export function recoverAfterRestart(): void {
 				});
 			}
 		}
-		if (queuedRows(id).length) kick(id);
+		// The subagent host starts subagents again itself, once it's writing their log.
+		if (queuedRows(id).length && !isSubagentConversation(id)) kick(id);
 	}
 }

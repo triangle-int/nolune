@@ -61,8 +61,22 @@
 		{
 			"idx": 8,
 			"version": "6",
-			"when": 1790465667213,
-			"tag": "0008_soul",
+			"when": 1790461424362,
+			"tag": "0008_avatars",
+			"breakpoints": true
+		},
+		{
+			"idx": 9,
+			"version": "6",
+			"when": 1790465416318,
+			"tag": "0009_subagents",
+			"breakpoints": true
+		},
+		{
+			"idx": 10,
+			"version": "6",
+			"when": 1790466752907,
+			"tag": "0010_soul",
 			"breakpoints": true
 		}
 	]

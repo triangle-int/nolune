@@ -27,7 +27,6 @@ import {
 	isApiKeyProvider,
 	listPresets,
 	listProfileSkills,
-	listProfiles,
 	listUsers,
 	normalizeApiKey,
 	parseImageModel,
@@ -47,9 +46,11 @@ import {
 	ViewLimitError,
 	type ApiKeyProvider
 } from '@btw/core';
+import { AGENT_HELP, agentCommand } from './agent.ts';
 import { GENERATE_HELP, generateCommand } from './generate.ts';
 import { ask, askHidden } from './input.ts';
 import { MEMORY_HELP, memoryCommand } from './memory.ts';
+import { PROFILE_HELP, profileCommand } from './profile.ts';
 import { SOUL_HELP, soulCommand } from './soul.ts';
 import { TRIGGER_HELP, triggerCommand, wakeCommand } from './triggers.ts';
 import {
@@ -93,8 +94,7 @@ Model presets (shared by all profiles)
   btw preset default <name|id>               the model new chats start with
   btw preset list
 
-Profiles and skills
-  btw profile list
+${PROFILE_HELP}
   btw skill new <name> [--description D] [--profile SLUG | --global]
   btw skill list [--profile SLUG]
   btw skill enable <name>... [--profile SLUG]
@@ -110,7 +110,9 @@ ${GENERATE_HELP}
 
 Inside agent commands (BTW_PROFILE is set, so --profile can be left out)
   btw view <image>...                        show images to the agent: they're attached to the
-                                             command's result (HEIC and big photos are converted)`;
+                                             command's result (HEIC and big photos are converted)
+
+${AGENT_HELP}`;
 
 const DEFAULT_MODEL = 'claude-opus-5-5';
 
@@ -519,12 +521,9 @@ async function main(argv: string[]): Promise<void> {
 			return;
 		}
 
-		case 'profile': {
+		case 'profile':
 			requireInit();
-			if (action !== 'list') fail('usage: btw profile list');
-			for (const p of listProfiles()) console.log(`${p.slug}\t${p.name}`);
-			return;
-		}
+			return profileCommand(action, rest);
 
 		case 'skill': {
 			const { values, positionals } = parseArgs({
@@ -599,6 +598,10 @@ async function main(argv: string[]): Promise<void> {
 		case 'wake':
 			requireInit();
 			return wakeCommand(argv.slice(1));
+
+		case 'agent':
+			requireInit();
+			return agentCommand(action, rest);
 
 		case 'generate':
 			return generateCommand(action, rest);

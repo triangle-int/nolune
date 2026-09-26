@@ -9,12 +9,19 @@ import { paths } from './paths.ts';
 
 export const DEFAULT_TIMEOUT_SECONDS = 120;
 export const MAX_TIMEOUT_SECONDS = 1800;
+/** Background commands: nothing waits on them, so they may run for much longer. */
+export const DEFAULT_BACKGROUND_TIMEOUT_SECONDS = 3600;
+export const MAX_BACKGROUND_TIMEOUT_SECONDS = 86_400;
 const HEAD_CHARS = 10_000;
 const TAIL_CHARS = 20_000;
 const KILL_GRACE_MS = 2000;
 
-/** Constant for the life of the process: it is part of every conversation's cached prefix. */
-export const RUN_COMMAND_TOOL: Anthropic.Tool = {
+/**
+ * The first `run_command`, which conversations from before tools were saved with each chat still
+ * send (LEGACY_TOOLS). It must never change: it is part of their cached prefix, and their thinking
+ * blocks are bound to it.
+ */
+export const RUN_COMMAND_TOOL_V1: Anthropic.Tool = {
 	name: 'run_command',
 	description:
 		'Run a shell command on this computer and return its combined stdout and stderr plus the exit code. Each call is a fresh login shell with no keyboard input. Output longer than 30,000 characters is cut in the middle.',
@@ -49,10 +56,49 @@ export const RUN_COMMAND_TOOL: Anthropic.Tool = {
 	}
 };
 
+const v1Properties = (RUN_COMMAND_TOOL_V1.input_schema.properties ?? {}) as Record<
+	string,
+	{ type: string; description: string }
+>;
+
+/** `run_command` as new conversations get it: it can also run a command in the background. */
+export const RUN_COMMAND_TOOL: Anthropic.Tool = {
+	name: 'run_command',
+	description:
+		'Run a shell command on this computer and return its combined stdout and stderr plus the exit code. Each call is a fresh login shell with no keyboard input. Output longer than 30,000 characters is cut in the middle. With run_in_background, the call returns at once and the output comes back in a message of its own when the command ends.',
+	input_schema: {
+		type: 'object',
+		properties: {
+			summary: v1Properties.summary,
+			icon: v1Properties.icon,
+			command: v1Properties.command,
+			cwd: v1Properties.cwd,
+			timeout_seconds: {
+				type: 'integer',
+				description: `Seconds before the command is killed. Default ${DEFAULT_TIMEOUT_SECONDS}, max ${MAX_TIMEOUT_SECONDS}; in the background, default ${DEFAULT_BACKGROUND_TIMEOUT_SECONDS}, max ${MAX_BACKGROUND_TIMEOUT_SECONDS}.`
+			},
+			run_in_background: {
+				type: 'boolean',
+				description:
+					'Start the command and return at once, for long jobs you don\'t need to wait on, like a big download or `btw agent watch`. Keep working or end your turn: when the command ends, its output arrives as a message that starts with "[Background command finished".'
+			}
+		},
+		required: ['summary', 'icon', 'command'],
+		additionalProperties: false
+	}
+};
+
+/** What new conversations are created with, and save (`conversation.tools`). */
+export const TOOLS: Anthropic.Tool[] = [RUN_COMMAND_TOOL];
+/** What conversations created before tools were saved with each chat send. */
+export const LEGACY_TOOLS: Anthropic.Tool[] = [RUN_COMMAND_TOOL_V1];
+
 export interface RunCommandInput {
 	command: string;
 	cwd?: string;
 	timeoutSeconds?: number;
+	/** Return at once and hand the output over when the command ends (see background.ts). */
+	background?: boolean;
 }
 
 /**
@@ -61,7 +107,7 @@ export interface RunCommandInput {
  */
 export function parseRunCommandInput(input: unknown): RunCommandInput | string {
 	if (!input || typeof input !== 'object') return 'Input must be an object.';
-	const { command, cwd, timeout_seconds } = input as Record<string, unknown>;
+	const { command, cwd, timeout_seconds, run_in_background } = input as Record<string, unknown>;
 	if (typeof command !== 'string' || !command.trim())
 		return '`command` must be a non-empty string.';
 	if (cwd !== undefined && typeof cwd !== 'string') return '`cwd` must be a string.';
@@ -71,11 +117,25 @@ export function parseRunCommandInput(input: unknown): RunCommandInput | string {
 	) {
 		return '`timeout_seconds` must be a positive number.';
 	}
+	if (run_in_background !== undefined && typeof run_in_background !== 'boolean') {
+		return '`run_in_background` must be true or false.';
+	}
 	return {
 		command,
 		cwd: cwd as string | undefined,
-		timeoutSeconds: timeout_seconds as number | undefined
+		timeoutSeconds: timeout_seconds as number | undefined,
+		...(run_in_background ? { background: true } : {})
 	};
+}
+
+/** Seconds a command may run before it's killed: what it asked for, within its limit. */
+export function commandTimeout(input: RunCommandInput): number {
+	return input.background
+		? Math.min(
+				input.timeoutSeconds ?? DEFAULT_BACKGROUND_TIMEOUT_SECONDS,
+				MAX_BACKGROUND_TIMEOUT_SECONDS
+			)
+		: Math.min(input.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS);
 }
 
 export function commandShell(): string {
@@ -183,6 +243,8 @@ export function runCommand(
 		env: NodeJS.ProcessEnv;
 		signal: AbortSignal;
 		onOutput?: (chunk: string) => void;
+		/** Called once the shell is started, with its pid, which is also its process group. */
+		onStart?: (pid: number) => void;
 		/** Text used when the command is aborted, e.g. "Stopped by Anna." */
 		abortReason: () => string;
 	}
@@ -195,10 +257,7 @@ export function runCommand(
 			exitCode: null
 		});
 	}
-	const timeoutSeconds = Math.min(
-		input.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS,
-		MAX_TIMEOUT_SECONDS
-	);
+	const timeoutSeconds = commandTimeout(input);
 
 	return new Promise((done) => {
 		const child = spawn(commandShell(), ['-lc', input.command], {
@@ -208,7 +267,10 @@ export function runCommand(
 			// Own process group, so a timeout or Stop can kill everything the command started.
 			detached: true
 		});
-		if (child.pid) trackGroup(child.pid);
+		if (child.pid) {
+			trackGroup(child.pid);
+			options.onStart?.(child.pid);
+		}
 		const output = new CappedOutput();
 		const decoders = [new StringDecoder('utf8'), new StringDecoder('utf8')];
 		let ended: 'timeout' | 'aborted' | null = null;

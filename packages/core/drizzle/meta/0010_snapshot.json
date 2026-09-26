@@ -1,8 +1,8 @@
 {
 	"version": "6",
 	"dialect": "sqlite",
-	"id": "dc16b578-7631-4588-98d9-e05d6d249ab8",
-	"prevId": "db6dc30b-9987-471c-a643-5a56c9076248",
+	"id": "791335e6-d593-44e1-9316-3f0b873058ad",
+	"prevId": "a0b5b713-d65b-43c5-a72f-ba9453c60b98",
 	"tables": {
 		"account": {
 			"name": "account",
@@ -122,6 +122,68 @@
 			"uniqueConstraints": {},
 			"checkConstraints": {}
 		},
+		"background_command": {
+			"name": "background_command",
+			"columns": {
+				"tool_use_id": {
+					"name": "tool_use_id",
+					"type": "text",
+					"primaryKey": true,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"conversation_id": {
+					"name": "conversation_id",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"summary": {
+					"name": "summary",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"command": {
+					"name": "command",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"started_at": {
+					"name": "started_at",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": "(cast(unixepoch('subsecond') * 1000 as integer))"
+				}
+			},
+			"indexes": {
+				"background_command_conversationId_idx": {
+					"name": "background_command_conversationId_idx",
+					"columns": ["conversation_id"],
+					"isUnique": false
+				}
+			},
+			"foreignKeys": {
+				"background_command_conversation_id_conversation_id_fk": {
+					"name": "background_command_conversation_id_conversation_id_fk",
+					"tableFrom": "background_command",
+					"tableTo": "conversation",
+					"columnsFrom": ["conversation_id"],
+					"columnsTo": ["id"],
+					"onDelete": "cascade",
+					"onUpdate": "no action"
+				}
+			},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {},
+			"checkConstraints": {}
+		},
 		"conversation": {
 			"name": "conversation",
 			"columns": {
@@ -212,12 +274,35 @@
 					"autoincrement": false,
 					"default": "''"
 				},
+				"soul": {
+					"name": "soul",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": "''"
+				},
 				"prompt_changed_at_seq": {
 					"name": "prompt_changed_at_seq",
 					"type": "integer",
 					"primaryKey": false,
 					"notNull": false,
 					"autoincrement": false
+				},
+				"tools": {
+					"name": "tools",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"cache_ttl": {
+					"name": "cache_ttl",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": "'1h'"
 				},
 				"hidden": {
 					"name": "hidden",
@@ -1311,6 +1396,109 @@
 					"tableFrom": "session",
 					"tableTo": "user",
 					"columnsFrom": ["user_id"],
+					"columnsTo": ["id"],
+					"onDelete": "cascade",
+					"onUpdate": "no action"
+				}
+			},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {},
+			"checkConstraints": {}
+		},
+		"subagent": {
+			"name": "subagent",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "text",
+					"primaryKey": true,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"parent_id": {
+					"name": "parent_id",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"name": {
+					"name": "name",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"conversation_id": {
+					"name": "conversation_id",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"status": {
+					"name": "status",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"error": {
+					"name": "error",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"created_at": {
+					"name": "created_at",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": "(cast(unixepoch('subsecond') * 1000 as integer))"
+				},
+				"updated_at": {
+					"name": "updated_at",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": "(cast(unixepoch('subsecond') * 1000 as integer))"
+				}
+			},
+			"indexes": {
+				"subagent_parent_name_idx": {
+					"name": "subagent_parent_name_idx",
+					"columns": ["parent_id", "name"],
+					"isUnique": true
+				},
+				"subagent_conversationId_idx": {
+					"name": "subagent_conversationId_idx",
+					"columns": ["conversation_id"],
+					"isUnique": false
+				},
+				"subagent_status_idx": {
+					"name": "subagent_status_idx",
+					"columns": ["status"],
+					"isUnique": false
+				}
+			},
+			"foreignKeys": {
+				"subagent_parent_id_conversation_id_fk": {
+					"name": "subagent_parent_id_conversation_id_fk",
+					"tableFrom": "subagent",
+					"tableTo": "conversation",
+					"columnsFrom": ["parent_id"],
+					"columnsTo": ["id"],
+					"onDelete": "cascade",
+					"onUpdate": "no action"
+				},
+				"subagent_conversation_id_conversation_id_fk": {
+					"name": "subagent_conversation_id_conversation_id_fk",
+					"tableFrom": "subagent",
+					"tableTo": "conversation",
+					"columnsFrom": ["conversation_id"],
 					"columnsTo": ["id"],
 					"onDelete": "cascade",
 					"onUpdate": "no action"

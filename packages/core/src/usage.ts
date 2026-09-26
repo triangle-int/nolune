@@ -4,8 +4,10 @@ import type { Usage } from './conversations.ts';
 /** Shortfalls smaller than the minimum cacheable prefix aren't worth flagging. */
 const MISS_THRESHOLD = 1024;
 
-/** How long an unused cache entry lives: the `ttl: '1h'` in anthropic.ts. */
-export const CACHE_TTL_MS = 60 * 60 * 1000;
+/** How long an unused cache entry lives: a conversation's `cacheTtl` (5 minutes for subagents). */
+export function cacheTtlMs(ttl: '5m' | '1h'): number {
+	return ttl === '5m' ? 5 * 60 * 1000 : 60 * 60 * 1000;
+}
 
 /** The whole prompt of one call: read from the cache, written to it, or neither. */
 export function promptTokens(usage: Usage): number {

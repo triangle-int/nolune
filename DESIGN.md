@@ -22,9 +22,11 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | Memory             | Short Markdown notes per profile, one per topic, that the agent reads and changes with `btw memory`, like any other command. The system prompt has the pinned `core` note in full and lists the others by name, so the agent reads the ones it needs. The family sees and edits them on the Memory page. See [Memory](#memory).                                                                                                                                                                                                                                                                      |
 | Soul               | Who btw is for a profile (character, values, tone), in `soul.md` in its folder, at most 4,000 characters. It opens every chat's system prompt. The family edits it in the profile's settings; the agent changes it itself with `btw soul write` and says so. See [Soul](#soul).                                                                                                                                                                                                                                                                                                                      |
 | Folders            | Group a profile's chats, like ChatGPT's projects. A folder has instructions and files; its chats get the instructions and the files' paths (never the files themselves) in their system prompt. Chats are dragged into folders in the sidebar or started in one. See [Folders](#folders).                                                                                                                                                                                                                                                                                                            |
-| Skills             | Follow [agentskills.io](https://agentskills.io/client-implementation/adding-skills-support). They are read from `~/.btw-agent/profiles/<slug>/skills`, `~/.agents/skills` and the built-in skills (`packages/core/skills`: `automations`, `view-images`, `generate-images`, `btw-agent`); a profile skill overrides a global one, and both override a built-in one with the same name. The agent loads a skill by running `cat` on its `SKILL.md`, and creates new ones with `btw skill new`.                                                                                                        |
+| Skills             | Follow [agentskills.io](https://agentskills.io/client-implementation/adding-skills-support). They are read from `~/.btw-agent/profiles/<slug>/skills`, `~/.agents/skills` and the built-in skills (`packages/core/skills`: `automations`, `view-images`, `generate-images`, `subagents`, `btw-agent`); a profile skill overrides a global one, and both override a built-in one with the same name. The agent loads a skill by running `cat` on its `SKILL.md`, and creates new ones with `btw skill new`.                                                                                           |
 | Pictures and files | The agent writes Markdown: `![alt](path or URL)` shows a picture, `[label](path)` hands over a file. The gateway copies each one, byte for byte, when the reply is saved, and the chat only ever loads those copies. Web pictures only from links the agent found, never from the local network. The agent looks at pictures itself with `btw view`, which attaches them to that command's result. There is no tool for either.                                                                                                                                                                      |
 | Web search         | Handled by a skill that uses the firecrawl CLI. The gateway has no code for it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Background work    | `run_command` takes `run_in_background` (new chats): the call returns at once, and the command's output joins the conversation as a message when it ends. See [Background commands](#background-commands).                                                                                                                                                                                                                                                                                                                                                                                           |
+| Subagents          | `btw agent run` starts another agent in a hidden conversation of its own that starts with only its task, and caches its prompt for 5 minutes. The agent hears back by running `btw agent watch` in the background, and can steer it and read its log. No new tool. See [Subagents](#subagents).                                                                                                                                                                                                                                                                                                      |
 | Making pictures    | The agent runs `btw generate image` (OpenAI's Image API, `gpt-image-2.5-flare` by default; each other provider would be one more module). Templates belong to the Images page, which turns one and its settings into a finished prompt in the message it sends; the CLI knows nothing about them.                                                                                                                                                                                                                                                                                                    |
 
 ## Files on disk
@@ -35,7 +37,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
                               for commands (mode 600)
   btw.db                      SQLite: users, sessions, profiles, presets, folders, conversations,
                               messages, media, uploads, provider files, triggers, trigger runs,
-                              notifications
+                              notifications, subagents, running background commands
   media/<sha256>              copies of the pictures and files shown in chats, and of attached
                               files not sent yet
   image-templates/<id>/       Images page templates for every profile (TEMPLATE.md, cover.webp)
@@ -50,12 +52,17 @@ folder, skills and memory. The agent has a single tool, `run_command`.
     image-templates/<id>/     this profile's own templates
     images/                   what `btw generate image` made
     folders/<folder>/         files added to a chat folder
+    agents/<chat>/<id>.log    what each subagent said and ran (no reasoning), for the agent that
+                              started it; <chat> is the first 8 characters of that chat's id
   trash/<slug>-<timestamp>/   deleted profiles (and deleted folders' files)
 ~/.agents/skills/<name>/SKILL.md   global skills, visible to every profile
 ```
 
 The folder name is a slug that is fixed when the profile is created. Renaming a profile changes
 only its display name, so the skill paths already in system prompts stay valid.
+
+The profile also stores its assistant's avatar (`profile.avatar`, one of eight names). A new profile
+gets the one its slug picks; see [Assistant avatars](#assistant-avatars).
 
 Every skill is on in every profile until someone turns it off, on the profile's Skills page or with
 `btw skill disable`. The profile stores the names it turned off (`profile.disabled_skills`), so skills
@@ -66,16 +73,23 @@ created; conversations already running keep the catalog they started with.
 
 The rule: **the request prefix must stay byte-identical, so history is only ever appended to.**
 
-- Order of the request: `tools` (just `run_command`, a constant) → `system` (the conversation's saved
-  copy) → `messages`. Editing the tool definition therefore costs every conversation one cache
-  miss after the upgrade (adding `summary` and `icon` did).
+- Order of the request: `tools` → `system` → `messages`, the first two the conversation's own
+  saved copies. Tools are saved with each chat (`conversation.tools`) like its system prompt, because
+  a thinking block is bound to the tools it was made with: changing them for an existing chat would
+  cost it a cache miss and, on Opus 5.5 and Fable 5.1, invalidate the thinking in its history (a
+  400 on accounts created since 2026-08-31). So a new version of btw that changes a tool only
+  reaches new chats. Chats from before tools were saved send the first `run_command`
+  (`RUN_COMMAND_TOOL_V1`, which must never change); new ones get the one with `run_in_background`.
 - Each assistant response is stored as the exact `content` JSON the API returned, thinking blocks and
   their signatures included, and is sent back unchanged. Messages are never rebuilt from normalized
   columns. Command output is truncated once, when the tool result is created, and never later.
 - Cache markers: `cache_control: {type: "ephemeral", ttl: "1h"}` on the system block, plus the same
-  setting at the top level of the request (automatic caching of the growing tail). Both use 1h,
-  because the API requires longer-TTL entries to come before shorter ones.
-- The model, tool definition and system prompt are fixed per conversation (the prompt is built
+  setting at the top level of the request (automatic caching of the growing tail). Both use the
+  same TTL, because the API requires longer-TTL entries to come before shorter ones. The TTL is
+  per conversation (`conversation.cache_ttl`): an hour for chats, where people answer minutes
+  apart, and 5 minutes for subagents, whose steps follow each other within seconds, so the
+  cheaper 5-minute write (1.25x the input price, against 2x for an hour) is enough.
+- The model, tool definitions, cache TTL and system prompt are fixed per conversation (the prompt is built
   again only when the chat's folder changes; see [Folders](#folders)). Thinking uses
   `adaptive` with `display: "summarized"`, the same for every conversation. The only per-conversation
   knob is `effort`.
@@ -113,10 +127,16 @@ kick(conversation):                     one loop per conversation at a time
   and conversations with queued messages are started again.
 - Several consecutive user rows (for example tool results followed by steering texts) are sent as
   separate messages. The API merges them into one turn.
+- **Messages from the gateway** queue like a person's and join the transcript the same way: a
+  background command's output (`task_result`) and, in a subagent's conversation, its task and steers
+  (`agent_message`). Each one is plain user text with a bracketed first line saying where it comes
+  from (`[Background command finished: …]`), not a mid-conversation system message: not every model
+  takes those, and a command's output mustn't get system authority.
 
 ### `run_command`
 
-- Input: `{summary, icon, command, cwd?, timeout_seconds?}`. Runs as `$SHELL -lc <command>`, so every
+- Input: `{summary, icon, command, cwd?, timeout_seconds?, run_in_background?}` (chats from before
+  saved tools don't have `run_in_background`). Runs as `$SHELL -lc <command>`, so every
   call starts a fresh login shell and `cd` doesn't carry over between calls.
 - `summary` (what the command does, in plain words and the conversation's language) and `icon` (a
   Lucide icon name) are only for the web UI, which shows them instead of the command. They come
@@ -133,6 +153,25 @@ kick(conversation):                     one loop per conversation at a time
   `BTW_PROFILE`, `BTW_PROFILE_DIR`, `BTW_CONVERSATION_ID` and `BTW_VIEW_DIR`.
 - `eager_input_streaming` is left off: the input is one short command, and leaving it off keeps the API's
   own input validation.
+
+### Background commands
+
+- With `run_in_background: true` the call is answered as soon as the shell starts: "Started in the
+  background (process group N) …", with `kill -TERM -N` to stop it early. The agent keeps working
+  or ends its turn.
+- When the command ends, its output (capped like any command's, with the exit-code line) is queued
+  in the conversation as a `task_result` message, `[Background command finished: <summary>]`, the
+  command and the output, and the conversation is kicked: the agent reads it at its next step, or
+  it starts a new turn. The chat shows it as a folded card.
+- Default timeout 3600 s, maximum 86400 s. No `BTW_VIEW_DIR`, since nothing collects pictures from
+  a command nobody waits for.
+- The processes live in the gateway (`background.ts`); a `background_command` row per running one
+  lets the next start queue "[Background command cut off …]" for commands a restart killed, so an
+  agent waiting on one isn't left waiting.
+- **Stop** in a chat also stops its background commands and its subagents (`stopConversation`), and
+  nothing they would have handed over reaches the conversation. The chat lists what's still
+  working in the background, with a Stop button that works while the agent itself is idle.
+  Deleting a chat stops them first.
 
 ### Seeing images: `btw view`
 
@@ -459,7 +498,8 @@ into conversations.
   failing script notifies once, when it starts failing, not on every run.
 - **Notifications** belong to the profile, like conversations. Dismissing is per person
   (`notification_dismissal`), and unread means newer than when that person last opened the menu
-  (`notification_seen`). The bell listens on `/api/notifications/events` (SSE) and reloads on change.
+  (`notification_seen`). Pages listen on `/api/events` (SSE), which also carries profile renames and
+  avatar changes, and reload the bell on change.
 - **Continue in chat** unhides the run's conversation, which moves into the sidebar with its whole
   transcript; sending a message into a hidden run does the same. A notification without a
   conversation (script failures, or the run was deleted) starts a new conversation whose first
@@ -468,6 +508,52 @@ into conversations.
   usual "restarted" result) and script runs in progress are marked failed.
 - **Retention:** finished runs, notifications and hidden conversations are deleted after 30 days, and
   only the last 100 runs of each trigger are kept.
+
+## Subagents
+
+A subagent is another agent that a chat's agent starts to work on a task in the background: big
+jobs that would fill the chat with reading (research across many pages, going through a folder
+of documents), several independent jobs at once, or long ones the agent shouldn't sit in. Like
+automations, it's a CLI command and a built-in skill (`subagents`), not a tool.
+
+- **`btw agent run [<id>] --prompt "<task>"`** (`--prompt -` reads stdin) writes a `subagent` row
+  and a hidden conversation for it, whose first message is the task, queued as an `agent_message`
+  with a note saying it's a subagent, nobody can answer questions, and its last message is its
+  result. It returns at once with the id (`agent-1`, `agent-2`, … or one the agent gives), the log
+  path, and how to hear back. Given the id of one that finished, it queues more work in the same
+  conversation instead. At most 5 work at once per chat, and subagents can't start subagents.
+- **It doesn't inherit the chat.** Its conversation has a system prompt built for it from the
+  profile as it is now (skills, memory notes, and the chat's folder if it's in one), the current
+  tools, and a 5-minute cache. Nothing of the parent's transcript comes along: the prompt must say
+  everything it needs.
+- **Model and reasoning:** the chat's, unless `--preset <name|id>` (resolved like
+  `btw wake --preset`) or `--effort <level>` say otherwise. The skill tells the agent to run
+  `btw preset list` and pick a name from it, never to make one up, and suggests a smaller model and
+  `low` for simple reading-heavy jobs. Like any conversation, a subagent keeps its model: more work
+  with another `--preset` is refused, while `--effort` may change (one cache rebuild, as in a
+  chat).
+- **The gateway runs it** (`subagent-host.ts`), like `btw wake`: the CLI only writes rows, and the
+  scheduler (every tick, and right after each of the agent's commands) starts `pending` subagents
+  through the normal runner. When its loop ends it is `done`, `failed` or `stopped`; one still
+  waiting for its own background commands stays `running` until they end.
+- **`btw agent watch <id>`** polls until its current work has ended and prints its last message
+  (exit 1 with the reason if it failed or was stopped). The agent runs it with
+  `run_in_background`, so the result arrives as a background command's output: the agent can do
+  other work or end its turn meanwhile, and hears back as a message.
+- **`btw agent steer <id> --prompt "…"`** queues a message the subagent reads at its next step,
+  and marks it `pending` so the gateway starts it if it was waiting. A steer and the end of a loop
+  can't miss each other: both check the other side in a transaction, and a loop that ends with a
+  message queued starts again.
+- **The log** (`profiles/<slug>/agents/<chat>/<id>.log`) gets every row the subagent's
+  conversation commits, as the gateway's runner emits it: messages from the agent that started it,
+  what it wrote, the commands it ran and the start of their output. Never its reasoning. The agent
+  reads it with `tail` when someone asks how it's going.
+- `btw agent stop <id>` asks the gateway to stop it; `btw agent list` shows the chat's subagents.
+- **In the web UI** a subagent's chat opens from the chat's background list and has no composer:
+  only the agent that started it writes there, though people can Stop it. Its banner links back.
+- After a restart, subagents that were working start again (their interrupted commands get the
+  usual result). A deleted chat takes its subagents' conversations with it; subagents are hidden
+  conversations, so they're also deleted after 30 idle days.
 
 ## Pictures and files
 
@@ -544,7 +630,8 @@ composer. Most of the family doesn't read shell, so the default view hides the m
 - **Replies** are built by `buildTranscript` (`src/lib/transcript.ts`): text blocks are shown as
   Markdown (`marked` + DOMPurify), and every run of thinking and commands between two texts is one
   collapsible group, "Worked for 12s" when done and a live "Thinking" / current step while running.
-  Durations come from row timestamps, so they're approximate.
+  Durations come from row timestamps, so they're approximate. The profile's assistant avatar sits at
+  the top left of each reply: in the margin when the chat is wide, on its own line when it isn't.
 - **Steps** show the `summary` and `icon` the model wrote with each `run_command` call ("Checking
   tomorrow's weather in Berlin" with `cloud-sun-rain`), in the conversation's language. Opening a
   step shows the command and its output. Calls from before summaries existed say "Ran a command".
@@ -562,7 +649,9 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   reasoning can change. The folder chip next to it starts the chat in a folder.
 - **The sidebar** lists folders above the chats. A folder's chats show under it when its page or
   one of its chats is open, or when its icon (a chevron on hover) is clicked; chats in folders are
-  not in the Chats list.
+  not in the Chats list. A chat btw is working in shimmers like the "Thinking" label, for everyone
+  in the profile: the sidebar listens on `/api/p/<slug>/running` (SSE), which sends the ids of the
+  profile's running chats on connect and whenever an agent loop starts or stops.
 - **Chat titles:** the first message stands in until the chat's model names it, in the background.
   Anyone in the profile can rename a chat from its menu (the sidebar's, or the chat header's). The
   new name reaches everyone who has the chat open, doesn't move it up the list, and isn't replaced
@@ -579,18 +668,55 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   Anthropic key warns to keep the same workspace: pictures and PDFs already sent live in it.
   `btw key set` does the same check, but saves anyway when the provider can't be reached.
 
+## Assistant avatars
+
+Each profile's assistant has a small mascot: one of eight one-color glyphs (probe, campfire, lantern,
+planet, quantum, comet, moon, satellite), redrawn by hand as SVG from a concept sheet. It shows next
+to every reply, large on the new chat screen, in the profile switcher and the profile list, on
+notifications, and as the tab icon of the profile's pages. People keep `UserAvatar`, their initial
+on a colored circle.
+
+- **Drawing.** `packages/core/src/avatars.ts` has the names and the glyphs: shapes on a 24×24 grid
+  filled with `currentColor`, with no strokes or second tone. Eyes and other details are holes
+  knocked out with a mask, so the page shows through in both themes, and the eyes are shapes of
+  their own so they can move. `AssistantAvatar.svelte` (`avatar`, `mood`, `size`) draws one. Each
+  avatar's color is a `--avatar-<name>` variable in `layout.css`: the dark value is the concept
+  sheet's, the light one the same hue at least 3:1 on white, the sidebar and bubbles. The tab icon
+  reads both from the file and follows the system's theme, like the tab strip.
+- **Choosing.** A new profile gets the avatar its slug picks (`defaultAvatar`, a hash of the slug),
+  so profiles differ without anyone choosing. The migration that added `profile.avatar` gave
+  existing profiles theirs the same way, in SQL. Any member changes it on People & profile, or with
+  `btw profile avatar <name>`, which the agent runs when asked ("switch to the comet"; the
+  `btw-agent` skill explains it).
+- **Moods.** Only the avatar on the newest reply moves; older ones hold still. It follows what the
+  chat already knows: `thinking` while the model streams (eyes up, a gentle bob), `working` while a
+  command runs (a busy hop, and the avatar's own motion: the flame flares, the antenna blinks,
+  quantum's dashes flicker), `waiting` while messages are queued behind the turn (a slow pulse),
+  `blocked` on an API error or when Continue is shown (drooping eyes, a muted color), `done` for a
+  moment after a turn (a squash), then `idle` (an occasional blink). Hovering it shows the current
+  step in the step list's words. It's CSS animation only; with reduced motion each mood keeps its
+  pose and nothing moves.
+- **Live.** A new avatar or name reaches open pages: `/api/events` pings the profile's members and
+  the page loads its data again. The CLI changes the database from another process, so the gateway
+  also looks for changes after every command and on each scheduler tick.
+- **Not for the model.** The avatar and the mood never reach it: nothing goes into the system
+  prompt, the tool or the request, so caching is untouched. Only the `btw-agent` skill's description
+  mentions avatars, so new chats know the command.
+
 ## Code layout
 
 ```
-packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_command, memory notes,
-                btw view images, attachments, Anthropic call and Files API, provider file cache,
-                runner, media, users/profiles/presets, API keys, chat folders, triggers, scheduler,
-                notifications, image generation (providers: openai.ts) and image templates.
+packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_command, background
+                commands, memory notes, btw view images, attachments, Anthropic call and Files API,
+                provider file cache, runner, media, users/profiles/presets, API keys, chat folders,
+                triggers, scheduler, subagents (subagents.ts, and subagent-host.ts in the
+                gateway), notifications, image generation (providers: openai.ts), image templates
+                and assistant avatars.
                 Built-in skills in packages/core/skills, built-in templates in
                 packages/core/image-templates. Plain TypeScript run by Node with type stripping
                 (no enums or parameter properties; imports use .ts extensions).
 packages/cli    btw: setup, start, service, config, key, env, user, preset, profile, skill, trigger, wake,
-                view, memory, generate
+                view, memory, generate, agent
 src/            SvelteKit gateway (adapter-node). @btw/core is bundled into the server build.
                 UI components in src/lib/components (shadcn-svelte primitives in ui/).
 scripts/        build-cli.mjs bundles the CLI and core into dist/cli.js with esbuild.

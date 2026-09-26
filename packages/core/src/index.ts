@@ -54,11 +54,15 @@ export {
 	listMembers,
 	listProfiles,
 	listProfilesForUser,
+	noticeProfileChanges,
+	onProfileChanged,
 	removeMember,
 	renameProfile,
+	setProfileAvatar,
 	setSkillsEnabled,
 	type Profile
 } from './profiles.ts';
+export { AVATARS, defaultAvatar, isAvatar, type Avatar } from './avatars.ts';
 export {
 	PROVIDERS,
 	addPreset,
@@ -75,6 +79,7 @@ export {
 	createConversation,
 	deleteConversation,
 	getConversation,
+	isSubagentConversation,
 	getConversationForUser,
 	listConversations,
 	setEffort,
@@ -119,11 +124,14 @@ export {
 	isRunning,
 	kick,
 	onLoopEnd,
+	onRunningChange,
 	recoverAfterRestart,
 	renameConversation,
+	runningConversationIds,
 	sendMessage,
 	stop,
 	subscribe,
+	type BackgroundItem,
 	type LiveBlock,
 	type LiveEvent,
 	type Snapshot
@@ -139,6 +147,22 @@ export {
 	type Skill
 } from './skills.ts';
 export { buildSystemPrompt } from './prompt.ts';
+export {
+	MAX_ACTIVE_SUBAGENTS,
+	SubagentError,
+	findSubagent,
+	isActive as isSubagentActive,
+	lastSubagentMessage,
+	listSubagents,
+	requestSubagentStop,
+	runSubagent,
+	steerSubagent,
+	subagentByConversation,
+	subagentLogPath,
+	subagentResult,
+	type Subagent
+} from './subagents.ts';
+export { stopConversation } from './subagent-host.ts';
 export {
 	CORE_NOTE,
 	MAX_PINNED_CHARS,

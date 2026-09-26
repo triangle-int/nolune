@@ -9,6 +9,7 @@ import {
 	readSoulFile,
 	removeMember,
 	renameProfile,
+	setProfileAvatar,
 	writeSoul
 } from '@btw/core';
 import { requireProfile } from '$lib/server/access';
@@ -42,6 +43,17 @@ export const actions: Actions = {
 			return fail(400, { message: message(err) });
 		}
 		return { message: 'Renamed.' };
+	},
+	avatar: async ({ locals, params, request }) => {
+		const { profile } = requireProfile(locals, params.slug);
+		const avatar = (await request.formData()).get('avatar')?.toString() ?? '';
+		try {
+			setProfileAvatar(profile.id, avatar);
+		} catch (err) {
+			return fail(400, { message: message(err) });
+		}
+		// The picker shows the change; no message needed.
+		return {};
 	},
 	soul: async ({ locals, params, request }) => {
 		const { profile } = requireProfile(locals, params.slug);
