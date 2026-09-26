@@ -71,6 +71,16 @@
 	let dropTarget = $state<string | null>(null);
 	/** What the pointer carries while a chat is dragged (see the bottom of the page). */
 	let dragPreview = $state<HTMLElement>();
+	/** Chats btw is working in right now, in this profile. */
+	let running = $state<string[]>([]);
+
+	// EventSource reconnects by itself; each (re)connect starts with the whole list.
+	$effect(() => {
+		const source = new EventSource(`/api/p/${profile.slug}/running`);
+		source.onmessage = (event) =>
+			(running = (JSON.parse(event.data) as { running: string[] }).running);
+		return () => source.close();
+	});
 
 	const looseChats = $derived(conversations.filter((c) => !c.folderId));
 	const chatsIn = (folderId: string) => conversations.filter((c) => c.folderId === folderId);
@@ -166,6 +176,7 @@
 	<Sidebar.MenuItem class={cn(dragging?.id === conversation.id && 'opacity-50')}>
 		<Sidebar.MenuButton isActive={page.params.id === conversation.id}>
 			{#snippet child({ props })}
+				{@const working = running.includes(conversation.id)}
 				<a
 					href={chatHref(conversation.id)}
 					draggable="true"
@@ -176,7 +187,11 @@
 					}}
 					{...props}
 				>
-					<span><TypedText text={conversation.title} /></span>
+					<!-- Shimmers like the "Thinking" label while btw works in the chat. -->
+					<span class={cn(working && 'thinking-shimmer')}>
+						<TypedText text={conversation.title} />
+						{#if working}<span class="sr-only">, working</span>{/if}
+					</span>
 				</a>
 			{/snippet}
 		</Sidebar.MenuButton>

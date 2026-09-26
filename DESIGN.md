@@ -530,7 +530,9 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   reasoning can change. The folder chip next to it starts the chat in a folder.
 - **The sidebar** lists folders above the chats. A folder's chats show under it when its page or
   one of its chats is open, or when its icon (a chevron on hover) is clicked; chats in folders are
-  not in the Chats list.
+  not in the Chats list. A chat btw is working in shimmers like the "Thinking" label, for everyone
+  in the profile: the sidebar listens on `/api/p/<slug>/running` (SSE), which sends the ids of the
+  profile's running chats on connect and whenever an agent loop starts or stops.
 - **Chat titles:** the first message stands in until the chat's model names it, in the background.
   Anyone in the profile can rename a chat from its menu (the sidebar's, or the chat header's). The
   new name reaches everyone who has the chat open, doesn't move it up the list, and isn't replaced
