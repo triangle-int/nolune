@@ -19,7 +19,7 @@ export function isValidSkillName(name: string): boolean {
 	return name.length <= 64 && /^[a-z0-9]+(-[a-z0-9]+)*$/.test(name);
 }
 
-function parseFrontmatter(text: string): Record<string, unknown> | null {
+export function parseFrontmatter(text: string): Record<string, unknown> | null {
 	const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
 	if (!match) return null;
 	try {

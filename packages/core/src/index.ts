@@ -1,4 +1,11 @@
-export { cliCommand, packageRoot, paths, profileDir, profileSkillsDir } from './paths.ts';
+export {
+	cliCommand,
+	packageRoot,
+	paths,
+	profileDir,
+	profileImageTemplatesDir,
+	profileSkillsDir
+} from './paths.ts';
 export {
 	DEFAULT_PORT,
 	configExists,
@@ -85,7 +92,35 @@ export {
 	type Skill
 } from './skills.ts';
 export { buildSystemPrompt } from './prompt.ts';
-export { ViewLimitError, viewImage } from './images.ts';
+export { ViewLimitError, inspectImage, viewImage } from './images.ts';
+export {
+	DEFAULT_IMAGE_MODEL,
+	IMAGE_BACKGROUNDS,
+	IMAGE_FORMATS,
+	IMAGE_SHAPES,
+	MAX_IMAGE_COUNT,
+	configuredImageModel,
+	generateImages,
+	imageGenerationStatus,
+	parseImageModel,
+	parseImageSize,
+	type GeneratedImage,
+	type ImageBackground,
+	type ImageFormat,
+	type ImageGenerationStatus,
+	type ImageProvider,
+	type ImageShape
+} from './image-generation.ts';
+export {
+	checkTemplateImages,
+	resolveImageTemplate,
+	scanImageTemplates,
+	templateMessage,
+	type ImageTemplate,
+	type ResolvedTemplate,
+	type TemplateSetting
+} from './image-templates.ts';
+export { MAX_UPLOAD_BYTES, MAX_UPLOADS, saveUploads, type Attachment } from './uploads.ts';
 export { installCliShim } from './shim.ts';
 export {
 	SILENT_REPLY,

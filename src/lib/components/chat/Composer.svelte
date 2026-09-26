@@ -19,6 +19,8 @@
 		onstop?: () => void;
 		/** Controls next to the send button, like the model and reasoning menu. */
 		tools?: Snippet;
+		/** Above the text, e.g. previews of attached pictures. */
+		attachments?: Snippet;
 		class?: string;
 	}
 
@@ -33,6 +35,7 @@
 		onsubmit,
 		onstop,
 		tools,
+		attachments,
 		class: className
 	}: Props = $props();
 
@@ -68,6 +71,7 @@
 		if (event.target === event.currentTarget) textarea?.focus();
 	}}
 >
+	{@render attachments?.()}
 	<textarea
 		bind:this={textarea}
 		bind:value

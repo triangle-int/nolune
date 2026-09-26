@@ -6,6 +6,7 @@
 	import SquarePenIcon from '@lucide/svelte/icons/square-pen';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import ClockIcon from '@lucide/svelte/icons/clock';
+	import ImagesIcon from '@lucide/svelte/icons/images';
 	import PuzzleIcon from '@lucide/svelte/icons/puzzle';
 	import UsersIcon from '@lucide/svelte/icons/users';
 	import CheckIcon from '@lucide/svelte/icons/check';
@@ -129,6 +130,19 @@
 					<Sidebar.MenuButton tooltipContent="Search chats" onclick={openSearch}>
 						<SearchIcon />
 						<span>Search chats</span>
+					</Sidebar.MenuButton>
+				</Sidebar.MenuItem>
+				<Sidebar.MenuItem>
+					<Sidebar.MenuButton
+						tooltipContent="Images"
+						isActive={page.route.id === '/p/[slug]/images'}
+					>
+						{#snippet child({ props })}
+							<a href={resolve('/p/[slug]/images', { slug: profile.slug })} {...props}>
+								<ImagesIcon />
+								<span>Images</span>
+							</a>
+						{/snippet}
 					</Sidebar.MenuButton>
 				</Sidebar.MenuItem>
 				<Sidebar.MenuItem>

@@ -4,7 +4,10 @@ import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
+	DEFAULT_IMAGE_MODEL,
 	DEFAULT_PORT,
+	MAX_UPLOAD_BYTES,
+	MAX_UPLOADS,
 	addPreset,
 	configExists,
 	createSkill,
@@ -15,12 +18,14 @@ import {
 	getDb,
 	getDefaultPreset,
 	getProfileBySlug,
+	imageGenerationStatus,
 	initConfig,
 	installCliShim,
 	listPresets,
 	listProfileSkills,
 	listProfiles,
 	listUsers,
+	parseImageModel,
 	paths,
 	profileSkillsDir,
 	readConfig,
@@ -34,6 +39,7 @@ import {
 	viewImage,
 	ViewLimitError
 } from '@btw/core';
+import { GENERATE_HELP, generateCommand } from './generate.ts';
 import { ask, askHidden } from './input.ts';
 import { TRIGGER_HELP, triggerCommand, wakeCommand } from './triggers.ts';
 import {
@@ -56,7 +62,9 @@ Getting started
 Settings (${paths.home})
   btw config                                 show address, port and what's configured
   btw config set <host|port|origin> <value>  origin = the public URL people open
-  btw key set anthropic [key]                store the Anthropic API key (prompts if omitted)
+  btw config set image-model <provider/model>  for pictures, e.g. openai/gpt-image-2.5-flare
+  btw key set <anthropic|openai> [key]       store an API key (prompts if omitted); OpenAI's is
+                                             for pictures
   btw env set <NAME> <value>                 extra env var for agent commands (e.g. FIRECRAWL_API_KEY)
   btw env rm <NAME> | btw env list
 
@@ -82,11 +90,19 @@ Profiles and skills
 
 ${TRIGGER_HELP}
 
+${GENERATE_HELP}
+
 Inside agent commands (BTW_PROFILE is set, so --profile can be left out)
   btw view <image>...                        show images to the agent: they're attached to the
                                              command's result (HEIC and big photos are converted)`;
 
 const DEFAULT_MODEL = 'claude-opus-5-5';
+
+/** `btw key set <provider>`: where each provider's key goes in config.json. */
+const API_KEYS = {
+	anthropic: { field: 'anthropicApiKey', label: 'Anthropic' },
+	openai: { field: 'openaiApiKey', label: 'OpenAI' }
+} as const;
 
 function fail(message: string): never {
 	console.error(`btw: ${message}`);
@@ -214,6 +230,9 @@ async function start(): Promise<void> {
 	process.env.HOST ??= host;
 	process.env.PORT ??= String(port);
 	process.env.ORIGIN ??= origin;
+	// Room for the pictures the Images page uploads (adapter-node allows 512 KB by default).
+	// Requests without a login are refused before their body is read.
+	process.env.BODY_SIZE_LIMIT ??= String(MAX_UPLOADS * MAX_UPLOAD_BYTES + 1024 * 1024);
 	console.log(
 		`btw gateway: ${process.env.ORIGIN} (listening on ${process.env.HOST}:${process.env.PORT})`
 	);
@@ -313,11 +332,13 @@ async function main(argv: string[]): Promise<void> {
 				console.log(
 					`anthropic  ${config.anthropicApiKey ? 'key set' : 'no key (btw key set anthropic)'}`
 				);
+				const images = imageGenerationStatus();
+				console.log(`images     ${images.model}${images.problem ? ` (${images.problem})` : ''}`);
 				console.log(`env        ${Object.keys(config.commandEnv ?? {}).join(', ') || '-'}`);
 				return;
 			}
-			if (action !== 'set') fail('usage: btw config [set <host|port|origin> <value>]');
-			const key = positional(rest, 0, 'host|port|origin');
+			if (action !== 'set') fail('usage: btw config [set <host|port|origin|image-model> <value>]');
+			const key = positional(rest, 0, 'host|port|origin|image-model');
 			const value = positional(rest, 1, 'value');
 			updateConfig((c) => {
 				if (key === 'port') {
@@ -326,21 +347,34 @@ async function main(argv: string[]): Promise<void> {
 					c.port = port;
 				} else if (key === 'host') c.host = value;
 				else if (key === 'origin') c.origin = value.replace(/\/+$/, '');
-				else fail('you can set host, port or origin');
+				else if (key === 'image-model') {
+					const current = parseImageModel(c.imageModel || DEFAULT_IMAGE_MODEL);
+					const { provider, model } = parseImageModel(value, current.provider);
+					c.imageModel = `${provider}/${model}`;
+				} else fail('you can set host, port, origin or image-model');
 			});
+			if (key === 'image-model') {
+				const { model, problem } = imageGenerationStatus();
+				console.log(`Pictures are now made with ${model}.${problem ? ` ${problem}` : ''}`);
+				return;
+			}
 			console.log(`Set ${key}. Run \`btw service restart\` if the service is running.`);
 			return;
 		}
 
 		case 'key': {
 			requireInit();
-			if (action !== 'set' || rest[0] !== 'anthropic') fail('usage: btw key set anthropic [key]');
-			const key = rest[1] || (await askHidden('Anthropic API key'));
+			const provider = rest[0];
+			if (action !== 'set' || !(provider === 'anthropic' || provider === 'openai')) {
+				fail(`usage: btw key set <${Object.keys(API_KEYS).join('|')}> [key]`);
+			}
+			const { field, label } = API_KEYS[provider];
+			const key = rest[1] || (await askHidden(`${label} API key`));
 			if (!key) fail('no key given');
 			updateConfig((c) => {
-				c.anthropicApiKey = key;
+				c[field] = key;
 			});
-			console.log('Saved the Anthropic API key.');
+			console.log(`Saved the ${label} API key.`);
 			return;
 		}
 
@@ -517,6 +551,9 @@ async function main(argv: string[]): Promise<void> {
 		case 'wake':
 			requireInit();
 			return wakeCommand(argv.slice(1));
+
+		case 'generate':
+			return generateCommand(action, rest);
 
 		case 'view': {
 			const dir = process.env.BTW_VIEW_DIR;

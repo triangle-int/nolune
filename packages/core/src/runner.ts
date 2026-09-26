@@ -27,6 +27,7 @@ import { collectViewedImages, createViewDir, imageUse, type ImageUse } from './i
 import { copyReplyMedia, listMedia, mediaByMessage, type PreparedMedia } from './media.ts';
 import { profileDir } from './paths.ts';
 import { RUN_COMMAND_TOOL, commandEnv, parseRunCommandInput, runCommand } from './run-command.ts';
+import type { Attachment } from './uploads.ts';
 import { cacheHitRate } from './usage.ts';
 
 export interface LiveBlock {
@@ -118,23 +119,29 @@ export function getSnapshot(conversationId: string): Snapshot {
 		running: st.running,
 		error: st.error,
 		messages: committedRows(conversationId).map((row) => toDisplay(row, media.get(row.id))),
-		queued: queuedRows(conversationId).map((row) => toDisplay(row)),
+		queued: queuedRows(conversationId).map((row) => toDisplay(row, media.get(row.id))),
 		live: st.live,
 		toolOutput: st.toolOutput
 	};
 }
 
 function emitQueued(conversationId: string): void {
+	const rows = queuedRows(conversationId);
+	// Queued messages can have pictures attached; nothing queued needs no query.
+	const media = rows.length ? mediaByMessage(conversationId) : new Map();
 	emit(conversationId, {
 		type: 'queued',
-		queued: queuedRows(conversationId).map((row) => toDisplay(row))
+		queued: rows.map((row) => toDisplay(row, media.get(row.id)))
 	});
 }
 
 function commitQueued(conversationId: string): void {
 	const rows = commitQueuedRows(conversationId);
 	if (rows.length === 0) return;
-	for (const row of rows) emit(conversationId, { type: 'message', message: toDisplay(row) });
+	const media = mediaByMessage(conversationId);
+	for (const row of rows) {
+		emit(conversationId, { type: 'message', message: toDisplay(row, media.get(row.id)) });
+	}
 	emitQueued(conversationId);
 }
 
@@ -164,11 +171,15 @@ function onStreamEvent(conversationId: string, event: StreamEvent): void {
 	}
 }
 
-/** Queues a message; it joins the transcript at the agent's next step (steering) or starts a turn. */
+/**
+ * Queues a message; it joins the transcript at the agent's next step (steering) or starts a turn.
+ * `attachments`: pictures saved with `saveUploads`.
+ */
 export function sendMessage(
 	conversationId: string,
 	sender: { id: string; name: string },
-	text: string
+	text: string,
+	attachments: Attachment[] = []
 ): void {
 	const trimmed = text.trim();
 	if (!trimmed) throw new Error('Message is empty');
@@ -176,7 +187,13 @@ export function sendMessage(
 	if (!conv) throw new Error('No such conversation');
 	// Writing into a background run turns it into a normal conversation.
 	if (conv.hidden) setHidden(conversationId, false);
-	insertQueued({ conversationId, senderId: sender.id, senderName: sender.name, text: trimmed });
+	insertQueued({
+		conversationId,
+		senderId: sender.id,
+		senderName: sender.name,
+		text: trimmed,
+		attachments
+	});
 	touchConversation(conversationId, conv.title ? undefined : trimmed.slice(0, 80));
 	emitQueued(conversationId);
 	kick(conversationId);

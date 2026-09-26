@@ -194,7 +194,8 @@ export const message = sqliteTable(
 
 /**
  * A picture (`![alt](src)`) or file (`[label](src)`) in one of the agent's replies, copied when
- * the reply was saved so the chat keeps showing it after the original moves or disappears.
+ * the reply was saved so the chat keeps showing it after the original moves or disappears. Also
+ * the pictures people attach to their messages (their `src` is the path of the uploaded file).
  */
 export const media = sqliteTable(
 	'media',
@@ -207,7 +208,7 @@ export const media = sqliteTable(
 		messageId: integer('message_id')
 			.notNull()
 			.references(() => message.id, { onDelete: 'cascade' }),
-		/** The link target exactly as the Markdown lexer read it from the reply. */
+		/** The link target exactly as the Markdown lexer read it from the reply, or an upload's path. */
 		src: text('src').notNull(),
 		status: text('status', {
 			enum: ['ok', 'missing', 'unsupported', 'too_large', 'blocked', 'failed']

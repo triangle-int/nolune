@@ -38,7 +38,8 @@ export const MAX_IMAGES_PER_COMMAND = 10;
 export const MAX_CONVERSATION_IMAGES = 100;
 export const MAX_CONVERSATION_IMAGE_BYTES = 20_000_000;
 
-type MediaType = Anthropic.Base64ImageSource['media_type'];
+export type MediaType = Anthropic.Base64ImageSource['media_type'];
+const ALL_TYPES: readonly MediaType[] = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
 
 export interface ImageInfo {
 	mediaType: MediaType;
@@ -160,7 +161,7 @@ function exifOrientation(buf: Buffer, tiff: number, end: number): number | null 
  * Drops a JPEG's APP1 segments (EXIF, XMP). They carry GPS positions, and an orientation that
  * browsers apply but the model doesn't, so a JPEG we rotated would show up rotated twice.
  */
-function stripJpegMetadata(buf: Buffer): Buffer {
+export function stripJpegMetadata(buf: Buffer): Buffer {
 	const parts: Buffer[] = [buf.subarray(0, 2)];
 	let i = 2;
 	while (i + 4 <= buf.length && buf[i] === 0xff) {
@@ -260,14 +261,21 @@ function typeName(info: ImageInfo | null, path: string): string {
 	return extname(path).slice(1).toUpperCase() || 'this file';
 }
 
-/** Makes a file ready for the model: a supported format, at most MAX_EDGE, upright, small. */
-export function prepareImage(path: string): PreparedImage {
+/**
+ * Makes a file ready for the model: a supported format, at most MAX_EDGE, upright, small.
+ * `accept`: the formats the destination takes; anything else is converted.
+ */
+export function prepareImage(
+	path: string,
+	accept: readonly MediaType[] = ALL_TYPES
+): PreparedImage {
 	if (!existsSync(path)) throw new Error('no such file');
 	if (statSync(path).isDirectory()) throw new Error("it's a folder");
 	const original = readFileSync(path);
 	const info = inspectImage(original);
 	if (
 		info &&
+		accept.includes(info.mediaType) &&
 		Math.max(info.width, info.height) <= MAX_EDGE &&
 		original.length <= REENCODE_ABOVE_BYTES &&
 		info.orientation <= 1 &&

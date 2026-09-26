@@ -14,6 +14,7 @@ import {
 import { buildSystemPrompt } from './prompt.ts';
 import { effectiveContextWindow, getPreset } from './presets.ts';
 import type { Profile } from './profiles.ts';
+import type { Attachment } from './uploads.ts';
 
 export type Conversation = typeof conversation.$inferSelect;
 export type MessageRow = typeof message.$inferSelect;
@@ -44,6 +45,8 @@ export type DisplayMessage =
 			kind: 'human';
 			senderName: string;
 			text: string;
+			/** Pictures attached to the message, in order. */
+			attachments: DisplayMedia[];
 			queued: boolean;
 			createdAt: number;
 	  }
@@ -218,28 +221,54 @@ function nextSeq(conversationId: string): number {
 	return (row?.seq ?? 0) + 1;
 }
 
+/** What the model reads for a person's message. */
+function humanContent(senderName: string, text: string, attachments: Attachment[]): string {
+	// The sender's name and what they wrote, then where the attached files were saved. The model
+	// looks at them with `btw view` when it needs to, so they cost nothing until then.
+	const files = attachments.map((a) => `Attached: ${a.path}`).join('\n');
+	return JSON.stringify([
+		{ type: 'text', text: `${senderName}: ${text}${files ? `\n\n${files}` : ''}` }
+	]);
+}
+
 export function insertQueued(input: {
 	conversationId: string;
 	senderId: string;
 	senderName: string;
 	text: string;
+	attachments?: Attachment[];
 }): MessageRow {
-	return getDb()
-		.insert(message)
-		.values({
-			conversationId: input.conversationId,
-			seq: null,
-			role: 'user',
-			kind: 'human',
-			senderId: input.senderId,
-			senderName: input.senderName,
-			text: input.text,
-			// The model sees only the sender's name and what they wrote.
-			content: JSON.stringify([{ type: 'text', text: `${input.senderName}: ${input.text}` }]),
-			createdAt: new Date()
-		})
-		.returning()
-		.get();
+	const attachments = input.attachments ?? [];
+	return getDb().transaction((tx) => {
+		const row = tx
+			.insert(message)
+			.values({
+				conversationId: input.conversationId,
+				seq: null,
+				role: 'user',
+				kind: 'human',
+				senderId: input.senderId,
+				senderName: input.senderName,
+				text: input.text,
+				content: humanContent(input.senderName, input.text, attachments),
+				createdAt: new Date()
+			})
+			.returning()
+			.get();
+		if (attachments.length) {
+			tx.insert(media)
+				.values(
+					attachments.map((a) => ({
+						...a.media,
+						id: newMediaId(),
+						conversationId: input.conversationId,
+						messageId: row.id
+					}))
+				)
+				.run();
+		}
+		return row;
+	});
 }
 
 /** Moves queued messages into the transcript, in the order they were sent. */
@@ -350,7 +379,7 @@ export function foundText(rows: MessageRow[]): string {
 		.join('\n');
 }
 
-/** `mediaRows`: the row's pictures and files, for assistant rows. */
+/** `mediaRows`: the row's pictures and files: attachments of a human row, links of a reply. */
 export function toDisplay(row: MessageRow, mediaRows: MediaRow[] = []): DisplayMessage {
 	const createdAt = row.createdAt.getTime();
 	if (row.kind === 'trigger') {
@@ -368,6 +397,7 @@ export function toDisplay(row: MessageRow, mediaRows: MediaRow[] = []): DisplayM
 			kind: 'human',
 			senderName: row.senderName ?? 'Someone',
 			text: row.text ?? '',
+			attachments: Object.values(toDisplayMedia(mediaRows)),
 			queued: row.seq === null,
 			createdAt
 		};

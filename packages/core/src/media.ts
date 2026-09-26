@@ -21,7 +21,7 @@ import { get as httpGet, type IncomingMessage } from 'node:http';
 import { get as httpsGet } from 'node:https';
 import { BlockList, isIP, type LookupFunction } from 'node:net';
 import { homedir, networkInterfaces } from 'node:os';
-import { basename, extname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import type { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
@@ -478,6 +478,11 @@ async function copyOne(href: string, baseDir: string, signal: AbortSignal): Prom
 		}
 		return problem('failed', describeError(err, remote));
 	}
+}
+
+/** A copy of one file on this computer, e.g. a picture someone attached to a message. */
+export function copyFile(path: string, signal?: AbortSignal): Promise<PreparedMedia> {
+	return copyOne(path, dirname(path), signal ?? new AbortController().signal);
 }
 
 /**

@@ -2,7 +2,7 @@
 	import { untrack } from 'svelte';
 	import { enhance } from '$app/forms';
 	import { invalidate } from '$app/navigation';
-	import type { Usage } from '@btw/core';
+	import type { DisplayMedia, Usage } from '@btw/core';
 	import { CACHE_TTL_MS, cacheHitRate, cacheMissTokens, promptTokens } from '@btw/core/usage';
 	import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
 	import ClockIcon from '@lucide/svelte/icons/clock';
@@ -190,7 +190,12 @@
 	}
 </script>
 
-{#snippet humanBubble(senderName: string, body: string, pending: boolean)}
+{#snippet humanBubble(
+	senderName: string,
+	body: string,
+	attachments: DisplayMedia[],
+	pending: boolean
+)}
 	{@const mine = senderName === me}
 	<div class="group/human flex flex-col items-end gap-1">
 		{#if !mine || pending}
@@ -202,6 +207,37 @@
 					<UserAvatar name={senderName} class="size-4 text-[9px]" />
 					{senderName}
 				{/if}
+			</div>
+		{/if}
+		{#if attachments.length}
+			<div class="flex max-w-[85%] flex-wrap justify-end gap-1.5 sm:max-w-[70%]">
+				{#each attachments as picture, i (i)}
+					{#if picture.status === 'ok' && picture.viewable}
+						{@const src = `/api/c/${conversation.id}/media/${encodeURIComponent(picture.id)}`}
+						<!-- Opens in the viewer through pictureClicks, like pictures in replies. -->
+						<button
+							type="button"
+							data-media-view
+							data-name={picture.name}
+							data-download={`${src}?download`}
+							class="cursor-zoom-in overflow-hidden rounded-2xl"
+							aria-label={`Open ${picture.name}`}
+						>
+							<img
+								{src}
+								alt={picture.name}
+								width={picture.width ?? undefined}
+								height={picture.height ?? undefined}
+								loading="lazy"
+								class="block h-auto max-h-60 w-auto max-w-full bg-muted object-cover"
+							/>
+						</button>
+					{:else}
+						<span class="rounded-2xl border border-dashed px-3 py-2 text-sm text-muted-foreground">
+							{picture.name}
+						</span>
+					{/if}
+				{/each}
 			</div>
 		{/if}
 		<div
@@ -374,7 +410,12 @@
 
 			{#each entries as entry, index (entry.key)}
 				{#if entry.type === 'human'}
-					{@render humanBubble(entry.message.senderName, entry.message.text, false)}
+					{@render humanBubble(
+						entry.message.senderName,
+						entry.message.text,
+						entry.message.attachments ?? [],
+						false
+					)}
 				{:else if entry.type === 'trigger'}
 					<div class="rounded-2xl border px-4 py-3 text-sm">
 						<div class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
@@ -390,7 +431,7 @@
 
 			{#each chat.queued as message (message.id)}
 				{#if message.kind === 'human'}
-					{@render humanBubble(message.senderName, message.text, true)}
+					{@render humanBubble(message.senderName, message.text, message.attachments ?? [], true)}
 				{/if}
 			{/each}
 
