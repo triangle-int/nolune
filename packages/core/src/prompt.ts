@@ -1,27 +1,13 @@
-import { existsSync, readFileSync } from 'node:fs';
 import { homedir, type, userInfo } from 'node:os';
-import { join } from 'node:path';
-import { profileDir, profileSkillsDir } from './paths.ts';
+import { profileDir, profileMemoryDir, profileSkillsDir } from './paths.ts';
 import { renderSkillsCatalog, scanSkills } from './skills.ts';
 import { MAX_TIMEOUT_SECONDS, DEFAULT_TIMEOUT_SECONDS, commandShell } from './run-command.ts';
 
-const MEMORY_LIMIT = 8000;
-
-function readMemory(dir: string): string {
-	const file = join(dir, 'MEMORY.md');
-	if (!existsSync(file)) return '(empty - the file does not exist yet)';
-	const text = readFileSync(file, 'utf8').trim();
-	if (!text) return '(empty)';
-	if (text.length <= MEMORY_LIMIT) return text;
-	return (
-		text.slice(0, MEMORY_LIMIT) +
-		`\n\n[MEMORY.md is ${text.length} characters; only the first ${MEMORY_LIMIT} are shown. Shorten it.]`
-	);
-}
-
 /**
  * Built once per conversation and stored with it. Everything here must be stable for the life of
- * the conversation: no dates, no user names, nothing that varies per request.
+ * the conversation: no dates, no user names, nothing that varies per request. Memory isn't in it:
+ * the agent reads it with the memory tool, so the prompt is the same for every conversation of a
+ * profile until its skills change.
  */
 export function buildSystemPrompt(profileSlug: string): string {
 	const dir = profileDir(profileSlug);
@@ -47,11 +33,12 @@ Before your first command in a turn, say in one short sentence what you are abou
 - Messages don't include the date or time. Run \`date\` when it matters.
 
 # Memory
-\`${dir}/MEMORY.md\` is this profile's long-term memory, shared by all its conversations. Its content when this conversation started is below. When you learn something that will matter in future conversations (preferences, facts about the family, where things are kept), update the file. Keep it short, a few hundred words at most: rewrite and merge rather than append.
-
-<memory>
-${readMemory(dir)}
-</memory>
+Your memory tool holds this profile's long-term memory: files under /memories, shared by all of its conversations and all of its members. It outlives this conversation, and what other conversations learn shows up there too.
+- At the start of a conversation, view /memories and read the files that look relevant to what was asked. There's no need to look again for every message.
+- When you learn something that will matter in later conversations (preferences, facts about the family, where things are kept, how things are set up), save it right away. Keep one Markdown file per topic with a short name, like /memories/family.md or /memories/home.md, and write short bullet points, one fact each. Update and merge rather than repeat, and delete what is no longer true.
+- Everyone in this profile can read the memory, and the family can see it on the Memory page. Don't save passwords or anything someone told you in confidence.
+- Don't record ordinary one-off requests. For a long job that could be interrupted, a progress note is fine; delete it when the job is done.
+- The files live in \`${profileMemoryDir(profileSlug)}\`, but always read and change them with the memory tool, not with run_command.
 
 # Skills
 Skills are folders with instructions for specific tasks. ${skillsSection}

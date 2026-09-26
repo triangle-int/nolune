@@ -1,5 +1,5 @@
-import type { DisplayMessage, LiveBlock, Usage } from '@btw/core';
-import { partialToolInput } from './commands';
+import type { DisplayMessage, LiveBlock, MemoryCall, Usage } from '@btw/core';
+import { partialMemoryCall, partialToolInput } from './commands';
 
 /**
  * Turns the stored rows into what the chat shows: people's messages, and btw's replies as a run
@@ -23,7 +23,8 @@ export type Step =
 			summary: string | null;
 			/** Lucide icon name the model picked. */
 			icon: string | null;
-	  };
+	  }
+	| ({ type: 'memory'; id: string } & MemoryCall);
 
 export interface TextPart {
 	type: 'text';
@@ -133,7 +134,8 @@ export function buildTranscript(
 			if (message.stopReason) r.stopReasons.push(message.stopReason);
 			for (const block of message.blocks) {
 				if (block.type === 'text') addText(r, block.text);
-				else if (block.type === 'thinking') addStep(r, block, message.createdAt);
+				else if (block.type === 'thinking' || block.type === 'memory')
+					addStep(r, block, message.createdAt);
 				else
 					addStep(
 						r,
@@ -164,6 +166,8 @@ export function buildTranscript(
 		for (const block of streaming) {
 			if (block.type === 'text') addText(r, block.text);
 			else if (block.type === 'thinking') addStep(r, { type: 'thinking', text: block.text }, now);
+			else if (block.id && block.name === 'memory')
+				addStep(r, { type: 'memory', id: block.id, ...partialMemoryCall(block.text) }, now);
 			else if (block.id)
 				addStep(r, { type: 'command', id: block.id, ...partialToolInput(block.text) }, now);
 		}

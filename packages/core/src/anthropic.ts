@@ -1,6 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { readConfig } from './config.ts';
-import { RUN_COMMAND_TOOL } from './run-command.ts';
 
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type Effort = (typeof EFFORTS)[number];
@@ -39,6 +38,8 @@ export async function streamTurn(opts: {
 	model: string;
 	effort: Effort;
 	system: string;
+	/** Fixed per conversation, like the system prompt. */
+	tools: Anthropic.ToolUnion[];
 	messages: Anthropic.MessageParam[];
 	signal: AbortSignal;
 	onEvent: (event: StreamEvent) => void;
@@ -52,7 +53,7 @@ export async function streamTurn(opts: {
 			// prompt. Both 1h: longer-TTL entries must come before shorter ones.
 			cache_control: CACHE_1H,
 			system: [{ type: 'text', text: opts.system, cache_control: CACHE_1H }],
-			tools: [RUN_COMMAND_TOOL],
+			tools: opts.tools,
 			...(adaptive
 				? {
 						// "summarized" also returns the short notes newer models write between tool calls.

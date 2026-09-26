@@ -46,6 +46,10 @@ Access). `btw setup` prints the exact path.
   details** in Settings (click your name at the bottom of the sidebar).
 - Skills live in `~/.btw-agent/profiles/<profile>/skills` and `~/.agents/skills`
   ([Agent Skills](https://agentskills.io) format). The agent creates its own with `btw skill new`.
+- **Memory.** btw keeps what it learns about the family (preferences, who's who, where things are)
+  in small notes per topic, and reads the ones it needs when a chat starts. The profile's Memory
+  page shows them as a map and lets you fix or delete a note. Files:
+  `~/.btw-agent/profiles/<profile>/memories`.
 - **Automations.** Ask btw in a conversation ("every weekday at 7:30, tell us if we need umbrellas",
   "check my email every 10 minutes and tell me when the school writes"). It sets up a trigger that
   runs in the background, and what it finds shows up under the bell at the top; open a notification

@@ -2,7 +2,8 @@
 
 A small agent that runs on one Mac and does things on it for a family. One gateway process serves
 a web UI. Family members share **profiles**. Each profile has its own conversations, workspace
-folder, skills and memory. The agent has a single tool, `run_command`.
+folder, skills and memory. The agent has one tool of its own, `run_command`, plus Anthropic's
+[memory tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool).
 
 ## Decisions
 
@@ -17,7 +18,8 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | Providers        | Anthropic only for now (API key). Model presets are global and managed by the admin with the CLI or the `/admin` page. A preset has a name (default `<model> (anthropic)`), a model, and an optional context-window override. One preset is the default (the oldest until an admin picks another): new chats start with it, and automations without a preset use it.                                                                                          |
 | Preset switching | Not allowed. A conversation keeps its provider and model for its whole life.                                                                                                                                                                                                                                                                                                                                                                                  |
 | Reasoning        | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once.                                                                                                                                                                                                                                                                                  |
-| System prompt    | Built once when the conversation is created: instructions, the skills catalog and the contents of `MEMORY.md`. **It is never changed afterwards, and no update notices are added.** If memory or skills change in another conversation, this conversation only sees it by running commands.                                                                                                                                                                   |
+| System prompt    | Built once when the conversation is created: instructions and the skills catalog. **It is never changed afterwards, and no update notices are added.** If skills change in another conversation, this conversation only sees it by running commands. Memory isn't in it, so every conversation of a profile starts with the same prompt until its skills change.                                                                                              |
+| Memory           | Anthropic's memory tool: a folder of small Markdown files per profile, one per topic, read on demand instead of pasted into the prompt. The family sees and edits it on the Memory page. See [Memory](#memory).                                                                                                                                                                                                                                               |
 | Skills           | Follow [agentskills.io](https://agentskills.io/client-implementation/adding-skills-support). They are read from `~/.btw-agent/profiles/<slug>/skills`, `~/.agents/skills` and the skills that ship with btw (`packages/core/skills`, e.g. `automations`); a profile skill overrides a global one, and both override a built-in one with the same name. The agent loads a skill by running `cat` on its `SKILL.md`, and creates new ones with `btw skill new`. |
 | Web search       | Handled by a skill that uses the firecrawl CLI. The gateway has no code for it.                                                                                                                                                                                                                                                                                                                                                                               |
 
@@ -30,7 +32,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
                               triggers, trigger runs, notifications
   bin/btw                     shim so the agent can run `btw` from any command
   profiles/<slug>/            default working folder for commands in this profile
-    MEMORY.md
+    memories/<topic>.md       long-term memory: what the memory tool calls /memories
     skills/<name>/SKILL.md
   trash/<slug>-<timestamp>/   deleted profiles
 ~/.agents/skills/<name>/SKILL.md   global skills, visible to every profile
@@ -43,7 +45,7 @@ only its display name, so the skill paths already in system prompts stay valid.
 
 The rule: **the request prefix must stay byte-identical, so history is only ever appended to.**
 
-- Order of the request: `tools` (just `run_command`, a constant) → `system` (the conversation's saved
+- Order of the request: `tools` (`run_command` and the memory tool, constants) → `system` (the conversation's saved
   copy) → `messages`. Editing the tool definition therefore costs every conversation one cache
   miss after the upgrade (adding `summary` and `icon` did).
 - Each assistant response is stored as the exact `content` JSON the API returned, thinking blocks and
@@ -75,7 +77,8 @@ kick(conversation):                     one loop per conversation at a time
     if the last committed row isn't a user row: stop
     stream a model call → append an assistant row
     if it contains tool_use blocks:
-      run them one after another → append one user row with every tool_result
+      run them one after another (run_command, or a memory operation) → append one user row with
+      every tool_result
       (if stop_reason isn't tool_use, the calls are answered with "not run" instead)
 ```
 
@@ -107,6 +110,36 @@ kick(conversation):                     one loop per conversation at a time
   `BTW_PROFILE`, `BTW_PROFILE_DIR` and `BTW_CONVERSATION_ID`.
 - `eager_input_streaming` is left off: the input is one short command, and leaving it off keeps the API's
   own input validation.
+
+## Memory
+
+Each profile's memory is a folder of files, `~/.btw-agent/profiles/<slug>/memories`, that the agent
+works on with Anthropic's client-side memory tool (`{type: "memory_20250818", name: "memory"}`,
+[docs](https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool)). The API tells
+the model to view `/memories` before it starts; it then reads only the files that matter for the
+request. Nothing about memory is in the system prompt, which also keeps the prompt identical across
+a profile's conversations.
+
+- **Handler** (`packages/core/src/memory.ts`): `view` (listing two levels deep, or a file with line
+  numbers, cut at 16,000 characters unless a `view_range` is given), `create` (creates or overwrites,
+  as the tool's description promises), `str_replace` (must match exactly once), `insert`, `delete`
+  and `rename`, with the result strings from the docs. Every path must stay inside `/memories`:
+  `..`, paths outside it and anything going through a symbolic link are refused. Files are written
+  atomically and hold at most 50,000 characters. Errors come back as `is_error` results.
+- **What goes in:** the prompt asks for one Markdown file per topic (`family.md`, `home.md`) with
+  one fact per bullet, updated rather than repeated, and no secrets, since every member can read
+  it. It also asks the agent not to log ordinary requests, which the API's memory protocol would
+  otherwise encourage.
+- **Older conversations** keep their frozen prompt, which has the old `MEMORY.md` pasted in, and
+  their tools (`conversation.memory_tool` is false), so their cache stays valid. Whenever a
+  `MEMORY.md` shows up in the profile folder (the old file on the first use, or one an older chat
+  writes later), it is moved into the folder as `general.md` (or `general-2.md`, …).
+- **Memory page** (`/p/<slug>/memory`): a map of the memory, with the profile in the middle, each
+  file as a colored planet and each fact (list item, paragraph or table row) as a star orbiting
+  it. Pointing at a star shows the fact; topics changed in the last day pulse. Below it, every file
+  is rendered as Markdown and can be edited or forgotten. An edit is refused if the agent changed
+  the file after it was opened; saving again then replaces the agent's version. Motion stops while
+  something is pointed at, while the map is scrolled out of view, and with reduced motion.
 
 ## Automations
 
@@ -173,6 +206,9 @@ composer. Most of the family doesn't read shell, so the default view hides the m
 - **Technical details** (Settings, per device, in the `btw-prefs` cookie so the server renders it
   too) switch the labels to the raw commands and add context size, prompt-cache hit rate, cache
   misses, per-reply token usage and the model name. "Always show steps" opens the groups by default.
+- **Memory calls** show as steps too, in plain words ("Reading “Family” from memory", "Saving
+  “Home” to memory") with a fitting icon. Opening one shows what was read, or which lines changed,
+  and links to the note on the Memory page.
 - **New chat** is the empty composer: the first message creates the conversation and is sent in
   the same request. Model and reasoning are picked from the chip in the composer: the model starts
   at the default preset, reasoning at the level last used on this device. In an existing chat only
@@ -183,9 +219,9 @@ composer. Most of the family doesn't read shell, so the default view hides the m
 ## Code layout
 
 ```
-packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_command, Anthropic call,
-                runner, users/profiles/presets, triggers, scheduler, notifications. Built-in skills
-                in packages/core/skills. Plain TypeScript run by Node with type stripping
+packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_command, memory tool,
+                Anthropic call, runner, users/profiles/presets, triggers, scheduler, notifications.
+                Built-in skills in packages/core/skills. Plain TypeScript run by Node with type stripping
                 (no enums or parameter properties; imports use .ts extensions).
 packages/cli    btw: setup, start, service, config, key, env, user, preset, profile, skill, trigger, wake
 src/            SvelteKit gateway (adapter-node). @btw/core is bundled into the server build.

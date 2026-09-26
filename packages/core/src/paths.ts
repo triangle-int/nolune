@@ -61,3 +61,8 @@ export function profileDir(slug: string): string {
 export function profileSkillsDir(slug: string): string {
 	return join(paths.profiles, slug, 'skills');
 }
+
+/** What the memory tool calls /memories. */
+export function profileMemoryDir(slug: string): string {
+	return join(paths.profiles, slug, 'memories');
+}

@@ -1,4 +1,11 @@
-export { cliCommand, packageRoot, paths, profileDir, profileSkillsDir } from './paths.ts';
+export {
+	cliCommand,
+	packageRoot,
+	paths,
+	profileDir,
+	profileMemoryDir,
+	profileSkillsDir
+} from './paths.ts';
 export {
 	DEFAULT_PORT,
 	configExists,
@@ -58,6 +65,7 @@ export {
 	type Conversation,
 	type DisplayBlock,
 	type DisplayMessage,
+	type MemoryCall,
 	type Usage
 } from './conversations.ts';
 export {
@@ -76,6 +84,16 @@ export {
 export { EFFORTS, type Effort } from './anthropic.ts';
 export { createSkill, isValidSkillName, scanSkills, type Skill } from './skills.ts';
 export { buildSystemPrompt } from './prompt.ts';
+export {
+	MEMORY_TOOL,
+	MemoryConflictError,
+	MemoryError,
+	forgetMemoryFile,
+	listMemoryFiles,
+	runMemoryCommand,
+	writeMemoryFile,
+	type MemoryFile
+} from './memory.ts';
 export { installCliShim } from './shim.ts';
 export {
 	SILENT_REPLY,

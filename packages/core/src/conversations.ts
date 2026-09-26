@@ -29,7 +29,22 @@ export type DisplayBlock =
 			/** Plain-language description and Lucide icon name the model wrote with the call. */
 			summary?: string;
 			icon?: string;
-	  };
+	  }
+	| ({ type: 'memory'; id: string } & MemoryCall);
+
+/** A memory tool call, as far as the chat shows it. */
+export interface MemoryCall {
+	/** view, create, str_replace, insert, delete or rename. */
+	command: string | null;
+	/** The file or folder under /memories; the old path for rename. */
+	path: string | null;
+	/** rename: where it moves to. */
+	newPath?: string;
+	/** What gets written: the whole file (create), the new text (str_replace) or the lines (insert). */
+	text?: string;
+	/** str_replace: the text it replaces. */
+	oldText?: string;
+}
 
 export type DisplayMessage =
 	| {
@@ -86,6 +101,7 @@ export function createConversation(input: {
 		contextWindow: effectiveContextWindow(preset),
 		effort: input.effort ?? 'medium',
 		systemPrompt: buildSystemPrompt(input.profile.slug),
+		memoryTool: true,
 		hidden: input.hidden ?? false,
 		createdBy: input.userId,
 		createdAt: now,
@@ -300,6 +316,19 @@ function toolResultText(content: Anthropic.ToolResultBlockParam['content']): str
 	return (content ?? []).map((b) => (b.type === 'text' ? b.text : `[${b.type}]`)).join('\n');
 }
 
+function toMemoryCall(input: unknown): MemoryCall {
+	const args = (input ?? {}) as Record<string, unknown>;
+	const str = (key: string) => (typeof args[key] === 'string' ? (args[key] as string) : undefined);
+	const newText = str('file_text') ?? str('new_str') ?? str('insert_text');
+	return {
+		command: str('command') ?? null,
+		path: str('path') ?? str('old_path') ?? null,
+		...(str('new_path') !== undefined ? { newPath: str('new_path') } : {}),
+		...(newText !== undefined ? { text: newText } : {}),
+		...(str('old_str') !== undefined ? { oldText: str('old_str') } : {})
+	};
+}
+
 /** The text blocks of an assistant row: what the agent said, without thinking or commands. */
 export function replyText(row: MessageRow): string {
 	const content = JSON.parse(row.content) as Anthropic.ContentBlock[];
@@ -349,6 +378,8 @@ export function toDisplay(row: MessageRow): DisplayMessage {
 		if (block.type === 'text' && block.text.trim()) blocks.push({ type: 'text', text: block.text });
 		else if (block.type === 'thinking' && block.thinking.trim()) {
 			blocks.push({ type: 'thinking', text: block.thinking });
+		} else if (block.type === 'tool_use' && block.name === 'memory') {
+			blocks.push({ type: 'memory', id: block.id, ...toMemoryCall(block.input) });
 		} else if (block.type === 'tool_use') {
 			const input = (block.input ?? {}) as Record<string, unknown>;
 			const text = (key: string) =>

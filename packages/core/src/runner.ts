@@ -22,6 +22,7 @@ import {
 import { getDb } from './db/index.ts';
 import { profile } from './db/schema.ts';
 import { eq } from 'drizzle-orm';
+import { MEMORY_TOOL, runMemoryCommand } from './memory.ts';
 import { profileDir } from './paths.ts';
 import { RUN_COMMAND_TOOL, commandEnv, parseRunCommandInput, runCommand } from './run-command.ts';
 import { cacheHitRate } from './usage.ts';
@@ -30,6 +31,8 @@ export interface LiveBlock {
 	type: 'text' | 'thinking' | 'tool';
 	text: string;
 	id?: string;
+	/** Tool blocks: which tool is being called. */
+	name?: string;
 }
 
 export type LiveEvent =
@@ -145,7 +148,7 @@ function onStreamEvent(conversationId: string, event: StreamEvent): void {
 		let block: LiveBlock | null = null;
 		if (b.type === 'text') block = { type: 'text', text: '' };
 		else if (b.type === 'thinking') block = { type: 'thinking', text: '' };
-		else if (b.type === 'tool_use') block = { type: 'tool', text: '', id: b.id };
+		else if (b.type === 'tool_use') block = { type: 'tool', text: '', id: b.id, name: b.name };
 		if (!block) return;
 		st.live[event.index] = block;
 		emit(conversationId, { type: 'live_block', index: event.index, block });
@@ -197,6 +200,14 @@ function stoppedText(st: State): string {
 	return `Stopped by ${st.stoppedBy ?? 'a user'}.`;
 }
 
+/**
+ * The tools a conversation was created with. Conversations from before the memory tool keep
+ * run_command alone, so their cached prefix stays the same.
+ */
+function toolsFor(conv: Conversation): Anthropic.ToolUnion[] {
+	return conv.memoryTool ? [RUN_COMMAND_TOOL, MEMORY_TOOL] : [RUN_COMMAND_TOOL];
+}
+
 function toolResult(id: string, content: string, isError: boolean): Anthropic.ToolResultBlockParam {
 	return { type: 'tool_result', tool_use_id: id, content, ...(isError ? { is_error: true } : {}) };
 }
@@ -215,11 +226,10 @@ async function runToolCall(
 			true
 		);
 	}
-	if (call.name !== RUN_COMMAND_TOOL.name)
+	const memory = call.name === MEMORY_TOOL.name && conv.memoryTool;
+	if (call.name !== RUN_COMMAND_TOOL.name && !memory)
 		return toolResult(call.id, `Unknown tool "${call.name}".`, true);
 	if (signal.aborted) return toolResult(call.id, `Not run. ${stoppedText(st)}`, true);
-	const input = parseRunCommandInput(call.input);
-	if (typeof input === 'string') return toolResult(call.id, `Invalid input: ${input}`, true);
 
 	const slug = getDb()
 		.select({ slug: profile.slug })
@@ -227,6 +237,14 @@ async function runToolCall(
 		.where(eq(profile.id, conv.profileId))
 		.get()?.slug;
 	if (!slug) return toolResult(call.id, 'Not run: the profile no longer exists.', true);
+
+	if (memory) {
+		const result = runMemoryCommand(slug, call.input);
+		return toolResult(call.id, result.content, result.isError);
+	}
+
+	const input = parseRunCommandInput(call.input);
+	if (typeof input === 'string') return toolResult(call.id, `Invalid input: ${input}`, true);
 	const dir = profileDir(slug);
 	mkdirSync(dir, { recursive: true });
 
@@ -272,6 +290,7 @@ async function loop(conversationId: string): Promise<void> {
 					model: conv.model,
 					effort: conv.effort,
 					system: conv.systemPrompt,
+					tools: toolsFor(conv),
 					messages: rows.map(toMessageParam),
 					signal: abort.signal,
 					onEvent: (event) => onStreamEvent(conversationId, event)

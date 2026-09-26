@@ -152,6 +152,11 @@ export const conversation = sqliteTable(
 			.default('medium'),
 		/** Frozen at creation so the prompt cache prefix never changes. */
 		systemPrompt: text('system_prompt').notNull(),
+		/**
+		 * Has the memory tool next to run_command. Also fixed at creation: older conversations keep
+		 * their tools, and their prompt that keeps memory in one MEMORY.md.
+		 */
+		memoryTool: integer('memory_tool', { mode: 'boolean' }).notNull().default(false),
 		/** Background runs started by triggers stay out of the list until someone continues them. */
 		hidden: integer('hidden', { mode: 'boolean' }).notNull().default(false),
 		createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
