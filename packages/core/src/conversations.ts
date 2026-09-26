@@ -181,6 +181,16 @@ export function touchConversation(id: string, title?: string): void {
 		.run();
 }
 
+/** Sets the title unless it changed since it read `from`. True if it was set. */
+export function replaceTitle(id: string, from: string, to: string): boolean {
+	const result = getDb()
+		.update(conversation)
+		.set({ title: to })
+		.where(and(eq(conversation.id, id), eq(conversation.title, from)))
+		.run();
+	return result.changes > 0;
+}
+
 export function committedRows(conversationId: string): MessageRow[] {
 	return getDb()
 		.select()

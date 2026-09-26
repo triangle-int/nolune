@@ -23,7 +23,7 @@ export function getClient(): Anthropic {
 }
 
 /** Haiku 4.5 predates adaptive thinking and effort. */
-function supportsAdaptiveThinking(model: string): boolean {
+export function supportsAdaptiveThinking(model: string): boolean {
 	return !model.startsWith('claude-haiku-');
 }
 
