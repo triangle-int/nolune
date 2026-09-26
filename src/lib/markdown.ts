@@ -3,7 +3,7 @@ import type { DisplayMedia } from '@btw/core';
 import { isMediaHref } from '@btw/core/media-refs';
 import DOMPurify from 'dompurify';
 import { Copy, Download, File, FileX, Image, ImageOff, type IconNode } from 'lucide';
-import { Marked } from 'marked';
+import { Marked, type Token, type Tokens } from 'marked';
 import { copyText } from './clipboard';
 import { formatBytes } from './format';
 
@@ -94,8 +94,39 @@ function pendingFile(label: string): string {
 	return `<span data-media-pending class="${OWN_LINE} max-w-full animate-pulse items-center gap-3 rounded-xl border px-3 py-2 leading-snug">${FILE_ICON}<span class="min-w-0 truncate font-medium">${label}</span></span>`;
 }
 
+/**
+ * Pictures written into a sentence ("Here it is: ![photo](…)") go on a line of their own, under
+ * the text before them and above the text after them, like file cards do. Pictures with only
+ * spaces between them stay side by side. Changes `tokens`, a list of inline tokens, in place.
+ */
+export function pictureLines(tokens: Token[]): void {
+	const blank = (token: Token | undefined) => token?.type === 'text' && !token.raw.trim();
+	const needsBreak = (token: Token | undefined) => token !== undefined && token.type !== 'br';
+	const breaks: number[] = [];
+	for (let start = 0; start < tokens.length; start++) {
+		if (tokens[start].type !== 'image') continue;
+		let end = start;
+		for (let next = start + 1; next < tokens.length; next++) {
+			if (tokens[next].type === 'image') end = next;
+			else if (!blank(tokens[next])) break;
+		}
+		let before = start - 1;
+		while (blank(tokens[before])) before--;
+		let after = end + 1;
+		while (blank(tokens[after])) after++;
+		if (needsBreak(tokens[before])) breaks.push(start);
+		if (needsBreak(tokens[after])) breaks.push(end + 1);
+		start = end;
+	}
+	for (const at of breaks.reverse()) tokens.splice(at, 0, { type: 'br', raw: '' });
+}
+
 const marked = new Marked({
 	gfm: true,
+	walkTokens(token) {
+		const inline = (token as Tokens.Generic).tokens;
+		if (inline) pictureLines(inline);
+	},
 	renderer: {
 		// Code blocks get a header with the language and a copy button, like ChatGPT.
 		code({ text, lang }) {
