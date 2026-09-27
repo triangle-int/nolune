@@ -145,6 +145,8 @@ export function commandShell(): string {
 const SECRET_ENV = [
 	'ANTHROPIC_API_KEY',
 	'ANTHROPIC_AUTH_TOKEN',
+	// A Claude plan token from `claude setup-token`, for Claude Code only (claude-plan.ts).
+	'CLAUDE_CODE_OAUTH_TOKEN',
 	'BETTER_AUTH_SECRET',
 	'BTW_AUTH_SECRET',
 	'DATABASE_URL'

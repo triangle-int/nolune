@@ -1,9 +1,12 @@
+import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { mkdirSync, rmSync } from 'node:fs';
 import type Anthropic from '@anthropic-ai/sdk';
+import { runTurn as runPlanTurn, sessionProblem } from './claude-plan.ts';
 import {
 	describeApiError,
 	isAbortError,
+	runsOnClaudeCode,
 	streamTurn,
 	type ModelReply,
 	type StreamEvent,
@@ -26,11 +29,13 @@ import {
 	isSubagentConversation,
 	lastCommittedRow,
 	listAllConversationIds,
+	plainText,
 	queuedRows,
 	rebuildSystemPrompt,
 	replaceTitle,
 	requestMessages,
 	setHidden,
+	setProviderSession,
 	setTitle,
 	toDisplay,
 	toMessageParam,
@@ -594,6 +599,182 @@ export function withCurrentContext(conv: Conversation, rows: MessageRow[]): Conv
 	return rebuildSystemPrompt(conv, owner, context, soul, lastReply?.seq ?? null);
 }
 
+/**
+ * Saves a model call's reply in the live reply's place. Pictures and files it links to are copied
+ * first (the live reply stays on screen meanwhile), so the saved reply never points at a missing
+ * copy. Web pictures only if their link appeared in what the model read before this reply
+ * (`found`).
+ */
+async function saveReply(
+	conv: Conversation,
+	reply: ModelReply,
+	signal: AbortSignal,
+	found: () => string
+): Promise<void> {
+	const conversationId = conv.id;
+	const st = stateFor(conversationId);
+	const slug = profileSlug(conv.profileId);
+	const media: PreparedMedia[] = slug
+		? await copyReplyMedia(reply.texts, profileDir(slug), signal, found)
+		: [];
+
+	const { usage } = reply;
+	console.log(
+		`[btw] ${conversationId.slice(0, 8)} ${conv.model} in=${usage.input} cache_read=${usage.cacheRead} cache_write=${usage.cacheWrite} hit=${Math.floor(cacheHitRate(usage) * 100)}% out=${usage.output} stop=${reply.stopReason}`
+	);
+	const assistantRow = appendRow({
+		conversationId,
+		role: 'assistant',
+		kind: 'assistant',
+		content: JSON.stringify(reply.content),
+		stopReason: reply.stopReason,
+		usage,
+		media
+	});
+	// The saved reply takes the live one's place in a single event. As a clear and then the
+	// message, the chat could draw in between without the reply, and a reader following it at the
+	// bottom was left at its start.
+	st.live = [];
+	st.toolOutput = null;
+	emit(conversationId, {
+		type: 'message',
+		message: toDisplay(assistantRow, media.length ? listMedia(assistantRow.id) : []),
+		replacesLive: true
+	});
+	touchConversation(conversationId);
+}
+
+/** One row with the result of every call of the reply before it, in order. */
+function saveResults(conversationId: string, results: Anthropic.ToolResultBlockParam[]): void {
+	const resultsRow = appendRow({
+		conversationId,
+		role: 'user',
+		kind: 'tool_results',
+		content: JSON.stringify(results)
+	});
+	emit(conversationId, { type: 'message', message: toDisplay(resultsRow) });
+}
+
+/** Rows a chat on the Claude plan sends as the model's input: messages, not command results. */
+function isPlanInput(row: MessageRow): boolean {
+	return row.role === 'user' && row.kind !== 'tool_results';
+}
+
+/**
+ * What a chat on the Claude plan sends Claude Code next, and the session it goes to. Its session
+ * keeps the conversation, so only rows it hasn't been sent go. A chat Claude Code hasn't seen yet
+ * may already have replies (a notification opened as a chat): those go along as a transcript.
+ */
+function planInput(conv: Conversation, rows: MessageRow[], newSessionId = conv.id) {
+	const sentSeq = rows.at(-1)?.seq ?? 0;
+	const content = (row: MessageRow) => JSON.parse(row.content) as Anthropic.ContentBlockParam[];
+	const session = conv.providerSession;
+	let input: Anthropic.ContentBlockParam[];
+	if (session) {
+		input = rows
+			.filter((row) => (row.seq ?? 0) > session.sentSeq && isPlanInput(row))
+			.flatMap(content);
+	} else {
+		const lastReply = rows.findLastIndex((row) => row.role === 'assistant');
+		const earlier = rows
+			.slice(0, lastReply + 1)
+			.map((row) => (row.role === 'assistant' ? `You: ${plainText(row)}` : plainText(row)))
+			.filter((text) => text && text !== 'You: ');
+		input = rows
+			.slice(lastReply + 1)
+			.filter(isPlanInput)
+			.flatMap(content);
+		if (earlier.length) {
+			input.unshift({
+				type: 'text',
+				text: `[This chat started before you could see it. What was said so far, oldest first:]\n\n${earlier.join('\n\n')}`
+			});
+		}
+	}
+	// Nothing new: a turn that failed after Claude Code took its input, continued.
+	if (!input.length) input = [{ type: 'text', text: '[Continue.]' }];
+	return {
+		sessionId: session?.id ?? newSessionId,
+		resume: !!session,
+		sentSeq,
+		input
+	};
+}
+
+/**
+ * A turn of a chat on the Claude plan, which Claude Code runs (claude-plan.ts). btw saves each
+ * reply and runs each command as its own loop would; messages sent meanwhile wait for the next
+ * turn. False when the loop should end: stopped, or failed with `st.error`.
+ */
+async function planTurn(
+	conv: Conversation,
+	rows: MessageRow[],
+	st: State,
+	abort: AbortController
+): Promise<boolean> {
+	const conversationId = conv.id;
+	const slug = profileSlug(conv.profileId);
+	if (!slug) {
+		st.error = 'The profile no longer exists.';
+		return false;
+	}
+	const cwd = profileDir(slug);
+	mkdirSync(cwd, { recursive: true });
+	const images = imageUse(rows.map(toMessageParam));
+	let next = planInput(conv, rows);
+	for (let retried = false; ; retried = true) {
+		const { sessionId, resume, sentSeq, input } = next;
+		try {
+			await runPlanTurn({
+				sessionId,
+				resume,
+				cwd,
+				model: conv.model,
+				effort: conv.effort,
+				system: conv.systemPrompt,
+				tools: toolsFor(conv),
+				input,
+				signal: abort.signal,
+				onStarted: () => setProviderSession(conversationId, { id: sessionId, sentSeq }),
+				onEvent: (event) => onStreamEvent(conversationId, event),
+				onReply: (reply) =>
+					saveReply(conv, reply, abort.signal, () => foundText(committedRows(conversationId))),
+				// A call that throws still gets its result, or Claude Code would wait for one forever.
+				runTool: (call) =>
+					runToolCall(conv, call, 'tool_use', abort.signal, st, images).catch((err: unknown) => {
+						st.toolOutput = null;
+						console.error(`[btw] ${conversationId.slice(0, 8)} command failed:`, err);
+						const reason = err instanceof Error ? err.message : String(err);
+						return toolResult(call.id, `Not finished: ${reason}`, true);
+					}),
+				onResults: (results) => saveResults(conversationId, results)
+			});
+			return true;
+		} catch (err) {
+			clearLive(conversationId);
+			if (abort.signal.aborted || isAbortError(err)) {
+				// Waiting messages join the transcript unanswered, as after a stop in btw's own loop.
+				commitQueued(conversationId);
+				return false;
+			}
+			const problem = sessionProblem(err);
+			if (problem && !retried) {
+				console.error(
+					`[btw] ${conversationId.slice(0, 8)} Claude Code session ${problem}, trying again`
+				);
+				next =
+					problem === 'taken'
+						? { ...next, resume: true }
+						: planInput({ ...conv, providerSession: null }, rows, randomUUID());
+				continue;
+			}
+			st.error = describeApiError(err);
+			console.error(`[btw] ${conversationId.slice(0, 8)} Claude Code turn failed:`, err);
+			return false;
+		}
+	}
+}
+
 async function loop(conversationId: string): Promise<void> {
 	const st = stateFor(conversationId);
 	if (st.running) return; // the running loop picks up new messages at its next step
@@ -614,6 +795,12 @@ async function loop(conversationId: string): Promise<void> {
 
 			const abort = new AbortController();
 			st.abort = abort;
+			if (runsOnClaudeCode(conv.provider)) {
+				if (!(await planTurn(conv, rows, st, abort))) return;
+				// Claude Code ended its turn: only messages that came meanwhile start another.
+				if (!queuedRows(conversationId).length) return;
+				continue;
+			}
 			const messages = requestMessages(rows, conv.promptChangedAtSeq);
 			let reply: ModelReply;
 			try {
@@ -641,38 +828,7 @@ async function loop(conversationId: string): Promise<void> {
 				return;
 			}
 
-			// Pictures and files the reply links to are copied before it's saved (the live reply
-			// stays on screen meanwhile), so the saved reply never points at a missing copy. Web
-			// pictures only if their link appeared in what the model read before this reply.
-			const slug = profileSlug(conv.profileId);
-			const media: PreparedMedia[] = slug
-				? await copyReplyMedia(reply.texts, profileDir(slug), abort.signal, () => foundText(rows))
-				: [];
-
-			const { usage } = reply;
-			console.log(
-				`[btw] ${conversationId.slice(0, 8)} ${conv.model} in=${usage.input} cache_read=${usage.cacheRead} cache_write=${usage.cacheWrite} hit=${Math.floor(cacheHitRate(usage) * 100)}% out=${usage.output} stop=${reply.stopReason}`
-			);
-			const assistantRow = appendRow({
-				conversationId,
-				role: 'assistant',
-				kind: 'assistant',
-				content: JSON.stringify(reply.content),
-				stopReason: reply.stopReason,
-				usage,
-				media
-			});
-			// The saved reply takes the live one's place in a single event. As a clear and then the
-			// message, the chat could draw in between without the reply, and a reader following it
-			// at the bottom was left at its start.
-			st.live = [];
-			st.toolOutput = null;
-			emit(conversationId, {
-				type: 'message',
-				message: toDisplay(assistantRow, media.length ? listMedia(assistantRow.id) : []),
-				replacesLive: true
-			});
-			touchConversation(conversationId);
+			await saveReply(conv, reply, abort.signal, () => foundText(rows));
 
 			const { calls } = reply;
 			// No tool calls: the turn is over. Loop again in case messages arrived meanwhile.
@@ -698,13 +854,7 @@ async function loop(conversationId: string): Promise<void> {
 				});
 				results.push(result);
 			}
-			const resultsRow = appendRow({
-				conversationId,
-				role: 'user',
-				kind: 'tool_results',
-				content: JSON.stringify(results)
-			});
-			emit(conversationId, { type: 'message', message: toDisplay(resultsRow) });
+			saveResults(conversationId, results);
 			if (abort.signal.aborted) {
 				commitQueued(conversationId);
 				return;

@@ -18,7 +18,7 @@ export const CODEX_HELP = `ChatGPT plan (provider codex: OpenAI's models on a Pl
   btw codex status                           who btw is signed in as
   btw codex models                           the models the plan offers, for \`btw preset add\``;
 
-export function describeAccount(account: CodexAccount): string {
+export function describeChatGptAccount(account: CodexAccount): string {
 	const plan = account.plan ? ` (${account.plan} plan)` : '';
 	return `${account.email ?? 'a ChatGPT account'}${plan}`;
 }
@@ -37,7 +37,7 @@ export async function signInWithChatGpt(io: Io): Promise<CodexAccount> {
 The code works for 15 minutes. Enter it only if you started this sign-in. Waiting…`);
 	try {
 		const account = await signIn.done;
-		io.log(`Signed in as ${describeAccount(account)}.`);
+		io.log(`Signed in as ${describeChatGptAccount(account)}.`);
 		return account;
 	} finally {
 		io.signal.removeEventListener('abort', stop);
@@ -54,7 +54,7 @@ export async function codexCommand(io: Io, action: string | undefined): Promise<
 			await signOutCodex();
 			io.log(
 				account
-					? `Signed out of ${describeAccount(account)}. Chats on codex presets stop until someone signs in again.`
+					? `Signed out of ${describeChatGptAccount(account)}. Chats on codex presets stop until someone signs in again.`
 					: 'Not signed in.'
 			);
 			return;
@@ -64,7 +64,7 @@ export async function codexCommand(io: Io, action: string | undefined): Promise<
 			const account = codexAccount();
 			io.log(
 				account
-					? `Signed in as ${describeAccount(account)}.`
+					? `Signed in as ${describeChatGptAccount(account)}.`
 					: 'Not signed in. Run `btw codex login`.'
 			);
 			return;

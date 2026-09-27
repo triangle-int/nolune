@@ -349,7 +349,7 @@ const MANIFEST_FILE = 'manifest.jsonl';
 /** Images already in a conversation. Each one is resent with every request. */
 export interface ImageUse {
 	count: number;
-	/** Base64 characters of the ones sent inline. */
+	/** Base64 characters of what's sent inline: pictures, and PDFs in chats on the Claude plan. */
 	bytes: number;
 }
 
@@ -372,6 +372,11 @@ export function base64Length(bytes: number): number {
 export function imageUse(messages: Anthropic.MessageParam[]): ImageUse {
 	const use: ImageUse = { count: 0, bytes: 0 };
 	const add = (block: { type: string }) => {
+		if (block.type === 'document') {
+			const { source } = block as Anthropic.DocumentBlockParam;
+			if (source.type === 'base64') use.bytes += source.data.length;
+			return;
+		}
 		if (block.type !== 'image') return;
 		const { source } = block as Anthropic.ImageBlockParam;
 		use.count++;

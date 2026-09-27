@@ -162,6 +162,7 @@ export function createConversation(
 		soul: soul.text,
 		promptChangedAtSeq: null,
 		tools: TOOLS,
+		providerSession: null,
 		cacheTtl: input.cacheTtl ?? '1h',
 		hidden: input.hidden ?? false,
 		createdBy: input.userId,
@@ -253,6 +254,15 @@ export function rebuildSystemPrompt(
 	};
 	getDb().update(conversation).set(changed).where(eq(conversation.id, conv.id)).run();
 	return { ...conv, ...changed };
+}
+
+/** Chats on the Claude plan: Claude Code's session, and the last row it was sent. */
+export function setProviderSession(id: string, session: Conversation['providerSession']): void {
+	getDb()
+		.update(conversation)
+		.set({ providerSession: session })
+		.where(eq(conversation.id, id))
+		.run();
 }
 
 /** A background run becomes a normal conversation once someone continues it. */
@@ -586,6 +596,21 @@ function pairToolResults(messages: Anthropic.MessageParam[]): Anthropic.MessageP
 function toolResultText(content: Anthropic.ToolResultBlockParam['content']): string {
 	if (typeof content === 'string') return content;
 	return (content ?? []).map((b) => (b.type === 'text' ? b.text : `[${b.type}]`)).join('\n');
+}
+
+/**
+ * A row as plain text: what was said, and what commands printed. Pictures, files and the agent's
+ * commands themselves are left out.
+ */
+export function plainText(row: MessageRow): string {
+	if (row.role === 'assistant') return replyText(row);
+	return (JSON.parse(row.content) as (Anthropic.TextBlockParam | Anthropic.ToolResultBlockParam)[])
+		.map((b) =>
+			b.type === 'tool_result' ? toolResultText(b.content) : b.type === 'text' ? b.text : ''
+		)
+		.filter(Boolean)
+		.join('\n')
+		.trim();
 }
 
 /** The text blocks of an assistant row: what the agent said, without thinking or commands. */

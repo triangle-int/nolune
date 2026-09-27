@@ -4,6 +4,7 @@
 	import BoxIcon from '@lucide/svelte/icons/box';
 	import CircleUserRoundIcon from '@lucide/svelte/icons/circle-user-round';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
+	import TerminalIcon from '@lucide/svelte/icons/terminal';
 	import StarIcon from '@lucide/svelte/icons/star';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { Badge } from '$lib/components/ui/badge';
@@ -11,6 +12,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import * as ToggleGroup from '$lib/components/ui/toggle-group';
 	import TopBar from '$lib/components/TopBar.svelte';
+	import CopyButton from '$lib/components/chat/CopyButton.svelte';
 	import { formatTokens } from '$lib/format';
 	import { cn } from '$lib/utils';
 
@@ -21,8 +23,11 @@
 	const EXAMPLE_MODELS: Record<string, string> = {
 		anthropic: 'claude-opus-5-5',
 		openai: 'gpt-6-astra',
+		'claude-plan': 'claude-opus-5-5',
 		codex: 'gpt-6-astra'
 	};
+	/** Whether the Claude Code sign-in is being checked. */
+	let checkingPlan = $state(false);
 
 	type KeyStatus = (typeof data.keys)[number];
 	/** The key being pasted, the one being checked, and the one about to be removed. */
@@ -178,13 +183,96 @@
 				</ul>
 			</section>
 
+			<section class="space-y-3" aria-labelledby="plan-heading">
+				<div class="space-y-1">
+					<h2 id="plan-heading" class="text-lg font-medium">Claude plan</h2>
+					<p class="text-muted-foreground">
+						Chats on a Claude plan preset run on the Pro or Max plan someone signed in to Claude
+						Code with on this computer, instead of an API key. btw runs Claude Code and never sees
+						the sign-in. Plan limits assume one person's ordinary use, so keep busy automations and
+						subagents on an API key preset.
+					</p>
+				</div>
+				<div class="space-y-3 rounded-2xl border px-4 py-3 text-sm">
+					<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+						<span
+							class={cn(
+								'flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted max-sm:self-start',
+								data.claude.installed ? 'text-foreground' : 'text-muted-foreground'
+							)}
+						>
+							<TerminalIcon class="size-4" />
+						</span>
+						<div class="min-w-0 flex-1">
+							<div class="font-medium">Claude Code</div>
+							{#if data.claude.installed}
+								<div class="truncate font-mono text-muted-foreground">{data.claude.path}</div>
+							{:else if data.claude.path}
+								<div class="text-warning">
+									Not at <span class="font-mono">{data.claude.path}</span>, where
+									<code>btw config set claude-path</code> says it is.
+								</div>
+							{:else}
+								<div class="text-warning">Not installed on this computer.</div>
+							{/if}
+						</div>
+						<form
+							method="POST"
+							action="?/checkPlan"
+							class="max-sm:basis-full max-sm:pl-9"
+							use:enhance={() => {
+								checkingPlan = true;
+								return async ({ update }) => {
+									await update();
+									checkingPlan = false;
+								};
+							}}
+						>
+							<Button
+								type="submit"
+								variant="ghost"
+								size="sm"
+								class="text-muted-foreground"
+								disabled={checkingPlan}
+							>
+								{checkingPlan ? 'Checking…' : 'Check sign-in'}
+							</Button>
+						</form>
+					</div>
+					{#if form?.planError}
+						<p class="text-destructive sm:pl-12" role="alert">{form.planError}</p>
+					{:else if form?.planMessage}
+						<p class="text-muted-foreground sm:pl-12" role="status">{form.planMessage}</p>
+					{:else if !data.claude.installed}
+						<div class="space-y-2 text-muted-foreground sm:pl-12">
+							<p>
+								In a terminal on this computer, run <code>btw claude-plan setup</code>: it installs
+								Claude Code with Anthropic's installer and signs it in to your Claude account,
+								asking first. Or install it yourself, then run <code>claude</code> and sign in:
+							</p>
+							<div class="flex items-center gap-1 rounded-xl bg-muted py-1 pr-1 pl-3">
+								<code class="min-w-0 flex-1 truncate font-mono text-foreground"
+									>{data.claude.installCommand}</code
+								>
+								<CopyButton text={data.claude.installCommand} label="Copy the command" />
+							</div>
+						</div>
+					{:else}
+						<p class="text-muted-foreground sm:pl-12">
+							To sign in, run <code>btw claude-plan setup</code> in a terminal on this computer, or
+							run <code>claude</code> there and use <code>/login</code> with your Claude account.
+						</p>
+					{/if}
+				</div>
+			</section>
+
 			<section class="space-y-3" aria-labelledby="chatgpt-heading">
 				<div class="space-y-1">
 					<h2 id="chatgpt-heading" class="text-lg font-medium">ChatGPT plan</h2>
 					<p class="text-muted-foreground">
-						Presets on ChatGPT run on a ChatGPT Plus, Pro or Business plan through Codex, the way
-						OpenAI's Codex app does, instead of on API credit. They count against the plan's Codex
-						limits.
+						Chats on a ChatGPT plan preset run on a ChatGPT Plus, Pro or Business plan through
+						Codex, the way OpenAI's Codex app does, instead of an API key. They count against the
+						plan's Codex limits.
 					</p>
 				</div>
 				<div class="space-y-3 rounded-2xl border px-4 py-3 text-sm">
@@ -400,13 +488,19 @@
 							min="1"
 							placeholder={provider === 'openai'
 								? 'Context window (flagships: known)'
-								: 'Context window (optional)'}
+								: provider === 'claude-plan'
+									? 'Context window (not reported)'
+									: 'Context window (optional)'}
 							aria-label="Context window"
 							class="h-10 rounded-full px-4 sm:w-60"
 						/>
 					</div>
 					<Button type="submit" disabled={adding} class="h-10 px-5">
-						{adding ? 'Checking the model…' : 'Add'}
+						{adding
+							? provider === 'claude-plan'
+								? 'Checking Claude Code…'
+								: 'Checking the model…'
+							: 'Add'}
 					</Button>
 				</form>
 			</section>
@@ -450,7 +544,7 @@
 		<AlertDialog.Header>
 			<AlertDialog.Title>Sign out of ChatGPT?</AlertDialog.Title>
 			<AlertDialog.Description>
-				Chats on ChatGPT presets stop working until someone signs in again.
+				Chats on ChatGPT plan presets stop working until someone signs in again.
 			</AlertDialog.Description>
 		</AlertDialog.Header>
 		<form

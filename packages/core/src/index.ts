@@ -141,6 +141,7 @@ export {
 	PROVIDER_LABELS,
 	describeApiError,
 	isProvider,
+	runsOnClaudeCode,
 	type Effort,
 	type Provider
 } from './models.ts';
@@ -157,6 +158,17 @@ export {
 	type CodexStatus
 } from './codex-auth.ts';
 export { listCodexModels, type CodexModel } from './codex-chat.ts';
+export {
+	CLAUDE_INSTALL_COMMAND,
+	ClaudePlanError,
+	checkClaudePlan,
+	claudeSignInCommand,
+	findClaudeCode,
+	claudeExecutable,
+	claudePlanStatus,
+	describeAccount,
+	type ClaudePlanStatus
+} from './claude-plan.ts';
 export {
 	createSkill,
 	isValidSkillName,

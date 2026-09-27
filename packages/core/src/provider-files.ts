@@ -10,7 +10,7 @@ import { openaiFiles } from './openai-chat.ts';
  * Pictures and PDFs kept on the provider's side (Anthropic's or OpenAI's Files API), so a request refers to
  * them by id instead of carrying their bytes, which it would resend with every step for the
  * rest of the conversation. Each provider with a Files API brings its own store; the cache here
- * is shared. ChatGPT's Codex backend has none: its pictures go inline (attachments.ts).
+ * is shared.
  */
 export interface FileStore {
 	/** The account files live in. An id from one account means nothing in another. */
@@ -22,12 +22,12 @@ export interface FileStore {
 	remove(fileId: string): Promise<void>;
 }
 
-/** The providers with a Files API. */
-export type FileProvider = Exclude<Provider, 'codex'>;
+/** Chats on the Claude plan and on a ChatGPT plan have none: their pictures go inline. */
+const stores = { anthropic: anthropicFiles, openai: openaiFiles } satisfies Partial<
+	Record<Provider, FileStore>
+>;
 
-const stores: Record<FileProvider, FileStore> = { anthropic: anthropicFiles, openai: openaiFiles };
-
-export function hasFileStore(provider: Provider): provider is FileProvider {
+export function hasFileStore(provider: Provider): provider is keyof typeof stores {
 	return Object.hasOwn(stores, provider);
 }
 
@@ -42,11 +42,12 @@ const IN_USE_MS = 60 * 60 * 1000;
  * checked first: a message referring to a file that's gone would fail every later request.
  */
 export async function providerFileId(
-	provider: FileProvider,
+	provider: Provider,
 	data: Buffer,
 	name: string,
 	mime: string
 ): Promise<string> {
+	if (!hasFileStore(provider)) throw new Error(`${provider} has no Files API`);
 	const store = stores[provider];
 	const account = store.account();
 	const sha256 = createHash('sha256').update(data).digest('hex');

@@ -1,5 +1,6 @@
 import { error, fail } from '@sveltejs/kit';
 import {
+	CLAUDE_INSTALL_COMMAND,
 	ApiKeyError,
 	CodexAuthError,
 	PROVIDERS,
@@ -8,8 +9,11 @@ import {
 	apiKeyStatuses,
 	cancelCodexSignIn,
 	checkApiKey,
+	claudePlanStatus,
 	codexStatus,
+	describeAccount,
 	effectiveContextWindow,
+	findClaudeCode,
 	getDefaultPreset,
 	isApiKeyProvider,
 	listPresets,
@@ -35,6 +39,8 @@ export const load: PageServerLoad = ({ locals, depends }) => {
 		// Who btw is signed in to ChatGPT as, and a sign-in's code; never the tokens.
 		codex: codexStatus(),
 		providers: PROVIDERS.map((id) => ({ id, label: PROVIDER_LABELS[id] })),
+		// Where Claude Code is; whether it's signed in takes starting it, so that's a button.
+		claude: { ...findClaudeCode(), installCommand: CLAUDE_INSTALL_COMMAND },
 		presets: listPresets().map((p) => ({
 			id: p.id,
 			name: p.name,
@@ -68,6 +74,15 @@ export const actions: Actions = {
 			if (!(err instanceof ApiKeyError)) throw err;
 			return fail(400, { provider, keyError: err.message });
 		}
+	},
+	checkPlan: async ({ locals }) => {
+		requireAdmin(locals);
+		const status = await claudePlanStatus();
+		if (status.problem || !status.account) {
+			return fail(400, { planError: status.problem ?? "Claude Code didn't answer." });
+		}
+		const signedIn = describeAccount(status.account);
+		return { planMessage: `${signedIn[0].toUpperCase()}${signedIn.slice(1)}.` };
 	},
 	removeKey: async ({ locals, request }) => {
 		requireAdmin(locals);
