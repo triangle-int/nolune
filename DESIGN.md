@@ -815,9 +815,10 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   the model, picked from the provider's list or typed (any id works, a dated snapshot say); an
   optional name, whose placeholder is the default it gets; and the context window, folded away
   under what it will be ("Auto · 1M"). The list comes from `/api/models` when the form needs it:
-  Anthropic's models API, with names and windows; OpenAI's, the chat models only (no audio,
-  pictures, embeddings or search, and no dated snapshot of a model also listed without a date),
-  the newest first, with the flagships' known window; and Claude Code's own list for the Claude
+  Anthropic's models API, with names and windows; OpenAI's, only GPT-5.6 and newer (its
+  current generations in September 2026; older ones can still be typed), without audio,
+  realtime, pictures or search, nor dated snapshots of models also listed without a date, the
+  newest first, with the flagships' known window; and Claude Code's own list for the Claude
   plan, by full id (`claude-opus-5-5`, not `opus`, which would move a chat to a newer model when
   Claude Code updates). It's asked for again when the provider's key changes. The context window
   is a row of chips: Auto (what the provider reports, if anything), 128K, 200K, 1M, or Custom,

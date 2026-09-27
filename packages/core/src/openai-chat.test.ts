@@ -15,7 +15,7 @@ import {
 import { describeApiError } from './models.ts';
 import {
 	countDocumentTokens,
-	isChatModel,
+	isListedModel,
 	knownContextWindow,
 	listModels,
 	openaiFiles,
@@ -635,6 +635,7 @@ describe("OpenAI's Files API and models", () => {
 		['gpt-5.5', 1_050_000],
 		['gpt-5.5-pro', 1_050_000],
 		['gpt-5.5-2026-04-23', 1_050_000],
+		['gpt-5.6-terra', 1_050_000],
 		['gpt-6-astra', 1_050_000],
 		['gpt-6-luna-pro', 1_050_000],
 		['gpt-10-sol', 1_050_000],
@@ -654,27 +655,29 @@ describe("OpenAI's Files API and models", () => {
 
 	it.each([
 		['gpt-6-astra', true],
-		['gpt-5.4-mini', true],
-		['gpt-5.5-codex', true],
-		['o3', true],
-		['o4-mini', true],
-		['chatgpt-4o-latest', true],
-		['gpt-4o-audio-preview', false],
-		['gpt-realtime', false],
-		['gpt-4o-mini-transcribe', false],
-		['gpt-4o-mini-tts', false],
+		['gpt-6-luna-pro', true],
+		['gpt-5.6-terra', true],
+		['gpt-5.6-sol-2026-02-16', true],
+		['gpt-7', true],
+		// Older generations: typed, not listed.
+		['gpt-5.5', false],
+		['gpt-5.4-mini', false],
+		['gpt-5.3-codex', false],
+		['gpt-4o', false],
+		['o3', false],
+		['chatgpt-4o-latest', false],
+		// Not for chats.
+		['gpt-6-astra-audio', false],
+		['gpt-6-realtime', false],
+		['gpt-6-chat-latest', false],
+		['gpt-realtime-2.1', false],
 		['gpt-image-2.5-flare', false],
-		['gpt-4o-search-preview', false],
-		['o3-deep-research', false],
-		['gpt-3.5-turbo', false],
-		['text-embedding-3-large', false],
-		['whisper-1', false],
-		['dall-e-3', false]
-	])('knows whether %s chats: %s', (model, chats) => {
-		expect(isChatModel(model)).toBe(chats);
+		['whisper-1', false]
+	])('lists %s: %s', (model, listed) => {
+		expect(isListedModel(model)).toBe(listed);
 	});
 
-	it('lists the chat models, the newest first, without dated snapshots of listed ones', async () => {
+	it('lists GPT-5.6 and GPT-6, the newest first, without dated snapshots of listed ones', async () => {
 		const models = (...ids: string[]) =>
 			ids.map((id, i) => ({ id, object: 'model', created: 1_700_000_000 + i, owned_by: 'openai' }));
 		answer = (req) =>
@@ -683,21 +686,27 @@ describe("OpenAI's Files API and models", () => {
 						json: {
 							object: 'list',
 							data: models(
-								'gpt-5.4-mini',
+								'gpt-5.6-luna',
+								'gpt-5.5',
 								'whisper-1',
-								'gpt-6-astra-2026-06-01',
+								'gpt-6-astra-2026-09-03',
 								'gpt-6-astra',
-								'gpt-5.4-mini-2026-03-05',
+								'gpt-5.6-terra',
+								'gpt-5.4-mini',
 								'gpt-image-2.5-flare',
-								'o3-2025-04-16'
+								'gpt-5.6-sol-2026-02-16',
+								'o3'
 							)
 						}
 					}
 				: { status: 404, json: { error: { message: 'Not found' } } };
+		const flagship = { name: null, description: null, contextWindow: 1_050_000 };
 		expect(await listModels()).toEqual([
-			{ id: 'o3-2025-04-16', name: null, description: null, contextWindow: null },
-			{ id: 'gpt-6-astra', name: null, description: null, contextWindow: 1_050_000 },
-			{ id: 'gpt-5.4-mini', name: null, description: null, contextWindow: null }
+			// Only a dated one of Sol here, so that's the one.
+			{ id: 'gpt-5.6-sol-2026-02-16', ...flagship },
+			{ id: 'gpt-5.6-terra', ...flagship },
+			{ id: 'gpt-6-astra', ...flagship },
+			{ id: 'gpt-5.6-luna', ...flagship }
 		]);
 
 		// A compatible server's own names aren't OpenAI's: all of them.
