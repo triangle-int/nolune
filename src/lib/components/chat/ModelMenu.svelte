@@ -1,7 +1,7 @@
 <script lang="ts" module>
 	/** "claude-opus-5-5 (anthropic)" → "claude-opus-5-5". */
 	export function shortModelName(name: string): string {
-		return name.replace(/\s*\((anthropic|openai|openrouter|claude-plan)\)$/i, '');
+		return name.replace(/\s*\((anthropic|openai|openrouter|claude-plan|chatgpt-plan)\)$/i, '');
 	}
 </script>
 

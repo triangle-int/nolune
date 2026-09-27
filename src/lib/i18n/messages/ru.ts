@@ -767,8 +767,25 @@ export const ru: Messages = {
 		useEnvInstead: (variable: string) =>
 			`Вместо него btw будет использовать ключ из переменной окружения ${variable}.`,
 		plan: 'Подписка Claude',
-		planHint:
-			'Чаты на пресете с подпиской Claude работают по тарифу Pro или Max, с которым кто-то вошёл в Claude Code на этом компьютере, а не по API-ключу. btw запускает Claude Code и никогда не видит данные для входа. Лимиты подписки рассчитаны на обычное использование одним человеком, поэтому частые автоматизации и субагентов лучше оставить на пресете с API-ключом.',
+		plans: 'Подписки',
+		plansHint:
+			'Чаты на пресете с подпиской работают по чьей-то собственной подписке, а не по API-ключу, через агента её создателя на этом компьютере. btw запускает его и никогда не видит данные для входа. Лимиты подписок рассчитаны на обычное использование одним человеком, поэтому частые автоматизации и субагентов лучше оставить на пресете с API-ключом.',
+		claudePlanAbout: 'Pro или Max, через Claude Code.',
+		chatgptPlan: 'Подписка ChatGPT',
+		chatgptPlanAbout: 'Plus, Pro или Business, через Codex от OpenAI.',
+		chatgptInstall:
+			'В терминале на этом компьютере выполните {setup}: команда установит Codex через npm, спросив перед этим, и войдёт в ChatGPT. Или установите его сами, а затем войдите здесь:',
+		chatgptSignIn: 'Войти через ChatGPT',
+		chatgptSignInAgain: 'Войти заново',
+		chatgptAsking: 'Запрашиваем ChatGPT…',
+		signOut: 'Выйти',
+		chatgptOpen: 'Откройте {link} на любом устройстве и войдите в ChatGPT.',
+		chatgptCode: 'Введите этот код: {code}',
+		chatgptCodeHint: 'Код действует 15 минут. Страница обновится, когда его введут.',
+		chatgptSignOutTitle: 'Выйти из ChatGPT?',
+		chatgptSignOutBody:
+			'Чаты на пресетах с подпиской ChatGPT перестанут работать, пока кто-нибудь снова не войдёт.',
+		signedOut: 'Выход выполнен.',
 		notAt: 'Не найден по пути {path}, который указан в {command}.',
 		notInstalled: 'Не установлен на этом компьютере.',
 		checkSignIn: 'Проверить вход',
@@ -807,10 +824,13 @@ export const ru: Messages = {
 					'OpenAI его не сообщает: «Авто» знает только окна флагманов (1,05M начиная с GPT-5.4).',
 				openrouter:
 					'В режиме «Авто» берётся окно, которое OpenRouter указывает для модели и её основного провайдера.',
-				'claude-plan': 'Claude Code его не сообщает: «Авто» знает только модели с контекстом 1M.'
+				'claude-plan': 'Claude Code его не сообщает: «Авто» знает только модели с контекстом 1M.',
+				'chatgpt-plan': 'Codex его не сообщает, поэтому «Авто» оставляет его неизвестным.'
 			},
 			onPlan: 'Работает по тарифу Pro или Max, с которым вошли в Claude Code.',
 			noClaudeCode: 'Claude Code ещё не установлен: см. «Подписка Claude» выше.',
+			onChatGptPlan: 'Работает по подписке ChatGPT, с которой вошли в Codex.',
+			noCodex: 'Codex ещё не установлен: см. «Подписка ChatGPT» выше.',
 			onKey: (provider: string) => `Работает по API-ключу ${provider}.`,
 			noKey: (provider: string) =>
 				`API-ключа ${provider} пока нет: добавьте его в разделе «API-ключи» выше.`,
@@ -819,6 +839,7 @@ export const ru: Messages = {
 			couldNotList: (status: number) => `btw не удалось получить список моделей (${status}).`,
 			unreachable: 'Не удалось связаться с btw.',
 			checkingClaude: 'Проверяем Claude Code…',
+			checkingCodex: 'Проверяем Codex…',
 			checkingModel: 'Проверяем модель…',
 			pick: 'Выберите модель',
 			search: 'Найдите или введите ID модели',

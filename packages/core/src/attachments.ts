@@ -46,9 +46,11 @@ import { hasFileStore, providerFileId } from './provider-files.ts';
 /*
  * Files people attach to a message. Each is saved in the profile's `attachments` folder, where
  * the agent can work with it, and shown in the chat through a media row. The model gets pictures
- * and PDFs themselves, through the provider's Files API (inline without one) when it takes them,
- * and every other file as its name and path. What the model got is written into the message's `content` (btw's format, with the
- * provider's file ids); `message.attachments` keeps a record of the files themselves.
+ * and PDFs themselves when it takes them, through the provider's Files API (the plans have none:
+ * pictures go inline, and PDFs inline on the Claude plan and as their path on the ChatGPT plan),
+ * and every other file as its name and path. What the model got is written into the message's
+ * `content` (btw's format, with the provider's file ids); `message.attachments` keeps a record of
+ * the files themselves.
  */
 
 export const MAX_ATTACHMENTS = 10;
@@ -248,8 +250,8 @@ function kept(data: Buffer, mime: string): Extract<Source, { type: 'media' }> {
  * reference, so each provider gets its own copy when a request is made (resolveFiles), also after
  * the chat switches to another. With a Files API it's uploaded now, so a problem shows here rather
  * than at every later request; if that fails, it goes inline as base64 when the conversation
- * still has room. Without one (the Claude plan) every request carries it inline, so it counts
- * against that room.
+ * still has room. Without one (the plans) every request carries it inline, so it counts against
+ * that room.
  */
 export async function imageBlock(
 	conv: ModelOf,
@@ -404,6 +406,8 @@ async function pdfBlock(
 	used: ImageUse
 ): Promise<{ block: PdfBlock; tokens: number } | { problem: string }> {
 	const { provider } = conv;
+	// Codex takes text and pictures only.
+	if (provider === 'chatgpt-plan') return { problem: "models on the ChatGPT plan don't take PDFs" };
 	const refused = await modelTakes(conv, 'pdfs');
 	if (refused) return { problem: refused };
 	const data = readFileSync(path);

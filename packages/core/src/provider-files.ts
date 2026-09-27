@@ -14,8 +14,8 @@ import { openrouterFiles } from './openrouter.ts';
 /**
  * Pictures and PDFs kept on the provider's side (Anthropic's, OpenAI's or OpenRouter's Files API),
  * so a request refers to them by id instead of carrying their bytes, which it would resend with
- * every step for the rest of the conversation. Each provider brings its own store; the cache here
- * is shared.
+ * every step for the rest of the conversation. Each provider with a Files API brings its own
+ * store; the cache here is shared.
  */
 export interface FileStore {
 	/** The account files live in. An id from one account means nothing in another. */
@@ -27,7 +27,7 @@ export interface FileStore {
 	remove(fileId: string): Promise<void>;
 }
 
-/** Chats on the Claude plan have none: Claude Code gets pictures inline and PDFs as paths. */
+/** Chats on the Claude plan and on a ChatGPT plan have none: their pictures go inline. */
 const stores = {
 	anthropic: anthropicFiles,
 	openai: openaiFiles,

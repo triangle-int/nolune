@@ -1,6 +1,6 @@
 ---
 name: btw-agent
-description: Change btw's own setup with the `btw` command, including models, API keys, environment variables for your commands, which skills are on, the avatar the family sees in the chat ("switch to the comet"), family accounts and passwords, the web address and the background service (status, logs, restarts, updates). Use whenever someone asks you to configure yourself or change how btw is set up, or asks how it is set up.
+description: Change btw's own setup with the `btw` command, including models, API keys, the ChatGPT sign-in, environment variables for your commands, which skills are on, the avatar the family sees in the chat ("switch to the comet"), family accounts and passwords, the web address and the background service (status, logs, restarts, updates). Use whenever someone asks you to configure yourself or change how btw is set up, or asks how it is set up.
 ---
 
 # Configuring btw
@@ -34,7 +34,8 @@ Other parts of the CLI have their own instructions: automations (`btw trigger`, 
 ## Models
 
 Chats run on model presets, on Claude (Anthropic), on OpenAI's models or on the models
-OpenRouter serves with an API key, or on the owner's Claude plan (`claude-plan`, below). People
+OpenRouter serves with an API key, or on a plan: someone's own Claude or ChatGPT subscription
+(`claude-plan`, `chatgpt-plan`, below). People
 pick one when they start a chat, and new chats start with the default. They can switch a chat to
 another one from its composer; its next reply then reads the whole chat again without the cache.
 
@@ -44,6 +45,7 @@ btw preset add claude-sonnet-5 --name "Sonnet"  # Anthropic checks the model id 
 btw preset add gpt-6-astra --provider openai --name "GPT"
 btw preset add deepseek/deepseek-v4.1-flash --provider openrouter --name "DeepSeek"
 btw preset add claude-opus-5-5 --provider claude-plan --name "Opus (plan)"
+btw preset add gpt-6-astra --provider chatgpt-plan --name "GPT (plan)"
 btw preset default Sonnet                       # new chats start with it
 btw preset rm Sonnet                            # chats that use it keep working
 ```
@@ -53,22 +55,34 @@ its other models (mini, nano), give `--context-window` when you know it. OpenRou
 the model's maker (`anthropic/claude-sonnet-5`, `google/gemini-3.8-flash`; see
 https://openrouter.ai/models), its models list their window, and btw only takes one that can call
 tools, since that's how you run commands. Models that can't see pictures or read PDFs get them as
-their paths. A preset needs its provider's key. If `btw preset add` can't check the model, an admin can add it under Models &
-keys in the account menu.
+their paths. A preset needs its provider's key, or its plan's sign-in. If `btw preset add` can't
+check the model, an admin can add it under Models & keys in the account menu.
 
-### The Claude plan
+### Plans
 
-A `claude-plan` preset runs chats on the Claude Pro or Max plan someone signed in to Claude Code
-with on this computer, instead of an API key: btw runs Claude Code, which uses the plan's limits.
-`btw claude-plan status` says which Claude Code btw runs and who it's signed in as. Nobody signs in
-through btw or you: the owner runs `btw claude-plan setup` in a terminal on this computer, which
-installs Claude Code if needed and starts its own sign-in (or runs `claude` there and uses
-`/login`). That command asks questions, so it doesn't work from your commands. Never ask for, look
-for or copy a Claude sign-in or its tokens.
+Both plans work alike for you: `btw <plan> status` says who the plan is signed in as, and
+`btw <plan> setup` signs it in where needed. Plan limits assume one person's ordinary use. When
+someone wants a plan as the default, say that automations and subagents started from its chats
+use it too, and suggest keeping busy automations on an API key preset (`btw trigger` takes a
+preset). When a plan's limit is used up, chats on it stop until the time the error names.
 
-The plan's limits assume one person's ordinary use. When someone wants the plan as the default,
-say that automations and subagents started from its chats use it too, and suggest keeping busy
-automations on an API key preset (`btw trigger` takes a preset).
+- **`claude-plan`** runs chats on the Claude Pro or Max plan someone signed in to Claude Code with
+  on this computer: btw runs Claude Code, which keeps the sign-in. `btw claude-plan status` also
+  says which Claude Code btw runs. Nobody signs in through btw or you: the owner runs
+  `btw claude-plan setup` in a terminal on this computer, which installs Claude Code if needed and
+  starts its own sign-in (or runs `claude` there and uses `/login`). That command asks questions,
+  so it doesn't work from your commands. Never ask for, look for or copy a Claude sign-in or its
+  tokens.
+- **`chatgpt-plan`** runs chats on a ChatGPT Plus, Pro or Business plan through OpenAI's Codex on
+  this computer: btw runs Codex, which keeps the sign-in. `btw chatgpt-plan status` also says which
+  Codex btw runs; when there's none, the owner runs `btw chatgpt-plan setup` in a terminal on this
+  computer, which installs it (asking first). Signing in needs someone to enter a one-time code on
+  ChatGPT's site: suggest Models & keys in the account menu, or run `btw chatgpt-plan setup` in the
+  background and pass on the link and code it prints (it waits up to 15 minutes for them). Never
+  ask for, look for or copy the sign-in Codex keeps. `btw chatgpt-plan models` lists the models
+  the plan offers. Don't run `btw chatgpt-plan logout` while presets use it: chats on them stop
+  answering. Its models don't get PDFs, only their path, so open a PDF someone attached with a
+  command.
 
 ## API keys
 

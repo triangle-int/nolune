@@ -689,8 +689,26 @@ export const de: Messages = {
 		useEnvInstead: (variable: string) =>
 			`btw verwendet dann den Schlüssel aus der Umgebungsvariable ${variable}.`,
 		plan: 'Claude-Abo',
-		planHint:
-			'Chats mit einer Claude-Abo-Voreinstellung laufen über das Pro- oder Max-Abo, mit dem jemand auf diesem Computer bei Claude Code angemeldet ist, statt über einen API-Schlüssel. btw startet Claude Code und sieht die Anmeldung nie. Die Abo-Limits gehen von der normalen Nutzung durch eine Person aus, also lass viel beschäftigte Automationen und Subagenten auf einer Voreinstellung mit API-Schlüssel.',
+		plans: 'Abos',
+		plansHint:
+			'Chats mit einer Abo-Voreinstellung laufen über das eigene Abo von jemandem statt über einen API-Schlüssel, mit dem Agenten des Anbieters auf diesem Computer. btw startet ihn und sieht die Anmeldung nie. Die Abo-Limits gehen von der normalen Nutzung durch eine Person aus, also lass viel beschäftigte Automationen und Subagenten auf einer Voreinstellung mit API-Schlüssel.',
+		claudePlanAbout: 'Pro oder Max, über Claude Code.',
+		chatgptPlan: 'ChatGPT-Abo',
+		chatgptPlanAbout: 'Plus, Pro oder Business, über Codex von OpenAI.',
+		chatgptInstall:
+			'Führe in einem Terminal auf diesem Computer {setup} aus: Es installiert Codex mit npm (nach Rückfrage) und meldet es bei ChatGPT an. Oder installiere es selbst und melde dich dann hier an:',
+		chatgptSignIn: 'Mit ChatGPT anmelden',
+		chatgptSignInAgain: 'Erneut anmelden',
+		chatgptAsking: 'ChatGPT wird gefragt…',
+		signOut: 'Abmelden',
+		chatgptOpen: 'Öffne {link} auf einem beliebigen Gerät und melde dich bei ChatGPT an.',
+		chatgptCode: 'Gib diesen Code ein: {code}',
+		chatgptCodeHint:
+			'Der Code gilt 15 Minuten. Diese Seite aktualisiert sich, sobald er eingegeben ist.',
+		chatgptSignOutTitle: 'Von ChatGPT abmelden?',
+		chatgptSignOutBody:
+			'Chats mit ChatGPT-Abo-Voreinstellungen funktionieren erst wieder, wenn sich jemand erneut anmeldet.',
+		signedOut: 'Abgemeldet.',
 		notAt: 'Nicht unter {path}, wo es laut {command} sein sollte.',
 		notInstalled: 'Nicht auf diesem Computer installiert.',
 		checkSignIn: 'Anmeldung prüfen',
@@ -727,10 +745,13 @@ export const de: Messages = {
 				openai: 'OpenAI meldet es nicht: Auto kennt nur das der Flaggschiffe (1,05M seit GPT-5.4).',
 				openrouter:
 					'Auto verwendet das Fenster, das OpenRouter für das Modell und seinen Hauptanbieter angibt.',
-				'claude-plan': 'Claude Code meldet es nicht: Auto kennt nur seine Modelle mit 1M Kontext.'
+				'claude-plan': 'Claude Code meldet es nicht: Auto kennt nur seine Modelle mit 1M Kontext.',
+				'chatgpt-plan': 'Codex meldet es nicht, also lässt Auto es offen.'
 			},
 			onPlan: 'Läuft über das Pro- oder Max-Abo, mit dem Claude Code angemeldet ist.',
 			noClaudeCode: 'Claude Code ist noch nicht installiert: siehe „Claude-Abo“ oben.',
+			onChatGptPlan: 'Läuft über das ChatGPT-Abo, mit dem Codex angemeldet ist.',
+			noCodex: 'Codex ist noch nicht installiert: siehe „ChatGPT-Abo“ oben.',
 			onKey: (provider: string) => `Läuft über den ${provider}-API-Schlüssel.`,
 			noKey: (provider: string) =>
 				`Noch kein ${provider}-API-Schlüssel: Füge oben unter „API-Schlüssel“ einen hinzu.`,
@@ -739,6 +760,7 @@ export const de: Messages = {
 			couldNotList: (status: number) => `btw konnte die Modelle nicht abrufen (${status}).`,
 			unreachable: 'btw ist nicht erreichbar.',
 			checkingClaude: 'Claude Code wird geprüft…',
+			checkingCodex: 'Codex wird geprüft…',
 			checkingModel: 'Modell wird geprüft…',
 			pick: 'Modell wählen',
 			search: 'Suchen oder eine Modell-ID eingeben',

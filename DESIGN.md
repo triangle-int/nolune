@@ -6,36 +6,38 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 
 ## Decisions
 
-| Area               | Decision                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Execution          | Commands run as the gateway's macOS user with full access to the disk and no approval step. There is no sandbox. The profile folder is only the default working folder. A "smart mode" that auto-approves or rejects commands may come later.                                                                                                                                                                                                                                                                                                                                                        |
-| Clients            | Family members use the web UI only. The CLI is for the owner and for the agent itself (skill templates, self-configuration, which the built-in `btw-agent` skill explains).                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| Exposure           | Public through a tunnel on a VPS. Every route requires login. The sign-up endpoint is disabled: accounts are created only with the local CLI, and passwords must be long and strong.                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| Profiles           | Any user can create a profile. Any member can add or remove members, rename the profile, or delete it. Deleting moves the folder to `~/.btw-agent/trash/` instead of erasing it.                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| Conversations      | Shared by every member of the profile. Messages go through a queue, and a message sent while the agent is working is fed into its next step (steering). Anyone can press Stop.                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| Sender identity    | Every human message is sent to the model as `Name: text`. Attached files come first, each as a line saying who attached it and where it was saved, followed by the picture or PDF itself when the model gets one. Display names are unique across the gateway.                                                                                                                                                                                                                                                                                                                                       |
-| Attachments        | Any file, up to 100 MB and 10 per message, saved in the profile's `attachments` folder. btw keeps a copy of each picture and PDF the model gets and sends it by reference: through the provider's Files API (base64 only if an upload fails), whichever provider the chat moves to. Every other file goes as its path.                                                                                                                                                                                                                                                                               |
-| Providers          | Anthropic, OpenAI and OpenRouter (API keys), and the Claude plan: a Pro or Max plan signed in to Claude Code on this computer, which btw runs (see [The Claude plan](#the-claude-plan)). Keys and presets are global, managed by the admin with the CLI or the `/admin` page (Models & keys). A preset has a name (default `<model> (<provider>)`), a provider, a model, and an optional context-window override. One preset is the default (the oldest until an admin picks another): new chats start with it, and automations without a preset use it. See [Model providers](#model-providers).    |
-| Preset switching   | Allowed at any time, from the model chip in a chat's composer (or `btw agent run <id> --preset` for a subagent). The next model call uses the new model, and another provider gets the history translated. See [Switching models](#switching-models).                                                                                                                                                                                                                                                                                                                                                |
-| Reasoning          | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once, so the chat asks first.                                                                                                                                                                                                                                                                                                                                                                                                 |
-| System prompt      | Built once when the conversation is created: instructions, the profile's soul, the skills catalog and, for a chat in a folder, the folder's instructions and file paths. **It is not changed afterwards, and no update notices are added,** with one exception: when the chat moves to another folder, or its folder or the soul changes, it is built again at the start of the next turn (one cache miss). If skills change in another conversation, this conversation only sees it by running commands. Of memory, only `core` and the note names are in it: chats outside folders share a prompt. |
-| Memory             | Short Markdown notes per profile, one per topic, that the agent reads and changes with `btw memory`, like any other command. The system prompt has the pinned `core` note in full and lists the others by name, so the agent reads the ones it needs. The family sees and edits them on the Memory page. See [Memory](#memory).                                                                                                                                                                                                                                                                      |
-| Soul               | Who btw is for a profile (character, values, tone), in `soul.md` in its folder, at most 4,000 characters. It opens every chat's system prompt. The family edits it in the profile's settings; the agent changes it itself with `btw soul write` and says so. See [Soul](#soul).                                                                                                                                                                                                                                                                                                                      |
-| Folders            | Group a profile's chats, like ChatGPT's projects. A folder has instructions and files; its chats get the instructions and the files' paths (never the files themselves) in their system prompt. Chats are dragged into folders in the sidebar or started in one. See [Folders](#folders).                                                                                                                                                                                                                                                                                                            |
-| Skills             | Follow [agentskills.io](https://agentskills.io/client-implementation/adding-skills-support). They are read from `~/.btw-agent/profiles/<slug>/skills`, `~/.agents/skills` and the built-in skills (`packages/core/skills`: `automations`, `view-images`, `generate-images`, `subagents`, `btw-agent`); a profile skill overrides a global one, and both override a built-in one with the same name. The agent loads a skill by running `cat` on its `SKILL.md`, and creates new ones with `btw skill new`.                                                                                           |
-| Pictures and files | The agent writes Markdown: `![alt](path or URL)` shows a picture, `[label](path)` hands over a file. The gateway copies each one, byte for byte, when the reply is saved, and the chat only ever loads those copies. Web pictures only from links the agent found, never from the local network. The agent looks at pictures itself with `btw view`, which attaches them to that command's result. There is no tool for either.                                                                                                                                                                      |
-| Web search         | Handled by a skill that uses the firecrawl CLI. The gateway has no code for it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| Background work    | `run_command` takes `run_in_background` (new chats): the call returns at once, and the command's output joins the conversation as a message when it ends. See [Background commands](#background-commands).                                                                                                                                                                                                                                                                                                                                                                                           |
-| Subagents          | `btw agent run` starts another agent in a hidden conversation of its own that starts with only its task, and caches its prompt for 5 minutes. The agent hears back by running `btw agent watch` in the background, and can steer it and read its log. No new tool. See [Subagents](#subagents).                                                                                                                                                                                                                                                                                                      |
-| Making pictures    | The agent runs `btw generate image` (OpenAI's Image API, `gpt-image-2.5-flare` by default; each other provider would be one more module). Templates belong to the Images page, which turns one and its settings into a finished prompt in the message it sends; the CLI knows nothing about them.                                                                                                                                                                                                                                                                                                    |
+| Area               | Decision                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Execution          | Commands run as the gateway's macOS user with full access to the disk and no approval step. There is no sandbox. The profile folder is only the default working folder. A "smart mode" that auto-approves or rejects commands may come later.                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Clients            | Family members use the web UI only. The CLI is for the owner and for the agent itself (skill templates, self-configuration, which the built-in `btw-agent` skill explains).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Exposure           | Public through a tunnel on a VPS. Every route requires login. The sign-up endpoint is disabled: accounts are created only with the local CLI, and passwords must be long and strong.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Profiles           | Any user can create a profile. Any member can add or remove members, rename the profile, or delete it. Deleting moves the folder to `~/.btw-agent/trash/` instead of erasing it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Conversations      | Shared by every member of the profile. Messages go through a queue, and a message sent while the agent is working is fed into its next step (steering). Anyone can press Stop.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Sender identity    | Every human message is sent to the model as `Name: text`. Attached files come first, each as a line saying who attached it and where it was saved, followed by the picture or PDF itself when the model gets one. Display names are unique across the gateway.                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Attachments        | Any file, up to 100 MB and 10 per message, saved in the profile's `attachments` folder. btw keeps a copy of each picture and PDF the model gets and sends it by reference: through the provider's Files API (base64 only if an upload fails), whichever provider the chat moves to; the plans have none, so pictures go inline, and PDFs too on the Claude plan and as their path on the ChatGPT plan. Every other file goes as its path.                                                                                                                                                                                                                                                                      |
+| Providers          | Anthropic, OpenAI and OpenRouter (API keys), and two plans, someone's own subscription instead of a key (see [Plans](#plans)): `claude-plan`, a Pro or Max plan signed in to Claude Code on this computer, and `chatgpt-plan`, a ChatGPT plan signed in to OpenAI's Codex there, each of which btw runs. Keys and model presets are global and managed by the admin with the CLI or the `/admin` page (Models & keys). A preset has a name (default `<model> (<provider>)`), a provider, a model, and an optional window override. One preset is the default (the oldest until an admin picks one): new chats start with it, and automations without a preset use it. See [Model providers](#model-providers). |
+| Preset switching   | Allowed at any time, from the model chip in a chat's composer (or `btw agent run <id> --preset` for a subagent). The next model call uses the new model, and another provider gets the history translated. See [Switching models](#switching-models).                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Reasoning          | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once, so the chat asks first.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| System prompt      | Built once when the conversation is created: instructions, the profile's soul, the skills catalog and, for a chat in a folder, the folder's instructions and file paths. **It is not changed afterwards, and no update notices are added,** with one exception: when the chat moves to another folder, or its folder or the soul changes, it is built again at the start of the next turn (one cache miss). If skills change in another conversation, this conversation only sees it by running commands. Of memory, only `core` and the note names are in it: chats outside folders share a prompt.                                                                                                           |
+| Memory             | Short Markdown notes per profile, one per topic, that the agent reads and changes with `btw memory`, like any other command. The system prompt has the pinned `core` note in full and lists the others by name, so the agent reads the ones it needs. The family sees and edits them on the Memory page. See [Memory](#memory).                                                                                                                                                                                                                                                                                                                                                                                |
+| Soul               | Who btw is for a profile (character, values, tone), in `soul.md` in its folder, at most 4,000 characters. It opens every chat's system prompt. The family edits it in the profile's settings; the agent changes it itself with `btw soul write` and says so. See [Soul](#soul).                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Folders            | Group a profile's chats, like ChatGPT's projects. A folder has instructions and files; its chats get the instructions and the files' paths (never the files themselves) in their system prompt. Chats are dragged into folders in the sidebar or started in one. See [Folders](#folders).                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Skills             | Follow [agentskills.io](https://agentskills.io/client-implementation/adding-skills-support). They are read from `~/.btw-agent/profiles/<slug>/skills`, `~/.agents/skills` and the built-in skills (`packages/core/skills`: `automations`, `view-images`, `generate-images`, `subagents`, `btw-agent`); a profile skill overrides a global one, and both override a built-in one with the same name. The agent loads a skill by running `cat` on its `SKILL.md`, and creates new ones with `btw skill new`.                                                                                                                                                                                                     |
+| Pictures and files | The agent writes Markdown: `![alt](path or URL)` shows a picture, `[label](path)` hands over a file. The gateway copies each one, byte for byte, when the reply is saved, and the chat only ever loads those copies. Web pictures only from links the agent found, never from the local network. The agent looks at pictures itself with `btw view`, which attaches them to that command's result. There is no tool for either.                                                                                                                                                                                                                                                                                |
+| Web search         | Handled by a skill that uses the firecrawl CLI. The gateway has no code for it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Background work    | `run_command` takes `run_in_background` (new chats): the call returns at once, and the command's output joins the conversation as a message when it ends. See [Background commands](#background-commands).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Subagents          | `btw agent run` starts another agent in a hidden conversation of its own that starts with only its task, and caches its prompt for 5 minutes. The agent hears back by running `btw agent watch` in the background, and can steer it and read its log. No new tool. See [Subagents](#subagents).                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Making pictures    | The agent runs `btw generate image` (OpenAI's Image API, `gpt-image-2.5-flare` by default; each other provider would be one more module). Templates belong to the Images page, which turns one and its settings into a finished prompt in the message it sends; the CLI knows nothing about them.                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 ## Files on disk
 
 ```
 ~/.btw-agent/                 (override with BTW_HOME)
   config.json                 auth secret, Anthropic, OpenAI and OpenRouter keys, image model,
-                              extra env vars
-                              for commands, where Claude Code is if set (mode 600)
+                              extra env vars for commands, where Claude Code and Codex are if set
+                              (mode 600)
+  codex/                      Codex's home for the ChatGPT plan: its sign-in (which btw never
+                              reads), and the chats' threads under sessions/
   btw.db                      SQLite: users, sessions, profiles, presets, folders, conversations,
                               messages, media, uploads, provider files, triggers, trigger runs,
                               notifications, subagents, running background commands
@@ -135,8 +137,9 @@ provider's module (`anthropic.ts`, `openai-chat.ts`, `openrouter.ts`) for the mo
 chat's title, PDF token counts, model checks and what the model can be sent, and gets back the
 same shape from each (the reply's content, its stop reason in Anthropic's words, usage, tool calls
 and texts). Each API provider brings a `FileStore` for pictures and PDFs (see
-[Attachments](#attachments)). The Claude plan (`claude-plan.ts`) is different: Claude Code runs
-the agent loop, so the runner hands it whole turns (see [The Claude plan](#the-claude-plan)).
+[Attachments](#attachments)). The plans are different: the plan maker's own agent (Claude Code in
+`claude-plan.ts`, Codex in `chatgpt-plan.ts`) runs the agent loop, so the runner hands it whole
+turns (`runPlanTurn`; see [Plans](#plans)).
 
 - **What's stored.** What btw writes itself is in btw's own format, and replies exactly as their
   provider returned them; each provider's module turns both into its request (see
@@ -225,8 +228,9 @@ is `media` (kept by btw, which `resolveFiles` turns into each provider's copy be
 from before btw kept its own copies). Each
 provider's module turns messages into its request, leaving out what it can't take:
 `toAnthropicMessages` in `anthropic.ts` (Claude Code on a Claude plan gets the same blocks, from
-`toAnthropicBlocks`), `toResponsesInput` in `openai-chat.ts` and `toChatMessages` in
-`openrouter.ts`. Nothing else in btw knows a
+`toAnthropicBlocks`), `toResponsesInput` in `openai-chat.ts`, `toChatMessages` in
+`openrouter.ts`, and `toCodexInput` in `chatgpt-plan.ts` (Codex on a ChatGPT plan, which takes
+text and pictures). Nothing else in btw knows a
 provider's shapes: the runner, the chat's display, plain-text transcripts and image limits all
 read btw's format.
 
@@ -246,6 +250,55 @@ read btw's format.
   for (from those rows, or a result Claude Code wrote itself) is an `other` block that carries its
   Anthropic original and goes only to Claude. Stored rows are never rewritten.
 
+### Plans
+
+`claude-plan` and `chatgpt-plan` run chats on someone's own subscription instead of an API key.
+Neither Anthropic nor OpenAI has other apps sign in to their accounts for this, so btw doesn't:
+each plan runs its maker's own agent, installed on this computer and unmodified, which signs in,
+keeps the sign-in, bills the plan and runs the agent loop, asking btw to run each command. The
+two agents speak differently (below); what they share is in `plans.ts` and the runner:
+
+- **One kind of turn.** The runner hands the agent a whole turn (`PlanTurn`, through
+  `runPlanTurn` in `models.ts`): the chat's session, what it hasn't seen yet in btw's format (with
+  `resolve`, which reads btw's copies of its pictures into it), btw's system prompt and tools, and
+  callbacks that save each reply before its commands run, run a command and save the results, so
+  the chat gets the same rows and live events as from btw's own loop. The session is
+  `conversation.provider_session` (its id, the last row it was sent, and the plan whose agent has
+  it), saved once the agent took the turn's input (`onStarted`). Only rows it hasn't been sent go,
+  as one message; a turn that failed after the agent took its input is continued with
+  `[Continue.]`. A chat the agent has never seen that already has replies (a notification opened
+  as a chat, or replies from another model the chat used before) gets them first as a plain-text
+  transcript, in a new session, and so does one whose session the agent lost
+  (`planSessionProblem`). Messages sent while the agent works join after its turn, not at its next
+  step.
+- **Stop** interrupts the agent's turn and kills the running command, as elsewhere (a
+  `PlanStopped`); an agent that hasn't ended the turn 5 seconds later is closed. A reply cut off
+  mid-stream is dropped.
+- **One kind of error.** Both turn whatever fails into a `PlanError` in words for the people in
+  the chat, with the plan's own `kind` (`authentication_failed`, `usageLimitExceeded`...), so
+  `describeApiError` and `shortApiError` know nothing about either.
+- **One status.** `claudePlanStatus()` and `chatGptPlanStatus()` start the agent without sending
+  anything and say where it is (`path`, `installed`), who it's signed in as (`signedIn`: "signed
+  in as anna@example.com (Claude Max)", or "(ChatGPT Plus)", from `describePlanAccount`) and what
+  stops chats on it (`problem`). Adding a preset checks the same, since nothing is billed.
+- **The same commands and page.** `btw <plan> status` and `btw <plan> setup` (or
+  `btw setup --provider <plan>`) for both (`packages/cli/src/plans.ts`), printing the same line,
+  and `btw config set claude-path|codex-path` for an agent btw doesn't find. `chatgpt-plan` adds
+  `logout` and `models`, which Codex has. Models & keys has one Plans list with a row for each.
+- **Finding the agent.** The configured path, else the PATH and its installers' folders, since
+  the gateway may run without a login shell's PATH (as a LaunchAgent). Without one, every one of
+  the above says so and how to install it; at a terminal, setup offers the maker's installer,
+  asking first.
+- **No Files API.** Pictures go inline for both, within the conversation's 20 MB. PDFs go inline
+  on the Claude plan and as their path on the ChatGPT plan, since Codex takes text and pictures
+  only.
+- **What's different.** The context window isn't known before a call, except for Claude Code's
+  1M-context models, whose ids say so (`claude-opus-5-5[1m]`), so the context meter shows "?"
+  (and PDFs get 25% of 200k tokens) unless the preset sets one. Titles are asked for through
+  the agent too, as one exchange without a session. Plan limits assume one person's ordinary use,
+  so the help, the page and the docs suggest keeping busy automations and subagents on an API key
+  preset.
+
 ### The Claude plan
 
 `claude-plan` presets run chats on the Pro or Max plan (Team and Enterprise work the same) that
@@ -259,11 +312,7 @@ paused). Those limits assume one person's ordinary use, which is why the docs su
 automations and subagents on an API key preset.
 
 - **Who runs the loop.** Claude Code. Each turn is a `query()` that resumes the chat's Claude Code
-  session (`conversation.provider_session`: its id, at first the chat's own, and the last row it
-  was sent). Only rows it hasn't been sent go, as one user message; a turn that failed after Claude
-  Code took its input is continued with `[Continue.]`. A chat Claude Code has never seen that
-  already has replies (a notification opened as a chat) gets them first as a plain-text
-  transcript. If Claude Code lost the session, btw starts a new one with that transcript.
+  session, whose id btw picks: at first the chat's own.
 - **What the model gets.** btw's system prompt and the chat's saved `run_command` definition, as an
   in-process MCP tool (`mcp__btw__run_command` to the model). Claude Code's built-in tools, settings
   files, CLAUDE.md, skills and MCP servers are left out (`tools: []`, `settingSources: []`,
@@ -283,9 +332,6 @@ automations and subagents on an API key preset.
   folders (`~/.local/bin`, `~/.claude/local`, Homebrew), or at `btw config set claude-path`. The
   SDK's own copy of Claude Code (about 230 MB per platform) isn't shipped, so the Claude Code
   people keep up to date is the one that runs.
-- **Stop** interrupts Claude Code's turn and kills the running command, as elsewhere; if Claude Code
-  hasn't ended the turn 5 seconds later, its process is closed. A reply cut off mid-stream is
-  dropped.
 - **Errors.** Claude Code reports API errors as a reply of its own (`error: authentication_failed`,
   `rate_limit`...), which btw shows as the chat's error, with how to sign in when that's the
   problem. `btw claude-plan status`, the admin page's Check sign-in and adding a preset start
@@ -309,12 +355,77 @@ automations and subagents on an API key preset.
   its page tree, read from the file (compressed object streams too), and checked against the same
   25% of the context window and the API's page limit. A PDF whose pages can't be counted
   (encrypted, say) goes as its path.
-- **What's different.** Messages sent while Claude Code works join after its turn, not at its next
-  step. The context window isn't known before a call, except for the 1M-context models, whose ids
-  say so (`claude-opus-5-5[1m]`), so the context meter shows "?" (and PDFs get 25% of 200k tokens)
-  unless the preset sets one. Titles are asked for through Claude Code too, as
-  one exchange without a session. Claude Code keeps its own copy of each chat under
-  `~/.claude/projects`, which deleting the chat in btw doesn't remove yet.
+- **Its own copy.** Claude Code keeps each chat under `~/.claude/projects`, which deleting the
+  chat in btw doesn't remove yet.
+
+### The ChatGPT plan
+
+`chatgpt-plan` presets run chats on a ChatGPT plan (Plus, Pro, Business, Enterprise) that
+someone signed in to OpenAI's Codex with, instead of an API key. btw runs the installed Codex
+(`npm install -g @openai/codex`, or Homebrew's), unmodified, through `codex app-server`: the
+JSON-RPC interface over stdio that Codex's own IDE extension uses and OpenAI documents for
+integrations (`codex-app-server.ts` carries the messages, `chatgpt-plan.ts` says what to ask).
+Codex signs in with ChatGPT, keeps the sign-in fresh and bills the plan's Codex limits itself.
+
+- **Codex's home.** btw gives Codex a home of its own (`CODEX_HOME=~/.btw-agent/codex`), apart
+  from the owner's `~/.codex`: its sign-in, settings and threads are btw's alone, and btw's chats
+  don't show up in the owner's Codex. btw never reads the sign-in there.
+- **Who runs the loop.** Codex. A chat is a Codex thread, whose id Codex picks: a turn starts one
+  (`thread/start`) or resumes the chat's (`thread/resume`), starts a turn with the new input
+  (`turn/start`) and follows its events until `turn/completed`. A thread Codex no longer has ("no
+  rollout found") is a lost session. Codex runs for one turn and is closed after, like Claude
+  Code. It sets up its home's state database as it starts, which two starting at once trip over,
+  so btw starts one at a time, and starts again once a Codex that ended while starting.
+- **What the model gets.** btw's system prompt as Codex's base instructions, and the chat's saved
+  `run_command` as a dynamic tool (`dynamicTools`, in a `btw` namespace; experimental in Codex, so
+  btw opts in with `experimentalApi`). Codex's own tools that act on the computer or reach out are
+  off, from its command line so no config.toml turns them back on (`-c features.shell_tool=false`
+  and so on: shell, pictures, image generation, web search, browser and computer use, apps,
+  plugins, skills, goals, sub-agents), AGENTS.md files aren't read (`project_doc_max_bytes=0`),
+  and turns have no execution environment (`environments: []`), which also leaves out
+  `apply_patch`. What's left is Codex's harness: the model calls tools from short scripts
+  (`exec`, and `wait` for a long one), which reach btw as `item/tool/call` requests. The thread's
+  sandbox is read-only with approvals off, since Codex itself runs nothing. Codex adds notes on
+  permissions and the environment (date, time zone).
+- **The same rows.** btw saves what Codex streams as OpenAI's output items (`reasoning`
+  summaries, `message`, a `function_call` for each command), which the chat reads as it reads
+  OpenAI's replies. A command's reply is saved when Codex asks to run it, with what the model said
+  since the last one; a script may ask for several at once, but btw runs them one at a time, each
+  with a reply and results of its own. Results go back as Codex's content items: text, and `btw
+view` pictures as data URLs. Deltas (`item/agentMessage/delta`, reasoning summaries) are the
+  live reply.
+- **Pictures** go to Codex as data URLs, read from btw's copies (`resolveFiles`) within the
+  conversation's inline limit, in messages and in command results. A PDF, and a picture from before
+  btw kept its own copies (held by another provider's Files API), becomes a note saying where its
+  file is, since Codex takes text and pictures only.
+- **Usage.** Codex says what a model call used (`thread/tokenUsage/updated`) only once the
+  commands it asked for have finished, after btw saved the reply that asked for them. So only the
+  reply that ends a turn has usage, its own call's, and a chat's totals leave out calls that asked
+  for commands. Codex caches prompts itself.
+- **Environment.** Codex gets btw's environment without `OPENAI_API_KEY` and `CODEX_API_KEY`,
+  which it would use (and bill) instead of the plan. npm's `codex` is a Node script, so the Node
+  that runs btw goes on its PATH, and its folder is where btw looks for `codex` too.
+- **Signing in** is Codex's own device code flow through the app server (`account/login/start`
+  with `chatgptDeviceCode`): Codex asks OpenAI for a one-time code, someone signed in to ChatGPT
+  enters it at `auth.openai.com/codex/device` on any device, and Codex saves the sign-in
+  (`account/login/completed`). Nothing redirects back to this computer, so it works through a
+  tunnel, from a phone and from the agent's commands. A sign-in under way is a Codex waiting for
+  its code in the process that started it: the gateway for Models & keys, which asks again every
+  few seconds until the code is entered, or `btw chatgpt-plan setup`, which prints the link and
+  the code and waits. Signing out is Codex's (`account/logout`). The status is Codex's
+  `account/read`: a ChatGPT account passes, named with its plan (`plus`: "ChatGPT Plus"); an API
+  key doesn't.
+- **Models** are the ones Codex lists (`model/list`, with the ones its picker hides): adding a
+  preset checks the model is there. Codex doesn't say their context windows.
+- **Errors.** A failed turn's error (`codexErrorInfo`: `unauthorized`, `usageLimitExceeded`,
+  `contextWindowExceeded`...) is shown in Codex's words, with how to sign in when that's the
+  problem. Codex retries what can be retried itself.
+- **Onboarding.** At a terminal, `btw setup --provider chatgpt-plan` and `btw chatgpt-plan setup`
+  offer npm's installer (`npm install -g @openai/codex`), asking first, then sign in. The admin
+  page shows the install command, and signs in itself, since the code is entered on OpenAI's
+  page, never on btw's.
+- **Its own copy.** Codex keeps each chat's thread under `~/.btw-agent/codex/sessions`, which
+  deleting the chat in btw doesn't remove yet.
 
 ### Switching models
 
@@ -342,7 +453,8 @@ has the chat open gets the change as a live `model` event (also in the snapshot)
   - Replies from another provider go as their text and tool calls (`portableReply`), without
     reasoning. So do replies from another OpenAI model or another model on OpenRouter (reasoning
     goes back only to the model that wrote it, and items without their reasoning lose their ids)
-    and a Claude plan's replies on the API (their thinking was signed for another account). Anthropic accepts
+    and a plan's replies (a Claude plan's thinking was signed for another account, and Codex keeps
+    a ChatGPT plan's reasoning to itself). Anthropic accepts
     tool calls without thinking in the middle of a turn, so a switch can happen there.
   - Pictures and PDFs go along: btw keeps them and each provider gets its own copy (see
     [Attachments](#attachments)). Only those from before btw kept its own, stored as another
@@ -351,10 +463,11 @@ has the chat open gets the change as a live `model` event (also in the snapshot)
     where the file is, so `btw view` shows it again. The switch dialog mentions them when the chat
     has any (`heldFileProviders`). A model on OpenRouter that can't see pictures or read PDFs gets
     the same kind of note for those it can't take (`readableMessages`).
-- **The Claude plan.** Claude Code keeps its own copy of the chat, so a chat that comes back to the
-  plan after another model answered starts a new session (a random id: the chat's own is taken)
-  with the chat so far as a transcript, as a notification's chat does. Switching between plan
-  presets keeps the session, and Claude Code resumes it on the new model.
+- **The plans.** A plan's agent keeps its own copy of the chat, so a chat that comes back to a plan
+  after another model answered starts a new session (on the Claude plan, a random id: the chat's
+  own is taken) with the chat so far as a transcript, as a notification's chat does. So does one
+  that moves from one plan to the other: the saved session says whose it is. Switching between
+  presets of the same plan keeps the session, and the agent resumes it on the new model.
 
 ## Agent loop
 
@@ -508,7 +621,8 @@ kind of file, up to 100 MB each (the same as pictures in replies) and 10 per mes
 - **Other providers.** `message.attachments` is the provider-neutral record (saved path, type,
   what the model got). `content` holds btw's blocks (see [btw's format](#btws-format)), and each
   provider's module turns them into its request. A provider brings a `FileStore`
-  (`provider-files.ts`); one without a files API would send pictures inline. OpenAI's is its
+  (`provider-files.ts`); one without a files API sends pictures inline (PDFs too on the Claude
+  plan, and as their path on the ChatGPT plan). OpenAI's is its
   Files API: pictures are uploaded for `vision` and PDFs as `user_data`, and a PDF's cost is
   counted with `POST /v1/responses/input_tokens`, which also fails for a PDF it can't read.
 - **OpenRouter's** is its Files API (in beta), which takes pictures and PDFs alike and keeps them
@@ -971,25 +1085,30 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   first (listing models, which is free), then saved to `config.json`, which is read on every
   request, so it applies without a restart. A key the provider rejects isn't saved; one that works
   on an account with a problem (out of credit, a restricted OpenAI key that can't list models) is,
-  with the provider's words. OpenRouter lists its models for anyone, so its key is checked with
-  `GET /key` instead. Removing a saved key falls back to the environment's. Replacing a key warns
-  to keep the same workspace (Anthropic, OpenRouter) or project (OpenAI): pictures and PDFs
-  already sent live in it. `btw key set` does the same check, but saves anyway when the provider
-  can't be reached. Under the presets, **Add a model** opens the form (open from the start while
-  there are none), in the order the choices are made: the provider, saying which key or plan it runs
-  on; the model, picked from the provider's list or typed (any id works, a dated snapshot say); an
-  optional name, whose placeholder is the default it gets; and the context window, folded away under
-  what it will be ("Auto · 1M"). The list comes from `/api/models` when the form needs it:
-  Anthropic's models API, with names and windows; OpenAI's, only GPT-5.6 and newer (its current
-  generations in September 2026; older ones can still be typed), without audio, realtime, pictures
-  or search, nor dated snapshots of models also listed without a date, the newest first, with the
-  flagships' known window; OpenRouter's, the models that can call tools (without `:batch` variants,
-  which are for its batch API), the newest first, with its names and the window a preset gets; and
-  Claude Code's own list for the Claude plan, by full id (`claude-opus-5-5`, not `opus`, which would
-  move a chat to a newer model when Claude Code updates). It's asked for again when the provider's
-  key changes. The context window is a row of chips: Auto (what the provider reports, if anything),
-  128K, 200K, 1M, or Custom, typed as `272k`, `1.5m` or `272000`. The provider checks the model id
-  before the preset is saved.
+  with the provider's words. OpenRouter lists its models for anyone, so its key is checked with `GET
+/key` instead. Removing a saved key falls back to the environment's. Replacing a key warns to keep
+  the same workspace (Anthropic, OpenRouter) or project (OpenAI): pictures and PDFs already sent
+  live in it. `btw key set` does the same check, but saves anyway when the provider can't be
+  reached. Under the keys, **Plans** lists both plans alike (what each is, who it's signed in as,
+  what to do next): the Claude plan's row shows where Claude Code is and checks its sign-in; the
+  ChatGPT plan's shows where Codex is and who it's signed in as, signs it in with ChatGPT, showing
+  the link and the one-time code, updates by itself once the code is entered, and then offers Sign
+  in again and Sign out. Without the agent, a row shows how to install it. Under the presets, **Add
+  a model** opens the form (open from the start while there are none), in the order the choices are
+  made: the provider, saying which key or plan it runs on; the model, picked from the provider's
+  list or typed (any id works, a dated snapshot say); an optional name, whose placeholder is the
+  default it gets; and the context window, folded away under what it will be ("Auto · 1M"). The list
+  comes from `/api/models` when the form needs it: Anthropic's models API, with names and windows;
+  OpenAI's, only GPT-5.6 and newer (its current generations in September 2026; older ones can still
+  be typed), without audio, realtime, pictures or search, nor dated snapshots of models also listed
+  without a date, the newest first, with the flagships' known window; OpenRouter's, the models that
+  can call tools (without `:batch` variants, which are for its batch API), the newest first, with
+  its names and the window a preset gets; Claude Code's own list for the Claude plan, by full id
+  (`claude-opus-5-5`, not `opus`, which would move a chat to a newer model when Claude Code
+  updates); and what Codex's own picker offers for the ChatGPT plan. It's asked for again when the
+  provider's key changes. The context window is a row of chips: Auto (what the provider reports, if
+  anything), 128K, 200K, 1M, or Custom, typed as `272k`, `1.5m` or `272000`. The provider checks the
+  model id before the preset is saved.
 
 ## Languages
 
@@ -1121,8 +1240,9 @@ packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_comm
                 commands, memory notes, new-chat suggestions, btw view images, attachments, model
                 calls (models.ts, with anthropic.ts, openai-chat.ts and openrouter.ts, each with its
                 Files API and the function that turns btw's format, format.ts, into its request),
-                Claude plan turns through Claude Code
-                (claude-plan.ts), provider
+                plans (plans.ts: the Claude plan's turns through Claude Code in claude-plan.ts, the
+                ChatGPT plan's through Codex's app server in chatgpt-plan.ts and
+                codex-app-server.ts), provider
                 file cache, runner, media, users/profiles/presets, API
                 keys, chat folders, triggers, scheduler, subagents (subagents.ts, and
                 subagent-host.ts in the gateway), notifications, image generation (providers:
@@ -1130,8 +1250,8 @@ packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_comm
                 Built-in skills in packages/core/skills, built-in templates in
                 packages/core/image-templates. Plain TypeScript run by Node with type stripping
                 (no enums or parameter properties; imports use .ts extensions).
-packages/cli    btw: setup, start, service, config, key, env, user, preset, profile, skill, trigger, wake,
-                view, memory, generate, agent. `runCli(argv, io)` in run.ts runs a command and returns
+packages/cli    btw: setup, start, service, config, key, claude-plan, chatgpt-plan (plans.ts), env,
+                user, preset, profile, skill, trigger, wake, view, memory, generate, agent. `runCli(argv, io)` in run.ts runs a command and returns
                 its exit code; index.ts calls it with this process's io. Commands print, read stdin,
                 the environment (BTW_PROFILE, …) and the working folder only through `io` (io.ts),
                 never `process`, and end in an error rather than `process.exit`, so the agent's
@@ -1160,7 +1280,8 @@ Published to npm as `btw-agent` (not yet). `npm install -g btw-agent` gives the 
   `node_modules`, which is why the CLI ships as JavaScript.
   Claude Code itself isn't shipped (see [The Claude plan](#the-claude-plan)); the Agent SDK and
   zod, which core loads on first use, are in chunks of their own.
-- `btw setup` is the first-run wizard: config, API key, admin account, default preset, public URL.
+- `btw setup` is the first-run wizard: config, API key (or, with `--provider <plan>`, the plan's
+  agent and its sign-in), admin account, default preset, public URL.
 - `btw start` reads host, port and origin from `config.json` (default `127.0.0.1:5780`), sets
   `HOST` / `PORT` / `ORIGIN` for adapter-node and imports `build/index.js`.
 - `btw service install` writes a LaunchAgent (`~/Library/LaunchAgents/dev.btw-agent.gateway.plist`)

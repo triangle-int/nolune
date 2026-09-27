@@ -706,8 +706,26 @@ export const fr: Messages = {
 		useEnvInstead: (variable: string) =>
 			`btw utilisera à la place la clé de la variable d’environnement ${variable}.`,
 		plan: 'Abonnement Claude',
-		planHint:
-			'Les discussions avec un préréglage d’abonnement Claude utilisent l’abonnement Pro ou Max avec lequel quelqu’un s’est connecté à Claude Code sur cet ordinateur, au lieu d’une clé d’API. btw lance Claude Code et ne voit jamais la connexion. Les limites de l’abonnement supposent l’usage ordinaire d’une seule personne : gardez donc les automatisations chargées et les sous-agents sur un préréglage avec clé d’API.',
+		plans: 'Abonnements',
+		plansHint:
+			'Les discussions avec un préréglage d’abonnement utilisent l’abonnement de quelqu’un au lieu d’une clé d’API, par l’agent de l’éditeur installé sur cet ordinateur. btw le lance et ne voit jamais la connexion. Les limites des abonnements supposent l’usage ordinaire d’une seule personne : gardez donc les automatisations chargées et les sous-agents sur un préréglage avec clé d’API.',
+		claudePlanAbout: 'Pro ou Max, via Claude Code.',
+		chatgptPlan: 'Abonnement ChatGPT',
+		chatgptPlanAbout: 'Plus, Pro ou Business, via Codex d’OpenAI.',
+		chatgptInstall:
+			'Dans un terminal sur cet ordinateur, lancez {setup} : il installe Codex avec npm, après vous l’avoir demandé, et le connecte à ChatGPT. Ou installez-le vous-même, puis connectez-vous ici :',
+		chatgptSignIn: 'Se connecter avec ChatGPT',
+		chatgptSignInAgain: 'Se reconnecter',
+		chatgptAsking: 'Demande à ChatGPT…',
+		signOut: 'Se déconnecter',
+		chatgptOpen: 'Ouvrez {link} sur n’importe quel appareil et connectez-vous à ChatGPT.',
+		chatgptCode: 'Saisissez ce code : {code}',
+		chatgptCodeHint:
+			'Le code est valable 15 minutes. Cette page se met à jour dès qu’il est saisi.',
+		chatgptSignOutTitle: 'Se déconnecter de ChatGPT ?',
+		chatgptSignOutBody:
+			'Les discussions avec un préréglage d’abonnement ChatGPT ne fonctionneront plus tant que personne ne se sera reconnecté.',
+		signedOut: 'Déconnecté.',
 		notAt: 'Introuvable à {path}, où {command} indique qu’il se trouve.',
 		notInstalled: 'Pas installé sur cet ordinateur.',
 		checkSignIn: 'Vérifier la connexion',
@@ -746,10 +764,13 @@ export const fr: Messages = {
 				openrouter:
 					'Auto utilise la fenêtre qu’OpenRouter indique pour le modèle et son fournisseur principal.',
 				'claude-plan':
-					'Claude Code ne l’indique pas : Auto ne connaît que ses modèles à 1M de contexte.'
+					'Claude Code ne l’indique pas : Auto ne connaît que ses modèles à 1M de contexte.',
+				'chatgpt-plan': 'Codex ne l’indique pas : Auto la laisse donc inconnue.'
 			},
 			onPlan: 'Utilise l’abonnement Pro ou Max auquel Claude Code est connecté.',
 			noClaudeCode: 'Claude Code n’est pas encore installé : voir « Abonnement Claude » plus haut.',
+			onChatGptPlan: 'Utilise l’abonnement ChatGPT auquel Codex est connecté.',
+			noCodex: 'Codex n’est pas encore installé : voir « Abonnement ChatGPT » plus haut.',
 			onKey: (provider: string) => `Utilise la clé d’API ${provider}.`,
 			noKey: (provider: string) =>
 				`Pas encore de clé d’API ${provider} : ajoutez-en une dans « Clés d’API » plus haut.`,
@@ -758,6 +779,7 @@ export const fr: Messages = {
 			couldNotList: (status: number) => `btw n’a pas pu obtenir les modèles (${status}).`,
 			unreachable: 'btw est injoignable.',
 			checkingClaude: 'Vérification de Claude Code…',
+			checkingCodex: 'Vérification de Codex…',
 			checkingModel: 'Vérification du modèle…',
 			pick: 'Choisissez un modèle',
 			search: 'Recherchez ou saisissez un identifiant de modèle',
