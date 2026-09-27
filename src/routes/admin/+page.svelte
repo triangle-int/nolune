@@ -8,9 +8,9 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import * as ToggleGroup from '$lib/components/ui/toggle-group';
 	import Rich from '$lib/components/Rich.svelte';
 	import TopBar from '$lib/components/TopBar.svelte';
+	import AddModelForm from '$lib/components/admin/AddModelForm.svelte';
 	import CopyButton from '$lib/components/chat/CopyButton.svelte';
 	import { formatTokens } from '$lib/format';
 	import { getI18n } from '$lib/i18n';
@@ -18,14 +18,6 @@
 
 	let { data, form } = $props();
 	const { m } = getI18n();
-	let adding = $state(false);
-	/** Whose model the new preset runs. */
-	let provider = $state('anthropic');
-	const EXAMPLE_MODELS: Record<string, string> = {
-		anthropic: 'claude-opus-5-5',
-		openai: 'gpt-6-astra',
-		'claude-plan': 'claude-opus-5-5'
-	};
 	/** Whether the Claude Code sign-in is being checked. */
 	let checkingPlan = $state(false);
 
@@ -319,69 +311,13 @@
 					{/each}
 				</ul>
 
-				<form
-					method="POST"
-					action="?/add"
-					class="space-y-3"
-					use:enhance={() => {
-						adding = true;
-						return async ({ update }) => {
-							await update();
-							adding = false;
-						};
-					}}
-				>
-					<div class="flex flex-wrap items-center justify-between gap-3">
-						<h2 class="font-medium">{m.admin.addPreset}</h2>
-						<ToggleGroup.Root
-							type="single"
-							variant="outline"
-							size="sm"
-							value={provider}
-							onValueChange={(value) => value && (provider = value)}
-							aria-label={m.admin.provider}
-						>
-							{#each data.providers as p (p.id)}
-								<ToggleGroup.Item value={p.id}>{p.label}</ToggleGroup.Item>
-							{/each}
-						</ToggleGroup.Root>
-					</div>
-					<input type="hidden" name="provider" value={provider} />
-					<Input
-						name="model"
-						required
-						placeholder={m.admin.modelIdExample(EXAMPLE_MODELS[provider] ?? '')}
-						aria-label={m.admin.modelId}
-						class="h-10 rounded-full px-4"
-					/>
-					<div class="flex flex-col gap-3 sm:flex-row">
-						<Input
-							name="name"
-							placeholder={m.admin.nameDefault}
-							aria-label={m.admin.name}
-							class="h-10 flex-1 rounded-full px-4"
-						/>
-						<Input
-							name="contextWindow"
-							type="number"
-							min="1"
-							placeholder={provider === 'openai'
-								? m.admin.contextKnown
-								: provider === 'claude-plan'
-									? m.admin.contextNotReported
-									: m.admin.contextOptional}
-							aria-label={m.admin.contextWindow}
-							class="h-10 rounded-full px-4 sm:w-60"
-						/>
-					</div>
-					<Button type="submit" disabled={adding} class="h-10 px-5">
-						{adding
-							? provider === 'claude-plan'
-								? m.admin.checkingClaude
-								: m.admin.checkingModel
-							: m.common.add}
-					</Button>
-				</form>
+				<AddModelForm
+					providers={data.providers}
+					keys={data.keys}
+					claudeInstalled={data.claude.installed}
+					problem={form?.addError}
+					startOpen={data.presets.length === 0}
+				/>
 			</section>
 		</div>
 	</main>

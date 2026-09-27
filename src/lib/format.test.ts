@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatAgo, formatBytes, formatPercent, formatTokens } from './format';
+import { formatAgo, formatBytes, formatPercent, formatTokens, parseTokens } from './format';
 import { translations } from './i18n';
 
 const en = translations('en');
@@ -12,6 +12,18 @@ describe('format', () => {
 		expect(formatTokens(12_345)).toBe('12K');
 		expect(formatTokens(2_000_000)).toBe('2M');
 		expect(formatTokens(1_250_000)).toBe('1.3M');
+	});
+
+	it('reads token counts, shortened or not', () => {
+		expect(parseTokens('272000')).toBe(272_000);
+		expect(parseTokens(' 272k ')).toBe(272_000);
+		expect(parseTokens('1.5M')).toBe(1_500_000);
+		expect(parseTokens('1 m')).toBe(1_000_000);
+		expect(parseTokens('0.1')).toBeNaN();
+		expect(parseTokens('0')).toBeNaN();
+		expect(parseTokens('')).toBeNaN();
+		expect(parseTokens('200kb')).toBeNaN();
+		expect(parseTokens('-5k')).toBeNaN();
 	});
 
 	it('never rounds a partial hit up to 100%', () => {

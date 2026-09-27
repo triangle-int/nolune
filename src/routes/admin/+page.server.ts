@@ -20,6 +20,7 @@ import {
 	saveApiKey,
 	setDefaultPreset
 } from '@btw/core';
+import { parseTokens } from '$lib/format';
 import { translations } from '$lib/i18n';
 import { requireAdmin } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
@@ -93,13 +94,17 @@ export const actions: Actions = {
 		const provider = form.get('provider')?.toString() ?? '';
 		const model = form.get('model')?.toString() ?? '';
 		const name = form.get('name')?.toString() ?? '';
+		// Left out for the model's own window; otherwise a chip's count, or one typed like "272k".
 		const cw = form.get('contextWindow')?.toString().trim() ?? '';
+		const contextWindow = cw ? parseTokens(cw) : null;
+		const { addModel } = translations(locals.locale).m.admin;
+		if (Number.isNaN(contextWindow)) return fail(400, { addError: addModel.invalidContext });
 		try {
-			await addPreset({ provider, model, name, contextWindow: cw ? Number(cw) : null });
+			const preset = await addPreset({ provider, model, name, contextWindow });
+			return { message: addModel.added(preset.name) };
 		} catch (err) {
-			return fail(400, { message: err instanceof Error ? err.message : String(err) });
+			return fail(400, { addError: err instanceof Error ? err.message : String(err) });
 		}
-		return { message: translations(locals.locale).m.admin.added };
 	},
 	setDefault: async ({ locals, request }) => {
 		requireAdmin(locals);
