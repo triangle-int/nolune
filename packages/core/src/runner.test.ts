@@ -1,19 +1,29 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { streamTurn } from './anthropic.ts';
+import { streamTurn, toAnthropicMessages } from './anthropic.ts';
 import { eq } from 'drizzle-orm';
 import { stopBackgroundCommands } from './background.ts';
-import { committedRows, createConversation, insertQueued } from './conversations.ts';
+import {
+	appendRow,
+	commitQueuedRows,
+	committedRows,
+	createConversation,
+	insertQueued
+} from './conversations.ts';
 import { getDb } from './db/index.ts';
 import { conversation } from './db/schema.ts';
 import { LEGACY_TOOLS, TOOLS, runCommand, type RunCommandResult } from './run-command.ts';
 import {
+	changeEffort,
+	changeModel,
 	getSnapshot,
 	kick,
 	onLoopEnd,
 	onRunningChange,
 	recoverAfterRestart,
-	runningConversationIds
+	runningConversationIds,
+	subscribe,
+	type LiveEvent
 } from './runner.ts';
 import { runSubagent, setSubagentStatus } from './subagents.ts';
 import { makeFamily, makePreset } from './test/fixtures.ts';
@@ -96,9 +106,9 @@ describe('the agent loop', () => {
 		await ended;
 
 		expect(results(chat.id)).toEqual([
-			[{ type: 'tool_result', tool_use_id: 't1', content: 'a.txt' }]
+			[{ type: 'tool_result', callId: 't1', content: 'a.txt', isError: false }]
 		]);
-		expect(vi.mocked(streamTurn).mock.calls[1][0].messages.at(-1)).toEqual({
+		expect(toAnthropicMessages(vi.mocked(streamTurn).mock.calls[1][0].messages).at(-1)).toEqual({
 			role: 'user',
 			content: [{ type: 'tool_result', tool_use_id: 't1', content: 'a.txt' }]
 		});
@@ -118,9 +128,9 @@ describe('the agent loop', () => {
 			[
 				{
 					type: 'tool_result',
-					tool_use_id: 't1',
+					callId: 't1',
 					content: 'Not finished: spawn EAGAIN',
-					is_error: true
+					isError: true
 				}
 			]
 		]);
@@ -169,6 +179,83 @@ describe('tools and cache', () => {
 	});
 });
 
+describe('switching models', () => {
+	it('goes on with the new model, even in the middle of a turn, and tells everyone watching', async () => {
+		const { user, profile } = makeFamily();
+		const gpt = makePreset('GPT', 'gpt-6-astra', 'openai');
+		const chat = createConversation({ profile, presetId: gpt.id, userId: user.id });
+		insertQueued({
+			conversationId: chat.id,
+			senderId: user.id,
+			senderName: 'Anna',
+			text: 'Files?'
+		});
+		commitQueuedRows(chat.id);
+		// GPT asked for a command, and got its result, before the chat switched.
+		appendRow({
+			conversationId: chat.id,
+			role: 'assistant',
+			kind: 'assistant',
+			content: JSON.stringify([
+				{ id: 'rs_1', type: 'reasoning', summary: [], encrypted_content: 'gAAAA' },
+				{
+					id: 'fc_1',
+					type: 'function_call',
+					call_id: 'call_1',
+					name: 'run_command',
+					arguments: '{"command":"ls"}'
+				}
+			]),
+			provider: 'openai',
+			model: 'gpt-6-astra'
+		});
+		appendRow({
+			conversationId: chat.id,
+			role: 'user',
+			kind: 'tool_results',
+			content: JSON.stringify([{ type: 'tool_result', tool_use_id: 'call_1', content: 'a.txt' }]),
+			provider: 'openai'
+		});
+		const events: LiveEvent[] = [];
+		const off = subscribe(chat.id, (event) => events.push(event));
+		const sonnet = makePreset();
+		changeModel(chat.id, sonnet.id);
+		changeEffort(chat.id, 'high');
+		off();
+		const model = {
+			presetId: sonnet.id,
+			presetName: 'Sonnet',
+			provider: 'anthropic',
+			contextWindow: 200_000
+		};
+		expect(events).toEqual([
+			{ type: 'model', model: { ...model, effort: 'medium' } },
+			{ type: 'model', model: { ...model, effort: 'high' } }
+		]);
+		expect(getSnapshot(chat.id).model).toEqual({ ...model, effort: 'high' });
+
+		vi.mocked(streamTurn).mockResolvedValueOnce(
+			modelReply([{ type: 'text', text: 'One file: a.txt.' }], 'end_turn')
+		);
+		await run(chat.id);
+		const request = vi.mocked(streamTurn).mock.calls[0][0];
+		expect(request).toMatchObject({ model: 'claude-sonnet-5', effort: 'high' });
+		expect(toAnthropicMessages(request.messages)).toEqual([
+			{ role: 'user', content: [{ type: 'text', text: 'Anna: Files?' }] },
+			{
+				role: 'assistant',
+				content: [{ type: 'tool_use', id: 'call_1', name: 'run_command', input: { command: 'ls' } }]
+			},
+			{ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_1', content: 'a.txt' }] }
+		]);
+		expect(committedRows(chat.id).at(-1)).toMatchObject({
+			kind: 'assistant',
+			provider: 'anthropic',
+			model: 'claude-sonnet-5'
+		});
+	});
+});
+
 describe('background commands', () => {
 	const download = {
 		type: 'tool_use',
@@ -192,9 +279,8 @@ describe('background commands', () => {
 		await run(chat.id);
 		expect(vi.mocked(runCommand).mock.calls[0][0]).toMatchObject({ background: true });
 		const [[started]] = results(chat.id);
-		expect(started).toMatchObject({ tool_use_id: 'bg1' });
+		expect(started).toMatchObject({ callId: 'bg1', isError: false });
 		expect(started.content).toContain('Started in the background (process group 4242)');
-		expect(started.is_error).toBeUndefined();
 
 		// The output starts the agent again.
 		const second = loopEnd(chat.id);
@@ -203,7 +289,7 @@ describe('background commands', () => {
 
 		const notice = committedRows(chat.id).find((row) => row.kind === 'task_result')!;
 		expect(notice).toMatchObject({ senderName: 'Downloading the photos' });
-		const told = vi.mocked(streamTurn).mock.calls[2][0].messages.at(-1);
+		const told = toAnthropicMessages(vi.mocked(streamTurn).mock.calls[2][0].messages).at(-1);
 		expect(JSON.stringify(told)).toContain(
 			'[Background command finished: Downloading the photos]\\n$ fetch-photos\\nsaved 120 photos'
 		);

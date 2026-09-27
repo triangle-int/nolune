@@ -79,7 +79,9 @@ export {
 	getConversation,
 	isSubagentConversation,
 	getConversationForUser,
+	heldFileProviders,
 	listConversations,
+	ModelSwitchError,
 	setEffort,
 	setHidden,
 	type Conversation,
@@ -118,6 +120,8 @@ export {
 	type MediaRow
 } from './media.ts';
 export {
+	changeEffort,
+	changeModel,
 	getSnapshot,
 	isRunning,
 	kick,
@@ -130,6 +134,7 @@ export {
 	stop,
 	subscribe,
 	type BackgroundItem,
+	type ChatModel,
 	type LiveBlock,
 	type LiveEvent,
 	type Snapshot
@@ -227,6 +232,7 @@ export {
 	type MemoryFile
 } from './memory.ts';
 export { MAX_SOUL_CHARS, SoulError, readSoul, readSoulFile, writeSoul } from './soul.ts';
+export { currentSuggestions, refreshSuggestions, type Suggestion } from './suggestions.ts';
 export { ViewLimitError, inspectImage, viewImage } from './images.ts';
 export {
 	AttachmentError,

@@ -2,16 +2,17 @@ import type Anthropic from '@anthropic-ai/sdk';
 import * as anthropic from './anthropic.ts';
 import * as claudePlan from './claude-plan.ts';
 import * as chatgptPlan from './chatgpt-plan.ts';
-import { replyBlocks, toolCalls, type ReplyBlock } from './content-blocks.ts';
 import type { Usage } from './conversations.ts';
+import { replyBlocks, toolCalls, type Message, type ToolCallBlock } from './format.ts';
 import * as openai from './openai-chat.ts';
 import { PlanError, isPlan, isPlanStopped, type Plan, type PlanTurn } from './plans.ts';
 
 /*
  * A model call as the rest of btw sees it, whichever provider runs it. Each provider's module
  * speaks its own API; this one picks the module for a conversation's provider and turns what it
- * returns into the same shape. The reply's `content` is still the provider's own, and is stored
- * and sent back exactly as it came (see content-blocks.ts).
+ * returns into the same shape. Requests are built from btw's own format (format.ts) by each
+ * provider's module. The reply's `content` is still the provider's own, and is stored and sent
+ * back exactly as it came.
  *
  * The plans are the exception (plans.ts): the maker's own agent runs the agent loop, Claude Code
  * for `claude-plan` and Codex for `chatgpt-plan`, so the runner hands them whole turns
@@ -52,7 +53,7 @@ export type StreamEvent =
 	  }
 	| { type: 'delta'; index: number; text: string };
 
-export type ToolCall = Extract<ReplyBlock, { type: 'tool_call' }>;
+export type ToolCall = ToolCallBlock;
 
 export interface ModelReply {
 	/** What the provider returned, to store and send back unchanged. */
@@ -88,8 +89,8 @@ export async function streamTurn(opts: {
 	tools: Anthropic.Tool[];
 	cacheTtl: CacheTtl;
 	cacheKey: string;
-	/** btw's own blocks, and each reply as its provider returned it (content-blocks.ts). */
-	messages: Anthropic.MessageParam[];
+	/** The conversation in btw's format; each provider's module turns it into its request. */
+	messages: Message[];
 	signal: AbortSignal;
 	onEvent: (event: StreamEvent) => void;
 }): Promise<ModelReply> {

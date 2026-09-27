@@ -11,6 +11,16 @@ import {
 import { readConfig } from './config.ts';
 import type { Usage } from './conversations.ts';
 import {
+	heldElsewhereNote,
+	placeholder,
+	unresolved,
+	type Block,
+	type ImageBlock,
+	type PdfBlock,
+	type TextBlock,
+	type ToolResultBlock
+} from './format.ts';
+import {
 	EFFORTS,
 	type Effort,
 	type ModelChoice,
@@ -257,49 +267,57 @@ function addUsage(a: Usage | null, b: Usage): Usage {
 	};
 }
 
-/** Codex's input items for btw's blocks. It takes text and pictures, as links or data URLs. */
-function toCodexInput(blocks: Anthropic.ContentBlockParam[]): Record<string, unknown>[] {
+/** A picture as Codex takes it: a data URL. PDFs and other providers' copies can't go. */
+function codexImage(block: ImageBlock | PdfBlock): { url: string } | TextBlock {
+	if (block.type === 'pdf') {
+		return {
+			type: 'text',
+			text: `[PDF not shown: models on the ChatGPT plan don't take PDFs. The line before this says where its file is.]`
+		};
+	}
+	// Another provider's Files API holds it, which Codex can't open.
+	if (block.source.type === 'uploaded') return heldElsewhereNote(block);
+	if (block.source.type === 'media') unresolved(block);
+	return { url: `data:${block.source.mime};base64,${block.source.data}` };
+}
+
+/**
+ * Codex's input items for btw's blocks, with pictures and PDFs resolved (`turn.resolve`). It
+ * takes text and pictures.
+ */
+function toCodexInput(blocks: Block[]): Record<string, unknown>[] {
 	return blocks.flatMap((block): Record<string, unknown>[] => {
 		const text = (text: string) => [{ type: 'text', text, text_elements: [] }];
 		switch (block.type) {
 			case 'text':
-				return text(block.text);
+				return block.text ? text(block.text) : [];
 			case 'image':
-				if (block.source.type === 'base64') {
-					return [
-						{ type: 'image', url: `data:${block.source.media_type};base64,${block.source.data}` }
-					];
-				}
-				if (block.source.type === 'url') return [{ type: 'image', url: block.source.url }];
-				return text('[A picture the model can’t see here]');
-			case 'document':
-				if (block.source.type === 'text') return text(block.source.data);
-				return text(
-					`[A document the model can’t read here${block.title ? `: ${block.title}` : ''}]`
-				);
+			case 'pdf': {
+				const image = codexImage(block);
+				return 'url' in image ? [{ type: 'image', url: image.url }] : text(image.text);
+			}
 			default:
+				// Replies and command results never go as input, and `other` blocks are Claude's.
 				return [];
 		}
 	});
 }
 
-/** A command's result as Codex takes a dynamic tool's. */
-function toToolResponse(result: Anthropic.ToolResultBlockParam) {
-	const blocks = typeof result.content === 'string' ? [result.content] : (result.content ?? []);
+/** A command's result, resolved, as Codex takes a dynamic tool's. */
+function toToolResponse(result: ToolResultBlock) {
+	const blocks = typeof result.content === 'string' ? [result.content] : result.content;
 	const contentItems = blocks.map((b) => {
 		if (typeof b === 'string') return { type: 'inputText', text: b };
-		if (b.type === 'image' && b.source.type === 'base64') {
-			return {
-				type: 'inputImage',
-				imageUrl: `data:${b.source.media_type};base64,${b.source.data}`
-			};
+		if (b.type === 'text') return { type: 'inputText', text: b.text };
+		if (b.type === 'image' || b.type === 'pdf') {
+			const image = codexImage(b);
+			return 'url' in image
+				? { type: 'inputImage', imageUrl: image.url }
+				: { type: 'inputText', text: image.text };
 		}
-		if (b.type === 'image' && b.source.type === 'url') {
-			return { type: 'inputImage', imageUrl: b.source.url };
-		}
-		return { type: 'inputText', text: b.type === 'text' ? b.text : `[${b.type}]` };
+		return { type: 'inputText', text: `[${placeholder(b)}]` };
 	});
-	return { contentItems, success: !result.is_error };
+	return { contentItems, success: !result.isError };
 }
 
 /** How Codex's tools see btw's: in btw's namespace, with the same schemas. */
@@ -507,20 +525,20 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 		const run = queue.then(async () => {
 			if (turn.signal.aborted) throw new Error('the turn was stopped');
 			await saveReply([call]);
-			let result: Anthropic.ToolResultBlockParam;
+			let result: ToolResultBlock;
 			try {
 				result = await turn.runTool(call);
 			} catch (err) {
 				const reason = err instanceof Error ? err.message : String(err);
 				result = {
 					type: 'tool_result',
-					tool_use_id: call.id,
+					callId: call.id,
 					content: `Not run: ${reason}`,
-					is_error: true
+					isError: true
 				};
 			}
 			turn.onResults([result]);
-			return toToolResponse(result);
+			return toToolResponse((await turn.resolve([result]))[0] as ToolResultBlock);
 		});
 		queue = run.catch(() => {});
 		return run;
@@ -582,7 +600,7 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 		threadId = thread.thread.id;
 		const started = await codex.request<{ turn: { id: string } }>('turn/start', {
 			threadId,
-			input: toCodexInput(turn.input),
+			input: toCodexInput(await turn.resolve(turn.input)),
 			effort: await effortFor(codex, turn.model, turn.effort),
 			summary: 'auto',
 			// No computer of Codex's own to work on: btw's tools are the model's only way to act.

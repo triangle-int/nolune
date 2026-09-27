@@ -10,9 +10,16 @@ import type {
 	SDKUserMessage
 } from '@anthropic-ai/claude-agent-sdk';
 import type { ZodType } from 'zod';
+import { toAnthropicBlocks } from './anthropic.ts';
 import { readConfig } from './config.ts';
-import { replyBlocks, toolCalls } from './content-blocks.ts';
 import type { Usage } from './conversations.ts';
+import {
+	fromAnthropic,
+	placeholder,
+	replyBlocks,
+	toolCalls,
+	type ToolResultBlock
+} from './format.ts';
 import type { Effort, ModelChoice, ToolCall } from './models.ts';
 import {
 	PlanError,
@@ -220,9 +227,9 @@ interface OpenReply {
 interface Answering {
 	calls: ToolCall[];
 	/** btw's own results: what it ran, and what it said about it. */
-	ours: Map<string, Anthropic.ToolResultBlockParam>;
+	ours: Map<string, ToolResultBlock>;
 	/** What Claude Code recorded for calls btw never got (invalid input, a stop). */
-	theirs: Map<string, Anthropic.ToolResultBlockParam>;
+	theirs: Map<string, ToolResultBlock>;
 	/** Calls whose command is running now. */
 	running: Set<string>;
 }
@@ -259,16 +266,16 @@ function textOf(content: unknown): string {
 }
 
 /** A command's result as an MCP tool result, which Claude Code turns back into the same blocks. */
-function toCallToolResult(result: Anthropic.ToolResultBlockParam) {
-	const blocks = typeof result.content === 'string' ? [result.content] : (result.content ?? []);
+function toCallToolResult(result: ToolResultBlock) {
+	const blocks = typeof result.content === 'string' ? [result.content] : result.content;
 	const content = blocks.map((b) => {
 		if (typeof b === 'string') return { type: 'text' as const, text: b };
-		if (b.type === 'image' && b.source.type === 'base64') {
-			return { type: 'image' as const, data: b.source.data, mimeType: b.source.media_type };
+		if (b.type === 'image' && b.source.type === 'inline') {
+			return { type: 'image' as const, data: b.source.data, mimeType: b.source.mime };
 		}
-		return { type: 'text' as const, text: b.type === 'text' ? b.text : `[${b.type}]` };
+		return { type: 'text' as const, text: b.type === 'text' ? b.text : `[${placeholder(b)}]` };
 	});
-	return { content, ...(result.is_error ? { isError: true } : {}) };
+	return { content, ...(result.isError ? { isError: true } : {}) };
 }
 
 /** An error Claude Code reported instead of a reply. */
@@ -345,9 +352,9 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 					a.ours.get(c.id) ??
 					a.theirs.get(c.id) ?? {
 						type: 'tool_result',
-						tool_use_id: c.id,
+						callId: c.id,
 						content: 'No result came back from this command. It may or may not have run.',
-						is_error: true
+						isError: true
 					}
 			)
 		);
@@ -415,7 +422,7 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 		try {
 			const result = await run;
 			a?.ours.set(id, result);
-			return result;
+			return (await turn.resolve([result]))[0] as ToolResultBlock;
 		} finally {
 			inFlight.delete(run);
 			a?.running.delete(id);
@@ -441,8 +448,9 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 
 	let q: Query;
 	try {
+		const input = toAnthropicBlocks(await turn.resolve(turn.input), 'claude-plan');
 		q = sdk.query({
-			prompt: oneMessage(turn.input),
+			prompt: oneMessage(input),
 			options: {
 				...baseOptions(turn.cwd),
 				...modelOptions(turn.model, turn.effort),
@@ -526,7 +534,8 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 				for (const block of content) {
 					if (block.type !== 'tool_result' || !answering) continue;
 					if (answering.calls.some((c) => c.id === block.tool_use_id)) {
-						answering.theirs.set(block.tool_use_id, block);
+						const result = fromAnthropic(block, null) as ToolResultBlock;
+						answering.theirs.set(block.tool_use_id, result);
 					}
 				}
 				settle();

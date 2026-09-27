@@ -1,4 +1,5 @@
 import type Anthropic from '@anthropic-ai/sdk';
+import type { Block, ToolResultBlock } from './format.ts';
 import type { Effort, ModelReply, StreamEvent, ToolCall } from './models.ts';
 
 /*
@@ -56,7 +57,9 @@ export interface PlanTurn {
 	system: string;
 	tools: Anthropic.Tool[];
 	/** What the model hasn't seen yet, sent as one message. */
-	input: Anthropic.ContentBlockParam[];
+	input: Block[];
+	/** Pictures and PDFs kept by reference, with their bytes: the agent gets them inline. */
+	resolve: (blocks: Block[]) => Promise<Block[]>;
 	signal: AbortSignal;
 	/** The agent took the input into this session: from here on it's there, even if the turn fails. */
 	onStarted: (sessionId: string) => void;
@@ -64,9 +67,9 @@ export interface PlanTurn {
 	/** A reply to save. Its commands wait until this resolves. */
 	onReply: (reply: ModelReply) => Promise<void>;
 	/** Runs a call of the reply that was saved last. */
-	runTool: (call: ToolCall) => Promise<Anthropic.ToolResultBlockParam>;
+	runTool: (call: ToolCall) => Promise<ToolResultBlock>;
 	/** Every call of the reply that was saved last has its result, in the reply's order. */
-	onResults: (results: Anthropic.ToolResultBlockParam[]) => void;
+	onResults: (results: ToolResultBlock[]) => void;
 }
 
 /**

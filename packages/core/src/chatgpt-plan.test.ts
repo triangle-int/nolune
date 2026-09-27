@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
 	chmodSync,
 	existsSync,
@@ -269,6 +270,12 @@ function planChat() {
 	return { user, profile, chat };
 }
 
+/** A picture kept in btw's media store, as a message refers to it. */
+function kept(data: Buffer, mime: string) {
+	const sha256 = createHash('sha256').update(data).digest('hex');
+	return { type: 'media', sha256, mime, bytes: data.length };
+}
+
 function rowsOf(conversationId: string) {
 	return committedRows(conversationId).map((row) => ({
 		kind: row.kind,
@@ -321,7 +328,7 @@ describe.skipIf(!codex)('chats on the ChatGPT plan', { timeout: 60_000 }, () => 
 			},
 			{
 				kind: 'tool_results',
-				content: [{ type: 'tool_result', tool_use_id: callId, content: 'a.txt\n[exit code 0]' }]
+				content: [{ type: 'tool_result', callId, content: 'a.txt\n[exit code 0]', isError: false }]
 			},
 			{
 				kind: 'assistant',
@@ -364,7 +371,7 @@ describe.skipIf(!codex)('chats on the ChatGPT plan', { timeout: 60_000 }, () => 
 			timeout: 20_000
 		});
 		const session = getConversation(chat.id)?.providerSession;
-		expect(session).toEqual({ id: expect.any(String), sentSeq: 1 });
+		expect(session).toEqual({ id: expect.any(String), sentSeq: 1, provider: 'chatgpt-plan' });
 		expect(session?.id).not.toBe(chat.id);
 		expect(existsSync(join(tmpdir(), 'not-btws-codex-home'))).toBe(false);
 	});
@@ -389,7 +396,11 @@ describe.skipIf(!codex)('chats on the ChatGPT plan', { timeout: 60_000 }, () => 
 			'Anna: Again'
 		]);
 		expect(texts(second, 'assistant')).toContain('Hi Anna.');
-		expect(getConversation(chat.id)?.providerSession).toEqual({ id: thread, sentSeq: 3 });
+		expect(getConversation(chat.id)?.providerSession).toEqual({
+			id: thread,
+			sentSeq: 3,
+			provider: 'chatgpt-plan'
+		});
 	});
 
 	it("asks for the nearest effort below the chat's that the model takes", async () => {
@@ -429,7 +440,7 @@ describe.skipIf(!codex)('chats on the ChatGPT plan', { timeout: 60_000 }, () => 
 			content: JSON.stringify([said('Rain at 4pm: take umbrellas.')])
 		});
 		const lost = crypto.randomUUID();
-		setProviderSession(chat.id, { id: lost, sentSeq: 2 });
+		setProviderSession(chat.id, { id: lost, sentSeq: 2, provider: 'chatgpt-plan' });
 		scripted([said('Back.')]);
 		const ended = loopEnd(chat.id);
 		insertQueued({
@@ -450,6 +461,33 @@ describe.skipIf(!codex)('chats on the ChatGPT plan', { timeout: 60_000 }, () => 
 		expect(asked).toBe('Anna: Hello?');
 		const session = getConversation(chat.id)?.providerSession;
 		expect(session?.id).not.toBe(lost);
+	});
+
+	it('starts a thread of its own when the chat comes from the Claude plan', async () => {
+		const { user, chat } = planChat();
+		appendRow({
+			conversationId: chat.id,
+			role: 'user',
+			kind: 'trigger',
+			senderName: 'Umbrellas',
+			text: 'Opened from a notification.',
+			content: JSON.stringify([{ type: 'text', text: '[Notification "Umbrellas"]' }])
+		});
+		// Claude Code's session, saved before sessions said whose they are.
+		setProviderSession(chat.id, { id: chat.id, sentSeq: 1 });
+		scripted([said('Hello from Codex.')]);
+		const logged = vi.spyOn(console, 'error');
+		const ended = loopEnd(chat.id);
+		insertQueued({ conversationId: chat.id, senderId: user.id, senderName: 'Anna', text: 'Hi' });
+		kick(chat.id);
+		await ended;
+
+		expect(getSnapshot(chat.id).error).toBeNull();
+		// Codex was never asked for Claude Code's session.
+		expect(logged).not.toHaveBeenCalledWith(expect.stringContaining('session missing'));
+		expect(texts(chatCalls()[0], 'user').at(-2)).toContain('[Notification "Umbrellas"]');
+		expect(getConversation(chat.id)?.providerSession).toMatchObject({ provider: 'chatgpt-plan' });
+		logged.mockRestore();
 	});
 
 	it('sends pictures inline and PDFs as their path, having no Files API', async () => {
@@ -513,7 +551,7 @@ describe.skipIf(!codex)('chats on the ChatGPT plan', { timeout: 60_000 }, () => 
 				content: [
 					{ type: 'text', text: 'Viewing dot.png\n[exit code 0]' },
 					{ type: 'text', text: expect.stringContaining('Image: ') },
-					{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: DOT } }
+					{ type: 'image', source: kept(Buffer.from(DOT, 'base64'), 'image/png') }
 				]
 			})
 		]);
@@ -542,7 +580,7 @@ describe.skipIf(!codex)('chats on the ChatGPT plan', { timeout: 60_000 }, () => 
 		const rows = rowsOf(chat.id).slice(1);
 		expect(rows.map((row) => row.kind)).toEqual(['assistant', 'tool_results']);
 		expect(rows[1].content).toEqual([
-			expect.objectContaining({ content: 'Stopped by Anna.', is_error: true })
+			expect.objectContaining({ content: 'Stopped by Anna.', isError: true })
 		]);
 		// The model wasn't asked to go on.
 		expect(chatCalls()).toHaveLength(1);

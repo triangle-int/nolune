@@ -215,7 +215,10 @@ export const conversation = sqliteTable(
 			.references(() => profile.id, { onDelete: 'cascade' }),
 		title: text('title').notNull().default(''),
 		presetId: text('preset_id').references(() => modelPreset.id, { onDelete: 'set null' }),
-		// Snapshot of the preset at creation: a conversation never changes model.
+		/**
+		 * Snapshot of the preset the conversation runs on, taken when it was created or last
+		 * switched to another model (setPreset), so later changes to the preset leave it alone.
+		 */
 		presetName: text('preset_name').notNull(),
 		provider: text('provider', {
 			enum: ['anthropic', 'openai', 'claude-plan', 'chatgpt-plan']
@@ -248,12 +251,18 @@ export const conversation = sqliteTable(
 		 */
 		tools: text('tools', { mode: 'json' }).$type<Anthropic.Tool[]>(),
 		/**
-		 * Chats on the Claude plan (claude-plan.ts): the Claude Code session that holds the model's
-		 * side of the chat, and the last row it has been sent. Null until its first turn starts.
+		 * Chats on a plan (plans.ts): the session of the plan's agent (Claude Code's, or Codex's
+		 * thread) that holds the model's side of the chat, and the last row it has been sent. Null
+		 * until its first turn starts.
 		 */
 		providerSession: text('provider_session', { mode: 'json' }).$type<{
 			id: string;
 			sentSeq: number;
+			/**
+			 * The plan whose agent has the session, since a chat can switch between them. Missing:
+			 * the Claude plan's, from before there was another.
+			 */
+			provider?: 'claude-plan' | 'chatgpt-plan';
 		}>(),
 		/** Prompt cache lifetime: an hour for chats people come back to, 5 minutes for subagents. */
 		cacheTtl: text('cache_ttl', { enum: ['5m', '1h'] })
@@ -304,10 +313,22 @@ export const message = sqliteTable(
 		 */
 		text: text('text'),
 		/**
-		 * Exact API content blocks as JSON: btw's own in Anthropic's format, replies as their
-		 * provider returned them (content-blocks.ts). Replayed byte-for-byte; never rewritten.
+		 * JSON. btw's own rows in btw's format (`format` 'btw'), replies exactly as their provider
+		 * returned them, and rows from before btw's format in Anthropic's (format.ts). Never
+		 * rewritten: what a model got before goes to it again byte for byte.
 		 */
 		content: text('content').notNull(),
+		/** 'btw': `content` is in btw's own format. Null: a reply as it came, or a row from before. */
+		format: text('format', { enum: ['btw'] }),
+		/**
+		 * The provider `content` was made for: the one whose model wrote a reply, or whose Files API a
+		 * message's or command result's pictures and PDFs went to. A conversation can switch models,
+		 * so another provider's encoder leaves out what it can't take (format.ts). Rows that are only
+		 * text, which every provider reads the same, may have none.
+		 */
+		provider: text('provider', { enum: ['anthropic', 'openai', 'claude-plan', 'chatgpt-plan'] }),
+		/** Replies: the model that wrote it. */
+		model: text('model'),
 		stopReason: text('stop_reason'),
 		usage: text('usage'),
 		/**
