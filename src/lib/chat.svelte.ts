@@ -54,6 +54,10 @@ export class ChatState {
 				this.queued = event.queued;
 				break;
 			case 'message':
+				if (event.replacesLive) {
+					this.live = [];
+					this.toolOutput = null;
+				}
 				if (!this.messages.some((m) => m.id === event.message.id))
 					this.messages.push(event.message);
 				break;

@@ -230,16 +230,21 @@
 
 	/**
 	 * Keeps the view pinned to the newest content while the reader is at the bottom, whenever
-	 * anything changes size: new messages and streamed text, but also pictures that finish loading.
-	 * Starting to scroll up (wheel, trackpad or finger) lets go right away, before the view has
-	 * moved far.
+	 * anything changes size: new messages and streamed text, but also pictures that finish loading
+	 * and the composer growing. Starting to scroll up (wheel, trackpad or finger) lets go right away,
+	 * before the view has moved far.
 	 */
 	function autoscroll(node: HTMLElement) {
 		const observer = new ResizeObserver(() => {
 			if (stickToBottom) node.scrollTop = node.scrollHeight;
+			// Content that got shorter pulled the view up with it. Its scroll event only comes a
+			// frame later, maybe after the content grew back, and must not read as the reader
+			// scrolling up.
+			lastScrollTop = node.scrollTop;
 		});
 		observer.observe(node);
-		for (const child of node.children) observer.observe(child);
+		// The border box, so the padding the composer sets counts too.
+		for (const child of node.children) observer.observe(child, { box: 'border-box' });
 
 		const release = () => {
 			if (node.scrollTop > 0) stickToBottom = false;
@@ -279,7 +284,9 @@
 		lastScrollTop = top;
 	}
 
+	/** Follows the newest content from now on, even what arrives while the view is on its way. */
 	function scrollToBottom() {
+		stickToBottom = true;
 		scroller?.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
 	}
 

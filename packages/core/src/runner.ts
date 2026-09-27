@@ -64,7 +64,8 @@ export interface LiveBlock {
 export type LiveEvent =
 	| { type: 'status'; running: boolean; error: string | null }
 	| { type: 'queued'; queued: DisplayMessage[] }
-	| { type: 'message'; message: DisplayMessage }
+	/** `replacesLive`: the live reply, now saved, which takes the live blocks' place. */
+	| { type: 'message'; message: DisplayMessage; replacesLive?: true }
 	| { type: 'live_block'; index: number; block: LiveBlock }
 	| { type: 'live_delta'; index: number; text: string }
 	| { type: 'live_clear' }
@@ -630,7 +631,6 @@ async function loop(conversationId: string): Promise<void> {
 			const media: PreparedMedia[] = slug
 				? await copyReplyMedia(texts, profileDir(slug), abort.signal, () => foundText(rows))
 				: [];
-			clearLive(conversationId);
 
 			const usage = summarizeUsage(reply.usage);
 			console.log(
@@ -645,9 +645,15 @@ async function loop(conversationId: string): Promise<void> {
 				usage,
 				media
 			});
+			// The saved reply takes the live one's place in a single event. As a clear and then the
+			// message, the chat could draw in between without the reply, and a reader following it
+			// at the bottom was left at its start.
+			st.live = [];
+			st.toolOutput = null;
 			emit(conversationId, {
 				type: 'message',
-				message: toDisplay(assistantRow, media.length ? listMedia(assistantRow.id) : [])
+				message: toDisplay(assistantRow, media.length ? listMedia(assistantRow.id) : []),
+				replacesLive: true
 			});
 			touchConversation(conversationId);
 
