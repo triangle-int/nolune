@@ -10,7 +10,13 @@ import {
 } from './codex-app-server.ts';
 import { readConfig } from './config.ts';
 import type { Usage } from './conversations.ts';
-import { EFFORTS, type Effort, type ModelReply, type ToolCall } from './models.ts';
+import {
+	EFFORTS,
+	type Effort,
+	type ModelChoice,
+	type ModelReply,
+	type ToolCall
+} from './models.ts';
 import { packageRoot, paths } from './paths.ts';
 import {
 	PlanError,
@@ -686,6 +692,7 @@ export async function quickReply(opts: {
 export interface ChatGptModel {
 	id: string;
 	name: string;
+	description: string | null;
 	/** Hidden models work but aren't offered in Codex's own model picker. */
 	listed: boolean;
 	isDefault: boolean;
@@ -693,7 +700,7 @@ export interface ChatGptModel {
 	efforts: string[];
 }
 
-async function listModels(codex: AppServer): Promise<ChatGptModel[]> {
+async function readModels(codex: AppServer): Promise<ChatGptModel[]> {
 	const models: ChatGptModel[] = [];
 	let cursor: string | null = null;
 	do {
@@ -704,6 +711,7 @@ async function listModels(codex: AppServer): Promise<ChatGptModel[]> {
 			models.push({
 				id: m.id,
 				name: typeof m.displayName === 'string' && m.displayName ? m.displayName : m.id,
+				description: typeof m.description === 'string' && m.description ? m.description : null,
 				listed: !m.hidden,
 				isDefault: !!m.isDefault,
 				efforts: Array.isArray(m.supportedReasoningEfforts)
@@ -725,7 +733,7 @@ async function listModels(codex: AppServer): Promise<ChatGptModel[]> {
 async function effortFor(codex: AppServer, model: string, effort: Effort): Promise<string> {
 	let efforts: string[] = [];
 	try {
-		efforts = (await listModels(codex)).find((m) => m.id === model)?.efforts ?? [];
+		efforts = (await readModels(codex)).find((m) => m.id === model)?.efforts ?? [];
 	} catch {
 		// Codex checks the model itself when the turn starts.
 	}
@@ -736,9 +744,16 @@ async function effortFor(codex: AppServer, model: string, effort: Effort): Promi
 
 /** The models Codex offers on the plan. */
 export function listChatGptModels(): Promise<ChatGptModel[]> {
-	return withCodex(listModels).catch((err: unknown) => {
+	return withCodex(readModels).catch((err: unknown) => {
 		throw startError(err);
 	});
+}
+
+/** The models Codex's own picker offers, in its order, for the admin page's. */
+export async function listModels(): Promise<ModelChoice[]> {
+	return (await listChatGptModels()).flatMap((m) =>
+		m.listed ? [{ id: m.id, name: m.name, description: m.description, contextWindow: null }] : []
+	);
 }
 
 /**
@@ -749,7 +764,7 @@ export async function fetchContextWindow(model: string): Promise<null> {
 	await withCodex(async (codex) => {
 		const problem = accountProblem(await readAccount(codex));
 		if (problem) throw new PlanError(problem);
-		const models = await listModels(codex);
+		const models = await readModels(codex);
 		if (models.some((m) => m.id === model)) return;
 		const offered = models.filter((m) => m.listed).map((m) => m.id);
 		throw new PlanError(

@@ -139,8 +139,11 @@ export {
 	EFFORTS,
 	PROVIDERS,
 	PROVIDER_LABELS,
+	describeApiError,
 	isProvider,
+	listModels,
 	type Effort,
+	type ModelChoice,
 	type Provider
 } from './models.ts';
 export {

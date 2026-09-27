@@ -202,8 +202,9 @@ two agents speak differently (below); what they share is in `plans.ts` and the r
 - **No Files API.** Pictures go inline for both, within the conversation's 20 MB. PDFs go inline
   on the Claude plan and as their path on the ChatGPT plan, since Codex takes text and pictures
   only.
-- **What's different.** The context window isn't known before a call, so the context meter shows
-  "?" (and PDFs get 25% of 200k tokens) unless the preset sets one. Titles are asked for through
+- **What's different.** The context window isn't known before a call, except for Claude Code's
+  1M-context models, whose ids say so (`claude-opus-5-5[1m]`), so the context meter shows "?"
+  (and PDFs get 25% of 200k tokens) unless the preset sets one. Titles are asked for through
   the agent too, as one exchange without a session. Plan limits assume one person's ordinary use,
   so the help, the page and the docs suggest keeping busy automations and subagents on an API key
   preset.
@@ -919,9 +920,21 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   what to do next): the Claude plan's row shows where Claude Code is and checks its sign-in; the
   ChatGPT plan's shows where Codex is and who it's signed in as, signs it in with ChatGPT,
   showing the link and the one-time code, updates by itself once the code is entered, and then
-  offers Sign in again and Sign out. Without the agent, a row shows how to install it. The preset form picks the
-  provider (Anthropic, OpenAI, Claude plan or ChatGPT plan), and the provider checks the model id
-  before the preset is saved.
+  offers Sign in again and Sign out. Without the agent, a row shows how to install it. Under the
+  presets, **Add a model** opens the form (open from the start while there are
+  none), in the order the choices are made: the provider, saying which key or plan it runs on;
+  the model, picked from the provider's list or typed (any id works, a dated snapshot say); an
+  optional name, whose placeholder is the default it gets; and the context window, folded away
+  under what it will be ("Auto · 1M"). The list comes from `/api/models` when the form needs it:
+  Anthropic's models API, with names and windows; OpenAI's, only GPT-5.6 and newer (its
+  current generations in September 2026; older ones can still be typed), without audio,
+  realtime, pictures or search, nor dated snapshots of models also listed without a date, the
+  newest first, with the flagships' known window; Claude Code's own list for the Claude
+  plan, by full id (`claude-opus-5-5`, not `opus`, which would move a chat to a newer model when
+  Claude Code updates); and what Codex's own picker offers for the ChatGPT plan. It's asked for
+  again when the provider's key changes. The context window
+  is a row of chips: Auto (what the provider reports, if anything), 128K, 200K, 1M, or Custom,
+  typed as `272k`, `1.5m` or `272000`. The provider checks the model id before the preset is saved.
 
 ## Assistant avatars
 
@@ -942,7 +955,10 @@ on a colored circle.
   so profiles differ without anyone choosing. The migration that added `profile.avatar` gave
   existing profiles theirs the same way, in SQL. Any member changes it on People & profile, or with
   `btw profile avatar <name>`, which the agent runs when asked ("switch to the comet"; the
-  `btw-agent` skill explains it).
+  `btw-agent` skill explains it). The picker there (`AvatarPicker.svelte`) is laid out like a
+  character select: the pick up close on a starry stage lit in its color, which pops in with a
+  squash when it changes, next to the roster, whose tiles take their avatar's color and show its
+  working motion on hover.
 - **Tint.** A profile's pages take on its avatar's hue: `src/lib/tint.ts` gives the page, sidebar,
   bubbles, hover and (in dark) card, menu and composer greys a little OKLCH chroma in the avatar
   color's hue, at each grey's own luminance, so text and avatars keep their contrast. The root

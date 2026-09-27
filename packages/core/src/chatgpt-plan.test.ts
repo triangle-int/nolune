@@ -33,6 +33,7 @@ import {
 	setProviderSession
 } from './conversations.ts';
 import { viewImage } from './images.ts';
+import { listModels } from './models.ts';
 import { paths } from './paths.ts';
 import { addPreset } from './presets.ts';
 import { runCommand } from './run-command.ts';
@@ -732,6 +733,10 @@ describe('signing in with ChatGPT through Codex', { timeout: 20_000 }, () => {
 			'Codex has no model "gpt-7" on the ChatGPT plan. It has gpt-6-astra.'
 		);
 		expect((await chatGptPlanStatus()).signedIn).toBe('signed in to ChatGPT Business');
+		// The admin page's picker offers what Codex's own does.
+		expect(await listModels('chatgpt-plan')).toEqual([
+			{ id: 'gpt-6-astra', name: 'GPT-6 Astra', description: null, contextWindow: null }
+		]);
 	});
 });
 

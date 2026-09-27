@@ -9,22 +9,13 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import * as ToggleGroup from '$lib/components/ui/toggle-group';
 	import TopBar from '$lib/components/TopBar.svelte';
+	import AddModelForm from '$lib/components/admin/AddModelForm.svelte';
 	import CopyButton from '$lib/components/chat/CopyButton.svelte';
 	import { formatTokens } from '$lib/format';
 	import { cn } from '$lib/utils';
 
 	let { data, form } = $props();
-	let adding = $state(false);
-	/** Whose model the new preset runs. */
-	let provider = $state('anthropic');
-	const EXAMPLE_MODELS: Record<string, string> = {
-		anthropic: 'claude-opus-5-5',
-		openai: 'gpt-6-astra',
-		'claude-plan': 'claude-opus-5-5',
-		'chatgpt-plan': 'gpt-6-astra'
-	};
 	/** Whether the Claude Code sign-in is being checked. */
 	let checkingPlan = $state(false);
 
@@ -478,71 +469,14 @@
 					{/each}
 				</ul>
 
-				<form
-					method="POST"
-					action="?/add"
-					class="space-y-3"
-					use:enhance={() => {
-						adding = true;
-						return async ({ update }) => {
-							await update();
-							adding = false;
-						};
-					}}
-				>
-					<div class="flex flex-wrap items-center justify-between gap-3">
-						<h2 class="font-medium">Add a preset</h2>
-						<ToggleGroup.Root
-							type="single"
-							variant="outline"
-							size="sm"
-							value={provider}
-							onValueChange={(value) => value && (provider = value)}
-							aria-label="Provider"
-						>
-							{#each data.providers as p (p.id)}
-								<ToggleGroup.Item value={p.id}>{p.label}</ToggleGroup.Item>
-							{/each}
-						</ToggleGroup.Root>
-					</div>
-					<input type="hidden" name="provider" value={provider} />
-					<Input
-						name="model"
-						required
-						placeholder="Model id, e.g. {EXAMPLE_MODELS[provider] ?? ''}"
-						aria-label="Model id"
-						class="h-10 rounded-full px-4"
-					/>
-					<div class="flex flex-col gap-3 sm:flex-row">
-						<Input
-							name="name"
-							placeholder="Name (default: model + provider)"
-							aria-label="Name"
-							class="h-10 flex-1 rounded-full px-4"
-						/>
-						<Input
-							name="contextWindow"
-							type="number"
-							min="1"
-							placeholder={provider === 'openai'
-								? 'Context window (flagships: known)'
-								: provider === 'claude-plan' || provider === 'chatgpt-plan'
-									? 'Context window (not reported)'
-									: 'Context window (optional)'}
-							aria-label="Context window"
-							class="h-10 rounded-full px-4 sm:w-60"
-						/>
-					</div>
-					<Button type="submit" disabled={adding} class="h-10 px-5">
-						{adding
-							? provider === 'claude-plan'
-								? 'Checking Claude Code…'
-								: provider === 'chatgpt-plan'
-									? 'Checking Codex…'
-									: 'Checking the model…'
-							: 'Add'}
-					</Button>
-				</form>
+				<AddModelForm
+					providers={data.providers}
+					keys={data.keys}
+					claudeInstalled={data.claude.installed}
+					codexInstalled={data.chatgpt.installed}
+					problem={form?.addError}
+					startOpen={data.presets.length === 0}
+				/>
 			</section>
 		</div>
 	</main>
