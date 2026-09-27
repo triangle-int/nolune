@@ -47,7 +47,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
     memories/<topic>.md       long-term memory: one note per topic
     memories/core.md          the pinned note, copied into every new chat's prompt
     memories/.facts.json      when each fact in memory was first seen
-    memories/.suggestions.json  the new-chat page's chips, and the memory they were made from
+    memories/.suggestions.json  each member's new-chat chips, and the memory they were made from
     skills/<name>/SKILL.md
     attachments/              files people attached to messages
     image-templates/<id>/     this profile's own templates
@@ -792,16 +792,21 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   at the default preset, reasoning at the level last used on this device. In an existing chat only
   reasoning can change. The folder chip next to it starts the chat in a folder.
 - **Suggestions** under the new-chat composer (`packages/core/src/suggestions.ts`) come from the
-  profile's memory. Until it has any, they are four general ones (a reminder, a weather check,
-  finding a file, free disk space). After that, the default preset is asked, with `quickReply`, for
-  four things this family might ask btw, each built on something in the notes and in their
-  language: a label, a Lucide icon and the text the chip puts in the box. It gets today's date and
-  the notes, the core note first and then the most recently changed, up to 12,000 characters. They
-  are saved in `memories/.suggestions.json` with a hash of the notes, so the page only asks again
-  when memory changed or they are a week old. The page renders the saved ones (or the general
-  ones) at once and, when they are stale, fetches `/api/p/<slug>/suggestions`, which waits for the
-  model, then swaps them in. One call per profile runs at a time; a failed one keeps the old chips
-  and isn't retried for the same memory for 15 minutes.
+  profile's memory, and each member gets their own. Until it has any, they are four general ones
+  (a reminder, a weather check, finding a file, free disk space). After that, the default preset is
+  asked, with `quickReply`, for four things the person looking at the page might ask btw, each built
+  on something in the notes, preferably about them or what they take part in, written as they
+  would write it and in the notes' language: a label, a Lucide icon and the text the chip puts in
+  the box. It gets today's date, the person's name and the notes, the core note first and then the
+  most recently changed, up to 12,000 characters. Each member's are saved in
+  `memories/.suggestions.json` under their user id, with a hash of the notes and their name, so
+  the page only asks again when memory changed, they were renamed, or theirs are a week old; that
+  is one call per member who opens the page, not one per profile. Someone's that weren't made again
+  in 90 days are dropped, most likely a member who left. The page renders the saved ones (or the
+  general ones) at once and, when they are stale, fetches `/api/p/<slug>/suggestions`, which waits
+  for the model, then swaps them in. One call per member runs at a time; a failed one keeps the old
+  chips and isn't retried for the same memory for 15 minutes. Anything in memory can show up in
+  anyone's chips, which is no more than the Memory page already shows every member.
 - **The sidebar** lists folders above the chats. A folder's chats show under it when its page or
   one of its chats is open, or when its icon (a chevron on hover) is clicked; chats in folders are
   not in the Chats list. A chat btw is working in shimmers like the "Thinking" label, for everyone
