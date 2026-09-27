@@ -2,7 +2,6 @@
 	import { enhance } from '$app/forms';
 	import { invalidate } from '$app/navigation';
 	import BoxIcon from '@lucide/svelte/icons/box';
-	import CircleUserRoundIcon from '@lucide/svelte/icons/circle-user-round';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import TerminalIcon from '@lucide/svelte/icons/terminal';
 	import StarIcon from '@lucide/svelte/icons/star';
@@ -39,6 +38,8 @@
 	let signingIn = $state(false);
 	let signingOut = $state(false);
 	const chatgpt = $derived(data.chatgpt);
+	/** Who Codex is signed in as; null while a sign-in waits for its code, or when it isn't. */
+	const chatgptSignedIn = $derived(chatgpt.status?.signedIn ?? null);
 	/** What the last plan action said, for the row of the plan it was about. */
 	const claudeResult = $derived(form?.plan === 'claude-plan' ? form : null);
 	const chatgptResult = $derived(form?.plan === 'chatgpt-plan' ? form : null);
@@ -54,6 +55,11 @@
 	/** "signed in as …" at the start of a line. */
 	function sentence(text: string): string {
 		return `${text[0].toUpperCase()}${text.slice(1)}`;
+	}
+
+	/** A problem's first sentence: the rest says how to sign in, which the buttons do here. */
+	function firstSentence(text: string): string {
+		return text.split('. ')[0].replace(/\.?$/, '.');
 	}
 
 	function sourceText(key: KeyStatus): string {
@@ -285,68 +291,80 @@
 							<span
 								class={cn(
 									'flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted max-sm:self-start',
-									chatgpt.signedIn ? 'text-foreground' : 'text-muted-foreground'
+									chatgptSignedIn ? 'text-foreground' : 'text-muted-foreground'
 								)}
 							>
-								<CircleUserRoundIcon class="size-4" />
+								<TerminalIcon class="size-4" />
 							</span>
 							<div class="min-w-0 flex-1">
 								<div class="font-medium">ChatGPT plan</div>
 								<div class="text-muted-foreground">
-									Plus, Pro or Business, through Codex's backend, the way OpenAI's Codex does. btw
-									keeps the sign-in.
+									Plus, Pro or Business, through OpenAI's Codex on this computer. btw runs it and
+									never sees its sign-in.
 								</div>
-								{#if chatgpt.signedIn}
-									<div class="break-words text-muted-foreground">{sentence(chatgpt.signedIn)}</div>
-								{:else}
-									<div class="text-warning">Not signed in</div>
-								{/if}
-							</div>
-							<div class="flex gap-1 max-sm:basis-full max-sm:pl-9">
-								{#if chatgpt.pending}
-									<form method="POST" action="?/chatgptCancel" use:enhance>
-										<Button type="submit" variant="ghost" size="sm" class="text-muted-foreground">
-											Cancel
-										</Button>
-									</form>
-								{:else}
-									<form
-										method="POST"
-										action="?/chatgptSignIn"
-										use:enhance={() => {
-											signingIn = true;
-											return async ({ update }) => {
-												await update();
-												signingIn = false;
-											};
-										}}
-									>
-										<Button
-											type="submit"
-											variant={chatgpt.signedIn ? 'ghost' : 'default'}
-											size="sm"
-											disabled={signingIn}
-											class={cn(chatgpt.signedIn && 'text-muted-foreground')}
-										>
-											{signingIn
-												? 'Asking ChatGPT…'
-												: chatgpt.signedIn
-													? 'Sign in again'
-													: 'Sign in with ChatGPT'}
-										</Button>
-									</form>
-									{#if chatgpt.signedIn}
-										<Button
-											variant="ghost"
-											size="sm"
-											class="text-muted-foreground"
-											onclick={() => (signingOut = true)}
-										>
-											Sign out
-										</Button>
+								{#if chatgpt.installed}
+									<div class="truncate font-mono text-muted-foreground">{chatgpt.path}</div>
+									{#if chatgptSignedIn}
+										<div class="break-words text-muted-foreground">{sentence(chatgptSignedIn)}</div>
+									{:else if chatgpt.status?.problem}
+										<div class="text-warning">{firstSentence(chatgpt.status.problem)}</div>
 									{/if}
+								{:else if chatgpt.path}
+									<div class="text-warning">
+										Not at <span class="font-mono">{chatgpt.path}</span>, where
+										<code>btw config set codex-path</code> says it is.
+									</div>
+								{:else}
+									<div class="text-warning">Codex isn't installed on this computer.</div>
 								{/if}
 							</div>
+							{#if chatgpt.installed}
+								<div class="flex gap-1 max-sm:basis-full max-sm:pl-9">
+									{#if chatgpt.pending}
+										<form method="POST" action="?/chatgptCancel" use:enhance>
+											<Button type="submit" variant="ghost" size="sm" class="text-muted-foreground">
+												Cancel
+											</Button>
+										</form>
+									{:else}
+										<form
+											method="POST"
+											action="?/chatgptSignIn"
+											use:enhance={() => {
+												signingIn = true;
+												return async ({ update }) => {
+													await update();
+													signingIn = false;
+												};
+											}}
+										>
+											<Button
+												type="submit"
+												variant={chatgptSignedIn ? 'ghost' : 'default'}
+												size="sm"
+												disabled={signingIn}
+												class={cn(chatgptSignedIn && 'text-muted-foreground')}
+											>
+												{signingIn
+													? 'Asking ChatGPT…'
+													: chatgptSignedIn
+														? 'Sign in again'
+														: 'Sign in with ChatGPT'}
+											</Button>
+										</form>
+										{#if chatgptSignedIn}
+											<Button
+												variant="ghost"
+												size="sm"
+												class="text-muted-foreground"
+												onclick={() => (signingOut = true)}
+											>
+												Sign out
+											</Button>
+										{/if}
+									{/if}
+								</div>
+							{/if}
 						</div>
 
 						{#if chatgpt.pending}
@@ -380,6 +398,20 @@
 							<p class="text-muted-foreground sm:pl-12" role="status">
 								{chatgptResult.planMessage}
 							</p>
+						{:else if !chatgpt.installed}
+							<div class="space-y-2 text-muted-foreground sm:pl-12">
+								<p>
+									In a terminal on this computer, run <code>btw chatgpt-plan setup</code>: it
+									installs Codex with npm, asking first, and signs it in with ChatGPT. Or install it
+									yourself, then sign in here:
+								</p>
+								<div class="flex items-center gap-1 rounded-xl bg-muted py-1 pr-1 pl-3">
+									<code class="min-w-0 flex-1 truncate font-mono text-foreground"
+										>{chatgpt.installCommand}</code
+									>
+									<CopyButton text={chatgpt.installCommand} label="Copy the command" />
+								</div>
+							</div>
 						{/if}
 					</li>
 				</ul>
@@ -494,7 +526,7 @@
 							min="1"
 							placeholder={provider === 'openai'
 								? 'Context window (flagships: known)'
-								: provider === 'claude-plan'
+								: provider === 'claude-plan' || provider === 'chatgpt-plan'
 									? 'Context window (not reported)'
 									: 'Context window (optional)'}
 							aria-label="Context window"
@@ -505,7 +537,9 @@
 						{adding
 							? provider === 'claude-plan'
 								? 'Checking Claude Code…'
-								: 'Checking the model…'
+								: provider === 'chatgpt-plan'
+									? 'Checking Codex…'
+									: 'Checking the model…'
 							: 'Add'}
 					</Button>
 				</form>

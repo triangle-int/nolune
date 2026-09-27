@@ -140,7 +140,6 @@ export {
 	PROVIDERS,
 	PROVIDER_LABELS,
 	isProvider,
-	runsOnClaudeCode,
 	type Effort,
 	type Provider
 } from './models.ts';
@@ -164,14 +163,20 @@ export {
 } from './claude-plan.ts';
 export {
 	CHATGPT_SIGN_IN_HELP,
+	CODEX_INSTALL_COMMAND,
 	cancelChatGptSignIn,
 	chatGptPlanStatus,
+	chatGptSignInState,
+	checkChatGptPlan,
+	codexExecutable,
+	findCodex,
+	listChatGptModels,
 	signOutChatGpt,
 	startChatGptSignIn,
-	type ChatGptSignIn,
-	type ChatGptPlanStatus
-} from './chatgpt-sign-in.ts';
-export { listChatGptModels, type ChatGptModel } from './chatgpt-plan.ts';
+	type ChatGptModel,
+	type ChatGptPlanStatus,
+	type ChatGptSignIn
+} from './chatgpt-plan.ts';
 export {
 	createSkill,
 	isValidSkillName,

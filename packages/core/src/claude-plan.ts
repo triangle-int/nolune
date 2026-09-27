@@ -13,8 +13,15 @@ import type { ZodType } from 'zod';
 import { readConfig } from './config.ts';
 import { replyBlocks, toolCalls } from './content-blocks.ts';
 import type { Usage } from './conversations.ts';
-import type { Effort, ModelReply, StreamEvent, ToolCall } from './models.ts';
-import { PlanError, describePlanAccount, type PlanStatus } from './plans.ts';
+import type { Effort, ToolCall } from './models.ts';
+import {
+	PlanError,
+	PlanStopped,
+	describePlanAccount,
+	type PlanStatus,
+	type PlanTurn,
+	type SessionProblem
+} from './plans.ts';
 
 /*
  * Chats on the Claude plan: the Pro or Max subscription someone signed in to Claude Code with on
@@ -51,16 +58,6 @@ const TOOL_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 /** After Stop, how long Claude Code gets to end the turn before its process is closed. */
 const INTERRUPT_GRACE_MS = 5000;
 const STATUS_TIMEOUT_MS = 30_000;
-
-class PlanAbortError extends Error {
-	constructor() {
-		super('Stopped');
-	}
-}
-
-export function isPlanAbortError(err: unknown): boolean {
-	return err instanceof PlanAbortError;
-}
 
 const HOW_TO_SIGN_IN =
 	'Run `claude` in a terminal on the computer btw runs on and sign in with your Claude account (/login), or run `btw claude-plan setup` there.';
@@ -190,30 +187,6 @@ function turnError(text: string, kind: string | null): PlanError {
 
 // --- a chat's turn ---
 
-export interface PlanTurn {
-	/** The chat's Claude Code session, and whether it exists yet (else it's created with this id). */
-	sessionId: string;
-	resume: boolean;
-	/** Claude Code's working folder: the profile's. */
-	cwd: string;
-	model: string;
-	effort: Effort;
-	system: string;
-	tools: Anthropic.Tool[];
-	/** What the model hasn't seen yet, sent as one message. */
-	input: Anthropic.ContentBlockParam[];
-	signal: AbortSignal;
-	/** Claude Code took the input: from here on it's in the session, even if the turn fails. */
-	onStarted: () => void;
-	onEvent: (event: StreamEvent) => void;
-	/** A model call ended: its reply, to save. Its commands wait until this resolves. */
-	onReply: (reply: ModelReply) => Promise<void>;
-	/** Runs a call of the reply that was saved last. */
-	runTool: (call: ToolCall) => Promise<Anthropic.ToolResultBlockParam>;
-	/** Every call of the reply that was saved last has its result, in the reply's order. */
-	onResults: (results: Anthropic.ToolResultBlockParam[]) => void;
-}
-
 interface Deferred {
 	promise: Promise<void>;
 	resolve: () => void;
@@ -336,11 +309,11 @@ async function* oneMessage(content: Anthropic.ContentBlockParam[]): AsyncIterabl
  * One turn of a chat: Claude Code answers the new input, running commands through `runTool`,
  * until the model ends its turn. Each model call's reply is saved (`onReply`) before its commands
  * run, and their results (`onResults`) once they have all ended, the order btw's own loop keeps.
- * Throws a PlanError when the turn fails and a PlanAbortError when it was stopped.
+ * Throws a PlanError when the turn fails and a PlanStopped when it was stopped.
  */
 export async function runTurn(turn: PlanTurn): Promise<void> {
 	const { sdk, z } = await load();
-	if (turn.signal.aborted) throw new PlanAbortError();
+	if (turn.signal.aborted) throw new PlanStopped();
 
 	let open: OpenReply | null = null;
 	let answering: Answering | null = null;
@@ -498,7 +471,7 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 	const onMessage = async (message: SDKMessage) => {
 		switch (message.type) {
 			case 'system':
-				if (message.subtype === 'init') turn.onStarted();
+				if (message.subtype === 'init') turn.onStarted(turn.sessionId);
 				return;
 			case 'stream_event': {
 				if (message.parent_tool_use_id) return;
@@ -585,7 +558,7 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 		settle(true);
 	}
 
-	if (turn.signal.aborted) throw new PlanAbortError();
+	if (turn.signal.aborted) throw new PlanStopped();
 	if (failure) throw turnError(failure.text, failure.kind);
 	if (thrown) throw startError(thrown);
 }
@@ -595,7 +568,7 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
  * no longer has it, say its files were deleted) or `taken` (it exists, though btw never saw it
  * start). Null for any other failure.
  */
-export function sessionProblem(err: unknown): 'missing' | 'taken' | null {
+export function sessionProblem(err: unknown): SessionProblem | null {
 	if (!(err instanceof PlanError)) return null;
 	if (/no conversation found with session id/i.test(err.message)) return 'missing';
 	if (/session id .* is already in use/i.test(err.message)) return 'taken';
@@ -656,10 +629,6 @@ export async function quickReply(opts: {
 }
 
 export interface ClaudePlanStatus extends PlanStatus {
-	/** The Claude Code btw runs, if it found one (or was told where it is). */
-	path: string | null;
-	/** Whether that Claude Code is there. */
-	installed: boolean;
 	/** Who Claude Code is signed in as, as it says; null when it couldn't be asked. */
 	account: AccountInfo | null;
 }

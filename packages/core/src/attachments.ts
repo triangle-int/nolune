@@ -355,7 +355,7 @@ async function pdfBlock(
 	used: ImageUse
 ): Promise<{ block: Anthropic.DocumentBlockParam; tokens: number } | { problem: string }> {
 	if (!hasFileStore(conv.provider)) {
-		// ChatGPT's Codex backend isn't known to take PDFs (Codex never sends one).
+		// Codex takes text and pictures only.
 		if (conv.provider === 'chatgpt-plan') {
 			return { problem: "models on the ChatGPT plan don't take PDFs" };
 		}

@@ -1,6 +1,7 @@
 import { error, fail } from '@sveltejs/kit';
 import {
 	CLAUDE_INSTALL_COMMAND,
+	CODEX_INSTALL_COMMAND,
 	ApiKeyError,
 	PlanError,
 	PROVIDERS,
@@ -11,8 +12,10 @@ import {
 	checkApiKey,
 	claudePlanStatus,
 	chatGptPlanStatus,
+	chatGptSignInState,
 	effectiveContextWindow,
 	findClaudeCode,
+	findCodex,
 	getDefaultPreset,
 	isApiKeyProvider,
 	listPresets,
@@ -29,19 +32,27 @@ import {
 import { requireAdmin } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
 
-export const load: PageServerLoad = ({ locals, depends }) => {
+export const load: PageServerLoad = async ({ locals, depends }) => {
 	requireAdmin(locals);
 	// The page asks again while a ChatGPT sign-in waits for its code.
 	depends('btw:chatgpt-plan');
 	const defaultId = getDefaultPreset()?.id;
+	const codex = findCodex();
+	const signIn = chatGptSignInState();
 	return {
 		// Where each key comes from and its last four characters; never the keys themselves.
 		keys: apiKeyStatuses(),
 		providers: PROVIDERS.map((id) => ({ id, label: PROVIDER_LABELS[id] })),
 		// Where Claude Code is; whether it's signed in takes starting it, so that's a button.
 		claude: { ...findClaudeCode(), installCommand: CLAUDE_INSTALL_COMMAND },
-		// Who btw is signed in to ChatGPT as, and a sign-in's code; never the tokens.
-		chatgpt: chatGptPlanStatus(),
+		// Where Codex is, who it's signed in as (asking takes starting it, which waits while a
+		// sign-in's code does), and a sign-in's code. Never the sign-in: Codex keeps it.
+		chatgpt: {
+			...codex,
+			...signIn,
+			installCommand: CODEX_INSTALL_COMMAND,
+			status: codex.installed && !signIn.pending ? await chatGptPlanStatus() : null
+		},
 		presets: listPresets().map((p) => ({
 			id: p.id,
 			name: p.name,
@@ -111,7 +122,12 @@ export const actions: Actions = {
 	},
 	chatgptSignOut: async ({ locals }) => {
 		requireAdmin(locals);
-		await signOutChatGpt();
+		try {
+			await signOutChatGpt();
+		} catch (err) {
+			if (!(err instanceof PlanError)) throw err;
+			return fail(400, { plan: 'chatgpt-plan' as const, planError: err.message });
+		}
 		return { plan: 'chatgpt-plan' as const, planMessage: 'Signed out.' };
 	},
 	add: async ({ locals, request }) => {

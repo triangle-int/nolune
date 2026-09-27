@@ -15,7 +15,8 @@ Needs macOS (Linux works without the background service), Node 22.18+ and an
 [OpenAI API key](https://platform.openai.com/api-keys) (chats run on Claude or on OpenAI's GPT
 models; you can have both), a Claude Pro or Max plan signed in to
 [Claude Code](https://claude.com/claude-code) on the same computer, or a ChatGPT Plus, Pro or
-Business plan (see below).
+Business plan signed in to OpenAI's [Codex](https://developers.openai.com/codex/cli) there (see
+below).
 
 ```sh
 npm install -g btw-agent
@@ -38,19 +39,24 @@ keys). `btw <plan> status` says who the plan is signed in as. Plan limits assume
 ordinary use: keep busy automations and subagents on an API key preset. See
 [DESIGN.md](DESIGN.md#plans) for what works differently.
 
+Either way, btw runs the plan maker's own agent on this computer, unmodified, which keeps the
+sign-in and uses the plan's limits; btw never sees the sign-in. Without the agent, setup offers
+to install it, asking first, so run it in a terminal on this computer.
+
 - **`claude-plan`: Claude Pro or Max.** Chats run through
-  [Claude Code](https://claude.com/claude-code) on this computer, unmodified, signed in to your
-  Claude account; btw never sees the sign-in. Without Claude Code, setup offers to install it
-  with Anthropic's installer and then to sign it in (Claude Code's own sign-in, in your browser),
-  asking before each, so run it in a terminal on this computer. Anthropic
+  [Claude Code](https://claude.com/claude-code), signed in to your Claude account. Setup installs
+  it with Anthropic's installer and starts Claude Code's own sign-in, in your browser. Anthropic
   [counts this](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
   as Agent SDK use of your subscription.
-- **`chatgpt-plan`: ChatGPT Plus, Pro or Business.** Chats run the way OpenAI's Codex does, on
-  the plan's Codex limits. Setup, or Sign in with ChatGPT under Models & keys, shows a link and a
-  one-time code: open the link on any device, sign in to ChatGPT and enter the code.
-  `btw chatgpt-plan models` lists what the plan offers, and `btw chatgpt-plan logout` signs out.
-  There's no file storage there, so pictures go to the model with each request and PDFs only as
-  their path, which btw opens with commands.
+- **`chatgpt-plan`: ChatGPT Plus, Pro or Business.** Chats run through OpenAI's
+  [Codex](https://developers.openai.com/codex/cli) (`npm install -g @openai/codex`), through the
+  [app server](https://developers.openai.com/codex/app-server) Codex's own IDE extension uses, on
+  the plan's Codex limits. Setup, or Sign in with ChatGPT under Models & keys, has Codex show a
+  link and a one-time code: open the link on any device, sign in to ChatGPT and enter the code.
+  Codex keeps that sign-in in a home of its own for btw (`~/.btw-agent/codex`), apart from yours
+  in `~/.codex`. `btw chatgpt-plan models` lists what the plan offers, and
+  `btw chatgpt-plan logout` signs Codex out. Codex takes no PDFs, so the model gets their path,
+  which it opens with commands.
 
 **Reaching it from outside your home.** The gateway listens on `127.0.0.1:5780`. Put a tunnel in
 front of it, e.g. [Tailscale Funnel](https://tailscale.com/kb/1223/funnel),

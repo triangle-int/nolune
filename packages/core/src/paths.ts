@@ -31,8 +31,11 @@ export const packageRoot = findPackageRoot();
 export const paths = {
 	home,
 	config: join(home, 'config.json'),
-	/** The ChatGPT sign-in's tokens, for the ChatGPT plan (chatgpt-sign-in.ts). */
-	chatgptAuth: join(home, 'chatgpt-auth.json'),
+	/**
+	 * Codex's home for chats on the ChatGPT plan (chatgpt-plan.ts), apart from ~/.codex: its
+	 * ChatGPT sign-in, which only Codex reads, and the chats' threads.
+	 */
+	codexHome: join(home, 'codex'),
 	db: join(home, 'btw.db'),
 	bin: join(home, 'bin'),
 	logs: join(home, 'logs'),

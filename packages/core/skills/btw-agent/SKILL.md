@@ -66,13 +66,16 @@ preset). When a plan's limit is used up, chats on it stop until the time the err
   starts its own sign-in (or runs `claude` there and uses `/login`). That command asks questions,
   so it doesn't work from your commands. Never ask for, look for or copy a Claude sign-in or its
   tokens.
-- **`chatgpt-plan`** runs chats on a ChatGPT Plus, Pro or Business plan btw is signed in to, the
-  way OpenAI's Codex does. Signing in needs someone to enter a one-time code on ChatGPT's site:
-  suggest Models & keys in the account menu, or run `btw chatgpt-plan setup` in the background and
-  pass on the link and code it prints (it waits up to 15 minutes for them). `btw chatgpt-plan
-models` lists the models the plan offers. Don't run `btw chatgpt-plan logout` while presets use
-  it: chats on them stop answering. Its models don't get PDFs, only their path, so open a PDF
-  someone attached with a command.
+- **`chatgpt-plan`** runs chats on a ChatGPT Plus, Pro or Business plan through OpenAI's Codex on
+  this computer: btw runs Codex, which keeps the sign-in. `btw chatgpt-plan status` also says which
+  Codex btw runs; when there's none, the owner runs `btw chatgpt-plan setup` in a terminal on this
+  computer, which installs it (asking first). Signing in needs someone to enter a one-time code on
+  ChatGPT's site: suggest Models & keys in the account menu, or run `btw chatgpt-plan setup` in the
+  background and pass on the link and code it prints (it waits up to 15 minutes for them). Never
+  ask for, look for or copy the sign-in Codex keeps. `btw chatgpt-plan models` lists the models
+  the plan offers. Don't run `btw chatgpt-plan logout` while presets use it: chats on them stop
+  answering. Its models don't get PDFs, only their path, so open a PDF someone attached with a
+  command.
 
 ## API keys
 
