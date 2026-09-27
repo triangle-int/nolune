@@ -9,12 +9,14 @@
 	import AssistantAvatar from '$lib/components/AssistantAvatar.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import UserAvatar from '$lib/components/UserAvatar.svelte';
+	import { getI18n } from '$lib/i18n';
 	import { cn } from '$lib/utils';
 	import { getPreferences } from '$lib/preferences.svelte';
 
 	let { data, form } = $props();
 
 	const prefs = getPreferences();
+	const { m } = getI18n();
 	let who = $state('');
 	let deleteOpen = $state(false);
 	/** The avatar just clicked, shown as picked until the page has saved it. */
@@ -41,7 +43,7 @@
 </script>
 
 <PageHeader>
-	<span class="truncate text-lg font-medium">People & profile</span>
+	<span class="truncate text-lg font-medium">{m.profile.title}</span>
 </PageHeader>
 
 <div class="min-h-0 flex-1 overflow-y-auto">
@@ -51,19 +53,19 @@
 		{/if}
 
 		<form method="POST" action="?/rename" use:enhance class="space-y-3">
-			<h2 class="font-medium">Name</h2>
+			<h2 class="font-medium">{m.profile.name}</h2>
 			<div class="flex gap-2">
 				<Input
 					name="name"
 					value={data.profile.name}
 					required
-					aria-label="Profile name"
+					aria-label={m.profile.profileName}
 					class="h-10 flex-1 rounded-full px-4"
 				/>
-				<Button type="submit" variant="outline" class="h-10 px-5">Rename</Button>
+				<Button type="submit" variant="outline" class="h-10 px-5">{m.common.rename}</Button>
 			</div>
 			<p class="text-xs text-muted-foreground">
-				Folder: ~/.btw-agent/profiles/{data.profile.slug} (doesn't change)
+				{m.profile.folder(data.profile.slug)}
 			</p>
 		</form>
 
@@ -80,10 +82,9 @@
 			class="space-y-3"
 		>
 			<div class="space-y-1">
-				<h2 class="font-medium">Avatar</h2>
+				<h2 class="font-medium">{m.profile.avatar}</h2>
 				<p class="text-sm text-muted-foreground">
-					How btw looks in this profile's chats. Everyone here sees the same one, and btw can change
-					it when asked.
+					{m.profile.avatarHint}
 				</p>
 			</div>
 			<div class="grid grid-cols-4 gap-2 sm:grid-cols-8">
@@ -100,7 +101,7 @@
 						)}
 					>
 						<AssistantAvatar avatar={name} mood={picked ? 'idle' : undefined} size={36} />
-						<span class="capitalize">{name}</span>
+						<span>{m.avatars[name]}</span>
 					</button>
 				{/each}
 			</div>
@@ -108,10 +109,9 @@
 
 		<section class="space-y-3">
 			<div class="space-y-1">
-				<h2 class="font-medium">Soul</h2>
+				<h2 class="font-medium">{m.profile.soul}</h2>
 				<p class="text-sm text-muted-foreground">
-					Who btw is for {data.profile.name}: its character, what it cares about, how it talks.
-					Every chat starts with it, and btw changes it too when you ask it to be different.
+					{m.profile.soulHint(data.profile.name)}
 				</p>
 			</div>
 			<form
@@ -123,7 +123,7 @@
 					return async ({ result, update }) => {
 						savingSoul = false;
 						if (result.type === 'failure') {
-							soulProblem = String(result.data?.message ?? 'Could not save.');
+							soulProblem = String(result.data?.message ?? m.errors.couldNotSave);
 						} else await update({ reset: false });
 					};
 				}}
@@ -133,8 +133,8 @@
 					bind:value={soul}
 					{@attach growWithText}
 					maxlength={data.maxSoul}
-					aria-label="Soul"
-					placeholder="You're warm and a little playful, and you keep answers short. With the kids you explain things simply and never talk down to them. When you don't know something, you say so."
+					aria-label={m.profile.soul}
+					placeholder={m.profile.soulPlaceholder}
 					class="field-sizing-fixed! max-h-96 min-h-32"
 				/>
 				{#if soulProblem}
@@ -142,28 +142,26 @@
 				{/if}
 				<div class="mt-2 flex min-h-8 items-center gap-2">
 					<span class="text-xs text-muted-foreground tabular-nums">
-						{soul.length} / {data.maxSoul} characters
+						{m.common.characters(soul.length, data.maxSoul)}
 					</span>
 					{#if edited}
 						<Button variant="ghost" size="sm" class="ml-auto" onclick={() => (soul = data.soul)}
-							>Cancel</Button
+							>{m.common.cancel}</Button
 						>
-						<Button type="submit" size="sm" disabled={savingSoul}>Save</Button>
+						<Button type="submit" size="sm" disabled={savingSoul}>{m.common.save}</Button>
 					{/if}
 				</div>
 			</form>
 			<p class="text-xs text-muted-foreground">
-				{prefs.technical
-					? 'Chats get changes at their next message, which re-reads the conversation once (a prompt cache miss).'
-					: 'Chats get changes at their next message.'}
+				{prefs.technical ? m.profile.changesTechnical : m.profile.changes}
 			</p>
 		</section>
 
 		<section class="space-y-3">
 			<div class="space-y-1">
-				<h2 class="font-medium">Members</h2>
+				<h2 class="font-medium">{m.profile.members}</h2>
 				<p class="text-sm text-muted-foreground">
-					Everyone here sees and writes in the same chats, and can ask btw for anything.
+					{m.profile.membersHint}
 				</p>
 			</div>
 			<ul class="overflow-hidden rounded-2xl border">
@@ -174,7 +172,7 @@
 						<form method="POST" action="?/remove" use:enhance>
 							<input type="hidden" name="userId" value={member.id} />
 							<Button type="submit" variant="ghost" size="sm" class="text-muted-foreground"
-								>Remove</Button
+								>{m.common.remove}</Button
 							>
 						</form>
 					</li>
@@ -184,8 +182,11 @@
 				<form method="POST" action="?/add" use:enhance class="flex gap-2">
 					<input type="hidden" name="who" value={who} />
 					<Select.Root type="single" bind:value={who}>
-						<Select.Trigger class="h-10 flex-1 rounded-full px-4" aria-label="Person to add">
-							{who || 'Choose someone to add'}
+						<Select.Trigger
+							class="h-10 flex-1 rounded-full px-4"
+							aria-label={m.profile.personToAdd}
+						>
+							{who || m.profile.chooseSomeone}
 						</Select.Trigger>
 						<Select.Content>
 							{#each data.others as name (name)}
@@ -193,19 +194,23 @@
 							{/each}
 						</Select.Content>
 					</Select.Root>
-					<Button type="submit" variant="outline" class="h-10 px-5" disabled={!who}>Add</Button>
+					<Button type="submit" variant="outline" class="h-10 px-5" disabled={!who}
+						>{m.common.add}</Button
+					>
 				</form>
 			{:else}
-				<p class="text-sm text-muted-foreground">Everyone is already a member.</p>
+				<p class="text-sm text-muted-foreground">{m.profile.everyoneIsMember}</p>
 			{/if}
 		</section>
 
 		<section class="space-y-3">
-			<h2 class="font-medium text-destructive">Delete profile</h2>
+			<h2 class="font-medium text-destructive">{m.profile.deleteTitle}</h2>
 			<p class="text-sm text-muted-foreground">
-				Deletes all its chats for everyone. The folder is moved to ~/.btw-agent/trash.
+				{m.profile.deleteHint}
 			</p>
-			<Button variant="destructive" onclick={() => (deleteOpen = true)}>Delete this profile</Button>
+			<Button variant="destructive" onclick={() => (deleteOpen = true)}
+				>{m.profile.deleteButton}</Button
+			>
 		</section>
 	</div>
 </div>
@@ -213,15 +218,17 @@
 <AlertDialog.Root bind:open={deleteOpen}>
 	<AlertDialog.Content>
 		<AlertDialog.Header>
-			<AlertDialog.Title>Delete "{data.profile.name}"?</AlertDialog.Title>
+			<AlertDialog.Title>{m.profile.deleteConfirm(data.profile.name)}</AlertDialog.Title>
 			<AlertDialog.Description>
-				All its chats are deleted for everyone. The folder is moved to ~/.btw-agent/trash.
+				{m.profile.deleteBody}
 			</AlertDialog.Description>
 		</AlertDialog.Header>
 		<form method="POST" action="?/delete">
 			<AlertDialog.Footer>
-				<AlertDialog.Cancel type="button">Cancel</AlertDialog.Cancel>
-				<AlertDialog.Action type="submit" variant="destructive">Delete</AlertDialog.Action>
+				<AlertDialog.Cancel type="button">{m.common.cancel}</AlertDialog.Cancel>
+				<AlertDialog.Action type="submit" variant="destructive"
+					>{m.common.delete}</AlertDialog.Action
+				>
 			</AlertDialog.Footer>
 		</form>
 	</AlertDialog.Content>

@@ -3,6 +3,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { getI18n } from '$lib/i18n';
 
 	interface Props {
 		/** The chat to rename; the dialog is open while it's set. */
@@ -11,6 +12,8 @@
 	}
 
 	let { chat = $bindable(), slug }: Props = $props();
+
+	const { m } = getI18n();
 
 	let saving = $state(false);
 	let problem = $state<string | null>(null);
@@ -45,7 +48,7 @@
 					return async ({ result, update }) => {
 						saving = false;
 						if (result.type === 'failure') {
-							problem = String(result.data?.message ?? 'Could not rename the chat.');
+							problem = String(result.data?.message ?? m.chat.couldNotRename);
 							return;
 						}
 						chat = null;
@@ -54,7 +57,7 @@
 				}}
 			>
 				<Dialog.Header>
-					<Dialog.Title>Rename chat</Dialog.Title>
+					<Dialog.Title>{m.chat.renameTitle}</Dialog.Title>
 				</Dialog.Header>
 				<Input
 					bind:ref={input}
@@ -62,14 +65,14 @@
 					value={chat.title}
 					required
 					maxlength={80}
-					aria-label="Chat name"
+					aria-label={m.chat.chatName}
 					class="h-10 rounded-full px-4"
 				/>
 				{#if problem}
 					<p class="text-sm text-destructive">{problem}</p>
 				{/if}
 				<Dialog.Footer>
-					<Button type="submit" disabled={saving}>Rename</Button>
+					<Button type="submit" disabled={saving}>{m.common.rename}</Button>
 				</Dialog.Footer>
 			</form>
 		{/if}

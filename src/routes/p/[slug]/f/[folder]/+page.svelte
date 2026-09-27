@@ -22,6 +22,7 @@
 	import RenameFolderDialog from '$lib/components/folders/RenameFolderDialog.svelte';
 	import type { FolderItem } from '$lib/folders';
 	import { formatAgo, formatBytes } from '$lib/format';
+	import { getI18n } from '$lib/i18n';
 	import { getPreferences } from '$lib/preferences.svelte';
 	import { Attachments } from '$lib/uploads.svelte';
 	import { cn } from '$lib/utils';
@@ -29,6 +30,8 @@
 	let { data } = $props();
 
 	const prefs = getPreferences();
+	const i18n = getI18n();
+	const { m } = i18n;
 	const slug = $derived(data.profile.slug);
 	const chats = $derived(data.conversations.filter((c) => c.folderId === data.folder.id));
 
@@ -58,7 +61,7 @@
 
 	// --- files ---
 
-	const uploads = new Attachments(() => slug);
+	const uploads = new Attachments(() => slug, m);
 	let fileInput = $state<HTMLInputElement>();
 	let dragging = $state(false);
 	let adding = $state(false);
@@ -90,12 +93,12 @@
 			} else {
 				filesProblem =
 					result.type === 'failure'
-						? String(result.data?.message ?? 'Could not add the files.')
-						: 'Could not add the files.';
+						? String(result.data?.message ?? m.folders.couldNotAdd)
+						: m.folders.couldNotAdd;
 				for (const f of uploads.files) if (f.id && ids.includes(f.id)) uploads.remove(f.key);
 			}
 		} catch {
-			filesProblem = 'Could not add the files. Check the connection and try again.';
+			filesProblem = m.folders.couldNotAddOffline;
 			for (const f of uploads.files) if (f.id && ids.includes(f.id)) uploads.remove(f.key);
 		} finally {
 			adding = false;
@@ -118,18 +121,18 @@
 		<DropdownMenu.Root>
 			<DropdownMenu.Trigger
 				class="flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground aria-expanded:bg-muted"
-				aria-label="Folder options"
+				aria-label={m.folders.options}
 			>
 				<EllipsisIcon class="size-5" />
 			</DropdownMenu.Trigger>
 			<DropdownMenu.Content align="end" class="w-48">
 				<DropdownMenu.Item onSelect={() => (renaming = data.folder)}>
 					<PencilIcon />
-					Rename
+					{m.common.rename}
 				</DropdownMenu.Item>
 				<DropdownMenu.Item variant="destructive" onSelect={() => (deleting = data.folder)}>
 					<Trash2Icon />
-					Delete
+					{m.common.delete}
 				</DropdownMenu.Item>
 			</DropdownMenu.Content>
 		</DropdownMenu.Root>
@@ -154,7 +157,7 @@
 					efforts={data.efforts}
 					folders={data.folders}
 					folderId={data.folder.id}
-					placeholder="New chat in {data.folder.name}"
+					placeholder={m.folders.newChatIn(data.folder.name)}
 					autofocus
 				/>
 			{/key}
@@ -162,9 +165,9 @@
 
 		<div class="grid gap-3 sm:grid-cols-2">
 			<section class="flex flex-col rounded-3xl border p-4">
-				<h2 class="font-medium">Instructions</h2>
+				<h2 class="font-medium">{m.folders.instructions}</h2>
 				<p class="mt-0.5 text-sm text-muted-foreground">
-					What btw should know or do in every chat here.
+					{m.folders.instructionsHint}
 				</p>
 				<form
 					method="POST"
@@ -176,7 +179,7 @@
 						return async ({ result, update }) => {
 							savingInstructions = false;
 							if (result.type === 'failure') {
-								instructionsProblem = String(result.data?.message ?? 'Could not save.');
+								instructionsProblem = String(result.data?.message ?? m.errors.couldNotSave);
 							} else await update({ reset: false });
 						};
 					}}
@@ -186,7 +189,7 @@
 						bind:value={instructions}
 						{@attach growWithText}
 						maxlength={data.maxInstructions}
-						placeholder="We're planning two weeks in Japan in April with the kids (7 and 10). Keep plans relaxed and the budget under ¥600,000."
+						placeholder={m.folders.instructionsPlaceholder}
 						class="field-sizing-fixed! max-h-80 min-h-28 flex-1"
 					/>
 					{#if instructionsProblem}
@@ -197,16 +200,14 @@
 							<Button
 								variant="ghost"
 								size="sm"
-								onclick={() => (instructions = data.folder.instructions)}>Cancel</Button
+								onclick={() => (instructions = data.folder.instructions)}>{m.common.cancel}</Button
 							>
-							<Button type="submit" size="sm" disabled={savingInstructions}>Save</Button>
+							<Button type="submit" size="sm" disabled={savingInstructions}>{m.common.save}</Button>
 						</div>
 					{/if}
 				</form>
 				<p class="mt-2 text-xs text-muted-foreground">
-					{prefs.technical
-						? 'Chats in the folder get changes at their next message, which re-reads the conversation once (a prompt cache miss).'
-						: 'Chats in the folder get changes at their next message.'}
+					{prefs.technical ? m.folders.changesTechnical : m.folders.changes}
 				</p>
 			</section>
 
@@ -215,7 +216,7 @@
 					'flex flex-col rounded-3xl border p-4 transition-shadow',
 					dragging && 'ring-2 ring-ring'
 				)}
-				aria-label="Files"
+				aria-label={m.folders.files}
 				ondragover={(event) => {
 					if (!hasFiles(event)) return;
 					event.preventDefault();
@@ -232,7 +233,7 @@
 				}}
 			>
 				<div class="flex items-center justify-between gap-2">
-					<h2 class="font-medium">Files</h2>
+					<h2 class="font-medium">{m.folders.files}</h2>
 					<Button
 						variant="outline"
 						size="sm"
@@ -240,7 +241,7 @@
 						disabled={data.files.length >= data.maxFiles}
 					>
 						<PlusIcon />
-						Add files
+						{m.folders.addFiles}
 					</Button>
 					<input
 						bind:this={fileInput}
@@ -255,8 +256,7 @@
 					/>
 				</div>
 				<p class="mt-0.5 text-sm text-muted-foreground">
-					Pictures, documents, anything. btw gets where they're saved and opens them when they
-					matter.
+					{m.folders.filesHint}
 				</p>
 
 				{#if data.files.length || pending.length}
@@ -287,7 +287,7 @@
 									<span class="min-w-0 text-sm leading-tight">
 										<span class="block truncate font-medium">{file.name}</span>
 										<span class="block text-xs text-muted-foreground"
-											>{formatBytes(file.bytes)}</span
+											>{formatBytes(file.bytes, i18n)}</span
 										>
 									</span>
 								</a>
@@ -297,7 +297,7 @@
 									<button
 										type="submit"
 										class="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:bg-background hover:text-foreground md:opacity-0 md:group-hover/file:opacity-100 md:focus-visible:opacity-100"
-										aria-label="Remove {file.name}"
+										aria-label={m.common.removeFile(file.name)}
 									>
 										<XIcon class="size-4" />
 									</button>
@@ -327,14 +327,14 @@
 											file.status === 'failed' ? 'text-destructive' : 'text-muted-foreground'
 										)}
 									>
-										{file.status === 'failed' ? file.error : 'Uploading…'}
+										{file.status === 'failed' ? file.error : m.common.uploading}
 									</span>
 								</span>
 								<button
 									type="button"
 									onclick={() => uploads.remove(file.key)}
 									class="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
-									aria-label="Remove {file.name}"
+									aria-label={m.common.removeFile(file.name)}
 								>
 									<XIcon class="size-4" />
 								</button>
@@ -345,20 +345,22 @@
 					<p
 						class="mt-3 flex flex-1 items-center justify-center rounded-2xl border border-dashed px-4 py-6 text-center text-sm text-muted-foreground"
 					>
-						No files yet
+						{m.folders.noFiles}
 					</p>
 				{/if}
 				{#if filesProblem}
 					<p class="mt-2 text-sm text-destructive">{filesProblem}</p>
 				{/if}
 				{#if prefs.technical}
-					<p class="mt-2 text-xs break-all text-muted-foreground">Saved in {data.folder.dir}</p>
+					<p class="mt-2 text-xs break-all text-muted-foreground">
+						{m.folders.savedIn(data.folder.dir)}
+					</p>
 				{/if}
 			</section>
 		</div>
 
 		<section>
-			<h2 class="px-1 pb-2 font-medium">Chats</h2>
+			<h2 class="px-1 pb-2 font-medium">{m.folders.chats}</h2>
 			{#if chats.length}
 				<ul class="overflow-hidden rounded-3xl border">
 					{#each chats as chat (chat.id)}
@@ -370,7 +372,7 @@
 								<MessageSquareIcon class="size-4 shrink-0 text-muted-foreground" />
 								<span class="min-w-0 flex-1 truncate"><TypedText text={chat.title} /></span>
 								<span class="shrink-0 text-xs text-muted-foreground">
-									{formatAgo(chat.updatedAt)}
+									{formatAgo(chat.updatedAt, i18n)}
 								</span>
 							</a>
 						</li>
@@ -380,7 +382,7 @@
 				<p
 					class="rounded-3xl border border-dashed px-4 py-6 text-center text-sm text-muted-foreground"
 				>
-					Chats you start here show up here. You can also drag chats onto the folder in the sidebar.
+					{m.folders.noChats}
 				</p>
 			{/if}
 		</section>

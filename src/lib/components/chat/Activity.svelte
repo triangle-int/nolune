@@ -1,6 +1,7 @@
 <script lang="ts">
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import * as Collapsible from '$lib/components/ui/collapsible';
+	import { getI18n } from '$lib/i18n';
 	import { getPreferences } from '$lib/preferences.svelte';
 	import {
 		activeStepLabel,
@@ -27,6 +28,7 @@
 	let { part, results, toolOutput, active, running }: Props = $props();
 
 	const prefs = getPreferences();
+	const { m } = getI18n();
 	/** Set once the reader opens or closes the group; until then the preference decides. */
 	let choice = $state<boolean | null>(null);
 	const open = $derived(choice ?? prefs.expandSteps);
@@ -42,15 +44,17 @@
 	);
 
 	const label = $derived.by(() => {
-		if (active) return activeStepLabel(part, results, prefs.technical);
-		if (stopped) return 'Stopped';
-		const duration = formatDuration(part.endedAt - part.startedAt);
-		if (commands.length === 0) return duration ? `Thought for ${duration}` : 'Thought for a moment';
+		if (active) return activeStepLabel(part, results, prefs.technical, m);
+		if (stopped) return m.steps.stopped;
+		const duration = formatDuration(part.endedAt - part.startedAt, m);
+		if (commands.length === 0) {
+			return duration ? m.steps.thoughtFor(duration) : m.steps.thoughtForAMoment;
+		}
 		if (prefs.technical) {
-			const ran = `Ran ${commands.length} command${commands.length === 1 ? '' : 's'}`;
+			const ran = m.steps.ranCommands(commands.length);
 			return duration ? `${ran} · ${duration}` : ran;
 		}
-		return duration ? `Worked for ${duration}` : 'Worked for a moment';
+		return duration ? m.steps.workedFor(duration) : m.steps.workedForAMoment;
 	});
 </script>
 
@@ -68,7 +72,7 @@
 			{label}
 		</span>
 		{#if failed && !active && prefs.technical}
-			<span class="shrink-0 text-destructive">· {failed} failed</span>
+			<span class="shrink-0 text-destructive">· {m.steps.failedCount(failed)}</span>
 		{/if}
 		<ChevronRightIcon
 			class="size-4 shrink-0 transition-transform group-data-[state=open]/activity:rotate-90"
@@ -93,7 +97,7 @@
 						{#if step.text.trim()}
 							<Markdown text={step.text} class="text-sm leading-relaxed text-muted-foreground" />
 						{:else}
-							<span class="text-sm text-muted-foreground">Thinking…</span>
+							<span class="text-sm text-muted-foreground">{m.steps.thinkingDots}</span>
 						{/if}
 					{:else}
 						<CommandStep

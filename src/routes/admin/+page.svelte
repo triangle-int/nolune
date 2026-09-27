@@ -9,12 +9,15 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as ToggleGroup from '$lib/components/ui/toggle-group';
+	import Rich from '$lib/components/Rich.svelte';
 	import TopBar from '$lib/components/TopBar.svelte';
 	import CopyButton from '$lib/components/chat/CopyButton.svelte';
 	import { formatTokens } from '$lib/format';
+	import { getI18n } from '$lib/i18n';
 	import { cn } from '$lib/utils';
 
 	let { data, form } = $props();
+	const { m } = getI18n();
 	let adding = $state(false);
 	/** Whose model the new preset runs. */
 	let provider = $state('anthropic');
@@ -33,10 +36,9 @@
 	let removing = $state<KeyStatus | null>(null);
 
 	function sourceText(key: KeyStatus): string {
-		const end = key.hint ? ` ending in ${key.hint}` : '';
-		if (key.source === 'config') return `Saved in btw${end}`;
-		if (key.source === 'env') return `From the ${key.env} environment variable${end}`;
-		return 'Not set';
+		if (key.source === 'config') return m.admin.savedInBtw(key.hint);
+		if (key.source === 'env') return m.admin.fromEnv(key.env, key.hint);
+		return m.admin.notSet;
 	}
 </script>
 
@@ -44,14 +46,13 @@
 	<TopBar />
 	<main class="min-h-0 flex-1 overflow-y-auto">
 		<div class="mx-auto max-w-2xl space-y-8 px-4 py-8 sm:py-12">
-			<h1 class="text-2xl font-semibold">Models & keys</h1>
+			<h1 class="text-2xl font-semibold">{m.admin.title}</h1>
 
 			<section class="space-y-3" aria-labelledby="keys-heading">
 				<div class="space-y-1">
-					<h2 id="keys-heading" class="text-lg font-medium">API keys</h2>
+					<h2 id="keys-heading" class="text-lg font-medium">{m.admin.keys}</h2>
 					<p class="text-muted-foreground">
-						Shared by every profile and kept in btw's config file on this computer. A new key is
-						checked with its provider before it's saved, and used right away.
+						{m.admin.keysHint}
 					</p>
 				</div>
 				<ul class="overflow-hidden rounded-2xl border">
@@ -71,7 +72,7 @@
 								</span>
 								<div class="min-w-0 flex-1">
 									<div class="font-medium">{key.label}</div>
-									<div class="text-muted-foreground">{key.purpose}</div>
+									<div class="text-muted-foreground">{m.admin.purposes[key.provider]}</div>
 									<div class={cn(key.source ? 'text-muted-foreground' : 'text-warning')}>
 										{sourceText(key)}
 									</div>
@@ -85,7 +86,7 @@
 											class="text-muted-foreground"
 											onclick={() => (editing = key.provider)}
 										>
-											Replace
+											{m.admin.replace}
 										</Button>
 									{/if}
 									{#if key.source === 'config'}
@@ -95,7 +96,7 @@
 											class="text-muted-foreground"
 											onclick={() => (removing = key)}
 										>
-											Remove
+											{m.common.remove}
 										</Button>
 									{/if}
 								</div>
@@ -123,13 +124,13 @@
 											required
 											autocomplete="off"
 											spellcheck="false"
-											placeholder={`Paste the ${key.label} API key`}
-											aria-label={`${key.label} API key`}
+											placeholder={m.admin.pasteKey(key.label)}
+											aria-label={m.admin.keyLabel(key.label)}
 											class="h-10 flex-1 rounded-full px-4 font-mono placeholder:font-sans"
 										/>
 										<div class="flex gap-2">
 											<Button type="submit" disabled={busy} class="h-10 px-5 max-sm:flex-1">
-												{busy ? 'Checking the key…' : 'Save'}
+												{busy ? m.admin.checkingKey : m.common.save}
 											</Button>
 											{#if key.source || key.envSet}
 												<Button
@@ -138,20 +139,22 @@
 													class="h-10"
 													onclick={() => (editing = null)}
 												>
-													Cancel
+													{m.common.cancel}
 												</Button>
 											{/if}
 										</div>
 									</div>
 									<p class="text-muted-foreground">
-										Make one at
-										<a href={key.consoleUrl} target="_blank" rel="noreferrer" class="underline"
-											>{new URL(key.consoleUrl).host}</a
-										>.
+										<Rich text={m.admin.makeOneAt}>
+											{#snippet link()}<a
+													href={key.consoleUrl}
+													target="_blank"
+													rel="noreferrer"
+													class="underline">{new URL(key.consoleUrl).host}</a
+												>{/snippet}
+										</Rich>
 										{#if key.source}
-											Use a key from the same {key.provider === 'openai' ? 'project' : 'workspace'}:
-											pictures and PDFs already sent in chats live there, and those chats can't go
-											on without them.
+											{key.provider === 'openai' ? m.admin.sameProject : m.admin.sameWorkspace}
 										{/if}
 									</p>
 								</form>
@@ -169,12 +172,9 @@
 
 			<section class="space-y-3" aria-labelledby="plan-heading">
 				<div class="space-y-1">
-					<h2 id="plan-heading" class="text-lg font-medium">Claude plan</h2>
+					<h2 id="plan-heading" class="text-lg font-medium">{m.admin.plan}</h2>
 					<p class="text-muted-foreground">
-						Chats on a Claude plan preset run on the Pro or Max plan someone signed in to Claude
-						Code with on this computer, instead of an API key. btw runs Claude Code and never sees
-						the sign-in. Plan limits assume one person's ordinary use, so keep busy automations and
-						subagents on an API key preset.
+						{m.admin.planHint}
 					</p>
 				</div>
 				<div class="space-y-3 rounded-2xl border px-4 py-3 text-sm">
@@ -193,11 +193,13 @@
 								<div class="truncate font-mono text-muted-foreground">{data.claude.path}</div>
 							{:else if data.claude.path}
 								<div class="text-warning">
-									Not at <span class="font-mono">{data.claude.path}</span>, where
-									<code>btw config set claude-path</code> says it is.
+									<Rich text={m.admin.notAt}>
+										{#snippet path()}<span class="font-mono">{data.claude.path}</span>{/snippet}
+										{#snippet command()}<code>btw config set claude-path</code>{/snippet}
+									</Rich>
 								</div>
 							{:else}
-								<div class="text-warning">Not installed on this computer.</div>
+								<div class="text-warning">{m.admin.notInstalled}</div>
 							{/if}
 						</div>
 						<form
@@ -219,7 +221,7 @@
 								class="text-muted-foreground"
 								disabled={checkingPlan}
 							>
-								{checkingPlan ? 'Checking…' : 'Check sign-in'}
+								{checkingPlan ? m.common.checking : m.admin.checkSignIn}
 							</Button>
 						</form>
 					</div>
@@ -230,21 +232,25 @@
 					{:else if !data.claude.installed}
 						<div class="space-y-2 text-muted-foreground sm:pl-12">
 							<p>
-								In a terminal on this computer, run <code>btw claude-plan setup</code>: it installs
-								Claude Code with Anthropic's installer and signs it in to your Claude account,
-								asking first. Or install it yourself, then run <code>claude</code> and sign in:
+								<Rich text={m.admin.install}>
+									{#snippet setup()}<code>btw claude-plan setup</code>{/snippet}
+									{#snippet claude()}<code>claude</code>{/snippet}
+								</Rich>
 							</p>
 							<div class="flex items-center gap-1 rounded-xl bg-muted py-1 pr-1 pl-3">
 								<code class="min-w-0 flex-1 truncate font-mono text-foreground"
 									>{data.claude.installCommand}</code
 								>
-								<CopyButton text={data.claude.installCommand} label="Copy the command" />
+								<CopyButton text={data.claude.installCommand} label={m.admin.copyCommand} />
 							</div>
 						</div>
 					{:else}
 						<p class="text-muted-foreground sm:pl-12">
-							To sign in, run <code>btw claude-plan setup</code> in a terminal on this computer, or
-							run <code>claude</code> there and use <code>/login</code> with your Claude account.
+							<Rich text={m.admin.signIn}>
+								{#snippet setup()}<code>btw claude-plan setup</code>{/snippet}
+								{#snippet claude()}<code>claude</code>{/snippet}
+								{#snippet login()}<code>/login</code>{/snippet}
+							</Rich>
 						</p>
 					{/if}
 				</div>
@@ -252,10 +258,9 @@
 
 			<section class="space-y-3" aria-labelledby="models-heading">
 				<div class="space-y-1">
-					<h2 id="models-heading" class="text-lg font-medium">Models</h2>
+					<h2 id="models-heading" class="text-lg font-medium">{m.admin.models}</h2>
 					<p class="text-muted-foreground">
-						Presets are shared by every profile. New chats start with the default one. Removing a
-						preset doesn't affect existing chats.
+						{m.admin.modelsHint}
 					</p>
 				</div>
 
@@ -275,13 +280,16 @@
 								<div class="flex items-center gap-2">
 									<span class="truncate font-medium">{preset.name}</span>
 									{#if preset.isDefault}
-										<Badge variant="secondary">Default</Badge>
+										<Badge variant="secondary">{m.common.default}</Badge>
 									{/if}
 								</div>
 								<div class="truncate text-muted-foreground">
-									{preset.provider} / {preset.model} · context {formatTokens(
-										preset.contextWindow
-									)}{preset.overridden ? ' (override)' : ''}
+									{m.admin.presetDetails(
+										preset.provider,
+										preset.model,
+										formatTokens(preset.contextWindow),
+										preset.overridden
+									)}
 								</div>
 							</div>
 							{#if !preset.isDefault}
@@ -291,23 +299,23 @@
 										type="submit"
 										variant="ghost"
 										size="sm"
-										title="Make default"
+										title={m.admin.makeDefault}
 										class="text-muted-foreground max-sm:px-2"
 									>
 										<StarIcon />
-										<span class="max-sm:sr-only">Make default</span>
+										<span class="max-sm:sr-only">{m.admin.makeDefault}</span>
 									</Button>
 								</form>
 							{/if}
 							<form method="POST" action="?/remove" use:enhance>
 								<input type="hidden" name="id" value={preset.id} />
 								<Button type="submit" variant="ghost" size="sm" class="text-muted-foreground"
-									>Remove</Button
+									>{m.common.remove}</Button
 								>
 							</form>
 						</li>
 					{:else}
-						<li class="px-4 py-3 text-sm text-muted-foreground">No presets yet.</li>
+						<li class="px-4 py-3 text-sm text-muted-foreground">{m.admin.noPresets}</li>
 					{/each}
 				</ul>
 
@@ -324,14 +332,14 @@
 					}}
 				>
 					<div class="flex flex-wrap items-center justify-between gap-3">
-						<h2 class="font-medium">Add a preset</h2>
+						<h2 class="font-medium">{m.admin.addPreset}</h2>
 						<ToggleGroup.Root
 							type="single"
 							variant="outline"
 							size="sm"
 							value={provider}
 							onValueChange={(value) => value && (provider = value)}
-							aria-label="Provider"
+							aria-label={m.admin.provider}
 						>
 							{#each data.providers as p (p.id)}
 								<ToggleGroup.Item value={p.id}>{p.label}</ToggleGroup.Item>
@@ -342,15 +350,15 @@
 					<Input
 						name="model"
 						required
-						placeholder="Model id, e.g. {EXAMPLE_MODELS[provider] ?? ''}"
-						aria-label="Model id"
+						placeholder={m.admin.modelIdExample(EXAMPLE_MODELS[provider] ?? '')}
+						aria-label={m.admin.modelId}
 						class="h-10 rounded-full px-4"
 					/>
 					<div class="flex flex-col gap-3 sm:flex-row">
 						<Input
 							name="name"
-							placeholder="Name (default: model + provider)"
-							aria-label="Name"
+							placeholder={m.admin.nameDefault}
+							aria-label={m.admin.name}
 							class="h-10 flex-1 rounded-full px-4"
 						/>
 						<Input
@@ -358,20 +366,20 @@
 							type="number"
 							min="1"
 							placeholder={provider === 'openai'
-								? 'Context window (flagships: known)'
+								? m.admin.contextKnown
 								: provider === 'claude-plan'
-									? 'Context window (not reported)'
-									: 'Context window (optional)'}
-							aria-label="Context window"
+									? m.admin.contextNotReported
+									: m.admin.contextOptional}
+							aria-label={m.admin.contextWindow}
 							class="h-10 rounded-full px-4 sm:w-60"
 						/>
 					</div>
 					<Button type="submit" disabled={adding} class="h-10 px-5">
 						{adding
 							? provider === 'claude-plan'
-								? 'Checking Claude Code…'
-								: 'Checking the model…'
-							: 'Add'}
+								? m.admin.checkingClaude
+								: m.admin.checkingModel
+							: m.common.add}
 					</Button>
 				</form>
 			</section>
@@ -382,12 +390,12 @@
 <AlertDialog.Root open={removing !== null} onOpenChange={(open) => !open && (removing = null)}>
 	<AlertDialog.Content>
 		<AlertDialog.Header>
-			<AlertDialog.Title>Remove the {removing?.label} key?</AlertDialog.Title>
+			<AlertDialog.Title>{m.admin.removeKeyTitle(removing?.label ?? '')}</AlertDialog.Title>
 			<AlertDialog.Description>
 				{#if removing?.envSet}
-					btw will use the key in the {removing.env} environment variable instead.
-				{:else}
-					{removing?.withoutIt}
+					{m.admin.useEnvInstead(removing.env)}
+				{:else if removing}
+					{m.admin.withoutIt[removing.provider]}
 				{/if}
 			</AlertDialog.Description>
 		</AlertDialog.Header>
@@ -403,8 +411,10 @@
 		>
 			<input type="hidden" name="provider" value={removing?.provider ?? ''} />
 			<AlertDialog.Footer>
-				<AlertDialog.Cancel type="button">Cancel</AlertDialog.Cancel>
-				<AlertDialog.Action type="submit" variant="destructive">Remove</AlertDialog.Action>
+				<AlertDialog.Cancel type="button">{m.common.cancel}</AlertDialog.Cancel>
+				<AlertDialog.Action type="submit" variant="destructive"
+					>{m.common.remove}</AlertDialog.Action
+				>
 			</AlertDialog.Footer>
 		</form>
 	</AlertDialog.Content>

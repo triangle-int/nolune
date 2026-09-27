@@ -11,6 +11,7 @@ import {
 	sendMessage,
 	type Effort
 } from '@btw/core';
+import { translations } from '$lib/i18n';
 import { requireProfile } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -33,16 +34,17 @@ export const actions: Actions = {
 	 */
 	default: async ({ locals, params, request }) => {
 		const { user, profile } = requireProfile(locals, params.slug);
+		const { m } = translations(locals.locale);
 		const form = await request.formData();
 		const presetId = form.get('preset')?.toString() ?? '';
 		const effort = (form.get('effort')?.toString() ?? 'medium') as Effort;
 		const text = form.get('text')?.toString().trim() ?? '';
 		const uploads = form.getAll('upload').map(String);
 		const folderId = form.get('folder')?.toString() || null;
-		if (!getPreset(presetId)) return fail(400, { message: 'Pick a model.' });
-		if (!EFFORTS.includes(effort)) return fail(400, { message: 'Pick a reasoning level.' });
+		if (!getPreset(presetId)) return fail(400, { message: m.newChat.pickModel });
+		if (!EFFORTS.includes(effort)) return fail(400, { message: m.newChat.pickEffort });
 		if (folderId && !getFolder(profile.id, folderId)) {
-			return fail(400, { message: 'That folder was deleted. Pick another one.' });
+			return fail(400, { message: m.newChat.folderGone });
 		}
 		try {
 			// Checked before the conversation exists, so a stale file doesn't leave an empty chat.

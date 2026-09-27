@@ -6,6 +6,7 @@
 	import BellIcon from '@lucide/svelte/icons/bell';
 	import XIcon from '@lucide/svelte/icons/x';
 	import * as Popover from '$lib/components/ui/popover';
+	import { getI18n } from '$lib/i18n';
 	import AssistantAvatar from './AssistantAvatar.svelte';
 	import { cn } from '$lib/utils';
 
@@ -16,6 +17,8 @@
 	}
 
 	let { items, seenAt }: Props = $props();
+
+	const { m, intl } = getI18n();
 
 	let open = $state(false);
 	/** `seenAt` as it was when the menu opened, so new items stay marked while it's open. */
@@ -30,7 +33,7 @@
 		const res = await fetch(`/api/notifications/${path}`, { method: 'POST' });
 		if (!res.ok) {
 			const body = await res.json().catch(() => null);
-			actionError = body?.message ?? `Request failed (${res.status})`;
+			actionError = body?.message ?? m.errors.requestFailed(res.status);
 		}
 		return res;
 	}
@@ -77,17 +80,17 @@
 
 	function ago(ms: number): string {
 		const seconds = (Date.now() - ms) / 1000;
-		if (seconds < 60) return 'just now';
-		if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
-		if (seconds < 86_400) return `${Math.floor(seconds / 3600)} h ago`;
-		return new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+		if (seconds < 60) return m.time.justNow;
+		if (seconds < 3600) return m.time.minutesAgo(Math.floor(seconds / 60));
+		if (seconds < 86_400) return m.time.hoursAgo(Math.floor(seconds / 3600));
+		return new Date(ms).toLocaleDateString(intl, { day: 'numeric', month: 'short' });
 	}
 </script>
 
 <Popover.Root bind:open {onOpenChange}>
 	<Popover.Trigger
 		class="relative flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground"
-		aria-label={unseen ? `Notifications, ${unseen} new` : 'Notifications'}
+		aria-label={unseen ? m.notifications.unseen(unseen) : m.notifications.title}
 	>
 		<BellIcon class="size-5" />
 		{#if unseen}
@@ -104,10 +107,10 @@
 		class="flex max-h-[min(75vh,36rem)] w-[calc(100vw-1rem)] flex-col gap-0 overflow-hidden p-0 sm:w-96"
 	>
 		<div class="flex items-center justify-between px-4 pt-3 pb-2">
-			<span class="font-semibold">Notifications</span>
+			<span class="font-semibold">{m.notifications.title}</span>
 			{#if items.length}
 				<button onclick={clearAll} class="text-sm text-muted-foreground hover:text-foreground">
-					Clear all
+					{m.notifications.clearAll}
 				</button>
 			{/if}
 		</div>
@@ -117,13 +120,16 @@
 				<li class={cn('rounded-2xl px-3 py-2.5 text-sm', isNew ? 'bg-muted' : 'hover:bg-muted/60')}>
 					<div class="flex items-start gap-2">
 						{#if isNew}
-							<span class="mt-1.5 size-2 shrink-0 rounded-full bg-red-600" title="New"></span>
+							<span
+								class="mt-1.5 size-2 shrink-0 rounded-full bg-red-600"
+								title={m.notifications.new}
+							></span>
 						{/if}
 						<AssistantAvatar avatar={item.profile.avatar} size={20} class="mt-px" />
 						<button
 							class="min-w-0 flex-1 text-left"
 							onclick={() => (expanded = expanded === item.id ? null : item.id)}
-							title={expanded === item.id ? 'Show less' : 'Show all'}
+							title={expanded === item.id ? m.notifications.showLess : m.notifications.showAll}
 						>
 							<span class="flex items-baseline gap-2">
 								<span
@@ -145,8 +151,8 @@
 							onclick={() => dismiss(item.id)}
 							disabled={busy === item.id}
 							class="-mt-0.5 -mr-1 flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-background hover:text-foreground"
-							aria-label="Dismiss"
-							title="Dismiss"
+							aria-label={m.notifications.dismiss}
+							title={m.notifications.dismiss}
 						>
 							<XIcon class="size-3.5" />
 						</button>
@@ -160,14 +166,14 @@
 								})}
 								onclick={() => (open = false)}
 								class="rounded-full border bg-background px-3 py-1 font-medium hover:bg-muted"
-								>Open chat</a
+								>{m.notifications.openChat}</a
 							>
 						{:else}
 							<button
 								onclick={() => continueInChat(item)}
 								disabled={busy === item.id}
 								class="rounded-full border bg-background px-3 py-1 font-medium hover:bg-muted disabled:opacity-50"
-								>Continue in chat</button
+								>{m.notifications.continueInChat}</button
 							>
 						{/if}
 						<span class="truncate text-muted-foreground">{item.profile.name}</span>
@@ -175,7 +181,7 @@
 				</li>
 			{:else}
 				<li class="px-4 py-8 text-center text-sm text-muted-foreground">
-					Nothing yet. Ask btw for a reminder or a daily check, and what it finds shows up here.
+					{m.notifications.empty}
 				</li>
 			{/each}
 		</ul>

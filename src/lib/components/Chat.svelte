@@ -29,6 +29,7 @@
 	import { firstLine } from '$lib/commands';
 	import { moveChat, type FolderItem } from '$lib/folders';
 	import { formatPercent, formatTokens } from '$lib/format';
+	import { getI18n } from '$lib/i18n';
 	import { getPreferences } from '$lib/preferences.svelte';
 	import { activeStepLabel, buildTranscript, replyText, type Reply } from '$lib/transcript';
 	import { Attachments } from '$lib/uploads.svelte';
@@ -46,6 +47,7 @@
 	import ModelMenu from './chat/ModelMenu.svelte';
 	import RenameChatDialog from './chat/RenameChatDialog.svelte';
 	import PageHeader from './PageHeader.svelte';
+	import Rich from './Rich.svelte';
 	import TypedText from './TypedText.svelte';
 	import UserAvatar from './UserAvatar.svelte';
 
@@ -74,9 +76,10 @@
 	let { conversation, efforts, me, folders, folderId, avatar }: Props = $props();
 
 	const prefs = getPreferences();
+	const { m } = getI18n();
 	const chat = new ChatState();
 	let text = $state('');
-	const attachments = new Attachments(() => page.params.slug ?? '');
+	const attachments = new Attachments(() => page.params.slug ?? '', m);
 	let sending = $state(false);
 	let actionError = $state<string | null>(null);
 	let stickToBottom = $state(true);
@@ -98,8 +101,8 @@
 	const title = $derived(
 		chat.title ||
 			conversation.title ||
-			chat.messages.find((m) => m.kind === 'human')?.text.slice(0, 80) ||
-			'New chat'
+			chat.messages.find((message) => message.kind === 'human')?.text.slice(0, 80) ||
+			m.common.newChat
 	);
 
 	// btw names a chat shortly after its first message; the sidebar lists the title too.
@@ -156,7 +159,13 @@
 	});
 
 	function cacheSummary(label: string, u: Usage): string {
-		return `${label}: ${formatPercent(cacheHitRate(u))} cached (${formatTokens(u.cacheRead)} read, ${formatTokens(u.cacheWrite)} written, ${formatTokens(u.input)} uncached)`;
+		return m.chat.cacheSummary(
+			label,
+			formatPercent(cacheHitRate(u)),
+			formatTokens(u.cacheRead),
+			formatTokens(u.cacheWrite),
+			formatTokens(u.input)
+		);
 	}
 
 	/** Cache misses within one reply, which may span several model calls. */
@@ -164,10 +173,10 @@
 		const misses = reply.messageIds.flatMap((id) => cacheMisses[id] ?? []);
 		if (!misses.length) return null;
 		return {
-			tokens: misses.reduce((n, m) => n + m.tokens, 0),
-			reason: misses.some((m) => m.expired)
-				? `Over ${conversation.cacheTtl === '5m' ? '5 minutes' : 'an hour'} passed since the previous step, so the cached conversation expired and was processed again (slower and costlier).`
-				: 'Context that should have come from the cache was processed again (slower and costlier). Changing the reasoning level, moving the chat to another folder or changing its folder cause this once.'
+			tokens: misses.reduce((n, miss) => n + miss.tokens, 0),
+			reason: misses.some((miss) => miss.expired)
+				? m.chat.cacheExpired(conversation.cacheTtl)
+				: m.chat.cacheBroken
 		};
 	}
 
@@ -188,11 +197,13 @@
 	const step = $derived.by(() => {
 		const tail = chat.running ? liveReply?.parts.at(-1) : undefined;
 		if (!tail || tail.type === 'text') {
-			return chat.running ? { label: tail ? 'Writing' : 'Thinking', command: false } : null;
+			return chat.running
+				? { label: tail ? m.chat.writing : m.chat.thinking, command: false }
+				: null;
 		}
 		const last = tail.steps.at(-1);
 		return {
-			label: activeStepLabel(tail, chat.results, prefs.technical),
+			label: activeStepLabel(tail, chat.results, prefs.technical, m),
 			// Running once the model has finished writing it, until its result arrives.
 			command:
 				last?.type === 'command' &&
@@ -334,7 +345,7 @@
 			} catch {
 				// plain text
 			}
-			actionError = message || `Request failed (${res.status})`;
+			actionError = message || m.errors.requestFailed(res.status);
 		}
 		return res.ok;
 	}
@@ -383,7 +394,7 @@
 			<div class="flex items-center gap-1.5 px-1 text-xs text-muted-foreground">
 				{#if pending}
 					<ClockIcon class="size-3" />
-					{mine ? '' : `${senderName} · `}btw reads this after its current step
+					{mine ? m.chat.readsAfterStep : `${senderName} · ${m.chat.readsAfterStep}`}
 				{:else}
 					<UserAvatar name={senderName} class="size-4 text-[9px]" />
 					{senderName}
@@ -449,15 +460,15 @@
 
 		{#if r.live && (!tail || (tail.type === 'text' && chat.live.every((b) => !b)))}
 			<span class="my-1 block size-3.5 animate-pulse rounded-full bg-foreground" role="status">
-				<span class="sr-only">btw is working</span>
+				<span class="sr-only">{m.chat.working}</span>
 			</span>
 		{/if}
 
 		{#if r.stopReasons.includes('max_tokens')}
-			<p class="text-sm text-warning">The reply was cut off because it got too long.</p>
+			<p class="text-sm text-warning">{m.chat.cutOff}</p>
 		{/if}
 		{#if r.stopReasons.includes('refusal')}
-			<p class="text-sm text-warning">btw declined to continue this request.</p>
+			<p class="text-sm text-warning">{m.chat.refused}</p>
 		{/if}
 
 		{#if !r.live && (copyable || (prefs.technical && r.usage))}
@@ -474,22 +485,25 @@
 					<Tooltip.Root>
 						<Tooltip.Trigger
 							class="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
-							aria-label="Usage"
+							aria-label={m.chat.usage}
 						>
 							<InfoIcon class="size-4" />
 						</Tooltip.Trigger>
 						<Tooltip.Content class="max-w-xs flex-col items-start gap-0.5">
 							<span
-								>{formatTokens(promptTokens(r.usage))} tokens in, {formatTokens(r.usage.output)} out</span
+								>{m.chat.tokensInOut(
+									formatTokens(promptTokens(r.usage)),
+									formatTokens(r.usage.output)
+								)}</span
 							>
-							<span>{cacheSummary('Cache', r.usage)}</span>
+							<span>{cacheSummary(m.chat.cache, r.usage)}</span>
 						</Tooltip.Content>
 					</Tooltip.Root>
 				{/if}
 				{#if miss}
 					<Tooltip.Root>
 						<Tooltip.Trigger class="px-1.5 text-xs text-warning">
-							Cache miss · {formatTokens(miss.tokens)} tokens processed again
+							{m.chat.cacheMiss(formatTokens(miss.tokens))}
 						</Tooltip.Trigger>
 						<Tooltip.Content class="max-w-xs">{miss.reason}</Tooltip.Content>
 					</Tooltip.Root>
@@ -516,18 +530,21 @@
 			<Tooltip.Trigger
 				class="hidden shrink-0 rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground sm:block"
 			>
-				{formatTokens(contextUsed)} / {formatTokens(conversation.contextWindow)} · {formatPercent(
-					cacheHitRate(usage.last)
-				)} cached
+				{m.chat.contextChip(
+					formatTokens(contextUsed),
+					formatTokens(conversation.contextWindow),
+					formatPercent(cacheHitRate(usage.last))
+				)}
 			</Tooltip.Trigger>
 			<Tooltip.Content class="max-w-sm flex-col items-start gap-0.5">
 				<span
-					>Context used by the last reply: {formatTokens(contextUsed)} of {formatTokens(
-						conversation.contextWindow
+					>{m.chat.contextUsed(
+						formatTokens(contextUsed),
+						formatTokens(conversation.contextWindow)
 					)}</span
 				>
-				<span>{cacheSummary('Last reply', usage.last)}</span>
-				<span>{cacheSummary('Whole conversation', usage.total)}</span>
+				<span>{cacheSummary(m.chat.lastReply, usage.last)}</span>
+				<span>{cacheSummary(m.chat.wholeConversation, usage.total)}</span>
 			</Tooltip.Content>
 		</Tooltip.Root>
 	{/if}
@@ -536,7 +553,7 @@
 		<DropdownMenu.Root>
 			<DropdownMenu.Trigger
 				class="flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground aria-expanded:bg-muted"
-				aria-label="Chat options"
+				aria-label={m.chat.options}
 			>
 				<EllipsisIcon class="size-5" />
 			</DropdownMenu.Trigger>
@@ -546,18 +563,21 @@
 						<span class="block truncate text-foreground">{conversation.presetName}</span>
 						{#if usage}
 							<span class="block"
-								>Context {formatTokens(contextUsed)} / {formatTokens(
-									conversation.contextWindow
+								>{m.chat.contextMenu(
+									formatTokens(contextUsed),
+									formatTokens(conversation.contextWindow)
 								)}</span
 							>
-							<span class="block">{formatPercent(cacheHitRate(usage.total))} cached overall</span>
+							<span class="block"
+								>{m.chat.cachedOverall(formatPercent(cacheHitRate(usage.total)))}</span
+							>
 						{/if}
 					</DropdownMenu.Label>
 					<DropdownMenu.Separator />
 				{/if}
 				<DropdownMenu.Item onSelect={() => (renaming = { id: conversation.id, title })}>
 					<PencilIcon />
-					Rename
+					{m.common.rename}
 				</DropdownMenu.Item>
 				<MoveToFolderMenu
 					{folders}
@@ -568,7 +588,7 @@
 				<DropdownMenu.Separator />
 				<DropdownMenu.Item variant="destructive" onSelect={() => (deleteOpen = true)}>
 					<Trash2Icon />
-					Delete
+					{m.common.delete}
 				</DropdownMenu.Item>
 			</DropdownMenu.Content>
 		</DropdownMenu.Root>
@@ -578,20 +598,22 @@
 {#if conversation.subagent}
 	<div class="mx-auto w-full max-w-3xl px-4">
 		<p class="rounded-2xl bg-muted px-4 py-2 text-center text-sm text-muted-foreground">
-			Subagent {conversation.subagent.name}: btw started it from
-			<a
-				href={resolve('/p/[slug]/c/[id]', {
-					slug: page.params.slug ?? '',
-					id: conversation.subagent.parentId
-				})}
-				class="text-foreground underline underline-offset-2">{conversation.subagent.parentTitle}</a
-			>, and it reports back there.
+			<Rich text={m.chat.subagentBanner} name={conversation.subagent.name}>
+				{#snippet parent()}<a
+						href={resolve('/p/[slug]/c/[id]', {
+							slug: page.params.slug ?? '',
+							id: conversation.subagent?.parentId ?? ''
+						})}
+						class="text-foreground underline underline-offset-2"
+						>{conversation.subagent?.parentTitle}</a
+					>{/snippet}
+			</Rich>
 		</p>
 	</div>
 {:else if conversation.hidden && !continued}
 	<div class="mx-auto w-full max-w-3xl px-4">
 		<p class="rounded-2xl bg-muted px-4 py-2 text-center text-sm text-muted-foreground">
-			A background run from an automation. Send a message to keep it in your chats.
+			{m.chat.hiddenBanner}
 		</p>
 	</div>
 {/if}
@@ -609,7 +631,7 @@
 			style:padding-bottom="{composerHeight + 16}px"
 		>
 			{#if chat.loaded && chat.messages.length === 0 && chat.queued.length === 0 && !chat.running}
-				<p class="py-16 text-center text-muted-foreground">Ask for something to get started.</p>
+				<p class="py-16 text-center text-muted-foreground">{m.chat.empty}</p>
 			{/if}
 
 			{#each entries as entry, index (entry.key)}
@@ -624,7 +646,7 @@
 					<div class="rounded-2xl border px-4 py-3 text-sm">
 						<div class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
 							<ClockIcon class="size-3.5" />
-							Automation · {entry.message.title}
+							{m.chat.automation(entry.message.title)}
 						</div>
 						<div class="mt-1.5 leading-relaxed whitespace-pre-wrap">{entry.message.text}</div>
 					</div>
@@ -632,7 +654,7 @@
 					<div class="rounded-2xl border px-4 py-3 text-sm">
 						<div class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
 							<BotIcon class="size-3.5" />
-							From btw, to {entry.message.title}
+							{m.chat.fromBtw(entry.message.title)}
 						</div>
 						<div class="mt-1.5 leading-relaxed whitespace-pre-wrap">{entry.message.text}</div>
 					</div>
@@ -643,11 +665,11 @@
 						>
 							<SquareTerminalIcon class="size-3.5 shrink-0" />
 							<span class="min-w-0 truncate"
-								>Finished in the background · {entry.message.title}</span
+								>{m.chat.finishedInBackground(entry.message.title)}</span
 							>
 							{#if entry.message.isError}
 								<span class="shrink-0 text-destructive">
-									{prefs.technical ? 'failed' : "didn't work"}
+									{prefs.technical ? m.steps.failed : m.steps.didntWork}
 								</span>
 							{/if}
 							<ChevronRightIcon
@@ -668,15 +690,18 @@
 			{#if chat.background.length}
 				<div class="flex flex-col gap-1.5 rounded-2xl border px-4 py-3 text-sm">
 					<div class="flex items-center justify-between gap-3">
-						<span class="text-xs font-medium text-muted-foreground">Working in the background</span>
-						<Button size="sm" variant="outline" onclick={() => post('stop')}>Stop</Button>
+						<span class="text-xs font-medium text-muted-foreground">{m.chat.inBackground}</span>
+						<Button size="sm" variant="outline" onclick={() => post('stop')}>{m.common.stop}</Button
+						>
 					</div>
 					{#each chat.background as item (item.id)}
 						<div class="flex min-w-0 items-center gap-2 text-muted-foreground">
 							<LoaderIcon class="size-3.5 shrink-0 animate-spin" />
 							{#if item.kind === 'command'}
 								<span class={cn('min-w-0 truncate', prefs.technical && 'font-mono text-xs')}>
-									{prefs.technical ? `$ ${firstLine(item.command)}` : (item.summary ?? 'A command')}
+									{prefs.technical
+										? `$ ${firstLine(item.command)}`
+										: (item.summary ?? m.chat.aCommand)}
 								</span>
 							{:else}
 								<a
@@ -686,7 +711,9 @@
 									})}
 									class="min-w-0 truncate underline-offset-2 hover:text-foreground hover:underline"
 								>
-									Subagent {item.name}{item.status === 'stopping' ? ' · stopping' : ''}
+									{m.chat.subagent(item.name)}{item.status === 'stopping'
+										? ` · ${m.chat.stopping}`
+										: ''}
 								</a>
 							{/if}
 						</div>
@@ -712,20 +739,22 @@
 						>
 							<CircleAlertIcon class="size-4 shrink-0 text-destructive" />
 							<span class="min-w-0 flex-1">
-								<span class="block font-medium">Something went wrong while btw was answering.</span>
+								<span class="block font-medium">{m.chat.errorTitle}</span>
 								<span class="block text-muted-foreground">{chat.error}</span>
 							</span>
 							{#if !conversation.subagent}
 								<Button size="sm" variant="outline" onclick={() => post('continue')}>
 									<RotateCcwIcon />
-									Try again
+									{m.common.tryAgain}
 								</Button>
 							{/if}
 						</div>
 					{:else}
 						<div class="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-							btw hasn't answered this yet.
-							<Button size="sm" variant="outline" onclick={() => post('continue')}>Continue</Button>
+							{m.chat.unanswered}
+							<Button size="sm" variant="outline" onclick={() => post('continue')}
+								>{m.common.continue}</Button
+							>
 						</div>
 					{/if}
 				</div>
@@ -738,7 +767,7 @@
 			<button
 				onclick={scrollToBottom}
 				class="absolute bottom-full left-1/2 mb-3 flex size-9 -translate-x-1/2 items-center justify-center rounded-full border bg-background text-foreground shadow-md hover:bg-muted"
-				aria-label="Scroll to the newest message"
+				aria-label={m.chat.scrollToBottom}
 			>
 				<ArrowDownIcon class="size-4" />
 			</button>
@@ -747,9 +776,9 @@
 			<div
 				class="flex items-center justify-between gap-3 rounded-[26px] border bg-background px-5 py-3 text-sm text-muted-foreground shadow-sm"
 			>
-				<span>Only the agent that started {conversation.subagent.name} writes here.</span>
+				<span>{m.chat.subagentOnly(conversation.subagent.name)}</span>
 				{#if chat.running}
-					<Button size="sm" variant="outline" onclick={() => post('stop')}>Stop</Button>
+					<Button size="sm" variant="outline" onclick={() => post('stop')}>{m.common.stop}</Button>
 				{/if}
 			</div>
 		{:else}
@@ -759,7 +788,7 @@
 				{attachments}
 				running={chat.running}
 				busy={sending}
-				placeholder={chat.running ? 'Add something while btw works…' : 'Ask btw'}
+				placeholder={chat.running ? m.chat.placeholderRunning : m.chat.placeholder}
 				onsubmit={send}
 				onstop={() => post('stop')}
 			>
@@ -777,10 +806,10 @@
 		{#if actionError}
 			<p class="mt-2 text-center text-sm text-destructive">{actionError}</p>
 		{:else if !chat.connected && chat.loaded}
-			<p class="mt-2 text-center text-xs text-warning">Reconnecting…</p>
+			<p class="mt-2 text-center text-xs text-warning">{m.chat.reconnecting}</p>
 		{:else}
 			<p class="mt-2 hidden text-center text-xs text-muted-foreground sm:block">
-				btw can make mistakes, and it can change files on this computer.
+				{m.chat.disclaimer}
 			</p>
 		{/if}
 	</ComposerDock>
@@ -799,15 +828,19 @@
 <AlertDialog.Root bind:open={deleteOpen}>
 	<AlertDialog.Content>
 		<AlertDialog.Header>
-			<AlertDialog.Title>Delete chat?</AlertDialog.Title>
+			<AlertDialog.Title>{m.chat.deleteTitle}</AlertDialog.Title>
 			<AlertDialog.Description>
-				This deletes <strong class="text-foreground">{title}</strong> for everyone in the profile.
+				<Rich text={m.chat.deleteBody}>
+					{#snippet name()}<strong class="text-foreground">{title}</strong>{/snippet}
+				</Rich>
 			</AlertDialog.Description>
 		</AlertDialog.Header>
 		<form method="POST" action="?/delete" use:enhance>
 			<AlertDialog.Footer>
-				<AlertDialog.Cancel type="button">Cancel</AlertDialog.Cancel>
-				<AlertDialog.Action type="submit" variant="destructive">Delete</AlertDialog.Action>
+				<AlertDialog.Cancel type="button">{m.common.cancel}</AlertDialog.Cancel>
+				<AlertDialog.Action type="submit" variant="destructive"
+					>{m.common.delete}</AlertDialog.Action
+				>
 			</AlertDialog.Footer>
 		</form>
 	</AlertDialog.Content>

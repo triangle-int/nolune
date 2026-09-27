@@ -16,6 +16,7 @@ import {
 	templateMessage,
 	type ImageShape
 } from '@btw/core';
+import { translations } from '$lib/i18n';
 import { requireProfile } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -64,7 +65,7 @@ export const load: PageServerLoad = ({ locals, params }) => {
 			})
 		})),
 		ready: status.ready && !!preset,
-		problem: preset ? status.problem : 'No chat model is set up yet.',
+		problem: preset ? status.problem : translations(locals.locale).m.images.noModel,
 		/** The provider whose key is missing, so the page can say who adds it and where. */
 		missingKey: status.missingKey && { label: API_KEYS[status.missingKey].label }
 	};
@@ -82,18 +83,19 @@ export const actions: Actions = {
 	 */
 	default: async ({ locals, params, request }) => {
 		const { user, profile } = requireProfile(locals, params.slug);
+		const { m } = translations(locals.locale);
 		const form = await request.formData();
 		const templateId = form.get('template')?.toString() ?? '';
 		const uploads = form.getAll('upload').map(String);
 		const problem = (text: string) => fail(400, { template: templateId, message: text });
 		const preset = getDefaultPreset();
-		if (!preset) return problem('No chat model is set up yet.');
+		if (!preset) return problem(m.images.noModel);
 		try {
 			// Checked before the conversation exists, so a stale file doesn't leave an empty chat.
 			const notPicture = findUploads(profile.id, user.id, uploads).find(
 				(u) => !u.mime.startsWith('image/')
 			);
-			if (templateId && notPicture) return problem(`${notPicture.name} is not a picture.`);
+			if (templateId && notPicture) return problem(m.images.notPicture(notPicture.name));
 		} catch (err) {
 			if (err instanceof AttachmentError) return problem(err.message);
 			throw err;
@@ -102,7 +104,7 @@ export const actions: Actions = {
 		let text: string;
 		if (templateId) {
 			const template = templatesFor(profile.slug).find((t) => t.id === templateId);
-			if (!template) return problem('That template no longer exists.');
+			if (!template) return problem(m.images.templateGone);
 			const values: Record<string, string> = {};
 			for (const setting of template.settings) {
 				const value = form.get(`setting:${setting.id}`)?.toString();
@@ -125,7 +127,8 @@ export const actions: Actions = {
 			}
 		} else {
 			const description = form.get('text')?.toString().trim() ?? '';
-			if (!description) return problem('Describe the picture first.');
+			if (!description) return problem(m.images.describeFirst);
+			// For the model, like a template's prompt: the same in every interface language.
 			text = `Make an image: ${description}`;
 		}
 

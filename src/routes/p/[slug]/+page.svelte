@@ -5,23 +5,20 @@
 	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 	import AssistantAvatar from '$lib/components/AssistantAvatar.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import Rich from '$lib/components/Rich.svelte';
 	import NewChatForm from '$lib/components/chat/NewChatForm.svelte';
+	import { getI18n } from '$lib/i18n';
 
 	let { data } = $props();
 
+	const { m } = getI18n();
+	/** Put in the message box for the person to finish, in the interface's language. */
+	const { suggestions } = m.newChat;
 	const SUGGESTIONS = [
-		{ icon: BellIcon, label: 'Set a reminder', text: 'Remind me tomorrow at 9:00 to ' },
-		{
-			icon: CloudSunIcon,
-			label: 'Daily weather check',
-			text: 'Every weekday at 7:30, check the weather and tell us if we need umbrellas.'
-		},
-		{ icon: FileSearchIcon, label: 'Find a file', text: 'Find the file on this computer called ' },
-		{
-			icon: HardDriveIcon,
-			label: 'Check free space',
-			text: 'How much free disk space is left on this computer?'
-		}
+		{ icon: BellIcon, ...suggestions.reminder },
+		{ icon: CloudSunIcon, ...suggestions.weather },
+		{ icon: FileSearchIcon, ...suggestions.file },
+		{ icon: HardDriveIcon, ...suggestions.space }
 	];
 
 	const firstName = $derived(data.user?.name.split(/\s+/)[0] ?? '');
@@ -34,8 +31,10 @@
 {#if data.presets.length === 0}
 	<div class="flex flex-1 items-center justify-center p-6">
 		<p class="max-w-md text-center text-muted-foreground">
-			No models are set up yet. An admin can add one on the Models page or with
-			<code class="rounded bg-muted px-1">btw preset add &lt;model&gt;</code>.
+			<Rich text={m.newChat.noModels}>
+				{#snippet command()}<code class="rounded bg-muted px-1">btw preset add &lt;model&gt;</code
+					>{/snippet}
+			</Rich>
 		</p>
 	</div>
 {:else}
@@ -59,7 +58,7 @@
 				class="mx-auto mb-5 block"
 			/>
 			<h1 class="mb-8 text-center text-[28px] leading-tight font-normal tracking-tight">
-				{firstName ? `What can I help with, ${firstName}?` : 'What can I help with?'}
+				{firstName ? m.newChat.greeting(firstName) : m.newChat.greetingNoName}
 			</h1>
 			<div class="flex-1 sm:hidden"></div>
 		{/snippet}

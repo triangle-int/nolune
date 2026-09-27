@@ -98,75 +98,83 @@ function span(names: string[]): string {
 	return `${names[0]} to ${names[names.length - 1]}`;
 }
 
-/** Which days, as a sentence start ("Every weekday") and as a tail ("on weekdays"). */
-function describeDays(
-	dom: number[],
-	months: number[],
-	dow: number[]
-): { every: string; on: string } | null {
-	const allDom = dom.length === 31;
-	const allMonths = months.length === 12;
-	const allDow = dow.length === 7;
-	// Cron matches either the day of the month or the weekday when both are set; too subtle to word.
-	if (!allDom && !allDow) return null;
-	const names = months.map((m) => MONTHS[m - 1]);
-	const monthNames = list(names);
-	const inMonths =
-		names.length >= 3 && isRange(months) ? `from ${span(names)}` : `in ${monthNames}`;
+/**
+ * Which days a schedule runs on. Weekdays are JavaScript's numbers (0 is Sunday), Monday first;
+ * `monthDays` are days of the month, at most four.
+ */
+export type ScheduleDays =
+	| { kind: 'daily' }
+	| { kind: 'weekdays' }
+	| { kind: 'weekends' }
+	| { kind: 'weekdayRange'; from: number; to: number }
+	| { kind: 'weekdayList'; days: number[] }
+	| { kind: 'monthDays'; days: number[] }
+	| { kind: 'date'; day: number; month: number };
 
-	if (!allDom) {
-		if (dom.length > 4) return null;
-		const days = list(dom.map(ordinal));
-		if (allMonths) {
-			return { every: `On the ${days} of every month`, on: `on the ${days} of every month` };
-		}
-		if (dom.length === 1 && months.length === 1) {
-			return {
-				every: `Every year on ${dom[0]} ${monthNames}`,
-				on: `every year on ${dom[0]} ${monthNames}`
-			};
-		}
-		return { every: `On the ${days} of ${monthNames}`, on: `on the ${days} of ${monthNames}` };
-	}
+/** When in those days: clock times are "07:30". */
+export type ScheduleTimes =
+	/** Every `step` minutes, all day or between two times. */
+	| { kind: 'minutes'; step: number; between: { from: string; to: string } | null }
+	/** Every `step` hours, `minute` past the hour. */
+	| { kind: 'hours'; step: number; minute: number }
+	/** Every hour from one time to another. */
+	| { kind: 'hourRange'; from: string; to: string }
+	| { kind: 'at'; times: string[] };
 
-	// Monday first, Sunday last.
-	const order = dow.map((d) => (d + 6) % 7).sort((a, b) => a - b);
-	const weekdays = order.map((d) => DAYS[(d + 1) % 7]);
-	let days: { every: string; on: string };
-	if (allDow) days = { every: 'Every day', on: '' };
-	else if (order.join() === '0,1,2,3,4') days = { every: 'Every weekday', on: 'on weekdays' };
-	else if (order.join() === '5,6') days = { every: 'On weekends', on: 'on weekends' };
-	else if (order.length >= 3 && isRange(order)) {
-		days = { every: span(weekdays), on: span(weekdays) };
-	} else {
-		days = {
-			every: `Every ${list(weekdays)}`,
-			on: `on ${list(weekdays.map((d) => `${d}s`))}`
-		};
-	}
-	if (allMonths) return days;
-	return { every: `${days.every} ${inMonths}`, on: `${days.on || 'every day'} ${inMonths}` };
+/** A cron expression taken apart into what can be said in words, in any language. */
+export interface Schedule {
+	days: ScheduleDays;
+	/** 1 to 12, or null for every month (a `date` names its own). */
+	months: number[] | null;
+	times: ScheduleTimes;
+}
+
+/** Whether months are three or more in a row, said as "from June to August". */
+export function isMonthSpan(months: number[]): boolean {
+	return months.length >= 3 && isRange(months);
 }
 
 /**
- * A 5-field cron expression in plain words: `30 7 * * 1-5` is "Every weekday at 07:30",
- * `*\/10 9-17 * * *` "Every 10 minutes from 09:00 to 17:50". Null when it can't be put simply.
+ * Reads a 5-field cron expression. Null when it can't be put simply: syntax this doesn't read,
+ * both a day of the month and a weekday, uneven steps, too many times.
  */
-export function describeCron(expr: string): string | null {
+export function parseCron(expr: string): Schedule | null {
 	const fields = (NICKNAMES[expr.trim().toLowerCase()] ?? expr).trim().split(/\s+/);
 	if (fields.length !== 5) return null;
 	const minutes = expand(fields[0], 0, 59);
 	const hours = expand(fields[1], 0, 23);
 	const dom = expand(fields[2], 1, 31);
-	const months = expand(fields[3], 1, 12, MONTH_ALIASES);
+	const monthList = expand(fields[3], 1, 12, MONTH_ALIASES);
 	// 7 is Sunday too.
 	const dowRaw = expand(fields[4], 0, 7, DAY_ALIASES);
-	if (!minutes || !hours || !dom || !months || !dowRaw) return null;
+	if (!minutes || !hours || !dom || !monthList || !dowRaw) return null;
 	const dow = [...new Set(dowRaw.map((d) => d % 7))];
-	const days = describeDays(dom, months, dow);
-	if (!days) return null;
 
-	const tail = days.on ? ` ${days.on}` : '';
+	const allDom = dom.length === 31;
+	const allDow = dow.length === 7;
+	// Cron matches either the day of the month or the weekday when both are set; too subtle to word.
+	if (!allDom && !allDow) return null;
+	let months = monthList.length === 12 ? null : monthList;
+	let days: ScheduleDays;
+	if (!allDom) {
+		if (dom.length > 4) return null;
+		if (months?.length === 1 && dom.length === 1) {
+			days = { kind: 'date', day: dom[0], month: months[0] };
+			months = null;
+		} else days = { kind: 'monthDays', days: dom };
+	} else {
+		// Monday first, Sunday last.
+		const order = dow.map((d) => (d + 6) % 7).sort((a, b) => a - b);
+		const weekdays = order.map((d) => (d + 1) % 7);
+		if (allDow) days = { kind: 'daily' };
+		else if (order.join() === '0,1,2,3,4') days = { kind: 'weekdays' };
+		else if (order.join() === '5,6') days = { kind: 'weekends' };
+		else if (order.length >= 3 && isRange(order)) {
+			days = { kind: 'weekdayRange', from: weekdays[0], to: weekdays[weekdays.length - 1] };
+		} else days = { kind: 'weekdayList', days: weekdays };
+	}
+
+	const schedule = (times: ScheduleTimes): Schedule => ({ days, months, times });
 	const allMinutes = minutes.length === 60;
 	const minuteStep = allMinutes ? 1 : stepOf(minutes, 0, 60);
 	const allHours = hours.length === 24;
@@ -175,24 +183,81 @@ export function describeCron(expr: string): string | null {
 	const last = hours[hours.length - 1];
 
 	if (minuteStep) {
-		const every = minuteStep === 1 ? 'Every minute' : `Every ${minuteStep} minutes`;
-		if (allHours) return every + tail;
+		if (allHours) return schedule({ kind: 'minutes', step: minuteStep, between: null });
 		if (isRange(hours)) {
-			return `${every} from ${clock(first, 0)} to ${clock(last, 60 - minuteStep)}${tail}`;
+			const between = { from: clock(first, 0), to: clock(last, 60 - minuteStep) };
+			return schedule({ kind: 'minutes', step: minuteStep, between });
 		}
 	}
 	if (minutes.length === 1) {
 		const [m] = minutes;
-		const past = m ? ` at :${String(m).padStart(2, '0')}` : '';
-		if (allHours) return `Every hour${past}${tail}`;
-		if (hourStep) return `Every ${hourStep} hours${past}${tail}`;
+		if (hourStep) return schedule({ kind: 'hours', step: hourStep, minute: m });
 		if (hours.length >= 5 && isRange(hours)) {
-			return `Every hour from ${clock(first, m)} to ${clock(last, m)}${tail}`;
+			return schedule({ kind: 'hourRange', from: clock(first, m), to: clock(last, m) });
 		}
 	}
 	const times = hours.flatMap((h) => minutes.map((m) => clock(h, m)));
-	if (times.length <= 4) return `${days.every} at ${list(times)}`;
-	return null;
+	return times.length <= 4 ? schedule({ kind: 'at', times }) : null;
+}
+
+/** Which days, as a sentence start ("Every weekday") and as a tail ("on weekdays"). */
+function describeDays({ days, months }: Schedule): { every: string; on: string } {
+	const monthNames = (months ?? []).map((m) => MONTHS[m - 1]);
+	if (days.kind === 'monthDays') {
+		const which = list(days.days.map(ordinal));
+		const of = months ? list(monthNames) : 'every month';
+		return { every: `On the ${which} of ${of}`, on: `on the ${which} of ${of}` };
+	}
+	if (days.kind === 'date') {
+		const date = `${days.day} ${MONTHS[days.month - 1]}`;
+		return { every: `Every year on ${date}`, on: `every year on ${date}` };
+	}
+	let words: { every: string; on: string };
+	if (days.kind === 'daily') words = { every: 'Every day', on: '' };
+	else if (days.kind === 'weekdays') words = { every: 'Every weekday', on: 'on weekdays' };
+	else if (days.kind === 'weekends') words = { every: 'On weekends', on: 'on weekends' };
+	else if (days.kind === 'weekdayRange') {
+		const range = span([DAYS[days.from], DAYS[days.to]]);
+		words = { every: range, on: range };
+	} else {
+		const names = days.days.map((d) => DAYS[d]);
+		words = { every: `Every ${list(names)}`, on: `on ${list(names.map((d) => `${d}s`))}` };
+	}
+	if (!months) return words;
+	const inMonths = isMonthSpan(months) ? `from ${span(monthNames)}` : `in ${list(monthNames)}`;
+	return { every: `${words.every} ${inMonths}`, on: `${words.on || 'every day'} ${inMonths}` };
+}
+
+/** A schedule in plain English. The web UI words it in the reader's language (src/lib/i18n). */
+export function describeSchedule(schedule: Schedule): string {
+	const days = describeDays(schedule);
+	const tail = days.on ? ` ${days.on}` : '';
+	const { times } = schedule;
+	switch (times.kind) {
+		case 'minutes': {
+			const every = times.step === 1 ? 'Every minute' : `Every ${times.step} minutes`;
+			if (!times.between) return every + tail;
+			return `${every} from ${times.between.from} to ${times.between.to}${tail}`;
+		}
+		case 'hours': {
+			const past = times.minute ? ` at :${String(times.minute).padStart(2, '0')}` : '';
+			const every = times.step === 1 ? 'Every hour' : `Every ${times.step} hours`;
+			return `${every}${past}${tail}`;
+		}
+		case 'hourRange':
+			return `Every hour from ${times.from} to ${times.to}${tail}`;
+		case 'at':
+			return `${days.every} at ${list(times.times)}`;
+	}
+}
+
+/**
+ * A 5-field cron expression in plain words: `30 7 * * 1-5` is "Every weekday at 07:30",
+ * `*\/10 9-17 * * *` "Every 10 minutes from 09:00 to 17:50". Null when it can't be put simply.
+ */
+export function describeCron(expr: string): string | null {
+	const schedule = parseCron(expr);
+	return schedule && describeSchedule(schedule);
 }
 
 function dayNumber(date: Date): number {
@@ -202,35 +267,33 @@ function dayNumber(date: Date): number {
 	);
 }
 
-/** "today", "tomorrow", "yesterday", "Monday" (within the coming week), else "Mon 5 Oct". */
-export function formatDay(date: Date, now: Date = new Date()): string {
+/**
+ * "today", "tomorrow", "yesterday", "Monday" (within the coming week), else "Mon 5 Oct", in
+ * `locale`'s words (a BCP 47 tag like `ru`; British English by default).
+ */
+export function formatDay(date: Date, now: Date = new Date(), locale = 'en-GB'): string {
 	const diff = dayNumber(date) - dayNumber(now);
-	if (diff === 0) return 'today';
-	if (diff === 1) return 'tomorrow';
-	if (diff === -1) return 'yesterday';
-	if (diff > 1 && diff < 7) return date.toLocaleDateString('en-GB', { weekday: 'long' });
+	if (Math.abs(diff) <= 1) {
+		return new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(diff, 'day');
+	}
+	if (diff > 1 && diff < 7) return date.toLocaleDateString(locale, { weekday: 'long' });
 	const year = date.getFullYear() !== now.getFullYear() ? ` ${date.getFullYear()}` : '';
-	return `${formatWeekday(date)} ${formatDate(date)}${year}`;
+	return `${formatWeekday(date, locale)} ${formatDate(date, locale)}${year}`;
 }
 
 /** "Mon". */
-export function formatWeekday(date: Date): string {
-	return date.toLocaleDateString('en-GB', { weekday: 'short' });
+export function formatWeekday(date: Date, locale = 'en-GB'): string {
+	return date.toLocaleDateString(locale, { weekday: 'short' });
 }
 
 /** "28 Sept". */
-export function formatDate(date: Date): string {
-	return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+export function formatDate(date: Date, locale = 'en-GB'): string {
+	return date.toLocaleDateString(locale, { day: 'numeric', month: 'short' });
 }
 
 /** "07:30" in local time. */
 export function formatClock(date: Date): string {
 	return clock(date.getHours(), date.getMinutes());
-}
-
-/** "tomorrow at 07:30", "Mon 5 Oct at 07:30". */
-export function formatDayTime(date: Date, now: Date = new Date()): string {
-	return `${formatDay(date, now)} at ${formatClock(date)}`;
 }
 
 /** Local calendar day, for grouping: "2026-09-28". */

@@ -4,6 +4,7 @@
 	import DownloadIcon from '@lucide/svelte/icons/download';
 	import FileIcon from '@lucide/svelte/icons/file';
 	import { formatBytes } from '$lib/format';
+	import { getI18n } from '$lib/i18n';
 
 	interface Props {
 		conversationId: string;
@@ -11,6 +12,9 @@
 	}
 
 	let { conversationId, attachments }: Props = $props();
+
+	const i18n = getI18n();
+	const { m } = i18n;
 
 	/** Pictures in a message are at most this tall; the viewer shows them full size. */
 	const MAX_HEIGHT = 192;
@@ -36,7 +40,7 @@
 					data-media-view
 					data-name={a.name}
 					data-download="{url(a.id)}?download"
-					aria-label="Open {a.name}"
+					aria-label={m.attachments.open(a.name)}
 					class="block max-w-full cursor-zoom-in overflow-hidden rounded-xl border"
 				>
 					<img
@@ -58,7 +62,9 @@
 					<FileIcon class="size-5 shrink-0 text-muted-foreground" />
 					<span class="min-w-0">
 						<span class="block truncate text-sm font-medium">{a.name}</span>
-						<span class="block truncate text-xs text-muted-foreground">{formatBytes(a.bytes)}</span>
+						<span class="block truncate text-xs text-muted-foreground"
+							>{formatBytes(a.bytes, i18n)}</span
+						>
 					</span>
 					<DownloadIcon class="size-4 shrink-0 text-muted-foreground" />
 				</a>
@@ -66,7 +72,7 @@
 			{/if}
 			{#if a.note}
 				<span class="max-w-72 text-right text-xs text-muted-foreground">
-					btw got only where it's saved: {a.note}
+					{m.attachments.onlyPath(a.note)}
 				</span>
 			{/if}
 		</div>

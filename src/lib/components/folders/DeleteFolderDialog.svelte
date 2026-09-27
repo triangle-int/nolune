@@ -5,6 +5,8 @@
 	import { page } from '$app/state';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import type { FolderItem } from '$lib/folders';
+	import { getI18n } from '$lib/i18n';
+	import Rich from '../Rich.svelte';
 
 	interface Props {
 		/** The folder to delete; the dialog is open while it's set. */
@@ -13,16 +15,18 @@
 	}
 
 	let { folder = $bindable(), slug }: Props = $props();
+
+	const { m } = getI18n();
 </script>
 
 <AlertDialog.Root open={folder !== null} onOpenChange={(isOpen) => !isOpen && (folder = null)}>
 	<AlertDialog.Content>
 		<AlertDialog.Header>
-			<AlertDialog.Title>Delete folder?</AlertDialog.Title>
+			<AlertDialog.Title>{m.folders.deleteTitle}</AlertDialog.Title>
 			<AlertDialog.Description>
-				<strong class="text-foreground">{folder?.name}</strong> is deleted for everyone in the profile.
-				Its chats move back to your chat list, without its instructions and files. The files are moved
-				to ~/.btw-agent/trash.
+				<Rich text={m.folders.deleteBody}>
+					{#snippet name()}<strong class="text-foreground">{folder?.name}</strong>{/snippet}
+				</Rich>
 			</AlertDialog.Description>
 		</AlertDialog.Header>
 		<form
@@ -41,8 +45,10 @@
 			}}
 		>
 			<AlertDialog.Footer>
-				<AlertDialog.Cancel type="button">Cancel</AlertDialog.Cancel>
-				<AlertDialog.Action type="submit" variant="destructive">Delete</AlertDialog.Action>
+				<AlertDialog.Cancel type="button">{m.common.cancel}</AlertDialog.Cancel>
+				<AlertDialog.Action type="submit" variant="destructive"
+					>{m.common.delete}</AlertDialog.Action
+				>
 			</AlertDialog.Footer>
 		</form>
 	</AlertDialog.Content>

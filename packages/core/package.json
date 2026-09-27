@@ -9,6 +9,7 @@
 		"./media-refs": "./src/media-refs.ts",
 		"./articles": "./src/articles.ts",
 		"./avatars": "./src/avatars.ts",
+		"./schedule": "./src/schedule.ts",
 		"./paths": "./src/paths.ts"
 	},
 	"scripts": {

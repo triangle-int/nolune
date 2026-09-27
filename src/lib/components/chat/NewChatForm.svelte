@@ -2,6 +2,7 @@
 	import { onMount, untrack, type Snippet } from 'svelte';
 	import { enhance } from '$app/forms';
 	import type { FolderItem } from '$lib/folders';
+	import { getI18n } from '$lib/i18n';
 	import { Attachments } from '$lib/uploads.svelte';
 	import Composer from './Composer.svelte';
 	import FolderMenu from './FolderMenu.svelte';
@@ -28,6 +29,8 @@
 		footer?: Snippet;
 	}
 
+	const { m } = getI18n();
+
 	let {
 		slug,
 		presets,
@@ -35,7 +38,7 @@
 		efforts,
 		folders,
 		folderId: initialFolderId,
-		placeholder = 'Ask btw',
+		placeholder = m.chat.placeholder,
 		autofocus = false,
 		class: className,
 		header,
@@ -48,7 +51,7 @@
 	const STORAGE_KEY = 'btw-new-chat';
 
 	let text = $state('');
-	const attachments = new Attachments(() => slug);
+	const attachments = new Attachments(() => slug, m);
 	let presetId = $state(untrack(() => defaultPresetId));
 	let effort = $state('medium');
 	// Follows the page (`?folder=`) until someone picks another folder in the chip.
@@ -93,7 +96,7 @@
 		remember();
 		return async ({ result, update }) => {
 			if (result.type === 'failure') {
-				problem = String(result.data?.message ?? 'Could not start the chat.');
+				problem = String(result.data?.message ?? m.newChat.couldNotStart);
 			} else await update();
 			submitting = false;
 		};

@@ -7,6 +7,7 @@
 	import XIcon from '@lucide/svelte/icons/x';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { formatBytes } from '$lib/format';
+	import { getI18n } from '$lib/i18n';
 	import type { Attachments } from '$lib/uploads.svelte';
 	import { cn } from '$lib/utils';
 
@@ -29,9 +30,12 @@
 		class?: string;
 	}
 
+	const i18n = getI18n();
+	const { m } = i18n;
+
 	let {
 		value = $bindable(),
-		placeholder = 'Ask anything',
+		placeholder = m.composer.placeholder,
 		running = false,
 		busy = false,
 		name,
@@ -131,7 +135,7 @@
 									file.status === 'failed' ? 'text-destructive' : 'text-muted-foreground'
 								)}
 							>
-								{file.status === 'failed' ? file.error : formatBytes(file.size)}
+								{file.status === 'failed' ? file.error : formatBytes(file.size, i18n)}
 							</span>
 						</span>
 					{/if}
@@ -149,7 +153,7 @@
 						type="button"
 						onclick={() => attachments.remove(file.key)}
 						class="absolute top-1 right-1 flex size-5 items-center justify-center rounded-full bg-foreground/70 text-background hover:bg-foreground"
-						aria-label="Remove {file.name}"
+						aria-label={m.common.removeFile(file.name)}
 					>
 						<XIcon class="size-3" />
 					</button>
@@ -167,7 +171,7 @@
 		{@attach autosize}
 		rows="1"
 		enterkeyhint="enter"
-		aria-label="Message"
+		aria-label={m.composer.message}
 		class="block max-h-[40vh] min-h-11 w-full resize-none bg-transparent px-3 pt-2.5 pb-1 text-base leading-6 outline-none placeholder:text-muted-foreground"
 	></textarea>
 	<div class="flex items-center gap-1 pt-1">
@@ -191,13 +195,13 @@
 							type="button"
 							onclick={() => fileInput?.click()}
 							class="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
-							aria-label="Attach files"
+							aria-label={m.composer.attach}
 						>
 							<PaperclipIcon class="size-[18px]" />
 						</button>
 					{/snippet}
 				</Tooltip.Trigger>
-				<Tooltip.Content>Attach files</Tooltip.Content>
+				<Tooltip.Content>{m.composer.attach}</Tooltip.Content>
 			</Tooltip.Root>
 		{/if}
 		{@render tools?.()}
@@ -211,13 +215,13 @@
 							type="button"
 							onclick={onstop}
 							class="flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground hover:opacity-80"
-							aria-label="Stop"
+							aria-label={m.common.stop}
 						>
 							<SquareIcon class="size-3.5 fill-current" />
 						</button>
 					{/snippet}
 				</Tooltip.Trigger>
-				<Tooltip.Content>Stop</Tooltip.Content>
+				<Tooltip.Content>{m.common.stop}</Tooltip.Content>
 			</Tooltip.Root>
 		{:else}
 			<button
@@ -225,7 +229,7 @@
 				onclick={onsubmit}
 				disabled={empty || blocked}
 				class="flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground hover:opacity-80 disabled:opacity-30"
-				aria-label="Send"
+				aria-label={m.composer.send}
 			>
 				<ArrowUpIcon class="size-5" />
 			</button>
