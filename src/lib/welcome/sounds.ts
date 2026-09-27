@@ -3,9 +3,12 @@
  * tint washing in, memories arriving), and a soft click when someone picks something. While a
  * step waits for them, it stays quiet.
  *
- * Each cue is a file in src/lib/assets/sounds/welcome (`burst.mp3`), bundled with a hashed name and
- * fetched on first use; a cue without its file stays silent, so the welcome works before any
- * sounds exist. `pad` loops under the intro and the steps.
+ * Music plays under those moments and fades out whenever the welcome waits for someone; the next
+ * moment picks it up at its own cut (MUSIC). Effects play on top.
+ *
+ * Each cue is a file in src/lib/assets/sounds/welcome (`burst.mp3`, `music.mp3`), bundled with a
+ * hashed name and fetched on first use; one without its file stays silent, so the welcome works
+ * before any sounds exist.
  *
  * Browsers only allow sound after a click. Creating the profile is one, and the welcome is a
  * client-side navigation from there, so the intro can play; opened some other way it starts
@@ -13,7 +16,6 @@
  */
 
 export const CUES = [
-	'pad',
 	'shimmer',
 	'trace',
 	'tick',
@@ -27,6 +29,17 @@ export const CUES = [
 	'gather'
 ] as const;
 export type Cue = (typeof CUES)[number];
+
+/**
+ * Where each moment that plays by itself starts in the music, in seconds, cut to the song's
+ * sections: the intro rises out of silence with it, the tint washes in on the lift at 23.7 s, and
+ * memories take flight on the drop at 42 s, which comes 0.9 s after the arrival opens, as they
+ * start to fly. For "Wistful Melodic Arc" (music.mp3, its first 56 s); another song needs its own.
+ */
+export const MUSIC = { intro: 0, hello: 23.45, arrival: 41.1 } as const;
+export type MusicCut = keyof typeof MUSIC;
+/** Under the effects, and well under anyone's own music. */
+const MUSIC_LEVEL = 0.5;
 
 /** The cues' files that exist, by name. */
 const FILES = Object.fromEntries(
@@ -43,7 +56,7 @@ const FILES = Object.fromEntries(
 			.replace(/\.[^.]+$/, ''),
 		url
 	])
-) as Partial<Record<Cue, string>>;
+) as Partial<Record<Cue | 'music', string>>;
 
 /** Semitones of the major pentatonic, so a cascade of sparkles climbs without clashing. */
 const PENTATONIC = [0, 2, 4, 7, 9, 12, 14, 16, 19, 21];
@@ -51,14 +64,15 @@ const PENTATONIC = [0, 2, 4, 7, 9, 12, 14, 16, 19, 21];
 let ctx: AudioContext | null = null;
 let out: GainNode | null = null;
 let enabled = true;
-const buffers = new Map<Cue, Promise<AudioBuffer | null>>();
-let pad: { source: AudioBufferSourceNode; gain: GainNode } | null = null;
-let padWanted = false;
+const buffers = new Map<Cue | 'music', Promise<AudioBuffer | null>>();
+let music: { source: AudioBufferSourceNode; gain: GainNode } | null = null;
+/** Bumped by every play and fade, so music that finishes loading late doesn't start after all. */
+let musicTurn = 0;
 
-/** Sounds follow the Sounds setting; turning it off also stops the pad. */
+/** Sounds follow the Sounds setting; turning it off also fades the music out. */
 export function setSoundsOn(on: boolean): void {
 	enabled = on;
-	if (!on) stopPad(0.3);
+	if (!on) fadeOutMusic(0.3);
 }
 
 /** The audio graph, made on first use; null when sounds are off or the browser has no audio. */
@@ -79,7 +93,7 @@ function audio(): { ctx: AudioContext; out: GainNode } | null {
 	return out ? { ctx, out } : null;
 }
 
-function load(cue: Cue): Promise<AudioBuffer | null> {
+function load(cue: Cue | 'music'): Promise<AudioBuffer | null> {
 	let found = buffers.get(cue);
 	if (!found) {
 		const url = FILES[cue];
@@ -94,9 +108,12 @@ function load(cue: Cue): Promise<AudioBuffer | null> {
 	return found;
 }
 
-/** Call from a click, so a page that started silent can play from then on. */
+/**
+ * Starts loading everything, so the music is ready when its moments come. Also call it from a
+ * click, so a page that started silent can play from then on.
+ */
 export function wake(): void {
-	if (audio() && padWanted) startPad();
+	audio();
 }
 
 /**
@@ -127,34 +144,39 @@ export function sparkle(i: number, n: number): void {
 	play('sparkle', { semitones: PENTATONIC[step], pan: Math.sin(i * 1.7) * 0.6, gain: 0.7 });
 }
 
-/** The quiet bed under the intro and the steps, looped until stopPad. */
-export function startPad(): void {
-	padWanted = true;
+/**
+ * Plays the music from a moment's cut, fading in over `fadeIn` seconds. Starting late (the file
+ * was still loading) starts that much further in, so it stays in time with the screen.
+ */
+export function playMusic(cut: MusicCut, fadeIn = 0.4): void {
 	const a = audio();
-	if (!a || pad) return;
-	load('pad').then((buffer) => {
-		if (!buffer || pad || !padWanted || !enabled) return;
+	if (!a) return;
+	fadeOutMusic(0.3);
+	const turn = ++musicTurn;
+	const asked = a.ctx.currentTime;
+	load('music').then((buffer) => {
+		if (!buffer || !enabled || turn !== musicTurn) return;
+		const now = a.ctx.currentTime;
 		const source = a.ctx.createBufferSource();
 		source.buffer = buffer;
-		source.loop = true;
 		const gain = a.ctx.createGain();
-		const now = a.ctx.currentTime;
 		gain.gain.setValueAtTime(0, now);
-		gain.gain.linearRampToValueAtTime(0.6, now + 2.5);
-		source.connect(gain).connect(a.out);
-		source.start();
-		pad = { source, gain };
+		gain.gain.linearRampToValueAtTime(MUSIC_LEVEL, now + fadeIn);
+		source.connect(gain).connect(a.ctx.destination);
+		source.start(now, MUSIC[cut] + Math.min(now - asked, 2));
+		music = { source, gain };
 	});
 }
 
-export function stopPad(fade = 2): void {
-	padWanted = false;
-	if (!pad || !ctx) return;
-	const { source, gain } = pad;
+/** The welcome waits for someone, or is done: the music fades out. Once; later calls do nothing. */
+export function fadeOutMusic(fade = 1.5): void {
+	musicTurn++;
+	if (!music || !ctx) return;
+	const { source, gain } = music;
 	const now = ctx.currentTime;
 	gain.gain.cancelScheduledValues(now);
 	gain.gain.setValueAtTime(gain.gain.value, now);
 	gain.gain.linearRampToValueAtTime(0, now + fade);
 	source.stop(now + fade + 0.05);
-	pad = null;
+	music = null;
 }

@@ -1187,17 +1187,23 @@ nothing, and opening the page again runs it again.
   note), landing at full strength and fading to its age. The count ticks up with them. Then the
   dots fly into the avatar, and the page goes to `/p/<slug>`; a view transition names the avatar
   on both pages (`btw-assistant`), so it glides into its place over the composer.
-- **Sounds** (`src/lib/welcome/sounds.ts`). Only where the screen moves by itself (the spark, the
-  letters, the typing, the burst, the aurora, the tint washing in, each memory landing, the grid
-  settling, the gathering), plus a click when someone picks something; a step that waits stays
-  quiet, over a looped pad that fades out when the chat opens. Each cue is a file in
-  `src/lib/assets/sounds/welcome` (`pad`, `shimmer`, `trace`, `tick`, `burst`, `swell`, `click`,
-  `confirm`, `wash`, `sparkle`, `chord`, `gather`, as `.mp3`), bundled through `import.meta.glob`
-  and played with Web Audio; a cue without its file is silent. Sparkles are one note pitched up
-  the pentatonic scale as the grid fills, at most 40 per import. Browsers only play sound after
-  a click: creating the profile is one, and the welcome is a client-side navigation from there.
-  The Sounds setting (per device, in `btw-prefs`) and the speaker button on the welcome turn
-  them off.
+- **Sounds** (`src/lib/welcome/sounds.ts`). Only where the screen moves by itself: a click when
+  someone picks something is the one exception, and a step that waits stays quiet.
+  - **Music** plays under the three moments that run on their own (the intro, the tint washing
+    in, memories arriving) and fades out whenever the welcome waits for someone. Each moment
+    starts at its own cut of the song (`MUSIC`), chosen by its sections: the intro rises out of
+    the song's opening silence, the tint washes in on its lift at 23.7 s, and memories take off
+    on the drop at 42 s, 0.9 s after the arrival opens. It fades over three seconds on the new
+    chat. The song is "Wistful Melodic Arc" by p5ina, cut to its first 56 s (`music.mp3`); a new
+    song needs new cuts.
+  - **Effects** on top: `shimmer`, `trace`, `tick`, `burst`, `swell`, `click`, `confirm`,
+    `wash`, `sparkle`, `chord`, `gather`. Sparkles are one note pitched up the pentatonic scale
+    as the grid fills, at most 40 per import.
+  - Each is a file in `src/lib/assets/sounds/welcome` (`.mp3`), bundled through
+    `import.meta.glob` and played with Web Audio; one without its file is silent. Browsers only
+    play sound after a click: creating the profile is one, and the welcome is a client-side
+    navigation from there. The Sounds setting (per device, in `btw-prefs`) and the speaker button
+    on the welcome turn them off.
 
 ## Running `btw` in the gateway
 

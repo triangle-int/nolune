@@ -29,7 +29,7 @@
 	import { getPreferences } from '$lib/preferences.svelte';
 	import { avatarTint, tintStyle } from '$lib/tint';
 	import { cn } from '$lib/utils';
-	import { play, setSoundsOn, startPad, stopPad, wake } from '$lib/welcome/sounds';
+	import { fadeOutMusic, play, playMusic, setSoundsOn, wake } from '$lib/welcome/sounds';
 
 	let { data } = $props();
 	const { m } = getI18n();
@@ -97,7 +97,7 @@
 		const draw = 1900;
 		const sweep = 0.55;
 
-		startPad();
+		playMusic('intro', 0.05);
 		play('shimmer');
 		first.animate(
 			[
@@ -194,12 +194,15 @@
 		);
 		await wait(400);
 		if (!alive()) return;
+		// From here the welcome waits for "Let's go".
+		fadeOutMusic(2.5);
 		phase = 'welcome';
 	}
 
 	function skipIntro() {
 		if (phase !== 'intro') return;
 		introRun++;
+		fadeOutMusic(1);
 		skipped = true;
 		sky = 'aurora';
 		phase = 'welcome';
@@ -223,6 +226,7 @@
 		const root = document.documentElement;
 		root.style.setProperty('--wash-x', `${origin.x}px`);
 		root.style.setProperty('--wash-y', `${origin.y}px`);
+		playMusic('hello', 0.25);
 		play('wash');
 		const apply = async () => {
 			tinted = picked;
@@ -238,13 +242,15 @@
 			await apply();
 		}
 		await wait(reduced ? 900 : 1700);
+		fadeOutMusic(1.5);
 		phase = 'steps';
 		nextStep();
 	}
 
 	/** On to the profile's first chat. */
 	async function finish() {
-		stopPad(1.5);
+		// Carries on for a moment over the new chat, where it's up to them again.
+		fadeOutMusic(3);
 		await goto(resolve('/p/[slug]', { slug: data.welcome.slug }), { replaceState: true });
 	}
 
@@ -260,9 +266,11 @@
 	});
 
 	onMount(() => {
+		// Loads the sounds; after the click on Create, the intro can play them.
+		wake();
 		if (reduced) skipIntro();
 		else intro();
-		return () => stopPad(0.5);
+		return () => fadeOutMusic(0.5);
 	});
 </script>
 
@@ -432,6 +440,7 @@
 									if (!result.added) finish();
 									else {
 										imported = { notes: result.notes, lines };
+										playMusic('arrival', 0.3);
 										phase = 'arrival';
 									}
 								}}
