@@ -3,17 +3,27 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { streamTurn } from './anthropic.ts';
 import { eq } from 'drizzle-orm';
 import { stopBackgroundCommands } from './background.ts';
-import { committedRows, createConversation, insertQueued } from './conversations.ts';
+import {
+	appendRow,
+	commitQueuedRows,
+	committedRows,
+	createConversation,
+	insertQueued
+} from './conversations.ts';
 import { getDb } from './db/index.ts';
 import { conversation } from './db/schema.ts';
 import { LEGACY_TOOLS, TOOLS, runCommand, type RunCommandResult } from './run-command.ts';
 import {
+	changeEffort,
+	changeModel,
 	getSnapshot,
 	kick,
 	onLoopEnd,
 	onRunningChange,
 	recoverAfterRestart,
-	runningConversationIds
+	runningConversationIds,
+	subscribe,
+	type LiveEvent
 } from './runner.ts';
 import { runSubagent, setSubagentStatus } from './subagents.ts';
 import { makeFamily, makePreset } from './test/fixtures.ts';
@@ -166,6 +176,83 @@ describe('tools and cache', () => {
 		getDb().update(conversation).set({ tools: null }).where(eq(conversation.id, chat.id)).run();
 		await run(chat.id);
 		expect(vi.mocked(streamTurn).mock.calls[0][0].tools).toBe(LEGACY_TOOLS);
+	});
+});
+
+describe('switching models', () => {
+	it('goes on with the new model, even in the middle of a turn, and tells everyone watching', async () => {
+		const { user, profile } = makeFamily();
+		const gpt = makePreset('GPT', 'gpt-6-astra', 'openai');
+		const chat = createConversation({ profile, presetId: gpt.id, userId: user.id });
+		insertQueued({
+			conversationId: chat.id,
+			senderId: user.id,
+			senderName: 'Anna',
+			text: 'Files?'
+		});
+		commitQueuedRows(chat.id);
+		// GPT asked for a command, and got its result, before the chat switched.
+		appendRow({
+			conversationId: chat.id,
+			role: 'assistant',
+			kind: 'assistant',
+			content: JSON.stringify([
+				{ id: 'rs_1', type: 'reasoning', summary: [], encrypted_content: 'gAAAA' },
+				{
+					id: 'fc_1',
+					type: 'function_call',
+					call_id: 'call_1',
+					name: 'run_command',
+					arguments: '{"command":"ls"}'
+				}
+			]),
+			provider: 'openai',
+			model: 'gpt-6-astra'
+		});
+		appendRow({
+			conversationId: chat.id,
+			role: 'user',
+			kind: 'tool_results',
+			content: JSON.stringify([{ type: 'tool_result', tool_use_id: 'call_1', content: 'a.txt' }]),
+			provider: 'openai'
+		});
+		const events: LiveEvent[] = [];
+		const off = subscribe(chat.id, (event) => events.push(event));
+		const sonnet = makePreset();
+		changeModel(chat.id, sonnet.id);
+		changeEffort(chat.id, 'high');
+		off();
+		const model = {
+			presetId: sonnet.id,
+			presetName: 'Sonnet',
+			provider: 'anthropic',
+			contextWindow: 200_000
+		};
+		expect(events).toEqual([
+			{ type: 'model', model: { ...model, effort: 'medium' } },
+			{ type: 'model', model: { ...model, effort: 'high' } }
+		]);
+		expect(getSnapshot(chat.id).model).toEqual({ ...model, effort: 'high' });
+
+		vi.mocked(streamTurn).mockResolvedValueOnce(
+			modelReply([{ type: 'text', text: 'One file: a.txt.' }], 'end_turn')
+		);
+		await run(chat.id);
+		const request = vi.mocked(streamTurn).mock.calls[0][0];
+		expect(request).toMatchObject({ model: 'claude-sonnet-5', effort: 'high' });
+		expect(request.messages).toEqual([
+			{ role: 'user', content: [{ type: 'text', text: 'Anna: Files?' }] },
+			{
+				role: 'assistant',
+				content: [{ type: 'tool_use', id: 'call_1', name: 'run_command', input: { command: 'ls' } }]
+			},
+			{ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_1', content: 'a.txt' }] }
+		]);
+		expect(committedRows(chat.id).at(-1)).toMatchObject({
+			kind: 'assistant',
+			provider: 'anthropic',
+			model: 'claude-sonnet-5'
+		});
 	});
 });
 

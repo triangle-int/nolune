@@ -1,3 +1,5 @@
+import type Anthropic from '@anthropic-ai/sdk';
+
 /*
  * Reading stored message content, whichever provider wrote it. What btw writes itself (people's
  * messages, command results, notices) uses Anthropic's content blocks for every provider. A reply
@@ -80,4 +82,26 @@ export function replyBlocks(content: unknown): ReplyBlock[] {
 /** The tool calls in a reply, in order. */
 export function toolCalls(content: unknown): Extract<ReplyBlock, { type: 'tool_call' }>[] {
 	return replyBlocks(content).filter((b) => b.type === 'tool_call');
+}
+
+/**
+ * A reply in either provider's format as what any model can read: its text and tool calls, as
+ * Anthropic's blocks, without reasoning, which only the model (or provider) that wrote it can
+ * read back. This is how a reply goes to another model after the conversation switched. The same
+ * content always gives the same blocks, so the request prefix stays byte-identical.
+ */
+export function portableReply(
+	content: unknown
+): (Anthropic.TextBlockParam | Anthropic.ToolUseBlockParam)[] {
+	return replyBlocks(content).flatMap(
+		(b): (Anthropic.TextBlockParam | Anthropic.ToolUseBlockParam)[] => {
+			// The API refuses empty text blocks.
+			if (b.type === 'text') return b.text.trim() ? [{ type: 'text', text: b.text }] : [];
+			if (b.type !== 'tool_call' || !b.id) return [];
+			// A call whose input didn't parse goes without it; its result says it was invalid.
+			const input =
+				b.input && typeof b.input === 'object' && !Array.isArray(b.input) ? b.input : {};
+			return [{ type: 'tool_use', id: b.id, name: b.name, input }];
+		}
+	);
 }

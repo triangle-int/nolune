@@ -16,8 +16,8 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | Sender identity    | Every human message is sent to the model as `Name: text`. Attached files come first, each as a line saying who attached it and where it was saved, followed by the picture or PDF itself when the model gets one. Display names are unique across the gateway.                                                                                                                                                                                                                                                                                                                                       |
 | Attachments        | Any file, up to 100 MB and 10 per message, saved in the profile's `attachments` folder. The model gets pictures and PDFs through the provider's Files API, never as base64 unless an upload fails, and every other file as its path.                                                                                                                                                                                                                                                                                                                                                                 |
 | Providers          | Anthropic and OpenAI (API keys), and the Claude plan: a Pro or Max plan signed in to Claude Code on this computer, which btw runs (see [The Claude plan](#the-claude-plan)). Keys and model presets are global and managed by the admin with the CLI or the `/admin` page (Models & keys). A preset has a name (default `<model> (<provider>)`), a provider, a model, and an optional context-window override. One preset is the default (the oldest until an admin picks another): new chats start with it, and automations without a preset use it. See [Model providers](#model-providers).       |
-| Preset switching   | Not allowed. A conversation keeps its provider and model for its whole life.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Reasoning          | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once.                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Preset switching   | Allowed at any time, from the model chip in a chat's composer (or `btw agent run <id> --preset` for a subagent). The next model call uses the new model, and another provider gets the history translated. See [Switching models](#switching-models).                                                                                                                                                                                                                                                                                                                                                |
+| Reasoning          | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once, so the chat asks first.                                                                                                                                                                                                                                                                                                                                                                                                 |
 | System prompt      | Built once when the conversation is created: instructions, the profile's soul, the skills catalog and, for a chat in a folder, the folder's instructions and file paths. **It is not changed afterwards, and no update notices are added,** with one exception: when the chat moves to another folder, or its folder or the soul changes, it is built again at the start of the next turn (one cache miss). If skills change in another conversation, this conversation only sees it by running commands. Of memory, only `core` and the note names are in it: chats outside folders share a prompt. |
 | Memory             | Short Markdown notes per profile, one per topic, that the agent reads and changes with `btw memory`, like any other command. The system prompt has the pinned `core` note in full and lists the others by name, so the agent reads the ones it needs. The family sees and edits them on the Memory page. See [Memory](#memory).                                                                                                                                                                                                                                                                      |
 | Soul               | Who btw is for a profile (character, values, tone), in `soul.md` in its folder, at most 4,000 characters. It opens every chat's system prompt. The family edits it in the profile's settings; the agent changes it itself with `btw soul write` and says so. See [Soul](#soul).                                                                                                                                                                                                                                                                                                                      |
@@ -89,8 +89,9 @@ The rule: **the request prefix must stay byte-identical, so history is only ever
   per conversation (`conversation.cache_ttl`): an hour for chats, where people answer minutes
   apart, and 5 minutes for subagents, whose steps follow each other within seconds, so the
   cheaper 5-minute write (1.25x the input price, against 2x for an hour) is enough.
-- The model, tool definitions, cache TTL and system prompt are fixed per conversation (the prompt is built
-  again only when the chat's folder changes; see [Folders](#folders)). Thinking uses
+- Tool definitions, cache TTL and system prompt are fixed per conversation (the prompt is built
+  again only when the chat's folder changes; see [Folders](#folders)), and the model changes only
+  when someone switches it (see [Switching models](#switching-models)). Thinking uses
   `adaptive` with `display: "summarized"`, the same for every conversation. The only per-conversation
   knob is `effort`.
 - Steering messages, stop results and restart-recovery results are **appended** as new rows. Nothing
@@ -99,7 +100,8 @@ The rule: **the request prefix must stay byte-identical, so history is only ever
 - Every assistant row stores `usage`, and the gateway logs `cache_read` / `cache_write` and the hit
   rate for every call. The chat header shows the hit rate (tooltip: last reply and whole conversation),
   and a reply is marked as a cache miss when it read less than the previous call read or wrote, with
-  the likely cause: over an hour idle (the TTL) or a changed request such as a new reasoning level.
+  the likely cause: over an hour idle (the TTL) or a changed request such as a new model or
+  reasoning level.
 
 ### On OpenAI
 
@@ -112,7 +114,8 @@ numbers mean the same for both providers.
 
 ## Model providers
 
-A conversation runs on its preset's provider for its whole life. `models.ts` is what the rest of
+A conversation runs on its preset's provider until someone switches it to another preset (see
+[Switching models](#switching-models)). `models.ts` is what the rest of
 btw calls: it picks the provider's module (`anthropic.ts`, `openai-chat.ts`) for the model call,
 the chat's title, PDF token counts and model checks, and gets back the same shape from each (the
 reply's content, its stop reason in Anthropic's words, usage, tool calls and texts). Each API
@@ -227,6 +230,45 @@ automations and subagents on an API key preset.
   25% of 200k tokens) unless the preset sets one. Titles are asked for through Claude Code too, as
   one exchange without a session. Claude Code keeps its own copy of each chat under
   `~/.claude/projects`, which deleting the chat in btw doesn't remove yet.
+
+### Switching models
+
+Anyone in the profile can switch a chat to another preset, or another reasoning level, from the
+chip in its composer; `btw agent run <id> --preset` does it for a subagent given more work.
+`setPreset` takes a new snapshot of the preset (name, provider, model, context window), and the
+next model call uses it, even in the middle of a turn, so a model that keeps failing can be left
+behind with Continue. It's refused when the conversation is already larger than the new model's
+window (from its last call's usage): history is never edited, so it could never fit. Everyone who
+has the chat open gets the change as a live `model` event (also in the snapshot).
+
+- **What it costs.** Caches belong to one model, so the first call on the new one reads the whole
+  conversation again (a new reasoning level does the same on Claude). Once the chat has a reply,
+  the chat asks before either change, saying so (with the tokens, in technical details).
+- **Who wrote what.** Every row records the provider its content was made for (`message.provider`:
+  the one whose model wrote a reply, or whose Files API a message's or command result's pictures
+  went to) and replies their model (`message.model`). Rows from before this were given their
+  conversation's. The chat shows which model wrote each reply in technical details.
+- **What each model gets** (`requestMessages`, for a target provider and model). Rows are
+  translated the same way on every call, from what's stored, so after the one miss the prefix is
+  byte-identical again. Stored rows never change.
+  - Claude gets replies from other Claude models as they are. The API itself leaves out thinking a
+    model can't read (it's bound to the model that made it), without an error; stripping it would
+    be an edit, which breaks preserved thinking for the model that can read it.
+  - Replies from another provider go as their text and tool calls (`portableReply`: Anthropic's
+    `text` and `tool_use` blocks, which `toResponsesInput` turns into OpenAI's `function_call`
+    items), without reasoning. So do replies from another OpenAI model (reasoning goes back only
+    to the model that wrote it, and items without their reasoning lose their ids) and a Claude
+    plan's replies on the API (their thinking was signed for another account). Anthropic accepts
+    tool calls without thinking in the middle of a turn, so a switch can happen there.
+  - Pictures and PDFs another provider holds (`source.type: "file"`) become a note: this model can't
+    open that copy, and the line before it (the attachment's label, or `Image: <path>` in a command
+    result) says where the file is, so `btw view` shows it again. Inline ones (the Claude plan's)
+    go as they are. Uploading them again would make the request depend on an upload that can
+    fail, which would change the prefix from one call to the next.
+- **The Claude plan.** Claude Code keeps its own copy of the chat, so a chat that comes back to the
+  plan after another model answered starts a new session (a random id: the chat's own is taken)
+  with the chat so far as a transcript, as a notification's chat does. Switching between plan
+  presets keeps the session, and Claude Code resumes it on the new model.
 
 ## Agent loop
 
@@ -671,9 +713,8 @@ automations, it's a CLI command and a built-in skill (`subagents`), not a tool.
 - **Model and reasoning:** the chat's, unless `--preset <name|id>` (resolved like
   `btw wake --preset`) or `--effort <level>` say otherwise. The skill tells the agent to run
   `btw preset list` and pick a name from it, never to make one up, and suggests a smaller model and
-  `low` for simple reading-heavy jobs. Like any conversation, a subagent keeps its model: more work
-  with another `--preset` is refused, while `--effort` may change (one cache rebuild, as in a
-  chat).
+  `low` for simple reading-heavy jobs. More work may come with another `--preset` or `--effort`,
+  which switch the subagent's conversation as in a chat (one cache rebuild).
 - **The gateway runs it** (`subagent-host.ts`), like `btw wake`: the CLI only writes rows, and the
   scheduler (every tick, and right after each of the agent's commands) starts `pending` subagents
   through the normal runner. When its loop ends it is `done`, `failed` or `stopped`; one still
@@ -781,14 +822,16 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   pages don't download all two thousand; unknown names fall back to a terminal icon.
 - **Technical details** (Settings, per device, in the `btw-prefs` cookie so the server renders it
   too) switch the labels to the raw commands and add context size, prompt-cache hit rate, cache
-  misses, per-reply token usage and the model name. "Always show steps" opens the groups by default.
+  misses, per-reply token usage and the model that wrote each reply. "Always show steps" opens the
+  groups by default.
 - **The composer** is docked over the end of the chat and of the Images grid (`ComposerDock`):
   what scrolls under it fades and blurs into it instead of stopping at an edge, and the scroll
   area pads its end by the composer's height so the newest message still clears it.
 - **New chat** is the empty composer: the first message creates the conversation and is sent in
   the same request. Model and reasoning are picked from the chip in the composer: the model starts
-  at the default preset, reasoning at the level last used on this device. In an existing chat only
-  reasoning can change. The folder chip next to it starts the chat in a folder.
+  at the default preset, reasoning at the level last used on this device. In an existing chat both
+  can change (see [Switching models](#switching-models)). The folder chip next to it starts the
+  chat in a folder.
 - **The sidebar** lists folders above the chats. A folder's chats show under it when its page or
   one of its chats is open, or when its icon (a chevron on hover) is clicked; chats in folders are
   not in the Chats list. A chat btw is working in shimmers like the "Thinking" label, for everyone

@@ -8,6 +8,7 @@ import {
 	isAbortError,
 	runsOnClaudeCode,
 	streamTurn,
+	type Effort,
 	type ModelReply,
 	type StreamEvent,
 	type ToolCall
@@ -22,6 +23,7 @@ import {
 	appendRow,
 	commitQueuedRows,
 	committedRows,
+	contentFor,
 	foundText,
 	getConversation,
 	insertQueued,
@@ -34,7 +36,9 @@ import {
 	rebuildSystemPrompt,
 	replaceTitle,
 	requestMessages,
+	setEffort,
 	setHidden,
+	setPreset,
 	setProviderSession,
 	setTitle,
 	toDisplay,
@@ -83,7 +87,23 @@ export type LiveEvent =
 	| { type: 'live_clear' }
 	| { type: 'tool_output'; id: string; chunk: string }
 	| { type: 'title'; title: string }
+	| { type: 'model'; model: ChatModel }
 	| { type: 'background'; background: BackgroundItem[] };
+
+/** The model and reasoning level a conversation's next model call uses. */
+export interface ChatModel {
+	/** Null once the preset was removed; the conversation keeps its model. */
+	presetId: string | null;
+	presetName: string;
+	provider: Conversation['provider'];
+	effort: Effort;
+	contextWindow: number | null;
+}
+
+function chatModel(conv: Conversation): ChatModel {
+	const { presetId, presetName, provider, effort, contextWindow } = conv;
+	return { presetId, presetName, provider, effort, contextWindow };
+}
 
 /** Work of the conversation's agent that goes on while it does other things, or nothing. */
 export type BackgroundItem =
@@ -108,6 +128,8 @@ export type BackgroundItem =
 
 export interface Snapshot {
 	title: string;
+	/** Null once the conversation was deleted. */
+	model: ChatModel | null;
 	running: boolean;
 	error: string | null;
 	messages: DisplayMessage[];
@@ -220,8 +242,10 @@ export function subscribe(
 export function getSnapshot(conversationId: string): Snapshot {
 	const st = stateFor(conversationId);
 	const media = mediaByMessage(conversationId);
+	const conv = getConversation(conversationId);
 	return {
-		title: getConversation(conversationId)?.title ?? '',
+		title: conv?.title ?? '',
+		model: conv ? chatModel(conv) : null,
 		running: st.running,
 		error: st.error,
 		messages: committedRows(conversationId).map((row) => toDisplay(row, media.get(row.id))),
@@ -376,6 +400,7 @@ async function queueMessage(
 		senderId: sender.id,
 		senderName: sender.name,
 		text: trimmed,
+		provider: conv.provider,
 		attachments
 	});
 	// The first message stands in as the title until the model has named the chat. A message
@@ -401,6 +426,26 @@ function nameConversation(conv: Conversation, text: string, placeholder: string)
 		.catch((err) => {
 			console.error(`[btw] ${conv.id.slice(0, 8)} could not name the chat:`, describeApiError(err));
 		});
+}
+
+/**
+ * Switches the chat to another model preset (setPreset), for everyone who has it open. Throws
+ * ModelSwitchError when it can't.
+ */
+export function changeModel(conversationId: string, presetId: string): ChatModel {
+	const model = chatModel(setPreset(conversationId, presetId));
+	emit(conversationId, { type: 'model', model });
+	return model;
+}
+
+/** Changes the chat's reasoning level, for everyone who has it open. Null if it's gone. */
+export function changeEffort(conversationId: string, effort: Effort): ChatModel | null {
+	setEffort(conversationId, effort);
+	const conv = getConversation(conversationId);
+	if (!conv) return null;
+	const model = chatModel(conv);
+	emit(conversationId, { type: 'model', model });
+	return model;
 }
 
 /**
@@ -624,6 +669,8 @@ async function saveReply(
 		role: 'assistant',
 		kind: 'assistant',
 		content: JSON.stringify(reply.content),
+		provider: conv.provider,
+		model: conv.model,
 		stopReason: reply.stopReason,
 		usage,
 		media
@@ -641,15 +688,19 @@ async function saveReply(
 	touchConversation(conversationId);
 }
 
-/** One row with the result of every call of the reply before it, in order. */
-function saveResults(conversationId: string, results: Anthropic.ToolResultBlockParam[]): void {
+/**
+ * One row with the result of every call of the reply before it, in order. Their `btw view`
+ * pictures were prepared for the conversation's provider.
+ */
+function saveResults(conv: Conversation, results: Anthropic.ToolResultBlockParam[]): void {
 	const resultsRow = appendRow({
-		conversationId,
+		conversationId: conv.id,
 		role: 'user',
 		kind: 'tool_results',
-		content: JSON.stringify(results)
+		content: JSON.stringify(results),
+		provider: conv.provider
 	});
-	emit(conversationId, { type: 'message', message: toDisplay(resultsRow) });
+	emit(conv.id, { type: 'message', message: toDisplay(resultsRow) });
 }
 
 /** Rows a chat on the Claude plan sends as the model's input: messages, not command results. */
@@ -658,29 +709,47 @@ function isPlanInput(row: MessageRow): boolean {
 }
 
 /**
+ * Whether another model answered in the chat since its Claude Code session was last sent
+ * anything: the chat switched away from the Claude plan and back. That session never saw those
+ * replies, so the chat starts a new one.
+ */
+function missedReplies(session: { sentSeq: number }, rows: MessageRow[]): boolean {
+	return rows.some(
+		(row) =>
+			(row.seq ?? 0) > session.sentSeq &&
+			row.role === 'assistant' &&
+			row.provider !== null &&
+			row.provider !== 'claude-plan'
+	);
+}
+
+/**
  * What a chat on the Claude plan sends Claude Code next, and the session it goes to. Its session
  * keeps the conversation, so only rows it hasn't been sent go. A chat Claude Code hasn't seen yet
- * may already have replies (a notification opened as a chat): those go along as a transcript.
+ * may already have replies (a notification opened as a chat, or replies from another model the
+ * chat used before): those go along as a transcript, in a new session.
  */
 function planInput(conv: Conversation, rows: MessageRow[], newSessionId = conv.id) {
 	const sentSeq = rows.at(-1)?.seq ?? 0;
-	const content = (row: MessageRow) => JSON.parse(row.content) as Anthropic.ContentBlockParam[];
-	const session = conv.providerSession;
+	const content = (row: MessageRow) => contentFor(row, conv.provider);
+	const kept = conv.providerSession;
+	const session = kept && !missedReplies(kept, rows) ? kept : null;
+	// The chat's first session has its id.
+	if (kept && !session && newSessionId === conv.id) newSessionId = randomUUID();
 	let input: Anthropic.ContentBlockParam[];
 	if (session) {
 		input = rows
 			.filter((row) => (row.seq ?? 0) > session.sentSeq && isPlanInput(row))
 			.flatMap(content);
 	} else {
-		const lastReply = rows.findLastIndex((row) => row.role === 'assistant');
+		// Up to the last reply, or the results of its commands when another model's turn was still
+		// going when the chat switched to the plan.
+		const seen = rows.findLastIndex((row) => !isPlanInput(row)) + 1;
 		const earlier = rows
-			.slice(0, lastReply + 1)
+			.slice(0, seen)
 			.map((row) => (row.role === 'assistant' ? `You: ${plainText(row)}` : plainText(row)))
 			.filter((text) => text && text !== 'You: ');
-		input = rows
-			.slice(lastReply + 1)
-			.filter(isPlanInput)
-			.flatMap(content);
+		input = rows.slice(seen).flatMap(content);
 		if (earlier.length) {
 			input.unshift({
 				type: 'text',
@@ -744,7 +813,7 @@ async function planTurn(
 						const reason = err instanceof Error ? err.message : String(err);
 						return toolResult(call.id, `Not finished: ${reason}`, true);
 					}),
-				onResults: (results) => saveResults(conversationId, results)
+				onResults: (results) => saveResults(conv, results)
 			});
 			return true;
 		} catch (err) {
@@ -798,7 +867,7 @@ async function loop(conversationId: string): Promise<void> {
 				if (!queuedRows(conversationId).length) return;
 				continue;
 			}
-			const messages = requestMessages(rows, conv.promptChangedAtSeq);
+			const messages = requestMessages(rows, conv.promptChangedAtSeq, conv);
 			let reply: ModelReply;
 			try {
 				reply = await streamTurn({
@@ -851,7 +920,7 @@ async function loop(conversationId: string): Promise<void> {
 				});
 				results.push(result);
 			}
-			saveResults(conversationId, results);
+			saveResults(conv, results);
 			if (abort.signal.aborted) {
 				commitQueued(conversationId);
 				return;

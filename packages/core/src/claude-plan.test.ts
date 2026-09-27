@@ -11,10 +11,12 @@ import { checkClaudePlan, claudePlanStatus } from './claude-plan.ts';
 import { initConfig, updateConfig } from './config.ts';
 import {
 	appendRow,
+	commitQueuedRows,
 	committedRows,
 	createConversation,
 	getConversation,
 	insertQueued,
+	setPreset,
 	setProviderSession
 } from './conversations.ts';
 import { viewImage } from './images.ts';
@@ -382,6 +384,48 @@ describe.skipIf(!claude)('chats on the Claude plan', { timeout: 60_000 }, () => 
 		expect(userTexts(chatCalls()[0])).toContain('Anna: Hello?');
 		const session = getConversation(chat.id)?.providerSession;
 		expect(session?.id).not.toBe(chat.id);
+	});
+
+	it('starts a new session, with the chat so far, when another model answered in between', async () => {
+		const { user, chat } = planChat();
+		scripted(
+			{ stop: 'end_turn', content: [{ type: 'text', text: 'Hi Anna.' }] },
+			{ stop: 'end_turn', content: [{ type: 'text', text: 'Ten past four.' }] }
+		);
+		let ended = loopEnd(chat.id);
+		insertQueued({ conversationId: chat.id, senderId: user.id, senderName: 'Anna', text: 'Hello' });
+		kick(chat.id);
+		await ended;
+		const plan = chat.presetId!;
+
+		// Sonnet, on the API, answered a question while the chat was switched to it.
+		setPreset(chat.id, makePreset().id);
+		insertQueued({ conversationId: chat.id, senderId: user.id, senderName: 'Anna', text: 'Time?' });
+		commitQueuedRows(chat.id);
+		appendRow({
+			conversationId: chat.id,
+			role: 'assistant',
+			kind: 'assistant',
+			content: JSON.stringify([{ type: 'text', text: 'Four.' }]),
+			provider: 'anthropic',
+			model: 'claude-sonnet-5'
+		});
+		setPreset(chat.id, plan);
+
+		ended = loopEnd(chat.id);
+		insertQueued({ conversationId: chat.id, senderId: user.id, senderName: 'Anna', text: 'Now?' });
+		kick(chat.id);
+		await ended;
+
+		expect(getSnapshot(chat.id).error).toBeNull();
+		const [, second] = chatCalls();
+		expect(userTexts(second)).toEqual([
+			'[This chat started before you could see it. What was said so far, oldest first:]\n\nAnna: Hello\n\nYou: Hi Anna.\n\nAnna: Time?\n\nYou: Four.',
+			'Anna: Now?'
+		]);
+		const session = getConversation(chat.id)?.providerSession;
+		expect(session?.id).not.toBe(chat.id);
+		expect(session?.sentSeq).toBe(5);
 	});
 
 	it("gives Claude Code what the chat said before it first saw it, as a notification's chat has", async () => {

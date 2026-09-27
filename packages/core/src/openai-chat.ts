@@ -128,7 +128,9 @@ function toolOutput(content: unknown): string | OutputPart[] {
  * The transcript as the Responses API's `input`. Messages from people and command results are
  * btw's own blocks, in Anthropic's format; replies are OpenAI's own output items, sent back as
  * they came, except reasoning without its encrypted content, which can't be read back without
- * `store`. A reply btw wrote itself (a notification continued in a chat) is plain text.
+ * `store`. A reply btw wrote itself (a notification continued in a chat) is plain text, and one
+ * another model wrote before the conversation switched is text and `tool_use` blocks
+ * (portableReply).
  */
 export function toResponsesInput(messages: Anthropic.MessageParam[]): InputItem[] {
 	const input: InputItem[] = [];
@@ -141,6 +143,14 @@ export function toResponsesInput(messages: Anthropic.MessageParam[]): InputItem[
 			for (const b of blocks) {
 				if (b.type === 'text' && typeof b.text === 'string' && b.text) {
 					input.push({ role: 'assistant', content: b.text });
+				} else if (b.type === 'tool_use') {
+					// A call another model made, before the conversation switched to this one.
+					input.push({
+						type: 'function_call',
+						call_id: String(b.id),
+						name: String(b.name),
+						arguments: JSON.stringify(b.input ?? {})
+					});
 				} else if (b.type === 'reasoning' && !b.encrypted_content) {
 					continue;
 				} else if (typeof b.type === 'string' && OUTPUT_TYPES.has(b.type)) {

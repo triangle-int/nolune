@@ -10,6 +10,7 @@ import {
 	createConversation,
 	getConversation,
 	requestMessages,
+	setPreset,
 	toDisplay
 } from './conversations.ts';
 import { describeApiError } from './models.ts';
@@ -378,6 +379,88 @@ describe('a chat on an OpenAI model', () => {
 		expect(JSON.parse(human.attachments!)).toMatchObject([{ sentAs: 'document', tokens: 1200 }]);
 	});
 
+	it('continues a chat that Claude started, from its text and calls', async () => {
+		const { user, profile } = makeFamily();
+		const chat = createConversation({ profile, presetId: makePreset().id, userId: user.id });
+		const text = (t: string) => ({ type: 'text', text: t });
+		appendRow({
+			conversationId: chat.id,
+			role: 'user',
+			kind: 'trigger',
+			content: JSON.stringify([
+				text('[Anna attached a.png, saved at /a.png]'),
+				{ type: 'image', source: { type: 'file', file_id: 'file_011photo' } },
+				text('Anna: Files?')
+			]),
+			provider: 'anthropic'
+		});
+		appendRow({
+			conversationId: chat.id,
+			role: 'assistant',
+			kind: 'assistant',
+			content: JSON.stringify([
+				{ type: 'thinking', thinking: 'Listing them.', signature: 'sig' },
+				{ type: 'tool_use', id: 'toolu_1', name: 'run_command', input: { command: 'ls' } }
+			]),
+			provider: 'anthropic',
+			model: 'claude-sonnet-5'
+		});
+		appendRow({
+			conversationId: chat.id,
+			role: 'user',
+			kind: 'tool_results',
+			content: JSON.stringify([{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'a.txt' }]),
+			provider: 'anthropic'
+		});
+		appendRow({
+			conversationId: chat.id,
+			role: 'assistant',
+			kind: 'assistant',
+			content: JSON.stringify([text('One file.')]),
+			provider: 'anthropic',
+			model: 'claude-sonnet-5'
+		});
+		setPreset(chat.id, makePreset('GPT', 'gpt-6-astra', 'openai').id);
+		answer = (req) =>
+			req.json?.stream ? streamed([said('It is a.txt.')]) : { status: 404, json: {} };
+
+		const ended = loopEnd(chat.id);
+		await sendMessage(chat.id, user, 'Which?');
+		await ended;
+
+		expect(turns()).toHaveLength(1);
+		expect(turns()[0].json).toMatchObject({
+			model: 'gpt-6-astra',
+			instructions: chat.systemPrompt
+		});
+		expect(turns()[0].json!.input).toEqual([
+			{
+				role: 'user',
+				content: [
+					{ type: 'input_text', text: '[Anna attached a.png, saved at /a.png]' },
+					{
+						type: 'input_text',
+						text: expect.stringMatching(/^\[Picture not shown: it went to the model this chat/)
+					},
+					{ type: 'input_text', text: 'Anna: Files?' }
+				]
+			},
+			{
+				type: 'function_call',
+				call_id: 'toolu_1',
+				name: 'run_command',
+				arguments: '{"command":"ls"}'
+			},
+			{ type: 'function_call_output', call_id: 'toolu_1', output: 'a.txt' },
+			{ role: 'assistant', content: 'One file.' },
+			{ role: 'user', content: [{ type: 'input_text', text: 'Anna: Which?' }] }
+		]);
+		expect(committedRows(chat.id).at(-1)).toMatchObject({
+			provider: 'openai',
+			model: 'gpt-6-astra'
+		});
+	});
+
 	it('answers a call left without a result, after a crash or a restart', () => {
 		const { chat } = openaiChat();
 		const text = (t: string) => JSON.stringify([{ type: 'text', text: t }]);
@@ -389,7 +472,7 @@ describe('a chat on an OpenAI model', () => {
 			content: JSON.stringify([thought, listCall])
 		});
 		appendRow({ conversationId: chat.id, role: 'user', kind: 'trigger', content: text('And?') });
-		expect(toResponsesInput(requestMessages(committedRows(chat.id), null))).toEqual([
+		expect(toResponsesInput(requestMessages(committedRows(chat.id), null, chat))).toEqual([
 			{ role: 'user', content: [{ type: 'input_text', text: 'Files?' }] },
 			thought,
 			listCall,

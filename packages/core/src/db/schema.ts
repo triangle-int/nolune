@@ -213,7 +213,10 @@ export const conversation = sqliteTable(
 			.references(() => profile.id, { onDelete: 'cascade' }),
 		title: text('title').notNull().default(''),
 		presetId: text('preset_id').references(() => modelPreset.id, { onDelete: 'set null' }),
-		// Snapshot of the preset at creation: a conversation never changes model.
+		/**
+		 * Snapshot of the preset the conversation runs on, taken when it was created or last
+		 * switched to another model (setPreset), so later changes to the preset leave it alone.
+		 */
 		presetName: text('preset_name').notNull(),
 		provider: text('provider', { enum: ['anthropic', 'openai', 'claude-plan'] }).notNull(),
 		model: text('model').notNull(),
@@ -304,6 +307,15 @@ export const message = sqliteTable(
 		 * provider returned them (content-blocks.ts). Replayed byte-for-byte; never rewritten.
 		 */
 		content: text('content').notNull(),
+		/**
+		 * The provider `content` was made for: the one whose model wrote a reply, or whose Files API a
+		 * message's or command result's pictures and PDFs went to. A conversation can switch models,
+		 * so another provider gets it translated (requestMessages). Rows that are only text, which
+		 * every provider reads the same, may have none.
+		 */
+		provider: text('provider', { enum: ['anthropic', 'openai', 'claude-plan'] }),
+		/** Replies: the model that wrote it. */
+		model: text('model'),
 		stopReason: text('stop_reason'),
 		usage: text('usage'),
 		/**

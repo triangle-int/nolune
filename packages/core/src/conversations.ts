@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type Anthropic from '@anthropic-ai/sdk';
 import { and, desc, eq, inArray, isNotNull, isNull, lt, max } from 'drizzle-orm';
 import { parseAttachments, type MessageAttachment } from './attachments.ts';
-import { replyBlocks, toolCalls } from './content-blocks.ts';
+import { portableReply, replyBlocks, toolCalls } from './content-blocks.ts';
 import { getDb } from './db/index.ts';
 import {
 	conversation,
@@ -22,12 +22,13 @@ import {
 	type MediaRow,
 	type PreparedMedia
 } from './media.ts';
-import type { CacheTtl, Effort } from './models.ts';
+import type { CacheTtl, Effort, Provider } from './models.ts';
 import { buildSystemPrompt } from './prompt.ts';
 import { effectiveContextWindow, getPreset } from './presets.ts';
 import type { Profile } from './profiles.ts';
 import { LEGACY_TOOLS, TOOLS } from './run-command.ts';
 import { readSoul } from './soul.ts';
+import { promptTokens } from './usage.ts';
 
 export type Conversation = typeof conversation.$inferSelect;
 export type MessageRow = typeof message.$inferSelect;
@@ -104,6 +105,8 @@ export type DisplayMessage =
 			media: Record<string, DisplayMedia>;
 			stopReason: string | null;
 			usage: Usage | null;
+			/** The model that wrote it: a conversation can switch models. */
+			model: string | null;
 			createdAt: number;
 	  }
 	| {
@@ -231,6 +234,52 @@ export function getConversationForUser(id: string, userId: string) {
 /** On Claude, changing effort mid-conversation rebuilds that conversation's cache once. */
 export function setEffort(id: string, effort: Effort): void {
 	getDb().update(conversation).set({ effort }).where(eq(conversation.id, id)).run();
+}
+
+/** Why a conversation can't switch to a model, in words for the person switching. */
+export class ModelSwitchError extends Error {}
+
+/** The prompt and reply of the conversation's latest model call, in tokens, or 0 before one. */
+function contextUsed(conversationId: string): number {
+	const last = getDb()
+		.select({ usage: message.usage })
+		.from(message)
+		.where(
+			and(
+				eq(message.conversationId, conversationId),
+				eq(message.role, 'assistant'),
+				isNotNull(message.usage)
+			)
+		)
+		.orderBy(desc(message.seq))
+		.limit(1)
+		.get();
+	if (!last?.usage) return 0;
+	const usage = JSON.parse(last.usage) as Usage;
+	return promptTokens(usage) + usage.output;
+}
+
+/**
+ * Switches the conversation to another model preset, from its next model call on (a turn in
+ * progress goes on with the new model too). The new model has none of the conversation cached, so
+ * that call reads it all again once. Another provider gets earlier replies and files translated
+ * (requestMessages). Refused when the conversation is already larger than the new model's window,
+ * which it could never shrink back into: history is never edited.
+ */
+export function setPreset(id: string, presetId: string): Conversation {
+	const conv = getConversation(id);
+	if (!conv) throw new ModelSwitchError('This chat no longer exists.');
+	const preset = getPreset(presetId);
+	if (!preset) throw new ModelSwitchError('That model was removed. Pick another one.');
+	const columns = modelColumns({ presetId: preset.id });
+	const used = contextUsed(id);
+	if (columns.contextWindow !== null && used > columns.contextWindow) {
+		throw new ModelSwitchError(
+			`This chat is already about ${used.toLocaleString('en-US')} tokens, more than ${preset.name} can read (${columns.contextWindow.toLocaleString('en-US')}). Start a new chat for it.`
+		);
+	}
+	getDb().update(conversation).set(columns).where(eq(conversation.id, id)).run();
+	return { ...conv, ...columns };
 }
 
 /**
@@ -362,6 +411,8 @@ export function insertQueued(input: {
 	senderId: string;
 	senderName: string;
 	text: string;
+	/** The provider its pictures and PDFs were prepared for: the conversation's. */
+	provider?: Provider;
 	/** With attachments (see prepareMessage): the content, the files, and the uploads they were. */
 	attachments?: {
 		content: unknown[];
@@ -397,6 +448,7 @@ export function insertQueued(input: {
 					attachments?.content ?? [{ type: 'text', text: `${input.senderName}: ${input.text}` }]
 				),
 				attachments: attachments ? JSON.stringify(attachments.files) : null,
+				provider: input.provider ?? null,
 				createdAt: new Date()
 			})
 			.returning()
@@ -474,6 +526,12 @@ export function appendRow(input: {
 	text?: string;
 	stopReason?: string | null;
 	usage?: Usage | null;
+	/**
+	 * Replies: the provider and model that wrote it. Command results: the provider their pictures
+	 * were prepared for.
+	 */
+	provider?: Provider | null;
+	model?: string | null;
 	/** Assistant rows: copies of the pictures and files the reply links to, saved with it. */
 	media?: PreparedMedia[];
 }): MessageRow {
@@ -488,6 +546,8 @@ export function appendRow(input: {
 				senderName: input.senderName ?? null,
 				text: input.text ?? null,
 				content: input.content,
+				provider: input.provider ?? null,
+				model: input.model ?? null,
 				stopReason: input.stopReason ?? null,
 				usage: input.usage ? JSON.stringify(input.usage) : null,
 				createdAt: new Date()
@@ -515,33 +575,104 @@ export function toMessageParam(row: MessageRow): Anthropic.MessageParam {
 	return { role: row.role, content: JSON.parse(row.content) };
 }
 
+/** The model a request goes to. */
+export interface ModelTarget {
+	provider: Provider;
+	model: string;
+}
+
 /**
- * The transcript as a model call sends it: every row exactly as stored, except the thinking in
- * replies from before the system prompt was last built again (`promptChangedAtSeq`). A thinking
- * block's signature records the prompt it was made under, and newer models refuse it under
- * another one, so those are left out. They are always the oldest ones, which the API allows,
- * and they are left out the same way on every call, so the prefix stays byte-identical.
- * OpenAI's reasoning isn't bound to the prompt, so its replies go as they are.
+ * Whether a reply goes to the target model as it was stored. Claude reads the thinking of other
+ * Claude models itself (the API leaves out what a model can't read), but not what OpenAI returned
+ * or what a Claude plan's Claude Code got (another account). OpenAI's reasoning goes back only to
+ * the model that wrote it. Rows without a provider are btw's own text, which every model reads.
+ */
+function sendsAsStored(row: MessageRow, target: ModelTarget): boolean {
+	if (!row.provider) return true;
+	if (row.provider !== target.provider) return false;
+	return target.provider !== 'openai' || row.model === target.model;
+}
+
+type Block = { type?: unknown; source?: { type?: unknown }; content?: unknown };
+
+/** A picture or PDF kept in a provider's Files API, which only that provider can open. */
+function isStoredFile(block: Block): boolean {
+	return (block.type === 'image' || block.type === 'document') && block.source?.type === 'file';
+}
+
+/** What the model reads instead of a picture or PDF another provider holds. */
+function storedFileNote(block: Block): Anthropic.TextBlockParam {
+	const what = block.type === 'image' ? 'Picture' : 'PDF';
+	return {
+		type: 'text',
+		text: `[${what} not shown: it went to the model this chat used before, and this model can't open that copy. The line before this says where its file is${block.type === 'image' ? '; `btw view` shows it again' : ''}.]`
+	};
+}
+
+/**
+ * A message's or command result's blocks for another provider than the one its pictures and PDFs
+ * were uploaded to: each one it can't open becomes a note. Blocks inline as base64 stay, since
+ * every provider reads them.
+ */
+function withoutStoredFiles(blocks: Block[]): Block[] {
+	if (!blocks.some((b) => isStoredFile(b) || Array.isArray(b.content))) return blocks;
+	return blocks.map((b) => {
+		if (isStoredFile(b)) return storedFileNote(b);
+		if (b.type !== 'tool_result' || !Array.isArray(b.content)) return b;
+		const content = withoutStoredFiles(b.content as Block[]);
+		return content === b.content ? b : { ...b, content };
+	});
+}
+
+/**
+ * The transcript as a model call to `target` sends it: every row exactly as stored, except
+ *
+ * - the thinking in replies from before the system prompt was last built again
+ *   (`promptChangedAtSeq`). A thinking block's signature records the prompt it was made under,
+ *   and newer models refuse it under another one, so those are left out. They are always the
+ *   oldest ones, which the API allows. OpenAI's reasoning isn't bound to the prompt, so its
+ *   replies go as they are.
+ * - after the conversation switched models, what the target can't read: replies another
+ *   provider (or, on OpenAI, another model) wrote go as their text and tool calls, and pictures
+ *   and PDFs another provider holds as a note saying where their file is.
+ *
+ * Both depend only on the stored rows, so every call leaves out the same and the prefix stays
+ * byte-identical.
  *
  * Replies are in their provider's own format (see content-blocks.ts), so for OpenAI's
  * conversations the assistant messages hold its output items rather than Anthropic's blocks.
  */
 export function requestMessages(
 	rows: MessageRow[],
-	promptChangedAtSeq: number | null
+	promptChangedAtSeq: number | null,
+	target: ModelTarget
 ): Anthropic.MessageParam[] {
 	const messages = rows.flatMap((row): Anthropic.MessageParam[] => {
-		if (promptChangedAtSeq === null || row.role !== 'assistant' || row.seq === null) {
+		if (row.role !== 'assistant')
+			return [{ role: 'user', content: contentFor(row, target.provider) }];
+		let content: Anthropic.ContentBlockParam[];
+		if (!sendsAsStored(row, target)) content = portableReply(JSON.parse(row.content));
+		else if (promptChangedAtSeq === null || row.seq === null || row.seq > promptChangedAtSeq) {
 			return [toMessageParam(row)];
+		} else {
+			content = (JSON.parse(row.content) as Anthropic.ContentBlockParam[]).filter(
+				(b) => b.type !== 'thinking' && b.type !== 'redacted_thinking'
+			);
 		}
-		if (row.seq > promptChangedAtSeq) return [toMessageParam(row)];
-		const content = (JSON.parse(row.content) as Anthropic.ContentBlockParam[]).filter(
-			(b) => b.type !== 'thinking' && b.type !== 'redacted_thinking'
-		);
 		// A reply that was only thinking (cut off, say) has nothing left to send.
 		return content.length ? [{ role: 'assistant', content }] : [];
 	});
 	return pairToolResults(messages);
+}
+
+/**
+ * A message's or command result's content for `provider`: as stored, except that pictures and
+ * PDFs another provider holds become notes (withoutStoredFiles).
+ */
+export function contentFor(row: MessageRow, provider: Provider): Anthropic.ContentBlockParam[] {
+	const content = JSON.parse(row.content) as Anthropic.ContentBlockParam[];
+	if (!row.provider || row.provider === provider) return content;
+	return withoutStoredFiles(content as Block[]) as Anthropic.ContentBlockParam[];
 }
 
 function noResult(toolUseId: string): Anthropic.ToolResultBlockParam {
@@ -730,6 +861,7 @@ export function toDisplay(row: MessageRow, mediaRows: MediaRow[] = []): DisplayM
 		media: toDisplayMedia(mediaRows),
 		stopReason: row.stopReason,
 		usage: row.usage ? (JSON.parse(row.usage) as Usage) : null,
+		model: row.model,
 		createdAt
 	};
 }
