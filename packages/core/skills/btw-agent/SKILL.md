@@ -27,14 +27,16 @@ Other parts of the CLI have their own instructions: automations (`btw trigger`, 
 - Use `btw`, not the files. Don't edit `config.json` or `btw.db` in `$BTW_HOME` by hand, and don't
   print `config.json`: it holds the API keys.
 - API keys, environment variables and the image model apply from the next command or message. The
-  default model and which skills are on apply to new chats: a chat keeps the model and the skills
-  it started with, this one too. The address applies after a restart.
+  default model and which skills are on apply to new chats: a chat keeps the skills it started
+  with, this one too, and its model until someone picks another in its composer. The address
+  applies after a restart.
 
 ## Models
 
 Chats run on model presets, on Claude (Anthropic) or on OpenAI's models with an API key, or on
 the owner's Claude plan (`claude-plan`, below). People pick one when they start a chat, and new
-chats start with the default.
+chats start with the default. They can switch a chat to another one from its composer; its next
+reply then reads the whole chat again without the cache.
 
 ```sh
 btw preset list                                 # name, provider/model, context window, id, default

@@ -1,4 +1,11 @@
-import type { BackgroundItem, DisplayMessage, LiveBlock, LiveEvent, Snapshot } from '@btw/core';
+import type {
+	BackgroundItem,
+	ChatModel,
+	DisplayMessage,
+	LiveBlock,
+	LiveEvent,
+	Snapshot
+} from '@btw/core';
 
 type ServerEvent = LiveEvent | { type: 'snapshot'; snapshot: Snapshot };
 type ToolResult = { output: string; isError: boolean };
@@ -7,6 +14,8 @@ type ToolResult = { output: string; isError: boolean };
 export class ChatState {
 	/** Empty until the first snapshot arrives. */
 	title = $state('');
+	/** The model and reasoning level, which anyone in the profile can change. Null until then. */
+	model = $state<ChatModel | null>(null);
 	messages = $state<DisplayMessage[]>([]);
 	queued = $state<DisplayMessage[]>([]);
 	running = $state(false);
@@ -31,6 +40,7 @@ export class ChatState {
 		switch (event.type) {
 			case 'snapshot':
 				this.title = event.snapshot.title;
+				this.model = event.snapshot.model;
 				this.messages = event.snapshot.messages;
 				this.queued = event.snapshot.queued;
 				this.running = event.snapshot.running;
@@ -42,6 +52,9 @@ export class ChatState {
 				break;
 			case 'title':
 				this.title = event.title;
+				break;
+			case 'model':
+				this.model = event.model;
 				break;
 			case 'background':
 				this.background = event.background;

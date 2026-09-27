@@ -138,25 +138,25 @@ describe('btw agent run', () => {
 		expect(getConversation(conversation.id)).toMatchObject({ model: 'claude-haiku-4-5' });
 	});
 
-	it('keeps a subagent on its model, but lets its reasoning level change', () => {
+	it('lets more work switch a subagent to another model or reasoning level', () => {
 		const { chat } = parentChat();
 		const haiku = makePreset('Haiku', 'claude-haiku-4-5');
 		const { subagent } = runSubagent({ parentId: chat.id, name: 'sorter', prompt: 'Sort.' });
 		setSubagentStatus(subagent.id, 'done');
 
-		expect(() =>
-			runSubagent({ parentId: chat.id, name: 'sorter', prompt: 'More.', presetId: haiku.id })
-		).toThrow(/keeps the model it started with \(Sonnet\)/);
-		expect(findSubagent(chat.id, 'sorter')?.status).toBe('done');
-
 		const again = runSubagent({
 			parentId: chat.id,
 			name: 'sorter',
 			prompt: 'More.',
+			presetId: haiku.id,
 			effort: 'max'
 		});
-		expect(again.conversation.effort).toBe('max');
-		expect(getConversation(subagent.conversationId)?.effort).toBe('max');
+		expect(again.conversation).toMatchObject({ presetName: 'Haiku', effort: 'max' });
+		expect(getConversation(subagent.conversationId)).toMatchObject({
+			presetId: haiku.id,
+			model: 'claude-haiku-4-5',
+			effort: 'max'
+		});
 	});
 
 	it('refuses an unknown preset or reasoning level', () => {

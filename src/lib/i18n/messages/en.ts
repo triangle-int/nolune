@@ -171,6 +171,18 @@ export const en = {
 		chatName: 'Chat name',
 		couldNotRename: 'Could not rename the chat.',
 		// Technical details
+		// Switching the model or reasoning level
+		switchTitle: (model: string) => `Switch to ${model}?`,
+		anotherModel: 'another model',
+		effortTitle: (level: string) => `Change reasoning to ${level}?`,
+		switchCache: (model: boolean, missTokens: string | null) =>
+			`btw keeps this chat in a cache, so each reply only pays for what's new. ${model ? 'Another model' : 'Another reasoning level'} can't use it: the next reply reads the whole chat again, which takes longer and costs more${missTokens ? ` (a prompt cache miss of about ${missTokens} tokens)` : ''}.`,
+		switchFiles:
+			"Some pictures and PDFs in this chat don't carry over to another provider: the new model gets where their files are, and can look at them again.",
+		switch: 'Switch',
+		change: 'Change',
+		/** The models that wrote a reply, in order. */
+		models: (models: string[]) => models.join(', then '),
 		usage: 'Usage',
 		tokensInOut: (input: string, output: string) => `${input} tokens in, ${output} out`,
 		cache: 'Cache',
@@ -182,7 +194,7 @@ export const en = {
 		cacheExpired: (ttl: '5m' | '1h') =>
 			`Over ${ttl === '5m' ? '5 minutes' : 'an hour'} passed since the previous step, so the cached conversation expired and was processed again (slower and costlier).`,
 		cacheBroken:
-			'Context that should have come from the cache was processed again (slower and costlier). Changing the reasoning level, moving the chat to another folder or changing its folder cause this once.',
+			'Context that should have come from the cache was processed again (slower and costlier). Switching the model or the reasoning level, moving the chat to another folder or changing its folder cause this once.',
 		contextChip: (used: string, window: string, rate: string) =>
 			`${used} / ${window} · ${rate} cached`,
 		contextUsed: (used: string, window: string) =>
@@ -226,7 +238,6 @@ export const en = {
 
 	model: {
 		model: 'Model',
-		fixed: 'Model (fixed for this chat)',
 		reasoning: 'Reasoning',
 		efforts: {
 			low: { label: 'Low', hint: 'Fastest answers' },
@@ -234,10 +245,7 @@ export const en = {
 			high: { label: 'High', hint: 'Thinks longer on harder tasks' },
 			xhigh: { label: 'Extra high', hint: 'Takes its time' },
 			max: { label: 'Max', hint: 'Slowest, for the hardest problems' }
-		},
-		changeTechnical:
-			'Changing this makes the next reply re-read the whole conversation once (a prompt cache miss).',
-		change: 'After a change, the next reply takes a little longer.'
+		}
 	},
 
 	newChat: {

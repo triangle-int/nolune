@@ -15,7 +15,8 @@ import {
 	renameSync,
 	rmSync,
 	statSync,
-	utimesSync
+	utimesSync,
+	writeFileSync
 } from 'node:fs';
 import { get as httpGet, type IncomingMessage } from 'node:http';
 import { get as httpsGet } from 'node:https';
@@ -26,9 +27,9 @@ import type { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, like } from 'drizzle-orm';
 import { getDb } from './db/index.ts';
-import { folderFile, media, upload } from './db/schema.ts';
+import { folderFile, media, message, upload } from './db/schema.ts';
 import { inspectImage } from './images.ts';
 import { isRemoteHref, mediaRefs } from './media-refs.ts';
 import { paths } from './paths.ts';
@@ -181,6 +182,48 @@ export async function store(
 		renameSync(tmp, dest);
 	}
 	return { sha256, bytes };
+}
+
+/** Keeps `data` in the store under its SHA-256, like `store`. */
+export function storeBytes(data: Buffer): { sha256: string; bytes: number } {
+	if (data.length > MAX_MEDIA_BYTES) throw new TooLargeError();
+	mkdirSync(paths.media, { recursive: true });
+	const sha256 = createHash('sha256').update(data).digest('hex');
+	const dest = blobPath(sha256);
+	if (existsSync(dest)) {
+		const now = new Date();
+		utimesSync(dest, now, now);
+	} else {
+		const tmp = join(paths.media, `tmp-${randomUUID()}`);
+		writeFileSync(tmp, data);
+		renameSync(tmp, dest);
+	}
+	return { sha256, bytes: data.length };
+}
+
+function collectMedia(value: unknown, hashes: Set<string>): void {
+	if (Array.isArray(value)) {
+		for (const item of value) collectMedia(item, hashes);
+	} else if (value && typeof value === 'object') {
+		const record = value as Record<string, unknown>;
+		if (record.type === 'media' && typeof record.sha256 === 'string') hashes.add(record.sha256);
+		for (const child of Object.values(record)) collectMedia(child, hashes);
+	}
+}
+
+/**
+ * The stored files messages send by reference: pictures and PDFs in btw's format (format.ts),
+ * which each provider gets a copy of when a request is made.
+ */
+export function referencedMedia(): Set<string> {
+	const hashes = new Set<string>();
+	const rows = getDb()
+		.select({ content: message.content })
+		.from(message)
+		.where(like(message.content, '%"type":"media"%'))
+		.all();
+	for (const row of rows) collectMedia(JSON.parse(row.content), hashes);
+	return hashes;
 }
 
 function resolveLocal(href: string, baseDir: string): string {
@@ -685,8 +728,8 @@ export function mediaFile(
 
 /**
  * Deletes stored files no row points to any more (their conversations or folders were deleted,
- * or an upload was never sent). Files younger than an hour are kept, since a reply being saved
- * may be about to reference them.
+ * or an upload was never sent), messages' pictures and PDFs included. Files younger than an hour
+ * are kept, since a row being saved may be about to reference them.
  */
 export function pruneMedia(): void {
 	if (!existsSync(paths.media)) return;
@@ -702,6 +745,7 @@ export function pruneMedia(): void {
 	for (const row of getDb().select({ sha256: upload.sha256 }).from(upload).all()) {
 		used.add(row.sha256);
 	}
+	for (const sha256 of referencedMedia()) used.add(sha256);
 	const folderFiles = getDb()
 		.select({ sha256: folderFile.sha256, previewSha256: folderFile.previewSha256 })
 		.from(folderFile)

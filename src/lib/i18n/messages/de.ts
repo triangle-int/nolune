@@ -246,6 +246,16 @@ export const de: Messages = {
 		renameTitle: 'Chat umbenennen',
 		chatName: 'Name des Chats',
 		couldNotRename: 'Der Chat konnte nicht umbenannt werden.',
+		switchTitle: (model: string) => `Zu ${model} wechseln?`,
+		anotherModel: 'einem anderen Modell',
+		effortTitle: (level: string) => `Denktiefe auf „${level}“ ändern?`,
+		switchCache: (model: boolean, missTokens: string | null) =>
+			`btw hält diesen Chat in einem Cache, damit jede Antwort nur für Neues bezahlt. ${model ? 'Ein anderes Modell' : 'Eine andere Denktiefe'} kann ihn nicht nutzen: Die nächste Antwort liest den ganzen Chat noch einmal, was länger dauert und mehr kostet${missTokens ? ` (ein Prompt-Cache-Fehlschlag von etwa ${missTokens} Tokens)` : ''}.`,
+		switchFiles:
+			'Manche Bilder und PDFs in diesem Chat gehen nicht zu einem anderen Anbieter mit: Das neue Modell bekommt, wo ihre Dateien liegen, und kann sie sich noch einmal ansehen.',
+		switch: 'Wechseln',
+		change: 'Ändern',
+		models: (models: string[]) => models.join(', dann '),
 		usage: 'Verbrauch',
 		tokensInOut: (input: string, output: string) => `${input} Tokens rein, ${output} raus`,
 		cache: 'Cache',
@@ -257,7 +267,7 @@ export const de: Messages = {
 		cacheExpired: (ttl: '5m' | '1h') =>
 			`Seit dem vorigen Schritt ${ttl === '5m' ? 'sind über 5 Minuten' : 'ist über eine Stunde'} vergangen, daher war der zwischengespeicherte Chat abgelaufen und wurde neu verarbeitet (langsamer und teurer).`,
 		cacheBroken:
-			'Kontext, der aus dem Cache hätte kommen sollen, wurde neu verarbeitet (langsamer und teurer). Das passiert einmal, wenn die Denktiefe geändert, der Chat in einen anderen Ordner verschoben oder sein Ordner geändert wird.',
+			'Kontext, der aus dem Cache hätte kommen sollen, wurde neu verarbeitet (langsamer und teurer). Das passiert einmal, wenn das Modell oder die Denktiefe gewechselt, der Chat in einen anderen Ordner verschoben oder sein Ordner geändert wird.',
 		contextChip: (used: string, window: string, rate: string) =>
 			`${used} / ${window} · ${rate} aus dem Cache`,
 		contextUsed: (used: string, window: string) =>
@@ -302,7 +312,6 @@ export const de: Messages = {
 
 	model: {
 		model: 'Modell',
-		fixed: 'Modell (in diesem Chat fest)',
 		reasoning: 'Denktiefe',
 		efforts: {
 			low: { label: 'Niedrig', hint: 'Schnellste Antworten' },
@@ -310,10 +319,7 @@ export const de: Messages = {
 			high: { label: 'Hoch', hint: 'Denkt bei schwierigen Aufgaben länger nach' },
 			xhigh: { label: 'Sehr hoch', hint: 'Nimmt sich Zeit' },
 			max: { label: 'Maximal', hint: 'Am langsamsten, für die schwierigsten Probleme' }
-		},
-		changeTechnical:
-			'Eine Änderung lässt die nächste Antwort einmal den ganzen Chat neu lesen (ein Prompt-Cache-Fehlschlag).',
-		change: 'Nach einer Änderung dauert die nächste Antwort etwas länger.'
+		}
 	},
 
 	newChat: {

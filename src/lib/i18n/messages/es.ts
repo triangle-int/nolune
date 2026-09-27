@@ -267,6 +267,16 @@ export const es: Messages = {
 		renameTitle: 'Cambiar el nombre del chat',
 		chatName: 'Nombre del chat',
 		couldNotRename: 'No se pudo cambiar el nombre del chat.',
+		switchTitle: (model: string) => `¿Cambiar a ${model}?`,
+		anotherModel: 'otro modelo',
+		effortTitle: (level: string) => `¿Cambiar el razonamiento a «${level}»?`,
+		switchCache: (model: boolean, missTokens: string | null) =>
+			`btw guarda este chat en una caché para que cada respuesta solo pague por lo nuevo. ${model ? 'Otro modelo' : 'Otro nivel de razonamiento'} no puede usarla: la próxima respuesta vuelve a leer todo el chat, lo que tarda más y cuesta más${missTokens ? ` (un fallo de la caché del prompt de unos ${missTokens} tokens)` : ''}.`,
+		switchFiles:
+			'Algunas imágenes y PDF de este chat no pasan a otro proveedor: el nuevo modelo recibe dónde están sus archivos y puede volver a mirarlos.',
+		switch: 'Cambiar',
+		change: 'Cambiar',
+		models: (models: string[]) => models.join(', luego '),
 		usage: 'Uso',
 		tokensInOut: (input: string, output: string) =>
 			`${input} tokens de entrada, ${output} de salida`,
@@ -279,7 +289,7 @@ export const es: Messages = {
 		cacheExpired: (ttl: '5m' | '1h') =>
 			`Pasaron más de ${ttl === '5m' ? '5 minutos' : 'una hora'} desde el paso anterior, así que la conversación en caché caducó y se procesó de nuevo (más lento y más caro).`,
 		cacheBroken:
-			'El contexto que debía salir de la caché se procesó de nuevo (más lento y más caro). Pasa una vez al cambiar el nivel de razonamiento, mover el chat a otra carpeta o cambiar su carpeta.',
+			'El contexto que debía salir de la caché se procesó de nuevo (más lento y más caro). Pasa una vez al cambiar el modelo o el nivel de razonamiento, mover el chat a otra carpeta o cambiar su carpeta.',
 		contextChip: (used: string, window: string, rate: string) =>
 			`${used} / ${window} · ${rate} en caché`,
 		contextUsed: (used: string, window: string) =>
@@ -324,7 +334,6 @@ export const es: Messages = {
 
 	model: {
 		model: 'Modelo',
-		fixed: 'Modelo (fijo en este chat)',
 		reasoning: 'Razonamiento',
 		efforts: {
 			low: { label: 'Bajo', hint: 'Las respuestas más rápidas' },
@@ -332,10 +341,7 @@ export const es: Messages = {
 			high: { label: 'Alto', hint: 'Piensa más en las tareas difíciles' },
 			xhigh: { label: 'Muy alto', hint: 'Se toma su tiempo' },
 			max: { label: 'Máximo', hint: 'El más lento, para los problemas más difíciles' }
-		},
-		changeTechnical:
-			'Cambiarlo hace que la próxima respuesta vuelva a leer toda la conversación una vez (un fallo de la caché del prompt).',
-		change: 'Después de un cambio, la próxima respuesta tarda un poco más.'
+		}
 	},
 
 	newChat: {

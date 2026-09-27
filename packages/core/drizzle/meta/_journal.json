@@ -85,6 +85,20 @@
 			"when": 1790480368374,
 			"tag": "0011_claude_plan",
 			"breakpoints": true
+		},
+		{
+			"idx": 12,
+			"version": "6",
+			"when": 1790488854146,
+			"tag": "0012_model_switch",
+			"breakpoints": true
+		},
+		{
+			"idx": 13,
+			"version": "6",
+			"when": 1790490975553,
+			"tag": "0013_btw_format",
+			"breakpoints": true
 		}
 	]
 }

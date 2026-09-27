@@ -15,10 +15,10 @@
 		efforts: string[];
 		effort: string;
 		onEffortChange: (effort: string) => void;
-		/** Choosable models (a new chat), or just the current one (the model is fixed per chat). */
+		/** The models to choose from. */
 		presets: { id: string; name: string }[];
 		presetId: string;
-		onPresetChange?: (id: string) => void;
+		onPresetChange: (id: string) => void;
 		/** Marked in the list so people can find their way back to it. */
 		defaultPresetId?: string;
 	}
@@ -38,7 +38,6 @@
 	/** Labels and hints by reasoning level; levels added later show as they are. */
 	const effortInfo: Record<string, { label: string; hint: string } | undefined> = m.model.efforts;
 	const preset = $derived(presets.find((p) => p.id === presetId));
-	const locked = $derived(!onPresetChange);
 </script>
 
 <DropdownMenu.Root>
@@ -54,11 +53,11 @@
 		<ChevronDownIcon class="size-3.5 shrink-0" />
 	</DropdownMenu.Trigger>
 	<DropdownMenu.Content side="top" align="start" class="w-72">
-		{#if !locked && presets.length > 1}
+		{#if presets.length > 1}
 			<DropdownMenu.Label class="text-xs font-normal text-muted-foreground"
 				>{m.model.model}</DropdownMenu.Label
 			>
-			<DropdownMenu.RadioGroup value={presetId} onValueChange={(id) => onPresetChange?.(id)}>
+			<DropdownMenu.RadioGroup value={presetId} onValueChange={onPresetChange}>
 				{#each presets as p (p.id)}
 					<DropdownMenu.RadioItem value={p.id}>
 						<span class="min-w-0 flex-1 truncate">{shortModelName(p.name)}</span>
@@ -68,12 +67,6 @@
 					</DropdownMenu.RadioItem>
 				{/each}
 			</DropdownMenu.RadioGroup>
-			<DropdownMenu.Separator />
-		{:else if locked && preset && prefs.technical}
-			<DropdownMenu.Label class="font-normal">
-				<span class="block text-xs text-muted-foreground">{m.model.fixed}</span>
-				<span class="block truncate">{preset.name}</span>
-			</DropdownMenu.Label>
 			<DropdownMenu.Separator />
 		{/if}
 		<DropdownMenu.Label class="text-xs font-normal text-muted-foreground"
@@ -91,10 +84,5 @@
 				</DropdownMenu.RadioItem>
 			{/each}
 		</DropdownMenu.RadioGroup>
-		{#if locked}
-			<p class="px-3 pt-1 pb-2 text-xs text-muted-foreground">
-				{prefs.technical ? m.model.changeTechnical : m.model.change}
-			</p>
-		{/if}
 	</DropdownMenu.Content>
 </DropdownMenu.Root>

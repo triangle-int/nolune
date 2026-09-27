@@ -259,6 +259,16 @@ export const fr: Messages = {
 		renameTitle: 'Renommer la discussion',
 		chatName: 'Nom de la discussion',
 		couldNotRename: 'Impossible de renommer la discussion.',
+		switchTitle: (model: string) => `Passer à ${model} ?`,
+		anotherModel: 'un autre modèle',
+		effortTitle: (level: string) => `Passer la réflexion à « ${level} » ?`,
+		switchCache: (model: boolean, missTokens: string | null) =>
+			`btw garde cette discussion en cache, pour que chaque réponse ne paie que ce qui est nouveau. ${model ? 'Un autre modèle' : 'Un autre niveau de réflexion'} ne peut pas s’en servir : la prochaine réponse relit toute la discussion, ce qui prend plus de temps et coûte plus cher${missTokens ? ` (un défaut du cache du prompt d’environ ${missTokens} tokens)` : ''}.`,
+		switchFiles:
+			'Certaines images et certains PDF de cette discussion ne passent pas à un autre fournisseur : le nouveau modèle reçoit l’emplacement de leurs fichiers et peut les regarder à nouveau.',
+		switch: 'Changer',
+		change: 'Modifier',
+		models: (models: string[]) => models.join(', puis '),
 		usage: 'Consommation',
 		tokensInOut: (input: string, output: string) =>
 			`${input} tokens en entrée, ${output} en sortie`,
@@ -271,7 +281,7 @@ export const fr: Messages = {
 		cacheExpired: (ttl: '5m' | '1h') =>
 			`${ttl === '5m' ? 'Plus de 5 minutes se sont écoulées' : 'Plus d’une heure s’est écoulée'} depuis l’étape précédente : la discussion en cache a expiré et a été traitée à nouveau (plus lent et plus coûteux).`,
 		cacheBroken:
-			'Du contexte qui aurait dû venir du cache a été traité à nouveau (plus lent et plus coûteux). Cela arrive une fois quand on change le niveau de réflexion, qu’on déplace la discussion dans un autre dossier ou qu’on modifie son dossier.',
+			'Du contexte qui aurait dû venir du cache a été traité à nouveau (plus lent et plus coûteux). Cela arrive une fois quand on change de modèle ou de niveau de réflexion, qu’on déplace la discussion dans un autre dossier ou qu’on modifie son dossier.',
 		contextChip: (used: string, window: string, rate: string) =>
 			`${used} / ${window} · ${rate} en cache`,
 		contextUsed: (used: string, window: string) =>
@@ -316,7 +326,6 @@ export const fr: Messages = {
 
 	model: {
 		model: 'Modèle',
-		fixed: 'Modèle (fixe pour cette discussion)',
 		reasoning: 'Réflexion',
 		efforts: {
 			low: { label: 'Faible', hint: 'Les réponses les plus rapides' },
@@ -324,10 +333,7 @@ export const fr: Messages = {
 			high: { label: 'Élevée', hint: 'Réfléchit plus longtemps aux tâches difficiles' },
 			xhigh: { label: 'Très élevée', hint: 'Prend son temps' },
 			max: { label: 'Maximale', hint: 'La plus lente, pour les problèmes les plus durs' }
-		},
-		changeTechnical:
-			'La modifier fait relire une fois toute la discussion à la prochaine réponse (un défaut du cache du prompt).',
-		change: 'Après une modification, la prochaine réponse prend un peu plus de temps.'
+		}
 	},
 
 	newChat: {

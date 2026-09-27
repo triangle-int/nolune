@@ -4,6 +4,9 @@ import {
 	TitleError,
 	deleteConversation,
 	getConversation,
+	getDefaultPreset,
+	heldFileProviders,
+	listPresets,
 	renameConversation,
 	stopConversation,
 	subagentByConversation
@@ -21,9 +24,13 @@ export const load: PageServerLoad = ({ locals, params }) => {
 		conversation: {
 			id: conversation.id,
 			title: conversation.title,
+			presetId: conversation.presetId,
 			presetName: conversation.presetName,
+			provider: conversation.provider,
 			effort: conversation.effort,
 			contextWindow: conversation.contextWindow,
+			/** Providers holding pictures and PDFs of this chat that another can't open. */
+			heldBy: heldFileProviders(conversation.id),
 			hidden: conversation.hidden,
 			cacheTtl: conversation.cacheTtl,
 			/** A subagent's own chat: who started it, where. */
@@ -35,7 +42,10 @@ export const load: PageServerLoad = ({ locals, params }) => {
 					}
 				: null
 		},
-		efforts: [...EFFORTS]
+		efforts: [...EFFORTS],
+		/** The models it can switch to. */
+		presets: listPresets().map((p) => ({ id: p.id, name: p.name, provider: p.provider })),
+		defaultPresetId: getDefaultPreset()?.id ?? ''
 	};
 };
 
