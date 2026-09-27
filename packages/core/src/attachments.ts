@@ -27,13 +27,14 @@ import {
 } from './media.ts';
 import { countDocumentTokens, shortApiError, type Provider } from './models.ts';
 import { profileDir } from './paths.ts';
-import { providerFileId } from './provider-files.ts';
+import { hasFileStore, providerFileId } from './provider-files.ts';
 
 /*
  * Files people attach to a message. Each is saved in the profile's `attachments` folder, where
  * the agent can work with it, and shown in the chat through a media row. The model gets pictures
- * and PDFs themselves, through the provider's Files API, and every other file as its name and
- * path. What the model got is written into the message's `content` in the provider's format;
+ * and PDFs themselves, through the provider's Files API (pictures inline, and PDFs as their path,
+ * on ChatGPT's Codex backend, which has none), and every other file as its name and path. What
+ * the model got is written into the message's `content` in the provider's format;
  * `message.attachments` keeps the provider-neutral record.
  */
 
@@ -200,7 +201,8 @@ type AttachmentBlock =
 
 /**
  * A picture as the provider's content block, counted in `used`: uploaded through its Files API,
- * or inline as base64 when that fails and the conversation still has room for it.
+ * or inline as base64 when that fails or the provider has none (ChatGPT's Codex backend) and the
+ * conversation still has room for it.
  */
 export async function imageBlock(
 	provider: Provider,
@@ -214,24 +216,37 @@ export async function imageBlock(
 			problem: `this conversation already holds ${MAX_CONVERSATION_IMAGES} pictures, as many as it can`
 		};
 	}
-	let block: ImageBlock;
-	try {
-		const fileId = await providerFileId(provider, data, name, mediaType);
-		block = { type: 'image', source: { type: 'file', file_id: fileId } };
-	} catch (err) {
-		const bytes = base64Length(data.length);
-		if (used.bytes + bytes > MAX_CONVERSATION_IMAGE_BYTES) {
-			return { problem: `it couldn't be uploaded (${shortApiError(err)})` };
+	let uploadError: unknown;
+	if (hasFileStore(provider)) {
+		try {
+			const fileId = await providerFileId(provider, data, name, mediaType);
+			used.count++;
+			return { block: { type: 'image', source: { type: 'file', file_id: fileId } } };
+		} catch (err) {
+			uploadError = err;
 		}
-		console.error(`[btw] uploading ${name} failed, sending it inline: ${shortApiError(err)}`);
-		block = {
+	}
+	const bytes = base64Length(data.length);
+	if (used.bytes + bytes > MAX_CONVERSATION_IMAGE_BYTES) {
+		return {
+			problem: uploadError
+				? `it couldn't be uploaded (${shortApiError(uploadError, provider)})`
+				: `this conversation's pictures already fill the ${MAX_CONVERSATION_IMAGE_BYTES / 1_000_000} MB it can send`
+		};
+	}
+	if (uploadError) {
+		console.error(
+			`[btw] uploading ${name} failed, sending it inline: ${shortApiError(uploadError, provider)}`
+		);
+	}
+	used.bytes += bytes;
+	used.count++;
+	return {
+		block: {
 			type: 'image',
 			source: { type: 'base64', media_type: mediaType, data: data.toString('base64') }
-		};
-		used.bytes += bytes;
-	}
-	used.count++;
-	return { block };
+		}
+	};
 }
 
 /** The images `btw view` left, for the command's tool_result, each after a line naming it. */
@@ -261,17 +276,20 @@ async function pdfBlock(
 	name: string,
 	room: number
 ): Promise<{ block: Anthropic.DocumentBlockParam; tokens: number } | { problem: string }> {
+	const { provider } = conv;
+	// Without a Files API a PDF would go inline and be resent with every step.
+	if (!hasFileStore(provider)) return { problem: "models on a ChatGPT plan don't take PDFs" };
 	let fileId: string;
 	try {
-		fileId = await providerFileId(conv.provider, readFileSync(path), name, 'application/pdf');
+		fileId = await providerFileId(provider, readFileSync(path), name, 'application/pdf');
 	} catch (err) {
-		return { problem: `it couldn't be uploaded (${shortApiError(err)})` };
+		return { problem: `it couldn't be uploaded (${shortApiError(err, provider)})` };
 	}
 	let tokens: number;
 	try {
-		tokens = await countDocumentTokens(conv.provider, conv.model, fileId);
+		tokens = await countDocumentTokens(provider, conv.model, fileId);
 	} catch (err) {
-		return { problem: `the model can't read it (${shortApiError(err)})` };
+		return { problem: `the model can't read it (${shortApiError(err, provider)})` };
 	}
 	if (tokens > room) {
 		return {

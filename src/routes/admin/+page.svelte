@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { invalidate } from '$app/navigation';
 	import BoxIcon from '@lucide/svelte/icons/box';
+	import CircleUserRoundIcon from '@lucide/svelte/icons/circle-user-round';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import StarIcon from '@lucide/svelte/icons/star';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
@@ -18,7 +20,8 @@
 	let provider = $state('anthropic');
 	const EXAMPLE_MODELS: Record<string, string> = {
 		anthropic: 'claude-opus-5-5',
-		openai: 'gpt-6-astra'
+		openai: 'gpt-6-astra',
+		codex: 'gpt-6-astra'
 	};
 
 	type KeyStatus = (typeof data.keys)[number];
@@ -26,6 +29,19 @@
 	let editing = $state<string | null>(null);
 	let checking = $state<string | null>(null);
 	let removing = $state<KeyStatus | null>(null);
+
+	/** A ChatGPT sign-in being started, and one about to be signed out. */
+	let signingIn = $state(false);
+	let signingOut = $state(false);
+	const codex = $derived(data.codex);
+	const codexError = $derived(form?.codexError ?? codex.error);
+
+	// The code is entered on another page, often another device: ask until it has been.
+	$effect(() => {
+		if (!codex.pending) return;
+		const timer = setInterval(() => invalidate('btw:codex'), 3000);
+		return () => clearInterval(timer);
+	});
 
 	function sourceText(key: KeyStatus): string {
 		const end = key.hint ? ` ending in ${key.hint}` : '';
@@ -160,6 +176,119 @@
 						</li>
 					{/each}
 				</ul>
+			</section>
+
+			<section class="space-y-3" aria-labelledby="chatgpt-heading">
+				<div class="space-y-1">
+					<h2 id="chatgpt-heading" class="text-lg font-medium">ChatGPT plan</h2>
+					<p class="text-muted-foreground">
+						Presets on ChatGPT run on a ChatGPT Plus, Pro or Business plan through Codex, the way
+						OpenAI's Codex app does, instead of on API credit. They count against the plan's Codex
+						limits.
+					</p>
+				</div>
+				<div class="space-y-3 rounded-2xl border px-4 py-3 text-sm">
+					<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+						<span
+							class={cn(
+								'flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted max-sm:self-start',
+								codex.account ? 'text-foreground' : 'text-muted-foreground'
+							)}
+						>
+							<CircleUserRoundIcon class="size-4" />
+						</span>
+						<div class="min-w-0 flex-1">
+							<div class="font-medium">ChatGPT</div>
+							{#if codex.account}
+								<div class="truncate text-muted-foreground">
+									Signed in as {codex.account.email ?? 'a ChatGPT account'}{codex.account.plan
+										? ` · ${codex.account.plan} plan`
+										: ''}
+								</div>
+							{:else}
+								<div class="text-warning">Not signed in</div>
+							{/if}
+						</div>
+						<div class="flex gap-1 max-sm:basis-full max-sm:pl-9">
+							{#if codex.pending}
+								<form method="POST" action="?/codexCancel" use:enhance>
+									<Button type="submit" variant="ghost" size="sm" class="text-muted-foreground">
+										Cancel
+									</Button>
+								</form>
+							{:else}
+								<form
+									method="POST"
+									action="?/codexSignIn"
+									use:enhance={() => {
+										signingIn = true;
+										return async ({ update }) => {
+											await update();
+											signingIn = false;
+										};
+									}}
+								>
+									<Button
+										type="submit"
+										variant={codex.account ? 'ghost' : 'default'}
+										size="sm"
+										disabled={signingIn}
+										class={cn(codex.account && 'text-muted-foreground')}
+									>
+										{signingIn
+											? 'Asking ChatGPT…'
+											: codex.account
+												? 'Sign in again'
+												: 'Sign in with ChatGPT'}
+									</Button>
+								</form>
+								{#if codex.account}
+									<Button
+										variant="ghost"
+										size="sm"
+										class="text-muted-foreground"
+										onclick={() => (signingOut = true)}
+									>
+										Sign out
+									</Button>
+								{/if}
+							{/if}
+						</div>
+					</div>
+
+					{#if codex.pending}
+						<ol class="list-inside list-decimal space-y-2 sm:pl-12" aria-live="polite">
+							<li>
+								Open
+								<a
+									href={codex.pending.verificationUrl}
+									target="_blank"
+									rel="noreferrer"
+									class="underline"
+									>{new URL(codex.pending.verificationUrl).host}{new URL(
+										codex.pending.verificationUrl
+									).pathname}</a
+								>
+								on any device and sign in to ChatGPT.
+							</li>
+							<li>
+								Enter this code:
+								<span class="ml-1 font-mono text-lg font-medium tracking-widest select-all"
+									>{codex.pending.userCode}</span
+								>
+							</li>
+						</ol>
+						<p class="text-muted-foreground sm:pl-12">
+							The code works for 15 minutes. This page updates once it's entered.
+						</p>
+					{/if}
+
+					{#if codexError && !codex.pending}
+						<p class="text-destructive sm:pl-12" role="alert">{codexError}</p>
+					{:else if form?.codexMessage}
+						<p class="text-muted-foreground sm:pl-12" role="status">{form.codexMessage}</p>
+					{/if}
+				</div>
 			</section>
 
 			<section class="space-y-3" aria-labelledby="models-heading">
@@ -311,6 +440,32 @@
 			<AlertDialog.Footer>
 				<AlertDialog.Cancel type="button">Cancel</AlertDialog.Cancel>
 				<AlertDialog.Action type="submit" variant="destructive">Remove</AlertDialog.Action>
+			</AlertDialog.Footer>
+		</form>
+	</AlertDialog.Content>
+</AlertDialog.Root>
+
+<AlertDialog.Root open={signingOut} onOpenChange={(open) => !open && (signingOut = false)}>
+	<AlertDialog.Content>
+		<AlertDialog.Header>
+			<AlertDialog.Title>Sign out of ChatGPT?</AlertDialog.Title>
+			<AlertDialog.Description>
+				Chats on ChatGPT presets stop working until someone signs in again.
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+		<form
+			method="POST"
+			action="?/codexSignOut"
+			use:enhance={() => {
+				return async ({ update }) => {
+					signingOut = false;
+					await update();
+				};
+			}}
+		>
+			<AlertDialog.Footer>
+				<AlertDialog.Cancel type="button">Cancel</AlertDialog.Cancel>
+				<AlertDialog.Action type="submit" variant="destructive">Sign out</AlertDialog.Action>
 			</AlertDialog.Footer>
 		</form>
 	</AlertDialog.Content>

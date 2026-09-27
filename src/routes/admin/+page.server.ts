@@ -1,11 +1,14 @@
 import { error, fail } from '@sveltejs/kit';
 import {
-	API_KEYS,
 	ApiKeyError,
+	CodexAuthError,
 	PROVIDERS,
+	PROVIDER_LABELS,
 	addPreset,
 	apiKeyStatuses,
+	cancelCodexSignIn,
 	checkApiKey,
+	codexStatus,
 	effectiveContextWindow,
 	getDefaultPreset,
 	isApiKeyProvider,
@@ -14,18 +17,24 @@ import {
 	removeApiKey,
 	removePreset,
 	saveApiKey,
-	setDefaultPreset
+	setDefaultPreset,
+	signOutCodex,
+	startCodexSignIn
 } from '@btw/core';
 import { requireAdmin } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
 
-export const load: PageServerLoad = ({ locals }) => {
+export const load: PageServerLoad = ({ locals, depends }) => {
 	requireAdmin(locals);
+	// The page asks again while a ChatGPT sign-in waits for its code.
+	depends('btw:codex');
 	const defaultId = getDefaultPreset()?.id;
 	return {
 		// Where each key comes from and its last four characters; never the keys themselves.
 		keys: apiKeyStatuses(),
-		providers: PROVIDERS.map((id) => ({ id, label: API_KEYS[id].label })),
+		// Who btw is signed in to ChatGPT as, and a sign-in's code; never the tokens.
+		codex: codexStatus(),
+		providers: PROVIDERS.map((id) => ({ id, label: PROVIDER_LABELS[id] })),
 		presets: listPresets().map((p) => ({
 			id: p.id,
 			name: p.name,
@@ -65,6 +74,25 @@ export const actions: Actions = {
 		const { provider } = await keyForm(request);
 		removeApiKey(provider);
 		return { provider, keyMessage: 'Removed.' };
+	},
+	codexSignIn: async ({ locals }) => {
+		requireAdmin(locals);
+		try {
+			// Waits for the code, not for it to be entered: that goes on in the background.
+			await startCodexSignIn();
+		} catch (err) {
+			if (!(err instanceof CodexAuthError)) throw err;
+			return fail(400, { codexError: err.message });
+		}
+	},
+	codexCancel: ({ locals }) => {
+		requireAdmin(locals);
+		cancelCodexSignIn();
+	},
+	codexSignOut: async ({ locals }) => {
+		requireAdmin(locals);
+		await signOutCodex();
+		return { codexMessage: 'Signed out.' };
 	},
 	add: async ({ locals, request }) => {
 		requireAdmin(locals);

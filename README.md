@@ -11,21 +11,29 @@ it works and why.
 ## Install
 
 Needs macOS (Linux works without the background service), Node 22.18+ and an
-[Anthropic API key](https://console.anthropic.com/) or an
-[OpenAI API key](https://platform.openai.com/api-keys) (chats run on Claude or on OpenAI's GPT
-models; you can have both).
+[Anthropic API key](https://console.anthropic.com/), an
+[OpenAI API key](https://platform.openai.com/api-keys), or a ChatGPT Plus, Pro or Business plan
+(chats run on Claude or on OpenAI's GPT models; you can have all three). A ChatGPT plan runs GPT
+chats the way OpenAI's Codex does, without an API key, and counts against the plan's Codex limits.
 
 ```sh
 npm install -g btw-agent
 btw setup                      # API key, your account, default model, public URL
-                               # (btw setup --provider openai to start with GPT)
+                               # (btw setup --provider openai to start with GPT, or
+                               #  --provider codex to sign in with a ChatGPT plan instead of a key)
 btw key set openai             # optional: GPT models for chats, and pictures (Images page)
+btw codex login                # optional: GPT chats on your ChatGPT plan (prints a link and a code)
 btw service install            # run in the background, start at login
 btw user create Anna anna@example.com   # add family members (prints their password)
 ```
 
 Then open the address `btw setup` printed and sign in. As the admin you can also add or replace
-API keys and models on the web, under Models & keys in your account menu.
+API keys, sign in with ChatGPT, and add models on the web, under Models & keys in your account
+menu. Signing in with ChatGPT shows a link and a one-time code: open the link on any device,
+sign in to ChatGPT and enter the code. Presets on the ChatGPT plan use the provider `codex`
+(`btw preset add gpt-6-astra --provider codex`; `btw codex models` lists what the plan offers).
+It has no file storage, so pictures go to the model with each request and PDFs only as their
+path, which btw opens with commands.
 
 **Reaching it from outside your home.** The gateway listens on `127.0.0.1:5780`. Put a tunnel in
 front of it, e.g. [Tailscale Funnel](https://tailscale.com/kb/1223/funnel),

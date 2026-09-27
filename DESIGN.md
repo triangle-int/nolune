@@ -14,8 +14,8 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | Profiles           | Any user can create a profile. Any member can add or remove members, rename the profile, or delete it. Deleting moves the folder to `~/.btw-agent/trash/` instead of erasing it.                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Conversations      | Shared by every member of the profile. Messages go through a queue, and a message sent while the agent is working is fed into its next step (steering). Anyone can press Stop.                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Sender identity    | Every human message is sent to the model as `Name: text`. Attached files come first, each as a line saying who attached it and where it was saved, followed by the picture or PDF itself when the model gets one. Display names are unique across the gateway.                                                                                                                                                                                                                                                                                                                                       |
-| Attachments        | Any file, up to 100 MB and 10 per message, saved in the profile's `attachments` folder. The model gets pictures and PDFs through the provider's Files API, never as base64 unless an upload fails, and every other file as its path.                                                                                                                                                                                                                                                                                                                                                                 |
-| Providers          | Anthropic and OpenAI (API keys). Keys and model presets are global and managed by the admin with the CLI or the `/admin` page (Models & keys). A preset has a name (default `<model> (<provider>)`), a provider, a model, and an optional context-window override. One preset is the default (the oldest until an admin picks another): new chats start with it, and automations without a preset use it. See [Model providers](#model-providers).                                                                                                                                                   |
+| Attachments        | Any file, up to 100 MB and 10 per message, saved in the profile's `attachments` folder. The model gets pictures and PDFs through the provider's Files API, never as base64 unless an upload fails or there's no Files API (a ChatGPT plan: pictures inline, PDFs as their path), and every other file as its path.                                                                                                                                                                                                                                                                                   |
+| Providers          | Anthropic and OpenAI (API keys), and OpenAI's models on a ChatGPT plan through Codex (provider `codex`, a ChatGPT sign-in). Keys, the sign-in and model presets are global and managed by the admin with the CLI or the `/admin` page (Models & keys). A preset has a name (default `<model> (<provider>)`), a provider, a model, and an optional context-window override. One preset is the default (the oldest until an admin picks another): new chats start with it, and automations without a preset use it. See [Model providers](#model-providers).                                           |
 | Preset switching   | Not allowed. A conversation keeps its provider and model for its whole life.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Reasoning          | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once.                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | System prompt      | Built once when the conversation is created: instructions, the profile's soul, the skills catalog and, for a chat in a folder, the folder's instructions and file paths. **It is not changed afterwards, and no update notices are added,** with one exception: when the chat moves to another folder, or its folder or the soul changes, it is built again at the start of the next turn (one cache miss). If skills change in another conversation, this conversation only sees it by running commands. Of memory, only `core` and the note names are in it: chats outside folders share a prompt. |
@@ -35,6 +35,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 ~/.btw-agent/                 (override with BTW_HOME)
   config.json                 auth secret, Anthropic and OpenAI keys, image model, extra env vars
                               for commands (mode 600)
+  codex-auth.json             the ChatGPT sign-in's tokens, for the codex provider (mode 600)
   btw.db                      SQLite: users, sessions, profiles, presets, folders, conversations,
                               messages, media, uploads, provider files, triggers, trigger runs,
                               notifications, subagents, running background commands
@@ -108,15 +109,17 @@ OpenAI's prompt cache is automatic, and the rule above is what keeps it working:
 `prompt_cache_key` (the conversation's id), which keeps a conversation's calls on the same cache.
 `cacheTtl` and the cache markers are Anthropic's alone. Usage reports `cached_tokens` (and, on
 newer models, `cache_write_tokens`) inside `input_tokens`; btw subtracts them, so the chat's
-numbers mean the same for both providers.
+numbers mean the same for both providers. ChatGPT's Codex backend caches the same way; its
+requests also carry the conversation's id as `session-id`, as Codex sends it.
 
 ## Model providers
 
 A conversation runs on its preset's provider for its whole life. `models.ts` is what the rest of
-btw calls: it picks the provider's module (`anthropic.ts`, `openai-chat.ts`) for the model call,
-the chat's title, PDF token counts and model checks, and gets back the same shape from each (the
-reply's content, its stop reason in Anthropic's words, usage, tool calls and texts). Each
-provider brings a `FileStore` for pictures and PDFs (see [Attachments](#attachments)).
+btw calls: it picks the provider's module (`anthropic.ts`, `openai-chat.ts`, `codex-chat.ts`)
+for the model call, the chat's title, PDF token counts and model checks, and gets back the same
+shape from each (the reply's content, its stop reason in Anthropic's words, usage, tool calls
+and texts). Each provider with a Files API brings a `FileStore` for pictures and PDFs (see
+[Attachments](#attachments)).
 
 - **What's stored.** What btw writes itself (people's messages, attachments, command results,
   automations' and subagents' messages, notices) uses Anthropic's content blocks, whatever the
@@ -153,7 +156,32 @@ provider brings a `FileStore` for pictures and PDFs (see [Attachments](#attachme
   what the model takes, for good, since history is never edited; so they get one only when the
   admin sets it. Without one, the chat's context meter shows "?" and PDFs share 25% of 200k
   tokens. Titles are asked for at `low` effort.
-- **Another provider** (OpenRouter, Gemini) would be one more module next to these two, a branch
+- **A ChatGPT plan** (`codex`, in `codex-chat.ts` and `codex-auth.ts`) runs OpenAI's models the
+  way the Codex CLI does when signed in with ChatGPT: the Responses API at
+  `chatgpt.com/backend-api/codex`, with the account's OAuth token and a `ChatGPT-Account-Id`
+  header, counting against the plan's Codex limits instead of API credit. Requests are built and
+  read by `openai-chat.ts` (`turnRequest`, `readStream`), so replies are stored as OpenAI's output
+  items and the chat reads them the same way. What differs: every request streams and none takes
+  `max_output_tokens` (titles too); there's no Files API, so pictures go inline as data URLs
+  (within the 20 MB a conversation's inline pictures may take) and PDFs as their path only, since
+  Codex never sends them; and models are checked in Codex's catalog (`GET /models`, which also
+  gives their context window: 272k for the current ones). A 401 renews the sign-in and tries
+  once more. Usage limits (a 429 with `usage_limit_reached`) are shown with when they reset.
+  Errors are described per provider (`describeApiError(err, provider)`), since this one fails
+  with OpenAI's SDK errors but is fixed by signing in, not by a key.
+- **Signing in with ChatGPT** (`codex-auth.ts`) is Codex's device code flow (`codex login
+--device-auth`, with Codex's client id): btw asks `auth.openai.com` for a one-time code, someone
+  signed in to ChatGPT enters it at `auth.openai.com/codex/device`, and btw polls until it gets an
+  authorization code, which it trades for tokens. Nothing redirects back to this computer, so it
+  works through a tunnel and from a phone. The tokens live in `codex-auth.json` (mode 600), read
+  on every request like `config.json`; the web page and `btw config` show only the account's
+  email and plan. The access token is renewed 5 minutes before it runs out. A refresh token works
+  once and both the gateway and the CLI may renew, so a process renews one at a time and, after
+  ChatGPT answers, reads the file again: when it changed meanwhile (renewed elsewhere, signed out,
+  signed in again), what's there wins. Signing out asks ChatGPT to revoke the refresh token and
+  deletes the file either way. A sign-in under way lives in the process that started it: the
+  gateway for Models & keys, which asks again every few seconds until the code is entered.
+- **Another provider** (OpenRouter, Gemini) would be one more module next to these, a branch
   in each of `models.ts`'s functions, a `FileStore` (or pictures inline), its key in `API_KEYS`
   (config.ts) with a check request in `api-keys.ts`, and its name in `PROVIDERS` and the schema's
   `provider` enums (a TypeScript list only: SQLite stores any text there).
@@ -301,7 +329,8 @@ kind of file, up to 100 MB each (the same as pictures in replies) and 10 per mes
   what the model got). `content` holds btw's blocks in Anthropic's format for every provider,
   with the provider's own file ids, and each provider's module turns them into its request
   format (see [Model providers](#model-providers)). A provider brings a `FileStore`
-  (`provider-files.ts`); one without a files API would send pictures inline. OpenAI's is its
+  (`provider-files.ts`); one without a files API (a ChatGPT plan) sends pictures inline and PDFs
+  as their path. OpenAI's is its
   Files API: pictures are uploaded for `vision` and PDFs as `user_data`, and a PDF's cost is
   counted with `POST /v1/responses/input_tokens`, which also fails for a PDF it can't read.
 
@@ -739,8 +768,10 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   with the provider's words. Removing a saved key falls back to the environment's. Replacing a
   key warns to keep the same workspace (Anthropic) or project (OpenAI): pictures and PDFs already
   sent live in it. `btw key set` does the same check, but saves anyway when the provider can't be
-  reached. The preset form picks the provider (Anthropic or OpenAI), and the provider checks the
-  model id before the preset is saved.
+  reached. Under the keys, **ChatGPT plan** signs in with ChatGPT: it shows the link and the
+  one-time code, updates by itself once the code is entered, and then shows the account's email
+  and plan, with Sign in again and Sign out. The preset form picks the provider (Anthropic,
+  OpenAI or ChatGPT), and the provider checks the model id before the preset is saved.
 
 ## Assistant avatars
 
@@ -825,16 +856,17 @@ to (issue #42).
 ```
 packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_command, background
                 commands, memory notes, btw view images, attachments, model calls (models.ts, with
-                anthropic.ts and openai-chat.ts, each with its Files API; content-blocks.ts reads
-                either's replies), provider file cache, runner, media, users/profiles/presets, API
+                anthropic.ts and openai-chat.ts, each with its Files API, and codex-chat.ts with
+                the ChatGPT sign-in in codex-auth.ts; content-blocks.ts reads any of their
+                replies), provider file cache, runner, media, users/profiles/presets, API
                 keys, chat folders, triggers, scheduler, subagents (subagents.ts, and
                 subagent-host.ts in the gateway), notifications, image generation (providers:
                 openai.ts), image templates and assistant avatars.
                 Built-in skills in packages/core/skills, built-in templates in
                 packages/core/image-templates. Plain TypeScript run by Node with type stripping
                 (no enums or parameter properties; imports use .ts extensions).
-packages/cli    btw: setup, start, service, config, key, env, user, preset, profile, skill, trigger, wake,
-                view, memory, generate, agent. `runCli(argv, io)` in run.ts runs a command and returns
+packages/cli    btw: setup, start, service, config, key, codex, env, user, preset, profile, skill, trigger,
+                wake, view, memory, generate, agent. `runCli(argv, io)` in run.ts runs a command and returns
                 its exit code; index.ts calls it with this process's io. Commands print, read stdin,
                 the environment (BTW_PROFILE, …) and the working folder only through `io` (io.ts),
                 never `process`, and end in an error rather than `process.exit`, so the agent's
@@ -860,7 +892,8 @@ Published to npm as `btw-agent` (not yet). `npm install -g btw-agent` gives the 
   templates in `packages/core/image-templates`. Its only runtime dependency is `better-sqlite3` (a
   native module with prebuilt binaries). Everything else is bundled. Node won't strip types inside
   `node_modules`, which is why the CLI ships as JavaScript.
-- `btw setup` is the first-run wizard: config, API key, admin account, default preset, public URL.
+- `btw setup` is the first-run wizard: config, API key (or the ChatGPT sign-in, with `--provider
+codex`), admin account, default preset, public URL.
 - `btw start` reads host, port and origin from `config.json` (default `127.0.0.1:5780`), sets
   `HOST` / `PORT` / `ORIGIN` for adapter-node and imports `build/index.js`.
 - `btw service install` writes a LaunchAgent (`~/Library/LaunchAgents/dev.btw-agent.gateway.plist`)

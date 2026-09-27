@@ -11,6 +11,7 @@ import {
 	addPreset,
 	apiKeyStatuses,
 	checkApiKey,
+	codexAccount,
 	configExists,
 	createSkill,
 	createUser,
@@ -48,6 +49,7 @@ import {
 	type Provider
 } from '@btw/core';
 import { AGENT_HELP, agentCommand } from './agent.ts';
+import { CODEX_HELP, codexCommand, describeAccount, signInWithChatGpt } from './codex.ts';
 import { generateCommand, generateHelp } from './generate.ts';
 import { ask, askHidden } from './input.ts';
 import { fail, type Io } from './io.ts';
@@ -68,8 +70,10 @@ import {
 const help = () => `btw - a family agent that runs on this computer
 
 Getting started
-  btw setup [--provider anthropic|openai]    interactive first-time setup (key, your account, model);
-                                             chats run on Claude unless you pick openai
+  btw setup [--provider anthropic|openai|codex]
+                                             interactive first-time setup (key, your account, model);
+                                             chats run on Claude unless you pick openai (an API
+                                             key) or codex (sign in with a ChatGPT plan)
   btw start                                  run the gateway in the foreground
   btw service install|uninstall|restart|status|logs [-f]
                                              run it in the background at login (macOS)
@@ -85,6 +89,8 @@ Settings (${paths.home})
   btw env set <NAME> <value>                 extra env var for agent commands (e.g. FIRECRAWL_API_KEY)
   btw env rm <NAME> | btw env list
 
+${CODEX_HELP}
+
 Users (web sign-up is disabled; this is the only way to add people)
   btw user create <name> <email> [--password P] [--admin]
   btw user passwd <name|email> [--password P]
@@ -93,7 +99,7 @@ Users (web sign-up is disabled; this is the only way to add people)
   btw user list
 
 Model presets (shared by all profiles)
-  btw preset add <model> [--provider anthropic|openai] [--name N] [--context-window TOKENS]
+  btw preset add <model> [--provider anthropic|openai|codex] [--name N] [--context-window TOKENS]
                                              the provider checks the model id first (anthropic
                                              unless given); OpenAI models other than the
                                              flagships need --context-window
@@ -121,10 +127,17 @@ Inside agent commands (BTW_PROFILE is set, so --profile can be left out)
 
 ${AGENT_HELP}`;
 
-/** What `btw setup` suggests for each provider's first preset, and where its keys are made. */
-const SETUP: Record<Provider, { model: string; keys: string }> = {
-	anthropic: { model: 'claude-opus-5-5', keys: 'console.anthropic.com > API keys' },
-	openai: { model: 'gpt-6-astra', keys: 'platform.openai.com > API keys' }
+/** What `btw setup` suggests for each provider's first preset. */
+const SETUP_MODELS: Record<Provider, string> = {
+	anthropic: 'claude-opus-5-5',
+	openai: 'gpt-6-astra',
+	codex: 'gpt-6-astra'
+};
+
+/** Where each provider's API keys are made. */
+const KEYS_AT: Record<ApiKeyProvider, string> = {
+	anthropic: 'console.anthropic.com > API keys',
+	openai: 'platform.openai.com > API keys'
 };
 
 function positional(args: string[], index: number, name: string): string {
@@ -205,16 +218,18 @@ async function setup(io: Io, args: string[]): Promise<void> {
 	});
 
 	const provider = values.provider ?? 'anthropic';
-	if (!isProvider(provider)) fail('--provider is anthropic or openai');
-	const { label, field } = API_KEYS[provider];
+	if (!isProvider(provider)) fail('--provider is anthropic, openai or codex');
 
 	const { created } = initConfig();
 	getDb();
 	installCliShim();
 	io.log(created ? `Created ${paths.home}` : `Using ${paths.home}`);
 
-	if (!readConfig()[field]) {
-		const key = values.key ?? (await askHidden(io, `${label} API key (${SETUP[provider].keys})`));
+	if (provider === 'codex') {
+		if (!codexAccount()) await signInWithChatGpt(io);
+	} else if (!readConfig()[API_KEYS[provider].field]) {
+		const { label } = API_KEYS[provider];
+		const key = values.key ?? (await askHidden(io, `${label} API key (${KEYS_AT[provider]})`));
 		if (!key) fail(`an ${label} API key is required`);
 		await storeApiKey(io, provider, key);
 	}
@@ -231,7 +246,7 @@ async function setup(io: Io, args: string[]): Promise<void> {
 	}
 
 	if (listPresets().length === 0) {
-		const model = values.model ?? (await ask(io, 'Model', SETUP[provider].model));
+		const model = values.model ?? (await ask(io, 'Model', SETUP_MODELS[provider]));
 		const preset = await addPreset({ provider, model });
 		io.log(`Added model "${preset.name}".`);
 	}
@@ -395,6 +410,10 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 						: `no key (btw key set ${key.provider})`;
 					io.log(`${key.provider.padEnd(10)} ${shown}`);
 				}
+				const chatgpt = codexAccount();
+				io.log(
+					`codex      ${chatgpt ? `signed in as ${describeAccount(chatgpt)}` : 'not signed in (btw codex login)'}`
+				);
 				const images = imageGenerationStatus();
 				io.log(`images     ${images.model}${images.problem ? ` (${images.problem})` : ''}`);
 				io.log(`env        ${Object.keys(config.commandEnv ?? {}).join(', ') || '-'}`);
@@ -444,6 +463,10 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 			await storeApiKey(io, provider, key);
 			return;
 		}
+
+		case 'codex':
+			requireInit();
+			return codexCommand(io, action);
 
 		case 'env': {
 			requireInit();

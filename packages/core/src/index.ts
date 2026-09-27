@@ -135,7 +135,28 @@ export {
 	type Snapshot
 } from './runner.ts';
 export { TitleError } from './titles.ts';
-export { EFFORTS, PROVIDERS, isProvider, type Effort, type Provider } from './models.ts';
+export {
+	EFFORTS,
+	PROVIDERS,
+	PROVIDER_LABELS,
+	describeApiError,
+	isProvider,
+	type Effort,
+	type Provider
+} from './models.ts';
+export {
+	CODEX_SIGN_IN_HELP,
+	CodexAuthError,
+	cancelCodexSignIn,
+	codexAccount,
+	codexStatus,
+	signOutCodex,
+	startCodexSignIn,
+	type CodexAccount,
+	type CodexSignIn,
+	type CodexStatus
+} from './codex-auth.ts';
+export { listCodexModels, type CodexModel } from './codex-chat.ts';
 export {
 	createSkill,
 	isValidSkillName,

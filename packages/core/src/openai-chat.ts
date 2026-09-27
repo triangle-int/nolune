@@ -33,7 +33,7 @@ type Sdk = typeof import('openai');
  */
 let sdk: Sdk | undefined;
 
-async function loadSdk(): Promise<Sdk> {
+export async function loadSdk(): Promise<Sdk> {
 	return (sdk ??= await import('openai'));
 }
 
@@ -49,7 +49,10 @@ type ErrorClass =
 	| 'RateLimitError';
 
 /** Whether `err` is one of the SDK's errors, which it can't be before the SDK was loaded. */
-function isSdkError<K extends ErrorClass>(err: unknown, name: K): err is InstanceType<Sdk[K]> {
+export function isSdkError<K extends ErrorClass>(
+	err: unknown,
+	name: K
+): err is InstanceType<Sdk[K]> {
 	return !!sdk && err instanceof sdk[name];
 }
 
@@ -209,7 +212,7 @@ function refusesSummaries(err: unknown): boolean {
 }
 
 /** Reads the stream, telling `onEvent` about each block as it grows, and returns the response. */
-async function readStream(
+export async function readStream(
 	stream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>,
 	onEvent: (event: StreamEvent) => void
 ): Promise<OpenAI.Responses.Response> {
@@ -248,8 +251,7 @@ async function readStream(
 	throw new ReplyError('The reply ended before it was complete.');
 }
 
-/** One model call, streamed. See models.ts for what stays fixed between calls. */
-export async function streamResponse(opts: {
+export interface TurnOptions {
 	model: string;
 	effort: Effort;
 	system: string;
@@ -258,39 +260,56 @@ export async function streamResponse(opts: {
 	cacheKey: string;
 	signal: AbortSignal;
 	onEvent: (event: StreamEvent) => void;
-}): Promise<OpenAI.Responses.Response> {
-	const client = await getClient();
-	const account = accountOf(apiKey());
-	const request = (summaries: boolean) =>
-		client.responses.create(
-			{
-				model: opts.model,
-				instructions: opts.system,
-				input: toResponsesInput(opts.messages),
-				tools: opts.tools.map(functionTool),
-				store: false,
-				stream: true,
-				...(supportsReasoning(opts.model)
-					? {
-							reasoning: {
-								effort: opts.effort,
-								...(summaries ? { summary: 'auto' as const } : {})
-							},
-							include: ['reasoning.encrypted_content' as const]
-						}
-					: {}),
-				prompt_cache_key: opts.cacheKey
-			},
-			{ signal: opts.signal }
-		);
-	let stream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>;
+}
+
+/** A streamed turn's request, the same for OpenAI's API and ChatGPT's Codex backend. */
+export function turnRequest(
+	opts: TurnOptions,
+	summaries: boolean
+): OpenAI.Responses.ResponseCreateParamsStreaming {
+	return {
+		model: opts.model,
+		instructions: opts.system,
+		input: toResponsesInput(opts.messages),
+		tools: opts.tools.map(functionTool),
+		store: false,
+		stream: true,
+		...(supportsReasoning(opts.model)
+			? {
+					reasoning: {
+						effort: opts.effort,
+						...(summaries ? { summary: 'auto' as const } : {})
+					},
+					include: ['reasoning.encrypted_content' as const]
+				}
+			: {}),
+		prompt_cache_key: opts.cacheKey
+	};
+}
+
+/**
+ * Opens a turn's stream with `open`, asking again without reasoning summaries when `account`
+ * turns out not to have them.
+ */
+export async function openTurn(
+	account: string,
+	open: (summaries: boolean) => Promise<AsyncIterable<OpenAI.Responses.ResponseStreamEvent>>
+): Promise<AsyncIterable<OpenAI.Responses.ResponseStreamEvent>> {
 	try {
-		stream = await request(!noSummaries.has(account));
+		return await open(!noSummaries.has(account));
 	} catch (err) {
 		if (noSummaries.has(account) || !refusesSummaries(err)) throw err;
 		noSummaries.add(account);
-		stream = await request(false);
+		return open(false);
 	}
+}
+
+/** One model call, streamed. See models.ts for what stays fixed between calls. */
+export async function streamResponse(opts: TurnOptions): Promise<OpenAI.Responses.Response> {
+	const client = await getClient();
+	const stream = await openTurn(accountOf(apiKey()), (summaries) =>
+		client.responses.create(turnRequest(opts, summaries), { signal: opts.signal })
+	);
 	return readStream(stream, opts.onEvent);
 }
 

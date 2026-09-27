@@ -1,5 +1,6 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import * as anthropic from './anthropic.ts';
+import * as codex from './codex-chat.ts';
 import { replyBlocks, toolCalls, type ReplyBlock } from './content-blocks.ts';
 import type { Usage } from './conversations.ts';
 import * as openai from './openai-chat.ts';
@@ -11,8 +12,16 @@ import * as openai from './openai-chat.ts';
  * and sent back exactly as it came (see content-blocks.ts).
  */
 
-export const PROVIDERS = ['anthropic', 'openai'] as const;
+/** `codex` is OpenAI's models on a ChatGPT plan, signed in with ChatGPT (codex-chat.ts). */
+export const PROVIDERS = ['anthropic', 'openai', 'codex'] as const;
 export type Provider = (typeof PROVIDERS)[number];
+
+/** Each provider's name for people. */
+export const PROVIDER_LABELS: Record<Provider, string> = {
+	anthropic: 'Anthropic',
+	openai: 'OpenAI',
+	codex: 'ChatGPT'
+};
 
 export function isProvider(value: string): value is Provider {
 	return (PROVIDERS as readonly string[]).includes(value);
@@ -23,7 +32,7 @@ export type Effort = (typeof EFFORTS)[number];
 
 /**
  * How long a cached prompt lives: an hour for chats people come back to, 5 minutes for
- * subagents. Only Anthropic takes it; OpenAI caches on its own.
+ * subagents. Only Anthropic takes it; OpenAI (and ChatGPT's Codex backend) caches on its own.
  */
 export type CacheTtl = '5m' | '1h';
 
@@ -77,8 +86,9 @@ export async function streamTurn(opts: {
 	onEvent: (event: StreamEvent) => void;
 }): Promise<ModelReply> {
 	const { provider, cacheKey, ...request } = opts;
-	if (provider === 'openai') {
-		const response = await openai.streamResponse({ ...request, cacheKey });
+	if (provider === 'openai' || provider === 'codex') {
+		const turn = provider === 'codex' ? codex.streamResponse : openai.streamResponse;
+		const response = await turn({ ...request, cacheKey });
 		return fromContent(
 			response.output ?? [],
 			openai.stopReason(response),
@@ -110,8 +120,10 @@ export async function quickReply(opts: {
 	maxTokens: number;
 	timeoutMs: number;
 }): Promise<{ text: string | null; usage: Usage }> {
-	if (opts.provider === 'openai') {
-		const response = await openai.createResponse(opts);
+	if (opts.provider === 'openai' || opts.provider === 'codex') {
+		const response = await (opts.provider === 'codex'
+			? codex.createResponse(opts)
+			: openai.createResponse(opts));
 		const usage = openai.summarizeUsage(response.usage);
 		if (openai.stopReason(response) !== 'end_turn') return { text: null, usage };
 		return { text: textOf(response.output ?? []), usage };
@@ -131,9 +143,10 @@ function textOf(content: unknown[]): string {
 /**
  * What an uploaded PDF costs in every request of a conversation on this model. The provider
  * reads the whole document, so it also throws for PDFs it can't use (encrypted, too many pages).
+ * Only for providers with a Files API (see provider-files.ts).
  */
 export function countDocumentTokens(
-	provider: Provider,
+	provider: Exclude<Provider, 'codex'>,
 	model: string,
 	fileId: string
 ): Promise<number> {
@@ -144,17 +157,24 @@ export function countDocumentTokens(
 
 /** Throws if the provider doesn't know the model. Null when its window isn't known. */
 export function fetchContextWindow(provider: Provider, model: string): Promise<number | null> {
+	if (provider === 'codex') return codex.fetchContextWindow(model);
 	return provider === 'openai'
 		? openai.fetchContextWindow(model)
 		: anthropic.fetchContextWindow(model);
 }
 
-export function describeApiError(err: unknown): string {
+/**
+ * For people. `provider` is the one the failed call went to: ChatGPT's backend fails with
+ * OpenAI's SDK errors too, but a sign-in fixes them, not an API key.
+ */
+export function describeApiError(err: unknown, provider?: Provider): string {
+	if (provider === 'codex') return codex.describeApiError(err);
 	return openai.isOpenAIError(err) ? openai.describeApiError(err) : anthropic.describeApiError(err);
 }
 
 /** The API's own message, without the status and JSON around it: for notes shown to the model. */
-export function shortApiError(err: unknown): string {
+export function shortApiError(err: unknown, provider?: Provider): string {
+	if (provider === 'codex') return codex.shortApiError(err);
 	return openai.isOpenAIError(err) ? openai.shortApiError(err) : anthropic.shortApiError(err);
 }
 

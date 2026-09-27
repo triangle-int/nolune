@@ -9,7 +9,8 @@ import { openaiFiles } from './openai-chat.ts';
 /**
  * Pictures and PDFs kept on the provider's side (Anthropic's or OpenAI's Files API), so a request refers to
  * them by id instead of carrying their bytes, which it would resend with every step for the
- * rest of the conversation. Each provider brings its own store; the cache here is shared.
+ * rest of the conversation. Each provider with a Files API brings its own store; the cache here
+ * is shared. ChatGPT's Codex backend has none: its pictures go inline (attachments.ts).
  */
 export interface FileStore {
 	/** The account files live in. An id from one account means nothing in another. */
@@ -21,7 +22,14 @@ export interface FileStore {
 	remove(fileId: string): Promise<void>;
 }
 
-const stores: Record<Provider, FileStore> = { anthropic: anthropicFiles, openai: openaiFiles };
+/** The providers with a Files API. */
+export type FileProvider = Exclude<Provider, 'codex'>;
+
+const stores: Record<FileProvider, FileStore> = { anthropic: anthropicFiles, openai: openaiFiles };
+
+export function hasFileStore(provider: Provider): provider is FileProvider {
+	return Object.hasOwn(stores, provider);
+}
 
 /** Uploads under way, so the same content sent twice at once is uploaded once. */
 const inFlight = new Map<string, Promise<string>>();
@@ -34,7 +42,7 @@ const IN_USE_MS = 60 * 60 * 1000;
  * checked first: a message referring to a file that's gone would fail every later request.
  */
 export async function providerFileId(
-	provider: Provider,
+	provider: FileProvider,
 	data: Buffer,
 	name: string,
 	mime: string

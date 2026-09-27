@@ -1,6 +1,6 @@
 ---
 name: btw-agent
-description: Change btw's own setup with the `btw` command, including models, API keys, environment variables for your commands, which skills are on, the avatar the family sees in the chat ("switch to the comet"), family accounts and passwords, the web address and the background service (status, logs, restarts, updates). Use whenever someone asks you to configure yourself or change how btw is set up, or asks how it is set up.
+description: Change btw's own setup with the `btw` command, including models, API keys, the ChatGPT sign-in, environment variables for your commands, which skills are on, the avatar the family sees in the chat ("switch to the comet"), family accounts and passwords, the web address and the background service (status, logs, restarts, updates). Use whenever someone asks you to configure yourself or change how btw is set up, or asks how it is set up.
 ---
 
 # Configuring btw
@@ -32,21 +32,36 @@ Other parts of the CLI have their own instructions: automations (`btw trigger`, 
 
 ## Models
 
-Chats run on model presets, on Claude (Anthropic) or on OpenAI's models. People pick one when
-they start a chat, and new chats start with the default.
+Chats run on model presets, on Claude (Anthropic), on OpenAI's models with an API key (`openai`),
+or on OpenAI's models through a ChatGPT plan (`codex`). People pick one when they start a chat,
+and new chats start with the default.
 
 ```sh
 btw preset list                                 # name, provider/model, context window, id, default
 btw preset add claude-sonnet-5 --name "Sonnet"  # Anthropic checks the model id first
 btw preset add gpt-6-astra --provider openai --name "GPT"
+btw preset add gpt-6-astra --provider codex --name "GPT (ChatGPT plan)"
 btw preset default Sonnet                       # new chats start with it
 btw preset rm Sonnet                            # chats that use it keep working
 ```
 
 btw knows the context window of OpenAI's flagship models (1,050,000 tokens since GPT-5.4). For
 its other models (mini, nano), give `--context-window` when you know it. A preset needs its
-provider's key. If `btw preset add` can't check the model, an admin can add it under Models &
-keys in the account menu.
+provider's key, or for `codex` the ChatGPT sign-in. If `btw preset add` can't check the model, an
+admin can add it under Models & keys in the account menu.
+
+## ChatGPT plan
+
+The `codex` provider runs chats on the ChatGPT plan (Plus, Pro, Business) btw is signed in to,
+the way OpenAI's Codex does, instead of on API credit. It counts against the plan's Codex limits;
+when they're used up, chats on it stop until the time the error names. `btw codex status` says who
+btw is signed in as, and `btw codex models` lists the models the plan offers.
+
+Signing in needs someone to enter a one-time code on ChatGPT's site. Suggest Models & keys in the
+account menu, or run `btw codex login` in the background and pass on the link and code it prints:
+it waits up to 15 minutes for them to be entered. Don't run `btw codex logout` while presets use
+`codex`: chats on them stop answering. Models on a ChatGPT plan don't get PDFs, only their path,
+so open a PDF someone attached with a command.
 
 ## API keys
 
