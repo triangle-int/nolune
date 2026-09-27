@@ -1,6 +1,7 @@
 import { error, redirect, type Handle, type ServerInit } from '@sveltejs/kit';
 import { building } from '$app/environment';
 import { svelteKitHandler } from 'better-auth/svelte-kit';
+import { serveGatewayCommands } from '@btw/cli/serve';
 import { installCliShim, recoverAfterRestart, startScheduler } from '@btw/core';
 import { getAuth } from '$lib/server/auth';
 
@@ -8,6 +9,8 @@ export const init: ServerInit = () => {
 	installCliShim();
 	recoverAfterRestart();
 	startScheduler();
+	// The agent's `btw` commands run here, on the btw already loaded (packages/cli/src/serve.ts).
+	serveGatewayCommands();
 };
 
 /** Webhook URLs carry their own secret token instead of a login. */

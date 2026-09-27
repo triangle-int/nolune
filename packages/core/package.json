@@ -8,7 +8,8 @@
 		"./usage": "./src/usage.ts",
 		"./media-refs": "./src/media-refs.ts",
 		"./articles": "./src/articles.ts",
-		"./avatars": "./src/avatars.ts"
+		"./avatars": "./src/avatars.ts",
+		"./paths": "./src/paths.ts"
 	},
 	"scripts": {
 		"check": "tsc -p ."
