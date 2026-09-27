@@ -65,6 +65,7 @@ export {
 export { AVATARS, defaultAvatar, isAvatar, type Avatar } from './avatars.ts';
 export {
 	addPreset,
+	editPreset,
 	effectiveContextWindow,
 	getDefaultPreset,
 	getPreset,

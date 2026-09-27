@@ -697,10 +697,11 @@ export const de: Messages = {
 			'Zum Anmelden führe {setup} in einem Terminal auf diesem Computer aus, oder starte dort {claude} und nutze {login} mit deinem Claude-Konto.',
 		models: 'Modelle',
 		modelsHint:
-			'Voreinstellungen werden von allen Profilen geteilt. Neue Chats starten mit der Standard-Voreinstellung. Das Entfernen einer Voreinstellung wirkt sich nicht auf bestehende Chats aus.',
+			'Voreinstellungen werden von allen Profilen geteilt. Neue Chats starten mit der Standard-Voreinstellung. Das Bearbeiten oder Entfernen einer Voreinstellung ändert nichts an Chats, die sie schon verwenden.',
 		presetDetails: (provider: string, model: string, context: string, overridden: boolean) =>
 			`${provider} / ${model} · Kontext ${context}${overridden ? ' (überschrieben)' : ''}`,
 		makeDefault: 'Als Standard festlegen',
+		editPreset: (name: string) => `${name} bearbeiten`,
 		noPresets: 'Noch keine Voreinstellungen.',
 		addModel: {
 			title: 'Modell hinzufügen',
@@ -734,11 +735,14 @@ export const de: Messages = {
 			unreachable: 'btw ist nicht erreichbar.',
 			checkingClaude: 'Claude Code wird geprüft…',
 			checkingModel: 'Modell wird geprüft…',
+			saving: 'Wird gespeichert…',
 			pick: 'Modell wählen',
 			search: 'Suchen oder eine Modell-ID eingeben',
 			use: '{model} verwenden',
 			typeId: 'Gib oben die ID des Modells ein.',
 			added: (name: string) => `${name} hinzugefügt.`,
+			saved: (name: string) =>
+				`${name} gespeichert. Chats, die sie schon verwenden, bleiben, wie sie waren.`,
 			invalidContext: 'Das Kontextfenster muss eine Tokenzahl sein, etwa 272k oder 272000.'
 		},
 		savedWorks: 'Gespeichert. Er funktioniert.',

@@ -714,10 +714,11 @@ export const fr: Messages = {
 			'Pour vous connecter, exécutez {setup} dans un terminal sur cet ordinateur, ou lancez-y {claude} et utilisez {login} avec votre compte Claude.',
 		models: 'Modèles',
 		modelsHint:
-			'Les préréglages sont partagés par tous les profils. Les nouvelles discussions commencent avec celui par défaut. Retirer un préréglage n’affecte pas les discussions existantes.',
+			'Les préréglages sont partagés par tous les profils. Les nouvelles discussions commencent avec celui par défaut. Modifier ou retirer un préréglage ne change pas les discussions qui l’utilisent déjà.',
 		presetDetails: (provider: string, model: string, context: string, overridden: boolean) =>
 			`${provider} / ${model} · contexte ${context}${overridden ? ' (personnalisé)' : ''}`,
 		makeDefault: 'Définir par défaut',
+		editPreset: (name: string) => `Modifier ${name}`,
 		noPresets: 'Aucun préréglage pour l’instant.',
 		addModel: {
 			title: 'Ajouter un modèle',
@@ -753,11 +754,14 @@ export const fr: Messages = {
 			unreachable: 'btw est injoignable.',
 			checkingClaude: 'Vérification de Claude Code…',
 			checkingModel: 'Vérification du modèle…',
+			saving: 'Enregistrement…',
 			pick: 'Choisissez un modèle',
 			search: 'Recherchez ou saisissez un identifiant de modèle',
 			use: 'Utiliser {model}',
 			typeId: 'Saisissez l’identifiant du modèle ci-dessus.',
 			added: (name: string) => `${name} a été ajouté.`,
+			saved: (name: string) =>
+				`${name} a été enregistré. Les discussions qui l’utilisent déjà restent comme elles étaient.`,
 			invalidContext: 'La fenêtre de contexte doit être un nombre de tokens, comme 272k ou 272000.'
 		},
 		savedWorks: 'Enregistrée. Elle fonctionne.',

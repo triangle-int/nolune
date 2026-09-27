@@ -629,12 +629,13 @@ export const en = {
 			'To sign in, run {setup} in a terminal on this computer, or run {claude} there and use {login} with your Claude account.',
 		models: 'Models',
 		modelsHint:
-			"Presets are shared by every profile. New chats start with the default one. Removing a preset doesn't affect existing chats.",
+			"Presets are shared by every profile. New chats start with the default one. Editing or removing a preset doesn't change chats already on it.",
 		presetDetails: (provider: string, model: string, context: string, overridden: boolean) =>
 			`${provider} / ${model} · context ${context}${overridden ? ' (override)' : ''}`,
 		makeDefault: 'Make default',
+		editPreset: (name: string) => `Edit ${name}`,
 		noPresets: 'No presets yet.',
-		/** The form that adds a model preset. */
+		/** The form that adds a model preset, or edits one. */
 		addModel: {
 			title: 'Add a model',
 			provider: 'Provider',
@@ -667,11 +668,13 @@ export const en = {
 			unreachable: "btw couldn't be reached.",
 			checkingClaude: 'Checking Claude Code…',
 			checkingModel: 'Checking the model…',
+			saving: 'Saving…',
 			pick: 'Pick a model',
 			search: 'Search, or type a model id',
 			use: 'Use {model}',
 			typeId: "Type the model's id above.",
 			added: (name: string) => `Added ${name}.`,
+			saved: (name: string) => `Saved ${name}. Chats already on it keep what they had.`,
 			invalidContext: 'Context window must be a token count, like 272k or 272000.'
 		},
 		savedWorks: 'Saved. It works.',

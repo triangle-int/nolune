@@ -9,6 +9,7 @@ import {
 	checkApiKey,
 	claudePlanStatus,
 	describeAccount,
+	editPreset,
 	effectiveContextWindow,
 	findClaudeCode,
 	getDefaultPreset,
@@ -40,11 +41,27 @@ export const load: PageServerLoad = ({ locals }) => {
 			provider: p.provider,
 			model: p.model,
 			contextWindow: effectiveContextWindow(p),
-			overridden: p.contextWindow != null,
+			/** The admin's own window, which Auto leaves out. */
+			override: p.contextWindow,
 			isDefault: p.id === defaultId
 		}))
 	};
 };
+
+/**
+ * A preset form's fields. The whole preset is sent, so an empty name is the default one and a
+ * left-out context window is the model's own (null); NaN when the one typed isn't a count.
+ */
+function presetFields(form: FormData) {
+	const cw = form.get('contextWindow')?.toString().trim() ?? '';
+	return {
+		provider: form.get('provider')?.toString() ?? '',
+		model: form.get('model')?.toString() ?? '',
+		name: form.get('name')?.toString() ?? '',
+		// A chip's count, or one typed like "272k".
+		contextWindow: cw ? parseTokens(cw) : null
+	};
+}
 
 /** The provider a key form is about, or a 400. */
 async function keyForm(request: Request) {
@@ -90,20 +107,30 @@ export const actions: Actions = {
 	},
 	add: async ({ locals, request }) => {
 		requireAdmin(locals);
-		const form = await request.formData();
-		const provider = form.get('provider')?.toString() ?? '';
-		const model = form.get('model')?.toString() ?? '';
-		const name = form.get('name')?.toString() ?? '';
-		// Left out for the model's own window; otherwise a chip's count, or one typed like "272k".
-		const cw = form.get('contextWindow')?.toString().trim() ?? '';
-		const contextWindow = cw ? parseTokens(cw) : null;
 		const { addModel } = translations(locals.locale).m.admin;
-		if (Number.isNaN(contextWindow)) return fail(400, { addError: addModel.invalidContext });
+		const fields = presetFields(await request.formData());
+		if (Number.isNaN(fields.contextWindow)) return fail(400, { addError: addModel.invalidContext });
 		try {
-			const preset = await addPreset({ provider, model, name, contextWindow });
+			const preset = await addPreset(fields);
 			return { message: addModel.added(preset.name) };
 		} catch (err) {
 			return fail(400, { addError: err instanceof Error ? err.message : String(err) });
+		}
+	},
+	edit: async ({ locals, request }) => {
+		requireAdmin(locals);
+		const { addModel } = translations(locals.locale).m.admin;
+		const form = await request.formData();
+		const editId = form.get('id')?.toString() ?? '';
+		const fields = presetFields(form);
+		if (Number.isNaN(fields.contextWindow)) {
+			return fail(400, { editId, editError: addModel.invalidContext });
+		}
+		try {
+			const preset = await editPreset(editId, fields);
+			return { message: addModel.saved(preset.name) };
+		} catch (err) {
+			return fail(400, { editId, editError: err instanceof Error ? err.message : String(err) });
 		}
 	},
 	setDefault: async ({ locals, request }) => {

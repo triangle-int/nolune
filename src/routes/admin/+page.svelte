@@ -2,6 +2,7 @@
 	import { enhance } from '$app/forms';
 	import BoxIcon from '@lucide/svelte/icons/box';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import TerminalIcon from '@lucide/svelte/icons/terminal';
 	import StarIcon from '@lucide/svelte/icons/star';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
@@ -11,6 +12,7 @@
 	import Rich from '$lib/components/Rich.svelte';
 	import TopBar from '$lib/components/TopBar.svelte';
 	import AddModelForm from '$lib/components/admin/AddModelForm.svelte';
+	import PresetForm from '$lib/components/admin/PresetForm.svelte';
 	import CopyButton from '$lib/components/chat/CopyButton.svelte';
 	import { formatTokens } from '$lib/format';
 	import { getI18n } from '$lib/i18n';
@@ -26,6 +28,8 @@
 	let editing = $state<string | null>(null);
 	let checking = $state<string | null>(null);
 	let removing = $state<KeyStatus | null>(null);
+	/** The preset being edited. */
+	let editingPreset = $state<string | null>(null);
 
 	function sourceText(key: KeyStatus): string {
 		if (key.source === 'config') return m.admin.savedInBtw(key.hint);
@@ -262,49 +266,75 @@
 
 				<ul class="overflow-hidden rounded-2xl border">
 					{#each data.presets as preset (preset.id)}
-						<li class="flex items-center gap-3 border-b px-4 py-3 text-sm last:border-b-0">
-							<span
-								class="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground"
-							>
-								<BoxIcon class="size-4" />
-							</span>
-							<div class="min-w-0 flex-1">
-								<div class="flex items-center gap-2">
-									<span class="truncate font-medium">{preset.name}</span>
-									{#if preset.isDefault}
-										<Badge variant="secondary">{m.common.default}</Badge>
-									{/if}
+						<li class="border-b px-4 py-3 text-sm last:border-b-0">
+							<div class="flex items-center gap-3">
+								<span
+									class="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground"
+								>
+									<BoxIcon class="size-4" />
+								</span>
+								<div class="min-w-0 flex-1">
+									<div class="flex items-center gap-2">
+										<span class="truncate font-medium">{preset.name}</span>
+										{#if preset.isDefault}
+											<Badge variant="secondary">{m.common.default}</Badge>
+										{/if}
+									</div>
+									<div class="truncate text-muted-foreground">
+										{m.admin.presetDetails(
+											preset.provider,
+											preset.model,
+											formatTokens(preset.contextWindow),
+											preset.override != null
+										)}
+									</div>
 								</div>
-								<div class="truncate text-muted-foreground">
-									{m.admin.presetDetails(
-										preset.provider,
-										preset.model,
-										formatTokens(preset.contextWindow),
-										preset.overridden
-									)}
-								</div>
-							</div>
-							{#if !preset.isDefault}
-								<form method="POST" action="?/setDefault" use:enhance>
-									<input type="hidden" name="id" value={preset.id} />
+								{#if !preset.isDefault}
+									<form method="POST" action="?/setDefault" use:enhance>
+										<input type="hidden" name="id" value={preset.id} />
+										<Button
+											type="submit"
+											variant="ghost"
+											size="sm"
+											title={m.admin.makeDefault}
+											class="text-muted-foreground max-sm:px-2"
+										>
+											<StarIcon />
+											<span class="max-sm:sr-only">{m.admin.makeDefault}</span>
+										</Button>
+									</form>
+								{/if}
+								{#if editingPreset !== preset.id}
 									<Button
-										type="submit"
 										variant="ghost"
 										size="sm"
-										title={m.admin.makeDefault}
+										title={m.admin.editPreset(preset.name)}
+										aria-label={m.admin.editPreset(preset.name)}
 										class="text-muted-foreground max-sm:px-2"
+										onclick={() => (editingPreset = preset.id)}
 									>
-										<StarIcon />
-										<span class="max-sm:sr-only">{m.admin.makeDefault}</span>
+										<PencilIcon />
+										<span class="max-sm:sr-only">{m.common.edit}</span>
 									</Button>
+								{/if}
+								<form method="POST" action="?/remove" use:enhance>
+									<input type="hidden" name="id" value={preset.id} />
+									<Button type="submit" variant="ghost" size="sm" class="text-muted-foreground"
+										>{m.common.remove}</Button
+									>
 								</form>
+							</div>
+							{#if editingPreset === preset.id}
+								<PresetForm
+									providers={data.providers}
+									keys={data.keys}
+									claudeInstalled={data.claude.installed}
+									{preset}
+									problem={form?.editId === preset.id ? form.editError : null}
+									class="pt-4 sm:pl-12"
+									onclose={() => (editingPreset = null)}
+								/>
 							{/if}
-							<form method="POST" action="?/remove" use:enhance>
-								<input type="hidden" name="id" value={preset.id} />
-								<Button type="submit" variant="ghost" size="sm" class="text-muted-foreground"
-									>{m.common.remove}</Button
-								>
-							</form>
 						</li>
 					{:else}
 						<li class="px-4 py-3 text-sm text-muted-foreground">{m.admin.noPresets}</li>
