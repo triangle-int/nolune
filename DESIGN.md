@@ -1196,7 +1196,8 @@ nothing, and opening the page again runs it again.
   `gather` (the dots gathering into the avatar as the chat opens). When the welcome starts waiting
   for someone (the welcome screen, each step) or opens the chat, whatever is still ringing fades
   out (`quiet`). Each cue is a file in `src/lib/assets/sounds/welcome` (`<cue>.mp3`), bundled
-  through `import.meta.glob` and played with Web Audio; one without its file is silent, and a
+  through `import.meta.glob` and played with Web Audio (where each came from is in `CREDITS.md`
+  next to them); one without its file is silent, and a
   long one that loads late starts that far in, to stay in time. Browsers only play sound after a
   click: creating the profile is one, and the welcome is a client-side navigation from there. The
   Sounds setting (per device, in `btw-prefs`) and the speaker button on the welcome turn them
