@@ -1,3 +1,8 @@
+import type { I18n } from './i18n';
+
+/** What formatting needs of the interface's language. */
+type Language = Pick<I18n, 'intl' | 'm'>;
+
 export function formatTokens(n: number | null | undefined): string {
 	if (n == null) return '?';
 	if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(1)}M`;
@@ -19,12 +24,12 @@ export function formatPercent(rate: number): string {
 	return `${Math.floor(rate * 100)}%`;
 }
 
-const relative = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+const relatives = new Map<string, Intl.RelativeTimeFormat>();
 
 /** "3 hours ago", "yesterday". */
-export function formatAgo(ms: number, now = Date.now()): string {
+export function formatAgo(ms: number, { intl, m }: Language, now = Date.now()): string {
 	const seconds = Math.round((ms - now) / 1000);
-	if (seconds > -60) return 'just now';
+	if (seconds > -60) return m.time.justNow;
 	const steps: [Intl.RelativeTimeFormatUnit, number][] = [
 		['minute', 60],
 		['hour', 3600],
@@ -35,12 +40,22 @@ export function formatAgo(ms: number, now = Date.now()): string {
 	];
 	let [unit, size] = steps[0];
 	for (const step of steps) if (-seconds >= step[1]) [unit, size] = step;
+	let relative = relatives.get(intl);
+	if (!relative) {
+		relative = new Intl.RelativeTimeFormat(intl, { numeric: 'auto' });
+		relatives.set(intl, relative);
+	}
 	return relative.format(Math.round(seconds / size), unit);
 }
 
-export function formatBytes(bytes: number): string {
-	if (bytes < 1024) return `${bytes} B`;
-	if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+export function formatBytes(bytes: number, { intl, m }: Language): string {
+	if (bytes < 1024) return `${bytes} ${m.units.bytes}`;
+	if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} ${m.units.kilobytes}`;
 	const mb = bytes / (1024 * 1024);
-	return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
+	const digits = mb < 10 ? 1 : 0;
+	const size = mb.toLocaleString(intl, {
+		minimumFractionDigits: digits,
+		maximumFractionDigits: digits
+	});
+	return `${size} ${m.units.megabytes}`;
 }

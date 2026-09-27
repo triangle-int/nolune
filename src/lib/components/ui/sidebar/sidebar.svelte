@@ -1,5 +1,6 @@
 <script lang="ts">
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
+	import { getI18n } from '$lib/i18n';
 	import { cn, type WithElementRef } from '$lib/utils.js';
 	import { SIDEBAR_WIDTH_MOBILE } from './constants.js';
 	import { useSidebar } from './context.svelte.js';
@@ -18,6 +19,8 @@
 		variant?: 'sidebar' | 'floating' | 'inset';
 		collapsible?: 'offcanvas' | 'icon' | 'none';
 	} = $props();
+
+	const { m } = getI18n();
 
 	const sidebar = useSidebar();
 </script>
@@ -48,8 +51,8 @@
 			{side}
 		>
 			<Sheet.Header class="sr-only">
-				<Sheet.Title>Sidebar</Sheet.Title>
-				<Sheet.Description>Displays the mobile sidebar.</Sheet.Description>
+				<Sheet.Title>{m.sidebar.label}</Sheet.Title>
+				<Sheet.Description>{m.sidebar.description}</Sheet.Description>
 			</Sheet.Header>
 			<div class="flex h-full w-full flex-col">
 				{@render children?.()}

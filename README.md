@@ -100,6 +100,9 @@ Access). `btw setup` prints the exact path.
   from the start, so keep it short: at most 4,000 characters. The profile's Memory
   page shows every fact as a dot, darker the newer it is, and lets you fix or delete a note. Files:
   `~/.btw-agent/profiles/<profile>/memories`.
+- **Languages.** The web interface comes in English, Russian, German, Spanish and French. It
+  follows the browser's language, or pick one in Settings (per device). Only menus, buttons and
+  pages change: btw answers in whatever language you write in, whatever the setting.
 - **Soul.** Each profile can tell btw who to be for its family: its character, what it cares about,
   how it talks. Write it under **People & profile**, or just ask btw to be different and it updates
   its own soul (`~/.btw-agent/profiles/<profile>/soul.md`). Every chat starts with it.

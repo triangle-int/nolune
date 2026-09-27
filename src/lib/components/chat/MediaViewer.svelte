@@ -37,12 +37,15 @@
 	import DownloadIcon from '@lucide/svelte/icons/download';
 	import { buttonVariants } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
+	import { getI18n } from '$lib/i18n';
 
 	interface Props {
 		picture: ViewedPicture | null;
 	}
 
 	let { picture = $bindable() }: Props = $props();
+
+	const { m } = getI18n();
 
 	/** The picture last opened, kept after closing so the focus can go back to it. */
 	let trigger = $state.raw<HTMLElement>();
@@ -80,7 +83,7 @@
 					class={buttonVariants({ variant: 'outline', size: 'sm' })}
 				>
 					<DownloadIcon />
-					Download
+					{m.attachments.download}
 				</a>
 			</div>
 		{/if}

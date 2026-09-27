@@ -3,7 +3,9 @@
 	import type { ModelChoice } from '@btw/core';
 	import * as Command from '$lib/components/ui/command';
 	import * as Popover from '$lib/components/ui/popover';
+	import Rich from '$lib/components/Rich.svelte';
 	import { formatTokens } from '$lib/format';
+	import { getI18n } from '$lib/i18n';
 
 	interface Props {
 		/** The chosen model id: one from the list, or one typed in. */
@@ -17,6 +19,8 @@
 	}
 
 	let { value = $bindable(), models, source, id, describedBy }: Props = $props();
+
+	const t = getI18n().m.admin.addModel;
 
 	let open = $state(false);
 	let search = $state('');
@@ -42,17 +46,17 @@
 				<span class="truncate font-mono text-xs text-muted-foreground">{value}</span>
 			{/if}
 		{:else}
-			<span class="text-muted-foreground">Pick a model</span>
+			<span class="text-muted-foreground">{t.pick}</span>
 		{/if}
 		<ChevronsUpDownIcon class="ml-auto size-4 shrink-0 text-muted-foreground" />
 	</Popover.Trigger>
 	<Popover.Content align="start" class="w-(--bits-popover-anchor-width) min-w-72 gap-0 p-0">
 		<Command.Root>
-			<Command.Input bind:value={search} placeholder="Search, or type a model id" />
+			<Command.Input bind:value={search} placeholder={t.search} />
 			<Command.List class="p-1">
 				{#if models === null}
 					<Command.Loading class="px-3 py-6 text-center text-sm text-muted-foreground">
-						Asking {source} for its models…
+						{t.asking(source)}
 					</Command.Loading>
 				{:else}
 					{#each models as model (model.id)}
@@ -82,12 +86,14 @@
 					<!-- Always there, so any id can be used: a new model, a snapshot, a proxy's own. -->
 					<Command.Item value={typed} forceMount onSelect={() => pick(typed)}>
 						<span class="min-w-0 truncate">
-							Use <span class="font-mono">{typed}</span>
+							<Rich text={t.use}>
+								{#snippet model()}<span class="font-mono">{typed}</span>{/snippet}
+							</Rich>
 						</span>
 					</Command.Item>
 				{:else if models?.length === 0}
 					<p class="px-3 py-6 text-center text-sm text-muted-foreground">
-						Type the model's id above.
+						{t.typeId}
 					</p>
 				{/if}
 			</Command.List>

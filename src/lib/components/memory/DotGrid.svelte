@@ -27,6 +27,7 @@
 
 <script lang="ts">
 	import { formatAgo } from '$lib/format';
+	import { getI18n } from '$lib/i18n';
 
 	interface Props {
 		topics: Topic[];
@@ -37,6 +38,9 @@
 	}
 
 	let { topics, focus = $bindable(null), onpick }: Props = $props();
+
+	const i18n = getI18n();
+	const { m } = i18n;
 
 	/** Rows shown until "Show all". */
 	const LIMIT = 12;
@@ -67,7 +71,7 @@
 	}
 
 	function learned(at: number | null): string {
-		return at === null ? 'learned a while ago' : `learned ${formatAgo(at, now)}`;
+		return at === null ? m.memory.learnedAWhileAgo : m.memory.learned(formatAgo(at, i18n, now));
 	}
 
 	function show(event: Event, topic: Topic, fact: MemoryFact) {
@@ -116,9 +120,7 @@
 						type="button"
 						class="w-24 shrink-0 truncate text-left text-[15px] leading-4 text-foreground/70 transition-colors hover:text-foreground sm:w-40"
 						class:pl-3={topic.group}
-						aria-label="{topic.title}: {topic.facts.length} {topic.facts.length === 1
-							? 'memory'
-							: 'memories'}. Show the note."
+						aria-label={m.memory.topicLabel(topic.title, topic.facts.length)}
 						onclick={() => onpick?.(topic.path)}>{topic.title}</button
 					>
 					<div class="flex min-h-4 flex-1 flex-wrap gap-2.5 sm:gap-3">
@@ -136,7 +138,7 @@
 								onclick={(event) => show(event, topic, fact)}
 							></span>
 						{:else}
-							<span class="pt-px text-xs text-muted-foreground">Nothing in it yet</span>
+							<span class="pt-px text-xs text-muted-foreground">{m.memory.nothingInIt}</span>
 						{/each}
 					</div>
 				</div>
@@ -148,17 +150,17 @@
 		>
 			{#if shown.length < rows.length || showAll}
 				<button type="button" class="hover:text-foreground" onclick={() => (showAll = !showAll)}>
-					{showAll ? 'Show fewer' : `Show all ${rows.length} topics`}
+					{showAll ? m.memory.showFewer : m.memory.showAllTopics(rows.length)}
 				</button>
 			{:else}
 				<span></span>
 			{/if}
 			<span class="flex items-center gap-1.5" aria-hidden="true">
-				Older
+				{m.memory.older}
 				{#each [0.14, 0.3, 0.5, 0.75, 1] as amount (amount)}
 					<span class="size-2 rounded-full" style:background-color={ink(amount)}></span>
 				{/each}
-				Newer
+				{m.memory.newer}
 			</span>
 		</div>
 	{:else}
@@ -169,7 +171,7 @@
 				{/each}
 			</div>
 			<p class="text-sm text-muted-foreground">
-				Nothing remembered yet. Each thing btw learns becomes a dot here.
+				{m.memory.nothingYet}
 			</p>
 		</div>
 	{/if}

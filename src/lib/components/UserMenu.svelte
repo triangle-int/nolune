@@ -6,6 +6,7 @@
 	import UsersIcon from '@lucide/svelte/icons/users';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Sidebar from '$lib/components/ui/sidebar';
+	import { getI18n } from '$lib/i18n';
 	import SettingsDialog from './SettingsDialog.svelte';
 	import UserAvatar from './UserAvatar.svelte';
 
@@ -17,6 +18,7 @@
 
 	let { user, variant = 'sidebar' }: Props = $props();
 
+	const { m } = getI18n();
 	let settingsOpen = $state(false);
 	let logoutForm = $state<HTMLFormElement>();
 </script>
@@ -33,7 +35,7 @@
 				<button
 					{...props}
 					class="flex size-9 items-center justify-center rounded-full hover:bg-muted"
-					aria-label="Account"
+					aria-label={m.userMenu.account}
 				>
 					<UserAvatar name={user.name} />
 				</button>
@@ -55,24 +57,24 @@
 		<DropdownMenu.Separator />
 		<DropdownMenu.Item onSelect={() => (settingsOpen = true)}>
 			<SettingsIcon />
-			Settings
+			{m.userMenu.settings}
 		</DropdownMenu.Item>
 		<DropdownMenu.Item>
 			{#snippet child({ props })}
-				<a {...props} href={resolve('/profiles')}><UsersIcon />All profiles</a>
+				<a {...props} href={resolve('/profiles')}><UsersIcon />{m.userMenu.allProfiles}</a>
 			{/snippet}
 		</DropdownMenu.Item>
 		{#if user.isAdmin}
 			<DropdownMenu.Item>
 				{#snippet child({ props })}
-					<a {...props} href={resolve('/admin')}><BoxIcon />Models & keys</a>
+					<a {...props} href={resolve('/admin')}><BoxIcon />{m.userMenu.modelsAndKeys}</a>
 				{/snippet}
 			</DropdownMenu.Item>
 		{/if}
 		<DropdownMenu.Separator />
 		<DropdownMenu.Item onSelect={() => logoutForm?.requestSubmit()}>
 			<LogOutIcon />
-			Log out
+			{m.userMenu.logOut}
 		</DropdownMenu.Item>
 	</DropdownMenu.Content>
 </DropdownMenu.Root>

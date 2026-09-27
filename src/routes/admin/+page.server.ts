@@ -21,6 +21,7 @@ import {
 	setDefaultPreset
 } from '@btw/core';
 import { parseTokens } from '$lib/format';
+import { translations } from '$lib/i18n';
 import { requireAdmin } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -61,7 +62,11 @@ export const actions: Actions = {
 			const key = normalizeApiKey(pasted);
 			const warning = await checkApiKey(provider, key);
 			saveApiKey(provider, key);
-			return { provider, keyMessage: warning ? `Saved. ${warning}` : 'Saved. It works.' };
+			const { m } = translations(locals.locale);
+			return {
+				provider,
+				keyMessage: warning ? m.admin.savedWarning(warning) : m.admin.savedWorks
+			};
 		} catch (err) {
 			if (!(err instanceof ApiKeyError)) throw err;
 			return fail(400, { provider, keyError: err.message });
@@ -71,7 +76,8 @@ export const actions: Actions = {
 		requireAdmin(locals);
 		const status = await claudePlanStatus();
 		if (status.problem || !status.account) {
-			return fail(400, { planError: status.problem ?? "Claude Code didn't answer." });
+			const { m } = translations(locals.locale);
+			return fail(400, { planError: status.problem ?? m.admin.claudeNoAnswer });
 		}
 		const signedIn = describeAccount(status.account);
 		return { planMessage: `${signedIn[0].toUpperCase()}${signedIn.slice(1)}.` };
@@ -80,7 +86,7 @@ export const actions: Actions = {
 		requireAdmin(locals);
 		const { provider } = await keyForm(request);
 		removeApiKey(provider);
-		return { provider, keyMessage: 'Removed.' };
+		return { provider, keyMessage: translations(locals.locale).m.admin.removed };
 	},
 	add: async ({ locals, request }) => {
 		requireAdmin(locals);
@@ -91,12 +97,11 @@ export const actions: Actions = {
 		// Left out for the model's own window; otherwise a chip's count, or one typed like "272k".
 		const cw = form.get('contextWindow')?.toString().trim() ?? '';
 		const contextWindow = cw ? parseTokens(cw) : null;
-		if (Number.isNaN(contextWindow)) {
-			return fail(400, { addError: 'Context window must be a token count, like 272k or 272000.' });
-		}
+		const { addModel } = translations(locals.locale).m.admin;
+		if (Number.isNaN(contextWindow)) return fail(400, { addError: addModel.invalidContext });
 		try {
 			const preset = await addPreset({ provider, model, name, contextWindow });
-			return { message: `Added ${preset.name}.` };
+			return { message: addModel.added(preset.name) };
 		} catch (err) {
 			return fail(400, { addError: err instanceof Error ? err.message : String(err) });
 		}
@@ -106,7 +111,7 @@ export const actions: Actions = {
 		const id = (await request.formData()).get('id')?.toString() ?? '';
 		try {
 			const preset = setDefaultPreset(id);
-			return { message: `New chats now start with ${preset.name}.` };
+			return { message: translations(locals.locale).m.admin.newDefault(preset.name) };
 		} catch (err) {
 			return fail(400, { message: err instanceof Error ? err.message : String(err) });
 		}
@@ -115,6 +120,6 @@ export const actions: Actions = {
 		requireAdmin(locals);
 		const id = (await request.formData()).get('id')?.toString() ?? '';
 		removePreset(id);
-		return { message: 'Removed. Existing conversations keep working.' };
+		return { message: translations(locals.locale).m.admin.presetRemoved };
 	}
 };

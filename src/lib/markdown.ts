@@ -6,6 +6,7 @@ import { Copy, Download, File, FileX, Image, ImageOff, type IconNode } from 'luc
 import { Marked } from 'marked';
 import { copyText } from './clipboard';
 import { formatBytes } from './format';
+import type { I18n, Messages } from './i18n';
 
 /** A Lucide icon as markup, for the buttons and cards inside rendered HTML. */
 function iconSvg(node: IconNode, size: number, className?: string): string {
@@ -47,6 +48,7 @@ type CopiedMedia = Extract<DisplayMedia, { status: 'ok' }>;
 
 /** Set only while renderMarkdown parses, which is synchronous. */
 let context: MediaContext | undefined;
+let language: Pick<I18n, 'intl' | 'm'> | undefined;
 
 /** Pictures are at most this tall in the chat; the viewer shows them full size. */
 const MAX_PICTURE_HEIGHT = 448;
@@ -56,14 +58,14 @@ function mediaUrl(id: string, download = false): string {
 	return `/api/c/${conversation}/media/${encodeURIComponent(id)}${download ? '?download' : ''}`;
 }
 
-function picture(media: CopiedMedia, alt: string): string {
+function picture(media: CopiedMedia, alt: string, m: Messages): string {
 	// The size holds the picture's space before it loads, so the chat doesn't jump.
 	let size = '';
 	if (media.width && media.height) {
 		const scale = Math.min(1, MAX_PICTURE_HEIGHT / media.height);
 		size = ` width="${Math.round(media.width * scale)}" height="${Math.round(media.height * scale)}"`;
 	}
-	return `<button type="button" data-media-view data-name="${escapeHtml(media.name)}" data-download="${mediaUrl(media.id, true)}" aria-label="${escapeHtml(`Open ${alt || media.name}`)}" class="my-1 mr-1.5 inline-block max-w-full cursor-zoom-in overflow-hidden rounded-xl align-top"><img src="${mediaUrl(media.id)}" alt="${escapeHtml(alt)}"${size} loading="lazy" decoding="async" class="block h-auto max-h-[28rem] max-w-full bg-muted"></button>`;
+	return `<button type="button" data-media-view data-name="${escapeHtml(media.name)}" data-download="${mediaUrl(media.id, true)}" aria-label="${escapeHtml(m.attachments.open(alt || media.name))}" class="my-1 mr-1.5 inline-block max-w-full cursor-zoom-in overflow-hidden rounded-xl align-top"><img src="${mediaUrl(media.id)}" alt="${escapeHtml(alt)}"${size} loading="lazy" decoding="async" class="block h-auto max-h-[28rem] max-w-full bg-muted"></button>`;
 }
 
 /**
@@ -74,10 +76,10 @@ const OWN_LINE = 'my-2 flex w-fit';
 const INLINE = 'my-1 mr-1.5 inline-flex align-middle';
 
 /** `label` is HTML. */
-function fileCard(media: CopiedMedia, label: string): string {
+function fileCard(media: CopiedMedia, label: string, lang: Pick<I18n, 'intl' | 'm'>): string {
 	const name = escapeHtml(media.name);
-	const details =
-		label === name ? formatBytes(media.bytes) : `${name} · ${formatBytes(media.bytes)}`;
+	const size = formatBytes(media.bytes, lang);
+	const details = label === name ? size : `${name} · ${size}`;
 	return `<a href="${mediaUrl(media.id, true)}" download="${name}" data-media-file class="${OWN_LINE} max-w-full items-center gap-3 rounded-xl border px-3 py-2 leading-snug hover:bg-muted">${FILE_ICON}<span class="min-w-0"><span class="block truncate font-medium">${label}</span><span class="block truncate text-xs text-muted-foreground">${details}</span></span>${DOWNLOAD_ICON}</a>`;
 }
 
@@ -94,37 +96,51 @@ function pendingFile(label: string): string {
 	return `<span data-media-pending class="${OWN_LINE} max-w-full animate-pulse items-center gap-3 rounded-xl border px-3 py-2 leading-snug">${FILE_ICON}<span class="min-w-0 truncate font-medium">${label}</span></span>`;
 }
 
+/** The interface's language, while renderMarkdown parses. */
+function words(): Pick<I18n, 'intl' | 'm'> {
+	if (!language) throw new Error('renderMarkdown sets the language before parsing');
+	return language;
+}
+
 const marked = new Marked({
 	gfm: true,
 	renderer: {
 		// Code blocks get a header with the language and a copy button, like ChatGPT.
 		code({ text, lang }) {
-			const language = escapeHtml((lang ?? '').split(/\s/)[0]);
+			const { m } = words();
+			const code = escapeHtml((lang ?? '').split(/\s/)[0]);
 			return `<div data-code-block class="my-3 overflow-hidden rounded-2xl border bg-muted/50">
-<div class="flex h-9 items-center justify-between pr-2 pl-4 text-xs text-muted-foreground"><span>${language || 'text'}</span><button type="button" data-copy class="flex items-center gap-1.5 rounded-lg px-2 py-1 hover:bg-accent hover:text-foreground">${COPY_ICON}<span>Copy</span></button></div>
+<div class="flex h-9 items-center justify-between pr-2 pl-4 text-xs text-muted-foreground"><span>${code || m.markdown.text}</span><button type="button" data-copy class="flex items-center gap-1.5 rounded-lg px-2 py-1 hover:bg-accent hover:text-foreground">${COPY_ICON}<span>${escapeHtml(m.common.copy)}</span></button></div>
 <pre class="overflow-x-auto px-4 pb-4"><code>${escapeHtml(text)}</code></pre></div>`;
 		},
 		// Pictures show btw's copy of the file (see @btw/core media.ts), never the link itself.
 		image({ href, text, tokens }) {
 			const alt = tokens ? this.parser.parseInline(tokens, this.parser.textRenderer) : text;
+			const lang = words();
 			const media = context?.media?.[href];
 			if (media?.status === 'ok') {
 				return media.viewable
-					? picture(media, alt)
-					: fileCard(media, escapeHtml(alt || media.name));
+					? picture(media, alt, lang.m)
+					: fileCard(media, escapeHtml(alt || media.name), lang);
 			}
 			if (media) {
 				return problem(IMAGE_OFF_ICON, escapeHtml(alt || media.name), media.error, INLINE);
 			}
 			if (context?.pending && isMediaHref(href, 'image')) return pendingPicture(alt);
-			return problem(IMAGE_OFF_ICON, escapeHtml(alt || 'Picture'), 'Not available', INLINE);
+			const { markdown } = lang.m;
+			return problem(
+				IMAGE_OFF_ICON,
+				escapeHtml(alt || markdown.picture),
+				markdown.notAvailable,
+				INLINE
+			);
 		},
 		// Links to files on the computer become downloads of the copy; web links stay links.
 		link(token) {
 			if (!context || !isMediaHref(token.href, 'link')) return false;
 			const label = this.parser.parseInline(token.tokens);
 			const media = context.media?.[token.href];
-			if (media?.status === 'ok') return fileCard(media, label);
+			if (media?.status === 'ok') return fileCard(media, label, words());
 			if (media) return problem(FILE_X_ICON, label, media.error, OWN_LINE);
 			// Written before files were copied: the path means nothing to the browser.
 			return context.pending ? pendingFile(label) : label;
@@ -145,9 +161,14 @@ let hooked = false;
 
 /**
  * Markdown to sanitized HTML. Only used in the browser; the server never renders messages.
- * With `media`, pictures and file links show the copies made for the reply.
+ * With `media`, pictures and file links show the copies made for the reply. `lang` is the
+ * interface's, for the copy buttons and file cards around the text; the text stays as it is.
  */
-export function renderMarkdown(text: string, media?: MediaContext): string {
+export function renderMarkdown(
+	text: string,
+	lang: Pick<I18n, 'intl' | 'm'>,
+	media?: MediaContext
+): string {
 	if (!browser) return `<p>${escapeHtml(text)}</p>`;
 	if (!hooked) {
 		DOMPurify.addHook('afterSanitizeAttributes', (node) => {
@@ -163,25 +184,29 @@ export function renderMarkdown(text: string, media?: MediaContext): string {
 		hooked = true;
 	}
 	context = media;
+	language = lang;
 	try {
 		return DOMPurify.sanitize(marked.parse(text, { async: false }), SANITIZE);
 	} finally {
 		context = undefined;
+		language = undefined;
 	}
 }
 
 /** Handles the copy buttons inside rendered code blocks. */
-export function codeCopyButtons(node: HTMLElement) {
-	const onClick = async (event: MouseEvent) => {
-		const button = (event.target as Element).closest<HTMLButtonElement>('[data-copy]');
-		if (!button) return;
-		const code = button.closest('[data-code-block]')?.querySelector('code')?.textContent ?? '';
-		await copyText(code);
-		const label = button.querySelector('span');
-		if (!label) return;
-		label.textContent = 'Copied';
-		setTimeout(() => (label.textContent = 'Copy'), 2000);
+export function codeCopyButtons(m: Messages) {
+	return (node: HTMLElement) => {
+		const onClick = async (event: MouseEvent) => {
+			const button = (event.target as Element).closest<HTMLButtonElement>('[data-copy]');
+			if (!button) return;
+			const code = button.closest('[data-code-block]')?.querySelector('code')?.textContent ?? '';
+			await copyText(code);
+			const label = button.querySelector('span');
+			if (!label) return;
+			label.textContent = m.common.copied;
+			setTimeout(() => (label.textContent = m.common.copy), 2000);
+		};
+		node.addEventListener('click', onClick);
+		return () => node.removeEventListener('click', onClick);
 	};
-	node.addEventListener('click', onClick);
-	return () => node.removeEventListener('click', onClick);
 }

@@ -26,18 +26,30 @@ export interface Suggestion {
 	label: string;
 	/** What the chip puts in the chat box. A trailing space means the person finishes it. */
 	text: string;
+	/**
+	 * Set on the general chips only: the web UI shows those in its reader's language (the model
+	 * writes the others in the family's).
+	 */
+	id?: 'reminder' | 'weather' | 'file' | 'space';
 }
 
 /** For a profile with nothing in memory yet, or when the model can't be asked. */
 export const DEFAULT_SUGGESTIONS: readonly Suggestion[] = [
-	{ icon: 'bell', label: 'Set a reminder', text: 'Remind me tomorrow at 9:00 to ' },
+	{ id: 'reminder', icon: 'bell', label: 'Set a reminder', text: 'Remind me tomorrow at 9:00 to ' },
 	{
+		id: 'weather',
 		icon: 'cloud-sun',
 		label: 'Daily weather check',
 		text: 'Every weekday at 7:30, check the weather and tell us if we need umbrellas.'
 	},
-	{ icon: 'file-search', label: 'Find a file', text: 'Find the file on this computer called ' },
 	{
+		id: 'file',
+		icon: 'file-search',
+		label: 'Find a file',
+		text: 'Find the file on this computer called '
+	},
+	{
+		id: 'space',
 		icon: 'hard-drive',
 		label: 'Check free space',
 		text: 'How much free disk space is left on this computer?'

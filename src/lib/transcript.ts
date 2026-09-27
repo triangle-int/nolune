@@ -1,5 +1,6 @@
 import type { DisplayMedia, DisplayMessage, LiveBlock, Usage } from '@btw/core';
 import { firstLine, partialToolInput } from './commands';
+import type { Messages } from './i18n';
 
 /**
  * Turns the stored rows into what the chat shows: people's messages, and btw's replies as a run
@@ -208,14 +209,15 @@ export function buildTranscript(
 export function activeStepLabel(
 	part: ActivityPart,
 	results: Record<string, ToolResult>,
-	technical: boolean
+	technical: boolean,
+	m: Messages
 ): string {
 	const last = part.steps.at(-1);
 	if (last?.type === 'command' && !results[last.id]) {
-		if (technical && last.command) return `Running ${firstLine(last.command, 80)}`;
-		return last.summary ?? 'Running a command';
+		if (technical && last.command) return m.steps.running(firstLine(last.command, 80));
+		return last.summary ?? m.steps.runningACommand;
 	}
-	return 'Thinking';
+	return m.steps.thinking;
 }
 
 /** The reply's visible text, for the copy button. */
@@ -226,13 +228,13 @@ export function replyText(reply: Reply): string {
 		.trim();
 }
 
-export function formatDuration(ms: number): string | null {
+export function formatDuration(ms: number, m: Messages): string | null {
 	const seconds = Math.round(ms / 1000);
 	if (seconds < 1) return null;
-	if (seconds < 60) return `${seconds}s`;
+	if (seconds < 60) return m.time.seconds(seconds);
 	const minutes = Math.floor(seconds / 60);
-	if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
-	return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+	if (minutes < 60) return m.time.minutesSeconds(minutes, seconds % 60);
+	return m.time.hoursMinutes(Math.floor(minutes / 60), minutes % 60);
 }
 
 /** How a finished command ended. */

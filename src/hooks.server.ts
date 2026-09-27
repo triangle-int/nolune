@@ -3,6 +3,8 @@ import { building } from '$app/environment';
 import { svelteKitHandler } from 'better-auth/svelte-kit';
 import { serveGatewayCommands } from '@btw/cli/serve';
 import { installCliShim, recoverAfterRestart, startScheduler } from '@btw/core';
+import { matchLocale, translations } from '$lib/i18n';
+import { PREFERENCES_COOKIE, parsePreferences } from '$lib/preferences.svelte';
 import { getAuth } from '$lib/server/auth';
 
 export const init: ServerInit = () => {
@@ -31,6 +33,12 @@ function bodyTooLarge(request: Request, path: string): boolean {
 }
 
 export const handle: Handle = async ({ event, resolve }) => {
+	// The interface's language: the one picked in Settings, else the browser's.
+	const { language } = parsePreferences(event.cookies.get(PREFERENCES_COOKIE));
+	const locale =
+		language === 'auto' ? matchLocale(event.request.headers.get('accept-language')) : language;
+	event.locals.locale = locale;
+
 	if (bodyTooLarge(event.request, event.url.pathname)) error(413, 'Request body too large');
 
 	const auth = getAuth();
@@ -42,9 +50,15 @@ export const handle: Handle = async ({ event, resolve }) => {
 
 	const path = event.url.pathname;
 	if (!event.locals.user && !PUBLIC_PATHS.some((p) => path === p || path.startsWith(p))) {
-		if (path.startsWith('/api/')) error(401, 'Not signed in');
+		if (path.startsWith('/api/')) error(401, translations(locale).m.errors.notSignedIn);
 		redirect(303, '/login');
 	}
 
-	return svelteKitHandler({ event, resolve, auth, building });
+	return svelteKitHandler({
+		event,
+		resolve: (event) =>
+			resolve(event, { transformPageChunk: ({ html }) => html.replace('%btw.lang%', locale) }),
+		auth,
+		building
+	});
 };

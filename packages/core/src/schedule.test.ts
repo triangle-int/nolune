@@ -46,6 +46,12 @@ describe('formatDay', () => {
 		expect(formatDay(new Date(2026, 9, 10), now)).toBe('Sat 10 Oct');
 		expect(formatDay(new Date(2027, 0, 5), now)).toBe('Tue 5 Jan 2027');
 	});
+
+	it('names days in the language asked for', () => {
+		expect(formatDay(new Date(2026, 8, 29, 7, 30), now, 'ru')).toBe('завтра');
+		expect(formatDay(new Date(2026, 9, 1), now, 'de')).toBe('Donnerstag');
+		expect(formatDay(new Date(2026, 9, 10), now, 'fr')).toBe('sam. 10 oct.');
+	});
 });
 
 describe('dayKey', () => {

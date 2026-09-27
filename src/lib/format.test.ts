@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { formatAgo, formatBytes, formatPercent, formatTokens, parseTokens } from './format';
+import { translations } from './i18n';
+
+const en = translations('en');
+const ru = translations('ru');
 
 describe('format', () => {
 	it('shortens token counts', () => {
@@ -28,17 +32,28 @@ describe('format', () => {
 	});
 
 	it('sizes files', () => {
-		expect(formatBytes(512)).toBe('512 B');
-		expect(formatBytes(2048)).toBe('2 KB');
-		expect(formatBytes(1.5 * 1024 * 1024)).toBe('1.5 MB');
-		expect(formatBytes(25 * 1024 * 1024)).toBe('25 MB');
+		expect(formatBytes(512, en)).toBe('512 B');
+		expect(formatBytes(2048, en)).toBe('2 KB');
+		expect(formatBytes(1.5 * 1024 * 1024, en)).toBe('1.5 MB');
+		expect(formatBytes(25 * 1024 * 1024, en)).toBe('25 MB');
+	});
+
+	it('sizes files in the interface language', () => {
+		expect(formatBytes(1.5 * 1024 * 1024, ru)).toBe('1,5 МБ');
 	});
 
 	it('says how long ago', () => {
 		const now = Date.UTC(2026, 8, 28, 12);
-		expect(formatAgo(now - 30_000, now)).toBe('just now');
-		expect(formatAgo(now - 5 * 60_000, now)).toBe('5 minutes ago');
-		expect(formatAgo(now - 3 * 3_600_000, now)).toBe('3 hours ago');
-		expect(formatAgo(now - 86_400_000, now)).toBe('yesterday');
+		expect(formatAgo(now - 30_000, en, now)).toBe('just now');
+		expect(formatAgo(now - 5 * 60_000, en, now)).toBe('5 minutes ago');
+		expect(formatAgo(now - 3 * 3_600_000, en, now)).toBe('3 hours ago');
+		expect(formatAgo(now - 86_400_000, en, now)).toBe('yesterday');
+	});
+
+	it('says how long ago in the interface language', () => {
+		const now = Date.UTC(2026, 8, 28, 12);
+		expect(formatAgo(now - 30_000, ru, now)).toBe('только что');
+		expect(formatAgo(now - 3 * 3_600_000, ru, now)).toBe('3 часа назад');
+		expect(formatAgo(now - 86_400_000, ru, now)).toBe('вчера');
 	});
 });

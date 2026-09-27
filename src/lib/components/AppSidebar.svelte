@@ -35,6 +35,7 @@
 	import { Kbd } from '$lib/components/ui/kbd';
 	import { ChatDrag, SETTLE_MS } from '$lib/chat-drag.svelte';
 	import { moveChat, type FolderItem } from '$lib/folders';
+	import { getI18n } from '$lib/i18n';
 	import { cn } from '$lib/utils';
 	import AssistantAvatar from './AssistantAvatar.svelte';
 	import RenameChatDialog from './chat/RenameChatDialog.svelte';
@@ -42,6 +43,7 @@
 	import MoveToFolderMenu from './folders/MoveToFolderMenu.svelte';
 	import NewFolderDialog from './folders/NewFolderDialog.svelte';
 	import RenameFolderDialog from './folders/RenameFolderDialog.svelte';
+	import Rich from './Rich.svelte';
 	import TypedText from './TypedText.svelte';
 	import UserMenu from './UserMenu.svelte';
 
@@ -58,6 +60,7 @@
 	let { profile, profiles, folders, conversations, user }: Props = $props();
 
 	const sidebar = Sidebar.useSidebar();
+	const { m } = getI18n();
 
 	let searchOpen = $state(false);
 	let renaming = $state<ChatItem | null>(null);
@@ -224,7 +227,7 @@
 					<!-- Shimmers like the "Thinking" label while btw works in the chat. -->
 					<span class={cn(working && 'thinking-shimmer')}>
 						<TypedText text={conversation.title} />
-						{#if working}<span class="sr-only">, working</span>{/if}
+						{#if working}<span class="sr-only">{m.sidebar.working}</span>{/if}
 					</span>
 				</a>
 			{/snippet}
@@ -238,14 +241,14 @@
 						class="top-1/2! size-7 -translate-y-1/2 rounded-lg max-md:hidden"
 					>
 						<EllipsisIcon />
-						<span class="sr-only">More</span>
+						<span class="sr-only">{m.common.more}</span>
 					</Sidebar.MenuAction>
 				{/snippet}
 			</DropdownMenu.Trigger>
 			<DropdownMenu.Content side="right" align="start" class="w-48">
 				<DropdownMenu.Item onSelect={() => (renaming = conversation)}>
 					<PencilIcon />
-					Rename
+					{m.common.rename}
 				</DropdownMenu.Item>
 				<MoveToFolderMenu
 					{folders}
@@ -256,7 +259,7 @@
 				<DropdownMenu.Separator />
 				<DropdownMenu.Item variant="destructive" onSelect={() => (deleting = conversation)}>
 					<Trash2Icon />
-					Delete
+					{m.common.delete}
 				</DropdownMenu.Item>
 			</DropdownMenu.Content>
 		</DropdownMenu.Root>
@@ -293,7 +296,7 @@
 				</DropdownMenu.Trigger>
 				<DropdownMenu.Content class="w-64">
 					<DropdownMenu.Label class="text-xs font-normal text-muted-foreground"
-						>Profiles</DropdownMenu.Label
+						>{m.sidebar.profiles}</DropdownMenu.Label
 					>
 					{#each profiles as p (p.slug)}
 						<DropdownMenu.Item onSelect={() => goto(resolve('/p/[slug]', { slug: p.slug }))}>
@@ -305,7 +308,7 @@
 					<DropdownMenu.Separator />
 					<DropdownMenu.Item onSelect={() => goto(resolve('/profiles'))}>
 						<PlusIcon />
-						New profile
+						{m.sidebar.newProfile}
 					</DropdownMenu.Item>
 				</DropdownMenu.Content>
 			</DropdownMenu.Root>
@@ -317,14 +320,14 @@
 							{...props}
 							onclick={sidebar.toggle}
 							class="flex size-9 shrink-0 items-center justify-center rounded-xl text-muted-foreground group-data-[collapsible=icon]:size-8 hover:bg-sidebar-accent hover:text-foreground max-md:hidden"
-							aria-label={sidebar.open ? 'Close sidebar' : 'Open sidebar'}
+							aria-label={sidebar.open ? m.sidebar.closeSidebar : m.sidebar.openSidebar}
 						>
 							<PanelLeftIcon class="size-5" />
 						</button>
 					{/snippet}
 				</Tooltip.Trigger>
 				<Tooltip.Content side="right">
-					{sidebar.open ? 'Close sidebar' : 'Open sidebar'}
+					{sidebar.open ? m.sidebar.closeSidebar : m.sidebar.openSidebar}
 					<Kbd>Ctrl B</Kbd>
 				</Tooltip.Content>
 			</Tooltip.Root>
@@ -335,82 +338,85 @@
 		<Sidebar.Group class="px-2 py-1">
 			<Sidebar.Menu>
 				<Sidebar.MenuItem>
-					<Sidebar.MenuButton tooltipContent="New chat" isActive={page.route.id === '/p/[slug]'}>
+					<Sidebar.MenuButton
+						tooltipContent={m.common.newChat}
+						isActive={page.route.id === '/p/[slug]'}
+					>
 						{#snippet child({ props })}
 							<a href={newChatHref} {...props}>
 								<SquarePenIcon />
-								<span>New chat</span>
+								<span>{m.common.newChat}</span>
 							</a>
 						{/snippet}
 					</Sidebar.MenuButton>
 				</Sidebar.MenuItem>
 				<Sidebar.MenuItem>
-					<Sidebar.MenuButton tooltipContent="Search chats" onclick={openSearch}>
+					<Sidebar.MenuButton tooltipContent={m.sidebar.searchChats} onclick={openSearch}>
 						<SearchIcon />
-						<span>Search chats</span>
+						<span>{m.sidebar.searchChats}</span>
 					</Sidebar.MenuButton>
 				</Sidebar.MenuItem>
 				<Sidebar.MenuItem>
 					<Sidebar.MenuButton
-						tooltipContent="Images"
+						tooltipContent={m.sidebar.images}
 						isActive={page.route.id === '/p/[slug]/images'}
 					>
 						{#snippet child({ props })}
 							<a href={resolve('/p/[slug]/images', { slug: profile.slug })} {...props}>
 								<ImagesIcon />
-								<span>Images</span>
+								<span>{m.sidebar.images}</span>
 							</a>
 						{/snippet}
 					</Sidebar.MenuButton>
 				</Sidebar.MenuItem>
 				<Sidebar.MenuItem>
 					<Sidebar.MenuButton
-						tooltipContent="Automations"
+						tooltipContent={m.sidebar.automations}
 						isActive={page.route.id === '/p/[slug]/automations'}
 					>
 						{#snippet child({ props })}
 							<a href={resolve('/p/[slug]/automations', { slug: profile.slug })} {...props}>
 								<ClockIcon />
-								<span>Automations</span>
+								<span>{m.sidebar.automations}</span>
 							</a>
 						{/snippet}
 					</Sidebar.MenuButton>
 				</Sidebar.MenuItem>
 				<Sidebar.MenuItem>
 					<Sidebar.MenuButton
-						tooltipContent="Memory"
+						tooltipContent={m.sidebar.memory}
 						isActive={page.route.id === '/p/[slug]/memory'}
 					>
 						{#snippet child({ props })}
 							<a href={resolve('/p/[slug]/memory', { slug: profile.slug })} {...props}>
 								<BrainIcon />
-								<span>Memory</span>
+								<span>{m.sidebar.memory}</span>
 							</a>
 						{/snippet}
 					</Sidebar.MenuButton>
 				</Sidebar.MenuItem>
 				<Sidebar.MenuItem>
 					<Sidebar.MenuButton
-						tooltipContent="Skills"
+						tooltipContent={m.sidebar.skills}
 						isActive={page.route.id === '/p/[slug]/skills'}
 					>
 						{#snippet child({ props })}
 							<a href={resolve('/p/[slug]/skills', { slug: profile.slug })} {...props}>
 								<PuzzleIcon />
-								<span>Skills</span>
+								<span>{m.sidebar.skills}</span>
 							</a>
 						{/snippet}
 					</Sidebar.MenuButton>
 				</Sidebar.MenuItem>
 				<Sidebar.MenuItem>
 					<Sidebar.MenuButton
-						tooltipContent="People & profile"
+						tooltipContent={m.sidebar.people}
 						isActive={page.route.id === '/p/[slug]/settings'}
 					>
 						{#snippet child({ props })}
 							<a href={resolve('/p/[slug]/settings', { slug: profile.slug })} {...props}>
 								<UsersIcon />
-								<span>People & profile</span>
+								<span>{m.sidebar.people}</span>
 							</a>
 						{/snippet}
 					</Sidebar.MenuButton>
@@ -420,13 +426,13 @@
 
 		<Sidebar.Group class="px-2 group-data-[collapsible=icon]:hidden">
 			<Sidebar.GroupLabel class="text-sm font-medium text-muted-foreground"
-				>Folders</Sidebar.GroupLabel
+				>{m.sidebar.folders}</Sidebar.GroupLabel
 			>
 			<Sidebar.Menu>
 				<Sidebar.MenuItem>
 					<Sidebar.MenuButton onclick={() => newFolder()}>
 						<FolderPlusIcon />
-						<span>New folder</span>
+						<span>{m.sidebar.newFolder}</span>
 					</Sidebar.MenuButton>
 				</Sidebar.MenuItem>
 				{#each folders as folder (folder.id)}
@@ -452,8 +458,8 @@
 							class="absolute top-1.5 left-1.5 flex size-6 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-border/60 [&>svg]:size-4"
 							aria-expanded={open}
 							aria-label={open
-								? `Hide the chats in ${folder.name}`
-								: `Show the chats in ${folder.name}`}
+								? m.sidebar.hideChats(folder.name)
+								: m.sidebar.showChats(folder.name)}
 						>
 							{#if open}
 								<FolderOpenIcon class="md:group-hover/menu-item:hidden" />
@@ -476,18 +482,18 @@
 										class="top-1! size-7 rounded-lg max-md:hidden"
 									>
 										<EllipsisIcon />
-										<span class="sr-only">More</span>
+										<span class="sr-only">{m.common.more}</span>
 									</Sidebar.MenuAction>
 								{/snippet}
 							</DropdownMenu.Trigger>
 							<DropdownMenu.Content side="right" align="start" class="w-44">
 								<DropdownMenu.Item onSelect={() => (renamingFolder = folder)}>
 									<PencilIcon />
-									Rename
+									{m.common.rename}
 								</DropdownMenu.Item>
 								<DropdownMenu.Item variant="destructive" onSelect={() => (deletingFolder = folder)}>
 									<Trash2Icon />
-									Delete
+									{m.common.delete}
 								</DropdownMenu.Item>
 							</DropdownMenu.Content>
 						</DropdownMenu.Root>
@@ -511,7 +517,7 @@
 									{/if}
 								{:else}
 									<li class="px-3 py-1.5 text-xs text-muted-foreground">
-										Drag chats here, or start one on the folder's page.
+										{m.sidebar.emptyFolder}
 									</li>
 								{/each}
 							</Sidebar.MenuSub>
@@ -532,7 +538,7 @@
 			data-drop-target=""
 		>
 			<Sidebar.GroupLabel class="text-sm font-medium text-muted-foreground"
-				>Chats</Sidebar.GroupLabel
+				>{m.sidebar.chats}</Sidebar.GroupLabel
 			>
 			<Sidebar.Menu>
 				{#each rowsOf('') as row (row.key)}
@@ -543,9 +549,7 @@
 					{/if}
 				{:else}
 					<p class="px-3 py-2 text-sm text-muted-foreground">
-						{drag.row?.item.folderId
-							? 'Drop here to take the chat out of its folder.'
-							: 'Your chats will show up here.'}
+						{drag.row?.item.folderId ? m.sidebar.dropToTakeOut : m.sidebar.noChats}
 					</p>
 				{/each}
 			</Sidebar.Menu>
@@ -564,13 +568,13 @@
 <!-- Pinned near the top and kept inside the screen: a long list scrolls, the input never moves. -->
 <Command.Dialog
 	bind:open={searchOpen}
-	title="Search chats"
-	description="Find a chat by its title"
+	title={m.sidebar.searchChats}
+	description={m.sidebar.searchDescription}
 	class="top-[12dvh] flex max-h-[min(36rem,76dvh)] flex-col"
 >
-	<Command.Input placeholder="Search chats…" />
+	<Command.Input placeholder={m.sidebar.searchPlaceholder} />
 	<Command.List class="max-h-none">
-		<Command.Empty>No chats found.</Command.Empty>
+		<Command.Empty>{m.sidebar.noResults}</Command.Empty>
 		<Command.Group>
 			<Command.Item
 				value="new chat"
@@ -580,11 +584,11 @@
 				}}
 			>
 				<SquarePenIcon />
-				New chat
+				{m.common.newChat}
 			</Command.Item>
 		</Command.Group>
 		{#if folders.length}
-			<Command.Group heading="Folders">
+			<Command.Group heading={m.sidebar.folders}>
 				{#each folders as folder (folder.id)}
 					<Command.Item
 						value={`${folder.name} ${folder.id}`}
@@ -600,7 +604,7 @@
 			</Command.Group>
 		{/if}
 		{#if conversations.length}
-			<Command.Group heading="Chats">
+			<Command.Group heading={m.sidebar.chats}>
 				{#each conversations as conversation (conversation.id)}
 					{@const folder = folders.find((f) => f.id === conversation.folderId)}
 					<Command.Item
@@ -627,10 +631,11 @@
 <AlertDialog.Root open={deleting !== null} onOpenChange={(open) => !open && (deleting = null)}>
 	<AlertDialog.Content>
 		<AlertDialog.Header>
-			<AlertDialog.Title>Delete chat?</AlertDialog.Title>
+			<AlertDialog.Title>{m.chat.deleteTitle}</AlertDialog.Title>
 			<AlertDialog.Description>
-				This deletes <strong class="text-foreground">{deleting?.title}</strong> for everyone in
-				{profile.name}.
+				<Rich text={m.sidebar.deleteChatBody} profile={profile.name}>
+					{#snippet name()}<strong class="text-foreground">{deleting?.title}</strong>{/snippet}
+				</Rich>
 			</AlertDialog.Description>
 		</AlertDialog.Header>
 		<form
@@ -648,8 +653,10 @@
 			}}
 		>
 			<AlertDialog.Footer>
-				<AlertDialog.Cancel type="button">Cancel</AlertDialog.Cancel>
-				<AlertDialog.Action type="submit" variant="destructive">Delete</AlertDialog.Action>
+				<AlertDialog.Cancel type="button">{m.common.cancel}</AlertDialog.Cancel>
+				<AlertDialog.Action type="submit" variant="destructive"
+					>{m.common.delete}</AlertDialog.Action
+				>
 			</AlertDialog.Footer>
 		</form>
 	</AlertDialog.Content>

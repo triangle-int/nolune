@@ -2,6 +2,7 @@
 	import { Dialog as DialogPrimitive } from 'bits-ui';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { Button } from '$lib/components/ui/button/index.js';
+	import { getI18n } from '$lib/i18n';
 	import { cn, type WithoutChildrenOrChild } from '$lib/utils.js';
 	import * as Dialog from './index.js';
 	import DialogPortal from './dialog-portal.svelte';
@@ -20,6 +21,8 @@
 		children: Snippet;
 		showCloseButton?: boolean;
 	} = $props();
+
+	const { m } = getI18n();
 </script>
 
 <DialogPortal {...portalProps}>
@@ -44,7 +47,7 @@
 						{...props}
 					>
 						<XIcon />
-						<span class="sr-only">Close</span>
+						<span class="sr-only">{m.common.close}</span>
 					</Button>
 				{/snippet}
 			</DialogPrimitive.Close>

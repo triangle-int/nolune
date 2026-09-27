@@ -5,28 +5,30 @@
 	import { Switch } from '$lib/components/ui/switch';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import { formatTokens } from '$lib/format';
+	import { getI18n } from '$lib/i18n';
 	import { getPreferences } from '$lib/preferences.svelte';
 
 	let { data, form } = $props();
 
 	const prefs = getPreferences();
+	const { m } = getI18n();
 
 	type Skill = (typeof data.skills)[number];
 
 	const groups = $derived(
 		[
 			{
-				title: `Made for ${data.profile.name}`,
+				title: m.skills.madeFor(data.profile.name),
 				folder: data.folders.profile,
 				skills: data.skills.filter((s) => s.scope === 'profile')
 			},
 			{
-				title: 'Shared by all profiles',
+				title: m.skills.shared,
 				folder: data.folders.global,
 				skills: data.skills.filter((s) => s.scope === 'global')
 			},
 			{
-				title: 'Built into btw',
+				title: m.skills.builtIn,
 				folder: null,
 				skills: data.skills.filter((s) => s.scope === 'builtin')
 			}
@@ -48,7 +50,7 @@
 </script>
 
 <PageHeader>
-	<span class="truncate text-lg font-medium">Skills</span>
+	<span class="truncate text-lg font-medium">{m.skills.title}</span>
 </PageHeader>
 
 <form method="POST" action="?/set" use:enhance bind:this={setForm} class="hidden">
@@ -62,14 +64,11 @@
 	<div class="mx-auto max-w-2xl space-y-8 px-4 py-6 sm:py-10">
 		<div class="space-y-2">
 			<p class="text-muted-foreground">
-				Skills are instructions btw follows for specific tasks. It sees the name and description of
-				every skill that's on, and reads the rest when a task calls for it. Turning off skills this
-				profile doesn't need keeps btw focused. Changes apply to new chats.
+				{m.skills.intro}
 			</p>
 			{#if prefs.technical && data.skills.length}
 				<p class="text-sm text-muted-foreground">
-					{enabled.length} of {data.skills.length} on · about {formatTokens(enabledTokens)} tokens at
-					the start of every new chat
+					{m.skills.summary(enabled.length, data.skills.length, formatTokens(enabledTokens))}
 				</p>
 			{/if}
 		</div>
@@ -95,7 +94,7 @@
 							class="shrink-0 text-muted-foreground"
 							onclick={() => setSkills(group.skills, !anyOn)}
 						>
-							{anyOn ? 'Turn all off' : 'Turn all on'}
+							{anyOn ? m.skills.allOff : m.skills.allOn}
 						</Button>
 					{/if}
 				</div>
@@ -108,7 +107,7 @@
 										<span class="truncate font-medium">{skill.name}</span>
 										{#if prefs.technical}
 											<span class="shrink-0 text-xs text-muted-foreground">
-												~{formatTokens(skill.tokens)} tokens
+												{m.skills.tokens(formatTokens(skill.tokens))}
 											</span>
 										{/if}
 									</span>
@@ -120,7 +119,7 @@
 									class="mt-0.5"
 									checked={skill.enabled}
 									onCheckedChange={(on) => setSkills([skill], on)}
-									aria-label={`Use ${skill.name}`}
+									aria-label={m.skills.use(skill.name)}
 								/>
 							</label>
 						</li>
@@ -129,8 +128,7 @@
 			</section>
 		{:else}
 			<p class="text-muted-foreground">
-				No skills yet. When btw works out how to do something, it can save that as a skill for next
-				time.
+				{m.skills.empty}
 			</p>
 		{/each}
 	</div>
