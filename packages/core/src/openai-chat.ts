@@ -3,7 +3,16 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { OpenAI } from 'openai';
 import { apiKeyHelp, configuredApiKey } from './config.ts';
 import type { Usage } from './conversations.ts';
-import type { Effort, StreamEvent } from './models.ts';
+import {
+	heldElsewhere,
+	heldElsewhereNote,
+	portableReply,
+	unresolved,
+	type Block,
+	type Message,
+	type ToolResultBlock
+} from './format.ts';
+import type { Effort, ModelChoice, StreamEvent } from './models.ts';
 import { openaiBaseUrl } from './openai.ts';
 
 /*
@@ -13,9 +22,9 @@ import { openaiBaseUrl } from './openai.ts';
  * Requests are stateless (`store: false`): like Anthropic's, every call sends the whole
  * transcript, so nothing depends on OpenAI keeping a conversation. A reply is stored as the
  * output items the API returned, its reasoning included in encrypted form, and sent back as it
- * came. btw's own blocks (people's messages, command results) are in Anthropic's format and are
- * turned into input items here, the same way on every call, so the request prefix stays
- * byte-identical and OpenAI's automatic prompt cache keeps serving it.
+ * came. btw's own blocks (people's messages, command results; format.ts) are turned into input
+ * items here, the same way on every call, so the request prefix stays byte-identical and OpenAI's
+ * automatic prompt cache keeps serving it.
  */
 
 type InputItem = OpenAI.Responses.ResponseInputItem;
@@ -87,65 +96,92 @@ async function getClient(): Promise<OpenAI> {
 	return cached.client;
 }
 
-// --- turning the transcript into input items ---
+// --- btw's format as OpenAI takes it ---
 
-type Block = { type?: unknown } & Record<string, unknown>;
+type Stored = { type?: unknown } & Record<string, unknown>;
 
 /** What OpenAI returned in a reply, which goes back as it is. */
 const OUTPUT_TYPES = new Set(['message', 'reasoning', 'function_call']);
 
-/** A picture, PDF or text block of btw's (Anthropic's format) as an input content part. */
+/** A text, picture or PDF block as an input content part; one OpenAI can't open, as a note. */
 function inputPart(block: Block): InputPart | null {
-	const source = block.source as Record<string, string> | undefined;
-	if (block.type === 'text') return { type: 'input_text', text: String(block.text) };
-	if (block.type === 'image' && source) {
-		if (source.type === 'file')
-			return { type: 'input_image', file_id: source.file_id, detail: 'auto' };
-		if (source.type === 'base64') {
-			const url = `data:${source.media_type};base64,${source.data}`;
-			return { type: 'input_image', image_url: url, detail: 'auto' };
-		}
-		if (source.type === 'url')
-			return { type: 'input_image', image_url: source.url, detail: 'auto' };
+	if (block.type === 'text') return { type: 'input_text', text: block.text };
+	if (block.type !== 'image' && block.type !== 'pdf') return null;
+	if (heldElsewhere(block, 'openai')) {
+		return { type: 'input_text', text: heldElsewhereNote(block).text };
 	}
-	if (block.type === 'document' && source) {
-		if (source.type === 'file') return { type: 'input_file', file_id: source.file_id };
-		if (source.type === 'base64') {
-			const filename = typeof block.title === 'string' ? block.title : 'document.pdf';
-			const data = `data:${source.media_type};base64,${source.data}`;
-			return { type: 'input_file', filename, file_data: data };
+	const { source } = block;
+	if (source.type === 'media') unresolved(block);
+	if (block.type === 'image') {
+		if (source.type === 'uploaded') {
+			return { type: 'input_image', file_id: source.fileId, detail: 'auto' };
 		}
+		const url = `data:${source.mime};base64,${source.data}`;
+		return { type: 'input_image', image_url: url, detail: 'auto' };
 	}
-	return null;
+	if (source.type === 'uploaded') return { type: 'input_file', file_id: source.fileId };
+	const data = `data:${source.mime};base64,${source.data}`;
+	return { type: 'input_file', filename: block.name || 'document.pdf', file_data: data };
 }
 
-function toolOutput(content: unknown): string | OutputPart[] {
-	if (!Array.isArray(content)) return typeof content === 'string' ? content : '';
-	return (content as Block[]).flatMap((b) => (inputPart(b) as OutputPart | null) ?? []);
+function toolOutput(content: ToolResultBlock['content']): string | OutputPart[] {
+	if (typeof content === 'string') return content;
+	return content.flatMap((b) => (inputPart(b) as OutputPart | null) ?? []);
+}
+
+/** A reply of this model's, as the API returned it: its output items, reasoning included. */
+function nativeItems(content: unknown[]): InputItem[] {
+	const items: InputItem[] = [];
+	for (const b of content as Stored[]) {
+		if (b.type === 'text' && typeof b.text === 'string' && b.text) {
+			// A reply btw wrote itself, from before btw's own format.
+			items.push({ role: 'assistant', content: b.text });
+		} else if (b.type === 'tool_use') {
+			// A row that didn't record who wrote it (tests).
+			items.push({
+				type: 'function_call',
+				call_id: String(b.id),
+				name: String(b.name),
+				arguments: JSON.stringify(b.input ?? {})
+			});
+		} else if (b.type === 'reasoning' && !b.encrypted_content) {
+			continue;
+		} else if (typeof b.type === 'string' && OUTPUT_TYPES.has(b.type)) {
+			items.push(b as unknown as InputItem);
+		}
+	}
+	return items;
 }
 
 /**
- * The transcript as the Responses API's `input`. Messages from people and command results are
- * btw's own blocks, in Anthropic's format; replies are OpenAI's own output items, sent back as
- * they came, except reasoning without its encrypted content, which can't be read back without
- * `store`. A reply btw wrote itself (a notification continued in a chat) is plain text.
+ * A conversation's messages as the Responses API's `input` for `model`. Replies it wrote go back
+ * as they came, except reasoning without its encrypted content, which can't be read back without
+ * `store`. Replies from another model or provider (the conversation switched), and btw's own, go
+ * as their text and calls: reasoning goes back only to the model that wrote it.
  */
-export function toResponsesInput(messages: Anthropic.MessageParam[]): InputItem[] {
+export function toResponsesInput(messages: Message[], model: string): InputItem[] {
 	const input: InputItem[] = [];
 	for (const m of messages) {
-		const blocks: Block[] =
-			typeof m.content === 'string'
-				? [{ type: 'text', text: m.content }]
-				: (m.content as unknown as Block[]);
 		if (m.role === 'assistant') {
-			for (const b of blocks) {
-				if (b.type === 'text' && typeof b.text === 'string' && b.text) {
-					input.push({ role: 'assistant', content: b.text });
-				} else if (b.type === 'reasoning' && !b.encrypted_content) {
-					continue;
-				} else if (typeof b.type === 'string' && OUTPUT_TYPES.has(b.type)) {
-					input.push(b as unknown as InputItem);
-				}
+			const native = m.native;
+			if (
+				native &&
+				(native.provider === null || (native.provider === 'openai' && native.model === model))
+			) {
+				input.push(...nativeItems(native.content));
+				continue;
+			}
+			for (const b of portableReply(m.blocks)) {
+				input.push(
+					b.type === 'text'
+						? { role: 'assistant', content: b.text }
+						: {
+								type: 'function_call',
+								call_id: b.id,
+								name: b.name,
+								arguments: JSON.stringify(b.input ?? {})
+							}
+				);
 			}
 			continue;
 		}
@@ -155,12 +191,12 @@ export function toResponsesInput(messages: Anthropic.MessageParam[]): InputItem[
 			if (parts.length) input.push({ role: 'user', content: parts });
 			parts = [];
 		};
-		for (const b of blocks) {
+		for (const b of m.blocks) {
 			if (b.type === 'tool_result') {
 				flush();
 				input.push({
 					type: 'function_call_output',
-					call_id: String(b.tool_use_id),
+					call_id: b.callId,
 					output: toolOutput(b.content)
 				});
 			} else {
@@ -232,7 +268,7 @@ async function readStream(
 				onEvent({ type: 'delta', index: event.output_index, text: event.delta });
 				break;
 			case 'response.reasoning_summary_part.added':
-				// Parts are paragraphs, as content-blocks.ts joins them.
+				// Parts are paragraphs, as format.ts joins them.
 				if (event.summary_index > 0) {
 					onEvent({ type: 'delta', index: event.output_index, text: '\n\n' });
 				}
@@ -254,7 +290,7 @@ export async function streamResponse(opts: {
 	effort: Effort;
 	system: string;
 	tools: Anthropic.Tool[];
-	messages: Anthropic.MessageParam[];
+	messages: Message[];
 	cacheKey: string;
 	signal: AbortSignal;
 	onEvent: (event: StreamEvent) => void;
@@ -266,7 +302,7 @@ export async function streamResponse(opts: {
 			{
 				model: opts.model,
 				instructions: opts.system,
-				input: toResponsesInput(opts.messages),
+				input: toResponsesInput(opts.messages, opts.model),
 				tools: opts.tools.map(functionTool),
 				store: false,
 				stream: true,
@@ -325,13 +361,13 @@ export function stopReason(response: {
 	if (response.status === 'incomplete') {
 		return response.incomplete_details?.reason === 'content_filter' ? 'refusal' : 'max_tokens';
 	}
-	const output = (response.output ?? []) as Block[];
+	const output = (response.output ?? []) as Stored[];
 	if (output.some((item) => item.type === 'function_call')) return 'tool_use';
 	const refused = output.some(
 		(item) =>
 			item.type === 'message' &&
 			Array.isArray(item.content) &&
-			(item.content as Block[]).some((part) => part.type === 'refusal')
+			(item.content as Stored[]).some((part) => part.type === 'refusal')
 	);
 	return refused ? 'refusal' : 'end_turn';
 }
@@ -412,19 +448,27 @@ export async function countDocumentTokens(model: string, fileId: string): Promis
 /** Every flagship model since GPT-5.4 has this window, the Pro ones included. */
 const FLAGSHIP_CONTEXT_WINDOW = 1_050_000;
 
-/**
- * The model's context window when btw knows it: OpenAI's models API doesn't say. Flagships
- * since GPT-5.4 (gpt-5.4, gpt-5.5-pro, gpt-6-astra, and their dated snapshots) have 1,050,000
- * tokens. Other models (mini, nano, codex, older ones) may have much less, and a window set too
- * large would let a conversation grow past what the model takes, for good, so they get none.
- */
-export function knownContextWindow(model: string): number | null {
+/** "gpt-5.6-sol" → 5, 6 and "-sol"; null for a name of another kind. */
+function gptVersion(model: string): { major: number; minor: number; suffix: string } | null {
 	const match = /^gpt-(\d+)(?:\.(\d+))?(-.*)?$/.exec(model);
 	if (!match) return null;
-	const [major, minor] = [Number(match[1]), Number(match[2] ?? 0)];
+	return { major: Number(match[1]), minor: Number(match[2] ?? 0), suffix: match[3] ?? '' };
+}
+
+/**
+ * The model's context window when btw knows it: OpenAI's models API doesn't say. Flagships
+ * since GPT-5.4 (gpt-5.4, gpt-5.5-pro, gpt-5.6-terra, gpt-6-astra, and their dated snapshots)
+ * have 1,050,000 tokens. Other models (mini, nano, codex, older ones) may have much less, and a
+ * window set too large would let a conversation grow past what the model takes, for good, so
+ * they get none.
+ */
+export function knownContextWindow(model: string): number | null {
+	const version = gptVersion(model);
+	if (!version) return null;
+	const { major, minor, suffix } = version;
 	if (major < 5 || (major === 5 && minor < 4)) return null;
-	// GPT-6's names, Pro, and a snapshot's date; any other suffix may be a smaller model.
-	const flagship = /^(-(astra|sol|luna))?(-pro)?(-\d{4}-\d{2}-\d{2})?$/.test(match[3] ?? '');
+	// The tiers' names, Pro, and a snapshot's date; any other suffix may be a smaller model.
+	const flagship = /^(-(astra|sol|terra|luna))?(-pro)?(-\d{4}-\d{2}-\d{2})?$/.test(suffix);
 	return flagship ? FLAGSHIP_CONTEXT_WINDOW : null;
 }
 
@@ -433,6 +477,44 @@ export async function fetchContextWindow(model: string): Promise<number | null> 
 	const client = await getClient();
 	await client.models.retrieve(model, { timeout: REQUEST_TIMEOUT_MS });
 	return knownContextWindow(model);
+}
+
+/**
+ * Whether the admin page lists the model: GPT-5.6 and newer, OpenAI's current generations in
+ * September 2026, and of those only the ones that chat (not audio, pictures or search). Older
+ * ones can still be typed.
+ */
+export function isListedModel(model: string): boolean {
+	const version = gptVersion(model);
+	if (!version) return false;
+	const { major, minor, suffix } = version;
+	if (major < 5 || (major === 5 && minor < 6)) return false;
+	return !/audio|realtime|transcribe|tts|live|image|search|deep-research|chat/.test(suffix);
+}
+
+const SNAPSHOT_DATE = /-\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * The models the admin page lists (isListedModel) that the key can use, the newest first,
+ * without the dated snapshots of models also listed without a date (they can still be typed).
+ * All of them when that leaves none: a compatible server behind OPENAI_BASE_URL has names of
+ * its own.
+ */
+export async function listModels(): Promise<ModelChoice[]> {
+	const client = await getClient();
+	const all: OpenAI.Models.Model[] = [];
+	for await (const model of client.models.list({ timeout: REQUEST_TIMEOUT_MS })) all.push(model);
+	all.sort((a, b) => b.created - a.created);
+	const ids = new Set(all.map((m) => m.id));
+	const isSnapshot = (id: string) =>
+		SNAPSHOT_DATE.test(id) && ids.has(id.replace(SNAPSHOT_DATE, ''));
+	const listed = all.filter((m) => isListedModel(m.id) && !isSnapshot(m.id));
+	return (listed.length ? listed : all).map((m) => ({
+		id: m.id,
+		name: null,
+		description: null,
+		contextWindow: knownContextWindow(m.id)
+	}));
 }
 
 export function describeApiError(err: unknown): string {

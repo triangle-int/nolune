@@ -1,28 +1,30 @@
 <script lang="ts">
-	import BellIcon from '@lucide/svelte/icons/bell';
-	import CloudSunIcon from '@lucide/svelte/icons/cloud-sun';
-	import FileSearchIcon from '@lucide/svelte/icons/file-search';
-	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
+	import { fade } from 'svelte/transition';
 	import AssistantAvatar from '$lib/components/AssistantAvatar.svelte';
+	import LucideIcon from '$lib/components/LucideIcon.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import NewChatForm from '$lib/components/chat/NewChatForm.svelte';
 
 	let { data } = $props();
 
-	const SUGGESTIONS = [
-		{ icon: BellIcon, label: 'Set a reminder', text: 'Remind me tomorrow at 9:00 to ' },
-		{
-			icon: CloudSunIcon,
-			label: 'Daily weather check',
-			text: 'Every weekday at 7:30, check the weather and tell us if we need umbrellas.'
-		},
-		{ icon: FileSearchIcon, label: 'Find a file', text: 'Find the file on this computer called ' },
-		{
-			icon: HardDriveIcon,
-			label: 'Check free space',
-			text: 'How much free disk space is left on this computer?'
-		}
-	];
+	/** The profile's saved chips, until new ones made from its memory arrive. */
+	let suggestions = $derived(data.suggestions);
+	const slug = $derived(data.profile.slug);
+	const stale = $derived(data.suggestionsStale);
+
+	$effect(() => {
+		if (!stale) return;
+		const controller = new AbortController();
+		fetch(`/api/p/${slug}/suggestions`, { signal: controller.signal })
+			.then((res) => (res.ok ? (res.json() as Promise<typeof data.suggestions>) : null))
+			.then((fresh) => {
+				if (fresh?.length) suggestions = fresh;
+			})
+			.catch(() => {
+				// Left the page, or offline: the saved ones stay.
+			});
+		return () => controller.abort();
+	});
 
 	const firstName = $derived(data.user?.name.split(/\s+/)[0] ?? '');
 </script>
@@ -66,13 +68,14 @@
 
 		{#snippet above(suggest)}
 			<div class="-mx-3 mb-3 no-scrollbar flex gap-2 overflow-x-auto px-3 sm:hidden">
-				{#each SUGGESTIONS as s (s.label)}
+				{#each suggestions as s (s.label)}
 					<button
 						type="button"
 						onclick={() => suggest(s.text)}
+						in:fade={{ duration: 150 }}
 						class="flex shrink-0 items-center gap-2 rounded-full border px-3.5 py-2 text-sm hover:bg-muted"
 					>
-						<s.icon class="size-4 text-muted-foreground" />
+						<LucideIcon node={s.icon} class="size-4 text-muted-foreground" />
 						{s.label}
 					</button>
 				{/each}
@@ -81,13 +84,14 @@
 
 		{#snippet below(suggest)}
 			<div class="mt-4 hidden flex-wrap justify-center gap-2 sm:flex">
-				{#each SUGGESTIONS as s (s.label)}
+				{#each suggestions as s (s.label)}
 					<button
 						type="button"
 						onclick={() => suggest(s.text)}
+						in:fade={{ duration: 150 }}
 						class="flex items-center gap-2 rounded-full border px-3.5 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
 					>
-						<s.icon class="size-4" />
+						<LucideIcon node={s.icon} class="size-4" />
 						{s.label}
 					</button>
 				{/each}

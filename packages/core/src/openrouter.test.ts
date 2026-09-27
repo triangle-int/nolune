@@ -6,19 +6,19 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createUpload } from './attachments.ts';
-import { replyBlocks } from './content-blocks.ts';
 import {
-	appendRow,
 	committedRows,
 	createConversation,
 	getConversation,
-	requestMessages,
+	setPreset,
 	toDisplay
 } from './conversations.ts';
+import { replyBlocks, type Message } from './format.ts';
 import { viewImage } from './images.ts';
-import { describeApiError } from './models.ts';
+import { describeApiError, type Provider } from './models.ts';
 import {
 	openrouterFiles,
+	readableMessages,
 	stopReason,
 	streamTurn,
 	summarizeUsage,
@@ -503,6 +503,39 @@ describe('a chat on an OpenRouter model', () => {
 		]);
 	});
 
+	it("gives a model it switched to a note for each picture it can't see", async () => {
+		const { user, profile, chat } = openrouterChat();
+		const picture = await createUpload({
+			profileId: profile.id,
+			userId: user.id,
+			name: 'dot.png',
+			body: Readable.from([Buffer.from(DOT, 'base64')])
+		});
+		answer = (req) => (req.json?.stream ? saying('A dot.') : titled('A dot'));
+		let ended = loopEnd(chat.id);
+		await sendMessage(chat.id, user, 'What is this?', [picture.id]);
+		await ended;
+
+		// Someone moves the chat to a model that only reads text.
+		setPreset(chat.id, makePreset('DeepSeek Pro', 'deepseek/deepseek-pro', 'openrouter').id);
+		ended = loopEnd(chat.id);
+		await sendMessage(chat.id, user, 'And now?');
+		await ended;
+
+		const [first, second] = turns().map((r) => r.json!);
+		expect((first.messages as { content: unknown[] }[])[1].content[1]).toEqual({
+			type: 'file',
+			file: { file_id: 'or_file_1' }
+		});
+		expect(second.model).toBe('deepseek/deepseek-pro');
+		expect((second.messages as { content: unknown[] }[])[1].content[1]).toEqual({
+			type: 'text',
+			text: "[Picture not shown: deepseek/deepseek-pro can't see pictures. The line before this says where its file is.]"
+		});
+		// The earlier reply goes as its text: its reasoning belongs to the model that wrote it.
+		expect((second.messages as unknown[])[2]).toEqual({ role: 'assistant', content: 'A dot.' });
+	});
+
 	it('shows the model the pictures a command opened, after its result', async () => {
 		const { user, chat } = openrouterChat('deepseek/deepseek-v4.1-flash');
 		const replies = [listing, saying('A dot.')];
@@ -537,54 +570,73 @@ describe('a chat on an OpenRouter model', () => {
 });
 
 describe('the transcript as chat messages', () => {
+	const MODEL = 'anthropic/claude-opus-5.5';
+	/** A reply read from its row, as requestMessages gives it. */
+	const reply = (
+		content: unknown[],
+		model = MODEL,
+		provider: Provider | null = 'openrouter'
+	): Message => ({
+		role: 'assistant',
+		blocks: replyBlocks(content),
+		native: { provider, model, content }
+	});
+
 	it("turns btw's own blocks into messages, and puts OpenRouter's replies back together", () => {
 		expect(
-			toChatMessages('You are btw.', [
-				{
-					role: 'user',
-					content: [
-						{ type: 'text', text: '[Anna attached cat.jpg, saved at /tmp/cat.jpg]' },
-						{ type: 'image', source: { type: 'file', file_id: 'or_file_8' } },
-						{ type: 'document', source: { type: 'file', file_id: 'or_file_9' }, title: 'menu.pdf' },
-						// A picture that couldn't be uploaded.
-						{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: '/9j/' } },
-						{ type: 'text', text: 'Anna: Look' }
-					]
-				},
-				// A notification someone continued in a chat: btw wrote this reply itself.
-				{ role: 'assistant', content: [{ type: 'text', text: 'The parcel arrived.' }] },
-				{ role: 'assistant', content: [thought, listCall] as never },
-				{
-					role: 'user',
-					content: [
-						{
-							type: 'tool_result',
-							tool_use_id: 'toolu_1',
-							content: [
-								{ type: 'text', text: 'Viewing shot.png\n[exit code 0]' },
-								{ type: 'text', text: 'Image: shot.png' },
-								{
-									type: 'image',
-									source: { type: 'base64', media_type: 'image/png', data: 'iVBOR' }
-								}
-							]
-						},
-						{ type: 'text', text: 'Max: and?' }
-					]
-				},
-				// Only reasoning (cut off): nothing to send.
-				{
-					role: 'assistant',
-					content: [{ type: 'reasoning.encrypted', data: 'enc', index: 0 }] as never
-				},
-				{ role: 'user', content: 'Anna: Hello?' }
-			])
+			toChatMessages(
+				'You are btw.',
+				[
+					{
+						role: 'user',
+						blocks: [
+							{ type: 'text', text: '[Anna attached cat.jpg, saved at /tmp/cat.jpg]' },
+							{
+								type: 'image',
+								source: { type: 'uploaded', provider: 'openrouter', fileId: 'or_file_8' }
+							},
+							{
+								type: 'pdf',
+								source: { type: 'uploaded', provider: 'openrouter', fileId: 'or_file_9' },
+								name: 'menu.pdf'
+							},
+							// A picture that couldn't be uploaded.
+							{ type: 'image', source: { type: 'inline', mime: 'image/jpeg', data: '/9j/' } },
+							{ type: 'text', text: 'Anna: Look' }
+						]
+					},
+					// A notification someone continued in a chat: btw wrote this reply itself.
+					{ role: 'assistant', blocks: [{ type: 'text', text: 'The parcel arrived.' }] },
+					reply([thought, listCall]),
+					{
+						role: 'user',
+						blocks: [
+							{
+								type: 'tool_result',
+								callId: 'toolu_1',
+								content: [
+									{ type: 'text', text: 'Viewing shot.png\n[exit code 0]' },
+									{ type: 'text', text: 'Image: shot.png' },
+									{ type: 'image', source: { type: 'inline', mime: 'image/png', data: 'iVBOR' } }
+								],
+								isError: false
+							},
+							{ type: 'text', text: 'Max: and?' }
+						]
+					},
+					// Only reasoning (cut off): nothing to send.
+					reply([{ type: 'reasoning.encrypted', data: 'enc', index: 0 }]),
+					{ role: 'user', blocks: [{ type: 'text', text: 'Anna: Hello?' }] }
+				],
+				MODEL
+			)
 		).toEqual([
 			{ role: 'system', content: 'You are btw.' },
 			{
 				role: 'user',
 				content: [
 					{ type: 'text', text: '[Anna attached cat.jpg, saved at /tmp/cat.jpg]' },
+					// Chat Completions takes an uploaded picture as a file part too.
 					{ type: 'file', file: { file_id: 'or_file_8' } },
 					{ type: 'file', file: { file_id: 'or_file_9', filename: 'menu.pdf' } },
 					{ type: 'image_url', image_url: { url: 'data:image/jpeg;base64,/9j/' } },
@@ -610,6 +662,94 @@ describe('the transcript as chat messages', () => {
 		]);
 	});
 
+	it('sends reasoning back only to the model that wrote it, and not from before a new prompt', () => {
+		const said = { type: 'text', text: 'Listing.' };
+		const messages = toChatMessages(
+			'You are btw.',
+			[
+				// Written before the system prompt was built again: Claude's thinking is bound to it.
+				{ ...reply([thought, said]), beforePromptChange: true },
+				// Another model on OpenRouter, and Anthropic's own API: the chat switched models.
+				reply([thought, said, listCall], 'deepseek/deepseek-v4.1-flash'),
+				reply(
+					[
+						{ type: 'thinking', thinking: 'Hmm.', signature: 'sig' },
+						{ type: 'text', text: 'Checking.' },
+						{ type: 'tool_use', id: 'toolu_2', name: 'run_command', input: { command: 'pwd' } }
+					],
+					'claude-opus-5-5',
+					'anthropic'
+				),
+				// A picture Anthropic's Files API holds, which OpenRouter can't open.
+				{
+					role: 'user',
+					blocks: [
+						{
+							type: 'image',
+							source: { type: 'uploaded', provider: 'anthropic', fileId: 'file_011' }
+						}
+					]
+				}
+			],
+			MODEL
+		);
+		expect(messages.slice(1)).toEqual([
+			{ role: 'assistant', content: 'Listing.' },
+			{ role: 'assistant', content: 'Listing.', tool_calls: [listCall] },
+			{
+				role: 'assistant',
+				content: 'Checking.',
+				tool_calls: [
+					{
+						id: 'toolu_2',
+						type: 'function',
+						function: { name: 'run_command', arguments: '{"command":"pwd"}' }
+					}
+				]
+			},
+			{
+				role: 'user',
+				content: [{ type: 'text', text: expect.stringMatching(/^\[Picture not shown: it went to/) }]
+			}
+		]);
+	});
+
+	it("turns the pictures and PDFs a model can't take into notes, before they're uploaded", async () => {
+		const picture: Message = {
+			role: 'user',
+			blocks: [
+				{ type: 'text', text: '[Anna attached dot.png, saved at /tmp/dot.png]' },
+				{ type: 'image', source: { type: 'media', sha256: 'abc', mime: 'image/png', bytes: 3 } },
+				{
+					type: 'pdf',
+					source: { type: 'media', sha256: 'def', mime: 'application/pdf', bytes: 9 },
+					name: 'menu.pdf'
+				}
+			]
+		};
+		const text: Message = { role: 'user', blocks: [{ type: 'text', text: 'Anna: Hi' }] };
+		// Nothing to check without pictures or PDFs.
+		expect(await readableMessages([text], 'deepseek/deepseek-pro')).toEqual([text]);
+		expect(seen.filter((r) => r.path === '/api/v1/models')).toHaveLength(0);
+
+		const [readable] = await readableMessages([picture], 'deepseek/deepseek-pro');
+		expect(readable.blocks.slice(1)).toEqual([
+			{
+				type: 'text',
+				text: "[Picture not shown: deepseek/deepseek-pro can't see pictures. The line before this says where its file is.]"
+			},
+			{
+				type: 'text',
+				text: "[PDF not shown: deepseek/deepseek-pro doesn't read PDFs itself. The line before this says where its file is.]"
+			}
+		]);
+		// A model that sees pictures but doesn't read PDFs keeps the picture.
+		const [flash] = await readableMessages([picture], 'deepseek/deepseek-v4.1-flash');
+		expect(flash.blocks.map((b) => b.type)).toEqual(['text', 'image', 'text']);
+		// One that takes both gets the messages as they were.
+		expect(await readableMessages([picture], MODEL)).toEqual([picture]);
+	});
+
 	it("reads OpenRouter's replies for the chat and the runner", () => {
 		expect(
 			replyBlocks([
@@ -620,31 +760,11 @@ describe('the transcript as chat messages', () => {
 				{ id: 'call_2', type: 'function', function: { name: 'run_command', arguments: '{"a": ' } }
 			])
 		).toEqual([
-			{ type: 'thinking', text: 'Anna wants the files.' },
-			{ type: 'thinking', text: 'Checked the folder.' },
+			{ type: 'reasoning', text: 'Anna wants the files.' },
+			{ type: 'reasoning', text: 'Checked the folder.' },
 			{ type: 'text', text: 'Here.' },
 			// Cut off in the middle: passed on as it is, and run_command refuses it.
 			{ type: 'tool_call', id: 'call_2', name: 'run_command', input: '{"a": ' }
-		]);
-	});
-
-	it('leaves out reasoning from before the system prompt was built again, like thinking', () => {
-		const { chat } = openrouterChat();
-		const text = (t: string) => JSON.stringify([{ type: 'text', text: t }]);
-		appendRow({ conversationId: chat.id, role: 'user', kind: 'trigger', content: text('Hi') });
-		const reply = appendRow({
-			conversationId: chat.id,
-			role: 'assistant',
-			kind: 'assistant',
-			content: JSON.stringify([thought, { type: 'text', text: 'Hello.' }])
-		});
-		expect(requestMessages(committedRows(chat.id), reply.seq)[1]).toEqual({
-			role: 'assistant',
-			content: [{ type: 'text', text: 'Hello.' }]
-		});
-		expect(requestMessages(committedRows(chat.id), null)[1].content).toEqual([
-			thought,
-			{ type: 'text', text: 'Hello.' }
 		]);
 	});
 
@@ -676,7 +796,7 @@ describe('calling OpenRouter', () => {
 			system: 'You are btw.',
 			tools: TOOLS,
 			cacheTtl: '5m',
-			messages: [{ role: 'user', content: [{ type: 'text', text: 'Anna: Hi' }] }],
+			messages: [{ role: 'user', blocks: [{ type: 'text', text: 'Anna: Hi' }] }],
 			cacheKey: 'chat-1',
 			signal: new AbortController().signal,
 			onEvent: () => {}

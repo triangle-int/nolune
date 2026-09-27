@@ -1,9 +1,13 @@
 import { createHash } from 'node:crypto';
-import { and, eq, like, lt } from 'drizzle-orm';
+import { existsSync, readFileSync } from 'node:fs';
+import { and, eq, like, lt, or } from 'drizzle-orm';
 import { anthropicFiles } from './anthropic.ts';
 import { getDb } from './db/index.ts';
 import { message, providerFile } from './db/schema.ts';
-import type { Provider } from './models.ts';
+import type { Block, ImageBlock, Message, PdfBlock, Source, TextBlock } from './format.ts';
+import { MAX_CONVERSATION_IMAGE_BYTES, base64Length } from './images.ts';
+import { blobPath, referencedMedia } from './media.ts';
+import { PROVIDER_LABELS, shortApiError, type Provider } from './models.ts';
 import { openaiFiles } from './openai-chat.ts';
 import { openrouterFiles } from './openrouter.ts';
 
@@ -90,23 +94,157 @@ export async function providerFileId(
 	return pending;
 }
 
+// --- pictures and PDFs kept by reference ---
+
+type FileBlock = ImageBlock | PdfBlock;
+type MediaSource = Extract<Source, { type: 'media' }>;
+
+/** Uploads at once, for the first request after a conversation switched to a provider. */
+const UPLOADS_AT_ONCE = 4;
+
+/**
+ * The provider's copy of a file btw keeps, uploading it the first time. A known copy is taken as
+ * it is, unlike in providerFileId: every request carries every picture, and checking each one
+ * would cost a request apiece.
+ */
+async function mediaFileId(
+	provider: keyof typeof stores,
+	source: MediaSource,
+	name: string
+): Promise<string> {
+	const known = getDb()
+		.update(providerFile)
+		.set({ usedAt: new Date() })
+		.where(
+			and(
+				eq(providerFile.provider, provider),
+				eq(providerFile.account, stores[provider].account()),
+				eq(providerFile.sha256, source.sha256)
+			)
+		)
+		.returning({ fileId: providerFile.fileId })
+		.get();
+	if (known) return known.fileId;
+	return providerFileId(provider, mediaBytes(source, name), name, source.mime);
+}
+
+function mediaBytes(source: MediaSource, name: string): Buffer {
+	const path = blobPath(source.sha256);
+	if (!existsSync(path)) throw new Error(`${name} is no longer on this computer.`);
+	return readFileSync(path);
+}
+
+/** Its name, for the Files API: a PDF's own, or one for a picture from its type. */
+function uploadName(block: FileBlock): string {
+	if (block.type === 'pdf') return block.name || 'document.pdf';
+	return `picture.${block.source.type === 'media' ? block.source.mime.split('/')[1] : 'png'}`;
+}
+
+function fileBlocks(messages: Message[]): FileBlock[] {
+	const found: FileBlock[] = [];
+	const add = (b: Block) => {
+		if ((b.type === 'image' || b.type === 'pdf') && b.source.type === 'media') found.push(b);
+	};
+	for (const m of messages) {
+		for (const b of m.blocks) {
+			add(b);
+			if (b.type === 'tool_result' && Array.isArray(b.content)) b.content.forEach(add);
+		}
+	}
+	return found;
+}
+
+/** What a model reads instead of a picture or PDF past what the conversation takes inline. */
+function overLimitNote(block: FileBlock): TextBlock {
+	const what = block.type === 'image' ? 'Picture' : 'PDF';
+	return {
+		type: 'text',
+		text: `[${what} not shown: this chat already holds as many pictures and PDFs as this model takes. The line before this says where its file is${block.type === 'image' ? '; `btw view` shows it again' : ''}.]`
+	};
+}
+
+/**
+ * The messages with each picture and PDF btw keeps by reference (`media` sources) as `provider`
+ * gets it: its Files API's copy, uploaded the first time a request on it needs one, or inline
+ * where it has none (the Claude plan), oldest first up to the conversation's inline limit, the
+ * rest as a note. The same rows give the same request every time: a copy is reused for as long as
+ * the cache has it (pruneProviderFiles keeps it while a message refers to it). Other messages are
+ * returned as they are. Throws when an upload fails: that call fails, and Continue tries again.
+ */
+export async function resolveFiles(messages: Message[], provider: Provider): Promise<Message[]> {
+	const blocks = fileBlocks(messages);
+	if (!blocks.length) return messages;
+	const ids = new Map<string, string>();
+	if (hasFileStore(provider)) {
+		const pending = [...new Map(blocks.map((b) => [(b.source as MediaSource).sha256, b])).values()];
+		const upload = async () => {
+			for (let b = pending.shift(); b; b = pending.shift()) {
+				const source = b.source as MediaSource;
+				try {
+					ids.set(source.sha256, await mediaFileId(provider, source, uploadName(b)));
+				} catch (err) {
+					throw new Error(
+						`Couldn't give ${PROVIDER_LABELS[provider]} ${b.type === 'pdf' ? b.name : 'a picture'} from this chat: ${shortApiError(err)}`,
+						{ cause: err }
+					);
+				}
+			}
+		};
+		await Promise.all(Array.from({ length: UPLOADS_AT_ONCE }, upload));
+	}
+
+	let inlineBytes = 0;
+	const resolve = (b: Block): Block => {
+		if (b.type !== 'image' && b.type !== 'pdf') return b;
+		const { source } = b;
+		if (source.type === 'inline') inlineBytes += source.data.length;
+		if (source.type !== 'media') return b;
+		const fileId = ids.get(source.sha256);
+		if (fileId && hasFileStore(provider)) {
+			return { ...b, source: { type: 'uploaded', provider, fileId } };
+		}
+		const bytes = base64Length(source.bytes);
+		if (inlineBytes + bytes > MAX_CONVERSATION_IMAGE_BYTES) return overLimitNote(b);
+		inlineBytes += bytes;
+		const data = mediaBytes(source, b.type === 'pdf' ? b.name : 'A picture').toString('base64');
+		return { ...b, source: { type: 'inline', mime: source.mime, data } };
+	};
+	return messages.map((m) => {
+		let changed = false;
+		const blocks = m.blocks.map((b) => {
+			let next: Block;
+			if (b.type === 'tool_result' && Array.isArray(b.content)) {
+				const content = b.content.map((c) => resolve(c) as typeof c);
+				next = content.every((c, i) => c === (b.content as Block[])[i]) ? b : { ...b, content };
+			} else next = resolve(b);
+			if (next !== b) changed = true;
+			return next;
+		});
+		return changed ? { ...m, blocks } : m;
+	});
+}
+
+// --- pruning ---
+
 function collectFileIds(value: unknown, ids: Set<string>): void {
 	if (Array.isArray(value)) {
 		for (const item of value) collectFileIds(item, ids);
 	} else if (value && typeof value === 'object') {
 		const record = value as Record<string, unknown>;
+		// btw's format, and Anthropic's (rows from before it)
+		if (record.type === 'uploaded' && typeof record.fileId === 'string') ids.add(record.fileId);
 		if (record.type === 'file' && typeof record.file_id === 'string') ids.add(record.file_id);
 		for (const child of Object.values(record)) collectFileIds(child, ids);
 	}
 }
 
-/** Every file id a stored message refers to, in any provider's format. */
+/** Every file id a stored message refers to, in btw's format or a provider's. */
 function referencedFileIds(): Set<string> {
 	const ids = new Set<string>();
 	const rows = getDb()
 		.select({ content: message.content })
 		.from(message)
-		.where(like(message.content, '%"file_id"%'))
+		.where(or(like(message.content, '%"fileId"%'), like(message.content, '%"file_id"%')))
 		.all();
 	for (const row of rows) collectFileIds(JSON.parse(row.content), ids);
 	return ids;
@@ -114,8 +252,8 @@ function referencedFileIds(): Set<string> {
 
 /**
  * Deletes the provider's copies that no message refers to any more (their conversations were
- * deleted or expired). Files in another account than the current key's are left alone: they
- * can't be reached, and the key may change back.
+ * deleted or expired), by id or by what it's a copy of. Files in another account than the current
+ * key's are left alone: they can't be reached, and the key may change back.
  */
 export async function pruneProviderFiles(): Promise<void> {
 	const rows = getDb()
@@ -125,8 +263,10 @@ export async function pruneProviderFiles(): Promise<void> {
 		.all();
 	if (!rows.length) return;
 	const used = referencedFileIds();
+	// Copies of what messages keep by reference, which later requests send again.
+	const media = referencedMedia();
 	for (const row of rows) {
-		if (used.has(row.fileId)) continue;
+		if (used.has(row.fileId) || media.has(row.sha256)) continue;
 		const store = stores[row.provider];
 		const where = and(
 			eq(providerFile.provider, row.provider),

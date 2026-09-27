@@ -72,6 +72,9 @@ Access). `btw setup` prints the exact path.
 - The chat keeps what btw did folded under each reply ("Worked for 12s"), with plain-language
   steps. To see the exact commands, token usage and prompt caching, turn on **Show technical
   details** in Settings (click your name at the bottom of the sidebar).
+- **Models.** The chip in the message box picks the model and how long it thinks, in a new chat or
+  an existing one. After a change the next reply reads the whole chat again (it isn't cached for
+  the new setting yet), so it's slower and costs more once; the chat asks before that happens.
 - Attach files to a message with the paperclip, by pasting, or by dropping them on the message box.
   btw sees pictures and PDFs, and every file is saved in the profile's `attachments` folder for it
   to work with.

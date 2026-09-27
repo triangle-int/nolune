@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
+import { toAnthropicMessages } from './anthropic.ts';
 import { createUpload } from './attachments.ts';
 import {
 	appendRow,
@@ -205,7 +206,9 @@ describe('chats in folders', () => {
 			{ type: 'text', text: 'Sure.' }
 		]);
 		say(chat.id, user, 'Thanks');
-		expect(requestMessages(committedRows(chat.id), moved.promptChangedAtSeq)).toEqual([
+		expect(
+			toAnthropicMessages(requestMessages(committedRows(chat.id), moved.promptChangedAtSeq))
+		).toEqual([
 			{ role: 'user', content: [{ type: 'text', text: 'Anna: Hi' }] },
 			{ role: 'assistant', content: [{ type: 'text', text: 'Hello!' }] },
 			{ role: 'user', content: [{ type: 'text', text: 'Anna: Plan the trip' }] },
@@ -258,12 +261,12 @@ describe('chats in folders', () => {
 		say(chat.id, user, 'Hi');
 		const cut = reply(chat.id, [{ type: 'redacted_thinking', data: 'x' }]);
 		say(chat.id, user, 'Hello?');
-		expect(requestMessages(committedRows(chat.id), cut.seq)).toEqual([
+		expect(toAnthropicMessages(requestMessages(committedRows(chat.id), cut.seq))).toEqual([
 			{ role: 'user', content: [{ type: 'text', text: 'Anna: Hi' }] },
 			{ role: 'user', content: [{ type: 'text', text: 'Anna: Hello?' }] }
 		]);
 		// Without a rebuilt prompt, every row goes exactly as stored.
-		expect(requestMessages(committedRows(chat.id), null)[1]).toEqual({
+		expect(toAnthropicMessages(requestMessages(committedRows(chat.id), null))[1]).toEqual({
 			role: 'assistant',
 			content: [{ type: 'redacted_thinking', data: 'x' }]
 		});

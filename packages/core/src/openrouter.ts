@@ -3,7 +3,20 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { OpenAI } from 'openai';
 import { apiKeyHelp, configuredApiKey } from './config.ts';
 import type { Usage } from './conversations.ts';
-import type { CacheTtl, Effort, StreamEvent } from './models.ts';
+import {
+	heldElsewhere,
+	heldElsewhereNote,
+	placeholder,
+	portableReply,
+	unresolved,
+	type Block,
+	type ImageBlock,
+	type Message,
+	type PdfBlock,
+	type TextBlock,
+	type ToolResultBlock
+} from './format.ts';
+import type { CacheTtl, Effort, ModelChoice, StreamEvent } from './models.ts';
 
 /*
  * Chats on the models OpenRouter serves (Anthropic's, OpenAI's, Google's, DeepSeek's...), through
@@ -103,9 +116,9 @@ async function getClient(): Promise<OpenAI> {
 	return cached.client;
 }
 
-// --- turning the transcript into chat messages ---
+// --- btw's format as OpenRouter takes it ---
 
-type Block = { type?: unknown } & Record<string, unknown>;
+type Stored = { type?: unknown } & Record<string, unknown>;
 type CacheControl = { type: 'ephemeral'; ttl: CacheTtl };
 
 type Part =
@@ -132,74 +145,100 @@ type ChatMessage =
 	  }
 	| { role: 'tool'; tool_call_id: string; content: string };
 
-function isReasoningDetail(block: Block): block is ReasoningDetail {
+function isReasoningDetail(block: Stored): block is ReasoningDetail {
 	return typeof block.type === 'string' && block.type.startsWith('reasoning.');
 }
 
-function isToolCall(block: Block): block is ToolCallItem & Block {
-	return block.type === 'function' && typeof block.id === 'string';
+function toolCallItem(id: string, name: string, input: unknown): ToolCallItem {
+	return { id, type: 'function', function: { name, arguments: JSON.stringify(input ?? {}) } };
 }
 
 /**
- * A picture, PDF or text block of btw's (Anthropic's format) as a content part. An uploaded
- * picture or PDF goes as a `file` part with its id, which Chat Completions takes for both.
+ * A text, picture or PDF block as a content part: an uploaded one as a `file` part with its id,
+ * which Chat Completions takes for pictures too; one OpenRouter can't open, as a note.
  */
 function inputPart(block: Block): Part | null {
-	const source = block.source as Record<string, string> | undefined;
-	if (block.type === 'text') return { type: 'text', text: String(block.text) };
-	if (block.type === 'image' && source) {
-		if (source.type === 'file') return { type: 'file', file: { file_id: source.file_id } };
-		if (source.type === 'base64') {
-			return {
-				type: 'image_url',
-				image_url: { url: `data:${source.media_type};base64,${source.data}` }
-			};
-		}
-		if (source.type === 'url') return { type: 'image_url', image_url: { url: source.url } };
+	if (block.type === 'text') return { type: 'text', text: block.text };
+	if (block.type !== 'image' && block.type !== 'pdf') return null;
+	if (heldElsewhere(block, 'openrouter')) {
+		return { type: 'text', text: heldElsewhereNote(block).text };
 	}
-	if (block.type === 'document' && source) {
-		const filename = typeof block.title === 'string' ? block.title : 'document.pdf';
-		if (source.type === 'file')
-			return { type: 'file', file: { file_id: source.file_id, filename } };
-		if (source.type !== 'base64') return null;
-		return {
-			type: 'file',
-			file: { filename, file_data: `data:${source.media_type};base64,${source.data}` }
-		};
+	const { source } = block;
+	if (source.type === 'media') unresolved(block);
+	const filename = block.type === 'pdf' ? block.name || 'document.pdf' : null;
+	if (source.type === 'uploaded') {
+		const file = filename ? { file_id: source.fileId, filename } : { file_id: source.fileId };
+		return { type: 'file', file };
 	}
-	return null;
+	const data = `data:${source.mime};base64,${source.data}`;
+	if (!filename) return { type: 'image_url', image_url: { url: data } };
+	return { type: 'file', file: { filename, file_data: data } };
 }
 
 /**
- * A command's result as a tool message's text, and the pictures in it (`btw view`), each after
- * the line naming it: a tool message takes only text, so they follow in a user message.
+ * A command's result as a tool message's text, and the pictures and PDFs in it (`btw view`), each
+ * after the line naming it: a tool message takes only text, so they follow in a user message.
  */
-function toolResult(content: unknown): { text: string; pictures: Part[] } {
-	if (!Array.isArray(content))
-		return { text: typeof content === 'string' ? content : '', pictures: [] };
-	const blocks = content as Block[];
+function toolResult(content: ToolResultBlock['content']): { text: string; files: Part[] } {
+	if (typeof content === 'string') return { text: content, files: [] };
 	const texts: string[] = [];
-	const pictures: Part[] = [];
-	blocks.forEach((b, i) => {
-		if (b.type === 'text') texts.push(String(b.text));
-		const part = b.type === 'image' ? inputPart(b) : null;
+	const files: Part[] = [];
+	content.forEach((b, i) => {
+		if (b.type === 'text') texts.push(b.text);
+		else if (b.type === 'other') texts.push(`[${placeholder(b)}]`);
+		const part = b.type === 'image' || b.type === 'pdf' ? inputPart(b) : null;
 		if (!part) return;
-		const label = blocks[i - 1];
-		if (label?.type === 'text') pictures.push({ type: 'text', text: String(label.text) });
-		pictures.push(part);
+		const label = content[i - 1];
+		if (label?.type === 'text') files.push({ type: 'text', text: label.text });
+		files.push(part);
 	});
-	return { text: texts.join('\n'), pictures };
+	return { text: texts.join('\n'), files };
 }
 
 /**
- * The transcript as Chat Completions messages. Messages from people and command results are
- * btw's own blocks, in Anthropic's format; replies are what OpenRouter returned, put back into
- * one assistant message the way it came. A reply btw wrote itself (a notification continued in a
- * chat) is plain text. `cache`: Anthropic's models only cache what's marked.
+ * A reply as one assistant message, from its text and calls; with `details`, the reasoning that
+ * goes back to the model that wrote it. Null for one with nothing to send (only reasoning, cut
+ * off, say).
+ */
+function assistantMessage(
+	texts: string[],
+	calls: ToolCallItem[],
+	details: ReasoningDetail[] = []
+): ChatMessage | null {
+	const text = texts.filter(Boolean).join('\n\n');
+	if (!text && !calls.length) return null;
+	return {
+		role: 'assistant',
+		content: text || null,
+		...(calls.length ? { tool_calls: calls } : {}),
+		...(details.length ? { reasoning_details: details } : {})
+	};
+}
+
+/** A reply of this model's, as OpenRouter returned it. */
+function nativeMessage(content: unknown[], withReasoning: boolean): ChatMessage | null {
+	const blocks = content as Stored[];
+	const texts = blocks.flatMap((b) => (b.type === 'text' ? [String(b.text ?? '')] : []));
+	const calls = blocks.flatMap((b): ToolCallItem[] => {
+		if (b.type === 'function' && typeof b.id === 'string') return [b as unknown as ToolCallItem];
+		// A row that didn't record who wrote it (tests).
+		if (b.type === 'tool_use') return [toolCallItem(String(b.id), String(b.name), b.input)];
+		return [];
+	});
+	return assistantMessage(texts, calls, withReasoning ? blocks.filter(isReasoningDetail) : []);
+}
+
+/**
+ * A conversation's messages as Chat Completions messages for `model`. Replies it wrote go back as
+ * they came, reasoning included, except from before the system prompt was built again: through
+ * OpenRouter it may be Claude's thinking, which is bound to the prompt. Replies from another model
+ * or provider (the conversation switched), and btw's own, go as their text and calls. `cache`:
+ * Claude only caches what's marked.
  */
 export function toChatMessages(
 	system: string,
-	messages: Anthropic.MessageParam[],
+	messages: Message[],
+	model: string,
 	cache: CacheControl | null = null
 ): ChatMessage[] {
 	const out: ChatMessage[] = [
@@ -209,31 +248,33 @@ export function toChatMessages(
 		}
 	];
 	for (const m of messages) {
-		const blocks: Block[] =
-			typeof m.content === 'string'
-				? [{ type: 'text', text: m.content }]
-				: (m.content as unknown as Block[]);
 		if (m.role === 'assistant') {
-			const text = blocks.flatMap((b) => (b.type === 'text' ? [String(b.text)] : [])).join('');
-			const calls = blocks.filter(isToolCall);
-			const details = blocks.filter(isReasoningDetail);
-			// Nothing to send for a reply that was only reasoning (cut off, say).
-			if (!text && !calls.length) continue;
-			out.push({
-				role: 'assistant',
-				content: text || null,
-				...(calls.length ? { tool_calls: calls } : {}),
-				...(details.length ? { reasoning_details: details } : {})
-			});
+			const native = m.native;
+			let reply: ChatMessage | null;
+			if (
+				native &&
+				(native.provider === null || (native.provider === 'openrouter' && native.model === model))
+			) {
+				reply = nativeMessage(native.content, !m.beforePromptChange);
+			} else {
+				const portable = portableReply(m.blocks);
+				reply = assistantMessage(
+					portable.flatMap((b) => (b.type === 'text' ? [b.text] : [])),
+					portable.flatMap((b) =>
+						b.type === 'tool_call' ? [toolCallItem(b.id, b.name, b.input)] : []
+					)
+				);
+			}
+			if (reply) out.push(reply);
 			continue;
 		}
 		// Results come first, right after the reply that asked for them; the rest follows.
 		const parts: Part[] = [];
-		for (const b of blocks) {
+		for (const b of m.blocks) {
 			if (b.type === 'tool_result') {
 				const result = toolResult(b.content);
-				out.push({ role: 'tool', tool_call_id: String(b.tool_use_id), content: result.text });
-				parts.push(...result.pictures);
+				out.push({ role: 'tool', tool_call_id: b.callId, content: result.text });
+				parts.push(...result.files);
 			} else {
 				const part = inputPart(b);
 				if (part) parts.push(part);
@@ -242,6 +283,48 @@ export function toChatMessages(
 		if (parts.length) out.push({ role: 'user', content: parts });
 	}
 	return out;
+}
+
+/** What a model reads instead of a picture or PDF it can't take. */
+function unreadableNote(block: ImageBlock | PdfBlock, model: string): TextBlock {
+	const what =
+		block.type === 'image'
+			? `Picture not shown: ${model} can't see pictures`
+			: `PDF not shown: ${model} doesn't read PDFs itself`;
+	return { type: 'text', text: `[${what}. The line before this says where its file is.]` };
+}
+
+/**
+ * The messages with each picture and PDF `model` can't take as a note, before resolveFiles
+ * uploads them: a chat that switched to a text-only model may hold them, and a request carrying
+ * one would fail. Messages without any are returned as they are.
+ */
+export async function readableMessages(messages: Message[], model: string): Promise<Message[]> {
+	const isFile = (b: Block) => b.type === 'image' || b.type === 'pdf';
+	const holdsFiles = messages.some((m) =>
+		m.blocks.some(
+			(b) =>
+				isFile(b) ||
+				(b.type === 'tool_result' && Array.isArray(b.content) && b.content.some(isFile))
+		)
+	);
+	if (!holdsFiles) return messages;
+	const inputs = await modelInputs(model);
+	if (inputs.pictures && inputs.pdfs) return messages;
+	return messages.map((m) => {
+		let changed = false;
+		const readable = <B extends Block>(b: B): B | TextBlock => {
+			if ((b.type !== 'image' || inputs.pictures) && (b.type !== 'pdf' || inputs.pdfs)) return b;
+			changed = true;
+			return unreadableNote(b as unknown as ImageBlock | PdfBlock, model);
+		};
+		const blocks = m.blocks.map((b): Block =>
+			b.type === 'tool_result' && Array.isArray(b.content)
+				? { ...b, content: b.content.map(readable) }
+				: readable(b)
+		);
+		return changed ? { ...m, blocks } : m;
+	});
 }
 
 /** A tool as btw saves it (Anthropic's format) as a function tool. */
@@ -427,7 +510,8 @@ export function streamTurn(opts: {
 	tools: Anthropic.Tool[];
 	cacheTtl: CacheTtl;
 	cacheKey: string;
-	messages: Anthropic.MessageParam[];
+	/** In btw's format, with pictures and PDFs as OpenRouter gets them (resolveFiles). */
+	messages: Message[];
 	signal: AbortSignal;
 	onEvent: (event: StreamEvent) => void;
 }): Promise<Reply> {
@@ -439,7 +523,7 @@ export function streamTurn(opts: {
 			: null;
 		const body = {
 			model: opts.model,
-			messages: toChatMessages(opts.system, opts.messages, cache),
+			messages: toChatMessages(opts.system, opts.messages, opts.model, cache),
 			tools: opts.tools.map(functionTool),
 			reasoning: { effort: opts.effort },
 			...(cache ? { cache_control: cache } : {}),
@@ -555,6 +639,9 @@ export const openrouterFiles = {
 
 interface ModelInfo {
 	id: string;
+	name?: string | null;
+	/** When OpenRouter added it, in seconds. */
+	created?: number | null;
 	context_length?: number | null;
 	top_provider?: { context_length?: number | null } | null;
 	supported_parameters?: string[] | null;
@@ -564,7 +651,7 @@ interface ModelInfo {
 let catalog: { at: number; models: Promise<Map<string, ModelInfo>> } | undefined;
 
 /** Every model OpenRouter has, by id, kept for an hour. `fresh` asks again. */
-function listModels(fresh = false): Promise<Map<string, ModelInfo>> {
+function catalogOf(fresh = false): Promise<Map<string, ModelInfo>> {
 	if (fresh || !catalog || Date.now() - catalog.at > MODELS_TTL_MS) {
 		const models = tagged(async () => {
 			const client = await getClient();
@@ -585,7 +672,7 @@ function listModels(fresh = false): Promise<Map<string, ModelInfo>> {
 
 /** A variant (`:nitro`, `:online`...) is its model, routed differently, unless it's listed itself. */
 async function modelInfo(model: string, fresh = false): Promise<ModelInfo | undefined> {
-	const models = await listModels(fresh);
+	const models = await catalogOf(fresh);
 	return models.get(model) ?? models.get(model.replace(/:[^/]*$/, ''));
 }
 
@@ -609,15 +696,41 @@ export async function fetchContextWindow(model: string): Promise<number | null> 
 			`Model not found: OpenRouter has no model "${model}". Its ids look like anthropic/claude-sonnet-5 (see https://openrouter.ai/models).`
 		);
 	}
-	if (!info.supported_parameters?.includes('tools')) {
+	if (!callsTools(info)) {
 		throw new OpenRouterError(
 			`${model} can't call tools on OpenRouter, and btw needs them to run commands.`
 		);
 	}
+	return windowOf(info);
+}
+
+function callsTools(info: ModelInfo): boolean {
+	return !!info.supported_parameters?.includes('tools');
+}
+
+function windowOf(info: ModelInfo): number | null {
 	const windows = [info.context_length, info.top_provider?.context_length].filter(
 		(n): n is number => typeof n === 'number' && n > 0
 	);
 	return windows.length ? Math.min(...windows) : null;
+}
+
+/**
+ * The models a preset can take (they call tools), for the admin page, the newest first, with
+ * OpenRouter's names and the window a preset gets. `:batch` variants are left out: they're for
+ * OpenRouter's batch API, not chats.
+ */
+export async function listModels(): Promise<ModelChoice[]> {
+	const models = [...(await catalogOf(true)).values()].filter(
+		(m) => callsTools(m) && !m.id.endsWith(':batch')
+	);
+	models.sort((a, b) => (b.created ?? 0) - (a.created ?? 0));
+	return models.map((m) => ({
+		id: m.id,
+		name: m.name ?? null,
+		description: null,
+		contextWindow: windowOf(m)
+	}));
 }
 
 /** The HTTP status, or for an error in the middle of a stream, the code OpenRouter gives it. */

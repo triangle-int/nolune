@@ -10,10 +10,18 @@ import type {
 	SDKUserMessage
 } from '@anthropic-ai/claude-agent-sdk';
 import type { ZodType } from 'zod';
+import { toAnthropicBlocks } from './anthropic.ts';
 import { readConfig } from './config.ts';
-import { replyBlocks, toolCalls } from './content-blocks.ts';
 import type { Usage } from './conversations.ts';
-import type { Effort, ModelReply, StreamEvent, ToolCall } from './models.ts';
+import {
+	fromAnthropic,
+	placeholder,
+	replyBlocks,
+	toolCalls,
+	type Block,
+	type ToolResultBlock
+} from './format.ts';
+import type { Effort, ModelChoice, ModelReply, StreamEvent, ToolCall } from './models.ts';
 
 /*
  * Chats on the Claude plan: the Pro or Max subscription someone signed in to Claude Code with on
@@ -210,7 +218,9 @@ export interface PlanTurn {
 	system: string;
 	tools: Anthropic.Tool[];
 	/** What the model hasn't seen yet, sent as one message. */
-	input: Anthropic.ContentBlockParam[];
+	input: Block[];
+	/** Pictures and PDFs kept by reference, with their bytes: Claude Code gets them inline. */
+	resolve: (blocks: Block[]) => Promise<Block[]>;
 	signal: AbortSignal;
 	/** Claude Code took the input: from here on it's in the session, even if the turn fails. */
 	onStarted: () => void;
@@ -218,9 +228,9 @@ export interface PlanTurn {
 	/** A model call ended: its reply, to save. Its commands wait until this resolves. */
 	onReply: (reply: ModelReply) => Promise<void>;
 	/** Runs a call of the reply that was saved last. */
-	runTool: (call: ToolCall) => Promise<Anthropic.ToolResultBlockParam>;
+	runTool: (call: ToolCall) => Promise<ToolResultBlock>;
 	/** Every call of the reply that was saved last has its result, in the reply's order. */
-	onResults: (results: Anthropic.ToolResultBlockParam[]) => void;
+	onResults: (results: ToolResultBlock[]) => void;
 }
 
 interface Deferred {
@@ -256,9 +266,9 @@ interface OpenReply {
 interface Answering {
 	calls: ToolCall[];
 	/** btw's own results: what it ran, and what it said about it. */
-	ours: Map<string, Anthropic.ToolResultBlockParam>;
+	ours: Map<string, ToolResultBlock>;
 	/** What Claude Code recorded for calls btw never got (invalid input, a stop). */
-	theirs: Map<string, Anthropic.ToolResultBlockParam>;
+	theirs: Map<string, ToolResultBlock>;
 	/** Calls whose command is running now. */
 	running: Set<string>;
 }
@@ -295,16 +305,16 @@ function textOf(content: unknown): string {
 }
 
 /** A command's result as an MCP tool result, which Claude Code turns back into the same blocks. */
-function toCallToolResult(result: Anthropic.ToolResultBlockParam) {
-	const blocks = typeof result.content === 'string' ? [result.content] : (result.content ?? []);
+function toCallToolResult(result: ToolResultBlock) {
+	const blocks = typeof result.content === 'string' ? [result.content] : result.content;
 	const content = blocks.map((b) => {
 		if (typeof b === 'string') return { type: 'text' as const, text: b };
-		if (b.type === 'image' && b.source.type === 'base64') {
-			return { type: 'image' as const, data: b.source.data, mimeType: b.source.media_type };
+		if (b.type === 'image' && b.source.type === 'inline') {
+			return { type: 'image' as const, data: b.source.data, mimeType: b.source.mime };
 		}
-		return { type: 'text' as const, text: b.type === 'text' ? b.text : `[${b.type}]` };
+		return { type: 'text' as const, text: b.type === 'text' ? b.text : `[${placeholder(b)}]` };
 	});
-	return { content, ...(result.is_error ? { isError: true } : {}) };
+	return { content, ...(result.isError ? { isError: true } : {}) };
 }
 
 /** An error Claude Code reported instead of a reply. */
@@ -381,9 +391,9 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 					a.ours.get(c.id) ??
 					a.theirs.get(c.id) ?? {
 						type: 'tool_result',
-						tool_use_id: c.id,
+						callId: c.id,
 						content: 'No result came back from this command. It may or may not have run.',
-						is_error: true
+						isError: true
 					}
 			)
 		);
@@ -451,7 +461,7 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 		try {
 			const result = await run;
 			a?.ours.set(id, result);
-			return result;
+			return (await turn.resolve([result]))[0] as ToolResultBlock;
 		} finally {
 			inFlight.delete(run);
 			a?.running.delete(id);
@@ -477,8 +487,9 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 
 	let q: Query;
 	try {
+		const input = toAnthropicBlocks(await turn.resolve(turn.input), 'claude-plan');
 		q = sdk.query({
-			prompt: oneMessage(turn.input),
+			prompt: oneMessage(input),
 			options: {
 				...baseOptions(turn.cwd),
 				...modelOptions(turn.model, turn.effort),
@@ -562,7 +573,8 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 				for (const block of content) {
 					if (block.type !== 'tool_result' || !answering) continue;
 					if (answering.calls.some((c) => c.id === block.tool_use_id)) {
-						answering.theirs.set(block.tool_use_id, block);
+						const result = fromAnthropic(block, null) as ToolResultBlock;
+						answering.theirs.set(block.tool_use_id, result);
 					}
 				}
 				settle();
@@ -701,15 +713,12 @@ function accountProblem(account: AccountInfo): string | null {
 	return `Claude Code isn't signed in to a Claude plan. ${HOW_TO_SIGN_IN}`;
 }
 
-/**
- * Starts Claude Code without sending anything and asks who it's signed in as. Nothing is billed.
- */
-export async function claudePlanStatus(): Promise<ClaudePlanStatus> {
-	const { path, installed } = findClaudeCode();
+/** Starts Claude Code without sending anything, asks it one thing, and closes it. Nothing is billed. */
+async function ask<T>(question: (q: Query) => Promise<T>): Promise<T> {
 	const { sdk } = await load();
 	let release!: () => void;
 	const released = new Promise<void>((resolve) => (release = resolve));
-	/** Keeps Claude Code's input open, without a message, until the check is done. */
+	/** Keeps Claude Code's input open, without a message, until it has answered. */
 	async function* nothing(): AsyncIterable<SDKUserMessage> {
 		await released;
 		yield* [];
@@ -724,15 +733,56 @@ export async function claudePlanStatus(): Promise<ClaudePlanStatus> {
 		const timeout = new Promise<never>((_, reject) => {
 			timer = setTimeout(() => reject(new Error('no answer')), STATUS_TIMEOUT_MS);
 		});
-		const account = await Promise.race([q.accountInfo(), timeout]);
-		return { path, installed, account, problem: accountProblem(account) };
+		return await Promise.race([question(q), timeout]);
 	} catch (err) {
-		return { path, installed, account: null, problem: startError(err).message };
+		throw startError(err);
 	} finally {
 		clearTimeout(timer);
 		release();
 		q?.close();
 	}
+}
+
+/** Asks Claude Code who it's signed in as. */
+export async function claudePlanStatus(): Promise<ClaudePlanStatus> {
+	const { path, installed } = findClaudeCode();
+	try {
+		const account = await ask((q) => q.accountInfo());
+		return { path, installed, account, problem: accountProblem(account) };
+	} catch (err) {
+		return { path, installed, account: null, problem: startError(err).message };
+	}
+}
+
+/**
+ * Claude Code doesn't say how large a model's window is, except in the ids of the 1M-context
+ * ones, like `claude-opus-5-5[1m]`.
+ */
+export function knownContextWindow(model: string): number | null {
+	return /\[1m\]$/i.test(model) ? 1_000_000 : null;
+}
+
+/**
+ * The models Claude Code offers on the plan it's signed in to, in its order, by their full ids:
+ * an alias like `opus` would move a chat to a newer model when Claude Code updates. Its
+ * "Default" is left out, since it's one of the others.
+ */
+export async function listModels(): Promise<ModelChoice[]> {
+	const models = await ask((q) => q.supportedModels());
+	const seen = new Set<string>();
+	return models.flatMap((m) => {
+		const id = m.resolvedModel ?? m.value;
+		if (m.value === 'default' || seen.has(id)) return [];
+		seen.add(id);
+		return [
+			{
+				id,
+				name: m.displayName,
+				description: m.description || null,
+				contextWindow: knownContextWindow(id)
+			}
+		];
+	});
 }
 
 /**

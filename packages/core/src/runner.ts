@@ -1,13 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { mkdirSync, rmSync } from 'node:fs';
-import type Anthropic from '@anthropic-ai/sdk';
 import { runTurn as runPlanTurn, sessionProblem } from './claude-plan.ts';
 import {
 	describeApiError,
 	isAbortError,
+	readableMessages,
 	runsOnClaudeCode,
 	streamTurn,
+	type Effort,
 	type ModelReply,
 	type StreamEvent,
 	type ToolCall
@@ -33,12 +34,15 @@ import {
 	queuedRows,
 	rebuildSystemPrompt,
 	replaceTitle,
+	readRow,
 	requestMessages,
+	rowCalls,
+	setEffort,
 	setHidden,
+	setPreset,
 	setProviderSession,
 	setTitle,
 	toDisplay,
-	toMessageParam,
 	toolsFor,
 	touchConversation,
 	type Conversation,
@@ -48,13 +52,14 @@ import {
 import { getDb } from './db/index.ts';
 import { profile } from './db/schema.ts';
 import { eq } from 'drizzle-orm';
-import { toolCalls } from './content-blocks.ts';
+import type { Block, ImageBlock, TextBlock, ToolResultBlock } from './format.ts';
 import { findUploads, prepareMessage, viewedImageBlocks } from './attachments.ts';
 import { folderContextFor } from './folders.ts';
 import { readSoul } from './soul.ts';
 import { createViewDir, imageUse, readViewedImages, type ImageUse } from './images.ts';
 import { copyReplyMedia, listMedia, mediaByMessage, type PreparedMedia } from './media.ts';
 import { profileDir } from './paths.ts';
+import { resolveFiles } from './provider-files.ts';
 import { getProfile, noticeProfileChanges } from './profiles.ts';
 import {
 	RUN_COMMAND_TOOL,
@@ -83,7 +88,23 @@ export type LiveEvent =
 	| { type: 'live_clear' }
 	| { type: 'tool_output'; id: string; chunk: string }
 	| { type: 'title'; title: string }
+	| { type: 'model'; model: ChatModel }
 	| { type: 'background'; background: BackgroundItem[] };
+
+/** The model and reasoning level a conversation's next model call uses. */
+export interface ChatModel {
+	/** Null once the preset was removed; the conversation keeps its model. */
+	presetId: string | null;
+	presetName: string;
+	provider: Conversation['provider'];
+	effort: Effort;
+	contextWindow: number | null;
+}
+
+function chatModel(conv: Conversation): ChatModel {
+	const { presetId, presetName, provider, effort, contextWindow } = conv;
+	return { presetId, presetName, provider, effort, contextWindow };
+}
 
 /** Work of the conversation's agent that goes on while it does other things, or nothing. */
 export type BackgroundItem =
@@ -108,6 +129,8 @@ export type BackgroundItem =
 
 export interface Snapshot {
 	title: string;
+	/** Null once the conversation was deleted. */
+	model: ChatModel | null;
 	running: boolean;
 	error: string | null;
 	messages: DisplayMessage[];
@@ -220,8 +243,10 @@ export function subscribe(
 export function getSnapshot(conversationId: string): Snapshot {
 	const st = stateFor(conversationId);
 	const media = mediaByMessage(conversationId);
+	const conv = getConversation(conversationId);
 	return {
-		title: getConversation(conversationId)?.title ?? '',
+		title: conv?.title ?? '',
+		model: conv ? chatModel(conv) : null,
 		running: st.running,
 		error: st.error,
 		messages: committedRows(conversationId).map((row) => toDisplay(row, media.get(row.id))),
@@ -376,6 +401,7 @@ async function queueMessage(
 		senderId: sender.id,
 		senderName: sender.name,
 		text: trimmed,
+		provider: conv.provider,
 		attachments
 	});
 	// The first message stands in as the title until the model has named the chat. A message
@@ -401,6 +427,26 @@ function nameConversation(conv: Conversation, text: string, placeholder: string)
 		.catch((err) => {
 			console.error(`[btw] ${conv.id.slice(0, 8)} could not name the chat:`, describeApiError(err));
 		});
+}
+
+/**
+ * Switches the chat to another model preset (setPreset), for everyone who has it open. Throws
+ * ModelSwitchError when it can't.
+ */
+export function changeModel(conversationId: string, presetId: string): ChatModel {
+	const model = chatModel(setPreset(conversationId, presetId));
+	emit(conversationId, { type: 'model', model });
+	return model;
+}
+
+/** Changes the chat's reasoning level, for everyone who has it open. Null if it's gone. */
+export function changeEffort(conversationId: string, effort: Effort): ChatModel | null {
+	setEffort(conversationId, effort);
+	const conv = getConversation(conversationId);
+	if (!conv) return null;
+	const model = chatModel(conv);
+	emit(conversationId, { type: 'model', model });
+	return model;
 }
 
 /**
@@ -456,10 +502,10 @@ function toolResult(
 	text: string,
 	isError: boolean,
 	/** Images from `btw view`, with their labels. They follow the command's output. */
-	attachments: (Anthropic.TextBlockParam | Anthropic.ImageBlockParam)[] = []
-): Anthropic.ToolResultBlockParam {
+	attachments: (TextBlock | ImageBlock)[] = []
+): ToolResultBlock {
 	const content = attachments.length ? [{ type: 'text' as const, text }, ...attachments] : text;
-	return { type: 'tool_result', tool_use_id: id, content, ...(isError ? { is_error: true } : {}) };
+	return { type: 'tool_result', callId: id, content, isError };
 }
 
 async function runToolCall(
@@ -470,7 +516,7 @@ async function runToolCall(
 	st: State,
 	/** Images already in the conversation; grows by what this call attaches. */
 	images: ImageUse
-): Promise<Anthropic.ToolResultBlockParam> {
+): Promise<ToolResultBlock> {
 	if (stopReason !== 'tool_use') {
 		return toolResult(
 			call.id,
@@ -583,7 +629,7 @@ function queueBackgroundResult(
  */
 export function withCurrentContext(conv: Conversation, rows: MessageRow[]): Conversation {
 	const lastReply = rows.findLast((row) => row.role === 'assistant');
-	if (lastReply && toolCalls(JSON.parse(lastReply.content)).length) return conv;
+	if (lastReply && rowCalls(lastReply).length) return conv;
 	const owner = getProfile(conv.profileId);
 	if (!owner) return conv;
 	const context = folderContextFor(owner, conv.folderId);
@@ -624,6 +670,8 @@ async function saveReply(
 		role: 'assistant',
 		kind: 'assistant',
 		content: JSON.stringify(reply.content),
+		provider: conv.provider,
+		model: conv.model,
 		stopReason: reply.stopReason,
 		usage,
 		media
@@ -641,15 +689,19 @@ async function saveReply(
 	touchConversation(conversationId);
 }
 
-/** One row with the result of every call of the reply before it, in order. */
-function saveResults(conversationId: string, results: Anthropic.ToolResultBlockParam[]): void {
+/**
+ * One row with the result of every call of the reply before it, in order. Their `btw view`
+ * pictures were prepared for the conversation's provider.
+ */
+function saveResults(conv: Conversation, results: ToolResultBlock[]): void {
 	const resultsRow = appendRow({
-		conversationId,
+		conversationId: conv.id,
 		role: 'user',
 		kind: 'tool_results',
-		content: JSON.stringify(results)
+		blocks: results,
+		provider: conv.provider
 	});
-	emit(conversationId, { type: 'message', message: toDisplay(resultsRow) });
+	emit(conv.id, { type: 'message', message: toDisplay(resultsRow) });
 }
 
 /** Rows a chat on the Claude plan sends as the model's input: messages, not command results. */
@@ -658,29 +710,47 @@ function isPlanInput(row: MessageRow): boolean {
 }
 
 /**
+ * Whether another model answered in the chat since its Claude Code session was last sent
+ * anything: the chat switched away from the Claude plan and back. That session never saw those
+ * replies, so the chat starts a new one.
+ */
+function missedReplies(session: { sentSeq: number }, rows: MessageRow[]): boolean {
+	return rows.some(
+		(row) =>
+			(row.seq ?? 0) > session.sentSeq &&
+			row.role === 'assistant' &&
+			row.provider !== null &&
+			row.provider !== 'claude-plan'
+	);
+}
+
+/**
  * What a chat on the Claude plan sends Claude Code next, and the session it goes to. Its session
  * keeps the conversation, so only rows it hasn't been sent go. A chat Claude Code hasn't seen yet
- * may already have replies (a notification opened as a chat): those go along as a transcript.
+ * may already have replies (a notification opened as a chat, or replies from another model the
+ * chat used before): those go along as a transcript, in a new session.
  */
 function planInput(conv: Conversation, rows: MessageRow[], newSessionId = conv.id) {
 	const sentSeq = rows.at(-1)?.seq ?? 0;
-	const content = (row: MessageRow) => JSON.parse(row.content) as Anthropic.ContentBlockParam[];
-	const session = conv.providerSession;
-	let input: Anthropic.ContentBlockParam[];
+	const content = (row: MessageRow) => readRow(row).blocks;
+	const kept = conv.providerSession;
+	const session = kept && !missedReplies(kept, rows) ? kept : null;
+	// The chat's first session has its id.
+	if (kept && !session && newSessionId === conv.id) newSessionId = randomUUID();
+	let input: Block[];
 	if (session) {
 		input = rows
 			.filter((row) => (row.seq ?? 0) > session.sentSeq && isPlanInput(row))
 			.flatMap(content);
 	} else {
-		const lastReply = rows.findLastIndex((row) => row.role === 'assistant');
+		// Up to the last reply, or the results of its commands when another model's turn was still
+		// going when the chat switched to the plan.
+		const seen = rows.findLastIndex((row) => !isPlanInput(row)) + 1;
 		const earlier = rows
-			.slice(0, lastReply + 1)
+			.slice(0, seen)
 			.map((row) => (row.role === 'assistant' ? `You: ${plainText(row)}` : plainText(row)))
 			.filter((text) => text && text !== 'You: ');
-		input = rows
-			.slice(lastReply + 1)
-			.filter(isPlanInput)
-			.flatMap(content);
+		input = rows.slice(seen).flatMap(content);
 		if (earlier.length) {
 			input.unshift({
 				type: 'text',
@@ -717,7 +787,8 @@ async function planTurn(
 	}
 	const cwd = profileDir(slug);
 	mkdirSync(cwd, { recursive: true });
-	const images = imageUse(rows.map(toMessageParam));
+	// Claude Code gets pictures and PDFs inline, so their bytes count too.
+	const images = imageUse(rows.map(readRow), true);
 	let next = planInput(conv, rows);
 	for (let retried = false; ; retried = true) {
 		const { sessionId, resume, sentSeq, input } = next;
@@ -731,6 +802,8 @@ async function planTurn(
 				system: conv.systemPrompt,
 				tools: toolsFor(conv),
 				input,
+				resolve: async (blocks) =>
+					(await resolveFiles([{ role: 'user', blocks }], conv.provider))[0].blocks,
 				signal: abort.signal,
 				onStarted: () => setProviderSession(conversationId, { id: sessionId, sentSeq }),
 				onEvent: (event) => onStreamEvent(conversationId, event),
@@ -744,7 +817,7 @@ async function planTurn(
 						const reason = err instanceof Error ? err.message : String(err);
 						return toolResult(call.id, `Not finished: ${reason}`, true);
 					}),
-				onResults: (results) => saveResults(conversationId, results)
+				onResults: (results) => saveResults(conv, results)
 			});
 			return true;
 		} catch (err) {
@@ -809,7 +882,12 @@ async function loop(conversationId: string): Promise<void> {
 					tools: toolsFor(conv),
 					cacheTtl: conv.cacheTtl,
 					cacheKey: conv.id,
-					messages,
+					// Pictures and PDFs kept by reference, as this provider gets them, where the model
+					// takes them.
+					messages: await resolveFiles(
+						await readableMessages(conv.provider, conv.model, messages),
+						conv.provider
+					),
 					signal: abort.signal,
 					onEvent: (event) => onStreamEvent(conversationId, event)
 				});
@@ -832,8 +910,8 @@ async function loop(conversationId: string): Promise<void> {
 			if (calls.length === 0) continue;
 
 			// Queued messages may carry pictures too; they join the history at the next step.
-			const images = imageUse([...messages, ...queuedRows(conversationId).map(toMessageParam)]);
-			const results: Anthropic.ToolResultBlockParam[] = [];
+			const images = imageUse([...messages, ...queuedRows(conversationId).map(readRow)]);
+			const results: ToolResultBlock[] = [];
 			for (const call of calls) {
 				// A call that throws still gets its result, or the reply would wait for one forever.
 				const result = await runToolCall(
@@ -851,7 +929,7 @@ async function loop(conversationId: string): Promise<void> {
 				});
 				results.push(result);
 			}
-			saveResults(conversationId, results);
+			saveResults(conv, results);
 			if (abort.signal.aborted) {
 				commitQueued(conversationId);
 				return;
@@ -895,16 +973,14 @@ export function recoverAfterRestart(): void {
 		if (isRunning(id)) continue;
 		const last = lastCommittedRow(id);
 		if (last?.kind === 'assistant') {
-			const calls = toolCalls(JSON.parse(last.content));
+			const calls = rowCalls(last);
 			if (calls.length) {
 				appendRow({
 					conversationId: id,
 					role: 'user',
 					kind: 'tool_results',
-					content: JSON.stringify(
-						calls.map((c) =>
-							toolResult(c.id, 'Not finished: the gateway restarted while this was running.', true)
-						)
+					blocks: calls.map((c) =>
+						toolResult(c.id, 'Not finished: the gateway restarted while this was running.', true)
 					)
 				});
 			}

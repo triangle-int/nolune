@@ -183,7 +183,7 @@ function startAgentRun(run: TriggerRun): void {
 		kind: 'trigger',
 		senderName: run.title,
 		text: [run.prompt, run.payload].filter(Boolean).join('\n\n'),
-		content: JSON.stringify([{ type: 'text', text: runMessage(run) }])
+		blocks: [{ type: 'text', text: runMessage(run) }]
 	});
 	updateRun(run.id, { status: 'running', conversationId: conv.id });
 	console.log(`[btw] background run "${run.title}" started in ${conv.id.slice(0, 8)}`);

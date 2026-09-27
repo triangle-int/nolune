@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import { createRequire } from 'node:module';
@@ -11,13 +12,16 @@ import { checkClaudePlan, claudePlanStatus } from './claude-plan.ts';
 import { initConfig, updateConfig } from './config.ts';
 import {
 	appendRow,
+	commitQueuedRows,
 	committedRows,
 	createConversation,
 	getConversation,
 	insertQueued,
+	setPreset,
 	setProviderSession
 } from './conversations.ts';
 import { viewImage } from './images.ts';
+import { listModels } from './models.ts';
 import { addPreset } from './presets.ts';
 import { RUN_COMMAND_TOOL, runCommand } from './run-command.ts';
 import { getSnapshot, kick, onLoopEnd, sendMessage, stop } from './runner.ts';
@@ -261,6 +265,12 @@ function planChat() {
 	return { user, chat };
 }
 
+/** A picture or PDF kept in btw's media store, as a message refers to it. */
+function kept(data: Buffer, mime: string) {
+	const sha256 = createHash('sha256').update(data).digest('hex');
+	return { type: 'media', sha256, mime, bytes: data.length };
+}
+
 function rowsOf(conversationId: string) {
 	return committedRows(conversationId).map((row) => ({
 		kind: row.kind,
@@ -297,7 +307,14 @@ describe.skipIf(!claude)('chats on the Claude plan', { timeout: 60_000 }, () => 
 			},
 			{
 				kind: 'tool_results',
-				content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'a.txt\n[exit code 0]' }]
+				content: [
+					{
+						type: 'tool_result',
+						callId: 'toolu_1',
+						content: 'a.txt\n[exit code 0]',
+						isError: false
+					}
+				]
 			},
 			{ kind: 'assistant', content: [{ type: 'text', text: 'One file: a.txt.' }] }
 		]);
@@ -382,6 +399,48 @@ describe.skipIf(!claude)('chats on the Claude plan', { timeout: 60_000 }, () => 
 		expect(userTexts(chatCalls()[0])).toContain('Anna: Hello?');
 		const session = getConversation(chat.id)?.providerSession;
 		expect(session?.id).not.toBe(chat.id);
+	});
+
+	it('starts a new session, with the chat so far, when another model answered in between', async () => {
+		const { user, chat } = planChat();
+		scripted(
+			{ stop: 'end_turn', content: [{ type: 'text', text: 'Hi Anna.' }] },
+			{ stop: 'end_turn', content: [{ type: 'text', text: 'Ten past four.' }] }
+		);
+		let ended = loopEnd(chat.id);
+		insertQueued({ conversationId: chat.id, senderId: user.id, senderName: 'Anna', text: 'Hello' });
+		kick(chat.id);
+		await ended;
+		const plan = chat.presetId!;
+
+		// Sonnet, on the API, answered a question while the chat was switched to it.
+		setPreset(chat.id, makePreset().id);
+		insertQueued({ conversationId: chat.id, senderId: user.id, senderName: 'Anna', text: 'Time?' });
+		commitQueuedRows(chat.id);
+		appendRow({
+			conversationId: chat.id,
+			role: 'assistant',
+			kind: 'assistant',
+			content: JSON.stringify([{ type: 'text', text: 'Four.' }]),
+			provider: 'anthropic',
+			model: 'claude-sonnet-5'
+		});
+		setPreset(chat.id, plan);
+
+		ended = loopEnd(chat.id);
+		insertQueued({ conversationId: chat.id, senderId: user.id, senderName: 'Anna', text: 'Now?' });
+		kick(chat.id);
+		await ended;
+
+		expect(getSnapshot(chat.id).error).toBeNull();
+		const [, second] = chatCalls();
+		expect(userTexts(second)).toEqual([
+			'[This chat started before you could see it. What was said so far, oldest first:]\n\nAnna: Hello\n\nYou: Hi Anna.\n\nAnna: Time?\n\nYou: Four.',
+			'Anna: Now?'
+		]);
+		const session = getConversation(chat.id)?.providerSession;
+		expect(session?.id).not.toBe(chat.id);
+		expect(session?.sentSeq).toBe(5);
 	});
 
 	it("gives Claude Code what the chat said before it first saw it, as a notification's chat has", async () => {
@@ -469,12 +528,13 @@ describe.skipIf(!claude)('chats on the Claude plan', { timeout: 60_000 }, () => 
 			type: 'image',
 			source: { type: 'base64', media_type: 'image/png', data: dot }
 		});
+		// Kept by reference: another provider gets its own copy if the chat switches.
 		expect(rowsOf(chat.id)[2].content).toEqual([
 			expect.objectContaining({
 				content: [
 					{ type: 'text', text: 'Viewing dot.png\n[exit code 0]' },
 					{ type: 'text', text: expect.stringContaining('Image: ') },
-					{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: dot } }
+					{ type: 'image', source: kept(Buffer.from(dot, 'base64'), 'image/png') }
 				]
 			})
 		]);
@@ -512,9 +572,9 @@ describe.skipIf(!claude)('chats on the Claude plan', { timeout: 60_000 }, () => 
 				content: [
 					{
 						type: 'tool_result',
-						tool_use_id: 'toolu_1',
+						callId: 'toolu_1',
 						content: 'Stopped by Anna.',
-						is_error: true
+						isError: true
 					}
 				]
 			}
@@ -548,6 +608,24 @@ describe.skipIf(!claude)('chats on the Claude plan', { timeout: 60_000 }, () => 
 			provider: 'claude-plan',
 			modelContextWindow: null
 		});
+		// The one window Claude Code's ids tell.
+		expect(
+			await addPreset({ provider: 'claude-plan', model: 'claude-opus-5-5[1m]' })
+		).toMatchObject({ modelContextWindow: 1_000_000 });
+		expect(seen).toEqual([]);
+	});
+
+	it('lists the models Claude Code offers, by their full ids', async () => {
+		const models = await listModels('claude-plan');
+		expect(models.length).toBeGreaterThan(0);
+		const ids = models.map((m) => m.id);
+		expect(new Set(ids).size).toBe(ids.length);
+		for (const m of models) {
+			// No "default", and no alias that would change model when Claude Code updates.
+			expect(m.id).toMatch(/^claude-/);
+			expect(m.name).toBeTruthy();
+			expect(m.contextWindow).toBe(m.id.endsWith('[1m]') ? 1_000_000 : null);
+		}
 		expect(seen).toEqual([]);
 	});
 });
@@ -590,13 +668,9 @@ describe('attachments in chats on the Claude plan', () => {
 
 		expect(prepared.content).toEqual([
 			{ type: 'text', text: expect.stringContaining('Anna attached dot.png') },
-			{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: dot } },
+			{ type: 'image', source: kept(Buffer.from(dot, 'base64'), 'image/png') },
 			{ type: 'text', text: expect.stringContaining('Anna attached form.pdf') },
-			{
-				type: 'document',
-				source: { type: 'base64', media_type: 'application/pdf', data: form.toString('base64') },
-				title: 'form.pdf'
-			},
+			{ type: 'pdf', source: kept(form, 'application/pdf'), name: 'form.pdf' },
 			{
 				type: 'text',
 				text: expect.stringContaining("couldn't tell how many pages it has")

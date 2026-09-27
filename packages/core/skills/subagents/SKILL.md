@@ -80,9 +80,9 @@ A background command is killed after an hour unless you pass `timeout_seconds` (
 
 A subagent that finished keeps its conversation. `btw agent run <id> --prompt "..."` gives it more
 work that builds on what it did (then `watch` it again); a new id starts from nothing. It keeps
-its model for good, so leave out `--preset` then (a different one is refused: start a new
-subagent for another model). `--effort` can change, but then its next step rereads its whole
-conversation without the cache once.
+its model and reasoning level unless you give `--preset` or `--effort` again. Either may change,
+but then its next step rereads its whole conversation without the cache once, so change them
+only when the new work needs it.
 
 ## Limits
 

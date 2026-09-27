@@ -1,7 +1,19 @@
 import { createHash } from 'node:crypto';
 import type Anthropic from '@anthropic-ai/sdk';
 import { apiKeyHelp, configuredApiKey } from './config.ts';
-import type { CacheTtl, Effort, StreamEvent } from './models.ts';
+import {
+	heldElsewhere,
+	heldElsewhereNote,
+	portableReply,
+	storedAs,
+	unresolved,
+	type Block,
+	type ImageBlock,
+	type Message,
+	type PdfBlock,
+	type ResultBlock
+} from './format.ts';
+import type { CacheTtl, Effort, ModelChoice, Provider, StreamEvent } from './models.ts';
 
 /*
  * Chats on Claude, through Anthropic's Messages API and its SDK, and the Files API for pictures
@@ -49,6 +61,125 @@ export async function getClient(): Promise<Anthropic> {
 	return cached.client;
 }
 
+// --- btw's format as Claude takes it ---
+
+/**
+ * A conversation's messages as the Messages API takes them. Replies Claude wrote go back as they
+ * came, thinking included: the API itself leaves out thinking from another Claude model that
+ * this one can't read. Thinking made under an earlier system prompt is left out, since Claude
+ * refuses it under another one. Replies from OpenAI, and from a Claude plan (whose thinking
+ * belongs to another account), go as their text and calls.
+ */
+export function toAnthropicMessages(messages: Message[]): Anthropic.MessageParam[] {
+	return messages.flatMap((m): Anthropic.MessageParam[] => {
+		if (m.role === 'user') return [{ role: 'user', content: toAnthropicBlocks(m.blocks) }];
+		if (m.native && (m.native.provider === 'anthropic' || m.native.provider === null)) {
+			const content = m.native.content as Anthropic.ContentBlockParam[];
+			if (!m.beforePromptChange) return [{ role: 'assistant', content }];
+			const kept = content.filter((b) => b.type !== 'thinking' && b.type !== 'redacted_thinking');
+			// A reply that was only thinking (cut off, say) has nothing left to send.
+			return kept.length ? [{ role: 'assistant', content: kept }] : [];
+		}
+		const content = portableReply(m.blocks).map((b): Anthropic.ContentBlockParam =>
+			b.type === 'text'
+				? { type: 'text', text: b.text }
+				: { type: 'tool_use', id: b.id, name: b.name, input: b.input }
+		);
+		return content.length ? [{ role: 'assistant', content }] : [];
+	});
+}
+
+/**
+ * The blocks of a person's or command's message in Anthropic's shape, for Claude or for Claude
+ * Code on a Claude plan (`provider`). Blocks of rows from before btw's own format go as they were
+ * stored. A picture or PDF another provider holds becomes a note.
+ */
+export function toAnthropicBlocks(
+	blocks: Block[],
+	provider: Provider = 'anthropic'
+): Anthropic.ContentBlockParam[] {
+	return blocks.flatMap((b) => {
+		const block = toAnthropicBlock(b, provider);
+		return block ? [block] : [];
+	});
+}
+
+function toAnthropicBlock(block: Block, provider: Provider): Anthropic.ContentBlockParam | null {
+	const was = storedAs(block) as Anthropic.ContentBlockParam | undefined;
+	switch (block.type) {
+		case 'text':
+			return was ?? { type: 'text', text: block.text };
+		case 'image':
+		case 'pdf':
+			if (heldElsewhere(block, provider)) return heldElsewhereNote(block);
+			return was ?? fileBlock(block);
+		case 'tool_result': {
+			if (typeof block.content === 'string') {
+				return (
+					was ?? {
+						type: 'tool_result',
+						tool_use_id: block.callId,
+						content: block.content,
+						...(block.isError ? { is_error: true } : {})
+					}
+				);
+			}
+			let changed = !was;
+			const content = block.content.flatMap((b) => {
+				const part = resultPart(b, provider);
+				if (part !== storedAs(b)) changed = true;
+				return part ? [part] : [];
+			});
+			if (!changed) return was!;
+			// A result from before btw's format keeps everything else it had.
+			if (was) return { ...(was as Anthropic.ToolResultBlockParam), content };
+			return {
+				type: 'tool_result',
+				tool_use_id: block.callId,
+				content,
+				...(block.isError ? { is_error: true } : {})
+			};
+		}
+		case 'other':
+			return (was ?? block.anthropic) as Anthropic.ContentBlockParam;
+		default:
+			// Reasoning and calls are a reply's, never in a message.
+			return null;
+	}
+}
+
+type ResultPart = Extract<Anthropic.ToolResultBlockParam['content'], unknown[]>[number];
+
+function resultPart(block: ResultBlock, provider: Provider): ResultPart | null {
+	return toAnthropicBlock(block, provider) as ResultPart | null;
+}
+
+function fileBlock(block: ImageBlock | PdfBlock): Anthropic.ContentBlockParam {
+	const { source } = block;
+	if (source.type === 'media') unresolved(block);
+	if (block.type === 'image') {
+		return {
+			type: 'image',
+			source:
+				source.type === 'uploaded'
+					? { type: 'file', file_id: source.fileId }
+					: {
+							type: 'base64',
+							media_type: source.mime as Anthropic.Base64ImageSource['media_type'],
+							data: source.data
+						}
+		};
+	}
+	return {
+		type: 'document',
+		source:
+			source.type === 'uploaded'
+				? { type: 'file', file_id: source.fileId }
+				: { type: 'base64', media_type: 'application/pdf', data: source.data },
+		...(block.name ? { title: block.name } : {})
+	};
+}
+
 /** Haiku 4.5 predates adaptive thinking and effort. */
 export function supportsAdaptiveThinking(model: string): boolean {
 	return !model.startsWith('claude-haiku-');
@@ -65,7 +196,7 @@ export async function streamTurn(opts: {
 	system: string;
 	tools: Anthropic.Tool[];
 	cacheTtl: CacheTtl;
-	messages: Anthropic.MessageParam[];
+	messages: Message[];
 	signal: AbortSignal;
 	onEvent: (event: StreamEvent) => void;
 }): Promise<Anthropic.Message> {
@@ -88,7 +219,7 @@ export async function streamTurn(opts: {
 						output_config: { effort: opts.effort }
 					}
 				: {}),
-			messages: opts.messages
+			messages: toAnthropicMessages(opts.messages)
 		},
 		{ signal: opts.signal }
 	);
@@ -200,6 +331,21 @@ export async function fetchContextWindow(model: string): Promise<number | null> 
 	const client = await getClient();
 	const info = await client.models.retrieve(model);
 	return info.max_input_tokens ?? null;
+}
+
+/** Every model the key can use, the newest first, as Anthropic lists them. */
+export async function listModels(): Promise<ModelChoice[]> {
+	const client = await getClient();
+	const models: ModelChoice[] = [];
+	for await (const info of client.models.list({ limit: 100 })) {
+		models.push({
+			id: info.id,
+			name: info.display_name,
+			description: null,
+			contextWindow: info.max_input_tokens ?? null
+		});
+	}
+	return models;
 }
 
 export function describeApiError(err: unknown): string {

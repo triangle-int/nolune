@@ -54,6 +54,8 @@ export interface Reply {
 	messageIds: number[];
 	usage: Usage | null;
 	stopReasons: string[];
+	/** The models that wrote it, in order: a chat can switch models, even in the middle of a turn. */
+	models: string[];
 	/** Still being written (the agent is running and this is the newest reply). */
 	live: boolean;
 }
@@ -117,6 +119,7 @@ export function buildTranscript(
 				messageIds: [],
 				usage: null,
 				stopReasons: [],
+				models: [],
 				live: false
 			};
 			entries.push(reply);
@@ -155,6 +158,7 @@ export function buildTranscript(
 			r.messageIds.push(message.id);
 			r.usage = addUsage(r.usage, message.usage);
 			if (message.stopReason) r.stopReasons.push(message.stopReason);
+			if (message.model && r.models.at(-1) !== message.model) r.models.push(message.model);
 			for (const block of message.blocks) {
 				if (block.type === 'text') addText(r, block.text, { media: message.media });
 				else if (block.type === 'thinking') addStep(r, block, message.createdAt);

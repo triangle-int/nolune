@@ -1,16 +1,17 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import * as anthropic from './anthropic.ts';
 import * as claudePlan from './claude-plan.ts';
-import { replyBlocks, toolCalls, type ReplyBlock } from './content-blocks.ts';
 import type { Usage } from './conversations.ts';
+import { replyBlocks, toolCalls, type Message, type ToolCallBlock } from './format.ts';
 import * as openai from './openai-chat.ts';
 import * as openrouter from './openrouter.ts';
 
 /*
  * A model call as the rest of btw sees it, whichever provider runs it. Each provider's module
  * speaks its own API; this one picks the module for a conversation's provider and turns what it
- * returns into the same shape. The reply's `content` is still the provider's own, and is stored
- * and sent back exactly as it came (see content-blocks.ts).
+ * returns into the same shape. Requests are built from btw's own format (format.ts) by each
+ * provider's module. The reply's `content` is still the provider's own, and is stored and sent
+ * back exactly as it came.
  *
  * `claude-plan` is the exception: Claude Code runs its agent loop (claude-plan.ts), so the runner
  * hands it whole turns rather than calling streamTurn.
@@ -55,7 +56,7 @@ export type StreamEvent =
 	  }
 	| { type: 'delta'; index: number; text: string };
 
-export type ToolCall = Extract<ReplyBlock, { type: 'tool_call' }>;
+export type ToolCall = ToolCallBlock;
 
 export interface ModelReply {
 	/** What the provider returned, to store and send back unchanged. */
@@ -90,8 +91,8 @@ export async function streamTurn(opts: {
 	tools: Anthropic.Tool[];
 	cacheTtl: CacheTtl;
 	cacheKey: string;
-	/** btw's own blocks, and each reply as its provider returned it (content-blocks.ts). */
-	messages: Anthropic.MessageParam[];
+	/** The conversation in btw's format; each provider's module turns it into its request. */
+	messages: Message[];
 	signal: AbortSignal;
 	onEvent: (event: StreamEvent) => void;
 }): Promise<ModelReply> {
@@ -194,10 +195,24 @@ export async function modelInputs(
 }
 
 /**
+ * The messages as `model` can take them, before resolveFiles gives the provider its copies:
+ * pictures and PDFs a model on OpenRouter can't read become notes. A chat that switched to that
+ * model may hold them. Other providers' models take them all.
+ */
+export function readableMessages(
+	provider: Provider,
+	model: string,
+	messages: Message[]
+): Promise<Message[]> {
+	if (provider === 'openrouter') return openrouter.readableMessages(messages, model);
+	return Promise.resolve(messages);
+}
+
+/**
  * Throws if the provider doesn't know the model. Null when its window isn't known. For the
- * Claude plan, it checks that Claude Code is here and signed in to one: it has no models API, and
- * whether it takes the model shows at the chat's first reply. On OpenRouter, the model must also
- * be able to call tools.
+ * Claude plan, it checks that Claude Code is here and signed in to one: it can't check a model
+ * id, so whether it takes the model shows at the chat's first reply. On OpenRouter, the model must
+ * also be able to call tools.
  */
 export async function fetchContextWindow(
 	provider: Provider,
@@ -205,12 +220,34 @@ export async function fetchContextWindow(
 ): Promise<number | null> {
 	if (runsOnClaudeCode(provider)) {
 		await claudePlan.checkClaudePlan();
-		return null;
+		return claudePlan.knownContextWindow(model);
 	}
 	if (provider === 'openrouter') return openrouter.fetchContextWindow(model);
 	return provider === 'openai'
 		? openai.fetchContextWindow(model)
 		: anthropic.fetchContextWindow(model);
+}
+
+/** A model a preset can pick, as its provider lists it. */
+export interface ModelChoice {
+	/** What the preset stores. */
+	id: string;
+	/** The provider's name for it, when it gives one. */
+	name: string | null;
+	/** A line about it, when the provider gives one. */
+	description: string | null;
+	/** What a preset gets without an override: the same as fetchContextWindow says. */
+	contextWindow: number | null;
+}
+
+/**
+ * The models the provider offers, for the admin page to pick from: the newest first, or in
+ * Claude Code's own order for the Claude plan. Throws what describeApiError explains.
+ */
+export async function listModels(provider: Provider): Promise<ModelChoice[]> {
+	if (runsOnClaudeCode(provider)) return claudePlan.listModels();
+	if (provider === 'openrouter') return openrouter.listModels();
+	return provider === 'openai' ? openai.listModels() : anthropic.listModels();
 }
 
 export function describeApiError(err: unknown): string {

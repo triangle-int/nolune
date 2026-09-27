@@ -4,7 +4,7 @@
 	import { invalidate } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import type { DisplayAttachment, Usage } from '@btw/core';
+	import type { ChatModel, DisplayAttachment, Usage } from '@btw/core';
 	import type { Avatar } from '@btw/core/avatars';
 	import { cacheHitRate, cacheMissTokens, cacheTtlMs, promptTokens } from '@btw/core/usage';
 	import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
@@ -43,7 +43,7 @@
 	import Markdown from './chat/Markdown.svelte';
 	import MediaViewer, { pictureClicks, type ViewedPicture } from './chat/MediaViewer.svelte';
 	import MessageAttachments from './chat/MessageAttachments.svelte';
-	import ModelMenu from './chat/ModelMenu.svelte';
+	import ModelMenu, { EFFORT_INFO, shortModelName } from './chat/ModelMenu.svelte';
 	import RenameChatDialog from './chat/RenameChatDialog.svelte';
 	import PageHeader from './PageHeader.svelte';
 	import TypedText from './TypedText.svelte';
@@ -53,9 +53,13 @@
 		conversation: {
 			id: string;
 			title: string;
+			presetId: string | null;
 			presetName: string;
-			effort: string;
+			provider: ChatModel['provider'];
+			effort: ChatModel['effort'];
 			contextWindow: number | null;
+			/** Providers holding pictures and PDFs of this chat that another can't open. */
+			heldBy: ChatModel['provider'][];
 			/** A background run nobody has continued yet. */
 			hidden: boolean;
 			cacheTtl: '5m' | '1h';
@@ -63,6 +67,9 @@
 			subagent: { name: string; parentId: string; parentTitle: string } | null;
 		};
 		efforts: string[];
+		/** The models the chat can switch to. */
+		presets: { id: string; name: string; provider: ChatModel['provider'] }[];
+		defaultPresetId: string;
 		me: string;
 		/** The profile's folders, and the one this chat is in. */
 		folders: FolderItem[];
@@ -71,7 +78,8 @@
 		avatar: Avatar;
 	}
 
-	let { conversation, efforts, me, folders, folderId, avatar }: Props = $props();
+	let { conversation, efforts, presets, defaultPresetId, me, folders, folderId, avatar }: Props =
+		$props();
 
 	const prefs = getPreferences();
 	const chat = new ChatState();
@@ -82,7 +90,6 @@
 	let stickToBottom = $state(true);
 	/** Sending a message turns a background run into a normal conversation. */
 	let continued = $state(false);
-	let effort = $state(untrack(() => conversation.effort));
 	let renaming = $state<{ id: string; title: string } | null>(null);
 	let deleteOpen = $state(false);
 	let creatingFolder = $state(false);
@@ -94,6 +101,34 @@
 	let textarea = $state<HTMLTextAreaElement | null>(null);
 
 	$effect(() => chat.connect(conversation.id));
+
+	/** The model and reasoning level: anyone in the profile can change them, which arrives live. */
+	const model: ChatModel = $derived(
+		chat.model ?? {
+			presetId: conversation.presetId,
+			presetName: conversation.presetName,
+			provider: conversation.provider,
+			effort: conversation.effort,
+			contextWindow: conversation.contextWindow
+		}
+	);
+	/** A removed preset isn't in the list, but the chat still runs on its model: it shows as `current`. */
+	const listed = $derived(presets.some((p) => p.id === model.presetId));
+	const menuPresets = $derived(
+		listed
+			? presets
+			: [{ id: 'current', name: model.presetName, provider: model.provider }, ...presets]
+	);
+
+	type ModelChange = { presetId: string } | { effort: ChatModel['effort'] };
+	/** A change waiting for the person to accept that the chat's cache starts over. */
+	let confirming = $state<ModelChange | null>(null);
+	const switchingTo = $derived.by(() => {
+		const change = confirming;
+		return change && 'presetId' in change
+			? presets.find((p) => p.id === change.presetId)
+			: undefined;
+	});
 
 	const title = $derived(
 		chat.title ||
@@ -167,7 +202,7 @@
 			tokens: misses.reduce((n, m) => n + m.tokens, 0),
 			reason: misses.some((m) => m.expired)
 				? `Over ${conversation.cacheTtl === '5m' ? '5 minutes' : 'an hour'} passed since the previous step, so the cached conversation expired and was processed again (slower and costlier).`
-				: 'Context that should have come from the cache was processed again (slower and costlier). Changing the reasoning level, moving the chat to another folder or changing its folder cause this once.'
+				: 'Context that should have come from the cache was processed again (slower and costlier). Switching the model or the reasoning level, moving the chat to another folder or changing its folder cause this once.'
 		};
 	}
 
@@ -319,7 +354,8 @@
 		scroller?.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
 	}
 
-	async function post(path: string, body?: unknown): Promise<boolean> {
+	/** The response if the request went through; otherwise null, with the reason shown. */
+	async function post(path: string, body?: unknown): Promise<Response | null> {
 		actionError = null;
 		const res = await fetch(`/api/c/${conversation.id}/${path}`, {
 			method: 'POST',
@@ -336,7 +372,7 @@
 			}
 			actionError = message || `Request failed (${res.status})`;
 		}
-		return res.ok;
+		return res.ok ? res : null;
 	}
 
 	async function send() {
@@ -364,10 +400,24 @@
 		}
 	}
 
-	async function changeEffort(value: string) {
-		const previous = effort;
-		effort = value;
-		if (!(await post('effort', { effort: value }))) effort = previous;
+	/**
+	 * Another model or reasoning level. Once the chat has a reply, its cache starts over with the
+	 * change, so that is asked first.
+	 */
+	function requestChange(change: ModelChange) {
+		const same =
+			'presetId' in change
+				? change.presetId === model.presetId || change.presetId === 'current'
+				: change.effort === model.effort;
+		if (same) return;
+		if (chat.messages.some((m) => m.kind === 'assistant')) confirming = change;
+		else applyChange(change);
+	}
+
+	async function applyChange(change: ModelChange) {
+		confirming = null;
+		const res = await post('presetId' in change ? 'preset' : 'effort', change);
+		if (res) chat.apply({ type: 'model', model: (await res.json()) as ChatModel });
 	}
 </script>
 
@@ -479,6 +529,9 @@
 							<InfoIcon class="size-4" />
 						</Tooltip.Trigger>
 						<Tooltip.Content class="max-w-xs flex-col items-start gap-0.5">
+							{#if r.models.length}
+								<span>{r.models.join(', then ')}</span>
+							{/if}
 							<span
 								>{formatTokens(promptTokens(r.usage))} tokens in, {formatTokens(r.usage.output)} out</span
 							>
@@ -516,14 +569,14 @@
 			<Tooltip.Trigger
 				class="hidden shrink-0 rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground sm:block"
 			>
-				{formatTokens(contextUsed)} / {formatTokens(conversation.contextWindow)} · {formatPercent(
+				{formatTokens(contextUsed)} / {formatTokens(model.contextWindow)} · {formatPercent(
 					cacheHitRate(usage.last)
 				)} cached
 			</Tooltip.Trigger>
 			<Tooltip.Content class="max-w-sm flex-col items-start gap-0.5">
 				<span
 					>Context used by the last reply: {formatTokens(contextUsed)} of {formatTokens(
-						conversation.contextWindow
+						model.contextWindow
 					)}</span
 				>
 				<span>{cacheSummary('Last reply', usage.last)}</span>
@@ -543,12 +596,10 @@
 			<DropdownMenu.Content align="end" class="w-60">
 				{#if prefs.technical}
 					<DropdownMenu.Label class="font-normal">
-						<span class="block truncate text-foreground">{conversation.presetName}</span>
+						<span class="block truncate text-foreground">{model.presetName}</span>
 						{#if usage}
 							<span class="block"
-								>Context {formatTokens(contextUsed)} / {formatTokens(
-									conversation.contextWindow
-								)}</span
+								>Context {formatTokens(contextUsed)} / {formatTokens(model.contextWindow)}</span
 							>
 							<span class="block">{formatPercent(cacheHitRate(usage.total))} cached overall</span>
 						{/if}
@@ -766,10 +817,12 @@
 				{#snippet tools()}
 					<ModelMenu
 						{efforts}
-						{effort}
-						onEffortChange={changeEffort}
-						presets={[{ id: 'current', name: conversation.presetName }]}
-						presetId="current"
+						effort={model.effort}
+						onEffortChange={(effort) => requestChange({ effort: effort as ChatModel['effort'] })}
+						presets={menuPresets}
+						presetId={(listed && model.presetId) || 'current'}
+						onPresetChange={(presetId) => requestChange({ presetId })}
+						{defaultPresetId}
 					/>
 				{/snippet}
 			</Composer>
@@ -795,6 +848,51 @@
 	slug={page.params.slug ?? ''}
 	oncreated={(created) => move(created.id)}
 />
+
+<AlertDialog.Root
+	open={confirming !== null}
+	onOpenChange={(open) => {
+		if (!open) confirming = null;
+	}}
+>
+	<AlertDialog.Content>
+		{#if confirming}
+			{@const change = confirming}
+			<AlertDialog.Header>
+				<AlertDialog.Title>
+					{#if 'presetId' in change}
+						Switch to {shortModelName(switchingTo?.name ?? 'another model')}?
+					{:else}
+						Change reasoning to {EFFORT_INFO[change.effort]?.label ?? change.effort}?
+					{/if}
+				</AlertDialog.Title>
+				<AlertDialog.Description class="flex flex-col gap-2">
+					<span>
+						btw keeps this chat in a cache, so each reply only pays for what's new. {'presetId' in
+						change
+							? 'Another model'
+							: 'Another reasoning level'} can't use it: the next reply reads the whole chat again, which
+						takes longer and costs more{prefs.technical && contextUsed
+							? ` (a prompt cache miss of about ${formatTokens(contextUsed)} tokens)`
+							: ''}.
+					</span>
+					{#if switchingTo && conversation.heldBy.some((p) => p !== switchingTo.provider)}
+						<span>
+							Some pictures and PDFs in this chat don't carry over to another provider: the new
+							model gets where their files are, and can look at them again.
+						</span>
+					{/if}
+				</AlertDialog.Description>
+			</AlertDialog.Header>
+			<AlertDialog.Footer>
+				<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+				<AlertDialog.Action onclick={() => applyChange(change)}>
+					{'presetId' in change ? 'Switch' : 'Change'}
+				</AlertDialog.Action>
+			</AlertDialog.Footer>
+		{/if}
+	</AlertDialog.Content>
+</AlertDialog.Root>
 
 <AlertDialog.Root bind:open={deleteOpen}>
 	<AlertDialog.Content>
