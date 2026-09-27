@@ -137,14 +137,16 @@ export function avatarTint(avatar: Avatar, stylesheet = css): Tint {
 }
 
 /**
- * The `<style>` element that tints the page. Doubled selectors outrank layout.css's `:root` and
- * `.dark` wherever the two end up in the page. (Built here: Svelte's preprocessor would take a
- * `<style>` written in a component for the component's own.)
+ * The `<style>` element that tints the page. Both selectors outrank layout.css's `:root` and
+ * `.dark` wherever the two end up in the page. The light one skips the dark theme: a grey tinted
+ * only in light, like the accent, would otherwise outrank `.dark` and put light greys under dark
+ * mode's light text. (Built here: Svelte's preprocessor would take a `<style>` written in a
+ * component for the component's own.)
  */
 export function tintStyle({ light, dark }: Tint): string {
 	const vars = (colors: Record<string, string>) =>
 		Object.entries(colors)
 			.map(([name, color]) => `--${name}:${color};`)
 			.join('');
-	return `<style>:root:root{${vars(light)}}.dark.dark{${vars(dark)}}</style>`;
+	return `<style>:root:not(.dark){${vars(light)}}.dark.dark{${vars(dark)}}</style>`;
 }
