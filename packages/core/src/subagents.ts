@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { and, asc, eq, inArray } from 'drizzle-orm';
-import { EFFORTS, type Effort } from './anthropic.ts';
+import { EFFORTS, type Effort } from './models.ts';
 import {
 	committedRows,
 	createConversation,

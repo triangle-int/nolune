@@ -25,6 +25,7 @@ import {
 	initConfig,
 	installCliShim,
 	isApiKeyProvider,
+	isProvider,
 	listPresets,
 	listProfileSkills,
 	listUsers,
@@ -44,7 +45,8 @@ import {
 	updateConfig,
 	viewImage,
 	ViewLimitError,
-	type ApiKeyProvider
+	type ApiKeyProvider,
+	type Provider
 } from '@btw/core';
 import { AGENT_HELP, agentCommand } from './agent.ts';
 import { GENERATE_HELP, generateCommand } from './generate.ts';
@@ -65,7 +67,8 @@ import {
 const HELP = `btw - a family agent that runs on this computer
 
 Getting started
-  btw setup                                  interactive first-time setup (key, your account, model)
+  btw setup [--provider anthropic|openai]    interactive first-time setup (key, your account, model);
+                                             chats run on Claude unless you pick openai
   btw start                                  run the gateway in the foreground
   btw service install|uninstall|restart|status|logs [-f]
                                              run it in the background at login (macOS)
@@ -75,8 +78,8 @@ Settings (${paths.home})
   btw config set <host|port|origin> <value>  origin = the public URL people open
   btw config set image-model <provider/model>  for pictures, e.g. openai/gpt-image-2.5-flare
   btw key set <anthropic|openai> [key]       store an API key (prompts if omitted) after checking
-                                             it; OpenAI's is for pictures. Admins can also do this
-                                             on the web, under Models & keys
+                                             it; OpenAI's runs GPT chats and makes pictures. Admins
+                                             can also do this on the web, under Models & keys
   btw key rm <anthropic|openai>              remove a stored key (the environment's is used, if set)
   btw env set <NAME> <value>                 extra env var for agent commands (e.g. FIRECRAWL_API_KEY)
   btw env rm <NAME> | btw env list
@@ -89,7 +92,9 @@ Users (web sign-up is disabled; this is the only way to add people)
   btw user list
 
 Model presets (shared by all profiles)
-  btw preset add <model> [--name N] [--context-window TOKENS]
+  btw preset add <model> [--provider anthropic|openai] [--name N] [--context-window TOKENS]
+                                             the provider checks the model id first (anthropic
+                                             unless given); OpenAI doesn't say its context window
   btw preset rm <name|id>
   btw preset default <name|id>               the model new chats start with
   btw preset list
@@ -114,7 +119,11 @@ Inside agent commands (BTW_PROFILE is set, so --profile can be left out)
 
 ${AGENT_HELP}`;
 
-const DEFAULT_MODEL = 'claude-opus-5-5';
+/** What `btw setup` suggests for each provider's first preset, and where its keys are made. */
+const SETUP: Record<Provider, { model: string; keys: string }> = {
+	anthropic: { model: 'claude-opus-5-5', keys: 'console.anthropic.com > API keys' },
+	openai: { model: 'gpt-6-astra', keys: 'platform.openai.com > API keys' }
+};
 
 function fail(message: string): never {
 	console.error(`btw: ${message}`);
@@ -187,6 +196,7 @@ async function setup(args: string[]): Promise<void> {
 	const { values } = parseArgs({
 		args,
 		options: {
+			provider: { type: 'string' },
 			key: { type: 'string' },
 			name: { type: 'string' },
 			email: { type: 'string' },
@@ -197,16 +207,19 @@ async function setup(args: string[]): Promise<void> {
 		}
 	});
 
+	const provider = values.provider ?? 'anthropic';
+	if (!isProvider(provider)) fail('--provider is anthropic or openai');
+	const { label, field } = API_KEYS[provider];
+
 	const { created } = initConfig();
 	getDb();
 	installCliShim();
 	console.log(created ? `Created ${paths.home}` : `Using ${paths.home}`);
 
-	if (!readConfig().anthropicApiKey) {
-		const key =
-			values.key ?? (await askHidden('Anthropic API key (console.anthropic.com > API keys)'));
-		if (!key) fail('an Anthropic API key is required');
-		await storeApiKey('anthropic', key);
+	if (!readConfig()[field]) {
+		const key = values.key ?? (await askHidden(`${label} API key (${SETUP[provider].keys})`));
+		if (!key) fail(`an ${label} API key is required`);
+		await storeApiKey(provider, key);
 	}
 
 	const admin = listUsers().find((u) => u.isAdmin);
@@ -221,8 +234,8 @@ async function setup(args: string[]): Promise<void> {
 	}
 
 	if (listPresets().length === 0) {
-		const model = values.model ?? (await ask('Model', DEFAULT_MODEL));
-		const preset = await addPreset({ model });
+		const model = values.model ?? (await ask('Model', SETUP[provider].model));
+		const preset = await addPreset({ provider, model });
 		console.log(`Added model "${preset.name}".`);
 	}
 
@@ -487,6 +500,7 @@ async function main(argv: string[]): Promise<void> {
 				args: rest,
 				allowPositionals: true,
 				options: {
+					provider: { type: 'string' },
 					name: { type: 'string' },
 					'context-window': { type: 'string' }
 				}
@@ -495,6 +509,7 @@ async function main(argv: string[]): Promise<void> {
 				const model = positional(positionals, 0, 'model');
 				const cw = values['context-window'];
 				const preset = await addPreset({
+					provider: values.provider,
 					model,
 					name: values.name,
 					contextWindow: cw ? Number(cw) : null

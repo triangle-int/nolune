@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../db/index.ts';
 import { modelPreset, user } from '../db/schema.ts';
+import type { Provider } from '../models.ts';
 import type { Preset } from '../presets.ts';
 import { createProfile, type Profile } from '../profiles.ts';
 
@@ -17,11 +18,15 @@ export function makeUser(name = 'Anna'): { id: string; name: string } {
 let presetClock = Date.UTC(2026, 0, 1);
 
 /** A preset without asking the API whether the model exists, as addPreset does. */
-export function makePreset(name = 'Sonnet', model = 'claude-sonnet-5'): Preset {
+export function makePreset(
+	name = 'Sonnet',
+	model = 'claude-sonnet-5',
+	provider: Provider = 'anthropic'
+): Preset {
 	const preset: Preset = {
 		id: randomUUID(),
 		name,
-		provider: 'anthropic',
+		provider,
 		model,
 		contextWindow: null,
 		modelContextWindow: 200_000,

@@ -2,9 +2,9 @@ import { apiKeyHelp, configuredApiKey } from './config.ts';
 import type { GeneratedImage, ImageRequest, ImageShape } from './image-generation.ts';
 
 /*
- * OpenAI's Image API, for `btw generate image`. No SDK: it's two endpoints, and a plain fetch
- * keeps the bundled CLI small. Generations take a prompt; edits take the same fields plus the
- * input images, as multipart.
+ * OpenAI's Image API, for `btw generate image`. No SDK (chats use it, in openai-chat.ts): it's
+ * two endpoints, and a plain fetch spares the command loading it. Generations take a prompt;
+ * edits take the same fields plus the input images, as multipart.
  */
 
 /** OPENAI_BASE_URL, as in OpenAI's own SDKs, points it at a proxy or a compatible server. */

@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type Anthropic from '@anthropic-ai/sdk';
 import { and, desc, eq, inArray, isNotNull, isNull, lt, max } from 'drizzle-orm';
-import type { CacheTtl, Effort } from './anthropic.ts';
 import { parseAttachments, type MessageAttachment } from './attachments.ts';
+import { replyBlocks, toolCalls } from './content-blocks.ts';
 import { getDb } from './db/index.ts';
 import {
 	conversation,
@@ -22,6 +22,7 @@ import {
 	type MediaRow,
 	type PreparedMedia
 } from './media.ts';
+import type { CacheTtl, Effort } from './models.ts';
 import { buildSystemPrompt } from './prompt.ts';
 import { effectiveContextWindow, getPreset } from './presets.ts';
 import type { Profile } from './profiles.ts';
@@ -510,6 +511,10 @@ export function toMessageParam(row: MessageRow): Anthropic.MessageParam {
  * block's signature records the prompt it was made under, and newer models refuse it under
  * another one, so those are left out. They are always the oldest ones, which the API allows,
  * and they are left out the same way on every call, so the prefix stays byte-identical.
+ * OpenAI's reasoning isn't bound to the prompt, so its replies go as they are.
+ *
+ * Replies are in their provider's own format (see content-blocks.ts), so for OpenAI's
+ * conversations the assistant messages hold its output items rather than Anthropic's blocks.
  */
 export function requestMessages(
 	rows: MessageRow[],
@@ -553,10 +558,7 @@ function pairToolResults(messages: Anthropic.MessageParam[]): Anthropic.MessageP
 	for (const m of messages) {
 		if (m.role === 'assistant') {
 			if (open.length) out.push({ role: 'user', content: open.map(noResult) });
-			open =
-				typeof m.content === 'string'
-					? []
-					: m.content.flatMap((b) => (b.type === 'tool_use' ? [b.id] : []));
+			open = typeof m.content === 'string' ? [] : toolCalls(m.content).map((c) => c.id);
 			out.push(m);
 			continue;
 		}
@@ -581,15 +583,6 @@ function pairToolResults(messages: Anthropic.MessageParam[]): Anthropic.MessageP
 	return out;
 }
 
-export function summarizeUsage(usage: Anthropic.Usage): Usage {
-	return {
-		input: usage.input_tokens,
-		cacheRead: usage.cache_read_input_tokens ?? 0,
-		cacheWrite: usage.cache_creation_input_tokens ?? 0,
-		output: usage.output_tokens
-	};
-}
-
 function toolResultText(content: Anthropic.ToolResultBlockParam['content']): string {
 	if (typeof content === 'string') return content;
 	return (content ?? []).map((b) => (b.type === 'text' ? b.text : `[${b.type}]`)).join('\n');
@@ -597,8 +590,7 @@ function toolResultText(content: Anthropic.ToolResultBlockParam['content']): str
 
 /** The text blocks of an assistant row: what the agent said, without thinking or commands. */
 export function replyText(row: MessageRow): string {
-	const content = JSON.parse(row.content) as Anthropic.ContentBlock[];
-	return content
+	return replyBlocks(JSON.parse(row.content))
 		.flatMap((b) => (b.type === 'text' ? [b.text] : []))
 		.join('\n\n')
 		.trim();
@@ -688,13 +680,11 @@ export function toDisplay(row: MessageRow, mediaRows: MediaRow[] = []): DisplayM
 			createdAt
 		};
 	}
-	const content = JSON.parse(row.content) as Anthropic.ContentBlock[];
 	const blocks: DisplayBlock[] = [];
-	for (const block of content) {
-		if (block.type === 'text' && block.text.trim()) blocks.push({ type: 'text', text: block.text });
-		else if (block.type === 'thinking' && block.thinking.trim()) {
-			blocks.push({ type: 'thinking', text: block.thinking });
-		} else if (block.type === 'tool_use') {
+	for (const block of replyBlocks(JSON.parse(row.content))) {
+		if (block.type !== 'tool_call') {
+			if (block.text.trim()) blocks.push(block);
+		} else {
 			const input = (block.input ?? {}) as Record<string, unknown>;
 			const text = (key: string) =>
 				typeof input[key] === 'string' && input[key].trim() ? { [key]: input[key].trim() } : {};

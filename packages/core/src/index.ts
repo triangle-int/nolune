@@ -64,7 +64,6 @@ export {
 } from './profiles.ts';
 export { AVATARS, defaultAvatar, isAvatar, type Avatar } from './avatars.ts';
 export {
-	PROVIDERS,
 	addPreset,
 	effectiveContextWindow,
 	getDefaultPreset,
@@ -72,8 +71,7 @@ export {
 	listPresets,
 	removePreset,
 	setDefaultPreset,
-	type Preset,
-	type Provider
+	type Preset
 } from './presets.ts';
 export {
 	createConversation,
@@ -137,7 +135,7 @@ export {
 	type Snapshot
 } from './runner.ts';
 export { TitleError } from './titles.ts';
-export { EFFORTS, type Effort } from './anthropic.ts';
+export { EFFORTS, PROVIDERS, isProvider, type Effort, type Provider } from './models.ts';
 export {
 	createSkill,
 	isValidSkillName,

@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Cron } from 'croner';
 import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, notInArray } from 'drizzle-orm';
-import { EFFORTS, type Effort } from './anthropic.ts';
+import { EFFORTS, type Effort } from './models.ts';
 import { DEFAULT_PORT, readConfig } from './config.ts';
 import { getDb } from './db/index.ts';
 import { trigger, triggerRun } from './db/schema.ts';
