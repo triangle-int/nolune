@@ -93,6 +93,14 @@
 					onCheckedChange={(expandSteps) => prefs.set({ expandSteps })}
 				/>
 			</label>
+
+			<label class="flex cursor-pointer items-start justify-between gap-4 py-4">
+				<span class="space-y-1">
+					<span class="block">{m.settings.sounds}</span>
+					<span class="block text-muted-foreground">{m.settings.soundsHint}</span>
+				</span>
+				<Switch checked={prefs.sounds} onCheckedChange={(sounds) => prefs.set({ sounds })} />
+			</label>
 		</div>
 
 		<Separator />

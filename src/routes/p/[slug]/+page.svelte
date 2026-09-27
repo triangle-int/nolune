@@ -59,12 +59,10 @@
 		{#snippet header()}
 			<!-- Phones: greeting in the middle, composer at the bottom. Desktop: both centered. -->
 			<div class="flex-1"></div>
-			<AssistantAvatar
-				avatar={data.profile.avatar}
-				mood="idle"
-				size={64}
-				class="mx-auto mb-5 block"
-			/>
+			<!-- Named, so it glides here from a new profile's welcome. -->
+			<div class="mx-auto mb-5" style:view-transition-name="btw-assistant">
+				<AssistantAvatar avatar={data.profile.avatar} mood="idle" size={64} class="block" />
+			</div>
 			<h1 class="mb-8 text-center text-[28px] leading-tight font-normal tracking-tight">
 				{firstName ? m.newChat.greeting(firstName) : m.newChat.greetingNoName}
 			</h1>
