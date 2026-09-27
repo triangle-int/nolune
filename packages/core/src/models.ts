@@ -142,7 +142,7 @@ export function countDocumentTokens(
 		: anthropic.countDocumentTokens(model, fileId);
 }
 
-/** Throws if the provider doesn't know the model. Null when it doesn't say how large its window is. */
+/** Throws if the provider doesn't know the model. Null when its window isn't known. */
 export function fetchContextWindow(provider: Provider, model: string): Promise<number | null> {
 	return provider === 'openai'
 		? openai.fetchContextWindow(model)
