@@ -810,7 +810,8 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   key warns to keep the same workspace (Anthropic) or project (OpenAI): pictures and PDFs already
   sent live in it. `btw key set` does the same check, but saves anyway when the provider can't be
   reached. The preset form picks the provider (Anthropic or OpenAI), and the provider checks the
-  model id before the preset is saved.
+  model id before the preset is saved. Its context window is a row of chips: Auto (what the
+  provider reports, if anything), 128K, 200K, 1M, or Custom, typed as `272k`, `1.5m` or `272000`.
 
 ## Assistant avatars
 

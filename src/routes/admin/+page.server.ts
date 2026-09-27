@@ -20,6 +20,7 @@ import {
 	saveApiKey,
 	setDefaultPreset
 } from '@btw/core';
+import { parseTokens } from '$lib/format';
 import { requireAdmin } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -87,9 +88,14 @@ export const actions: Actions = {
 		const provider = form.get('provider')?.toString() ?? '';
 		const model = form.get('model')?.toString() ?? '';
 		const name = form.get('name')?.toString() ?? '';
+		// Left out when the model's own window is picked; otherwise a chip's count or one typed as "272k".
 		const cw = form.get('contextWindow')?.toString().trim() ?? '';
+		const contextWindow = cw ? parseTokens(cw) : null;
+		if (Number.isNaN(contextWindow)) {
+			return fail(400, { message: 'Context window must be a token count, like 272k or 272000.' });
+		}
 		try {
-			await addPreset({ provider, model, name, contextWindow: cw ? Number(cw) : null });
+			await addPreset({ provider, model, name, contextWindow });
 		} catch (err) {
 			return fail(400, { message: err instanceof Error ? err.message : String(err) });
 		}
