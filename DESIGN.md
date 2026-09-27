@@ -688,6 +688,14 @@ on a colored circle.
   existing profiles theirs the same way, in SQL. Any member changes it on People & profile, or with
   `btw profile avatar <name>`, which the agent runs when asked ("switch to the comet"; the
   `btw-agent` skill explains it).
+- **Tint.** A profile's pages take on its avatar's hue: `src/lib/tint.ts` gives the page, sidebar,
+  bubbles, hover and (in dark) card, menu and composer greys a little OKLCH chroma in the avatar
+  color's hue, at each grey's own luminance, so text and avatars keep their contrast. The root
+  layout renders it into the head as a `<style>` that outranks `layout.css`, so the first paint and
+  menus portaled to `<body>` are tinted too, and a new profile or avatar swaps it in place.
+  See-through borders and inputs take the tint from what's under them; light cards, menus and the
+  composer stay white, a step above the page. The `theme-color` meta follows the tinted page. Pages
+  outside a profile (sign-in, the profile list, Models & keys) keep the plain greys.
 - **Moods.** Only the avatar on the newest reply moves; older ones hold still. It follows what the
   chat already knows: `thinking` while the model streams (eyes up, a gentle bob), `working` while a
   command runs (a busy hop, and the avatar's own motion: the flame flares, the antenna blinks,
