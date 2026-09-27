@@ -12,14 +12,16 @@ it works and why.
 
 Needs macOS (Linux works without the background service), Node 22.18+ and an
 [Anthropic API key](https://console.anthropic.com/), an
-[OpenAI API key](https://platform.openai.com/api-keys) (chats run on Claude or on OpenAI's GPT
-models; you can have both), or a Claude Pro or Max plan signed in to
-[Claude Code](https://claude.com/claude-code) on the same computer (see below).
+[OpenAI API key](https://platform.openai.com/api-keys), an
+[OpenRouter API key](https://openrouter.ai/settings/keys) (chats run on Claude, on OpenAI's GPT
+models, or on any model OpenRouter serves that can call tools; you can have all three), or a
+Claude Pro or Max plan signed in to [Claude Code](https://claude.com/claude-code) on the same
+computer (see below).
 
 ```sh
 npm install -g btw-agent
 btw setup                      # API key, your account, default model, public URL
-                               # (btw setup --provider openai to start with GPT)
+                               # (--provider openai to start with GPT, or openrouter)
 btw key set openai             # optional: GPT models for chats, and pictures (Images page)
 btw service install            # run in the background, start at login
 btw user create Anna anna@example.com   # add family members (prints their password)
@@ -27,6 +29,12 @@ btw user create Anna anna@example.com   # add family members (prints their passw
 
 Then open the address `btw setup` printed and sign in. As the admin you can also add or replace
 API keys and models on the web, under Models & keys in your account menu.
+
+**Through OpenRouter.** With `btw key set openrouter` (or `btw setup --provider openrouter`), a
+preset can run any model [OpenRouter](https://openrouter.ai/models) serves that can call tools:
+`btw preset add deepseek/deepseek-v4.1-flash --provider openrouter`. OpenRouter's ids name the
+model's maker. Pictures and PDFs go only to models that take them; for the others, they're saved
+for the agent and named in the message, like any other file.
 
 **On your Claude plan instead of an API key.** Run `btw setup --provider claude-plan`. Chats then
 run through [Claude Code](https://claude.com/claude-code) on this computer, unmodified, signed in

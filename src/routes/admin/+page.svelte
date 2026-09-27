@@ -21,6 +21,7 @@
 	const EXAMPLE_MODELS: Record<string, string> = {
 		anthropic: 'claude-opus-5-5',
 		openai: 'gpt-6-astra',
+		openrouter: 'anthropic/claude-opus-5.5',
 		'claude-plan': 'claude-opus-5-5'
 	};
 	/** Whether the Claude Code sign-in is being checked. */
@@ -148,7 +149,7 @@
 										<a href={key.consoleUrl} target="_blank" rel="noreferrer" class="underline"
 											>{new URL(key.consoleUrl).host}</a
 										>.
-										{#if key.source}
+										{#if key.source && key.provider !== 'openrouter'}
 											Use a key from the same {key.provider === 'openai' ? 'project' : 'workspace'}:
 											pictures and PDFs already sent in chats live there, and those chats can't go
 											on without them.

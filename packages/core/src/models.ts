@@ -4,6 +4,7 @@ import * as claudePlan from './claude-plan.ts';
 import { replyBlocks, toolCalls, type ReplyBlock } from './content-blocks.ts';
 import type { Usage } from './conversations.ts';
 import * as openai from './openai-chat.ts';
+import * as openrouter from './openrouter.ts';
 
 /*
  * A model call as the rest of btw sees it, whichever provider runs it. Each provider's module
@@ -15,7 +16,7 @@ import * as openai from './openai-chat.ts';
  * hands it whole turns rather than calling streamTurn.
  */
 
-export const PROVIDERS = ['anthropic', 'openai', 'claude-plan'] as const;
+export const PROVIDERS = ['anthropic', 'openai', 'openrouter', 'claude-plan'] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
 export function isProvider(value: string): value is Provider {
@@ -26,6 +27,7 @@ export function isProvider(value: string): value is Provider {
 export const PROVIDER_LABELS: Record<Provider, string> = {
 	anthropic: 'Anthropic',
 	openai: 'OpenAI',
+	openrouter: 'OpenRouter',
 	'claude-plan': 'Claude plan'
 };
 
@@ -39,7 +41,8 @@ export type Effort = (typeof EFFORTS)[number];
 
 /**
  * How long a cached prompt lives: an hour for chats people come back to, 5 minutes for
- * subagents. Only Anthropic takes it; OpenAI caches on its own.
+ * subagents. Only Claude takes it (from Anthropic or through OpenRouter); OpenAI caches on its
+ * own.
  */
 export type CacheTtl = '5m' | '1h';
 
@@ -77,7 +80,7 @@ function fromContent(content: unknown[], stopReason: string | null, usage: Usage
  * One model call. The request shape must stay identical across calls in a conversation (only
  * `messages` grows), otherwise the prompt cache is lost: `tools`, `system` and `cacheTtl` are the
  * conversation's own, fixed when it was created. `cacheKey` (the conversation's id) keeps a
- * conversation's calls together in OpenAI's cache.
+ * conversation's calls together in OpenAI's cache, and on one provider behind OpenRouter.
  */
 export async function streamTurn(opts: {
 	provider: Provider;
@@ -95,6 +98,10 @@ export async function streamTurn(opts: {
 	const { provider, cacheKey, ...request } = opts;
 	if (runsOnClaudeCode(provider)) {
 		throw new Error('Chats on the Claude plan run whole turns through claude-plan.ts');
+	}
+	if (provider === 'openrouter') {
+		const reply = await openrouter.streamTurn({ ...request, cacheKey });
+		return fromContent(reply.content, reply.stopReason, reply.usage);
 	}
 	if (provider === 'openai') {
 		const response = await openai.streamResponse({ ...request, cacheKey });
@@ -130,6 +137,7 @@ export async function quickReply(opts: {
 	timeoutMs: number;
 }): Promise<{ text: string | null; usage: Usage }> {
 	if (runsOnClaudeCode(opts.provider)) return claudePlan.quickReply(opts);
+	if (opts.provider === 'openrouter') return openrouter.quickReply(opts);
 	if (opts.provider === 'openai') {
 		const response = await openai.createResponse(opts);
 		const usage = openai.summarizeUsage(response.usage);
@@ -160,15 +168,31 @@ export function countDocumentTokens(
 	if (runsOnClaudeCode(provider)) {
 		return Promise.reject(new Error('Chats on the Claude plan get PDFs as files, not documents'));
 	}
+	if (provider === 'openrouter') {
+		return Promise.reject(new Error('OpenRouter has no Files API: its PDFs go inline'));
+	}
 	return provider === 'openai'
 		? openai.countDocumentTokens(model, fileId)
 		: anthropic.countDocumentTokens(model, fileId);
 }
 
 /**
+ * What the model can be sent besides text. Every model of Anthropic's, OpenAI's and the Claude
+ * plan sees pictures and reads PDFs; OpenRouter says per model.
+ */
+export async function modelInputs(
+	provider: Provider,
+	model: string
+): Promise<{ pictures: boolean; pdfs: boolean }> {
+	if (provider === 'openrouter') return openrouter.modelInputs(model);
+	return { pictures: true, pdfs: true };
+}
+
+/**
  * Throws if the provider doesn't know the model. Null when its window isn't known. For the
  * Claude plan, it checks that Claude Code is here and signed in to one: it has no models API, and
- * whether it takes the model shows at the chat's first reply.
+ * whether it takes the model shows at the chat's first reply. On OpenRouter, the model must also
+ * be able to call tools.
  */
 export async function fetchContextWindow(
 	provider: Provider,
@@ -178,6 +202,7 @@ export async function fetchContextWindow(
 		await claudePlan.checkClaudePlan();
 		return null;
 	}
+	if (provider === 'openrouter') return openrouter.fetchContextWindow(model);
 	return provider === 'openai'
 		? openai.fetchContextWindow(model)
 		: anthropic.fetchContextWindow(model);
@@ -185,17 +210,23 @@ export async function fetchContextWindow(
 
 export function describeApiError(err: unknown): string {
 	if (err instanceof claudePlan.ClaudePlanError) return err.message;
+	// OpenRouter's errors are OpenAI's SDK's classes too, so it's asked first.
+	if (openrouter.isOpenRouterError(err)) return openrouter.describeApiError(err);
 	return openai.isOpenAIError(err) ? openai.describeApiError(err) : anthropic.describeApiError(err);
 }
 
 /** The API's own message, without the status and JSON around it: for notes shown to the model. */
 export function shortApiError(err: unknown): string {
 	if (err instanceof claudePlan.ClaudePlanError) return err.message;
+	if (openrouter.isOpenRouterError(err)) return openrouter.shortApiError(err);
 	return openai.isOpenAIError(err) ? openai.shortApiError(err) : anthropic.shortApiError(err);
 }
 
 export function isAbortError(err: unknown): boolean {
 	return (
-		anthropic.isAbortError(err) || openai.isAbortError(err) || claudePlan.isPlanAbortError(err)
+		anthropic.isAbortError(err) ||
+		openai.isAbortError(err) ||
+		openrouter.isAbortError(err) ||
+		claudePlan.isPlanAbortError(err)
 	);
 }

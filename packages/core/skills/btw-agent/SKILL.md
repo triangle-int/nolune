@@ -32,22 +32,26 @@ Other parts of the CLI have their own instructions: automations (`btw trigger`, 
 
 ## Models
 
-Chats run on model presets, on Claude (Anthropic) or on OpenAI's models with an API key, or on
-the owner's Claude plan (`claude-plan`, below). People pick one when they start a chat, and new
-chats start with the default.
+Chats run on model presets, on Claude (Anthropic), on OpenAI's models or on the models
+OpenRouter serves with an API key, or on the owner's Claude plan (`claude-plan`, below). People
+pick one when they start a chat, and new chats start with the default.
 
 ```sh
 btw preset list                                 # name, provider/model, context window, id, default
 btw preset add claude-sonnet-5 --name "Sonnet"  # Anthropic checks the model id first
 btw preset add gpt-6-astra --provider openai --name "GPT"
+btw preset add deepseek/deepseek-v4.1-flash --provider openrouter --name "DeepSeek"
 btw preset add claude-opus-5-5 --provider claude-plan --name "Opus (plan)"
 btw preset default Sonnet                       # new chats start with it
 btw preset rm Sonnet                            # chats that use it keep working
 ```
 
 btw knows the context window of OpenAI's flagship models (1,050,000 tokens since GPT-5.4). For
-its other models (mini, nano), give `--context-window` when you know it. A preset needs its
-provider's key. If `btw preset add` can't check the model, an admin can add it under Models &
+its other models (mini, nano), give `--context-window` when you know it. OpenRouter's ids name
+the model's maker (`anthropic/claude-sonnet-5`, `google/gemini-3.8-flash`; see
+https://openrouter.ai/models), its models list their window, and btw only takes one that can call
+tools, since that's how you run commands. Models that can't see pictures or read PDFs get them as
+their paths. A preset needs its provider's key. If `btw preset add` can't check the model, an admin can add it under Models &
 keys in the account menu.
 
 ### The Claude plan
@@ -67,7 +71,8 @@ automations on an API key preset (`btw trigger` takes a preset).
 ## API keys
 
 The `anthropic` key runs chats on Claude; the `openai` one runs chats on OpenAI's models and makes
-pictures. `btw key set` checks a key with the provider and refuses one it rejects, and btw uses the
+pictures; the `openrouter` one runs chats on OpenRouter's models and pays for them with its
+credits. `btw key set` checks a key with the provider and refuses one it rejects, and btw uses the
 new key from the next message.
 
 ```sh

@@ -521,10 +521,12 @@ export function toMessageParam(row: MessageRow): Anthropic.MessageParam {
  * block's signature records the prompt it was made under, and newer models refuse it under
  * another one, so those are left out. They are always the oldest ones, which the API allows,
  * and they are left out the same way on every call, so the prefix stays byte-identical.
- * OpenAI's reasoning isn't bound to the prompt, so its replies go as they are.
+ * OpenAI's reasoning isn't bound to the prompt, so its replies go as they are. OpenRouter's
+ * reasoning details are left out like thinking: through OpenRouter they may be Claude's.
  *
- * Replies are in their provider's own format (see content-blocks.ts), so for OpenAI's
- * conversations the assistant messages hold its output items rather than Anthropic's blocks.
+ * Replies are in their provider's own format (see content-blocks.ts), so for OpenAI's and
+ * OpenRouter's conversations the assistant messages hold their items rather than Anthropic's
+ * blocks.
  */
 export function requestMessages(
 	rows: MessageRow[],
@@ -536,7 +538,10 @@ export function requestMessages(
 		}
 		if (row.seq > promptChangedAtSeq) return [toMessageParam(row)];
 		const content = (JSON.parse(row.content) as Anthropic.ContentBlockParam[]).filter(
-			(b) => b.type !== 'thinking' && b.type !== 'redacted_thinking'
+			(b) =>
+				b.type !== 'thinking' &&
+				b.type !== 'redacted_thinking' &&
+				!(b.type as string).startsWith('reasoning.')
 		);
 		// A reply that was only thinking (cut off, say) has nothing left to send.
 		return content.length ? [{ role: 'assistant', content }] : [];

@@ -141,7 +141,9 @@ export const profileMember = sqliteTable(
 export const modelPreset = sqliteTable('model_preset', {
 	id: text('id').primaryKey(),
 	name: text('name').notNull().unique(),
-	provider: text('provider', { enum: ['anthropic', 'openai', 'claude-plan'] }).notNull(),
+	provider: text('provider', {
+		enum: ['anthropic', 'openai', 'openrouter', 'claude-plan']
+	}).notNull(),
 	model: text('model').notNull(),
 	/** Admin override. Wins over modelContextWindow. */
 	contextWindow: integer('context_window'),
@@ -215,7 +217,9 @@ export const conversation = sqliteTable(
 		presetId: text('preset_id').references(() => modelPreset.id, { onDelete: 'set null' }),
 		// Snapshot of the preset at creation: a conversation never changes model.
 		presetName: text('preset_name').notNull(),
-		provider: text('provider', { enum: ['anthropic', 'openai', 'claude-plan'] }).notNull(),
+		provider: text('provider', {
+			enum: ['anthropic', 'openai', 'openrouter', 'claude-plan']
+		}).notNull(),
 		model: text('model').notNull(),
 		contextWindow: integer('context_window'),
 		effort: text('effort', { enum: ['low', 'medium', 'high', 'xhigh', 'max'] })

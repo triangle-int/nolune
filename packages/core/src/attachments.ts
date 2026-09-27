@@ -26,16 +26,16 @@ import {
 	storedType,
 	type PreparedMedia
 } from './media.ts';
-import { countDocumentTokens, shortApiError, type Provider } from './models.ts';
+import { countDocumentTokens, modelInputs, shortApiError, type Provider } from './models.ts';
 import { profileDir } from './paths.ts';
 import { hasFileStore, providerFileId } from './provider-files.ts';
 
 /*
  * Files people attach to a message. Each is saved in the profile's `attachments` folder, where
  * the agent can work with it, and shown in the chat through a media row. The model gets pictures
- * and PDFs themselves, through the provider's Files API, and every other file as its name and
- * path. What the model got is written into the message's `content` in the provider's format;
- * `message.attachments` keeps the provider-neutral record.
+ * and PDFs themselves, through the provider's Files API (inline without one) when it takes them,
+ * and every other file as its name and path. What the model got is written into the message's
+ * `content` in the provider's format; `message.attachments` keeps the provider-neutral record.
  */
 
 export const MAX_ATTACHMENTS = 10;
@@ -43,8 +43,9 @@ export const MAX_ATTACHMENTS = 10;
 const DOCUMENT_SHARE = 0.25;
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 /**
- * Chats on the Claude plan can't count a PDF's tokens (that takes the API), so they estimate:
- * Anthropic puts a page's text at 1,500 to 3,000 tokens, and each page also goes as a picture.
+ * Chats on the Claude plan and OpenRouter can't count a PDF's tokens (that takes Anthropic's or
+ * OpenAI's API), so they estimate: Anthropic puts a page's text at 1,500 to 3,000 tokens, and
+ * each page also goes as a picture.
  */
 const TOKENS_PER_PDF_PAGE = 4_000;
 /** Pages the API takes in one request: 600, or 100 with a context window under 1M tokens. */
@@ -207,19 +208,39 @@ export function parseAttachments(json: string | null): MessageAttachment[] {
 type ImageBlock = Anthropic.ImageBlockParam;
 type AttachmentBlock =
 	Anthropic.TextBlockParam | Anthropic.ImageBlockParam | Anthropic.DocumentBlockParam;
+/** The conversation's model, which decides what the files go as. */
+type ModelOf = { provider: Provider; model: string };
+
+/**
+ * Whether the model takes pictures or PDFs, or why not in plain words. A file it can't read
+ * would fail every later request, so it goes as its path when the answer is unsure too.
+ */
+async function modelTakes(conv: ModelOf, what: 'pictures' | 'pdfs'): Promise<string | null> {
+	try {
+		if ((await modelInputs(conv.provider, conv.model))[what]) return null;
+	} catch (err) {
+		return `btw couldn't check whether ${conv.model} takes ${what === 'pdfs' ? 'PDFs' : 'pictures'} (${shortApiError(err)})`;
+	}
+	return what === 'pdfs'
+		? `${conv.model} doesn't read PDFs itself`
+		: `${conv.model} can't see pictures`;
+}
 
 /**
  * A picture as the provider's content block, counted in `used`: uploaded through its Files API,
- * or inline as base64 when that fails (or the provider has none, as on the Claude plan) and the
- * conversation still has room for it.
+ * or inline as base64 when that fails (or the provider has none, as on the Claude plan and
+ * OpenRouter) and the conversation still has room for it.
  */
 export async function imageBlock(
-	provider: Provider,
+	conv: ModelOf,
 	data: Buffer,
 	mediaType: ImageMediaType,
 	name: string,
 	used: ImageUse
 ): Promise<{ block: ImageBlock } | { problem: string }> {
+	const { provider } = conv;
+	const refused = await modelTakes(conv, 'pictures');
+	if (refused) return { problem: refused };
 	if (used.count >= MAX_CONVERSATION_IMAGES) {
 		return {
 			problem: `this conversation already holds ${MAX_CONVERSATION_IMAGES} pictures, as many as it can`
@@ -254,7 +275,7 @@ export async function imageBlock(
 
 /** The images `btw view` left, for the command's tool_result, each after a line naming it. */
 export async function viewedImageBlocks(
-	provider: Provider,
+	conv: ModelOf,
 	images: ViewedImage[],
 	used: ImageUse
 ): Promise<(Anthropic.TextBlockParam | ImageBlock)[]> {
@@ -263,7 +284,7 @@ export async function viewedImageBlocks(
 		const result =
 			'problem' in image
 				? { problem: image.problem }
-				: await imageBlock(provider, image.data, image.mediaType, image.name, used);
+				: await imageBlock(conv, image.data, image.mediaType, image.name, used);
 		if ('problem' in result) {
 			blocks.push({ type: 'text', text: `Not attached: ${image.name} (${result.problem}).` });
 		} else {
@@ -306,8 +327,8 @@ export function pdfPageCount(data: Buffer): number | null {
 }
 
 /**
- * A PDF inline, for chats on the Claude plan, which have no Files API: estimated from its pages,
- * and counted in the conversation's inline bytes, which every request carries.
+ * A PDF inline, for chats on the Claude plan and OpenRouter, which have no Files API: estimated
+ * from its pages, and counted in the conversation's inline bytes, which every request carries.
  */
 function inlinePdfBlock(
 	conv: Conversation,
@@ -353,6 +374,8 @@ async function pdfBlock(
 	room: number,
 	used: ImageUse
 ): Promise<{ block: Anthropic.DocumentBlockParam; tokens: number } | { problem: string }> {
+	const refused = await modelTakes(conv, 'pdfs');
+	if (refused) return { problem: refused };
 	if (!hasFileStore(conv.provider)) return inlinePdfBlock(conv, path, name, room, used);
 	let fileId: string;
 	try {
@@ -440,7 +463,7 @@ export async function prepareMessage(input: {
 			let result: { block: ImageBlock } | { problem: string };
 			try {
 				const image = await prepareImage(path);
-				result = await imageBlock(conv.provider, image.data, image.info.mediaType, up.name, images);
+				result = await imageBlock(conv, image.data, image.info.mediaType, up.name, images);
 			} catch (err) {
 				result = {
 					problem: `it couldn't be made into a picture the model can see (${(err as Error).message})`

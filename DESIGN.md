@@ -15,7 +15,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | Conversations      | Shared by every member of the profile. Messages go through a queue, and a message sent while the agent is working is fed into its next step (steering). Anyone can press Stop.                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Sender identity    | Every human message is sent to the model as `Name: text`. Attached files come first, each as a line saying who attached it and where it was saved, followed by the picture or PDF itself when the model gets one. Display names are unique across the gateway.                                                                                                                                                                                                                                                                                                                                       |
 | Attachments        | Any file, up to 100 MB and 10 per message, saved in the profile's `attachments` folder. The model gets pictures and PDFs through the provider's Files API, never as base64 unless an upload fails, and every other file as its path.                                                                                                                                                                                                                                                                                                                                                                 |
-| Providers          | Anthropic and OpenAI (API keys), and the Claude plan: a Pro or Max plan signed in to Claude Code on this computer, which btw runs (see [The Claude plan](#the-claude-plan)). Keys and model presets are global and managed by the admin with the CLI or the `/admin` page (Models & keys). A preset has a name (default `<model> (<provider>)`), a provider, a model, and an optional context-window override. One preset is the default (the oldest until an admin picks another): new chats start with it, and automations without a preset use it. See [Model providers](#model-providers).       |
+| Providers          | Anthropic, OpenAI and OpenRouter (API keys), and the Claude plan: a Pro or Max plan signed in to Claude Code on this computer, which btw runs (see [The Claude plan](#the-claude-plan)). Keys and presets are global, managed by the admin with the CLI or the `/admin` page (Models & keys). A preset has a name (default `<model> (<provider>)`), a provider, a model, and an optional context-window override. One preset is the default (the oldest until an admin picks another): new chats start with it, and automations without a preset use it. See [Model providers](#model-providers).    |
 | Preset switching   | Not allowed. A conversation keeps its provider and model for its whole life.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Reasoning          | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once.                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | System prompt      | Built once when the conversation is created: instructions, the profile's soul, the skills catalog and, for a chat in a folder, the folder's instructions and file paths. **It is not changed afterwards, and no update notices are added,** with one exception: when the chat moves to another folder, or its folder or the soul changes, it is built again at the start of the next turn (one cache miss). If skills change in another conversation, this conversation only sees it by running commands. Of memory, only `core` and the note names are in it: chats outside folders share a prompt. |
@@ -33,7 +33,8 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 
 ```
 ~/.btw-agent/                 (override with BTW_HOME)
-  config.json                 auth secret, Anthropic and OpenAI keys, image model, extra env vars
+  config.json                 auth secret, Anthropic, OpenAI and OpenRouter keys, image model,
+                              extra env vars
                               for commands, where Claude Code is if set (mode 600)
   btw.db                      SQLite: users, sessions, profiles, presets, folders, conversations,
                               messages, media, uploads, provider files, triggers, trigger runs,
@@ -110,28 +111,41 @@ OpenAI's prompt cache is automatic, and the rule above is what keeps it working:
 newer models, `cache_write_tokens`) inside `input_tokens`; btw subtracts them, so the chat's
 numbers mean the same for both providers.
 
+### On OpenRouter
+
+The same rule, over Chat Completions: the system message, the tools, then the messages, with only
+the messages growing. Claude only caches what's marked, so for `anthropic/` models (and their
+`~anthropic/` aliases) the system message carries `cache_control` with the conversation's TTL,
+and so does the request's top level (automatic caching of the growing tail), as with Anthropic's
+own API. Other models (OpenAI's, Gemini, DeepSeek, Grok...) cache on their own and get no
+markers. Requests carry `session_id` (the conversation's id), which keeps a conversation on the
+same provider behind OpenRouter, whose cache holds its earlier calls. Usage reports
+`cached_tokens` and `cache_write_tokens` inside `prompt_tokens`; btw subtracts them, as for OpenAI.
+
 ## Model providers
 
 A conversation runs on its preset's provider for its whole life. `models.ts` is what the rest of
-btw calls: it picks the provider's module (`anthropic.ts`, `openai-chat.ts`) for the model call,
-the chat's title, PDF token counts and model checks, and gets back the same shape from each (the
-reply's content, its stop reason in Anthropic's words, usage, tool calls and texts). Each API
-provider brings a `FileStore` for pictures and PDFs (see [Attachments](#attachments)). The Claude
+btw calls: it picks the provider's module (`anthropic.ts`, `openai-chat.ts`, `openrouter.ts`)
+for the model call, the chat's title, PDF token counts, model checks and what the model can be
+sent, and gets back the same shape from each (the reply's content, its stop reason in Anthropic's
+words, usage, tool calls and texts). Anthropic and OpenAI bring a `FileStore` for pictures and
+PDFs (see [Attachments](#attachments)); OpenRouter has none and sends them inline. The Claude
 plan (`claude-plan.ts`) is different: Claude Code runs the agent loop, so the runner hands it whole
 turns (see [The Claude plan](#the-claude-plan)).
 
 - **What's stored.** What btw writes itself (people's messages, attachments, command results,
   automations' and subagents' messages, notices) uses Anthropic's content blocks, whatever the
-  provider. A reply is stored exactly as its provider returned it: Anthropic's content blocks, or
-  OpenAI's output items (`reasoning`, `message`, `function_call`). The two use different type
-  names, so `content-blocks.ts` reads any row without knowing its provider, for the chat, the
-  runner (tool calls, restart recovery) and `pairToolResults`.
+  provider. A reply is stored exactly as its provider returned it: Anthropic's content blocks,
+  OpenAI's output items (`reasoning`, `message`, `function_call`), or OpenRouter's pieces (see
+  below). They use different type names, so `content-blocks.ts` reads any row without knowing its
+  provider, for the chat, the runner (tool calls, restart recovery) and `pairToolResults`.
 - **Both SDKs load on first use** (`@anthropic-ai/sdk` in `anthropic.ts`, `openai` in
-  `openai-chat.ts`), not when core loads: the bundled CLI carries all of core, and most `btw`
-  commands the agent runs never call a model. Loading OpenAI's up front made each of them about
-  50 ms slower (lazily, the cost is Node parsing its code, around 10 ms). Anthropic's is lighter
-  (about 2 ms saved) and loads the same way, so the two modules match. Error classes are checked
-  only once their SDK is loaded, since before that no error can be one of them.
+  `openai-chat.ts` and `openrouter.ts`), not when core loads: the bundled CLI carries all of
+  core, and most `btw` commands the agent runs never call a model. Loading OpenAI's up front made
+  each of them about 50 ms slower (lazily, the cost is Node parsing its code, around 10 ms).
+  Anthropic's is lighter (about 2 ms saved) and loads the same way, so the modules match. Error
+  classes are checked only once their SDK is loaded, since before that no error can be one of
+  them.
 - **OpenAI** (`openai-chat.ts`) uses the Responses API through OpenAI's SDK (`openai`), which
   also retries overloads, rate limits and dropped connections, like Anthropic's. Requests are
   stateless (`store: false`), so every call sends the whole transcript, as with Anthropic, and
@@ -155,10 +169,41 @@ turns (see [The Claude plan](#the-claude-plan)).
   what the model takes, for good, since history is never edited; so they get one only when the
   admin sets it. Without one, the chat's context meter shows "?" and PDFs share 25% of 200k
   tokens. Titles are asked for at `low` effort.
-- **Another provider** (OpenRouter, Gemini) would be one more module next to these, a branch
-  in each of `models.ts`'s functions, a `FileStore` (or pictures inline), its key in `API_KEYS`
-  (config.ts) with a check request in `api-keys.ts`, and its name in `PROVIDERS` and the schema's
-  `provider` enums (a TypeScript list only: SQLite stores any text there).
+- **OpenRouter** (`openrouter.ts`) serves models from many providers behind one key, through its
+  Chat Completions API. OpenAI's SDK speaks it, pointed at `https://openrouter.ai/api/v1` (or
+  `OPENROUTER_BASE_URL`), so it brings the same retries and server-sent events; its errors are
+  that SDK's classes too, so `models.ts` asks `openrouter.ts` first, which remembers the errors
+  its own calls threw. Its Responses API isn't used: it's OpenAI's shape, documented for
+  OpenAI's models. Like the others, every call sends the whole transcript.
+- **What an OpenRouter reply is stored as.** A reply is one assistant message, stored as its
+  pieces: its `reasoning_details` as they came (`reasoning.text` with Claude's signature,
+  `reasoning.summary`, `reasoning.encrypted`), then its text as a `text` block, then its
+  `tool_calls` (`function`). They stream in pieces keyed by `index` and are put together as they
+  arrive. They go back as one assistant message (`content`, `tool_calls`, `reasoning_details`),
+  the details unchanged and in order, which Claude and Gemini need to go on after a tool call.
+  Through OpenRouter a reasoning detail may be Claude's thinking, bound to the system prompt, so
+  details from before a rebuilt prompt are left out like thinking (`requestMessages`). A reply
+  that was only reasoning has nothing to send and is skipped.
+- **btw's blocks on OpenRouter.** Text becomes `text` parts, pictures `image_url` parts with a
+  data URL, PDFs `file` parts, command results `tool` messages. A tool message takes only text,
+  so the pictures `btw view` attached to a result follow, each after the line naming it, in the
+  user message after the results. `run_command` is sent as a function tool, as for OpenAI.
+- **Reasoning** on OpenRouter is `reasoning.effort`, with the same five levels, which OpenRouter
+  maps for each model (a thinking budget for older Claude models, say) and ignores for models
+  that don't reason. The chat shows `reasoning.text` and summaries as thinking; encrypted
+  reasoning has nothing to show. Requests set no `max_tokens`, so OpenRouter allows the model's
+  own maximum: an account with too few credits for that gets a 402, which btw shows with where
+  to add credits.
+- **Models on OpenRouter.** Adding a preset reads OpenRouter's model list (`GET /models`), which
+  says what each model takes: btw refuses one that can't call tools, since the agent works
+  through `run_command`, and takes the smaller of the model's `context_length` and its top
+  provider's as the window. A variant (`:nitro`, `:online`) is looked up as its model unless it's
+  listed itself. The list is kept for an hour for what the model can be sent (see
+  [Attachments](#attachments)). Titles are asked for at `low` effort with 2,048 tokens.
+- **Another provider** (Gemini) would be one more module next to these, a branch in each of
+  `models.ts`'s functions, a `FileStore` (or pictures inline), its key in `API_KEYS` (config.ts)
+  with a check request in `api-keys.ts`, and its name in `PROVIDERS` and the schema's `provider`
+  enums (a TypeScript list only: SQLite stores any text there).
 
 ### The Claude plan
 
@@ -231,8 +276,8 @@ automations and subagents on an API key preset.
 ## Agent loop
 
 This is a hand-written loop over the provider's streaming call (Anthropic's `messages.stream()`,
-OpenAI's Responses API) rather than an SDK's tool runner, because each step must be saved to
-SQLite and resumed from there, including after a gateway restart.
+OpenAI's Responses API, OpenRouter's Chat Completions) rather than an SDK's tool runner, because
+each step must be saved to SQLite and resumed from there, including after a gateway restart.
 
 ```
 kick(conversation):                     one loop per conversation at a time
@@ -374,6 +419,15 @@ kind of file, up to 100 MB each (the same as pictures in replies) and 10 per mes
   (`provider-files.ts`); one without a files API would send pictures inline. OpenAI's is its
   Files API: pictures are uploaded for `vision` and PDFs as `user_data`, and a PDF's cost is
   counted with `POST /v1/responses/input_tokens`, which also fails for a PDF it can't read.
+- **OpenRouter** has no Files API, so pictures and PDFs go inline, counted against the same 20 MB
+  as on the Claude plan, and a PDF's tokens are estimated from its pages the same way. Unlike
+  Anthropic's and OpenAI's, many of its models are text only, and a picture sent to one would
+  fail every later request. So `modelInputs` asks OpenRouter's model list first (`image` and
+  `file` among its `input_modalities`): a picture goes only to a model that sees pictures, and a
+  PDF only to one that reads PDFs itself, since for the others OpenRouter would run it through a
+  paid OCR service at every request, each one carrying the whole history. Otherwise the file goes
+  as its path with the reason (`… can't see pictures`), and `btw view` says the same in the
+  command's result. When the list can't be read, the file goes as its path too.
 
 ## Memory
 
@@ -806,11 +860,12 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   first (listing models, which is free), then saved to `config.json`, which is read on every
   request, so it applies without a restart. A key the provider rejects isn't saved; one that works
   on an account with a problem (out of credit, a restricted OpenAI key that can't list models) is,
-  with the provider's words. Removing a saved key falls back to the environment's. Replacing a
-  key warns to keep the same workspace (Anthropic) or project (OpenAI): pictures and PDFs already
-  sent live in it. `btw key set` does the same check, but saves anyway when the provider can't be
-  reached. The preset form picks the provider (Anthropic or OpenAI), and the provider checks the
-  model id before the preset is saved.
+  with the provider's words. OpenRouter lists its models for anyone, so its key is checked with
+  `GET /key` instead. Removing a saved key falls back to the environment's. Replacing a key warns
+  to keep the same workspace (Anthropic) or project (OpenAI): pictures and PDFs already sent live
+  in it (OpenRouter keeps none). `btw key set` does the same check, but saves anyway when the
+  provider can't be reached. The preset form picks the provider (Anthropic, OpenAI, OpenRouter or
+  the Claude plan), and the provider checks the model id before the preset is saved.
 
 ## Assistant avatars
 
@@ -895,8 +950,9 @@ to (issue #42).
 ```
 packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_command, background
                 commands, memory notes, btw view images, attachments, model calls (models.ts, with
-                anthropic.ts and openai-chat.ts, each with its Files API; content-blocks.ts reads
-                either's replies), Claude plan turns through Claude Code (claude-plan.ts), provider
+                anthropic.ts and openai-chat.ts, each with its Files API, and openrouter.ts;
+                content-blocks.ts reads any one's replies), Claude plan turns through Claude Code
+                (claude-plan.ts), provider
                 file cache, runner, media, users/profiles/presets, API
                 keys, chat folders, triggers, scheduler, subagents (subagents.ts, and
                 subagent-host.ts in the gateway), notifications, image generation (providers:
@@ -952,8 +1008,9 @@ Published to npm as `btw-agent` (not yet). `npm install -g btw-agent` gives the 
 - **Compaction.** The context window is already stored on each conversation and shown in the UI.
   The next step is server-side compaction (beta `compact-2026-01-12`), triggered at about 85% of the
   window.
-- Other chat providers (OpenRouter, Gemini). See [Model providers](#model-providers) for what each
-  needs.
+- Other chat providers (Gemini). See [Model providers](#model-providers) for what each needs.
+- OpenRouter: provider preferences (`provider.order`, data policy), and PDFs for models that don't
+  read them, through OpenRouter's parser with its annotations sent back so a PDF is parsed once.
 - The Claude plan: deleting a chat's Claude Code session with the chat (the SDK has
   `deleteSession`); messages sent mid-turn joining at Claude Code's next step (its input stream
   takes them) rather than after the turn.

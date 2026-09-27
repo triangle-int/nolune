@@ -533,7 +533,7 @@ async function runToolCall(
 			}
 		});
 		st.toolOutput = null;
-		const attachments = await viewedImageBlocks(conv.provider, readViewedImages(viewDir), images);
+		const attachments = await viewedImageBlocks(conv, readViewedImages(viewDir), images);
 		return toolResult(call.id, result.content, result.isError, attachments);
 	} finally {
 		rmSync(viewDir, { recursive: true, force: true });

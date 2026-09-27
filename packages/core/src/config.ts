@@ -8,6 +8,7 @@ export interface Config {
 	anthropicApiKey?: string;
 	/** For `btw generate image` with the openai image provider. */
 	openaiApiKey?: string;
+	openrouterApiKey?: string;
 	/**
 	 * The Claude Code executable that chats on the Claude plan run (claude-plan.ts). Found on the
 	 * PATH and in the usual install folders when not set.
@@ -32,7 +33,8 @@ export const DEFAULT_PORT = 5780;
 /** Where each provider's API key is kept, and the environment variable used when it isn't. */
 export const API_KEYS = {
 	anthropic: { label: 'Anthropic', field: 'anthropicApiKey', env: 'ANTHROPIC_API_KEY' },
-	openai: { label: 'OpenAI', field: 'openaiApiKey', env: 'OPENAI_API_KEY' }
+	openai: { label: 'OpenAI', field: 'openaiApiKey', env: 'OPENAI_API_KEY' },
+	openrouter: { label: 'OpenRouter', field: 'openrouterApiKey', env: 'OPENROUTER_API_KEY' }
 } as const satisfies Record<string, { label: string; field: keyof Config; env: string }>;
 
 export type ApiKeyProvider = keyof typeof API_KEYS;

@@ -1,5 +1,6 @@
 import { API_KEYS, configuredApiKey, updateConfig, type ApiKeyProvider } from './config.ts';
 import { openaiBaseUrl } from './openai.ts';
+import { openrouterBaseUrl } from './openrouter.ts';
 
 /*
  * API keys as the admin page and `btw key` handle them. A key never goes back out: the status
@@ -37,6 +38,12 @@ const ABOUT: Record<ApiKeyProvider, Pick<ApiKeyStatus, 'purpose' | 'withoutIt' |
 		withoutIt:
 			"Chats and automations on OpenAI models stop working, and btw can't make pictures, until a new key is added.",
 		consoleUrl: 'https://platform.openai.com/api-keys'
+	},
+	openrouter: {
+		purpose:
+			'Runs chats and automations on the models OpenRouter serves (Claude, GPT, Gemini, DeepSeek and many more), with one key and its credits.',
+		withoutIt: 'Chats and automations on OpenRouter models stop working until a new key is added.',
+		consoleUrl: 'https://openrouter.ai/settings/keys'
 	}
 };
 
@@ -78,7 +85,10 @@ export function normalizeApiKey(value: string): string {
 
 const CHECK_TIMEOUT_MS = 20_000;
 
-/** Listing models is free and needs nothing but a valid key. */
+/**
+ * Listing models is free and needs nothing but a valid key. OpenRouter lists its models for
+ * anyone, so it's asked about the key itself.
+ */
 function checkRequest(
 	provider: ApiKeyProvider,
 	key: string
@@ -92,6 +102,9 @@ function checkRequest(
 			url: `${base}/v1/models?limit=1`,
 			headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' }
 		};
+	}
+	if (provider === 'openrouter') {
+		return { url: `${openrouterBaseUrl()}/key`, headers: { authorization: `Bearer ${key}` } };
 	}
 	return { url: `${openaiBaseUrl()}/models`, headers: { authorization: `Bearer ${key}` } };
 }
