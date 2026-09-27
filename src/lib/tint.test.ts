@@ -81,7 +81,17 @@ describe('avatar tint', () => {
 
 	it('overrides layout.css in both themes', () => {
 		const style = tintStyle(avatarTint('comet', css));
-		expect(style).toMatch(/^<style>:root:root\{--background:#[0-9a-f]{6};.*\}<\/style>$/);
+		expect(style).toMatch(/^<style>:root:not\(\.dark\)\{--background:#[0-9a-f]{6};.*\}<\/style>$/);
 		expect(style).toMatch(/\}\.dark\.dark\{--background:#[0-9a-f]{6};/);
+	});
+
+	// The light accent is tinted and the dark one isn't: a light rule that also matched `.dark`
+	// would outrank layout.css's and put the light accent under dark mode's light text.
+	it('keeps the light tint out of the dark theme', () => {
+		const tint = avatarTint('quantum', css);
+		expect(tint.light).toHaveProperty('accent');
+		expect(tint.dark).not.toHaveProperty('accent');
+		const [lightRule] = tintStyle(tint).match(/<style>[^{]*/)!;
+		expect(lightRule).toContain(':not(.dark)');
 	});
 });
