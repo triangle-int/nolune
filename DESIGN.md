@@ -124,14 +124,16 @@ provider brings a `FileStore` for pictures and PDFs (see [Attachments](#attachme
   OpenAI's output items (`reasoning`, `message`, `function_call`). The two use different type
   names, so `content-blocks.ts` reads any row without knowing its provider, for the chat, the
   runner (tool calls, restart recovery) and `pairToolResults`.
+- **Both SDKs load on first use** (`@anthropic-ai/sdk` in `anthropic.ts`, `openai` in
+  `openai-chat.ts`), not when core loads: the bundled CLI carries all of core, and most `btw`
+  commands the agent runs never call a model. Loading OpenAI's up front made each of them about
+  50 ms slower (lazily, the cost is Node parsing its code, around 10 ms). Anthropic's is lighter
+  (about 2 ms saved) and loads the same way, so the two modules match. Error classes are checked
+  only once their SDK is loaded, since before that no error can be one of them.
 - **OpenAI** (`openai-chat.ts`) uses the Responses API through OpenAI's SDK (`openai`), which
-  also retries overloads, rate limits and dropped connections, like Anthropic's. The SDK is
-  imported on first use rather than when core loads: the bundled CLI carries all of core, and
-  loading it up front made every `btw` command the agent runs about 50 ms slower (lazily, the
-  cost is Node parsing its code, around 10 ms). Its error classes are checked only once it's
-  loaded, since before that no error can be one of them. Requests are stateless
-  (`store: false`), so every call sends the whole transcript, as with Anthropic, and nothing
-  depends on OpenAI keeping a conversation. Reasoning comes back encrypted
+  also retries overloads, rate limits and dropped connections, like Anthropic's. Requests are
+  stateless (`store: false`), so every call sends the whole transcript, as with Anthropic, and
+  nothing depends on OpenAI keeping a conversation. Reasoning comes back encrypted
   (`include: ["reasoning.encrypted_content"]`) and goes back with the reply's other items,
   unchanged. btw's own blocks become input items the same way on every call: text as
   `input_text`, pictures as `input_image`, PDFs as `input_file`, command results as
