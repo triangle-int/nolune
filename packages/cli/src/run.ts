@@ -319,7 +319,9 @@ async function start(io: Io): Promise<void> {
 	io.log(
 		`btw gateway: ${process.env.ORIGIN} (listening on ${process.env.HOST}:${process.env.PORT})`
 	);
-	await import(pathToFileURL(paths.server).href);
+	// `pnpm dev` loads this file through Vite (src/hooks.server.ts), which can't follow a runtime
+	// path: the built server is loaded by Node, as is.
+	await import(/* @vite-ignore */ pathToFileURL(paths.server).href);
 }
 
 async function service(io: Io, action: string | undefined, args: string[]): Promise<void> {
