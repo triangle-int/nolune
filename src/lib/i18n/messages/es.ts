@@ -831,10 +831,11 @@ export const es: Messages = {
 			'Para iniciar sesión, ejecuta {setup} en una terminal de este ordenador, o ejecuta {claude} allí y usa {login} con tu cuenta de Claude.',
 		models: 'Modelos',
 		modelsHint:
-			'Los preajustes se comparten entre todos los perfiles. Los chats nuevos empiezan con el predeterminado. Quitar un preajuste no afecta a los chats existentes.',
+			'Los preajustes se comparten entre todos los perfiles. Los chats nuevos empiezan con el predeterminado. Editar o quitar un preajuste no cambia los chats que ya lo usan.',
 		presetDetails: (provider: string, model: string, context: string, overridden: boolean) =>
 			`${provider} / ${model} · contexto ${context}${overridden ? ' (personalizado)' : ''}`,
 		makeDefault: 'Hacer predeterminado',
+		editPreset: (name: string) => `Editar ${name}`,
 		noPresets: 'Todavía no hay preajustes.',
 		addModel: {
 			title: 'Añadir un modelo',
@@ -875,11 +876,13 @@ export const es: Messages = {
 			checkingClaude: 'Comprobando Claude Code…',
 			checkingCodex: 'Comprobando Codex…',
 			checkingModel: 'Comprobando el modelo…',
+			saving: 'Guardando…',
 			pick: 'Elige un modelo',
 			search: 'Busca o escribe un ID de modelo',
 			use: 'Usar {model}',
 			typeId: 'Escribe arriba el ID del modelo.',
 			added: (name: string) => `${name} añadido.`,
+			saved: (name: string) => `${name} guardado. Los chats que ya lo usan siguen como estaban.`,
 			invalidContext: 'La ventana de contexto debe ser un número de tokens, como 272k o 272000.'
 		},
 		savedWorks: 'Guardada. Funciona.',

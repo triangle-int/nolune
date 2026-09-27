@@ -1112,6 +1112,11 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   provider's key changes. The context window is a row of chips: Auto (what the provider reports, if
   anything), 128K, 200K, 1M, or Custom, typed as `272k`, `1.5m` or `272000`. The provider checks the
   model id before the preset is saved.
+  **Edit** on a preset opens the same form in its row, filled in (`editPreset`; the CLI has
+  `btw preset edit`). Only a new provider or model is checked with the provider, so renaming or
+  setting the window needs no key; a name left as the default follows the model. New chats,
+  automations that use the preset and chats switched to it from then on get the change; chats
+  already on it keep the copy they took (see [Switching models](#switching-models)).
 
 ## Languages
 
