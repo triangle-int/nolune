@@ -72,10 +72,11 @@ import {
 const help = () => `btw - a family agent that runs on this computer
 
 Getting started
-  btw setup [--provider anthropic|openai|claude-plan|chatgpt-plan]
+  btw setup [--provider anthropic|openai|openrouter|claude-plan|chatgpt-plan]
                                              interactive first-time setup (key, your account, model);
-                                             chats run on Claude unless you pick openai, or a plan
-                                             (see Plans below), which setup signs in to instead
+                                             chats run on Claude unless you pick another: openrouter
+                                             runs any model OpenRouter serves with one key, and a
+                                             plan (see Plans below) is signed in to instead
   btw start                                  run the gateway in the foreground
   btw service install|uninstall|restart|status|logs [-f]
                                              run it in the background at login (macOS)
@@ -87,10 +88,11 @@ Settings (${paths.home})
   btw config set claude-path <path>          the Claude Code that claude-plan chats run, and the
   btw config set codex-path <path>           Codex that chatgpt-plan chats run (found on the PATH
                                              and in their usual folders otherwise)
-  btw key set <anthropic|openai> [key]       store an API key (prompts if omitted) after checking
+  btw key set <anthropic|openai|openrouter> [key]
+                                             store an API key (prompts if omitted) after checking
                                              it; OpenAI's runs GPT chats and makes pictures. Admins
                                              can also do this on the web, under Models & keys
-  btw key rm <anthropic|openai>              remove a stored key (the environment's is used, if set)
+  btw key rm <anthropic|openai|openrouter>   remove a stored key (the environment's is used, if set)
   btw env set <NAME> <value>                 extra env var for agent commands (e.g. FIRECRAWL_API_KEY)
   btw env rm <NAME> | btw env list
 
@@ -116,10 +118,13 @@ Users (web sign-up is disabled; this is the only way to add people)
   btw user list
 
 Model presets (shared by all profiles)
-  btw preset add <model> [--provider anthropic|openai|claude-plan|chatgpt-plan] [--name N] [--context-window TOKENS]
+  btw preset add <model> [--provider anthropic|openai|openrouter|claude-plan|chatgpt-plan]
+                 [--name N] [--context-window TOKENS]
                                              the provider checks the model id first (anthropic
                                              unless given); OpenAI models other than the
-                                             flagships need --context-window. The plans check
+                                             flagships need --context-window. OpenRouter's ids
+                                             name their maker (anthropic/claude-sonnet-5), and the
+                                             model must be able to call tools. The plans check
                                              their agent's sign-in instead, and chatgpt-plan the
                                              models Codex offers
   btw preset rm <name|id>
@@ -150,6 +155,7 @@ ${AGENT_HELP}`;
 const SETUP: Record<Provider, { model: string; keys: string }> = {
 	anthropic: { model: 'claude-opus-5-5', keys: 'console.anthropic.com > API keys' },
 	openai: { model: 'gpt-6-astra', keys: 'platform.openai.com > API keys' },
+	openrouter: { model: 'anthropic/claude-opus-5.5', keys: 'openrouter.ai > Settings > API Keys' },
 	'claude-plan': { model: 'claude-opus-5-5', keys: '' },
 	'chatgpt-plan': { model: 'gpt-6-astra', keys: '' }
 };
@@ -232,7 +238,9 @@ async function setup(io: Io, args: string[]): Promise<void> {
 	});
 
 	const provider = values.provider ?? 'anthropic';
-	if (!isProvider(provider)) fail('--provider is anthropic, openai, claude-plan or chatgpt-plan');
+	if (!isProvider(provider)) {
+		fail('--provider is anthropic, openai, openrouter, claude-plan or chatgpt-plan');
+	}
 
 	const { created } = initConfig();
 	getDb();

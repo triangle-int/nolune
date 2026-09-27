@@ -660,13 +660,17 @@ export const de: Messages = {
 		purposes: {
 			anthropic: 'Für Chats und Automationen mit Claude-Modellen.',
 			openai:
-				'Für Chats und Automationen mit OpenAI-Modellen und zum Erstellen von Bildern auf der Seite „Bilder“ und wenn der Agent zeichnet.'
+				'Für Chats und Automationen mit OpenAI-Modellen und zum Erstellen von Bildern auf der Seite „Bilder“ und wenn der Agent zeichnet.',
+			openrouter:
+				'Für Chats und Automationen mit den Modellen, die OpenRouter anbietet (Claude, GPT, Gemini, DeepSeek und viele mehr), mit einem Schlüssel und dessen Guthaben.'
 		},
 		withoutIt: {
 			anthropic:
 				'Chats und Automationen mit Claude-Modellen funktionieren nicht mehr, bis ein neuer Schlüssel hinzugefügt wird.',
 			openai:
-				'Chats und Automationen mit OpenAI-Modellen funktionieren nicht mehr, und btw kann keine Bilder erstellen, bis ein neuer Schlüssel hinzugefügt wird.'
+				'Chats und Automationen mit OpenAI-Modellen funktionieren nicht mehr, und btw kann keine Bilder erstellen, bis ein neuer Schlüssel hinzugefügt wird.',
+			openrouter:
+				'Chats und Automationen mit OpenRouter-Modellen funktionieren nicht mehr, bis ein neuer Schlüssel hinzugefügt wird.'
 		},
 		savedInBtw: (hint: string | null) => `In btw gespeichert${hint ? `, endet auf ${hint}` : ''}`,
 		fromEnv: (variable: string, hint: string | null) =>
@@ -739,6 +743,8 @@ export const de: Messages = {
 			autoContext: {
 				anthropic: 'Auto verwendet das Fenster, das Anthropic für das Modell meldet.',
 				openai: 'OpenAI meldet es nicht: Auto kennt nur das der Flaggschiffe (1,05M seit GPT-5.4).',
+				openrouter:
+					'Auto verwendet das Fenster, das OpenRouter für das Modell und seinen Hauptanbieter angibt.',
 				'claude-plan': 'Claude Code meldet es nicht: Auto kennt nur seine Modelle mit 1M Kontext.',
 				'chatgpt-plan': 'Codex meldet es nicht, also lässt Auto es offen.'
 			},

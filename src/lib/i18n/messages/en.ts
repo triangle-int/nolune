@@ -593,12 +593,16 @@ export const en = {
 		purposes: {
 			anthropic: 'Runs chats and automations on Claude models.',
 			openai:
-				'Runs chats and automations on OpenAI models, and makes pictures for the Images page and when the agent draws.'
+				'Runs chats and automations on OpenAI models, and makes pictures for the Images page and when the agent draws.',
+			openrouter:
+				'Runs chats and automations on the models OpenRouter serves (Claude, GPT, Gemini, DeepSeek and many more), with one key and its credits.'
 		},
 		withoutIt: {
 			anthropic: 'Chats and automations on Claude models stop working until a new key is added.',
 			openai:
-				"Chats and automations on OpenAI models stop working, and btw can't make pictures, until a new key is added."
+				"Chats and automations on OpenAI models stop working, and btw can't make pictures, until a new key is added.",
+			openrouter:
+				'Chats and automations on OpenRouter models stop working until a new key is added.'
 		},
 		savedInBtw: (hint: string | null) => `Saved in btw${hint ? ` ending in ${hint}` : ''}`,
 		fromEnv: (variable: string, hint: string | null) =>
@@ -671,6 +675,7 @@ export const en = {
 			autoContext: {
 				anthropic: 'Auto uses the window Anthropic reports for the model.',
 				openai: "OpenAI doesn't report it: Auto knows only its flagships' (1.05M since GPT-5.4).",
+				openrouter: 'Auto uses the window OpenRouter lists for the model and its main provider.',
 				'claude-plan': "Claude Code doesn't report it: Auto knows only its 1M-context models'.",
 				'chatgpt-plan': "Codex doesn't report it, so Auto leaves it unknown."
 			},

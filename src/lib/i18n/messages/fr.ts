@@ -676,13 +676,17 @@ export const fr: Messages = {
 		purposes: {
 			anthropic: 'Fait tourner les discussions et les automatisations sur les modèles Claude.',
 			openai:
-				'Fait tourner les discussions et les automatisations sur les modèles OpenAI, et crée les images de la page Images et celles que dessine l’agent.'
+				'Fait tourner les discussions et les automatisations sur les modèles OpenAI, et crée les images de la page Images et celles que dessine l’agent.',
+			openrouter:
+				'Fait tourner les discussions et les automatisations sur les modèles que propose OpenRouter (Claude, GPT, Gemini, DeepSeek et bien d’autres), avec une seule clé et ses crédits.'
 		},
 		withoutIt: {
 			anthropic:
 				'Les discussions et les automatisations sur les modèles Claude cessent de fonctionner jusqu’à l’ajout d’une nouvelle clé.',
 			openai:
-				'Les discussions et les automatisations sur les modèles OpenAI cessent de fonctionner, et btw ne peut plus créer d’images, jusqu’à l’ajout d’une nouvelle clé.'
+				'Les discussions et les automatisations sur les modèles OpenAI cessent de fonctionner, et btw ne peut plus créer d’images, jusqu’à l’ajout d’une nouvelle clé.',
+			openrouter:
+				'Les discussions et les automatisations sur les modèles OpenRouter cessent de fonctionner jusqu’à l’ajout d’une nouvelle clé.'
 		},
 		savedInBtw: (hint: string | null) =>
 			`Enregistrée dans btw${hint ? `, se termine par ${hint}` : ''}`,
@@ -757,6 +761,8 @@ export const fr: Messages = {
 				anthropic: 'Auto utilise la fenêtre qu’Anthropic indique pour le modèle.',
 				openai:
 					'OpenAI ne l’indique pas : Auto ne connaît que celle de ses modèles phares (1,05M depuis GPT-5.4).',
+				openrouter:
+					'Auto utilise la fenêtre qu’OpenRouter indique pour le modèle et son fournisseur principal.',
 				'claude-plan':
 					'Claude Code ne l’indique pas : Auto ne connaît que ses modèles à 1M de contexte.',
 				'chatgpt-plan': 'Codex ne l’indique pas : Auto la laisse donc inconnue.'
