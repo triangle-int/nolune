@@ -799,7 +799,13 @@ packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_comm
                 packages/core/image-templates. Plain TypeScript run by Node with type stripping
                 (no enums or parameter properties; imports use .ts extensions).
 packages/cli    btw: setup, start, service, config, key, env, user, preset, profile, skill, trigger, wake,
-                view, memory, generate, agent
+                view, memory, generate, agent. `runCli(argv, io)` in run.ts runs a command and returns
+                its exit code; index.ts calls it with this process's io. Commands print, read stdin,
+                the environment (BTW_PROFILE, …) and the working folder only through `io` (io.ts),
+                never `process`, and end in an error rather than `process.exit`, so the agent's
+                commands can later run inside the gateway (issue #42). setup, start and service
+                stay in a process of their own: they prompt at a terminal, run the gateway or manage
+                its service.
 src/            SvelteKit gateway (adapter-node). @btw/core is bundled into the server build.
                 UI components in src/lib/components (shadcn-svelte primitives in ui/).
 scripts/        build-cli.mjs bundles the CLI and core into dist/cli.js with esbuild.
