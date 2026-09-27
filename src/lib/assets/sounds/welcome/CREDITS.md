@@ -13,5 +13,5 @@ after it; a cue without a file is silent.
 | `chord.mp3`   | the grid settling                                            | [achievement-sparkle](https://freesound.org/people/SkySpeira/sounds/715067/) by SkySpeira on Freesound | CC0     |
 | `gather.mp3`  | the dots gathering into the avatar as the chat opens         | [Fast Warp In](https://freesound.org/people/GammaGool/sounds/735062/) by GammaGool on Freesound        | CC0     |
 
-The Freesound ones are their previews, trimmed to start on the sound and leveled against each
-other. CC0 asks for no credit; it is kept here to know where each came from.
+The Freesound ones are made from the original uploads, trimmed to start on the sound and leveled
+against each other. CC0 asks for no credit; it is kept here to know where each came from.
