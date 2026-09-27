@@ -16,13 +16,14 @@ import {
 	renameFolder,
 	setFolderInstructions
 } from '@btw/core';
+import { translations } from '$lib/i18n';
 import { requireProfile } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
 
 function requireFolder(locals: App.Locals, params: { slug: string; folder: string }) {
 	const { user, profile } = requireProfile(locals, params.slug);
 	const found = getFolder(profile.id, params.folder);
-	if (!found) error(404, 'Folder not found');
+	if (!found) error(404, translations(locals.locale).m.errors.folderNotFound);
 	return { user, profile, folder: found };
 }
 

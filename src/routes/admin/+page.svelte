@@ -9,13 +9,16 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import Rich from '$lib/components/Rich.svelte';
 	import TopBar from '$lib/components/TopBar.svelte';
 	import AddModelForm from '$lib/components/admin/AddModelForm.svelte';
 	import CopyButton from '$lib/components/chat/CopyButton.svelte';
 	import { formatTokens } from '$lib/format';
+	import { getI18n } from '$lib/i18n';
 	import { cn } from '$lib/utils';
 
 	let { data, form } = $props();
+	const { m } = getI18n();
 	/** Whether the Claude Code sign-in is being checked. */
 	let checkingPlan = $state(false);
 
@@ -54,10 +57,9 @@
 	}
 
 	function sourceText(key: KeyStatus): string {
-		const end = key.hint ? ` ending in ${key.hint}` : '';
-		if (key.source === 'config') return `Saved in btw${end}`;
-		if (key.source === 'env') return `From the ${key.env} environment variable${end}`;
-		return 'Not set';
+		if (key.source === 'config') return m.admin.savedInBtw(key.hint);
+		if (key.source === 'env') return m.admin.fromEnv(key.env, key.hint);
+		return m.admin.notSet;
 	}
 </script>
 
@@ -65,14 +67,13 @@
 	<TopBar />
 	<main class="min-h-0 flex-1 overflow-y-auto">
 		<div class="mx-auto max-w-2xl space-y-8 px-4 py-8 sm:py-12">
-			<h1 class="text-2xl font-semibold">Models & keys</h1>
+			<h1 class="text-2xl font-semibold">{m.admin.title}</h1>
 
 			<section class="space-y-3" aria-labelledby="keys-heading">
 				<div class="space-y-1">
-					<h2 id="keys-heading" class="text-lg font-medium">API keys</h2>
+					<h2 id="keys-heading" class="text-lg font-medium">{m.admin.keys}</h2>
 					<p class="text-muted-foreground">
-						Shared by every profile and kept in btw's config file on this computer. A new key is
-						checked with its provider before it's saved, and used right away.
+						{m.admin.keysHint}
 					</p>
 				</div>
 				<ul class="overflow-hidden rounded-2xl border">
@@ -92,7 +93,7 @@
 								</span>
 								<div class="min-w-0 flex-1">
 									<div class="font-medium">{key.label}</div>
-									<div class="text-muted-foreground">{key.purpose}</div>
+									<div class="text-muted-foreground">{m.admin.purposes[key.provider]}</div>
 									<div class={cn(key.source ? 'text-muted-foreground' : 'text-warning')}>
 										{sourceText(key)}
 									</div>
@@ -106,7 +107,7 @@
 											class="text-muted-foreground"
 											onclick={() => (editing = key.provider)}
 										>
-											Replace
+											{m.admin.replace}
 										</Button>
 									{/if}
 									{#if key.source === 'config'}
@@ -116,7 +117,7 @@
 											class="text-muted-foreground"
 											onclick={() => (removing = key)}
 										>
-											Remove
+											{m.common.remove}
 										</Button>
 									{/if}
 								</div>
@@ -144,13 +145,13 @@
 											required
 											autocomplete="off"
 											spellcheck="false"
-											placeholder={`Paste the ${key.label} API key`}
-											aria-label={`${key.label} API key`}
+											placeholder={m.admin.pasteKey(key.label)}
+											aria-label={m.admin.keyLabel(key.label)}
 											class="h-10 flex-1 rounded-full px-4 font-mono placeholder:font-sans"
 										/>
 										<div class="flex gap-2">
 											<Button type="submit" disabled={busy} class="h-10 px-5 max-sm:flex-1">
-												{busy ? 'Checking the key…' : 'Save'}
+												{busy ? m.admin.checkingKey : m.common.save}
 											</Button>
 											{#if key.source || key.envSet}
 												<Button
@@ -159,20 +160,22 @@
 													class="h-10"
 													onclick={() => (editing = null)}
 												>
-													Cancel
+													{m.common.cancel}
 												</Button>
 											{/if}
 										</div>
 									</div>
 									<p class="text-muted-foreground">
-										Make one at
-										<a href={key.consoleUrl} target="_blank" rel="noreferrer" class="underline"
-											>{new URL(key.consoleUrl).host}</a
-										>.
+										<Rich text={m.admin.makeOneAt}>
+											{#snippet link()}<a
+													href={key.consoleUrl}
+													target="_blank"
+													rel="noreferrer"
+													class="underline">{new URL(key.consoleUrl).host}</a
+												>{/snippet}
+										</Rich>
 										{#if key.source}
-											Use a key from the same {key.provider === 'openai' ? 'project' : 'workspace'}:
-											pictures and PDFs already sent in chats live there, and those chats can't go
-											on without them.
+											{key.provider === 'openai' ? m.admin.sameProject : m.admin.sameWorkspace}
 										{/if}
 									</p>
 								</form>
@@ -190,11 +193,9 @@
 
 			<section class="space-y-3" aria-labelledby="plans-heading">
 				<div class="space-y-1">
-					<h2 id="plans-heading" class="text-lg font-medium">Plans</h2>
+					<h2 id="plans-heading" class="text-lg font-medium">{m.admin.plans}</h2>
 					<p class="text-muted-foreground">
-						Chats on a plan preset run on someone's own subscription instead of an API key. Plan
-						limits assume one person's ordinary use, so keep busy automations and subagents on an
-						API key preset.
+						{m.admin.plansHint}
 					</p>
 				</div>
 				<ul class="overflow-hidden rounded-2xl border">
@@ -209,20 +210,19 @@
 								<TerminalIcon class="size-4" />
 							</span>
 							<div class="min-w-0 flex-1">
-								<div class="font-medium">Claude plan</div>
-								<div class="text-muted-foreground">
-									Pro or Max, through Claude Code on this computer. btw runs it and never sees its
-									sign-in.
-								</div>
+								<div class="font-medium">{m.admin.plan}</div>
+								<div class="text-muted-foreground">{m.admin.claudePlanAbout}</div>
 								{#if data.claude.installed}
 									<div class="truncate font-mono text-muted-foreground">{data.claude.path}</div>
 								{:else if data.claude.path}
 									<div class="text-warning">
-										Not at <span class="font-mono">{data.claude.path}</span>, where
-										<code>btw config set claude-path</code> says it is.
+										<Rich text={m.admin.notAt}>
+											{#snippet path()}<span class="font-mono">{data.claude.path}</span>{/snippet}
+											{#snippet command()}<code>btw config set claude-path</code>{/snippet}
+										</Rich>
 									</div>
 								{:else}
-									<div class="text-warning">Claude Code isn't installed on this computer.</div>
+									<div class="text-warning">{m.admin.notInstalled}</div>
 								{/if}
 							</div>
 							<form
@@ -244,7 +244,7 @@
 									class="text-muted-foreground"
 									disabled={checkingPlan}
 								>
-									{checkingPlan ? 'Checking…' : 'Check sign-in'}
+									{checkingPlan ? m.common.checking : m.admin.checkSignIn}
 								</Button>
 							</form>
 						</div>
@@ -257,22 +257,25 @@
 						{:else if !data.claude.installed}
 							<div class="space-y-2 text-muted-foreground sm:pl-12">
 								<p>
-									In a terminal on this computer, run <code>btw claude-plan setup</code>: it
-									installs Claude Code with Anthropic's installer and signs it in to your Claude
-									account, asking first. Or install it yourself, then run <code>claude</code> and sign
-									in:
+									<Rich text={m.admin.install}>
+										{#snippet setup()}<code>btw claude-plan setup</code>{/snippet}
+										{#snippet claude()}<code>claude</code>{/snippet}
+									</Rich>
 								</p>
 								<div class="flex items-center gap-1 rounded-xl bg-muted py-1 pr-1 pl-3">
 									<code class="min-w-0 flex-1 truncate font-mono text-foreground"
 										>{data.claude.installCommand}</code
 									>
-									<CopyButton text={data.claude.installCommand} label="Copy the command" />
+									<CopyButton text={data.claude.installCommand} label={m.admin.copyCommand} />
 								</div>
 							</div>
 						{:else}
 							<p class="text-muted-foreground sm:pl-12">
-								To sign in, run <code>btw claude-plan setup</code> in a terminal on this computer,
-								or run <code>claude</code> there and use <code>/login</code> with your Claude account.
+								<Rich text={m.admin.signIn}>
+									{#snippet setup()}<code>btw claude-plan setup</code>{/snippet}
+									{#snippet claude()}<code>claude</code>{/snippet}
+									{#snippet login()}<code>/login</code>{/snippet}
+								</Rich>
 							</p>
 						{/if}
 					</li>
@@ -288,11 +291,8 @@
 								<TerminalIcon class="size-4" />
 							</span>
 							<div class="min-w-0 flex-1">
-								<div class="font-medium">ChatGPT plan</div>
-								<div class="text-muted-foreground">
-									Plus, Pro or Business, through OpenAI's Codex on this computer. btw runs it and
-									never sees its sign-in.
-								</div>
+								<div class="font-medium">{m.admin.chatgptPlan}</div>
+								<div class="text-muted-foreground">{m.admin.chatgptPlanAbout}</div>
 								{#if chatgpt.installed}
 									<div class="truncate font-mono text-muted-foreground">{chatgpt.path}</div>
 									{#if chatgptSignedIn}
@@ -302,11 +302,13 @@
 									{/if}
 								{:else if chatgpt.path}
 									<div class="text-warning">
-										Not at <span class="font-mono">{chatgpt.path}</span>, where
-										<code>btw config set codex-path</code> says it is.
+										<Rich text={m.admin.notAt}>
+											{#snippet path()}<span class="font-mono">{chatgpt.path}</span>{/snippet}
+											{#snippet command()}<code>btw config set codex-path</code>{/snippet}
+										</Rich>
 									</div>
 								{:else}
-									<div class="text-warning">Codex isn't installed on this computer.</div>
+									<div class="text-warning">{m.admin.notInstalled}</div>
 								{/if}
 							</div>
 							{#if chatgpt.installed}
@@ -314,7 +316,7 @@
 									{#if chatgpt.pending}
 										<form method="POST" action="?/chatgptCancel" use:enhance>
 											<Button type="submit" variant="ghost" size="sm" class="text-muted-foreground">
-												Cancel
+												{m.common.cancel}
 											</Button>
 										</form>
 									{:else}
@@ -337,10 +339,10 @@
 												class={cn(chatgptSignedIn && 'text-muted-foreground')}
 											>
 												{signingIn
-													? 'Asking ChatGPT…'
+													? m.admin.chatgptAsking
 													: chatgptSignedIn
-														? 'Sign in again'
-														: 'Sign in with ChatGPT'}
+														? m.admin.chatgptSignInAgain
+														: m.admin.chatgptSignIn}
 											</Button>
 										</form>
 										{#if chatgptSignedIn}
@@ -350,7 +352,7 @@
 												class="text-muted-foreground"
 												onclick={() => (signingOut = true)}
 											>
-												Sign out
+												{m.admin.signOut}
 											</Button>
 										{/if}
 									{/if}
@@ -359,30 +361,28 @@
 						</div>
 
 						{#if chatgpt.pending}
+							{@const url = new URL(chatgpt.pending.verificationUrl)}
 							<ol class="list-inside list-decimal space-y-2 sm:pl-12" aria-live="polite">
 								<li>
-									Open
-									<a
-										href={chatgpt.pending.verificationUrl}
-										target="_blank"
-										rel="noreferrer"
-										class="underline"
-										>{new URL(chatgpt.pending.verificationUrl).host}{new URL(
-											chatgpt.pending.verificationUrl
-										).pathname}</a
-									>
-									on any device and sign in to ChatGPT.
+									<Rich text={m.admin.chatgptOpen}>
+										{#snippet link()}<a
+												href={chatgpt.pending?.verificationUrl}
+												target="_blank"
+												rel="noreferrer"
+												class="underline">{url.host}{url.pathname}</a
+											>{/snippet}
+									</Rich>
 								</li>
 								<li>
-									Enter this code:
-									<span class="ml-1 font-mono text-lg font-medium tracking-widest select-all"
-										>{chatgpt.pending.userCode}</span
-									>
+									<Rich text={m.admin.chatgptCode}>
+										{#snippet code()}<span
+												class="ml-1 font-mono text-lg font-medium tracking-widest select-all"
+												>{chatgpt.pending?.userCode}</span
+											>{/snippet}
+									</Rich>
 								</li>
 							</ol>
-							<p class="text-muted-foreground sm:pl-12">
-								The code works for 15 minutes. This page updates once it's entered.
-							</p>
+							<p class="text-muted-foreground sm:pl-12">{m.admin.chatgptCodeHint}</p>
 						{:else if chatgptError}
 							<p class="text-destructive sm:pl-12" role="alert">{chatgptError}</p>
 						{:else if chatgptResult?.planMessage}
@@ -392,15 +392,15 @@
 						{:else if !chatgpt.installed}
 							<div class="space-y-2 text-muted-foreground sm:pl-12">
 								<p>
-									In a terminal on this computer, run <code>btw chatgpt-plan setup</code>: it
-									installs Codex with npm, asking first, and signs it in with ChatGPT. Or install it
-									yourself, then sign in here:
+									<Rich text={m.admin.chatgptInstall}>
+										{#snippet setup()}<code>btw chatgpt-plan setup</code>{/snippet}
+									</Rich>
 								</p>
 								<div class="flex items-center gap-1 rounded-xl bg-muted py-1 pr-1 pl-3">
 									<code class="min-w-0 flex-1 truncate font-mono text-foreground"
 										>{chatgpt.installCommand}</code
 									>
-									<CopyButton text={chatgpt.installCommand} label="Copy the command" />
+									<CopyButton text={chatgpt.installCommand} label={m.admin.copyCommand} />
 								</div>
 							</div>
 						{/if}
@@ -410,10 +410,9 @@
 
 			<section class="space-y-3" aria-labelledby="models-heading">
 				<div class="space-y-1">
-					<h2 id="models-heading" class="text-lg font-medium">Models</h2>
+					<h2 id="models-heading" class="text-lg font-medium">{m.admin.models}</h2>
 					<p class="text-muted-foreground">
-						Presets are shared by every profile. New chats start with the default one. Removing a
-						preset doesn't affect existing chats.
+						{m.admin.modelsHint}
 					</p>
 				</div>
 
@@ -433,13 +432,16 @@
 								<div class="flex items-center gap-2">
 									<span class="truncate font-medium">{preset.name}</span>
 									{#if preset.isDefault}
-										<Badge variant="secondary">Default</Badge>
+										<Badge variant="secondary">{m.common.default}</Badge>
 									{/if}
 								</div>
 								<div class="truncate text-muted-foreground">
-									{preset.provider} / {preset.model} · context {formatTokens(
-										preset.contextWindow
-									)}{preset.overridden ? ' (override)' : ''}
+									{m.admin.presetDetails(
+										preset.provider,
+										preset.model,
+										formatTokens(preset.contextWindow),
+										preset.overridden
+									)}
 								</div>
 							</div>
 							{#if !preset.isDefault}
@@ -449,23 +451,23 @@
 										type="submit"
 										variant="ghost"
 										size="sm"
-										title="Make default"
+										title={m.admin.makeDefault}
 										class="text-muted-foreground max-sm:px-2"
 									>
 										<StarIcon />
-										<span class="max-sm:sr-only">Make default</span>
+										<span class="max-sm:sr-only">{m.admin.makeDefault}</span>
 									</Button>
 								</form>
 							{/if}
 							<form method="POST" action="?/remove" use:enhance>
 								<input type="hidden" name="id" value={preset.id} />
 								<Button type="submit" variant="ghost" size="sm" class="text-muted-foreground"
-									>Remove</Button
+									>{m.common.remove}</Button
 								>
 							</form>
 						</li>
 					{:else}
-						<li class="px-4 py-3 text-sm text-muted-foreground">No presets yet.</li>
+						<li class="px-4 py-3 text-sm text-muted-foreground">{m.admin.noPresets}</li>
 					{/each}
 				</ul>
 
@@ -485,12 +487,12 @@
 <AlertDialog.Root open={removing !== null} onOpenChange={(open) => !open && (removing = null)}>
 	<AlertDialog.Content>
 		<AlertDialog.Header>
-			<AlertDialog.Title>Remove the {removing?.label} key?</AlertDialog.Title>
+			<AlertDialog.Title>{m.admin.removeKeyTitle(removing?.label ?? '')}</AlertDialog.Title>
 			<AlertDialog.Description>
 				{#if removing?.envSet}
-					btw will use the key in the {removing.env} environment variable instead.
-				{:else}
-					{removing?.withoutIt}
+					{m.admin.useEnvInstead(removing.env)}
+				{:else if removing}
+					{m.admin.withoutIt[removing.provider]}
 				{/if}
 			</AlertDialog.Description>
 		</AlertDialog.Header>
@@ -506,8 +508,10 @@
 		>
 			<input type="hidden" name="provider" value={removing?.provider ?? ''} />
 			<AlertDialog.Footer>
-				<AlertDialog.Cancel type="button">Cancel</AlertDialog.Cancel>
-				<AlertDialog.Action type="submit" variant="destructive">Remove</AlertDialog.Action>
+				<AlertDialog.Cancel type="button">{m.common.cancel}</AlertDialog.Cancel>
+				<AlertDialog.Action type="submit" variant="destructive"
+					>{m.common.remove}</AlertDialog.Action
+				>
 			</AlertDialog.Footer>
 		</form>
 	</AlertDialog.Content>
@@ -516,10 +520,8 @@
 <AlertDialog.Root open={signingOut} onOpenChange={(open) => !open && (signingOut = false)}>
 	<AlertDialog.Content>
 		<AlertDialog.Header>
-			<AlertDialog.Title>Sign out of ChatGPT?</AlertDialog.Title>
-			<AlertDialog.Description>
-				Chats on ChatGPT plan presets stop working until someone signs in again.
-			</AlertDialog.Description>
+			<AlertDialog.Title>{m.admin.chatgptSignOutTitle}</AlertDialog.Title>
+			<AlertDialog.Description>{m.admin.chatgptSignOutBody}</AlertDialog.Description>
 		</AlertDialog.Header>
 		<form
 			method="POST"
@@ -532,8 +534,10 @@
 			}}
 		>
 			<AlertDialog.Footer>
-				<AlertDialog.Cancel type="button">Cancel</AlertDialog.Cancel>
-				<AlertDialog.Action type="submit" variant="destructive">Sign out</AlertDialog.Action>
+				<AlertDialog.Cancel type="button">{m.common.cancel}</AlertDialog.Cancel>
+				<AlertDialog.Action type="submit" variant="destructive"
+					>{m.admin.signOut}</AlertDialog.Action
+				>
 			</AlertDialog.Footer>
 		</form>
 	</AlertDialog.Content>

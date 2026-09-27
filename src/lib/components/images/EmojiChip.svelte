@@ -3,11 +3,29 @@
 	import DeleteIcon from '@lucide/svelte/icons/delete';
 	import SmilePlusIcon from '@lucide/svelte/icons/smile-plus';
 	import { mode } from 'mode-watcher';
+	import type { I18n as PickerLabels } from 'emoji-picker-element/shared';
 	// Served by btw itself, so the picker works without reaching a CDN. It's fetched the first
 	// time the picker opens and kept in the browser's IndexedDB after that.
-	import emojiData from 'emoji-picker-element-data/en/emojibase/data.json?url';
+	import deData from 'emoji-picker-element-data/de/cldr/data.json?url';
+	import enData from 'emoji-picker-element-data/en/emojibase/data.json?url';
+	import esData from 'emoji-picker-element-data/es/cldr/data.json?url';
+	import frData from 'emoji-picker-element-data/fr/emojibase/data.json?url';
+	import ruData from 'emoji-picker-element-data/ru/emojibase/data.json?url';
 	import * as Popover from '$lib/components/ui/popover';
+	import { getI18n, type Locale } from '$lib/i18n';
 	import { cn } from '$lib/utils';
+
+	/** The emoji's names and search words, and the picker's own labels, in each language. */
+	const PICKER: Record<
+		Locale,
+		{ data: string; labels?: () => Promise<{ default: PickerLabels }> }
+	> = {
+		en: { data: enData },
+		ru: { data: ruData, labels: () => import('emoji-picker-element/i18n/ru_RU.js') },
+		de: { data: deData, labels: () => import('emoji-picker-element/i18n/de.js') },
+		es: { data: esData, labels: () => import('emoji-picker-element/i18n/es.js') },
+		fr: { data: frData, labels: () => import('emoji-picker-element/i18n/fr.js') }
+	};
 
 	interface Props {
 		/** The form field it fills. */
@@ -20,6 +38,8 @@
 	}
 
 	let { name, label, max, value = $bindable(''), class: className }: Props = $props();
+
+	const { m, locale } = getI18n();
 
 	let open = $state(false);
 	let picker = $state<HTMLElement>();
@@ -41,9 +61,10 @@
 	function mountPicker(node: HTMLElement) {
 		let element: HTMLElement | undefined;
 		let gone = false;
-		void import('emoji-picker-element').then(({ Picker }) => {
+		const { data, labels } = PICKER[locale];
+		void Promise.all([import('emoji-picker-element'), labels?.()]).then(([{ Picker }, i18n]) => {
 			if (gone) return;
-			const created = new Picker({ dataSource: emojiData, locale: 'en' });
+			const created = new Picker({ dataSource: data, locale, i18n: i18n?.default });
 			created.addEventListener('emoji-click', (event) => {
 				if (event.detail.unicode) add(event.detail.unicode);
 			});
@@ -68,7 +89,7 @@
 	<Popover.Root bind:open>
 		<Popover.Trigger
 			class={cn('inline-flex items-center gap-1 whitespace-nowrap', className)}
-			aria-label={`${label}: ${value || 'none'}`}
+			aria-label={m.emoji.value(label, value)}
 		>
 			{#if emoji.length}
 				{value}
@@ -86,7 +107,7 @@
 					{#if emoji.length}
 						{value}
 					{:else}
-						<span class="text-sm text-muted-foreground">Pick up to {max}</span>
+						<span class="text-sm text-muted-foreground">{m.emoji.pickUpTo(max)}</span>
 					{/if}
 				</span>
 				<button
@@ -94,7 +115,7 @@
 					onclick={removeLast}
 					disabled={!emoji.length}
 					class="flex size-10 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
-					aria-label="Remove the last emoji"
+					aria-label={m.emoji.removeLast}
 				>
 					<DeleteIcon class="size-5" />
 				</button>
@@ -103,7 +124,7 @@
 					onclick={() => (open = false)}
 					class="h-10 rounded-full bg-primary px-4 text-sm font-medium text-primary-foreground hover:opacity-85"
 				>
-					Done
+					{m.common.done}
 				</button>
 			</div>
 			<div class="emoji-picker" {@attach mountPicker}></div>

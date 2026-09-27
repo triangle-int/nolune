@@ -3,6 +3,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { createFolder, type FolderItem } from '$lib/folders';
+	import { getI18n } from '$lib/i18n';
 
 	interface Props {
 		open: boolean;
@@ -12,6 +13,8 @@
 	}
 
 	let { open = $bindable(), slug, oncreated }: Props = $props();
+
+	const { m } = getI18n();
 
 	let name = $state('');
 	let saving = $state(false);
@@ -39,23 +42,23 @@
 	<Dialog.Content>
 		<form onsubmit={submit} class="grid gap-5">
 			<Dialog.Header>
-				<Dialog.Title>New folder</Dialog.Title>
+				<Dialog.Title>{m.folders.newTitle}</Dialog.Title>
 				<Dialog.Description>
-					Keep related chats together. Every chat in a folder gets its instructions and files.
+					{m.folders.newDescription}
 				</Dialog.Description>
 			</Dialog.Header>
 			<Input
 				bind:value={name}
-				placeholder="Trip to Japan"
+				placeholder={m.folders.namePlaceholder}
 				maxlength={80}
-				aria-label="Folder name"
+				aria-label={m.folders.name}
 				class="h-10 rounded-full px-4"
 			/>
 			{#if problem}
 				<p class="text-sm text-destructive">{problem}</p>
 			{/if}
 			<Dialog.Footer>
-				<Button type="submit" disabled={!name.trim() || saving}>Create folder</Button>
+				<Button type="submit" disabled={!name.trim() || saving}>{m.folders.create}</Button>
 			</Dialog.Footer>
 		</form>
 	</Dialog.Content>

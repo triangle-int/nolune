@@ -7,6 +7,7 @@ import {
 	scanSkills,
 	setSkillsEnabled
 } from '@btw/core';
+import { translations } from '$lib/i18n';
 import { requireProfile } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -42,7 +43,9 @@ export const actions: Actions = {
 			.getAll('name')
 			.map(String)
 			.filter((name) => known.has(name));
-		if (!names.length) return fail(400, { message: 'That skill no longer exists.' });
+		if (!names.length) {
+			return fail(400, { message: translations(locals.locale).m.skills.gone });
+		}
 		setSkillsEnabled(profile.id, names, form.get('enabled') === 'on');
 	}
 };

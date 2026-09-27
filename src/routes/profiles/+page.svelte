@@ -6,8 +6,10 @@
 	import { Input } from '$lib/components/ui/input';
 	import AssistantAvatar from '$lib/components/AssistantAvatar.svelte';
 	import TopBar from '$lib/components/TopBar.svelte';
+	import { getI18n } from '$lib/i18n';
 
 	let { data, form } = $props();
+	const { m } = getI18n();
 </script>
 
 <div class="flex h-full flex-col">
@@ -16,14 +18,14 @@
 		<div class="mx-auto max-w-xl space-y-10 px-4 py-8 sm:py-12">
 			<section class="space-y-4">
 				<div class="space-y-1">
-					<h1 class="text-2xl font-semibold">Profiles</h1>
+					<h1 class="text-2xl font-semibold">{m.profiles.title}</h1>
 					<p class="text-muted-foreground">
-						Each profile has its own chats, memory and skills, shared by its members.
+						{m.profiles.intro}
 					</p>
 				</div>
 				{#if data.profiles.length === 0}
 					<p class="rounded-2xl bg-muted px-4 py-3 text-sm">
-						You're not in any profile yet. Create one below, or ask someone to add you to theirs.
+						{m.profiles.none}
 					</p>
 				{:else}
 					<ul class="overflow-hidden rounded-2xl border">
@@ -49,16 +51,16 @@
 			</section>
 
 			<form id="new" method="POST" action="?/create" use:enhance class="space-y-3">
-				<h2 class="font-medium">New profile</h2>
+				<h2 class="font-medium">{m.profiles.new}</h2>
 				<div class="flex gap-2">
 					<Input
 						name="name"
-						placeholder="e.g. Family, Grandma, Homework"
-						aria-label="Profile name"
+						placeholder={m.profiles.namePlaceholder}
+						aria-label={m.profiles.name}
 						required
 						class="h-10 flex-1 rounded-full px-4"
 					/>
-					<Button type="submit" class="h-10 px-5">Create</Button>
+					<Button type="submit" class="h-10 px-5">{m.common.create}</Button>
 				</div>
 				{#if form?.message}
 					<p class="text-sm text-destructive">{form.message}</p>

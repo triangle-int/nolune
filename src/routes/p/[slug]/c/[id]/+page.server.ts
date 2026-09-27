@@ -11,12 +11,14 @@ import {
 	stopConversation,
 	subagentByConversation
 } from '@btw/core';
+import { translations } from '$lib/i18n';
 import { requireConversation } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = ({ locals, params }) => {
 	const { conversation, profile } = requireConversation(locals, params.id);
-	if (profile.slug !== params.slug) error(404, 'Conversation not found');
+	const { m } = translations(locals.locale);
+	if (profile.slug !== params.slug) error(404, m.errors.conversationNotFound);
 	const subagent = subagentByConversation(conversation.id);
 	return {
 		conversation: {
@@ -36,7 +38,7 @@ export const load: PageServerLoad = ({ locals, params }) => {
 				? {
 						name: subagent.name,
 						parentId: subagent.parentId,
-						parentTitle: getConversation(subagent.parentId)?.title || 'a chat'
+						parentTitle: getConversation(subagent.parentId)?.title || m.chat.aChat
 					}
 				: null
 		},

@@ -4,6 +4,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import type { FolderItem } from '$lib/folders';
+	import { getI18n } from '$lib/i18n';
 
 	interface Props {
 		/** The folder to rename; the dialog is open while it's set. */
@@ -12,6 +13,8 @@
 	}
 
 	let { folder = $bindable(), slug }: Props = $props();
+
+	const { m } = getI18n();
 
 	let saving = $state(false);
 	let problem = $state<string | null>(null);
@@ -37,7 +40,7 @@
 					return async ({ result, update }) => {
 						saving = false;
 						if (result.type === 'failure') {
-							problem = String(result.data?.message ?? 'Could not rename the folder.');
+							problem = String(result.data?.message ?? m.folders.couldNotRename);
 							return;
 						}
 						folder = null;
@@ -46,21 +49,21 @@
 				}}
 			>
 				<Dialog.Header>
-					<Dialog.Title>Rename folder</Dialog.Title>
+					<Dialog.Title>{m.folders.renameTitle}</Dialog.Title>
 				</Dialog.Header>
 				<Input
 					name="name"
 					value={folder.name}
 					required
 					maxlength={80}
-					aria-label="Folder name"
+					aria-label={m.folders.name}
 					class="h-10 rounded-full px-4"
 				/>
 				{#if problem}
 					<p class="text-sm text-destructive">{problem}</p>
 				{/if}
 				<Dialog.Footer>
-					<Button type="submit" disabled={saving}>Rename</Button>
+					<Button type="submit" disabled={saving}>{m.common.rename}</Button>
 				</Dialog.Footer>
 			</form>
 		{/if}

@@ -8,6 +8,7 @@
 	import favicon from '$lib/assets/favicon.svg';
 	import { avatarFavicon } from '$lib/avatars';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { setI18n } from '$lib/i18n';
 	import { Preferences, setPreferences } from '$lib/preferences.svelte';
 	import { avatarTint, tintStyle } from '$lib/tint';
 
@@ -15,6 +16,8 @@
 
 	// The cookie is only read once; after that this object is the source of truth.
 	setPreferences(new Preferences(untrack(() => data.prefs)));
+	// Picking another language reloads the page, so this holds for the page's life.
+	setI18n(untrack(() => data.locale));
 
 	// What others change while the page is open: notifications, and profile names and avatars.
 	const signedIn = $derived(!!data.user);

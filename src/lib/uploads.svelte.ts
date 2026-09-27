@@ -1,4 +1,5 @@
 import { SvelteMap } from 'svelte/reactivity';
+import type { Messages } from './i18n';
 
 /** The server's limits (MAX_ATTACHMENTS and MAX_MEDIA_BYTES in @btw/core), checked early. */
 export const MAX_FILES = 10;
@@ -27,14 +28,14 @@ const BROWSER_PICTURES = new Set([
 ]);
 
 /** The message SvelteKit's `error()` sends, or the raw text. */
-function errorMessage(xhr: XMLHttpRequest): string {
+function errorMessage(xhr: XMLHttpRequest, m: Messages): string {
 	try {
 		const body = JSON.parse(xhr.responseText) as { message?: unknown };
 		if (typeof body.message === 'string') return body.message;
 	} catch {
 		// not JSON
 	}
-	return xhr.responseText.trim() || `Upload failed (${xhr.status || 'no connection'})`;
+	return xhr.responseText.trim() || m.errors.uploadFailed(xhr.status || null);
 }
 
 /**
@@ -48,11 +49,13 @@ export class Attachments {
 	readonly ids = $derived(this.files.flatMap((f) => (f.status === 'ready' && f.id ? [f.id] : [])));
 
 	#slug: () => string;
+	#m: Messages;
 	#requests = new SvelteMap<string, XMLHttpRequest>();
 
-	/** `slug`: the profile the files are for. */
-	constructor(slug: () => string) {
+	/** `slug`: the profile the files are for. `m`: the words for what goes wrong. */
+	constructor(slug: () => string, m: Messages) {
 		this.#slug = slug;
+		this.#m = m;
 	}
 
 	add(list: Iterable<File>) {
@@ -69,10 +72,10 @@ export class Attachments {
 			};
 			if (this.files.length >= MAX_FILES) {
 				pending.status = 'failed';
-				pending.error = `At most ${MAX_FILES} files per message`;
+				pending.error = this.#m.errors.tooManyFiles(MAX_FILES);
 			} else if (file.size > MAX_FILE_BYTES) {
 				pending.status = 'failed';
-				pending.error = `Larger than ${MAX_FILE_BYTES / (1024 * 1024)} MB`;
+				pending.error = this.#m.errors.tooLarge(MAX_FILE_BYTES / (1024 * 1024));
 			}
 			this.files.push(pending);
 			if (pending.status === 'uploading') this.#upload(key, file);
@@ -102,7 +105,7 @@ export class Attachments {
 				item.progress = 1;
 			} else if (xhr.status !== 0 || item.status === 'uploading') {
 				item.status = 'failed';
-				item.error = errorMessage(xhr);
+				item.error = errorMessage(xhr, this.#m);
 			}
 		};
 		xhr.send(file);

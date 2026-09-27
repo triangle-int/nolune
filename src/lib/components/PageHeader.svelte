@@ -5,6 +5,7 @@
 	import MenuIcon from '@lucide/svelte/icons/menu';
 	import SquarePenIcon from '@lucide/svelte/icons/square-pen';
 	import * as Sidebar from '$lib/components/ui/sidebar';
+	import { getI18n } from '$lib/i18n';
 	import Notifications from './Notifications.svelte';
 
 	interface Props {
@@ -17,6 +18,7 @@
 	let { children, actions }: Props = $props();
 
 	const sidebar = Sidebar.useSidebar();
+	const { m } = getI18n();
 	const slug = $derived(page.params.slug);
 	const notifications = $derived(page.data.notifications);
 </script>
@@ -26,7 +28,7 @@
 	<button
 		onclick={sidebar.toggle}
 		class="flex size-10 shrink-0 items-center justify-center rounded-full border bg-background shadow-xs md:hidden"
-		aria-label="Open menu"
+		aria-label={m.header.openMenu}
 	>
 		<MenuIcon class="size-5" />
 	</button>
@@ -43,7 +45,7 @@
 		<a
 			href={resolve('/p/[slug]', { slug })}
 			class="flex size-10 shrink-0 items-center justify-center rounded-full border bg-background shadow-xs md:hidden"
-			aria-label="New chat"
+			aria-label={m.common.newChat}
 		>
 			<SquarePenIcon class="size-5" />
 		</a>

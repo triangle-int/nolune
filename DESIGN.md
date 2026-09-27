@@ -49,7 +49,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
     memories/<topic>.md       long-term memory: one note per topic
     memories/core.md          the pinned note, copied into every new chat's prompt
     memories/.facts.json      when each fact in memory was first seen
-    memories/.suggestions.json  the new-chat page's chips, and the memory they were made from
+    memories/.suggestions.json  each member's new-chat chips, and the memory they were made from
     skills/<name>/SKILL.md
     attachments/              files people attached to messages
     image-templates/<id>/     this profile's own templates
@@ -989,16 +989,21 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   can change (see [Switching models](#switching-models)). The folder chip next to it starts the
   chat in a folder.
 - **Suggestions** under the new-chat composer (`packages/core/src/suggestions.ts`) come from the
-  profile's memory. Until it has any, they are four general ones (a reminder, a weather check,
-  finding a file, free disk space). After that, the default preset is asked, with `quickReply`, for
-  four things this family might ask btw, each built on something in the notes and in their
-  language: a label, a Lucide icon and the text the chip puts in the box. It gets today's date and
-  the notes, the core note first and then the most recently changed, up to 12,000 characters. They
-  are saved in `memories/.suggestions.json` with a hash of the notes, so the page only asks again
-  when memory changed or they are a week old. The page renders the saved ones (or the general
-  ones) at once and, when they are stale, fetches `/api/p/<slug>/suggestions`, which waits for the
-  model, then swaps them in. One call per profile runs at a time; a failed one keeps the old chips
-  and isn't retried for the same memory for 15 minutes.
+  profile's memory, and each member gets their own. Until it has any, they are four general ones
+  (a reminder, a weather check, finding a file, free disk space). After that, the default preset is
+  asked, with `quickReply`, for four things the person looking at the page might ask btw, each built
+  on something in the notes, preferably about them or what they take part in, written as they
+  would write it and in the notes' language: a label, a Lucide icon and the text the chip puts in
+  the box. It gets today's date, the person's name and the notes, the core note first and then the
+  most recently changed, up to 12,000 characters. Each member's are saved in
+  `memories/.suggestions.json` under their user id, with a hash of the notes and their name, so
+  the page only asks again when memory changed, they were renamed, or theirs are a week old; that
+  is one call per member who opens the page, not one per profile. Someone's that weren't made again
+  in 90 days are dropped, most likely a member who left. The page renders the saved ones (or the
+  general ones) at once and, when they are stale, fetches `/api/p/<slug>/suggestions`, which waits
+  for the model, then swaps them in. One call per member runs at a time; a failed one keeps the old
+  chips and isn't retried for the same memory for 15 minutes. Anything in memory can show up in
+  anyone's chips, which is no more than the Memory page already shows every member.
 - **The sidebar** lists folders above the chats. A folder's chats show under it when its page or
   one of its chats is open, or when its icon (a chevron on hover) is clicked; chats in folders are
   not in the Chats list. A chat btw is working in shimmers like the "Thinking" label, for everyone
@@ -1038,6 +1043,48 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   again when the provider's key changes. The context window
   is a row of chips: Auto (what the provider reports, if anything), 128K, 200K, 1M, or Custom,
   typed as `272k`, `1.5m` or `272000`. The provider checks the model id before the preset is saved.
+
+## Languages
+
+The interface comes in English, Russian, German, Spanish and French. Only the interface: what
+people write, btw's replies, the steps' summaries (the model writes those in the conversation's
+language), chat titles and everything that reaches the model stay as they are, so the prompt and
+its cache never depend on someone's settings. btw already answers in the language it's written to.
+
+- **Picking one.** Settings has Language, per device in the `btw-prefs` cookie like the other
+  settings: a language, or "Same as the browser" (the default), the first language in the
+  browser's `Accept-Language` that btw has, else English. `hooks.server.ts` works it out for every
+  request (`locals.locale`), so server-rendered pages, `<html lang>` and form messages match, and the
+  sign-in page is in the browser's language too. Picking another language reloads the page, since
+  some of what's on it was written by the server.
+- **Messages** are in `src/lib/i18n/messages/<locale>.ts`, one object per language grouped by page.
+  English is the source: the others are typed as its shape, so a missing key or a wrong parameter
+  fails `pnpm check`, and `i18n.test.ts` checks that each has English's `{slots}`. Messages with
+  values in them are functions (`workedFor: (duration) => …`), so each language puts the value where
+  its grammar wants it and picks plural forms with `Intl.PluralRules` (`plural.ts`; Russian has one,
+  few and many). Sentences with markup in them (a link, a name in bold, a command) are strings with
+  `{slots}` that `Rich.svelte` fills with snippets: a translation moves the link, not the markup.
+- **In code.** Components get `{ m, locale, intl }` from `getI18n()`, which the root layout sets;
+  server loads and actions use `translations(locals.locale)`. Helpers that make text
+  (`formatAgo`, `formatBytes`, `activeStepLabel`, the copy buttons and file cards `renderMarkdown`
+  adds, upload errors) take the messages as a parameter. Dates and numbers go through `Intl` with
+  `intl`, which is British English for English so dates still read "28 Sept".
+- **Schedules** on the Automations page: core's `parseCron` takes a cron expression apart (which
+  days, which months, which times) and each language words that with its own grammar in
+  `automations.describe`: "По понедельникам и средам в 09:00", "Montags bis freitags um 07:30
+  Uhr". English is core's `describeSchedule`, as before. Day names come from `Intl`.
+- **The emoji picker** gets its labels (emoji-picker-element's translations) and emoji names and
+  search words (emoji-picker-element-data in the language, served by btw) in the language too.
+- **What stays as it is.** Image templates' names, sentences and choices (they are the prompt the
+  chat gets) and the "Make an image:" message, skills' descriptions, memory notes' names,
+  notifications (the agent writes them), and errors that come from core, since the CLI and the
+  agent share them. The general suggestions under a new chat's box (before a profile has memory)
+  are in the interface's language: they are the start of a message for the person to finish, like
+  typing it. The ones btw makes from memory are in the family's language, like the notes.
+- **Adding a language.** Copy `en.ts` to `<locale>.ts` and translate it, `automations.describe`
+  included (`ru.ts` shows one with grammatical cases); add the code to `LOCALES` and its own name to
+  `LANGUAGE_NAMES` in `locales.ts`, and the messages to `MESSAGES` in `src/lib/i18n/index.ts`; give
+  the emoji picker its data in `EmojiChip.svelte`. TypeScript points at anything left out.
 
 ## Assistant avatars
 
@@ -1146,7 +1193,8 @@ packages/cli    btw: setup, start, service, config, key, claude-plan, chatgpt-pl
                 process of their own: they prompt at a terminal, run the gateway or manage its
                 service.
 src/            SvelteKit gateway (adapter-node). @btw/core is bundled into the server build.
-                UI components in src/lib/components (shadcn-svelte primitives in ui/).
+                UI components in src/lib/components (shadcn-svelte primitives in ui/), the
+                interface's languages in src/lib/i18n.
 scripts/        build-cli.mjs bundles the CLI and core into dist/cli.js with esbuild.
 ```
 

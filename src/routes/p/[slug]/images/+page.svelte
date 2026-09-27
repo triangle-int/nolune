@@ -23,15 +23,19 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Select from '$lib/components/ui/select';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import Rich from '$lib/components/Rich.svelte';
 	import Composer from '$lib/components/chat/Composer.svelte';
 	import ComposerDock from '$lib/components/chat/ComposerDock.svelte';
 	import StepIcon from '$lib/components/chat/StepIcon.svelte';
 	import DrawingCanvas from '$lib/components/images/DrawingCanvas.svelte';
 	import EmojiChip from '$lib/components/images/EmojiChip.svelte';
+	import { getI18n } from '$lib/i18n';
 	import { Attachments } from '$lib/uploads.svelte';
 	import { cn } from '$lib/utils';
 
 	let { data } = $props();
+
+	const { m } = getI18n();
 
 	type Template = (typeof data.templates)[number];
 	type Setting = Template['settings'][number];
@@ -42,10 +46,10 @@
 		| { kind: 'image'; tail: string };
 
 	const SHAPES = [
-		{ value: 'square', label: 'Square', icon: SquareIcon },
-		{ value: 'portrait', label: 'Portrait', icon: RectangleVerticalIcon },
-		{ value: 'landscape', label: 'Landscape', icon: RectangleHorizontalIcon },
-		{ value: 'auto', label: 'Auto', icon: ScanIcon }
+		{ value: 'square', label: m.images.shapes.square, icon: SquareIcon },
+		{ value: 'portrait', label: m.images.shapes.portrait, icon: RectangleVerticalIcon },
+		{ value: 'landscape', label: m.images.shapes.landscape, icon: RectangleHorizontalIcon },
+		{ value: 'auto', label: m.images.shapes.auto, icon: ScanIcon }
 	] as const;
 
 	/** Phones get "Take a photo" next to "Choose a photo". */
@@ -78,7 +82,7 @@
 	let shape = $state('auto');
 
 	/** The template's pictures upload as soon as they're picked, like files in the chat. */
-	const photos = new Attachments(() => data.profile.slug);
+	const photos = new Attachments(() => data.profile.slug, m);
 	let photoInput = $state<HTMLInputElement>();
 	let cameraInput = $state<HTMLInputElement>();
 	let photoNote = $state<string | null>(null);
@@ -95,7 +99,7 @@
 	let describeForm = $state<HTMLFormElement>();
 	/** The grid scrolls under the composer, so it ends this far up. */
 	let composerHeight = $state(160);
-	const describeFiles = new Attachments(() => data.profile.slug);
+	const describeFiles = new Attachments(() => data.profile.slug, m);
 
 	/** The template's sentence split into words and chips; settings it leaves out come after. */
 	function sentenceParts(template: Template): { parts: Part[]; rest: Setting[] } {
@@ -135,7 +139,7 @@
 		photoNote = null;
 		const files = [...(list ?? [])];
 		const pictures = files.filter(isPicture);
-		if (pictures.length < files.length) photoNote = 'Only pictures can be used here.';
+		if (pictures.length < files.length) photoNote = m.images.onlyPictures;
 		if (!pictures.length) return false;
 		if (maxPhotos === 1) {
 			for (const file of photos.files) photos.remove(file.key);
@@ -143,7 +147,7 @@
 			return true;
 		}
 		const room = maxPhotos - photos.files.length;
-		if (pictures.length > room) photoNote = `At most ${maxPhotos} pictures.`;
+		if (pictures.length > room) photoNote = m.images.atMostPictures(maxPhotos);
 		photos.add(pictures.slice(0, Math.max(0, room)));
 		return room > 0;
 	}
@@ -261,9 +265,9 @@
 				} else {
 					await update({ reset: false });
 					if (result.type === 'failure') {
-						setError((result.data?.message as string | undefined) ?? 'That didn’t work.');
+						setError((result.data?.message as string | undefined) ?? m.errors.thatDidntWork);
 					} else if (result.type === 'error') {
-						setError(result.error?.message ?? 'Something went wrong.');
+						setError(result.error?.message ?? m.errors.somethingWentWrong);
 					}
 				}
 				setBusy(false);
@@ -336,8 +340,8 @@
 		picture?.status === 'failed' && 'border-destructive'
 	)}
 	{@const label = picture
-		? `Change ${template.imageLabel ?? 'the picture'}`
-		: (template.imageLabel ?? 'Add a picture')}
+		? m.images.changePicture(template.imageLabel)
+		: (template.imageLabel ?? m.images.addPicture)}
 	{#if template.imageSource === 'drawing'}
 		<!-- A drawing can be made here, or be a photo of one on paper. -->
 		<DropdownMenu.Root>
@@ -351,11 +355,11 @@
 			<DropdownMenu.Content align="start" class="w-56">
 				<DropdownMenu.Item onSelect={draw}>
 					<PenLineIcon />
-					Draw
+					{m.images.draw}
 				</DropdownMenu.Item>
 				<DropdownMenu.Item onSelect={() => photoInput?.click()}>
 					<ImagePlusIcon />
-					Choose a photo of a drawing
+					{m.images.choosePhotoOfDrawing}
 				</DropdownMenu.Item>
 			</DropdownMenu.Content>
 		</DropdownMenu.Root>
@@ -369,7 +373,7 @@
 {#snippet settingChip(setting: Setting)}
 	{#if setting.type === 'select'}
 		{@const typing = setting.id in custom}
-		{@const own = `your own ${setting.label.toLowerCase()}`}
+		{@const own = m.images.yourOwn(setting.label)}
 		<!-- The chip shows the choice and opens a menu of the others, and "Custom…" turns it into a
 		     field for the person's own. Inline-flex, so the whitespace between its parts doesn't show. -->
 		<span bind:this={chipAnchors[setting.id]} class="inline-flex">
@@ -401,7 +405,7 @@
 						/>
 						<SelectPrimitive.Trigger
 							class="cursor-pointer rounded-lg p-1 text-muted-foreground hover:text-foreground"
-							aria-label={`Pick a ${setting.label.toLowerCase()} from the list`}
+							aria-label={m.images.pickFromList(setting.label)}
 						>
 							<ChevronsUpDownIcon class="size-4" />
 						</SelectPrimitive.Trigger>
@@ -421,9 +425,9 @@
 					{/each}
 					{#if setting.custom}
 						<Select.Separator />
-						<Select.Item value={CUSTOM} label="Custom…" class="py-2.5 text-base">
+						<Select.Item value={CUSTOM} label={m.images.custom} class="py-2.5 text-base">
 							<PencilLineIcon class="size-4" />
-							Custom…
+							{m.images.custom}
 						</Select.Item>
 					{/if}
 				</Select.Content>
@@ -451,7 +455,7 @@
 {/snippet}
 
 <PageHeader>
-	<span class="truncate text-lg font-medium">Images</span>
+	<span class="truncate text-lg font-medium">{m.images.title}</span>
 </PageHeader>
 
 <div class="relative min-h-0 flex-1">
@@ -464,17 +468,19 @@
 				<div class="flex items-start gap-3 rounded-2xl bg-muted px-4 py-3 text-sm">
 					<CircleAlertIcon class="mt-0.5 size-4 shrink-0 text-warning" />
 					<span class="min-w-0">
-						<span class="block font-medium">btw can't make pictures yet.</span>
+						<span class="block font-medium">{m.images.cantMakeYet}</span>
 						<span class="block text-muted-foreground">
 							{#if data.missingKey && data.user?.isAdmin}
-								It needs an {data.missingKey.label} API key.
-								<a href={resolve('/admin')} class="font-medium text-foreground underline"
-									>Add it under Models & keys</a
-								>.
+								<Rich text={m.images.needsKeyAdmin} provider={data.missingKey.label}>
+									{#snippet link()}<a
+											href={resolve('/admin')}
+											class="font-medium text-foreground underline">{m.images.addKeyLink}</a
+										>{/snippet}
+								</Rich>
 							{:else if data.missingKey}
-								It needs an {data.missingKey.label} API key. Ask an admin to add one.
+								{m.images.needsKey(data.missingKey.label)}
 							{:else}
-								{data.problem} An admin sets this up on the computer btw runs on.
+								{data.problem} {m.images.adminSetsUp}
 							{/if}
 						</span>
 					</span>
@@ -482,7 +488,7 @@
 			{/if}
 
 			{#if categories.length > 1}
-				<div role="tablist" aria-label="Template groups" class="flex gap-1">
+				<div role="tablist" aria-label={m.images.groups} class="flex gap-1">
 					{#each categories as category (category)}
 						<button
 							type="button"
@@ -520,7 +526,9 @@
 						</span>
 					</button>
 				{:else}
-					<p class="col-span-full py-10 text-center text-muted-foreground">No templates yet.</p>
+					<p class="col-span-full py-10 text-center text-muted-foreground">
+						{m.images.noTemplates}
+					</p>
 				{/each}
 			</div>
 		</div>
@@ -542,7 +550,7 @@
 			<Composer
 				bind:value={text}
 				name="text"
-				placeholder="Describe an image"
+				placeholder={m.images.describe}
 				busy={describing || !data.ready}
 				attachments={describeFiles}
 				onsubmit={() => describeForm?.requestSubmit()}
@@ -551,7 +559,7 @@
 				<p class="mt-2 text-center text-sm text-destructive">{describeError}</p>
 			{:else}
 				<p class="mt-2 hidden text-center text-xs text-muted-foreground sm:block">
-					btw makes the picture in a new chat, where you can ask for changes.
+					{m.images.describeHint}
 				</p>
 			{/if}
 		</form>
@@ -616,7 +624,7 @@
 							type="button"
 							onclick={close}
 							class="absolute top-3 right-3 flex size-9 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur hover:bg-black/60"
-							aria-label="Close"
+							aria-label={m.common.close}
 						>
 							<XIcon class="size-5" />
 						</button>
@@ -637,7 +645,7 @@
 							{#if busy}
 								<div class={cn(bigButton, 'bg-muted text-muted-foreground')} role="status">
 									<LoaderCircleIcon class="size-5 animate-spin" />
-									{photos.uploading ? 'Uploading…' : 'Starting…'}
+									{photos.uploading ? m.common.uploading : m.common.starting}
 								</div>
 							{:else if chosen.imageSource === 'drawing'}
 								<button
@@ -647,7 +655,7 @@
 									class={cn(bigButton, 'bg-muted text-foreground')}
 								>
 									<ImagePlusIcon class="size-5" />
-									Use a photo of a drawing
+									{m.images.usePhotoOfDrawing}
 								</button>
 								<button
 									type="button"
@@ -656,7 +664,7 @@
 									class={cn(bigButton, 'bg-primary text-primary-foreground')}
 								>
 									<PenLineIcon class="size-5" />
-									Start drawing
+									{m.images.startDrawing}
 								</button>
 							{:else if chosen.image === 'required'}
 								{#if touch.current}
@@ -667,7 +675,7 @@
 										class={cn(bigButton, 'bg-muted text-foreground')}
 									>
 										<CameraIcon class="size-5" />
-										Take a photo
+										{m.images.takePhoto}
 									</button>
 								{/if}
 								<button
@@ -676,7 +684,7 @@
 									disabled={!data.ready}
 									class={cn(bigButton, 'bg-primary text-primary-foreground')}
 								>
-									Choose a photo
+									{m.images.choosePhoto}
 								</button>
 							{:else}
 								<button
@@ -685,7 +693,7 @@
 									disabled={!data.ready}
 									class={cn(bigButton, 'bg-primary text-primary-foreground')}
 								>
-									Try it
+									{m.images.tryIt}
 								</button>
 							{/if}
 						</div>
@@ -696,7 +704,7 @@
 							type="button"
 							onclick={close}
 							class="flex size-10 items-center justify-center rounded-full hover:bg-muted"
-							aria-label="Close"
+							aria-label={m.common.close}
 						>
 							<XIcon class="size-5" />
 						</button>
@@ -728,7 +736,7 @@
 						<textarea
 							name="extra"
 							rows="2"
-							placeholder="Add anything else…"
+							placeholder={m.images.addAnything}
 							class="mt-4 w-full resize-none bg-transparent text-xl leading-relaxed outline-none placeholder:text-muted-foreground/60"
 						></textarea>
 						{#if templateError || photoProblem}
@@ -743,7 +751,7 @@
 							{#each SHAPES.filter((s) => s.value === shape) as current (current.value)}
 								<SelectPrimitive.Trigger
 									class={cn(chip, 'inline-flex cursor-pointer items-center gap-1.5 py-1.5 text-sm')}
-									aria-label="Shape"
+									aria-label={m.images.shape}
 								>
 									<current.icon class="size-4" />
 									{current.label}
@@ -761,9 +769,11 @@
 						</Select.Root>
 						<span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
 							{photos.uploading
-								? 'Uploading the picture…'
+								? m.images.uploadingPicture
 								: missingPicture
-									? `Add ${chosen.imageSource === 'drawing' ? 'a drawing' : 'a photo'} first.`
+									? chosen.imageSource === 'drawing'
+										? m.images.addDrawingFirst
+										: m.images.addPhotoFirst
 									: ''}
 						</span>
 						<button
@@ -771,7 +781,7 @@
 							disabled={starting || missingPicture || photos.uploading || !data.ready}
 							class="h-10 rounded-full bg-primary px-5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-85 disabled:opacity-40"
 						>
-							{starting ? 'Starting…' : 'Generate'}
+							{starting ? m.common.starting : m.images.generate}
 						</button>
 					</div>
 				{/if}

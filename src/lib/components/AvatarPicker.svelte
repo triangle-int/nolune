@@ -4,6 +4,7 @@
 	import { scale } from 'svelte/transition';
 	import { AVATARS, type Avatar } from '@btw/core/avatars';
 	import AssistantAvatar from './AssistantAvatar.svelte';
+	import { getI18n } from '$lib/i18n';
 	import { cn } from '$lib/utils';
 
 	interface Props {
@@ -12,6 +13,8 @@
 	}
 
 	let { avatar }: Props = $props();
+
+	const { m } = getI18n();
 
 	/** A few stars behind the big avatar: where (percent), how big (px), and when they twinkle. */
 	const STARS = [
@@ -72,7 +75,7 @@
 				<AssistantAvatar {avatar} mood={hovered === 'stage' ? 'working' : 'done'} size={72} />
 			</div>
 		{/key}
-		<span class="relative text-sm font-medium capitalize">{avatar}</span>
+		<span class="relative text-sm font-medium">{m.avatars[avatar]}</span>
 	</div>
 
 	<div class="grid grid-cols-4 gap-2">
@@ -97,7 +100,7 @@
 					size={36}
 					class="transition-transform duration-200 motion-safe:group-hover:-translate-y-0.5 motion-safe:group-active:scale-90"
 				/>
-				<span class="capitalize">{name}</span>
+				<span>{m.avatars[name]}</span>
 			</button>
 		{/each}
 	</div>
