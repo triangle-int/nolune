@@ -831,7 +831,10 @@ on a colored circle.
   so profiles differ without anyone choosing. The migration that added `profile.avatar` gave
   existing profiles theirs the same way, in SQL. Any member changes it on People & profile, or with
   `btw profile avatar <name>`, which the agent runs when asked ("switch to the comet"; the
-  `btw-agent` skill explains it).
+  `btw-agent` skill explains it). The picker there (`AvatarPicker.svelte`) is laid out like a
+  character select: the pick up close on a starry stage lit in its color, which pops in with a
+  squash when it changes, next to the roster, whose tiles take their avatar's color and show its
+  working motion on hover.
 - **Tint.** A profile's pages take on its avatar's hue: `src/lib/tint.ts` gives the page, sidebar,
   bubbles, hover and (in dark) card, menu and composer greys a little OKLCH chroma in the avatar
   color's hue, at each grey's own luminance, so text and avatars keep their contrast. The root
