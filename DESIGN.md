@@ -206,6 +206,14 @@ automations and subagents on an API key preset.
   Claude Code without sending anything and ask who it's signed in as (`accountInfo()`): a plan
   (`Claude Max`...) or a `claude setup-token` token passes; an API key, another provider or no
   sign-in ("Claude API") doesn't. Whether it takes the model only shows at the chat's first reply.
+- **Onboarding.** Without Claude Code, every one of those says so and how to install it; btw never
+  falls back to the SDK's own copy. At a terminal, `btw setup --provider claude-plan` and
+  `btw claude-plan setup` offer what's missing, asking before each: Anthropic's installer
+  (`curl -fsSL https://claude.ai/install.sh | bash`, which puts it in `~/.local/bin`, where btw
+  looks even when the PATH doesn't), then Claude Code's own sign-in (`claude auth login
+--claudeai`), which opens Anthropic's page in a browser and keeps what it gets. The admin page
+  shows the same steps but can't sign in itself: relaying Claude's sign-in through btw's web page
+  would be btw handling it.
 - **Pictures and PDFs** go inline as base64, since there's no Files API; Claude Code passes them to
   the model as they are, and `btw view` pictures come back in `run_command`'s MCP result as images.
   They count against the conversation's inline limit (20 MB, which keeps requests under the API's

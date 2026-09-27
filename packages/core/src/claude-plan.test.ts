@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { Readable } from 'node:stream';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createUpload, prepareMessage } from './attachments.ts';
-import { checkClaudePlan } from './claude-plan.ts';
+import { checkClaudePlan, claudePlanStatus } from './claude-plan.ts';
 import { initConfig, updateConfig } from './config.ts';
 import {
 	appendRow,
@@ -328,8 +328,10 @@ describe.skipIf(!claude)('chats on the Claude plan', { timeout: 60_000 }, () => 
 		expect(userTexts(first)).toContain('Anna: Files?');
 		expect(JSON.stringify(second.json?.messages)).toContain('a.txt');
 
-		// Named by the same plan.
-		await vi.waitFor(() => expect(getConversation(chat.id)?.title).toBe('Files here'));
+		// Named by the same plan, in a Claude Code of its own that may still be at it.
+		await vi.waitFor(() => expect(getConversation(chat.id)?.title).toBe('Files here'), {
+			timeout: 20_000
+		});
 		expect(getConversation(chat.id)?.providerSession).toEqual({ id: chat.id, sentSeq: 1 });
 	});
 
@@ -616,12 +618,34 @@ describe('attachments in chats on the Claude plan', () => {
 });
 
 describe('chats on the Claude plan without Claude Code', () => {
-	it('say that Claude Code is needed', async () => {
+	// Where Homebrew puts it, which a test can't hide.
+	const homebrew = ['/opt/homebrew/bin/claude', '/usr/local/bin/claude'].some((p) => existsSync(p));
+
+	it.skipIf(homebrew)('say how to install it', async () => {
 		updateConfig((c) => {
-			c.claudePath = join(tmpdir(), 'no-such-claude');
+			c.claudePath = undefined;
 		});
+		const empty = mkdtempSync(join(tmpdir(), 'btw-no-claude-'));
+		vi.stubEnv('PATH', empty);
+		vi.stubEnv('HOME', empty);
+
+		const status = await claudePlanStatus();
+		expect(status).toMatchObject({ path: null, installed: false, account: null });
+		expect(status.problem).toMatch(/^Claude Code isn't installed on this computer/);
+		expect(status.problem).toContain('curl -fsSL https://claude.ai/install.sh | bash');
+		expect(status.problem).toContain('btw claude-plan setup');
 		await expect(addPreset({ provider: 'claude-plan', model: 'claude-opus-5-5' })).rejects.toThrow(
-			/Claude Code/
+			/Claude Code isn't installed/
 		);
+	});
+
+	it('say where btw was told it is', async () => {
+		const missing = join(tmpdir(), 'no-such-claude');
+		updateConfig((c) => {
+			c.claudePath = missing;
+		});
+		const status = await claudePlanStatus();
+		expect(status).toMatchObject({ path: missing, installed: false, account: null });
+		expect(status.problem).toMatch(new RegExp(`^There's no Claude Code at ${missing}`));
 	});
 });

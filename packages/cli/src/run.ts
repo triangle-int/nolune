@@ -1,10 +1,11 @@
 import { existsSync } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
 	API_KEYS,
 	ApiKeyError,
+	CLAUDE_INSTALL_COMMAND,
 	DEFAULT_IMAGE_MODEL,
 	DEFAULT_PORT,
 	MAX_MEDIA_BYTES,
@@ -13,6 +14,7 @@ import {
 	checkApiKey,
 	claudeExecutable,
 	claudePlanStatus,
+	claudeSignInCommand,
 	configExists,
 	createSkill,
 	createUser,
@@ -95,10 +97,13 @@ Settings (${paths.home})
   btw env rm <NAME> | btw env list
 
 Claude plan (chats on your own Pro or Max plan instead of an API key)
-  Install Claude Code on this computer, run \`claude\` and sign in with your Claude account (/login).
-  btw never sees that sign-in: it runs Claude Code, which uses the plan's limits. Those assume one
-  person's ordinary use, so keep busy automations and subagents on an API key preset.
+  Chats on a claude-plan preset run through Claude Code on this computer, signed in to your Claude
+  account; \`btw claude-plan setup\` installs it and signs it in if needed. btw never sees that
+  sign-in: Claude Code keeps it and uses the plan's limits. Those assume one person's ordinary use,
+  so keep busy automations and subagents on an API key preset.
   btw claude-plan status                     which Claude Code btw runs, and who it's signed in as
+  btw claude-plan setup                      install Claude Code and sign in to your plan, where
+                                             needed (asks before each)
 
 Users (web sign-up is disabled; this is the only way to add people)
   btw user create <name> <email> [--password P] [--admin]
@@ -144,11 +149,46 @@ const SETUP: Record<Provider, { model: string; keys: string }> = {
 	'claude-plan': { model: 'claude-opus-5-5', keys: '' }
 };
 
-/** Fails unless Claude Code is here and signed in to a plan; says who it's signed in as. */
-async function requireClaudePlan(io: Io): Promise<void> {
-	const status = await claudePlanStatus();
+async function confirm(io: Io, question: string): Promise<boolean> {
+	return /^y/i.test(await ask(io, `${question} (yes/no)`, 'yes'));
+}
+
+/** Runs a program on this terminal, for the person at it; returns its exit code. */
+function runOnTerminal(
+	command: string,
+	args: string[],
+	env: Record<string, string | undefined> = process.env
+): number {
+	return spawnSync(command, args, { stdio: 'inherit', env }).status ?? 1;
+}
+
+/**
+ * Fails unless Claude Code is here and signed in to a plan; says who it's signed in as. With
+ * `guide`, at a terminal, it first offers what's missing: Anthropic's installer, then Claude
+ * Code's own sign-in, asking before each. btw never sees the sign-in: Claude Code keeps it.
+ */
+async function requireClaudePlan(io: Io, guide = false): Promise<void> {
+	let status = await claudePlanStatus();
+	if (guide && io.stdinIsTTY && !status.installed) {
+		io.log("Chats on the Claude plan run through Claude Code, which isn't installed here.");
+		if (await confirm(io, `Install it with Anthropic's installer (${CLAUDE_INSTALL_COMMAND})?`)) {
+			if (runOnTerminal('bash', ['-c', CLAUDE_INSTALL_COMMAND]) !== 0) {
+				fail("Claude Code's installer failed. See https://code.claude.com/docs/en/setup");
+			}
+			status = await claudePlanStatus();
+		}
+	}
+	if (guide && io.stdinIsTTY && status.installed && status.account && status.problem) {
+		// Its first sentence: the rest says how to sign in, which is what comes next.
+		io.log(status.problem.split('. ')[0].replace(/\.?$/, '.'));
+		if (await confirm(io, 'Sign in to your Claude plan now? Claude Code opens its sign-in page')) {
+			const { command, args, env } = claudeSignInCommand(status.path ?? 'claude');
+			runOnTerminal(command, args, env);
+			status = await claudePlanStatus();
+		}
+	}
 	if (status.problem || !status.account) fail(status.problem ?? "Claude Code didn't answer.");
-	io.log(`Claude Code (${status.path ?? 'found by the SDK'}): ${describeAccount(status.account)}`);
+	io.log(`Claude Code (${status.path}): ${describeAccount(status.account)}`);
 }
 
 function positional(args: string[], index: number, name: string): string {
@@ -237,7 +277,7 @@ async function setup(io: Io, args: string[]): Promise<void> {
 	io.log(created ? `Created ${paths.home}` : `Using ${paths.home}`);
 
 	if (runsOnClaudeCode(provider)) {
-		await requireClaudePlan(io);
+		await requireClaudePlan(io, true);
 	} else {
 		const { label, field } = API_KEYS[provider];
 		if (!readConfig()[field]) {
@@ -425,7 +465,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				}
 				const claude = claudeExecutable();
 				io.log(
-					`claude     ${claude ? `Claude Code at ${claude} (btw claude-plan status checks its sign-in)` : 'no Claude Code found (for claude-plan presets)'}`
+					`claude     ${claude ? `Claude Code at ${claude} (btw claude-plan status checks its sign-in)` : 'no Claude Code found (btw claude-plan setup installs it)'}`
 				);
 				const images = imageGenerationStatus();
 				io.log(`images     ${images.model}${images.problem ? ` (${images.problem})` : ''}`);
@@ -485,8 +525,11 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 		}
 
 		case 'claude-plan': {
-			if (action !== 'status') fail('usage: btw claude-plan status');
-			await requireClaudePlan(io);
+			if (action !== 'status' && action !== 'setup') fail('usage: btw claude-plan status|setup');
+			if (action === 'setup' && !io.stdinIsTTY) {
+				fail('`btw claude-plan setup` asks questions: run it in a terminal on this computer.');
+			}
+			await requireClaudePlan(io, action === 'setup');
 			return;
 		}
 

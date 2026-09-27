@@ -10,6 +10,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import * as ToggleGroup from '$lib/components/ui/toggle-group';
 	import TopBar from '$lib/components/TopBar.svelte';
+	import CopyButton from '$lib/components/chat/CopyButton.svelte';
 	import { formatTokens } from '$lib/format';
 	import { cn } from '$lib/utils';
 
@@ -181,20 +182,22 @@
 						<span
 							class={cn(
 								'flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted max-sm:self-start',
-								data.claudePath ? 'text-foreground' : 'text-muted-foreground'
+								data.claude.installed ? 'text-foreground' : 'text-muted-foreground'
 							)}
 						>
 							<TerminalIcon class="size-4" />
 						</span>
 						<div class="min-w-0 flex-1">
 							<div class="font-medium">Claude Code</div>
-							{#if data.claudePath}
-								<div class="truncate font-mono text-muted-foreground">{data.claudePath}</div>
-							{:else}
+							{#if data.claude.installed}
+								<div class="truncate font-mono text-muted-foreground">{data.claude.path}</div>
+							{:else if data.claude.path}
 								<div class="text-warning">
-									Not found. Install it on this computer, or set its path with
-									<code>btw config set claude-path</code>.
+									Not at <span class="font-mono">{data.claude.path}</span>, where
+									<code>btw config set claude-path</code> says it is.
 								</div>
+							{:else}
+								<div class="text-warning">Not installed on this computer.</div>
 							{/if}
 						</div>
 						<form
@@ -224,10 +227,24 @@
 						<p class="text-destructive sm:pl-12" role="alert">{form.planError}</p>
 					{:else if form?.planMessage}
 						<p class="text-muted-foreground sm:pl-12" role="status">{form.planMessage}</p>
+					{:else if !data.claude.installed}
+						<div class="space-y-2 text-muted-foreground sm:pl-12">
+							<p>
+								In a terminal on this computer, run <code>btw claude-plan setup</code>: it installs
+								Claude Code with Anthropic's installer and signs it in to your Claude account,
+								asking first. Or install it yourself, then run <code>claude</code> and sign in:
+							</p>
+							<div class="flex items-center gap-1 rounded-xl bg-muted py-1 pr-1 pl-3">
+								<code class="min-w-0 flex-1 truncate font-mono text-foreground"
+									>{data.claude.installCommand}</code
+								>
+								<CopyButton text={data.claude.installCommand} label="Copy the command" />
+							</div>
+						</div>
 					{:else}
 						<p class="text-muted-foreground sm:pl-12">
-							To sign in, run <code>claude</code> in a terminal on this computer and use
-							<code>/login</code> with your Claude account.
+							To sign in, run <code>btw claude-plan setup</code> in a terminal on this computer, or
+							run <code>claude</code> there and use <code>/login</code> with your Claude account.
 						</p>
 					{/if}
 				</div>

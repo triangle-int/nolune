@@ -145,8 +145,11 @@ export {
 	type Provider
 } from './models.ts';
 export {
+	CLAUDE_INSTALL_COMMAND,
 	ClaudePlanError,
 	checkClaudePlan,
+	claudeSignInCommand,
+	findClaudeCode,
 	claudeExecutable,
 	claudePlanStatus,
 	describeAccount,

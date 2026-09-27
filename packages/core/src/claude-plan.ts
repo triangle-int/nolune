@@ -72,7 +72,12 @@ export function isPlanAbortError(err: unknown): boolean {
 }
 
 const HOW_TO_SIGN_IN =
-	'Run `claude` in a terminal on the computer btw runs on and sign in with your Claude account (/login).';
+	'Run `claude` in a terminal on the computer btw runs on and sign in with your Claude account (/login), or run `btw claude-plan setup` there.';
+
+/** Anthropic's installer for macOS and Linux (code.claude.com/docs/en/setup). */
+export const CLAUDE_INSTALL_COMMAND = 'curl -fsSL https://claude.ai/install.sh | bash';
+
+const HOW_TO_INSTALL = `Install it on the computer btw runs on with \`${CLAUDE_INSTALL_COMMAND}\` (or \`brew install --cask claude-code\`) and sign in with your Claude account, or run \`btw claude-plan setup\` there, which does both. If it's installed somewhere btw doesn't look, set its path with \`btw config set claude-path <path>\`.`;
 
 // --- finding and starting Claude Code ---
 
@@ -107,11 +112,31 @@ export function claudeExecutable(): string | null {
 	return candidates.find(isFile) ?? null;
 }
 
+/** The `claude` btw would run, and whether it's there (a configured path may not be). */
+export function findClaudeCode(): { path: string | null; installed: boolean } {
+	const path = claudeExecutable();
+	return { path, installed: !!path && isFile(path) };
+}
+
+/** The `claude` to run. Throws, saying how to install it, when there's none. */
+function requireClaudeExecutable(): string {
+	const path = claudeExecutable();
+	if (path && isFile(path)) return path;
+	if (path) {
+		throw new ClaudePlanError(
+			`There's no Claude Code at ${path}, where \`btw config set claude-path\` says it is. ${HOW_TO_INSTALL}`
+		);
+	}
+	throw new ClaudePlanError(
+		`Claude Code isn't installed on this computer, or btw can't find it. Chats on the Claude plan run through it. ${HOW_TO_INSTALL}`
+	);
+}
+
 /**
  * btw's environment, without the API credentials Claude Code would otherwise use (and bill)
  * instead of the plan.
  */
-function claudeEnv(): Record<string, string | undefined> {
+export function claudeEnv(): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = {
 		...process.env,
 		CLAUDE_AGENT_SDK_CLIENT_APP: 'btw-agent'
@@ -125,13 +150,12 @@ function claudeEnv(): Record<string, string | undefined> {
 
 /** What every query shares: btw's own prompt and tools only, nothing from Claude Code's settings. */
 function baseOptions(cwd: string): Options {
-	const executable = claudeExecutable();
 	return {
 		cwd,
 		env: claudeEnv(),
-		// Without one, the SDK tries the Claude Code that comes with it, which the published
-		// package doesn't carry: the error then says to install Claude Code.
-		...(executable ? { pathToClaudeCodeExecutable: executable } : {}),
+		// Always the one installed here: the SDK would otherwise try the copy that comes with it,
+		// which the published package doesn't carry.
+		pathToClaudeCodeExecutable: requireClaudeExecutable(),
 		tools: [],
 		settingSources: [],
 		strictMcpConfig: true,
@@ -152,10 +176,11 @@ function modelOptions(model: string, effort: Effort): Partial<Options> {
 
 /** The SDK's errors from starting Claude Code, in words for the people using btw. */
 function startError(err: unknown): ClaudePlanError {
+	if (err instanceof ClaudePlanError) return err;
 	const message = err instanceof Error ? err.message : String(err);
 	if (/not found|failed to launch|ENOENT|EACCES/i.test(message)) {
 		return new ClaudePlanError(
-			`Couldn't start Claude Code (${message.split('\n')[0]}). Chats on the Claude plan need Claude Code installed on this computer (https://claude.com/claude-code); if it's somewhere btw doesn't look, set its path with \`btw config set claude-path <path>\`.`
+			`Couldn't start Claude Code (${message.split('\n')[0]}). ${HOW_TO_INSTALL}`
 		);
 	}
 	return new ClaudePlanError(`Claude Code stopped: ${message.split('\n')[0]}`);
@@ -641,9 +666,11 @@ export async function quickReply(opts: {
 }
 
 export interface ClaudePlanStatus {
-	/** The Claude Code btw runs, if it found one. */
+	/** The Claude Code btw runs, if it found one (or was told where it is). */
 	path: string | null;
-	/** Who Claude Code is signed in as, as it says. */
+	/** Whether that Claude Code is there. */
+	installed: boolean;
+	/** Who Claude Code is signed in as, as it says; null when it couldn't be asked. */
 	account: AccountInfo | null;
 	/** What stops chats on the plan from working, in plain words; null when nothing does. */
 	problem: string | null;
@@ -678,7 +705,7 @@ function accountProblem(account: AccountInfo): string | null {
  * Starts Claude Code without sending anything and asks who it's signed in as. Nothing is billed.
  */
 export async function claudePlanStatus(): Promise<ClaudePlanStatus> {
-	const path = claudeExecutable();
+	const { path, installed } = findClaudeCode();
 	const { sdk } = await load();
 	let release!: () => void;
 	const released = new Promise<void>((resolve) => (release = resolve));
@@ -698,14 +725,26 @@ export async function claudePlanStatus(): Promise<ClaudePlanStatus> {
 			timer = setTimeout(() => reject(new Error('no answer')), STATUS_TIMEOUT_MS);
 		});
 		const account = await Promise.race([q.accountInfo(), timeout]);
-		return { path, account, problem: accountProblem(account) };
+		return { path, installed, account, problem: accountProblem(account) };
 	} catch (err) {
-		return { path, account: null, problem: startError(err).message };
+		return { path, installed, account: null, problem: startError(err).message };
 	} finally {
 		clearTimeout(timer);
 		release();
 		q?.close();
 	}
+}
+
+/**
+ * How to sign Claude Code in to a Claude plan from a terminal: its own sign-in, which opens
+ * Anthropic's page in a browser. btw only starts it; Claude Code keeps what it gets.
+ */
+export function claudeSignInCommand(path: string): {
+	command: string;
+	args: string[];
+	env: Record<string, string | undefined>;
+} {
+	return { command: path, args: ['auth', 'login', '--claudeai'], env: claudeEnv() };
 }
 
 /** Throws a ClaudePlanError unless Claude Code is here and signed in to a plan. */

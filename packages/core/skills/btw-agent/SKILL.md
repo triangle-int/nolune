@@ -55,8 +55,10 @@ keys in the account menu.
 A `claude-plan` preset runs chats on the Claude Pro or Max plan someone signed in to Claude Code
 with on this computer, instead of an API key: btw runs Claude Code, which uses the plan's limits.
 `btw claude-plan status` says which Claude Code btw runs and who it's signed in as. Nobody signs in
-through btw or you: the owner runs `claude` in a terminal and uses `/login` there. Never ask for,
-look for or copy a Claude sign-in or its tokens.
+through btw or you: the owner runs `btw claude-plan setup` in a terminal on this computer, which
+installs Claude Code if needed and starts its own sign-in (or runs `claude` there and uses
+`/login`). That command asks questions, so it doesn't work from your commands. Never ask for, look
+for or copy a Claude sign-in or its tokens.
 
 The plan's limits assume one person's ordinary use. When someone wants the plan as the default,
 say that automations and subagents started from its chats use it too, and suggest keeping busy

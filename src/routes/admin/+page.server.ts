@@ -1,15 +1,16 @@
 import { error, fail } from '@sveltejs/kit';
 import {
+	CLAUDE_INSTALL_COMMAND,
 	ApiKeyError,
 	PROVIDERS,
 	PROVIDER_LABELS,
 	addPreset,
 	apiKeyStatuses,
 	checkApiKey,
-	claudeExecutable,
 	claudePlanStatus,
 	describeAccount,
 	effectiveContextWindow,
+	findClaudeCode,
 	getDefaultPreset,
 	isApiKeyProvider,
 	listPresets,
@@ -30,7 +31,7 @@ export const load: PageServerLoad = ({ locals }) => {
 		keys: apiKeyStatuses(),
 		providers: PROVIDERS.map((id) => ({ id, label: PROVIDER_LABELS[id] })),
 		// Where Claude Code is; whether it's signed in takes starting it, so that's a button.
-		claudePath: claudeExecutable(),
+		claude: { ...findClaudeCode(), installCommand: CLAUDE_INSTALL_COMMAND },
 		presets: listPresets().map((p) => ({
 			id: p.id,
 			name: p.name,
