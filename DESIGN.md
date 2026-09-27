@@ -329,9 +329,19 @@ context, which the family sets on the folder's page (`/p/<slug>/f/<id>`).
   and PDF limits.
 - **Starting in a folder:** the composer on the folder's page, or the folder chip in the new
   chat composer (`?folder=<id>` preselects it), whose menu also makes a new folder.
-- **Moving chats:** drag a chat onto a folder in the sidebar, or onto the Chats list to take it
-  out; or use "Move to folder" in a chat's menu (the sidebar's, or the chat header's, which is
-  the way on phones). Moving only sets `conversation.folder_id`.
+- **Moving chats:** drag a chat onto a folder in the sidebar (its row, or its chats when it's
+  open), or onto the Chats list to take it out; or use "Move to folder" in a chat's menu (the
+  sidebar's or the chat header's). Moving only sets `conversation.folder_id`.
+- **Dragging** (`src/lib/chat-drag.svelte.ts`) uses pointer events for a mouse or pen and touch
+  events for fingers, not the browser's drag and drop, so it works the same on phones. A mouse
+  drags after moving 4px; a finger after a 400 ms long press, and moving earlier scrolls the list
+  as usual. The row only moves up and down and stays inside the sidebar's list, which scrolls
+  near its edges. The chat leaves its place, and the group under it opens a gap where it will
+  land: groups are ordered by recent activity, so that's its place in that order, not wherever
+  the pointer is. Holding it over a closed folder for a moment opens the folder; dropping on a
+  closed folder's row slides the chat into it. Escape puts it back. On touch screens a blocking
+  `touchmove` listener sits on the list from the start (the browser only waits for listeners
+  that were there when the touch began), and stops the scrolling once a chat is picked up.
 - **The prompt follows the folder.** Each conversation stores the folder section its prompt was
   built with (`folder_context`). At the start of every model call the runner renders the section
   the chat should have now (its folder's current name, instructions and files, or nothing) and,

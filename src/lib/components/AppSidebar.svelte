@@ -1,6 +1,8 @@
 <script lang="ts">
-	import { flushSync, untrack } from 'svelte';
+	import { untrack } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
+	import { scale, slide } from 'svelte/transition';
+	import { Portal } from 'bits-ui';
 	import { enhance } from '$app/forms';
 	import { afterNavigate, goto, invalidate } from '$app/navigation';
 	import { resolve } from '$app/paths';
@@ -31,7 +33,8 @@
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { Kbd } from '$lib/components/ui/kbd';
-	import { CHAT_DRAG_TYPE, moveChat, type FolderItem } from '$lib/folders';
+	import { ChatDrag, SETTLE_MS } from '$lib/chat-drag.svelte';
+	import { moveChat, type FolderItem } from '$lib/folders';
 	import { cn } from '$lib/utils';
 	import AssistantAvatar from './AssistantAvatar.svelte';
 	import RenameChatDialog from './chat/RenameChatDialog.svelte';
@@ -68,11 +71,77 @@
 
 	/** Folders whose chats are listed under them. */
 	const expanded = new SvelteSet<string>();
-	/** The chat being dragged, and where it would land: a folder's id, or '' for no folder. */
-	let dragging = $state<ChatItem | null>(null);
-	let dropTarget = $state<string | null>(null);
-	/** What the pointer carries while a chat is dragged (see the bottom of the page). */
-	let dragPreview = $state<HTMLElement>();
+	/** The sidebar's scrolling list, which a dragged chat stays inside. */
+	let scroller = $state<HTMLElement | null>(null);
+	/** A chat just dropped into another folder, shown there before the reload says so. */
+	let landed = $state<{ id: string; folderId: string | null } | null>(null);
+	let springTimer: ReturnType<typeof setTimeout> | undefined;
+
+	const drag: ChatDrag<ChatItem> = new ChatDrag<ChatItem>({
+		container: () => scroller,
+		settleOn: (): { el: Element; vanish: boolean } | null => {
+			const gap: Element | null | undefined =
+				landing === null ? null : scroller?.querySelector(`[data-chat-gap="${landing}"]`);
+			if (gap) return { el: gap, vanish: false };
+			// A closed folder has no gap: the chat slides into its row.
+			const row = landing && scroller?.querySelector(`[data-folder-row="${landing}"]`);
+			return row ? { el: row, vanish: true } : null;
+		},
+		drop: (chat, target) => {
+			clearTimeout(springTimer);
+			if (target === null || target === (chat.folderId ?? '')) return;
+			const folderId = target || null;
+			landed = { id: chat.id, folderId };
+			moveProblem = null;
+			moveChat(chat.id, folderId)
+				.catch((err) => (moveProblem = err instanceof Error ? err.message : String(err)))
+				.finally(() => {
+					if (landed?.id === chat.id) landed = null;
+				});
+		},
+		hover: (target) => {
+			clearTimeout(springTimer);
+			// Holding a chat over a closed folder opens it, to show where the chat will land.
+			if (!target || expanded.has(target)) return;
+			springTimer = setTimeout(() => {
+				if (drag.row?.target === target) expanded.add(target);
+			}, 600);
+		}
+	});
+
+	const shown = $derived.by(() => {
+		const moved = landed;
+		if (!moved) return conversations;
+		return conversations.map((c) => (c.id === moved.id ? { ...c, folderId: moved.folderId } : c));
+	});
+	/** Each chat's place in the sidebar's order (most recent activity first). */
+	const position = $derived(Object.fromEntries(shown.map((c, i) => [c.id, i])));
+	/** The group a dragged chat would land in: the one under it, or back where it came from. */
+	const landing: string | null = $derived(
+		drag.row ? (drag.row.target ?? drag.row.item.folderId ?? '') : null
+	);
+	/** That group when it's another one than the chat's own, to light up. */
+	const dropInto = $derived(
+		drag.row && landing !== (drag.row.item.folderId ?? '') ? landing : null
+	);
+
+	type Row = { key: string; chat: ChatItem | null };
+
+	/**
+	 * A group's rows: '' for the chat list, or a folder's id. A dragged chat leaves its row, and the
+	 * group it would land in opens a gap (`chat: null`) where it will be. Groups are in order of
+	 * recent activity, so that's the chat's place in that order, not wherever the pointer is.
+	 */
+	function rowsOf(group: string): Row[] {
+		const dragged = drag.row?.item;
+		const chats = shown.filter((c) => (c.folderId ?? '') === group && c.id !== dragged?.id);
+		const rows: Row[] = chats.map((chat) => ({ key: chat.id, chat }));
+		if (dragged && landing === group) {
+			const at = chats.filter((c) => position[c.id] < position[dragged.id]).length;
+			rows.splice(at, 0, { key: 'gap', chat: null });
+		}
+		return rows;
+	}
 	/** Chats btw is working in right now, in this profile. */
 	let running = $state<string[]>([]);
 
@@ -84,8 +153,6 @@
 		return () => source.close();
 	});
 
-	const looseChats = $derived(conversations.filter((c) => !c.folderId));
-	const chatsIn = (folderId: string) => conversations.filter((c) => c.folderId === folderId);
 	/** The folder of the open page or chat. */
 	const activeFolderId = $derived(
 		page.params.folder ?? conversations.find((c) => c.id === page.params.id)?.folderId ?? null
@@ -120,42 +187,6 @@
 		creatingFolder = true;
 	}
 
-	function startDrag(event: DragEvent, chat: ChatItem) {
-		if (!event.dataTransfer) return;
-		event.dataTransfer.setData(CHAT_DRAG_TYPE, chat.id);
-		event.dataTransfer.effectAllowed = 'move';
-		dragging = chat;
-		// Without this the browser shows its picture of a link (or its address). The preview has to
-		// show the chat's title before the browser takes its picture, which is right after this.
-		flushSync();
-		if (dragPreview) event.dataTransfer.setDragImage(dragPreview, 22, 26);
-	}
-
-	/** A folder (or '' for the chat list) takes the dragged chat unless it's already there. */
-	function dragOver(event: DragEvent, target: string) {
-		if (!dragging || !event.dataTransfer?.types.includes(CHAT_DRAG_TYPE)) return;
-		if ((dragging.folderId ?? '') === target) return;
-		event.preventDefault();
-		event.dataTransfer.dropEffect = 'move';
-		dropTarget = target;
-	}
-
-	/** Moving between the parts of one target (a folder's row and its chats) doesn't leave it. */
-	function dragLeave(event: DragEvent, target: string) {
-		const next = (event.relatedTarget as Element | null)?.closest?.('[data-drop-target]');
-		if (next?.getAttribute('data-drop-target') === target) return;
-		if (dropTarget === target) dropTarget = null;
-	}
-
-	function drop(event: DragEvent, target: string) {
-		const chat = dragging;
-		dragging = null;
-		dropTarget = null;
-		if (!chat || (chat.folderId ?? '') === target) return;
-		event.preventDefault();
-		move(chat.id, target || null);
-	}
-
 	function openSearch() {
 		sidebar.setOpenMobile(false);
 		searchOpen = true;
@@ -175,19 +206,20 @@
 </script>
 
 {#snippet chatItem(conversation: ChatItem)}
-	<Sidebar.MenuItem class={cn(dragging?.id === conversation.id && 'opacity-50')}>
-		<Sidebar.MenuButton isActive={page.params.id === conversation.id}>
+	<Sidebar.MenuItem>
+		<!-- Pressed and moved (or held, on touch screens), the row is dragged; see ChatDrag. -->
+		<Sidebar.MenuButton
+			isActive={page.params.id === conversation.id}
+			class="select-none [-webkit-touch-callout:none]"
+		>
 			{#snippet child({ props })}
 				{@const working = running.includes(conversation.id)}
 				<a
 					href={chatHref(conversation.id)}
-					draggable="true"
-					ondragstart={(event) => startDrag(event, conversation)}
-					ondragend={() => {
-						dragging = null;
-						dropTarget = null;
-					}}
 					{...props}
+					draggable="false"
+					onpointerdown={(event) => drag.press(event, conversation)}
+					ontouchstart={(event) => drag.touch(event, conversation)}
 				>
 					<!-- Shimmers like the "Thinking" label while btw works in the chat. -->
 					<span class={cn(working && 'thinking-shimmer')}>
@@ -229,6 +261,16 @@
 			</DropdownMenu.Content>
 		</DropdownMenu.Root>
 	</Sidebar.MenuItem>
+{/snippet}
+
+<!-- Where a dragged chat will land. It slides open and shut while the chat moves between groups. -->
+{#snippet gap(group: string)}
+	<li
+		data-chat-gap={group}
+		aria-hidden="true"
+		class="h-9 rounded-xl border border-dashed border-sidebar-border"
+		transition:slide|global={{ duration: drag.row?.animateGap ? SETTLE_MS : 0 }}
+	></li>
 {/snippet}
 
 <svelte:window onkeydown={onWindowKeydown} />
@@ -289,7 +331,7 @@
 		</div>
 	</Sidebar.Header>
 
-	<Sidebar.Content class="no-scrollbar">
+	<Sidebar.Content bind:ref={scroller} {@attach drag.holdScroll} class="no-scrollbar">
 		<Sidebar.Group class="px-2 py-1">
 			<Sidebar.Menu>
 				<Sidebar.MenuItem>
@@ -389,18 +431,12 @@
 				</Sidebar.MenuItem>
 				{#each folders as folder (folder.id)}
 					{@const open = expanded.has(folder.id)}
-					{@const inside = chatsIn(folder.id)}
-					<Sidebar.MenuItem
-						data-drop-target={folder.id}
-						ondragover={(event) => dragOver(event, folder.id)}
-						ondragleave={(event) => dragLeave(event, folder.id)}
-						ondrop={(event) => drop(event, folder.id)}
-					>
+					<Sidebar.MenuItem data-drop-target={folder.id} data-folder-row={folder.id}>
 						<Sidebar.MenuButton
 							isActive={page.params.folder === folder.id}
 							class={cn(
 								'pl-9',
-								dropTarget === folder.id && 'bg-sidebar-accent ring-2 ring-sidebar-ring'
+								dropInto === folder.id && 'bg-sidebar-accent ring-2 ring-sidebar-ring'
 							)}
 						>
 							{#snippet child({ props })}
@@ -463,14 +499,16 @@
 						-->
 						<li
 							data-drop-target={folder.id}
-							ondragover={(event) => dragOver(event, folder.id)}
-							ondragleave={(event) => dragLeave(event, folder.id)}
-							ondrop={(event) => drop(event, folder.id)}
-							class={cn('rounded-xl', dropTarget === folder.id && 'bg-sidebar-accent/60')}
+							class={cn('rounded-xl', dropInto === folder.id && 'bg-sidebar-accent/60')}
+							transition:slide={{ duration: SETTLE_MS }}
 						>
 							<Sidebar.MenuSub class="mr-0 pr-0">
-								{#each inside as conversation (conversation.id)}
-									{@render chatItem(conversation)}
+								{#each rowsOf(folder.id) as row (row.key)}
+									{#if row.chat}
+										{@render chatItem(row.chat)}
+									{:else}
+										{@render gap(folder.id)}
+									{/if}
 								{:else}
 									<li class="px-3 py-1.5 text-xs text-muted-foreground">
 										Drag chats here, or start one on the folder's page.
@@ -489,22 +527,23 @@
 		<Sidebar.Group
 			class={cn(
 				'rounded-xl px-2 group-data-[collapsible=icon]:hidden',
-				dropTarget === '' && 'bg-sidebar-accent/60 ring-2 ring-sidebar-ring ring-inset'
+				dropInto === '' && 'bg-sidebar-accent/60 ring-2 ring-sidebar-ring ring-inset'
 			)}
 			data-drop-target=""
-			ondragover={(event) => dragOver(event, '')}
-			ondragleave={(event) => dragLeave(event, '')}
-			ondrop={(event) => drop(event, '')}
 		>
 			<Sidebar.GroupLabel class="text-sm font-medium text-muted-foreground"
 				>Chats</Sidebar.GroupLabel
 			>
 			<Sidebar.Menu>
-				{#each looseChats as conversation (conversation.id)}
-					{@render chatItem(conversation)}
+				{#each rowsOf('') as row (row.key)}
+					{#if row.chat}
+						{@render chatItem(row.chat)}
+					{:else}
+						{@render gap('')}
+					{/if}
 				{:else}
 					<p class="px-3 py-2 text-sm text-muted-foreground">
-						{dragging?.folderId
+						{drag.row?.item.folderId
 							? 'Drop here to take the chat out of its folder.'
 							: 'Your chats will show up here.'}
 					</p>
@@ -631,19 +670,27 @@
 <RenameFolderDialog bind:folder={renamingFolder} slug={profile.slug} />
 <DeleteFolderDialog bind:folder={deletingFolder} slug={profile.slug} />
 
-<!--
-	A dragged chat's picture under the pointer. It stays off screen; the browser only takes a
-	picture of it. The padding leaves room for the shadow, which the picture would cut off.
--->
-<div
-	bind:this={dragPreview}
-	aria-hidden="true"
-	class="pointer-events-none fixed top-0 -left-[9999px] p-2"
->
-	<div
-		class="flex h-9 max-w-64 items-center gap-2 rounded-xl border bg-sidebar px-3 text-sm text-sidebar-foreground shadow-md"
-	>
-		<MessageCircleIcon class="size-4 shrink-0 text-muted-foreground" />
-		<span class="truncate">{dragging?.title ?? ''}</span>
-	</div>
-</div>
+{#if drag.row}
+	{@const row = drag.row}
+	<!-- The dragged chat. It lets the pointer through, so ChatDrag can see what's under it. -->
+	<Portal>
+		<div
+			aria-hidden="true"
+			in:scale={{ start: 0.98, opacity: 1, duration: 120 }}
+			class="pointer-events-none fixed top-0 z-100 flex items-center rounded-xl bg-sidebar-accent px-3 text-sm font-medium text-sidebar-accent-foreground shadow-lg ring-1 ring-sidebar-border"
+			style:left="{row.left}px"
+			style:width="{row.width}px"
+			style:height="{row.height}px"
+			style:translate="0 {row.settling?.top ?? row.top}px"
+			style:scale={row.settling ? (row.settling.vanish ? 0.85 : 1) : 1.02}
+			style:opacity={row.settling?.vanish ? 0 : 1}
+			style:transition={row.settling
+				? `translate ${SETTLE_MS}ms ease-out, scale ${SETTLE_MS}ms ease-out, opacity ${SETTLE_MS}ms ease-out`
+				: 'none'}
+		>
+			<span class={cn('truncate', running.includes(row.item.id) && 'thinking-shimmer')}>
+				{row.item.title}
+			</span>
+		</div>
+	</Portal>
+{/if}
