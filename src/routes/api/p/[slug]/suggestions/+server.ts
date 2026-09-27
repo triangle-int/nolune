@@ -1,5 +1,6 @@
 import { json } from '@sveltejs/kit';
 import { refreshSuggestions } from '@btw/core';
+import { translations } from '$lib/i18n';
 import { requireProfile } from '$lib/server/access';
 import { withIcons } from '$lib/server/suggestions';
 import type { RequestHandler } from './$types';
@@ -11,7 +12,8 @@ import type { RequestHandler } from './$types';
 export const GET: RequestHandler = async ({ locals, params }) => {
 	const { user, profile } = requireProfile(locals, params.slug);
 	const person = { id: user.id, name: user.name };
-	return json(withIcons(await refreshSuggestions(profile.slug, person)), {
+	const suggestions = await refreshSuggestions(profile.slug, person);
+	return json(withIcons(suggestions, translations(locals.locale).m), {
 		headers: { 'cache-control': 'no-store' }
 	});
 };

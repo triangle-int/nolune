@@ -2,8 +2,11 @@
 	import { enhance } from '$app/forms';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import Rich from '$lib/components/Rich.svelte';
+	import { getI18n } from '$lib/i18n';
 
 	let { form } = $props();
+	const { m } = getI18n();
 	let pending = $state(false);
 </script>
 
@@ -21,8 +24,8 @@
 	>
 		<div class="space-y-2 text-center">
 			<div class="text-4xl font-semibold tracking-tight">btw</div>
-			<h1 class="text-2xl font-medium">Welcome back</h1>
-			<p class="text-sm text-muted-foreground">Sign in with the account you were given.</p>
+			<h1 class="text-2xl font-medium">{m.login.welcome}</h1>
+			<p class="text-sm text-muted-foreground">{m.login.hint}</p>
 		</div>
 		<div class="space-y-3">
 			<Input
@@ -30,8 +33,8 @@
 				type="email"
 				autocomplete="username"
 				required
-				placeholder="Email address"
-				aria-label="Email address"
+				placeholder={m.login.email}
+				aria-label={m.login.email}
 				value={form?.email ?? ''}
 				class="h-12 rounded-full px-5 text-base"
 			/>
@@ -40,8 +43,8 @@
 				type="password"
 				autocomplete="current-password"
 				required
-				placeholder="Password"
-				aria-label="Password"
+				placeholder={m.login.password}
+				aria-label={m.login.password}
 				class="h-12 rounded-full px-5 text-base"
 			/>
 		</div>
@@ -49,11 +52,12 @@
 			<p class="text-center text-sm text-destructive">{form.message}</p>
 		{/if}
 		<Button type="submit" disabled={pending} class="h-12 w-full text-base">
-			{pending ? 'Signing in…' : 'Continue'}
+			{pending ? m.login.signingIn : m.common.continue}
 		</Button>
 		<p class="text-center text-xs text-muted-foreground">
-			Forgot your password? Ask whoever set up btw to run
-			<code class="rounded bg-muted px-1">btw user passwd</code>.
+			<Rich text={m.login.forgot}>
+				{#snippet command()}<code class="rounded bg-muted px-1">btw user passwd</code>{/snippet}
+			</Rich>
 		</p>
 	</form>
 </main>

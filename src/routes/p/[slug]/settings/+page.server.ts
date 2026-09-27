@@ -12,6 +12,7 @@ import {
 	setProfileAvatar,
 	writeSoul
 } from '@btw/core';
+import { translations } from '$lib/i18n';
 import { requireProfile } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -42,7 +43,7 @@ export const actions: Actions = {
 		} catch (err) {
 			return fail(400, { message: message(err) });
 		}
-		return { message: 'Renamed.' };
+		return { message: translations(locals.locale).m.profile.renamed };
 	},
 	avatar: async ({ locals, params, request }) => {
 		const { profile } = requireProfile(locals, params.slug);
@@ -59,7 +60,10 @@ export const actions: Actions = {
 		const { profile } = requireProfile(locals, params.slug);
 		const text = (await request.formData()).get('soul')?.toString() ?? '';
 		try {
-			return { message: writeSoul(profile.slug, text) ? 'Saved the soul.' : 'Removed the soul.' };
+			const { m } = translations(locals.locale);
+			return {
+				message: writeSoul(profile.slug, text) ? m.profile.soulSaved : m.profile.soulRemoved
+			};
 		} catch (err) {
 			if (err instanceof SoulError) return fail(400, { message: err.message });
 			throw err;
@@ -73,14 +77,14 @@ export const actions: Actions = {
 		} catch (err) {
 			return fail(400, { message: message(err) });
 		}
-		return { message: `Added ${who}.` };
+		return { message: translations(locals.locale).m.profile.added(who) };
 	},
 	remove: async ({ locals, params, request }) => {
 		const { user, profile } = requireProfile(locals, params.slug);
 		const userId = (await request.formData()).get('userId')?.toString() ?? '';
 		removeMember(profile.id, userId);
 		if (userId === user.id) redirect(303, '/');
-		return { message: 'Removed.' };
+		return { message: translations(locals.locale).m.profile.removed };
 	},
 	delete: async ({ locals, params }) => {
 		const { profile } = requireProfile(locals, params.slug);

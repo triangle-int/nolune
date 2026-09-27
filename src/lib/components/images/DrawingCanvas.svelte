@@ -4,6 +4,7 @@
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import Undo2Icon from '@lucide/svelte/icons/undo-2';
 	import XIcon from '@lucide/svelte/icons/x';
+	import { getI18n } from '$lib/i18n';
 	import { cn } from '$lib/utils';
 
 	interface Props {
@@ -13,6 +14,8 @@
 	}
 
 	let { ondone, onclose }: Props = $props();
+
+	const { m } = getI18n();
 
 	const COLORS = [
 		'#111111',
@@ -144,20 +147,24 @@
 	class="pointer-events-auto fixed inset-0 z-[60] flex flex-col bg-background pt-[env(safe-area-inset-top)] pb-[max(0.75rem,env(safe-area-inset-bottom))]"
 	role="dialog"
 	aria-modal="true"
-	aria-label="Drawing"
+	aria-label={m.drawing.title}
 >
 	<div class="flex items-center gap-2 px-3 py-3">
 		<button
 			type="button"
 			onclick={onclose}
 			class="flex size-10 items-center justify-center rounded-full bg-muted hover:bg-accent"
-			aria-label="Close"
+			aria-label={m.common.close}
 		>
 			<XIcon class="size-5" />
 		</button>
 		<div class="flex flex-1 justify-center">
-			<div class="flex gap-1 rounded-full bg-muted p-1" role="radiogroup" aria-label="Tool">
-				{#each [{ id: 'pen', icon: PencilIcon, label: 'Pen' }, { id: 'eraser', icon: EraserIcon, label: 'Eraser' }] as t (t.id)}
+			<div
+				class="flex gap-1 rounded-full bg-muted p-1"
+				role="radiogroup"
+				aria-label={m.drawing.tool}
+			>
+				{#each [{ id: 'pen', icon: PencilIcon, label: m.drawing.pen }, { id: 'eraser', icon: EraserIcon, label: m.drawing.eraser }] as t (t.id)}
 					<button
 						type="button"
 						role="radio"
@@ -179,7 +186,7 @@
 			onclick={() => strokes.pop()}
 			disabled={!strokes.length}
 			class="flex size-10 items-center justify-center rounded-full bg-muted hover:bg-accent disabled:opacity-40"
-			aria-label="Undo"
+			aria-label={m.drawing.undo}
 		>
 			<Undo2Icon class="size-5" />
 		</button>
@@ -191,7 +198,7 @@
 			min="2"
 			max="40"
 			bind:value={size}
-			aria-label="Pen size"
+			aria-label={m.drawing.penSize}
 			class="absolute top-1/2 left-4 z-10 h-40 w-6 -translate-y-1/2 accent-foreground [direction:rtl] [writing-mode:vertical-lr]"
 		/>
 		<div class="flex min-h-0 flex-1 items-center justify-center" {@attach fit}>
@@ -222,7 +229,7 @@
 						color === swatch && tool === 'pen' && 'ring-2 ring-foreground'
 					)}
 					style:background-color={swatch}
-					aria-label={`Color ${swatch}`}
+					aria-label={m.drawing.color(swatch)}
 				></button>
 			{/each}
 		</div>
@@ -231,7 +238,7 @@
 			onclick={done}
 			disabled={!strokes.length}
 			class="flex size-12 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground hover:opacity-80 disabled:opacity-30"
-			aria-label="Use this drawing"
+			aria-label={m.drawing.use}
 		>
 			<CheckIcon class="size-6" />
 		</button>

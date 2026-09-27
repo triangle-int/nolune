@@ -3,10 +3,13 @@
 	import AssistantAvatar from '$lib/components/AssistantAvatar.svelte';
 	import LucideIcon from '$lib/components/LucideIcon.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import Rich from '$lib/components/Rich.svelte';
 	import NewChatForm from '$lib/components/chat/NewChatForm.svelte';
+	import { getI18n } from '$lib/i18n';
 
 	let { data } = $props();
 
+	const { m } = getI18n();
 	/** The profile's saved chips, until new ones made from its memory arrive. */
 	let suggestions = $derived(data.suggestions);
 	const slug = $derived(data.profile.slug);
@@ -36,8 +39,10 @@
 {#if data.presets.length === 0}
 	<div class="flex flex-1 items-center justify-center p-6">
 		<p class="max-w-md text-center text-muted-foreground">
-			No models are set up yet. An admin can add one on the Models page or with
-			<code class="rounded bg-muted px-1">btw preset add &lt;model&gt;</code>.
+			<Rich text={m.newChat.noModels}>
+				{#snippet command()}<code class="rounded bg-muted px-1">btw preset add &lt;model&gt;</code
+					>{/snippet}
+			</Rich>
 		</p>
 	</div>
 {:else}
@@ -61,7 +66,7 @@
 				class="mx-auto mb-5 block"
 			/>
 			<h1 class="mb-8 text-center text-[28px] leading-tight font-normal tracking-tight">
-				{firstName ? `What can I help with, ${firstName}?` : 'What can I help with?'}
+				{firstName ? m.newChat.greeting(firstName) : m.newChat.greetingNoName}
 			</h1>
 			<div class="flex-1 sm:hidden"></div>
 		{/snippet}

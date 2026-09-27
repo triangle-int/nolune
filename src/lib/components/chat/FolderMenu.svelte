@@ -5,6 +5,7 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import NewFolderDialog from '$lib/components/folders/NewFolderDialog.svelte';
 	import type { FolderItem } from '$lib/folders';
+	import { getI18n } from '$lib/i18n';
 	import { cn } from '$lib/utils';
 
 	interface Props {
@@ -18,6 +19,7 @@
 
 	let { folders, folderId, onchange, slug }: Props = $props();
 
+	const { m } = getI18n();
 	const folder = $derived(folders.find((f) => f.id === folderId));
 	let creating = $state(false);
 </script>
@@ -32,8 +34,8 @@
 					? 'max-w-40 bg-muted pr-8 pl-3 text-foreground hover:bg-accent sm:max-w-60'
 					: 'w-9 justify-center text-muted-foreground hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground'
 			)}
-			aria-label={folder ? `In the folder ${folder.name}` : 'Start in a folder'}
-			title={folder ? undefined : 'Start in a folder'}
+			aria-label={folder ? m.folders.inFolder(folder.name) : m.folders.startInFolder}
+			title={folder ? undefined : m.folders.startInFolder}
 		>
 			<FolderIcon class="size-[18px] shrink-0" />
 			{#if folder}
@@ -42,14 +44,14 @@
 		</DropdownMenu.Trigger>
 		<DropdownMenu.Content side="top" align="start" class="w-64">
 			<DropdownMenu.Label class="text-xs font-normal text-muted-foreground">
-				Start in a folder
+				{m.folders.startInFolder}
 			</DropdownMenu.Label>
 			{#if folders.length}
 				<DropdownMenu.RadioGroup
 					value={folderId ?? ''}
 					onValueChange={(value) => onchange(value || null)}
 				>
-					<DropdownMenu.RadioItem value="">No folder</DropdownMenu.RadioItem>
+					<DropdownMenu.RadioItem value="">{m.folders.noFolder}</DropdownMenu.RadioItem>
 					{#each folders as f (f.id)}
 						<DropdownMenu.RadioItem value={f.id}>
 							<FolderIcon class="text-muted-foreground" />
@@ -61,7 +63,7 @@
 			{/if}
 			<DropdownMenu.Item onSelect={() => (creating = true)}>
 				<FolderPlusIcon />
-				New folder…
+				{m.folders.newFolderDots}
 			</DropdownMenu.Item>
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>
@@ -70,7 +72,7 @@
 			type="button"
 			onclick={() => onchange(null)}
 			class="absolute top-1/2 right-1.5 flex size-6 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-background hover:text-foreground"
-			aria-label="Start outside the folder"
+			aria-label={m.folders.startOutside}
 		>
 			<XIcon class="size-3.5" />
 		</button>

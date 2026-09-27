@@ -1,5 +1,6 @@
 import { error, json } from '@sveltejs/kit';
 import { AttachmentError, SubagentError, sendMessage } from '@btw/core';
+import { translations } from '$lib/i18n';
 import { requireConversation } from '$lib/server/access';
 import type { RequestHandler } from './$types';
 
@@ -14,7 +15,9 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	const uploads = Array.isArray(body?.uploads)
 		? body.uploads.filter((id): id is string => typeof id === 'string')
 		: [];
-	if (!text.trim() && !uploads.length) error(400, 'Message is empty');
+	if (!text.trim() && !uploads.length) {
+		error(400, translations(locals.locale).m.errors.messageEmpty);
+	}
 	try {
 		await sendMessage(params.id, { id: user.id, name: user.name }, text, uploads);
 	} catch (err) {

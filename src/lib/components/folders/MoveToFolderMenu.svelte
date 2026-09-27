@@ -4,6 +4,7 @@
 	import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import type { FolderItem } from '$lib/folders';
+	import { getI18n } from '$lib/i18n';
 	import { getPreferences } from '$lib/preferences.svelte';
 
 	interface Props {
@@ -18,13 +19,14 @@
 	let { folders, folderId, onmove, onnew }: Props = $props();
 
 	const prefs = getPreferences();
+	const { m } = getI18n();
 </script>
 
 <!-- A submenu of a chat's menu (sidebar or chat header). -->
 <DropdownMenu.Sub>
 	<DropdownMenu.SubTrigger>
 		<FolderInputIcon />
-		Move to folder
+		{m.folders.moveTo}
 	</DropdownMenu.SubTrigger>
 	<DropdownMenu.SubContent class="w-60">
 		<DropdownMenu.RadioGroup
@@ -33,7 +35,7 @@
 				if (value !== (folderId ?? '')) onmove(value || null);
 			}}
 		>
-			<DropdownMenu.RadioItem value="">No folder</DropdownMenu.RadioItem>
+			<DropdownMenu.RadioItem value="">{m.folders.noFolder}</DropdownMenu.RadioItem>
 			{#each folders as folder (folder.id)}
 				<DropdownMenu.RadioItem value={folder.id}>
 					<FolderIcon class="text-muted-foreground" />
@@ -44,12 +46,10 @@
 		<DropdownMenu.Separator />
 		<DropdownMenu.Item onSelect={onnew}>
 			<FolderPlusIcon />
-			New folder…
+			{m.folders.newFolderDots}
 		</DropdownMenu.Item>
 		<p class="px-3 pt-1 pb-2 text-xs text-muted-foreground">
-			{prefs.technical
-				? 'Moving builds the system prompt again, so the next reply re-reads the whole conversation once (a prompt cache miss).'
-				: 'After a move, the next reply takes a little longer.'}
+			{prefs.technical ? m.folders.moveTechnical : m.folders.move}
 		</p>
 	</DropdownMenu.SubContent>
 </DropdownMenu.Sub>

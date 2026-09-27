@@ -3,17 +3,17 @@ import {
 	cronRunsBetween,
 	dayKey,
 	deleteTrigger,
-	describeCron,
 	formatClock,
 	formatDate,
 	formatDay,
-	formatDayTime,
+	formatWeekday,
 	getPreset,
 	getTrigger,
 	isFinished,
 	listRuns,
 	listRunsBetween,
 	listTriggers,
+	parseCron,
 	runTriggerNow,
 	setTriggerEnabled,
 	updateTrigger,
@@ -21,12 +21,12 @@ import {
 	type RunStatus,
 	type Trigger
 } from '@btw/core';
+import { translations, type I18n, type Messages } from '$lib/i18n';
 import { requireProfile } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
 
 /** A trigger that runs more than this many times a day, on average, is listed once, not every time. */
 const MAX_RUNS_PER_DAY = 4;
-const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 function capitalize(text: string): string {
 	return text.charAt(0).toUpperCase() + text.slice(1);
@@ -41,11 +41,22 @@ function monthKey(date: Date): string {
 	return dayKey(date).slice(0, 7);
 }
 
+/** "tomorrow at 07:30", "Mon 5 Oct at 07:30". */
+function dayTime(date: Date, now: Date, { m, intl }: I18n): string {
+	return m.automations.dayAt(formatDay(date, now, intl), formatClock(date));
+}
+
 /** "Every weekday at 07:30", "Once, tomorrow at 17:00". Times are the gateway's, like cron's. */
-function schedule(t: Trigger, now: Date): string {
-	if (t.kind === 'cron') return (t.cron && describeCron(t.cron)) || 'On a custom schedule';
-	if (t.kind === 'once') return t.runAt ? `Once, ${formatDayTime(t.runAt, now)}` : 'Once';
-	return 'When another app calls its link';
+function schedule(t: Trigger, now: Date, i18n: I18n): string {
+	const { automations } = i18n.m;
+	if (t.kind === 'cron') {
+		const parsed = t.cron ? parseCron(t.cron) : null;
+		return parsed ? automations.describe(parsed) : automations.customSchedule;
+	}
+	if (t.kind === 'once') {
+		return t.runAt ? automations.onceAt(dayTime(t.runAt, now, i18n)) : automations.once;
+	}
+	return automations.onWebhook;
 }
 
 /** Runs and their history are kept this long, so the calendar doesn't go back further. */
@@ -68,7 +79,14 @@ type CalendarEntry = {
  * that failed: a script that checked and found nothing isn't news); the rest show what will run.
  * Triggers that run too often to show on every day are listed once instead.
  */
-function calendar(profileId: string, triggers: Trigger[], month: string | null, now: Date) {
+function calendar(
+	profileId: string,
+	triggers: Trigger[],
+	month: string | null,
+	now: Date,
+	i18n: I18n
+) {
+	const { intl } = i18n;
 	const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 	const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 	const asked = /^(\d{4})-(\d{2})$/.exec(month ?? '');
@@ -130,7 +148,7 @@ function calendar(profileId: string, triggers: Trigger[], month: string | null, 
 					name: t.name,
 					icon: t.icon,
 					kind: t.kind,
-					schedule: schedule(t, now)
+					schedule: schedule(t, now, i18n)
 				});
 			} else {
 				entries.push(...times.map((at) => ({ ...entry, at })));
@@ -161,15 +179,18 @@ function calendar(profileId: string, triggers: Trigger[], month: string | null, 
 				])
 			).values()
 		];
-		const relative = formatDay(date, now);
+		const soon = key === dayKey(today) || key === dayKey(addDays(today, 1));
 		cells.push({
 			key,
 			day: date.getDate(),
 			inMonth: date.getMonth() === first.getMonth(),
 			isToday: key === dayKey(today),
 			isPast: date < today,
-			title: `${date.toLocaleDateString('en-GB', { weekday: 'long' })} ${formatDate(date)}`,
-			relative: relative === 'today' || relative === 'tomorrow' ? capitalize(relative) : null,
+			title: capitalize(
+				`${date.toLocaleDateString(intl, { weekday: 'long' })} ${formatDate(date, intl)}`
+			),
+			// "Today", "Tomorrow"
+			relative: soon ? capitalize(formatDay(date, now, intl)) : null,
 			icons: icons.slice(0, 3),
 			more: Math.max(0, icons.length - 3),
 			entries: dayEntries.map(({ at, ...entry }) => ({ ...entry, time: formatClock(at) }))
@@ -180,8 +201,11 @@ function calendar(profileId: string, triggers: Trigger[], month: string | null, 
 	const inMonth = cells.filter((c) => c.inMonth);
 	const current = first.getTime() === thisMonth.getTime();
 	return {
-		title: first.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }),
-		weekdays: WEEKDAYS,
+		title: capitalize(first.toLocaleDateString(intl, { month: 'long', year: 'numeric' })),
+		// Monday first: 1 January 2024 was a Monday.
+		weekdays: [0, 1, 2, 3, 4, 5, 6].map((i) =>
+			capitalize(formatWeekday(new Date(2024, 0, 1 + i), intl))
+		),
 		cells,
 		frequent,
 		prev:
@@ -197,25 +221,26 @@ function calendar(profileId: string, triggers: Trigger[], month: string | null, 
 
 export const load: PageServerLoad = ({ locals, params, url }) => {
 	const { profile } = requireProfile(locals, params.slug);
+	const i18n = translations(locals.locale);
 	const now = new Date();
 	const triggers = listTriggers(profile.id);
 	return {
 		timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-		calendar: calendar(profile.id, triggers, url.searchParams.get('month'), now),
+		calendar: calendar(profile.id, triggers, url.searchParams.get('month'), now, i18n),
 		triggers: triggers.map((t) => ({
 			id: t.id,
 			name: t.name,
 			summary: t.summary,
 			icon: t.icon,
 			kind: t.kind,
-			schedule: schedule(t, now),
+			schedule: schedule(t, now, i18n),
 			cron: t.cron,
 			state: isFinished(t) ? ('done' as const) : t.enabled ? ('on' as const) : ('paused' as const),
 			// One-time triggers already show their time in `schedule`.
-			next: t.kind === 'cron' && t.nextRunAt ? formatDayTime(t.nextRunAt, now) : null,
+			next: t.kind === 'cron' && t.nextRunAt ? dayTime(t.nextRunAt, now, i18n) : null,
 			action: t.action,
 			text: (t.action === 'agent' ? t.prompt : t.command) ?? '',
-			model: (t.presetId && getPreset(t.presetId)?.name) || 'the default model',
+			model: (t.presetId && getPreset(t.presetId)?.name) || i18n.m.automations.defaultModel,
 			effort: t.effort,
 			webhookUrl: t.webhookToken ? webhookUrl(t.webhookToken) : null,
 			runs: listRuns(t.id, 5).map((r) => ({
@@ -223,7 +248,7 @@ export const load: PageServerLoad = ({ locals, params, url }) => {
 				action: r.action,
 				source: r.source,
 				status: r.status,
-				at: capitalize(formatDayTime(r.createdAt, now)),
+				at: capitalize(dayTime(r.createdAt, now, i18n)),
 				conversationId: r.conversationId,
 				output: r.output
 			}))
@@ -236,17 +261,18 @@ function message(err: unknown): string {
 }
 
 /** The trigger named in the form, if it belongs to this profile. */
-async function triggerFrom(profileId: string, request: Request) {
+async function triggerFrom(profileId: string, request: Request, m: Messages) {
 	const form = await request.formData();
 	const t = getTrigger(form.get('id')?.toString() ?? '');
-	if (!t || t.profileId !== profileId) error(404, 'Automation not found');
+	if (!t || t.profileId !== profileId) error(404, m.errors.automationNotFound);
 	return { t, form };
 }
 
 export const actions: Actions = {
 	edit: async ({ locals, params, request }) => {
 		const { profile } = requireProfile(locals, params.slug);
-		const { t, form } = await triggerFrom(profile.id, request);
+		const { m } = translations(locals.locale);
+		const { t, form } = await triggerFrom(profile.id, request, m);
 		const text = form.get('text')?.toString() ?? '';
 		try {
 			updateTrigger(t.id, {
@@ -259,11 +285,12 @@ export const actions: Actions = {
 		} catch (err) {
 			return fail(400, { message: message(err) });
 		}
-		return { message: `Saved "${t.name}".` };
+		return { message: m.automations.saved(t.name) };
 	},
 	run: async ({ locals, params, request }) => {
 		const { profile } = requireProfile(locals, params.slug);
-		const { t } = await triggerFrom(profile.id, request);
+		const { m } = translations(locals.locale);
+		const { t } = await triggerFrom(profile.id, request, m);
 		try {
 			runTriggerNow(t);
 		} catch (err) {
@@ -271,25 +298,27 @@ export const actions: Actions = {
 		}
 		return {
 			message:
-				t.action === 'agent'
-					? `Started "${t.name}". Its reply shows up under the bell.`
-					: `Started the script of "${t.name}".`
+				t.action === 'agent' ? m.automations.started(t.name) : m.automations.startedScript(t.name)
 		};
 	},
 	toggle: async ({ locals, params, request }) => {
 		const { profile } = requireProfile(locals, params.slug);
-		const { t } = await triggerFrom(profile.id, request);
+		const { m } = translations(locals.locale);
+		const { t } = await triggerFrom(profile.id, request, m);
 		try {
 			setTriggerEnabled(t.id, !t.enabled);
 		} catch (err) {
 			return fail(400, { message: message(err) });
 		}
-		return { message: `"${t.name}" is ${t.enabled ? 'paused' : 'on again'}.` };
+		return {
+			message: t.enabled ? m.automations.paused(t.name) : m.automations.resumed(t.name)
+		};
 	},
 	remove: async ({ locals, params, request }) => {
 		const { profile } = requireProfile(locals, params.slug);
-		const { t } = await triggerFrom(profile.id, request);
+		const { m } = translations(locals.locale);
+		const { t } = await triggerFrom(profile.id, request, m);
 		deleteTrigger(t.id);
-		return { message: `Deleted "${t.name}".` };
+		return { message: m.automations.deleted(t.name) };
 	}
 };

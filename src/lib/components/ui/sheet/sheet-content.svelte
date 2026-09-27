@@ -6,6 +6,7 @@
 	import { Dialog as SheetPrimitive } from 'bits-ui';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { Button } from '$lib/components/ui/button/index.js';
+	import { getI18n } from '$lib/i18n';
 	import { cn, type WithoutChildrenOrChild } from '$lib/utils.js';
 	import SheetOverlay from './sheet-overlay.svelte';
 	import SheetPortal from './sheet-portal.svelte';
@@ -26,6 +27,8 @@
 		showCloseButton?: boolean;
 		children: Snippet;
 	} = $props();
+
+	const { m } = getI18n();
 </script>
 
 <SheetPortal {...portalProps}>
@@ -51,7 +54,7 @@
 						{...props}
 					>
 						<XIcon />
-						<span class="sr-only">Close</span>
+						<span class="sr-only">{m.common.close}</span>
 					</Button>
 				{/snippet}
 			</SheetPrimitive.Close>

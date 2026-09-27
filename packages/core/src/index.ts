@@ -284,11 +284,16 @@ export {
 export {
 	dayKey,
 	describeCron,
+	describeSchedule,
 	formatClock,
 	formatDate,
 	formatDay,
-	formatDayTime,
-	formatWeekday
+	formatWeekday,
+	isMonthSpan,
+	parseCron,
+	type Schedule,
+	type ScheduleDays,
+	type ScheduleTimes
 } from './schedule.ts';
 export {
 	continueNotification,

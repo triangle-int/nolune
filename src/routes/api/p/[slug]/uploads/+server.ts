@@ -2,10 +2,9 @@ import { Readable } from 'node:stream';
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import { error, json } from '@sveltejs/kit';
 import { MAX_MEDIA_BYTES, TooLargeError, createUpload } from '@btw/core';
+import { translations } from '$lib/i18n';
 import { requireProfile } from '$lib/server/access';
 import type { RequestHandler } from './$types';
-
-const TOO_LARGE = `Larger than ${MAX_MEDIA_BYTES / (1024 * 1024)} MB`;
 
 /**
  * A file attached in the composer, before the message is sent. The body is the file itself and
@@ -13,8 +12,10 @@ const TOO_LARGE = `Larger than ${MAX_MEDIA_BYTES / (1024 * 1024)} MB`;
  */
 export const POST: RequestHandler = async ({ params, locals, request }) => {
 	const { user, profile } = requireProfile(locals, params.slug);
-	if (Number(request.headers.get('content-length')) > MAX_MEDIA_BYTES) error(413, TOO_LARGE);
-	if (!request.body) error(400, 'No file');
+	const { errors } = translations(locals.locale).m;
+	const tooLarge = errors.tooLarge(MAX_MEDIA_BYTES / (1024 * 1024));
+	if (Number(request.headers.get('content-length')) > MAX_MEDIA_BYTES) error(413, tooLarge);
+	if (!request.body) error(400, errors.noFile);
 	let name = 'file';
 	try {
 		name = decodeURIComponent(request.headers.get('x-file-name') ?? '') || name;
@@ -31,7 +32,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		});
 		return json({ id: row.id, name: row.name, mime: row.mime, bytes: row.bytes });
 	} catch (err) {
-		if (err instanceof TooLargeError) error(413, TOO_LARGE);
+		if (err instanceof TooLargeError) error(413, tooLarge);
 		throw err;
 	}
 };

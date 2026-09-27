@@ -12,13 +12,18 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import Rich from '$lib/components/Rich.svelte';
 	import Markdown from '$lib/components/chat/Markdown.svelte';
 	import DotGrid, { orderTopics, type Topic } from '$lib/components/memory/DotGrid.svelte';
 	import { formatAgo } from '$lib/format';
+	import { getI18n } from '$lib/i18n';
 	import { memoryAnchor, memoryTopic } from '$lib/memory';
 	import { cn } from '$lib/utils';
 
 	let { data, form } = $props();
+
+	const i18n = getI18n();
+	const { m } = i18n;
 
 	const WEEK = 7 * 24 * 60 * 60 * 1000;
 
@@ -67,8 +72,6 @@
 		count.set(total, { duration: prefersReducedMotion.current ? 0 : 1200 });
 	});
 
-	const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-
 	/** The topic pointed at, here or in the grid. */
 	let focus = $state<string | null>(null);
 	/** A card that was just jumped to. */
@@ -112,16 +115,13 @@
 </script>
 
 <PageHeader>
-	<span class="truncate text-lg font-medium">Memory</span>
+	<span class="truncate text-lg font-medium">{m.memory.title}</span>
 </PageHeader>
 
 <div class="min-h-0 flex-1 overflow-y-auto">
 	<div class="mx-auto max-w-3xl space-y-6 px-4 py-6 sm:py-10">
 		<p class="text-muted-foreground">
-			What btw remembers for {data.profile.name}, shared by everyone in it. Every chat starts with
-			the pinned Core note; btw reads the others when a chat needs them and saves what it learns
-			along the way. To add something, just tell it in a chat, like "Remember that Anna is allergic
-			to nuts".
+			{m.memory.intro(data.profile.name)}
 		</p>
 
 		<div class="space-y-3">
@@ -129,13 +129,13 @@
 				<p class="flex items-baseline gap-2">
 					<span class="text-3xl font-semibold tabular-nums">{Math.round(count.current)}</span>
 					<span class="text-muted-foreground">
-						{total === 1 ? 'memory' : 'memories'} in {plural(topics.length, 'topic', 'topics')}
+						{m.memory.total(total, topics.length)}
 					</span>
 				</p>
 				{#if updatedAt}
 					<p class="text-sm text-muted-foreground">
-						{#if thisWeek}{thisWeek} new this week ·{/if}
-						updated {formatAgo(updatedAt)}
+						{#if thisWeek}{m.memory.newThisWeek(thisWeek)} ·{/if}
+						{m.memory.updated(formatAgo(updatedAt, i18n))}
 					</p>
 				{/if}
 			</div>
@@ -169,9 +169,9 @@
 						<p class="truncate text-xs text-muted-foreground">
 							{[
 								file.path,
-								pinned && 'pinned, in every new chat',
-								!missing && plural(topic.facts.length, 'memory', 'memories'),
-								!missing && `updated ${formatAgo(file.updatedAt)}`
+								pinned && m.memory.pinned,
+								!missing && m.memory.memories(topic.facts.length),
+								!missing && m.memory.updated(formatAgo(file.updatedAt, i18n))
 							]
 								.filter(Boolean)
 								.join(' · ')}
@@ -182,7 +182,7 @@
 							variant="ghost"
 							size="icon-sm"
 							class="-mt-1 text-muted-foreground"
-							aria-label="Edit {topic.title}"
+							aria-label={m.memory.edit(topic.title)}
 							onclick={() => {
 								editing = file.path;
 								draft = file.text;
@@ -195,7 +195,7 @@
 								variant="ghost"
 								size="icon-sm"
 								class="-mt-1 -mr-1 text-muted-foreground hover:text-destructive"
-								aria-label="Forget {topic.title}"
+								aria-label={m.memory.forget(topic.title)}
 								onclick={() => (forgetting = file.path)}
 							>
 								<EraserIcon />
@@ -213,10 +213,8 @@
 							bind:value={draft}
 							rows={Math.min(18, Math.max(5, draft.split('\n').length + 1))}
 							class="rounded-2xl font-mono text-xs"
-							aria-label="{topic.title} note"
-							placeholder={pinned
-								? 'For example:\n- Anna and Ben are the parents, Mia is 7\n- We speak Russian at home\n- Mia is allergic to nuts'
-								: undefined}
+							aria-label={m.memory.note(topic.title)}
+							placeholder={pinned ? m.memory.corePlaceholder : undefined}
 						/>
 						{#if form?.path === file.path && form.message}
 							<p class="text-sm {'conflict' in form ? 'text-warning' : 'text-destructive'}">
@@ -224,9 +222,9 @@
 							</p>
 						{/if}
 						<div class="flex items-center gap-2">
-							<Button type="submit" size="sm" disabled={saving}>Save</Button>
+							<Button type="submit" size="sm" disabled={saving}>{m.common.save}</Button>
 							<Button type="button" variant="ghost" size="sm" onclick={() => (editing = null)}
-								>Cancel</Button
+								>{m.common.cancel}</Button
 							>
 							{#if pinned}
 								<span
@@ -235,7 +233,7 @@
 										draft.length > data.core.maxChars && 'text-destructive'
 									)}
 								>
-									{draft.length} / {data.core.maxChars} characters
+									{m.common.characters(draft.length, data.core.maxChars)}
 								</span>
 							{/if}
 						</div>
@@ -246,8 +244,7 @@
 					{/if}
 					{#if missing}
 						<p class="mt-3 text-sm text-muted-foreground">
-							Nothing yet. Put here what btw should keep in mind in every chat: who's in the family,
-							the languages you speak, allergies. btw adds to it too.
+							{m.memory.coreEmpty}
 						</p>
 					{:else if !mounted}
 						<p class="mt-3 text-sm whitespace-pre-line">{file.text}</p>
@@ -266,10 +263,13 @@
 <AlertDialog.Root open={forgetting !== null} onOpenChange={(open) => !open && (forgetting = null)}>
 	<AlertDialog.Content>
 		<AlertDialog.Header>
-			<AlertDialog.Title>Forget "{forgetting ? memoryTopic(forgetting) : ''}"?</AlertDialog.Title>
+			<AlertDialog.Title
+				>{m.memory.forgetTitle(forgetting ? memoryTopic(forgetting) : '')}</AlertDialog.Title
+			>
 			<AlertDialog.Description>
-				btw forgets everything in <strong class="text-foreground">{forgetting}</strong> for everyone
-				in {data.profile.name}. Chats that already read it keep what they read.
+				<Rich text={m.memory.forgetBody} profile={data.profile.name}>
+					{#snippet path()}<strong class="text-foreground">{forgetting}</strong>{/snippet}
+				</Rich>
 			</AlertDialog.Description>
 		</AlertDialog.Header>
 		<form
@@ -283,8 +283,10 @@
 		>
 			<input type="hidden" name="path" value={forgetting ?? ''} />
 			<AlertDialog.Footer>
-				<AlertDialog.Cancel type="button">Cancel</AlertDialog.Cancel>
-				<AlertDialog.Action type="submit" variant="destructive">Forget</AlertDialog.Action>
+				<AlertDialog.Cancel type="button">{m.common.cancel}</AlertDialog.Cancel>
+				<AlertDialog.Action type="submit" variant="destructive"
+					>{m.memory.forgetButton}</AlertDialog.Action
+				>
 			</AlertDialog.Footer>
 		</form>
 	</AlertDialog.Content>

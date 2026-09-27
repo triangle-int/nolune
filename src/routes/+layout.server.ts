@@ -5,7 +5,8 @@ import type { LayoutServerLoad } from './$types';
 export const load: LayoutServerLoad = ({ locals, depends, cookies }) => {
 	depends('btw:notifications');
 	const prefs = parsePreferences(cookies.get(PREFERENCES_COOKIE));
-	if (!locals.user) return { user: null, notifications: null, prefs };
+	const locale = locals.locale;
+	if (!locals.user) return { user: null, notifications: null, prefs, locale };
 	return {
 		user: {
 			id: locals.user.id,
@@ -14,6 +15,7 @@ export const load: LayoutServerLoad = ({ locals, depends, cookies }) => {
 			isAdmin: locals.user.isAdmin === true
 		},
 		notifications: listNotificationsForUser(locals.user.id),
-		prefs
+		prefs,
+		locale
 	};
 };

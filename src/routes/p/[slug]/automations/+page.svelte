@@ -11,13 +11,16 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import Rich from '$lib/components/Rich.svelte';
 	import StepIcon from '$lib/components/chat/StepIcon.svelte';
+	import { getI18n } from '$lib/i18n';
 	import { getPreferences } from '$lib/preferences.svelte';
 	import { cn } from '$lib/utils';
 
 	let { data, form } = $props();
 
 	const prefs = getPreferences();
+	const { m } = getI18n();
 
 	/** The automation whose edit form is open. */
 	let editing = $state<string | null>(null);
@@ -31,23 +34,8 @@
 
 	type Run = (typeof data.triggers)[number]['runs'][number];
 
-	const STATUS: Record<Run['status'], string> = {
-		pending: 'waiting',
-		running: 'running',
-		ok: 'done',
-		notified: 'notified',
-		silent: 'nothing to report',
-		stopped: 'stopped',
-		failed: 'failed'
-	};
-
-	const SOURCE: Record<Run['source'], string> = {
-		cron: 'scheduled',
-		once: 'scheduled',
-		webhook: 'webhook',
-		wake: 'woken by script',
-		manual: 'run by hand'
-	};
+	const STATUS: Record<Run['status'], string> = m.automations.statuses;
+	const SOURCE: Record<Run['source'], string> = m.automations.sources;
 
 	// Keep what's typed if saving fails; close the form once it's saved.
 	const save: SubmitFunction =
@@ -63,14 +51,13 @@
 </script>
 
 <PageHeader>
-	<span class="truncate text-lg font-medium">Automations</span>
+	<span class="truncate text-lg font-medium">{m.automations.title}</span>
 </PageHeader>
 
 <div class="min-h-0 flex-1 overflow-y-auto">
 	<div class="mx-auto max-w-2xl space-y-8 px-4 py-6 sm:py-10">
 		<p class="text-muted-foreground">
-			Things btw does on its own: reminders, regular checks and replies to other apps. What it finds
-			shows up under the bell. To add or change one, just ask btw in a chat.
+			{m.automations.intro}
 		</p>
 
 		{#if form?.message}
@@ -86,7 +73,7 @@
 							href="?month={data.calendar.current}"
 							data-sveltekit-noscroll
 							variant="ghost"
-							size="sm">Today</Button
+							size="sm">{m.automations.today}</Button
 						>
 					{/if}
 					<Button
@@ -95,14 +82,14 @@
 						disabled={!data.calendar.prev}
 						variant="ghost"
 						size="icon-sm"
-						aria-label="Previous month"><ChevronLeftIcon /></Button
+						aria-label={m.automations.previousMonth}><ChevronLeftIcon /></Button
 					>
 					<Button
 						href="?month={data.calendar.next}"
 						data-sveltekit-noscroll
 						variant="ghost"
 						size="icon-sm"
-						aria-label="Next month"><ChevronRightIcon /></Button
+						aria-label={m.automations.nextMonth}><ChevronRightIcon /></Button
 					>
 				</div>
 
@@ -119,7 +106,9 @@
 										/>
 										<span class="min-w-0">
 											{item.name}
-											<span class="text-muted-foreground">· {item.schedule.toLowerCase()}</span>
+											<span class="text-muted-foreground"
+												>· {m.automations.scheduleAfterName(item.schedule)}</span
+											>
 										</span>
 									</a>
 								</li>
@@ -138,9 +127,7 @@
 								type="button"
 								onclick={() => (picked = cell.key)}
 								aria-pressed={day?.key === cell.key}
-								aria-label="{cell.title}: {cell.entries.length
-									? `${cell.entries.length} automation runs`
-									: 'nothing'}"
+								aria-label={m.automations.dayLabel(cell.title, cell.entries.length)}
 								class={cn(
 									'flex h-14 flex-col items-center gap-1 rounded-xl pt-1.5 transition-colors hover:bg-muted sm:h-16',
 									day?.key === cell.key && 'bg-muted',
@@ -219,21 +206,21 @@
 								</ul>
 							{:else}
 								<p class="px-2 pb-1 text-muted-foreground">
-									{day.isPast ? 'Nothing ran on this day.' : 'Nothing runs on this day.'}
+									{day.isPast ? m.automations.nothingRan : m.automations.nothingRuns}
 								</p>
 							{/if}
 						</div>
 					{/if}
 				</div>
 				<p class="text-xs text-muted-foreground">
-					Times are in the computer's time zone ({data.timeZone}).
+					{m.automations.timeZone(data.timeZone)}
 				</p>
 			</section>
 		{/if}
 
 		<section class="space-y-4">
 			{#if data.triggers.length}
-				<h2 class="font-medium">All automations</h2>
+				<h2 class="font-medium">{m.automations.all}</h2>
 			{/if}
 			{#each data.triggers as t (t.id)}
 				<article id={t.id} class="scroll-mt-6 space-y-3 rounded-3xl border p-4 text-sm sm:p-5">
@@ -246,14 +233,14 @@
 						<div class="min-w-0 flex-1">
 							<h3 class="font-medium">{t.name}</h3>
 							<p class="text-muted-foreground">
-								{t.schedule}{#if t.next}&nbsp;· next {t.next}{/if}
+								{t.schedule}{#if t.next}&nbsp;· {m.automations.next(t.next)}{/if}
 							</p>
 							{#if prefs.technical && t.cron}
 								<p class="font-mono text-xs text-muted-foreground">{t.cron}</p>
 							{/if}
 						</div>
 						{#if t.state !== 'on'}
-							<Badge variant="secondary">{t.state}</Badge>
+							<Badge variant="secondary">{m.automations.states[t.state]}</Badge>
 						{/if}
 					</div>
 
@@ -263,10 +250,12 @@
 
 					<form method="POST" use:enhance class="flex flex-wrap gap-2">
 						<input type="hidden" name="id" value={t.id} />
-						<Button type="submit" formaction="?/run" variant="outline" size="sm">Run now</Button>
+						<Button type="submit" formaction="?/run" variant="outline" size="sm"
+							>{m.automations.runNow}</Button
+						>
 						{#if t.state !== 'done'}
 							<Button type="submit" formaction="?/toggle" variant="outline" size="sm"
-								>{t.state === 'paused' ? 'Resume' : 'Pause'}</Button
+								>{t.state === 'paused' ? m.automations.resume : m.automations.pause}</Button
 							>
 						{/if}
 						<Button
@@ -274,7 +263,7 @@
 							variant={editing === t.id ? 'secondary' : 'outline'}
 							size="sm"
 							aria-expanded={editing === t.id}
-							onclick={() => (editing = editing === t.id ? null : t.id)}>Edit</Button
+							onclick={() => (editing = editing === t.id ? null : t.id)}>{m.common.edit}</Button
 						>
 					</form>
 
@@ -282,23 +271,25 @@
 						<form method="POST" action="?/edit" use:enhance={save} class="space-y-3 border-t pt-3">
 							<input type="hidden" name="id" value={t.id} />
 							<label class="block space-y-1.5">
-								<span class="text-xs text-muted-foreground">Description</span>
+								<span class="text-xs text-muted-foreground">{m.automations.description}</span>
 								<Textarea
 									name="summary"
 									rows={2}
 									value={t.summary ?? ''}
-									placeholder="What it does, in one sentence"
+									placeholder={m.automations.descriptionPlaceholder}
 									class="rounded-2xl"
 								/>
 							</label>
 							<label class="block space-y-1.5">
 								<span class="text-xs text-muted-foreground">
 									{#if t.action === 'agent'}
-										Instructions for btw{prefs.technical
-											? ` (${t.model}, reasoning ${t.effort})`
-											: ''}
+										{prefs.technical
+											? m.automations.instructionsTechnical(t.model, t.effort)
+											: m.automations.instructions}
 									{:else}
-										Script: runs without the model and calls <code>btw wake</code> when btw is needed
+										<Rich text={m.automations.script}>
+											{#snippet command()}<code>btw wake</code>{/snippet}
+										</Rich>
 									{/if}
 								</span>
 								<Textarea
@@ -310,9 +301,7 @@
 							</label>
 							{#if t.webhookUrl}
 								<label class="block space-y-1.5">
-									<span class="text-xs text-muted-foreground"
-										>Webhook URL. Keep it secret: anyone with it can start a run. POST JSON to it.</span
-									>
+									<span class="text-xs text-muted-foreground">{m.automations.webhook}</span>
 									<input
 										readonly
 										value={t.webhookUrl}
@@ -322,9 +311,9 @@
 								</label>
 							{/if}
 							<div class="flex flex-wrap gap-2">
-								<Button type="submit" size="sm">Save</Button>
+								<Button type="submit" size="sm">{m.common.save}</Button>
 								<Button type="button" variant="outline" size="sm" onclick={() => (editing = null)}
-									>Cancel</Button
+									>{m.common.cancel}</Button
 								>
 								<Button
 									type="submit"
@@ -333,8 +322,8 @@
 									size="sm"
 									class="ml-auto text-muted-foreground hover:text-destructive"
 									onclick={(event) => {
-										if (!confirm(`Delete "${t.name}"?`)) event.preventDefault();
-									}}>Delete</Button
+										if (!confirm(m.automations.confirmDelete(t.name))) event.preventDefault();
+									}}>{m.common.delete}</Button
 								>
 							</div>
 						</form>
@@ -344,7 +333,7 @@
 						<Collapsible.Trigger
 							class="group/runs flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
 						>
-							{t.runs.length ? `Recent runs (${t.runs.length})` : 'No runs yet'}
+							{t.runs.length ? m.automations.recentRuns(t.runs.length) : m.automations.noRuns}
 							{#if t.runs.length}
 								<ChevronRightIcon
 									class="size-3.5 transition-transform group-data-[state=open]/runs:rotate-90"
@@ -357,7 +346,9 @@
 									<li class="flex flex-wrap items-baseline gap-x-2 text-xs">
 										<span class="text-muted-foreground">{run.at}</span>
 										<span class={run.status === 'failed' ? 'text-destructive' : ''}>
-											{run.action === 'script' ? 'script ' : ''}{STATUS[run.status]}
+											{run.action === 'script'
+												? m.automations.scriptRun(STATUS[run.status])
+												: STATUS[run.status]}
 										</span>
 										<span class="text-muted-foreground">{SOURCE[run.source]}</span>
 										{#if run.conversationId}
@@ -366,12 +357,15 @@
 													slug: data.profile.slug,
 													id: run.conversationId
 												})}
-												class="text-muted-foreground underline hover:text-foreground">view</a
+												class="text-muted-foreground underline hover:text-foreground"
+												>{m.automations.view}</a
 											>
 										{/if}
 										{#if run.output}
 											<details class="w-full">
-												<summary class="cursor-pointer text-muted-foreground">output</summary>
+												<summary class="cursor-pointer text-muted-foreground"
+													>{m.automations.output}</summary
+												>
 												<pre
 													class="mt-1 max-h-60 overflow-auto rounded-xl bg-muted/50 p-2 font-mono whitespace-pre-wrap text-muted-foreground">{run.output}</pre>
 											</details>
@@ -384,11 +378,11 @@
 				</article>
 			{:else}
 				<div class="space-y-3 rounded-3xl border border-dashed p-6 text-sm text-muted-foreground">
-					<p>No automations yet. Ask btw in a chat, for example:</p>
+					<p>{m.automations.empty}</p>
 					<ul class="list-disc space-y-1 pl-5">
-						<li>"Every weekday at 7:30, check the weather and tell us if we need umbrellas."</li>
-						<li>"Remind Anna tomorrow at 17:00 to pick up the parcel."</li>
-						<li>"Check my email every 10 minutes and tell me when the school writes."</li>
+						{#each m.automations.examples as example (example)}
+							<li>{example}</li>
+						{/each}
 					</ul>
 				</div>
 			{/each}
