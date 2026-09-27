@@ -135,7 +135,23 @@ export {
 	type Snapshot
 } from './runner.ts';
 export { TitleError } from './titles.ts';
-export { EFFORTS, PROVIDERS, isProvider, type Effort, type Provider } from './models.ts';
+export {
+	EFFORTS,
+	PROVIDERS,
+	PROVIDER_LABELS,
+	isProvider,
+	runsOnClaudeCode,
+	type Effort,
+	type Provider
+} from './models.ts';
+export {
+	ClaudePlanError,
+	checkClaudePlan,
+	claudeExecutable,
+	claudePlanStatus,
+	describeAccount,
+	type ClaudePlanStatus
+} from './claude-plan.ts';
 export {
 	createSkill,
 	isValidSkillName,

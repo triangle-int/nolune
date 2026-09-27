@@ -141,7 +141,7 @@ export const profileMember = sqliteTable(
 export const modelPreset = sqliteTable('model_preset', {
 	id: text('id').primaryKey(),
 	name: text('name').notNull().unique(),
-	provider: text('provider', { enum: ['anthropic', 'openai'] }).notNull(),
+	provider: text('provider', { enum: ['anthropic', 'openai', 'claude-plan'] }).notNull(),
 	model: text('model').notNull(),
 	/** Admin override. Wins over modelContextWindow. */
 	contextWindow: integer('context_window'),
@@ -215,7 +215,7 @@ export const conversation = sqliteTable(
 		presetId: text('preset_id').references(() => modelPreset.id, { onDelete: 'set null' }),
 		// Snapshot of the preset at creation: a conversation never changes model.
 		presetName: text('preset_name').notNull(),
-		provider: text('provider', { enum: ['anthropic', 'openai'] }).notNull(),
+		provider: text('provider', { enum: ['anthropic', 'openai', 'claude-plan'] }).notNull(),
 		model: text('model').notNull(),
 		contextWindow: integer('context_window'),
 		effort: text('effort', { enum: ['low', 'medium', 'high', 'xhigh', 'max'] })
@@ -243,6 +243,14 @@ export const conversation = sqliteTable(
 		 * only reaches new chats. Null: chats from before this was saved (LEGACY_TOOLS).
 		 */
 		tools: text('tools', { mode: 'json' }).$type<Anthropic.Tool[]>(),
+		/**
+		 * Chats on the Claude plan (claude-plan.ts): the Claude Code session that holds the model's
+		 * side of the chat, and the last row it has been sent. Null until its first turn starts.
+		 */
+		providerSession: text('provider_session', { mode: 'json' }).$type<{
+			id: string;
+			sentSeq: number;
+		}>(),
 		/** Prompt cache lifetime: an hour for chats people come back to, 5 minutes for subagents. */
 		cacheTtl: text('cache_ttl', { enum: ['5m', '1h'] })
 			.notNull()

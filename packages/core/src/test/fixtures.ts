@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { deflateSync } from 'node:zlib';
 import { getDb } from '../db/index.ts';
 import { modelPreset, user } from '../db/schema.ts';
 import type { Provider } from '../models.ts';
@@ -45,4 +46,22 @@ export function makeFamily(name = 'Anna'): {
 } {
 	const member = makeUser(name);
 	return { user: member, profile: createProfile('Family', member.id) };
+}
+
+/** A PDF's catalog and page tree, as plain objects or in a compressed object stream. */
+export function pdfWithPages(pages: number, compressed = false): Buffer {
+	const kids = Array.from({ length: pages }, (_, i) => `${i + 3} 0 R`).join(' ');
+	const tree = `<< /Type /Pages /Kids [${kids}] /Count ${pages} >>`;
+	const catalog = '<< /Type /Catalog /Pages 2 0 R >>';
+	if (!compressed) {
+		return Buffer.from(`%PDF-1.4\n1 0 obj ${catalog} endobj\n2 0 obj ${tree} endobj\n%%EOF\n`);
+	}
+	const objects = deflateSync(`1 0 2 34 ${catalog} ${tree}`);
+	return Buffer.concat([
+		Buffer.from(
+			`%PDF-1.5\n9 0 obj << /Type /ObjStm /N 2 /First 9 /Filter /FlateDecode /Length ${objects.length} >>\nstream\n`
+		),
+		objects,
+		Buffer.from('\nendstream\nendobj\n%%EOF\n')
+	]);
 }

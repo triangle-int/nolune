@@ -2,6 +2,7 @@
 	import { enhance } from '$app/forms';
 	import BoxIcon from '@lucide/svelte/icons/box';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
+	import TerminalIcon from '@lucide/svelte/icons/terminal';
 	import StarIcon from '@lucide/svelte/icons/star';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { Badge } from '$lib/components/ui/badge';
@@ -18,8 +19,11 @@
 	let provider = $state('anthropic');
 	const EXAMPLE_MODELS: Record<string, string> = {
 		anthropic: 'claude-opus-5-5',
-		openai: 'gpt-6-astra'
+		openai: 'gpt-6-astra',
+		'claude-plan': 'claude-opus-5-5'
 	};
+	/** Whether the Claude Code sign-in is being checked. */
+	let checkingPlan = $state(false);
 
 	type KeyStatus = (typeof data.keys)[number];
 	/** The key being pasted, the one being checked, and the one about to be removed. */
@@ -162,6 +166,73 @@
 				</ul>
 			</section>
 
+			<section class="space-y-3" aria-labelledby="plan-heading">
+				<div class="space-y-1">
+					<h2 id="plan-heading" class="text-lg font-medium">Claude plan</h2>
+					<p class="text-muted-foreground">
+						Chats on a Claude plan preset run on the Pro or Max plan someone signed in to Claude
+						Code with on this computer, instead of an API key. btw runs Claude Code and never sees
+						the sign-in. Plan limits assume one person's ordinary use, so keep busy automations and
+						subagents on an API key preset.
+					</p>
+				</div>
+				<div class="space-y-3 rounded-2xl border px-4 py-3 text-sm">
+					<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+						<span
+							class={cn(
+								'flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted max-sm:self-start',
+								data.claudePath ? 'text-foreground' : 'text-muted-foreground'
+							)}
+						>
+							<TerminalIcon class="size-4" />
+						</span>
+						<div class="min-w-0 flex-1">
+							<div class="font-medium">Claude Code</div>
+							{#if data.claudePath}
+								<div class="truncate font-mono text-muted-foreground">{data.claudePath}</div>
+							{:else}
+								<div class="text-warning">
+									Not found. Install it on this computer, or set its path with
+									<code>btw config set claude-path</code>.
+								</div>
+							{/if}
+						</div>
+						<form
+							method="POST"
+							action="?/checkPlan"
+							class="max-sm:basis-full max-sm:pl-9"
+							use:enhance={() => {
+								checkingPlan = true;
+								return async ({ update }) => {
+									await update();
+									checkingPlan = false;
+								};
+							}}
+						>
+							<Button
+								type="submit"
+								variant="ghost"
+								size="sm"
+								class="text-muted-foreground"
+								disabled={checkingPlan}
+							>
+								{checkingPlan ? 'Checking…' : 'Check sign-in'}
+							</Button>
+						</form>
+					</div>
+					{#if form?.planError}
+						<p class="text-destructive sm:pl-12" role="alert">{form.planError}</p>
+					{:else if form?.planMessage}
+						<p class="text-muted-foreground sm:pl-12" role="status">{form.planMessage}</p>
+					{:else}
+						<p class="text-muted-foreground sm:pl-12">
+							To sign in, run <code>claude</code> in a terminal on this computer and use
+							<code>/login</code> with your Claude account.
+						</p>
+					{/if}
+				</div>
+			</section>
+
 			<section class="space-y-3" aria-labelledby="models-heading">
 				<div class="space-y-1">
 					<h2 id="models-heading" class="text-lg font-medium">Models</h2>
@@ -271,13 +342,19 @@
 							min="1"
 							placeholder={provider === 'openai'
 								? "Context window (OpenAI doesn't say)"
-								: 'Context window (optional)'}
+								: provider === 'claude-plan'
+									? 'Context window (not reported)'
+									: 'Context window (optional)'}
 							aria-label="Context window"
 							class="h-10 rounded-full px-4 sm:w-60"
 						/>
 					</div>
 					<Button type="submit" disabled={adding} class="h-10 px-5">
-						{adding ? 'Checking the model…' : 'Add'}
+						{adding
+							? provider === 'claude-plan'
+								? 'Checking Claude Code…'
+								: 'Checking the model…'
+							: 'Add'}
 					</Button>
 				</form>
 			</section>

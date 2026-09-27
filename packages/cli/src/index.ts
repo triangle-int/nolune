@@ -12,10 +12,13 @@ import {
 	addPreset,
 	apiKeyStatuses,
 	checkApiKey,
+	claudeExecutable,
+	claudePlanStatus,
 	configExists,
 	createSkill,
 	createUser,
 	deleteUser,
+	describeAccount,
 	effectiveContextWindow,
 	generatePassword,
 	getDb,
@@ -36,6 +39,7 @@ import {
 	readConfig,
 	removeApiKey,
 	removePreset,
+	runsOnClaudeCode,
 	saveApiKey,
 	scanSkills,
 	setAdmin,
@@ -67,8 +71,11 @@ import {
 const HELP = `btw - a family agent that runs on this computer
 
 Getting started
-  btw setup [--provider anthropic|openai]    interactive first-time setup (key, your account, model);
-                                             chats run on Claude unless you pick openai
+  btw setup [--provider anthropic|openai|claude-plan]
+                                             interactive first-time setup (key, your account, model);
+                                             chats run on Claude unless you pick openai. claude-plan
+                                             runs them on your Claude Pro or Max plan through Claude
+                                             Code, which you sign in to yourself first (see below)
   btw start                                  run the gateway in the foreground
   btw service install|uninstall|restart|status|logs [-f]
                                              run it in the background at login (macOS)
@@ -77,12 +84,20 @@ Settings (${paths.home})
   btw config                                 show address, port and what's configured
   btw config set <host|port|origin> <value>  origin = the public URL people open
   btw config set image-model <provider/model>  for pictures, e.g. openai/gpt-image-2.5-flare
+  btw config set claude-path <path>          the Claude Code that claude-plan chats run (found on
+                                             the PATH and in its usual folders otherwise)
   btw key set <anthropic|openai> [key]       store an API key (prompts if omitted) after checking
                                              it; OpenAI's runs GPT chats and makes pictures. Admins
                                              can also do this on the web, under Models & keys
   btw key rm <anthropic|openai>              remove a stored key (the environment's is used, if set)
   btw env set <NAME> <value>                 extra env var for agent commands (e.g. FIRECRAWL_API_KEY)
   btw env rm <NAME> | btw env list
+
+Claude plan (chats on your own Pro or Max plan instead of an API key)
+  Install Claude Code on this computer, run \`claude\` and sign in with your Claude account (/login).
+  btw never sees that sign-in: it runs Claude Code, which uses the plan's limits. Those assume one
+  person's ordinary use, so keep busy automations and subagents on an API key preset.
+  btw plan status                            which Claude Code btw runs, and who it's signed in as
 
 Users (web sign-up is disabled; this is the only way to add people)
   btw user create <name> <email> [--password P] [--admin]
@@ -92,9 +107,10 @@ Users (web sign-up is disabled; this is the only way to add people)
   btw user list
 
 Model presets (shared by all profiles)
-  btw preset add <model> [--provider anthropic|openai] [--name N] [--context-window TOKENS]
+  btw preset add <model> [--provider anthropic|openai|claude-plan] [--name N] [--context-window TOKENS]
                                              the provider checks the model id first (anthropic
-                                             unless given); OpenAI doesn't say its context window
+                                             unless given); OpenAI doesn't say its context window.
+                                             claude-plan checks the Claude Code sign-in instead
   btw preset rm <name|id>
   btw preset default <name|id>               the model new chats start with
   btw preset list
@@ -122,8 +138,18 @@ ${AGENT_HELP}`;
 /** What `btw setup` suggests for each provider's first preset, and where its keys are made. */
 const SETUP: Record<Provider, { model: string; keys: string }> = {
 	anthropic: { model: 'claude-opus-5-5', keys: 'console.anthropic.com > API keys' },
-	openai: { model: 'gpt-6-astra', keys: 'platform.openai.com > API keys' }
+	openai: { model: 'gpt-6-astra', keys: 'platform.openai.com > API keys' },
+	'claude-plan': { model: 'claude-opus-5-5', keys: '' }
 };
+
+/** Fails unless Claude Code is here and signed in to a plan; says who it's signed in as. */
+async function requireClaudePlan(): Promise<void> {
+	const status = await claudePlanStatus();
+	if (status.problem || !status.account) fail(status.problem ?? "Claude Code didn't answer.");
+	console.log(
+		`Claude Code (${status.path ?? 'found by the SDK'}): ${describeAccount(status.account)}`
+	);
+}
 
 function fail(message: string): never {
 	console.error(`btw: ${message}`);
@@ -208,18 +234,22 @@ async function setup(args: string[]): Promise<void> {
 	});
 
 	const provider = values.provider ?? 'anthropic';
-	if (!isProvider(provider)) fail('--provider is anthropic or openai');
-	const { label, field } = API_KEYS[provider];
+	if (!isProvider(provider)) fail('--provider is anthropic, openai or claude-plan');
 
 	const { created } = initConfig();
 	getDb();
 	installCliShim();
 	console.log(created ? `Created ${paths.home}` : `Using ${paths.home}`);
 
-	if (!readConfig()[field]) {
-		const key = values.key ?? (await askHidden(`${label} API key (${SETUP[provider].keys})`));
-		if (!key) fail(`an ${label} API key is required`);
-		await storeApiKey(provider, key);
+	if (runsOnClaudeCode(provider)) {
+		await requireClaudePlan();
+	} else {
+		const { label, field } = API_KEYS[provider];
+		if (!readConfig()[field]) {
+			const key = values.key ?? (await askHidden(`${label} API key (${SETUP[provider].keys})`));
+			if (!key) fail(`an ${label} API key is required`);
+			await storeApiKey(provider, key);
+		}
 	}
 
 	const admin = listUsers().find((u) => u.isAdmin);
@@ -382,13 +412,19 @@ async function main(argv: string[]): Promise<void> {
 						: `no key (btw key set ${key.provider})`;
 					console.log(`${key.provider.padEnd(10)} ${shown}`);
 				}
+				const claude = claudeExecutable();
+				console.log(
+					`claude     ${claude ? `Claude Code at ${claude} (btw plan status checks its sign-in)` : 'no Claude Code found (for claude-plan presets)'}`
+				);
 				const images = imageGenerationStatus();
 				console.log(`images     ${images.model}${images.problem ? ` (${images.problem})` : ''}`);
 				console.log(`env        ${Object.keys(config.commandEnv ?? {}).join(', ') || '-'}`);
 				return;
 			}
-			if (action !== 'set') fail('usage: btw config [set <host|port|origin|image-model> <value>]');
-			const key = positional(rest, 0, 'host|port|origin|image-model');
+			if (action !== 'set') {
+				fail('usage: btw config [set <host|port|origin|image-model|claude-path> <value>]');
+			}
+			const key = positional(rest, 0, 'host|port|origin|image-model|claude-path');
 			const value = positional(rest, 1, 'value');
 			updateConfig((c) => {
 				if (key === 'port') {
@@ -401,8 +437,13 @@ async function main(argv: string[]): Promise<void> {
 					const current = parseImageModel(c.imageModel || DEFAULT_IMAGE_MODEL);
 					const { provider, model } = parseImageModel(value, current.provider);
 					c.imageModel = `${provider}/${model}`;
-				} else fail('you can set host, port, origin or image-model');
+				} else if (key === 'claude-path') c.claudePath = value;
+				else fail('you can set host, port, origin, image-model or claude-path');
 			});
+			if (key === 'claude-path') {
+				await requireClaudePlan();
+				return;
+			}
 			if (key === 'image-model') {
 				const { model, problem } = imageGenerationStatus();
 				console.log(`Pictures are now made with ${model}.${problem ? ` ${problem}` : ''}`);
@@ -429,6 +470,12 @@ async function main(argv: string[]): Promise<void> {
 			const key = rest[1] || (await askHidden(`${label} API key`));
 			if (!key) fail('no key given');
 			await storeApiKey(provider, key);
+			return;
+		}
+
+		case 'plan': {
+			if (action !== 'status') fail('usage: btw plan status');
+			await requireClaudePlan();
 			return;
 		}
 

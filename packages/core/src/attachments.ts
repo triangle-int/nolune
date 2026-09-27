@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { constants, copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import type { Readable } from 'node:stream';
+import { constants as zlibConstants, inflateSync } from 'node:zlib';
 import type Anthropic from '@anthropic-ai/sdk';
 import { and, eq, inArray, lt } from 'drizzle-orm';
 import type { Conversation, MessageRow } from './conversations.ts';
@@ -27,7 +28,7 @@ import {
 } from './media.ts';
 import { countDocumentTokens, shortApiError, type Provider } from './models.ts';
 import { profileDir } from './paths.ts';
-import { providerFileId } from './provider-files.ts';
+import { hasFileStore, providerFileId } from './provider-files.ts';
 
 /*
  * Files people attach to a message. Each is saved in the profile's `attachments` folder, where
@@ -41,6 +42,15 @@ export const MAX_ATTACHMENTS = 10;
 /** Share of the model's context window that the PDFs of one conversation may fill, together. */
 const DOCUMENT_SHARE = 0.25;
 const DEFAULT_CONTEXT_WINDOW = 200_000;
+/**
+ * Chats on the Claude plan can't count a PDF's tokens (that takes the API), so they estimate:
+ * Anthropic puts a page's text at 1,500 to 3,000 tokens, and each page also goes as a picture.
+ */
+const TOKENS_PER_PDF_PAGE = 4_000;
+/** Pages the API takes in one request: 600, or 100 with a context window under 1M tokens. */
+function maxPdfPages(contextWindow: number): number {
+	return contextWindow >= 1_000_000 ? 600 : 100;
+}
 /** Files attached in the composer but never sent are dropped after a day. */
 const UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -200,7 +210,8 @@ type AttachmentBlock =
 
 /**
  * A picture as the provider's content block, counted in `used`: uploaded through its Files API,
- * or inline as base64 when that fails and the conversation still has room for it.
+ * or inline as base64 when that fails (or the provider has none, as on the Claude plan) and the
+ * conversation still has room for it.
  */
 export async function imageBlock(
 	provider: Provider,
@@ -214,24 +225,31 @@ export async function imageBlock(
 			problem: `this conversation already holds ${MAX_CONVERSATION_IMAGES} pictures, as many as it can`
 		};
 	}
-	let block: ImageBlock;
-	try {
-		const fileId = await providerFileId(provider, data, name, mediaType);
-		block = { type: 'image', source: { type: 'file', file_id: fileId } };
-	} catch (err) {
-		const bytes = base64Length(data.length);
-		if (used.bytes + bytes > MAX_CONVERSATION_IMAGE_BYTES) {
-			return { problem: `it couldn't be uploaded (${shortApiError(err)})` };
+	if (hasFileStore(provider)) {
+		try {
+			const fileId = await providerFileId(provider, data, name, mediaType);
+			used.count++;
+			return { block: { type: 'image', source: { type: 'file', file_id: fileId } } };
+		} catch (err) {
+			const bytes = base64Length(data.length);
+			if (used.bytes + bytes > MAX_CONVERSATION_IMAGE_BYTES) {
+				return { problem: `it couldn't be uploaded (${shortApiError(err)})` };
+			}
+			console.error(`[btw] uploading ${name} failed, sending it inline: ${shortApiError(err)}`);
 		}
-		console.error(`[btw] uploading ${name} failed, sending it inline: ${shortApiError(err)}`);
-		block = {
+	}
+	const bytes = base64Length(data.length);
+	if (used.bytes + bytes > MAX_CONVERSATION_IMAGE_BYTES) {
+		return { problem: 'this conversation already holds as many pictures as it can' };
+	}
+	used.bytes += bytes;
+	used.count++;
+	return {
+		block: {
 			type: 'image',
 			source: { type: 'base64', media_type: mediaType, data: data.toString('base64') }
-		};
-		used.bytes += bytes;
-	}
-	used.count++;
-	return { block };
+		}
+	};
 }
 
 /** The images `btw view` left, for the command's tool_result, each after a line naming it. */
@@ -255,12 +273,87 @@ export async function viewedImageBlocks(
 	return blocks;
 }
 
+/**
+ * How many pages a PDF says it has: the `/Count` of its page tree's root, which newer PDFs keep
+ * in compressed object streams. Null when it doesn't say (encrypted, say, or damaged).
+ */
+export function pdfPageCount(data: Buffer): number | null {
+	const counts: number[] = [];
+	const scan = (text: string) => {
+		const trees =
+			/\/Type\s*\/Pages\b[^>]*?\/Count\s+(\d+)|\/Count\s+(\d+)[^>]*?\/Type\s*\/Pages\b/g;
+		for (const m of text.matchAll(trees)) counts.push(Number(m[1] ?? m[2]));
+	};
+	const text = data.toString('latin1');
+	scan(text);
+	if (!counts.length) {
+		for (const m of text.matchAll(/stream\r?\n/g)) {
+			if (!text.slice(Math.max(0, m.index - 400), m.index).includes('/ObjStm')) continue;
+			const start = m.index + m[0].length;
+			const end = text.indexOf('endstream', start);
+			if (end < 0) break;
+			try {
+				const inflated = inflateSync(data.subarray(start, end), {
+					finishFlush: zlibConstants.Z_SYNC_FLUSH
+				});
+				scan(inflated.toString('latin1'));
+			} catch {
+				// not deflated, or damaged
+			}
+		}
+	}
+	return counts.length ? Math.max(...counts) : null;
+}
+
+/**
+ * A PDF inline, for chats on the Claude plan, which have no Files API: estimated from its pages,
+ * and counted in the conversation's inline bytes, which every request carries.
+ */
+function inlinePdfBlock(
+	conv: Conversation,
+	path: string,
+	name: string,
+	room: number,
+	used: ImageUse
+): { block: Anthropic.DocumentBlockParam; tokens: number } | { problem: string } {
+	const data = readFileSync(path);
+	const pages = pdfPageCount(data);
+	if (pages === null) {
+		return { problem: "btw couldn't tell how many pages it has (it may be encrypted)" };
+	}
+	const maxPages = maxPdfPages(conv.contextWindow ?? DEFAULT_CONTEXT_WINDOW);
+	if (pages > maxPages) {
+		return { problem: `it has ${pages} pages, more than the model takes at once (${maxPages})` };
+	}
+	const tokens = pages * TOKENS_PER_PDF_PAGE;
+	if (tokens > room) {
+		return {
+			problem: `at ${pages} pages it's about ${tokens.toLocaleString('en-US')} tokens, more than this conversation has room for (${Math.max(0, room).toLocaleString('en-US')})`
+		};
+	}
+	const bytes = base64Length(data.length);
+	if (used.bytes + bytes > MAX_CONVERSATION_IMAGE_BYTES) {
+		return { problem: "it's too big to send along with everything else in this conversation" };
+	}
+	used.bytes += bytes;
+	return {
+		block: {
+			type: 'document',
+			source: { type: 'base64', media_type: 'application/pdf', data: data.toString('base64') },
+			title: name
+		},
+		tokens
+	};
+}
+
 async function pdfBlock(
 	conv: Conversation,
 	path: string,
 	name: string,
-	room: number
+	room: number,
+	used: ImageUse
 ): Promise<{ block: Anthropic.DocumentBlockParam; tokens: number } | { problem: string }> {
+	if (!hasFileStore(conv.provider)) return inlinePdfBlock(conv, path, name, room, used);
 	let fileId: string;
 	try {
 		fileId = await providerFileId(conv.provider, readFileSync(path), name, 'application/pdf');
@@ -359,7 +452,7 @@ export async function prepareMessage(input: {
 				attachment.sentAs = 'image';
 			}
 		} else if (up.mime === 'application/pdf') {
-			const result = await pdfBlock(conv, path, up.name, documentBudget - documentTokens);
+			const result = await pdfBlock(conv, path, up.name, documentBudget - documentTokens, images);
 			if ('problem' in result) attachment.note = result.problem;
 			else {
 				block = result.block;

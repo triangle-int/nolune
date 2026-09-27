@@ -1,11 +1,14 @@
 import { error, fail } from '@sveltejs/kit';
 import {
-	API_KEYS,
 	ApiKeyError,
 	PROVIDERS,
+	PROVIDER_LABELS,
 	addPreset,
 	apiKeyStatuses,
 	checkApiKey,
+	claudeExecutable,
+	claudePlanStatus,
+	describeAccount,
 	effectiveContextWindow,
 	getDefaultPreset,
 	isApiKeyProvider,
@@ -25,7 +28,9 @@ export const load: PageServerLoad = ({ locals }) => {
 	return {
 		// Where each key comes from and its last four characters; never the keys themselves.
 		keys: apiKeyStatuses(),
-		providers: PROVIDERS.map((id) => ({ id, label: API_KEYS[id].label })),
+		providers: PROVIDERS.map((id) => ({ id, label: PROVIDER_LABELS[id] })),
+		// Where Claude Code is; whether it's signed in takes starting it, so that's a button.
+		claudePath: claudeExecutable(),
 		presets: listPresets().map((p) => ({
 			id: p.id,
 			name: p.name,
@@ -59,6 +64,15 @@ export const actions: Actions = {
 			if (!(err instanceof ApiKeyError)) throw err;
 			return fail(400, { provider, keyError: err.message });
 		}
+	},
+	checkPlan: async ({ locals }) => {
+		requireAdmin(locals);
+		const status = await claudePlanStatus();
+		if (status.problem || !status.account) {
+			return fail(400, { planError: status.problem ?? "Claude Code didn't answer." });
+		}
+		const signedIn = describeAccount(status.account);
+		return { planMessage: `${signedIn[0].toUpperCase()}${signedIn.slice(1)}.` };
 	},
 	removeKey: async ({ locals, request }) => {
 		requireAdmin(locals);

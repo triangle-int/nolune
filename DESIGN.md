@@ -15,7 +15,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | Conversations      | Shared by every member of the profile. Messages go through a queue, and a message sent while the agent is working is fed into its next step (steering). Anyone can press Stop.                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Sender identity    | Every human message is sent to the model as `Name: text`. Attached files come first, each as a line saying who attached it and where it was saved, followed by the picture or PDF itself when the model gets one. Display names are unique across the gateway.                                                                                                                                                                                                                                                                                                                                       |
 | Attachments        | Any file, up to 100 MB and 10 per message, saved in the profile's `attachments` folder. The model gets pictures and PDFs through the provider's Files API, never as base64 unless an upload fails, and every other file as its path.                                                                                                                                                                                                                                                                                                                                                                 |
-| Providers          | Anthropic and OpenAI (API keys). Keys and model presets are global and managed by the admin with the CLI or the `/admin` page (Models & keys). A preset has a name (default `<model> (<provider>)`), a provider, a model, and an optional context-window override. One preset is the default (the oldest until an admin picks another): new chats start with it, and automations without a preset use it. See [Model providers](#model-providers).                                                                                                                                                   |
+| Providers          | Anthropic and OpenAI (API keys), and the Claude plan: a Pro or Max plan signed in to Claude Code on this computer, which btw runs (see [The Claude plan](#the-claude-plan)). Keys and model presets are global and managed by the admin with the CLI or the `/admin` page (Models & keys). A preset has a name (default `<model> (<provider>)`), a provider, a model, and an optional context-window override. One preset is the default (the oldest until an admin picks another): new chats start with it, and automations without a preset use it. See [Model providers](#model-providers).       |
 | Preset switching   | Not allowed. A conversation keeps its provider and model for its whole life.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Reasoning          | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once.                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | System prompt      | Built once when the conversation is created: instructions, the profile's soul, the skills catalog and, for a chat in a folder, the folder's instructions and file paths. **It is not changed afterwards, and no update notices are added,** with one exception: when the chat moves to another folder, or its folder or the soul changes, it is built again at the start of the next turn (one cache miss). If skills change in another conversation, this conversation only sees it by running commands. Of memory, only `core` and the note names are in it: chats outside folders share a prompt. |
@@ -34,7 +34,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 ```
 ~/.btw-agent/                 (override with BTW_HOME)
   config.json                 auth secret, Anthropic and OpenAI keys, image model, extra env vars
-                              for commands (mode 600)
+                              for commands, where Claude Code is if set (mode 600)
   btw.db                      SQLite: users, sessions, profiles, presets, folders, conversations,
                               messages, media, uploads, provider files, triggers, trigger runs,
                               notifications, subagents, running background commands
@@ -115,8 +115,10 @@ numbers mean the same for both providers.
 A conversation runs on its preset's provider for its whole life. `models.ts` is what the rest of
 btw calls: it picks the provider's module (`anthropic.ts`, `openai-chat.ts`) for the model call,
 the chat's title, PDF token counts and model checks, and gets back the same shape from each (the
-reply's content, its stop reason in Anthropic's words, usage, tool calls and texts). Each
-provider brings a `FileStore` for pictures and PDFs (see [Attachments](#attachments)).
+reply's content, its stop reason in Anthropic's words, usage, tool calls and texts). Each API
+provider brings a `FileStore` for pictures and PDFs (see [Attachments](#attachments)). The Claude
+plan (`claude-plan.ts`) is different: Claude Code runs the agent loop, so the runner hands it whole
+turns (see [The Claude plan](#the-claude-plan)).
 
 - **What's stored.** What btw writes itself (people's messages, attachments, command results,
   automations' and subagents' messages, notices) uses Anthropic's content blocks, whatever the
@@ -147,10 +149,70 @@ provider brings a `FileStore` for pictures and PDFs (see [Attachments](#attachme
 - **What OpenAI doesn't have.** Its models API doesn't give a context window, so an OpenAI preset
   has one only when the admin sets it; without, the chat's context meter shows "?" and PDFs share
   25% of 200k tokens. Titles are asked for at `low` effort.
-- **Another provider** (OpenRouter, Gemini) would be one more module next to these two, a branch
+- **Another provider** (OpenRouter, Gemini) would be one more module next to these, a branch
   in each of `models.ts`'s functions, a `FileStore` (or pictures inline), its key in `API_KEYS`
   (config.ts) with a check request in `api-keys.ts`, and its name in `PROVIDERS` and the schema's
   `provider` enums (a TypeScript list only: SQLite stores any text there).
+
+### The Claude plan
+
+`claude-plan` presets run chats on the Pro or Max plan (Team and Enterprise work the same) that
+someone signed in to Claude Code with on this computer, instead of an API key. Anthropic doesn't
+let other apps sign in to Claude accounts or hold their tokens, so btw doesn't: it runs the
+installed Claude Code, unmodified, through the Claude Agent SDK
+(`@anthropic-ai/claude-agent-sdk`, in `claude-plan.ts`), and Claude Code signs in and bills the plan
+itself. Anthropic's help center counts this as Agent SDK use of the subscription, which draws from
+the plan's usage limits (a separate monthly Agent SDK credit was announced for June 2026, then
+paused). Those limits assume one person's ordinary use, which is why the docs suggest keeping busy
+automations and subagents on an API key preset.
+
+- **Who runs the loop.** Claude Code. Each turn is a `query()` that resumes the chat's Claude Code
+  session (`conversation.provider_session`: its id, at first the chat's own, and the last row it
+  was sent). Only rows it hasn't been sent go, as one user message; a turn that failed after Claude
+  Code took its input is continued with `[Continue.]`. A chat Claude Code has never seen that
+  already has replies (a notification opened as a chat) gets them first as a plain-text
+  transcript. If Claude Code lost the session, btw starts a new one with that transcript.
+- **What the model gets.** btw's system prompt and the chat's saved `run_command` definition, as an
+  in-process MCP tool (`mcp__btw__run_command` to the model). Claude Code's built-in tools, settings
+  files, CLAUDE.md, skills and MCP servers are left out (`tools: []`, `settingSources: []`,
+  `strictMcpConfig`, `dontAsk` permissions with only that tool allowed). Claude Code adds a short
+  line of its own to the system prompt and an environment note (working folder, date). The
+  working folder is the profile's, like commands'.
+- **The same rows.** btw turns the stream into its own rows and live events: each model call's
+  reply is saved (the tool's name back to `run_command`) before its commands run, then one
+  `tool_results` row with every result, as in btw's loop. Claude Code starts a tool as soon as its
+  block is complete, so btw's handler waits until the reply is saved (at `message_stop`, or when a
+  reply came whole). Commands run one at a time through `runToolCall`, with live output, `btw view`
+  pictures (inline) and background commands as usual.
+- **Environment.** Claude Code gets btw's environment without `ANTHROPIC_API_KEY` and
+  `ANTHROPIC_AUTH_TOKEN`, which it would use (and bill) instead of the plan. A
+  `CLAUDE_CODE_OAUTH_TOKEN` there (from `claude setup-token`) reaches Claude Code but, like API keys,
+  not the agent's commands. btw looks for `claude`
+  on the PATH and in its installers' folders (`~/.local/bin`, `~/.claude/local`, Homebrew), or at
+  `btw config set claude-path`. The SDK's own copy of Claude Code (about 230 MB per platform) isn't
+  shipped, so the Claude Code people keep up to date is the one that runs.
+- **Stop** interrupts Claude Code's turn and kills the running command, as elsewhere; if Claude Code
+  hasn't ended the turn 5 seconds later, its process is closed. A reply cut off mid-stream is
+  dropped.
+- **Errors.** Claude Code reports API errors as a reply of its own (`error: authentication_failed`,
+  `rate_limit`...), which btw shows as the chat's error, with how to sign in when that's the
+  problem. `btw plan status`, the admin page's Check sign-in and adding a preset start Claude Code
+  without sending anything and ask who it's signed in as (`accountInfo()`): a plan (`Claude Max`...)
+  or a `claude setup-token` token passes; an API key, another provider or no sign-in ("Claude API")
+  doesn't. Whether it takes the model only shows at the chat's first reply.
+- **Pictures and PDFs** go inline as base64, since there's no Files API; Claude Code passes them to
+  the model as they are, and `btw view` pictures come back in `run_command`'s MCP result as images.
+  They count against the conversation's inline limit (20 MB, which keeps requests under the API's
+  32 MB). A PDF's tokens can't be counted without the API, so they're estimated at 4,000 a page
+  (Anthropic's 1,500 to 3,000 for a page's text, plus the page as a picture) from the page count in
+  its page tree, read from the file (compressed object streams too), and checked against the same
+  25% of the context window and the API's page limit. A PDF whose pages can't be counted
+  (encrypted, say) goes as its path.
+- **What's different.** Messages sent while Claude Code works join after its turn, not at its next
+  step. The context window isn't known before a call, so the context meter shows "?" (and PDFs get
+  25% of 200k tokens) unless the preset sets one. Titles are asked for through Claude Code too, as
+  one exchange without a session. Claude Code keeps its own copy of each chat under
+  `~/.claude/projects`, which deleting the chat in btw doesn't remove yet.
 
 ## Agent loop
 
@@ -785,7 +847,8 @@ on a colored circle.
 packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_command, background
                 commands, memory notes, btw view images, attachments, model calls (models.ts, with
                 anthropic.ts and openai-chat.ts, each with its Files API; content-blocks.ts reads
-                either's replies), provider file cache, runner, media, users/profiles/presets, API
+                either's replies), Claude plan turns through Claude Code (claude-plan.ts), provider
+                file cache, runner, media, users/profiles/presets, API
                 keys, chat folders, triggers, scheduler, subagents (subagents.ts, and
                 subagent-host.ts in the gateway), notifications, image generation (providers:
                 openai.ts), image templates and assistant avatars.
@@ -796,7 +859,8 @@ packages/cli    btw: setup, start, service, config, key, env, user, preset, prof
                 view, memory, generate, agent
 src/            SvelteKit gateway (adapter-node). @btw/core is bundled into the server build.
                 UI components in src/lib/components (shadcn-svelte primitives in ui/).
-scripts/        build-cli.mjs bundles the CLI and core into dist/cli.js with esbuild.
+scripts/        build-cli.mjs bundles the CLI and core into dist/cli.js with esbuild, and the SDKs
+                core loads on first use into dist/chunks.
 ```
 
 Core finds the package root by walking up to the `package.json` named `btw-agent`. That works
@@ -812,6 +876,9 @@ Published to npm as `btw-agent` (not yet). `npm install -g btw-agent` gives the 
   `packages/core/image-templates`. Its only
   runtime dependency is `better-sqlite3` (a native module with prebuilt binaries). Everything else is
   bundled. Node won't strip types inside `node_modules`, which is why the CLI ships as JavaScript.
+  SDKs that core imports on first use (OpenAI's, the Claude Agent SDK with zod) go in chunks of
+  their own (`dist/chunks`), so a `btw` command doesn't parse them: inline, the Agent SDK made each
+  one about 65 ms slower. Claude Code itself isn't shipped (see [The Claude plan](#the-claude-plan)).
 - `btw setup` is the first-run wizard: config, API key, admin account, default preset, public URL.
 - `btw start` reads host, port and origin from `config.json` (default `127.0.0.1:5780`), sets
   `HOST` / `PORT` / `ORIGIN` for adapter-node and imports `build/index.js`.
@@ -833,6 +900,9 @@ Published to npm as `btw-agent` (not yet). `npm install -g btw-agent` gives the 
   window.
 - Other chat providers (OpenRouter, Gemini). See [Model providers](#model-providers) for what each
   needs.
+- The Claude plan: deleting a chat's Claude Code session with the chat (the SDK has
+  `deleteSession`); messages sent mid-turn joining at Claude Code's next step (its input stream
+  takes them) rather than after the turn.
 - Other image providers (OpenRouter, fal, Higgsfield): a module each next to `openai.ts` and an entry
   in `PROVIDERS`, plus one in `API_KEYS` (config.ts) and a check request in `api-keys.ts`.
 - Smart approval mode.

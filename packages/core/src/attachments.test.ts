@@ -7,11 +7,12 @@ import {
 	deleteUpload,
 	findUploads,
 	MAX_ATTACHMENTS,
+	pdfPageCount,
 	pruneUploads
 } from './attachments.ts';
 import { blobPath } from './media.ts';
 import { paths } from './paths.ts';
-import { makeFamily, makeUser } from './test/fixtures.ts';
+import { makeFamily, makeUser, pdfWithPages } from './test/fixtures.ts';
 
 afterEach(() => {
 	vi.useRealTimers();
@@ -32,6 +33,14 @@ it.each([
 	[`${'a'.repeat(200)}.jpeg`, `${'a'.repeat(115)}.jpeg`]
 ])('cleans the file name %j to %j', (name, clean) => {
 	expect(cleanFileName(name)).toBe(clean);
+});
+
+describe('pdfPageCount', () => {
+	it("reads the page tree's count, also from compressed object streams", () => {
+		expect(pdfPageCount(pdfWithPages(3))).toBe(3);
+		expect(pdfPageCount(pdfWithPages(12, true))).toBe(12);
+		expect(pdfPageCount(Buffer.from('%PDF-1.4\n%%EOF\n'))).toBeNull();
+	});
 });
 
 describe('createUpload', () => {

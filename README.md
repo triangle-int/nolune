@@ -11,9 +11,10 @@ it works and why.
 ## Install
 
 Needs macOS (Linux works without the background service), Node 22.18+ and an
-[Anthropic API key](https://console.anthropic.com/) or an
+[Anthropic API key](https://console.anthropic.com/), an
 [OpenAI API key](https://platform.openai.com/api-keys) (chats run on Claude or on OpenAI's GPT
-models; you can have both).
+models; you can have both), or a Claude Pro or Max plan signed in to
+[Claude Code](https://claude.com/claude-code) on the same computer (see below).
 
 ```sh
 npm install -g btw-agent
@@ -26,6 +27,16 @@ btw user create Anna anna@example.com   # add family members (prints their passw
 
 Then open the address `btw setup` printed and sign in. As the admin you can also add or replace
 API keys and models on the web, under Models & keys in your account menu.
+
+**On your Claude plan instead of an API key.** Install Claude Code, run `claude` and sign in with
+your Claude account (`/login`). Then `btw setup --provider claude-plan`, or add a preset later with
+`btw preset add claude-opus-5-5 --provider claude-plan` (or on Models & keys). Chats on those
+presets run through the Claude Code on this computer, unmodified, which uses your plan's limits;
+btw never sees the sign-in. `btw plan status` shows who Claude Code is signed in as. Anthropic
+[counts this](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
+as Agent SDK use of your subscription, and plan limits assume one person's ordinary use: keep busy
+automations and subagents on an API key preset, and see [DESIGN.md](DESIGN.md#the-claude-plan)
+for what works differently.
 
 **Reaching it from outside your home.** The gateway listens on `127.0.0.1:5780`. Put a tunnel in
 front of it, e.g. [Tailscale Funnel](https://tailscale.com/kb/1223/funnel),
