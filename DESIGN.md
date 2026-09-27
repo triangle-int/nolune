@@ -1187,23 +1187,20 @@ nothing, and opening the page again runs it again.
   note), landing at full strength and fading to its age. The count ticks up with them. Then the
   dots fly into the avatar, and the page goes to `/p/<slug>`; a view transition names the avatar
   on both pages (`btw-assistant`), so it glides into its place over the composer.
-- **Sounds** (`src/lib/welcome/sounds.ts`). Only where the screen moves by itself: a click when
-  someone picks something is the one exception, and a step that waits stays quiet.
-  - **Music** plays under the three moments that run on their own (the intro, the tint washing
-    in, memories arriving) and fades out whenever the welcome waits for someone. Each moment
-    starts at its own cut of the song (`MUSIC`), chosen by its sections: the intro rises out of
-    the song's opening silence, the tint washes in on its lift at 23.7 s, and memories take off
-    on the drop at 42 s, 0.9 s after the arrival opens. It fades over three seconds on the new
-    chat. The song is "Wistful Melodic Arc" by p5ina, cut to its first 56 s (`music.mp3`); a new
-    song needs new cuts.
-  - **Effects** on top: `shimmer`, `trace`, `tick`, `burst`, `swell`, `click`, `confirm`,
-    `wash`, `sparkle`, `chord`, `gather`. Sparkles are one note pitched up the pentatonic scale
-    as the grid fills, at most 40 per import.
-  - Each is a file in `src/lib/assets/sounds/welcome` (`.mp3`), bundled through
-    `import.meta.glob` and played with Web Audio; one without its file is silent. Browsers only
-    play sound after a click: creating the profile is one, and the welcome is a client-side
-    navigation from there. The Sounds setting (per device, in `btw-prefs`) and the speaker button
-    on the welcome turn them off.
+- **Sounds** (`src/lib/welcome/sounds.ts`). Only where the screen moves by itself, plus a click
+  when someone picks something. The intro is one sound for the whole scene, `shimmer`: it swells
+  under the drawing and typing and hits as the dots burst into colors. Every later moment has its
+  own: `click` (a card, a model or an avatar picked), `confirm` (a key or plan check passes),
+  `wash` (the avatar's tint washing in), `sparkle` (each memory landing: one note, pitched up the
+  pentatonic scale as the grid fills, at most 40 per import), `chord` (the grid settling) and
+  `gather` (the dots gathering into the avatar as the chat opens). When the welcome starts waiting
+  for someone (the welcome screen, each step) or opens the chat, whatever is still ringing fades
+  out (`quiet`). Each cue is a file in `src/lib/assets/sounds/welcome` (`<cue>.mp3`), bundled
+  through `import.meta.glob` and played with Web Audio; one without its file is silent, and a
+  long one that loads late starts that far in, to stay in time. Browsers only play sound after a
+  click: creating the profile is one, and the welcome is a client-side navigation from there. The
+  Sounds setting (per device, in `btw-prefs`) and the speaker button on the welcome turn them
+  off.
 
 ## Running `btw` in the gateway
 

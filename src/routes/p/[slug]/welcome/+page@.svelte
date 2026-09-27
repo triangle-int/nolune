@@ -29,7 +29,7 @@
 	import { getPreferences } from '$lib/preferences.svelte';
 	import { avatarTint, tintStyle } from '$lib/tint';
 	import { cn } from '$lib/utils';
-	import { fadeOutMusic, play, playMusic, setSoundsOn, wake } from '$lib/welcome/sounds';
+	import { play, quiet, setSoundsOn, wake } from '$lib/welcome/sounds';
 
 	let { data } = $props();
 	const { m } = getI18n();
@@ -97,7 +97,7 @@
 		const draw = 1900;
 		const sweep = 0.55;
 
-		playMusic('intro', 0.05);
+		// The intro's one sound: it swells under the drawing and typing, and hits on the burst.
 		play('shimmer');
 		first.animate(
 			[
@@ -145,7 +145,6 @@
 		drawing = true;
 		await wait(draw * sweep);
 		if (!alive()) return;
-		play('trace');
 		await wait(draw * (1 - sweep));
 		if (!alive()) return;
 
@@ -162,9 +161,6 @@
 				],
 				{ duration: beat, delay: k * gap, iterations: 2, easing: 'ease-in-out' }
 			);
-			for (let i = 0; i < 2; i++) {
-				setTimeout(() => alive() && play('tick', { pan: (k - 1) * 0.3 }), k * gap + i * beat);
-			}
 		});
 		await wait(2 * beat + 2 * gap);
 		if (!alive()) return;
@@ -173,7 +169,6 @@
 		origins = dots.map(centerOf);
 		skyCenter = centerOf(wordmarkBox);
 		sky = 'orbit';
-		play('burst');
 		for (const dot of dots) {
 			dot.animate([{ opacity: 1 }, { opacity: 0, transform: 'scale(1.8)' }], {
 				duration: 250,
@@ -184,7 +179,6 @@
 		if (!alive()) return;
 
 		sky = 'aurora';
-		play('swell');
 		wordmarkBox.animate(
 			[{ opacity: 1 }, { opacity: 0, transform: 'translateY(-16px) scale(.97)' }],
 			{
@@ -195,14 +189,14 @@
 		await wait(400);
 		if (!alive()) return;
 		// From here the welcome waits for "Let's go".
-		fadeOutMusic(2.5);
+		quiet(1.5);
 		phase = 'welcome';
 	}
 
 	function skipIntro() {
 		if (phase !== 'intro') return;
 		introRun++;
-		fadeOutMusic(1);
+		quiet(0.6);
 		skipped = true;
 		sky = 'aurora';
 		phase = 'welcome';
@@ -226,7 +220,6 @@
 		const root = document.documentElement;
 		root.style.setProperty('--wash-x', `${origin.x}px`);
 		root.style.setProperty('--wash-y', `${origin.y}px`);
-		playMusic('hello', 0.25);
 		play('wash');
 		const apply = async () => {
 			tinted = picked;
@@ -242,15 +235,15 @@
 			await apply();
 		}
 		await wait(reduced ? 900 : 1700);
-		fadeOutMusic(1.5);
+		quiet(1.2);
 		phase = 'steps';
 		nextStep();
 	}
 
 	/** On to the profile's first chat. */
 	async function finish() {
-		// Carries on for a moment over the new chat, where it's up to them again.
-		fadeOutMusic(3);
+		// Rings on for a moment over the new chat, where it's up to them again.
+		quiet(2);
 		await goto(resolve('/p/[slug]', { slug: data.welcome.slug }), { replaceState: true });
 	}
 
@@ -270,7 +263,7 @@
 		wake();
 		if (reduced) skipIntro();
 		else intro();
-		return () => fadeOutMusic(0.5);
+		return () => quiet(0.5);
 	});
 </script>
 
@@ -440,7 +433,6 @@
 									if (!result.added) finish();
 									else {
 										imported = { notes: result.notes, lines };
-										playMusic('arrival', 0.3);
 										phase = 'arrival';
 									}
 								}}
