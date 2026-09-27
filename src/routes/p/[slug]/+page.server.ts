@@ -3,6 +3,7 @@ import {
 	AttachmentError,
 	EFFORTS,
 	createConversation,
+	currentSuggestions,
 	findUploads,
 	getDefaultPreset,
 	getFolder,
@@ -12,13 +13,18 @@ import {
 	type Effort
 } from '@btw/core';
 import { requireProfile } from '$lib/server/access';
+import { withIcons } from '$lib/server/suggestions';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = ({ locals, params, url }) => {
 	const { profile } = requireProfile(locals, params.slug);
 	// `?folder=<id>` starts the chat in that folder.
 	const folderId = url.searchParams.get('folder');
+	// Made from the profile's memory. When it changed since, the page fetches new ones.
+	const suggestions = currentSuggestions(profile.slug);
 	return {
+		suggestions: withIcons(suggestions.suggestions),
+		suggestionsStale: suggestions.stale,
 		presets: listPresets().map((p) => ({ id: p.id, name: p.name })),
 		defaultPresetId: getDefaultPreset()?.id ?? '',
 		efforts: [...EFFORTS],

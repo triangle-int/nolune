@@ -144,9 +144,12 @@ export {
 	EFFORTS,
 	PROVIDERS,
 	PROVIDER_LABELS,
+	describeApiError,
 	isProvider,
+	listModels,
 	runsOnClaudeCode,
 	type Effort,
+	type ModelChoice,
 	type Provider
 } from './models.ts';
 export {
@@ -207,6 +210,7 @@ export {
 	type MemoryFile
 } from './memory.ts';
 export { MAX_SOUL_CHARS, SoulError, readSoul, readSoulFile, writeSoul } from './soul.ts';
+export { currentSuggestions, refreshSuggestions, type Suggestion } from './suggestions.ts';
 export { ViewLimitError, inspectImage, viewImage } from './images.ts';
 export {
 	AttachmentError,

@@ -13,7 +13,7 @@ import {
 	type PdfBlock,
 	type ResultBlock
 } from './format.ts';
-import type { CacheTtl, Effort, Provider, StreamEvent } from './models.ts';
+import type { CacheTtl, Effort, ModelChoice, Provider, StreamEvent } from './models.ts';
 
 /*
  * Chats on Claude, through Anthropic's Messages API and its SDK, and the Files API for pictures
@@ -331,6 +331,21 @@ export async function fetchContextWindow(model: string): Promise<number | null> 
 	const client = await getClient();
 	const info = await client.models.retrieve(model);
 	return info.max_input_tokens ?? null;
+}
+
+/** Every model the key can use, the newest first, as Anthropic lists them. */
+export async function listModels(): Promise<ModelChoice[]> {
+	const client = await getClient();
+	const models: ModelChoice[] = [];
+	for await (const info of client.models.list({ limit: 100 })) {
+		models.push({
+			id: info.id,
+			name: info.display_name,
+			description: null,
+			contextWindow: info.max_input_tokens ?? null
+		});
+	}
+	return models;
 }
 
 export function describeApiError(err: unknown): string {

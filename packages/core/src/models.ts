@@ -168,8 +168,8 @@ export function countDocumentTokens(
 
 /**
  * Throws if the provider doesn't know the model. Null when its window isn't known. For the
- * Claude plan, it checks that Claude Code is here and signed in to one: it has no models API, and
- * whether it takes the model shows at the chat's first reply.
+ * Claude plan, it checks that Claude Code is here and signed in to one: it can't check a model
+ * id, so whether it takes the model shows at the chat's first reply.
  */
 export async function fetchContextWindow(
 	provider: Provider,
@@ -177,11 +177,32 @@ export async function fetchContextWindow(
 ): Promise<number | null> {
 	if (runsOnClaudeCode(provider)) {
 		await claudePlan.checkClaudePlan();
-		return null;
+		return claudePlan.knownContextWindow(model);
 	}
 	return provider === 'openai'
 		? openai.fetchContextWindow(model)
 		: anthropic.fetchContextWindow(model);
+}
+
+/** A model a preset can pick, as its provider lists it. */
+export interface ModelChoice {
+	/** What the preset stores. */
+	id: string;
+	/** The provider's name for it, when it gives one. */
+	name: string | null;
+	/** A line about it, when the provider gives one. */
+	description: string | null;
+	/** What a preset gets without an override: the same as fetchContextWindow says. */
+	contextWindow: number | null;
+}
+
+/**
+ * The models the provider offers, for the admin page to pick from: the newest first, or in
+ * Claude Code's own order for the Claude plan. Throws what describeApiError explains.
+ */
+export async function listModels(provider: Provider): Promise<ModelChoice[]> {
+	if (runsOnClaudeCode(provider)) return claudePlan.listModels();
+	return provider === 'openai' ? openai.listModels() : anthropic.listModels();
 }
 
 export function describeApiError(err: unknown): string {

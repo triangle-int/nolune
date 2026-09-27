@@ -21,6 +21,7 @@ import {
 	setProviderSession
 } from './conversations.ts';
 import { viewImage } from './images.ts';
+import { listModels } from './models.ts';
 import { addPreset } from './presets.ts';
 import { RUN_COMMAND_TOOL, runCommand } from './run-command.ts';
 import { getSnapshot, kick, onLoopEnd, sendMessage, stop } from './runner.ts';
@@ -607,6 +608,24 @@ describe.skipIf(!claude)('chats on the Claude plan', { timeout: 60_000 }, () => 
 			provider: 'claude-plan',
 			modelContextWindow: null
 		});
+		// The one window Claude Code's ids tell.
+		expect(
+			await addPreset({ provider: 'claude-plan', model: 'claude-opus-5-5[1m]' })
+		).toMatchObject({ modelContextWindow: 1_000_000 });
+		expect(seen).toEqual([]);
+	});
+
+	it('lists the models Claude Code offers, by their full ids', async () => {
+		const models = await listModels('claude-plan');
+		expect(models.length).toBeGreaterThan(0);
+		const ids = models.map((m) => m.id);
+		expect(new Set(ids).size).toBe(ids.length);
+		for (const m of models) {
+			// No "default", and no alias that would change model when Claude Code updates.
+			expect(m.id).toMatch(/^claude-/);
+			expect(m.name).toBeTruthy();
+			expect(m.contextWindow).toBe(m.id.endsWith('[1m]') ? 1_000_000 : null);
+		}
 		expect(seen).toEqual([]);
 	});
 });

@@ -12,7 +12,7 @@ import {
 	type Message,
 	type ToolResultBlock
 } from './format.ts';
-import type { Effort, StreamEvent } from './models.ts';
+import type { Effort, ModelChoice, StreamEvent } from './models.ts';
 import { openaiBaseUrl } from './openai.ts';
 
 /*
@@ -448,19 +448,27 @@ export async function countDocumentTokens(model: string, fileId: string): Promis
 /** Every flagship model since GPT-5.4 has this window, the Pro ones included. */
 const FLAGSHIP_CONTEXT_WINDOW = 1_050_000;
 
-/**
- * The model's context window when btw knows it: OpenAI's models API doesn't say. Flagships
- * since GPT-5.4 (gpt-5.4, gpt-5.5-pro, gpt-6-astra, and their dated snapshots) have 1,050,000
- * tokens. Other models (mini, nano, codex, older ones) may have much less, and a window set too
- * large would let a conversation grow past what the model takes, for good, so they get none.
- */
-export function knownContextWindow(model: string): number | null {
+/** "gpt-5.6-sol" → 5, 6 and "-sol"; null for a name of another kind. */
+function gptVersion(model: string): { major: number; minor: number; suffix: string } | null {
 	const match = /^gpt-(\d+)(?:\.(\d+))?(-.*)?$/.exec(model);
 	if (!match) return null;
-	const [major, minor] = [Number(match[1]), Number(match[2] ?? 0)];
+	return { major: Number(match[1]), minor: Number(match[2] ?? 0), suffix: match[3] ?? '' };
+}
+
+/**
+ * The model's context window when btw knows it: OpenAI's models API doesn't say. Flagships
+ * since GPT-5.4 (gpt-5.4, gpt-5.5-pro, gpt-5.6-terra, gpt-6-astra, and their dated snapshots)
+ * have 1,050,000 tokens. Other models (mini, nano, codex, older ones) may have much less, and a
+ * window set too large would let a conversation grow past what the model takes, for good, so
+ * they get none.
+ */
+export function knownContextWindow(model: string): number | null {
+	const version = gptVersion(model);
+	if (!version) return null;
+	const { major, minor, suffix } = version;
 	if (major < 5 || (major === 5 && minor < 4)) return null;
-	// GPT-6's names, Pro, and a snapshot's date; any other suffix may be a smaller model.
-	const flagship = /^(-(astra|sol|luna))?(-pro)?(-\d{4}-\d{2}-\d{2})?$/.test(match[3] ?? '');
+	// The tiers' names, Pro, and a snapshot's date; any other suffix may be a smaller model.
+	const flagship = /^(-(astra|sol|terra|luna))?(-pro)?(-\d{4}-\d{2}-\d{2})?$/.test(suffix);
 	return flagship ? FLAGSHIP_CONTEXT_WINDOW : null;
 }
 
@@ -469,6 +477,44 @@ export async function fetchContextWindow(model: string): Promise<number | null> 
 	const client = await getClient();
 	await client.models.retrieve(model, { timeout: REQUEST_TIMEOUT_MS });
 	return knownContextWindow(model);
+}
+
+/**
+ * Whether the admin page lists the model: GPT-5.6 and newer, OpenAI's current generations in
+ * September 2026, and of those only the ones that chat (not audio, pictures or search). Older
+ * ones can still be typed.
+ */
+export function isListedModel(model: string): boolean {
+	const version = gptVersion(model);
+	if (!version) return false;
+	const { major, minor, suffix } = version;
+	if (major < 5 || (major === 5 && minor < 6)) return false;
+	return !/audio|realtime|transcribe|tts|live|image|search|deep-research|chat/.test(suffix);
+}
+
+const SNAPSHOT_DATE = /-\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * The models the admin page lists (isListedModel) that the key can use, the newest first,
+ * without the dated snapshots of models also listed without a date (they can still be typed).
+ * All of them when that leaves none: a compatible server behind OPENAI_BASE_URL has names of
+ * its own.
+ */
+export async function listModels(): Promise<ModelChoice[]> {
+	const client = await getClient();
+	const all: OpenAI.Models.Model[] = [];
+	for await (const model of client.models.list({ timeout: REQUEST_TIMEOUT_MS })) all.push(model);
+	all.sort((a, b) => b.created - a.created);
+	const ids = new Set(all.map((m) => m.id));
+	const isSnapshot = (id: string) =>
+		SNAPSHOT_DATE.test(id) && ids.has(id.replace(SNAPSHOT_DATE, ''));
+	const listed = all.filter((m) => isListedModel(m.id) && !isSnapshot(m.id));
+	return (listed.length ? listed : all).map((m) => ({
+		id: m.id,
+		name: null,
+		description: null,
+		contextWindow: knownContextWindow(m.id)
+	}));
 }
 
 export function describeApiError(err: unknown): string {

@@ -47,6 +47,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
     memories/<topic>.md       long-term memory: one note per topic
     memories/core.md          the pinned note, copied into every new chat's prompt
     memories/.facts.json      when each fact in memory was first seen
+    memories/.suggestions.json  the new-chat page's chips, and the memory they were made from
     skills/<name>/SKILL.md
     attachments/              files people attached to messages
     image-templates/<id>/     this profile's own templates
@@ -257,8 +258,9 @@ automations and subagents on an API key preset.
   25% of the context window and the API's page limit. A PDF whose pages can't be counted
   (encrypted, say) goes as its path.
 - **What's different.** Messages sent while Claude Code works join after its turn, not at its next
-  step. The context window isn't known before a call, so the context meter shows "?" (and PDFs get
-  25% of 200k tokens) unless the preset sets one. Titles are asked for through Claude Code too, as
+  step. The context window isn't known before a call, except for the 1M-context models, whose ids
+  say so (`claude-opus-5-5[1m]`), so the context meter shows "?" (and PDFs get 25% of 200k tokens)
+  unless the preset sets one. Titles are asked for through Claude Code too, as
   one exchange without a session. Claude Code keeps its own copy of each chat under
   `~/.claude/projects`, which deleting the chat in btw doesn't remove yet.
 
@@ -872,6 +874,17 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   at the default preset, reasoning at the level last used on this device. In an existing chat both
   can change (see [Switching models](#switching-models)). The folder chip next to it starts the
   chat in a folder.
+- **Suggestions** under the new-chat composer (`packages/core/src/suggestions.ts`) come from the
+  profile's memory. Until it has any, they are four general ones (a reminder, a weather check,
+  finding a file, free disk space). After that, the default preset is asked, with `quickReply`, for
+  four things this family might ask btw, each built on something in the notes and in their
+  language: a label, a Lucide icon and the text the chip puts in the box. It gets today's date and
+  the notes, the core note first and then the most recently changed, up to 12,000 characters. They
+  are saved in `memories/.suggestions.json` with a hash of the notes, so the page only asks again
+  when memory changed or they are a week old. The page renders the saved ones (or the general
+  ones) at once and, when they are stale, fetches `/api/p/<slug>/suggestions`, which waits for the
+  model, then swaps them in. One call per profile runs at a time; a failed one keeps the old chips
+  and isn't retried for the same memory for 15 minutes.
 - **The sidebar** lists folders above the chats. A folder's chats show under it when its page or
   one of its chats is open, or when its icon (a chevron on hover) is clicked; chats in folders are
   not in the Chats list. A chat btw is working in shimmers like the "Thinking" label, for everyone
@@ -892,8 +905,19 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   with the provider's words. Removing a saved key falls back to the environment's. Replacing a
   key warns to keep the same workspace (Anthropic) or project (OpenAI): pictures and PDFs already
   sent live in it. `btw key set` does the same check, but saves anyway when the provider can't be
-  reached. The preset form picks the provider (Anthropic or OpenAI), and the provider checks the
-  model id before the preset is saved.
+  reached. Under the presets, **Add a model** opens the form (open from the start while there are
+  none), in the order the choices are made: the provider, saying which key or plan it runs on;
+  the model, picked from the provider's list or typed (any id works, a dated snapshot say); an
+  optional name, whose placeholder is the default it gets; and the context window, folded away
+  under what it will be ("Auto · 1M"). The list comes from `/api/models` when the form needs it:
+  Anthropic's models API, with names and windows; OpenAI's, only GPT-5.6 and newer (its
+  current generations in September 2026; older ones can still be typed), without audio,
+  realtime, pictures or search, nor dated snapshots of models also listed without a date, the
+  newest first, with the flagships' known window; and Claude Code's own list for the Claude
+  plan, by full id (`claude-opus-5-5`, not `opus`, which would move a chat to a newer model when
+  Claude Code updates). It's asked for again when the provider's key changes. The context window
+  is a row of chips: Auto (what the provider reports, if anything), 128K, 200K, 1M, or Custom,
+  typed as `272k`, `1.5m` or `272000`. The provider checks the model id before the preset is saved.
 
 ## Assistant avatars
 
@@ -914,7 +938,10 @@ on a colored circle.
   so profiles differ without anyone choosing. The migration that added `profile.avatar` gave
   existing profiles theirs the same way, in SQL. Any member changes it on People & profile, or with
   `btw profile avatar <name>`, which the agent runs when asked ("switch to the comet"; the
-  `btw-agent` skill explains it).
+  `btw-agent` skill explains it). The picker there (`AvatarPicker.svelte`) is laid out like a
+  character select: the pick up close on a starry stage lit in its color, which pops in with a
+  squash when it changes, next to the roster, whose tiles take their avatar's color and show its
+  working motion on hover.
 - **Tint.** A profile's pages take on its avatar's hue: `src/lib/tint.ts` gives the page, sidebar,
   bubbles, hover and (in dark) card, menu and composer greys a little OKLCH chroma in the avatar
   color's hue, at each grey's own luminance, so text and avatars keep their contrast. The root
@@ -977,9 +1004,10 @@ to (issue #42).
 
 ```
 packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_command, background
-                commands, memory notes, btw view images, attachments, model calls (models.ts, with
-                anthropic.ts and openai-chat.ts, each with its Files API and the function that turns
-                btw's format, format.ts, into its request), Claude plan turns through Claude Code
+                commands, memory notes, new-chat suggestions, btw view images, attachments, model
+                calls (models.ts, with anthropic.ts and openai-chat.ts, each with its Files API and
+                the function that turns btw's format, format.ts, into its request), Claude plan
+                turns through Claude Code
                 (claude-plan.ts), provider
                 file cache, runner, media, users/profiles/presets, API
                 keys, chat folders, triggers, scheduler, subagents (subagents.ts, and
