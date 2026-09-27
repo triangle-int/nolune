@@ -2,9 +2,8 @@ import { error, fail } from '@sveltejs/kit';
 import {
 	CLAUDE_INSTALL_COMMAND,
 	CODEX_INSTALL_COMMAND,
-	CUSTOM_OPENAI_ENV,
 	ApiKeyError,
-	CustomOpenaiError,
+	CustomServerError,
 	DEFAULT_EMBEDDING_MODELS,
 	PlanError,
 	PROVIDERS,
@@ -13,12 +12,11 @@ import {
 	apiKeyStatuses,
 	cancelChatGptSignIn,
 	checkApiKey,
-	checkCustomOpenai,
+	checkServer,
 	claudePlanStatus,
 	chatGptPlanStatus,
 	chatGptSignInState,
-	customOpenai,
-	customOpenaiStatus,
+	findServer,
 	editPreset,
 	effectiveContextWindow,
 	embeddingProblem,
@@ -27,16 +25,19 @@ import {
 	findCodex,
 	getDefaultPreset,
 	isApiKeyProvider,
+	isServerName,
 	isServerUrl,
 	listPresets,
 	listProfiles,
+	listServers,
 	normalizeApiKey,
 	normalizeServerUrl,
 	removeApiKey,
-	removeCustomOpenai,
 	removePreset,
+	removeServer,
 	saveApiKey,
-	saveCustomOpenai,
+	saveServer,
+	splitModel,
 	saveEmbeddingSetting,
 	setDefaultPreset,
 	signOutChatGpt,
@@ -61,9 +62,8 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
 	return {
 		// Where each key comes from and its last four characters; never the keys themselves.
 		keys: apiKeyStatuses(),
-		// The Custom OpenAI server's address and whether it has a key; never the key.
-		customOpenai: customOpenaiStatus(),
-		customOpenaiEnv: CUSTOM_OPENAI_ENV.url,
+		// The family's servers: each one's address and whether it has a key, never the key.
+		servers: listServers(),
 		providers: PROVIDERS.map((id) => ({ id, label: PROVIDER_LABELS[id] })),
 		// Where Claude Code is; whether it's signed in takes starting it, so that's a button.
 		claude: { ...findClaudeCode(), installCommand: CLAUDE_INSTALL_COMMAND },
@@ -142,38 +142,47 @@ export const actions: Actions = {
 			return fail(400, { provider, keyError: err.message });
 		}
 	},
-	saveCustomOpenai: async ({ locals, request }) => {
+	/** Adds a server (`adding`), or changes one; `server` in the result says which row it's for. */
+	saveServer: async ({ locals, request }) => {
 		requireAdmin(locals);
 		const { m } = translations(locals.locale);
-		const t = m.admin.custom;
+		const t = m.admin.servers;
 		const form = await request.formData();
+		const adding = form.get('adding') === '1';
+		const name = form.get('name')?.toString().trim() ?? '';
 		const url = normalizeServerUrl(form.get('url')?.toString() ?? '');
-		if (!isServerUrl(url)) return fail(400, { customError: t.needAddress });
+		const refuse = (serverError: string) => fail(400, { server: adding ? '' : name, serverError });
+		const current = findServer(name);
+		if (adding && !isServerName(name)) return refuse(t.needName);
+		if (adding && current) return refuse(t.nameTaken(current.name));
+		if (!adding && !current) error(400, 'Unknown server');
+		if (!isServerUrl(url)) return refuse(t.needAddress);
 		const typed = form.get('key')?.toString().trim() || undefined;
-		// Left empty, the key in use for the same address stays: the page never has it.
-		const current = customOpenai();
-		const key = typed ?? (current?.url === url ? current.key : null);
-		let result: { customMessage: string } | { customWarning: string };
+		// Left empty, the key saved for the same address stays: the page never has it.
+		const key = typed ?? (current?.url === url ? (current.key ?? null) : null);
+		let result: { serverMessage: string } | { serverWarning: string };
 		try {
-			const found = await checkCustomOpenai(url, key);
+			const found = await checkServer(url, key);
 			result = found.warning
-				? { customWarning: m.admin.savedWarning(found.warning) }
-				: { customMessage: t.works(found.models.length) };
+				? { serverWarning: m.admin.savedWarning(found.warning) }
+				: { serverMessage: t.works(found.models.length) };
 		} catch (err) {
-			if (!(err instanceof CustomOpenaiError)) throw err;
+			if (!(err instanceof CustomServerError)) throw err;
 			// Saved all the same: the server may not run yet.
-			if (err.reason !== 'unreachable') return fail(400, { customError: err.message });
-			result = { customWarning: t.unchecked(err.message) };
+			if (err.reason !== 'unreachable') return refuse(err.message);
+			result = { serverWarning: t.unchecked(err.message) };
 		}
-		saveCustomOpenai(url, typed);
+		saveServer(current?.name ?? name, url, typed);
 		// For memory search, when it uses the server.
 		startEmbeddingMemory(listProfiles().map((p) => p.slug));
-		return result;
+		return { server: current?.name ?? name, ...result };
 	},
-	removeCustomOpenai: ({ locals }) => {
+	removeServer: async ({ locals, request }) => {
 		requireAdmin(locals);
-		removeCustomOpenai();
-		return { customMessage: translations(locals.locale).m.admin.removed };
+		const name = (await request.formData()).get('name')?.toString() ?? '';
+		if (!findServer(name)) error(400, 'Unknown server');
+		removeServer(name);
+		return { server: '', serverMessage: translations(locals.locale).m.admin.removed };
 	},
 	checkPlan: async ({ locals }) => {
 		requireAdmin(locals);
@@ -260,7 +269,10 @@ export const actions: Actions = {
 		if (mode === 'openai' || mode === 'openrouter') {
 			setting = { provider: mode, model: model || DEFAULT_EMBEDDING_MODELS[mode] };
 		} else if (mode === 'custom-openai') {
-			if (!model) return fail(400, { embeddingsError: t.needModel });
+			// `<server>/<model>`, as the form puts it together.
+			const on = splitModel(model);
+			if (!on.server || !findServer(on.server)) error(400, 'Unknown server');
+			if (!on.model) return fail(400, { embeddingsError: t.needModel });
 			setting = { provider: mode, model };
 		} else if (mode === 'off') {
 			setting = 'off';

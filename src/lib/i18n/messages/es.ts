@@ -864,6 +864,8 @@ export const es: Messages = {
 					'Auto usa la ventana que OpenRouter indica para el modelo y su proveedor principal.',
 				'custom-openai':
 					'Auto usa la ventana que el servidor indica para el modelo, si la indica (vLLM lo hace); si no, queda como desconocida.',
+				'custom-anthropic':
+					'Auto usa la ventana que el servidor indica para el modelo, si la indica (vLLM lo hace); si no, queda como desconocida.',
 				'claude-plan': 'Claude Code no la indica: Auto solo conoce sus modelos de 1M de contexto.',
 				'chatgpt-plan': 'Codex no la indica, así que Auto la deja como desconocida.'
 			},
@@ -874,9 +876,10 @@ export const es: Messages = {
 			onKey: (provider: string) => `Funciona con la clave de API de ${provider}.`,
 			noKey: (provider: string) =>
 				`Todavía no hay clave de API de ${provider}: añade una en «Claves de API», arriba.`,
-			onServer: (url: string) =>
-				`Funciona en el servidor Custom OpenAI en ${url}. El modelo debe poder llamar herramientas; las imágenes y los PDF le llegan como rutas.`,
-			noServer: 'Aún no hay servidor Custom OpenAI: configura uno en Claves de API, arriba.',
+			server: 'Servidor',
+			onServer: (api: string, server: string, url: string) =>
+				`Funciona en ${server} (${url}), a través de su API de ${api}. El modelo debe poder llamar herramientas; las imágenes y los PDF le llegan como rutas.`,
+			noServers: 'Aún no hay servidores: añade uno en Tus servidores, arriba.',
 			asking: (source: string) => `Preguntando a ${source} por sus modelos…`,
 			listProblem: (problem: string) => `${problem} Aun así puedes escribir un ID.`,
 			couldNotList: (status: number) => `btw no pudo obtener los modelos (${status}).`,
@@ -900,30 +903,33 @@ export const es: Messages = {
 		newDefault: (name: string) => `Los chats nuevos empiezan ahora con ${name}.`,
 		presetRemoved: 'Quitado. Las conversaciones existentes siguen funcionando.',
 		/** Memory search by meaning: where its embeddings come from. */
-		custom: {
-			name: 'Custom OpenAI',
-			about:
-				'Ejecuta chats y automatizaciones con los modelos de cualquier servidor que hable la API de OpenAI, como Ollama, LM Studio o vLLM, y puede calcular los embeddings de la búsqueda en la memoria.',
-			saved: 'Guardado en btw',
-			fromEnv: (variable: string) => `De la variable de entorno ${variable}`,
-			keyEnding: (hint: string | null) => (hint ? `clave termina en ${hint}` : 'con clave'),
-			noKey: 'sin clave',
-			setUp: 'Configurar',
+		servers: {
+			title: 'Tus servidores',
+			hint: 'Servidores de modelos propios, como Ollama, LM Studio u oMLX en este ordenador, o vLLM en una máquina con GPU. Los preajustes Custom OpenAI usan la API de OpenAI del servidor y los Custom Anthropic su API de Anthropic; la búsqueda en la memoria puede usar sus embeddings. Se guardan en el archivo de configuración de btw, con sus claves, que nunca llegan a esta página.',
+			none: 'Aún ninguno.',
+			add: 'Añadir un servidor',
 			change: 'Cambiar',
+			name: 'Nombre',
+			nameHint:
+				'Letras, dígitos, - y _. Sus modelos se nombran con él, como gpu/qwen3:32b, así que no se puede cambiar después.',
 			address: 'Dirección',
+			addressHint:
+				'Ollama escucha en http://localhost:11434 y LM Studio en http://localhost:1234. btw pide al servidor sus modelos para comprobarlo.',
 			key: 'Clave',
 			keyOptional: '(si el servidor la necesita)',
 			keyKept: 'Guardada. Déjala vacía para conservarla.',
-			hint: 'Ollama escucha en http://localhost:11434/v1 y LM Studio en http://localhost:1234/v1. btw pide al servidor sus modelos para comprobarlo.',
+			withKey: (hint: string | null) => (hint ? `Clave termina en ${hint}` : 'Con clave'),
+			noKey: 'Sin clave',
 			checking: 'Comprobando el servidor…',
 			works: (n: number) => `Guardado. Ofrece ${n} ${p(n, { one: 'modelo', other: 'modelos' })}.`,
 			unchecked: (problem: string) => `Guardado sin comprobarlo: ${problem}`,
+			needName: 'Ponle un nombre: letras, dígitos, - y _, como local o gpu.',
+			nameTaken: (name: string) => `Ya hay un servidor llamado ${name}.`,
 			needAddress: 'Indica la dirección del servidor, empezando por http:// o https://.',
-			removeTitle: '¿Quitar el servidor Custom OpenAI?',
+			removeTitle: (name: string) => `¿Quitar ${name}?`,
 			removeBody:
-				'Los chats y automatizaciones con sus modelos dejan de funcionar, y también la búsqueda por significado si usa el servidor, hasta que se configure otro.',
-			useEnvInstead: (variable: string) =>
-				`btw usará la dirección de la variable de entorno ${variable}.`
+				'Los chats y automatizaciones con sus modelos dejan de funcionar hasta que se pasen a otro modelo.',
+			usedBy: (names: string) => `Estos preajustes funcionan en él: ${names}.`
 		},
 		embeddings: {
 			title: 'Búsqueda en la memoria',
@@ -936,7 +942,7 @@ export const es: Messages = {
 			noKey: (provider: string) =>
 				`Aún no hay clave de ${provider}, así que la memoria se busca solo por palabras. Añade una en Claves de API, arriba.`,
 			noServer:
-				'Aún no hay servidor Custom OpenAI, así que la memoria se busca solo por palabras. Configura uno en Claves de API, arriba.',
+				'Aún no hay servidores, así que la memoria se busca solo por palabras. Añade uno en Tus servidores, arriba.',
 			change: 'Cambiar',
 			source: 'Embeddings de',
 			modes: {
@@ -949,8 +955,10 @@ export const es: Messages = {
 			autoNote:
 				'text-embedding-3-small de OpenAI con la clave de OpenAI; si no, el mismo modelo a través de OpenRouter.',
 			withKey: (provider: string) => `Con la clave de API de ${provider}.`,
-			customNote: (url: string) => `Un modelo del servidor Custom OpenAI en ${url}.`,
+			customNote: (server: string, url: string) =>
+				`Un modelo de ${server} (${url}), a través de su API de OpenAI.`,
 			offNote: 'La memoria se busca solo por palabras, y ningún dato se envía a ninguna parte.',
+			server: 'Servidor',
 			model: 'Modelo',
 			customModel: 'Su nombre en el servidor, como nomic-embed-text',
 			checking: 'Comprobando…',

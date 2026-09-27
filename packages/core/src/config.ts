@@ -10,11 +10,11 @@ export interface Config {
 	openaiApiKey?: string;
 	openrouterApiKey?: string;
 	/**
-	 * Custom OpenAI (custom-openai.ts): the address of a server that speaks OpenAI's API, like
-	 * Ollama's or LM Studio's, and its key when it wants one.
+	 * The family's own model servers (custom-servers.ts), like Ollama or LM Studio, for Custom
+	 * OpenAI and Custom Anthropic presets: each with a name, an address, and a key when it wants
+	 * one.
 	 */
-	customOpenaiUrl?: string;
-	customOpenaiApiKey?: string;
+	servers?: { name: string; url: string; key?: string }[];
 	/**
 	 * The Claude Code executable that chats on the Claude plan run (claude-plan.ts). Found on the
 	 * PATH and in the usual install folders when not set.
@@ -32,8 +32,8 @@ export interface Config {
 	imageModel?: string;
 	/**
 	 * Where memory search gets embeddings, to find facts by meaning (memory-embeddings.ts): off, or
-	 * a provider's model, with its key or, for Custom OpenAI, its server (Ollama, LM Studio, oMLX).
-	 * Unset: OpenAI's key, else OpenRouter's.
+	 * a provider's model with its key, or a server's (`custom-openai`, the model `<server>/<model>`)
+	 * like Ollama, LM Studio or oMLX. Unset: OpenAI's key, else OpenRouter's.
 	 */
 	embeddings?: 'off' | { provider: 'openai' | 'openrouter' | 'custom-openai'; model: string };
 	/** Extra environment variables for commands the agent runs (e.g. FIRECRAWL_API_KEY). */

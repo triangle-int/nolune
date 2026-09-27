@@ -12,20 +12,20 @@
 
 	/**
 	 * Where memory search gets its embeddings, to find facts by meaning: what's in use, and a form
-	 * to change it. `defaults`: each provider's model when none is typed. `customServer`: the
-	 * Custom OpenAI server's address, when there is one.
+	 * to change it. `defaults`: each provider's model when none is typed. `servers`: the family's,
+	 * whose models are `<server>/<model>`.
 	 */
 	let {
 		setting,
 		defaults,
 		keys,
-		customServer,
+		servers,
 		result
 	}: {
 		setting: EmbeddingState;
 		defaults: { openai: string; openrouter: string };
 		keys: Pick<ApiKeyStatus, 'provider' | 'label' | 'source'>[];
-		customServer: string | null;
+		servers: { name: string; url: string }[];
 		result:
 			| { embeddingsMessage?: string; embeddingsWarning?: string; embeddingsError?: string }
 			| null
@@ -41,6 +41,8 @@
 	let saving = $state(false);
 	let mode = $state<Mode>('auto');
 	let model = $state('');
+	let server = $state('');
+	const serverUrl = $derived(servers.find((s) => s.name === server)?.url);
 
 	const key = (provider: string) => keys.find((k) => k.provider === provider);
 	const hasKey = (provider: string) => !!key(provider)?.source;
@@ -70,17 +72,23 @@
 				: { warn: true, text: t.noKey(label(mode)) };
 		}
 		if (mode === 'custom-openai') {
-			return customServer
-				? { warn: false, text: t.customNote(customServer) }
+			return serverUrl
+				? { warn: false, text: t.customNote(server, serverUrl) }
 				: { warn: true, text: t.noServer };
 		}
 		return { warn: false, text: t.offNote };
 	});
 
-	/** The form starts from what's saved. */
+	/** The form starts from what's saved; a server's model is `<server>/<model>`. */
 	function start() {
 		mode = setting.mode;
 		model = setting.model ?? '';
+		server = servers[0]?.name ?? '';
+		if (mode === 'custom-openai') {
+			const slash = model.indexOf('/');
+			server = model.slice(0, Math.max(0, slash)) || server;
+			model = model.slice(slash + 1);
+		}
 		open = true;
 	}
 </script>
@@ -150,12 +158,33 @@
 					<input type="hidden" name="mode" value={mode} />
 				</div>
 
+				{#if mode === 'custom-openai' && servers.length > 1}
+					<div class="space-y-2">
+						<div id="{uid}-server" class="font-medium">{t.server}</div>
+						<ToggleGroup.Root
+							type="single"
+							variant="outline"
+							size="sm"
+							value={server}
+							onValueChange={(value) => {
+								if (value) server = value;
+							}}
+							aria-labelledby="{uid}-server"
+							class="flex-wrap"
+						>
+							{#each servers as s (s.name)}
+								<ToggleGroup.Item value={s.name}>{s.name}</ToggleGroup.Item>
+							{/each}
+						</ToggleGroup.Root>
+					</div>
+				{/if}
+
 				{#if mode === 'openai' || mode === 'openrouter' || mode === 'custom-openai'}
 					<div class="space-y-2">
 						<label for="{uid}-model" class="block font-medium">{t.model}</label>
 						<Input
 							id="{uid}-model"
-							name="model"
+							name={mode === 'custom-openai' ? undefined : 'model'}
 							bind:value={model}
 							required={mode === 'custom-openai'}
 							autocomplete="off"
@@ -167,6 +196,10 @@
 									: defaults.openrouter}
 							class="h-10 rounded-full px-4 font-mono placeholder:font-sans"
 						/>
+						{#if mode === 'custom-openai'}
+							<!-- A server's model, as a Custom OpenAI preset keeps it. -->
+							<input type="hidden" name="model" value="{server}/{model.trim()}" />
+						{/if}
 					</div>
 				{/if}
 
@@ -175,7 +208,11 @@
 				{/if}
 
 				<div class="flex gap-2">
-					<Button type="submit" disabled={saving} class="h-10 px-5 max-sm:flex-1">
+					<Button
+						type="submit"
+						disabled={saving || (mode === 'custom-openai' && !serverUrl)}
+						class="h-10 px-5 max-sm:flex-1"
+					>
 						{saving ? t.checking : m.common.save}
 					</Button>
 					<Button type="button" variant="ghost" class="h-10" onclick={() => (open = false)}>

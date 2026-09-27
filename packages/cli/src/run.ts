@@ -5,8 +5,7 @@ import { parseArgs } from 'node:util';
 import {
 	API_KEYS,
 	ApiKeyError,
-	CUSTOM_OPENAI_ENV,
-	CustomOpenaiError,
+	CustomServerError,
 	DEFAULT_IMAGE_MODEL,
 	DEFAULT_PORT,
 	MAX_MEDIA_BYTES,
@@ -14,11 +13,11 @@ import {
 	editPreset,
 	apiKeyStatuses,
 	checkApiKey,
-	checkCustomOpenai,
+	checkServer,
 	claudeExecutable,
 	codexExecutable,
 	configExists,
-	customOpenaiStatus,
+	findServer,
 	createSkill,
 	createUser,
 	deleteUser,
@@ -35,9 +34,11 @@ import {
 	initConfig,
 	installCliShim,
 	isApiKeyProvider,
+	isCustomProvider,
 	isProvider,
 	listPresets,
 	listProfileSkills,
+	listServers,
 	listUsers,
 	normalizeApiKey,
 	parseImageModel,
@@ -45,16 +46,18 @@ import {
 	profileSkillsDir,
 	readConfig,
 	removeApiKey,
-	removeCustomOpenai,
+	removeServer,
 	removePreset,
 	isPlan,
 	saveApiKey,
-	saveCustomOpenai,
+	saveServer,
 	scanSkills,
 	setAdmin,
 	setDefaultPreset,
 	setPassword,
 	setSkillsEnabled,
+	splitModel,
+	suggestServerName,
 	updateConfig,
 	viewImage,
 	ViewLimitError,
@@ -83,13 +86,13 @@ import {
 const help = () => `btw - a family agent that runs on this computer
 
 Getting started
-  btw setup [--provider anthropic|openai|openrouter|custom-openai|claude-plan|chatgpt-plan]
-          [--url ADDRESS]                    interactive first-time setup (key, your account, model);
+  btw setup [--provider anthropic|openai|openrouter|custom-openai|custom-anthropic|claude-plan|
+          chatgpt-plan] [--url ADDRESS]      interactive first-time setup (key, your account, model);
                                              chats run on Claude unless you pick another: openrouter
                                              runs any model OpenRouter serves with one key,
-                                             custom-openai the models of a server at --url that
-                                             speaks OpenAI's API (Ollama, LM Studio, vLLM...), and a
-                                             plan (see Plans below) is signed in to instead
+                                             custom-openai and custom-anthropic the models of your
+                                             own server at --url (see Servers below), and a plan
+                                             (see Plans below) is signed in to instead
   btw start                                  run the gateway in the foreground
   btw service install|uninstall|restart|status|logs [-f]
                                              run it in the background at login (macOS)
@@ -101,8 +104,8 @@ Settings (${paths.home})
   btw config set embeddings <auto|off|provider/model>
                                              what memory search finds meaning with: auto uses the
                                              OpenAI key, else OpenRouter's; the provider is openai,
-                                             openrouter or custom-openai (your server's model, like
-                                             custom-openai/nomic-embed-text)
+                                             openrouter or custom-openai (a server's model, like
+                                             custom-openai/local/nomic-embed-text)
   btw config set claude-path <path>          the Claude Code that claude-plan chats run, and the
   btw config set codex-path <path>           Codex that chatgpt-plan chats run (found on the PATH
                                              and in their usual folders otherwise)
@@ -111,13 +114,17 @@ Settings (${paths.home})
                                              it; OpenAI's runs GPT chats and makes pictures. Admins
                                              can also do this on the web, under Models & keys
   btw key rm <anthropic|openai|openrouter>   remove a stored key (the environment's is used, if set)
-  btw key set custom-openai <url> [key]      the Custom OpenAI server: any server that speaks
-                                             OpenAI's API, like Ollama (http://localhost:11434/v1)
-                                             or LM Studio (http://localhost:1234/v1), and its key if
-                                             it wants one; btw asks it for its models first
-  btw key rm custom-openai                   forget it (${CUSTOM_OPENAI_ENV.url} is used, if set)
   btw env set <NAME> <value>                 extra env var for agent commands (e.g. FIRECRAWL_API_KEY)
   btw env rm <NAME> | btw env list
+
+Servers (your own: Ollama, LM Studio, oMLX, vLLM, llama.cpp..., for custom-openai presets, which
+use their OpenAI API, and custom-anthropic ones, which use their Anthropic API)
+  btw server add <name> <url> [--key K]      add a server, or change the one of that name; btw asks
+                                             it for its models first, and for its key at a terminal
+                                             when it wants one. The address is the server's, like
+                                             http://localhost:11434 (OpenAI's API is under /v1)
+  btw server rm <name>                       presets on it stop working until they're moved
+  btw server list
 
 Plans (chats on your own subscription instead of an API key)
   claude-plan: a Claude Pro or Max plan, through Claude Code on this computer, signed in to your
@@ -141,18 +148,20 @@ Users (web sign-up is disabled; this is the only way to add people)
   btw user list
 
 Model presets (shared by all profiles)
-  btw preset add <model> [--provider anthropic|openai|openrouter|custom-openai|claude-plan|
-                 chatgpt-plan] [--name N] [--context-window TOKENS]
+  btw preset add <model> [--provider anthropic|openai|openrouter|custom-openai|custom-anthropic|
+                 claude-plan|chatgpt-plan] [--server NAME] [--name N] [--context-window TOKENS]
                                              the provider checks the model id first (anthropic
                                              unless given); OpenAI models other than the
                                              flagships need --context-window. OpenRouter's ids
                                              name their maker (anthropic/claude-sonnet-5), and the
-                                             model must be able to call tools. A custom-openai
-                                             model must call tools too, which shows at its first
-                                             reply; pictures and PDFs reach it as paths. The plans
-                                             check their agent's sign-in instead, and chatgpt-plan
-                                             the models Codex offers
-  btw preset edit <name|id> [--provider P] [--model M] [--name N] [--context-window TOKENS|auto]
+                                             model must be able to call tools. A custom-openai or
+                                             custom-anthropic model is a server's (--server, or
+                                             <server>/<model>); it must call tools too, which shows
+                                             at its first reply, and pictures and PDFs reach it as
+                                             paths. The plans check their agent's sign-in instead,
+                                             and chatgpt-plan the models Codex offers
+  btw preset edit <name|id> [--provider P] [--model M] [--server NAME] [--name N]
+                 [--context-window TOKENS|auto]
                                              change what's given; a new model is checked like
                                              add's. Chats already on the preset keep what they had
   btw preset rm <name|id>
@@ -186,6 +195,7 @@ const SETUP: Record<Provider, { model: string; keys: string }> = {
 	openrouter: { model: 'anthropic/claude-opus-5.5', keys: 'openrouter.ai > Settings > API Keys' },
 	// The first model the server lists.
 	'custom-openai': { model: '', keys: '' },
+	'custom-anthropic': { model: '', keys: '' },
 	'claude-plan': { model: 'claude-opus-5-5', keys: '' },
 	'chatgpt-plan': { model: 'gpt-6-astra', keys: '' }
 };
@@ -220,42 +230,77 @@ async function storeApiKey(io: Io, provider: ApiKeyProvider, pasted: string): Pr
 }
 
 /**
- * Checks the Custom OpenAI server by asking it for its models, and saves it: the models it serves.
- * One that wants a key gets asked for it at a terminal; one that can't be reached is saved with a
- * warning, so setup works before the server runs.
+ * Checks a server by asking it for its models, and saves it: the models it serves. One that wants
+ * a key gets asked for it at a terminal; one that can't be reached is saved with a warning, so
+ * setup works before the server runs.
  */
-async function storeCustomOpenai(io: Io, url: string, given: string | null): Promise<string[]> {
+async function storeServer(
+	io: Io,
+	name: string,
+	url: string,
+	given: string | null
+): Promise<string[]> {
 	let key = given?.trim() || null;
-	let found: Awaited<ReturnType<typeof checkCustomOpenai>>;
+	const known = findServer(name);
+	let found: Awaited<ReturnType<typeof checkServer>>;
 	try {
 		try {
-			found = await checkCustomOpenai(url, key);
+			found = await checkServer(url, key);
 		} catch (err) {
-			if (!(err instanceof CustomOpenaiError) || err.reason !== 'key' || key || !io.stdinIsTTY) {
+			if (!(err instanceof CustomServerError) || err.reason !== 'key' || key || !io.stdinIsTTY) {
 				throw err;
 			}
 			key = (await askHidden(io, `Its API key`)) || null;
 			if (!key) throw err;
-			found = await checkCustomOpenai(url, key);
+			found = await checkServer(url, key);
 		}
 	} catch (err) {
-		if (!(err instanceof CustomOpenaiError) || err.reason !== 'unreachable') {
+		if (!(err instanceof CustomServerError) || err.reason !== 'unreachable') {
 			fail((err as Error).message);
 		}
-		saveCustomOpenai(url, key);
-		io.log(`Saved the Custom OpenAI server without checking it. ${err.message}`);
+		saveOrFail(name, url, key);
+		io.log(`Saved the server "${name}" without checking it. ${err.message}`);
 		return [];
 	}
-	saveCustomOpenai(url, key);
-	const { url: saved } = customOpenaiStatus();
+	saveOrFail(name, url, key);
 	const some = found.models.slice(0, 8).join(', ');
 	const serves = found.models.length
 		? ` It serves ${some}${found.models.length > 8 ? ` and ${found.models.length - 8} more` : ''}.`
 		: '';
 	io.log(
-		`Saved the Custom OpenAI server at ${saved}.${serves}${found.warning ? ` ${found.warning}` : ''}`
+		`${known ? 'Changed' : 'Added'} the server "${name}" at ${findServer(name)?.url}.${serves}${found.warning ? ` ${found.warning}` : ''}`
 	);
 	return found.models;
+}
+
+function saveOrFail(name: string, url: string, key: string | null): void {
+	try {
+		saveServer(name, url, key);
+	} catch (err) {
+		fail((err as Error).message);
+	}
+}
+
+/**
+ * A server's model as a preset keeps it, `<server>/<model>`: as typed when it starts with a
+ * server's name, else on `server`, or on the only one there is.
+ */
+function onServer(model: string, server: string | undefined): string {
+	const typed = splitModel(model);
+	const named = typed.server ? findServer(typed.server) : undefined;
+	if (named && (!server || server.toLowerCase() === named.name.toLowerCase())) return model;
+	const names = listServers().map((s) => s.name);
+	const name = server ?? (names.length === 1 ? names[0] : '');
+	if (!name) {
+		fail(
+			names.length
+				? `which server? Pass --server <${names.join('|')}>, or write the model as <server>/<model>.`
+				: 'no server yet. Add one with `btw server add <name> <url>`.'
+		);
+	}
+	const found = findServer(name);
+	if (!found) fail(`no server named "${name}". See \`btw server list\`.`);
+	return `${found.name}/${model}`;
 }
 
 function requireInit(): void {
@@ -309,7 +354,9 @@ async function setup(io: Io, args: string[]): Promise<void> {
 
 	const provider = values.provider ?? 'anthropic';
 	if (!isProvider(provider)) {
-		fail('--provider is anthropic, openai, openrouter, custom-openai, claude-plan or chatgpt-plan');
+		fail(
+			'--provider is anthropic, openai, openrouter, custom-openai, custom-anthropic, claude-plan or chatgpt-plan'
+		);
 	}
 
 	const { created } = initConfig();
@@ -320,16 +367,18 @@ async function setup(io: Io, args: string[]): Promise<void> {
 	let suggested = SETUP[provider].model;
 	if (isPlan(provider)) {
 		await setUpPlan(io, provider);
-	} else if (provider === 'custom-openai') {
-		if (!customOpenaiStatus().url || values.url) {
+	} else if (isCustomProvider(provider)) {
+		if (!listServers().length || values.url) {
 			const url =
 				values.url ??
 				(await ask(
 					io,
-					'Server address (Ollama: http://localhost:11434/v1, LM Studio: http://localhost:1234/v1)'
+					'Server address (Ollama: http://localhost:11434, LM Studio: http://localhost:1234)'
 				));
 			if (!url) fail('a server address is required (--url)');
-			suggested = (await storeCustomOpenai(io, url, values.key ?? null))[0] ?? '';
+			const name = suggestServerName(url);
+			const first = (await storeServer(io, name, url, values.key ?? null))[0];
+			suggested = first ? `${name}/${first}` : '';
 		}
 	} else {
 		const { label, field } = API_KEYS[provider];
@@ -352,8 +401,9 @@ async function setup(io: Io, args: string[]): Promise<void> {
 	}
 
 	if (listPresets().length === 0) {
-		const model = values.model ?? (await ask(io, 'Model', suggested));
-		if (!model) fail('which model? Pass --model <id>');
+		const typed = values.model ?? (await ask(io, 'Model', suggested));
+		if (!typed) fail('which model? Pass --model <id>');
+		const model = isCustomProvider(provider) ? onServer(typed, undefined) : typed;
 		const preset = await addPreset({ provider, model });
 		io.log(`Added model "${preset.name}".`);
 	}
@@ -520,12 +570,12 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 						: `no key (btw key set ${key.provider})`;
 					row(key.provider, shown);
 				}
-				const custom = customOpenaiStatus();
+				const servers = listServers();
 				row(
-					'custom-openai',
-					custom.url
-						? `${custom.url}${custom.source === 'env' ? ` from ${CUSTOM_OPENAI_ENV.url}` : ''}, ${custom.hasKey ? `with a key${custom.hint ? ` (…${custom.hint})` : ''}` : 'no key'}`
-						: 'no server (btw key set custom-openai <url>)'
+					'servers',
+					servers.length
+						? servers.map((s) => `${s.name} ${s.url}${s.hasKey ? ' (with a key)' : ''}`).join(', ')
+						: 'none (btw server add <name> <url>)'
 				);
 				const claude = claudeExecutable();
 				row(
@@ -610,23 +660,10 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 		case 'key': {
 			requireInit();
 			const provider = rest[0] ?? '';
-			const names = [...Object.keys(API_KEYS), 'custom-openai'].join('|');
-			if (provider === 'custom-openai' && action === 'rm') {
-				removeCustomOpenai();
-				const fallback = io.env[CUSTOM_OPENAI_ENV.url]
-					? ` btw uses ${CUSTOM_OPENAI_ENV.url} from the environment now.`
-					: '';
-				io.log(`Removed the Custom OpenAI server.${fallback}`);
-				return;
-			}
-			if (provider === 'custom-openai' && action === 'set') {
-				const url = positional(rest, 1, 'url');
-				await storeCustomOpenai(io, url, rest[2] ?? null);
-				return;
-			}
+			const names = Object.keys(API_KEYS).join('|');
 			if ((action !== 'set' && action !== 'rm') || !isApiKeyProvider(provider)) {
 				fail(
-					`usage: btw key set <${names}> [key] | btw key rm <${names}> (custom-openai takes its <url> before the key)`
+					`usage: btw key set <${names}> [key] | btw key rm <${names}> (your own servers: btw server add)`
 				);
 			}
 			const { label, env } = API_KEYS[provider];
@@ -639,6 +676,41 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 			const key = rest[1] || (await askHidden(io, `${label} API key`));
 			if (!key) fail('no key given');
 			await storeApiKey(io, provider, key);
+			return;
+		}
+
+		case 'server': {
+			requireInit();
+			const { values, positionals } = parseArgs({
+				args: rest,
+				allowPositionals: true,
+				options: { key: { type: 'string' } }
+			});
+			if (action === 'add') {
+				const name = positional(positionals, 0, 'name');
+				const url = positional(positionals, 1, 'url');
+				await storeServer(io, name, url, values.key ?? null);
+			} else if (action === 'rm') {
+				const name = positional(positionals, 0, 'name');
+				const server = findServer(name);
+				if (!server) fail(`no server named "${name}". See \`btw server list\`.`);
+				const on = listPresets().filter(
+					(p) => isCustomProvider(p.provider) && splitModel(p.model).server === server.name
+				);
+				removeServer(server.name);
+				io.log(
+					`Removed the server "${server.name}".${on.length ? ` Chats on ${on.map((p) => `"${p.name}"`).join(', ')} stop working until they're moved to another model.` : ''}`
+				);
+			} else if (action === 'list') {
+				for (const s of listServers()) {
+					io.log(
+						`${s.name}\t${s.url}\t${s.hasKey ? `key${s.hint ? ` …${s.hint}` : ''}` : 'no key'}`
+					);
+				}
+			} else
+				fail(
+					'usage: btw server add <name> <url> [--key K] | btw server rm <name> | btw server list'
+				);
 			return;
 		}
 
@@ -716,12 +788,17 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				options: {
 					provider: { type: 'string' },
 					model: { type: 'string' },
+					server: { type: 'string' },
 					name: { type: 'string' },
 					'context-window': { type: 'string' }
 				}
 			});
 			if (action === 'add') {
-				const model = positional(positionals, 0, 'model');
+				const typed = positional(positionals, 0, 'model');
+				const model =
+					values.provider && isCustomProvider(values.provider)
+						? onServer(typed, values.server)
+						: typed;
 				const cw = values['context-window'];
 				const preset = await addPreset({
 					provider: values.provider,
@@ -732,9 +809,18 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				io.log(`Added "${preset.name}" (context ${formatTokens(effectiveContextWindow(preset))}).`);
 			} else if (action === 'edit') {
 				const cw = values['context-window'];
-				const preset = await editPreset(positional(positionals, 0, 'name|id'), {
+				const which = positional(positionals, 0, 'name|id');
+				let model = values.model;
+				if (model !== undefined || values.server !== undefined) {
+					const old = listPresets().find((p) => p.id === which || p.name === which);
+					const provider = values.provider ?? old?.provider ?? '';
+					// A new server keeps the model's id there.
+					const id = model ?? splitModel(old?.model ?? '').model;
+					if (isCustomProvider(provider)) model = onServer(id, values.server);
+				}
+				const preset = await editPreset(which, {
 					provider: values.provider,
-					model: values.model,
+					model,
 					name: values.name,
 					contextWindow: cw === undefined ? undefined : cw === 'auto' ? null : Number(cw)
 				});

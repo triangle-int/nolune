@@ -41,6 +41,7 @@ import {
 	type Provider
 } from './models.ts';
 import { profileDir } from './paths.ts';
+import { isCustomProvider } from './custom-servers.ts';
 import { hasFileStore, providerFileId } from './provider-files.ts';
 
 /*
@@ -230,8 +231,8 @@ type ModelOf = { provider: Provider; model: string };
  */
 async function modelTakes(conv: ModelOf, what: 'pictures' | 'pdfs'): Promise<string | null> {
 	// Nothing says which of a server's models take them.
-	if (conv.provider === 'custom-openai') {
-		return `btw gives models on a Custom OpenAI server only ${what === 'pdfs' ? "a PDF's" : "a picture's"} path`;
+	if (isCustomProvider(conv.provider)) {
+		return `btw gives models on your own servers only ${what === 'pdfs' ? "a PDF's" : "a picture's"} path`;
 	}
 	try {
 		if ((await modelInputs(conv.provider, conv.model))[what]) return null;

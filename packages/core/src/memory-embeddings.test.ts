@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initConfig, updateConfig } from './config.ts';
-import { saveCustomOpenai } from './custom-openai.ts';
+import { saveServer } from './custom-servers.ts';
 import { addMemoryFact, writeMemoryNote } from './memory.ts';
 import {
 	embeddingSource,
@@ -83,8 +83,6 @@ beforeEach(() => {
 	vi.stubEnv('OPENAI_BASE_URL', `http://127.0.0.1:${port}/v1`);
 	vi.stubEnv('OPENAI_API_KEY', 'sk-test');
 	vi.stubEnv('OPENROUTER_API_KEY', '');
-	vi.stubEnv('CUSTOM_OPENAI_BASE_URL', '');
-	vi.stubEnv('CUSTOM_OPENAI_API_KEY', '');
 	startEmbeddingMemory([]);
 });
 
@@ -204,19 +202,20 @@ describe('embeddingSource', () => {
 		expect(embeddingSource()).toBeNull();
 	});
 
-	it("uses the Custom OpenAI server's model, with its key when it has one", async () => {
+	it("uses a server's model, with its key when it has one", async () => {
 		initConfig();
-		saveEmbeddingSetting(parseEmbeddingSetting('custom-openai/embeddinggemma:300m'));
+		saveEmbeddingSetting(parseEmbeddingSetting('custom-openai/local/embeddinggemma:300m'));
 		expect(embeddingSource()).toBeNull();
-		expect(embeddingStatus()).toContain('there is no Custom OpenAI server');
+		expect(embeddingStatus()).toContain('there is no server named "local"');
 
+		// Added as the server itself: its OpenAI API is under /v1.
 		const { port } = server.address() as { port: number };
-		saveCustomOpenai(`http://127.0.0.1:${port}/v1/`, null);
+		saveServer('local', `http://127.0.0.1:${port}/`, null);
 		expect(embeddingSource()).toEqual({
 			url: `http://127.0.0.1:${port}/v1`,
 			model: 'embeddinggemma:300m',
 			key: null,
-			name: 'custom-openai/embeddinggemma:300m'
+			name: 'custom-openai/local/embeddinggemma:300m'
 		});
 		const profile = family();
 		await embedMemory(profile.slug);
@@ -224,7 +223,7 @@ describe('embeddingSource', () => {
 		const teeth = await recallFor(profile.slug, 'Who fixes our teeth?', { known: '' });
 		expect(teeth).toContain('Dentist: Dr. Keller');
 
-		saveCustomOpenai(`http://127.0.0.1:${port}/v1`, 'sk-local');
+		saveServer('local', `http://127.0.0.1:${port}/v1`, 'sk-local');
 		expect(embeddingSource()?.key).toBe('sk-local');
 	});
 
@@ -235,13 +234,13 @@ describe('embeddingSource', () => {
 			model: null,
 			using: 'openai/text-embedding-3-small'
 		});
-		saveCustomOpenai('http://localhost:1234/v1', 'secret');
-		saveEmbeddingSetting({ provider: 'custom-openai', model: 'nomic' });
+		saveServer('studio', 'http://localhost:1234', 'secret');
+		saveEmbeddingSetting({ provider: 'custom-openai', model: 'studio/nomic' });
 		const state = embeddingState();
 		expect(state).toEqual({
 			mode: 'custom-openai',
-			model: 'nomic',
-			using: 'custom-openai/nomic'
+			model: 'studio/nomic',
+			using: 'custom-openai/studio/nomic'
 		});
 		expect(JSON.stringify(state)).not.toContain('secret');
 
@@ -260,13 +259,12 @@ describe('embeddingSource', () => {
 			provider: 'openrouter',
 			model: 'qwen/qwen3-embedding-8b'
 		});
-		expect(parseEmbeddingSetting('custom-openai/text-embedding-nomic-embed-text-v1.5')).toEqual({
+		expect(parseEmbeddingSetting('custom-openai/gpu/Qwen/Qwen3-Embedding-8B')).toEqual({
 			provider: 'custom-openai',
-			model: 'text-embedding-nomic-embed-text-v1.5'
+			model: 'gpu/Qwen/Qwen3-Embedding-8B'
 		});
-		expect(() => parseEmbeddingSetting('http://localhost:1234/v1')).toThrow(
-			'btw key set custom-openai'
-		);
+		expect(() => parseEmbeddingSetting('custom-openai/nomic')).toThrow('give the server too');
+		expect(() => parseEmbeddingSetting('http://localhost:1234/v1')).toThrow('btw server add');
 		expect(() => parseEmbeddingSetting('voyage/voyage-3')).toThrow('openai/<model>');
 		expect(() => parseEmbeddingSetting('openai/')).toThrow('openai/<model>');
 	});

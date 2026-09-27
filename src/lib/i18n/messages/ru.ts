@@ -935,6 +935,8 @@ export const ru: Messages = {
 					'В режиме «Авто» берётся окно, которое OpenRouter указывает для модели и её основного провайдера.',
 				'custom-openai':
 					'В режиме «Авто» берётся окно, которое сервер указывает для модели, если указывает (vLLM указывает); иначе оно остаётся неизвестным.',
+				'custom-anthropic':
+					'В режиме «Авто» берётся окно, которое сервер указывает для модели, если указывает (vLLM указывает); иначе оно остаётся неизвестным.',
 				'claude-plan': 'Claude Code его не сообщает: «Авто» знает только модели с контекстом 1M.',
 				'chatgpt-plan': 'Codex его не сообщает, поэтому «Авто» оставляет его неизвестным.'
 			},
@@ -945,9 +947,10 @@ export const ru: Messages = {
 			onKey: (provider: string) => `Работает по API-ключу ${provider}.`,
 			noKey: (provider: string) =>
 				`API-ключа ${provider} пока нет: добавьте его в разделе «API-ключи» выше.`,
-			onServer: (url: string) =>
-				`Работает на сервере Custom OpenAI по адресу ${url}. Модель должна уметь вызывать инструменты; картинки и PDF она получает как пути к файлам.`,
-			noServer: 'Сервера Custom OpenAI пока нет: настройте его в API-ключах выше.',
+			server: 'Сервер',
+			onServer: (api: string, server: string, url: string) =>
+				`Работает на ${server} (${url}) через его API в формате ${api}. Модель должна уметь вызывать инструменты; картинки и PDF она получает как пути к файлам.`,
+			noServers: 'Серверов пока нет: добавьте его в разделе «Ваши серверы» выше.',
 			asking: (source: string) => `Спрашиваем у ${source} список моделей…`,
 			listProblem: (problem: string) => `${problem} ID модели всё равно можно ввести вручную.`,
 			couldNotList: (status: number) => `btw не удалось получить список моделей (${status}).`,
@@ -971,31 +974,34 @@ export const ru: Messages = {
 		newDefault: (name: string) => `Теперь новые чаты начинаются с ${name}.`,
 		presetRemoved: 'Удалено. Существующие чаты продолжат работать.',
 		/** Memory search by meaning: where its embeddings come from. */
-		custom: {
-			name: 'Custom OpenAI',
-			about:
-				'Запускает чаты и автоматизации на моделях любого сервера с API как у OpenAI — Ollama, LM Studio или vLLM — и может считать эмбеддинги для поиска по памяти.',
-			saved: 'Сохранён в btw',
-			fromEnv: (variable: string) => `Из переменной окружения ${variable}`,
-			keyEnding: (hint: string | null) => (hint ? `ключ заканчивается на ${hint}` : 'с ключом'),
-			noKey: 'без ключа',
-			setUp: 'Настроить',
+		servers: {
+			title: 'Ваши серверы',
+			hint: 'Собственные серверы моделей: Ollama, LM Studio или oMLX на этом компьютере, или vLLM на машине с GPU. Пресеты Custom OpenAI используют API сервера в формате OpenAI, пресеты Custom Anthropic — в формате Anthropic; поиск по памяти может брать у него эмбеддинги. Хранятся в конфиге btw вместе с ключами, которые на эту страницу не попадают.',
+			none: 'Пока нет.',
+			add: 'Добавить сервер',
 			change: 'Изменить',
+			name: 'Имя',
+			nameHint:
+				'Буквы, цифры, - и _. По нему называются его модели, например gpu/qwen3:32b, поэтому потом его не поменять.',
 			address: 'Адрес',
+			addressHint:
+				'Ollama слушает на http://localhost:11434, LM Studio — на http://localhost:1234. btw проверяет сервер, запрашивая список его моделей.',
 			key: 'Ключ',
 			keyOptional: '(если серверу он нужен)',
 			keyKept: 'Сохранён. Оставьте пустым, чтобы не менять.',
-			hint: 'Ollama слушает на http://localhost:11434/v1, LM Studio — на http://localhost:1234/v1. btw проверяет сервер, запрашивая список его моделей.',
+			withKey: (hint: string | null) => (hint ? `Ключ заканчивается на ${hint}` : 'С ключом'),
+			noKey: 'Без ключа',
 			checking: 'Проверяем сервер…',
 			works: (n: number) =>
 				`Сохранено. На сервере ${n} ${p(n, { one: 'модель', few: 'модели', many: 'моделей', other: 'модели' })}.`,
 			unchecked: (problem: string) => `Сохранено без проверки: ${problem}`,
+			needName: 'Дайте ему имя: буквы, цифры, - и _, например local или gpu.',
+			nameTaken: (name: string) => `Сервер с именем ${name} уже есть.`,
 			needAddress: 'Укажите адрес сервера, начиная с http:// или https://.',
-			removeTitle: 'Удалить сервер Custom OpenAI?',
+			removeTitle: (name: string) => `Удалить ${name}?`,
 			removeBody:
-				'Чаты и автоматизации на его моделях перестанут работать, как и поиск по смыслу, если он использует этот сервер, — пока сервер не настроят снова.',
-			useEnvInstead: (variable: string) =>
-				`btw будет использовать адрес из переменной окружения ${variable}.`
+				'Чаты и автоматизации на его моделях перестанут работать, пока их не переведут на другую модель.',
+			usedBy: (names: string) => `На нём работают пресеты: ${names}.`
 		},
 		embeddings: {
 			title: 'Поиск по памяти',
@@ -1007,7 +1013,7 @@ export const ru: Messages = {
 			noKey: (provider: string) =>
 				`Пока нет ключа ${provider}, поэтому память ищется только по словам. Добавьте его в API-ключах выше.`,
 			noServer:
-				'Сервера Custom OpenAI пока нет, поэтому память ищется только по словам. Настройте его в API-ключах выше.',
+				'Серверов пока нет, поэтому память ищется только по словам. Добавьте его в разделе «Ваши серверы» выше.',
 			change: 'Изменить',
 			source: 'Откуда эмбеддинги',
 			modes: {
@@ -1020,8 +1026,10 @@ export const ru: Messages = {
 			autoNote:
 				'text-embedding-3-small от OpenAI по ключу OpenAI, а без него — та же модель через OpenRouter.',
 			withKey: (provider: string) => `По API-ключу ${provider}.`,
-			customNote: (url: string) => `Модель сервера Custom OpenAI по адресу ${url}.`,
+			customNote: (server: string, url: string) =>
+				`Модель сервера ${server} (${url}) через его API в формате OpenAI.`,
 			offNote: 'Память ищется только по словам, и никакие факты никуда не отправляются.',
+			server: 'Сервер',
 			model: 'Модель',
 			customModel: 'Как её называет сервер, например nomic-embed-text',
 			checking: 'Проверяем…',

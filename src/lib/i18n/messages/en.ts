@@ -774,6 +774,8 @@ export const en = {
 				openrouter: 'Auto uses the window OpenRouter lists for the model and its main provider.',
 				'custom-openai':
 					'Auto uses the window the server lists for the model, if it lists one (vLLM does); otherwise it stays unknown.',
+				'custom-anthropic':
+					'Auto uses the window the server lists for the model, if it lists one (vLLM does); otherwise it stays unknown.',
 				'claude-plan': "Claude Code doesn't report it: Auto knows only its 1M-context models'.",
 				'chatgpt-plan': "Codex doesn't report it, so Auto leaves it unknown."
 			},
@@ -783,9 +785,10 @@ export const en = {
 			noCodex: "Codex isn't installed yet: see ChatGPT plan, above.",
 			onKey: (provider: string) => `Runs on the ${provider} API key.`,
 			noKey: (provider: string) => `No ${provider} API key yet: add one under API keys, above.`,
-			onServer: (url: string) =>
-				`Runs on the Custom OpenAI server at ${url}. The model must be able to call tools; pictures and PDFs reach it as their paths.`,
-			noServer: 'No Custom OpenAI server yet: set one up under API keys, above.',
+			server: 'Server',
+			onServer: (api: string, server: string, url: string) =>
+				`Runs on ${server} at ${url}, through its ${api} API. The model must be able to call tools; pictures and PDFs reach it as their paths.`,
+			noServers: 'No server yet: add one under Your servers, above.',
 			asking: (source: string) => `Asking ${source} for its models…`,
 			listProblem: (problem: string) => `${problem} You can still type an id.`,
 			couldNotList: (status: number) => `btw couldn't get the models (${status}).`,
@@ -808,31 +811,34 @@ export const en = {
 		removed: 'Removed.',
 		newDefault: (name: string) => `New chats now start with ${name}.`,
 		presetRemoved: 'Removed. Existing conversations keep working.',
-		/** The Custom OpenAI server, among the API keys. */
-		custom: {
-			name: 'Custom OpenAI',
-			about:
-				"Runs chats and automations on the models of any server that speaks OpenAI's API, like Ollama, LM Studio or vLLM, and can make memory search's embeddings.",
-			saved: 'Saved in btw',
-			fromEnv: (variable: string) => `From the ${variable} environment variable`,
-			keyEnding: (hint: string | null) => (hint ? `key ending in ${hint}` : 'with a key'),
-			noKey: 'no key',
-			setUp: 'Set up',
+		/** The family's own model servers (Ollama, LM Studio...), for Custom OpenAI and Custom Anthropic. */
+		servers: {
+			title: 'Your servers',
+			hint: "Model servers of your own, like Ollama, LM Studio or oMLX on this computer, or vLLM on a machine with GPUs. Custom OpenAI presets use a server's OpenAI API and Custom Anthropic presets its Anthropic API; memory search can take its embeddings. Kept in btw's config file, keys included, which never come to this page.",
+			none: 'None yet.',
+			add: 'Add a server',
 			change: 'Change',
+			name: 'Name',
+			nameHint:
+				"Letters, digits, - and _. Its models are named by it, like gpu/qwen3:32b, so it can't be changed later.",
 			address: 'Address',
+			addressHint:
+				'Ollama listens at http://localhost:11434 and LM Studio at http://localhost:1234. btw asks the server for its models to check it.',
 			key: 'Key',
 			keyOptional: '(if the server needs one)',
 			keyKept: 'Saved. Leave empty to keep it.',
-			hint: 'Ollama listens at http://localhost:11434/v1 and LM Studio at http://localhost:1234/v1. btw asks the server for its models to check it.',
+			withKey: (hint: string | null) => (hint ? `Key ending in ${hint}` : 'With a key'),
+			noKey: 'No key',
 			checking: 'Checking the server…',
 			works: (n: number) => `Saved. It serves ${n} ${p(n, { one: 'model', other: 'models' })}.`,
 			unchecked: (problem: string) => `Saved without checking it: ${problem}`,
+			needName: 'Give it a name: letters, digits, - and _, like local or gpu.',
+			nameTaken: (name: string) => `There's already a server named ${name}.`,
 			needAddress: "Give the server's address, starting with http:// or https://.",
-			removeTitle: 'Remove the Custom OpenAI server?',
+			removeTitle: (name: string) => `Remove ${name}?`,
 			removeBody:
-				'Chats and automations on its models stop working, and so does search by meaning if it uses the server, until one is set up again.',
-			useEnvInstead: (variable: string) =>
-				`btw will use the address in the ${variable} environment variable instead.`
+				"Chats and automations on its models stop working until they're moved to another model.",
+			usedBy: (names: string) => `These presets run on it: ${names}.`
 		},
 		/** Memory search by meaning: where its embeddings come from. */
 		embeddings: {
@@ -845,7 +851,7 @@ export const en = {
 			noKey: (provider: string) =>
 				`No ${provider} key yet, so memory is searched by words only. Add one under API keys, above.`,
 			noServer:
-				'No Custom OpenAI server yet, so memory is searched by words only. Set one up under API keys, above.',
+				'No server yet, so memory is searched by words only. Add one under Your servers, above.',
 			change: 'Change',
 			source: 'Embeddings from',
 			modes: {
@@ -858,8 +864,10 @@ export const en = {
 			autoNote:
 				"OpenAI's text-embedding-3-small with the OpenAI key, else the same model through OpenRouter.",
 			withKey: (provider: string) => `With the ${provider} API key.`,
-			customNote: (url: string) => `A model of the Custom OpenAI server at ${url}.`,
+			customNote: (server: string, url: string) =>
+				`A model of ${server} at ${url}, through its OpenAI API.`,
 			offNote: 'Memory is searched by words only, and no fact is sent anywhere to be embedded.',
+			server: 'Server',
 			model: 'Model',
 			customModel: 'Its name on the server, like nomic-embed-text',
 			checking: 'Checking…',

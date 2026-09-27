@@ -168,8 +168,8 @@ describe('btw preset edit', () => {
 	});
 });
 
-describe('btw key set custom-openai', () => {
-	it('checks the server for its models, and memory search can use them', async () => {
+describe('btw server', () => {
+	it('checks a server for its models, and presets and memory search can use it', async () => {
 		// A server that wants a key, like a vLLM started with --api-key.
 		const server = createServer((req, res) => {
 			res.setHeader('content-type', 'application/json');
@@ -182,41 +182,51 @@ describe('btw key set custom-openai', () => {
 			}
 		});
 		await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-		const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
+		const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 		try {
-			const refused = await run(['key', 'set', 'custom-openai', url], { stdin: '' });
+			const refused = await run(['server', 'add', 'gpu', url], { stdin: '' });
 			expect(refused.code).not.toBe(0);
 			expect(refused.err).toContain('The server wants a key.');
 
-			expect(await run(['key', 'set', 'custom-openai', `${url}/`, 'sk-local'])).toEqual({
+			expect(await run(['server', 'add', 'gpu', `${url}/`, '--key', 'sk-local'])).toEqual({
 				code: 0,
-				out: `Saved the Custom OpenAI server at ${url}. It serves qwen3:8b, nomic.\n`,
+				out: `Added the server "gpu" at ${url}. It serves qwen3:8b, nomic.\n`,
 				err: ''
 			});
-			expect((await run(['config'])).out).toContain(`\ncustom-openai ${url}, with a key\n`);
+			expect((await run(['server', 'list'])).out).toBe(`gpu\t${url}\tkey\n`);
+			expect((await run(['config'])).out).toContain(`\nservers       gpu ${url} (with a key)\n`);
 
-			const meaning = await run(['config', 'set', 'embeddings', 'custom-openai/nomic']);
-			expect(meaning.out).toBe('Memory search by meaning: custom-openai/nomic.\n');
+			// With one server, a model needs no server's name; the preset is named by it.
+			const added = await run(['preset', 'add', 'qwen3:8b', '--provider', 'custom-anthropic']);
+			expect(added.out).toBe('Added "qwen3:8b (gpu)" (context ?).\n');
+			expect((await run(['preset', 'list'])).out).toContain('custom-anthropic/gpu/qwen3:8b');
+
+			const meaning = await run(['config', 'set', 'embeddings', 'custom-openai/gpu/nomic']);
+			expect(meaning.out).toBe('Memory search by meaning: custom-openai/gpu/nomic.\n');
 			const address = await run(['config', 'set', 'embeddings', url]);
-			expect(address.err).toContain('btw key set custom-openai <url>');
+			expect(address.err).toContain('btw server add <name> <url>');
 
-			expect((await run(['key', 'rm', 'custom-openai'])).out).toBe(
-				'Removed the Custom OpenAI server.\n'
+			expect((await run(['server', 'rm', 'gpu'])).out).toBe(
+				'Removed the server "gpu". Chats on "qwen3:8b (gpu)" stop working until they\'re moved to another model.\n'
 			);
 			expect((await run(['config'])).out).toContain(
-				'embeddings    custom-openai/nomic, but there is no Custom OpenAI server'
+				'embeddings    custom-openai/gpu/nomic, but there is no server named "gpu"'
 			);
+			const orphan = await run(['preset', 'add', 'qwen3:8b', '--provider', 'custom-openai']);
+			expect(orphan.err).toContain('no server yet');
 		} finally {
 			server.close();
 		}
 	});
 
 	it("saves a server that doesn't answer yet, with a warning", async () => {
-		const saved = await run(['key', 'set', 'custom-openai', 'http://127.0.0.1:1/v1']);
+		const saved = await run(['server', 'add', 'later', 'http://127.0.0.1:1']);
 		expect(saved.code).toBe(0);
 		expect(saved.out).toMatch(
-			/^Saved the Custom OpenAI server without checking it\. Couldn't reach http:\/\/127\.0\.0\.1:1\/v1 \(.+\)\.\n$/
+			/^Saved the server "later" without checking it\. Couldn't reach http:\/\/127\.0\.0\.1:1 \(.+\)\.\n$/
 		);
+		const bad = await run(['server', 'add', 'my server', 'http://127.0.0.1:1']);
+		expect(bad.err).toContain('letters, digits');
 	});
 });
 

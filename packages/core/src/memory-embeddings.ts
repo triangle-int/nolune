@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { join } from 'node:path';
 import type OpenAI from 'openai';
 import { configuredApiKey, readConfig, updateConfig, type Config } from './config.ts';
-import { CUSTOM_OPENAI_LABEL, customOpenai } from './custom-openai.ts';
+import { findServer, openaiUrl, splitModel } from './custom-servers.ts';
 import { openaiBaseUrl } from './openai.ts';
 import { openrouterBaseUrl } from './openrouter.ts';
 import { profileMemoryDir } from './paths.ts';
@@ -11,7 +11,7 @@ import { profileMemoryDir } from './paths.ts';
 /*
  * Embeddings of memory facts, for finding them by meaning (memory-search.ts), from any
  * OpenAI-compatible embeddings API: by default OpenAI's or OpenRouter's, with the key btw already
- * has, or the Custom OpenAI server (custom-openai.ts), like Ollama, LM Studio or oMLX on this
+ * has, or one of the family's servers (custom-servers.ts), like Ollama, LM Studio or oMLX on this
  * computer, for anyone who wants them local.
  * Each fact's vector is kept in a hidden file next to the notes and made again only when the fact
  * or the model changes. Facts are embedded in the background; a message waits only for its own.
@@ -54,8 +54,11 @@ function setting(): Config['embeddings'] {
 function fromProvider(provider: EmbeddingProvider, model: string): EmbeddingSource | null {
 	const name = `${provider}/${model}`;
 	if (provider === 'custom-openai') {
-		const server = customOpenai();
-		return server ? { url: server.url, model, key: server.key, name } : null;
+		// `<server>/<model>`, as a Custom OpenAI preset's.
+		const { server: serverName, model: id } = splitModel(model);
+		const server = serverName ? findServer(serverName) : undefined;
+		if (!server || !id) return null;
+		return { url: openaiUrl(server.url), model: id, key: server.key ?? null, name };
 	}
 	const found = configuredApiKey(provider);
 	if (!found) return null;
@@ -109,18 +112,19 @@ export function embeddingStatus(): string {
 	const source = embeddingSource(configured);
 	if (source) return source.name;
 	if (configured?.provider === 'custom-openai') {
-		return `${configured.provider}/${configured.model}, but there is no ${CUSTOM_OPENAI_LABEL} server (btw key set custom-openai <url>)`;
+		const { server } = splitModel(configured.model);
+		return `${configured.provider}/${configured.model}, but there is no server named "${server}" (btw server list)`;
 	}
 	if (configured) {
 		return `${configured.provider}/${configured.model}, but there is no ${configured.provider} key`;
 	}
-	return 'off: no OpenAI or OpenRouter key (or a model of a Custom OpenAI server: btw config set embeddings custom-openai/<model>)';
+	return "off: no OpenAI or OpenRouter key (or a server's model: btw config set embeddings custom-openai/<server>/<model>)";
 }
 
 /**
  * `btw config set embeddings`: `auto`, `off`, or `<provider>/<model>`, where the provider is
- * openai, openrouter or custom-openai (the server `btw key set custom-openai` saved). Unset means
- * auto.
+ * openai, openrouter or custom-openai, whose model is `<server>/<model>` on a server
+ * `btw server add` saved. Unset means auto.
  */
 export function parseEmbeddingSetting(value: string): EmbeddingSetting | undefined {
 	const word = value.trim();
@@ -128,7 +132,7 @@ export function parseEmbeddingSetting(value: string): EmbeddingSetting | undefin
 	if (word === 'off') return 'off';
 	if (/^https?:\/\//i.test(word)) {
 		throw new Error(
-			"a server's address goes in with btw key set custom-openai <url> [key]; then btw config set embeddings custom-openai/<model>"
+			'add the server with btw server add <name> <url>; then btw config set embeddings custom-openai/<name>/<model>'
 		);
 	}
 	const slash = word.indexOf('/');
@@ -136,8 +140,14 @@ export function parseEmbeddingSetting(value: string): EmbeddingSetting | undefin
 	const model = word.slice(slash + 1);
 	if (slash < 0 || !EMBEDDING_PROVIDERS.includes(provider) || !model) {
 		throw new Error(
-			'embeddings are auto, off, openai/<model>, openrouter/<model>, or custom-openai/<model> for a model of your Custom OpenAI server (Ollama, LM Studio...)'
+			'embeddings are auto, off, openai/<model>, openrouter/<model>, or custom-openai/<server>/<model> for a model of one of your servers (Ollama, LM Studio...)'
 		);
+	}
+	if (provider === 'custom-openai') {
+		const on = splitModel(model);
+		if (!on.server || !on.model) {
+			throw new Error('give the server too: custom-openai/<server>/<model> (btw server list)');
+		}
 	}
 	return { provider, model };
 }

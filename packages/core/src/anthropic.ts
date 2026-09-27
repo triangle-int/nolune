@@ -17,7 +17,9 @@ import type { CacheTtl, Effort, ModelChoice, Provider, StreamEvent } from './mod
 
 /*
  * Chats on Claude, through Anthropic's Messages API and its SDK, and the Files API for pictures
- * and PDFs. The rest of btw calls it through models.ts.
+ * and PDFs. The rest of btw calls it through models.ts. A Custom Anthropic server
+ * (custom-servers.ts) speaks the same API, so its chats go through the same code with its own
+ * client (a `MessagesApi`), leaving out what only Anthropic has.
  */
 
 type Sdk = typeof import('@anthropic-ai/sdk');
@@ -61,21 +63,50 @@ export async function getClient(): Promise<Anthropic> {
 	return cached.client;
 }
 
+/**
+ * Where Messages API calls go: Anthropic, or a server of the family's (custom-servers.ts). A
+ * server gets the same requests without what only Anthropic has: cache marks, adaptive thinking
+ * and effort, and thinking sent back (a server's has no signature to check it by).
+ */
+export interface MessagesApi {
+	provider: 'anthropic' | 'custom-anthropic';
+	client(): Promise<Anthropic>;
+	/** The model's id where it runs: a server's without the server's name before it. */
+	modelName(model: string): string;
+}
+
+const ANTHROPIC: MessagesApi = {
+	provider: 'anthropic',
+	client: getClient,
+	modelName: (model) => model
+};
+
+/** What a server's reply may run to: its window is usually smaller than Claude's. */
+const SERVER_MAX_TOKENS = 32_000;
+
 // --- btw's format as Claude takes it ---
 
 /**
- * A conversation's messages as the Messages API takes them. Replies Claude wrote go back as they
- * came, thinking included: the API itself leaves out thinking from another Claude model that
- * this one can't read. Thinking made under an earlier system prompt is left out, since Claude
- * refuses it under another one. Replies from OpenAI, and from a Claude plan (whose thinking
- * belongs to another account), go as their text and calls.
+ * A conversation's messages as the Messages API takes them, on `provider`. Replies Claude wrote
+ * go back as they came, thinking included: the API itself leaves out thinking from another
+ * Claude model that this one can't read. Thinking made under an earlier system prompt is left
+ * out, since Claude refuses it under another one. A server's replies go back without their
+ * thinking. Replies from OpenAI, and from a Claude plan (whose thinking belongs to another
+ * account), go as their text and calls.
  */
-export function toAnthropicMessages(messages: Message[]): Anthropic.MessageParam[] {
+export function toAnthropicMessages(
+	messages: Message[],
+	provider: MessagesApi['provider'] = 'anthropic'
+): Anthropic.MessageParam[] {
 	return messages.flatMap((m): Anthropic.MessageParam[] => {
-		if (m.role === 'user') return [{ role: 'user', content: toAnthropicBlocks(m.blocks) }];
-		if (m.native && (m.native.provider === 'anthropic' || m.native.provider === null)) {
+		if (m.role === 'user') {
+			return [{ role: 'user', content: toAnthropicBlocks(m.blocks, provider) }];
+		}
+		if (m.native && (m.native.provider === provider || m.native.provider === null)) {
 			const content = m.native.content as Anthropic.ContentBlockParam[];
-			if (!m.beforePromptChange) return [{ role: 'assistant', content }];
+			if (provider === 'anthropic' && !m.beforePromptChange) {
+				return [{ role: 'assistant', content }];
+			}
 			const kept = content.filter((b) => b.type !== 'thinking' && b.type !== 'redacted_thinking');
 			// A reply that was only thinking (cut off, say) has nothing left to send.
 			return kept.length ? [{ role: 'assistant', content: kept }] : [];
@@ -188,29 +219,37 @@ export function supportsAdaptiveThinking(model: string): boolean {
 /**
  * One model call. The request shape must stay identical across calls in a conversation (only
  * `messages` grows), otherwise the prompt cache is lost: `tools`, `system` and `cacheTtl` are the
- * conversation's own, fixed when it was created.
+ * conversation's own, fixed when it was created. `api`: Anthropic, or a Custom Anthropic server.
  */
-export async function streamTurn(opts: {
-	model: string;
-	effort: Effort;
-	system: string;
-	tools: Anthropic.Tool[];
-	cacheTtl: CacheTtl;
-	messages: Message[];
-	signal: AbortSignal;
-	onEvent: (event: StreamEvent) => void;
-}): Promise<Anthropic.Message> {
-	const adaptive = supportsAdaptiveThinking(opts.model);
+export async function streamTurn(
+	opts: {
+		model: string;
+		effort: Effort;
+		system: string;
+		tools: Anthropic.Tool[];
+		cacheTtl: CacheTtl;
+		messages: Message[];
+		signal: AbortSignal;
+		onEvent: (event: StreamEvent) => void;
+	},
+	api: MessagesApi = ANTHROPIC
+): Promise<Anthropic.Message> {
+	const claude = api.provider === 'anthropic';
+	const adaptive = claude && supportsAdaptiveThinking(opts.model);
 	const cache = { type: 'ephemeral', ttl: opts.cacheTtl } as const;
-	const client = await getClient();
+	const client = await api.client();
 	const stream = client.messages.stream(
 		{
-			model: opts.model,
-			max_tokens: 64000,
+			model: api.modelName(opts.model),
+			max_tokens: claude ? 64000 : SERVER_MAX_TOKENS,
 			// Automatic breakpoint on the growing tail, plus an explicit one on the frozen system
 			// prompt. The same TTL on both: longer-TTL entries must come before shorter ones.
-			cache_control: cache,
-			system: [{ type: 'text', text: opts.system, cache_control: cache }],
+			...(claude
+				? {
+						cache_control: cache,
+						system: [{ type: 'text', text: opts.system, cache_control: cache }]
+					}
+				: { system: opts.system }),
 			tools: opts.tools,
 			...(adaptive
 				? {
@@ -219,7 +258,7 @@ export async function streamTurn(opts: {
 						output_config: { effort: opts.effort }
 					}
 				: {}),
-			messages: toAnthropicMessages(opts.messages)
+			messages: toAnthropicMessages(opts.messages, api.provider)
 		},
 		{ signal: opts.signal }
 	);
@@ -246,20 +285,23 @@ export async function streamTurn(opts: {
 }
 
 /** One short exchange, not streamed, at low effort where the model takes one (see models.ts). */
-export async function createMessage(opts: {
-	model: string;
-	system: string;
-	input: string;
-	maxTokens: number;
-	timeoutMs: number;
-}): Promise<Anthropic.Message> {
-	const client = await getClient();
+export async function createMessage(
+	opts: {
+		model: string;
+		system: string;
+		input: string;
+		maxTokens: number;
+		timeoutMs: number;
+	},
+	api: MessagesApi = ANTHROPIC
+): Promise<Anthropic.Message> {
+	const client = await api.client();
 	return client.messages.create(
 		{
-			model: opts.model,
+			model: api.modelName(opts.model),
 			max_tokens: opts.maxTokens,
 			system: opts.system,
-			...(supportsAdaptiveThinking(opts.model)
+			...(api.provider === 'anthropic' && supportsAdaptiveThinking(opts.model)
 				? { output_config: { effort: 'low' as const } }
 				: {}),
 			messages: [{ role: 'user', content: opts.input }]

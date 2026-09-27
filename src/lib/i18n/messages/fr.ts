@@ -864,6 +864,8 @@ export const fr: Messages = {
 					'Auto utilise la fenêtre qu’OpenRouter indique pour le modèle et son fournisseur principal.',
 				'custom-openai':
 					'Auto utilise la fenêtre que le serveur indique pour le modèle, s’il en indique une (vLLM le fait) ; sinon elle reste inconnue.',
+				'custom-anthropic':
+					'Auto utilise la fenêtre que le serveur indique pour le modèle, s’il en indique une (vLLM le fait) ; sinon elle reste inconnue.',
 				'claude-plan':
 					'Claude Code ne l’indique pas : Auto ne connaît que ses modèles à 1M de contexte.',
 				'chatgpt-plan': 'Codex ne l’indique pas : Auto la laisse donc inconnue.'
@@ -875,10 +877,10 @@ export const fr: Messages = {
 			onKey: (provider: string) => `Utilise la clé d’API ${provider}.`,
 			noKey: (provider: string) =>
 				`Pas encore de clé d’API ${provider} : ajoutez-en une dans « Clés d’API » plus haut.`,
-			onServer: (url: string) =>
-				`Utilise le serveur Custom OpenAI à ${url}. Le modèle doit savoir appeler des outils ; les images et les PDF lui parviennent sous forme de chemins.`,
-			noServer:
-				'Pas encore de serveur Custom OpenAI : configurez-en un dans Clés d’API, plus haut.',
+			server: 'Serveur',
+			onServer: (api: string, server: string, url: string) =>
+				`Utilise ${server} à ${url}, par son API ${api}. Le modèle doit savoir appeler des outils ; les images et les PDF lui parviennent sous forme de chemins.`,
+			noServers: 'Pas encore de serveur : ajoutez-en un dans Vos serveurs, plus haut.',
 			asking: (source: string) => `Demande de ses modèles à ${source}…`,
 			listProblem: (problem: string) => `${problem} Vous pouvez quand même saisir un identifiant.`,
 			couldNotList: (status: number) => `btw n’a pas pu obtenir les modèles (${status}).`,
@@ -903,31 +905,34 @@ export const fr: Messages = {
 		newDefault: (name: string) => `Les nouvelles discussions commencent maintenant avec ${name}.`,
 		presetRemoved: 'Retiré. Les discussions existantes continuent de fonctionner.',
 		/** Memory search by meaning: where its embeddings come from. */
-		custom: {
-			name: 'Custom OpenAI',
-			about:
-				'Fait tourner les discussions et automatisations sur les modèles de tout serveur qui parle l’API d’OpenAI, comme Ollama, LM Studio ou vLLM, et peut calculer les embeddings de la recherche dans la mémoire.',
-			saved: 'Enregistré dans btw',
-			fromEnv: (variable: string) => `Depuis la variable d’environnement ${variable}`,
-			keyEnding: (hint: string | null) => (hint ? `clé se terminant par ${hint}` : 'avec une clé'),
-			noKey: 'sans clé',
-			setUp: 'Configurer',
+		servers: {
+			title: 'Vos serveurs',
+			hint: 'Des serveurs de modèles à vous, comme Ollama, LM Studio ou oMLX sur cet ordinateur, ou vLLM sur une machine avec des GPU. Les préréglages Custom OpenAI utilisent l’API OpenAI du serveur, les Custom Anthropic son API Anthropic ; la recherche dans la mémoire peut prendre ses embeddings. Enregistrés dans le fichier de configuration de btw, avec leurs clés, qui n’arrivent jamais sur cette page.',
+			none: 'Aucun pour l’instant.',
+			add: 'Ajouter un serveur',
 			change: 'Modifier',
+			name: 'Nom',
+			nameHint:
+				'Lettres, chiffres, - et _. Ses modèles portent son nom, comme gpu/qwen3:32b, il ne peut donc pas changer ensuite.',
 			address: 'Adresse',
+			addressHint:
+				'Ollama écoute sur http://localhost:11434 et LM Studio sur http://localhost:1234. btw demande ses modèles au serveur pour le vérifier.',
 			key: 'Clé',
 			keyOptional: '(si le serveur en demande une)',
 			keyKept: 'Enregistrée. Laissez vide pour la garder.',
-			hint: 'Ollama écoute sur http://localhost:11434/v1 et LM Studio sur http://localhost:1234/v1. btw demande ses modèles au serveur pour le vérifier.',
+			withKey: (hint: string | null) => (hint ? `Clé se terminant par ${hint}` : 'Avec une clé'),
+			noKey: 'Sans clé',
 			checking: 'Vérification du serveur…',
 			works: (n: number) =>
 				`Enregistré. Il propose ${n} ${p(n, { one: 'modèle', other: 'modèles' })}.`,
 			unchecked: (problem: string) => `Enregistré sans vérification : ${problem}`,
+			needName: 'Donnez-lui un nom : lettres, chiffres, - et _, comme local ou gpu.',
+			nameTaken: (name: string) => `Il y a déjà un serveur nommé ${name}.`,
 			needAddress: 'Indiquez l’adresse du serveur, en commençant par http:// ou https://.',
-			removeTitle: 'Retirer le serveur Custom OpenAI ?',
+			removeTitle: (name: string) => `Retirer ${name} ?`,
 			removeBody:
-				'Les discussions et automatisations sur ses modèles cessent de fonctionner, tout comme la recherche par le sens si elle utilise ce serveur, jusqu’à ce qu’un serveur soit de nouveau configuré.',
-			useEnvInstead: (variable: string) =>
-				`btw utilisera plutôt l’adresse de la variable d’environnement ${variable}.`
+				'Les discussions et automatisations sur ses modèles cessent de fonctionner jusqu’à ce qu’elles passent à un autre modèle.',
+			usedBy: (names: string) => `Ces préréglages l’utilisent : ${names}.`
 		},
 		embeddings: {
 			title: 'Recherche dans la mémoire',
@@ -940,7 +945,7 @@ export const fr: Messages = {
 			noKey: (provider: string) =>
 				`Pas encore de clé ${provider} : la mémoire est cherchée par mots seulement. Ajoutez-en une dans Clés d’API, plus haut.`,
 			noServer:
-				'Pas encore de serveur Custom OpenAI : la mémoire est cherchée par mots seulement. Configurez-en un dans Clés d’API, plus haut.',
+				'Pas encore de serveur : la mémoire est cherchée par mots seulement. Ajoutez-en un dans Vos serveurs, plus haut.',
 			change: 'Modifier',
 			source: 'Embeddings de',
 			modes: {
@@ -953,8 +958,10 @@ export const fr: Messages = {
 			autoNote:
 				'text-embedding-3-small d’OpenAI avec la clé OpenAI, sinon le même modèle via OpenRouter.',
 			withKey: (provider: string) => `Avec la clé d’API ${provider}.`,
-			customNote: (url: string) => `Un modèle du serveur Custom OpenAI à ${url}.`,
+			customNote: (server: string, url: string) =>
+				`Un modèle de ${server} à ${url}, par son API OpenAI.`,
 			offNote: 'La mémoire est cherchée par mots seulement, et aucun fait n’est envoyé nulle part.',
+			server: 'Serveur',
 			model: 'Modèle',
 			customModel: 'Son nom sur le serveur, comme nomic-embed-text',
 			checking: 'Vérification…',

@@ -147,7 +147,15 @@ export const modelPreset = sqliteTable('model_preset', {
 	id: text('id').primaryKey(),
 	name: text('name').notNull().unique(),
 	provider: text('provider', {
-		enum: ['anthropic', 'openai', 'openrouter', 'custom-openai', 'claude-plan', 'chatgpt-plan']
+		enum: [
+			'anthropic',
+			'openai',
+			'openrouter',
+			'custom-openai',
+			'custom-anthropic',
+			'claude-plan',
+			'chatgpt-plan'
+		]
 	}).notNull(),
 	model: text('model').notNull(),
 	/** Admin override. Wins over modelContextWindow. */
@@ -226,7 +234,15 @@ export const conversation = sqliteTable(
 		 */
 		presetName: text('preset_name').notNull(),
 		provider: text('provider', {
-			enum: ['anthropic', 'openai', 'openrouter', 'custom-openai', 'claude-plan', 'chatgpt-plan']
+			enum: [
+				'anthropic',
+				'openai',
+				'openrouter',
+				'custom-openai',
+				'custom-anthropic',
+				'claude-plan',
+				'chatgpt-plan'
+			]
 		}).notNull(),
 		model: text('model').notNull(),
 		contextWindow: integer('context_window'),
@@ -334,7 +350,15 @@ export const message = sqliteTable(
 		 * text, which every provider reads the same, may have none.
 		 */
 		provider: text('provider', {
-			enum: ['anthropic', 'openai', 'openrouter', 'custom-openai', 'claude-plan', 'chatgpt-plan']
+			enum: [
+				'anthropic',
+				'openai',
+				'openrouter',
+				'custom-openai',
+				'custom-anthropic',
+				'claude-plan',
+				'chatgpt-plan'
+			]
 		}),
 		/** Replies: the model that wrote it. */
 		model: text('model'),

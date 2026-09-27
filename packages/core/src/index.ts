@@ -32,18 +32,23 @@ export {
 	type ApiKeyStatus
 } from './api-keys.ts';
 export {
-	CUSTOM_OPENAI_ENV,
-	CUSTOM_OPENAI_LABEL,
-	CustomOpenaiError,
-	checkCustomOpenai,
-	customOpenai,
-	customOpenaiStatus,
+	CUSTOM_LABELS,
+	CUSTOM_PROVIDERS,
+	CustomServerError,
+	checkServer,
+	findServer,
+	isCustomProvider,
+	isServerName,
 	isServerUrl,
+	listServers,
 	normalizeServerUrl,
-	removeCustomOpenai,
-	saveCustomOpenai,
-	type CustomOpenaiStatus
-} from './custom-openai.ts';
+	removeServer,
+	saveServer,
+	splitModel,
+	suggestServerName,
+	type CustomProvider,
+	type ServerStatus
+} from './custom-servers.ts';
 export { getDb, schema, type DB } from './db/index.ts';
 export {
 	MIN_PASSWORD_LENGTH,

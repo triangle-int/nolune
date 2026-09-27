@@ -18,7 +18,7 @@ import { openaiBaseUrl } from './openai.ts';
 /*
  * Chats on OpenAI's models, through the Responses API and OpenAI's SDK, and its Files API for
  * pictures and PDFs. The rest of btw calls it through models.ts. A Custom OpenAI server
- * (custom-openai.ts) speaks the same API, so its chats go through the same code with its own
+ * (custom-servers.ts) speaks the same API, so its chats go through the same code with its own
  * client (a `ResponsesApi`), leaving out what only OpenAI has.
  *
  * Requests are stateless (`store: false`): like Anthropic's, every call sends the whole
@@ -99,7 +99,7 @@ async function getClient(): Promise<OpenAI> {
 }
 
 /**
- * Where Responses API calls go: OpenAI, or a Custom OpenAI server (custom-openai.ts). A server
+ * Where Responses API calls go: OpenAI, or a server of the family's (custom-servers.ts). A server
  * gets the same requests without what only OpenAI has: encrypted reasoning, its prompt cache key
  * and reasoning levels above `high`.
  */
@@ -108,12 +108,15 @@ export interface ResponsesApi {
 	client(): Promise<OpenAI>;
 	/** Whose calls these are, for what's learned from refusals: a hash or an address, never a key. */
 	account(): string;
+	/** The model's id where it runs: a server's without the server's name before it. */
+	modelName(model: string): string;
 }
 
 const OPENAI: ResponsesApi = {
 	provider: 'openai',
 	client: getClient,
-	account: () => accountOf(apiKey())
+	account: () => accountOf(apiKey()),
+	modelName: (model) => model
 };
 
 // --- btw's format as OpenAI takes it ---
@@ -295,12 +298,12 @@ async function withRefusals<T>(
 	model: string,
 	request: (takes: { summaries: boolean; reasoning: boolean }) => Promise<T>
 ): Promise<T> {
-	// A server's client comes from custom-openai.ts: the errors are checked with this module's SDK.
+	// A server's client comes from custom-servers.ts: its errors are checked with this module's SDK.
 	await loadSdk();
 	const account = api.account();
 	const takes = () => ({
 		summaries: !noSummaries.has(account),
-		reasoning: supportsReasoning(model) && !noReasoning.has(`${account} ${model}`)
+		reasoning: supportsReasoning(api.modelName(model)) && !noReasoning.has(`${account} ${model}`)
 	});
 	try {
 		return await request(takes());
@@ -382,7 +385,7 @@ export async function streamResponse(
 	const stream = await withRefusals(api, opts.model, (takes) =>
 		client.responses.create(
 			{
-				model: opts.model,
+				model: api.modelName(opts.model),
 				instructions: opts.system,
 				input: toResponsesInput(opts.messages, opts.model, api.provider),
 				tools: opts.tools.map(functionTool),
@@ -420,7 +423,7 @@ export async function createResponse(
 	return withRefusals(api, opts.model, (takes) =>
 		client.responses.create(
 			{
-				model: opts.model,
+				model: api.modelName(opts.model),
 				instructions: opts.system,
 				input: opts.input,
 				max_output_tokens: opts.maxTokens,
