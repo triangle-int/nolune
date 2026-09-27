@@ -498,6 +498,9 @@ export const fr: Messages = {
 			`${problem} Enregistrez à nouveau pour garder votre version, ou annulez pour voir celle de btw.`,
 		saved: 'Enregistré. Les nouvelles discussions verront le changement.',
 		forgot: (path: string) => `btw a oublié tout ce qu’il y avait dans ${path}.`,
+		learn: 'Apprendre des discussions',
+		learnHint:
+			'Quand une discussion est calme depuis quelques minutes, btw la relit et garde ce qui mérite d’être retenu. C’est chaque fois une courte requête de plus au modèle de la discussion. Désactivé, btw ne garde que ce à quoi il pense pendant la discussion.',
 		learned: (ago: string) => `appris ${ago}`,
 		learnedAWhileAgo: 'appris il y a un moment',
 		topicLabel: (topic: string, n: number) => `${topic} : ${memories(n)}. Afficher la note.`,

@@ -117,6 +117,11 @@ export const profile = sqliteTable('profile', {
 		.$type<string[]>()
 		.notNull()
 		.default(sql`'[]'`),
+	/**
+	 * Whether btw looks over its chats once they go quiet and saves what's worth remembering
+	 * (memory-learning.ts), besides what the agent saves itself.
+	 */
+	learnFromChats: integer('learn_from_chats', { mode: 'boolean' }).notNull().default(true),
 	createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull()
 });
@@ -273,6 +278,8 @@ export const conversation = sqliteTable(
 		 * joins it once someone continues it.
 		 */
 		hidden: integer('hidden', { mode: 'boolean' }).notNull().default(false),
+		/** The last row btw has looked over for memory (memory-learning.ts). Null: none yet. */
+		learnedSeq: integer('learned_seq'),
 		createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull(),
 		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).default(now).notNull()

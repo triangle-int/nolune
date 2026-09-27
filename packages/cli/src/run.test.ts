@@ -78,6 +78,24 @@ describe('runCli', () => {
 		});
 	});
 
+	it('searches memory, with where each fact is', async () => {
+		createProfile('Family', makeUser('Anna').id);
+		const env = { BTW_PROFILE: 'family' };
+		await run(['memory', 'write', 'home'], {
+			env,
+			stdin: '# Home\n\n## Internet\n\n- Wifi password: mango42\n- Router in the hall\n'
+		});
+
+		expect(await run(['memory', 'search', 'wifi', 'passwords'], { env })).toEqual({
+			code: 0,
+			out: 'home.md:5  Wifi password: mango42  (Internet)\n',
+			err: ''
+		});
+		expect((await run(['memory', 'search', 'dentist'], { env })).out).toContain(
+			'Nothing in Family\'s memory matches "dentist"'
+		);
+	});
+
 	it('resolves relative paths from its folder', async () => {
 		const cwd = mkdtempSync(join(tmpdir(), 'btw-cwd-'));
 		writeFileSync(join(cwd, 'dot.png'), DOT);

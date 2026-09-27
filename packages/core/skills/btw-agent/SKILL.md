@@ -1,6 +1,6 @@
 ---
 name: btw-agent
-description: Change btw's own setup with the `btw` command, including models, API keys, the ChatGPT sign-in, environment variables for your commands, which skills are on, the avatar the family sees in the chat ("switch to the comet"), family accounts and passwords, the web address and the background service (status, logs, restarts, updates). Use whenever someone asks you to configure yourself or change how btw is set up, or asks how it is set up.
+description: Change btw's own setup with the `btw` command, including models, API keys, the ChatGPT sign-in, environment variables for your commands, which skills are on, whether it saves what it learns from chats by itself, the avatar the family sees in the chat ("switch to the comet"), family accounts and passwords, the web address and the background service (status, logs, restarts, updates). Use whenever someone asks you to configure yourself or change how btw is set up, or asks how it is set up.
 ---
 
 # Configuring btw
@@ -127,6 +127,21 @@ btw skill new <name> --global --description "..."   # for every profile, in ~/.a
   profile doesn't use rather than deleting them.
 - Built-in skills (`builtin` in the list) are replaced when btw updates. To change one for this
   profile, copy its folder into `$BTW_PROFILE_DIR/skills/` and edit the copy; it takes precedence.
+
+## Learning from chats
+
+Besides what you save with `btw memory`, btw looks over each chat once it has been quiet for a
+couple of minutes and saves what's worth remembering to this profile's memory, with the chat's
+model (one short model call per quiet spell). It's on unless a profile turned it off.
+
+```sh
+btw memory learning        # on or off for this profile
+btw memory learning off    # save only what you save yourself
+btw memory learning on
+```
+
+Any member can change it, here or with the switch on the profile's Memory page. What's already in
+memory stays either way.
 
 ## The avatar
 

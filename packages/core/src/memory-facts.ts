@@ -21,15 +21,37 @@ function plain(markdown: string): string {
  * usually one entry per fact.
  */
 export function parseFacts(text: string): string[] {
-	const facts: string[] = [];
+	return readFacts(text).map((fact) => fact.text);
+}
+
+/** A fact of a note, with where it is. */
+export interface NoteFact {
+	/** Plain text, as parseFacts has it. */
+	text: string;
+	/** The line it starts on, from 1. */
+	line: number;
+	/** The heading it is under, as plain text; a note's title (`# …`) doesn't count. */
+	heading: string | null;
+}
+
+/** parseFacts, with each fact's line and heading. */
+export function readFacts(text: string): NoteFact[] {
+	const facts: NoteFact[] = [];
 	let current: string[] = [];
+	let start = 0;
+	let heading: string | null = null;
 	let fence = false;
 	let lastWasRow = false;
 	const flush = () => {
-		if (current.length) facts.push(current.join(' '));
+		if (current.length) facts.push({ text: current.join(' '), line: start, heading });
 		current = [];
 	};
-	for (const raw of text.split('\n')) {
+	/** Adds a line to the fact being read, which starts here if it is the first. */
+	const add = (part: string, at: number) => {
+		if (!current.length) start = at;
+		current.push(part);
+	};
+	for (const [i, raw] of text.split('\n').entries()) {
 		const line = raw.trim();
 		if (/^(```|~~~)/.test(line)) {
 			fence = !fence;
@@ -37,7 +59,7 @@ export function parseFacts(text: string): string[] {
 			continue;
 		}
 		if (fence) {
-			if (line) current.push(line);
+			if (line) add(line, i + 1);
 			continue;
 		}
 		const isRow = line.startsWith('|');
@@ -47,32 +69,41 @@ export function parseFacts(text: string): string[] {
 			continue;
 		}
 		lastWasRow = isRow;
-		if (!line || /^#{1,6}(\s|$)/.test(line) || /^([-*_])(\s*\1){2,}$/.test(line)) {
+		const title = line.match(/^(#{1,6})(\s|$)/);
+		if (title) {
+			flush();
+			const words = line.slice(title[1].length).replace(/\s#+$/, '');
+			heading = title[1].length > 1 ? plain(words) || null : null;
+			continue;
+		}
+		if (!line || /^([-*_])(\s*\1){2,}$/.test(line)) {
 			flush();
 			continue;
 		}
 		if (isRow) {
 			flush();
-			facts.push(
-				line
+			facts.push({
+				text: line
 					.replace(/^\||\|$/g, '')
 					.split('|')
 					.map((cell) => cell.trim())
 					.filter(Boolean)
-					.join(' · ')
-			);
+					.join(' · '),
+				line: i + 1,
+				heading
+			});
 			continue;
 		}
 		const item = line.match(/^(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.*)$/);
 		if (item) {
 			flush();
-			current.push(item[1]);
+			add(item[1], i + 1);
 		} else {
-			current.push(line.replace(/^>\s?/, ''));
+			add(line.replace(/^>\s?/, ''), i + 1);
 		}
 	}
 	flush();
-	return facts.map(plain).filter(Boolean);
+	return facts.map((fact) => ({ ...fact, text: plain(fact.text) })).filter((fact) => fact.text);
 }
 
 /** Facts match by their words, so changing only case or spacing doesn't make one new. */

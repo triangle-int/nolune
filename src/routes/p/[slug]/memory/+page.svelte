@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { cubicOut } from 'svelte/easing';
 	import { Tween, prefersReducedMotion } from 'svelte/motion';
 	import { enhance } from '$app/forms';
@@ -9,6 +9,7 @@
 	import EraserIcon from '@lucide/svelte/icons/eraser';
 	import PinIcon from '@lucide/svelte/icons/pin';
 	import { Button } from '$lib/components/ui/button';
+	import { Switch } from '$lib/components/ui/switch';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import PageHeader from '$lib/components/PageHeader.svelte';
@@ -102,6 +103,15 @@
 		if (file) pick(file.path);
 	});
 
+	let learnForm: HTMLFormElement | undefined = $state();
+	let learnOn = $state(true);
+
+	async function setLearning(on: boolean) {
+		learnOn = on;
+		await tick();
+		learnForm?.requestSubmit();
+	}
+
 	const save: SubmitFunction = () => {
 		saving = true;
 		return async ({ result, update }) => {
@@ -123,6 +133,22 @@
 		<p class="text-muted-foreground">
 			{m.memory.intro(data.profile.name)}
 		</p>
+
+		<form method="POST" action="?/learn" use:enhance bind:this={learnForm}>
+			<input type="hidden" name="on" value={learnOn ? 'on' : 'off'} />
+			<label class="flex cursor-pointer items-start gap-4 rounded-2xl border px-4 py-3">
+				<span class="min-w-0 flex-1 space-y-0.5">
+					<span class="block font-medium">{m.memory.learn}</span>
+					<span class="block text-sm text-muted-foreground">{m.memory.learnHint}</span>
+				</span>
+				<Switch
+					class="mt-0.5"
+					checked={data.learnFromChats}
+					onCheckedChange={setLearning}
+					aria-label={m.memory.learn}
+				/>
+			</label>
+		</form>
 
 		<div class="space-y-3">
 			<div class="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 px-1">

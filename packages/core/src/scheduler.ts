@@ -10,6 +10,8 @@ import {
 } from './conversations.ts';
 import { pruneUploads } from './attachments.ts';
 import { pruneMedia } from './media.ts';
+import { startLearning } from './memory-learning.ts';
+import { recallFor } from './memory-search.ts';
 import { pruneProviderFiles } from './provider-files.ts';
 import { createNotification, pruneNotifications } from './notifications.ts';
 import { profileDir } from './paths.ts';
@@ -54,12 +56,14 @@ const holder = globalThis as unknown as { __btwScheduler?: boolean };
  * Gateway only. Every few seconds: fires triggers that are due and starts queued runs (including
  * the ones `btw wake` and `btw trigger run` queue from other processes), starts the subagents
  * that `btw agent` asks for, and notices profiles that `btw profile` changed from another process.
+ * Chats that went quiet get looked over for memory (memory-learning.ts).
  */
 export function startScheduler(): void {
 	if (holder.__btwScheduler) return;
 	holder.__btwScheduler = true;
 	onLoopEnd(finishAgentRun);
 	startSubagentHost();
+	startLearning();
 	recoverRuns();
 	prune();
 	tick();
@@ -177,17 +181,32 @@ function startAgentRun(run: TriggerRun): void {
 		title: run.title,
 		hidden: true
 	});
+	const text = [run.prompt, run.payload].filter(Boolean).join('\n\n');
+	const memory = recall(profile.slug, text, conv.systemPrompt);
 	appendRow({
 		conversationId: conv.id,
 		role: 'user',
 		kind: 'trigger',
 		senderName: run.title,
-		text: [run.prompt, run.payload].filter(Boolean).join('\n\n'),
-		blocks: [{ type: 'text', text: runMessage(run) }]
+		text,
+		blocks: [
+			{ type: 'text', text: runMessage(run) },
+			...(memory ? [{ type: 'text' as const, text: memory }] : [])
+		]
 	});
 	updateRun(run.id, { status: 'running', conversationId: conv.id });
 	console.log(`[btw] background run "${run.title}" started in ${conv.id.slice(0, 8)}`);
 	kick(conv.id);
+}
+
+/** What memory has on an automation's prompt, like on a person's message; never stops the run. */
+function recall(slug: string, text: string, known: string): string | null {
+	try {
+		return recallFor(slug, text, { known });
+	} catch (err) {
+		console.error(`[btw] ${slug} could not look in memory for a background run:`, err);
+		return null;
+	}
 }
 
 /** Runs when a background run's agent loop stops: its final reply becomes the notification. */

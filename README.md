@@ -121,10 +121,14 @@ Access). `btw setup` prints the exact path.
   Each skill's name and description go into every new chat, so turn off the ones a profile doesn't
   need on its **Skills** page (or `btw skill disable <name> --profile <slug>`).
 - **Memory.** btw keeps what it learns about the family (preferences, who's who, where things are)
-  in small notes per topic, and reads the ones it needs when a chat starts. The pinned `core` note
-  (who's who, languages, allergies, anything you want it to always keep in mind) is in every chat
-  from the start, so keep it short: at most 4,000 characters. The profile's Memory
-  page shows every fact as a dot, darker the newer it is, and lets you fix or delete a note. Files:
+  in small notes per topic. Each message comes with the facts from memory that share words with
+  it, and btw searches for more when a request needs them (`btw memory search wifi`). The pinned
+  `core` note (who's who, languages, allergies, anything you want it to always keep in mind) is in
+  every chat from the start, so keep it short: at most 4,000 characters. Besides what btw saves
+  as it goes, it looks over each chat once it has been quiet for a couple of minutes and saves
+  what it missed, with one short request to the chat's model; turn that off on the Memory page
+  (**Learn from chats**) or with `btw memory learning off`. The Memory page shows every fact as a
+  dot, darker the newer it is, and lets you fix or delete a note. Files:
   `~/.btw-agent/profiles/<profile>/memories`.
 - **Languages.** The web interface comes in English, Russian, German, Spanish and French. It
   follows the browser's language, or pick one in Settings (per device). Only menus, buttons and

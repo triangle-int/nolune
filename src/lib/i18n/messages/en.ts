@@ -415,6 +415,9 @@ export const en = {
 			`${problem} Save again to keep your version, or cancel to see btw's.`,
 		saved: 'Saved. New chats will see the change.',
 		forgot: (path: string) => `btw forgot everything in ${path}.`,
+		learn: 'Learn from chats',
+		learnHint:
+			"When a chat has been quiet for a couple of minutes, btw reads it over and saves what's worth remembering. That's one short extra request to the chat's model each time. When this is off, btw saves only what it thinks of while chatting.",
 		// The grid of dots
 		learned: (ago: string) => `learned ${ago}`,
 		learnedAWhileAgo: 'learned a while ago',

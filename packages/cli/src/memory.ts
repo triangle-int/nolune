@@ -10,6 +10,8 @@ import {
 	removeMemoryNote,
 	renameMemoryNote,
 	replaceInMemory,
+	searchMemory,
+	setLearnFromChats,
 	writeMemoryNote
 } from '@btw/core';
 import type { Io } from './io.ts';
@@ -17,6 +19,7 @@ import { profileFor } from './profile.ts';
 
 export const MEMORY_HELP = `Memory (short notes per topic; the agent reads the ones it needs)
   btw memory [list] [--profile SLUG]         the notes and how many facts each holds
+  btw memory search <words>...               find facts in every note, best match first
   btw memory show <topic>...                 print notes (a topic is family, people/anna, …)
   btw memory add <topic> <fact>              add one fact; the note is created if needed
   btw memory replace <topic> <old> <new>     change text that appears once in the note
@@ -24,6 +27,8 @@ export const MEMORY_HELP = `Memory (short notes per topic; the agent reads the o
   btw memory write <topic> [text]            replace the whole note (the text, or stdin)
   btw memory rm <topic>
   btw memory mv <topic> <new-topic>
+  btw memory learning [on|off]               whether btw also saves what it learns by itself,
+                                             looking over each chat once it goes quiet
   The note core is pinned: every new chat starts with it, so it holds at most ${MAX_PINNED_CHARS} characters.`;
 
 /**
@@ -80,6 +85,21 @@ export async function memoryCommand(io: Io, args: string[]): Promise<void> {
 			}
 			return;
 		}
+		case 'search': {
+			need(rest, 1, 'search <words>...');
+			const query = rest.join(' ');
+			const hits = searchMemory(slug, query);
+			if (!hits.length) {
+				io.log(
+					`Nothing in ${profile.name}'s memory matches "${query}". Try other words (or another language), or read a note with \`btw memory show <topic>\`.`
+				);
+				return;
+			}
+			for (const hit of hits) {
+				io.log(`${hit.path}:${hit.line}  ${hit.text}${hit.heading ? `  (${hit.heading})` : ''}`);
+			}
+			return;
+		}
 		case 'show': {
 			need(rest, 1, 'show <topic>...');
 			for (const [i, topic] of rest.entries()) {
@@ -133,6 +153,20 @@ export async function memoryCommand(io: Io, args: string[]): Promise<void> {
 			need(rest, 2, 'mv <topic> <new topic>');
 			const moved = renameMemoryNote(slug, rest[0], rest[1]);
 			io.log(`Renamed ${moved.from} to ${moved.to}.`);
+			return;
+		}
+		case 'learning': {
+			const [value] = rest;
+			if (value !== undefined && value !== 'on' && value !== 'off') {
+				throw new Error('usage: btw memory learning [on|off]');
+			}
+			const on = value === undefined ? profile.learnFromChats : value === 'on';
+			if (value !== undefined) setLearnFromChats(profile.id, on);
+			io.log(
+				on
+					? `btw looks over ${profile.name}'s chats once they go quiet and saves what's worth remembering.`
+					: `btw saves to ${profile.name}'s memory only when it thinks of it in a chat.`
+			);
 			return;
 		}
 		default:

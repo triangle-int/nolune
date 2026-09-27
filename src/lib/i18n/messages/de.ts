@@ -484,6 +484,9 @@ export const de: Messages = {
 			`${problem} Speichere noch einmal, um deine Version zu behalten, oder brich ab, um die von btw zu sehen.`,
 		saved: 'Gespeichert. Neue Chats sehen die Änderung.',
 		forgot: (path: string) => `btw hat alles in ${path} vergessen.`,
+		learn: 'Aus Chats lernen',
+		learnHint:
+			'Wenn ein Chat ein paar Minuten ruht, liest btw ihn noch einmal durch und merkt sich, was sich zu merken lohnt. Das ist jedes Mal eine kurze zusätzliche Anfrage an das Modell des Chats. Ausgeschaltet merkt sich btw nur, woran es während des Chats selbst denkt.',
 		learned: (ago: string) => `gelernt ${ago}`,
 		learnedAWhileAgo: 'vor einer Weile gelernt',
 		topicLabel: (topic: string, n: number) => `${topic}: ${memories(n)}. Notiz anzeigen.`,

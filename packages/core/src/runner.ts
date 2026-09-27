@@ -53,12 +53,19 @@ import {
 import { getDb } from './db/index.ts';
 import { profile } from './db/schema.ts';
 import { eq } from 'drizzle-orm';
-import type { Block, ImageBlock, TextBlock, ToolResultBlock } from './format.ts';
+import {
+	messageText,
+	type Block,
+	type ImageBlock,
+	type TextBlock,
+	type ToolResultBlock
+} from './format.ts';
 import { findUploads, prepareMessage, viewedImageBlocks } from './attachments.ts';
 import { folderContextFor } from './folders.ts';
 import { readSoul } from './soul.ts';
 import { createViewDir, imageUse, readViewedImages, type ImageUse } from './images.ts';
 import { copyReplyMedia, listMedia, mediaByMessage, type PreparedMedia } from './media.ts';
+import { recallFor } from './memory-search.ts';
 import { profileDir } from './paths.ts';
 import { resolveFiles } from './provider-files.ts';
 import { getProfile, noticeProfileChanges } from './profiles.ts';
@@ -403,7 +410,8 @@ async function queueMessage(
 		senderName: sender.name,
 		text: trimmed,
 		provider: conv.provider,
-		attachments
+		attachments,
+		recall: recall(conv, trimmed, sender.name)
 	});
 	// The first message stands in as the title until the model has named the chat. A message
 	// with only files is named after them.
@@ -413,6 +421,24 @@ async function queueMessage(
 	emitQueued(conversationId);
 	kick(conversationId);
 	if (placeholder !== undefined) nameConversation(conv, opening, placeholder);
+}
+
+/**
+ * What memory has on a message, to go along with it (recallFor), leaving out what the chat
+ * already has. Null when nothing matches, and when memory can't be read: that must never stop a
+ * message.
+ */
+function recall(conv: Conversation, text: string, sender: string): string | null {
+	const slug = profileSlug(conv.profileId);
+	if (!slug || !text) return null;
+	try {
+		const rows = [...committedRows(conv.id), ...queuedRows(conv.id)];
+		const known = [conv.systemPrompt, ...rows.map((row) => messageText(readRow(row).blocks))];
+		return recallFor(slug, text, { sender, known: known.join('\n') });
+	} catch (err) {
+		console.error(`[btw] ${conv.id.slice(0, 8)} could not look in memory:`, err);
+		return null;
+	}
 }
 
 /** Asks the chat's model for a title in the background; the placeholder stays if that fails. */

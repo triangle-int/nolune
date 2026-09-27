@@ -506,6 +506,9 @@ export const es: Messages = {
 			`${problem} Guarda de nuevo para conservar tu versión, o cancela para ver la de btw.`,
 		saved: 'Guardado. Los chats nuevos verán el cambio.',
 		forgot: (path: string) => `btw olvidó todo lo que había en ${path}.`,
+		learn: 'Aprender de los chats',
+		learnHint:
+			'Cuando un chat lleva un par de minutos en silencio, btw lo repasa y guarda lo que vale la pena recordar. Cada vez es una breve petición extra al modelo del chat. Si lo desactivas, btw solo guarda lo que se le ocurra durante la conversación.',
 		learned: (ago: string) => `aprendido ${ago}`,
 		learnedAWhileAgo: 'aprendido hace tiempo',
 		topicLabel: (topic: string, n: number) => `${topic}: ${memories(n)}. Mostrar la nota.`,

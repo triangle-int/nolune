@@ -16,11 +16,12 @@ import { MAX_TIMEOUT_SECONDS, DEFAULT_TIMEOUT_SECONDS, commandShell } from './ru
 /**
  * Built once per conversation and stored with it. Everything here must be stable for the life of
  * the conversation: no dates, no user names, nothing that varies per request. Memory is listed by
- * note name, and the agent reads the notes it needs; only the small pinned core note is copied
- * whole. So the prompt changes when a note is added or removed or core changes, not with every
- * fact. `folderSection`: the chat's folder (renderFolderSection), last, so chats outside folders
- * share everything before it. `soul`: the profile's (readSoul), first, since it says who btw is;
- * the chat keeps its text to tell when the prompt is out of date.
+ * note name, and the agent searches and reads what it needs (facts that match a message go along
+ * with the message: recallFor); only the small pinned core note is copied whole. So the prompt
+ * changes when a note is added or removed or core changes, not with every fact. `folderSection`:
+ * the chat's folder (renderFolderSection), last, so chats outside folders share everything
+ * before it. `soul`: the profile's (readSoul), first, since it says who btw is; the chat keeps
+ * its text to tell when the prompt is out of date.
  */
 export function buildSystemPrompt(
 	profile: Pick<Profile, 'slug' | 'disabledSkills'>,
@@ -85,7 +86,8 @@ This profile's long-term memory is a set of short Markdown notes, one per topic,
 The note core is pinned: every new conversation starts with a copy of it, so it holds only what matters in almost every one. ${coreSection}
 
 ${notes.length ? `Other notes when this conversation started: ${notes.map((path) => path.replace(/\.md$/, '')).join(', ')}.` : 'There are no other notes yet.'}
-- Before you answer, read the other notes that could matter for the request, like \`btw memory show family food\`. Once per conversation is enough. \`btw memory\` lists the notes as they are now, in case another conversation added some.
+- A message can end with a <memory> block: facts from the notes that share words with it, looked up when it was sent. They are a head start, not all that memory holds.
+- Whenever a request could depend on something the family told you before (people, preferences, plans and dates, where things are, how things are set up), look in memory before you answer, also later in a conversation when the subject changes: \`btw memory search <words>\` finds facts in every note (if nothing comes up, try other words, or the language the notes are in), and \`btw memory show <topic>...\` prints whole notes, like \`btw memory show family food\`. \`btw memory\` lists the notes as they are now, in case another conversation added some.
 - When you learn something that will matter in later conversations (preferences, facts about the family, where things are kept, how things are set up), save it right away: \`btw memory add <topic> "<one fact>"\`. The note is created if needed. Keep topics broad, with short names like family, home, school or people/anna.
 - Save to core (\`btw memory add core "<one fact>"\`) only what you should have in mind in nearly every conversation: who is in the family and how to address them, the languages they use, allergies and health matters, standing preferences. Also anything someone asks you to always keep in mind. It holds at most ${MAX_PINNED_CHARS} characters; everything else goes into topic notes.
 - Keep notes true and short. \`btw memory replace <topic> "<old text>" "<new text>"\` corrects a fact, \`btw memory forget <topic> "<text>"\` removes one, and \`btw memory write <topic>\` with the whole note on stdin reorganizes it. Update rather than repeat.

@@ -19,7 +19,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | Preset switching   | Allowed at any time, from the model chip in a chat's composer (or `btw agent run <id> --preset` for a subagent). The next model call uses the new model, and another provider gets the history translated. See [Switching models](#switching-models).                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Reasoning          | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once, so the chat asks first.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | System prompt      | Built once when the conversation is created: instructions, the profile's soul, the skills catalog and, for a chat in a folder, the folder's instructions and file paths. **It is not changed afterwards, and no update notices are added,** with one exception: when the chat moves to another folder, or its folder or the soul changes, it is built again at the start of the next turn (one cache miss). If skills change in another conversation, this conversation only sees it by running commands. Of memory, only `core` and the note names are in it: chats outside folders share a prompt.                                                                                                           |
-| Memory             | Short Markdown notes per profile, one per topic, that the agent reads and changes with `btw memory`, like any other command. The system prompt has the pinned `core` note in full and lists the others by name, so the agent reads the ones it needs. The family sees and edits them on the Memory page. See [Memory](#memory).                                                                                                                                                                                                                                                                                                                                                                                |
+| Memory             | Short Markdown notes per profile, one per topic, that the agent searches, reads and changes with `btw memory`, like any other command. The system prompt has the pinned `core` note in full and lists the others by name; the facts that share words with a message go along with it, and once a chat goes quiet its model looks it over and saves what the agent missed. The family sees and edits them on the Memory page. See [Memory](#memory).                                                                                                                                                                                                                                                            |
 | Soul               | Who btw is for a profile (character, values, tone), in `soul.md` in its folder, at most 4,000 characters. It opens every chat's system prompt. The family edits it in the profile's settings; the agent changes it itself with `btw soul write` and says so. See [Soul](#soul).                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Folders            | Group a profile's chats, like ChatGPT's projects. A folder has instructions and files; its chats get the instructions and the files' paths (never the files themselves) in their system prompt. Chats are dragged into folders in the sidebar or started in one. See [Folders](#folders).                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | Skills             | Follow [agentskills.io](https://agentskills.io/client-implementation/adding-skills-support). They are read from `~/.btw-agent/profiles/<slug>/skills`, `~/.agents/skills` and the built-in skills (`packages/core/skills`: `automations`, `view-images`, `generate-images`, `subagents`, `btw-agent`); a profile skill overrides a global one, and both override a built-in one with the same name. The agent loads a skill by running `cat` on its `SKILL.md`, and creates new ones with `btw skill new`.                                                                                                                                                                                                     |
@@ -100,6 +100,8 @@ The rule: **the request prefix must stay byte-identical, so history is only ever
   when someone switches it (see [Switching models](#switching-models)). Thinking uses
   `adaptive` with `display: "summarized"`, the same for every conversation. The only per-conversation
   knob is `effort`.
+- Facts recalled from memory go into the message they came with, not the system prompt (see
+  [Memory](#memory)).
 - Steering messages, stop results and restart-recovery results are **appended** as new rows. Nothing
   is ever edited or deleted. Opus 5.5 and Fable 5.1 require this anyway for "preserved thinking":
   replaying a thinking block after its prefix changed returns a 400 on newer accounts.
@@ -645,23 +647,66 @@ one per topic (`family.md`, `people/anna.md`). There is no memory tool: like aut
 
 - **In the prompt:** a short Memory section that names the notes as they were when the
   conversation started (`Notes when this conversation started: family, food, people/anna.`), says
-  how to read and save them, and what is worth saving. Only names, never facts, so the prompt
-  changes when a note is added or removed and not with every fact, and nothing is read until the
-  agent needs it: before answering, it reads the notes that could matter
-  (`btw memory show family food`).
+  how to look things up and save them, and what is worth saving. Only names, never facts, so the
+  prompt changes when a note is added or removed and not with every fact, and nothing is read
+  until the agent needs it: whenever a request could depend on something the family said before,
+  also later in a chat when the subject changes, it searches (`btw memory search dentist`) or
+  reads whole notes (`btw memory show family food`). Guessing from note names alone missed facts
+  kept under a name that didn't suggest them, like the wifi password in `home`.
 - **Pinned core note.** `core.md` is the exception: a copy of it, as it is when the conversation
   starts (or its prompt is built again), goes whole into the Memory section. It is for what matters
   in almost every chat (who is in the family, languages, allergies, standing preferences, whatever
   someone asks btw to always keep in mind), and holds at most 4,000 characters: `btw memory` and
   the page refuse more, and one made longer in an editor is cut at a line in the prompt, with a
   note telling the agent to read the rest and move it out. The list of other notes leaves it out.
+- **Recall** (`recallFor` in `packages/core/src/memory-search.ts`): when a person's message is
+  queued, or an automation's run starts, memory is searched for its words, and up to 8 facts
+  (2,000 characters) that match go along with it in a `<memory>` block after the message, for the
+  model only (the chat shows what was written). It sits in the new message, never in the system
+  prompt, so the cached prefix doesn't change. Facts the conversation already has, in its system
+  prompt (core) or in any message or command output (a note the agent printed, an earlier
+  recall), are left out, so each comes once per chat. The sender's name only lifts facts that
+  match anyway (Anna's "what do I like?" puts "Anna likes tea" above "Ben likes coffee"), so it
+  doesn't bring up everything about them with every message. Anything going wrong costs the
+  recall, never the message.
+- **Search** (`rankFacts`): no index and no model, so the notes stay the only copy and it works the
+  same with every provider and offline. Every fact of every note is scored against the words of
+  the query: lower case and without accents, words of 3 letters only whole, longer ones by their
+  start (the first three quarters, at least 4 letters: "allergic" finds "allergies", "вайфая"
+  finds "вайфай"), and starts of 6 letters or more anywhere in a word, for compounds
+  ("Zahnarzt" finds "Kinderzahnarzt"). Short lists of words that say nothing, in the interface's
+  five languages, are left out. A word counts by how rare it is in memory (like BM25's IDF), and
+  one in more than 40% of a memory of 10 facts or more doesn't count at all. A word only in the
+  fact's note name or heading counts half, so "Anna" finds what `people/anna` says. Recall keeps
+  facts scoring at least 30% of the best one. Paraphrases with no word in common aren't found:
+  that needs embeddings (see [Not done yet](#not-done-yet)).
+- **Learning from chats** (`packages/core/src/memory-learning.ts`): the agent saves what it learns
+  when it thinks of it, and facts said in passing got lost. So once a chat's loop has ended and
+  nothing ran in it for 2 minutes (the gateway's scheduler starts the timers, and after a restart
+  gives chats active in the last day theirs), the chat's own model (`quickReply`, so plans work
+  too) looks over what was said since last time (`conversation.learned_seq`): people's messages,
+  with the names of attached files, and the text of btw's replies, never commands, their output
+  or an automation's message, so a web page, an email or a webhook can't write to memory. It gets
+  the two messages before, for context, today's date, and the notes: core, then the ones with
+  facts matching the conversation, then the most recently changed, whole up to 20,000 characters
+  and the rest by name. It answers with a JSON array of at most 10 changes (`add`, `replace`,
+  `forget`), usually `[]`, which go through the same functions as `btw memory`, so they are
+  dated and refused alike (a full core note, text that isn't there). One look at a time per
+  profile, so two chats ending together don't save the same fact. A stretch is read once: a
+  failed model call leaves it for next time, a reply without usable JSON doesn't. Hidden chats
+  (background runs nobody continued, subagents) are skipped, and so is a stretch without a
+  person's message. Each profile can turn it off on its Memory page or with
+  `btw memory learning off` (`profile.learn_from_chats`, on by default). It costs one short call
+  to the chat's model per quiet spell, on a plan the plan's usage.
 - **`btw memory`** (`packages/cli/src/memory.ts`, on top of `packages/core/src/memory.ts`): `list`,
+  `search <words>...` (every note's facts that match, best first, as `path:line  fact  (heading)`),
   `show <topic>...`, `add <topic> <fact>` (one bullet; creates the note, skips a fact it already
   has), `replace <topic> <old> <new>` (text that appears exactly once), `forget <topic> <text>` (the
-  one line containing it), `write <topic>` (the whole note, from stdin), `rm` and `mv`. Topics are
-  paths inside the folder; `..`, names starting with a dot and symbolic links are refused. Notes are
-  written atomically and hold at most 50,000 characters. The agent can also edit the files
-  directly; `btw memory` is preferred because it dates each fact.
+  one line containing it), `write <topic>` (the whole note, from stdin), `rm`, `mv` and
+  `learning [on|off]`. Topics are paths inside the folder; `..`, names starting with a dot and
+  symbolic links are refused. Notes are written atomically and hold at most 50,000 characters.
+  The agent can also edit the files directly; `btw memory` is preferred because it dates each
+  fact.
 - **What goes in:** one fact per bullet, updated rather than repeated. Secrets such as passwords
   and door codes are allowed when someone asks: a profile is only shared by people who trust each
   other, and models tend to refuse them in memory unless told so. The exception is something one
@@ -675,9 +720,9 @@ one per topic (`family.md`, `people/anna.md`). There is no memory tool: like aut
   files some other way are dated by their file's modification time, and whatever was in memory
   before dates were kept has none. A fact that moves to another file, or leaves one and comes
   back, keeps its date. Names starting with a dot are reserved, so `btw memory` can't touch it.
-- **Memory page** (`/p/<slug>/memory`): a grid of dots, one row per note and one dot per fact,
-  oldest on the left. A dot's shade is its age: black today (with a halo), fading to light grey
-  over about three months, and lightest when undated. Rows are ordered by the latest change, notes
+- **Memory page** (`/p/<slug>/memory`): the switch for learning from chats, then a grid of dots,
+  one row per note and one dot per fact, oldest on the left. A dot's shade is its age: black today
+  (with a halo), fading to light grey over about three months, and lightest when undated. Rows are ordered by the latest change, notes
   in a folder are grouped under its name, and past 12 rows the rest fold away. Pointing at (or
   tapping) a dot shows the fact and when it was learned. Below the grid, every note is rendered as
   Markdown and can be edited or forgotten. The core note comes first, marked as pinned, even before
@@ -1237,7 +1282,7 @@ to (issue #42).
 
 ```
 packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_command, background
-                commands, memory notes, new-chat suggestions, btw view images, attachments, model
+                commands, memory notes (search and recall, learning from chats), new-chat suggestions, btw view images, attachments, model
                 calls (models.ts, with anthropic.ts, openai-chat.ts and openrouter.ts, each with its
                 Files API and the function that turns btw's format, format.ts, into its request),
                 plans (plans.ts: the Claude plan's turns through Claude Code in claude-plan.ts, the
@@ -1308,6 +1353,8 @@ Published to npm as `btw-agent` (not yet). `npm install -g btw-agent` gives the 
   takes them) rather than after the turn.
 - Other image providers (OpenRouter, fal, Higgsfield): a module each next to `openai.ts` and an entry
   in `PROVIDERS`, plus one in `API_KEYS` (config.ts) and a check request in `api-keys.ts`.
+- Memory search by meaning: embeddings of each fact when an OpenAI key is set (or a local model),
+  next to the word search, for questions that share no word with the fact that answers them.
 - Smart approval mode.
 - Refusal fallbacks (`fallbacks: "default"`) for models that support them. Refusals are shown in the UI today.
 - Push notifications (Web Push) for the bell. Today it only updates while a page is open.

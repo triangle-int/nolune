@@ -6,6 +6,7 @@ import {
 	noteFacts,
 	parseFactIndex,
 	parseFacts,
+	readFacts,
 	serializeFactIndex
 } from './memory-facts.ts';
 
@@ -36,6 +37,28 @@ describe('parseFacts', () => {
 			'Anna · 40',
 			'wifi: hunter2',
 			'quoted fact'
+		]);
+	});
+});
+
+describe('readFacts', () => {
+	it('says where each fact starts and which heading it is under, but not the title', () => {
+		const note = [
+			'# Anna',
+			'- Likes tea',
+			'',
+			'## Health ##',
+			'- Allergic to',
+			'  peanuts',
+			'| Doctor | Dr. Keller |',
+			'### **School**',
+			'Riverside'
+		].join('\n');
+		expect(readFacts(note)).toEqual([
+			{ text: 'Likes tea', line: 2, heading: null },
+			{ text: 'Allergic to peanuts', line: 5, heading: 'Health' },
+			{ text: 'Doctor · Dr. Keller', line: 7, heading: 'Health' },
+			{ text: 'Riverside', line: 9, heading: 'School' }
 		]);
 	});
 });

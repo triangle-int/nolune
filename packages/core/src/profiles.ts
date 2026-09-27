@@ -77,6 +77,7 @@ export function createProfile(name: string, creatorId: string): Profile {
 		name: trimmed,
 		avatar: defaultAvatar(slug),
 		disabledSkills: [],
+		learnFromChats: true,
 		createdBy: creatorId,
 		createdAt: new Date()
 	};
@@ -186,6 +187,11 @@ export function setSkillsEnabled(profileId: string, names: string[], enabled: bo
 			.where(eq(profile.id, profileId))
 			.run();
 	});
+}
+
+/** Whether btw saves what's worth remembering from the profile's chats by itself (memory-learning). */
+export function setLearnFromChats(profileId: string, on: boolean): void {
+	getDb().update(profile).set({ learnFromChats: on }).where(eq(profile.id, profileId)).run();
 }
 
 /** Deletes the profile and its conversations; the folder is moved to ~/.btw-agent/trash. */
