@@ -303,15 +303,18 @@ export const message = sqliteTable(
 		 */
 		text: text('text'),
 		/**
-		 * Exact API content blocks as JSON: btw's own in Anthropic's format, replies as their
-		 * provider returned them (content-blocks.ts). Replayed byte-for-byte; never rewritten.
+		 * JSON. btw's own rows in btw's format (`format` 'btw'), replies exactly as their provider
+		 * returned them, and rows from before btw's format in Anthropic's (format.ts). Never
+		 * rewritten: what a model got before goes to it again byte for byte.
 		 */
 		content: text('content').notNull(),
+		/** 'btw': `content` is in btw's own format. Null: a reply as it came, or a row from before. */
+		format: text('format', { enum: ['btw'] }),
 		/**
 		 * The provider `content` was made for: the one whose model wrote a reply, or whose Files API a
 		 * message's or command result's pictures and PDFs went to. A conversation can switch models,
-		 * so another provider gets it translated (requestMessages). Rows that are only text, which
-		 * every provider reads the same, may have none.
+		 * so another provider's encoder leaves out what it can't take (format.ts). Rows that are only
+		 * text, which every provider reads the same, may have none.
 		 */
 		provider: text('provider', { enum: ['anthropic', 'openai', 'claude-plan'] }),
 		/** Replies: the model that wrote it. */

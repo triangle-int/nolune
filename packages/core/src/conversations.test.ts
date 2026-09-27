@@ -21,11 +21,14 @@ import {
 	setPreset,
 	toDisplay,
 	touchConversation,
-	type Conversation
+	type Conversation,
+	type MessageRow
 } from './conversations.ts';
 import { eq } from 'drizzle-orm';
+import { toAnthropicMessages } from './anthropic.ts';
 import { getDb } from './db/index.ts';
 import { modelPreset, upload } from './db/schema.ts';
+import { toResponsesInput } from './openai-chat.ts';
 import { removePreset } from './presets.ts';
 import { makeFamily, makePreset, makeUser } from './test/fixtures.ts';
 import { getRun, queueWake, updateRun } from './triggers.ts';
@@ -33,6 +36,11 @@ import { getRun, queueWake, updateRun } from './triggers.ts';
 afterEach(() => {
 	vi.useRealTimers();
 });
+
+/** The transcript as Claude gets it. */
+function forClaude(rows: MessageRow[], promptChangedAtSeq: number | null = null) {
+	return toAnthropicMessages(requestMessages(rows, promptChangedAtSeq));
+}
 
 function newChat(options: { hidden?: boolean; title?: string } = {}) {
 	const { user, profile } = makeFamily();
@@ -269,8 +277,9 @@ describe('requestMessages', () => {
 		);
 		say(chat, user, 'Thanks');
 		const rows = committedRows(chat.id);
-		expect(requestMessages(rows, null, chat)).toEqual(
-			rows.map((row) => ({ role: row.role, content: JSON.parse(row.content) }))
+		// Byte for byte: key order too.
+		expect(JSON.stringify(forClaude(rows))).toBe(
+			JSON.stringify(rows.map((row) => ({ role: row.role, content: JSON.parse(row.content) })))
 		);
 	});
 
@@ -283,7 +292,7 @@ describe('requestMessages', () => {
 			{ role: 'user', content: [result('t1', 'a'), result('t2', 'b')] }
 		);
 		say(chat, user, 'Hello?');
-		expect(requestMessages(committedRows(chat.id), null, chat).slice(1)).toEqual([
+		expect(forClaude(committedRows(chat.id)).slice(1)).toEqual([
 			{ role: 'assistant', content: calls('t1', 't2') },
 			{ role: 'user', content: [result('t1', 'Not finished.', true), result('t2', 'x', true)] },
 			{ role: 'user', content: [{ type: 'text', text: 'Anna: Hello?' }] }
@@ -295,7 +304,7 @@ describe('requestMessages', () => {
 			{ role: 'assistant', content: calls('t1', 't2') },
 			{ role: 'user', content: [result('t1', 'a')] }
 		);
-		expect(requestMessages(committedRows(chat.id), null, chat).slice(1)).toEqual([
+		expect(forClaude(committedRows(chat.id)).slice(1)).toEqual([
 			{ role: 'assistant', content: calls('t1', 't2') },
 			{ role: 'user', content: [result('t1', 'a')] },
 			{ role: 'user', content: [noResult('t2')] }
@@ -308,7 +317,7 @@ describe('requestMessages', () => {
 			kind: 'tool_results',
 			content: JSON.stringify([result('t2', 'late'), result('t9', 'from nowhere')])
 		});
-		expect(requestMessages(committedRows(chat.id), null, chat).slice(1)).toEqual([
+		expect(forClaude(committedRows(chat.id)).slice(1)).toEqual([
 			{ role: 'assistant', content: calls('t1', 't2') },
 			{ role: 'user', content: [result('t1', 'a')] },
 			{ role: 'user', content: [noResult('t2'), { type: 'text', text: 'Anna: Hello?' }] }
@@ -320,7 +329,7 @@ describe('requestMessages', () => {
 			{ role: 'assistant', content: calls('t1') },
 			{ role: 'assistant', content: [{ type: 'text', text: 'Hm.' }] }
 		);
-		expect(requestMessages(committedRows(chat.id), null, chat).slice(1)).toEqual([
+		expect(forClaude(committedRows(chat.id)).slice(1)).toEqual([
 			{ role: 'assistant', content: calls('t1') },
 			{ role: 'user', content: [noResult('t1')] },
 			{ role: 'assistant', content: [{ type: 'text', text: 'Hm.' }] }
@@ -337,10 +346,8 @@ describe('switching models', () => {
 		type: 'image',
 		source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' }
 	};
-	const photoNote = {
-		type: 'text',
-		text: "[Picture not shown: it went to the model this chat used before, and this model can't open that copy. The line before this says where its file is; `btw view` shows it again.]"
-	};
+	const note =
+		"[Picture not shown: it went to the model this chat used before, and this model can't open that copy. The line before this says where its file is; `btw view` shows it again.]";
 
 	/** A reply the chat's current model wrote. */
 	function answer(chat: Conversation, content: unknown[]) {
@@ -364,7 +371,13 @@ describe('switching models', () => {
 			text: 'Files?',
 			provider: 'anthropic',
 			attachments: {
-				content: [{ type: 'text', text: '[Anna attached a.png, saved at /a.png]' }, photo],
+				content: [
+					{ type: 'text', text: '[Anna attached a.png, saved at /a.png]' },
+					{
+						type: 'image',
+						source: { type: 'uploaded', provider: 'anthropic', fileId: 'file_photo' }
+					}
+				],
 				files: [],
 				media: [],
 				uploadIds: []
@@ -372,6 +385,7 @@ describe('switching models', () => {
 		});
 		commitQueuedRows(chat.id);
 		answer(chat, [thinking, { type: 'text', text: 'Looking.' }, listCall]);
+		// As results were stored before btw's own format.
 		appendRow({
 			conversationId: chat.id,
 			role: 'user',
@@ -428,32 +442,53 @@ describe('switching models', () => {
 
 	it("sends another Claude model the replies as they are: the API leaves out thinking it can't read", () => {
 		const { chat } = claudeChat();
-		const opus = setPreset(chat.id, makePreset('Opus', 'claude-opus-5-5').id);
-		const rows = committedRows(chat.id);
-		expect(requestMessages(rows, null, opus)).toEqual(requestMessages(rows, null, chat));
-		expect(requestMessages(rows, null, opus)[1].content).toEqual([
-			thinking,
-			{ type: 'text', text: 'Looking.' },
-			listCall
+		setPreset(chat.id, makePreset('Opus', 'claude-opus-5-5').id);
+		expect(forClaude(committedRows(chat.id))).toEqual([
+			{
+				role: 'user',
+				content: [{ type: 'text', text: '[Anna attached a.png, saved at /a.png]' }, photo]
+			},
+			{ role: 'assistant', content: [thinking, { type: 'text', text: 'Looking.' }, listCall] },
+			{
+				role: 'user',
+				content: [{ ...listed, content: [{ type: 'text', text: 'Image: /b.png' }, photo, inline] }]
+			},
+			{ role: 'assistant', content: [{ type: 'text', text: 'Two files.' }] }
 		]);
 	});
 
 	it("sends another provider the text and calls of replies, and notes for files it can't open", () => {
 		const { chat } = claudeChat();
 		const gpt = setPreset(chat.id, makePreset('GPT', 'gpt-6-astra', 'openai').id);
-		expect(requestMessages(committedRows(chat.id), null, gpt)).toEqual([
-			{
-				role: 'user',
-				content: [{ type: 'text', text: '[Anna attached a.png, saved at /a.png]' }, photoNote]
-			},
-			{ role: 'assistant', content: [{ type: 'text', text: 'Looking.' }, listCall] },
+		expect(toResponsesInput(requestMessages(committedRows(chat.id), null), gpt.model)).toEqual([
 			{
 				role: 'user',
 				content: [
-					{ ...listed, content: [{ type: 'text', text: 'Image: /b.png' }, photoNote, inline] }
+					{ type: 'input_text', text: '[Anna attached a.png, saved at /a.png]' },
+					{ type: 'input_text', text: note }
 				]
 			},
-			{ role: 'assistant', content: [{ type: 'text', text: 'Two files.' }] }
+			{ role: 'assistant', content: 'Looking.' },
+			{
+				type: 'function_call',
+				call_id: 't1',
+				name: 'run_command',
+				arguments: '{"command":"ls"}'
+			},
+			{
+				type: 'function_call_output',
+				call_id: 't1',
+				output: [
+					{ type: 'input_text', text: 'Image: /b.png' },
+					{ type: 'input_text', text: note },
+					{
+						type: 'input_image',
+						image_url: 'data:image/png;base64,iVBORw0KGgo=',
+						detail: 'auto'
+					}
+				]
+			},
+			{ role: 'assistant', content: 'Two files.' }
 		]);
 	});
 
@@ -495,8 +530,8 @@ describe('switching models', () => {
 			]),
 			provider: 'openai'
 		});
-		const claude = setPreset(chat.id, makePreset().id);
-		expect(requestMessages(committedRows(chat.id), null, claude)[1]).toEqual({
+		setPreset(chat.id, makePreset().id);
+		expect(forClaude(committedRows(chat.id))[1]).toEqual({
 			role: 'assistant',
 			content: [
 				{ type: 'text', text: 'Looking.' },
@@ -521,16 +556,15 @@ describe('switching models', () => {
 		};
 		answer(chat, [reasoning, hello]);
 
-		const mini = setPreset(chat.id, makePreset('Mini', 'gpt-6-mini', 'openai').id);
-		expect(requestMessages(committedRows(chat.id), null, mini)[1]).toEqual({
+		const rows = committedRows(chat.id);
+		expect(toResponsesInput(requestMessages(rows, null), 'gpt-6-mini')[1]).toEqual({
 			role: 'assistant',
-			content: [{ type: 'text', text: 'Hello!' }]
+			content: 'Hello!'
 		});
-		const back = setPreset(chat.id, gpt.id);
-		expect(requestMessages(committedRows(chat.id), null, back)[1]).toEqual({
-			role: 'assistant',
-			content: [reasoning, hello]
-		});
+		expect(toResponsesInput(requestMessages(rows, null), 'gpt-6-astra').slice(1)).toEqual([
+			reasoning,
+			hello
+		]);
 	});
 
 	it("leaves out the thinking a Claude plan's Claude Code got, which belongs to another account", () => {
@@ -540,8 +574,8 @@ describe('switching models', () => {
 		insertQueued({ conversationId: chat.id, senderId: user.id, senderName: 'Anna', text: 'Hi' });
 		commitQueuedRows(chat.id);
 		answer(chat, [thinking, { type: 'text', text: 'Hello!' }]);
-		const api = setPreset(chat.id, makePreset().id);
-		expect(requestMessages(committedRows(chat.id), null, api)[1]).toEqual({
+		setPreset(chat.id, makePreset().id);
+		expect(forClaude(committedRows(chat.id))[1]).toEqual({
 			role: 'assistant',
 			content: [{ type: 'text', text: 'Hello!' }]
 		});

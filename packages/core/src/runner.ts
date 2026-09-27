@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { mkdirSync, rmSync } from 'node:fs';
-import type Anthropic from '@anthropic-ai/sdk';
 import { runTurn as runPlanTurn, sessionProblem } from './claude-plan.ts';
 import {
 	describeApiError,
@@ -23,7 +22,6 @@ import {
 	appendRow,
 	commitQueuedRows,
 	committedRows,
-	contentFor,
 	foundText,
 	getConversation,
 	insertQueued,
@@ -35,14 +33,15 @@ import {
 	queuedRows,
 	rebuildSystemPrompt,
 	replaceTitle,
+	readRow,
 	requestMessages,
+	rowCalls,
 	setEffort,
 	setHidden,
 	setPreset,
 	setProviderSession,
 	setTitle,
 	toDisplay,
-	toMessageParam,
 	toolsFor,
 	touchConversation,
 	type Conversation,
@@ -52,7 +51,7 @@ import {
 import { getDb } from './db/index.ts';
 import { profile } from './db/schema.ts';
 import { eq } from 'drizzle-orm';
-import { toolCalls } from './content-blocks.ts';
+import type { Block, ImageBlock, TextBlock, ToolResultBlock } from './format.ts';
 import { findUploads, prepareMessage, viewedImageBlocks } from './attachments.ts';
 import { folderContextFor } from './folders.ts';
 import { readSoul } from './soul.ts';
@@ -501,10 +500,10 @@ function toolResult(
 	text: string,
 	isError: boolean,
 	/** Images from `btw view`, with their labels. They follow the command's output. */
-	attachments: (Anthropic.TextBlockParam | Anthropic.ImageBlockParam)[] = []
-): Anthropic.ToolResultBlockParam {
+	attachments: (TextBlock | ImageBlock)[] = []
+): ToolResultBlock {
 	const content = attachments.length ? [{ type: 'text' as const, text }, ...attachments] : text;
-	return { type: 'tool_result', tool_use_id: id, content, ...(isError ? { is_error: true } : {}) };
+	return { type: 'tool_result', callId: id, content, isError };
 }
 
 async function runToolCall(
@@ -515,7 +514,7 @@ async function runToolCall(
 	st: State,
 	/** Images already in the conversation; grows by what this call attaches. */
 	images: ImageUse
-): Promise<Anthropic.ToolResultBlockParam> {
+): Promise<ToolResultBlock> {
 	if (stopReason !== 'tool_use') {
 		return toolResult(
 			call.id,
@@ -628,7 +627,7 @@ function queueBackgroundResult(
  */
 export function withCurrentContext(conv: Conversation, rows: MessageRow[]): Conversation {
 	const lastReply = rows.findLast((row) => row.role === 'assistant');
-	if (lastReply && toolCalls(JSON.parse(lastReply.content)).length) return conv;
+	if (lastReply && rowCalls(lastReply).length) return conv;
 	const owner = getProfile(conv.profileId);
 	if (!owner) return conv;
 	const context = folderContextFor(owner, conv.folderId);
@@ -692,12 +691,12 @@ async function saveReply(
  * One row with the result of every call of the reply before it, in order. Their `btw view`
  * pictures were prepared for the conversation's provider.
  */
-function saveResults(conv: Conversation, results: Anthropic.ToolResultBlockParam[]): void {
+function saveResults(conv: Conversation, results: ToolResultBlock[]): void {
 	const resultsRow = appendRow({
 		conversationId: conv.id,
 		role: 'user',
 		kind: 'tool_results',
-		content: JSON.stringify(results),
+		blocks: results,
 		provider: conv.provider
 	});
 	emit(conv.id, { type: 'message', message: toDisplay(resultsRow) });
@@ -731,12 +730,12 @@ function missedReplies(session: { sentSeq: number }, rows: MessageRow[]): boolea
  */
 function planInput(conv: Conversation, rows: MessageRow[], newSessionId = conv.id) {
 	const sentSeq = rows.at(-1)?.seq ?? 0;
-	const content = (row: MessageRow) => contentFor(row, conv.provider);
+	const content = (row: MessageRow) => readRow(row).blocks;
 	const kept = conv.providerSession;
 	const session = kept && !missedReplies(kept, rows) ? kept : null;
 	// The chat's first session has its id.
 	if (kept && !session && newSessionId === conv.id) newSessionId = randomUUID();
-	let input: Anthropic.ContentBlockParam[];
+	let input: Block[];
 	if (session) {
 		input = rows
 			.filter((row) => (row.seq ?? 0) > session.sentSeq && isPlanInput(row))
@@ -786,7 +785,7 @@ async function planTurn(
 	}
 	const cwd = profileDir(slug);
 	mkdirSync(cwd, { recursive: true });
-	const images = imageUse(rows.map(toMessageParam));
+	const images = imageUse(rows.map(readRow));
 	let next = planInput(conv, rows);
 	for (let retried = false; ; retried = true) {
 		const { sessionId, resume, sentSeq, input } = next;
@@ -867,7 +866,7 @@ async function loop(conversationId: string): Promise<void> {
 				if (!queuedRows(conversationId).length) return;
 				continue;
 			}
-			const messages = requestMessages(rows, conv.promptChangedAtSeq, conv);
+			const messages = requestMessages(rows, conv.promptChangedAtSeq);
 			let reply: ModelReply;
 			try {
 				reply = await streamTurn({
@@ -901,8 +900,8 @@ async function loop(conversationId: string): Promise<void> {
 			if (calls.length === 0) continue;
 
 			// Queued messages may carry pictures too; they join the history at the next step.
-			const images = imageUse([...messages, ...queuedRows(conversationId).map(toMessageParam)]);
-			const results: Anthropic.ToolResultBlockParam[] = [];
+			const images = imageUse([...messages, ...queuedRows(conversationId).map(readRow)]);
+			const results: ToolResultBlock[] = [];
 			for (const call of calls) {
 				// A call that throws still gets its result, or the reply would wait for one forever.
 				const result = await runToolCall(
@@ -964,16 +963,14 @@ export function recoverAfterRestart(): void {
 		if (isRunning(id)) continue;
 		const last = lastCommittedRow(id);
 		if (last?.kind === 'assistant') {
-			const calls = toolCalls(JSON.parse(last.content));
+			const calls = rowCalls(last);
 			if (calls.length) {
 				appendRow({
 					conversationId: id,
 					role: 'user',
 					kind: 'tool_results',
-					content: JSON.stringify(
-						calls.map((c) =>
-							toolResult(c.id, 'Not finished: the gateway restarted while this was running.', true)
-						)
+					blocks: calls.map((c) =>
+						toolResult(c.id, 'Not finished: the gateway restarted while this was running.', true)
 					)
 				});
 			}

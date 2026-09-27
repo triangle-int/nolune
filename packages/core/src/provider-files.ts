@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { and, eq, like, lt } from 'drizzle-orm';
+import { and, eq, like, lt, or } from 'drizzle-orm';
 import { anthropicFiles } from './anthropic.ts';
 import { getDb } from './db/index.ts';
 import { message, providerFile } from './db/schema.ts';
@@ -91,18 +91,20 @@ function collectFileIds(value: unknown, ids: Set<string>): void {
 		for (const item of value) collectFileIds(item, ids);
 	} else if (value && typeof value === 'object') {
 		const record = value as Record<string, unknown>;
+		// btw's format, and Anthropic's (rows from before it)
+		if (record.type === 'uploaded' && typeof record.fileId === 'string') ids.add(record.fileId);
 		if (record.type === 'file' && typeof record.file_id === 'string') ids.add(record.file_id);
 		for (const child of Object.values(record)) collectFileIds(child, ids);
 	}
 }
 
-/** Every file id a stored message refers to, in any provider's format. */
+/** Every file id a stored message refers to, in btw's format or a provider's. */
 function referencedFileIds(): Set<string> {
 	const ids = new Set<string>();
 	const rows = getDb()
 		.select({ content: message.content })
 		.from(message)
-		.where(like(message.content, '%"file_id"%'))
+		.where(or(like(message.content, '%"fileId"%'), like(message.content, '%"file_id"%')))
 		.all();
 	for (const row of rows) collectFileIds(JSON.parse(row.content), ids);
 	return ids;

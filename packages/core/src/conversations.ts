@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import type Anthropic from '@anthropic-ai/sdk';
 import { and, desc, eq, inArray, isNotNull, isNull, lt, max } from 'drizzle-orm';
 import { parseAttachments, type MessageAttachment } from './attachments.ts';
-import { portableReply, replyBlocks, toolCalls } from './content-blocks.ts';
 import { getDb } from './db/index.ts';
 import {
 	conversation,
@@ -15,6 +14,15 @@ import {
 	upload
 } from './db/schema.ts';
 import { folderContextFor, getFolder } from './folders.ts';
+import {
+	messageText,
+	readMessage,
+	resultText,
+	type Block,
+	type Message,
+	type ToolCallBlock,
+	type ToolResultBlock
+} from './format.ts';
 import {
 	newMediaId,
 	toDisplayMedia,
@@ -415,7 +423,7 @@ export function insertQueued(input: {
 	provider?: Provider;
 	/** With attachments (see prepareMessage): the content, the files, and the uploads they were. */
 	attachments?: {
-		content: unknown[];
+		content: Block[];
 		files: MessageAttachment[];
 		media: (PreparedMedia & { id: string })[];
 		uploadIds: string[];
@@ -445,8 +453,10 @@ export function insertQueued(input: {
 				text: input.text,
 				// Without attachments the model sees only the sender's name and what they wrote.
 				content: JSON.stringify(
-					attachments?.content ?? [{ type: 'text', text: `${input.senderName}: ${input.text}` }]
+					attachments?.content ??
+						([{ type: 'text', text: `${input.senderName}: ${input.text}` }] satisfies Block[])
 				),
+				format: 'btw',
 				attachments: attachments ? JSON.stringify(attachments.files) : null,
 				provider: input.provider ?? null,
 				createdAt: new Date()
@@ -492,7 +502,8 @@ export function insertQueuedNotice(input: {
 			kind: input.kind,
 			senderName: input.title,
 			text: input.text,
-			content: JSON.stringify([{ type: 'text', text: input.content }]),
+			content: JSON.stringify([{ type: 'text', text: input.content }] satisfies Block[]),
+			format: 'btw',
 			createdAt: new Date()
 		})
 		.returning()
@@ -516,25 +527,35 @@ export function commitQueuedRows(conversationId: string): MessageRow[] {
 	});
 }
 
-export function appendRow(input: {
-	conversationId: string;
-	role: 'user' | 'assistant';
-	kind: 'trigger' | 'tool_results' | 'assistant';
-	content: string;
-	/** Trigger rows: the trigger's name and prompt, for display. */
-	senderName?: string;
-	text?: string;
-	stopReason?: string | null;
-	usage?: Usage | null;
-	/**
-	 * Replies: the provider and model that wrote it. Command results: the provider their pictures
-	 * were prepared for.
-	 */
-	provider?: Provider | null;
-	model?: string | null;
-	/** Assistant rows: copies of the pictures and files the reply links to, saved with it. */
-	media?: PreparedMedia[];
-}): MessageRow {
+export function appendRow(
+	input: {
+		conversationId: string;
+		role: 'user' | 'assistant';
+		kind: 'trigger' | 'tool_results' | 'assistant';
+		/** Trigger rows: the trigger's name and prompt, for display. */
+		senderName?: string;
+		text?: string;
+		stopReason?: string | null;
+		usage?: Usage | null;
+		/**
+		 * Replies: the provider and model that wrote it. Command results: the provider their
+		 * pictures were prepared for.
+		 */
+		provider?: Provider | null;
+		model?: string | null;
+		/** Assistant rows: copies of the pictures and files the reply links to, saved with it. */
+		media?: PreparedMedia[];
+	} & (
+		| {
+				/** btw's own content, stored in btw's format. */
+				blocks: Block[];
+		  }
+		| {
+				/** A reply as its provider returned it, as JSON: stored as it is. */
+				content: string;
+		  }
+	)
+): MessageRow {
 	return getDb().transaction((tx) => {
 		const row = tx
 			.insert(message)
@@ -545,7 +566,9 @@ export function appendRow(input: {
 				kind: input.kind,
 				senderName: input.senderName ?? null,
 				text: input.text ?? null,
-				content: input.content,
+				...('blocks' in input
+					? { content: JSON.stringify(input.blocks), format: 'btw' as const }
+					: { content: input.content }),
 				provider: input.provider ?? null,
 				model: input.model ?? null,
 				stopReason: input.stopReason ?? null,
@@ -570,117 +593,41 @@ export function appendRow(input: {
 	});
 }
 
-/** Exactly what was stored, so the request prefix is byte-identical to the previous call. */
-export function toMessageParam(row: MessageRow): Anthropic.MessageParam {
-	return { role: row.role, content: JSON.parse(row.content) };
+/** A row in btw's format (format.ts), whichever way it was stored. */
+export function readRow(row: MessageRow): Message {
+	return readMessage(row);
 }
 
-/** The model a request goes to. */
-export interface ModelTarget {
-	provider: Provider;
-	model: string;
-}
-
-/**
- * Whether a reply goes to the target model as it was stored. Claude reads the thinking of other
- * Claude models itself (the API leaves out what a model can't read), but not what OpenAI returned
- * or what a Claude plan's Claude Code got (another account). OpenAI's reasoning goes back only to
- * the model that wrote it. Rows without a provider are btw's own text, which every model reads.
- */
-function sendsAsStored(row: MessageRow, target: ModelTarget): boolean {
-	if (!row.provider) return true;
-	if (row.provider !== target.provider) return false;
-	return target.provider !== 'openai' || row.model === target.model;
-}
-
-type Block = { type?: unknown; source?: { type?: unknown }; content?: unknown };
-
-/** A picture or PDF kept in a provider's Files API, which only that provider can open. */
-function isStoredFile(block: Block): boolean {
-	return (block.type === 'image' || block.type === 'document') && block.source?.type === 'file';
-}
-
-/** What the model reads instead of a picture or PDF another provider holds. */
-function storedFileNote(block: Block): Anthropic.TextBlockParam {
-	const what = block.type === 'image' ? 'Picture' : 'PDF';
-	return {
-		type: 'text',
-		text: `[${what} not shown: it went to the model this chat used before, and this model can't open that copy. The line before this says where its file is${block.type === 'image' ? '; `btw view` shows it again' : ''}.]`
-	};
+/** The tool calls of a reply row. */
+export function rowCalls(row: MessageRow): ToolCallBlock[] {
+	return readRow(row).blocks.filter((b) => b.type === 'tool_call');
 }
 
 /**
- * A message's or command result's blocks for another provider than the one its pictures and PDFs
- * were uploaded to: each one it can't open becomes a note. Blocks inline as base64 stay, since
- * every provider reads them.
+ * The transcript for a model call, in btw's format: every row, with its replies marked when
+ * they're from before the system prompt was last built again (`promptChangedAtSeq`), and every
+ * tool call answered once (pairToolResults). Each provider's module turns it into its request
+ * (format.ts), and does it the same way on every call, so the prefix stays byte-identical.
  */
-function withoutStoredFiles(blocks: Block[]): Block[] {
-	if (!blocks.some((b) => isStoredFile(b) || Array.isArray(b.content))) return blocks;
-	return blocks.map((b) => {
-		if (isStoredFile(b)) return storedFileNote(b);
-		if (b.type !== 'tool_result' || !Array.isArray(b.content)) return b;
-		const content = withoutStoredFiles(b.content as Block[]);
-		return content === b.content ? b : { ...b, content };
-	});
-}
-
-/**
- * The transcript as a model call to `target` sends it: every row exactly as stored, except
- *
- * - the thinking in replies from before the system prompt was last built again
- *   (`promptChangedAtSeq`). A thinking block's signature records the prompt it was made under,
- *   and newer models refuse it under another one, so those are left out. They are always the
- *   oldest ones, which the API allows. OpenAI's reasoning isn't bound to the prompt, so its
- *   replies go as they are.
- * - after the conversation switched models, what the target can't read: replies another
- *   provider (or, on OpenAI, another model) wrote go as their text and tool calls, and pictures
- *   and PDFs another provider holds as a note saying where their file is.
- *
- * Both depend only on the stored rows, so every call leaves out the same and the prefix stays
- * byte-identical.
- *
- * Replies are in their provider's own format (see content-blocks.ts), so for OpenAI's
- * conversations the assistant messages hold its output items rather than Anthropic's blocks.
- */
-export function requestMessages(
-	rows: MessageRow[],
-	promptChangedAtSeq: number | null,
-	target: ModelTarget
-): Anthropic.MessageParam[] {
-	const messages = rows.flatMap((row): Anthropic.MessageParam[] => {
-		if (row.role !== 'assistant')
-			return [{ role: 'user', content: contentFor(row, target.provider) }];
-		let content: Anthropic.ContentBlockParam[];
-		if (!sendsAsStored(row, target)) content = portableReply(JSON.parse(row.content));
-		else if (promptChangedAtSeq === null || row.seq === null || row.seq > promptChangedAtSeq) {
-			return [toMessageParam(row)];
-		} else {
-			content = (JSON.parse(row.content) as Anthropic.ContentBlockParam[]).filter(
-				(b) => b.type !== 'thinking' && b.type !== 'redacted_thinking'
-			);
-		}
-		// A reply that was only thinking (cut off, say) has nothing left to send.
-		return content.length ? [{ role: 'assistant', content }] : [];
+export function requestMessages(rows: MessageRow[], promptChangedAtSeq: number | null): Message[] {
+	const messages = rows.map((row): Message => {
+		const read = readRow(row);
+		const before =
+			row.role === 'assistant' &&
+			promptChangedAtSeq !== null &&
+			row.seq !== null &&
+			row.seq <= promptChangedAtSeq;
+		return before ? { ...read, beforePromptChange: true } : read;
 	});
 	return pairToolResults(messages);
 }
 
-/**
- * A message's or command result's content for `provider`: as stored, except that pictures and
- * PDFs another provider holds become notes (withoutStoredFiles).
- */
-export function contentFor(row: MessageRow, provider: Provider): Anthropic.ContentBlockParam[] {
-	const content = JSON.parse(row.content) as Anthropic.ContentBlockParam[];
-	if (!row.provider || row.provider === provider) return content;
-	return withoutStoredFiles(content as Block[]) as Anthropic.ContentBlockParam[];
-}
-
-function noResult(toolUseId: string): Anthropic.ToolResultBlockParam {
+function noResult(callId: string): ToolResultBlock {
 	return {
 		type: 'tool_result',
-		tool_use_id: toolUseId,
+		callId,
 		content: 'No result came back from this command. It may or may not have run.',
-		is_error: true
+		isError: true
 	};
 }
 
@@ -692,41 +639,35 @@ function noResult(toolUseId: string): Anthropic.ToolResultBlockParam {
  * one saying so, and a result that's a second one, late, or for no call is left out. Messages
  * that need no mending are passed through as they are, so healthy transcripts don't change.
  */
-function pairToolResults(messages: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
-	const out: Anthropic.MessageParam[] = [];
+function pairToolResults(messages: Message[]): Message[] {
+	const out: Message[] = [];
 	/** Calls of the latest reply that have no result yet. */
 	let open: string[] = [];
 	for (const m of messages) {
 		if (m.role === 'assistant') {
-			if (open.length) out.push({ role: 'user', content: open.map(noResult) });
-			open = typeof m.content === 'string' ? [] : toolCalls(m.content).map((c) => c.id);
+			if (open.length) out.push({ role: 'user', blocks: open.map(noResult) });
+			open = m.blocks.flatMap((b) => (b.type === 'tool_call' ? [b.id] : []));
 			out.push(m);
 			continue;
 		}
-		const blocks: Anthropic.ContentBlockParam[] =
-			typeof m.content === 'string' ? [{ type: 'text', text: m.content }] : m.content;
-		const content: Anthropic.ContentBlockParam[] = [];
-		for (const b of blocks) {
+		const content: Block[] = [];
+		for (const b of m.blocks) {
 			if (b.type !== 'tool_result') {
 				content.push(...open.map(noResult), b);
 				open = [];
-			} else if (open.includes(b.tool_use_id)) {
+			} else if (open.includes(b.callId)) {
 				content.push(b);
-				open = open.filter((id) => id !== b.tool_use_id);
+				open = open.filter((id) => id !== b.callId);
 			}
 		}
-		if (content.length === blocks.length && content.every((b, i) => b === blocks[i])) out.push(m);
-		else if (content.length) out.push({ role: 'user', content });
+		if (content.length === m.blocks.length && content.every((b, i) => b === m.blocks[i])) {
+			out.push(m);
+		} else if (content.length) out.push({ role: 'user', blocks: content });
 	}
 	if (open.length && out.at(-1)?.role === 'user') {
-		out.push({ role: 'user', content: open.map(noResult) });
+		out.push({ role: 'user', blocks: open.map(noResult) });
 	}
 	return out;
-}
-
-function toolResultText(content: Anthropic.ToolResultBlockParam['content']): string {
-	if (typeof content === 'string') return content;
-	return (content ?? []).map((b) => (b.type === 'text' ? b.text : `[${b.type}]`)).join('\n');
 }
 
 /**
@@ -735,19 +676,13 @@ function toolResultText(content: Anthropic.ToolResultBlockParam['content']): str
  */
 export function plainText(row: MessageRow): string {
 	if (row.role === 'assistant') return replyText(row);
-	return (JSON.parse(row.content) as (Anthropic.TextBlockParam | Anthropic.ToolResultBlockParam)[])
-		.map((b) =>
-			b.type === 'tool_result' ? toolResultText(b.content) : b.type === 'text' ? b.text : ''
-		)
-		.filter(Boolean)
-		.join('\n')
-		.trim();
+	return messageText(readRow(row).blocks);
 }
 
 /** The text blocks of an assistant row: what the agent said, without thinking or commands. */
 export function replyText(row: MessageRow): string {
-	return replyBlocks(JSON.parse(row.content))
-		.flatMap((b) => (b.type === 'text' ? [b.text] : []))
+	return readRow(row)
+		.blocks.flatMap((b) => (b.type === 'text' ? [b.text] : []))
 		.join('\n\n')
 		.trim();
 }
@@ -761,10 +696,8 @@ export function foundText(rows: MessageRow[]): string {
 	return rows
 		.filter((row) => row.kind !== 'assistant' && row.kind !== 'agent_message')
 		.flatMap((row) =>
-			(
-				JSON.parse(row.content) as (Anthropic.TextBlockParam | Anthropic.ToolResultBlockParam)[]
-			).map((b) =>
-				b.type === 'tool_result' ? toolResultText(b.content) : b.type === 'text' ? b.text : ''
+			readRow(row).blocks.map((b) =>
+				b.type === 'tool_result' ? resultText(b.content) : b.type === 'text' ? b.text : ''
 			)
 		)
 		.join('\n');
@@ -824,23 +757,24 @@ export function toDisplay(row: MessageRow, mediaRows: MediaRow[] = []): DisplayM
 		};
 	}
 	if (row.kind === 'tool_results') {
-		const blocks = JSON.parse(row.content) as Anthropic.ToolResultBlockParam[];
 		return {
 			id: row.id,
 			kind: 'tool_results',
-			results: blocks.map((b) => ({
-				id: b.tool_use_id,
-				output: toolResultText(b.content),
-				isError: b.is_error === true
-			})),
+			results: readRow(row).blocks.flatMap((b) =>
+				b.type === 'tool_result'
+					? [{ id: b.callId, output: resultText(b.content), isError: b.isError }]
+					: []
+			),
 			createdAt
 		};
 	}
 	const blocks: DisplayBlock[] = [];
-	for (const block of replyBlocks(JSON.parse(row.content))) {
-		if (block.type !== 'tool_call') {
-			if (block.text.trim()) blocks.push(block);
-		} else {
+	for (const block of readRow(row).blocks) {
+		if (block.type === 'text' || block.type === 'reasoning') {
+			if (block.text.trim()) {
+				blocks.push({ type: block.type === 'text' ? 'text' : 'thinking', text: block.text });
+			}
+		} else if (block.type === 'tool_call') {
 			const input = (block.input ?? {}) as Record<string, unknown>;
 			const text = (key: string) =>
 				typeof input[key] === 'string' && input[key].trim() ? { [key]: input[key].trim() } : {};

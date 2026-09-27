@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { Readable } from 'node:stream';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createUpload } from './attachments.ts';
-import { replyBlocks } from './content-blocks.ts';
+import { replyBlocks } from './format.ts';
 import {
 	appendRow,
 	committedRows,
@@ -472,7 +472,7 @@ describe('a chat on an OpenAI model', () => {
 			content: JSON.stringify([thought, listCall])
 		});
 		appendRow({ conversationId: chat.id, role: 'user', kind: 'trigger', content: text('And?') });
-		expect(toResponsesInput(requestMessages(committedRows(chat.id), null, chat))).toEqual([
+		expect(toResponsesInput(requestMessages(committedRows(chat.id), null), chat.model)).toEqual([
 			{ role: 'user', content: [{ type: 'input_text', text: 'Files?' }] },
 			thought,
 			listCall,
@@ -494,9 +494,9 @@ describe('a chat on an OpenAI model', () => {
 		expect(JSON.parse(committedRows(chat.id).at(-1)!.content)).toEqual([
 			{
 				type: 'tool_result',
-				tool_use_id: 'call_1',
+				callId: 'call_1',
 				content: 'Not finished: the gateway restarted while this was running.',
-				is_error: true
+				isError: true
 			}
 		]);
 	});
@@ -504,41 +504,47 @@ describe('a chat on an OpenAI model', () => {
 
 describe('the transcript as input items', () => {
 	it("turns btw's own blocks into input items, and keeps OpenAI's own as they came", () => {
+		const unreadable = [{ id: 'rs_2', type: 'reasoning', summary: [] }, listCall];
 		expect(
-			toResponsesInput([
-				{
-					role: 'user',
-					content: [
-						{ type: 'text', text: '[Anna attached cat.jpg, saved at /tmp/cat.jpg]' },
-						{ type: 'image', source: { type: 'file', file_id: 'file-cat' } },
-						{ type: 'text', text: 'Anna: Look' }
-					]
-				},
-				// A notification someone continued in a chat: btw wrote this reply itself.
-				{ role: 'assistant', content: [{ type: 'text', text: 'The parcel arrived.' }] },
-				// Reasoning without its encrypted content can't be sent back without `store`.
-				{
-					role: 'assistant',
-					content: [{ id: 'rs_2', type: 'reasoning', summary: [] }, listCall] as never
-				},
-				{
-					role: 'user',
-					content: [
-						{
-							type: 'tool_result',
-							tool_use_id: 'call_1',
-							content: [
-								{ type: 'text', text: 'Image: shot.png' },
-								{
-									type: 'image',
-									source: { type: 'base64', media_type: 'image/png', data: 'iVBOR' }
-								}
-							]
-						},
-						{ type: 'text', text: 'Max: and?' }
-					]
-				}
-			])
+			toResponsesInput(
+				[
+					{
+						role: 'user',
+						blocks: [
+							{ type: 'text', text: '[Anna attached cat.jpg, saved at /tmp/cat.jpg]' },
+							{
+								type: 'image',
+								source: { type: 'uploaded', provider: 'openai', fileId: 'file-cat' }
+							},
+							{ type: 'text', text: 'Anna: Look' }
+						]
+					},
+					// A notification someone continued in a chat: btw wrote this reply itself.
+					{ role: 'assistant', blocks: [{ type: 'text', text: 'The parcel arrived.' }] },
+					// Reasoning without its encrypted content can't be sent back without `store`.
+					{
+						role: 'assistant',
+						blocks: replyBlocks(unreadable),
+						native: { provider: 'openai', model: 'gpt-6-astra', content: unreadable }
+					},
+					{
+						role: 'user',
+						blocks: [
+							{
+								type: 'tool_result',
+								callId: 'call_1',
+								content: [
+									{ type: 'text', text: 'Image: shot.png' },
+									{ type: 'image', source: { type: 'inline', mime: 'image/png', data: 'iVBOR' } }
+								],
+								isError: false
+							},
+							{ type: 'text', text: 'Max: and?' }
+						]
+					}
+				],
+				'gpt-6-astra'
+			)
 		).toEqual([
 			{
 				role: 'user',
@@ -570,7 +576,7 @@ describe('the transcript as input items', () => {
 				{ type: 'tool_use', id: 'toolu_1', name: 'run_command', input: { command: 'ls' } }
 			])
 		).toEqual([
-			{ type: 'thinking', text: 'Hmm.' },
+			{ type: 'reasoning', text: 'Hmm.' },
 			{ type: 'text', text: 'Checking.' },
 			{ type: 'tool_call', id: 'toolu_1', name: 'run_command', input: { command: 'ls' } }
 		]);
@@ -622,7 +628,7 @@ describe('calling OpenAI', () => {
 			effort: 'high',
 			system: 'You are btw.',
 			tools: TOOLS,
-			messages: [{ role: 'user', content: [{ type: 'text', text: 'Anna: Hi' }] }],
+			messages: [{ role: 'user', blocks: [{ type: 'text', text: 'Anna: Hi' }] }],
 			cacheKey: 'chat-1',
 			signal: new AbortController().signal,
 			onEvent: () => {}

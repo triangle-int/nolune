@@ -185,18 +185,19 @@ export function continueNotification(
 		kind: 'trigger',
 		senderName: n.title,
 		text: 'Opened from a notification.',
-		content: JSON.stringify([
+		blocks: [
 			{
 				type: 'text',
 				text: `[Notification "${n.title}" · ${formatLocalTime(n.createdAt)}]\n\nEarlier you sent the notification below to everyone in this profile. Someone opened it to continue from there.`
 			}
-		])
+		]
 	});
+	// btw's own reply, in its format: any model reads it.
 	appendRow({
 		conversationId: conv.id,
 		role: 'assistant',
 		kind: 'assistant',
-		content: JSON.stringify([{ type: 'text', text: n.body }])
+		blocks: [{ type: 'text', text: n.body }]
 	});
 	getDb()
 		.update(notification)

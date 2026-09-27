@@ -299,7 +299,14 @@ describe.skipIf(!claude)('chats on the Claude plan', { timeout: 60_000 }, () => 
 			},
 			{
 				kind: 'tool_results',
-				content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'a.txt\n[exit code 0]' }]
+				content: [
+					{
+						type: 'tool_result',
+						callId: 'toolu_1',
+						content: 'a.txt\n[exit code 0]',
+						isError: false
+					}
+				]
 			},
 			{ kind: 'assistant', content: [{ type: 'text', text: 'One file: a.txt.' }] }
 		]);
@@ -518,7 +525,7 @@ describe.skipIf(!claude)('chats on the Claude plan', { timeout: 60_000 }, () => 
 				content: [
 					{ type: 'text', text: 'Viewing dot.png\n[exit code 0]' },
 					{ type: 'text', text: expect.stringContaining('Image: ') },
-					{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: dot } }
+					{ type: 'image', source: { type: 'inline', mime: 'image/png', data: dot } }
 				]
 			})
 		]);
@@ -556,9 +563,9 @@ describe.skipIf(!claude)('chats on the Claude plan', { timeout: 60_000 }, () => 
 				content: [
 					{
 						type: 'tool_result',
-						tool_use_id: 'toolu_1',
+						callId: 'toolu_1',
 						content: 'Stopped by Anna.',
-						is_error: true
+						isError: true
 					}
 				]
 			}
@@ -634,12 +641,12 @@ describe('attachments in chats on the Claude plan', () => {
 
 		expect(prepared.content).toEqual([
 			{ type: 'text', text: expect.stringContaining('Anna attached dot.png') },
-			{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: dot } },
+			{ type: 'image', source: { type: 'inline', mime: 'image/png', data: dot } },
 			{ type: 'text', text: expect.stringContaining('Anna attached form.pdf') },
 			{
-				type: 'document',
-				source: { type: 'base64', media_type: 'application/pdf', data: form.toString('base64') },
-				title: 'form.pdf'
+				type: 'pdf',
+				source: { type: 'inline', mime: 'application/pdf', data: form.toString('base64') },
+				name: 'form.pdf'
 			},
 			{
 				type: 'text',

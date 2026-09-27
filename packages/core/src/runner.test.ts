@@ -1,6 +1,6 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { streamTurn } from './anthropic.ts';
+import { streamTurn, toAnthropicMessages } from './anthropic.ts';
 import { eq } from 'drizzle-orm';
 import { stopBackgroundCommands } from './background.ts';
 import {
@@ -106,9 +106,9 @@ describe('the agent loop', () => {
 		await ended;
 
 		expect(results(chat.id)).toEqual([
-			[{ type: 'tool_result', tool_use_id: 't1', content: 'a.txt' }]
+			[{ type: 'tool_result', callId: 't1', content: 'a.txt', isError: false }]
 		]);
-		expect(vi.mocked(streamTurn).mock.calls[1][0].messages.at(-1)).toEqual({
+		expect(toAnthropicMessages(vi.mocked(streamTurn).mock.calls[1][0].messages).at(-1)).toEqual({
 			role: 'user',
 			content: [{ type: 'tool_result', tool_use_id: 't1', content: 'a.txt' }]
 		});
@@ -128,9 +128,9 @@ describe('the agent loop', () => {
 			[
 				{
 					type: 'tool_result',
-					tool_use_id: 't1',
+					callId: 't1',
 					content: 'Not finished: spawn EAGAIN',
-					is_error: true
+					isError: true
 				}
 			]
 		]);
@@ -240,7 +240,7 @@ describe('switching models', () => {
 		await run(chat.id);
 		const request = vi.mocked(streamTurn).mock.calls[0][0];
 		expect(request).toMatchObject({ model: 'claude-sonnet-5', effort: 'high' });
-		expect(request.messages).toEqual([
+		expect(toAnthropicMessages(request.messages)).toEqual([
 			{ role: 'user', content: [{ type: 'text', text: 'Anna: Files?' }] },
 			{
 				role: 'assistant',
@@ -279,9 +279,8 @@ describe('background commands', () => {
 		await run(chat.id);
 		expect(vi.mocked(runCommand).mock.calls[0][0]).toMatchObject({ background: true });
 		const [[started]] = results(chat.id);
-		expect(started).toMatchObject({ tool_use_id: 'bg1' });
+		expect(started).toMatchObject({ callId: 'bg1', isError: false });
 		expect(started.content).toContain('Started in the background (process group 4242)');
-		expect(started.is_error).toBeUndefined();
 
 		// The output starts the agent again.
 		const second = loopEnd(chat.id);
@@ -290,7 +289,7 @@ describe('background commands', () => {
 
 		const notice = committedRows(chat.id).find((row) => row.kind === 'task_result')!;
 		expect(notice).toMatchObject({ senderName: 'Downloading the photos' });
-		const told = vi.mocked(streamTurn).mock.calls[2][0].messages.at(-1);
+		const told = toAnthropicMessages(vi.mocked(streamTurn).mock.calls[2][0].messages).at(-1);
 		expect(JSON.stringify(told)).toContain(
 			'[Background command finished: Downloading the photos]\\n$ fetch-photos\\nsaved 120 photos'
 		);

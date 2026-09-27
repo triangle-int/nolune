@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { basename, extname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type Anthropic from '@anthropic-ai/sdk';
+import type { Block, Message } from './format.ts';
 
 /*
  * Pictures for the model: `prepareImage` makes any picture file fit what the API accepts, for
@@ -369,22 +370,16 @@ export function base64Length(bytes: number): number {
 	return 4 * Math.ceil(bytes / 3);
 }
 
-export function imageUse(messages: Anthropic.MessageParam[]): ImageUse {
+export function imageUse(messages: Message[]): ImageUse {
 	const use: ImageUse = { count: 0, bytes: 0 };
-	const add = (block: { type: string }) => {
-		if (block.type === 'document') {
-			const { source } = block as Anthropic.DocumentBlockParam;
-			if (source.type === 'base64') use.bytes += source.data.length;
-			return;
+	const add = (block: Block) => {
+		if (block.type === 'image') use.count++;
+		if ((block.type === 'image' || block.type === 'pdf') && block.source.type === 'inline') {
+			use.bytes += block.source.data.length;
 		}
-		if (block.type !== 'image') return;
-		const { source } = block as Anthropic.ImageBlockParam;
-		use.count++;
-		if (source.type === 'base64') use.bytes += source.data.length;
 	};
 	for (const message of messages) {
-		if (typeof message.content === 'string') continue;
-		for (const block of message.content) {
+		for (const block of message.blocks) {
 			add(block);
 			if (block.type === 'tool_result' && Array.isArray(block.content)) block.content.forEach(add);
 		}

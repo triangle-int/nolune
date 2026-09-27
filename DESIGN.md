@@ -81,8 +81,10 @@ The rule: **the request prefix must stay byte-identical, so history is only ever
   reaches new chats. Chats from before tools were saved send the first `run_command`
   (`RUN_COMMAND_TOOL_V1`, which must never change); new ones get the one with `run_in_background`.
 - Each assistant response is stored as the exact `content` JSON the API returned, thinking blocks and
-  their signatures included, and is sent back unchanged. Messages are never rebuilt from normalized
-  columns. Command output is truncated once, when the tool result is created, and never later.
+  their signatures included, and is sent back unchanged to the model that wrote it. btw's own rows
+  are stored in its own format and turned into the provider's the same way on every call (see
+  [btw's format](#btws-format)). Command output is truncated once, when the tool result is
+  created, and never later.
 - Cache markers: `cache_control: {type: "ephemeral", ttl: "1h"}` on the system block, plus the same
   setting at the top level of the request (automatic caching of the growing tail). Both use the
   same TTL, because the API requires longer-TTL entries to come before shorter ones. The TTL is
@@ -123,12 +125,9 @@ provider brings a `FileStore` for pictures and PDFs (see [Attachments](#attachme
 plan (`claude-plan.ts`) is different: Claude Code runs the agent loop, so the runner hands it whole
 turns (see [The Claude plan](#the-claude-plan)).
 
-- **What's stored.** What btw writes itself (people's messages, attachments, command results,
-  automations' and subagents' messages, notices) uses Anthropic's content blocks, whatever the
-  provider. A reply is stored exactly as its provider returned it: Anthropic's content blocks, or
-  OpenAI's output items (`reasoning`, `message`, `function_call`). The two use different type
-  names, so `content-blocks.ts` reads any row without knowing its provider, for the chat, the
-  runner (tool calls, restart recovery) and `pairToolResults`.
+- **What's stored.** What btw writes itself is in btw's own format, and replies exactly as their
+  provider returned them; each provider's module turns both into its request (see
+  [btw's format](#btws-format)).
 - **Both SDKs load on first use** (`@anthropic-ai/sdk` in `anthropic.ts`, `openai` in
   `openai-chat.ts`), not when core loads: the bundled CLI carries all of core, and most `btw`
   commands the agent runs never call a model. Loading OpenAI's up front made each of them about
@@ -140,8 +139,8 @@ turns (see [The Claude plan](#the-claude-plan)).
   stateless (`store: false`), so every call sends the whole transcript, as with Anthropic, and
   nothing depends on OpenAI keeping a conversation. Reasoning comes back encrypted
   (`include: ["reasoning.encrypted_content"]`) and goes back with the reply's other items,
-  unchanged. btw's own blocks become input items the same way on every call: text as
-  `input_text`, pictures as `input_image`, PDFs as `input_file`, command results as
+  unchanged. btw's own blocks become input items the same way on every call (`toResponsesInput`):
+  text as `input_text`, pictures as `input_image`, PDFs as `input_file`, command results as
   `function_call_output` (pictures from `btw view` included). `run_command` is sent as a function
   tool built from the saved Anthropic definition, not strict, since `cwd` and the timeout are
   optional.
@@ -158,10 +157,39 @@ turns (see [The Claude plan](#the-claude-plan)).
   what the model takes, for good, since history is never edited; so they get one only when the
   admin sets it. Without one, the chat's context meter shows "?" and PDFs share 25% of 200k
   tokens. Titles are asked for at `low` effort.
-- **Another provider** (OpenRouter, Gemini) would be one more module next to these, a branch
-  in each of `models.ts`'s functions, a `FileStore` (or pictures inline), its key in `API_KEYS`
-  (config.ts) with a check request in `api-keys.ts`, and its name in `PROVIDERS` and the schema's
-  `provider` enums (a TypeScript list only: SQLite stores any text there).
+- **Another provider** (OpenRouter, Gemini) would be one more module next to these, with a
+  function turning btw's format into its request (Gemini's thought signatures would ride in
+  `native` like OpenAI's encrypted reasoning), a branch in each of `models.ts`'s functions, a
+  `FileStore` (or pictures inline), its key in `API_KEYS` (config.ts) with a check request in
+  `api-keys.ts`, and its name in `PROVIDERS` and the schema's `provider` enums (a TypeScript list
+  only: SQLite stores any text there).
+
+### btw's format
+
+`format.ts` defines what a conversation holds, whichever provider runs it: blocks (`text`,
+`image`, `pdf`, `reasoning`, `tool_call`, `tool_result`) in messages. A picture's or PDF's source
+is `inline` (base64, which every provider takes) or `uploaded` to one provider's Files API. Each
+provider's module turns messages into its request, leaving out what it can't take:
+`toAnthropicMessages` in `anthropic.ts` (Claude Code on a Claude plan gets the same blocks, from
+`toAnthropicBlocks`) and `toResponsesInput` in `openai-chat.ts`. Nothing else in btw knows a
+provider's shapes: the runner, the chat's display, plain-text transcripts and image limits all
+read btw's format.
+
+- **btw's own rows** (people's messages, attachments, command results, automations' and
+  subagents' messages, notices, its own replies such as a notification continued in a chat) are
+  stored in it, with `message.format` 'btw'.
+- **Replies** are stored exactly as their provider returned them (`format` null), and read into
+  btw's blocks with the original kept (`native`): only the model that wrote a reply reads its
+  reasoning back, and only unchanged. The encoders send `native` to that model, and the blocks'
+  text and calls (`portableReply`) to any other (see [Switching models](#switching-models)).
+  Anthropic's and OpenAI's type names differ, so `replyBlocks` reads either without knowing who
+  wrote it.
+- **Rows from before btw's format** have btw's blocks in Anthropic's shape. They're read into btw's
+  format the same way, and each block keeps what was stored (`storedAs`, in a `WeakMap`, never
+  written anywhere), which `toAnthropicBlocks` sends as it is: Claude gets those rows byte for
+  byte, as before, so old conversations keep their cache and thinking. A block btw has no type
+  for (from those rows, or a result Claude Code wrote itself) is an `other` block that carries its
+  Anthropic original and goes only to Claude. Stored rows are never rewritten.
 
 ### The Claude plan
 
@@ -248,19 +276,18 @@ has the chat open gets the change as a live `model` event (also in the snapshot)
   the one whose model wrote a reply, or whose Files API a message's or command result's pictures
   went to) and replies their model (`message.model`). Rows from before this were given their
   conversation's. The chat shows which model wrote each reply in technical details.
-- **What each model gets** (`requestMessages`, for a target provider and model). Rows are
-  translated the same way on every call, from what's stored, so after the one miss the prefix is
-  byte-identical again. Stored rows never change.
+- **What each model gets.** `requestMessages` reads the rows into btw's format, and the target's
+  encoder (see [btw's format](#btws-format)) decides what it can take. Both depend only on what's
+  stored, so after the one miss the prefix is byte-identical again. Stored rows never change.
   - Claude gets replies from other Claude models as they are. The API itself leaves out thinking a
     model can't read (it's bound to the model that made it), without an error; stripping it would
     be an edit, which breaks preserved thinking for the model that can read it.
-  - Replies from another provider go as their text and tool calls (`portableReply`: Anthropic's
-    `text` and `tool_use` blocks, which `toResponsesInput` turns into OpenAI's `function_call`
-    items), without reasoning. So do replies from another OpenAI model (reasoning goes back only
+  - Replies from another provider go as their text and tool calls (`portableReply`), without
+    reasoning. So do replies from another OpenAI model (reasoning goes back only
     to the model that wrote it, and items without their reasoning lose their ids) and a Claude
     plan's replies on the API (their thinking was signed for another account). Anthropic accepts
     tool calls without thinking in the middle of a turn, so a switch can happen there.
-  - Pictures and PDFs another provider holds (`source.type: "file"`) become a note: this model can't
+  - Pictures and PDFs another provider holds (an `uploaded` source) become a note: this model can't
     open that copy, and the line before it (the attachment's label, or `Image: <path>` in a command
     result) says where the file is, so `btw view` shows it again. Inline ones (the Claude plan's)
     go as they are. Uploading them again would make the request depend on an upload that can
@@ -410,9 +437,8 @@ kind of file, up to 100 MB each (the same as pictures in replies) and 10 per mes
   data retention, and a conversation whose files are gone (another workspace's key, deleted in the
   Console) can't recover, since its history can't be rewritten.
 - **Other providers.** `message.attachments` is the provider-neutral record (saved path, type,
-  what the model got). `content` holds btw's blocks in Anthropic's format for every provider,
-  with the provider's own file ids, and each provider's module turns them into its request
-  format (see [Model providers](#model-providers)). A provider brings a `FileStore`
+  what the model got). `content` holds btw's blocks (see [btw's format](#btws-format)), with the
+  provider's own file ids, and each provider's module turns them into its request. A provider brings a `FileStore`
   (`provider-files.ts`); one without a files API would send pictures inline. OpenAI's is its
   Files API: pictures are uploaded for `vision` and PDFs as `user_data`, and a PDF's cost is
   counted with `POST /v1/responses/input_tokens`, which also fails for a PDF it can't read.
@@ -938,8 +964,9 @@ to (issue #42).
 ```
 packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_command, background
                 commands, memory notes, btw view images, attachments, model calls (models.ts, with
-                anthropic.ts and openai-chat.ts, each with its Files API; content-blocks.ts reads
-                either's replies), Claude plan turns through Claude Code (claude-plan.ts), provider
+                anthropic.ts and openai-chat.ts, each with its Files API and the function that turns
+                btw's format, format.ts, into its request), Claude plan turns through Claude Code
+                (claude-plan.ts), provider
                 file cache, runner, media, users/profiles/presets, API
                 keys, chat folders, triggers, scheduler, subagents (subagents.ts, and
                 subagent-host.ts in the gateway), notifications, image generation (providers:
