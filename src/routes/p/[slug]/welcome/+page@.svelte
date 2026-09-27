@@ -418,7 +418,7 @@
 										cancel();
 										if (isAvatar(value)) {
 											picked = value;
-											yap(value);
+											yap();
 										}
 										return;
 									}
@@ -442,12 +442,7 @@
 										{m.welcome.avatar.subtitle(data.welcome.name)}
 									</p>
 								</div>
-								<AvatarPicker
-									avatar={picked}
-									hero
-									bind:stage={stageEl}
-									onpoke={() => yap(picked)}
-								/>
+								<AvatarPicker avatar={picked} hero bind:stage={stageEl} onpoke={yap} />
 								{#if avatarProblem}
 									<p class="text-center text-sm text-destructive" role="alert">{avatarProblem}</p>
 								{/if}

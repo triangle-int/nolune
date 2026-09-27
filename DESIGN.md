@@ -1277,8 +1277,8 @@ nothing, and opening the page again runs it again.
   itself over the new chat. It streams through a media element in the Web Audio graph, so
   three and a half minutes of music are never decoded at once. The short sounds are `confirm`
   (a key or plan check passes), `wash` (the avatar's tint washing in) and `yap`: a small animal's
-  shout when an avatar is picked or the big one poked, sped up and pitched to each avatar's own
-  voice (`VOICES`, a scale from lowest to highest), a little different each time. Each sound is a file in
+  shout when an avatar is picked or the big one poked, sped up, on a different note of a pentatonic
+  scale (`NOTES`) each click, whichever the avatar. Each sound is a file in
   `src/lib/assets/sounds/welcome` (`<name>.mp3`), bundled through `import.meta.glob` (where each
   came from is in `CREDITS.md` next to them); one without its file is silent. The screen waits
   for the song to start, up to a second and a half; one that can't start on time (still loading,

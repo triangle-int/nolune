@@ -1,7 +1,7 @@
 /*
  * The welcome's sounds: a song, and a sound only where the screen moves by itself (a check
- * passing, the tint washing in) or where an avatar is picked or poked, which yaps in its own
- * voice; other clicks are silent.
+ * passing, the tint washing in) or where an avatar is picked or poked, which yaps, on a
+ * different note each time; other clicks are silent.
  *
  * The song plays the intro, then stays on under the questions, much quieter (`duck`), for as long
  * as they take. When the memories arrive it jumps to its last phrase at full level, and ends by
@@ -16,8 +16,6 @@
  * client-side navigation from there, so the intro can play; opened some other way it starts
  * silent, and the first click wakes it.
  */
-
-import { AVATARS, type Avatar } from '@btw/core/avatars';
 
 /** The short sounds, played from memory. */
 export const CUES = ['confirm', 'wash', 'yap'] as const;
@@ -228,16 +226,17 @@ export function music(from = 0, { level = 1, loop = true } = {}): Promise<void> 
 	return Promise.race([playing, wait(1500).then(() => void (since = performance.now()))]);
 }
 
-/** Each avatar's voice, in semitones from the yap's own (sped up): a scale from lowest to highest. */
-const VOICES = [-5, -3, -1, 0, 2, 4, 5, 7];
+/** The notes a yap lands on, in semitones from its own (sped up): a pentatonic scale, so any two go together. */
+const NOTES = [-5, -3, 0, 2, 4, 7];
+let lastNote = -1;
 
-/**
- * An avatar yaps in its own voice, a little different each time, so clicking through them sounds
- * like a roll call rather than one sound over and over.
- */
-export function yap(avatar: Avatar): void {
-	const semitones = VOICES[AVATARS.indexOf(avatar) % VOICES.length] + (Math.random() - 0.5);
-	play('yap', { rate: 1.35 * 2 ** (semitones / 12), gain: 0.8 });
+/** An avatar yaps, on a different note from the last one, so clicking around sounds like a tune. */
+export function yap(): void {
+	// Any note but the last one.
+	let note = Math.floor(Math.random() * (NOTES.length - (lastNote === -1 ? 0 : 1)));
+	if (lastNote !== -1 && note >= lastNote) note++;
+	lastNote = note;
+	play('yap', { rate: 1.35 * 2 ** (NOTES[note] / 12), gain: 0.8 });
 }
 
 /** The song goes to its last phrase at full level, and ends by itself over whatever comes next. */
