@@ -246,7 +246,10 @@ export const en = {
 		noModels:
 			'No models are set up yet. An admin can add one on the Models page or with {command}.',
 		couldNotStart: 'Could not start the chat.',
-		/** Put in the message box: the start of a message for the person to finish. */
+		/**
+		 * The general chips a profile has until btw makes some from its memory (core's
+		 * DEFAULT_SUGGESTIONS, by id): the start of a message for the person to finish.
+		 */
 		suggestions: {
 			reminder: { label: 'Set a reminder', text: 'Remind me tomorrow at 9:00 to ' },
 			weather: {
