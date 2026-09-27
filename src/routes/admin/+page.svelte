@@ -341,7 +341,7 @@
 							type="number"
 							min="1"
 							placeholder={provider === 'openai'
-								? "Context window (OpenAI doesn't say)"
+								? 'Context window (flagships: known)'
 								: provider === 'claude-plan'
 									? 'Context window (not reported)'
 									: 'Context window (optional)'}

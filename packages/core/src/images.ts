@@ -10,7 +10,7 @@ import {
 	writeFileSync
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, extname, join } from 'node:path';
+import { basename, extname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type Anthropic from '@anthropic-ai/sdk';
 
@@ -422,8 +422,11 @@ export class ViewLimitError extends Error {}
 
 const CONVERSATION_FULL = `this conversation already holds ${MAX_CONVERSATION_IMAGES} images, as many as it can (each step sends all of them again). Say what you need to in words, or suggest a new conversation for more images`;
 
-/** `btw view`, for one file: prepares it and leaves it for the gateway. Returns a line to print. */
-export async function viewImage(path: string, dir: string): Promise<string> {
+/**
+ * `btw view`, for one file: prepares it and leaves it for the gateway. Returns a line to print.
+ * A relative `path` starts at `cwd`, the command's folder; the image keeps the name as given.
+ */
+export async function viewImage(path: string, dir: string, cwd = process.cwd()): Promise<string> {
 	const limits = JSON.parse(readFileSync(join(dir, LIMITS_FILE), 'utf8')) as ViewLimits;
 	const earlier = readManifest(dir);
 	if (earlier.length >= MAX_IMAGES_PER_COMMAND) {
@@ -432,7 +435,7 @@ export async function viewImage(path: string, dir: string): Promise<string> {
 		);
 	}
 	if (earlier.length >= limits.count) throw new ViewLimitError(CONVERSATION_FULL);
-	const image = await prepareImage(path);
+	const image = await prepareImage(resolve(cwd, path));
 
 	const file = `${randomUUID()}.${image.info.mediaType.slice('image/'.length)}`;
 	writeFileSync(join(dir, file), image.data);

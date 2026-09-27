@@ -166,9 +166,9 @@ export function countDocumentTokens(
 }
 
 /**
- * Throws if the provider doesn't know the model. Null when it doesn't say how large its window is.
- * For the Claude plan, it checks that Claude Code is here and signed in to one: it has no models
- * API, and whether it takes the model shows at the chat's first reply.
+ * Throws if the provider doesn't know the model. Null when its window isn't known. For the
+ * Claude plan, it checks that Claude Code is here and signed in to one: it has no models API, and
+ * whether it takes the model shows at the chat's first reply.
  */
 export async function fetchContextWindow(
 	provider: Provider,

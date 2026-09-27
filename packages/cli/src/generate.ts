@@ -13,13 +13,16 @@ import {
 	type ImageBackground,
 	type ImageFormat
 } from '@btw/core';
-import { readStdin } from './input.ts';
+import type { Io } from './io.ts';
 
-export const GENERATE_HELP = `Pictures (model ${configuredImageModel()}; change it with \`btw config set image-model\`)
+/** Read when shown: the gateway runs for days, and the image model can change meanwhile. */
+export function generateHelp(): string {
+	return `Pictures (model ${configuredImageModel()}; change it with \`btw config set image-model\`)
   btw generate image <PROMPT | -> [--image FILE]... [--size square|portrait|landscape|auto|WxH]
                      [--quality Q] [--background auto|transparent|opaque] [--format png|jpeg|webp]
                      [--count N] [--model PROVIDER/MODEL] [--out DIR|FILE] [--dry-run]
       make pictures from a prompt, or change the --image ones; \`-\` reads the prompt from stdin`;
+}
 
 const OPTIONS = {
 	image: { type: 'string', short: 'i', multiple: true },
@@ -67,20 +70,20 @@ function stamp(now: Date): string {
 }
 
 /** Where each picture goes: `--out` as a file (one picture) or a folder, else `images/`. */
-function outputPaths(out: string | undefined, count: number, base: string, format: string) {
+function outputPaths(io: Io, out: string | undefined, count: number, base: string, format: string) {
 	const ext = format === 'jpeg' ? 'jpg' : format;
 	let dir: string;
 	if (out && /\.(png|jpe?g|webp)$/i.test(out)) {
-		const file = resolve(expandHome(out));
+		const file = resolve(io.cwd, expandHome(out));
 		if (count === 1) return { dir: resolve(file, '..'), files: [file] };
 		dir = resolve(file, '..');
 		base = file.slice(dir.length + 1, -extname(file).length);
 	} else if (out) {
-		dir = resolve(expandHome(out));
+		dir = resolve(io.cwd, expandHome(out));
 	} else {
 		// In the agent's commands: the profile's images folder, so the family finds them later.
-		const profileDir = process.env.BTW_PROFILE_DIR;
-		dir = profileDir && isAbsolute(profileDir) ? join(profileDir, 'images') : process.cwd();
+		const profileDir = io.env.BTW_PROFILE_DIR;
+		dir = profileDir && isAbsolute(profileDir) ? join(profileDir, 'images') : io.cwd;
 	}
 	const files = Array.from({ length: count }, (_, i) =>
 		join(dir, `${base}${count > 1 ? `-${i + 1}` : ''}.${ext}`)
@@ -94,12 +97,12 @@ function formatBytes(bytes: number): string {
 		: `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
-async function image(args: string[]): Promise<void> {
+async function image(io: Io, args: string[]): Promise<void> {
 	const { values, positionals } = parseArgs({ args, allowPositionals: true, options: OPTIONS });
 	let prompt = positionals.join(' ').trim();
-	if (prompt === '-') prompt = (await readStdin()).trim();
+	if (prompt === '-') prompt = (await io.readStdin()).trim();
 	if (!prompt) throw new Error('say what to make: btw generate image "<prompt>"');
-	const inputs = (values.image ?? []).map((path) => resolve(expandHome(path)));
+	const inputs = (values.image ?? []).map((path) => resolve(io.cwd, expandHome(path)));
 	const count = values.count === undefined ? 1 : Number(values.count);
 	if (!Number.isInteger(count) || count < 1 || count > MAX_IMAGE_COUNT) {
 		throw new Error(`--count is between 1 and ${MAX_IMAGE_COUNT}.`);
@@ -111,12 +114,12 @@ async function image(args: string[]): Promise<void> {
 
 	if (values['dry-run']) {
 		const sizeText = typeof size === 'object' ? `${size.width}x${size.height}` : size;
-		console.log(`Model: ${values.model?.trim() || configuredImageModel()}`);
-		console.log(
+		io.log(`Model: ${values.model?.trim() || configuredImageModel()}`);
+		io.log(
 			`Size: ${sizeText}, quality: ${quality ?? 'default'}, background: ${background ?? 'default'}, format: ${format ?? 'png'}, count: ${count}`
 		);
-		if (inputs.length) console.log(`Images: ${inputs.join(', ')}`);
-		console.log(`Prompt:\n${prompt}`);
+		if (inputs.length) io.log(`Images: ${inputs.join(', ')}`);
+		io.log(`Prompt:\n${prompt}`);
 		return;
 	}
 
@@ -129,17 +132,19 @@ async function image(args: string[]): Promise<void> {
 		background,
 		format,
 		count,
+		signal: io.signal,
 		onStart: (model) => {
 			const from = inputs.length
 				? ` from ${inputs.length} image${inputs.length === 1 ? '' : 's'}`
 				: '';
 			const what = count === 1 ? 'a picture' : `${count} pictures`;
-			console.log(`Making ${what} with ${model}${from}. This can take a minute or two.`);
+			io.log(`Making ${what} with ${model}${from}. This can take a minute or two.`);
 		}
 	});
 
 	const base = `${stamp(new Date())}-${slug(prompt)}`;
 	const { dir, files } = outputPaths(
+		io,
 		values.out,
 		result.images.length,
 		base,
@@ -154,11 +159,15 @@ async function image(args: string[]): Promise<void> {
 			picture.format.toUpperCase(),
 			formatBytes(picture.data.length)
 		].filter(Boolean);
-		console.log(`Saved ${files[i]} (${details.join(', ')})`);
+		io.log(`Saved ${files[i]} (${details.join(', ')})`);
 	}
 }
 
-export async function generateCommand(action: string | undefined, args: string[]): Promise<void> {
-	if (action === 'image') return image(args);
+export async function generateCommand(
+	io: Io,
+	action: string | undefined,
+	args: string[]
+): Promise<void> {
+	if (action === 'image') return image(io, args);
 	throw new Error('usage: btw generate image <prompt> [options]. See `btw help`.');
 }

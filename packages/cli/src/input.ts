@@ -1,14 +1,15 @@
 import { createInterface } from 'node:readline/promises';
+import type { Io } from './io.ts';
 
-export async function readStdin(): Promise<string> {
-	let data = '';
-	for await (const chunk of process.stdin) data += chunk;
-	return data.trim();
-}
+/*
+ * Questions for the person at the terminal. Only a process's own stdin can be a terminal, so the
+ * interactive side talks to `process` directly; without one, the answer comes from the command's
+ * stdin, or the default.
+ */
 
-export async function ask(question: string, defaultValue = ''): Promise<string> {
+export async function ask(io: Io, question: string, defaultValue = ''): Promise<string> {
 	// Without a terminal (scripts, launchd) take the default rather than block; pass flags instead.
-	if (!process.stdin.isTTY) return defaultValue;
+	if (!io.stdinIsTTY) return defaultValue;
 	const rl = createInterface({ input: process.stdin, output: process.stdout });
 	try {
 		const suffix = defaultValue ? ` [${defaultValue}]` : '';
@@ -19,8 +20,8 @@ export async function ask(question: string, defaultValue = ''): Promise<string> 
 }
 
 /** Like ask(), but doesn't echo what's typed or pasted (API keys). */
-export function askHidden(question: string): Promise<string> {
-	if (!process.stdin.isTTY) return readStdin();
+export async function askHidden(io: Io, question: string): Promise<string> {
+	if (!io.stdinIsTTY) return (await io.readStdin()).trim();
 	const stdin = process.stdin;
 	return new Promise((resolve, reject) => {
 		process.stdout.write(`${question}: `);

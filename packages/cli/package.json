@@ -6,6 +6,9 @@
 	"bin": {
 		"btw": "./src/index.ts"
 	},
+	"exports": {
+		"./serve": "./src/serve.ts"
+	},
 	"scripts": {
 		"check": "tsc -p ."
 	},

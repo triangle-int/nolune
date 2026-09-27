@@ -46,7 +46,12 @@ export const paths = {
 	builtinImageTemplates: join(packageRoot, 'packages', 'core', 'image-templates'),
 	migrations: join(packageRoot, 'packages', 'core', 'drizzle'),
 	/** adapter-node output; `btw start` runs it. */
-	server: join(packageRoot, 'build', 'index.js')
+	server: join(packageRoot, 'build', 'index.js'),
+	/**
+	 * Where the gateway runs `btw` commands for the CLI, so they don't load all of btw each time.
+	 * Its folder is private: only this user can connect.
+	 */
+	cliSocket: join(home, 'run', 'cli.sock')
 };
 
 /**

@@ -39,15 +39,16 @@ chats start with the default.
 ```sh
 btw preset list                                 # name, provider/model, context window, id, default
 btw preset add claude-sonnet-5 --name "Sonnet"  # Anthropic checks the model id first
-btw preset add gpt-6-astra --provider openai --name "GPT" --context-window 1050000
+btw preset add gpt-6-astra --provider openai --name "GPT"
 btw preset add claude-opus-5-5 --provider claude-plan --name "Opus (plan)"
 btw preset default Sonnet                       # new chats start with it
 btw preset rm Sonnet                            # chats that use it keep working
 ```
 
-OpenAI doesn't say how large a model's context window is, so give `--context-window` when you
-know it. A preset needs its provider's key. If `btw preset add` can't check the model, an admin can
-add it under Models & keys in the account menu.
+btw knows the context window of OpenAI's flagship models (1,050,000 tokens since GPT-5.4). For
+its other models (mini, nano), give `--context-window` when you know it. A preset needs its
+provider's key. If `btw preset add` can't check the model, an admin can add it under Models &
+keys in the account menu.
 
 ### The Claude plan
 

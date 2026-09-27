@@ -409,11 +409,30 @@ export async function countDocumentTokens(model: string, fileId: string): Promis
 	return count.input_tokens;
 }
 
-/** Checks that the model exists. OpenAI's models API doesn't say how large its window is. */
+/** Every flagship model since GPT-5.4 has this window, the Pro ones included. */
+const FLAGSHIP_CONTEXT_WINDOW = 1_050_000;
+
+/**
+ * The model's context window when btw knows it: OpenAI's models API doesn't say. Flagships
+ * since GPT-5.4 (gpt-5.4, gpt-5.5-pro, gpt-6-astra, and their dated snapshots) have 1,050,000
+ * tokens. Other models (mini, nano, codex, older ones) may have much less, and a window set too
+ * large would let a conversation grow past what the model takes, for good, so they get none.
+ */
+export function knownContextWindow(model: string): number | null {
+	const match = /^gpt-(\d+)(?:\.(\d+))?(-.*)?$/.exec(model);
+	if (!match) return null;
+	const [major, minor] = [Number(match[1]), Number(match[2] ?? 0)];
+	if (major < 5 || (major === 5 && minor < 4)) return null;
+	// GPT-6's names, Pro, and a snapshot's date; any other suffix may be a smaller model.
+	const flagship = /^(-(astra|sol|luna))?(-pro)?(-\d{4}-\d{2}-\d{2})?$/.test(match[3] ?? '');
+	return flagship ? FLAGSHIP_CONTEXT_WINDOW : null;
+}
+
+/** Checks that the model exists, and says how large its window is when btw knows it. */
 export async function fetchContextWindow(model: string): Promise<number | null> {
 	const client = await getClient();
 	await client.models.retrieve(model, { timeout: REQUEST_TIMEOUT_MS });
-	return null;
+	return knownContextWindow(model);
 }
 
 export function describeApiError(err: unknown): string {
