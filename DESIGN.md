@@ -47,6 +47,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
     memories/<topic>.md       long-term memory: one note per topic
     memories/core.md          the pinned note, copied into every new chat's prompt
     memories/.facts.json      when each fact in memory was first seen
+    memories/.suggestions.json  the new-chat page's chips, and the memory they were made from
     skills/<name>/SKILL.md
     attachments/              files people attached to messages
     image-templates/<id>/     this profile's own templates
@@ -790,6 +791,17 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   the same request. Model and reasoning are picked from the chip in the composer: the model starts
   at the default preset, reasoning at the level last used on this device. In an existing chat only
   reasoning can change. The folder chip next to it starts the chat in a folder.
+- **Suggestions** under the new-chat composer (`packages/core/src/suggestions.ts`) come from the
+  profile's memory. Until it has any, they are four general ones (a reminder, a weather check,
+  finding a file, free disk space). After that, the default preset is asked, with `quickReply`, for
+  four things this family might ask btw, each built on something in the notes and in their
+  language: a label, a Lucide icon and the text the chip puts in the box. It gets today's date and
+  the notes, the core note first and then the most recently changed, up to 12,000 characters. They
+  are saved in `memories/.suggestions.json` with a hash of the notes, so the page only asks again
+  when memory changed or they are a week old. The page renders the saved ones (or the general
+  ones) at once and, when they are stale, fetches `/api/p/<slug>/suggestions`, which waits for the
+  model, then swaps them in. One call per profile runs at a time; a failed one keeps the old chips
+  and isn't retried for the same memory for 15 minutes.
 - **The sidebar** lists folders above the chats. A folder's chats show under it when its page or
   one of its chats is open, or when its icon (a chevron on hover) is clicked; chats in folders are
   not in the Chats list. A chat btw is working in shimmers like the "Thinking" label, for everyone
@@ -909,9 +921,10 @@ to (issue #42).
 
 ```
 packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_command, background
-                commands, memory notes, btw view images, attachments, model calls (models.ts, with
-                anthropic.ts and openai-chat.ts, each with its Files API; content-blocks.ts reads
-                either's replies), Claude plan turns through Claude Code (claude-plan.ts), provider
+                commands, memory notes, new-chat suggestions, btw view images, attachments, model
+                calls (models.ts, with anthropic.ts and openai-chat.ts, each with its Files API;
+                content-blocks.ts reads either's replies), Claude plan turns through Claude Code
+                (claude-plan.ts), provider
                 file cache, runner, media, users/profiles/presets, API
                 keys, chat folders, triggers, scheduler, subagents (subagents.ts, and
                 subagent-host.ts in the gateway), notifications, image generation (providers:

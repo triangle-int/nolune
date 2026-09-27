@@ -331,6 +331,15 @@ export function listMemoryNotes(slug: string): string[] {
 	return readMemoryFiles(openMemory(slug)).map((file) => file.path);
 }
 
+/** Every note with its text, sorted by path, without the fact dates: for the new-chat suggestions. */
+export function readMemoryNotes(slug: string): { path: string; text: string; updatedAt: number }[] {
+	return readMemoryFiles(openMemory(slug)).map(({ path, text, updatedAt }) => ({
+		path,
+		text,
+		updatedAt
+	}));
+}
+
 /** The pinned note as the system prompt shows it (see cutAtLine); null while empty or missing. */
 export function readPinnedNote(slug: string, path: string): { text: string; cut: boolean } | null {
 	const root = openMemory(slug);
