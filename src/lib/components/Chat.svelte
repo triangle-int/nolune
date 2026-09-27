@@ -226,13 +226,17 @@
 
 	/** How close to the end the chat has to be to count as scrolled to the bottom. */
 	const BOTTOM_SLACK = 80;
+	/** Where the view was, and how tall the chat, when last placed or scrolled. */
 	let lastScrollTop = 0;
+	let lastScrollHeight = 0;
+	/** A pointer is down in the chat: dragging its scrollbar, or selecting text. */
+	let pointerDown = false;
 
 	/**
 	 * Keeps the view pinned to the newest content while the reader is at the bottom, whenever
 	 * anything changes size: new messages and streamed text, but also pictures that finish loading
-	 * and the composer growing. Starting to scroll up (wheel, trackpad or finger) lets go right away,
-	 * before the view has moved far.
+	 * and the composer growing. Starting to scroll up (wheel, trackpad, finger or keys) lets go
+	 * right away, before the view has moved far.
 	 */
 	function autoscroll(node: HTMLElement) {
 		const observer = new ResizeObserver(() => {
@@ -241,6 +245,7 @@
 			// frame later, maybe after the content grew back, and must not read as the reader
 			// scrolling up.
 			lastScrollTop = node.scrollTop;
+			lastScrollHeight = node.scrollHeight;
 		});
 		observer.observe(node);
 		// The border box, so the padding the composer sets counts too.
@@ -259,14 +264,30 @@
 			if (y > touchY) release(); // a finger moving down scrolls up
 			touchY = y;
 		};
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (event.defaultPrevented || !['ArrowUp', 'PageUp', 'Home'].includes(event.key)) return;
+			// Not in the composer or a menu, where the key does something else.
+			const target = event.target as Node;
+			if (target === document.body || node.contains(target)) release();
+		};
+		const onPointerDown = () => (pointerDown = true);
+		const onPointerUp = () => (pointerDown = false);
 		node.addEventListener('wheel', onWheel, { passive: true });
 		node.addEventListener('touchstart', onTouchStart, { passive: true });
 		node.addEventListener('touchmove', onTouchMove, { passive: true });
+		node.addEventListener('pointerdown', onPointerDown);
+		window.addEventListener('pointerup', onPointerUp);
+		window.addEventListener('pointercancel', onPointerUp);
+		window.addEventListener('keydown', onKeyDown);
 		return () => {
 			observer.disconnect();
 			node.removeEventListener('wheel', onWheel);
 			node.removeEventListener('touchstart', onTouchStart);
 			node.removeEventListener('touchmove', onTouchMove);
+			node.removeEventListener('pointerdown', onPointerDown);
+			window.removeEventListener('pointerup', onPointerUp);
+			window.removeEventListener('pointercancel', onPointerUp);
+			window.removeEventListener('keydown', onKeyDown);
 		};
 	}
 
@@ -280,8 +301,16 @@
 		const top = node.scrollTop;
 		const atBottom = node.scrollHeight - top - node.clientHeight < BOTTOM_SLACK;
 		if (top > lastScrollTop && atBottom) stickToBottom = true;
-		else if (top < lastScrollTop && !atBottom) stickToBottom = false;
-		lastScrollTop = top;
+		else if (top < lastScrollTop && !atBottom && stickToBottom) {
+			// The chat changed size since the view was placed: it got shorter, which pulled the view
+			// up, and grew again before this event (Safari and Firefox can lay it out in between).
+			// That was the browser, not the reader, so back to the end.
+			if (node.scrollHeight !== lastScrollHeight && !pointerDown)
+				node.scrollTop = node.scrollHeight;
+			else stickToBottom = false;
+		}
+		lastScrollTop = node.scrollTop;
+		lastScrollHeight = node.scrollHeight;
 	}
 
 	/** Follows the newest content from now on, even what arrives while the view is on its way. */
