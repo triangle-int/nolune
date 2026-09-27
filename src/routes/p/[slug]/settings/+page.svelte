@@ -1,16 +1,15 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { AVATARS } from '@btw/core/avatars';
+	import { isAvatar, type Avatar } from '@btw/core/avatars';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import * as Select from '$lib/components/ui/select';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import AssistantAvatar from '$lib/components/AssistantAvatar.svelte';
+	import AvatarPicker from '$lib/components/AvatarPicker.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import UserAvatar from '$lib/components/UserAvatar.svelte';
 	import { getI18n } from '$lib/i18n';
-	import { cn } from '$lib/utils';
 	import { getPreferences } from '$lib/preferences.svelte';
 
 	let { data, form } = $props();
@@ -20,7 +19,7 @@
 	let who = $state('');
 	let deleteOpen = $state(false);
 	/** The avatar just clicked, shown as picked until the page has saved it. */
-	let picking = $state<string | null>(null);
+	let picking = $state<Avatar | null>(null);
 	const avatar = $derived(picking ?? data.profile.avatar);
 
 	/** What's in the box; follows the saved soul until someone types. */
@@ -73,7 +72,8 @@
 			method="POST"
 			action="?/avatar"
 			use:enhance={({ submitter }) => {
-				picking = submitter?.getAttribute('value') ?? null;
+				const value = submitter?.getAttribute('value');
+				picking = isAvatar(value) ? value : null;
 				return async ({ update }) => {
 					await update({ reset: false });
 					picking = null;
@@ -87,24 +87,7 @@
 					{m.profile.avatarHint}
 				</p>
 			</div>
-			<div class="grid grid-cols-4 gap-2 sm:grid-cols-8">
-				{#each AVATARS as name (name)}
-					{@const picked = name === avatar}
-					<button
-						type="submit"
-						name="avatar"
-						value={name}
-						aria-pressed={picked}
-						class={cn(
-							'flex flex-col items-center gap-1.5 rounded-2xl border px-1 pt-3 pb-2 text-xs text-muted-foreground hover:bg-muted',
-							picked && 'border-foreground/60 bg-muted text-foreground'
-						)}
-					>
-						<AssistantAvatar avatar={name} mood={picked ? 'idle' : undefined} size={36} />
-						<span>{m.avatars[name]}</span>
-					</button>
-				{/each}
-			</div>
+			<AvatarPicker {avatar} />
 		</form>
 
 		<section class="space-y-3">
