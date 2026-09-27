@@ -6,6 +6,7 @@ import {
 	describeApiError,
 	isAbortError,
 	planSessionProblem,
+	readableMessages,
 	runPlanTurn,
 	streamTurn,
 	type Effort,
@@ -579,7 +580,7 @@ async function runToolCall(
 			}
 		});
 		st.toolOutput = null;
-		const attachments = await viewedImageBlocks(conv.provider, readViewedImages(viewDir), images);
+		const attachments = await viewedImageBlocks(conv, readViewedImages(viewDir), images);
 		return toolResult(call.id, result.content, result.isError, attachments);
 	} finally {
 		rmSync(viewDir, { recursive: true, force: true });
@@ -891,8 +892,12 @@ async function loop(conversationId: string): Promise<void> {
 					tools: toolsFor(conv),
 					cacheTtl: conv.cacheTtl,
 					cacheKey: conv.id,
-					// Pictures and PDFs kept by reference, as this provider gets them.
-					messages: await resolveFiles(messages, conv.provider),
+					// Pictures and PDFs kept by reference, as this provider gets them, where the model
+					// takes them.
+					messages: await resolveFiles(
+						await readableMessages(conv.provider, conv.model, messages),
+						conv.provider
+					),
 					signal: abort.signal,
 					onEvent: (event) => onStreamEvent(conversationId, event)
 				});

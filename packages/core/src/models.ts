@@ -5,6 +5,7 @@ import * as chatgptPlan from './chatgpt-plan.ts';
 import type { Usage } from './conversations.ts';
 import { replyBlocks, toolCalls, type Message, type ToolCallBlock } from './format.ts';
 import * as openai from './openai-chat.ts';
+import * as openrouter from './openrouter.ts';
 import { PlanError, isPlan, isPlanStopped, type Plan, type PlanTurn } from './plans.ts';
 
 /*
@@ -20,7 +21,13 @@ import { PlanError, isPlan, isPlanStopped, type Plan, type PlanTurn } from './pl
  */
 
 /** `claude-plan` and `chatgpt-plan` run on someone's subscription instead of an API key (plans.ts). */
-export const PROVIDERS = ['anthropic', 'openai', 'claude-plan', 'chatgpt-plan'] as const;
+export const PROVIDERS = [
+	'anthropic',
+	'openai',
+	'openrouter',
+	'claude-plan',
+	'chatgpt-plan'
+] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
 export function isProvider(value: string): value is Provider {
@@ -31,6 +38,7 @@ export function isProvider(value: string): value is Provider {
 export const PROVIDER_LABELS: Record<Provider, string> = {
 	anthropic: 'Anthropic',
 	openai: 'OpenAI',
+	openrouter: 'OpenRouter',
 	'claude-plan': 'Claude plan',
 	'chatgpt-plan': 'ChatGPT plan'
 };
@@ -40,7 +48,8 @@ export type Effort = (typeof EFFORTS)[number];
 
 /**
  * How long a cached prompt lives: an hour for chats people come back to, 5 minutes for
- * subagents. Only Anthropic takes it; OpenAI (and Codex) caches on its own.
+ * subagents. Only Claude takes it (from Anthropic or through OpenRouter); OpenAI (and Codex)
+ * caches on its own.
  */
 export type CacheTtl = '5m' | '1h';
 
@@ -79,7 +88,7 @@ function fromContent(content: unknown[], stopReason: string | null, usage: Usage
  * One model call. The request shape must stay identical across calls in a conversation (only
  * `messages` grows), otherwise the prompt cache is lost: `tools`, `system` and `cacheTtl` are the
  * conversation's own, fixed when it was created. `cacheKey` (the conversation's id) keeps a
- * conversation's calls together in OpenAI's cache.
+ * conversation's calls together in OpenAI's cache, and on one provider behind OpenRouter.
  */
 export async function streamTurn(opts: {
 	provider: Provider;
@@ -96,6 +105,10 @@ export async function streamTurn(opts: {
 }): Promise<ModelReply> {
 	const { provider, cacheKey, ...request } = opts;
 	if (isPlan(provider)) throw new Error('Chats on a plan run whole turns through runPlanTurn');
+	if (provider === 'openrouter') {
+		const reply = await openrouter.streamTurn({ ...request, cacheKey });
+		return fromContent(reply.content, reply.stopReason, reply.usage);
+	}
 	if (provider === 'openai') {
 		const response = await openai.streamResponse({ ...request, cacheKey });
 		return fromContent(
@@ -131,6 +144,7 @@ export async function quickReply(opts: {
 }): Promise<{ text: string | null; usage: Usage }> {
 	if (opts.provider === 'claude-plan') return claudePlan.quickReply(opts);
 	if (opts.provider === 'chatgpt-plan') return chatgptPlan.quickReply(opts);
+	if (opts.provider === 'openrouter') return openrouter.quickReply(opts);
 	if (opts.provider === 'openai') {
 		const response = await openai.createResponse(opts);
 		const usage = openai.summarizeUsage(response.usage);
@@ -149,6 +163,11 @@ function textOf(content: unknown[]): string {
 		.join('');
 }
 
+/** Whether the provider can say what an uploaded PDF costs; the others' are estimated. */
+export function countsDocumentTokens(provider: Provider): boolean {
+	return provider === 'anthropic' || provider === 'openai';
+}
+
 /**
  * What an uploaded PDF costs in every request of a conversation on this model. The provider
  * reads the whole document, so it also throws for PDFs it can't use (encrypted, too many pages).
@@ -161,15 +180,45 @@ export function countDocumentTokens(
 	if (isPlan(provider)) {
 		return Promise.reject(new Error('Chats on a plan have no Files API to count PDFs with'));
 	}
+	if (!countsDocumentTokens(provider)) {
+		return Promise.reject(new Error(`${PROVIDER_LABELS[provider]} can't count a PDF's tokens`));
+	}
 	return provider === 'openai'
 		? openai.countDocumentTokens(model, fileId)
 		: anthropic.countDocumentTokens(model, fileId);
 }
 
 /**
+ * What the model can be sent besides text. Every model of Anthropic's, OpenAI's and the Claude
+ * plan sees pictures and reads PDFs; OpenRouter says per model.
+ */
+export async function modelInputs(
+	provider: Provider,
+	model: string
+): Promise<{ pictures: boolean; pdfs: boolean }> {
+	if (provider === 'openrouter') return openrouter.modelInputs(model);
+	return { pictures: true, pdfs: true };
+}
+
+/**
+ * The messages as `model` can take them, before resolveFiles gives the provider its copies:
+ * pictures and PDFs a model on OpenRouter can't read become notes. A chat that switched to that
+ * model may hold them. Other providers' models take them all.
+ */
+export function readableMessages(
+	provider: Provider,
+	model: string,
+	messages: Message[]
+): Promise<Message[]> {
+	if (provider === 'openrouter') return openrouter.readableMessages(messages, model);
+	return Promise.resolve(messages);
+}
+
+/**
  * Throws if the provider doesn't know the model. Null when its window isn't known. For a plan, it
  * checks that its agent is here and signed in to one. Claude Code can't check a model id, so
  * whether it takes the model shows at the chat's first reply; Codex lists the plan's models.
+ * On OpenRouter, the model must also be able to call tools.
  */
 export async function fetchContextWindow(
 	provider: Provider,
@@ -180,6 +229,7 @@ export async function fetchContextWindow(
 		return claudePlan.knownContextWindow(model);
 	}
 	if (provider === 'chatgpt-plan') return chatgptPlan.fetchContextWindow(model);
+	if (provider === 'openrouter') return openrouter.fetchContextWindow(model);
 	return provider === 'openai'
 		? openai.fetchContextWindow(model)
 		: anthropic.fetchContextWindow(model);
@@ -204,23 +254,32 @@ export interface ModelChoice {
 export async function listModels(provider: Provider): Promise<ModelChoice[]> {
 	if (provider === 'claude-plan') return claudePlan.listModels();
 	if (provider === 'chatgpt-plan') return chatgptPlan.listModels();
+	if (provider === 'openrouter') return openrouter.listModels();
 	return provider === 'openai' ? openai.listModels() : anthropic.listModels();
 }
 
 /** Plans say what went wrong in their own words (plans.ts). */
 export function describeApiError(err: unknown): string {
 	if (err instanceof PlanError) return err.message;
+	// OpenRouter's errors are OpenAI's SDK's classes too, so it's asked first.
+	if (openrouter.isOpenRouterError(err)) return openrouter.describeApiError(err);
 	return openai.isOpenAIError(err) ? openai.describeApiError(err) : anthropic.describeApiError(err);
 }
 
 /** The API's own message, without the status and JSON around it: for notes shown to the model. */
 export function shortApiError(err: unknown): string {
 	if (err instanceof PlanError) return err.message;
+	if (openrouter.isOpenRouterError(err)) return openrouter.shortApiError(err);
 	return openai.isOpenAIError(err) ? openai.shortApiError(err) : anthropic.shortApiError(err);
 }
 
 export function isAbortError(err: unknown): boolean {
-	return anthropic.isAbortError(err) || openai.isAbortError(err) || isPlanStopped(err);
+	return (
+		anthropic.isAbortError(err) ||
+		openai.isAbortError(err) ||
+		openrouter.isAbortError(err) ||
+		isPlanStopped(err)
+	);
 }
 
 /**

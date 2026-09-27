@@ -6,10 +6,11 @@ import * as keys from './api-keys.ts';
 import { configuredApiKey, initConfig, readConfig } from './config.ts';
 import { paths } from './paths.ts';
 
-/** Plays both providers: answers by the key it's given. */
+/** Plays every provider: answers by the key it's given. */
 const ANSWERS: Record<string, [number, object]> = {
 	'sk-ant-good-0000000000001234': [200, { data: [] }],
 	'sk-openai-good-000000005678': [200, { data: [] }],
+	'sk-or-v1-good-00000000abcd': [200, { data: { label: 'btw', limit: null, usage: 0 } }],
 	'sk-restricted-0000000000000': [403, { error: { message: 'Missing scopes: api.model.read' } }],
 	'sk-broke-000000000000000000': [429, { error: { message: 'You exceeded your current quota' } }],
 	'sk-down-0000000000000000000': [503, { error: { message: 'Overloaded' } }]
@@ -32,6 +33,7 @@ beforeAll(async () => {
 	const { port } = server.address() as AddressInfo;
 	vi.stubEnv('ANTHROPIC_BASE_URL', `http://127.0.0.1:${port}`);
 	vi.stubEnv('OPENAI_BASE_URL', `http://127.0.0.1:${port}/v1`);
+	vi.stubEnv('OPENROUTER_BASE_URL', `http://127.0.0.1:${port}/api/v1`);
 });
 
 afterAll(() => {
@@ -44,6 +46,7 @@ beforeEach(() => {
 	initConfig();
 	vi.stubEnv('ANTHROPIC_API_KEY', '');
 	vi.stubEnv('OPENAI_API_KEY', '');
+	vi.stubEnv('OPENROUTER_API_KEY', '');
 	seen.length = 0;
 });
 
@@ -93,13 +96,20 @@ describe('checkApiKey', () => {
 	it('lists models with the key, the way each provider wants it', async () => {
 		await expect(keys.checkApiKey('anthropic', 'sk-ant-good-0000000000001234')).resolves.toBe(null);
 		await expect(keys.checkApiKey('openai', 'sk-openai-good-000000005678')).resolves.toBe(null);
-		expect(seen.map((s) => s.path)).toEqual(['/v1/models?limit=1', '/v1/models']);
+		// OpenRouter lists its models for anyone, so it's asked about the key itself.
+		await expect(keys.checkApiKey('openrouter', 'sk-or-v1-good-00000000abcd')).resolves.toBe(null);
+		expect(seen.map((s) => s.path)).toEqual(['/v1/models?limit=1', '/v1/models', '/api/v1/key']);
+		expect(seen[2].key).toBe('sk-or-v1-good-00000000abcd');
 	});
 
 	it('refuses a key the provider rejects', async () => {
 		await expect(keys.checkApiKey('anthropic', 'sk-ant-wrong')).rejects.toMatchObject({
 			reason: 'rejected',
 			message: expect.stringContaining("Anthropic didn't accept this key")
+		});
+		await expect(keys.checkApiKey('openrouter', 'sk-or-v1-wrong')).rejects.toMatchObject({
+			reason: 'rejected',
+			message: expect.stringContaining("OpenRouter didn't accept this key")
 		});
 	});
 

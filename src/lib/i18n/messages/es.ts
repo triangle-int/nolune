@@ -690,7 +690,11 @@ export const es: Messages = {
 					about: 'Un plan Plus, Pro o Business, con Codex en este ordenador'
 				},
 				anthropic: { title: 'Clave de API de Anthropic', about: 'Modelos Claude, pago por uso' },
-				openai: { title: 'Clave de API de OpenAI', about: 'Modelos GPT, pago por uso' }
+				openai: { title: 'Clave de API de OpenAI', about: 'Modelos GPT, pago por uso' },
+				openrouter: {
+					title: 'Clave de API de OpenRouter',
+					about: 'Claude, GPT, Gemini y más con una sola clave'
+				}
 			},
 			checkingPlan: 'Comprobando el inicio de sesión…',
 			pasteKey: (label: string) => `Pega tu clave de ${label}`,
@@ -764,13 +768,17 @@ export const es: Messages = {
 		purposes: {
 			anthropic: 'Hace funcionar los chats y las automatizaciones con modelos de Claude.',
 			openai:
-				'Hace funcionar los chats y las automatizaciones con modelos de OpenAI, y crea las imágenes de la página Imágenes y las que dibuja el agente.'
+				'Hace funcionar los chats y las automatizaciones con modelos de OpenAI, y crea las imágenes de la página Imágenes y las que dibuja el agente.',
+			openrouter:
+				'Hace funcionar los chats y las automatizaciones con los modelos que ofrece OpenRouter (Claude, GPT, Gemini, DeepSeek y muchos más), con una sola clave y sus créditos.'
 		},
 		withoutIt: {
 			anthropic:
 				'Los chats y las automatizaciones con modelos de Claude dejan de funcionar hasta que se añada una clave nueva.',
 			openai:
-				'Los chats y las automatizaciones con modelos de OpenAI dejan de funcionar, y btw no puede crear imágenes, hasta que se añada una clave nueva.'
+				'Los chats y las automatizaciones con modelos de OpenAI dejan de funcionar, y btw no puede crear imágenes, hasta que se añada una clave nueva.',
+			openrouter:
+				'Los chats y las automatizaciones con modelos de OpenRouter dejan de funcionar hasta que se añada una clave nueva.'
 		},
 		savedInBtw: (hint: string | null) => `Guardada en btw${hint ? `, termina en ${hint}` : ''}`,
 		fromEnv: (variable: string, hint: string | null) =>
@@ -844,6 +852,8 @@ export const es: Messages = {
 				anthropic: 'Auto usa la ventana que Anthropic indica para el modelo.',
 				openai:
 					'OpenAI no la indica: Auto solo conoce la de sus modelos insignia (1,05M desde GPT-5.4).',
+				openrouter:
+					'Auto usa la ventana que OpenRouter indica para el modelo y su proveedor principal.',
 				'claude-plan': 'Claude Code no la indica: Auto solo conoce sus modelos de 1M de contexto.',
 				'chatgpt-plan': 'Codex no la indica, así que Auto la deja como desconocida.'
 			},

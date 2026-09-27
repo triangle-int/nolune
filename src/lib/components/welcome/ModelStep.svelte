@@ -6,7 +6,7 @@
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import MessageCircleIcon from '@lucide/svelte/icons/message-circle';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
-	import type { ModelChoice } from '@btw/core';
+	import type { ApiKeyProvider, ModelChoice } from '@btw/core';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import CopyButton from '$lib/components/chat/CopyButton.svelte';
@@ -17,7 +17,7 @@
 
 	interface Props {
 		isAdmin: boolean;
-		keys: { provider: 'anthropic' | 'openai'; label: string; consoleUrl: string; set: boolean }[];
+		keys: { provider: ApiKeyProvider; label: string; consoleUrl: string; set: boolean }[];
 		/** The model is saved, or someone who can't add one carries on without. */
 		ondone: () => void;
 	}
@@ -25,12 +25,13 @@
 	let { isAdmin, keys, ondone }: Props = $props();
 	const { m } = getI18n();
 
-	type Choice = 'claude-plan' | 'chatgpt-plan' | 'anthropic' | 'openai';
+	type Choice = 'claude-plan' | 'chatgpt-plan' | ApiKeyProvider;
 	const CHOICES: { id: Choice; icon: typeof KeyRoundIcon }[] = [
 		{ id: 'claude-plan', icon: SparklesIcon },
 		{ id: 'chatgpt-plan', icon: MessageCircleIcon },
 		{ id: 'anthropic', icon: KeyRoundIcon },
-		{ id: 'openai', icon: KeyRoundIcon }
+		{ id: 'openai', icon: KeyRoundIcon },
+		{ id: 'openrouter', icon: KeyRoundIcon }
 	];
 	/** How many of the provider's models are offered as chips; the rest can be typed. */
 	const SHOWN = 6;
@@ -124,7 +125,8 @@
 			<p class="text-muted-foreground">{m.welcome.model.subtitle}</p>
 		</div>
 		<input type="hidden" name="plan" value={choice} />
-		<div class="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label={m.welcome.model.title}>
+		<!-- The two plans side by side, the API keys in a row under them. -->
+		<div class="grid gap-3 sm:grid-cols-6" role="radiogroup" aria-label={m.welcome.model.title}>
 			{#each CHOICES as { id, icon: Icon } (id)}
 				{@const picked = choice === id}
 				<button
@@ -134,6 +136,7 @@
 					onclick={() => pick(id)}
 					class={cn(
 						'relative flex flex-col gap-3 rounded-3xl border bg-card p-5 text-left transition duration-200 outline-none hover:border-foreground/25 focus-visible:ring-3 focus-visible:ring-ring/30 motion-safe:hover:-translate-y-0.5',
+						id === 'claude-plan' || id === 'chatgpt-plan' ? 'sm:col-span-3' : 'sm:col-span-2',
 						picked && 'border-foreground/60 shadow-lg ring-3 ring-foreground/10'
 					)}
 				>

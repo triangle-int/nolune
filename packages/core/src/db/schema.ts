@@ -142,7 +142,7 @@ export const modelPreset = sqliteTable('model_preset', {
 	id: text('id').primaryKey(),
 	name: text('name').notNull().unique(),
 	provider: text('provider', {
-		enum: ['anthropic', 'openai', 'claude-plan', 'chatgpt-plan']
+		enum: ['anthropic', 'openai', 'openrouter', 'claude-plan', 'chatgpt-plan']
 	}).notNull(),
 	model: text('model').notNull(),
 	/** Admin override. Wins over modelContextWindow. */
@@ -221,7 +221,7 @@ export const conversation = sqliteTable(
 		 */
 		presetName: text('preset_name').notNull(),
 		provider: text('provider', {
-			enum: ['anthropic', 'openai', 'claude-plan', 'chatgpt-plan']
+			enum: ['anthropic', 'openai', 'openrouter', 'claude-plan', 'chatgpt-plan']
 		}).notNull(),
 		model: text('model').notNull(),
 		contextWindow: integer('context_window'),
@@ -326,7 +326,9 @@ export const message = sqliteTable(
 		 * so another provider's encoder leaves out what it can't take (format.ts). Rows that are only
 		 * text, which every provider reads the same, may have none.
 		 */
-		provider: text('provider', { enum: ['anthropic', 'openai', 'claude-plan', 'chatgpt-plan'] }),
+		provider: text('provider', {
+			enum: ['anthropic', 'openai', 'openrouter', 'claude-plan', 'chatgpt-plan']
+		}),
 		/** Replies: the model that wrote it. */
 		model: text('model'),
 		stopReason: text('stop_reason'),
@@ -591,14 +593,14 @@ export const upload = sqliteTable(
 );
 
 /**
- * Files uploaded to a provider (Anthropic's or OpenAI's Files API), so requests refer to them by id instead
- * of carrying their bytes. One upload per content and account; the hourly prune deletes the
- * ones no message refers to any more.
+ * Files uploaded to a provider (Anthropic's, OpenAI's or OpenRouter's Files API), so requests
+ * refer to them by id instead of carrying their bytes. One upload per content and account; the
+ * hourly prune deletes the ones no message refers to any more.
  */
 export const providerFile = sqliteTable(
 	'provider_file',
 	{
-		provider: text('provider', { enum: ['anthropic', 'openai'] }).notNull(),
+		provider: text('provider', { enum: ['anthropic', 'openai', 'openrouter'] }).notNull(),
 		/** The account the file lives in (a hash of the API key): ids are only valid there. */
 		account: text('account').notNull(),
 		/** SHA-256 of the bytes that were uploaded. */
