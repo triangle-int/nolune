@@ -1251,27 +1251,30 @@ nothing, and opening the page again runs it again.
   `addMemoryFacts` adds them under the heading, skips facts memory already has, and dates each
   one as the export did in `.facts.json`; `[unknown]` ones get 0, like facts from before dates
   were kept, so the Memory page shows them lightest.
-- **Memories arrive** (`MemoryArrival.svelte`). The saved facts show as lines, then each becomes a
-  dot that arcs from its line to its place in a grid laid out like the Memory page's (one row per
-  note), landing at full strength and fading to its age. The count ticks up with them. Then the
-  dots fly into the avatar, and the page goes to `/p/<slug>`; a view transition names the avatar
-  on both pages (`btw-assistant`), so it glides into its place over the composer.
-- **Sounds** (`src/lib/welcome/sounds.ts`). Only where the screen moves by itself; clicks are
-  silent. The intro is a song, `music` (its first half minute): it rises out of silence with the
-  stars, and rings on a moment over the welcome before fading, sooner on "Let's go" or a skip.
-  Every later moment has its own: `confirm` (a key or plan check passes), `wash` (the avatar's tint washing in), `sparkle` (each memory landing: one note, pitched up the
-  pentatonic scale as the grid fills, at most 40 per import), `chord` (the grid settling) and
-  `gather` (the dots gathering into the avatar as the chat opens). When the welcome starts waiting
-  for someone (the welcome screen, each step) or opens the chat, whatever is still ringing fades
-  out (`quiet`), and a cue still loading then stays quiet. Each cue is a file in `src/lib/assets/sounds/welcome` (`<cue>.mp3`), bundled
-  through `import.meta.glob` and played with Web Audio (where each came from is in `CREDITS.md`
-  next to them); one without its file is silent. A cue that can't start on time (still loading, or
-  the page not allowed sound yet) plays when it can: a short one only if it's still in time, the
-  song that far in, to stay in time with the screen. Browsers only play sound after a click:
-  creating the profile is one, and the welcome is a client-side navigation from there; opened
-  some other way, the song joins in at the first click. The
-  Sounds setting (per device, in `btw-prefs`) and the speaker button on the welcome turn them
-  off.
+- **Memories arrive** (`MemoryArrival.svelte`), slowly, to the song's last phrase. The saved
+  facts show as lines, coming in one after another; on the phrase's second bar each becomes a dot
+  that arcs from its line to its place in a grid laid out like the Memory page's (one row per
+  note), landing at full strength and fading to its age. The count ticks up with them. As the
+  phrase turns, the dots drift along curves into the avatar, which glows brighter with each. Then
+  the page goes to `/p/<slug>`: a view transition names the avatar on both pages
+  (`btw-assistant`), so it glides into its place over the composer while the page gives way over
+  two seconds (`html.btw-arrive`), landing on the song's last note.
+- **Sounds** (`src/lib/welcome/sounds.ts`). A song, and a sound only where the screen moves by
+  itself; clicks are silent. The song (`music`) plays the intro, rising out of silence with the
+  stars; once the welcome waits it plays on much quieter under the questions (`duck` to `UNDER`),
+  going round for as long as they take. When the memories arrive it jumps to its last phrase at
+  full level (`LAST_PHRASE`, 179.8 s) and ends by itself over the new chat; with nothing to bring
+  over it fades as the chat opens. It streams through a media element in the Web Audio graph, so
+  three and a half minutes of music are never decoded at once. The two short sounds are `confirm`
+  (a key or plan check passes) and `wash` (the avatar's tint washing in). Each sound is a file in
+  `src/lib/assets/sounds/welcome` (`<name>.mp3`), bundled through `import.meta.glob` (where each
+  came from is in `CREDITS.md` next to them); one without its file is silent. The screen waits
+  for the song to start, up to a second and a half; one that can't start on time (still loading,
+  or the page not allowed sound yet) joins as soon as it can, that far in, and a short sound that
+  late is dropped. Browsers only play sound after a click: creating the profile is one, and the
+  welcome is a client-side navigation from there; opened some other way, the song joins in at the
+  first click. The Sounds setting (per device, in `btw-prefs`) and the speaker button on the
+  welcome turn them off; turned back on, the song goes on where it was.
 
 ## Running `btw` in the gateway
 

@@ -352,7 +352,7 @@
 				spellcheck="false"
 				aria-label={m.welcome.model.modelId}
 				placeholder={m.welcome.model.modelId}
-				class="mx-auto h-10 max-w-sm rounded-full px-4 text-center font-mono text-sm"
+				class="mx-auto block h-10 max-w-sm rounded-full px-4 text-center font-mono text-sm"
 			/>
 			{#if problem}
 				<p class="text-center text-sm text-destructive" role="alert">{problem}</p>

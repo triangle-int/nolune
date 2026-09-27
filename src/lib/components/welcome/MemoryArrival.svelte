@@ -10,7 +10,7 @@
 	import { factInk, factShade } from '$lib/components/memory/DotGrid.svelte';
 	import { getI18n } from '$lib/i18n';
 	import { memoryTopic } from '$lib/memory';
-	import { play, sparkle } from '$lib/welcome/sounds';
+	import { music } from '$lib/welcome/sounds';
 
 	interface Props {
 		avatar: Avatar;
@@ -28,17 +28,25 @@
 	/*
 	 * Every dot lands at full strength, then fades to its fact's age, as the Memory page shades
 	 * it: what the other assistant learned years ago settles lighter than last week's.
+	 *
+	 * It all keeps time with the song's last phrase, which starts `LAST_PHRASE` seconds in; its
+	 * bars fall about every 2.6 seconds from there.
 	 */
+	const LAST_PHRASE = 179.8;
+	/** When the dots fly (the second bar), gather into the avatar (the fifth, as the phrase turns), and the chat opens, landing on the last note. */
+	const FLY = 2.65;
+	const GATHER = 10.45;
+	const OPEN = 15.8;
 
 	/** Lines shown in the box before they fly; the rest leave from its bottom edge. */
 	const VISIBLE_LINES = 12;
-	/** Sparkles are capped, so a big import doesn't turn into noise. */
-	const MAX_SPARKLES = 40;
 	const now = Date.now();
 
 	let phase = $state<'lines' | 'grid' | 'settled' | 'gathering'>('lines');
 	let mood = $state<Mood>('thinking');
 	let landed = $state(0);
+	/** How many have gathered into the avatar, which glows brighter with each. */
+	let gathered = $state(0);
 
 	const rows = $derived.by(() => {
 		let offset = 0;
@@ -92,7 +100,7 @@
 					},
 					{ transform: `translate(${f.to.x}px, ${f.to.y}px) scale(1)`, opacity: 1 }
 				],
-				{ duration: 850, delay: f.delay, easing: 'cubic-bezier(.45,.05,.3,1)', fill: 'both' }
+				{ duration: 1500, delay: f.delay, easing: 'cubic-bezier(.45,.05,.3,1)', fill: 'both' }
 			);
 			animation.finished.then(f.land, () => {});
 			return () => animation.cancel();
@@ -111,7 +119,27 @@
 		return found !== -1 ? found : i % Math.max(1, shownLines.length);
 	}
 
+	/** A dot's way from its place to the avatar: a curve, leaning one way or the other. */
+	function drift(from: { x: number; y: number }, to: { x: number; y: number }, i: number) {
+		const dx = to.x - from.x;
+		const dy = to.y - from.y;
+		const length = Math.hypot(dx, dy) || 1;
+		const lean = ((i % 5) - 2) * 0.18 * length;
+		const cx = dx / 2 - (dy / length) * lean;
+		const cy = dy / 2 + (dx / length) * lean;
+		return [0, 0.2, 0.4, 0.6, 0.8, 1].map((t) => ({
+			transform: `translate(${2 * (1 - t) * t * cx + t * t * dx}px, ${2 * (1 - t) * t * cy + t * t * dy}px) scale(${1 - 0.7 * t})`,
+			opacity: t < 0.8 ? 1 : 0,
+			offset: t
+		}));
+	}
+
 	async function run() {
+		// The song goes to its last phrase; everything from here keeps time with it.
+		await music(LAST_PHRASE, { loop: false });
+		const start = performance.now();
+		const at = (seconds: number) => wait(start + seconds * 1000 - performance.now());
+
 		if (prefersReducedMotion.current || total === 0) {
 			phase = 'settled';
 			landed = total;
@@ -120,7 +148,7 @@
 			ondone();
 			return;
 		}
-		await wait(900);
+		await at(FLY);
 
 		// Where each line is now, before the box gives way to the grid.
 		const sources = shownLines.map((_, i) => (lineEls[i] ? centerOf(lineEls[i]) : null));
@@ -132,8 +160,8 @@
 		mood = 'working';
 		await tick();
 
-		const stagger = Math.min(45, 1000 / Math.max(1, facts.length));
-		const every = Math.max(1, Math.ceil(facts.length / MAX_SPARKLES));
+		// However many there are, they're all on their way within a few seconds.
+		const stagger = Math.min(150, 3500 / Math.max(1, facts.length));
 		await new Promise<void>((allLanded) => {
 			let left = facts.length;
 			flyers = facts.map((fact, i) => {
@@ -147,7 +175,6 @@
 					swing: ((i % 7) - 3) * 18,
 					land: () => {
 						landed = Math.max(landed, i + 1);
-						if (i % every === 0) sparkle(i / every, Math.ceil(facts.length / every));
 						if (--left === 0) allLanded();
 					}
 				};
@@ -157,38 +184,30 @@
 
 		phase = 'settled';
 		mood = 'done';
-		play('chord');
-		await wait(1800);
+		await at(GATHER);
 
-		// Everything gathers into the avatar, and the chat opens.
+		// Everything drifts into the avatar, which glows as it takes them in.
 		phase = 'gathering';
 		mood = 'working';
-		play('gather');
 		const home = avatarEl ? centerOf(avatarEl) : { x: innerWidth / 2, y: 80 };
+		const spread = Math.min(1400, dotEls.length * 60);
 		await Promise.all(
-			dotEls.map((dot, i) => {
-				const at = centerOf(dot);
-				return dot
-					.animate(
-						[
-							{ transform: 'translate(0, 0) scale(1)', opacity: 1 },
-							{
-								transform: `translate(${home.x - at.x}px, ${home.y - at.y}px) scale(0.3)`,
-								opacity: 0
-							}
-						],
-						{
-							duration: 650,
-							delay: Math.min(i * 8, 400),
-							easing: 'cubic-bezier(.5,0,.75,0)',
-							fill: 'forwards'
-						}
+			dotEls.map((dot, i) =>
+				dot
+					.animate(drift(centerOf(dot), home, i), {
+						duration: 2200,
+						delay: (i / Math.max(1, dotEls.length)) * spread,
+						easing: 'cubic-bezier(.45,0,.25,1)',
+						fill: 'forwards'
+					})
+					.finished.then(
+						() => gathered++,
+						() => {}
 					)
-					.finished.catch(() => {});
-			})
+			)
 		);
 		mood = 'done';
-		await wait(350);
+		await at(OPEN);
 		ondone();
 	}
 
@@ -198,7 +217,14 @@
 </script>
 
 <div class="flex w-full flex-col items-center gap-8">
-	<div bind:this={avatarEl} style:view-transition-name="btw-assistant">
+	<div bind:this={avatarEl} class="relative" style:view-transition-name="btw-assistant">
+		<span
+			class="glow pointer-events-none absolute inset-0 -z-10 rounded-full blur-xl"
+			style:background-color="var(--avatar-{avatar})"
+			style:opacity={total ? (gathered / total) * 0.7 : 0}
+			style:scale={1 + (total ? gathered / total : 0) * 0.8}
+			aria-hidden="true"
+		></span>
 		<AssistantAvatar {avatar} {mood} size={64} />
 	</div>
 
@@ -208,7 +234,7 @@
 			class="w-full space-y-1 rounded-3xl border bg-card px-5 py-4 font-mono text-[13px] leading-relaxed text-foreground/80"
 		>
 			{#each shownLines as line, i (i)}
-				<p bind:this={lineEls[i]} class="truncate">{line}</p>
+				<p bind:this={lineEls[i]} class="line truncate" style:--i={i}>{line}</p>
 			{/each}
 		</div>
 	{:else}
@@ -266,6 +292,27 @@
 	.dot {
 		transition:
 			opacity 150ms ease-out,
-			background-color 1.4s ease-in-out 200ms;
+			background-color 2s ease-in-out 300ms;
+	}
+	.glow {
+		transition:
+			opacity 0.6s ease-out,
+			scale 0.6s ease-out;
+	}
+	/* The pasted lines come in one after another, as if being read. */
+	.line {
+		animation: line-in 0.6s ease-out both;
+		animation-delay: calc(var(--i) * 110ms);
+	}
+	@keyframes line-in {
+		from {
+			opacity: 0;
+			transform: translateY(4px);
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.line {
+			animation: none;
+		}
 	}
 </style>

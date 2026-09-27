@@ -29,7 +29,7 @@
 	import { getPreferences } from '$lib/preferences.svelte';
 	import { avatarTint, tintStyle } from '$lib/tint';
 	import { cn } from '$lib/utils';
-	import { play, quiet, setSoundsOn, wake } from '$lib/welcome/sounds';
+	import { UNDER, duck, music, play, quiet, setSoundsOn, wake } from '$lib/welcome/sounds';
 
 	let { data } = $props();
 	const { m } = getI18n();
@@ -81,6 +81,10 @@
 
 	/** Bumped to stop a running intro. */
 	let introRun = 0;
+	/** The song has been started; it plays on, quieter, under the questions. */
+	let songOn = false;
+	/** Off to the chat: the song, if it's playing its end, isn't cut off on the way. */
+	let finishing = false;
 
 	/**
 	 * Space, to a song: stars come out, one of them draws the wordmark, its three dots type, then
@@ -95,7 +99,9 @@
 
 		// Timed to the song: it rises out of silence, goes quiet for the drawing, comes back for
 		// the planets, and lifts at 23.6 seconds, when the welcome comes up.
-		play('music');
+		songOn = true;
+		await music(0);
+		if (!alive()) return;
 		sky = 'stars';
 		await wait(9000);
 		if (!alive()) return;
@@ -198,15 +204,17 @@
 		await wait(800);
 		if (!alive()) return;
 		phase = 'welcome';
-		// From here the welcome waits for "Let's go"; the song rings on a moment, then fades.
+		// From here the welcome waits for "Let's go"; the song rings on a moment, then goes quiet.
 		await wait(2500);
-		quiet(4, 'music');
+		if (phase === 'welcome') duck(UNDER, 4);
 	}
 
 	function skipIntro() {
 		if (phase !== 'intro') return;
 		introRun++;
-		quiet(1.2);
+		if (songOn) duck(UNDER, 1.2);
+		else music(0, { level: UNDER });
+		songOn = true;
 		skipped = true;
 		space = false;
 		sky = 'aurora';
@@ -215,7 +223,7 @@
 
 	function begin() {
 		wake();
-		quiet(2.5, 'music');
+		duck(UNDER, 2.5);
 		phase = 'steps';
 	}
 
@@ -246,15 +254,21 @@
 			await apply();
 		}
 		await wait(reduced ? 900 : 1700);
-		quiet(1.2);
+		quiet(1.2, 'wash');
 		phase = 'steps';
 		nextStep();
 	}
 
-	/** On to the profile's first chat. */
+	/**
+	 * On to the profile's first chat. After the memories arrive, the song plays its end over it and
+	 * the page gives way slowly; otherwise the song fades.
+	 */
 	async function finish() {
-		// Rings on for a moment over the new chat, where it's up to them again.
-		quiet(2);
+		finishing = true;
+		if (phase !== 'arrival') quiet(3, 'music');
+		else if ('startViewTransition' in document && !reduced) {
+			document.documentElement.classList.add('btw-arrive');
+		}
 		await goto(resolve('/p/[slug]', { slug: data.welcome.slug }), { replaceState: true });
 	}
 
@@ -262,10 +276,11 @@
 	onNavigate((navigation) => {
 		if (!document.startViewTransition || reduced) return;
 		return new Promise((done) => {
-			document.startViewTransition(async () => {
+			const transition = document.startViewTransition(async () => {
 				done();
 				await navigation.complete;
 			});
+			transition.finished.finally(() => document.documentElement.classList.remove('btw-arrive'));
 		});
 	});
 
@@ -274,7 +289,9 @@
 		wake();
 		if (reduced) skipIntro();
 		else intro();
-		return () => quiet(0.5);
+		return () => {
+			if (!finishing) quiet(0.5);
+		};
 	});
 </script>
 
@@ -502,6 +519,29 @@
 		}
 		html.btw-wash::view-transition-new(root) {
 			animation: btw-wash 0.75s cubic-bezier(0.4, 0, 0.2, 1);
+		}
+		/* Into the chat after the memories: slowly, the avatar gliding to its place. */
+		html.btw-arrive::view-transition-old(root) {
+			animation: btw-leave 1.2s ease-in both;
+		}
+		html.btw-arrive::view-transition-new(root) {
+			animation: btw-enter 1.4s ease-out 0.7s both;
+		}
+		html.btw-arrive::view-transition-group(btw-assistant),
+		html.btw-arrive::view-transition-old(btw-assistant),
+		html.btw-arrive::view-transition-new(btw-assistant) {
+			animation-duration: 2s;
+			animation-timing-function: cubic-bezier(0.45, 0, 0.2, 1);
+		}
+		@keyframes btw-leave {
+			to {
+				opacity: 0;
+			}
+		}
+		@keyframes btw-enter {
+			from {
+				opacity: 0;
+			}
 		}
 		@keyframes btw-wash {
 			from {
