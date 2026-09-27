@@ -785,6 +785,41 @@ on a colored circle.
   prompt, the tool or the request, so caching is untouched. Only the `btw-agent` skill's description
   mentions avatars, so new chats know the command.
 
+## Running `btw` in the gateway
+
+The agent runs `btw` all the time (`btw view`, `btw memory show`, `btw agent watch`, …), and each
+run used to start Node and load all of btw: about 150 ms from the bundle and 650 ms from a source
+checkout. Now the gateway, which has btw loaded already, runs the command, and `btw` only asks it
+to (issue #42).
+
+- **The socket** is `~/.btw-agent/run/cli.sock`, in a folder only this user can open (mode 700,
+  the socket 600), so it adds no one who couldn't already read `btw.db`. It isn't the web port,
+  which is public through the tunnel. `serve.ts` starts it from `hooks.server.ts`; it replaces a
+  socket left by a gateway that was killed, but never takes over from another gateway still
+  answering on it.
+- **The protocol** (`protocol.ts`) is one JSON message per line. `btw` sends the arguments, its
+  folder and its environment; the gateway runs the command with them as its `io` (see
+  [Code layout](#code-layout)), streams stdout and stderr back and ends with the exit code. Stdin
+  goes over only when the command reads it, so a command that doesn't never waits on it.
+- **What stays local.** `setup`, `start`, `service` and `init` always run in their own process,
+  and so does any command typed at a terminal (stdin is a TTY), since it may ask something. The
+  agent's commands and automation scripts have no terminal, so theirs go to the gateway.
+- **Falling back.** When nothing answers on the socket (no gateway, or the one that left it was
+  killed), or the gateway speaks another protocol version (`PROTOCOL`), `btw` loads btw and runs
+  the command itself, as before. Once the gateway has a command, `btw` never runs it again, even
+  if the gateway goes away in the middle ("the gateway stopped before the command finished", exit
+  1): it may have done part of it, like a `btw memory add`.
+- **Stopping.** `btw` hanging up (its command's timeout, or Stop) aborts the command's signal, which
+  ends a `btw agent watch` or `btw generate image`. The socket never keeps the gateway running by
+  itself, and on adapter-node's shutdown it closes and drops the commands still running, whose
+  `btw` then says the gateway stopped.
+- **Costs.** `dist/cli.js` holds only the client (3 KB): esbuild splits the rest of btw into
+  `dist/chunks`, loaded only to run a command locally. Through the gateway, `btw` takes about
+  50 ms from the bundle (Node alone takes about 25) and 100 ms from source. A command now runs
+  in the gateway's process, so the gateway serves the help text built when asked (the image model
+  may have changed since it started), and a slow command would briefly hold up its event loop;
+  image conversion runs in a child process, so `btw view` doesn't.
+
 ## Code layout
 
 ```
@@ -803,9 +838,10 @@ packages/cli    btw: setup, start, service, config, key, env, user, preset, prof
                 its exit code; index.ts calls it with this process's io. Commands print, read stdin,
                 the environment (BTW_PROFILE, …) and the working folder only through `io` (io.ts),
                 never `process`, and end in an error rather than `process.exit`, so the agent's
-                commands can later run inside the gateway (issue #42). setup, start and service
-                stay in a process of their own: they prompt at a terminal, run the gateway or manage
-                its service.
+                commands can run inside the gateway: index.ts asks it first (client.ts, over
+                protocol.ts), and serve.ts is the gateway's side. setup, start and service stay in a
+                process of their own: they prompt at a terminal, run the gateway or manage its
+                service.
 src/            SvelteKit gateway (adapter-node). @btw/core is bundled into the server build.
                 UI components in src/lib/components (shadcn-svelte primitives in ui/).
 scripts/        build-cli.mjs bundles the CLI and core into dist/cli.js with esbuild.
@@ -819,11 +855,11 @@ migrations, `build/index.js` and the CLI entry.
 
 Published to npm as `btw-agent` (not yet). `npm install -g btw-agent` gives the `btw` command.
 
-- The package ships `build/` (the web app), `dist/cli.js`, `packages/core/drizzle`, the built-in
-  skills in `packages/core/skills` and the built-in image templates in
-  `packages/core/image-templates`. Its only
-  runtime dependency is `better-sqlite3` (a native module with prebuilt binaries). Everything else is
-  bundled. Node won't strip types inside `node_modules`, which is why the CLI ships as JavaScript.
+- The package ships `build/` (the web app), `dist/cli.js` with its `dist/chunks`,
+  `packages/core/drizzle`, the built-in skills in `packages/core/skills` and the built-in image
+  templates in `packages/core/image-templates`. Its only runtime dependency is `better-sqlite3` (a
+  native module with prebuilt binaries). Everything else is bundled. Node won't strip types inside
+  `node_modules`, which is why the CLI ships as JavaScript.
 - `btw setup` is the first-run wizard: config, API key, admin account, default preset, public URL.
 - `btw start` reads host, port and origin from `config.json` (default `127.0.0.1:5780`), sets
   `HOST` / `PORT` / `ORIGIN` for adapter-node and imports `build/index.js`.

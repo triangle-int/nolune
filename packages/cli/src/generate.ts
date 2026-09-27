@@ -15,11 +15,14 @@ import {
 } from '@btw/core';
 import type { Io } from './io.ts';
 
-export const GENERATE_HELP = `Pictures (model ${configuredImageModel()}; change it with \`btw config set image-model\`)
+/** Read when shown: the gateway runs for days, and the image model can change meanwhile. */
+export function generateHelp(): string {
+	return `Pictures (model ${configuredImageModel()}; change it with \`btw config set image-model\`)
   btw generate image <PROMPT | -> [--image FILE]... [--size square|portrait|landscape|auto|WxH]
                      [--quality Q] [--background auto|transparent|opaque] [--format png|jpeg|webp]
                      [--count N] [--model PROVIDER/MODEL] [--out DIR|FILE] [--dry-run]
       make pictures from a prompt, or change the --image ones; \`-\` reads the prompt from stdin`;
+}
 
 const OPTIONS = {
 	image: { type: 'string', short: 'i', multiple: true },

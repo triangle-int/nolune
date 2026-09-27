@@ -48,7 +48,7 @@ import {
 	type Provider
 } from '@btw/core';
 import { AGENT_HELP, agentCommand } from './agent.ts';
-import { GENERATE_HELP, generateCommand } from './generate.ts';
+import { generateCommand, generateHelp } from './generate.ts';
 import { ask, askHidden } from './input.ts';
 import { fail, type Io } from './io.ts';
 import { MEMORY_HELP, memoryCommand } from './memory.ts';
@@ -64,7 +64,8 @@ import {
 	uninstallService
 } from './service.ts';
 
-const HELP = `btw - a family agent that runs on this computer
+/** Built when shown, like generateHelp(): the gateway serves it for as long as it runs. */
+const help = () => `btw - a family agent that runs on this computer
 
 Getting started
   btw setup [--provider anthropic|openai]    interactive first-time setup (key, your account, model);
@@ -112,7 +113,7 @@ ${MEMORY_HELP}
 
 ${SOUL_HELP}
 
-${GENERATE_HELP}
+${generateHelp()}
 
 Inside agent commands (BTW_PROFILE is set, so --profile can be left out)
   btw view <image>...                        show images to the agent: they're attached to the
@@ -355,7 +356,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 		case 'help':
 		case '--help':
 		case '-h':
-			io.log(HELP);
+			io.log(help());
 			return;
 
 		case 'setup':

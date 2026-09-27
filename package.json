@@ -44,6 +44,7 @@
 		"prepack": "pnpm build"
 	},
 	"devDependencies": {
+		"@btw/cli": "workspace:*",
 		"@btw/core": "workspace:*",
 		"@eslint/js": "^10.0.1",
 		"@fontsource-variable/figtree": "^5.3.0",

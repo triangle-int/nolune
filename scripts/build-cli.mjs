@@ -1,11 +1,18 @@
-// Bundles the CLI (and @btw/core) into dist/cli.js for the npm package. Node won't run .ts files
+// Bundles the CLI (and @btw/core) into dist/ for the npm package. Node won't run .ts files
 // from inside node_modules, so the published package ships JavaScript.
+import { rmSync } from 'node:fs';
 import { build } from 'esbuild';
 
+// Split: dist/cli.js holds only what asks the gateway to run a command, which is most runs; the
+// rest of btw is in chunks it loads when it runs the command itself. Old chunks go first.
+rmSync('dist/chunks', { recursive: true, force: true });
+
 await build({
-	entryPoints: ['packages/cli/src/index.ts'],
-	outfile: 'dist/cli.js',
+	entryPoints: { cli: 'packages/cli/src/index.ts' },
+	outdir: 'dist',
+	chunkNames: 'chunks/[name]-[hash]',
 	bundle: true,
+	splitting: true,
 	platform: 'node',
 	format: 'esm',
 	target: 'node22',
