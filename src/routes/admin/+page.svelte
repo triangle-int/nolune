@@ -270,7 +270,7 @@
 							type="number"
 							min="1"
 							placeholder={provider === 'openai'
-								? "Context window (OpenAI doesn't say)"
+								? 'Context window (flagships: known)'
 								: 'Context window (optional)'}
 							aria-label="Context window"
 							class="h-10 rounded-full px-4 sm:w-60"

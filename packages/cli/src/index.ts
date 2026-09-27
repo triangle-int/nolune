@@ -94,7 +94,8 @@ Users (web sign-up is disabled; this is the only way to add people)
 Model presets (shared by all profiles)
   btw preset add <model> [--provider anthropic|openai] [--name N] [--context-window TOKENS]
                                              the provider checks the model id first (anthropic
-                                             unless given); OpenAI doesn't say its context window
+                                             unless given); OpenAI models other than the
+                                             flagships need --context-window
   btw preset rm <name|id>
   btw preset default <name|id>               the model new chats start with
   btw preset list

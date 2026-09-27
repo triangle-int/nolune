@@ -15,6 +15,7 @@ import {
 import { describeApiError } from './models.ts';
 import {
 	countDocumentTokens,
+	knownContextWindow,
 	openaiFiles,
 	stopReason,
 	streamResponse,
@@ -627,20 +628,45 @@ describe("OpenAI's Files API and models", () => {
 		expect(openaiFiles.account()).toMatch(/^[0-9a-f]{16}$/);
 	});
 
+	it.each([
+		['gpt-5.4', 1_050_000],
+		['gpt-5.5', 1_050_000],
+		['gpt-5.5-pro', 1_050_000],
+		['gpt-5.5-2026-04-23', 1_050_000],
+		['gpt-6-astra', 1_050_000],
+		['gpt-6-luna-pro', 1_050_000],
+		['gpt-10-sol', 1_050_000],
+		// Smaller, older or unknown: a guess could be too large, so none.
+		['gpt-5.4-mini', null],
+		['gpt-5.5-nano', null],
+		['gpt-5.5-codex', null],
+		['gpt-6-astra-mini', null],
+		['gpt-5.2', null],
+		['gpt-5', null],
+		['gpt-4.1', null],
+		['o3', null],
+		['my-proxy-model', null]
+	])('knows %s has a window of %s', (model, window) => {
+		expect(knownContextWindow(model)).toBe(window);
+	});
+
 	it('counts what a PDF costs with the input token endpoint', async () => {
 		answer = () => ({ json: { object: 'response.input_tokens', input_tokens: 4321 } });
 		expect(await countDocumentTokens('gpt-6-astra', 'file-9')).toBe(4321);
 	});
 
-	it('checks the model when a preset is added, which has no window unless one is given', async () => {
+	it("checks the model when a preset is added, and knows a flagship's window", async () => {
 		answer = (req) =>
-			req.path === '/v1/models/gpt-6-astra'
-				? { json: { id: 'gpt-6-astra', object: 'model' } }
+			req.path === '/v1/models/gpt-6-astra' || req.path === '/v1/models/gpt-5.4-mini'
+				? { json: { id: req.path.split('/').at(-1), object: 'model' } }
 				: { status: 404, json: { error: { message: 'The model `gpt-9` does not exist' } } };
 
 		expect(await addPreset({ provider: 'openai', model: 'gpt-6-astra' })).toMatchObject({
 			name: 'gpt-6-astra (openai)',
 			provider: 'openai',
+			modelContextWindow: 1_050_000
+		});
+		expect(await addPreset({ provider: 'openai', model: 'gpt-5.4-mini' })).toMatchObject({
 			modelContextWindow: null
 		});
 		await expect(addPreset({ provider: 'openai', model: 'gpt-9' })).rejects.toThrow(

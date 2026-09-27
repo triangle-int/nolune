@@ -146,9 +146,13 @@ provider brings a `FileStore` for pictures and PDFs (see [Attachments](#attachme
   process's life, so replies still reason but the chat has nothing to show. GPT-4 and chat-tuned
   models get no reasoning settings. A rebuilt system prompt doesn't drop OpenAI's reasoning (it
   isn't bound to the prompt, unlike Claude's thinking).
-- **What OpenAI doesn't have.** Its models API doesn't give a context window, so an OpenAI preset
-  has one only when the admin sets it; without, the chat's context meter shows "?" and PDFs share
-  25% of 200k tokens. Titles are asked for at `low` effort.
+- **What OpenAI doesn't have.** Its models API doesn't give a context window. btw knows the
+  flagships' (`knownContextWindow`): every one since GPT-5.4 (`gpt-5.4`, `gpt-5.5-pro`,
+  `gpt-6-astra`, their dated snapshots) has 1,050,000 tokens. Other models (mini, nano, codex,
+  older ones) can have far less, and a window set too large would let a conversation grow past
+  what the model takes, for good, since history is never edited; so they get one only when the
+  admin sets it. Without one, the chat's context meter shows "?" and PDFs share 25% of 200k
+  tokens. Titles are asked for at `low` effort.
 - **Another provider** (OpenRouter, Gemini) would be one more module next to these two, a branch
   in each of `models.ts`'s functions, a `FileStore` (or pictures inline), its key in `API_KEYS`
   (config.ts) with a check request in `api-keys.ts`, and its name in `PROVIDERS` and the schema's
