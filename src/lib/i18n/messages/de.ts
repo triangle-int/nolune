@@ -879,6 +879,47 @@ export const de: Messages = {
 		claudeNoAnswer: 'Claude Code hat nicht geantwortet.',
 		removed: 'Entfernt.',
 		newDefault: (name: string) => `Neue Chats starten jetzt mit ${name}.`,
-		presetRemoved: 'Entfernt. Bestehende Chats funktionieren weiter.'
+		presetRemoved: 'Entfernt. Bestehende Chats funktionieren weiter.',
+		/** Memory search by meaning: where its embeddings come from. */
+		embeddings: {
+			title: 'Gedächtnissuche',
+			hint: 'btw findet Fakten im Gedächtnis auch nach ihrer Bedeutung, nicht nur nach ihren Wörtern, und über Sprachen hinweg. Dafür wird jeder Fakt einmal dorthin geschickt, wo die Embeddings entstehen, und jede Nachricht beim Senden; ein Server auf diesem Computer behält sie hier. Gilt für alle Profile.',
+			name: 'Suche nach Bedeutung',
+			using: (source: string) => `Verwendet ${source}.`,
+			usingServer: (model: string, url: string) => `Verwendet ${model} auf ${url}.`,
+			off: 'Aus: Das Gedächtnis wird nur nach Wörtern durchsucht.',
+			noKeys:
+				'Noch kein OpenAI- oder OpenRouter-Schlüssel, daher wird das Gedächtnis nur nach Wörtern durchsucht.',
+			noKey: (provider: string) =>
+				`Noch kein ${provider}-Schlüssel, daher wird das Gedächtnis nur nach Wörtern durchsucht. Füge oben unter API-Schlüssel einen hinzu.`,
+			change: 'Ändern',
+			source: 'Embeddings von',
+			modes: {
+				auto: 'Auto',
+				openai: 'OpenAI',
+				openrouter: 'OpenRouter',
+				server: 'Ein Server',
+				off: 'Aus'
+			},
+			autoNote:
+				'text-embedding-3-small von OpenAI mit dem OpenAI-Schlüssel, sonst dasselbe Modell über OpenRouter.',
+			withKey: (provider: string) => `Mit dem ${provider}-API-Schlüssel.`,
+			serverNote:
+				'Jeder OpenAI-kompatible Server, etwa Ollama, LM Studio oder oMLX auf diesem Computer.',
+			offNote:
+				'Das Gedächtnis wird nur nach Wörtern durchsucht, und kein Fakt wird irgendwohin geschickt.',
+			address: 'Adresse',
+			model: 'Modell',
+			serverModel: 'Sein Name auf dem Server, etwa embeddinggemma',
+			key: 'Schlüssel',
+			keyOptional: '(falls der Server einen braucht)',
+			keyKept: 'Gespeichert. Leer lassen, um ihn zu behalten.',
+			checking: 'Wird geprüft…',
+			works: 'Gespeichert. Es funktioniert; die Fakten werden im Hintergrund verarbeitet.',
+			wordsOnly: 'Gespeichert. Das Gedächtnis wird nur nach Wörtern durchsucht.',
+			noAnswer: (problem: string) => `Gespeichert, aber keine Antwort: ${problem}`,
+			needAddress: 'Gib die Adresse des Servers an, beginnend mit http:// oder https://.',
+			needModel: 'Gib das Modell an, das der Server verwenden soll.'
+		}
 	}
 };

@@ -964,6 +964,45 @@ export const ru: Messages = {
 		claudeNoAnswer: 'Claude Code не ответил.',
 		removed: 'Удалено.',
 		newDefault: (name: string) => `Теперь новые чаты начинаются с ${name}.`,
-		presetRemoved: 'Удалено. Существующие чаты продолжат работать.'
+		presetRemoved: 'Удалено. Существующие чаты продолжат работать.',
+		/** Memory search by meaning: where its embeddings come from. */
+		embeddings: {
+			title: 'Поиск по памяти',
+			hint: 'btw находит факты в памяти и по смыслу, а не только по словам, и на любом языке. Для этого каждый факт один раз отправляется туда, где считаются эмбеддинги, а каждое сообщение — при отправке; сервер на этом компьютере оставляет их здесь. Общая настройка для всех профилей.',
+			name: 'Поиск по смыслу',
+			using: (source: string) => `Использует ${source}.`,
+			usingServer: (model: string, url: string) => `Использует ${model} на ${url}.`,
+			off: 'Выключен: память ищется только по словам.',
+			noKeys: 'Пока нет ключа OpenAI или OpenRouter, поэтому память ищется только по словам.',
+			noKey: (provider: string) =>
+				`Пока нет ключа ${provider}, поэтому память ищется только по словам. Добавьте его в API-ключах выше.`,
+			change: 'Изменить',
+			source: 'Откуда эмбеддинги',
+			modes: {
+				auto: 'Авто',
+				openai: 'OpenAI',
+				openrouter: 'OpenRouter',
+				server: 'Сервер',
+				off: 'Выключен'
+			},
+			autoNote:
+				'text-embedding-3-small от OpenAI по ключу OpenAI, а без него — та же модель через OpenRouter.',
+			withKey: (provider: string) => `По API-ключу ${provider}.`,
+			serverNote:
+				'Любой сервер, совместимый с OpenAI: Ollama, LM Studio или oMLX на этом компьютере.',
+			offNote: 'Память ищется только по словам, и никакие факты никуда не отправляются.',
+			address: 'Адрес',
+			model: 'Модель',
+			serverModel: 'Как её называет сервер, например embeddinggemma',
+			key: 'Ключ',
+			keyOptional: '(если серверу он нужен)',
+			keyKept: 'Сохранён. Оставьте пустым, чтобы не менять.',
+			checking: 'Проверяем…',
+			works: 'Сохранено. Работает; факты обрабатываются в фоне.',
+			wordsOnly: 'Сохранено. Память ищется только по словам.',
+			noAnswer: (problem: string) => `Сохранено, но ответа нет: ${problem}`,
+			needAddress: 'Укажите адрес сервера, начиная с http:// или https://.',
+			needModel: 'Укажите модель, которую должен использовать сервер.'
+		}
 	}
 };

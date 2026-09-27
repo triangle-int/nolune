@@ -13,6 +13,7 @@
 	import Rich from '$lib/components/Rich.svelte';
 	import TopBar from '$lib/components/TopBar.svelte';
 	import AddModelForm from '$lib/components/admin/AddModelForm.svelte';
+	import MemorySearch from '$lib/components/admin/MemorySearch.svelte';
 	import PresetForm from '$lib/components/admin/PresetForm.svelte';
 	import CopyButton from '$lib/components/chat/CopyButton.svelte';
 	import { formatTokens } from '$lib/format';
@@ -511,6 +512,13 @@
 					startOpen={data.presets.length === 0}
 				/>
 			</section>
+
+			<MemorySearch
+				setting={data.embeddings}
+				defaults={data.embeddingDefaults}
+				keys={data.keys}
+				result={form}
+			/>
 		</div>
 	</main>
 </div>

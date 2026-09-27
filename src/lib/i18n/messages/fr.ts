@@ -895,6 +895,46 @@ export const fr: Messages = {
 		claudeNoAnswer: 'Claude Code n’a pas répondu.',
 		removed: 'Retirée.',
 		newDefault: (name: string) => `Les nouvelles discussions commencent maintenant avec ${name}.`,
-		presetRemoved: 'Retiré. Les discussions existantes continuent de fonctionner.'
+		presetRemoved: 'Retiré. Les discussions existantes continuent de fonctionner.',
+		/** Memory search by meaning: where its embeddings come from. */
+		embeddings: {
+			title: 'Recherche dans la mémoire',
+			hint: 'btw retrouve aussi les faits de la mémoire par leur sens, pas seulement par leurs mots, et d’une langue à l’autre. Pour cela, chaque fait est envoyé une fois là où sont calculés les embeddings, et chaque message à son envoi ; un serveur sur cet ordinateur les garde ici. Commun à tous les profils.',
+			name: 'Recherche par le sens',
+			using: (source: string) => `Utilise ${source}.`,
+			usingServer: (model: string, url: string) => `Utilise ${model} sur ${url}.`,
+			off: 'Désactivée : la mémoire est cherchée par mots seulement.',
+			noKeys:
+				'Pas encore de clé OpenAI ni OpenRouter : la mémoire est cherchée par mots seulement.',
+			noKey: (provider: string) =>
+				`Pas encore de clé ${provider} : la mémoire est cherchée par mots seulement. Ajoutez-en une dans Clés d’API, plus haut.`,
+			change: 'Modifier',
+			source: 'Embeddings de',
+			modes: {
+				auto: 'Auto',
+				openai: 'OpenAI',
+				openrouter: 'OpenRouter',
+				server: 'Un serveur',
+				off: 'Désactivée'
+			},
+			autoNote:
+				'text-embedding-3-small d’OpenAI avec la clé OpenAI, sinon le même modèle via OpenRouter.',
+			withKey: (provider: string) => `Avec la clé d’API ${provider}.`,
+			serverNote:
+				'Tout serveur compatible avec OpenAI, comme Ollama, LM Studio ou oMLX sur cet ordinateur.',
+			offNote: 'La mémoire est cherchée par mots seulement, et aucun fait n’est envoyé nulle part.',
+			address: 'Adresse',
+			model: 'Modèle',
+			serverModel: 'Son nom sur le serveur, comme embeddinggemma',
+			key: 'Clé',
+			keyOptional: '(si le serveur en demande une)',
+			keyKept: 'Enregistrée. Laissez vide pour la garder.',
+			checking: 'Vérification…',
+			works: 'Enregistré. Ça fonctionne ; les faits sont traités en arrière-plan.',
+			wordsOnly: 'Enregistré. La mémoire est cherchée par mots seulement.',
+			noAnswer: (problem: string) => `Enregistré, mais pas de réponse : ${problem}`,
+			needAddress: 'Indiquez l’adresse du serveur, en commençant par http:// ou https://.',
+			needModel: 'Indiquez le modèle que le serveur doit utiliser.'
+		}
 	}
 };

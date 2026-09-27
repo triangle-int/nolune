@@ -27,6 +27,7 @@ import {
 	embeddingStatus,
 	imageGenerationStatus,
 	parseEmbeddingSetting,
+	saveEmbeddingSetting,
 	initConfig,
 	installCliShim,
 	isApiKeyProvider,
@@ -478,10 +479,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				} catch (err) {
 					fail((err as Error).message);
 				}
-				updateConfig((c) => {
-					if (setting === undefined) delete c.embeddings;
-					else c.embeddings = setting;
-				});
+				saveEmbeddingSetting(setting);
 				const problem = await embeddingProblem();
 				io.log(
 					`Memory search by meaning: ${embeddingStatus()}.${problem ? ` It didn't answer: ${problem}` : ''}`

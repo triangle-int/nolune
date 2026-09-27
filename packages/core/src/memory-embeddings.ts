@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type OpenAI from 'openai';
-import { configuredApiKey, readConfig, type Config } from './config.ts';
+import { configuredApiKey, readConfig, updateConfig, type Config } from './config.ts';
 import { openaiBaseUrl } from './openai.ts';
 import { openrouterBaseUrl } from './openrouter.ts';
 import { profileMemoryDir } from './paths.ts';
@@ -16,6 +16,11 @@ import { profileMemoryDir } from './paths.ts';
  */
 
 export const DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-small';
+/** OpenAI's model, as each provider names it. */
+export const DEFAULT_EMBEDDING_MODELS = {
+	openai: DEFAULT_EMBEDDING_MODEL,
+	openrouter: `openai/${DEFAULT_EMBEDDING_MODEL}`
+} as const;
 /** Hidden, like the fact dates: `btw memory` refuses names starting with a dot. */
 const FILE = '.embeddings.json';
 /** Facts per request: small enough for a server on a laptop. */
@@ -62,9 +67,50 @@ export function embeddingSource(configured = setting()): EmbeddingSource | null 
 	}
 	if (configured) return fromProvider(configured.provider, configured.model);
 	return (
-		fromProvider('openai', DEFAULT_EMBEDDING_MODEL) ??
-		fromProvider('openrouter', `openai/${DEFAULT_EMBEDDING_MODEL}`)
+		fromProvider('openai', DEFAULT_EMBEDDING_MODELS.openai) ??
+		fromProvider('openrouter', DEFAULT_EMBEDDING_MODELS.openrouter)
 	);
+}
+
+/** What's set and what's in use, for Models & keys: never a key, only whether a server has one. */
+export interface EmbeddingState {
+	/** `auto` when nothing is set. */
+	mode: 'auto' | 'off' | 'openai' | 'openrouter' | 'server';
+	/** The model set, for a provider or a server. */
+	model: string | null;
+	/** A server's address. */
+	url: string | null;
+	hasKey: boolean;
+	/** What search by meaning uses now, as EmbeddingSource names it; null: words only. */
+	using: string | null;
+}
+
+export function embeddingState(): EmbeddingState {
+	const configured = setting();
+	const using = embeddingSource(configured)?.name ?? null;
+	if (configured === undefined)
+		return { mode: 'auto', model: null, url: null, hasKey: false, using };
+	if (configured === 'off') return { mode: 'off', model: null, url: null, hasKey: false, using };
+	if ('url' in configured) {
+		const { url, model, key } = configured;
+		return { mode: 'server', model, url, hasKey: !!key, using };
+	}
+	return { mode: configured.provider, model: configured.model, url: null, hasKey: false, using };
+}
+
+/** Saves where embeddings come from; undefined is auto. A new source's vectors are made anew. */
+export function saveEmbeddingSetting(value: EmbeddingSetting | undefined): void {
+	updateConfig((c) => {
+		if (value === undefined) delete c.embeddings;
+		else c.embeddings = value;
+	});
+}
+
+/** The key saved for the server at `url`, so a form can keep it without ever showing it. */
+export function savedServerKey(url: string): string | undefined {
+	const configured = setting();
+	if (!configured || configured === 'off' || !('url' in configured)) return undefined;
+	return configured.url === url.replace(/\/+$/, '') ? configured.key : undefined;
 }
 
 /** In words, for `btw config`: what memory search uses for meaning, or why nothing. */

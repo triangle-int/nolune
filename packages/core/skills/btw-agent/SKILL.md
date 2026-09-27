@@ -148,7 +148,7 @@ memory stays either way.
 Memory search and the facts that come with each message also match by meaning, with embeddings of
 each fact: on its own, btw uses OpenAI's `text-embedding-3-small` with the OpenAI key, else the
 same model through OpenRouter's key. `btw config` shows what it uses (`embeddings`). It's shared by
-every profile, so it's an admin's to change:
+every profile, so it's an admin's to change, here or under Memory search in Models & keys:
 
 ```sh
 btw config set embeddings off                                    # words only; facts stay here

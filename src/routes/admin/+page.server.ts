@@ -3,6 +3,7 @@ import {
 	CLAUDE_INSTALL_COMMAND,
 	CODEX_INSTALL_COMMAND,
 	ApiKeyError,
+	DEFAULT_EMBEDDING_MODELS,
 	PlanError,
 	PROVIDERS,
 	PROVIDER_LABELS,
@@ -15,18 +16,25 @@ import {
 	chatGptSignInState,
 	editPreset,
 	effectiveContextWindow,
+	embeddingProblem,
+	embeddingState,
 	findClaudeCode,
 	findCodex,
 	getDefaultPreset,
 	isApiKeyProvider,
 	listPresets,
+	listProfiles,
 	normalizeApiKey,
 	removeApiKey,
 	removePreset,
 	saveApiKey,
+	saveEmbeddingSetting,
+	savedServerKey,
 	setDefaultPreset,
 	signOutChatGpt,
 	startChatGptSignIn,
+	startEmbeddingMemory,
+	type EmbeddingSetting,
 	type Plan,
 	type PlanStatus
 } from '@btw/core';
@@ -56,6 +64,9 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
 			installCommand: CODEX_INSTALL_COMMAND,
 			status: codex.installed && !signIn.pending ? await chatGptPlanStatus() : null
 		},
+		// What memory search finds meaning with. Never a server's key, only whether it has one.
+		embeddings: embeddingState(),
+		embeddingDefaults: DEFAULT_EMBEDDING_MODELS,
 		presets: listPresets().map((p) => ({
 			id: p.id,
 			name: p.name,
@@ -194,6 +205,34 @@ export const actions: Actions = {
 		} catch (err) {
 			return fail(400, { message: err instanceof Error ? err.message : String(err) });
 		}
+	},
+	embeddings: async ({ locals, request }) => {
+		requireAdmin(locals);
+		const t = translations(locals.locale).m.admin.embeddings;
+		const form = await request.formData();
+		const mode = form.get('mode')?.toString() ?? '';
+		const model = form.get('model')?.toString().trim() ?? '';
+		let setting: EmbeddingSetting | undefined;
+		if (mode === 'openai' || mode === 'openrouter') {
+			setting = { provider: mode, model: model || DEFAULT_EMBEDDING_MODELS[mode] };
+		} else if (mode === 'server') {
+			const url = (form.get('url')?.toString().trim() ?? '').replace(/\/+$/, '');
+			if (!/^https?:\/\/[^\s/]+/i.test(url)) return fail(400, { embeddingsError: t.needAddress });
+			if (!model) return fail(400, { embeddingsError: t.needModel });
+			// Left empty, the key saved for the same address stays: the page never has it.
+			const key = form.get('key')?.toString().trim() || savedServerKey(url);
+			setting = { url, model, ...(key ? { key } : {}) };
+		} else if (mode === 'off') {
+			setting = 'off';
+		} else if (mode !== 'auto') {
+			error(400, 'Unknown source');
+		}
+		saveEmbeddingSetting(setting);
+		const problem = await embeddingProblem();
+		if (problem) return { embeddingsWarning: t.noAnswer(problem) };
+		// Facts the new source hasn't embedded yet are, in the background.
+		startEmbeddingMemory(listProfiles().map((p) => p.slug));
+		return { embeddingsMessage: embeddingState().using ? t.works : t.wordsOnly };
 	},
 	remove: async ({ locals, request }) => {
 		requireAdmin(locals);

@@ -4,7 +4,13 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initConfig, updateConfig } from './config.ts';
 import { addMemoryFact, writeMemoryNote } from './memory.ts';
-import { embeddingSource, parseEmbeddingSetting } from './memory-embeddings.ts';
+import {
+	embeddingSource,
+	embeddingState,
+	parseEmbeddingSetting,
+	saveEmbeddingSetting,
+	savedServerKey
+} from './memory-embeddings.ts';
 import { embedMemory, recallFor, searchMemory, startEmbeddingMemory } from './memory-search.ts';
 import { profileMemoryDir } from './paths.ts';
 import { makeFamily } from './test/fixtures.ts';
@@ -203,6 +209,38 @@ describe('embeddingSource', () => {
 		updateConfig((c) => (c.embeddings = parseEmbeddingSetting(['openai/text-embedding-3-large'])));
 		// Its key is missing.
 		expect(embeddingSource()).toBeNull();
+	});
+
+	it('tells Models & keys what is set and in use, never a key', () => {
+		initConfig();
+		expect(embeddingState()).toEqual({
+			mode: 'auto',
+			model: null,
+			url: null,
+			hasKey: false,
+			using: 'openai/text-embedding-3-small'
+		});
+		saveEmbeddingSetting({ url: 'http://localhost:1234/v1', model: 'nomic', key: 'secret' });
+		const state = embeddingState();
+		expect(state).toEqual({
+			mode: 'server',
+			model: 'nomic',
+			url: 'http://localhost:1234/v1',
+			hasKey: true,
+			using: 'nomic at http://localhost:1234/v1'
+		});
+		expect(JSON.stringify(state)).not.toContain('secret');
+		// An empty key field keeps the key only for the same address.
+		expect(savedServerKey('http://localhost:1234/v1/')).toBe('secret');
+		expect(savedServerKey('http://localhost:11434/v1')).toBeUndefined();
+
+		vi.stubEnv('OPENAI_API_KEY', '');
+		saveEmbeddingSetting({ provider: 'openai', model: 'text-embedding-3-large' });
+		expect(embeddingState()).toMatchObject({ mode: 'openai', using: null });
+		saveEmbeddingSetting('off');
+		expect(embeddingState()).toMatchObject({ mode: 'off', using: null });
+		saveEmbeddingSetting(undefined);
+		expect(embeddingState().mode).toBe('auto');
 	});
 
 	it('reads what `btw config set embeddings` is given', () => {

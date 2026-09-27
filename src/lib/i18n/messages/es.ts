@@ -893,6 +893,46 @@ export const es: Messages = {
 		claudeNoAnswer: 'Claude Code no respondió.',
 		removed: 'Quitada.',
 		newDefault: (name: string) => `Los chats nuevos empiezan ahora con ${name}.`,
-		presetRemoved: 'Quitado. Las conversaciones existentes siguen funcionando.'
+		presetRemoved: 'Quitado. Las conversaciones existentes siguen funcionando.',
+		/** Memory search by meaning: where its embeddings come from. */
+		embeddings: {
+			title: 'Búsqueda en la memoria',
+			hint: 'btw también encuentra datos de la memoria por lo que significan, no solo por sus palabras, y entre idiomas. Para ello, cada dato se envía una vez adonde se calculan los embeddings, y cada mensaje al enviarse; un servidor en este ordenador los mantiene aquí. Compartido por todos los perfiles.',
+			name: 'Búsqueda por significado',
+			using: (source: string) => `Usa ${source}.`,
+			usingServer: (model: string, url: string) => `Usa ${model} en ${url}.`,
+			off: 'Desactivada: la memoria se busca solo por palabras.',
+			noKeys:
+				'Aún no hay clave de OpenAI ni de OpenRouter, así que la memoria se busca solo por palabras.',
+			noKey: (provider: string) =>
+				`Aún no hay clave de ${provider}, así que la memoria se busca solo por palabras. Añade una en Claves de API, arriba.`,
+			change: 'Cambiar',
+			source: 'Embeddings de',
+			modes: {
+				auto: 'Auto',
+				openai: 'OpenAI',
+				openrouter: 'OpenRouter',
+				server: 'Un servidor',
+				off: 'Desactivada'
+			},
+			autoNote:
+				'text-embedding-3-small de OpenAI con la clave de OpenAI; si no, el mismo modelo a través de OpenRouter.',
+			withKey: (provider: string) => `Con la clave de API de ${provider}.`,
+			serverNote:
+				'Cualquier servidor compatible con OpenAI, como Ollama, LM Studio u oMLX en este ordenador.',
+			offNote: 'La memoria se busca solo por palabras, y ningún dato se envía a ninguna parte.',
+			address: 'Dirección',
+			model: 'Modelo',
+			serverModel: 'Su nombre en el servidor, como embeddinggemma',
+			key: 'Clave',
+			keyOptional: '(si el servidor la necesita)',
+			keyKept: 'Guardada. Déjala vacía para conservarla.',
+			checking: 'Comprobando…',
+			works: 'Guardado. Funciona; los datos se procesan en segundo plano.',
+			wordsOnly: 'Guardado. La memoria se busca solo por palabras.',
+			noAnswer: (problem: string) => `Guardado, pero no hubo respuesta: ${problem}`,
+			needAddress: 'Indica la dirección del servidor, empezando por http:// o https://.',
+			needModel: 'Indica el modelo que debe usar el servidor.'
+		}
 	}
 };

@@ -234,13 +234,19 @@ export {
 	type MemoryFact,
 	type MemoryFile
 } from './memory.ts';
-export { recallFor, searchMemory, type MemoryHit } from './memory-search.ts';
+export { recallFor, searchMemory, startEmbeddingMemory, type MemoryHit } from './memory-search.ts';
 export {
+	DEFAULT_EMBEDDING_MODELS,
 	embeddingProblem,
 	embeddingSource,
+	embeddingState,
 	embeddingStatus,
 	parseEmbeddingSetting,
-	type EmbeddingSource
+	saveEmbeddingSetting,
+	savedServerKey,
+	type EmbeddingSetting,
+	type EmbeddingSource,
+	type EmbeddingState
 } from './memory-embeddings.ts';
 export { learnFrom, type MemoryChange } from './memory-learning.ts';
 export {

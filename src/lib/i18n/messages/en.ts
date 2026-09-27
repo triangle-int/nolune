@@ -802,7 +802,45 @@ export const en = {
 		claudeNoAnswer: "Claude Code didn't answer.",
 		removed: 'Removed.',
 		newDefault: (name: string) => `New chats now start with ${name}.`,
-		presetRemoved: 'Removed. Existing conversations keep working.'
+		presetRemoved: 'Removed. Existing conversations keep working.',
+		/** Memory search by meaning: where its embeddings come from. */
+		embeddings: {
+			title: 'Memory search',
+			hint: "btw also finds memory facts by what they mean, not only by their words, and across languages. For that, every fact is sent once to where the embeddings are made, and each message as it's sent; a server on this computer keeps them here. Shared by every profile.",
+			name: 'Search by meaning',
+			using: (source: string) => `Uses ${source}.`,
+			usingServer: (model: string, url: string) => `Uses ${model} on ${url}.`,
+			off: 'Off: memory is searched by words only.',
+			noKeys: 'No OpenAI or OpenRouter key yet, so memory is searched by words only.',
+			noKey: (provider: string) =>
+				`No ${provider} key yet, so memory is searched by words only. Add one under API keys, above.`,
+			change: 'Change',
+			source: 'Embeddings from',
+			modes: {
+				auto: 'Auto',
+				openai: 'OpenAI',
+				openrouter: 'OpenRouter',
+				server: 'A server',
+				off: 'Off'
+			},
+			autoNote:
+				"OpenAI's text-embedding-3-small with the OpenAI key, else the same model through OpenRouter.",
+			withKey: (provider: string) => `With the ${provider} API key.`,
+			serverNote: 'Any OpenAI-compatible server, like Ollama, LM Studio or oMLX on this computer.',
+			offNote: 'Memory is searched by words only, and no fact is sent anywhere to be embedded.',
+			address: 'Address',
+			model: 'Model',
+			serverModel: 'Its name on the server, like embeddinggemma',
+			key: 'Key',
+			keyOptional: '(if the server needs one)',
+			keyKept: 'Saved. Leave empty to keep it.',
+			checking: 'Checking…',
+			works: 'Saved. It works; facts are embedded in the background.',
+			wordsOnly: 'Saved. Memory is searched by words only.',
+			noAnswer: (problem: string) => `Saved, but it didn't answer: ${problem}`,
+			needAddress: "Give the server's address, starting with http:// or https://.",
+			needModel: 'Give the model the server should use.'
+		}
 	}
 };
 

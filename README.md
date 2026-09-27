@@ -129,9 +129,9 @@ Access). `btw setup` prints the exact path.
   searches for more when a request needs them (`btw memory search wifi`). With an OpenAI or
   OpenRouter key, it also finds facts by meaning ("where's the other key for the car?" finds the
   spare key, a question in Russian finds notes in English): each fact is embedded once with that
-  provider's `text-embedding-3-small`. `btw config set embeddings off` turns that off, and
-  `btw config set embeddings http://localhost:11434/v1 <model>` uses a server on your computer
-  instead (Ollama, LM Studio, oMLX, anything OpenAI-compatible). The pinned
+  provider's `text-embedding-3-small`. An admin can turn that off, or use a server on your
+  computer instead (Ollama, LM Studio, oMLX, anything OpenAI-compatible), under Memory search in
+  Models & keys or with `btw config set embeddings`. The pinned
   `core` note (who's who, languages, allergies, anything you want it to always keep in mind) is in
   every chat from the start, so keep it short: at most 4,000 characters. Besides what btw saves
   as it goes, it looks over each chat once it has been quiet for a couple of minutes and saves

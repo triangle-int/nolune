@@ -685,10 +685,11 @@ one per topic (`family.md`, `people/anna.md`). There is no memory tool: like aut
   another language than the notes. So search and recall also compare embeddings, from any
   OpenAI-compatible embeddings API (the OpenAI SDK, loaded on first use). btw sets it up itself:
   with an OpenAI key, OpenAI's `text-embedding-3-small`; else with an OpenRouter key, the same
-  model through OpenRouter; else none, and words do it all. `btw config set embeddings` picks
-  another model (`openai/…`, `openrouter/…`), turns it `off` (every fact goes to that provider to
-  be embedded, whatever model the chats run on), or points it at a server on this computer, like
-  Ollama, LM Studio or oMLX (`<url> <model> [key]`), for anyone who wants it local. Each fact is
+  model through OpenRouter; else none, and words do it all. `btw config set embeddings`, or
+  Memory search under Models & keys, picks another model (`openai/…`, `openrouter/…`), turns it
+  `off` (every fact goes to that provider to be embedded, whatever model the chats run on), or
+  points it at a server on this computer, like Ollama, LM Studio or oMLX (`<url> <model> [key]`),
+  for anyone who wants it local. Each fact is
   embedded with its note and heading (`people/anna › Allergies: peanuts`) and kept in a hidden
   `.embeddings.json` with the model's name, so only new or changed facts are embedded again,
   and a new model starts over. The gateway embeds in the background: every profile's facts when
@@ -1195,6 +1196,13 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   setting the window needs no key; a name left as the default follows the model. New chats,
   automations that use the preset and chats switched to it from then on get the change; chats
   already on it keep the copy they took (see [Switching models](#switching-models)).
+  Last, **Memory search** says what search by meaning uses (see [Memory](#memory)), or why it goes
+  by words only (no key, or off), and Change opens a form: Auto, OpenAI, OpenRouter, a server or
+  Off, a model for a provider (its placeholder is the default), and for a server its address, the
+  model's name there and a key if it needs one. Like a key, a server's key never reaches the page:
+  it only says one is saved, and leaving the field empty keeps it. Saving asks the source once
+  (`embeddingProblem`) and says if it didn't answer, and a source that works starts embedding every
+  profile's facts in the background.
 
 ## Languages
 
