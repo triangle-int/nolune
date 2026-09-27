@@ -131,15 +131,18 @@ export class AppServer {
 		this.send({ method, params });
 	}
 
-	/** Ends Codex: its input closes, which ends it. It's stopped if it doesn't, then killed. */
-	close(): void {
-		if (this.ended) return;
+	/**
+	 * Ends Codex: its input closes, which ends it. It's stopped if it doesn't, then killed.
+	 * Resolves once it has ended.
+	 */
+	close(): Promise<void> {
+		if (this.ended) return this.exited;
 		this.proc.stdin.end();
 		const stop = setTimeout(() => this.proc.kill('SIGTERM'), STOP_AFTER_MS);
 		const kill = setTimeout(() => this.proc.kill('SIGKILL'), 2 * STOP_AFTER_MS);
 		stop.unref();
 		kill.unref();
-		void this.exited.then(() => {
+		return this.exited.then(() => {
 			clearTimeout(stop);
 			clearTimeout(kill);
 		});

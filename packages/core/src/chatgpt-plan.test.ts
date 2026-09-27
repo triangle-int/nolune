@@ -23,6 +23,7 @@ import {
 	signOutChatGpt,
 	startChatGptSignIn
 } from './chatgpt-plan.ts';
+import { AppServer } from './codex-app-server.ts';
 import { initConfig, updateConfig } from './config.ts';
 import {
 	appendRow,
@@ -738,6 +739,27 @@ describe('signing in with ChatGPT through Codex', { timeout: 20_000 }, () => {
 			})
 		);
 		expect(chatGptSignInState()).toEqual({ pending: null, signInError: null });
+	});
+
+	it('stops Codex too when the sign-in is cancelled while Codex starts', async () => {
+		useFakeCodex();
+		const start = vi.spyOn(AppServer, 'start');
+		const signingIn = startChatGptSignIn();
+		// A second sign-in, a double click or Ctrl-C, before Codex said hello.
+		cancelChatGptSignIn();
+		await expect(signingIn).rejects.toThrow('The sign-in was cancelled.');
+		expect(start).toHaveBeenCalledOnce();
+		const server = await start.mock.results[0].value;
+		await server.exited;
+		// The code Codex asked for goes unused.
+		expect(codexRequests().map((r) => r.method)).toEqual([
+			'initialize',
+			'initialized',
+			'account/login/start',
+			'account/login/cancel'
+		]);
+		expect(chatGptSignInState()).toEqual({ pending: null, signInError: null });
+		start.mockRestore();
 	});
 
 	it('signs Codex out', async () => {

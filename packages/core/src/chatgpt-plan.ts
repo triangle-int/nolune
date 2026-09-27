@@ -938,7 +938,13 @@ export async function startChatGptSignIn(): Promise<ChatGptSignIn> {
 		attempt.finish(error);
 		throw error;
 	}
-	if (finished) throw new PlanError('The sign-in was cancelled.');
+	if (finished) {
+		// Cancelled while Codex was starting, when `finish` had no Codex to close, or while it asked
+		// for the code, when there was no code yet to cancel.
+		await codex.request('account/login/cancel', { loginId }).catch(() => {});
+		await codex.close();
+		throw new PlanError('The sign-in was cancelled.');
+	}
 	void codex.exited.then(() =>
 		attempt.finish(new PlanError('Codex stopped before the sign-in finished.'))
 	);
