@@ -223,7 +223,7 @@ function startError(err: unknown): PlanError {
 	return new PlanError(`Codex: ${message.split('\n')[0]}`, null, { cause: err });
 }
 
-/** Runs `work` with Codex, then closes it. */
+/** Runs `work` with Codex, then closes it and waits for it to end. */
 async function withCodex<T>(
 	work: (codex: AppServer) => Promise<T>,
 	handlers: AppServerHandlers = {}
@@ -232,7 +232,7 @@ async function withCodex<T>(
 	try {
 		return await work(codex);
 	} finally {
-		codex.close();
+		await codex.close();
 	}
 }
 
@@ -622,7 +622,9 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 		clearTimeout(closeTimer);
 		// A command still running finishes (a stop ends it) and has its result saved.
 		await queue;
-		codex.close();
+		// Codex may still be writing to its home as it ends: the turn is over once it has ended,
+		// so the next turn's Codex doesn't start beside it.
+		await codex.close();
 	}
 
 	if (turn.signal.aborted) throw new PlanStopped();
@@ -854,7 +856,10 @@ export interface ChatGptSignIn {
 	userCode: string;
 	/** When btw stops waiting for the code, in ms since the epoch. */
 	expiresAt: number;
-	/** Resolves once the code was entered and Codex saved the sign-in; rejects when it doesn't. */
+	/**
+	 * Resolves once the code was entered and Codex saved the sign-in; rejects when it doesn't.
+	 * Either way, once the Codex that waited for the code has ended.
+	 */
 	done: Promise<void>;
 }
 
@@ -897,17 +902,17 @@ export async function startChatGptSignIn(): Promise<ChatGptSignIn> {
 			finished = true;
 			clearTimeout(timer);
 			if (pending === attempt) pending = null;
+			if (err && !quiet) lastError = err.message;
 			const server = codex;
-			if (err && loginId && server) {
-				// Codex stops waiting, and the code goes unused.
-				server
-					.request('account/login/cancel', { loginId })
-					.catch(() => {})
-					.finally(() => server.close());
-			} else server?.close();
-			if (!err) return settle.resolve();
-			if (!quiet) lastError = err.message;
-			settle.reject(err);
+			// Codex stops waiting, and the code goes unused.
+			const cancelled =
+				err && loginId && server
+					? server.request('account/login/cancel', { loginId }).catch(() => {})
+					: Promise.resolve();
+			// Settled once Codex has ended.
+			void cancelled
+				.then(() => server?.close())
+				.then(() => (err ? settle.reject(err) : settle.resolve()));
 		}
 	};
 	pending = attempt;

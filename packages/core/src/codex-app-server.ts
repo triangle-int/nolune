@@ -110,7 +110,7 @@ export class AppServer {
 			]);
 			server.notify('initialized');
 		} catch (err) {
-			server.close();
+			await server.close();
 			throw err;
 		} finally {
 			clearTimeout(timer);
@@ -131,9 +131,12 @@ export class AppServer {
 		this.send({ method, params });
 	}
 
-	/** Ends Codex: its input closes, which ends it. It's stopped if it doesn't, then killed. */
-	close(): void {
-		if (this.ended) return;
+	/**
+	 * Ends Codex: its input closes, which ends it. It's stopped if it doesn't, then killed.
+	 * Resolves once it has ended: until then it may still be writing to its home.
+	 */
+	close(): Promise<void> {
+		if (this.ended) return this.exited;
 		this.proc.stdin.end();
 		const stop = setTimeout(() => this.proc.kill('SIGTERM'), STOP_AFTER_MS);
 		const kill = setTimeout(() => this.proc.kill('SIGKILL'), 2 * STOP_AFTER_MS);
@@ -143,6 +146,7 @@ export class AppServer {
 			clearTimeout(stop);
 			clearTimeout(kill);
 		});
+		return this.exited;
 	}
 
 	private send(message: Record<string, unknown>): void {
