@@ -31,6 +31,19 @@ export {
 	saveApiKey,
 	type ApiKeyStatus
 } from './api-keys.ts';
+export {
+	CUSTOM_OPENAI_ENV,
+	CUSTOM_OPENAI_LABEL,
+	CustomOpenaiError,
+	checkCustomOpenai,
+	customOpenai,
+	customOpenaiStatus,
+	isServerUrl,
+	normalizeServerUrl,
+	removeCustomOpenai,
+	saveCustomOpenai,
+	type CustomOpenaiStatus
+} from './custom-openai.ts';
 export { getDb, schema, type DB } from './db/index.ts';
 export {
 	MIN_PASSWORD_LENGTH,
@@ -243,7 +256,7 @@ export {
 	embeddingStatus,
 	parseEmbeddingSetting,
 	saveEmbeddingSetting,
-	savedServerKey,
+	type EmbeddingProvider,
 	type EmbeddingSetting,
 	type EmbeddingSource,
 	type EmbeddingState

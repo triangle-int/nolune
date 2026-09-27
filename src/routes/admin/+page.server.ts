@@ -2,7 +2,9 @@ import { error, fail } from '@sveltejs/kit';
 import {
 	CLAUDE_INSTALL_COMMAND,
 	CODEX_INSTALL_COMMAND,
+	CUSTOM_OPENAI_ENV,
 	ApiKeyError,
+	CustomOpenaiError,
 	DEFAULT_EMBEDDING_MODELS,
 	PlanError,
 	PROVIDERS,
@@ -11,9 +13,12 @@ import {
 	apiKeyStatuses,
 	cancelChatGptSignIn,
 	checkApiKey,
+	checkCustomOpenai,
 	claudePlanStatus,
 	chatGptPlanStatus,
 	chatGptSignInState,
+	customOpenai,
+	customOpenaiStatus,
 	editPreset,
 	effectiveContextWindow,
 	embeddingProblem,
@@ -22,14 +27,17 @@ import {
 	findCodex,
 	getDefaultPreset,
 	isApiKeyProvider,
+	isServerUrl,
 	listPresets,
 	listProfiles,
 	normalizeApiKey,
+	normalizeServerUrl,
 	removeApiKey,
+	removeCustomOpenai,
 	removePreset,
 	saveApiKey,
+	saveCustomOpenai,
 	saveEmbeddingSetting,
-	savedServerKey,
 	setDefaultPreset,
 	signOutChatGpt,
 	startChatGptSignIn,
@@ -53,6 +61,9 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
 	return {
 		// Where each key comes from and its last four characters; never the keys themselves.
 		keys: apiKeyStatuses(),
+		// The Custom OpenAI server's address and whether it has a key; never the key.
+		customOpenai: customOpenaiStatus(),
+		customOpenaiEnv: CUSTOM_OPENAI_ENV.url,
 		providers: PROVIDERS.map((id) => ({ id, label: PROVIDER_LABELS[id] })),
 		// Where Claude Code is; whether it's signed in takes starting it, so that's a button.
 		claude: { ...findClaudeCode(), installCommand: CLAUDE_INSTALL_COMMAND },
@@ -64,7 +75,7 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
 			installCommand: CODEX_INSTALL_COMMAND,
 			status: codex.installed && !signIn.pending ? await chatGptPlanStatus() : null
 		},
-		// What memory search finds meaning with. Never a server's key, only whether it has one.
+		// What memory search finds meaning with.
 		embeddings: embeddingState(),
 		embeddingDefaults: DEFAULT_EMBEDDING_MODELS,
 		presets: listPresets().map((p) => ({
@@ -130,6 +141,39 @@ export const actions: Actions = {
 			if (!(err instanceof ApiKeyError)) throw err;
 			return fail(400, { provider, keyError: err.message });
 		}
+	},
+	saveCustomOpenai: async ({ locals, request }) => {
+		requireAdmin(locals);
+		const { m } = translations(locals.locale);
+		const t = m.admin.custom;
+		const form = await request.formData();
+		const url = normalizeServerUrl(form.get('url')?.toString() ?? '');
+		if (!isServerUrl(url)) return fail(400, { customError: t.needAddress });
+		const typed = form.get('key')?.toString().trim() || undefined;
+		// Left empty, the key in use for the same address stays: the page never has it.
+		const current = customOpenai();
+		const key = typed ?? (current?.url === url ? current.key : null);
+		let result: { customMessage: string } | { customWarning: string };
+		try {
+			const found = await checkCustomOpenai(url, key);
+			result = found.warning
+				? { customWarning: m.admin.savedWarning(found.warning) }
+				: { customMessage: t.works(found.models.length) };
+		} catch (err) {
+			if (!(err instanceof CustomOpenaiError)) throw err;
+			// Saved all the same: the server may not run yet.
+			if (err.reason !== 'unreachable') return fail(400, { customError: err.message });
+			result = { customWarning: t.unchecked(err.message) };
+		}
+		saveCustomOpenai(url, typed);
+		// For memory search, when it uses the server.
+		startEmbeddingMemory(listProfiles().map((p) => p.slug));
+		return result;
+	},
+	removeCustomOpenai: ({ locals }) => {
+		requireAdmin(locals);
+		removeCustomOpenai();
+		return { customMessage: translations(locals.locale).m.admin.removed };
 	},
 	checkPlan: async ({ locals }) => {
 		requireAdmin(locals);
@@ -215,13 +259,9 @@ export const actions: Actions = {
 		let setting: EmbeddingSetting | undefined;
 		if (mode === 'openai' || mode === 'openrouter') {
 			setting = { provider: mode, model: model || DEFAULT_EMBEDDING_MODELS[mode] };
-		} else if (mode === 'server') {
-			const url = (form.get('url')?.toString().trim() ?? '').replace(/\/+$/, '');
-			if (!/^https?:\/\/[^\s/]+/i.test(url)) return fail(400, { embeddingsError: t.needAddress });
+		} else if (mode === 'custom-openai') {
 			if (!model) return fail(400, { embeddingsError: t.needModel });
-			// Left empty, the key saved for the same address stays: the page never has it.
-			const key = form.get('key')?.toString().trim() || savedServerKey(url);
-			setting = { url, model, ...(key ? { key } : {}) };
+			setting = { provider: mode, model };
 		} else if (mode === 'off') {
 			setting = 'off';
 		} else if (mode !== 'auto') {

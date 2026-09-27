@@ -12,17 +12,20 @@
 
 	/**
 	 * Where memory search gets its embeddings, to find facts by meaning: what's in use, and a form
-	 * to change it. `defaults`: each provider's model when none is typed.
+	 * to change it. `defaults`: each provider's model when none is typed. `customServer`: the
+	 * Custom OpenAI server's address, when there is one.
 	 */
 	let {
 		setting,
 		defaults,
 		keys,
+		customServer,
 		result
 	}: {
 		setting: EmbeddingState;
 		defaults: { openai: string; openrouter: string };
 		keys: Pick<ApiKeyStatus, 'provider' | 'label' | 'source'>[];
+		customServer: string | null;
 		result:
 			| { embeddingsMessage?: string; embeddingsWarning?: string; embeddingsError?: string }
 			| null
@@ -32,13 +35,12 @@
 	const { m } = getI18n();
 	const t = $derived(m.admin.embeddings);
 	const uid = $props.id();
-	const MODES: Mode[] = ['auto', 'openai', 'openrouter', 'server', 'off'];
+	const MODES: Mode[] = ['auto', 'openai', 'openrouter', 'custom-openai', 'off'];
 
 	let open = $state(false);
 	let saving = $state(false);
 	let mode = $state<Mode>('auto');
 	let model = $state('');
-	let url = $state('');
 
 	const key = (provider: string) => keys.find((k) => k.provider === provider);
 	const hasKey = (provider: string) => !!key(provider)?.source;
@@ -46,16 +48,9 @@
 
 	/** What the row says is in use, or why search goes by words only. */
 	const status = $derived.by(() => {
-		if (setting.using) {
-			return {
-				warn: false,
-				text:
-					setting.mode === 'server' && setting.model && setting.url
-						? t.usingServer(setting.model, setting.url)
-						: t.using(setting.using)
-			};
-		}
+		if (setting.using) return { warn: false, text: t.using(setting.using) };
 		if (setting.mode === 'off') return { warn: false, text: t.off };
+		if (setting.mode === 'custom-openai') return { warn: true, text: t.noServer };
 		if (setting.mode === 'openai' || setting.mode === 'openrouter') {
 			return { warn: true, text: t.noKey(label(setting.mode)) };
 		}
@@ -74,14 +69,18 @@
 				? { warn: false, text: t.withKey(label(mode)) }
 				: { warn: true, text: t.noKey(label(mode)) };
 		}
-		return { warn: false, text: mode === 'server' ? t.serverNote : t.offNote };
+		if (mode === 'custom-openai') {
+			return customServer
+				? { warn: false, text: t.customNote(customServer) }
+				: { warn: true, text: t.noServer };
+		}
+		return { warn: false, text: t.offNote };
 	});
 
 	/** The form starts from what's saved. */
 	function start() {
 		mode = setting.mode;
 		model = setting.model ?? '';
-		url = setting.url ?? '';
 		open = true;
 	}
 </script>
@@ -151,54 +150,21 @@
 					<input type="hidden" name="mode" value={mode} />
 				</div>
 
-				{#if mode === 'server'}
-					<div class="space-y-2">
-						<label for="{uid}-url" class="block font-medium">{t.address}</label>
-						<Input
-							id="{uid}-url"
-							name="url"
-							bind:value={url}
-							required
-							autocomplete="off"
-							spellcheck="false"
-							placeholder="http://localhost:11434/v1"
-							class="h-10 rounded-full px-4 font-mono placeholder:font-sans"
-						/>
-					</div>
-				{/if}
-
-				{#if mode === 'openai' || mode === 'openrouter' || mode === 'server'}
+				{#if mode === 'openai' || mode === 'openrouter' || mode === 'custom-openai'}
 					<div class="space-y-2">
 						<label for="{uid}-model" class="block font-medium">{t.model}</label>
 						<Input
 							id="{uid}-model"
 							name="model"
 							bind:value={model}
-							required={mode === 'server'}
+							required={mode === 'custom-openai'}
 							autocomplete="off"
 							spellcheck="false"
-							placeholder={mode === 'server'
-								? t.serverModel
+							placeholder={mode === 'custom-openai'
+								? t.customModel
 								: mode === 'openai'
 									? defaults.openai
 									: defaults.openrouter}
-							class="h-10 rounded-full px-4 font-mono placeholder:font-sans"
-						/>
-					</div>
-				{/if}
-
-				{#if mode === 'server'}
-					<div class="space-y-2">
-						<label for="{uid}-key" class="block font-medium">
-							{t.key} <span class="font-normal text-muted-foreground">{t.keyOptional}</span>
-						</label>
-						<Input
-							id="{uid}-key"
-							name="key"
-							type="password"
-							autocomplete="off"
-							spellcheck="false"
-							placeholder={setting.hasKey && url === setting.url ? t.keyKept : ''}
 							class="h-10 rounded-full px-4 font-mono placeholder:font-sans"
 						/>
 					</div>

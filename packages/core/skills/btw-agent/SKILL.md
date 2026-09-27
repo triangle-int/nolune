@@ -34,8 +34,9 @@ Other parts of the CLI have their own instructions: automations (`btw trigger`, 
 ## Models
 
 Chats run on model presets, on Claude (Anthropic), on OpenAI's models or on the models
-OpenRouter serves with an API key, or on a plan: someone's own Claude or ChatGPT subscription
-(`claude-plan`, `chatgpt-plan`, below). People
+OpenRouter serves with an API key, on the models of the family's own server that speaks OpenAI's
+API (`custom-openai`: Ollama, LM Studio, vLLM...), or on a plan: someone's own Claude or ChatGPT
+subscription (`claude-plan`, `chatgpt-plan`, below). People
 pick one when they start a chat, and new chats start with the default. They can switch a chat to
 another one from its composer; its next reply then reads the whole chat again without the cache.
 
@@ -44,6 +45,7 @@ btw preset list                                 # name, provider/model, context 
 btw preset add claude-sonnet-5 --name "Sonnet"  # Anthropic checks the model id first
 btw preset add gpt-6-astra --provider openai --name "GPT"
 btw preset add deepseek/deepseek-v4.1-flash --provider openrouter --name "DeepSeek"
+btw preset add qwen3:8b --provider custom-openai --name "Qwen (local)"
 btw preset add claude-opus-5-5 --provider claude-plan --name "Opus (plan)"
 btw preset add gpt-6-astra --provider chatgpt-plan --name "GPT (plan)"
 btw preset default Sonnet                       # new chats start with it
@@ -54,8 +56,11 @@ btw knows the context window of OpenAI's flagship models (1,050,000 tokens since
 its other models (mini, nano), give `--context-window` when you know it. OpenRouter's ids name
 the model's maker (`anthropic/claude-sonnet-5`, `google/gemini-3.8-flash`; see
 https://openrouter.ai/models), its models list their window, and btw only takes one that can call
-tools, since that's how you run commands. Models that can't see pictures or read PDFs get them as
-their paths. A preset needs its provider's key, or its plan's sign-in. If `btw preset add` can't
+tools, since that's how you run commands. A `custom-openai` model is checked against the models
+its server lists, and whether it calls tools shows at its first reply; its window is unknown
+unless the server says it, so give `--context-window` when you know it. Models that can't see
+pictures or read PDFs, and every `custom-openai` model, get them as their paths. A preset needs
+its provider's key, the Custom OpenAI server, or its plan's sign-in. If `btw preset add` can't
 check the model, an admin can add it under Models & keys in the account menu.
 
 ### Plans
@@ -89,10 +94,12 @@ preset). When a plan's limit is used up, chats on it stop until the time the err
 The `anthropic` key runs chats on Claude; the `openai` one runs chats on OpenAI's models and makes
 pictures; the `openrouter` one runs chats on OpenRouter's models and pays for them with its
 credits. `btw key set` checks a key with the provider and refuses one it rejects, and btw uses the
-new key from the next message.
+new key from the next message. The Custom OpenAI server is set the same way, by its address and
+a key if it wants one; btw asks it for its models first.
 
 ```sh
 btw key set openai 'sk-...'
+btw key set custom-openai http://localhost:11434/v1     # Ollama; LM Studio is :1234/v1
 ```
 
 A key typed into a chat stays in the chat's history. When someone wants to add or replace a key
@@ -154,12 +161,12 @@ every profile, so it's an admin's to change, here or under Memory search in Mode
 btw config set embeddings off                                    # words only; facts stay here
 btw config set embeddings auto                                   # back to btw's own choice
 btw config set embeddings openrouter/qwen/qwen3-embedding-8b     # another model, with its key
-btw config set embeddings http://localhost:11434/v1 embeddinggemma   # a server on this computer
+btw config set embeddings custom-openai/nomic-embed-text         # a model of the Custom OpenAI server
 ```
 
-The last form takes any OpenAI-compatible server (Ollama's address is above, LM Studio's is
-usually `http://localhost:1234/v1`), a model it serves, and a key if it needs one. It asks the
-server once and says if it didn't answer. Every fact is embedded again with a new model, in the
+The last form takes a model the Custom OpenAI server serves (`btw key set custom-openai`, above),
+which keeps every fact on this computer when the server runs here. It asks the source once and
+says if it didn't answer. Every fact is embedded again with a new model, in the
 background; until then, and whenever it can't reach the server, search goes by words.
 
 ## The avatar

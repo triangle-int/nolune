@@ -1,4 +1,6 @@
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -163,6 +165,58 @@ describe('btw preset edit', () => {
 		const missing = await run(['preset', 'edit', 'Opus', '--name', 'Smart']);
 		expect(missing.code).not.toBe(0);
 		expect(missing.err).toContain('No preset "Opus"');
+	});
+});
+
+describe('btw key set custom-openai', () => {
+	it('checks the server for its models, and memory search can use them', async () => {
+		// A server that wants a key, like a vLLM started with --api-key.
+		const server = createServer((req, res) => {
+			res.setHeader('content-type', 'application/json');
+			if (req.headers.authorization !== 'Bearer sk-local') {
+				res.writeHead(401).end(JSON.stringify({ error: { message: 'Invalid API key' } }));
+			} else if (req.url === '/v1/models') {
+				res.end(JSON.stringify({ object: 'list', data: [{ id: 'qwen3:8b' }, { id: 'nomic' }] }));
+			} else {
+				res.end(JSON.stringify({ data: [{ index: 0, embedding: [0.6, 0.8] }] }));
+			}
+		});
+		await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+		const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
+		try {
+			const refused = await run(['key', 'set', 'custom-openai', url], { stdin: '' });
+			expect(refused.code).not.toBe(0);
+			expect(refused.err).toContain('The server wants a key.');
+
+			expect(await run(['key', 'set', 'custom-openai', `${url}/`, 'sk-local'])).toEqual({
+				code: 0,
+				out: `Saved the Custom OpenAI server at ${url}. It serves qwen3:8b, nomic.\n`,
+				err: ''
+			});
+			expect((await run(['config'])).out).toContain(`\ncustom-openai ${url}, with a key\n`);
+
+			const meaning = await run(['config', 'set', 'embeddings', 'custom-openai/nomic']);
+			expect(meaning.out).toBe('Memory search by meaning: custom-openai/nomic.\n');
+			const address = await run(['config', 'set', 'embeddings', url]);
+			expect(address.err).toContain('btw key set custom-openai <url>');
+
+			expect((await run(['key', 'rm', 'custom-openai'])).out).toBe(
+				'Removed the Custom OpenAI server.\n'
+			);
+			expect((await run(['config'])).out).toContain(
+				'embeddings    custom-openai/nomic, but there is no Custom OpenAI server'
+			);
+		} finally {
+			server.close();
+		}
+	});
+
+	it("saves a server that doesn't answer yet, with a warning", async () => {
+		const saved = await run(['key', 'set', 'custom-openai', 'http://127.0.0.1:1/v1']);
+		expect(saved.code).toBe(0);
+		expect(saved.out).toMatch(
+			/^Saved the Custom OpenAI server without checking it\. Couldn't reach http:\/\/127\.0\.0\.1:1\/v1 \(.+\)\.\n$/
+		);
 	});
 });
 

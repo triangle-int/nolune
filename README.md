@@ -14,7 +14,8 @@ Needs macOS (Linux works without the background service), Node 22.18+ and an
 [Anthropic API key](https://console.anthropic.com/), an
 [OpenAI API key](https://platform.openai.com/api-keys), an
 [OpenRouter API key](https://openrouter.ai/settings/keys) (chats run on Claude, on OpenAI's GPT
-models, or on any model OpenRouter serves that can call tools; you can have all three), a Claude
+models, or on any model OpenRouter serves that can call tools; you can have all three), a server
+that speaks OpenAI's API (Ollama, LM Studio, vLLM...) with a model that can call tools, a Claude
 Pro or Max plan signed in to [Claude Code](https://claude.com/claude-code) on the same computer, or
 a ChatGPT Plus, Pro or Business plan signed in to OpenAI's
 [Codex](https://developers.openai.com/codex/cli) there (see below).
@@ -23,7 +24,8 @@ a ChatGPT Plus, Pro or Business plan signed in to OpenAI's
 npm install -g btw-agent
 btw setup                      # API key, your account, default model, public URL
                                # (btw setup --provider openai to start with GPT, openrouter
-                               #  for OpenRouter's models, or with a plan instead of a key:
+                               #  for OpenRouter's models, custom-openai --url <address> for
+                               #  your own server, or with a plan instead of a key:
                                #  --provider claude-plan or chatgpt-plan)
 btw key set openai             # optional: GPT models for chats, and pictures (Images page)
 btw service install            # run in the background, start at login
@@ -39,6 +41,13 @@ preset can run any model [OpenRouter](https://openrouter.ai/models) serves that 
 `btw preset add deepseek/deepseek-v4.1-flash --provider openrouter`. OpenRouter's ids name the
 model's maker. Pictures and PDFs go only to models that take them; for the others, they're saved
 for the agent and named in the message, like any other file.
+
+**On your own server.** Custom OpenAI runs chats on any server that speaks OpenAI's API, like
+[Ollama](https://ollama.com) or [LM Studio](https://lmstudio.ai) on this computer: `btw key set
+custom-openai http://localhost:11434/v1` (with its key after the address, if it wants one), or
+under Models & keys, then `btw preset add qwen3:8b --provider custom-openai`. btw asks the server
+for its models to check it. The model must be able to call tools; pictures and PDFs reach it as
+their paths.
 
 **On your own plan instead of an API key.** Chats can run on a subscription someone in the family
 already has. Pick one with `btw setup --provider <plan>`, or later with `btw <plan> setup` and a
@@ -129,9 +138,9 @@ Access). `btw setup` prints the exact path.
   searches for more when a request needs them (`btw memory search wifi`). With an OpenAI or
   OpenRouter key, it also finds facts by meaning ("where's the other key for the car?" finds the
   spare key, a question in Russian finds notes in English): each fact is embedded once with that
-  provider's `text-embedding-3-small`. An admin can turn that off, or use a server on your
-  computer instead (Ollama, LM Studio, oMLX, anything OpenAI-compatible), under Memory search in
-  Models & keys or with `btw config set embeddings`. The pinned
+  provider's `text-embedding-3-small`. An admin can turn that off, or use a model of the Custom
+  OpenAI server instead (Ollama, LM Studio, oMLX on your computer), under Memory search in Models &
+  keys or with `btw config set embeddings custom-openai/nomic-embed-text`. The pinned
   `core` note (who's who, languages, allergies, anything you want it to always keep in mind) is in
   every chat from the start, so keep it short: at most 4,000 characters. Besides what btw saves
   as it goes, it looks over each chat once it has been quiet for a couple of minutes and saves

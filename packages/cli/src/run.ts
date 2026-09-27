@@ -5,6 +5,8 @@ import { parseArgs } from 'node:util';
 import {
 	API_KEYS,
 	ApiKeyError,
+	CUSTOM_OPENAI_ENV,
+	CustomOpenaiError,
 	DEFAULT_IMAGE_MODEL,
 	DEFAULT_PORT,
 	MAX_MEDIA_BYTES,
@@ -12,9 +14,11 @@ import {
 	editPreset,
 	apiKeyStatuses,
 	checkApiKey,
+	checkCustomOpenai,
 	claudeExecutable,
 	codexExecutable,
 	configExists,
+	customOpenaiStatus,
 	createSkill,
 	createUser,
 	deleteUser,
@@ -41,9 +45,11 @@ import {
 	profileSkillsDir,
 	readConfig,
 	removeApiKey,
+	removeCustomOpenai,
 	removePreset,
 	isPlan,
 	saveApiKey,
+	saveCustomOpenai,
 	scanSkills,
 	setAdmin,
 	setDefaultPreset,
@@ -77,10 +83,12 @@ import {
 const help = () => `btw - a family agent that runs on this computer
 
 Getting started
-  btw setup [--provider anthropic|openai|openrouter|claude-plan|chatgpt-plan]
-                                             interactive first-time setup (key, your account, model);
+  btw setup [--provider anthropic|openai|openrouter|custom-openai|claude-plan|chatgpt-plan]
+          [--url ADDRESS]                    interactive first-time setup (key, your account, model);
                                              chats run on Claude unless you pick another: openrouter
-                                             runs any model OpenRouter serves with one key, and a
+                                             runs any model OpenRouter serves with one key,
+                                             custom-openai the models of a server at --url that
+                                             speaks OpenAI's API (Ollama, LM Studio, vLLM...), and a
                                              plan (see Plans below) is signed in to instead
   btw start                                  run the gateway in the foreground
   btw service install|uninstall|restart|status|logs [-f]
@@ -90,10 +98,11 @@ Settings (${paths.home})
   btw config                                 show address, port and what's configured
   btw config set <host|port|origin> <value>  origin = the public URL people open
   btw config set image-model <provider/model>  for pictures, e.g. openai/gpt-image-2.5-flare
-  btw config set embeddings <auto|off|provider/model|url model [key]>
+  btw config set embeddings <auto|off|provider/model>
                                              what memory search finds meaning with: auto uses the
-                                             OpenAI key, else OpenRouter's; a URL is any OpenAI-
-                                             compatible server, like Ollama or LM Studio
+                                             OpenAI key, else OpenRouter's; the provider is openai,
+                                             openrouter or custom-openai (your server's model, like
+                                             custom-openai/nomic-embed-text)
   btw config set claude-path <path>          the Claude Code that claude-plan chats run, and the
   btw config set codex-path <path>           Codex that chatgpt-plan chats run (found on the PATH
                                              and in their usual folders otherwise)
@@ -102,6 +111,11 @@ Settings (${paths.home})
                                              it; OpenAI's runs GPT chats and makes pictures. Admins
                                              can also do this on the web, under Models & keys
   btw key rm <anthropic|openai|openrouter>   remove a stored key (the environment's is used, if set)
+  btw key set custom-openai <url> [key]      the Custom OpenAI server: any server that speaks
+                                             OpenAI's API, like Ollama (http://localhost:11434/v1)
+                                             or LM Studio (http://localhost:1234/v1), and its key if
+                                             it wants one; btw asks it for its models first
+  btw key rm custom-openai                   forget it (${CUSTOM_OPENAI_ENV.url} is used, if set)
   btw env set <NAME> <value>                 extra env var for agent commands (e.g. FIRECRAWL_API_KEY)
   btw env rm <NAME> | btw env list
 
@@ -127,15 +141,17 @@ Users (web sign-up is disabled; this is the only way to add people)
   btw user list
 
 Model presets (shared by all profiles)
-  btw preset add <model> [--provider anthropic|openai|openrouter|claude-plan|chatgpt-plan]
-                 [--name N] [--context-window TOKENS]
+  btw preset add <model> [--provider anthropic|openai|openrouter|custom-openai|claude-plan|
+                 chatgpt-plan] [--name N] [--context-window TOKENS]
                                              the provider checks the model id first (anthropic
                                              unless given); OpenAI models other than the
                                              flagships need --context-window. OpenRouter's ids
                                              name their maker (anthropic/claude-sonnet-5), and the
-                                             model must be able to call tools. The plans check
-                                             their agent's sign-in instead, and chatgpt-plan the
-                                             models Codex offers
+                                             model must be able to call tools. A custom-openai
+                                             model must call tools too, which shows at its first
+                                             reply; pictures and PDFs reach it as paths. The plans
+                                             check their agent's sign-in instead, and chatgpt-plan
+                                             the models Codex offers
   btw preset edit <name|id> [--provider P] [--model M] [--name N] [--context-window TOKENS|auto]
                                              change what's given; a new model is checked like
                                              add's. Chats already on the preset keep what they had
@@ -168,6 +184,8 @@ const SETUP: Record<Provider, { model: string; keys: string }> = {
 	anthropic: { model: 'claude-opus-5-5', keys: 'console.anthropic.com > API keys' },
 	openai: { model: 'gpt-6-astra', keys: 'platform.openai.com > API keys' },
 	openrouter: { model: 'anthropic/claude-opus-5.5', keys: 'openrouter.ai > Settings > API Keys' },
+	// The first model the server lists.
+	'custom-openai': { model: '', keys: '' },
 	'claude-plan': { model: 'claude-opus-5-5', keys: '' },
 	'chatgpt-plan': { model: 'gpt-6-astra', keys: '' }
 };
@@ -199,6 +217,45 @@ async function storeApiKey(io: Io, provider: ApiKeyProvider, pasted: string): Pr
 		saveApiKey(provider, key);
 		io.log(`Saved the ${label} API key without checking it. ${err.message}`);
 	}
+}
+
+/**
+ * Checks the Custom OpenAI server by asking it for its models, and saves it: the models it serves.
+ * One that wants a key gets asked for it at a terminal; one that can't be reached is saved with a
+ * warning, so setup works before the server runs.
+ */
+async function storeCustomOpenai(io: Io, url: string, given: string | null): Promise<string[]> {
+	let key = given?.trim() || null;
+	let found: Awaited<ReturnType<typeof checkCustomOpenai>>;
+	try {
+		try {
+			found = await checkCustomOpenai(url, key);
+		} catch (err) {
+			if (!(err instanceof CustomOpenaiError) || err.reason !== 'key' || key || !io.stdinIsTTY) {
+				throw err;
+			}
+			key = (await askHidden(io, `Its API key`)) || null;
+			if (!key) throw err;
+			found = await checkCustomOpenai(url, key);
+		}
+	} catch (err) {
+		if (!(err instanceof CustomOpenaiError) || err.reason !== 'unreachable') {
+			fail((err as Error).message);
+		}
+		saveCustomOpenai(url, key);
+		io.log(`Saved the Custom OpenAI server without checking it. ${err.message}`);
+		return [];
+	}
+	saveCustomOpenai(url, key);
+	const { url: saved } = customOpenaiStatus();
+	const some = found.models.slice(0, 8).join(', ');
+	const serves = found.models.length
+		? ` It serves ${some}${found.models.length > 8 ? ` and ${found.models.length - 8} more` : ''}.`
+		: '';
+	io.log(
+		`Saved the Custom OpenAI server at ${saved}.${serves}${found.warning ? ` ${found.warning}` : ''}`
+	);
+	return found.models;
 }
 
 function requireInit(): void {
@@ -245,13 +302,14 @@ async function setup(io: Io, args: string[]): Promise<void> {
 			password: { type: 'string' },
 			model: { type: 'string' },
 			origin: { type: 'string' },
-			port: { type: 'string' }
+			port: { type: 'string' },
+			url: { type: 'string' }
 		}
 	});
 
 	const provider = values.provider ?? 'anthropic';
 	if (!isProvider(provider)) {
-		fail('--provider is anthropic, openai, openrouter, claude-plan or chatgpt-plan');
+		fail('--provider is anthropic, openai, openrouter, custom-openai, claude-plan or chatgpt-plan');
 	}
 
 	const { created } = initConfig();
@@ -259,8 +317,20 @@ async function setup(io: Io, args: string[]): Promise<void> {
 	installCliShim();
 	io.log(created ? `Created ${paths.home}` : `Using ${paths.home}`);
 
+	let suggested = SETUP[provider].model;
 	if (isPlan(provider)) {
 		await setUpPlan(io, provider);
+	} else if (provider === 'custom-openai') {
+		if (!customOpenaiStatus().url || values.url) {
+			const url =
+				values.url ??
+				(await ask(
+					io,
+					'Server address (Ollama: http://localhost:11434/v1, LM Studio: http://localhost:1234/v1)'
+				));
+			if (!url) fail('a server address is required (--url)');
+			suggested = (await storeCustomOpenai(io, url, values.key ?? null))[0] ?? '';
+		}
 	} else {
 		const { label, field } = API_KEYS[provider];
 		if (!readConfig()[field]) {
@@ -282,7 +352,8 @@ async function setup(io: Io, args: string[]): Promise<void> {
 	}
 
 	if (listPresets().length === 0) {
-		const model = values.model ?? (await ask(io, 'Model', SETUP[provider].model));
+		const model = values.model ?? (await ask(io, 'Model', suggested));
+		if (!model) fail('which model? Pass --model <id>');
 		const preset = await addPreset({ provider, model });
 		io.log(`Added model "${preset.name}".`);
 	}
@@ -437,29 +508,43 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 			if (action === undefined) {
 				const config = readConfig();
 				const { host, port, origin } = listenAddress();
-				io.log(`home       ${paths.home}`);
-				io.log(`listen     http://${host}:${port}`);
-				io.log(`origin     ${origin}`);
+				const row = (name: string, value: string) => io.log(`${name.padEnd(13)} ${value}`);
+				row('home', paths.home);
+				row('listen', `http://${host}:${port}`);
+				row('origin', origin);
 				for (const key of apiKeyStatuses()) {
 					const where =
 						key.source === 'config' ? 'key set' : key.source === 'env' ? `key from ${key.env}` : '';
 					const shown = where
 						? `${where}${key.hint ? ` (…${key.hint})` : ''}`
 						: `no key (btw key set ${key.provider})`;
-					io.log(`${key.provider.padEnd(10)} ${shown}`);
+					row(key.provider, shown);
 				}
+				const custom = customOpenaiStatus();
+				row(
+					'custom-openai',
+					custom.url
+						? `${custom.url}${custom.source === 'env' ? ` from ${CUSTOM_OPENAI_ENV.url}` : ''}, ${custom.hasKey ? `with a key${custom.hint ? ` (…${custom.hint})` : ''}` : 'no key'}`
+						: 'no server (btw key set custom-openai <url>)'
+				);
 				const claude = claudeExecutable();
-				io.log(
-					`claude     ${claude ? `Claude Code at ${claude} (btw claude-plan status checks its sign-in)` : 'no Claude Code found (btw claude-plan setup installs it)'}`
+				row(
+					'claude',
+					claude
+						? `Claude Code at ${claude} (btw claude-plan status checks its sign-in)`
+						: 'no Claude Code found (btw claude-plan setup installs it)'
 				);
 				const codex = codexExecutable();
-				io.log(
-					`codex      ${codex ? `Codex at ${codex} (btw chatgpt-plan status checks its sign-in)` : 'no Codex found (btw chatgpt-plan setup installs it)'}`
+				row(
+					'codex',
+					codex
+						? `Codex at ${codex} (btw chatgpt-plan status checks its sign-in)`
+						: 'no Codex found (btw chatgpt-plan setup installs it)'
 				);
 				const images = imageGenerationStatus();
-				io.log(`images     ${images.model}${images.problem ? ` (${images.problem})` : ''}`);
-				io.log(`embeddings ${embeddingStatus()}`);
-				io.log(`env        ${Object.keys(config.commandEnv ?? {}).join(', ') || '-'}`);
+				row('images', `${images.model}${images.problem ? ` (${images.problem})` : ''}`);
+				row('embeddings', embeddingStatus());
+				row('env', Object.keys(config.commandEnv ?? {}).join(', ') || '-');
 				return;
 			}
 			if (action !== 'set') {
@@ -475,7 +560,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 			if (key === 'embeddings') {
 				let setting: ReturnType<typeof parseEmbeddingSetting>;
 				try {
-					setting = parseEmbeddingSetting(rest.slice(1));
+					setting = parseEmbeddingSetting(positional(rest, 1, 'auto|off|provider/model'));
 				} catch (err) {
 					fail((err as Error).message);
 				}
@@ -525,9 +610,24 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 		case 'key': {
 			requireInit();
 			const provider = rest[0] ?? '';
-			const names = Object.keys(API_KEYS).join('|');
+			const names = [...Object.keys(API_KEYS), 'custom-openai'].join('|');
+			if (provider === 'custom-openai' && action === 'rm') {
+				removeCustomOpenai();
+				const fallback = io.env[CUSTOM_OPENAI_ENV.url]
+					? ` btw uses ${CUSTOM_OPENAI_ENV.url} from the environment now.`
+					: '';
+				io.log(`Removed the Custom OpenAI server.${fallback}`);
+				return;
+			}
+			if (provider === 'custom-openai' && action === 'set') {
+				const url = positional(rest, 1, 'url');
+				await storeCustomOpenai(io, url, rest[2] ?? null);
+				return;
+			}
 			if ((action !== 'set' && action !== 'rm') || !isApiKeyProvider(provider)) {
-				fail(`usage: btw key set <${names}> [key] | btw key rm <${names}>`);
+				fail(
+					`usage: btw key set <${names}> [key] | btw key rm <${names}> (custom-openai takes its <url> before the key)`
+				);
 			}
 			const { label, env } = API_KEYS[provider];
 			if (action === 'rm') {

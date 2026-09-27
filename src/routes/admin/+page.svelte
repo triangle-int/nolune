@@ -13,6 +13,7 @@
 	import Rich from '$lib/components/Rich.svelte';
 	import TopBar from '$lib/components/TopBar.svelte';
 	import AddModelForm from '$lib/components/admin/AddModelForm.svelte';
+	import CustomOpenaiServer from '$lib/components/admin/CustomOpenaiServer.svelte';
 	import MemorySearch from '$lib/components/admin/MemorySearch.svelte';
 	import PresetForm from '$lib/components/admin/PresetForm.svelte';
 	import CopyButton from '$lib/components/chat/CopyButton.svelte';
@@ -193,6 +194,7 @@
 							{/if}
 						</li>
 					{/each}
+					<CustomOpenaiServer server={data.customOpenai} env={data.customOpenaiEnv} result={form} />
 				</ul>
 			</section>
 
@@ -489,6 +491,7 @@
 								<PresetForm
 									providers={data.providers}
 									keys={data.keys}
+									customServer={data.customOpenai.url}
 									claudeInstalled={data.claude.installed}
 									codexInstalled={data.chatgpt.installed}
 									{preset}
@@ -506,6 +509,7 @@
 				<AddModelForm
 					providers={data.providers}
 					keys={data.keys}
+					customServer={data.customOpenai.url}
 					claudeInstalled={data.claude.installed}
 					codexInstalled={data.chatgpt.installed}
 					problem={form?.addError}
@@ -517,6 +521,7 @@
 				setting={data.embeddings}
 				defaults={data.embeddingDefaults}
 				keys={data.keys}
+				customServer={data.customOpenai.url}
 				result={form}
 			/>
 		</div>

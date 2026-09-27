@@ -69,6 +69,9 @@ function isSdkError<K extends ErrorClass>(err: unknown, name: K): err is Instanc
 /** Something OpenRouter's side can't do, in words for people. */
 class OpenRouterError extends Error {}
 
+/** A reply that failed or ended early (readStream), in words for people, its provider named. */
+export class StreamError extends OpenRouterError {}
+
 class MissingApiKeyError extends OpenRouterError {
 	constructor() {
 		super(`No OpenRouter API key. ${apiKeyHelp('openrouter')}`);
@@ -233,13 +236,16 @@ function nativeMessage(content: unknown[], withReasoning: boolean): ChatMessage 
  * they came, reasoning included, except from before the system prompt was built again: through
  * OpenRouter it may be Claude's thinking, which is bound to the prompt. Replies from another model
  * or provider (the conversation switched), and btw's own, go as their text and calls. `cache`:
- * Claude only caches what's marked.
+ * Claude only caches what's marked. `provider`: whose replies these are; another server that
+ * speaks Chat Completions (custom-openai.ts) gets its replies back without their reasoning, which
+ * such servers don't take.
  */
 export function toChatMessages(
 	system: string,
 	messages: Message[],
 	model: string,
-	cache: CacheControl | null = null
+	cache: CacheControl | null = null,
+	provider: 'openrouter' | 'custom-openai' = 'openrouter'
 ): ChatMessage[] {
 	const out: ChatMessage[] = [
 		{
@@ -253,9 +259,9 @@ export function toChatMessages(
 			let reply: ChatMessage | null;
 			if (
 				native &&
-				(native.provider === null || (native.provider === 'openrouter' && native.model === model))
+				(native.provider === null || (native.provider === provider && native.model === model))
 			) {
-				reply = nativeMessage(native.content, !m.beforePromptChange);
+				reply = nativeMessage(native.content, provider === 'openrouter' && !m.beforePromptChange);
 			} else {
 				const portable = portableReply(m.blocks);
 				reply = assistantMessage(
@@ -300,6 +306,18 @@ function unreadableNote(block: ImageBlock | PdfBlock, model: string): TextBlock 
  * one would fail. Messages without any are returned as they are.
  */
 export async function readableMessages(messages: Message[], model: string): Promise<Message[]> {
+	return withoutUnreadable(messages, model, () => modelInputs(model));
+}
+
+/**
+ * The messages with each picture and PDF `model` can't take (`inputsOf`, asked only when there
+ * are any) as a note. Messages without any are returned as they are.
+ */
+export async function withoutUnreadable(
+	messages: Message[],
+	model: string,
+	inputsOf: () => Promise<{ pictures: boolean; pdfs: boolean }>
+): Promise<Message[]> {
 	const isFile = (b: Block) => b.type === 'image' || b.type === 'pdf';
 	const holdsFiles = messages.some((m) =>
 		m.blocks.some(
@@ -309,7 +327,7 @@ export async function readableMessages(messages: Message[], model: string): Prom
 		)
 	);
 	if (!holdsFiles) return messages;
-	const inputs = await modelInputs(model);
+	const inputs = await inputsOf();
 	if (inputs.pictures && inputs.pdfs) return messages;
 	return messages.map((m) => {
 		let changed = false;
@@ -328,7 +346,7 @@ export async function readableMessages(messages: Message[], model: string): Prom
 }
 
 /** A tool as btw saves it (Anthropic's format) as a function tool. */
-function functionTool(tool: Anthropic.Tool) {
+export function functionTool(tool: Anthropic.Tool) {
 	return {
 		type: 'function' as const,
 		function: { name: tool.name, description: tool.description, parameters: tool.input_schema }
@@ -346,6 +364,8 @@ interface ChunkDelta {
 	content?: string | null;
 	refusal?: string | null;
 	reasoning?: string | null;
+	/** How vLLM, LM Studio and DeepSeek's API name it. */
+	reasoning_content?: string | null;
 	reasoning_details?: ReasoningDetail[] | null;
 	tool_calls?:
 		| {
@@ -362,7 +382,7 @@ type ChatUsage = {
 	prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number } | null;
 } | null;
 
-interface Chunk {
+export interface Chunk {
 	choices?: { delta?: ChunkDelta | null; finish_reason?: string | null }[];
 	usage?: ChatUsage;
 }
@@ -380,17 +400,22 @@ const PIECED = new Set(['text', 'summary', 'data', 'signature']);
 
 /**
  * Reads the stream, telling `onEvent` about each block as it grows. Reasoning details and tool
- * calls arrive in pieces, keyed by their `index`, and are put together here.
+ * calls arrive in pieces, keyed by their `index`, and are put together here. `label` names the
+ * provider in its errors. `keepReasoning`: plain reasoning text, which OpenRouter sends beside its
+ * details, is kept as a `reasoning.text` piece when there are no details, so a server that sends
+ * only that still shows its thinking in the chat.
  */
-async function readStream(
+export async function readStream(
 	stream: AsyncIterable<Chunk>,
-	onEvent: (event: StreamEvent) => void
+	onEvent: (event: StreamEvent) => void,
+	options: { label: string; keepReasoning?: boolean } = { label: 'OpenRouter' }
 ): Promise<Reply> {
 	const details = new Map<number, ReasoningDetail>();
 	let lastDetail = -1;
 	const calls = new Map<number, ToolCallItem>();
 	let text = '';
 	let refusal = '';
+	let reasoning = '';
 	let finish: string | null = null;
 	let usage: ChatUsage = null;
 
@@ -447,8 +472,10 @@ async function readStream(
 				}
 			}
 			say('thinking', shown);
-		} else if (delta.reasoning) {
-			say('thinking', delta.reasoning);
+		} else if (delta.reasoning || delta.reasoning_content) {
+			const piece = delta.reasoning || delta.reasoning_content || '';
+			reasoning += piece;
+			say('thinking', piece);
 		}
 		if (delta.content) {
 			text += delta.content;
@@ -477,12 +504,17 @@ async function readStream(
 			if (piece.function?.arguments) call.function.arguments += piece.function.arguments;
 		}
 	}
-	if (!finish) throw new OpenRouterError('OpenRouter: the reply ended before it was complete.');
-	if (finish === 'error') throw new OpenRouterError('OpenRouter: the reply failed.');
+	if (!finish) {
+		throw new StreamError(`${options.label}: the reply ended before it was complete.`);
+	}
+	if (finish === 'error') throw new StreamError(`${options.label}: the reply failed.`);
 
 	const said = [text, refusal].filter(Boolean).join('\n\n');
 	// In the order the model made them, which is the order they must go back in.
 	const content: unknown[] = [...details.entries()].sort(([a], [b]) => a - b).map(([, d]) => d);
+	if (options.keepReasoning && !details.size && reasoning) {
+		content.push({ type: 'reasoning.text', text: reasoning });
+	}
 	if (said) content.push({ type: 'text', text: said });
 	content.push(...calls.values());
 	return {

@@ -229,6 +229,10 @@ type ModelOf = { provider: Provider; model: string };
  * would fail every later request, so it goes as its path when the answer is unsure too.
  */
 async function modelTakes(conv: ModelOf, what: 'pictures' | 'pdfs'): Promise<string | null> {
+	// Nothing says which of a server's models take them.
+	if (conv.provider === 'custom-openai') {
+		return `btw gives models on a Custom OpenAI server only ${what === 'pdfs' ? "a PDF's" : "a picture's"} path`;
+	}
 	try {
 		if ((await modelInputs(conv.provider, conv.model))[what]) return null;
 	} catch (err) {

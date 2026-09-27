@@ -3,6 +3,7 @@ import * as anthropic from './anthropic.ts';
 import * as claudePlan from './claude-plan.ts';
 import * as chatgptPlan from './chatgpt-plan.ts';
 import type { Usage } from './conversations.ts';
+import * as customOpenai from './custom-openai.ts';
 import { replyBlocks, toolCalls, type Message, type ToolCallBlock } from './format.ts';
 import * as openai from './openai-chat.ts';
 import * as openrouter from './openrouter.ts';
@@ -20,11 +21,15 @@ import { PlanError, isPlan, isPlanStopped, type Plan, type PlanTurn } from './pl
  * (runPlanTurn) rather than calling streamTurn.
  */
 
-/** `claude-plan` and `chatgpt-plan` run on someone's subscription instead of an API key (plans.ts). */
+/**
+ * `claude-plan` and `chatgpt-plan` run on someone's subscription instead of an API key (plans.ts);
+ * `custom-openai` on a server the admin names, which speaks OpenAI's API (custom-openai.ts).
+ */
 export const PROVIDERS = [
 	'anthropic',
 	'openai',
 	'openrouter',
+	'custom-openai',
 	'claude-plan',
 	'chatgpt-plan'
 ] as const;
@@ -39,6 +44,7 @@ export const PROVIDER_LABELS: Record<Provider, string> = {
 	anthropic: 'Anthropic',
 	openai: 'OpenAI',
 	openrouter: 'OpenRouter',
+	'custom-openai': customOpenai.CUSTOM_OPENAI_LABEL,
 	'claude-plan': 'Claude plan',
 	'chatgpt-plan': 'ChatGPT plan'
 };
@@ -109,6 +115,10 @@ export async function streamTurn(opts: {
 		const reply = await openrouter.streamTurn({ ...request, cacheKey });
 		return fromContent(reply.content, reply.stopReason, reply.usage);
 	}
+	if (provider === 'custom-openai') {
+		const reply = await customOpenai.streamTurn(request);
+		return fromContent(reply.content, reply.stopReason, reply.usage);
+	}
 	if (provider === 'openai') {
 		const response = await openai.streamResponse({ ...request, cacheKey });
 		return fromContent(
@@ -145,6 +155,7 @@ export async function quickReply(opts: {
 	if (opts.provider === 'claude-plan') return claudePlan.quickReply(opts);
 	if (opts.provider === 'chatgpt-plan') return chatgptPlan.quickReply(opts);
 	if (opts.provider === 'openrouter') return openrouter.quickReply(opts);
+	if (opts.provider === 'custom-openai') return customOpenai.quickReply(opts);
 	if (opts.provider === 'openai') {
 		const response = await openai.createResponse(opts);
 		const usage = openai.summarizeUsage(response.usage);
@@ -190,20 +201,23 @@ export function countDocumentTokens(
 
 /**
  * What the model can be sent besides text. Every model of Anthropic's, OpenAI's and the Claude
- * plan sees pictures and reads PDFs; OpenRouter says per model.
+ * plan sees pictures and reads PDFs; OpenRouter says per model; a Custom OpenAI server's models
+ * get them as their paths.
  */
 export async function modelInputs(
 	provider: Provider,
 	model: string
 ): Promise<{ pictures: boolean; pdfs: boolean }> {
 	if (provider === 'openrouter') return openrouter.modelInputs(model);
+	if (provider === 'custom-openai') return customOpenai.modelInputs();
 	return { pictures: true, pdfs: true };
 }
 
 /**
  * The messages as `model` can take them, before resolveFiles gives the provider its copies:
- * pictures and PDFs a model on OpenRouter can't read become notes. A chat that switched to that
- * model may hold them. Other providers' models take them all.
+ * pictures and PDFs a model on OpenRouter can't read, and all of them on a Custom OpenAI server,
+ * become notes. A chat that switched to that model may hold them. Other providers' models take
+ * them all.
  */
 export function readableMessages(
 	provider: Provider,
@@ -211,6 +225,7 @@ export function readableMessages(
 	messages: Message[]
 ): Promise<Message[]> {
 	if (provider === 'openrouter') return openrouter.readableMessages(messages, model);
+	if (provider === 'custom-openai') return customOpenai.readableMessages(messages, model);
 	return Promise.resolve(messages);
 }
 
@@ -218,7 +233,8 @@ export function readableMessages(
  * Throws if the provider doesn't know the model. Null when its window isn't known. For a plan, it
  * checks that its agent is here and signed in to one. Claude Code can't check a model id, so
  * whether it takes the model shows at the chat's first reply; Codex lists the plan's models.
- * On OpenRouter, the model must also be able to call tools.
+ * On OpenRouter, the model must also be able to call tools. A Custom OpenAI server is only asked
+ * whether it lists the model.
  */
 export async function fetchContextWindow(
 	provider: Provider,
@@ -230,6 +246,7 @@ export async function fetchContextWindow(
 	}
 	if (provider === 'chatgpt-plan') return chatgptPlan.fetchContextWindow(model);
 	if (provider === 'openrouter') return openrouter.fetchContextWindow(model);
+	if (provider === 'custom-openai') return customOpenai.fetchContextWindow(model);
 	return provider === 'openai'
 		? openai.fetchContextWindow(model)
 		: anthropic.fetchContextWindow(model);
@@ -255,13 +272,16 @@ export async function listModels(provider: Provider): Promise<ModelChoice[]> {
 	if (provider === 'claude-plan') return claudePlan.listModels();
 	if (provider === 'chatgpt-plan') return chatgptPlan.listModels();
 	if (provider === 'openrouter') return openrouter.listModels();
+	if (provider === 'custom-openai') return customOpenai.listModels();
 	return provider === 'openai' ? openai.listModels() : anthropic.listModels();
 }
 
 /** Plans say what went wrong in their own words (plans.ts). */
 export function describeApiError(err: unknown): string {
 	if (err instanceof PlanError) return err.message;
-	// OpenRouter's errors are OpenAI's SDK's classes too, so it's asked first.
+	// OpenRouter's and Custom OpenAI's errors are OpenAI's SDK's classes too, so they're asked
+	// first; Custom OpenAI's before OpenRouter's, whose stream reading it shares.
+	if (customOpenai.isCustomOpenaiError(err)) return customOpenai.describeApiError(err);
 	if (openrouter.isOpenRouterError(err)) return openrouter.describeApiError(err);
 	return openai.isOpenAIError(err) ? openai.describeApiError(err) : anthropic.describeApiError(err);
 }
@@ -269,6 +289,7 @@ export function describeApiError(err: unknown): string {
 /** The API's own message, without the status and JSON around it: for notes shown to the model. */
 export function shortApiError(err: unknown): string {
 	if (err instanceof PlanError) return err.message;
+	if (customOpenai.isCustomOpenaiError(err)) return customOpenai.shortApiError(err);
 	if (openrouter.isOpenRouterError(err)) return openrouter.shortApiError(err);
 	return openai.isOpenAIError(err) ? openai.shortApiError(err) : anthropic.shortApiError(err);
 }
@@ -278,6 +299,7 @@ export function isAbortError(err: unknown): boolean {
 		anthropic.isAbortError(err) ||
 		openai.isAbortError(err) ||
 		openrouter.isAbortError(err) ||
+		customOpenai.isAbortError(err) ||
 		isPlanStopped(err)
 	);
 }

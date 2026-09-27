@@ -862,6 +862,8 @@ export const fr: Messages = {
 					'OpenAI ne l’indique pas : Auto ne connaît que celle de ses modèles phares (1,05M depuis GPT-5.4).',
 				openrouter:
 					'Auto utilise la fenêtre qu’OpenRouter indique pour le modèle et son fournisseur principal.',
+				'custom-openai':
+					'Auto utilise la fenêtre que le serveur indique pour le modèle, s’il en indique une (vLLM le fait) ; sinon elle reste inconnue.',
 				'claude-plan':
 					'Claude Code ne l’indique pas : Auto ne connaît que ses modèles à 1M de contexte.',
 				'chatgpt-plan': 'Codex ne l’indique pas : Auto la laisse donc inconnue.'
@@ -873,6 +875,10 @@ export const fr: Messages = {
 			onKey: (provider: string) => `Utilise la clé d’API ${provider}.`,
 			noKey: (provider: string) =>
 				`Pas encore de clé d’API ${provider} : ajoutez-en une dans « Clés d’API » plus haut.`,
+			onServer: (url: string) =>
+				`Utilise le serveur Custom OpenAI à ${url}. Le modèle doit savoir appeler des outils ; les images et les PDF lui parviennent sous forme de chemins.`,
+			noServer:
+				'Pas encore de serveur Custom OpenAI : configurez-en un dans Clés d’API, plus haut.',
 			asking: (source: string) => `Demande de ses modèles à ${source}…`,
 			listProblem: (problem: string) => `${problem} Vous pouvez quand même saisir un identifiant.`,
 			couldNotList: (status: number) => `btw n’a pas pu obtenir les modèles (${status}).`,
@@ -897,43 +903,64 @@ export const fr: Messages = {
 		newDefault: (name: string) => `Les nouvelles discussions commencent maintenant avec ${name}.`,
 		presetRemoved: 'Retiré. Les discussions existantes continuent de fonctionner.',
 		/** Memory search by meaning: where its embeddings come from. */
+		custom: {
+			name: 'Custom OpenAI',
+			about:
+				'Fait tourner les discussions et automatisations sur les modèles de tout serveur qui parle l’API d’OpenAI, comme Ollama, LM Studio ou vLLM, et peut calculer les embeddings de la recherche dans la mémoire.',
+			saved: 'Enregistré dans btw',
+			fromEnv: (variable: string) => `Depuis la variable d’environnement ${variable}`,
+			keyEnding: (hint: string | null) => (hint ? `clé se terminant par ${hint}` : 'avec une clé'),
+			noKey: 'sans clé',
+			setUp: 'Configurer',
+			change: 'Modifier',
+			address: 'Adresse',
+			key: 'Clé',
+			keyOptional: '(si le serveur en demande une)',
+			keyKept: 'Enregistrée. Laissez vide pour la garder.',
+			hint: 'Ollama écoute sur http://localhost:11434/v1 et LM Studio sur http://localhost:1234/v1. btw demande ses modèles au serveur pour le vérifier.',
+			checking: 'Vérification du serveur…',
+			works: (n: number) =>
+				`Enregistré. Il propose ${n} ${p(n, { one: 'modèle', other: 'modèles' })}.`,
+			unchecked: (problem: string) => `Enregistré sans vérification : ${problem}`,
+			needAddress: 'Indiquez l’adresse du serveur, en commençant par http:// ou https://.',
+			removeTitle: 'Retirer le serveur Custom OpenAI ?',
+			removeBody:
+				'Les discussions et automatisations sur ses modèles cessent de fonctionner, tout comme la recherche par le sens si elle utilise ce serveur, jusqu’à ce qu’un serveur soit de nouveau configuré.',
+			useEnvInstead: (variable: string) =>
+				`btw utilisera plutôt l’adresse de la variable d’environnement ${variable}.`
+		},
 		embeddings: {
 			title: 'Recherche dans la mémoire',
 			hint: 'btw retrouve aussi les faits de la mémoire par leur sens, pas seulement par leurs mots, et d’une langue à l’autre. Pour cela, chaque fait est envoyé une fois là où sont calculés les embeddings, et chaque message à son envoi ; un serveur sur cet ordinateur les garde ici. Commun à tous les profils.',
 			name: 'Recherche par le sens',
 			using: (source: string) => `Utilise ${source}.`,
-			usingServer: (model: string, url: string) => `Utilise ${model} sur ${url}.`,
 			off: 'Désactivée : la mémoire est cherchée par mots seulement.',
 			noKeys:
 				'Pas encore de clé OpenAI ni OpenRouter : la mémoire est cherchée par mots seulement.',
 			noKey: (provider: string) =>
 				`Pas encore de clé ${provider} : la mémoire est cherchée par mots seulement. Ajoutez-en une dans Clés d’API, plus haut.`,
+			noServer:
+				'Pas encore de serveur Custom OpenAI : la mémoire est cherchée par mots seulement. Configurez-en un dans Clés d’API, plus haut.',
 			change: 'Modifier',
 			source: 'Embeddings de',
 			modes: {
 				auto: 'Auto',
 				openai: 'OpenAI',
 				openrouter: 'OpenRouter',
-				server: 'Un serveur',
+				'custom-openai': 'Custom OpenAI',
 				off: 'Désactivée'
 			},
 			autoNote:
 				'text-embedding-3-small d’OpenAI avec la clé OpenAI, sinon le même modèle via OpenRouter.',
 			withKey: (provider: string) => `Avec la clé d’API ${provider}.`,
-			serverNote:
-				'Tout serveur compatible avec OpenAI, comme Ollama, LM Studio ou oMLX sur cet ordinateur.',
+			customNote: (url: string) => `Un modèle du serveur Custom OpenAI à ${url}.`,
 			offNote: 'La mémoire est cherchée par mots seulement, et aucun fait n’est envoyé nulle part.',
-			address: 'Adresse',
 			model: 'Modèle',
-			serverModel: 'Son nom sur le serveur, comme embeddinggemma',
-			key: 'Clé',
-			keyOptional: '(si le serveur en demande une)',
-			keyKept: 'Enregistrée. Laissez vide pour la garder.',
+			customModel: 'Son nom sur le serveur, comme nomic-embed-text',
 			checking: 'Vérification…',
 			works: 'Enregistré. Ça fonctionne ; les faits sont traités en arrière-plan.',
 			wordsOnly: 'Enregistré. La mémoire est cherchée par mots seulement.',
 			noAnswer: (problem: string) => `Enregistré, mais pas de réponse : ${problem}`,
-			needAddress: 'Indiquez l’adresse du serveur, en commençant par http:// ou https://.',
 			needModel: 'Indiquez le modèle que le serveur doit utiliser.'
 		}
 	}

@@ -15,7 +15,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | Conversations      | Shared by every member of the profile. Messages go through a queue, and a message sent while the agent is working is fed into its next step (steering). Anyone can press Stop.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | Sender identity    | Every human message is sent to the model as `Name: text`. Attached files come first, each as a line saying who attached it and where it was saved, followed by the picture or PDF itself when the model gets one. Display names are unique across the gateway.                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | Attachments        | Any file, up to 100 MB and 10 per message, saved in the profile's `attachments` folder. btw keeps a copy of each picture and PDF the model gets and sends it by reference: through the provider's Files API (base64 only if an upload fails), whichever provider the chat moves to; the plans have none, so pictures go inline, and PDFs too on the Claude plan and as their path on the ChatGPT plan. Every other file goes as its path.                                                                                                                                                                                                                                                                      |
-| Providers          | Anthropic, OpenAI and OpenRouter (API keys), and two plans, someone's own subscription instead of a key (see [Plans](#plans)): `claude-plan`, a Pro or Max plan signed in to Claude Code on this computer, and `chatgpt-plan`, a ChatGPT plan signed in to OpenAI's Codex there, each of which btw runs. Keys and model presets are global and managed by the admin with the CLI or the `/admin` page (Models & keys). A preset has a name (default `<model> (<provider>)`), a provider, a model, and an optional window override. One preset is the default (the oldest until an admin picks one): new chats start with it, and automations without a preset use it. See [Model providers](#model-providers). |
+| Providers          | Anthropic, OpenAI and OpenRouter (API keys), Custom OpenAI (a server speaking OpenAI's API), and two plans, someone's own subscription instead of a key (see [Plans](#plans)): `claude-plan`, a Pro or Max plan in Claude Code, and `chatgpt-plan`, a ChatGPT plan in OpenAI's Codex, which btw runs on this computer. Keys, the server and presets are all global, managed by the admin with the CLI or the `/admin` page (Models & keys). A preset has a name (default `<model> (<provider>)`), a provider, a model and an optional window override. One preset is the default (the oldest until an admin picks one): new chats and automations without one use it. See [Model providers](#model-providers). |
 | Preset switching   | Allowed at any time, from the model chip in a chat's composer (or `btw agent run <id> --preset` for a subagent). The next model call uses the new model, and another provider gets the history translated. See [Switching models](#switching-models).                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Reasoning          | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once, so the chat asks first.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | System prompt      | Built once when the conversation is created: instructions, the profile's soul, the skills catalog and, for a chat in a folder, the folder's instructions and file paths. **It is not changed afterwards, and no update notices are added,** with one exception: when the chat moves to another folder, or its folder or the soul changes, it is built again at the start of the next turn (one cache miss). If skills change in another conversation, this conversation only sees it by running commands. Of memory, only `core` and the note names are in it: chats outside folders share a prompt.                                                                                                           |
@@ -33,7 +33,8 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 
 ```
 ~/.btw-agent/                 (override with BTW_HOME)
-  config.json                 auth secret, Anthropic, OpenAI and OpenRouter keys, image model,
+  config.json                 auth secret, Anthropic, OpenAI and OpenRouter keys, the Custom OpenAI
+                              server's address and key, image model,
                               extra env vars for commands, where Claude Code and Codex are if set
                               (mode 600)
   codex/                      Codex's home for the ChatGPT plan: its sign-in (which btw never
@@ -136,7 +137,8 @@ same provider behind OpenRouter, whose cache holds its earlier calls. Usage repo
 
 A conversation runs on its preset's provider until someone switches it to another preset (see
 [Switching models](#switching-models)). `models.ts` is what the rest of btw calls: it picks the
-provider's module (`anthropic.ts`, `openai-chat.ts`, `openrouter.ts`) for the model call, the
+provider's module (`anthropic.ts`, `openai-chat.ts`, `openrouter.ts`, `custom-openai.ts`) for the
+model call, the
 chat's title, PDF token counts, model checks and what the model can be sent, and gets back the
 same shape from each (the reply's content, its stop reason in Anthropic's words, usage, tool calls
 and texts). Each API provider brings a `FileStore` for pictures and PDFs (see
@@ -215,6 +217,27 @@ turns (`runPlanTurn`; see [Plans](#plans)).
   provider's as the window. A variant (`:nitro`, `:online`) is looked up as its model unless it's
   listed itself. The list is kept for an hour for what the model can be sent (see
   [Attachments](#attachments)). Titles are asked for at `low` effort with 2,048 tokens.
+- **Custom OpenAI** (`custom-openai.ts`) runs chats on the models of a server the admin names
+  that speaks OpenAI's API: Ollama, LM Studio, oMLX, vLLM, llama.cpp's server, LiteLLM. Its
+  address and optional key are kept apart from the API keys (`customOpenaiUrl`,
+  `customOpenaiApiKey` in `config.json`, else `CUSTOM_OPENAI_BASE_URL` and
+  `CUSTOM_OPENAI_API_KEY`; the environment's key goes only to the environment's address, so a
+  server saved in btw never gets another's), and saving it asks the server for its models
+  (`GET /models`): a server
+  that turns the key down isn't saved, one that doesn't answer is, with a warning, since it may not
+  run yet. Chats go over Chat Completions with OpenRouter's code (`toChatMessages`, `readStream`),
+  sending only what every such server takes: the model, the messages, the tools, and
+  `stream_options.include_usage`, without a reasoning level, cache marks or a session id. Thinking
+  that streams as `reasoning` or `reasoning_content` (vLLM, LM Studio, DeepSeek's) is stored as a
+  `reasoning.text` piece, shown in the chat and never sent back; a short reply (a title, the
+  note-taker's) drops the `<think>…</think>` a server without a reasoning parser leaves in the
+  text. Such servers can't say which of
+  their models see pictures or read PDFs, so those go as their paths (`modelInputs` is false for
+  both), and a chat that switched to one gets notes for those it holds. Adding a preset checks
+  that the server lists the model, when it lists any, and takes its window when the list says one
+  (`max_model_len`, as vLLM does; `context_length`); otherwise it's unknown until the admin sets
+  it. Whether the model calls tools shows at its first reply. Its errors are tagged like
+  OpenRouter's and asked about first.
 - **Another provider** (Gemini) would be one more module next to these, with a
   function turning btw's format into its request (Gemini's thought signatures would ride in
   `native` like OpenAI's encrypted reasoning), a branch in each of `models.ts`'s functions, a
@@ -464,8 +487,9 @@ has the chat open gets the change as a live `model` event (also in the snapshot)
     provider's `file_id` (an `uploaded` source), become a note: this model can't open that copy,
     and the line before it (the attachment's label, or `Image: <path>` in a command result) says
     where the file is, so `btw view` shows it again. The switch dialog mentions them when the chat
-    has any (`heldFileProviders`). A model on OpenRouter that can't see pictures or read PDFs gets
-    the same kind of note for those it can't take (`readableMessages`).
+    has any (`heldFileProviders`). A model on OpenRouter that can't see pictures or read PDFs, and
+    any model on the Custom OpenAI server, gets the same kind of note for those it can't take
+    (`readableMessages`).
 - **The plans.** A plan's agent keeps its own copy of the chat, so a chat that comes back to a plan
   after another model answered starts a new session (on the Claude plan, a random id: the chat's
   own is taken) with the chat so far as a transcript, as a notification's chat does. So does one
@@ -639,6 +663,9 @@ kind of file, up to 100 MB each (the same as pictures in replies) and 10 per mes
   paid OCR service at every request, each one carrying the whole history. Otherwise the file goes
   as its path with the reason (`… can't see pictures`), and `btw view` says the same in the
   command's result. When the list can't be read, the file goes as its path too.
+- **Custom OpenAI** has no Files API, and nothing says which of a server's models take pictures
+  or PDFs, so every one goes as its path, with that reason; the agent can still open the file
+  with its commands.
 
 ## Memory
 
@@ -688,8 +715,8 @@ one per topic (`family.md`, `people/anna.md`). There is no memory tool: like aut
   model through OpenRouter; else none, and words do it all. `btw config set embeddings`, or
   Memory search under Models & keys, picks another model (`openai/…`, `openrouter/…`), turns it
   `off` (every fact goes to that provider to be embedded, whatever model the chats run on), or
-  points it at a server on this computer, like Ollama, LM Studio or oMLX (`<url> <model> [key]`),
-  for anyone who wants it local. Each fact is
+  takes a model of the Custom OpenAI server (`custom-openai/…`), like Ollama, LM Studio or oMLX on
+  this computer, for anyone who wants it local. Each fact is
   embedded with its note and heading (`people/anna › Allergies: peanuts`) and kept in a hidden
   `.embeddings.json` with the model's name, so only new or changed facts are embedded again,
   and a new model starts over. The gateway embeds in the background: every profile's facts when
@@ -1171,7 +1198,12 @@ composer. Most of the family doesn't read shell, so the default view hides the m
 /key` instead. Removing a saved key falls back to the environment's. Replacing a key warns to keep
   the same workspace (Anthropic, OpenRouter) or project (OpenAI): pictures and PDFs already sent
   live in it. `btw key set` does the same check, but saves anyway when the provider can't be
-  reached. Under the keys, **Plans** lists both plans alike (what each is, who it's signed in as,
+  reached. Last among the keys, **Custom OpenAI** shows the server's address, where it comes from
+  and whether it has a key (never the key), and Set up or Change opens its address and an optional
+  key; left empty, the key in use for the same address stays. Saving asks the server for its
+  models and says how many it serves, or what went wrong; `btw key set custom-openai <url> [key]`
+  does the same, asking for a key at a terminal when the server wants one. Under the keys,
+  **Plans** lists both plans alike (what each is, who it's signed in as,
   what to do next): the Claude plan's row shows where Claude Code is and checks its sign-in; the
   ChatGPT plan's shows where Codex is and who it's signed in as, signs it in with ChatGPT, showing
   the link and the one-time code, updates by itself once the code is entered, and then offers Sign
@@ -1185,7 +1217,7 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   be typed), without audio, realtime, pictures or search, nor dated snapshots of models also listed
   without a date, the newest first, with the flagships' known window; OpenRouter's, the models that
   can call tools (without `:batch` variants, which are for its batch API), the newest first, with
-  its names and the window a preset gets; Claude Code's own list for the Claude plan, by full id
+  its names and the window a preset gets; the Custom OpenAI server's, as it lists them; Claude Code's own list for the Claude plan, by full id
   (`claude-opus-5-5`, not `opus`, which would move a chat to a newer model when Claude Code
   updates); and what Codex's own picker offers for the ChatGPT plan. It's asked for again when the
   provider's key changes. The context window is a row of chips: Auto (what the provider reports, if
@@ -1197,10 +1229,9 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   automations that use the preset and chats switched to it from then on get the change; chats
   already on it keep the copy they took (see [Switching models](#switching-models)).
   Last, **Memory search** says what search by meaning uses (see [Memory](#memory)), or why it goes
-  by words only (no key, or off), and Change opens a form: Auto, OpenAI, OpenRouter, a server or
-  Off, a model for a provider (its placeholder is the default), and for a server its address, the
-  model's name there and a key if it needs one. Like a key, a server's key never reaches the page:
-  it only says one is saved, and leaving the field empty keeps it. Saving asks the source once
+  by words only (no key or server, or off), and Change opens a form: Auto, OpenAI, OpenRouter,
+  Custom OpenAI or Off, and a model for a provider (its placeholder is the default; the Custom
+  OpenAI server's model has to be named, like `nomic-embed-text`). Saving asks the source once
   (`embeddingProblem`) and says if it didn't answer, and a source that works starts embedding every
   profile's facts in the background.
 
@@ -1416,8 +1447,9 @@ packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_comm
                 commands, memory notes (search and recall, learning from chats, and
                 memory-export.ts, memory-import.ts: memories brought over from another
                 assistant), new-chat suggestions, btw view images, attachments, model
-                calls (models.ts, with anthropic.ts, openai-chat.ts and openrouter.ts, each with its
-                Files API and the function that turns btw's format, format.ts, into its request),
+                calls (models.ts, with anthropic.ts, openai-chat.ts, openrouter.ts and
+                custom-openai.ts, each with its Files API, if any, and the function that turns
+                btw's format, format.ts, into its request),
                 plans (plans.ts: the Claude plan's turns through Claude Code in claude-plan.ts, the
                 ChatGPT plan's through Codex's app server in chatgpt-plan.ts and
                 codex-app-server.ts), provider

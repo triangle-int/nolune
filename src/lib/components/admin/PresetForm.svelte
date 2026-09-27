@@ -16,6 +16,8 @@
 		providers: { id: string; label: string }[];
 		/** Whether each API key provider has a key, and its last four characters. */
 		keys: { provider: string; source: string | null; hint: string | null }[];
+		/** The Custom OpenAI server's address, when there is one. */
+		customServer: string | null;
 		claudeInstalled: boolean;
 		codexInstalled: boolean;
 		/** The preset being changed, with its own context window if it has one; a new one without. */
@@ -30,6 +32,7 @@
 	let {
 		providers,
 		keys,
+		customServer,
 		claudeInstalled,
 		codexInstalled,
 		preset,
@@ -60,13 +63,18 @@
 	);
 	const label = $derived(providers.find((p) => p.id === provider)?.label ?? provider);
 	const key = $derived(keys.find((k) => k.provider === provider));
-	/** Whether the provider can be used: a key, or the plan's agent (Claude Code, Codex). */
+	/**
+	 * Whether the provider can be used: a key, the plan's agent (Claude Code, Codex), or the Custom
+	 * OpenAI server.
+	 */
 	const ready = $derived(
 		provider === 'claude-plan'
 			? claudeInstalled
 			: provider === 'chatgpt-plan'
 				? codexInstalled
-				: !!key?.source
+				: provider === 'custom-openai'
+					? !!customServer
+					: !!key?.source
 	);
 	/** A new provider or model is checked with the provider when it's saved. */
 	const checks = $derived(!start || provider !== start.provider || model !== start.model);
@@ -74,7 +82,9 @@
 	type ModelList = { models: ModelChoice[]; problem: string | null };
 	/** Each provider's models (null while they're asked for), asked for again when its key changes. */
 	let lists = $state<Record<string, ModelList | null>>({});
-	const listKey = $derived(`${provider}:${key?.hint ?? ''}:${ready}`);
+	const listKey = $derived(
+		`${provider}:${provider === 'custom-openai' ? customServer : (key?.hint ?? '')}:${ready}`
+	);
 	const list = $derived<ModelList | null>(
 		ready ? (lists[listKey] ?? null) : { models: [], problem: null }
 	);
@@ -102,6 +112,11 @@
 			return codexInstalled
 				? { text: t.onChatGptPlan, warn: false }
 				: { text: t.noCodex, warn: true };
+		}
+		if (provider === 'custom-openai') {
+			return customServer
+				? { text: t.onServer(customServer), warn: false }
+				: { text: t.noServer, warn: true };
 		}
 		return ready ? { text: t.onKey(label), warn: false } : { text: t.noKey(label), warn: true };
 	});
