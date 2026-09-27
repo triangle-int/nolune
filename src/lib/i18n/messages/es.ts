@@ -175,6 +175,8 @@ export const es: Messages = {
 		expandSteps: 'Mostrar siempre los pasos',
 		expandStepsHint:
 			'Abre la lista de lo que hizo btw debajo de cada respuesta, en lugar de dejarla plegada.',
+		sounds: 'Sonidos',
+		soundsHint: 'Sonidos suaves donde btw se mueve solo, como la bienvenida de un perfil nuevo.',
 		logOut: 'Cerrar sesión',
 		deviceOnly: 'Estos ajustes solo se guardan en este dispositivo.'
 	},
@@ -664,6 +666,96 @@ export const es: Messages = {
 		needsName: 'Ponle un nombre al perfil.'
 	},
 
+	/** La bienvenida de un perfil nuevo. Aquí habla btw: «yo» es el asistente. */
+	welcome: {
+		title: 'Hagamos de este lugar el tuyo.',
+		subtitle: 'Unas preguntas rápidas y te sentirás como en casa.',
+		go: 'Vamos',
+		takesAMinute: 'Lleva cerca de un minuto',
+		skipIntro: 'Saltar la intro',
+		skipHint: 'Haz clic en cualquier sitio para saltar',
+		back: 'Atrás',
+		soundsOn: 'Activar sonidos',
+		soundsOff: 'Desactivar sonidos',
+		progress: (n: number, total: number) => `Paso ${n} de ${total}`,
+		model: {
+			title: '¿Con qué debo pensar?',
+			subtitle: 'Elige qué me mueve. Puedes añadir más luego en Modelos y claves.',
+			askAdmin:
+				'Necesito un modelo para chatear. Pide a quien instaló btw que añada uno en Modelos y claves; lo demás ya funciona.',
+			choices: {
+				'claude-plan': {
+					title: 'Plan de Claude',
+					about: 'Un plan Pro o Max, con Claude Code en este ordenador'
+				},
+				'chatgpt-plan': {
+					title: 'Plan de ChatGPT',
+					about: 'Un plan Plus, Pro o Business, con Codex en este ordenador'
+				},
+				anthropic: { title: 'Clave de API de Anthropic', about: 'Modelos Claude, pago por uso' },
+				openai: { title: 'Clave de API de OpenAI', about: 'Modelos GPT, pago por uso' },
+				openrouter: {
+					title: 'Clave de API de OpenRouter',
+					about: 'Claude, GPT, Gemini y más con una sola clave'
+				}
+			},
+			checkingPlan: 'Comprobando el inicio de sesión…',
+			pasteKey: (label: string) => `Pega tu clave de ${label}`,
+			checkKey: 'Comprobar la clave',
+			keyWorks: 'La clave funciona.',
+			finishOnAdmin: 'Inicia sesión en {link} y vuelve a comprobar.',
+			checkAgain: 'Volver a comprobar',
+			pickModel: '¿Con qué modelo deben empezar los chats nuevos?',
+			asking: 'Pidiendo los modelos…',
+			modelId: 'ID del modelo'
+		},
+		avatar: {
+			title: '¿Quién debo ser?',
+			subtitle: (profile: string) => `Elige una cara para ${profile}.`,
+			thisOne: 'Este',
+			hello: 'Un placer conocerte.'
+		},
+		memory: {
+			title: '¿Ya nos conocemos?',
+			subtitle:
+				'Si usas ChatGPT, Claude o Gemini, ya sabe cosas de ti. Pregúntale con este prompt y pega aquí su respuesta.',
+			copyPrompt: 'Copiar prompt',
+			prompt: 'El prompt',
+			open: (name: string) => `Abrir ${name}`,
+			haveIt: 'Ya la tengo',
+			startFresh: 'Empezar de cero',
+			pasteTitle: 'Pégala aquí',
+			pastePlaceholder: 'La respuesta completa, con el bloque de código',
+			sections: {
+				instructions: 'Instrucciones',
+				identity: 'Sobre ti',
+				career: 'Carrera',
+				projects: 'Proyectos',
+				preferences: 'Preferencias',
+				other: 'Otros'
+			},
+			remember: (n: number) => p(n, { one: `Recordar ${n} cosa`, other: `Recordar ${n} cosas` }),
+			rememberThis: 'Recordar esto',
+			reading: 'Leyendo…',
+			saving: 'Guardando…',
+			empty: 'Pega lo que respondió el otro asistente.',
+			tooLong:
+				'Es demasiado largo para ser los recuerdos de una persona. Pega solo la respuesta al prompt.',
+			notAnExport:
+				'No parece la respuesta al prompt. Pega la respuesta completa, con su bloque de código.',
+			couldNotRead: (problem: string) => `No se pudo leer. ${problem}`,
+			nothingFound:
+				'No encontré nada sobre ti ahí. Pega la respuesta completa, con su bloque de código.'
+		},
+		arrival: {
+			thingsIKnow: (n: number) => p(n, { one: 'cosa que sé de ti', other: 'cosas que sé de ti' })
+		},
+		fresh: {
+			title: 'Un nuevo comienzo.',
+			subtitle: 'Te iré conociendo mientras hablamos.'
+		}
+	},
+
 	login: {
 		welcome: 'Hola de nuevo',
 		hint: 'Inicia sesión con la cuenta que te dieron.',
@@ -742,10 +834,11 @@ export const es: Messages = {
 			'Para iniciar sesión, ejecuta {setup} en una terminal de este ordenador, o ejecuta {claude} allí y usa {login} con tu cuenta de Claude.',
 		models: 'Modelos',
 		modelsHint:
-			'Los preajustes se comparten entre todos los perfiles. Los chats nuevos empiezan con el predeterminado. Quitar un preajuste no afecta a los chats existentes.',
+			'Los preajustes se comparten entre todos los perfiles. Los chats nuevos empiezan con el predeterminado. Editar o quitar un preajuste no cambia los chats que ya lo usan.',
 		presetDetails: (provider: string, model: string, context: string, overridden: boolean) =>
 			`${provider} / ${model} · contexto ${context}${overridden ? ' (personalizado)' : ''}`,
 		makeDefault: 'Hacer predeterminado',
+		editPreset: (name: string) => `Editar ${name}`,
 		noPresets: 'Todavía no hay preajustes.',
 		addModel: {
 			title: 'Añadir un modelo',
@@ -786,11 +879,13 @@ export const es: Messages = {
 			checkingClaude: 'Comprobando Claude Code…',
 			checkingCodex: 'Comprobando Codex…',
 			checkingModel: 'Comprobando el modelo…',
+			saving: 'Guardando…',
 			pick: 'Elige un modelo',
 			search: 'Busca o escribe un ID de modelo',
 			use: 'Usar {model}',
 			typeId: 'Escribe arriba el ID del modelo.',
 			added: (name: string) => `${name} añadido.`,
+			saved: (name: string) => `${name} guardado. Los chats que ya lo usan siguen como estaban.`,
 			invalidContext: 'La ventana de contexto debe ser un número de tokens, como 272k o 272000.'
 		},
 		savedWorks: 'Guardada. Funciona.',

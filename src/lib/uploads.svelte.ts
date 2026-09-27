@@ -1,4 +1,5 @@
 import { SvelteMap } from 'svelte/reactivity';
+import { errorMessage } from './http';
 import type { Messages } from './i18n';
 
 /** The server's limits (MAX_ATTACHMENTS and MAX_MEDIA_BYTES in @btw/core), checked early. */
@@ -27,15 +28,11 @@ const BROWSER_PICTURES = new Set([
 	'image/avif'
 ]);
 
-/** The message SvelteKit's `error()` sends, or the raw text. */
-function errorMessage(xhr: XMLHttpRequest, m: Messages): string {
-	try {
-		const body = JSON.parse(xhr.responseText) as { message?: unknown };
-		if (typeof body.message === 'string') return body.message;
-	} catch {
-		// not JSON
-	}
-	return xhr.responseText.trim() || m.errors.uploadFailed(xhr.status || null);
+function uploadError(xhr: XMLHttpRequest, m: Messages): string {
+	return (
+		errorMessage(xhr.responseText, xhr.getResponseHeader('content-type')) ??
+		m.errors.uploadFailed(xhr.status || null)
+	);
 }
 
 /**
@@ -105,7 +102,7 @@ export class Attachments {
 				item.progress = 1;
 			} else if (xhr.status !== 0 || item.status === 'uploading') {
 				item.status = 'failed';
-				item.error = errorMessage(xhr, this.#m);
+				item.error = uploadError(xhr, this.#m);
 			}
 		};
 		xhr.send(file);

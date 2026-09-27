@@ -365,33 +365,6 @@ export function readMemoryNote(slug: string, topic: string): { path: string; tex
 // --- Changes, for `btw memory` ---
 
 /**
- * `text` with a bullet at the end of the part under the heading `under`, which is started at the
- * end when the note doesn't have it; without `under`, at the end of the note.
- */
-function withFact(text: string, bullet: string, under: string | undefined): string {
-	const lines = text.trimEnd().split('\n');
-	const heading = under
-		?.replace(/^#+\s*/, '')
-		.replace(/\s+/g, ' ')
-		.trim();
-	if (!heading) return `${lines.join('\n')}\n${bullet}\n`;
-	const headingOf = (line: string) => line.trim().match(/^(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/);
-	const at = lines.findIndex(
-		(line) => headingOf(line)?.[2].toLowerCase() === heading.toLowerCase()
-	);
-	if (at === -1) return `${lines.join('\n')}\n\n## ${heading}\n\n${bullet}\n`;
-	// Up to the next heading of any level, as readFacts tells which heading a fact is under.
-	let end = lines.findIndex((line, i) => i > at && headingOf(line));
-	if (end === -1) end = lines.length;
-	// After the part's last line, so the blank line before the next heading stays.
-	let last = end - 1;
-	while (last > at && !lines[last].trim()) last--;
-	// A heading with nothing under it yet gets a blank line before its first fact.
-	lines.splice(last + 1, 0, ...(last === at ? ['', bullet] : [bullet]));
-	return `${lines.join('\n')}\n`;
-}
-
-/**
  * Adds one fact as a bullet at the end of a note, or of the part under the heading `under`,
  * creating the note if needed.
  */
@@ -416,14 +389,88 @@ export function addMemoryFact(
 	if (parseFacts(before).some((known) => factKey(known) === key)) {
 		return { path, created: false, duplicate: true };
 	}
-	const title = `# ${titleOf(path)}`;
-	const text = before.trim()
-		? withFact(before, `- ${line}`, under)
-		: under
-			? withFact(title, `- ${line}`, under)
-			: `${title}\n\n- ${line}\n`;
-	saveNote(root, full, text);
+	const lines = (before.trim() ? before.trimEnd() : `# ${titleOf(path)}`).split('\n');
+	saveNote(root, full, `${withFact(lines, `- ${line}`, under).join('\n')}\n`);
 	return { path, created: !exists, duplicate: false };
+}
+
+/**
+ * Adds facts learned elsewhere (an import) to a note, under `## heading` when given, keeping the
+ * dates they were first seen there: a fact without one is dated like those from before dates
+ * were kept. Facts the note already has are skipped. A pinned note takes only what fits; the
+ * rest comes back in `left`.
+ */
+export function addMemoryFacts(
+	slug: string,
+	topic: string,
+	facts: { text: string; learnedAt: number | null }[],
+	heading?: string
+): { path: string; added: MemoryFact[]; left: MemoryFact[] } {
+	const root = openMemory(slug);
+	const full = notePath(root, topic);
+	const path = relPath(root, full);
+	if (existsSync(full) && !statSync(full).isFile()) refuse(`"${topic}" is a folder, not a note.`);
+	const before = existsSync(full) ? readFileSync(full, 'utf8') : '';
+	const known = new Set(parseFacts(before).map(factKey));
+	let lines = (before.trim() ? before.trimEnd() : `# ${titleOf(path)}`).split('\n');
+	const added: MemoryFact[] = [];
+	const left: MemoryFact[] = [];
+	for (const fact of facts) {
+		const line = fact.text
+			.replace(/\s+/g, ' ')
+			.trim()
+			.replace(/^[-*+]\s+/, '');
+		const key = factKey(parseFacts(`- ${line}`)[0] ?? line);
+		if (!line || known.has(key)) continue;
+		const next = withFact(lines, `- ${line}`, heading);
+		if (isPinnedNote(path) && next.join('\n').length + 1 > MAX_PINNED_CHARS) {
+			left.push({ text: line, learnedAt: fact.learnedAt });
+			continue;
+		}
+		lines = next;
+		known.add(key);
+		added.push({ text: line, learnedAt: fact.learnedAt });
+	}
+	if (!added.length) return { path, added, left };
+	const text = `${lines.join('\n')}\n`;
+	checkSize(text, path);
+	changing(
+		root,
+		() => writeAtomic(full, text),
+		(index, now) => {
+			noteFacts(index, path, text, now);
+			const dates = index.files.get(path);
+			for (const fact of added) {
+				const key = factKey(parseFacts(`- ${fact.text}`)[0] ?? fact.text);
+				// Only facts that are new to memory; one it already had elsewhere keeps its date.
+				if (dates?.get(key) === now) dates.set(key, fact.learnedAt ?? 0);
+			}
+		}
+	);
+	return { path, added, left };
+}
+
+/**
+ * The note's lines with a bullet added at the end of the part under `heading`, a heading of any
+ * level (the note's title too) up to the next one, as readFacts tells which heading a fact is
+ * under; it's started as `## heading` at the end when the note lacks it. Without one, at the end.
+ */
+function withFact(lines: string[], bullet: string, heading?: string): string[] {
+	const out = [...lines];
+	const title = heading
+		?.replace(/^#+\s*/, '')
+		.replace(/\s+/g, ' ')
+		.trim();
+	if (!title) return [...out, ...(out.at(-1)?.startsWith('- ') ? [] : ['']), bullet];
+	const headingOf = (line: string) => line.trim().match(/^(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/);
+	const start = out.findIndex((l) => headingOf(l)?.[2].toLowerCase() === title.toLowerCase());
+	if (start === -1) return [...out, '', `## ${title}`, '', bullet];
+	let end = out.findIndex((l, i) => i > start && headingOf(l));
+	if (end === -1) end = out.length;
+	// After the part's last line, before the blank lines leading to the next heading.
+	while (end > start + 1 && !out[end - 1].trim()) end--;
+	out.splice(end, 0, ...(end === start + 1 ? [''] : []), bullet);
+	return out;
 }
 
 /** Replaces text that appears exactly once in a note. */

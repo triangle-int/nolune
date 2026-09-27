@@ -65,17 +65,19 @@ export async function requireClaudePlan(io: Io, guide = false): Promise<void> {
 /**
  * Signs Codex in with ChatGPT: prints where to go and a one-time code, then waits for someone to
  * enter it, on any device. It asks nothing here, so it also works from the agent's commands.
- * Stops waiting when the command is stopped.
+ * Stops when the command is stopped, even while Codex is still starting.
  */
 async function signInWithChatGpt(io: Io): Promise<void> {
-	const signIn = await startChatGptSignIn();
+	// Stopped already: no sign-in, and the one under way (the admin page's, say) isn't ours to cancel.
+	io.signal.throwIfAborted();
 	const stop = () => cancelChatGptSignIn();
 	io.signal.addEventListener('abort', stop, { once: true });
-	io.log(`To sign in with ChatGPT, on any device:
+	try {
+		const signIn = await startChatGptSignIn();
+		io.log(`To sign in with ChatGPT, on any device:
   1. Open ${signIn.verificationUrl} and sign in to ChatGPT
   2. Enter this code: ${signIn.userCode}
 The code works for 15 minutes. Enter it only if you started this sign-in. Waiting…`);
-	try {
 		await signIn.done;
 	} finally {
 		io.signal.removeEventListener('abort', stop);

@@ -23,6 +23,20 @@
 		}
 		return ordered;
 	}
+
+	const DAY = 24 * 60 * 60 * 1000;
+
+	/** How dark a fact's dot is: 1 today, fading to 0.18 over about three months. Undated is lightest. */
+	export function factShade(learnedAt: number | null, now = Date.now()): number {
+		if (learnedAt === null) return 0.14;
+		const days = Math.max(0, (now - learnedAt) / DAY);
+		return 1 - 0.82 * Math.min(1, Math.log1p(days) / Math.log1p(90));
+	}
+
+	/** The page's text color at that strength. */
+	export function factInk(amount: number): string {
+		return `color-mix(in oklab, var(--foreground) ${Math.round(amount * 100)}%, transparent)`;
+	}
 </script>
 
 <script lang="ts">
@@ -44,7 +58,6 @@
 
 	/** Rows shown until "Show all". */
 	const LIMIT = 12;
-	const DAY = 24 * 60 * 60 * 1000;
 	const now = Date.now();
 
 	let showAll = $state(false);
@@ -59,16 +72,8 @@
 		return [...facts].sort((a, b) => (a.learnedAt ?? 0) - (b.learnedAt ?? 0));
 	}
 
-	/** How dark a dot is: 1 today, fading to 0.18 over about three months. Undated is lightest. */
-	function shade(learnedAt: number | null): number {
-		if (learnedAt === null) return 0.14;
-		const days = Math.max(0, (now - learnedAt) / DAY);
-		return 1 - 0.82 * Math.min(1, Math.log1p(days) / Math.log1p(90));
-	}
-
-	function ink(amount: number): string {
-		return `color-mix(in oklab, var(--foreground) ${Math.round(amount * 100)}%, transparent)`;
-	}
+	const shade = (learnedAt: number | null) => factShade(learnedAt, now);
+	const ink = factInk;
 
 	function learned(at: number | null): string {
 		return at === null ? m.memory.learnedAWhileAgo : m.memory.learned(formatAgo(at, i18n, now));

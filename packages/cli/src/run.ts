@@ -9,6 +9,7 @@ import {
 	DEFAULT_PORT,
 	MAX_MEDIA_BYTES,
 	addPreset,
+	editPreset,
 	apiKeyStatuses,
 	checkApiKey,
 	claudeExecutable,
@@ -134,6 +135,9 @@ Model presets (shared by all profiles)
                                              model must be able to call tools. The plans check
                                              their agent's sign-in instead, and chatgpt-plan the
                                              models Codex offers
+  btw preset edit <name|id> [--provider P] [--model M] [--name N] [--context-window TOKENS|auto]
+                                             change what's given; a new model is checked like
+                                             add's. Chats already on the preset keep what they had
   btw preset rm <name|id>
   btw preset default <name|id>               the model new chats start with
   btw preset list
@@ -326,7 +330,9 @@ async function start(io: Io): Promise<void> {
 	io.log(
 		`btw gateway: ${process.env.ORIGIN} (listening on ${process.env.HOST}:${process.env.PORT})`
 	);
-	await import(pathToFileURL(paths.server).href);
+	// `pnpm dev` loads this file through Vite (src/hooks.server.ts), which can't follow a runtime
+	// path: the built server is loaded by Node, as is.
+	await import(/* @vite-ignore */ pathToFileURL(paths.server).href);
 }
 
 async function service(io: Io, action: string | undefined, args: string[]): Promise<void> {
@@ -611,6 +617,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				allowPositionals: true,
 				options: {
 					provider: { type: 'string' },
+					model: { type: 'string' },
 					name: { type: 'string' },
 					'context-window': { type: 'string' }
 				}
@@ -625,6 +632,17 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 					contextWindow: cw ? Number(cw) : null
 				});
 				io.log(`Added "${preset.name}" (context ${formatTokens(effectiveContextWindow(preset))}).`);
+			} else if (action === 'edit') {
+				const cw = values['context-window'];
+				const preset = await editPreset(positional(positionals, 0, 'name|id'), {
+					provider: values.provider,
+					model: values.model,
+					name: values.name,
+					contextWindow: cw === undefined ? undefined : cw === 'auto' ? null : Number(cw)
+				});
+				io.log(
+					`Saved "${preset.name}" (${preset.provider}/${preset.model}, context ${formatTokens(effectiveContextWindow(preset))}). Chats already on it keep what they had.`
+				);
 			} else if (action === 'rm') {
 				removePreset(positional(positionals, 0, 'name|id'));
 				io.log('Removed. Existing conversations keep working.');
@@ -640,7 +658,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 						`${p.name}\t${p.provider}/${p.model}\tcontext ${formatTokens(effectiveContextWindow(p))}${override}\t${p.id}${isDefault}`
 					);
 				}
-			} else fail('usage: btw preset add|rm|default|list');
+			} else fail('usage: btw preset add|edit|rm|default|list');
 			return;
 		}
 

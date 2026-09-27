@@ -1,4 +1,5 @@
 import { invalidate } from '$app/navigation';
+import { errorMessage } from './http';
 
 export interface FolderItem {
 	id: string;
@@ -12,14 +13,15 @@ async function post(url: string, body: unknown): Promise<unknown> {
 		body: JSON.stringify(body)
 	});
 	const text = await res.text();
-	let data: { message?: string } | null = null;
-	try {
-		data = JSON.parse(text);
-	} catch {
-		// plain text
+	if (!res.ok) {
+		const message = errorMessage(text, res.headers.get('content-type'));
+		throw new Error(message ?? `Request failed (${res.status})`);
 	}
-	if (!res.ok) throw new Error(data?.message ?? (text || `Request failed (${res.status})`));
-	return data;
+	try {
+		return JSON.parse(text);
+	} catch {
+		return null;
+	}
 }
 
 /** Creates a folder in the profile; the sidebar lists it once the layout reloads. */

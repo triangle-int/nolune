@@ -66,6 +66,7 @@ export {
 export { AVATARS, defaultAvatar, isAvatar, type Avatar } from './avatars.ts';
 export {
 	addPreset,
+	editPreset,
 	effectiveContextWindow,
 	getDefaultPreset,
 	getPreset,
@@ -217,6 +218,7 @@ export {
 	MemoryConflictError,
 	MemoryError,
 	addMemoryFact,
+	addMemoryFacts,
 	forgetMemoryFact,
 	forgetMemoryFile,
 	isPinnedNote,
@@ -241,6 +243,20 @@ export {
 	type EmbeddingSource
 } from './memory-embeddings.ts';
 export { learnFrom, type MemoryChange } from './memory-learning.ts';
+export {
+	EXPORT_PROMPT,
+	EXPORT_SECTIONS,
+	countSections,
+	parseMemoryExport,
+	type ExportSection,
+	type ExportedFact
+} from './memory-export.ts';
+export {
+	MAX_EXPORT_CHARS,
+	importMemoryExport,
+	reformatMemoryExport,
+	type ImportedNote
+} from './memory-import.ts';
 export { MAX_SOUL_CHARS, SoulError, readSoul, readSoulFile, writeSoul } from './soul.ts';
 export {
 	currentSuggestions,

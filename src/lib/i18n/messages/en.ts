@@ -79,6 +79,8 @@ export const en = {
 		expandSteps: 'Always show steps',
 		expandStepsHint:
 			'Open the list of what btw did under each reply, instead of keeping it folded.',
+		sounds: 'Sounds',
+		soundsHint: 'Soft sounds where btw moves on its own, like the welcome of a new profile.',
 		logOut: 'Log out',
 		deviceOnly: 'These settings are saved on this device only.'
 	},
@@ -577,6 +579,96 @@ export const en = {
 		needsName: 'Give the profile a name.'
 	},
 
+	/** A new profile's welcome. btw speaks for itself here: "I" is the assistant. */
+	welcome: {
+		title: "Let's make this place yours.",
+		subtitle: "A few quick questions, and you'll feel at home.",
+		go: "Let's go",
+		takesAMinute: 'Takes about a minute',
+		skipIntro: 'Skip the intro',
+		skipHint: 'Click anywhere to skip',
+		back: 'Back',
+		soundsOn: 'Turn sounds on',
+		soundsOff: 'Turn sounds off',
+		progress: (n: number, total: number) => `Step ${n} of ${total}`,
+		model: {
+			title: 'How should I think?',
+			subtitle: 'Pick what powers me. You can add more under Models & keys later.',
+			askAdmin:
+				'I need a model before I can chat. Ask whoever set up btw to add one under Models & keys; everything else works in the meantime.',
+			choices: {
+				'claude-plan': {
+					title: 'Claude plan',
+					about: 'A Pro or Max plan, through Claude Code on this computer'
+				},
+				'chatgpt-plan': {
+					title: 'ChatGPT plan',
+					about: 'A Plus, Pro or Business plan, through Codex on this computer'
+				},
+				anthropic: { title: 'Anthropic API key', about: 'Claude models, paid as you go' },
+				openai: { title: 'OpenAI API key', about: 'GPT models, paid as you go' },
+				openrouter: {
+					title: 'OpenRouter API key',
+					about: 'Claude, GPT, Gemini and more, on one key'
+				}
+			},
+			checkingPlan: 'Checking the sign-in…',
+			pasteKey: (label: string) => `Paste your ${label} key`,
+			checkKey: 'Check the key',
+			keyWorks: 'The key works.',
+			finishOnAdmin: 'Sign in on {link}, then check again.',
+			checkAgain: 'Check again',
+			pickModel: 'Which model should new chats start with?',
+			asking: 'Asking for the models…',
+			modelId: 'Model id'
+		},
+		avatar: {
+			title: 'Who should I be?',
+			subtitle: (profile: string) => `Pick a face for ${profile}.`,
+			thisOne: 'This one',
+			hello: 'Nice to meet you.'
+		},
+		memory: {
+			title: 'Have we met before?',
+			subtitle:
+				'If you use ChatGPT, Claude or Gemini, it already knows things about you. Ask it with this prompt, then paste its answer here.',
+			copyPrompt: 'Copy prompt',
+			prompt: 'The prompt',
+			open: (name: string) => `Open ${name}`,
+			haveIt: 'I have it',
+			startFresh: 'Start fresh',
+			pasteTitle: 'Paste it here',
+			pastePlaceholder: 'The whole answer, code block and all',
+			sections: {
+				instructions: 'Instructions',
+				identity: 'Identity',
+				career: 'Career',
+				projects: 'Projects',
+				preferences: 'Preferences',
+				other: 'Other'
+			},
+			remember: (n: number) => p(n, { one: `Remember ${n} thing`, other: `Remember ${n} things` }),
+			rememberThis: 'Remember this',
+			reading: 'Reading it…',
+			saving: 'Saving…',
+			empty: 'Paste what the other assistant answered.',
+			tooLong: "That's too long to be one person's memories. Paste just the answer to the prompt.",
+			notAnExport:
+				"That doesn't look like the answer to the prompt. Paste the whole answer, with its code block.",
+			couldNotRead: (problem: string) => `Couldn't read it. ${problem}`,
+			nothingFound:
+				"I couldn't find anything about you in that. Paste the whole answer, with its code block."
+		},
+		arrival: {
+			thingsIKnow: (n: number) =>
+				p(n, { one: 'thing I know about you', other: 'things I know about you' })
+		},
+		fresh: {
+			title: 'A fresh start.',
+			subtitle: "I'll get to know you as we talk."
+		}
+	},
+
 	login: {
 		welcome: 'Welcome back',
 		hint: 'Sign in with the account you were given.',
@@ -652,12 +744,13 @@ export const en = {
 			'To sign in, run {setup} in a terminal on this computer, or run {claude} there and use {login} with your Claude account.',
 		models: 'Models',
 		modelsHint:
-			"Presets are shared by every profile. New chats start with the default one. Removing a preset doesn't affect existing chats.",
+			"Presets are shared by every profile. New chats start with the default one. Editing or removing a preset doesn't change chats already on it.",
 		presetDetails: (provider: string, model: string, context: string, overridden: boolean) =>
 			`${provider} / ${model} · context ${context}${overridden ? ' (override)' : ''}`,
 		makeDefault: 'Make default',
+		editPreset: (name: string) => `Edit ${name}`,
 		noPresets: 'No presets yet.',
-		/** The form that adds a model preset. */
+		/** The form that adds a model preset, or edits one. */
 		addModel: {
 			title: 'Add a model',
 			provider: 'Provider',
@@ -695,11 +788,13 @@ export const en = {
 			checkingClaude: 'Checking Claude Code…',
 			checkingCodex: 'Checking Codex…',
 			checkingModel: 'Checking the model…',
+			saving: 'Saving…',
 			pick: 'Pick a model',
 			search: 'Search, or type a model id',
 			use: 'Use {model}',
 			typeId: "Type the model's id above.",
 			added: (name: string) => `Added ${name}.`,
+			saved: (name: string) => `Saved ${name}. Chats already on it keep what they had.`,
 			invalidContext: 'Context window must be a token count, like 272k or 272000.'
 		},
 		savedWorks: 'Saved. It works.',

@@ -148,6 +148,24 @@ describe('runCli', () => {
 	});
 });
 
+describe('btw preset edit', () => {
+	it("changes what it's given, and says chats on it keep theirs", async () => {
+		makePreset('Sonnet');
+		expect(
+			await run(['preset', 'edit', 'Sonnet', '--name', 'Everyday', '--context-window', '272000'])
+		).toEqual({
+			code: 0,
+			out: 'Saved "Everyday" (anthropic/claude-sonnet-5, context 272K). Chats already on it keep what they had.\n',
+			err: ''
+		});
+		const auto = await run(['preset', 'edit', 'Everyday', '--context-window', 'auto']);
+		expect(auto.out).toContain('context 200K');
+		const missing = await run(['preset', 'edit', 'Opus', '--name', 'Smart']);
+		expect(missing.code).not.toBe(0);
+		expect(missing.err).toContain('No preset "Opus"');
+	});
+});
+
 describe('btw agent watch', () => {
 	function subagentOf() {
 		const { user, profile } = makeFamily();

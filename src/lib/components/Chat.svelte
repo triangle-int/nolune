@@ -29,6 +29,7 @@
 	import { firstLine } from '$lib/commands';
 	import { moveChat, type FolderItem } from '$lib/folders';
 	import { formatPercent, formatTokens } from '$lib/format';
+	import { errorMessage } from '$lib/http';
 	import { getI18n } from '$lib/i18n';
 	import { getPreferences } from '$lib/preferences.svelte';
 	import { activeStepLabel, buildTranscript, replyText, type Reply } from '$lib/transcript';
@@ -376,14 +377,8 @@
 			body: body === undefined ? undefined : JSON.stringify(body)
 		});
 		if (!res.ok) {
-			const body = await res.text();
-			let message = body;
-			try {
-				message = (JSON.parse(body) as { message?: string }).message ?? body;
-			} catch {
-				// plain text
-			}
-			actionError = message || m.errors.requestFailed(res.status);
+			const message = errorMessage(await res.text(), res.headers.get('content-type'));
+			actionError = message ?? m.errors.requestFailed(res.status);
 		}
 		return res.ok ? res : null;
 	}
