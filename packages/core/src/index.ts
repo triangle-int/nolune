@@ -32,23 +32,27 @@ export {
 	type ApiKeyStatus
 } from './api-keys.ts';
 export {
+	CUSTOM_APIS,
 	CUSTOM_LABELS,
 	CUSTOM_PROVIDERS,
-	CustomServerError,
-	checkServer,
-	findServer,
+	CustomProviderError,
+	checkCustomProvider,
+	customProviderId,
+	customProviderNameProblem,
+	findCustomProvider,
 	isCustomProvider,
-	isServerName,
-	isServerUrl,
-	listServers,
-	normalizeServerUrl,
-	removeServer,
-	saveServer,
+	isProviderUrl,
+	listCustomProviders,
+	normalizeProviderUrl,
+	providerFor,
+	removeCustomProvider,
+	saveCustomProvider,
 	splitModel,
-	suggestServerName,
+	suggestProviderName,
+	type CustomApi,
 	type CustomProvider,
-	type ServerStatus
-} from './custom-servers.ts';
+	type CustomProviderStatus
+} from './custom-providers.ts';
 export { getDb, schema, type DB } from './db/index.ts';
 export {
 	MIN_PASSWORD_LENGTH,

@@ -17,9 +17,9 @@ import type { CacheTtl, Effort, ModelChoice, Provider, StreamEvent } from './mod
 
 /*
  * Chats on Claude, through Anthropic's Messages API and its SDK, and the Files API for pictures
- * and PDFs. The rest of btw calls it through models.ts. A Custom Anthropic server
- * (custom-servers.ts) speaks the same API, so its chats go through the same code with its own
- * client (a `MessagesApi`), leaving out what only Anthropic has.
+ * and PDFs. The rest of btw calls it through models.ts. A custom provider
+ * (custom-providers.ts) can speak the same API, so its chats go through the same code with its
+ * own client (a `MessagesApi`), leaving out what only Anthropic has.
  */
 
 type Sdk = typeof import('@anthropic-ai/sdk');
@@ -64,14 +64,14 @@ export async function getClient(): Promise<Anthropic> {
 }
 
 /**
- * Where Messages API calls go: Anthropic, or a server of the family's (custom-servers.ts). A
- * server gets the same requests without what only Anthropic has: cache marks, adaptive thinking
+ * Where Messages API calls go: Anthropic, or a custom provider (custom-providers.ts). A custom
+ * provider gets the same requests without what only Anthropic has: cache marks, adaptive thinking
  * and effort, and thinking sent back (a server's has no signature to check it by).
  */
 export interface MessagesApi {
 	provider: 'anthropic' | 'custom-anthropic';
 	client(): Promise<Anthropic>;
-	/** The model's id where it runs: a server's without the server's name before it. */
+	/** The model's id where it runs: a custom provider's without its id before it. */
 	modelName(model: string): string;
 }
 
@@ -219,7 +219,7 @@ export function supportsAdaptiveThinking(model: string): boolean {
 /**
  * One model call. The request shape must stay identical across calls in a conversation (only
  * `messages` grows), otherwise the prompt cache is lost: `tools`, `system` and `cacheTtl` are the
- * conversation's own, fixed when it was created. `api`: Anthropic, or a Custom Anthropic server.
+ * conversation's own, fixed when it was created. `api`: Anthropic, or a custom provider.
  */
 export async function streamTurn(
 	opts: {

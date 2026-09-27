@@ -34,10 +34,9 @@ Other parts of the CLI have their own instructions: automations (`btw trigger`, 
 ## Models
 
 Chats run on model presets, on Claude (Anthropic), on OpenAI's models or on the models
-OpenRouter serves with an API key, on the models of the family's own servers (Ollama, LM Studio,
-oMLX, vLLM..., below) through their OpenAI API (`custom-openai`) or their Anthropic API
-(`custom-anthropic`), or on a plan: someone's own Claude or ChatGPT subscription (`claude-plan`,
-`chatgpt-plan`, below). People
+OpenRouter serves with an API key, on the models of custom providers, the family's own servers
+(Ollama, LM Studio, oMLX, vLLM..., below) through their OpenAI API or their Anthropic API, or on a
+plan: someone's own Claude or ChatGPT subscription (`claude-plan`, `chatgpt-plan`, below). People
 pick one when they start a chat, and new chats start with the default. They can switch a chat to
 another one from its composer; its next reply then reads the whole chat again without the cache.
 
@@ -46,7 +45,7 @@ btw preset list                                 # name, provider/model, context 
 btw preset add claude-sonnet-5 --name "Sonnet"  # Anthropic checks the model id first
 btw preset add gpt-6-astra --provider openai --name "GPT"
 btw preset add deepseek/deepseek-v4.1-flash --provider openrouter --name "DeepSeek"
-btw preset add qwen3:32b --provider custom-openai --server gpu   # a model of the server "gpu"
+btw preset add qwen3:32b --provider "GPU box"   # a model of the custom provider "GPU box"
 btw preset add claude-opus-5-5 --provider claude-plan --name "Opus (plan)"
 btw preset add gpt-6-astra --provider chatgpt-plan --name "GPT (plan)"
 btw preset default Sonnet                       # new chats start with it
@@ -57,12 +56,12 @@ btw knows the context window of OpenAI's flagship models (1,050,000 tokens since
 its other models (mini, nano), give `--context-window` when you know it. OpenRouter's ids name
 the model's maker (`anthropic/claude-sonnet-5`, `google/gemini-3.8-flash`; see
 https://openrouter.ai/models), its models list their window, and btw only takes one that can call
-tools, since that's how you run commands. A server's model is `<server>/<model>` (`gpu/qwen3:32b`;
-`--server` says which, and with one server it can be left out); it's checked against the models
-its server lists, whether it calls tools shows at its first reply, and its window is unknown
-unless the server says it, so give `--context-window` when you know it. Models that can't see
-pictures or read PDFs, and every model on a server, get them as their paths. A preset needs its
-provider's key, its server, or its plan's sign-in. If `btw preset add` can't
+tools, since that's how you run commands. A custom provider is named by its name or id
+(`--provider "GPU box"`, or `gpu-box`); its model is checked against the models it lists,
+whether it calls tools shows at its first reply, and its window is unknown unless it says it, so
+give `--context-window` when you know it. Models that can't see pictures or read PDFs, and every
+model of a custom provider, get them as their paths. A preset needs its provider's key, its custom
+provider, or its plan's sign-in. If `btw preset add` can't
 check the model, an admin can add it under Models & keys in the account menu.
 
 ### Plans
@@ -102,16 +101,17 @@ new key from the next message.
 btw key set openai 'sk-...'
 ```
 
-The family's own model servers have a name each, an address, and a key if they want one; btw asks
-a server for its models before it saves it. Ollama listens at `http://localhost:11434` and LM
-Studio at `http://localhost:1234`; `custom-openai` presets use a server's OpenAI API and
-`custom-anthropic` ones its Anthropic API (llama.cpp's server has only that one).
+Custom providers are the family's own model servers, listed with the API keys: each has a name,
+the API it speaks (OpenAI's unless `--api anthropic`; llama.cpp's server has only Anthropic's),
+an address, and a key if it wants one. btw asks it for its models before it saves it. Ollama
+listens at `http://localhost:11434` and LM Studio at `http://localhost:1234`; a server that speaks
+both APIs can be added once for each.
 
 ```sh
-btw server add local http://localhost:11434
-btw server add gpu http://gpu-box:8000 --key '...'   # the same name again changes it
-btw server list
-btw server rm gpu                                    # presets on it stop working
+btw provider add Ollama http://localhost:11434
+btw provider add "GPU box" http://gpu-box:8000 --api anthropic --key '...'   # the same name again changes it
+btw provider list                                    # name, id, API, address, key
+btw provider rm "GPU box"                            # presets on it stop working
 ```
 
 A key typed into a chat stays in the chat's history. When someone wants to add or replace a key
@@ -173,11 +173,11 @@ every profile, so it's an admin's to change, here or under Memory search in Mode
 btw config set embeddings off                                    # words only; facts stay here
 btw config set embeddings auto                                   # back to btw's own choice
 btw config set embeddings openrouter/qwen/qwen3-embedding-8b     # another model, with its key
-btw config set embeddings custom-openai/local/nomic-embed-text   # a model of the server "local"
+btw config set embeddings custom-openai/ollama/nomic-embed-text  # a model of the custom provider "ollama"
 ```
 
-The last form takes a model one of your servers serves (`btw server list`, above), through its
-OpenAI API, which keeps every fact on this computer when the server runs here. It asks the source once and
+The last form takes a model a custom provider that speaks OpenAI's API serves, by its id
+(`btw provider list`, above), which keeps every fact on this computer when the server runs here. It asks the source once and
 says if it didn't answer. Every fact is embedded again with a new model, in the
 background; until then, and whenever it can't reach the server, search goes by words.
 

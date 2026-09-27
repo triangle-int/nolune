@@ -770,7 +770,7 @@ export const fr: Messages = {
 		title: 'Modèles et clés',
 		keys: 'Clés d’API',
 		keysHint:
-			'Partagées par tous les profils et conservées dans le fichier de configuration de btw sur cet ordinateur. Une nouvelle clé est vérifiée auprès de son fournisseur avant d’être enregistrée, puis utilisée tout de suite.',
+			'Partagées par tous les profils et conservées dans le fichier de configuration de btw sur cet ordinateur. Une nouvelle clé est vérifiée auprès de son fournisseur avant d’être enregistrée, puis utilisée tout de suite. Pour un serveur de modèles à vous, comme Ollama ou LM Studio, ajoutez un fournisseur personnalisé.',
 		purposes: {
 			anthropic: 'Fait tourner les discussions et les automatisations sur les modèles Claude.',
 			openai:
@@ -877,10 +877,9 @@ export const fr: Messages = {
 			onKey: (provider: string) => `Utilise la clé d’API ${provider}.`,
 			noKey: (provider: string) =>
 				`Pas encore de clé d’API ${provider} : ajoutez-en une dans « Clés d’API » plus haut.`,
-			server: 'Serveur',
-			onServer: (api: string, server: string, url: string) =>
-				`Utilise ${server} à ${url}, par son API ${api}. Le modèle doit savoir appeler des outils ; les images et les PDF lui parviennent sous forme de chemins.`,
-			noServers: 'Pas encore de serveur : ajoutez-en un dans Vos serveurs, plus haut.',
+			onCustom: (api: string, url: string) =>
+				`Utilise ${url}, par son API ${api}. Le modèle doit savoir appeler des outils ; les images et les PDF lui parviennent sous forme de chemins.`,
+			customGone: 'Ce fournisseur personnalisé a été retiré : choisissez-en un autre.',
 			asking: (source: string) => `Demande de ses modèles à ${source}…`,
 			listProblem: (problem: string) => `${problem} Vous pouvez quand même saisir un identifiant.`,
 			couldNotList: (status: number) => `btw n’a pas pu obtenir les modèles (${status}).`,
@@ -904,36 +903,43 @@ export const fr: Messages = {
 		removed: 'Retirée.',
 		newDefault: (name: string) => `Les nouvelles discussions commencent maintenant avec ${name}.`,
 		presetRemoved: 'Retiré. Les discussions existantes continuent de fonctionner.',
-		/** Memory search by meaning: where its embeddings come from. */
-		servers: {
-			title: 'Vos serveurs',
-			hint: 'Des serveurs de modèles à vous, comme Ollama, LM Studio ou oMLX sur cet ordinateur, ou vLLM sur une machine avec des GPU. Les préréglages Custom OpenAI utilisent l’API OpenAI du serveur, les Custom Anthropic son API Anthropic ; la recherche dans la mémoire peut prendre ses embeddings. Enregistrés dans le fichier de configuration de btw, avec leurs clés, qui n’arrivent jamais sur cette page.',
-			none: 'Aucun pour l’instant.',
-			add: 'Ajouter un serveur',
+		/** Custom providers: model servers of the family's own, listed with the API keys. */
+		customProviders: {
+			add: 'Ajouter un fournisseur personnalisé',
+			addTitle: 'Ajouter un fournisseur personnalisé',
+			addHint:
+				'Un serveur de modèles à vous, comme Ollama, LM Studio ou oMLX sur cet ordinateur, ou vLLM sur une machine avec des GPU. Il apparaît sous son nom dans Ajouter un modèle.',
+			about: (api: string) => `Votre propre serveur de modèles, par son API ${api}.`,
+			apis: { openai: 'OpenAI', anthropic: 'Anthropic' },
 			change: 'Modifier',
 			name: 'Nom',
-			nameHint:
-				'Lettres, chiffres, - et _. Ses modèles portent son nom, comme gpu/qwen3:32b, il ne peut donc pas changer ensuite.',
+			namePlaceholder: 'Ollama',
+			api: 'API',
+			apiHints: {
+				openai:
+					'La Responses API d’OpenAI : Ollama, LM Studio, vLLM, LiteLLM. La recherche dans la mémoire peut prendre ses embeddings.',
+				anthropic: 'La Messages API d’Anthropic : Ollama, LM Studio, le serveur de llama.cpp, oMLX.'
+			},
 			address: 'Adresse',
 			addressHint:
-				'Ollama écoute sur http://localhost:11434 et LM Studio sur http://localhost:1234. btw demande ses modèles au serveur pour le vérifier.',
+				'Ollama écoute sur http://localhost:11434 et LM Studio sur http://localhost:1234. btw lui demande ses modèles pour le vérifier.',
 			key: 'Clé',
-			keyOptional: '(si le serveur en demande une)',
+			keyOptional: '(s’il en demande une)',
 			keyKept: 'Enregistrée. Laissez vide pour la garder.',
-			withKey: (hint: string | null) => (hint ? `Clé se terminant par ${hint}` : 'Avec une clé'),
-			noKey: 'Sans clé',
-			checking: 'Vérification du serveur…',
+			withKey: (hint: string | null) => (hint ? `clé se terminant par ${hint}` : 'avec une clé'),
+			noKey: 'sans clé',
+			checking: 'Vérification…',
 			works: (n: number) =>
 				`Enregistré. Il propose ${n} ${p(n, { one: 'modèle', other: 'modèles' })}.`,
 			unchecked: (problem: string) => `Enregistré sans vérification : ${problem}`,
-			needName: 'Donnez-lui un nom : lettres, chiffres, - et _, comme local ou gpu.',
-			nameTaken: (name: string) => `Il y a déjà un serveur nommé ${name}.`,
-			needAddress: 'Indiquez l’adresse du serveur, en commençant par http:// ou https://.',
+			needName: 'Donnez-lui un nom, comme Ollama ou GPU box.',
+			needAddress: 'Indiquez son adresse, en commençant par http:// ou https://.',
 			removeTitle: (name: string) => `Retirer ${name} ?`,
 			removeBody:
 				'Les discussions et automatisations sur ses modèles cessent de fonctionner jusqu’à ce qu’elles passent à un autre modèle.',
 			usedBy: (names: string) => `Ces préréglages l’utilisent : ${names}.`
 		},
+		/** Memory search by meaning: where its embeddings come from. */
 		embeddings: {
 			title: 'Recherche dans la mémoire',
 			hint: 'btw retrouve aussi les faits de la mémoire par leur sens, pas seulement par leurs mots, et d’une langue à l’autre. Pour cela, chaque fait est envoyé une fois là où sont calculés les embeddings, et chaque message à son envoi ; un serveur sur cet ordinateur les garde ici. Commun à tous les profils.',
@@ -944,31 +950,28 @@ export const fr: Messages = {
 				'Pas encore de clé OpenAI ni OpenRouter : la mémoire est cherchée par mots seulement.',
 			noKey: (provider: string) =>
 				`Pas encore de clé ${provider} : la mémoire est cherchée par mots seulement. Ajoutez-en une dans Clés d’API, plus haut.`,
-			noServer:
-				'Pas encore de serveur : la mémoire est cherchée par mots seulement. Ajoutez-en un dans Vos serveurs, plus haut.',
+			customGone:
+				'Ce fournisseur personnalisé a été retiré : la mémoire est cherchée par mots seulement.',
 			change: 'Modifier',
 			source: 'Embeddings de',
 			modes: {
 				auto: 'Auto',
 				openai: 'OpenAI',
 				openrouter: 'OpenRouter',
-				'custom-openai': 'Custom OpenAI',
 				off: 'Désactivée'
 			},
 			autoNote:
 				'text-embedding-3-small d’OpenAI avec la clé OpenAI, sinon le même modèle via OpenRouter.',
 			withKey: (provider: string) => `Avec la clé d’API ${provider}.`,
-			customNote: (server: string, url: string) =>
-				`Un modèle de ${server} à ${url}, par son API OpenAI.`,
+			customNote: (url: string) => `Un modèle qu’il propose à ${url}, par son API OpenAI.`,
 			offNote: 'La mémoire est cherchée par mots seulement, et aucun fait n’est envoyé nulle part.',
-			server: 'Serveur',
 			model: 'Modèle',
-			customModel: 'Son nom sur le serveur, comme nomic-embed-text',
+			customModel: 'Son nom là-bas, comme nomic-embed-text',
 			checking: 'Vérification…',
 			works: 'Enregistré. Ça fonctionne ; les faits sont traités en arrière-plan.',
 			wordsOnly: 'Enregistré. La mémoire est cherchée par mots seulement.',
 			noAnswer: (problem: string) => `Enregistré, mais pas de réponse : ${problem}`,
-			needModel: 'Indiquez le modèle que le serveur doit utiliser.'
+			needModel: 'Indiquez le modèle à utiliser.'
 		}
 	}
 };

@@ -168,8 +168,8 @@ describe('btw preset edit', () => {
 	});
 });
 
-describe('btw server', () => {
-	it('checks a server for its models, and presets and memory search can use it', async () => {
+describe('btw provider', () => {
+	it('checks a custom provider for its models, and presets and memory search can use it', async () => {
 		// A server that wants a key, like a vLLM started with --api-key.
 		const server = createServer((req, res) => {
 			res.setHeader('content-type', 'application/json');
@@ -184,49 +184,59 @@ describe('btw server', () => {
 		await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
 		const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 		try {
-			const refused = await run(['server', 'add', 'gpu', url], { stdin: '' });
+			const refused = await run(['provider', 'add', 'GPU box', url], { stdin: '' });
 			expect(refused.code).not.toBe(0);
 			expect(refused.err).toContain('The server wants a key.');
 
-			expect(await run(['server', 'add', 'gpu', `${url}/`, '--key', 'sk-local'])).toEqual({
+			const args = ['provider', 'add', 'GPU box', `${url}/`, '--api', 'anthropic'];
+			expect(await run([...args, '--key', 'sk-local'])).toEqual({
 				code: 0,
-				out: `Added the server "gpu" at ${url}. It serves qwen3:8b, nomic.\n`,
+				out: `Added GPU box at ${url}, through its Anthropic API. It serves qwen3:8b, nomic.\n`,
 				err: ''
 			});
-			expect((await run(['server', 'list'])).out).toBe(`gpu\t${url}\tkey\n`);
-			expect((await run(['config'])).out).toContain(`\nservers       gpu ${url} (with a key)\n`);
-
-			// With one server, a model needs no server's name; the preset is named by it.
-			const added = await run(['preset', 'add', 'qwen3:8b', '--provider', 'custom-anthropic']);
-			expect(added.out).toBe('Added "qwen3:8b (gpu)" (context ?).\n');
-			expect((await run(['preset', 'list'])).out).toContain('custom-anthropic/gpu/qwen3:8b');
-
-			const meaning = await run(['config', 'set', 'embeddings', 'custom-openai/gpu/nomic']);
-			expect(meaning.out).toBe('Memory search by meaning: custom-openai/gpu/nomic.\n');
-			const address = await run(['config', 'set', 'embeddings', url]);
-			expect(address.err).toContain('btw server add <name> <url>');
-
-			expect((await run(['server', 'rm', 'gpu'])).out).toBe(
-				'Removed the server "gpu". Chats on "qwen3:8b (gpu)" stop working until they\'re moved to another model.\n'
+			// The same server through its OpenAI API, for memory search.
+			await run(['provider', 'add', 'Embeddings', url, '--key', 'sk-local']);
+			expect((await run(['provider', 'list'])).out).toBe(
+				`GPU box\tgpu-box\tanthropic\t${url}\tkey\nEmbeddings\tembeddings\topenai\t${url}\tkey\n`
 			);
 			expect((await run(['config'])).out).toContain(
-				'embeddings    custom-openai/gpu/nomic, but there is no server named "gpu"'
+				`\ncustom        GPU box ${url} (anthropic, with a key), Embeddings ${url} (openai, with a key)\n`
 			);
-			const orphan = await run(['preset', 'add', 'qwen3:8b', '--provider', 'custom-openai']);
-			expect(orphan.err).toContain('no server yet');
+			const other = await run(['provider', 'add', 'gpu box', url, '--api', 'openai']);
+			expect(other.err).toContain("GPU box speaks Anthropic's API.");
+
+			// Picked by its name; the preset is named by it.
+			const added = await run(['preset', 'add', 'qwen3:8b', '--provider', 'GPU box']);
+			expect(added.out).toBe('Added "qwen3:8b (GPU box)" (context ?).\n');
+			expect((await run(['preset', 'list'])).out).toContain('GPU box/qwen3:8b');
+			const unknown = await run(['preset', 'add', 'qwen3:8b', '--provider', 'ollama']);
+			expect(unknown.err).toContain('no provider "ollama"');
+
+			const meaning = await run(['config', 'set', 'embeddings', 'custom-openai/embeddings/nomic']);
+			expect(meaning.out).toBe('Memory search by meaning: Embeddings/nomic.\n');
+			const address = await run(['config', 'set', 'embeddings', url]);
+			expect(address.err).toContain('btw provider add <name> <url>');
+
+			expect((await run(['provider', 'rm', 'gpu-box'])).out).toBe(
+				'Removed GPU box. Chats on "qwen3:8b (GPU box)" stop working until they\'re moved to another model.\n'
+			);
+			await run(['provider', 'rm', 'Embeddings']);
+			expect((await run(['config'])).out).toContain(
+				'embeddings    custom-openai/embeddings/nomic, but there is no custom provider "embeddings"'
+			);
 		} finally {
 			server.close();
 		}
 	});
 
-	it("saves a server that doesn't answer yet, with a warning", async () => {
-		const saved = await run(['server', 'add', 'later', 'http://127.0.0.1:1']);
+	it("saves one that doesn't answer yet, with a warning", async () => {
+		const saved = await run(['provider', 'add', 'Later', 'http://127.0.0.1:1']);
 		expect(saved.code).toBe(0);
 		expect(saved.out).toMatch(
-			/^Saved the server "later" without checking it\. Couldn't reach http:\/\/127\.0\.0\.1:1 \(.+\)\.\n$/
+			/^Saved Later without checking it\. Couldn't reach http:\/\/127\.0\.0\.1:1 \(.+\)\.\n$/
 		);
-		const bad = await run(['server', 'add', 'my server', 'http://127.0.0.1:1']);
-		expect(bad.err).toContain('letters, digits');
+		const reserved = await run(['provider', 'add', 'OpenAI', 'http://127.0.0.1:1']);
+		expect(reserved.err).toContain("There's already a provider called OpenAI.");
 	});
 });
 

@@ -6,17 +6,18 @@ import { createUpload } from './attachments.ts';
 import { initConfig, readConfig } from './config.ts';
 import { committedRows, createConversation, getConversation, toDisplay } from './conversations.ts';
 import {
-	CustomServerError,
+	CustomProviderError,
 	anthropicUrl,
-	checkServer,
-	findServer,
-	listServers,
+	checkCustomProvider,
+	findCustomProvider,
+	listCustomProviders,
 	openaiUrl,
-	removeServer,
-	saveServer,
+	removeCustomProvider,
+	saveCustomProvider,
 	splitModel,
-	suggestServerName
-} from './custom-servers.ts';
+	suggestProviderName,
+	type CustomApi
+} from './custom-providers.ts';
 import {
 	describeApiError,
 	fetchContextWindow,
@@ -100,7 +101,7 @@ afterAll(() => {
 
 beforeEach(() => {
 	initConfig();
-	// The real providers' keys, which must never reach a server of the family's.
+	// The real providers' keys, which must never reach a custom provider.
 	vi.stubEnv('OPENAI_API_KEY', 'sk-openai-real-000000000001');
 	vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-real-000000000001');
 	vi.stubEnv('ANTHROPIC_AUTH_TOKEN', 'sk-ant-token-000000000001');
@@ -128,8 +129,12 @@ function loopEnd(conversationId: string): Promise<void> {
 	});
 }
 
+/** A custom provider at the stand-in (or `url`), its id from its name. */
+const add = (name: string, api: CustomApi, url = root, key: string | null = null) =>
+	saveCustomProvider({ name, api, url, key });
+
 function chatOn(provider: Provider, model = 'local/qwen3:8b') {
-	saveServer('local', root, null);
+	add('Local', provider === 'custom-anthropic' ? 'anthropic' : 'openai');
 	const { user, profile } = makeFamily();
 	const preset = makePreset('On the server', model, provider);
 	return {
@@ -139,7 +144,7 @@ function chatOn(provider: Provider, model = 'local/qwen3:8b') {
 	};
 }
 
-/** One call on a server's model, as the runner makes it. */
+/** One call on a custom provider's model, as the runner makes it. */
 const turn = (provider: Provider, model: string, effort: Effort = 'medium') =>
 	streamTurn({
 		provider,
@@ -317,79 +322,130 @@ const saidAnthropic = (text: string): Answer => ({
 
 // --- tests ---
 
-describe("the family's servers", () => {
-	it('are kept by name, their keys never shown, and a key only for its address', () => {
-		expect(listServers()).toEqual([]);
-		saveServer('local', 'http://localhost:11434/', null);
-		saveServer('gpu', 'http://gpu-box:8000/v1', 'sk-gpu-key-0000000000000042');
-		expect(listServers()).toEqual([
-			{ name: 'local', url: 'http://localhost:11434', hasKey: false, hint: null },
-			{ name: 'gpu', url: 'http://gpu-box:8000/v1', hasKey: true, hint: '0042' }
+describe('custom providers', () => {
+	it('are kept with an id from their name, their keys never shown, and a key only for its address', () => {
+		expect(listCustomProviders()).toEqual([]);
+		expect(add('Ollama', 'openai', 'http://localhost:11434/')).toBe('ollama');
+		expect(
+			add('GPU box', 'anthropic', 'http://gpu-box:8000/v1', 'sk-gpu-key-0000000000000042')
+		).toBe('gpu-box');
+		expect(listCustomProviders()).toEqual([
+			{
+				id: 'ollama',
+				name: 'Ollama',
+				api: 'openai',
+				url: 'http://localhost:11434',
+				hasKey: false,
+				hint: null
+			},
+			{
+				id: 'gpu-box',
+				name: 'GPU box',
+				api: 'anthropic',
+				url: 'http://gpu-box:8000/v1',
+				hasKey: true,
+				hint: '0042'
+			}
 		]);
-		expect(JSON.stringify(listServers())).not.toContain('sk-gpu');
-		expect(findServer('GPU')?.key).toBe('sk-gpu-key-0000000000000042');
+		expect(JSON.stringify(listCustomProviders())).not.toContain('sk-gpu');
+		expect(findCustomProvider('gpu BOX')?.key).toBe('sk-gpu-key-0000000000000042');
 
+		// Its name, address and key change; its id and API stay, as its presets' models need them.
 		// A form that never showed the key keeps it for the same address, not for another.
-		saveServer('gpu', 'http://gpu-box:8000/v1', undefined);
-		expect(findServer('gpu')?.key).toBe('sk-gpu-key-0000000000000042');
-		saveServer('gpu', 'http://other-box:8000/v1', undefined);
-		expect(findServer('gpu')).toEqual({ name: 'gpu', url: 'http://other-box:8000/v1' });
+		saveCustomProvider({
+			id: 'gpu-box',
+			name: 'Big GPU',
+			api: 'openai',
+			url: 'http://gpu-box:8000/v1',
+			key: undefined
+		});
+		expect(findCustomProvider('big gpu')).toEqual({
+			id: 'gpu-box',
+			name: 'Big GPU',
+			api: 'anthropic',
+			url: 'http://gpu-box:8000/v1',
+			key: 'sk-gpu-key-0000000000000042'
+		});
+		saveCustomProvider({
+			id: 'gpu-box',
+			name: 'Big GPU',
+			url: 'http://other-box:8000/v1',
+			key: undefined
+		});
+		expect(findCustomProvider('gpu-box')).toEqual({
+			id: 'gpu-box',
+			name: 'Big GPU',
+			api: 'anthropic',
+			url: 'http://other-box:8000/v1'
+		});
+		// Its old name is free again, with another id.
+		expect(add('GPU box', 'openai')).toBe('gpu-box-2');
+		removeCustomProvider('gpu-box-2');
 
-		removeServer('gpu');
-		expect(readConfig().servers).toEqual([{ name: 'local', url: 'http://localhost:11434' }]);
-		removeServer('local');
-		expect(readConfig().servers).toBeUndefined();
+		// One name each, and not a built-in provider's.
+		expect(() => add('ollama', 'anthropic')).toThrow("There's already a provider called Ollama.");
+		expect(() => add('OpenAI', 'openai')).toThrow("There's already a provider called OpenAI.");
+		expect(() => add('!!', 'openai')).toThrow(CustomProviderError);
 
-		expect(() => saveServer('my server', 'http://localhost:1234', null)).toThrow(CustomServerError);
-		expect(() => saveServer('a/b', 'http://localhost:1234', null)).toThrow('letters, digits');
+		removeCustomProvider('gpu-box');
+		expect(readConfig().customProviders).toEqual([
+			{ id: 'ollama', name: 'Ollama', api: 'openai', url: 'http://localhost:11434' }
+		]);
+		removeCustomProvider('ollama');
+		expect(readConfig().customProviders).toBeUndefined();
 	});
 
-	it('say where each API is, and name models as <server>/<model>', () => {
+	it('say where each API is, and name models as <id>/<model>', () => {
 		expect(openaiUrl('http://localhost:11434')).toBe('http://localhost:11434/v1');
 		expect(openaiUrl('http://localhost:11434/v1/')).toBe('http://localhost:11434/v1');
 		expect(openaiUrl('https://proxy.example.com/llm/v1')).toBe('https://proxy.example.com/llm/v1');
 		expect(anthropicUrl('http://localhost:11434/v1')).toBe('http://localhost:11434');
 		expect(anthropicUrl('http://localhost:8080')).toBe('http://localhost:8080');
 
-		expect(splitModel('gpu/Qwen/Qwen3-32B')).toEqual({ server: 'gpu', model: 'Qwen/Qwen3-32B' });
-		expect(splitModel('qwen3:8b')).toEqual({ server: '', model: 'qwen3:8b' });
+		expect(splitModel('gpu-box/Qwen/Qwen3-32B')).toEqual({
+			provider: 'gpu-box',
+			model: 'Qwen/Qwen3-32B'
+		});
+		expect(splitModel('qwen3:8b')).toEqual({ provider: '', model: 'qwen3:8b' });
 
-		expect(suggestServerName('http://localhost:11434')).toBe('local');
-		expect(suggestServerName('http://127.0.0.1:1234/v1')).toBe('local');
-		expect(suggestServerName('http://gpu-box.lan:8000/v1')).toBe('gpu-box');
+		expect(suggestProviderName('http://localhost:11434')).toBe('Local');
+		expect(suggestProviderName('http://127.0.0.1:1234/v1')).toBe('Local');
+		expect(suggestProviderName('http://gpu-box.lan:8000/v1')).toBe('gpu-box');
 	});
 
 	it('are checked by asking them for their models, with the key both ways', async () => {
-		expect(await checkServer(root, null)).toEqual({
+		expect(await checkCustomProvider(root, null)).toEqual({
 			models: ['qwen3:8b', 'Qwen/Qwen3-32B'],
 			warning: null
 		});
 		expect(seen.at(-1)).toMatchObject({ path: '/v1/models', bearer: undefined, apiKey: undefined });
 
 		wantsKey = 'secret';
-		await expect(checkServer(root, null)).rejects.toMatchObject({
+		await expect(checkCustomProvider(root, null)).rejects.toMatchObject({
 			reason: 'key',
 			message: 'The server wants a key.'
 		});
-		await expect(checkServer(root, 'wrong')).rejects.toMatchObject({ reason: 'key' });
-		expect((await checkServer(`${root}/v1/`, 'secret')).models).toHaveLength(2);
+		await expect(checkCustomProvider(root, 'wrong')).rejects.toMatchObject({ reason: 'key' });
+		expect((await checkCustomProvider(`${root}/v1/`, 'secret')).models).toHaveLength(2);
 		expect(seen.at(-1)).toMatchObject({ path: '/v1/models', bearer: 'secret', apiKey: 'secret' });
 
 		models = [];
 		wantsKey = null;
-		expect(await checkServer(root, null)).toEqual({
+		expect(await checkCustomProvider(root, null)).toEqual({
 			models: [],
 			warning: "It doesn't list any models yet."
 		});
-		await expect(checkServer('http://127.0.0.1:1', null)).rejects.toMatchObject({
+		await expect(checkCustomProvider('http://127.0.0.1:1', null)).rejects.toMatchObject({
 			reason: 'unreachable'
 		});
-		await expect(checkServer('localhost:11434', null)).rejects.toBeInstanceOf(CustomServerError);
+		await expect(checkCustomProvider('localhost:11434', null)).rejects.toBeInstanceOf(
+			CustomProviderError
+		);
 	});
 
 	it("list their models for a preset, with a window where they say one, and check a preset's", async () => {
-		saveServer('local', root, null);
-		expect(await listModels('custom-openai', 'local')).toEqual([
+		add('Local', 'anthropic');
+		expect(await listModels('custom-anthropic', 'local')).toEqual([
 			{ id: 'local/qwen3:8b', name: 'qwen3:8b', description: null, contextWindow: null },
 			{
 				id: 'local/Qwen/Qwen3-32B',
@@ -399,44 +455,53 @@ describe("the family's servers", () => {
 			}
 		]);
 		expect(await fetchContextWindow('custom-anthropic', 'local/Qwen/Qwen3-32B')).toBe(40_960);
-		expect(await fetchContextWindow('custom-openai', 'local/qwen3:8b')).toBeNull();
-		await expect(fetchContextWindow('custom-openai', 'local/llama3')).rejects.toThrow(
-			'the server "local" has no model "llama3". It serves qwen3:8b, Qwen/Qwen3-32B.'
+		expect(await fetchContextWindow('custom-anthropic', 'local/qwen3:8b')).toBeNull();
+		await expect(fetchContextWindow('custom-anthropic', 'local/llama3')).rejects.toThrow(
+			'Local has no model "llama3". It serves qwen3:8b, Qwen/Qwen3-32B.'
 		);
-		await expect(fetchContextWindow('custom-openai', 'gpu/llama3')).rejects.toThrow(
-			'No server named "gpu". Servers: local.'
+		await expect(fetchContextWindow('custom-anthropic', 'gpu/llama3')).rejects.toThrow(
+			'No custom provider "gpu". Custom providers: Local.'
 		);
-		// A server that lists none can't be asked: whatever it serves shows at the first reply.
+		// Its API is its own.
+		await expect(fetchContextWindow('custom-openai', 'local/qwen3:8b')).rejects.toThrow(
+			"Local speaks Anthropic's API, not OpenAI's."
+		);
+		// One that lists none can't be asked: whatever it serves shows at the first reply.
 		models = [];
-		expect(await fetchContextWindow('custom-openai', 'local/llama3')).toBeNull();
+		expect(await fetchContextWindow('custom-anthropic', 'local/llama3')).toBeNull();
 
-		// A preset on it is named by its server.
+		// A preset on it is named by its name.
 		models = [{ id: 'qwen3:8b' }];
 		const preset = await addPreset({ provider: 'custom-anthropic', model: 'local/qwen3:8b' });
-		expect(preset.name).toBe('qwen3:8b (local)');
+		expect(preset.name).toBe('qwen3:8b (Local)');
 	});
 
-	it('say what went wrong in words: no such server, the key, or one that is down', async () => {
-		const noServer = await quick('custom-openai', 'local/qwen3:8b').catch((err: unknown) => err);
-		expect(describeApiError(noServer)).toBe(
-			'No server named "local". An admin can add one under Models & keys in btw, or with `btw server add`.'
+	it('say what went wrong in words: no such provider, the key, or one that is down', async () => {
+		const missing = await quick('custom-openai', 'local/qwen3:8b').catch((err: unknown) => err);
+		expect(describeApiError(missing)).toBe(
+			'No custom provider "local". An admin can add one under Models & keys in btw, or with `btw provider add`.'
 		);
 		const unnamed = await quick('custom-openai', 'qwen3:8b').catch((err: unknown) => err);
-		expect(describeApiError(unnamed)).toContain("doesn't say which server it's on");
+		expect(describeApiError(unnamed)).toContain("doesn't say which custom provider it's on");
 
-		saveServer('local', root, null);
+		add('Local', 'openai');
+		add('oMLX', 'anthropic');
 		wantsKey = 'secret';
-		for (const provider of ['custom-openai', 'custom-anthropic'] as const) {
-			const refused = await quick(provider, 'local/qwen3:8b').catch((err: unknown) => err);
+		for (const [provider, model] of [
+			['custom-openai', 'local/qwen3:8b'],
+			['custom-anthropic', 'omlx/qwen3:8b']
+		] as const) {
+			const refused = await quick(provider, model).catch((err: unknown) => err);
+			const name = provider === 'custom-openai' ? 'Local' : 'oMLX';
 			expect(describeApiError(refused)).toBe(
-				`The server "local" at ${root} didn't accept the key. An admin can change it under Models & keys in btw, or with \`btw server add\`.`
+				`${name} at ${root} didn't accept the key. An admin can change it under Models & keys in btw.`
 			);
 		}
 
-		saveServer('down', 'http://127.0.0.1:1', null);
+		add('Down', 'anthropic', 'http://127.0.0.1:1');
 		const down = await turn('custom-anthropic', 'down/qwen3:8b').catch((err: unknown) => err);
 		expect(describeApiError(down)).toMatch(
-			/^Couldn't reach the server "down" at http:\/\/127\.0\.0\.1:1 \(.+\)\. Is it running\?$/
+			/^Couldn't reach Down at http:\/\/127\.0\.0\.1:1 \(.+\)\. Is it running\?$/
 		);
 
 		wantsKey = null;
@@ -447,14 +512,14 @@ describe("the family's servers", () => {
 						json: { type: 'error', error: { type: 'not_found_error', message: 'no model "x"' } }
 					}
 				: { status: 400, json: { error: { message: 'model "llama3" not found' } } };
-		const missing = await quick('custom-openai', 'local/llama3').catch((err: unknown) => err);
-		expect(describeApiError(missing)).toBe('Custom OpenAI error 400: model "llama3" not found');
-		const other = await quick('custom-anthropic', 'local/x').catch((err: unknown) => err);
-		expect(describeApiError(other)).toBe('Custom Anthropic error 404: no model "x"');
+		const notFound = await quick('custom-openai', 'local/llama3').catch((err: unknown) => err);
+		expect(describeApiError(notFound)).toBe('Local error 400: model "llama3" not found');
+		const other = await quick('custom-anthropic', 'omlx/x').catch((err: unknown) => err);
+		expect(describeApiError(other)).toBe('oMLX error 404: no model "x"');
 	});
 });
 
-describe('a chat on a Custom OpenAI model', () => {
+describe("a chat on a custom provider of OpenAI's API", () => {
 	it("runs the agent loop as OpenAI's does, leaving out what only OpenAI has", async () => {
 		const { user, chat } = chatOn('custom-openai');
 		const replies = [streamed([thought, listCall]), streamed([said('One file: a.txt.')])];
@@ -530,7 +595,7 @@ describe('a chat on a Custom OpenAI model', () => {
 	});
 
 	it("sends OpenAI's levels above high as high, and no reasoning to a model that refuses it", async () => {
-		saveServer('local', root, null);
+		add('Local', 'openai');
 		answer = (req) =>
 			req.json?.reasoning && req.json.model === 'llama3.2'
 				? { status: 400, json: { error: { message: '"llama3.2" does not support thinking' } } }
@@ -552,7 +617,7 @@ describe('a chat on a Custom OpenAI model', () => {
 		// Other errors aren't taken for a refusal.
 		answer = () => ({ status: 400, json: { error: { message: 'model "gemma" not found' } } });
 		const failed = await turn('custom-openai', 'local/gemma').catch((err: unknown) => err);
-		expect(describeApiError(failed)).toBe('Custom OpenAI error 400: model "gemma" not found');
+		expect(describeApiError(failed)).toBe('Local error 400: model "gemma" not found');
 	});
 
 	it('gives the model the paths of pictures and PDFs', async () => {
@@ -579,7 +644,7 @@ describe('a chat on a Custom OpenAI model', () => {
 			{
 				type: 'input_text',
 				text: expect.stringMatching(
-					/^\[Anna attached dot\.png, saved at .+dot\.png\. It isn't shown here: btw gives models on your own servers only a picture's path\]$/
+					/^\[Anna attached dot\.png, saved at .+dot\.png\. It isn't shown here: btw gives models of custom providers only a picture's path\]$/
 				)
 			},
 			{ type: 'input_text', text: 'Anna: What is it?' }
@@ -610,7 +675,7 @@ describe('a chat on a Custom OpenAI model', () => {
 			}
 		]);
 
-		saveServer('local', root, null);
+		add('Local', 'openai');
 		answer = () => ({
 			events: [
 				{ type: 'response.created', response: { status: 'in_progress' } },
@@ -618,11 +683,11 @@ describe('a chat on a Custom OpenAI model', () => {
 			]
 		});
 		const failed = await turn('custom-openai', 'local/qwen3:8b').catch((err: unknown) => err);
-		expect(describeApiError(failed)).toBe('Custom OpenAI: The reply ended before it was complete.');
+		expect(describeApiError(failed)).toBe('Local: The reply ended before it was complete.');
 	});
 });
 
-describe('a chat on a Custom Anthropic model', () => {
+describe("a chat on a custom provider of Anthropic's API", () => {
 	it("runs the agent loop as Anthropic's does, leaving out what only Anthropic has", async () => {
 		const { user, chat } = chatOn('custom-anthropic');
 		const replies = [
@@ -701,10 +766,10 @@ describe('a chat on a Custom Anthropic model', () => {
 	});
 
 	it('sends its key both ways, at the server itself rather than /v1', async () => {
-		saveServer('gpu', `${root}/v1`, 'sk-gpu-key-0000000000000042');
+		add('GPU box', 'anthropic', `${root}/v1`, 'sk-gpu-key-0000000000000042');
 		wantsKey = 'sk-gpu-key-0000000000000042';
 		answer = () => message([{ type: 'text', text: 'Hi.' }], 'end_turn');
-		const reply = await turn('custom-anthropic', 'gpu/qwen3:8b');
+		const reply = await turn('custom-anthropic', 'gpu-box/qwen3:8b');
 		expect(reply.texts).toEqual(['Hi.']);
 		expect(seen.at(-1)).toMatchObject({
 			path: MESSAGES,

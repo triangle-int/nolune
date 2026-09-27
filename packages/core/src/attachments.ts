@@ -41,7 +41,7 @@ import {
 	type Provider
 } from './models.ts';
 import { profileDir } from './paths.ts';
-import { isCustomProvider } from './custom-servers.ts';
+import { isCustomProvider } from './custom-providers.ts';
 import { hasFileStore, providerFileId } from './provider-files.ts';
 
 /*
@@ -230,9 +230,9 @@ type ModelOf = { provider: Provider; model: string };
  * would fail every later request, so it goes as its path when the answer is unsure too.
  */
 async function modelTakes(conv: ModelOf, what: 'pictures' | 'pdfs'): Promise<string | null> {
-	// Nothing says which of a server's models take them.
+	// Nothing says which of a custom provider's models take them.
 	if (isCustomProvider(conv.provider)) {
-		return `btw gives models on your own servers only ${what === 'pdfs' ? "a PDF's" : "a picture's"} path`;
+		return `btw gives models of custom providers only ${what === 'pdfs' ? "a PDF's" : "a picture's"} path`;
 	}
 	try {
 		if ((await modelInputs(conv.provider, conv.model))[what]) return null;

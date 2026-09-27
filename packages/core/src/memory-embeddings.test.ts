@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initConfig, updateConfig } from './config.ts';
-import { saveServer } from './custom-servers.ts';
+import { removeCustomProvider, saveCustomProvider } from './custom-providers.ts';
 import { addMemoryFact, writeMemoryNote } from './memory.ts';
 import {
 	embeddingSource,
@@ -202,20 +202,18 @@ describe('embeddingSource', () => {
 		expect(embeddingSource()).toBeNull();
 	});
 
-	it("uses a server's model, with its key when it has one", async () => {
+	it("uses a custom provider's model, with its key when it has one", async () => {
 		initConfig();
-		saveEmbeddingSetting(parseEmbeddingSetting('custom-openai/local/embeddinggemma:300m'));
-		expect(embeddingSource()).toBeNull();
-		expect(embeddingStatus()).toContain('there is no server named "local"');
-
 		// Added as the server itself: its OpenAI API is under /v1.
 		const { port } = server.address() as { port: number };
-		saveServer('local', `http://127.0.0.1:${port}/`, null);
+		const url = `http://127.0.0.1:${port}/`;
+		saveCustomProvider({ name: 'Local', api: 'openai', url, key: null });
+		saveEmbeddingSetting(parseEmbeddingSetting('custom-openai/local/embeddinggemma:300m'));
 		expect(embeddingSource()).toEqual({
 			url: `http://127.0.0.1:${port}/v1`,
 			model: 'embeddinggemma:300m',
 			key: null,
-			name: 'custom-openai/local/embeddinggemma:300m'
+			name: 'Local/embeddinggemma:300m'
 		});
 		const profile = family();
 		await embedMemory(profile.slug);
@@ -223,8 +221,12 @@ describe('embeddingSource', () => {
 		const teeth = await recallFor(profile.slug, 'Who fixes our teeth?', { known: '' });
 		expect(teeth).toContain('Dentist: Dr. Keller');
 
-		saveServer('local', `http://127.0.0.1:${port}/v1`, 'sk-local');
+		saveCustomProvider({ id: 'local', name: 'Local', url: `${url}v1`, key: 'sk-local' });
 		expect(embeddingSource()?.key).toBe('sk-local');
+
+		removeCustomProvider('local');
+		expect(embeddingSource()).toBeNull();
+		expect(embeddingStatus()).toContain('there is no custom provider "local"');
 	});
 
 	it('tells Models & keys what is set and in use, never a key', () => {
@@ -234,13 +236,18 @@ describe('embeddingSource', () => {
 			model: null,
 			using: 'openai/text-embedding-3-small'
 		});
-		saveServer('studio', 'http://localhost:1234', 'secret');
+		saveCustomProvider({
+			name: 'Studio',
+			api: 'openai',
+			url: 'http://localhost:1234',
+			key: 'secret'
+		});
 		saveEmbeddingSetting({ provider: 'custom-openai', model: 'studio/nomic' });
 		const state = embeddingState();
 		expect(state).toEqual({
 			mode: 'custom-openai',
 			model: 'studio/nomic',
-			using: 'custom-openai/studio/nomic'
+			using: 'Studio/nomic'
 		});
 		expect(JSON.stringify(state)).not.toContain('secret');
 
@@ -259,12 +266,21 @@ describe('embeddingSource', () => {
 			provider: 'openrouter',
 			model: 'qwen/qwen3-embedding-8b'
 		});
+		initConfig();
+		saveCustomProvider({ name: 'GPU', api: 'openai', url: 'http://gpu:8000/v1', key: null });
+		saveCustomProvider({ name: 'oMLX', api: 'anthropic', url: 'http://localhost:8000', key: null });
 		expect(parseEmbeddingSetting('custom-openai/gpu/Qwen/Qwen3-Embedding-8B')).toEqual({
 			provider: 'custom-openai',
 			model: 'gpu/Qwen/Qwen3-Embedding-8B'
 		});
-		expect(() => parseEmbeddingSetting('custom-openai/nomic')).toThrow('give the server too');
-		expect(() => parseEmbeddingSetting('http://localhost:1234/v1')).toThrow('btw server add');
+		expect(() => parseEmbeddingSetting('custom-openai/nomic')).toThrow(
+			'give the custom provider too'
+		);
+		expect(() => parseEmbeddingSetting('custom-openai/studio/nomic')).toThrow(
+			'no custom provider "studio"'
+		);
+		expect(() => parseEmbeddingSetting('custom-openai/omlx/nomic')).toThrow('no embeddings');
+		expect(() => parseEmbeddingSetting('http://localhost:1234/v1')).toThrow('btw provider add');
 		expect(() => parseEmbeddingSetting('voyage/voyage-3')).toThrow('openai/<model>');
 		expect(() => parseEmbeddingSetting('openai/')).toThrow('openai/<model>');
 	});

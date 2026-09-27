@@ -3,7 +3,7 @@ import * as anthropic from './anthropic.ts';
 import * as claudePlan from './claude-plan.ts';
 import * as chatgptPlan from './chatgpt-plan.ts';
 import type { Usage } from './conversations.ts';
-import * as custom from './custom-servers.ts';
+import * as custom from './custom-providers.ts';
 import { replyBlocks, toolCalls, type Message, type ToolCallBlock } from './format.ts';
 import * as openai from './openai-chat.ts';
 import * as openrouter from './openrouter.ts';
@@ -23,8 +23,8 @@ import { PlanError, isPlan, isPlanStopped, type Plan, type PlanTurn } from './pl
 
 /**
  * `claude-plan` and `chatgpt-plan` run on someone's subscription instead of an API key (plans.ts);
- * `custom-openai` and `custom-anthropic` on the family's own servers, in OpenAI's or Anthropic's
- * API (custom-servers.ts).
+ * `custom-openai` and `custom-anthropic` on custom providers, the family's own servers, in OpenAI's
+ * or Anthropic's API (custom-providers.ts).
  */
 export const PROVIDERS = [
 	'anthropic',
@@ -119,7 +119,7 @@ export async function streamTurn(opts: {
 		return fromContent(reply.content, reply.stopReason, reply.usage);
 	}
 	if (provider === 'openai' || provider === 'custom-openai') {
-		// A server's chats are OpenAI's, with its own client.
+		// A custom provider's chats are OpenAI's, with its own client.
 		const response =
 			provider === 'openai'
 				? await openai.streamResponse({ ...request, cacheKey })
@@ -215,7 +215,7 @@ export function countDocumentTokens(
 
 /**
  * What the model can be sent besides text. Every model of Anthropic's, OpenAI's and the Claude
- * plan sees pictures and reads PDFs; OpenRouter says per model; the family's servers' models get
+ * plan sees pictures and reads PDFs; OpenRouter says per model; custom providers' models get
  * them as their paths.
  */
 export async function modelInputs(
@@ -229,7 +229,7 @@ export async function modelInputs(
 
 /**
  * The messages as `model` can take them, before resolveFiles gives the provider its copies:
- * pictures and PDFs a model on OpenRouter can't read, and all of them on the family's servers,
+ * pictures and PDFs a model on OpenRouter can't read, and all of them on custom providers,
  * become notes. A chat that switched to that model may hold them. Other providers' models take
  * them all.
  */
@@ -247,7 +247,7 @@ export function readableMessages(
  * Throws if the provider doesn't know the model. Null when its window isn't known. For a plan, it
  * checks that its agent is here and signed in to one. Claude Code can't check a model id, so
  * whether it takes the model shows at the chat's first reply; Codex lists the plan's models.
- * On OpenRouter, the model must also be able to call tools. A server of the family's is only asked
+ * On OpenRouter, the model must also be able to call tools. A custom provider is only asked
  * whether it lists the model.
  */
 export async function fetchContextWindow(
@@ -280,23 +280,23 @@ export interface ModelChoice {
 
 /**
  * The models the provider offers, for the admin page to pick from: the newest first, or in the
- * agent's own order for a plan, or as `server` lists them for the family's servers (their ids
- * `<server>/<model>`). Throws what describeApiError explains.
+ * agent's own order for a plan, or as the custom provider `customId` lists them (their ids
+ * `<customId>/<model>`). Throws what describeApiError explains.
  */
-export async function listModels(provider: Provider, server = ''): Promise<ModelChoice[]> {
+export async function listModels(provider: Provider, customId = ''): Promise<ModelChoice[]> {
 	if (provider === 'claude-plan') return claudePlan.listModels();
 	if (provider === 'chatgpt-plan') return chatgptPlan.listModels();
 	if (provider === 'openrouter') return openrouter.listModels();
-	if (custom.isCustomProvider(provider)) return custom.listModels(provider, server);
+	if (custom.isCustomProvider(provider)) return custom.listModels(customId);
 	return provider === 'openai' ? openai.listModels() : anthropic.listModels();
 }
 
 /** Plans say what went wrong in their own words (plans.ts). */
 export function describeApiError(err: unknown): string {
 	if (err instanceof PlanError) return err.message;
-	// A server's errors are OpenAI's or Anthropic's SDK's classes, and OpenRouter's are OpenAI's,
-	// so they're asked first.
-	if (custom.isCustomServerError(err)) return custom.describeApiError(err);
+	// A custom provider's errors are OpenAI's or Anthropic's SDK's classes, and OpenRouter's are
+	// OpenAI's, so they're asked first.
+	if (custom.isCustomProviderError(err)) return custom.describeApiError(err);
 	if (openrouter.isOpenRouterError(err)) return openrouter.describeApiError(err);
 	return openai.isOpenAIError(err) ? openai.describeApiError(err) : anthropic.describeApiError(err);
 }
@@ -304,7 +304,7 @@ export function describeApiError(err: unknown): string {
 /** The API's own message, without the status and JSON around it: for notes shown to the model. */
 export function shortApiError(err: unknown): string {
 	if (err instanceof PlanError) return err.message;
-	if (custom.isCustomServerError(err)) return custom.shortApiError(err);
+	if (custom.isCustomProviderError(err)) return custom.shortApiError(err);
 	if (openrouter.isOpenRouterError(err)) return openrouter.shortApiError(err);
 	return openai.isOpenAIError(err) ? openai.shortApiError(err) : anthropic.shortApiError(err);
 }

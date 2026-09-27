@@ -26,6 +26,9 @@
 	let search = $state('');
 	const typed = $derived(search.trim());
 	const chosen = $derived(models?.find((m) => m.id === value));
+	/** Its id under its name, unless that's only its name after a custom provider's id. */
+	const showsId = (model: ModelChoice | undefined) =>
+		!!model?.name && !model.id.endsWith(`/${model.name}`);
 
 	function pick(model: string) {
 		value = model;
@@ -42,7 +45,7 @@
 	>
 		{#if value}
 			<span class="truncate">{chosen?.name ?? value}</span>
-			{#if chosen?.name}
+			{#if showsId(chosen)}
 				<span class="truncate font-mono text-xs text-muted-foreground">{value}</span>
 			{/if}
 		{:else}
@@ -68,7 +71,7 @@
 						>
 							<span class="min-w-0 flex-1">
 								<span class="block truncate">{model.name ?? model.id}</span>
-								{#if model.name}
+								{#if showsId(model)}
 									<span class="block truncate font-mono text-xs font-normal text-muted-foreground">
 										{model.id}
 									</span>

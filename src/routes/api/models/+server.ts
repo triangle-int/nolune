@@ -9,9 +9,9 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 	const provider = url.searchParams.get('provider') ?? '';
 	if (!isProvider(provider)) error(400, 'Unknown provider');
 	try {
-		// A server's, for Custom OpenAI and Custom Anthropic.
-		const server = url.searchParams.get('server') ?? '';
-		return json({ models: await listModels(provider, server), problem: null });
+		// A custom provider's, by its id.
+		const custom = url.searchParams.get('custom') ?? '';
+		return json({ models: await listModels(provider, custom), problem: null });
 	} catch (err) {
 		// The picker still takes a typed id, so this is a note under it rather than an error.
 		return json({ models: [], problem: describeApiError(err) });

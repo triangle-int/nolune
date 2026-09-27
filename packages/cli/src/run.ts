@@ -5,7 +5,7 @@ import { parseArgs } from 'node:util';
 import {
 	API_KEYS,
 	ApiKeyError,
-	CustomServerError,
+	CustomProviderError,
 	DEFAULT_IMAGE_MODEL,
 	DEFAULT_PORT,
 	MAX_MEDIA_BYTES,
@@ -13,11 +13,11 @@ import {
 	editPreset,
 	apiKeyStatuses,
 	checkApiKey,
-	checkServer,
+	checkCustomProvider,
 	claudeExecutable,
 	codexExecutable,
 	configExists,
-	findServer,
+	findCustomProvider,
 	createSkill,
 	createUser,
 	deleteUser,
@@ -36,9 +36,10 @@ import {
 	isApiKeyProvider,
 	isCustomProvider,
 	isProvider,
+	providerFor,
 	listPresets,
 	listProfileSkills,
-	listServers,
+	listCustomProviders,
 	listUsers,
 	normalizeApiKey,
 	parseImageModel,
@@ -46,22 +47,23 @@ import {
 	profileSkillsDir,
 	readConfig,
 	removeApiKey,
-	removeServer,
+	removeCustomProvider,
 	removePreset,
 	isPlan,
 	saveApiKey,
-	saveServer,
+	saveCustomProvider,
 	scanSkills,
 	setAdmin,
 	setDefaultPreset,
 	setPassword,
 	setSkillsEnabled,
 	splitModel,
-	suggestServerName,
+	suggestProviderName,
 	updateConfig,
 	viewImage,
 	ViewLimitError,
 	type ApiKeyProvider,
+	type CustomApi,
 	type Provider
 } from '@btw/core';
 import { AGENT_HELP, agentCommand } from './agent.ts';
@@ -86,13 +88,14 @@ import {
 const help = () => `btw - a family agent that runs on this computer
 
 Getting started
-  btw setup [--provider anthropic|openai|openrouter|custom-openai|custom-anthropic|claude-plan|
-          chatgpt-plan] [--url ADDRESS]      interactive first-time setup (key, your account, model);
+  btw setup [--provider anthropic|openai|openrouter|custom|claude-plan|chatgpt-plan]
+          [--url ADDRESS] [--api openai|anthropic]
+                                             interactive first-time setup (key, your account, model);
                                              chats run on Claude unless you pick another: openrouter
-                                             runs any model OpenRouter serves with one key,
-                                             custom-openai and custom-anthropic the models of your
-                                             own server at --url (see Servers below), and a plan
-                                             (see Plans below) is signed in to instead
+                                             runs any model OpenRouter serves with one key, custom
+                                             the models of your own server at --url (see Custom
+                                             providers below), and a plan (see Plans below) is
+                                             signed in to instead
   btw start                                  run the gateway in the foreground
   btw service install|uninstall|restart|status|logs [-f]
                                              run it in the background at login (macOS)
@@ -104,8 +107,8 @@ Settings (${paths.home})
   btw config set embeddings <auto|off|provider/model>
                                              what memory search finds meaning with: auto uses the
                                              OpenAI key, else OpenRouter's; the provider is openai,
-                                             openrouter or custom-openai (a server's model, like
-                                             custom-openai/local/nomic-embed-text)
+                                             openrouter or custom-openai (a custom provider's model,
+                                             like custom-openai/ollama/nomic-embed-text)
   btw config set claude-path <path>          the Claude Code that claude-plan chats run, and the
   btw config set codex-path <path>           Codex that chatgpt-plan chats run (found on the PATH
                                              and in their usual folders otherwise)
@@ -117,14 +120,16 @@ Settings (${paths.home})
   btw env set <NAME> <value>                 extra env var for agent commands (e.g. FIRECRAWL_API_KEY)
   btw env rm <NAME> | btw env list
 
-Servers (your own: Ollama, LM Studio, oMLX, vLLM, llama.cpp..., for custom-openai presets, which
-use their OpenAI API, and custom-anthropic ones, which use their Anthropic API)
-  btw server add <name> <url> [--key K]      add a server, or change the one of that name; btw asks
-                                             it for its models first, and for its key at a terminal
-                                             when it wants one. The address is the server's, like
-                                             http://localhost:11434 (OpenAI's API is under /v1)
-  btw server rm <name>                       presets on it stop working until they're moved
-  btw server list
+Custom providers (model servers of your own: Ollama, LM Studio, oMLX, vLLM, llama.cpp...)
+  btw provider add <name> <url> [--api openai|anthropic] [--key K]
+                                             add one, through its OpenAI API (the default) or its
+                                             Anthropic API, or change the address and key of the
+                                             one of that name; btw asks it for its models first,
+                                             and for its key at a terminal when it wants one. The
+                                             address is the server's, like http://localhost:11434.
+                                             A server that speaks both can be added once for each
+  btw provider rm <name|id>                  presets on it stop working until they're moved
+  btw provider list
 
 Plans (chats on your own subscription instead of an API key)
   claude-plan: a Claude Pro or Max plan, through Claude Code on this computer, signed in to your
@@ -148,19 +153,19 @@ Users (web sign-up is disabled; this is the only way to add people)
   btw user list
 
 Model presets (shared by all profiles)
-  btw preset add <model> [--provider anthropic|openai|openrouter|custom-openai|custom-anthropic|
-                 claude-plan|chatgpt-plan] [--server NAME] [--name N] [--context-window TOKENS]
+  btw preset add <model> [--provider anthropic|openai|openrouter|claude-plan|chatgpt-plan|<custom>]
+                 [--name N] [--context-window TOKENS]
                                              the provider checks the model id first (anthropic
                                              unless given); OpenAI models other than the
                                              flagships need --context-window. OpenRouter's ids
                                              name their maker (anthropic/claude-sonnet-5), and the
-                                             model must be able to call tools. A custom-openai or
-                                             custom-anthropic model is a server's (--server, or
-                                             <server>/<model>); it must call tools too, which shows
-                                             at its first reply, and pictures and PDFs reach it as
-                                             paths. The plans check their agent's sign-in instead,
-                                             and chatgpt-plan the models Codex offers
-  btw preset edit <name|id> [--provider P] [--model M] [--server NAME] [--name N]
+                                             model must be able to call tools. A custom provider
+                                             (by its name) lists its models; its model must call
+                                             tools too, which shows at its first reply, and
+                                             pictures and PDFs reach it as paths. The plans check
+                                             their agent's sign-in instead, and chatgpt-plan the
+                                             models Codex offers
+  btw preset edit <name|id> [--provider P] [--model M] [--name N]
                  [--context-window TOKENS|auto]
                                              change what's given; a new model is checked like
                                              add's. Chats already on the preset keep what they had
@@ -230,77 +235,96 @@ async function storeApiKey(io: Io, provider: ApiKeyProvider, pasted: string): Pr
 }
 
 /**
- * Checks a server by asking it for its models, and saves it: the models it serves. One that wants
- * a key gets asked for it at a terminal; one that can't be reached is saved with a warning, so
- * setup works before the server runs.
+ * Checks a custom provider's server by asking it for its models, and saves it (adds it, or changes
+ * the one of that name): its id and the models it serves. One that wants a key gets asked for it
+ * at a terminal; one that can't be reached is saved with a warning, so setup works before the
+ * server runs.
  */
-async function storeServer(
+async function storeCustomProvider(
 	io: Io,
 	name: string,
 	url: string,
+	api: CustomApi | undefined,
 	given: string | null
-): Promise<string[]> {
+): Promise<{ id: string; models: string[] }> {
 	let key = given?.trim() || null;
-	const known = findServer(name);
-	let found: Awaited<ReturnType<typeof checkServer>>;
+	const known = findCustomProvider(name);
+	if (known && api && api !== known.api) {
+		fail(
+			`${known.name} speaks ${known.api === 'openai' ? "OpenAI's" : "Anthropic's"} API. Add the other one under another name.`
+		);
+	}
+	let found: Awaited<ReturnType<typeof checkCustomProvider>>;
 	try {
 		try {
-			found = await checkServer(url, key);
+			found = await checkCustomProvider(url, key);
 		} catch (err) {
-			if (!(err instanceof CustomServerError) || err.reason !== 'key' || key || !io.stdinIsTTY) {
+			if (!(err instanceof CustomProviderError) || err.reason !== 'key' || key || !io.stdinIsTTY) {
 				throw err;
 			}
 			key = (await askHidden(io, `Its API key`)) || null;
 			if (!key) throw err;
-			found = await checkServer(url, key);
+			found = await checkCustomProvider(url, key);
 		}
 	} catch (err) {
-		if (!(err instanceof CustomServerError) || err.reason !== 'unreachable') {
+		if (!(err instanceof CustomProviderError) || err.reason !== 'unreachable') {
 			fail((err as Error).message);
 		}
-		saveOrFail(name, url, key);
-		io.log(`Saved the server "${name}" without checking it. ${err.message}`);
-		return [];
+		const id = saveOrFail(known, name, url, api, key);
+		io.log(`Saved ${findCustomProvider(id)?.name} without checking it. ${err.message}`);
+		return { id, models: [] };
 	}
-	saveOrFail(name, url, key);
+	const id = saveOrFail(known, name, url, api, key);
+	const saved = findCustomProvider(id)!;
 	const some = found.models.slice(0, 8).join(', ');
 	const serves = found.models.length
 		? ` It serves ${some}${found.models.length > 8 ? ` and ${found.models.length - 8} more` : ''}.`
 		: '';
 	io.log(
-		`${known ? 'Changed' : 'Added'} the server "${name}" at ${findServer(name)?.url}.${serves}${found.warning ? ` ${found.warning}` : ''}`
+		`${known ? 'Changed' : 'Added'} ${saved.name} at ${saved.url}, through its ${saved.api === 'openai' ? 'OpenAI' : 'Anthropic'} API.${serves}${found.warning ? ` ${found.warning}` : ''}`
 	);
-	return found.models;
+	return { id, models: found.models };
 }
 
-function saveOrFail(name: string, url: string, key: string | null): void {
+function saveOrFail(
+	known: { id: string; name: string } | undefined,
+	name: string,
+	url: string,
+	api: CustomApi | undefined,
+	key: string | null
+): string {
 	try {
-		saveServer(name, url, key);
+		return saveCustomProvider({ id: known?.id, name: known?.name ?? name, api, url, key });
 	} catch (err) {
 		fail((err as Error).message);
 	}
 }
 
 /**
- * A server's model as a preset keeps it, `<server>/<model>`: as typed when it starts with a
- * server's name, else on `server`, or on the only one there is.
+ * A preset's provider and model as typed: a custom provider by its name or id, its model kept as
+ * `<id>/<model>`. btw's own providers as they are.
  */
-function onServer(model: string, server: string | undefined): string {
-	const typed = splitModel(model);
-	const named = typed.server ? findServer(typed.server) : undefined;
-	if (named && (!server || server.toLowerCase() === named.name.toLowerCase())) return model;
-	const names = listServers().map((s) => s.name);
-	const name = server ?? (names.length === 1 ? names[0] : '');
-	if (!name) {
+function presetTarget(
+	provider: string | undefined,
+	model: string
+): { provider: string | undefined; model: string } {
+	if (!provider || isProvider(provider)) return { provider, model };
+	const custom = findCustomProvider(provider);
+	if (!custom) {
+		const names = listCustomProviders().map((c) => c.name);
 		fail(
-			names.length
-				? `which server? Pass --server <${names.join('|')}>, or write the model as <server>/<model>.`
-				: 'no server yet. Add one with `btw server add <name> <url>`.'
+			`no provider "${provider}". It's anthropic, openai, openrouter, claude-plan, chatgpt-plan${names.length ? `, or a custom provider: ${names.join(', ')}` : ', or a custom provider added with `btw provider add <name> <url>`'}.`
 		);
 	}
-	const found = findServer(name);
-	if (!found) fail(`no server named "${name}". See \`btw server list\`.`);
-	return `${found.name}/${model}`;
+	const bare = model.startsWith(`${custom.id}/`) ? model.slice(custom.id.length + 1) : model;
+	return { provider: providerFor(custom.api), model: `${custom.id}/${bare}` };
+}
+
+/** A preset's model for people: a custom provider's by its name. */
+function presetSource(provider: string, model: string): string {
+	const on = isCustomProvider(provider) ? splitModel(model) : null;
+	const custom = on?.provider ? findCustomProvider(on.provider) : undefined;
+	return custom && on ? `${custom.name}/${on.model}` : `${provider}/${model}`;
 }
 
 function requireInit(): void {
@@ -348,15 +372,18 @@ async function setup(io: Io, args: string[]): Promise<void> {
 			model: { type: 'string' },
 			origin: { type: 'string' },
 			port: { type: 'string' },
-			url: { type: 'string' }
+			url: { type: 'string' },
+			api: { type: 'string' }
 		}
 	});
 
-	const provider = values.provider ?? 'anthropic';
+	const api = values.api ?? 'openai';
+	if (api !== 'openai' && api !== 'anthropic') fail('--api is openai or anthropic');
+	// A custom provider: your own server, through the API it speaks.
+	const provider =
+		values.provider === 'custom' ? providerFor(api) : (values.provider ?? 'anthropic');
 	if (!isProvider(provider)) {
-		fail(
-			'--provider is anthropic, openai, openrouter, custom-openai, custom-anthropic, claude-plan or chatgpt-plan'
-		);
+		fail('--provider is anthropic, openai, openrouter, custom, claude-plan or chatgpt-plan');
 	}
 
 	const { created } = initConfig();
@@ -365,10 +392,15 @@ async function setup(io: Io, args: string[]): Promise<void> {
 	io.log(created ? `Created ${paths.home}` : `Using ${paths.home}`);
 
 	let suggested = SETUP[provider].model;
+	/** The custom provider the first preset runs on. */
+	let custom = '';
 	if (isPlan(provider)) {
 		await setUpPlan(io, provider);
 	} else if (isCustomProvider(provider)) {
-		if (!listServers().length || values.url) {
+		const saved = listCustomProviders().find((c) => providerFor(c.api) === provider);
+		if (saved && !values.url) {
+			custom = saved.id;
+		} else {
 			const url =
 				values.url ??
 				(await ask(
@@ -376,9 +408,14 @@ async function setup(io: Io, args: string[]): Promise<void> {
 					'Server address (Ollama: http://localhost:11434, LM Studio: http://localhost:1234)'
 				));
 			if (!url) fail('a server address is required (--url)');
-			const name = suggestServerName(url);
-			const first = (await storeServer(io, name, url, values.key ?? null))[0];
-			suggested = first ? `${name}/${first}` : '';
+			const through = provider === 'custom-anthropic' ? 'anthropic' : 'openai';
+			let name = suggestProviderName(url);
+			// The same server through its other API is another custom provider.
+			const taken = findCustomProvider(name);
+			if (taken && taken.api !== through) name = `${name} (${through})`;
+			const stored = await storeCustomProvider(io, name, url, through, values.key ?? null);
+			custom = stored.id;
+			suggested = stored.models[0] ?? '';
 		}
 	} else {
 		const { label, field } = API_KEYS[provider];
@@ -403,8 +440,9 @@ async function setup(io: Io, args: string[]): Promise<void> {
 	if (listPresets().length === 0) {
 		const typed = values.model ?? (await ask(io, 'Model', suggested));
 		if (!typed) fail('which model? Pass --model <id>');
-		const model = isCustomProvider(provider) ? onServer(typed, undefined) : typed;
-		const preset = await addPreset({ provider, model });
+		const preset = await addPreset(
+			custom ? presetTarget(custom, typed) : { provider, model: typed }
+		);
 		io.log(`Added model "${preset.name}".`);
 	}
 
@@ -570,12 +608,14 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 						: `no key (btw key set ${key.provider})`;
 					row(key.provider, shown);
 				}
-				const servers = listServers();
+				const customs = listCustomProviders();
 				row(
-					'servers',
-					servers.length
-						? servers.map((s) => `${s.name} ${s.url}${s.hasKey ? ' (with a key)' : ''}`).join(', ')
-						: 'none (btw server add <name> <url>)'
+					'custom',
+					customs.length
+						? customs
+								.map((c) => `${c.name} ${c.url} (${c.api}${c.hasKey ? ', with a key' : ''})`)
+								.join(', ')
+						: 'none (btw provider add <name> <url>)'
 				);
 				const claude = claudeExecutable();
 				row(
@@ -663,7 +703,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 			const names = Object.keys(API_KEYS).join('|');
 			if ((action !== 'set' && action !== 'rm') || !isApiKeyProvider(provider)) {
 				fail(
-					`usage: btw key set <${names}> [key] | btw key rm <${names}> (your own servers: btw server add)`
+					`usage: btw key set <${names}> [key] | btw key rm <${names}> (your own servers: btw provider add)`
 				);
 			}
 			const { label, env } = API_KEYS[provider];
@@ -679,37 +719,40 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 			return;
 		}
 
-		case 'server': {
+		case 'provider': {
 			requireInit();
 			const { values, positionals } = parseArgs({
 				args: rest,
 				allowPositionals: true,
-				options: { key: { type: 'string' } }
+				options: { key: { type: 'string' }, api: { type: 'string' } }
 			});
 			if (action === 'add') {
 				const name = positional(positionals, 0, 'name');
 				const url = positional(positionals, 1, 'url');
-				await storeServer(io, name, url, values.key ?? null);
+				const api = values.api;
+				if (api !== undefined && api !== 'openai' && api !== 'anthropic') {
+					fail('--api is openai or anthropic');
+				}
+				await storeCustomProvider(io, name, url, api, values.key ?? null);
 			} else if (action === 'rm') {
-				const name = positional(positionals, 0, 'name');
-				const server = findServer(name);
-				if (!server) fail(`no server named "${name}". See \`btw server list\`.`);
+				const which = positional(positionals, 0, 'name|id');
+				const custom = findCustomProvider(which);
+				if (!custom) fail(`no custom provider "${which}". See \`btw provider list\`.`);
 				const on = listPresets().filter(
-					(p) => isCustomProvider(p.provider) && splitModel(p.model).server === server.name
+					(p) => isCustomProvider(p.provider) && splitModel(p.model).provider === custom.id
 				);
-				removeServer(server.name);
+				removeCustomProvider(custom.id);
 				io.log(
-					`Removed the server "${server.name}".${on.length ? ` Chats on ${on.map((p) => `"${p.name}"`).join(', ')} stop working until they're moved to another model.` : ''}`
+					`Removed ${custom.name}.${on.length ? ` Chats on ${on.map((p) => `"${p.name}"`).join(', ')} stop working until they're moved to another model.` : ''}`
 				);
 			} else if (action === 'list') {
-				for (const s of listServers()) {
-					io.log(
-						`${s.name}\t${s.url}\t${s.hasKey ? `key${s.hint ? ` …${s.hint}` : ''}` : 'no key'}`
-					);
+				for (const c of listCustomProviders()) {
+					const key = c.hasKey ? `key${c.hint ? ` …${c.hint}` : ''}` : 'no key';
+					io.log(`${c.name}\t${c.id}\t${c.api}\t${c.url}\t${key}`);
 				}
 			} else
 				fail(
-					'usage: btw server add <name> <url> [--key K] | btw server rm <name> | btw server list'
+					'usage: btw provider add <name> <url> [--api openai|anthropic] [--key K] | btw provider rm <name|id> | btw provider list'
 				);
 			return;
 		}
@@ -788,20 +831,18 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				options: {
 					provider: { type: 'string' },
 					model: { type: 'string' },
-					server: { type: 'string' },
 					name: { type: 'string' },
 					'context-window': { type: 'string' }
 				}
 			});
 			if (action === 'add') {
-				const typed = positional(positionals, 0, 'model');
-				const model =
-					values.provider && isCustomProvider(values.provider)
-						? onServer(typed, values.server)
-						: typed;
+				const { provider, model } = presetTarget(
+					values.provider,
+					positional(positionals, 0, 'model')
+				);
 				const cw = values['context-window'];
 				const preset = await addPreset({
-					provider: values.provider,
+					provider,
 					model,
 					name: values.name,
 					contextWindow: cw ? Number(cw) : null
@@ -810,22 +851,22 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 			} else if (action === 'edit') {
 				const cw = values['context-window'];
 				const which = positional(positionals, 0, 'name|id');
-				let model = values.model;
-				if (model !== undefined || values.server !== undefined) {
+				let { provider, model } = { provider: values.provider, model: values.model };
+				if (provider && !isProvider(provider)) {
+					// A custom provider keeps the model's id there, unless another is given.
 					const old = listPresets().find((p) => p.id === which || p.name === which);
-					const provider = values.provider ?? old?.provider ?? '';
-					// A new server keeps the model's id there.
-					const id = model ?? splitModel(old?.model ?? '').model;
-					if (isCustomProvider(provider)) model = onServer(id, values.server);
+					const id =
+						old && isCustomProvider(old.provider) ? splitModel(old.model).model : old?.model;
+					({ provider, model } = presetTarget(provider, model ?? id ?? ''));
 				}
 				const preset = await editPreset(which, {
-					provider: values.provider,
+					provider,
 					model,
 					name: values.name,
 					contextWindow: cw === undefined ? undefined : cw === 'auto' ? null : Number(cw)
 				});
 				io.log(
-					`Saved "${preset.name}" (${preset.provider}/${preset.model}, context ${formatTokens(effectiveContextWindow(preset))}). Chats already on it keep what they had.`
+					`Saved "${preset.name}" (${presetSource(preset.provider, preset.model)}, context ${formatTokens(effectiveContextWindow(preset))}). Chats already on it keep what they had.`
 				);
 			} else if (action === 'rm') {
 				removePreset(positional(positionals, 0, 'name|id'));
@@ -839,7 +880,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 					const override = p.contextWindow ? ' (override)' : '';
 					const isDefault = p.id === defaultId ? '\tdefault' : '';
 					io.log(
-						`${p.name}\t${p.provider}/${p.model}\tcontext ${formatTokens(effectiveContextWindow(p))}${override}\t${p.id}${isDefault}`
+						`${p.name}\t${presetSource(p.provider, p.model)}\tcontext ${formatTokens(effectiveContextWindow(p))}${override}\t${p.id}${isDefault}`
 					);
 				}
 			} else fail('usage: btw preset add|edit|rm|default|list');

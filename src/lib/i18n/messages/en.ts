@@ -684,7 +684,7 @@ export const en = {
 		title: 'Models & keys',
 		keys: 'API keys',
 		keysHint:
-			"Shared by every profile and kept in btw's config file on this computer. A new key is checked with its provider before it's saved, and used right away.",
+			"Shared by every profile and kept in btw's config file on this computer. A new key is checked with its provider before it's saved, and used right away. Add a custom provider for a model server of your own, like Ollama or LM Studio.",
 		purposes: {
 			anthropic: 'Runs chats and automations on Claude models.',
 			openai:
@@ -785,10 +785,9 @@ export const en = {
 			noCodex: "Codex isn't installed yet: see ChatGPT plan, above.",
 			onKey: (provider: string) => `Runs on the ${provider} API key.`,
 			noKey: (provider: string) => `No ${provider} API key yet: add one under API keys, above.`,
-			server: 'Server',
-			onServer: (api: string, server: string, url: string) =>
-				`Runs on ${server} at ${url}, through its ${api} API. The model must be able to call tools; pictures and PDFs reach it as their paths.`,
-			noServers: 'No server yet: add one under Your servers, above.',
+			onCustom: (api: string, url: string) =>
+				`Runs on ${url}, through its ${api} API. The model must be able to call tools; pictures and PDFs reach it as their paths.`,
+			customGone: 'Its custom provider was removed: pick another provider.',
 			asking: (source: string) => `Asking ${source} for its models…`,
 			listProblem: (problem: string) => `${problem} You can still type an id.`,
 			couldNotList: (status: number) => `btw couldn't get the models (${status}).`,
@@ -811,30 +810,36 @@ export const en = {
 		removed: 'Removed.',
 		newDefault: (name: string) => `New chats now start with ${name}.`,
 		presetRemoved: 'Removed. Existing conversations keep working.',
-		/** The family's own model servers (Ollama, LM Studio...), for Custom OpenAI and Custom Anthropic. */
-		servers: {
-			title: 'Your servers',
-			hint: "Model servers of your own, like Ollama, LM Studio or oMLX on this computer, or vLLM on a machine with GPUs. Custom OpenAI presets use a server's OpenAI API and Custom Anthropic presets its Anthropic API; memory search can take its embeddings. Kept in btw's config file, keys included, which never come to this page.",
-			none: 'None yet.',
-			add: 'Add a server',
+		/** Custom providers: model servers of the family's own, listed with the API keys. */
+		customProviders: {
+			add: 'Add custom provider',
+			addTitle: 'Add a custom provider',
+			addHint:
+				'A model server of your own, like Ollama, LM Studio or oMLX on this computer, or vLLM on a machine with GPUs. It shows up in Add a model under its name.',
+			about: (api: string) => `Your own model server, through its ${api} API.`,
+			apis: { openai: 'OpenAI', anthropic: 'Anthropic' },
 			change: 'Change',
 			name: 'Name',
-			nameHint:
-				"Letters, digits, - and _. Its models are named by it, like gpu/qwen3:32b, so it can't be changed later.",
+			namePlaceholder: 'Ollama',
+			api: 'API',
+			apiHints: {
+				openai:
+					"OpenAI's Responses API: Ollama, LM Studio, vLLM, LiteLLM. Memory search can use its embeddings.",
+				anthropic: "Anthropic's Messages API: Ollama, LM Studio, llama.cpp's server, oMLX."
+			},
 			address: 'Address',
 			addressHint:
-				'Ollama listens at http://localhost:11434 and LM Studio at http://localhost:1234. btw asks the server for its models to check it.',
+				'Ollama listens at http://localhost:11434 and LM Studio at http://localhost:1234. btw asks it for its models to check it.',
 			key: 'Key',
-			keyOptional: '(if the server needs one)',
+			keyOptional: '(if it needs one)',
 			keyKept: 'Saved. Leave empty to keep it.',
-			withKey: (hint: string | null) => (hint ? `Key ending in ${hint}` : 'With a key'),
-			noKey: 'No key',
-			checking: 'Checking the server…',
+			withKey: (hint: string | null) => (hint ? `key ending in ${hint}` : 'with a key'),
+			noKey: 'no key',
+			checking: 'Checking…',
 			works: (n: number) => `Saved. It serves ${n} ${p(n, { one: 'model', other: 'models' })}.`,
 			unchecked: (problem: string) => `Saved without checking it: ${problem}`,
-			needName: 'Give it a name: letters, digits, - and _, like local or gpu.',
-			nameTaken: (name: string) => `There's already a server named ${name}.`,
-			needAddress: "Give the server's address, starting with http:// or https://.",
+			needName: 'Give it a name, like Ollama or GPU box.',
+			needAddress: 'Give its address, starting with http:// or https://.',
 			removeTitle: (name: string) => `Remove ${name}?`,
 			removeBody:
 				"Chats and automations on its models stop working until they're moved to another model.",
@@ -850,31 +855,27 @@ export const en = {
 			noKeys: 'No OpenAI or OpenRouter key yet, so memory is searched by words only.',
 			noKey: (provider: string) =>
 				`No ${provider} key yet, so memory is searched by words only. Add one under API keys, above.`,
-			noServer:
-				'No server yet, so memory is searched by words only. Add one under Your servers, above.',
+			customGone: 'Its custom provider was removed, so memory is searched by words only.',
 			change: 'Change',
 			source: 'Embeddings from',
 			modes: {
 				auto: 'Auto',
 				openai: 'OpenAI',
 				openrouter: 'OpenRouter',
-				'custom-openai': 'Custom OpenAI',
 				off: 'Off'
 			},
 			autoNote:
 				"OpenAI's text-embedding-3-small with the OpenAI key, else the same model through OpenRouter.",
 			withKey: (provider: string) => `With the ${provider} API key.`,
-			customNote: (server: string, url: string) =>
-				`A model of ${server} at ${url}, through its OpenAI API.`,
+			customNote: (url: string) => `A model it serves at ${url}, through its OpenAI API.`,
 			offNote: 'Memory is searched by words only, and no fact is sent anywhere to be embedded.',
-			server: 'Server',
 			model: 'Model',
-			customModel: 'Its name on the server, like nomic-embed-text',
+			customModel: 'Its name there, like nomic-embed-text',
 			checking: 'Checking…',
 			works: 'Saved. It works; facts are embedded in the background.',
 			wordsOnly: 'Saved. Memory is searched by words only.',
 			noAnswer: (problem: string) => `Saved, but it didn't answer: ${problem}`,
-			needModel: 'Give the model the server should use.'
+			needModel: 'Give the model it should use.'
 		}
 	}
 };

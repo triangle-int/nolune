@@ -757,7 +757,7 @@ export const de: Messages = {
 		title: 'Modelle & Schlüssel',
 		keys: 'API-Schlüssel',
 		keysHint:
-			'Von allen Profilen geteilt und in der Konfigurationsdatei von btw auf diesem Computer gespeichert. Ein neuer Schlüssel wird vor dem Speichern beim Anbieter geprüft und sofort verwendet.',
+			'Von allen Profilen geteilt und in der Konfigurationsdatei von btw auf diesem Computer gespeichert. Ein neuer Schlüssel wird vor dem Speichern beim Anbieter geprüft und sofort verwendet. Für einen eigenen Modellserver wie Ollama oder LM Studio füge einen eigenen Anbieter hinzu.',
 		purposes: {
 			anthropic: 'Für Chats und Automationen mit Claude-Modellen.',
 			openai:
@@ -861,10 +861,9 @@ export const de: Messages = {
 			onKey: (provider: string) => `Läuft über den ${provider}-API-Schlüssel.`,
 			noKey: (provider: string) =>
 				`Noch kein ${provider}-API-Schlüssel: Füge oben unter „API-Schlüssel“ einen hinzu.`,
-			server: 'Server',
-			onServer: (api: string, server: string, url: string) =>
-				`Läuft auf ${server} unter ${url}, über seine ${api}-API. Das Modell muss Werkzeuge aufrufen können; Bilder und PDFs erhält es als Pfade.`,
-			noServers: 'Noch kein Server: Füge oben unter „Deine Server“ einen hinzu.',
+			onCustom: (api: string, url: string) =>
+				`Läuft auf ${url}, über seine ${api}-API. Das Modell muss Werkzeuge aufrufen können; Bilder und PDFs erhält es als Pfade.`,
+			customGone: 'Dieser eigene Anbieter wurde entfernt: Wähle einen anderen.',
 			asking: (source: string) => `${source} wird nach seinen Modellen gefragt…`,
 			listProblem: (problem: string) => `${problem} Du kannst trotzdem eine ID eingeben.`,
 			couldNotList: (status: number) => `btw konnte die Modelle nicht abrufen (${status}).`,
@@ -888,36 +887,44 @@ export const de: Messages = {
 		removed: 'Entfernt.',
 		newDefault: (name: string) => `Neue Chats starten jetzt mit ${name}.`,
 		presetRemoved: 'Entfernt. Bestehende Chats funktionieren weiter.',
-		/** Memory search by meaning: where its embeddings come from. */
-		servers: {
-			title: 'Deine Server',
-			hint: 'Eigene Modellserver, etwa Ollama, LM Studio oder oMLX auf diesem Computer oder vLLM auf einem Rechner mit GPUs. Custom-OpenAI-Voreinstellungen nutzen die OpenAI-API eines Servers, Custom-Anthropic-Voreinstellungen seine Anthropic-API; die Gedächtnissuche kann seine Embeddings nutzen. Gespeichert in der Konfigurationsdatei von btw, samt Schlüsseln, die nie auf diese Seite kommen.',
-			none: 'Noch keine.',
-			add: 'Server hinzufügen',
+		/** Custom providers: model servers of the family's own, listed with the API keys. */
+		customProviders: {
+			add: 'Eigenen Anbieter hinzufügen',
+			addTitle: 'Eigenen Anbieter hinzufügen',
+			addHint:
+				'Ein eigener Modellserver, etwa Ollama, LM Studio oder oMLX auf diesem Computer oder vLLM auf einem Rechner mit GPUs. Unter „Modell hinzufügen“ erscheint er mit seinem Namen.',
+			about: (api: string) => `Dein eigener Modellserver, über seine ${api}-API.`,
+			apis: { openai: 'OpenAI', anthropic: 'Anthropic' },
 			change: 'Ändern',
 			name: 'Name',
-			nameHint:
-				'Buchstaben, Ziffern, - und _. Seine Modelle werden danach benannt, etwa gpu/qwen3:32b, daher lässt er sich später nicht ändern.',
+			namePlaceholder: 'Ollama',
+			api: 'API',
+			apiHints: {
+				openai:
+					'Die Responses API von OpenAI: Ollama, LM Studio, vLLM, LiteLLM. Die Gedächtnissuche kann seine Embeddings nutzen.',
+				anthropic:
+					'Die Messages API von Anthropic: Ollama, LM Studio, der Server von llama.cpp, oMLX.'
+			},
 			address: 'Adresse',
 			addressHint:
-				'Ollama lauscht auf http://localhost:11434, LM Studio auf http://localhost:1234. btw fragt den Server nach seinen Modellen, um ihn zu prüfen.',
+				'Ollama lauscht auf http://localhost:11434, LM Studio auf http://localhost:1234. btw fragt ihn nach seinen Modellen, um ihn zu prüfen.',
 			key: 'Schlüssel',
-			keyOptional: '(falls der Server einen braucht)',
+			keyOptional: '(falls er einen braucht)',
 			keyKept: 'Gespeichert. Leer lassen, um ihn zu behalten.',
-			withKey: (hint: string | null) => (hint ? `Schlüssel endet auf ${hint}` : 'Mit Schlüssel'),
-			noKey: 'Ohne Schlüssel',
-			checking: 'Server wird geprüft…',
+			withKey: (hint: string | null) => (hint ? `Schlüssel endet auf ${hint}` : 'mit Schlüssel'),
+			noKey: 'ohne Schlüssel',
+			checking: 'Wird geprüft…',
 			works: (n: number) =>
 				`Gespeichert. Er bietet ${n} ${p(n, { one: 'Modell', other: 'Modelle' })}.`,
 			unchecked: (problem: string) => `Ohne Prüfung gespeichert: ${problem}`,
-			needName: 'Gib ihm einen Namen: Buchstaben, Ziffern, - und _, etwa local oder gpu.',
-			nameTaken: (name: string) => `Es gibt schon einen Server namens ${name}.`,
-			needAddress: 'Gib die Adresse des Servers an, beginnend mit http:// oder https://.',
+			needName: 'Gib ihm einen Namen, etwa Ollama oder GPU box.',
+			needAddress: 'Gib seine Adresse an, beginnend mit http:// oder https://.',
 			removeTitle: (name: string) => `${name} entfernen?`,
 			removeBody:
 				'Chats und Automationen mit seinen Modellen funktionieren nicht mehr, bis sie auf ein anderes Modell umgestellt sind.',
 			usedBy: (names: string) => `Diese Voreinstellungen laufen darauf: ${names}.`
 		},
+		/** Memory search by meaning: where its embeddings come from. */
 		embeddings: {
 			title: 'Gedächtnissuche',
 			hint: 'btw findet Fakten im Gedächtnis auch nach ihrer Bedeutung, nicht nur nach ihren Wörtern, und über Sprachen hinweg. Dafür wird jeder Fakt einmal dorthin geschickt, wo die Embeddings entstehen, und jede Nachricht beim Senden; ein Server auf diesem Computer behält sie hier. Gilt für alle Profile.',
@@ -928,32 +935,30 @@ export const de: Messages = {
 				'Noch kein OpenAI- oder OpenRouter-Schlüssel, daher wird das Gedächtnis nur nach Wörtern durchsucht.',
 			noKey: (provider: string) =>
 				`Noch kein ${provider}-Schlüssel, daher wird das Gedächtnis nur nach Wörtern durchsucht. Füge oben unter API-Schlüssel einen hinzu.`,
-			noServer:
-				'Noch kein Server, daher wird das Gedächtnis nur nach Wörtern durchsucht. Füge oben unter „Deine Server“ einen hinzu.',
+			customGone:
+				'Dieser eigene Anbieter wurde entfernt, daher wird das Gedächtnis nur nach Wörtern durchsucht.',
 			change: 'Ändern',
 			source: 'Embeddings von',
 			modes: {
 				auto: 'Auto',
 				openai: 'OpenAI',
 				openrouter: 'OpenRouter',
-				'custom-openai': 'Custom OpenAI',
 				off: 'Aus'
 			},
 			autoNote:
 				'text-embedding-3-small von OpenAI mit dem OpenAI-Schlüssel, sonst dasselbe Modell über OpenRouter.',
 			withKey: (provider: string) => `Mit dem ${provider}-API-Schlüssel.`,
-			customNote: (server: string, url: string) =>
-				`Ein Modell von ${server} unter ${url}, über seine OpenAI-API.`,
+			customNote: (url: string) =>
+				`Ein Modell, das er unter ${url} anbietet, über seine OpenAI-API.`,
 			offNote:
 				'Das Gedächtnis wird nur nach Wörtern durchsucht, und kein Fakt wird irgendwohin geschickt.',
-			server: 'Server',
 			model: 'Modell',
-			customModel: 'Sein Name auf dem Server, etwa nomic-embed-text',
+			customModel: 'Sein Name dort, etwa nomic-embed-text',
 			checking: 'Wird geprüft…',
 			works: 'Gespeichert. Es funktioniert; die Fakten werden im Hintergrund verarbeitet.',
 			wordsOnly: 'Gespeichert. Das Gedächtnis wird nur nach Wörtern durchsucht.',
 			noAnswer: (problem: string) => `Gespeichert, aber keine Antwort: ${problem}`,
-			needModel: 'Gib das Modell an, das der Server verwenden soll.'
+			needModel: 'Gib das Modell an, das verwendet werden soll.'
 		}
 	}
 };

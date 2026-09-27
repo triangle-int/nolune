@@ -24,9 +24,9 @@ a ChatGPT Plus, Pro or Business plan signed in to OpenAI's
 npm install -g btw-agent
 btw setup                      # API key, your account, default model, public URL
                                # (btw setup --provider openai to start with GPT, openrouter
-                               #  for OpenRouter's models, custom-openai or custom-anthropic
-                               #  --url <address> for your own server, or with a plan:
-                               #  --provider claude-plan or chatgpt-plan)
+                               #  for OpenRouter's models, custom --url <address> for your
+                               #  own server, or with a plan: --provider claude-plan or
+                               #  chatgpt-plan)
 btw key set openai             # optional: GPT models for chats, and pictures (Images page)
 btw service install            # run in the background, start at login
 btw user create Anna anna@example.com   # add family members (prints their password)
@@ -44,13 +44,13 @@ for the agent and named in the message, like any other file.
 
 **On your own servers.** Chats can run on model servers of your own, like
 [Ollama](https://ollama.com) or [LM Studio](https://lmstudio.ai) on this computer, or vLLM on a
-machine with GPUs: `btw server add local http://localhost:11434` (with `--key` if it wants one),
-or under Models & keys, then `btw preset add qwen3:8b --provider custom-openai` for its OpenAI
-API or `--provider custom-anthropic` for its Anthropic API (Ollama, LM Studio and oMLX have both;
-llama.cpp's server only Anthropic's). With several servers, name the one a model is on:
-`btw preset add qwen3:32b --provider custom-openai --server gpu`. btw asks each server for its
-models to check it. The model must be able to call tools; pictures and PDFs reach it as their
-paths.
+machine with GPUs. Add each one as a custom provider, with the name you want to see, under Models &
+keys (Add custom provider, under the API keys) or with
+`btw provider add Ollama http://localhost:11434` (`--key` if it wants one). It speaks OpenAI's API
+unless you pass `--api anthropic` (Ollama, LM Studio and oMLX have both; llama.cpp's server only
+Anthropic's). Then it's a provider like the others: `btw preset add qwen3:8b --provider Ollama`,
+or its chip in Add a model. btw asks it for its models to check it. The model must be able to call
+tools; pictures and PDFs reach it as their paths.
 
 **On your own plan instead of an API key.** Chats can run on a subscription someone in the family
 already has. Pick one with `btw setup --provider <plan>`, or later with `btw <plan> setup` and a

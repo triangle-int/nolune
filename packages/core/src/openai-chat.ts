@@ -17,9 +17,9 @@ import { openaiBaseUrl } from './openai.ts';
 
 /*
  * Chats on OpenAI's models, through the Responses API and OpenAI's SDK, and its Files API for
- * pictures and PDFs. The rest of btw calls it through models.ts. A Custom OpenAI server
- * (custom-servers.ts) speaks the same API, so its chats go through the same code with its own
- * client (a `ResponsesApi`), leaving out what only OpenAI has.
+ * pictures and PDFs. The rest of btw calls it through models.ts. A custom provider
+ * (custom-providers.ts) can speak the same API, so its chats go through the same code with its
+ * own client (a `ResponsesApi`), leaving out what only OpenAI has.
  *
  * Requests are stateless (`store: false`): like Anthropic's, every call sends the whole
  * transcript, so nothing depends on OpenAI keeping a conversation. A reply is stored as the
@@ -99,16 +99,16 @@ async function getClient(): Promise<OpenAI> {
 }
 
 /**
- * Where Responses API calls go: OpenAI, or a server of the family's (custom-servers.ts). A server
- * gets the same requests without what only OpenAI has: encrypted reasoning, its prompt cache key
- * and reasoning levels above `high`.
+ * Where Responses API calls go: OpenAI, or a custom provider (custom-providers.ts). A custom
+ * provider gets the same requests without what only OpenAI has: encrypted reasoning, its prompt
+ * cache key and reasoning levels above `high`.
  */
 export interface ResponsesApi {
 	provider: 'openai' | 'custom-openai';
 	client(): Promise<OpenAI>;
 	/** Whose calls these are, for what's learned from refusals: a hash or an address, never a key. */
 	account(): string;
-	/** The model's id where it runs: a server's without the server's name before it. */
+	/** The model's id where it runs: a custom provider's without its id before it. */
 	modelName(model: string): string;
 }
 
@@ -182,7 +182,7 @@ function nativeItems(content: unknown[]): InputItem[] {
 /**
  * A conversation's messages as the Responses API's `input` for `model` on `provider`. Replies it
  * wrote go back as they came, except reasoning without its encrypted content, which can't be read
- * back without `store` (a Custom OpenAI server's never has any). Replies from another model or
+ * back without `store` (a custom provider's never has any). Replies from another model or
  * provider (the conversation switched), and btw's own, go as their text and calls: reasoning goes
  * back only to the model that wrote it.
  */
@@ -276,8 +276,8 @@ function refusesSummaries(err: unknown): boolean {
 }
 
 /**
- * Models of a Custom OpenAI server that refused reasoning settings (a model that doesn't reason,
- * on a server that says so), by server and model, learned from the first refusal.
+ * Models of a custom provider that refused reasoning settings (a model that doesn't reason, on a
+ * server that says so), by address and model, learned from the first refusal.
  */
 const noReasoning = new Set<string>();
 
@@ -291,14 +291,15 @@ function refusesReasoning(err: unknown): boolean {
 
 /**
  * Makes a request with what the account and model take, learned from refusals: `summaries`, and
- * on a Custom OpenAI server `reasoning` at all. A refusal is learned and the request made again.
+ * on a custom provider `reasoning` at all. A refusal is learned and the request made again.
  */
 async function withRefusals<T>(
 	api: ResponsesApi,
 	model: string,
 	request: (takes: { summaries: boolean; reasoning: boolean }) => Promise<T>
 ): Promise<T> {
-	// A server's client comes from custom-servers.ts: its errors are checked with this module's SDK.
+	// A custom provider's client comes from custom-providers.ts: its errors are checked with this
+	// module's SDK.
 	await loadSdk();
 	const account = api.account();
 	const takes = () => ({
@@ -316,7 +317,7 @@ async function withRefusals<T>(
 	}
 }
 
-/** OpenAI's levels above `high` are its own; a server gets `high` for them. */
+/** OpenAI's levels above `high` are its own; a custom provider gets `high` for them. */
 function effortFor(api: ResponsesApi, effort: Effort): Effort {
 	return api.provider === 'openai' || !['xhigh', 'max'].includes(effort) ? effort : 'high';
 }
@@ -365,7 +366,7 @@ async function readStream(
 
 /**
  * One model call, streamed. See models.ts for what stays fixed between calls. `api`: OpenAI, or
- * a Custom OpenAI server.
+ * a custom provider.
  */
 export async function streamResponse(
 	opts: {
