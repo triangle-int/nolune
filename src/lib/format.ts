@@ -5,6 +5,15 @@ export function formatTokens(n: number | null | undefined): string {
 	return String(n);
 }
 
+/** "272k", "1.5m" or "272000" → tokens. NaN for anything else, fractions of a token included. */
+export function parseTokens(text: string): number {
+	const match = /^(\d+(?:\.\d+)?)\s*([km]?)$/i.exec(text.trim());
+	if (!match) return NaN;
+	const exponent = { k: 3, m: 6 }[match[2].toLowerCase()] ?? 0;
+	const tokens = Number(`${match[1]}e${exponent}`);
+	return Number.isSafeInteger(tokens) && tokens > 0 ? tokens : NaN;
+}
+
 /** Rounds down, so a partial hit never shows as 100%. */
 export function formatPercent(rate: number): string {
 	return `${Math.floor(rate * 100)}%`;

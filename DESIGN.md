@@ -223,8 +223,9 @@ automations and subagents on an API key preset.
   25% of the context window and the API's page limit. A PDF whose pages can't be counted
   (encrypted, say) goes as its path.
 - **What's different.** Messages sent while Claude Code works join after its turn, not at its next
-  step. The context window isn't known before a call, so the context meter shows "?" (and PDFs get
-  25% of 200k tokens) unless the preset sets one. Titles are asked for through Claude Code too, as
+  step. The context window isn't known before a call, except for the 1M-context models, whose ids
+  say so (`claude-opus-5-5[1m]`), so the context meter shows "?" (and PDFs get 25% of 200k tokens)
+  unless the preset sets one. Titles are asked for through Claude Code too, as
   one exchange without a session. Claude Code keeps its own copy of each chat under
   `~/.claude/projects`, which deleting the chat in btw doesn't remove yet.
 
@@ -809,8 +810,19 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   with the provider's words. Removing a saved key falls back to the environment's. Replacing a
   key warns to keep the same workspace (Anthropic) or project (OpenAI): pictures and PDFs already
   sent live in it. `btw key set` does the same check, but saves anyway when the provider can't be
-  reached. The preset form picks the provider (Anthropic or OpenAI), and the provider checks the
-  model id before the preset is saved.
+  reached. Under the presets, **Add a model** opens the form (open from the start while there are
+  none), in the order the choices are made: the provider, saying which key or plan it runs on;
+  the model, picked from the provider's list or typed (any id works, a dated snapshot say); an
+  optional name, whose placeholder is the default it gets; and the context window, folded away
+  under what it will be ("Auto · 1M"). The list comes from `/api/models` when the form needs it:
+  Anthropic's models API, with names and windows; OpenAI's, only GPT-5.6 and newer (its
+  current generations in September 2026; older ones can still be typed), without audio,
+  realtime, pictures or search, nor dated snapshots of models also listed without a date, the
+  newest first, with the flagships' known window; and Claude Code's own list for the Claude
+  plan, by full id (`claude-opus-5-5`, not `opus`, which would move a chat to a newer model when
+  Claude Code updates). It's asked for again when the provider's key changes. The context window
+  is a row of chips: Auto (what the provider reports, if anything), 128K, 200K, 1M, or Custom,
+  typed as `272k`, `1.5m` or `272000`. The provider checks the model id before the preset is saved.
 
 ## Assistant avatars
 
