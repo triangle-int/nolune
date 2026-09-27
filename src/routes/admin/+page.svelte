@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { invalidate } from '$app/navigation';
 	import BoxIcon from '@lucide/svelte/icons/box';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import TerminalIcon from '@lucide/svelte/icons/terminal';
@@ -26,6 +27,34 @@
 	let editing = $state<string | null>(null);
 	let checking = $state<string | null>(null);
 	let removing = $state<KeyStatus | null>(null);
+
+	/** A ChatGPT sign-in being started, and one about to be signed out. */
+	let signingIn = $state(false);
+	let signingOut = $state(false);
+	const chatgpt = $derived(data.chatgpt);
+	/** Who Codex is signed in as; null while a sign-in waits for its code, or when it isn't. */
+	const chatgptSignedIn = $derived(chatgpt.status?.signedIn ?? null);
+	/** What the last plan action said, for the row of the plan it was about. */
+	const claudeResult = $derived(form?.plan === 'claude-plan' ? form : null);
+	const chatgptResult = $derived(form?.plan === 'chatgpt-plan' ? form : null);
+	const chatgptError = $derived(chatgptResult?.planError ?? chatgpt.signInError);
+
+	// The code is entered on another page, often another device: ask until it has been.
+	$effect(() => {
+		if (!chatgpt.pending) return;
+		const timer = setInterval(() => invalidate('btw:chatgpt-plan'), 3000);
+		return () => clearInterval(timer);
+	});
+
+	/** "signed in as …" at the start of a line. */
+	function sentence(text: string): string {
+		return `${text[0].toUpperCase()}${text.slice(1)}`;
+	}
+
+	/** A problem's first sentence: the rest says how to sign in, which the buttons do here. */
+	function firstSentence(text: string): string {
+		return text.split('. ')[0].replace(/\.?$/, '.');
+	}
 
 	function sourceText(key: KeyStatus): string {
 		if (key.source === 'config') return m.admin.savedInBtw(key.hint);
@@ -162,90 +191,221 @@
 				</ul>
 			</section>
 
-			<section class="space-y-3" aria-labelledby="plan-heading">
+			<section class="space-y-3" aria-labelledby="plans-heading">
 				<div class="space-y-1">
-					<h2 id="plan-heading" class="text-lg font-medium">{m.admin.plan}</h2>
+					<h2 id="plans-heading" class="text-lg font-medium">{m.admin.plans}</h2>
 					<p class="text-muted-foreground">
-						{m.admin.planHint}
+						{m.admin.plansHint}
 					</p>
 				</div>
-				<div class="space-y-3 rounded-2xl border px-4 py-3 text-sm">
-					<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-						<span
-							class={cn(
-								'flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted max-sm:self-start',
-								data.claude.installed ? 'text-foreground' : 'text-muted-foreground'
-							)}
-						>
-							<TerminalIcon class="size-4" />
-						</span>
-						<div class="min-w-0 flex-1">
-							<div class="font-medium">Claude Code</div>
-							{#if data.claude.installed}
-								<div class="truncate font-mono text-muted-foreground">{data.claude.path}</div>
-							{:else if data.claude.path}
-								<div class="text-warning">
-									<Rich text={m.admin.notAt}>
-										{#snippet path()}<span class="font-mono">{data.claude.path}</span>{/snippet}
-										{#snippet command()}<code>btw config set claude-path</code>{/snippet}
-									</Rich>
-								</div>
-							{:else}
-								<div class="text-warning">{m.admin.notInstalled}</div>
-							{/if}
-						</div>
-						<form
-							method="POST"
-							action="?/checkPlan"
-							class="max-sm:basis-full max-sm:pl-9"
-							use:enhance={() => {
-								checkingPlan = true;
-								return async ({ update }) => {
-									await update();
-									checkingPlan = false;
-								};
-							}}
-						>
-							<Button
-								type="submit"
-								variant="ghost"
-								size="sm"
-								class="text-muted-foreground"
-								disabled={checkingPlan}
+				<ul class="overflow-hidden rounded-2xl border">
+					<li class="space-y-3 border-b px-4 py-3 text-sm last:border-b-0">
+						<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+							<span
+								class={cn(
+									'flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted max-sm:self-start',
+									data.claude.installed ? 'text-foreground' : 'text-muted-foreground'
+								)}
 							>
-								{checkingPlan ? m.common.checking : m.admin.checkSignIn}
-							</Button>
-						</form>
-					</div>
-					{#if form?.planError}
-						<p class="text-destructive sm:pl-12" role="alert">{form.planError}</p>
-					{:else if form?.planMessage}
-						<p class="text-muted-foreground sm:pl-12" role="status">{form.planMessage}</p>
-					{:else if !data.claude.installed}
-						<div class="space-y-2 text-muted-foreground sm:pl-12">
-							<p>
-								<Rich text={m.admin.install}>
+								<TerminalIcon class="size-4" />
+							</span>
+							<div class="min-w-0 flex-1">
+								<div class="font-medium">{m.admin.plan}</div>
+								<div class="text-muted-foreground">{m.admin.claudePlanAbout}</div>
+								{#if data.claude.installed}
+									<div class="truncate font-mono text-muted-foreground">{data.claude.path}</div>
+								{:else if data.claude.path}
+									<div class="text-warning">
+										<Rich text={m.admin.notAt}>
+											{#snippet path()}<span class="font-mono">{data.claude.path}</span>{/snippet}
+											{#snippet command()}<code>btw config set claude-path</code>{/snippet}
+										</Rich>
+									</div>
+								{:else}
+									<div class="text-warning">{m.admin.notInstalled}</div>
+								{/if}
+							</div>
+							<form
+								method="POST"
+								action="?/checkPlan"
+								class="max-sm:basis-full max-sm:pl-9"
+								use:enhance={() => {
+									checkingPlan = true;
+									return async ({ update }) => {
+										await update();
+										checkingPlan = false;
+									};
+								}}
+							>
+								<Button
+									type="submit"
+									variant="ghost"
+									size="sm"
+									class="text-muted-foreground"
+									disabled={checkingPlan}
+								>
+									{checkingPlan ? m.common.checking : m.admin.checkSignIn}
+								</Button>
+							</form>
+						</div>
+						{#if claudeResult?.planError}
+							<p class="text-destructive sm:pl-12" role="alert">{claudeResult.planError}</p>
+						{:else if claudeResult?.planMessage}
+							<p class="text-muted-foreground sm:pl-12" role="status">
+								{claudeResult.planMessage}
+							</p>
+						{:else if !data.claude.installed}
+							<div class="space-y-2 text-muted-foreground sm:pl-12">
+								<p>
+									<Rich text={m.admin.install}>
+										{#snippet setup()}<code>btw claude-plan setup</code>{/snippet}
+										{#snippet claude()}<code>claude</code>{/snippet}
+									</Rich>
+								</p>
+								<div class="flex items-center gap-1 rounded-xl bg-muted py-1 pr-1 pl-3">
+									<code class="min-w-0 flex-1 truncate font-mono text-foreground"
+										>{data.claude.installCommand}</code
+									>
+									<CopyButton text={data.claude.installCommand} label={m.admin.copyCommand} />
+								</div>
+							</div>
+						{:else}
+							<p class="text-muted-foreground sm:pl-12">
+								<Rich text={m.admin.signIn}>
 									{#snippet setup()}<code>btw claude-plan setup</code>{/snippet}
 									{#snippet claude()}<code>claude</code>{/snippet}
+									{#snippet login()}<code>/login</code>{/snippet}
 								</Rich>
 							</p>
-							<div class="flex items-center gap-1 rounded-xl bg-muted py-1 pr-1 pl-3">
-								<code class="min-w-0 flex-1 truncate font-mono text-foreground"
-									>{data.claude.installCommand}</code
-								>
-								<CopyButton text={data.claude.installCommand} label={m.admin.copyCommand} />
+						{/if}
+					</li>
+
+					<li class="space-y-3 border-b px-4 py-3 text-sm last:border-b-0">
+						<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+							<span
+								class={cn(
+									'flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted max-sm:self-start',
+									chatgptSignedIn ? 'text-foreground' : 'text-muted-foreground'
+								)}
+							>
+								<TerminalIcon class="size-4" />
+							</span>
+							<div class="min-w-0 flex-1">
+								<div class="font-medium">{m.admin.chatgptPlan}</div>
+								<div class="text-muted-foreground">{m.admin.chatgptPlanAbout}</div>
+								{#if chatgpt.installed}
+									<div class="truncate font-mono text-muted-foreground">{chatgpt.path}</div>
+									{#if chatgptSignedIn}
+										<div class="break-words text-muted-foreground">{sentence(chatgptSignedIn)}</div>
+									{:else if chatgpt.status?.problem}
+										<div class="text-warning">{firstSentence(chatgpt.status.problem)}</div>
+									{/if}
+								{:else if chatgpt.path}
+									<div class="text-warning">
+										<Rich text={m.admin.notAt}>
+											{#snippet path()}<span class="font-mono">{chatgpt.path}</span>{/snippet}
+											{#snippet command()}<code>btw config set codex-path</code>{/snippet}
+										</Rich>
+									</div>
+								{:else}
+									<div class="text-warning">{m.admin.notInstalled}</div>
+								{/if}
 							</div>
+							{#if chatgpt.installed}
+								<div class="flex gap-1 max-sm:basis-full max-sm:pl-9">
+									{#if chatgpt.pending}
+										<form method="POST" action="?/chatgptCancel" use:enhance>
+											<Button type="submit" variant="ghost" size="sm" class="text-muted-foreground">
+												{m.common.cancel}
+											</Button>
+										</form>
+									{:else}
+										<form
+											method="POST"
+											action="?/chatgptSignIn"
+											use:enhance={() => {
+												signingIn = true;
+												return async ({ update }) => {
+													await update();
+													signingIn = false;
+												};
+											}}
+										>
+											<Button
+												type="submit"
+												variant={chatgptSignedIn ? 'ghost' : 'default'}
+												size="sm"
+												disabled={signingIn}
+												class={cn(chatgptSignedIn && 'text-muted-foreground')}
+											>
+												{signingIn
+													? m.admin.chatgptAsking
+													: chatgptSignedIn
+														? m.admin.chatgptSignInAgain
+														: m.admin.chatgptSignIn}
+											</Button>
+										</form>
+										{#if chatgptSignedIn}
+											<Button
+												variant="ghost"
+												size="sm"
+												class="text-muted-foreground"
+												onclick={() => (signingOut = true)}
+											>
+												{m.admin.signOut}
+											</Button>
+										{/if}
+									{/if}
+								</div>
+							{/if}
 						</div>
-					{:else}
-						<p class="text-muted-foreground sm:pl-12">
-							<Rich text={m.admin.signIn}>
-								{#snippet setup()}<code>btw claude-plan setup</code>{/snippet}
-								{#snippet claude()}<code>claude</code>{/snippet}
-								{#snippet login()}<code>/login</code>{/snippet}
-							</Rich>
-						</p>
-					{/if}
-				</div>
+
+						{#if chatgpt.pending}
+							{@const url = new URL(chatgpt.pending.verificationUrl)}
+							<ol class="list-inside list-decimal space-y-2 sm:pl-12" aria-live="polite">
+								<li>
+									<Rich text={m.admin.chatgptOpen}>
+										{#snippet link()}<a
+												href={chatgpt.pending?.verificationUrl}
+												target="_blank"
+												rel="noreferrer"
+												class="underline">{url.host}{url.pathname}</a
+											>{/snippet}
+									</Rich>
+								</li>
+								<li>
+									<Rich text={m.admin.chatgptCode}>
+										{#snippet code()}<span
+												class="ml-1 font-mono text-lg font-medium tracking-widest select-all"
+												>{chatgpt.pending?.userCode}</span
+											>{/snippet}
+									</Rich>
+								</li>
+							</ol>
+							<p class="text-muted-foreground sm:pl-12">{m.admin.chatgptCodeHint}</p>
+						{:else if chatgptError}
+							<p class="text-destructive sm:pl-12" role="alert">{chatgptError}</p>
+						{:else if chatgptResult?.planMessage}
+							<p class="text-muted-foreground sm:pl-12" role="status">
+								{chatgptResult.planMessage}
+							</p>
+						{:else if !chatgpt.installed}
+							<div class="space-y-2 text-muted-foreground sm:pl-12">
+								<p>
+									<Rich text={m.admin.chatgptInstall}>
+										{#snippet setup()}<code>btw chatgpt-plan setup</code>{/snippet}
+									</Rich>
+								</p>
+								<div class="flex items-center gap-1 rounded-xl bg-muted py-1 pr-1 pl-3">
+									<code class="min-w-0 flex-1 truncate font-mono text-foreground"
+										>{chatgpt.installCommand}</code
+									>
+									<CopyButton text={chatgpt.installCommand} label={m.admin.copyCommand} />
+								</div>
+							</div>
+						{/if}
+					</li>
+				</ul>
 			</section>
 
 			<section class="space-y-3" aria-labelledby="models-heading">
@@ -315,6 +475,7 @@
 					providers={data.providers}
 					keys={data.keys}
 					claudeInstalled={data.claude.installed}
+					codexInstalled={data.chatgpt.installed}
 					problem={form?.addError}
 					startOpen={data.presets.length === 0}
 				/>
@@ -350,6 +511,32 @@
 				<AlertDialog.Cancel type="button">{m.common.cancel}</AlertDialog.Cancel>
 				<AlertDialog.Action type="submit" variant="destructive"
 					>{m.common.remove}</AlertDialog.Action
+				>
+			</AlertDialog.Footer>
+		</form>
+	</AlertDialog.Content>
+</AlertDialog.Root>
+
+<AlertDialog.Root open={signingOut} onOpenChange={(open) => !open && (signingOut = false)}>
+	<AlertDialog.Content>
+		<AlertDialog.Header>
+			<AlertDialog.Title>{m.admin.chatgptSignOutTitle}</AlertDialog.Title>
+			<AlertDialog.Description>{m.admin.chatgptSignOutBody}</AlertDialog.Description>
+		</AlertDialog.Header>
+		<form
+			method="POST"
+			action="?/chatgptSignOut"
+			use:enhance={() => {
+				return async ({ update }) => {
+					signingOut = false;
+					await update();
+				};
+			}}
+		>
+			<AlertDialog.Footer>
+				<AlertDialog.Cancel type="button">{m.common.cancel}</AlertDialog.Cancel>
+				<AlertDialog.Action type="submit" variant="destructive"
+					>{m.admin.signOut}</AlertDialog.Action
 				>
 			</AlertDialog.Footer>
 		</form>

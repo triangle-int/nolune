@@ -141,7 +141,9 @@ export const profileMember = sqliteTable(
 export const modelPreset = sqliteTable('model_preset', {
 	id: text('id').primaryKey(),
 	name: text('name').notNull().unique(),
-	provider: text('provider', { enum: ['anthropic', 'openai', 'claude-plan'] }).notNull(),
+	provider: text('provider', {
+		enum: ['anthropic', 'openai', 'claude-plan', 'chatgpt-plan']
+	}).notNull(),
 	model: text('model').notNull(),
 	/** Admin override. Wins over modelContextWindow. */
 	contextWindow: integer('context_window'),
@@ -218,7 +220,9 @@ export const conversation = sqliteTable(
 		 * switched to another model (setPreset), so later changes to the preset leave it alone.
 		 */
 		presetName: text('preset_name').notNull(),
-		provider: text('provider', { enum: ['anthropic', 'openai', 'claude-plan'] }).notNull(),
+		provider: text('provider', {
+			enum: ['anthropic', 'openai', 'claude-plan', 'chatgpt-plan']
+		}).notNull(),
 		model: text('model').notNull(),
 		contextWindow: integer('context_window'),
 		effort: text('effort', { enum: ['low', 'medium', 'high', 'xhigh', 'max'] })
@@ -247,12 +251,18 @@ export const conversation = sqliteTable(
 		 */
 		tools: text('tools', { mode: 'json' }).$type<Anthropic.Tool[]>(),
 		/**
-		 * Chats on the Claude plan (claude-plan.ts): the Claude Code session that holds the model's
-		 * side of the chat, and the last row it has been sent. Null until its first turn starts.
+		 * Chats on a plan (plans.ts): the session of the plan's agent (Claude Code's, or Codex's
+		 * thread) that holds the model's side of the chat, and the last row it has been sent. Null
+		 * until its first turn starts.
 		 */
 		providerSession: text('provider_session', { mode: 'json' }).$type<{
 			id: string;
 			sentSeq: number;
+			/**
+			 * The plan whose agent has the session, since a chat can switch between them. Missing:
+			 * the Claude plan's, from before there was another.
+			 */
+			provider?: 'claude-plan' | 'chatgpt-plan';
 		}>(),
 		/** Prompt cache lifetime: an hour for chats people come back to, 5 minutes for subagents. */
 		cacheTtl: text('cache_ttl', { enum: ['5m', '1h'] })
@@ -316,7 +326,7 @@ export const message = sqliteTable(
 		 * so another provider's encoder leaves out what it can't take (format.ts). Rows that are only
 		 * text, which every provider reads the same, may have none.
 		 */
-		provider: text('provider', { enum: ['anthropic', 'openai', 'claude-plan'] }),
+		provider: text('provider', { enum: ['anthropic', 'openai', 'claude-plan', 'chatgpt-plan'] }),
 		/** Replies: the model that wrote it. */
 		model: text('model'),
 		stopReason: text('stop_reason'),

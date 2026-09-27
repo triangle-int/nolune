@@ -1,9 +1,11 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import * as anthropic from './anthropic.ts';
 import * as claudePlan from './claude-plan.ts';
+import * as chatgptPlan from './chatgpt-plan.ts';
 import type { Usage } from './conversations.ts';
 import { replyBlocks, toolCalls, type Message, type ToolCallBlock } from './format.ts';
 import * as openai from './openai-chat.ts';
+import { PlanError, isPlan, isPlanStopped, type Plan, type PlanTurn } from './plans.ts';
 
 /*
  * A model call as the rest of btw sees it, whichever provider runs it. Each provider's module
@@ -12,11 +14,13 @@ import * as openai from './openai-chat.ts';
  * provider's module. The reply's `content` is still the provider's own, and is stored and sent
  * back exactly as it came.
  *
- * `claude-plan` is the exception: Claude Code runs its agent loop (claude-plan.ts), so the runner
- * hands it whole turns rather than calling streamTurn.
+ * The plans are the exception (plans.ts): the maker's own agent runs the agent loop, Claude Code
+ * for `claude-plan` and Codex for `chatgpt-plan`, so the runner hands them whole turns
+ * (runPlanTurn) rather than calling streamTurn.
  */
 
-export const PROVIDERS = ['anthropic', 'openai', 'claude-plan'] as const;
+/** `claude-plan` and `chatgpt-plan` run on someone's subscription instead of an API key (plans.ts). */
+export const PROVIDERS = ['anthropic', 'openai', 'claude-plan', 'chatgpt-plan'] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
 export function isProvider(value: string): value is Provider {
@@ -27,20 +31,16 @@ export function isProvider(value: string): value is Provider {
 export const PROVIDER_LABELS: Record<Provider, string> = {
 	anthropic: 'Anthropic',
 	openai: 'OpenAI',
-	'claude-plan': 'Claude plan'
+	'claude-plan': 'Claude plan',
+	'chatgpt-plan': 'ChatGPT plan'
 };
-
-/** Providers whose chats run through Claude Code and a Claude plan rather than an API key. */
-export function runsOnClaudeCode(provider: Provider): provider is 'claude-plan' {
-	return provider === 'claude-plan';
-}
 
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type Effort = (typeof EFFORTS)[number];
 
 /**
  * How long a cached prompt lives: an hour for chats people come back to, 5 minutes for
- * subagents. Only Anthropic takes it; OpenAI caches on its own.
+ * subagents. Only Anthropic takes it; OpenAI (and Codex) caches on its own.
  */
 export type CacheTtl = '5m' | '1h';
 
@@ -63,7 +63,8 @@ export interface ModelReply {
 	 * complete and can run), `max_tokens` (cut off) or `refusal`.
 	 */
 	stopReason: string | null;
-	usage: Usage;
+	/** Null when it isn't known: on the ChatGPT plan, for replies that ask for commands. */
+	usage: Usage | null;
 	calls: ToolCall[];
 	/** The reply's text, without thinking or calls. */
 	texts: string[];
@@ -94,9 +95,7 @@ export async function streamTurn(opts: {
 	onEvent: (event: StreamEvent) => void;
 }): Promise<ModelReply> {
 	const { provider, cacheKey, ...request } = opts;
-	if (runsOnClaudeCode(provider)) {
-		throw new Error('Chats on the Claude plan run whole turns through claude-plan.ts');
-	}
+	if (isPlan(provider)) throw new Error('Chats on a plan run whole turns through runPlanTurn');
 	if (provider === 'openai') {
 		const response = await openai.streamResponse({ ...request, cacheKey });
 		return fromContent(
@@ -130,7 +129,8 @@ export async function quickReply(opts: {
 	maxTokens: number;
 	timeoutMs: number;
 }): Promise<{ text: string | null; usage: Usage }> {
-	if (runsOnClaudeCode(opts.provider)) return claudePlan.quickReply(opts);
+	if (opts.provider === 'claude-plan') return claudePlan.quickReply(opts);
+	if (opts.provider === 'chatgpt-plan') return chatgptPlan.quickReply(opts);
 	if (opts.provider === 'openai') {
 		const response = await openai.createResponse(opts);
 		const usage = openai.summarizeUsage(response.usage);
@@ -158,8 +158,8 @@ export function countDocumentTokens(
 	model: string,
 	fileId: string
 ): Promise<number> {
-	if (runsOnClaudeCode(provider)) {
-		return Promise.reject(new Error('Chats on the Claude plan get PDFs as files, not documents'));
+	if (isPlan(provider)) {
+		return Promise.reject(new Error('Chats on a plan have no Files API to count PDFs with'));
 	}
 	return provider === 'openai'
 		? openai.countDocumentTokens(model, fileId)
@@ -167,18 +167,19 @@ export function countDocumentTokens(
 }
 
 /**
- * Throws if the provider doesn't know the model. Null when its window isn't known. For the
- * Claude plan, it checks that Claude Code is here and signed in to one: it can't check a model
- * id, so whether it takes the model shows at the chat's first reply.
+ * Throws if the provider doesn't know the model. Null when its window isn't known. For a plan, it
+ * checks that its agent is here and signed in to one. Claude Code can't check a model id, so
+ * whether it takes the model shows at the chat's first reply; Codex lists the plan's models.
  */
 export async function fetchContextWindow(
 	provider: Provider,
 	model: string
 ): Promise<number | null> {
-	if (runsOnClaudeCode(provider)) {
+	if (provider === 'claude-plan') {
 		await claudePlan.checkClaudePlan();
 		return claudePlan.knownContextWindow(model);
 	}
+	if (provider === 'chatgpt-plan') return chatgptPlan.fetchContextWindow(model);
 	return provider === 'openai'
 		? openai.fetchContextWindow(model)
 		: anthropic.fetchContextWindow(model);
@@ -197,27 +198,40 @@ export interface ModelChoice {
 }
 
 /**
- * The models the provider offers, for the admin page to pick from: the newest first, or in
- * Claude Code's own order for the Claude plan. Throws what describeApiError explains.
+ * The models the provider offers, for the admin page to pick from: the newest first, or in the
+ * agent's own order for a plan. Throws what describeApiError explains.
  */
 export async function listModels(provider: Provider): Promise<ModelChoice[]> {
-	if (runsOnClaudeCode(provider)) return claudePlan.listModels();
+	if (provider === 'claude-plan') return claudePlan.listModels();
+	if (provider === 'chatgpt-plan') return chatgptPlan.listModels();
 	return provider === 'openai' ? openai.listModels() : anthropic.listModels();
 }
 
+/** Plans say what went wrong in their own words (plans.ts). */
 export function describeApiError(err: unknown): string {
-	if (err instanceof claudePlan.ClaudePlanError) return err.message;
+	if (err instanceof PlanError) return err.message;
 	return openai.isOpenAIError(err) ? openai.describeApiError(err) : anthropic.describeApiError(err);
 }
 
 /** The API's own message, without the status and JSON around it: for notes shown to the model. */
 export function shortApiError(err: unknown): string {
-	if (err instanceof claudePlan.ClaudePlanError) return err.message;
+	if (err instanceof PlanError) return err.message;
 	return openai.isOpenAIError(err) ? openai.shortApiError(err) : anthropic.shortApiError(err);
 }
 
 export function isAbortError(err: unknown): boolean {
-	return (
-		anthropic.isAbortError(err) || openai.isAbortError(err) || claudePlan.isPlanAbortError(err)
-	);
+	return anthropic.isAbortError(err) || openai.isAbortError(err) || isPlanStopped(err);
+}
+
+/**
+ * A turn of a chat on a plan, which its agent runs. Throws a PlanError when it fails and a
+ * PlanStopped when it was stopped.
+ */
+export function runPlanTurn(plan: Plan, turn: PlanTurn): Promise<void> {
+	return plan === 'claude-plan' ? claudePlan.runTurn(turn) : chatgptPlan.runTurn(turn);
+}
+
+/** Whether a plan's turn failed on the chat's session (plans.ts), and how. */
+export function planSessionProblem(plan: Plan, err: unknown) {
+	return plan === 'claude-plan' ? claudePlan.sessionProblem(err) : chatgptPlan.sessionProblem(err);
 }

@@ -314,7 +314,7 @@ export function rebuildSystemPrompt(
 	return { ...conv, ...changed };
 }
 
-/** Chats on the Claude plan: Claude Code's session, and the last row it was sent. */
+/** Chats on a plan: its agent's session, and the last row it was sent. */
 export function setProviderSession(id: string, session: Conversation['providerSession']): void {
 	getDb()
 		.update(conversation)

@@ -18,13 +18,14 @@
 		/** Whether each API key provider has a key, and its last four characters. */
 		keys: { provider: string; source: string | null; hint: string | null }[];
 		claudeInstalled: boolean;
+		codexInstalled: boolean;
 		/** Why the last add failed. */
 		problem?: string | null;
 		/** Open from the start: when there are no models yet. */
 		startOpen: boolean;
 	}
 
-	let { providers, keys, claudeInstalled, problem, startOpen }: Props = $props();
+	let { providers, keys, claudeInstalled, codexInstalled, problem, startOpen }: Props = $props();
 
 	const { m: messages } = getI18n();
 	const t = messages.admin.addModel;
@@ -38,8 +39,14 @@
 	let model = $state('');
 	const label = $derived(providers.find((p) => p.id === provider)?.label ?? provider);
 	const key = $derived(keys.find((k) => k.provider === provider));
-	/** Whether the provider can be used: a key, or Claude Code for the plan. */
-	const ready = $derived(provider === 'claude-plan' ? claudeInstalled : !!key?.source);
+	/** Whether the provider can be used: a key, or the plan's agent (Claude Code, Codex). */
+	const ready = $derived(
+		provider === 'claude-plan'
+			? claudeInstalled
+			: provider === 'chatgpt-plan'
+				? codexInstalled
+				: !!key?.source
+	);
 
 	type ModelList = { models: ModelChoice[]; problem: string | null };
 	/** Each provider's models (null while they're asked for), asked for again when its key changes. */
@@ -68,6 +75,11 @@
 				? { text: t.onPlan, warn: false }
 				: { text: t.noClaudeCode, warn: true };
 		}
+		if (provider === 'chatgpt-plan') {
+			return codexInstalled
+				? { text: t.onChatGptPlan, warn: false }
+				: { text: t.noCodex, warn: true };
+		}
 		return ready ? { text: t.onKey(label), warn: false } : { text: t.noKey(label), warn: true };
 	});
 
@@ -80,7 +92,11 @@
 	});
 
 	function sourceName(): string {
-		return provider === 'claude-plan' ? 'Claude Code' : label;
+		return provider === 'claude-plan'
+			? 'Claude Code'
+			: provider === 'chatgpt-plan'
+				? 'Codex'
+				: label;
 	}
 
 	/** Offered as chips; any other size is typed under Custom. */
@@ -275,7 +291,9 @@
 				{adding
 					? provider === 'claude-plan'
 						? t.checkingClaude
-						: t.checkingModel
+						: provider === 'chatgpt-plan'
+							? t.checkingCodex
+							: t.checkingModel
 					: messages.common.add}
 			</Button>
 			<Button type="button" variant="ghost" class="h-10" onclick={close}
