@@ -32,7 +32,7 @@ API keys and models on the web, under Models & keys in your account menu.
 your Claude account (`/login`). Then `btw setup --provider claude-plan`, or add a preset later with
 `btw preset add claude-opus-5-5 --provider claude-plan` (or on Models & keys). Chats on those
 presets run through the Claude Code on this computer, unmodified, which uses your plan's limits;
-btw never sees the sign-in. `btw plan status` shows who Claude Code is signed in as. Anthropic
+btw never sees the sign-in. `btw claude-plan status` shows who Claude Code is signed in as. Anthropic
 [counts this](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
 as Agent SDK use of your subscription, and plan limits assume one person's ordinary use: keep busy
 automations and subagents on an API key preset, and see [DESIGN.md](DESIGN.md#the-claude-plan)

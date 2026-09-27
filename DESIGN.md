@@ -192,20 +192,20 @@ automations and subagents on an API key preset.
   pictures (inline) and background commands as usual.
 - **Environment.** Claude Code gets btw's environment without `ANTHROPIC_API_KEY` and
   `ANTHROPIC_AUTH_TOKEN`, which it would use (and bill) instead of the plan. A
-  `CLAUDE_CODE_OAUTH_TOKEN` there (from `claude setup-token`) reaches Claude Code but, like API keys,
-  not the agent's commands. btw looks for `claude`
-  on the PATH and in its installers' folders (`~/.local/bin`, `~/.claude/local`, Homebrew), or at
-  `btw config set claude-path`. The SDK's own copy of Claude Code (about 230 MB per platform) isn't
-  shipped, so the Claude Code people keep up to date is the one that runs.
+  `CLAUDE_CODE_OAUTH_TOKEN` there (from `claude setup-token`) reaches Claude Code but, like API
+  keys, not the agent's commands. btw looks for `claude` on the PATH and in its installers'
+  folders (`~/.local/bin`, `~/.claude/local`, Homebrew), or at `btw config set claude-path`. The
+  SDK's own copy of Claude Code (about 230 MB per platform) isn't shipped, so the Claude Code
+  people keep up to date is the one that runs.
 - **Stop** interrupts Claude Code's turn and kills the running command, as elsewhere; if Claude Code
   hasn't ended the turn 5 seconds later, its process is closed. A reply cut off mid-stream is
   dropped.
 - **Errors.** Claude Code reports API errors as a reply of its own (`error: authentication_failed`,
   `rate_limit`...), which btw shows as the chat's error, with how to sign in when that's the
-  problem. `btw plan status`, the admin page's Check sign-in and adding a preset start Claude Code
-  without sending anything and ask who it's signed in as (`accountInfo()`): a plan (`Claude Max`...)
-  or a `claude setup-token` token passes; an API key, another provider or no sign-in ("Claude API")
-  doesn't. Whether it takes the model only shows at the chat's first reply.
+  problem. `btw claude-plan status`, the admin page's Check sign-in and adding a preset start
+  Claude Code without sending anything and ask who it's signed in as (`accountInfo()`): a plan
+  (`Claude Max`...) or a `claude setup-token` token passes; an API key, another provider or no
+  sign-in ("Claude API") doesn't. Whether it takes the model only shows at the chat's first reply.
 - **Pictures and PDFs** go inline as base64, since there's no Files API; Claude Code passes them to
   the model as they are, and `btw view` pictures come back in `run_command`'s MCP result as images.
   They count against the conversation's inline limit (20 MB, which keeps requests under the API's

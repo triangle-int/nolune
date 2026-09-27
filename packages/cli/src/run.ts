@@ -98,7 +98,7 @@ Claude plan (chats on your own Pro or Max plan instead of an API key)
   Install Claude Code on this computer, run \`claude\` and sign in with your Claude account (/login).
   btw never sees that sign-in: it runs Claude Code, which uses the plan's limits. Those assume one
   person's ordinary use, so keep busy automations and subagents on an API key preset.
-  btw plan status                            which Claude Code btw runs, and who it's signed in as
+  btw claude-plan status                     which Claude Code btw runs, and who it's signed in as
 
 Users (web sign-up is disabled; this is the only way to add people)
   btw user create <name> <email> [--password P] [--admin]
@@ -425,7 +425,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				}
 				const claude = claudeExecutable();
 				io.log(
-					`claude     ${claude ? `Claude Code at ${claude} (btw plan status checks its sign-in)` : 'no Claude Code found (for claude-plan presets)'}`
+					`claude     ${claude ? `Claude Code at ${claude} (btw claude-plan status checks its sign-in)` : 'no Claude Code found (for claude-plan presets)'}`
 				);
 				const images = imageGenerationStatus();
 				io.log(`images     ${images.model}${images.problem ? ` (${images.problem})` : ''}`);
@@ -484,8 +484,8 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 			return;
 		}
 
-		case 'plan': {
-			if (action !== 'status') fail('usage: btw plan status');
+		case 'claude-plan': {
+			if (action !== 'status') fail('usage: btw claude-plan status');
 			await requireClaudePlan(io);
 			return;
 		}

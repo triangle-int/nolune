@@ -54,7 +54,7 @@ keys in the account menu.
 
 A `claude-plan` preset runs chats on the Claude Pro or Max plan someone signed in to Claude Code
 with on this computer, instead of an API key: btw runs Claude Code, which uses the plan's limits.
-`btw plan status` says which Claude Code btw runs and who it's signed in as. Nobody signs in
+`btw claude-plan status` says which Claude Code btw runs and who it's signed in as. Nobody signs in
 through btw or you: the owner runs `claude` in a terminal and uses `/login` there. Never ask for,
 look for or copy a Claude sign-in or its tokens.
 
