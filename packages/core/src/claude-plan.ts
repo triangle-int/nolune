@@ -13,7 +13,7 @@ import type { ZodType } from 'zod';
 import { readConfig } from './config.ts';
 import { replyBlocks, toolCalls } from './content-blocks.ts';
 import type { Usage } from './conversations.ts';
-import type { Effort, ModelReply, StreamEvent, ToolCall } from './models.ts';
+import type { Effort, ModelChoice, ModelReply, StreamEvent, ToolCall } from './models.ts';
 
 /*
  * Chats on the Claude plan: the Pro or Max subscription someone signed in to Claude Code with on
@@ -701,15 +701,12 @@ function accountProblem(account: AccountInfo): string | null {
 	return `Claude Code isn't signed in to a Claude plan. ${HOW_TO_SIGN_IN}`;
 }
 
-/**
- * Starts Claude Code without sending anything and asks who it's signed in as. Nothing is billed.
- */
-export async function claudePlanStatus(): Promise<ClaudePlanStatus> {
-	const { path, installed } = findClaudeCode();
+/** Starts Claude Code without sending anything, asks it one thing, and closes it. Nothing is billed. */
+async function ask<T>(question: (q: Query) => Promise<T>): Promise<T> {
 	const { sdk } = await load();
 	let release!: () => void;
 	const released = new Promise<void>((resolve) => (release = resolve));
-	/** Keeps Claude Code's input open, without a message, until the check is done. */
+	/** Keeps Claude Code's input open, without a message, until it has answered. */
 	async function* nothing(): AsyncIterable<SDKUserMessage> {
 		await released;
 		yield* [];
@@ -724,15 +721,56 @@ export async function claudePlanStatus(): Promise<ClaudePlanStatus> {
 		const timeout = new Promise<never>((_, reject) => {
 			timer = setTimeout(() => reject(new Error('no answer')), STATUS_TIMEOUT_MS);
 		});
-		const account = await Promise.race([q.accountInfo(), timeout]);
-		return { path, installed, account, problem: accountProblem(account) };
+		return await Promise.race([question(q), timeout]);
 	} catch (err) {
-		return { path, installed, account: null, problem: startError(err).message };
+		throw startError(err);
 	} finally {
 		clearTimeout(timer);
 		release();
 		q?.close();
 	}
+}
+
+/** Asks Claude Code who it's signed in as. */
+export async function claudePlanStatus(): Promise<ClaudePlanStatus> {
+	const { path, installed } = findClaudeCode();
+	try {
+		const account = await ask((q) => q.accountInfo());
+		return { path, installed, account, problem: accountProblem(account) };
+	} catch (err) {
+		return { path, installed, account: null, problem: startError(err).message };
+	}
+}
+
+/**
+ * Claude Code doesn't say how large a model's window is, except in the ids of the 1M-context
+ * ones, like `claude-opus-5-5[1m]`.
+ */
+export function knownContextWindow(model: string): number | null {
+	return /\[1m\]$/i.test(model) ? 1_000_000 : null;
+}
+
+/**
+ * The models Claude Code offers on the plan it's signed in to, in its order, by their full ids:
+ * an alias like `opus` would move a chat to a newer model when Claude Code updates. Its
+ * "Default" is left out, since it's one of the others.
+ */
+export async function listModels(): Promise<ModelChoice[]> {
+	const models = await ask((q) => q.supportedModels());
+	const seen = new Set<string>();
+	return models.flatMap((m) => {
+		const id = m.resolvedModel ?? m.value;
+		if (m.value === 'default' || seen.has(id)) return [];
+		seen.add(id);
+		return [
+			{
+				id,
+				name: m.displayName,
+				description: m.description || null,
+				contextWindow: knownContextWindow(id)
+			}
+		];
+	});
 }
 
 /**

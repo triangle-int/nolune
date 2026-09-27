@@ -8,42 +8,13 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import * as ToggleGroup from '$lib/components/ui/toggle-group';
 	import TopBar from '$lib/components/TopBar.svelte';
+	import AddModelForm from '$lib/components/admin/AddModelForm.svelte';
 	import CopyButton from '$lib/components/chat/CopyButton.svelte';
-	import { formatTokens, parseTokens } from '$lib/format';
+	import { formatTokens } from '$lib/format';
 	import { cn } from '$lib/utils';
 
 	let { data, form } = $props();
-	let adding = $state(false);
-	/** Whose model the new preset runs. */
-	let provider = $state('anthropic');
-	const EXAMPLE_MODELS: Record<string, string> = {
-		anthropic: 'claude-opus-5-5',
-		openai: 'gpt-6-astra',
-		'claude-plan': 'claude-opus-5-5'
-	};
-	/** Offered as chips; any other size is typed under Custom. */
-	const CONTEXT_WINDOWS = [128_000, 200_000, 1_000_000];
-	/** What Auto (no override) gets with each provider. */
-	const AUTO_CONTEXT: Record<string, string> = {
-		anthropic: 'Auto uses the window Anthropic reports for the model.',
-		openai: "OpenAI doesn't report it: Auto knows only its flagships' (1.05M since GPT-5.4).",
-		'claude-plan': "Claude Code doesn't report it, so with Auto the window stays unknown."
-	};
-	/** "auto", a chip's token count, or "custom". */
-	let contextChoice = $state('auto');
-	let customContext = $state('');
-	const customTokens = $derived(parseTokens(customContext));
-	const contextInvalid = $derived(
-		contextChoice === 'custom' && customContext.trim() !== '' && Number.isNaN(customTokens)
-	);
-	const contextHint = $derived.by(() => {
-		if (contextChoice === 'auto') return AUTO_CONTEXT[provider] ?? '';
-		const tokens = contextChoice === 'custom' ? customTokens : Number(contextChoice);
-		if (Number.isNaN(tokens)) return 'Type a token count, like 272k or 272000.';
-		return `${tokens.toLocaleString('en')} tokens.`;
-	});
 	/** Whether the Claude Code sign-in is being checked. */
 	let checkingPlan = $state(false);
 
@@ -332,108 +303,13 @@
 					{/each}
 				</ul>
 
-				<form
-					method="POST"
-					action="?/add"
-					class="space-y-3"
-					use:enhance={({ cancel }) => {
-						// The hint under the field already says what's wrong.
-						if (contextInvalid) {
-							cancel();
-							return;
-						}
-						adding = true;
-						return async ({ result, update }) => {
-							await update();
-							adding = false;
-							if (result.type === 'success') {
-								contextChoice = 'auto';
-								customContext = '';
-							}
-						};
-					}}
-				>
-					<div class="flex flex-wrap items-center justify-between gap-3">
-						<h2 class="font-medium">Add a preset</h2>
-						<ToggleGroup.Root
-							type="single"
-							variant="outline"
-							size="sm"
-							value={provider}
-							onValueChange={(value) => value && (provider = value)}
-							aria-label="Provider"
-						>
-							{#each data.providers as p (p.id)}
-								<ToggleGroup.Item value={p.id}>{p.label}</ToggleGroup.Item>
-							{/each}
-						</ToggleGroup.Root>
-					</div>
-					<input type="hidden" name="provider" value={provider} />
-					<Input
-						name="model"
-						required
-						placeholder="Model id, e.g. {EXAMPLE_MODELS[provider] ?? ''}"
-						aria-label="Model id"
-						class="h-10 rounded-full px-4"
-					/>
-					<Input
-						name="name"
-						placeholder="Name (default: model + provider)"
-						aria-label="Name"
-						class="h-10 rounded-full px-4"
-					/>
-					<div class="space-y-2">
-						<div class="flex flex-wrap items-center justify-between gap-3">
-							<span id="context-window-label" class="text-sm font-medium">Context window</span>
-							<ToggleGroup.Root
-								type="single"
-								variant="outline"
-								size="sm"
-								spacing={1}
-								class="flex-wrap"
-								value={contextChoice}
-								onValueChange={(value) => value && (contextChoice = value)}
-								aria-labelledby="context-window-label"
-							>
-								<ToggleGroup.Item value="auto">Auto</ToggleGroup.Item>
-								{#each CONTEXT_WINDOWS as tokens (tokens)}
-									<ToggleGroup.Item value={String(tokens)}>{formatTokens(tokens)}</ToggleGroup.Item>
-								{/each}
-								<ToggleGroup.Item value="custom">Custom</ToggleGroup.Item>
-							</ToggleGroup.Root>
-						</div>
-						{#if contextChoice === 'custom'}
-							<Input
-								name="contextWindow"
-								bind:value={customContext}
-								required
-								autocomplete="off"
-								spellcheck="false"
-								placeholder="Tokens, e.g. 272k"
-								aria-labelledby="context-window-label"
-								aria-describedby="context-window-hint"
-								aria-invalid={contextInvalid}
-								class="h-10 rounded-full px-4 sm:w-60"
-								{@attach (input) => input.focus()}
-							/>
-						{:else if contextChoice !== 'auto'}
-							<input type="hidden" name="contextWindow" value={contextChoice} />
-						{/if}
-						<p
-							id="context-window-hint"
-							class={cn('text-sm', contextInvalid ? 'text-destructive' : 'text-muted-foreground')}
-						>
-							{contextHint}
-						</p>
-					</div>
-					<Button type="submit" disabled={adding} class="h-10 px-5">
-						{adding
-							? provider === 'claude-plan'
-								? 'Checking Claude Code…'
-								: 'Checking the model…'
-							: 'Add'}
-					</Button>
-				</form>
+				<AddModelForm
+					providers={data.providers}
+					keys={data.keys}
+					claudeInstalled={data.claude.installed}
+					problem={form?.addError}
+					startOpen={data.presets.length === 0}
+				/>
 			</section>
 		</div>
 	</main>

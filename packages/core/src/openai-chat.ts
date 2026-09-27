@@ -3,7 +3,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { OpenAI } from 'openai';
 import { apiKeyHelp, configuredApiKey } from './config.ts';
 import type { Usage } from './conversations.ts';
-import type { Effort, StreamEvent } from './models.ts';
+import type { Effort, ModelChoice, StreamEvent } from './models.ts';
 import { openaiBaseUrl } from './openai.ts';
 
 /*
@@ -433,6 +433,41 @@ export async function fetchContextWindow(model: string): Promise<number | null> 
 	const client = await getClient();
 	await client.models.retrieve(model, { timeout: REQUEST_TIMEOUT_MS });
 	return knownContextWindow(model);
+}
+
+/** Models that chat through the Responses API: not audio, pictures, embeddings or search. */
+export function isChatModel(model: string): boolean {
+	return (
+		/^(gpt-|o\d|chatgpt-|codex-)/.test(model) &&
+		!/^gpt-3/.test(model) &&
+		!/audio|realtime|transcribe|tts|image|search|embedding|moderation|instruct|deep-research|computer-use/.test(
+			model
+		)
+	);
+}
+
+const SNAPSHOT_DATE = /-\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * The chat models the key can use, the newest first, without the dated snapshots of models
+ * also listed without a date (they can still be typed). All of them when that leaves none: a
+ * compatible server behind OPENAI_BASE_URL has names of its own.
+ */
+export async function listModels(): Promise<ModelChoice[]> {
+	const client = await getClient();
+	const all: OpenAI.Models.Model[] = [];
+	for await (const model of client.models.list({ timeout: REQUEST_TIMEOUT_MS })) all.push(model);
+	all.sort((a, b) => b.created - a.created);
+	const ids = new Set(all.map((m) => m.id));
+	const isSnapshot = (id: string) =>
+		SNAPSHOT_DATE.test(id) && ids.has(id.replace(SNAPSHOT_DATE, ''));
+	const chat = all.filter((m) => isChatModel(m.id) && !isSnapshot(m.id));
+	return (chat.length ? chat : all).map((m) => ({
+		id: m.id,
+		name: null,
+		description: null,
+		contextWindow: knownContextWindow(m.id)
+	}));
 }
 
 export function describeApiError(err: unknown): string {

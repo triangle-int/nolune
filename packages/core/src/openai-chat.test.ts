@@ -15,7 +15,9 @@ import {
 import { describeApiError } from './models.ts';
 import {
 	countDocumentTokens,
+	isChatModel,
 	knownContextWindow,
+	listModels,
 	openaiFiles,
 	stopReason,
 	streamResponse,
@@ -648,6 +650,59 @@ describe("OpenAI's Files API and models", () => {
 		['my-proxy-model', null]
 	])('knows %s has a window of %s', (model, window) => {
 		expect(knownContextWindow(model)).toBe(window);
+	});
+
+	it.each([
+		['gpt-6-astra', true],
+		['gpt-5.4-mini', true],
+		['gpt-5.5-codex', true],
+		['o3', true],
+		['o4-mini', true],
+		['chatgpt-4o-latest', true],
+		['gpt-4o-audio-preview', false],
+		['gpt-realtime', false],
+		['gpt-4o-mini-transcribe', false],
+		['gpt-4o-mini-tts', false],
+		['gpt-image-2.5-flare', false],
+		['gpt-4o-search-preview', false],
+		['o3-deep-research', false],
+		['gpt-3.5-turbo', false],
+		['text-embedding-3-large', false],
+		['whisper-1', false],
+		['dall-e-3', false]
+	])('knows whether %s chats: %s', (model, chats) => {
+		expect(isChatModel(model)).toBe(chats);
+	});
+
+	it('lists the chat models, the newest first, without dated snapshots of listed ones', async () => {
+		const models = (...ids: string[]) =>
+			ids.map((id, i) => ({ id, object: 'model', created: 1_700_000_000 + i, owned_by: 'openai' }));
+		answer = (req) =>
+			req.path === '/v1/models'
+				? {
+						json: {
+							object: 'list',
+							data: models(
+								'gpt-5.4-mini',
+								'whisper-1',
+								'gpt-6-astra-2026-06-01',
+								'gpt-6-astra',
+								'gpt-5.4-mini-2026-03-05',
+								'gpt-image-2.5-flare',
+								'o3-2025-04-16'
+							)
+						}
+					}
+				: { status: 404, json: { error: { message: 'Not found' } } };
+		expect(await listModels()).toEqual([
+			{ id: 'o3-2025-04-16', name: null, description: null, contextWindow: null },
+			{ id: 'gpt-6-astra', name: null, description: null, contextWindow: 1_050_000 },
+			{ id: 'gpt-5.4-mini', name: null, description: null, contextWindow: null }
+		]);
+
+		// A compatible server's own names aren't OpenAI's: all of them.
+		answer = () => ({ json: { object: 'list', data: models('llama-4', 'qwen-3') } });
+		expect((await listModels()).map((m) => m.id)).toEqual(['qwen-3', 'llama-4']);
 	});
 
 	it('counts what a PDF costs with the input token endpoint', async () => {

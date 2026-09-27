@@ -88,18 +88,18 @@ export const actions: Actions = {
 		const provider = form.get('provider')?.toString() ?? '';
 		const model = form.get('model')?.toString() ?? '';
 		const name = form.get('name')?.toString() ?? '';
-		// Left out when the model's own window is picked; otherwise a chip's count or one typed as "272k".
+		// Left out for the model's own window; otherwise a chip's count, or one typed like "272k".
 		const cw = form.get('contextWindow')?.toString().trim() ?? '';
 		const contextWindow = cw ? parseTokens(cw) : null;
 		if (Number.isNaN(contextWindow)) {
-			return fail(400, { message: 'Context window must be a token count, like 272k or 272000.' });
+			return fail(400, { addError: 'Context window must be a token count, like 272k or 272000.' });
 		}
 		try {
-			await addPreset({ provider, model, name, contextWindow });
+			const preset = await addPreset({ provider, model, name, contextWindow });
+			return { message: `Added ${preset.name}.` };
 		} catch (err) {
-			return fail(400, { message: err instanceof Error ? err.message : String(err) });
+			return fail(400, { addError: err instanceof Error ? err.message : String(err) });
 		}
-		return { message: 'Added.' };
 	},
 	setDefault: async ({ locals, request }) => {
 		requireAdmin(locals);
