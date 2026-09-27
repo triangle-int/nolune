@@ -14,10 +14,10 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | Profiles           | Any user can create a profile. Any member can add or remove members, rename the profile, or delete it. Deleting moves the folder to `~/.btw-agent/trash/` instead of erasing it.                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Conversations      | Shared by every member of the profile. Messages go through a queue, and a message sent while the agent is working is fed into its next step (steering). Anyone can press Stop.                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Sender identity    | Every human message is sent to the model as `Name: text`. Attached files come first, each as a line saying who attached it and where it was saved, followed by the picture or PDF itself when the model gets one. Display names are unique across the gateway.                                                                                                                                                                                                                                                                                                                                       |
-| Attachments        | Any file, up to 100 MB and 10 per message, saved in the profile's `attachments` folder. The model gets pictures and PDFs through the provider's Files API, never as base64 unless an upload fails, and every other file as its path.                                                                                                                                                                                                                                                                                                                                                                 |
+| Attachments        | Any file, up to 100 MB and 10 per message, saved in the profile's `attachments` folder. btw keeps a copy of each picture and PDF the model gets and sends it by reference: through the provider's Files API (base64 only if an upload fails), whichever provider the chat moves to. Every other file goes as its path.                                                                                                                                                                                                                                                                               |
 | Providers          | Anthropic and OpenAI (API keys), and the Claude plan: a Pro or Max plan signed in to Claude Code on this computer, which btw runs (see [The Claude plan](#the-claude-plan)). Keys and model presets are global and managed by the admin with the CLI or the `/admin` page (Models & keys). A preset has a name (default `<model> (<provider>)`), a provider, a model, and an optional context-window override. One preset is the default (the oldest until an admin picks another): new chats start with it, and automations without a preset use it. See [Model providers](#model-providers).       |
-| Preset switching   | Not allowed. A conversation keeps its provider and model for its whole life.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Reasoning          | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once.                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Preset switching   | Allowed at any time, from the model chip in a chat's composer (or `btw agent run <id> --preset` for a subagent). The next model call uses the new model, and another provider gets the history translated. See [Switching models](#switching-models).                                                                                                                                                                                                                                                                                                                                                |
+| Reasoning          | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once, so the chat asks first.                                                                                                                                                                                                                                                                                                                                                                                                 |
 | System prompt      | Built once when the conversation is created: instructions, the profile's soul, the skills catalog and, for a chat in a folder, the folder's instructions and file paths. **It is not changed afterwards, and no update notices are added,** with one exception: when the chat moves to another folder, or its folder or the soul changes, it is built again at the start of the next turn (one cache miss). If skills change in another conversation, this conversation only sees it by running commands. Of memory, only `core` and the note names are in it: chats outside folders share a prompt. |
 | Memory             | Short Markdown notes per profile, one per topic, that the agent reads and changes with `btw memory`, like any other command. The system prompt has the pinned `core` note in full and lists the others by name, so the agent reads the ones it needs. The family sees and edits them on the Memory page. See [Memory](#memory).                                                                                                                                                                                                                                                                      |
 | Soul               | Who btw is for a profile (character, values, tone), in `soul.md` in its folder, at most 4,000 characters. It opens every chat's system prompt. The family edits it in the profile's settings; the agent changes it itself with `btw soul write` and says so. See [Soul](#soul).                                                                                                                                                                                                                                                                                                                      |
@@ -82,16 +82,19 @@ The rule: **the request prefix must stay byte-identical, so history is only ever
   reaches new chats. Chats from before tools were saved send the first `run_command`
   (`RUN_COMMAND_TOOL_V1`, which must never change); new ones get the one with `run_in_background`.
 - Each assistant response is stored as the exact `content` JSON the API returned, thinking blocks and
-  their signatures included, and is sent back unchanged. Messages are never rebuilt from normalized
-  columns. Command output is truncated once, when the tool result is created, and never later.
+  their signatures included, and is sent back unchanged to the model that wrote it. btw's own rows
+  are stored in its own format and turned into the provider's the same way on every call (see
+  [btw's format](#btws-format)). Command output is truncated once, when the tool result is
+  created, and never later.
 - Cache markers: `cache_control: {type: "ephemeral", ttl: "1h"}` on the system block, plus the same
   setting at the top level of the request (automatic caching of the growing tail). Both use the
   same TTL, because the API requires longer-TTL entries to come before shorter ones. The TTL is
   per conversation (`conversation.cache_ttl`): an hour for chats, where people answer minutes
   apart, and 5 minutes for subagents, whose steps follow each other within seconds, so the
   cheaper 5-minute write (1.25x the input price, against 2x for an hour) is enough.
-- The model, tool definitions, cache TTL and system prompt are fixed per conversation (the prompt is built
-  again only when the chat's folder changes; see [Folders](#folders)). Thinking uses
+- Tool definitions, cache TTL and system prompt are fixed per conversation (the prompt is built
+  again only when the chat's folder changes; see [Folders](#folders)), and the model changes only
+  when someone switches it (see [Switching models](#switching-models)). Thinking uses
   `adaptive` with `display: "summarized"`, the same for every conversation. The only per-conversation
   knob is `effort`.
 - Steering messages, stop results and restart-recovery results are **appended** as new rows. Nothing
@@ -100,7 +103,8 @@ The rule: **the request prefix must stay byte-identical, so history is only ever
 - Every assistant row stores `usage`, and the gateway logs `cache_read` / `cache_write` and the hit
   rate for every call. The chat header shows the hit rate (tooltip: last reply and whole conversation),
   and a reply is marked as a cache miss when it read less than the previous call read or wrote, with
-  the likely cause: over an hour idle (the TTL) or a changed request such as a new reasoning level.
+  the likely cause: over an hour idle (the TTL) or a changed request such as a new model or
+  reasoning level.
 
 ### On OpenAI
 
@@ -113,7 +117,8 @@ numbers mean the same for both providers.
 
 ## Model providers
 
-A conversation runs on its preset's provider for its whole life. `models.ts` is what the rest of
+A conversation runs on its preset's provider until someone switches it to another preset (see
+[Switching models](#switching-models)). `models.ts` is what the rest of
 btw calls: it picks the provider's module (`anthropic.ts`, `openai-chat.ts`) for the model call,
 the chat's title, PDF token counts and model checks, and gets back the same shape from each (the
 reply's content, its stop reason in Anthropic's words, usage, tool calls and texts). Each API
@@ -121,12 +126,9 @@ provider brings a `FileStore` for pictures and PDFs (see [Attachments](#attachme
 plan (`claude-plan.ts`) is different: Claude Code runs the agent loop, so the runner hands it whole
 turns (see [The Claude plan](#the-claude-plan)).
 
-- **What's stored.** What btw writes itself (people's messages, attachments, command results,
-  automations' and subagents' messages, notices) uses Anthropic's content blocks, whatever the
-  provider. A reply is stored exactly as its provider returned it: Anthropic's content blocks, or
-  OpenAI's output items (`reasoning`, `message`, `function_call`). The two use different type
-  names, so `content-blocks.ts` reads any row without knowing its provider, for the chat, the
-  runner (tool calls, restart recovery) and `pairToolResults`.
+- **What's stored.** What btw writes itself is in btw's own format, and replies exactly as their
+  provider returned them; each provider's module turns both into its request (see
+  [btw's format](#btws-format)).
 - **Both SDKs load on first use** (`@anthropic-ai/sdk` in `anthropic.ts`, `openai` in
   `openai-chat.ts`), not when core loads: the bundled CLI carries all of core, and most `btw`
   commands the agent runs never call a model. Loading OpenAI's up front made each of them about
@@ -138,8 +140,8 @@ turns (see [The Claude plan](#the-claude-plan)).
   stateless (`store: false`), so every call sends the whole transcript, as with Anthropic, and
   nothing depends on OpenAI keeping a conversation. Reasoning comes back encrypted
   (`include: ["reasoning.encrypted_content"]`) and goes back with the reply's other items,
-  unchanged. btw's own blocks become input items the same way on every call: text as
-  `input_text`, pictures as `input_image`, PDFs as `input_file`, command results as
+  unchanged. btw's own blocks become input items the same way on every call (`toResponsesInput`):
+  text as `input_text`, pictures as `input_image`, PDFs as `input_file`, command results as
   `function_call_output` (pictures from `btw view` included). `run_command` is sent as a function
   tool built from the saved Anthropic definition, not strict, since `cwd` and the timeout are
   optional.
@@ -156,10 +158,41 @@ turns (see [The Claude plan](#the-claude-plan)).
   what the model takes, for good, since history is never edited; so they get one only when the
   admin sets it. Without one, the chat's context meter shows "?" and PDFs share 25% of 200k
   tokens. Titles are asked for at `low` effort.
-- **Another provider** (OpenRouter, Gemini) would be one more module next to these, a branch
-  in each of `models.ts`'s functions, a `FileStore` (or pictures inline), its key in `API_KEYS`
-  (config.ts) with a check request in `api-keys.ts`, and its name in `PROVIDERS` and the schema's
-  `provider` enums (a TypeScript list only: SQLite stores any text there).
+- **Another provider** (OpenRouter, Gemini) would be one more module next to these, with a
+  function turning btw's format into its request (Gemini's thought signatures would ride in
+  `native` like OpenAI's encrypted reasoning), a branch in each of `models.ts`'s functions, a
+  `FileStore` (or pictures inline), its key in `API_KEYS` (config.ts) with a check request in
+  `api-keys.ts`, and its name in `PROVIDERS` and the schema's `provider` enums (a TypeScript list
+  only: SQLite stores any text there).
+
+### btw's format
+
+`format.ts` defines what a conversation holds, whichever provider runs it: blocks (`text`,
+`image`, `pdf`, `reasoning`, `tool_call`, `tool_result`) in messages. A picture's or PDF's source
+is `media` (kept by btw, which `resolveFiles` turns into each provider's copy before a request),
+`inline` (base64, which every provider takes) or `uploaded` to one provider's Files API (rows
+from before btw kept its own copies). Each
+provider's module turns messages into its request, leaving out what it can't take:
+`toAnthropicMessages` in `anthropic.ts` (Claude Code on a Claude plan gets the same blocks, from
+`toAnthropicBlocks`) and `toResponsesInput` in `openai-chat.ts`. Nothing else in btw knows a
+provider's shapes: the runner, the chat's display, plain-text transcripts and image limits all
+read btw's format.
+
+- **btw's own rows** (people's messages, attachments, command results, automations' and
+  subagents' messages, notices, its own replies such as a notification continued in a chat) are
+  stored in it, with `message.format` 'btw'.
+- **Replies** are stored exactly as their provider returned them (`format` null), and read into
+  btw's blocks with the original kept (`native`): only the model that wrote a reply reads its
+  reasoning back, and only unchanged. The encoders send `native` to that model, and the blocks'
+  text and calls (`portableReply`) to any other (see [Switching models](#switching-models)).
+  Anthropic's and OpenAI's type names differ, so `replyBlocks` reads either without knowing who
+  wrote it.
+- **Rows from before btw's format** have btw's blocks in Anthropic's shape. They're read into btw's
+  format the same way, and each block keeps what was stored (`storedAs`, in a `WeakMap`, never
+  written anywhere), which `toAnthropicBlocks` sends as it is: Claude gets those rows byte for
+  byte, as before, so old conversations keep their cache and thinking. A block btw has no type
+  for (from those rows, or a result Claude Code wrote itself) is an `other` block that carries its
+  Anthropic original and goes only to Claude. Stored rows are never rewritten.
 
 ### The Claude plan
 
@@ -215,10 +248,11 @@ automations and subagents on an API key preset.
 --claudeai`), which opens Anthropic's page in a browser and keeps what it gets. The admin page
   shows the same steps but can't sign in itself: relaying Claude's sign-in through btw's web page
   would be btw handling it.
-- **Pictures and PDFs** go inline as base64, since there's no Files API; Claude Code passes them to
-  the model as they are, and `btw view` pictures come back in `run_command`'s MCP result as images.
-  They count against the conversation's inline limit (20 MB, which keeps requests under the API's
-  32 MB). A PDF's tokens can't be counted without the API, so they're estimated at 4,000 a page
+- **Pictures and PDFs** go inline as base64, since there's no Files API: btw's copies are read
+  into the request (`resolveFiles`). Claude Code passes them to the model as they are, and
+  `btw view` pictures come back in `run_command`'s MCP result as images. They count against the
+  conversation's inline limit (20 MB, which keeps requests under the API's 32 MB); a chat that
+  moved to the plan with more than that sends the rest as notes, oldest first inline. A PDF's tokens can't be counted without the API, so they're estimated at 4,000 a page
   (Anthropic's 1,500 to 3,000 for a page's text, plus the page as a picture) from the page count in
   its page tree, read from the file (compressed object streams too), and checked against the same
   25% of the context window and the API's page limit. A PDF whose pages can't be counted
@@ -229,6 +263,45 @@ automations and subagents on an API key preset.
   unless the preset sets one. Titles are asked for through Claude Code too, as
   one exchange without a session. Claude Code keeps its own copy of each chat under
   `~/.claude/projects`, which deleting the chat in btw doesn't remove yet.
+
+### Switching models
+
+Anyone in the profile can switch a chat to another preset, or another reasoning level, from the
+chip in its composer; `btw agent run <id> --preset` does it for a subagent given more work.
+`setPreset` takes a new snapshot of the preset (name, provider, model, context window), and the
+next model call uses it, even in the middle of a turn, so a model that keeps failing can be left
+behind with Continue. It's refused when the conversation is already larger than the new model's
+window (from its last call's usage): history is never edited, so it could never fit. Everyone who
+has the chat open gets the change as a live `model` event (also in the snapshot).
+
+- **What it costs.** Caches belong to one model, so the first call on the new one reads the whole
+  conversation again (a new reasoning level does the same on Claude). Once the chat has a reply,
+  the chat asks before either change, saying so (with the tokens, in technical details).
+- **Who wrote what.** Every row records the provider its content was made for (`message.provider`:
+  the one whose model wrote a reply, or whose Files API a message's or command result's pictures
+  went to) and replies their model (`message.model`). Rows from before this were given their
+  conversation's. The chat shows which model wrote each reply in technical details.
+- **What each model gets.** `requestMessages` reads the rows into btw's format, and the target's
+  encoder (see [btw's format](#btws-format)) decides what it can take. Both depend only on what's
+  stored, so after the one miss the prefix is byte-identical again. Stored rows never change.
+  - Claude gets replies from other Claude models as they are. The API itself leaves out thinking a
+    model can't read (it's bound to the model that made it), without an error; stripping it would
+    be an edit, which breaks preserved thinking for the model that can read it.
+  - Replies from another provider go as their text and tool calls (`portableReply`), without
+    reasoning. So do replies from another OpenAI model (reasoning goes back only
+    to the model that wrote it, and items without their reasoning lose their ids) and a Claude
+    plan's replies on the API (their thinking was signed for another account). Anthropic accepts
+    tool calls without thinking in the middle of a turn, so a switch can happen there.
+  - Pictures and PDFs go along: btw keeps them and each provider gets its own copy (see
+    [Attachments](#attachments)). Only those from before btw kept its own, stored as another
+    provider's `file_id` (an `uploaded` source), become a note: this model can't open that copy,
+    and the line before it (the attachment's label, or `Image: <path>` in a command result) says
+    where the file is, so `btw view` shows it again. The switch dialog mentions them when the chat
+    has any (`heldFileProviders`).
+- **The Claude plan.** Claude Code keeps its own copy of the chat, so a chat that comes back to the
+  plan after another model answered starts a new session (a random id: the chat's own is taken)
+  with the chat so far as a transcript, as a notification's chat does. Switching between plan
+  presets keeps the session, and Claude Code resumes it on the new model.
 
 ## Agent loop
 
@@ -350,8 +423,8 @@ kind of file, up to 100 MB each (the same as pictures in replies) and 10 per mes
   its own name (`name (2).ext` when another file has it), gets a media row so the chat shows it (see [Pictures and files](#pictures-and-files)), and the message's content gets, per file, a line saying who
   attached it and where it was saved, then the file itself when the model can have it:
   - **pictures** go through `prepareImage` (converted, at most 2000 px, upright) and become an
-    `image` block with a `file_id`;
-  - **PDFs** become a `document` block with a `file_id`, after a free `count_tokens` call that
+    `image` block referring to those bytes, kept in the media store;
+  - **PDFs** become a `pdf` block referring to the file, after a free `count_tokens` call that
     checks the model can read it and says what it costs;
   - **other files**, text included, are only named, and the agent opens them with commands.
 - **Limits, because history is never edited.** A file the API refuses would fail every later
@@ -360,19 +433,28 @@ kind of file, up to 100 MB each (the same as pictures in replies) and 10 per mes
   well under the API's 600 and 100 pages). A PDF over the rest of that budget, or one
   `count_tokens` rejects, is sent as its path with the reason in its line, and the chat shows the
   same note under the file.
-- **Files API.** Uploaded once per content and account: `provider_file` maps provider, a hash of
-  the API key (files live in its workspace) and the content's SHA-256 to the `file_id`. Requests
-  stay small whatever the history holds, and a reference is part of the cached prefix like any
-  other block. A cached id is checked (one metadata request) before it's reused, and the file
-  uploaded again if it's gone, since a message referring to a missing file would fail every later
-  request. The hourly prune deletes files no message refers to any more, leaving those used in
-  the last hour and those in another key's workspace alone. The Files API isn't eligible for zero
-  data retention, and a conversation whose files are gone (another workspace's key, deleted in the
-  Console) can't recover, since its history can't be rewritten.
+- **By reference.** A message keeps a picture or PDF as a `media` source: the SHA-256 of the
+  bytes the model gets (a converted picture's own), which the media store keeps while a message
+  refers to it. Before each model call, `resolveFiles` (`provider-files.ts`) gives the provider its
+  copy: the Files API's `file_id`, or the bytes inline for the Claude plan. So a chat that
+  switches providers takes its pictures along, and the first call on the new one uploads them.
+  The same rows always give the same request. An upload that fails at that point fails the call
+  (Continue tries again), never falling back to base64, which would change the prefix later.
+- **Files API.** Uploaded once per content and account, and first when the file is attached, so
+  a problem shows then: `provider_file` maps provider, a hash of the API key (files live in its
+  workspace) and the content's SHA-256 to the `file_id`. Requests stay small whatever the history
+  holds, and a reference is part of the cached prefix like any other block. When attached, a
+  cached id is checked (one metadata request) and the file uploaded again if it's gone; later
+  requests take the cached copy as it is, since checking every picture would cost a request
+  apiece. The hourly prune deletes files no message refers to any more (by id, or by what it's a
+  copy of), leaving those used in the last hour and those in another key's workspace alone. With
+  another workspace's key, a chat's pictures are uploaded again, at the cost of one cache miss.
+  The Files API isn't eligible for zero data retention. Pictures and PDFs from before btw kept
+  its own copies are stored with the provider's `file_id` and can't move to another provider or
+  workspace.
 - **Other providers.** `message.attachments` is the provider-neutral record (saved path, type,
-  what the model got). `content` holds btw's blocks in Anthropic's format for every provider,
-  with the provider's own file ids, and each provider's module turns them into its request
-  format (see [Model providers](#model-providers)). A provider brings a `FileStore`
+  what the model got). `content` holds btw's blocks (see [btw's format](#btws-format)), and each
+  provider's module turns them into its request. A provider brings a `FileStore`
   (`provider-files.ts`); one without a files API would send pictures inline. OpenAI's is its
   Files API: pictures are uploaded for `vision` and PDFs as `user_data`, and a PDF's cost is
   counted with `POST /v1/responses/input_tokens`, which also fails for a PDF it can't read.
@@ -673,9 +755,8 @@ automations, it's a CLI command and a built-in skill (`subagents`), not a tool.
 - **Model and reasoning:** the chat's, unless `--preset <name|id>` (resolved like
   `btw wake --preset`) or `--effort <level>` say otherwise. The skill tells the agent to run
   `btw preset list` and pick a name from it, never to make one up, and suggests a smaller model and
-  `low` for simple reading-heavy jobs. Like any conversation, a subagent keeps its model: more work
-  with another `--preset` is refused, while `--effort` may change (one cache rebuild, as in a
-  chat).
+  `low` for simple reading-heavy jobs. More work may come with another `--preset` or `--effort`,
+  which switch the subagent's conversation as in a chat (one cache rebuild).
 - **The gateway runs it** (`subagent-host.ts`), like `btw wake`: the CLI only writes rows, and the
   scheduler (every tick, and right after each of the agent's commands) starts `pending` subagents
   through the normal runner. When its loop ends it is `done`, `failed` or `stopped`; one still
@@ -783,14 +864,16 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   pages don't download all two thousand; unknown names fall back to a terminal icon.
 - **Technical details** (Settings, per device, in the `btw-prefs` cookie so the server renders it
   too) switch the labels to the raw commands and add context size, prompt-cache hit rate, cache
-  misses, per-reply token usage and the model name. "Always show steps" opens the groups by default.
+  misses, per-reply token usage and the model that wrote each reply. "Always show steps" opens the
+  groups by default.
 - **The composer** is docked over the end of the chat and of the Images grid (`ComposerDock`):
   what scrolls under it fades and blurs into it instead of stopping at an edge, and the scroll
   area pads its end by the composer's height so the newest message still clears it.
 - **New chat** is the empty composer: the first message creates the conversation and is sent in
   the same request. Model and reasoning are picked from the chip in the composer: the model starts
-  at the default preset, reasoning at the level last used on this device. In an existing chat only
-  reasoning can change. The folder chip next to it starts the chat in a folder.
+  at the default preset, reasoning at the level last used on this device. In an existing chat both
+  can change (see [Switching models](#switching-models)). The folder chip next to it starts the
+  chat in a folder.
 - **Suggestions** under the new-chat composer (`packages/core/src/suggestions.ts`) come from the
   profile's memory. Until it has any, they are four general ones (a reminder, a weather check,
   finding a file, free disk space). After that, the default preset is asked, with `quickReply`, for
@@ -922,8 +1005,9 @@ to (issue #42).
 ```
 packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_command, background
                 commands, memory notes, new-chat suggestions, btw view images, attachments, model
-                calls (models.ts, with anthropic.ts and openai-chat.ts, each with its Files API;
-                content-blocks.ts reads either's replies), Claude plan turns through Claude Code
+                calls (models.ts, with anthropic.ts and openai-chat.ts, each with its Files API and
+                the function that turns btw's format, format.ts, into its request), Claude plan
+                turns through Claude Code
                 (claude-plan.ts), provider
                 file cache, runner, media, users/profiles/presets, API
                 keys, chat folders, triggers, scheduler, subagents (subagents.ts, and

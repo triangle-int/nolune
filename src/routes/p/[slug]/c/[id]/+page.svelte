@@ -8,6 +8,8 @@
 	<Chat
 		conversation={data.conversation}
 		efforts={data.efforts}
+		presets={data.presets}
+		defaultPresetId={data.defaultPresetId}
 		me={data.user?.name ?? ''}
 		folders={data.folders}
 		folderId={data.conversations.find((c) => c.id === data.conversation.id)?.folderId ?? null}

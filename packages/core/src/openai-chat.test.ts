@@ -3,15 +3,19 @@ import type { AddressInfo } from 'node:net';
 import { Readable } from 'node:stream';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createUpload } from './attachments.ts';
-import { replyBlocks } from './content-blocks.ts';
+import { replyBlocks } from './format.ts';
 import {
 	appendRow,
 	committedRows,
+	commitQueuedRows,
 	createConversation,
 	getConversation,
+	insertQueued,
 	requestMessages,
+	setPreset,
 	toDisplay
 } from './conversations.ts';
+import { storeBytes } from './media.ts';
 import { describeApiError } from './models.ts';
 import {
 	countDocumentTokens,
@@ -380,6 +384,149 @@ describe('a chat on an OpenAI model', () => {
 		expect(JSON.parse(human.attachments!)).toMatchObject([{ sentAs: 'document', tokens: 1200 }]);
 	});
 
+	it('continues a chat that Claude started, from its text and calls', async () => {
+		const { user, profile } = makeFamily();
+		const chat = createConversation({ profile, presetId: makePreset().id, userId: user.id });
+		const text = (t: string) => ({ type: 'text', text: t });
+		appendRow({
+			conversationId: chat.id,
+			role: 'user',
+			kind: 'trigger',
+			content: JSON.stringify([
+				text('[Anna attached a.png, saved at /a.png]'),
+				{ type: 'image', source: { type: 'file', file_id: 'file_011photo' } },
+				text('Anna: Files?')
+			]),
+			provider: 'anthropic'
+		});
+		appendRow({
+			conversationId: chat.id,
+			role: 'assistant',
+			kind: 'assistant',
+			content: JSON.stringify([
+				{ type: 'thinking', thinking: 'Listing them.', signature: 'sig' },
+				{ type: 'tool_use', id: 'toolu_1', name: 'run_command', input: { command: 'ls' } }
+			]),
+			provider: 'anthropic',
+			model: 'claude-sonnet-5'
+		});
+		appendRow({
+			conversationId: chat.id,
+			role: 'user',
+			kind: 'tool_results',
+			content: JSON.stringify([{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'a.txt' }]),
+			provider: 'anthropic'
+		});
+		appendRow({
+			conversationId: chat.id,
+			role: 'assistant',
+			kind: 'assistant',
+			content: JSON.stringify([text('One file.')]),
+			provider: 'anthropic',
+			model: 'claude-sonnet-5'
+		});
+		setPreset(chat.id, makePreset('GPT', 'gpt-6-astra', 'openai').id);
+		answer = (req) =>
+			req.json?.stream ? streamed([said('It is a.txt.')]) : { status: 404, json: {} };
+
+		const ended = loopEnd(chat.id);
+		await sendMessage(chat.id, user, 'Which?');
+		await ended;
+
+		expect(turns()).toHaveLength(1);
+		expect(turns()[0].json).toMatchObject({
+			model: 'gpt-6-astra',
+			instructions: chat.systemPrompt
+		});
+		expect(turns()[0].json!.input).toEqual([
+			{
+				role: 'user',
+				content: [
+					{ type: 'input_text', text: '[Anna attached a.png, saved at /a.png]' },
+					{
+						type: 'input_text',
+						text: expect.stringMatching(/^\[Picture not shown: it went to the model this chat/)
+					},
+					{ type: 'input_text', text: 'Anna: Files?' }
+				]
+			},
+			{
+				type: 'function_call',
+				call_id: 'toolu_1',
+				name: 'run_command',
+				arguments: '{"command":"ls"}'
+			},
+			{ type: 'function_call_output', call_id: 'toolu_1', output: 'a.txt' },
+			{ role: 'assistant', content: 'One file.' },
+			{ role: 'user', content: [{ type: 'input_text', text: 'Anna: Which?' }] }
+		]);
+		expect(committedRows(chat.id).at(-1)).toMatchObject({
+			provider: 'openai',
+			model: 'gpt-6-astra'
+		});
+	});
+
+	it("gives a picture sent while on Claude to OpenAI's Files API after a switch", async () => {
+		const { user, profile } = makeFamily();
+		const chat = createConversation({ profile, presetId: makePreset().id, userId: user.id });
+		// As prepareMessage keeps an attached picture: in the media store, by reference.
+		const picture = Buffer.from('a picture of a cat');
+		const { sha256, bytes } = storeBytes(picture);
+		insertQueued({
+			conversationId: chat.id,
+			senderId: user.id,
+			senderName: 'Anna',
+			text: 'Look',
+			provider: 'anthropic',
+			attachments: {
+				content: [
+					{ type: 'text', text: '[Anna attached cat.jpg, saved at /cat.jpg]' },
+					{ type: 'image', source: { type: 'media', sha256, mime: 'image/jpeg', bytes } },
+					{ type: 'text', text: 'Anna: Look' }
+				],
+				files: [],
+				media: [],
+				uploadIds: []
+			}
+		});
+		commitQueuedRows(chat.id);
+		appendRow({
+			conversationId: chat.id,
+			role: 'assistant',
+			kind: 'assistant',
+			content: JSON.stringify([{ type: 'text', text: 'A cat.' }]),
+			provider: 'anthropic',
+			model: 'claude-sonnet-5'
+		});
+		setPreset(chat.id, makePreset('GPT', 'gpt-6-astra', 'openai').id);
+		answer = (req) => {
+			if (req.path === '/v1/files') return { json: { id: 'file-cat', object: 'file' } };
+			if (req.path === '/v1/responses' && req.json?.stream) return streamed([said('Orange.')]);
+			return { status: 404, json: {} };
+		};
+
+		const ended = loopEnd(chat.id);
+		await sendMessage(chat.id, user, 'What color?');
+		await ended;
+
+		const uploads = seen.filter((r) => r.path === '/v1/files');
+		expect(uploads).toHaveLength(1);
+		expect(uploads[0].body).toMatch(/name="purpose"\r\n\r\nvision/);
+		expect(uploads[0].body).toContain('a picture of a cat');
+		expect(turns()[0].json!.input).toEqual([
+			{
+				role: 'user',
+				content: [
+					{ type: 'input_text', text: '[Anna attached cat.jpg, saved at /cat.jpg]' },
+					{ type: 'input_image', file_id: 'file-cat', detail: 'auto' },
+					{ type: 'input_text', text: 'Anna: Look' }
+				]
+			},
+			{ role: 'assistant', content: 'A cat.' },
+			{ role: 'user', content: [{ type: 'input_text', text: 'Anna: What color?' }] }
+		]);
+	});
+
 	it('answers a call left without a result, after a crash or a restart', () => {
 		const { chat } = openaiChat();
 		const text = (t: string) => JSON.stringify([{ type: 'text', text: t }]);
@@ -391,7 +538,7 @@ describe('a chat on an OpenAI model', () => {
 			content: JSON.stringify([thought, listCall])
 		});
 		appendRow({ conversationId: chat.id, role: 'user', kind: 'trigger', content: text('And?') });
-		expect(toResponsesInput(requestMessages(committedRows(chat.id), null))).toEqual([
+		expect(toResponsesInput(requestMessages(committedRows(chat.id), null), chat.model)).toEqual([
 			{ role: 'user', content: [{ type: 'input_text', text: 'Files?' }] },
 			thought,
 			listCall,
@@ -413,9 +560,9 @@ describe('a chat on an OpenAI model', () => {
 		expect(JSON.parse(committedRows(chat.id).at(-1)!.content)).toEqual([
 			{
 				type: 'tool_result',
-				tool_use_id: 'call_1',
+				callId: 'call_1',
 				content: 'Not finished: the gateway restarted while this was running.',
-				is_error: true
+				isError: true
 			}
 		]);
 	});
@@ -423,41 +570,47 @@ describe('a chat on an OpenAI model', () => {
 
 describe('the transcript as input items', () => {
 	it("turns btw's own blocks into input items, and keeps OpenAI's own as they came", () => {
+		const unreadable = [{ id: 'rs_2', type: 'reasoning', summary: [] }, listCall];
 		expect(
-			toResponsesInput([
-				{
-					role: 'user',
-					content: [
-						{ type: 'text', text: '[Anna attached cat.jpg, saved at /tmp/cat.jpg]' },
-						{ type: 'image', source: { type: 'file', file_id: 'file-cat' } },
-						{ type: 'text', text: 'Anna: Look' }
-					]
-				},
-				// A notification someone continued in a chat: btw wrote this reply itself.
-				{ role: 'assistant', content: [{ type: 'text', text: 'The parcel arrived.' }] },
-				// Reasoning without its encrypted content can't be sent back without `store`.
-				{
-					role: 'assistant',
-					content: [{ id: 'rs_2', type: 'reasoning', summary: [] }, listCall] as never
-				},
-				{
-					role: 'user',
-					content: [
-						{
-							type: 'tool_result',
-							tool_use_id: 'call_1',
-							content: [
-								{ type: 'text', text: 'Image: shot.png' },
-								{
-									type: 'image',
-									source: { type: 'base64', media_type: 'image/png', data: 'iVBOR' }
-								}
-							]
-						},
-						{ type: 'text', text: 'Max: and?' }
-					]
-				}
-			])
+			toResponsesInput(
+				[
+					{
+						role: 'user',
+						blocks: [
+							{ type: 'text', text: '[Anna attached cat.jpg, saved at /tmp/cat.jpg]' },
+							{
+								type: 'image',
+								source: { type: 'uploaded', provider: 'openai', fileId: 'file-cat' }
+							},
+							{ type: 'text', text: 'Anna: Look' }
+						]
+					},
+					// A notification someone continued in a chat: btw wrote this reply itself.
+					{ role: 'assistant', blocks: [{ type: 'text', text: 'The parcel arrived.' }] },
+					// Reasoning without its encrypted content can't be sent back without `store`.
+					{
+						role: 'assistant',
+						blocks: replyBlocks(unreadable),
+						native: { provider: 'openai', model: 'gpt-6-astra', content: unreadable }
+					},
+					{
+						role: 'user',
+						blocks: [
+							{
+								type: 'tool_result',
+								callId: 'call_1',
+								content: [
+									{ type: 'text', text: 'Image: shot.png' },
+									{ type: 'image', source: { type: 'inline', mime: 'image/png', data: 'iVBOR' } }
+								],
+								isError: false
+							},
+							{ type: 'text', text: 'Max: and?' }
+						]
+					}
+				],
+				'gpt-6-astra'
+			)
 		).toEqual([
 			{
 				role: 'user',
@@ -489,7 +642,7 @@ describe('the transcript as input items', () => {
 				{ type: 'tool_use', id: 'toolu_1', name: 'run_command', input: { command: 'ls' } }
 			])
 		).toEqual([
-			{ type: 'thinking', text: 'Hmm.' },
+			{ type: 'reasoning', text: 'Hmm.' },
 			{ type: 'text', text: 'Checking.' },
 			{ type: 'tool_call', id: 'toolu_1', name: 'run_command', input: { command: 'ls' } }
 		]);
@@ -541,7 +694,7 @@ describe('calling OpenAI', () => {
 			effort: 'high',
 			system: 'You are btw.',
 			tools: TOOLS,
-			messages: [{ role: 'user', content: [{ type: 'text', text: 'Anna: Hi' }] }],
+			messages: [{ role: 'user', blocks: [{ type: 'text', text: 'Anna: Hi' }] }],
 			cacheKey: 'chat-1',
 			signal: new AbortController().signal,
 			onEvent: () => {}

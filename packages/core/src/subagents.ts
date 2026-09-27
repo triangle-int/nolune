@@ -9,9 +9,11 @@ import {
 	getConversation,
 	insertQueuedNotice,
 	isSubagentConversation,
+	ModelSwitchError,
 	queuedRows,
 	replyText,
 	setEffort,
+	setPreset,
 	type Conversation
 } from './conversations.ts';
 import { getDb } from './db/index.ts';
@@ -181,7 +183,7 @@ function firstLine(text: string, max = 60): string {
  * `btw agent run [name]`: starts a subagent with `prompt` as its task, or gives one that finished
  * more work in the same conversation (it keeps what it learned). Returns at once; the gateway
  * starts it within seconds. It runs on the chat's model and reasoning level unless `presetId` or
- * `effort` say otherwise; like every conversation, it keeps its model for good.
+ * `effort` say otherwise; more work for one that finished may switch either, like in a chat.
  */
 export function runSubagent(input: {
 	parentId: string;
@@ -223,12 +225,16 @@ export function runSubagent(input: {
 			}
 			const conv = getConversation(existing.conversationId);
 			if (!conv) throw new SubagentError(`${existing.name}'s conversation no longer exists.`);
-			if (preset && preset.id !== conv.presetId) {
-				throw new SubagentError(
-					`${existing.name} keeps the model it started with (${conv.presetName}): a conversation never changes model. Start a new subagent for ${preset.name}, or leave out --preset.`
-				);
-			}
 			// Allowed, like in a chat; its next request reads the conversation again without the cache.
+			let switched = conv;
+			if (preset && preset.id !== conv.presetId) {
+				try {
+					switched = setPreset(conv.id, preset.id);
+				} catch (err) {
+					if (err instanceof ModelSwitchError) throw new SubagentError(err.message);
+					throw err;
+				}
+			}
 			if (input.effort && input.effort !== conv.effort) setEffort(conv.id, input.effort);
 			insertQueuedNotice({
 				conversationId: existing.conversationId,
@@ -240,7 +246,7 @@ export function runSubagent(input: {
 			setSubagentStatus(existing.id, 'pending');
 			return {
 				subagent: { ...existing, status: 'pending' as const, error: null },
-				conversation: { ...conv, effort: input.effort ?? conv.effort },
+				conversation: { ...switched, effort: input.effort ?? conv.effort },
 				created: false
 			};
 		}

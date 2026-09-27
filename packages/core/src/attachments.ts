@@ -3,10 +3,16 @@ import { constants, copyFileSync, existsSync, mkdirSync, readFileSync, statSync 
 import { basename, extname, join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { constants as zlibConstants, inflateSync } from 'node:zlib';
-import type Anthropic from '@anthropic-ai/sdk';
 import { and, eq, inArray, lt } from 'drizzle-orm';
 import type { Conversation, MessageRow } from './conversations.ts';
 import { getDb } from './db/index.ts';
+import {
+	readMessage,
+	type ImageBlock,
+	type PdfBlock,
+	type Source,
+	type TextBlock
+} from './format.ts';
 import { upload } from './db/schema.ts';
 import {
 	MAX_CONVERSATION_IMAGE_BYTES,
@@ -23,6 +29,7 @@ import {
 	describeStored,
 	newMediaId,
 	store,
+	storeBytes,
 	storedType,
 	type PreparedMedia
 } from './media.ts';
@@ -34,8 +41,8 @@ import { hasFileStore, providerFileId } from './provider-files.ts';
  * Files people attach to a message. Each is saved in the profile's `attachments` folder, where
  * the agent can work with it, and shown in the chat through a media row. The model gets pictures
  * and PDFs themselves, through the provider's Files API, and every other file as its name and
- * path. What the model got is written into the message's `content` in the provider's format;
- * `message.attachments` keeps the provider-neutral record.
+ * path. What the model got is written into the message's `content` (btw's format, with the
+ * provider's file ids); `message.attachments` keeps a record of the files themselves.
  */
 
 export const MAX_ATTACHMENTS = 10;
@@ -202,16 +209,23 @@ export function parseAttachments(json: string | null): MessageAttachment[] {
 	}
 }
 
-// --- what the model gets (the provider's format) ---
+// --- what the model gets ---
 
-type ImageBlock = Anthropic.ImageBlockParam;
-type AttachmentBlock =
-	Anthropic.TextBlockParam | Anthropic.ImageBlockParam | Anthropic.DocumentBlockParam;
+type AttachmentBlock = TextBlock | ImageBlock | PdfBlock;
+
+/** Keeps the bytes the model gets in the media store, for requests to send by reference. */
+function kept(data: Buffer, mime: string): Extract<Source, { type: 'media' }> {
+	const { sha256, bytes } = storeBytes(data);
+	return { type: 'media', sha256, mime, bytes };
+}
 
 /**
- * A picture as the provider's content block, counted in `used`: uploaded through its Files API,
- * or inline as base64 when that fails (or the provider has none, as on the Claude plan) and the
- * conversation still has room for it.
+ * A picture for the model, counted in `used`. It's kept in btw's media store and sent by
+ * reference, so each provider gets its own copy when a request is made (resolveFiles), also after
+ * the chat switches to another. With a Files API it's uploaded now, so a problem shows here rather
+ * than at every later request; if that fails, it goes inline as base64 when the conversation
+ * still has room. Without one (the Claude plan) every request carries it inline, so it counts
+ * against that room.
  */
 export async function imageBlock(
 	provider: Provider,
@@ -227,9 +241,9 @@ export async function imageBlock(
 	}
 	if (hasFileStore(provider)) {
 		try {
-			const fileId = await providerFileId(provider, data, name, mediaType);
+			await providerFileId(provider, data, name, mediaType);
 			used.count++;
-			return { block: { type: 'image', source: { type: 'file', file_id: fileId } } };
+			return { block: { type: 'image', source: kept(data, mediaType) } };
 		} catch (err) {
 			const bytes = base64Length(data.length);
 			if (used.bytes + bytes > MAX_CONVERSATION_IMAGE_BYTES) {
@@ -244,10 +258,12 @@ export async function imageBlock(
 	}
 	used.bytes += bytes;
 	used.count++;
+	if (!hasFileStore(provider)) return { block: { type: 'image', source: kept(data, mediaType) } };
+	// Its upload failed.
 	return {
 		block: {
 			type: 'image',
-			source: { type: 'base64', media_type: mediaType, data: data.toString('base64') }
+			source: { type: 'inline', mime: mediaType, data: data.toString('base64') }
 		}
 	};
 }
@@ -257,8 +273,8 @@ export async function viewedImageBlocks(
 	provider: Provider,
 	images: ViewedImage[],
 	used: ImageUse
-): Promise<(Anthropic.TextBlockParam | ImageBlock)[]> {
-	const blocks: (Anthropic.TextBlockParam | ImageBlock)[] = [];
+): Promise<(TextBlock | ImageBlock)[]> {
+	const blocks: (TextBlock | ImageBlock)[] = [];
 	for (const image of images) {
 		const result =
 			'problem' in image
@@ -306,8 +322,9 @@ export function pdfPageCount(data: Buffer): number | null {
 }
 
 /**
- * A PDF inline, for chats on the Claude plan, which have no Files API: estimated from its pages,
- * and counted in the conversation's inline bytes, which every request carries.
+ * A PDF for chats on the Claude plan, which have no Files API: estimated from its pages, and
+ * counted in the conversation's inline bytes, which every request carries. Kept by reference,
+ * like pictures (imageBlock).
  */
 function inlinePdfBlock(
 	conv: Conversation,
@@ -315,7 +332,7 @@ function inlinePdfBlock(
 	name: string,
 	room: number,
 	used: ImageUse
-): { block: Anthropic.DocumentBlockParam; tokens: number } | { problem: string } {
+): { block: PdfBlock; tokens: number } | { problem: string } {
 	const data = readFileSync(path);
 	const pages = pdfPageCount(data);
 	if (pages === null) {
@@ -336,14 +353,7 @@ function inlinePdfBlock(
 		return { problem: "it's too big to send along with everything else in this conversation" };
 	}
 	used.bytes += bytes;
-	return {
-		block: {
-			type: 'document',
-			source: { type: 'base64', media_type: 'application/pdf', data: data.toString('base64') },
-			title: name
-		},
-		tokens
-	};
+	return { block: { type: 'pdf', source: kept(data, 'application/pdf'), name }, tokens };
 }
 
 async function pdfBlock(
@@ -352,17 +362,19 @@ async function pdfBlock(
 	name: string,
 	room: number,
 	used: ImageUse
-): Promise<{ block: Anthropic.DocumentBlockParam; tokens: number } | { problem: string }> {
-	if (!hasFileStore(conv.provider)) return inlinePdfBlock(conv, path, name, room, used);
+): Promise<{ block: PdfBlock; tokens: number } | { problem: string }> {
+	const { provider } = conv;
+	if (!hasFileStore(provider)) return inlinePdfBlock(conv, path, name, room, used);
+	const data = readFileSync(path);
 	let fileId: string;
 	try {
-		fileId = await providerFileId(conv.provider, readFileSync(path), name, 'application/pdf');
+		fileId = await providerFileId(provider, data, name, 'application/pdf');
 	} catch (err) {
 		return { problem: `it couldn't be uploaded (${shortApiError(err)})` };
 	}
 	let tokens: number;
 	try {
-		tokens = await countDocumentTokens(conv.provider, conv.model, fileId);
+		tokens = await countDocumentTokens(provider, conv.model, fileId);
 	} catch (err) {
 		return { problem: `the model can't read it (${shortApiError(err)})` };
 	}
@@ -371,10 +383,7 @@ async function pdfBlock(
 			problem: `it's about ${tokens.toLocaleString('en-US')} tokens, more than this conversation has room for (${Math.max(0, room).toLocaleString('en-US')})`
 		};
 	}
-	return {
-		block: { type: 'document', source: { type: 'file', file_id: fileId }, title: name },
-		tokens
-	};
+	return { block: { type: 'pdf', source: kept(data, 'application/pdf'), name }, tokens };
 }
 
 function attachmentLabel(senderName: string, attachment: MessageAttachment): string {
@@ -383,7 +392,7 @@ function attachmentLabel(senderName: string, attachment: MessageAttachment): str
 }
 
 export interface PreparedMessage {
-	/** The message's content in the provider's format. */
+	/** The message's content, with pictures and PDFs as the provider got them. */
 	content: AttachmentBlock[];
 	attachments: MessageAttachment[];
 	/** Media rows that show the attachments in the chat, with their ids. */
@@ -406,9 +415,7 @@ export async function prepareMessage(input: {
 }): Promise<PreparedMessage> {
 	const { conv, senderName } = input;
 	const dir = attachmentsDir(input.profileSlug);
-	const images = imageUse(
-		input.earlier.map((row) => ({ role: row.role, content: JSON.parse(row.content) }))
-	);
+	const images = imageUse(input.earlier.map(readMessage), !hasFileStore(conv.provider));
 	let documentTokens = input.earlier
 		.flatMap((row) => parseAttachments(row.attachments))
 		.reduce((sum, a) => sum + (a.sentAs === 'document' ? (a.tokens ?? 0) : 0), 0);
