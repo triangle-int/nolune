@@ -5,12 +5,13 @@ import { withIcons } from '$lib/server/suggestions';
 import type { RequestHandler } from './$types';
 
 /**
- * New chips for the new-chat page, made from the profile's memory when it changed since the
- * last ones (the page asks when its load says they are stale). Waits for the model.
+ * New chips for the person on the new-chat page, made from the profile's memory when it changed
+ * since their last ones (the page asks when its load says they are stale). Waits for the model.
  */
 export const GET: RequestHandler = async ({ locals, params }) => {
-	const { profile } = requireProfile(locals, params.slug);
-	return json(withIcons(await refreshSuggestions(profile.slug)), {
+	const { user, profile } = requireProfile(locals, params.slug);
+	const person = { id: user.id, name: user.name };
+	return json(withIcons(await refreshSuggestions(profile.slug, person)), {
 		headers: { 'cache-control': 'no-store' }
 	});
 };

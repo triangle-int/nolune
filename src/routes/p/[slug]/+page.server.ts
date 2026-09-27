@@ -17,11 +17,11 @@ import { withIcons } from '$lib/server/suggestions';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = ({ locals, params, url }) => {
-	const { profile } = requireProfile(locals, params.slug);
+	const { user, profile } = requireProfile(locals, params.slug);
 	// `?folder=<id>` starts the chat in that folder.
 	const folderId = url.searchParams.get('folder');
-	// Made from the profile's memory. When it changed since, the page fetches new ones.
-	const suggestions = currentSuggestions(profile.slug);
+	// Made for this person from the profile's memory. When it changed since, the page fetches new ones.
+	const suggestions = currentSuggestions(profile.slug, { id: user.id, name: user.name });
 	return {
 		suggestions: withIcons(suggestions.suggestions),
 		suggestionsStale: suggestions.stale,
