@@ -141,7 +141,7 @@ export const profileMember = sqliteTable(
 export const modelPreset = sqliteTable('model_preset', {
 	id: text('id').primaryKey(),
 	name: text('name').notNull().unique(),
-	provider: text('provider', { enum: ['anthropic'] }).notNull(),
+	provider: text('provider', { enum: ['anthropic', 'openai'] }).notNull(),
 	model: text('model').notNull(),
 	/** Admin override. Wins over modelContextWindow. */
 	contextWindow: integer('context_window'),
@@ -215,7 +215,7 @@ export const conversation = sqliteTable(
 		presetId: text('preset_id').references(() => modelPreset.id, { onDelete: 'set null' }),
 		// Snapshot of the preset at creation: a conversation never changes model.
 		presetName: text('preset_name').notNull(),
-		provider: text('provider', { enum: ['anthropic'] }).notNull(),
+		provider: text('provider', { enum: ['anthropic', 'openai'] }).notNull(),
 		model: text('model').notNull(),
 		contextWindow: integer('context_window'),
 		effort: text('effort', { enum: ['low', 'medium', 'high', 'xhigh', 'max'] })
@@ -291,7 +291,10 @@ export const message = sqliteTable(
 		 * Agent messages: what the agent wrote. Task results: the command's output.
 		 */
 		text: text('text'),
-		/** Exact API content blocks as JSON. Replayed byte-for-byte; never rewritten. */
+		/**
+		 * Exact API content blocks as JSON: btw's own in Anthropic's format, replies as their
+		 * provider returned them (content-blocks.ts). Replayed byte-for-byte; never rewritten.
+		 */
 		content: text('content').notNull(),
 		stopReason: text('stop_reason'),
 		usage: text('usage'),
@@ -555,14 +558,14 @@ export const upload = sqliteTable(
 );
 
 /**
- * Files uploaded to a provider (Anthropic's Files API), so requests refer to them by id instead
+ * Files uploaded to a provider (Anthropic's or OpenAI's Files API), so requests refer to them by id instead
  * of carrying their bytes. One upload per content and account; the hourly prune deletes the
  * ones no message refers to any more.
  */
 export const providerFile = sqliteTable(
 	'provider_file',
 	{
-		provider: text('provider', { enum: ['anthropic'] }).notNull(),
+		provider: text('provider', { enum: ['anthropic', 'openai'] }).notNull(),
 		/** The account the file lives in (a hash of the API key): ids are only valid there. */
 		account: text('account').notNull(),
 		/** SHA-256 of the bytes that were uploaded. */

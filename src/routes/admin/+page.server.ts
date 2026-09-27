@@ -1,6 +1,8 @@
 import { error, fail } from '@sveltejs/kit';
 import {
+	API_KEYS,
 	ApiKeyError,
+	PROVIDERS,
 	addPreset,
 	apiKeyStatuses,
 	checkApiKey,
@@ -23,6 +25,7 @@ export const load: PageServerLoad = ({ locals }) => {
 	return {
 		// Where each key comes from and its last four characters; never the keys themselves.
 		keys: apiKeyStatuses(),
+		providers: PROVIDERS.map((id) => ({ id, label: API_KEYS[id].label })),
 		presets: listPresets().map((p) => ({
 			id: p.id,
 			name: p.name,
@@ -66,11 +69,12 @@ export const actions: Actions = {
 	add: async ({ locals, request }) => {
 		requireAdmin(locals);
 		const form = await request.formData();
+		const provider = form.get('provider')?.toString() ?? '';
 		const model = form.get('model')?.toString() ?? '';
 		const name = form.get('name')?.toString() ?? '';
 		const cw = form.get('contextWindow')?.toString().trim() ?? '';
 		try {
-			await addPreset({ model, name, contextWindow: cw ? Number(cw) : null });
+			await addPreset({ provider, model, name, contextWindow: cw ? Number(cw) : null });
 		} catch (err) {
 			return fail(400, { message: err instanceof Error ? err.message : String(err) });
 		}

@@ -1,5 +1,5 @@
-import { getClient, supportsAdaptiveThinking } from './anthropic.ts';
-import { summarizeUsage, type Usage } from './conversations.ts';
+import type { Usage } from './conversations.ts';
+import { quickReply, type Provider } from './models.ts';
 
 /** Longest title kept, in characters. The first message stands in as the title until then. */
 export const TITLE_LIMIT = 80;
@@ -27,24 +27,20 @@ const SYSTEM = `You name chats in a family's chat app. You get the first message
  * holds no usable title (a refusal, or cut off).
  */
 export async function suggestTitle(
+	provider: Provider,
 	model: string,
 	text: string
 ): Promise<{ title: string | null; usage: Usage }> {
-	const reply = await getClient().messages.create(
-		{
-			model,
-			// Room for whatever thinking the model does first; the title itself is a few tokens.
-			max_tokens: 2048,
-			system: SYSTEM,
-			...(supportsAdaptiveThinking(model) ? { output_config: { effort: 'low' as const } } : {}),
-			messages: [{ role: 'user', content: `<message>\n${text.slice(0, INPUT_LIMIT)}\n</message>` }]
-		},
-		{ timeout: 30_000 }
-	);
-	const usage = summarizeUsage(reply.usage);
-	if (reply.stop_reason !== 'end_turn') return { title: null, usage };
-	const raw = reply.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('');
-	return { title: cleanTitle(raw), usage };
+	const reply = await quickReply({
+		provider,
+		model,
+		system: SYSTEM,
+		input: `<message>\n${text.slice(0, INPUT_LIMIT)}\n</message>`,
+		// Room for whatever thinking the model does first; the title itself is a few tokens.
+		maxTokens: 2048,
+		timeoutMs: 30_000
+	});
+	return { title: reply.text === null ? null : cleanTitle(reply.text), usage: reply.usage };
 }
 
 /** The first line of the reply, without the dressing models sometimes add around a title. */

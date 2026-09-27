@@ -32,8 +32,10 @@ const ABOUT: Record<ApiKeyProvider, Pick<ApiKeyStatus, 'purpose' | 'withoutIt' |
 		consoleUrl: 'https://console.anthropic.com/settings/keys'
 	},
 	openai: {
-		purpose: 'Makes pictures, for the Images page and when the agent draws.',
-		withoutIt: "btw can't make pictures until a new key is added.",
+		purpose:
+			'Runs chats and automations on OpenAI models, and makes pictures for the Images page and when the agent draws.',
+		withoutIt:
+			"Chats and automations on OpenAI models stop working, and btw can't make pictures, until a new key is added.",
 		consoleUrl: 'https://platform.openai.com/api-keys'
 	}
 };

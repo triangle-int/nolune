@@ -7,12 +7,19 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import * as ToggleGroup from '$lib/components/ui/toggle-group';
 	import TopBar from '$lib/components/TopBar.svelte';
 	import { formatTokens } from '$lib/format';
 	import { cn } from '$lib/utils';
 
 	let { data, form } = $props();
 	let adding = $state(false);
+	/** Whose model the new preset runs. */
+	let provider = $state('anthropic');
+	const EXAMPLE_MODELS: Record<string, string> = {
+		anthropic: 'claude-opus-5-5',
+		openai: 'gpt-6-astra'
+	};
 
 	type KeyStatus = (typeof data.keys)[number];
 	/** The key being pasted, the one being checked, and the one about to be removed. */
@@ -136,9 +143,10 @@
 										<a href={key.consoleUrl} target="_blank" rel="noreferrer" class="underline"
 											>{new URL(key.consoleUrl).host}</a
 										>.
-										{#if key.provider === 'anthropic' && key.source}
-											Use a key from the same workspace: pictures and PDFs already sent in chats
-											live there, and those chats can't go on without them.
+										{#if key.source}
+											Use a key from the same {key.provider === 'openai' ? 'project' : 'workspace'}:
+											pictures and PDFs already sent in chats live there, and those chats can't go
+											on without them.
 										{/if}
 									</p>
 								</form>
@@ -227,11 +235,26 @@
 						};
 					}}
 				>
-					<h2 class="font-medium">Add a preset (Anthropic)</h2>
+					<div class="flex flex-wrap items-center justify-between gap-3">
+						<h2 class="font-medium">Add a preset</h2>
+						<ToggleGroup.Root
+							type="single"
+							variant="outline"
+							size="sm"
+							value={provider}
+							onValueChange={(value) => value && (provider = value)}
+							aria-label="Provider"
+						>
+							{#each data.providers as p (p.id)}
+								<ToggleGroup.Item value={p.id}>{p.label}</ToggleGroup.Item>
+							{/each}
+						</ToggleGroup.Root>
+					</div>
+					<input type="hidden" name="provider" value={provider} />
 					<Input
 						name="model"
 						required
-						placeholder="Model id, e.g. claude-opus-5-5"
+						placeholder="Model id, e.g. {EXAMPLE_MODELS[provider] ?? ''}"
 						aria-label="Model id"
 						class="h-10 rounded-full px-4"
 					/>
@@ -246,7 +269,9 @@
 							name="contextWindow"
 							type="number"
 							min="1"
-							placeholder="Context window (optional)"
+							placeholder={provider === 'openai'
+								? "Context window (OpenAI doesn't say)"
+								: 'Context window (optional)'}
 							aria-label="Context window"
 							class="h-10 rounded-full px-4 sm:w-60"
 						/>

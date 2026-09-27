@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
 import Anthropic, { toFile } from '@anthropic-ai/sdk';
 import { apiKeyHelp, configuredApiKey } from './config.ts';
+import type { CacheTtl, Effort, StreamEvent } from './models.ts';
 
-export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
-export type Effort = (typeof EFFORTS)[number];
-
-/** How long a cached prompt lives: an hour for chats people come back to, 5 minutes for subagents. */
-export type CacheTtl = '5m' | '1h';
+/*
+ * Chats on Claude, through Anthropic's Messages API and its SDK, and the Files API for pictures
+ * and PDFs. The rest of btw calls it through models.ts.
+ */
 
 let cached: { key: string | undefined; client: Anthropic } | undefined;
 
@@ -32,10 +32,6 @@ export function getClient(): Anthropic {
 export function supportsAdaptiveThinking(model: string): boolean {
 	return !model.startsWith('claude-haiku-');
 }
-
-export type StreamEvent =
-	| { type: 'block_start'; index: number; block: Anthropic.ContentBlock }
-	| { type: 'delta'; index: number; text: string };
 
 /**
  * One model call. The request shape must stay identical across calls in a conversation (only
@@ -77,7 +73,14 @@ export async function streamTurn(opts: {
 
 	for await (const event of stream) {
 		if (event.type === 'content_block_start') {
-			opts.onEvent({ type: 'block_start', index: event.index, block: event.content_block });
+			const b = event.content_block;
+			const block =
+				b.type === 'text' || b.type === 'thinking'
+					? { type: b.type }
+					: b.type === 'tool_use'
+						? { type: 'tool' as const, id: b.id }
+						: null;
+			if (block) opts.onEvent({ type: 'block_start', index: event.index, block });
 		} else if (event.type === 'content_block_delta') {
 			if (event.delta.type === 'text_delta') {
 				opts.onEvent({ type: 'delta', index: event.index, text: event.delta.text });
@@ -87,6 +90,28 @@ export async function streamTurn(opts: {
 		}
 	}
 	return stream.finalMessage();
+}
+
+/** One short exchange, not streamed, at low effort where the model takes one (see models.ts). */
+export function createMessage(opts: {
+	model: string;
+	system: string;
+	input: string;
+	maxTokens: number;
+	timeoutMs: number;
+}): Promise<Anthropic.Message> {
+	return getClient().messages.create(
+		{
+			model: opts.model,
+			max_tokens: opts.maxTokens,
+			system: opts.system,
+			...(supportsAdaptiveThinking(opts.model)
+				? { output_config: { effort: 'low' as const } }
+				: {}),
+			messages: [{ role: 'user', content: opts.input }]
+		},
+		{ timeout: opts.timeoutMs }
+	);
 }
 
 /** The Files API rejects names over 255 characters and with any of these in them. */

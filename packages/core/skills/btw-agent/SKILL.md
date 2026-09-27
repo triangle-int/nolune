@@ -32,23 +32,26 @@ Other parts of the CLI have their own instructions: automations (`btw trigger`, 
 
 ## Models
 
-Chats run on model presets. People pick one when they start a chat, and new chats start with the
-default.
+Chats run on model presets, on Claude (Anthropic) or on OpenAI's models. People pick one when
+they start a chat, and new chats start with the default.
 
 ```sh
-btw preset list                                 # name, model, context window, id, which is default
+btw preset list                                 # name, provider/model, context window, id, default
 btw preset add claude-sonnet-5 --name "Sonnet"  # Anthropic checks the model id first
+btw preset add gpt-6-astra --provider openai --name "GPT" --context-window 1050000
 btw preset default Sonnet                       # new chats start with it
 btw preset rm Sonnet                            # chats that use it keep working
 ```
 
-If `btw preset add` can't check the model, an admin can add it under Models & keys in the account
-menu.
+OpenAI doesn't say how large a model's context window is, so give `--context-window` when you
+know it. A preset needs its provider's key. If `btw preset add` can't check the model, an admin can
+add it under Models & keys in the account menu.
 
 ## API keys
 
-The `anthropic` key runs you; the `openai` one makes pictures. `btw key set` checks a key with
-the provider and refuses one it rejects, and btw uses the new key from the next message.
+The `anthropic` key runs chats on Claude; the `openai` one runs chats on OpenAI's models and makes
+pictures. `btw key set` checks a key with the provider and refuses one it rejects, and btw uses the
+new key from the next message.
 
 ```sh
 btw key set openai 'sk-...'
@@ -56,8 +59,8 @@ btw key set openai 'sk-...'
 
 A key typed into a chat stays in the chat's history. When someone wants to add or replace a key
 and hasn't pasted it yet, suggest Models & keys in the account menu instead, which keeps it out of
-the chat. Don't remove the Anthropic key (`btw key rm anthropic`): without it btw can't answer
-anyone.
+the chat. Don't remove the key of a provider that presets use (`btw preset list` shows each
+preset's provider): chats on those models stop answering.
 
 ## Environment variables for your commands
 

@@ -1,7 +1,14 @@
 import { EventEmitter } from 'node:events';
 import { mkdirSync, rmSync } from 'node:fs';
 import type Anthropic from '@anthropic-ai/sdk';
-import { describeApiError, isAbortError, streamTurn, type StreamEvent } from './anthropic.ts';
+import {
+	describeApiError,
+	isAbortError,
+	streamTurn,
+	type ModelReply,
+	type StreamEvent,
+	type ToolCall
+} from './models.ts';
 import {
 	backgroundCommands,
 	startBackgroundCommand,
@@ -25,7 +32,6 @@ import {
 	requestMessages,
 	setHidden,
 	setTitle,
-	summarizeUsage,
 	toDisplay,
 	toMessageParam,
 	toolsFor,
@@ -37,6 +43,7 @@ import {
 import { getDb } from './db/index.ts';
 import { profile } from './db/schema.ts';
 import { eq } from 'drizzle-orm';
+import { toolCalls } from './content-blocks.ts';
 import { findUploads, prepareMessage, viewedImageBlocks } from './attachments.ts';
 import { folderContextFor } from './folders.ts';
 import { readSoul } from './soul.ts';
@@ -270,12 +277,7 @@ function clearLive(conversationId: string): void {
 function onStreamEvent(conversationId: string, event: StreamEvent): void {
 	const st = stateFor(conversationId);
 	if (event.type === 'block_start') {
-		const b = event.block;
-		let block: LiveBlock | null = null;
-		if (b.type === 'text') block = { type: 'text', text: '' };
-		else if (b.type === 'thinking') block = { type: 'thinking', text: '' };
-		else if (b.type === 'tool_use') block = { type: 'tool', text: '', id: b.id };
-		if (!block) return;
+		const block: LiveBlock = { ...event.block, text: '' };
 		st.live[event.index] = block;
 		emit(conversationId, { type: 'live_block', index: event.index, block });
 	} else {
@@ -367,7 +369,7 @@ async function queueMessage(
 
 /** Asks the chat's model for a title in the background; the placeholder stays if that fails. */
 function nameConversation(conv: Conversation, text: string, placeholder: string): void {
-	suggestTitle(conv.model, text)
+	suggestTitle(conv.provider, conv.model, text)
 		.then(({ title, usage }) => {
 			console.log(
 				`[btw] ${conv.id.slice(0, 8)} title ${conv.model} in=${usage.input} out=${usage.output}${title ? '' : ' (none)'}`
@@ -441,8 +443,8 @@ function toolResult(
 
 async function runToolCall(
 	conv: Conversation,
-	call: Anthropic.ToolUseBlock,
-	stopReason: Anthropic.Message['stop_reason'],
+	call: ToolCall,
+	stopReason: string | null,
 	signal: AbortSignal,
 	st: State,
 	/** Images already in the conversation; grows by what this call attaches. */
@@ -520,7 +522,7 @@ async function runToolCall(
 	}
 }
 
-function commandSummary(call: Anthropic.ToolUseBlock): string | null {
+function commandSummary(call: ToolCall): string | null {
 	const summary = (call.input as { summary?: unknown } | null)?.summary;
 	return typeof summary === 'string' && summary.trim() ? summary.trim() : null;
 }
@@ -560,12 +562,7 @@ function queueBackgroundResult(
  */
 export function withCurrentContext(conv: Conversation, rows: MessageRow[]): Conversation {
 	const lastReply = rows.findLast((row) => row.role === 'assistant');
-	if (
-		lastReply &&
-		(JSON.parse(lastReply.content) as Anthropic.ContentBlock[]).some((b) => b.type === 'tool_use')
-	) {
-		return conv;
-	}
+	if (lastReply && toolCalls(JSON.parse(lastReply.content)).length) return conv;
 	const owner = getProfile(conv.profileId);
 	if (!owner) return conv;
 	const context = folderContextFor(owner, conv.folderId);
@@ -599,14 +596,16 @@ async function loop(conversationId: string): Promise<void> {
 			const abort = new AbortController();
 			st.abort = abort;
 			const messages = requestMessages(rows, conv.promptChangedAtSeq);
-			let reply: Anthropic.Message;
+			let reply: ModelReply;
 			try {
 				reply = await streamTurn({
+					provider: conv.provider,
 					model: conv.model,
 					effort: conv.effort,
 					system: conv.systemPrompt,
 					tools: toolsFor(conv),
 					cacheTtl: conv.cacheTtl,
+					cacheKey: conv.id,
 					messages,
 					signal: abort.signal,
 					onEvent: (event) => onStreamEvent(conversationId, event)
@@ -626,22 +625,21 @@ async function loop(conversationId: string): Promise<void> {
 			// Pictures and files the reply links to are copied before it's saved (the live reply
 			// stays on screen meanwhile), so the saved reply never points at a missing copy. Web
 			// pictures only if their link appeared in what the model read before this reply.
-			const texts = reply.content.flatMap((b) => (b.type === 'text' ? [b.text] : []));
 			const slug = profileSlug(conv.profileId);
 			const media: PreparedMedia[] = slug
-				? await copyReplyMedia(texts, profileDir(slug), abort.signal, () => foundText(rows))
+				? await copyReplyMedia(reply.texts, profileDir(slug), abort.signal, () => foundText(rows))
 				: [];
 
-			const usage = summarizeUsage(reply.usage);
+			const { usage } = reply;
 			console.log(
-				`[btw] ${conversationId.slice(0, 8)} ${conv.model} in=${usage.input} cache_read=${usage.cacheRead} cache_write=${usage.cacheWrite} hit=${Math.floor(cacheHitRate(usage) * 100)}% out=${usage.output} stop=${reply.stop_reason}`
+				`[btw] ${conversationId.slice(0, 8)} ${conv.model} in=${usage.input} cache_read=${usage.cacheRead} cache_write=${usage.cacheWrite} hit=${Math.floor(cacheHitRate(usage) * 100)}% out=${usage.output} stop=${reply.stopReason}`
 			);
 			const assistantRow = appendRow({
 				conversationId,
 				role: 'assistant',
 				kind: 'assistant',
 				content: JSON.stringify(reply.content),
-				stopReason: reply.stop_reason,
+				stopReason: reply.stopReason,
 				usage,
 				media
 			});
@@ -657,7 +655,7 @@ async function loop(conversationId: string): Promise<void> {
 			});
 			touchConversation(conversationId);
 
-			const calls = reply.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
+			const { calls } = reply;
 			// No tool calls: the turn is over. Loop again in case messages arrived meanwhile.
 			if (calls.length === 0) continue;
 
@@ -669,7 +667,7 @@ async function loop(conversationId: string): Promise<void> {
 				const result = await runToolCall(
 					conv,
 					call,
-					reply.stop_reason,
+					reply.stopReason,
 					abort.signal,
 					st,
 					images
@@ -731,9 +729,7 @@ export function recoverAfterRestart(): void {
 		if (isRunning(id)) continue;
 		const last = lastCommittedRow(id);
 		if (last?.kind === 'assistant') {
-			const calls = (JSON.parse(last.content) as Anthropic.ContentBlock[]).filter(
-				(b): b is Anthropic.ToolUseBlock => b.type === 'tool_use'
-			);
+			const calls = toolCalls(JSON.parse(last.content));
 			if (calls.length) {
 				appendRow({
 					conversationId: id,

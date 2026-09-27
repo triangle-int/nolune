@@ -3,10 +3,11 @@ import { and, eq, like, lt } from 'drizzle-orm';
 import { anthropicFiles } from './anthropic.ts';
 import { getDb } from './db/index.ts';
 import { message, providerFile } from './db/schema.ts';
-import type { Provider } from './presets.ts';
+import type { Provider } from './models.ts';
+import { openaiFiles } from './openai-chat.ts';
 
 /**
- * Pictures and PDFs kept on the provider's side (Anthropic's Files API), so a request refers to
+ * Pictures and PDFs kept on the provider's side (Anthropic's or OpenAI's Files API), so a request refers to
  * them by id instead of carrying their bytes, which it would resend with every step for the
  * rest of the conversation. Each provider brings its own store; the cache here is shared.
  */
@@ -20,7 +21,7 @@ export interface FileStore {
 	remove(fileId: string): Promise<void>;
 }
 
-const stores: Record<Provider, FileStore> = { anthropic: anthropicFiles };
+const stores: Record<Provider, FileStore> = { anthropic: anthropicFiles, openai: openaiFiles };
 
 /** Uploads under way, so the same content sent twice at once is uploaded once. */
 const inFlight = new Map<string, Promise<string>>();

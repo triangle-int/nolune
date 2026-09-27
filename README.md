@@ -11,12 +11,15 @@ it works and why.
 ## Install
 
 Needs macOS (Linux works without the background service), Node 22.18+ and an
-[Anthropic API key](https://console.anthropic.com/).
+[Anthropic API key](https://console.anthropic.com/) or an
+[OpenAI API key](https://platform.openai.com/api-keys) (chats run on Claude or on OpenAI's GPT
+models; you can have both).
 
 ```sh
 npm install -g btw-agent
 btw setup                      # API key, your account, default model, public URL
-btw key set openai             # optional: lets btw make pictures (Images page)
+                               # (btw setup --provider openai to start with GPT)
+btw key set openai             # optional: GPT models for chats, and pictures (Images page)
 btw service install            # run in the background, start at login
 btw user create Anna anna@example.com   # add family members (prints their password)
 ```

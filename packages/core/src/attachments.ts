@@ -4,7 +4,6 @@ import { basename, extname, join } from 'node:path';
 import type { Readable } from 'node:stream';
 import type Anthropic from '@anthropic-ai/sdk';
 import { and, eq, inArray, lt } from 'drizzle-orm';
-import { countDocumentTokens, shortApiError } from './anthropic.ts';
 import type { Conversation, MessageRow } from './conversations.ts';
 import { getDb } from './db/index.ts';
 import { upload } from './db/schema.ts';
@@ -26,8 +25,8 @@ import {
 	storedType,
 	type PreparedMedia
 } from './media.ts';
+import { countDocumentTokens, shortApiError, type Provider } from './models.ts';
 import { profileDir } from './paths.ts';
-import type { Provider } from './presets.ts';
 import { providerFileId } from './provider-files.ts';
 
 /*
@@ -270,7 +269,7 @@ async function pdfBlock(
 	}
 	let tokens: number;
 	try {
-		tokens = await countDocumentTokens(conv.model, fileId);
+		tokens = await countDocumentTokens(conv.provider, conv.model, fileId);
 	} catch (err) {
 		return { problem: `the model can't read it (${shortApiError(err)})` };
 	}
@@ -313,8 +312,6 @@ export async function prepareMessage(input: {
 	earlier: MessageRow[];
 }): Promise<PreparedMessage> {
 	const { conv, senderName } = input;
-	if (conv.provider !== 'anthropic')
-		throw new Error(`Attachments aren't supported for ${conv.provider}`);
 	const dir = attachmentsDir(input.profileSlug);
 	const images = imageUse(
 		input.earlier.map((row) => ({ role: row.role, content: JSON.parse(row.content) }))
