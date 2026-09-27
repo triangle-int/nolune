@@ -522,6 +522,10 @@ describe.skipIf(!codex)('chats on the ChatGPT plan', { timeout: 60_000 }, () => 
 			},
 			{ type: 'input_text', text: 'Anna: What are these?' }
 		]);
+		// Named in a Codex of its own, which must end before the next test empties Codex's home.
+		await vi.waitFor(() => expect(getConversation(chat.id)?.title).toBe('Files here'), {
+			timeout: 20_000
+		});
 	});
 
 	it('shows the model the pictures a command opened with `btw view`', async () => {

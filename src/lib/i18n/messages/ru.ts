@@ -796,10 +796,11 @@ export const ru: Messages = {
 			'Чтобы войти, выполните {setup} в терминале на этом компьютере или запустите там {claude} и используйте {login} с вашим аккаунтом Claude.',
 		models: 'Модели',
 		modelsHint:
-			'Пресеты общие для всех профилей. Новые чаты начинаются с пресета по умолчанию. Удаление пресета не влияет на существующие чаты.',
+			'Пресеты общие для всех профилей. Новые чаты начинаются с пресета по умолчанию. Изменение или удаление пресета не затрагивает чаты, которые уже на нём.',
 		presetDetails: (provider: string, model: string, context: string, overridden: boolean) =>
 			`${provider} / ${model} · контекст ${context}${overridden ? ' (задан вручную)' : ''}`,
 		makeDefault: 'Сделать по умолчанию',
+		editPreset: (name: string) => `Изменить ${name}`,
 		noPresets: 'Пресетов пока нет.',
 		addModel: {
 			title: 'Добавить модель',
@@ -841,11 +842,13 @@ export const ru: Messages = {
 			checkingClaude: 'Проверяем Claude Code…',
 			checkingCodex: 'Проверяем Codex…',
 			checkingModel: 'Проверяем модель…',
+			saving: 'Сохраняем…',
 			pick: 'Выберите модель',
 			search: 'Найдите или введите ID модели',
 			use: 'Использовать {model}',
 			typeId: 'Введите ID модели выше.',
 			added: (name: string) => `Добавлено: ${name}.`,
+			saved: (name: string) => `Сохранено: ${name}. Чаты, которые уже на нём, остаются как были.`,
 			invalidContext: 'Окно контекста должно быть числом токенов, например 272k или 272000.'
 		},
 		savedWorks: 'Сохранено. Ключ работает.',
