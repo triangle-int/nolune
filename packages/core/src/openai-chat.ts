@@ -1,15 +1,14 @@
 import { createHash } from 'node:crypto';
-import { setTimeout as sleep } from 'node:timers/promises';
 import type Anthropic from '@anthropic-ai/sdk';
+import type { OpenAI } from 'openai';
 import { apiKeyHelp, configuredApiKey } from './config.ts';
 import type { Usage } from './conversations.ts';
 import type { Effort, StreamEvent } from './models.ts';
 import { openaiBaseUrl } from './openai.ts';
 
 /*
- * Chats on OpenAI's models, through the Responses API, and its Files API for pictures and PDFs.
- * No SDK, like the Image API in openai.ts: a few endpoints and a stream of server-sent events,
- * and a plain fetch keeps the bundled CLI small. The rest of btw calls it through models.ts.
+ * Chats on OpenAI's models, through the Responses API and OpenAI's SDK, and its Files API for
+ * pictures and PDFs. The rest of btw calls it through models.ts.
  *
  * Requests are stateless (`store: false`): like Anthropic's, every call sends the whole
  * transcript, so nothing depends on OpenAI keeping a conversation. A reply is stored as the
@@ -19,37 +18,42 @@ import { openaiBaseUrl } from './openai.ts';
  * byte-identical and OpenAI's automatic prompt cache keeps serving it.
  */
 
-/** An item of a response's `output`, as stored. */
-export type OutputItem = { type: string } & Record<string, unknown>;
+type InputItem = OpenAI.Responses.ResponseInputItem;
+type InputPart = OpenAI.Responses.ResponseInputContent;
+type OutputPart = OpenAI.Responses.ResponseFunctionCallOutputItem;
 
-export interface OpenAIResponse {
-	status?: string;
-	output?: OutputItem[];
-	incomplete_details?: { reason?: string } | null;
-	usage?: OpenAIUsage | null;
-}
-
-interface OpenAIUsage {
-	input_tokens?: number;
-	input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number } | null;
-	output_tokens?: number;
-}
-
-/** Retries after a dropped connection, an overload or a rate limit, like Anthropic's SDK. */
-const RETRIES = 2;
 const UPLOAD_TIMEOUT_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 60_000;
 
-export class OpenAIChatError extends Error {
-	/** The HTTP status, or null when OpenAI couldn't be reached or the stream failed. */
-	readonly status: number | null;
-	readonly code: string | null;
-	constructor(message: string, status: number | null = null, code: string | null = null) {
-		super(message);
-		this.status = status;
-		this.code = code;
-	}
+type Sdk = typeof import('openai');
+
+/**
+ * The SDK, loaded on first use. The bundled CLI carries all of core, and loading the SDK when
+ * it starts would slow down every `btw` command the agent runs, which almost never call OpenAI.
+ */
+let sdk: Sdk | undefined;
+
+async function loadSdk(): Promise<Sdk> {
+	return (sdk ??= await import('openai'));
 }
+
+type ErrorClass =
+	| 'OpenAIError'
+	| 'APIError'
+	| 'APIUserAbortError'
+	| 'APIConnectionError'
+	| 'APIConnectionTimeoutError'
+	| 'BadRequestError'
+	| 'AuthenticationError'
+	| 'NotFoundError'
+	| 'RateLimitError';
+
+/** Whether `err` is one of the SDK's errors, which it can't be before the SDK was loaded. */
+function isSdkError<K extends ErrorClass>(err: unknown, name: K): err is InstanceType<Sdk[K]> {
+	return !!sdk && err instanceof sdk[name];
+}
+
+let cached: { key: string; baseURL: string; client: OpenAI } | undefined;
 
 class MissingApiKeyError extends Error {
 	constructor() {
@@ -57,8 +61,13 @@ class MissingApiKeyError extends Error {
 	}
 }
 
+/** A reply that failed or broke off after the request itself went through. */
+class ReplyError extends Error {}
+
 export function isOpenAIError(err: unknown): boolean {
-	return err instanceof OpenAIChatError || err instanceof MissingApiKeyError;
+	return (
+		isSdkError(err, 'OpenAIError') || err instanceof MissingApiKeyError || err instanceof ReplyError
+	);
 }
 
 function apiKey(): string {
@@ -67,81 +76,15 @@ function apiKey(): string {
 	return found.key;
 }
 
-/** Files and cached prompts belong to the key's project. A hash, so the key itself isn't stored. */
-function accountOf(key: string): string {
-	return createHash('sha256').update(key).digest('hex').slice(0, 16);
-}
-
-function retryable(status: number, code: string | null): boolean {
-	if (status === 429) return code !== 'insufficient_quota';
-	return status === 408 || status === 409 || status >= 500;
-}
-
-/** OpenAI says how long to wait in `retry-after-ms`, or `retry-after` in seconds. */
-function retryDelay(attempt: number, res?: Response): number {
-	const ms = Number(res?.headers.get('retry-after-ms'));
-	if (ms > 0) return Math.min(ms, 30_000);
-	const seconds = Number(res?.headers.get('retry-after'));
-	if (seconds > 0) return Math.min(seconds, 30) * 1000;
-	return 500 * 2 ** attempt + Math.random() * 250;
-}
-
-async function failure(res: Response): Promise<OpenAIChatError> {
-	let error: { message?: unknown; code?: unknown } | undefined;
-	try {
-		error = ((await res.json()) as { error?: typeof error }).error;
-	} catch {
-		// not JSON
+/** OPENAI_BASE_URL points it at a proxy or a compatible server, as for pictures (openai.ts). */
+async function getClient(): Promise<OpenAI> {
+	const key = apiKey();
+	const baseURL = openaiBaseUrl();
+	const { OpenAI: Client } = await loadSdk();
+	if (!cached || cached.key !== key || cached.baseURL !== baseURL) {
+		cached = { key, baseURL, client: new Client({ apiKey: key, baseURL }) };
 	}
-	const message = typeof error?.message === 'string' && error.message.trim();
-	const code = typeof error?.code === 'string' ? error.code : null;
-	return new OpenAIChatError(message || res.statusText || 'no details', res.status, code);
-}
-
-/** One request to the API, retried when that's worth it. Throws an OpenAIChatError unless it's ok. */
-async function call(
-	path: string,
-	options: {
-		method?: 'GET' | 'POST' | 'DELETE';
-		json?: unknown;
-		form?: FormData;
-		signal?: AbortSignal;
-		timeoutMs?: number;
-	} = {}
-): Promise<Response> {
-	const headers: Record<string, string> = { authorization: `Bearer ${apiKey()}` };
-	if (options.json !== undefined) headers['content-type'] = 'application/json';
-	const body = options.form ?? (options.json !== undefined ? JSON.stringify(options.json) : null);
-	for (let attempt = 0; ; attempt++) {
-		const signals = [options.signal, options.timeoutMs && AbortSignal.timeout(options.timeoutMs)];
-		const signal = AbortSignal.any(signals.filter((s): s is AbortSignal => !!s));
-		let res: Response;
-		try {
-			res = await fetch(`${openaiBaseUrl()}${path}`, {
-				method: options.method ?? 'GET',
-				headers,
-				body,
-				signal
-			});
-		} catch (err) {
-			const e = err as { name?: string; cause?: { code?: string; message?: string } };
-			if (options.signal?.aborted) throw err;
-			if (e.name === 'TimeoutError') throw new OpenAIChatError("OpenAI didn't answer in time.");
-			if (attempt < RETRIES) {
-				await sleep(retryDelay(attempt), undefined, { signal: options.signal });
-				continue;
-			}
-			const why = e.cause?.code ?? e.cause?.message ?? (err as Error).message;
-			throw new OpenAIChatError(`Couldn't reach OpenAI (${why}).`);
-		}
-		if (res.ok) return res;
-		const error = await failure(res);
-		if (attempt < RETRIES && retryable(res.status, error.code)) {
-			await sleep(retryDelay(attempt, res), undefined, { signal: options.signal });
-			continue;
-		}
-		throw error;
-	}
+	return cached.client;
 }
 
 // --- turning the transcript into input items ---
@@ -152,9 +95,9 @@ type Block = { type?: unknown } & Record<string, unknown>;
 const OUTPUT_TYPES = new Set(['message', 'reasoning', 'function_call']);
 
 /** A picture, PDF or text block of btw's (Anthropic's format) as an input content part. */
-function inputPart(block: Block): Record<string, unknown> | null {
-	const source = block.source as Record<string, unknown> | undefined;
-	if (block.type === 'text') return { type: 'input_text', text: block.text };
+function inputPart(block: Block): InputPart | null {
+	const source = block.source as Record<string, string> | undefined;
+	if (block.type === 'text') return { type: 'input_text', text: String(block.text) };
 	if (block.type === 'image' && source) {
 		if (source.type === 'file')
 			return { type: 'input_image', file_id: source.file_id, detail: 'auto' };
@@ -169,19 +112,16 @@ function inputPart(block: Block): Record<string, unknown> | null {
 		if (source.type === 'file') return { type: 'input_file', file_id: source.file_id };
 		if (source.type === 'base64') {
 			const filename = typeof block.title === 'string' ? block.title : 'document.pdf';
-			return {
-				type: 'input_file',
-				filename,
-				file_data: `data:${source.media_type};base64,${source.data}`
-			};
+			const data = `data:${source.media_type};base64,${source.data}`;
+			return { type: 'input_file', filename, file_data: data };
 		}
 	}
 	return null;
 }
 
-function toolOutput(content: unknown): unknown {
+function toolOutput(content: unknown): string | OutputPart[] {
 	if (!Array.isArray(content)) return typeof content === 'string' ? content : '';
-	return (content as Block[]).flatMap((b) => inputPart(b) ?? []);
+	return (content as Block[]).flatMap((b) => (inputPart(b) as OutputPart | null) ?? []);
 }
 
 /**
@@ -190,8 +130,8 @@ function toolOutput(content: unknown): unknown {
  * they came, except reasoning without its encrypted content, which can't be read back without
  * `store`. A reply btw wrote itself (a notification continued in a chat) is plain text.
  */
-export function toResponsesInput(messages: Anthropic.MessageParam[]): unknown[] {
-	const input: unknown[] = [];
+export function toResponsesInput(messages: Anthropic.MessageParam[]): InputItem[] {
+	const input: InputItem[] = [];
 	for (const m of messages) {
 		const blocks: Block[] =
 			typeof m.content === 'string'
@@ -204,13 +144,13 @@ export function toResponsesInput(messages: Anthropic.MessageParam[]): unknown[] 
 				} else if (b.type === 'reasoning' && !b.encrypted_content) {
 					continue;
 				} else if (typeof b.type === 'string' && OUTPUT_TYPES.has(b.type)) {
-					input.push(b);
+					input.push(b as unknown as InputItem);
 				}
 			}
 			continue;
 		}
 		// Results go on their own; what's around them stays in order, as user messages.
-		let parts: unknown[] = [];
+		let parts: InputPart[] = [];
 		const flush = () => {
 			if (parts.length) input.push({ role: 'user', content: parts });
 			parts = [];
@@ -220,7 +160,7 @@ export function toResponsesInput(messages: Anthropic.MessageParam[]): unknown[] 
 				flush();
 				input.push({
 					type: 'function_call_output',
-					call_id: b.tool_use_id,
+					call_id: String(b.tool_use_id),
 					output: toolOutput(b.content)
 				});
 			} else {
@@ -234,7 +174,7 @@ export function toResponsesInput(messages: Anthropic.MessageParam[]): unknown[] 
 }
 
 /** A tool as btw saves it (Anthropic's format) as a function tool. Not strict: `cwd` is optional. */
-function functionTool(tool: Anthropic.Tool): Record<string, unknown> {
+function functionTool(tool: Anthropic.Tool): OpenAI.Responses.FunctionTool {
 	return {
 		type: 'function',
 		name: tool.name,
@@ -251,6 +191,11 @@ export function supportsReasoning(model: string): boolean {
 
 // --- a turn ---
 
+/** Files and cached prompts belong to the key's project. A hash, so the key itself isn't stored. */
+function accountOf(key: string): string {
+	return createHash('sha256').update(key).digest('hex').slice(0, 16);
+}
+
 /**
  * Accounts that can't have reasoning summaries (they need a verified organization), learned
  * from the first refusal. Their replies still reason; the chat just can't show it.
@@ -259,96 +204,48 @@ const noSummaries = new Set<string>();
 
 function refusesSummaries(err: unknown): boolean {
 	return (
-		err instanceof OpenAIChatError &&
-		err.status === 400 &&
-		/summar/i.test(err.message) &&
-		/verif/i.test(err.message)
+		isSdkError(err, 'BadRequestError') && /summar/i.test(err.message) && /verif/i.test(err.message)
 	);
-}
-
-function str(value: unknown): string {
-	return typeof value === 'string' ? value : '';
-}
-
-function num(value: unknown): number {
-	return typeof value === 'number' ? value : 0;
-}
-
-/** The events of a server-sent event stream, parsed from their `data:` lines. */
-async function* serverSentEvents(
-	body: ReadableStream<Uint8Array>
-): AsyncGenerator<Record<string, unknown>> {
-	const reader = body.getReader();
-	const decoder = new TextDecoder();
-	let buffer = '';
-	try {
-		for (;;) {
-			const { done, value } = await reader.read();
-			buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
-			const events = buffer.split(/\r?\n\r?\n/);
-			buffer = done ? '' : (events.pop() ?? '');
-			for (const event of events) {
-				const data = event
-					.split(/\r?\n/)
-					.filter((line) => line.startsWith('data:'))
-					.map((line) => line.slice(5).replace(/^ /, ''))
-					.join('\n');
-				if (data && data !== '[DONE]') yield JSON.parse(data) as Record<string, unknown>;
-			}
-			if (done) return;
-		}
-	} finally {
-		// The response is complete (or failed) before the stream ends: don't leave it open.
-		reader.cancel().catch(() => {});
-	}
 }
 
 /** Reads the stream, telling `onEvent` about each block as it grows, and returns the response. */
 async function readStream(
-	res: Response,
+	stream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>,
 	onEvent: (event: StreamEvent) => void
-): Promise<OpenAIResponse> {
-	if (!res.body) throw new OpenAIChatError('OpenAI answered without a reply.');
-	for await (const event of serverSentEvents(res.body)) {
-		const index = num(event.output_index);
+): Promise<OpenAI.Responses.Response> {
+	for await (const event of stream) {
 		switch (event.type) {
 			case 'response.output_item.added': {
-				const item = event.item as OutputItem;
+				const { item, output_index: index } = event;
 				if (item.type === 'message')
 					onEvent({ type: 'block_start', index, block: { type: 'text' } });
 				else if (item.type === 'reasoning') {
 					onEvent({ type: 'block_start', index, block: { type: 'thinking' } });
 				} else if (item.type === 'function_call') {
-					onEvent({ type: 'block_start', index, block: { type: 'tool', id: str(item.call_id) } });
+					onEvent({ type: 'block_start', index, block: { type: 'tool', id: item.call_id } });
 				}
 				break;
 			}
 			case 'response.output_text.delta':
 			case 'response.refusal.delta':
 			case 'response.reasoning_summary_text.delta':
-				onEvent({ type: 'delta', index, text: str(event.delta) });
+				onEvent({ type: 'delta', index: event.output_index, text: event.delta });
 				break;
 			case 'response.reasoning_summary_part.added':
 				// Parts are paragraphs, as content-blocks.ts joins them.
-				if (num(event.summary_index) > 0) onEvent({ type: 'delta', index, text: '\n\n' });
+				if (event.summary_index > 0) {
+					onEvent({ type: 'delta', index: event.output_index, text: '\n\n' });
+				}
 				break;
 			case 'response.completed':
 			case 'response.incomplete':
-				return event.response as OpenAIResponse;
-			case 'response.failed': {
-				const error = (event.response as { error?: { message?: string; code?: string } } | null)
-					?.error;
-				throw new OpenAIChatError(error?.message || 'The reply failed.', null, error?.code ?? null);
-			}
-			case 'error':
-				throw new OpenAIChatError(
-					str(event.message) || 'The reply failed.',
-					null,
-					str(event.code) || null
-				);
+				// Leaving the loop closes the stream.
+				return event.response;
+			case 'response.failed':
+				throw new ReplyError(event.response.error?.message || 'The reply failed.');
 		}
 	}
-	throw new OpenAIChatError('The reply ended before it was complete.');
+	throw new ReplyError('The reply ended before it was complete.');
 }
 
 /** One model call, streamed. See models.ts for what stays fixed between calls. */
@@ -361,36 +258,40 @@ export async function streamResponse(opts: {
 	cacheKey: string;
 	signal: AbortSignal;
 	onEvent: (event: StreamEvent) => void;
-}): Promise<OpenAIResponse> {
+}): Promise<OpenAI.Responses.Response> {
+	const client = await getClient();
 	const account = accountOf(apiKey());
-	const request = (summaries: boolean) => ({
-		model: opts.model,
-		instructions: opts.system,
-		input: toResponsesInput(opts.messages),
-		tools: opts.tools.map(functionTool),
-		store: false,
-		stream: true,
-		...(supportsReasoning(opts.model)
-			? {
-					reasoning: { effort: opts.effort, ...(summaries ? { summary: 'auto' } : {}) },
-					include: ['reasoning.encrypted_content']
-				}
-			: {}),
-		prompt_cache_key: opts.cacheKey
-	});
-	let res: Response;
+	const request = (summaries: boolean) =>
+		client.responses.create(
+			{
+				model: opts.model,
+				instructions: opts.system,
+				input: toResponsesInput(opts.messages),
+				tools: opts.tools.map(functionTool),
+				store: false,
+				stream: true,
+				...(supportsReasoning(opts.model)
+					? {
+							reasoning: {
+								effort: opts.effort,
+								...(summaries ? { summary: 'auto' as const } : {})
+							},
+							include: ['reasoning.encrypted_content' as const]
+						}
+					: {}),
+				prompt_cache_key: opts.cacheKey
+			},
+			{ signal: opts.signal }
+		);
+	let stream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>;
 	try {
-		res = await call('/responses', {
-			method: 'POST',
-			json: request(!noSummaries.has(account)),
-			signal: opts.signal
-		});
+		stream = await request(!noSummaries.has(account));
 	} catch (err) {
 		if (noSummaries.has(account) || !refusesSummaries(err)) throw err;
 		noSummaries.add(account);
-		res = await call('/responses', { method: 'POST', json: request(false), signal: opts.signal });
+		stream = await request(false);
 	}
-	return readStream(res, opts.onEvent);
+	return readStream(stream, opts.onEvent);
 }
 
 /** One short exchange, not streamed, at low effort (see models.ts). */
@@ -400,28 +301,31 @@ export async function createResponse(opts: {
 	input: string;
 	maxTokens: number;
 	timeoutMs: number;
-}): Promise<OpenAIResponse> {
-	const res = await call('/responses', {
-		method: 'POST',
-		json: {
+}): Promise<OpenAI.Responses.Response> {
+	const client = await getClient();
+	return client.responses.create(
+		{
 			model: opts.model,
 			instructions: opts.system,
 			input: opts.input,
 			max_output_tokens: opts.maxTokens,
 			store: false,
-			...(supportsReasoning(opts.model) ? { reasoning: { effort: 'low' } } : {})
+			...(supportsReasoning(opts.model) ? { reasoning: { effort: 'low' as const } } : {})
 		},
-		timeoutMs: opts.timeoutMs
-	});
-	return (await res.json()) as OpenAIResponse;
+		{ timeout: opts.timeoutMs }
+	);
 }
 
 /** In Anthropic's words, as btw stores it: see ModelReply in models.ts. */
-export function stopReason(response: OpenAIResponse): string {
+export function stopReason(response: {
+	status?: string;
+	output?: readonly unknown[];
+	incomplete_details?: { reason?: string } | null;
+}): string {
 	if (response.status === 'incomplete') {
 		return response.incomplete_details?.reason === 'content_filter' ? 'refusal' : 'max_tokens';
 	}
-	const output = response.output ?? [];
+	const output = (response.output ?? []) as Block[];
 	if (output.some((item) => item.type === 'function_call')) return 'tool_use';
 	const refused = output.some(
 		(item) =>
@@ -433,14 +337,23 @@ export function stopReason(response: OpenAIResponse): string {
 }
 
 /** OpenAI counts cached tokens inside `input_tokens`; btw counts them apart, as Anthropic does. */
-export function summarizeUsage(usage: OpenAIUsage | null | undefined): Usage {
-	const cacheRead = num(usage?.input_tokens_details?.cached_tokens);
-	const cacheWrite = num(usage?.input_tokens_details?.cache_write_tokens);
+export function summarizeUsage(
+	usage:
+		| {
+				input_tokens?: number;
+				input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number } | null;
+				output_tokens?: number;
+		  }
+		| null
+		| undefined
+): Usage {
+	const cacheRead = usage?.input_tokens_details?.cached_tokens ?? 0;
+	const cacheWrite = usage?.input_tokens_details?.cache_write_tokens ?? 0;
 	return {
-		input: Math.max(0, num(usage?.input_tokens) - cacheRead - cacheWrite),
+		input: Math.max(0, (usage?.input_tokens ?? 0) - cacheRead - cacheWrite),
 		cacheRead,
 		cacheWrite,
-		output: num(usage?.output_tokens)
+		output: usage?.output_tokens ?? 0
 	};
 }
 
@@ -459,64 +372,82 @@ export const openaiFiles = {
 		return accountOf(apiKey());
 	},
 	async upload(data: Buffer, name: string, mime: string): Promise<string> {
-		const form = new FormData();
+		const client = await getClient();
+		const file = await (await loadSdk()).toFile(data, uploadName(name), { type: mime });
 		// Pictures are uploaded for vision, PDFs as the model's input.
-		form.append('purpose', mime.startsWith('image/') ? 'vision' : 'user_data');
-		form.append('file', new Blob([new Uint8Array(data)], { type: mime }), uploadName(name));
-		const res = await call('/files', { method: 'POST', form, timeoutMs: UPLOAD_TIMEOUT_MS });
-		return ((await res.json()) as { id: string }).id;
+		const purpose = mime.startsWith('image/') ? 'vision' : 'user_data';
+		return (await client.files.create({ file, purpose }, { timeout: UPLOAD_TIMEOUT_MS })).id;
 	},
 	/** False once the file was deleted; other failures throw. */
 	async exists(fileId: string): Promise<boolean> {
+		const client = await getClient();
 		try {
-			await call(`/files/${encodeURIComponent(fileId)}`, { timeoutMs: REQUEST_TIMEOUT_MS });
+			await client.files.retrieve(fileId, { timeout: REQUEST_TIMEOUT_MS });
 			return true;
 		} catch (err) {
-			if (err instanceof OpenAIChatError && err.status === 404) return false;
+			if (isSdkError(err, 'NotFoundError')) return false;
 			throw err;
 		}
 	},
 	/** Resolves when the file is gone, also when it already was. */
 	async remove(fileId: string): Promise<void> {
+		const client = await getClient();
 		try {
-			await call(`/files/${encodeURIComponent(fileId)}`, {
-				method: 'DELETE',
-				timeoutMs: REQUEST_TIMEOUT_MS
-			});
+			await client.files.delete(fileId, { timeout: REQUEST_TIMEOUT_MS });
 		} catch (err) {
-			if (!(err instanceof OpenAIChatError && err.status === 404)) throw err;
+			if (!isSdkError(err, 'NotFoundError')) throw err;
 		}
 	}
 };
 
 export async function countDocumentTokens(model: string, fileId: string): Promise<number> {
-	const res = await call('/responses/input_tokens', {
-		method: 'POST',
-		json: { model, input: [{ role: 'user', content: [{ type: 'input_file', file_id: fileId }] }] },
-		timeoutMs: REQUEST_TIMEOUT_MS
-	});
-	return num(((await res.json()) as { input_tokens?: unknown }).input_tokens);
+	const client = await getClient();
+	const count = await client.responses.inputTokens.count(
+		{ model, input: [{ role: 'user', content: [{ type: 'input_file', file_id: fileId }] }] },
+		{ timeout: REQUEST_TIMEOUT_MS }
+	);
+	return count.input_tokens;
 }
 
 /** Checks that the model exists. OpenAI's models API doesn't say how large its window is. */
 export async function fetchContextWindow(model: string): Promise<number | null> {
-	await call(`/models/${encodeURIComponent(model)}`, { timeoutMs: REQUEST_TIMEOUT_MS });
+	const client = await getClient();
+	await client.models.retrieve(model, { timeout: REQUEST_TIMEOUT_MS });
 	return null;
 }
 
 export function describeApiError(err: unknown): string {
 	if (err instanceof MissingApiKeyError) return err.message;
-	if (!(err instanceof OpenAIChatError)) return err instanceof Error ? err.message : String(err);
-	if (err.status === 401) return `OpenAI didn't accept the API key. ${apiKeyHelp('openai')}`;
-	if (err.status === 429 && err.code !== 'insufficient_quota') {
+	if (isSdkError(err, 'AuthenticationError')) {
+		return `OpenAI didn't accept the API key. ${apiKeyHelp('openai')}`;
+	}
+	if (isSdkError(err, 'RateLimitError') && err.code !== 'insufficient_quota') {
 		return 'Rate limited by OpenAI. Try again shortly.';
 	}
-	if (err.status === 404) return `Model not found: ${err.message}`;
-	if (err.status === null) return `OpenAI: ${err.message}`;
-	return `OpenAI API error ${err.status}: ${err.message}`;
+	if (isSdkError(err, 'NotFoundError')) return `Model not found: ${shortApiError(err)}`;
+	if (isSdkError(err, 'APIConnectionTimeoutError')) return "OpenAI didn't answer in time.";
+	if (isSdkError(err, 'APIConnectionError')) {
+		// fetch says "fetch failed"; the reason (ECONNREFUSED, ENOTFOUND...) is in its cause.
+		const cause = err.cause as
+			{ code?: string; cause?: { code?: string; message?: string } } | undefined;
+		const why = cause?.code ?? cause?.cause?.code ?? cause?.cause?.message ?? err.message;
+		return `Couldn't reach OpenAI (${why}).`;
+	}
+	if (isSdkError(err, 'APIError') && err.status) {
+		return `OpenAI API error ${err.status}: ${shortApiError(err)}`;
+	}
+	return `OpenAI: ${shortApiError(err)}`;
 }
 
-/** OpenAI's own message, for notes shown to the model. */
+/** OpenAI's own message, without the status and JSON around it: for notes shown to the model. */
 export function shortApiError(err: unknown): string {
+	if (isSdkError(err, 'APIError')) {
+		const body = err.error as { message?: unknown } | undefined;
+		if (typeof body?.message === 'string') return body.message;
+	}
 	return err instanceof Error ? err.message : String(err);
+}
+
+export function isAbortError(err: unknown): boolean {
+	return isSdkError(err, 'APIUserAbortError');
 }

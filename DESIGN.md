@@ -124,8 +124,12 @@ provider brings a `FileStore` for pictures and PDFs (see [Attachments](#attachme
   OpenAI's output items (`reasoning`, `message`, `function_call`). The two use different type
   names, so `content-blocks.ts` reads any row without knowing its provider, for the chat, the
   runner (tool calls, restart recovery) and `pairToolResults`.
-- **OpenAI** (`openai-chat.ts`) uses the Responses API with plain `fetch` and its server-sent
-  events, like the Image API: the SDK would add to the bundled CLI. Requests are stateless
+- **OpenAI** (`openai-chat.ts`) uses the Responses API through OpenAI's SDK (`openai`), which
+  also retries overloads, rate limits and dropped connections, like Anthropic's. The SDK is
+  imported on first use rather than when core loads: the bundled CLI carries all of core, and
+  loading it up front made every `btw` command the agent runs about 50 ms slower (lazily, the
+  cost is Node parsing its code, around 10 ms). Its error classes are checked only once it's
+  loaded, since before that no error can be one of them. Requests are stateless
   (`store: false`), so every call sends the whole transcript, as with Anthropic, and nothing
   depends on OpenAI keeping a conversation. Reasoning comes back encrypted
   (`include: ["reasoning.encrypted_content"]`) and goes back with the reply's other items,
@@ -133,8 +137,7 @@ provider brings a `FileStore` for pictures and PDFs (see [Attachments](#attachme
   `input_text`, pictures as `input_image`, PDFs as `input_file`, command results as
   `function_call_output` (pictures from `btw view` included). `run_command` is sent as a function
   tool built from the saved Anthropic definition, not strict, since `cwd` and the timeout are
-  optional. Retries (twice, on overloads, rate limits and dropped connections) happen before the
-  stream starts.
+  optional.
 - **Reasoning** on OpenAI is `reasoning.effort`, with the same five levels, and
   `summary: "auto"`, which the chat shows as thinking. An organization that must be verified
   before it gets summaries refuses them; btw then asks without them for the rest of the

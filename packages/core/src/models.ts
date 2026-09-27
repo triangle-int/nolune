@@ -159,5 +159,5 @@ export function shortApiError(err: unknown): string {
 }
 
 export function isAbortError(err: unknown): boolean {
-	return anthropic.isAbortError(err) || (err instanceof Error && err.name === 'AbortError');
+	return anthropic.isAbortError(err) || openai.isAbortError(err);
 }
