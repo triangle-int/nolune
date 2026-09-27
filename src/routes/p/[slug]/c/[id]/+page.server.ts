@@ -5,6 +5,7 @@ import {
 	deleteConversation,
 	getConversation,
 	getDefaultPreset,
+	heldFileProviders,
 	listPresets,
 	renameConversation,
 	stopConversation,
@@ -26,6 +27,8 @@ export const load: PageServerLoad = ({ locals, params }) => {
 			provider: conversation.provider,
 			effort: conversation.effort,
 			contextWindow: conversation.contextWindow,
+			/** Providers holding pictures and PDFs of this chat that another can't open. */
+			heldBy: heldFileProviders(conversation.id),
 			hidden: conversation.hidden,
 			cacheTtl: conversation.cacheTtl,
 			/** A subagent's own chat: who started it, where. */

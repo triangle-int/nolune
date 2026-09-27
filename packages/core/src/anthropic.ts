@@ -6,6 +6,7 @@ import {
 	heldElsewhereNote,
 	portableReply,
 	storedAs,
+	unresolved,
 	type Block,
 	type ImageBlock,
 	type Message,
@@ -155,6 +156,7 @@ function resultPart(block: ResultBlock, provider: Provider): ResultPart | null {
 
 function fileBlock(block: ImageBlock | PdfBlock): Anthropic.ContentBlockParam {
 	const { source } = block;
+	if (source.type === 'media') unresolved(block);
 	if (block.type === 'image') {
 		return {
 			type: 'image',

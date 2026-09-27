@@ -58,6 +58,8 @@
 			provider: ChatModel['provider'];
 			effort: ChatModel['effort'];
 			contextWindow: number | null;
+			/** Providers holding pictures and PDFs of this chat that another can't open. */
+			heldBy: ChatModel['provider'][];
 			/** A background run nobody has continued yet. */
 			hidden: boolean;
 			cacheTtl: '5m' | '1h';
@@ -874,9 +876,9 @@
 							? ` (a prompt cache miss of about ${formatTokens(contextUsed)} tokens)`
 							: ''}.
 					</span>
-					{#if switchingTo && switchingTo.provider !== model.provider && model.provider !== 'claude-plan'}
+					{#if switchingTo && conversation.heldBy.some((p) => p !== switchingTo.provider)}
 						<span>
-							Pictures and PDFs already in this chat don't carry over to another provider: the new
+							Some pictures and PDFs in this chat don't carry over to another provider: the new
 							model gets where their files are, and can look at them again.
 						</span>
 					{/if}

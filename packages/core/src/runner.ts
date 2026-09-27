@@ -58,6 +58,7 @@ import { readSoul } from './soul.ts';
 import { createViewDir, imageUse, readViewedImages, type ImageUse } from './images.ts';
 import { copyReplyMedia, listMedia, mediaByMessage, type PreparedMedia } from './media.ts';
 import { profileDir } from './paths.ts';
+import { resolveFiles } from './provider-files.ts';
 import { getProfile, noticeProfileChanges } from './profiles.ts';
 import {
 	RUN_COMMAND_TOOL,
@@ -785,7 +786,8 @@ async function planTurn(
 	}
 	const cwd = profileDir(slug);
 	mkdirSync(cwd, { recursive: true });
-	const images = imageUse(rows.map(readRow));
+	// Claude Code gets pictures and PDFs inline, so their bytes count too.
+	const images = imageUse(rows.map(readRow), true);
 	let next = planInput(conv, rows);
 	for (let retried = false; ; retried = true) {
 		const { sessionId, resume, sentSeq, input } = next;
@@ -799,6 +801,8 @@ async function planTurn(
 				system: conv.systemPrompt,
 				tools: toolsFor(conv),
 				input,
+				resolve: async (blocks) =>
+					(await resolveFiles([{ role: 'user', blocks }], conv.provider))[0].blocks,
 				signal: abort.signal,
 				onStarted: () => setProviderSession(conversationId, { id: sessionId, sentSeq }),
 				onEvent: (event) => onStreamEvent(conversationId, event),
@@ -877,7 +881,8 @@ async function loop(conversationId: string): Promise<void> {
 					tools: toolsFor(conv),
 					cacheTtl: conv.cacheTtl,
 					cacheKey: conv.id,
-					messages,
+					// Pictures and PDFs kept by reference, as this provider gets them.
+					messages: await resolveFiles(messages, conv.provider),
 					signal: abort.signal,
 					onEvent: (event) => onStreamEvent(conversationId, event)
 				});

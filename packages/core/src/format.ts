@@ -21,6 +21,12 @@ export type FileProvider = 'anthropic' | 'openai';
 
 /** Where a picture's or PDF's bytes are. */
 export type Source =
+	/**
+	 * Kept by btw, in its media store (`media/<sha256>`). Each provider gets its own copy when a
+	 * request is made (resolveFiles in provider-files.ts): an upload to its Files API, or inline.
+	 * `bytes` counts against the conversation's inline limit where they go inline.
+	 */
+	| { type: 'media'; sha256: string; mime: string; bytes: number }
 	/** In the message itself, as base64: every provider takes it. */
 	| { type: 'inline'; mime: string; data: string }
 	/**
@@ -310,6 +316,14 @@ export function heldElsewhereNote(block: ImageBlock | PdfBlock): TextBlock {
 		type: 'text',
 		text: `[${what} not shown: it went to the model this chat used before, and this model can't open that copy. The line before this says where its file is${block.type === 'image' ? '; `btw view` shows it again' : ''}.]`
 	};
+}
+
+/**
+ * For encoders given a picture or PDF by reference: resolveFiles gives each provider its copy
+ * before a request is built.
+ */
+export function unresolved(block: ImageBlock | PdfBlock): never {
+	throw new Error(`A ${block.type} kept by reference reached a request without its copy.`);
 }
 
 /** A tool result's text, with a placeholder for each picture or PDF. */

@@ -19,6 +19,7 @@ import {
 	readMessage,
 	resultText,
 	type Block,
+	type FileProvider,
 	type Message,
 	type ToolCallBlock,
 	type ToolResultBlock
@@ -596,6 +597,27 @@ export function appendRow(
 /** A row in btw's format (format.ts), whichever way it was stored. */
 export function readRow(row: MessageRow): Message {
 	return readMessage(row);
+}
+
+/**
+ * The providers holding pictures and PDFs of the conversation that no other provider can open:
+ * those sent before btw kept its own copies, as a Files API id. Newer ones go to any provider.
+ */
+export function heldFileProviders(conversationId: string): FileProvider[] {
+	const held = new Set<FileProvider>();
+	const add = (b: Block) => {
+		if ((b.type === 'image' || b.type === 'pdf') && b.source.type === 'uploaded') {
+			if (b.source.provider) held.add(b.source.provider);
+		}
+	};
+	for (const row of committedRows(conversationId)) {
+		if (row.role !== 'user') continue;
+		for (const b of readRow(row).blocks) {
+			add(b);
+			if (b.type === 'tool_result' && Array.isArray(b.content)) b.content.forEach(add);
+		}
+	}
+	return [...held];
 }
 
 /** The tool calls of a reply row. */

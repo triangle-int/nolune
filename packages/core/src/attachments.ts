@@ -6,7 +6,13 @@ import { constants as zlibConstants, inflateSync } from 'node:zlib';
 import { and, eq, inArray, lt } from 'drizzle-orm';
 import type { Conversation, MessageRow } from './conversations.ts';
 import { getDb } from './db/index.ts';
-import { readMessage, type ImageBlock, type PdfBlock, type TextBlock } from './format.ts';
+import {
+	readMessage,
+	type ImageBlock,
+	type PdfBlock,
+	type Source,
+	type TextBlock
+} from './format.ts';
 import { upload } from './db/schema.ts';
 import {
 	MAX_CONVERSATION_IMAGE_BYTES,
@@ -23,6 +29,7 @@ import {
 	describeStored,
 	newMediaId,
 	store,
+	storeBytes,
 	storedType,
 	type PreparedMedia
 } from './media.ts';
@@ -206,10 +213,19 @@ export function parseAttachments(json: string | null): MessageAttachment[] {
 
 type AttachmentBlock = TextBlock | ImageBlock | PdfBlock;
 
+/** Keeps the bytes the model gets in the media store, for requests to send by reference. */
+function kept(data: Buffer, mime: string): Extract<Source, { type: 'media' }> {
+	const { sha256, bytes } = storeBytes(data);
+	return { type: 'media', sha256, mime, bytes };
+}
+
 /**
- * A picture as the provider's content block, counted in `used`: uploaded through its Files API,
- * or inline as base64 when that fails (or the provider has none, as on the Claude plan) and the
- * conversation still has room for it.
+ * A picture for the model, counted in `used`. It's kept in btw's media store and sent by
+ * reference, so each provider gets its own copy when a request is made (resolveFiles), also after
+ * the chat switches to another. With a Files API it's uploaded now, so a problem shows here rather
+ * than at every later request; if that fails, it goes inline as base64 when the conversation
+ * still has room. Without one (the Claude plan) every request carries it inline, so it counts
+ * against that room.
  */
 export async function imageBlock(
 	provider: Provider,
@@ -225,9 +241,9 @@ export async function imageBlock(
 	}
 	if (hasFileStore(provider)) {
 		try {
-			const fileId = await providerFileId(provider, data, name, mediaType);
+			await providerFileId(provider, data, name, mediaType);
 			used.count++;
-			return { block: { type: 'image', source: { type: 'uploaded', provider, fileId } } };
+			return { block: { type: 'image', source: kept(data, mediaType) } };
 		} catch (err) {
 			const bytes = base64Length(data.length);
 			if (used.bytes + bytes > MAX_CONVERSATION_IMAGE_BYTES) {
@@ -242,6 +258,8 @@ export async function imageBlock(
 	}
 	used.bytes += bytes;
 	used.count++;
+	if (!hasFileStore(provider)) return { block: { type: 'image', source: kept(data, mediaType) } };
+	// Its upload failed.
 	return {
 		block: {
 			type: 'image',
@@ -304,8 +322,9 @@ export function pdfPageCount(data: Buffer): number | null {
 }
 
 /**
- * A PDF inline, for chats on the Claude plan, which have no Files API: estimated from its pages,
- * and counted in the conversation's inline bytes, which every request carries.
+ * A PDF for chats on the Claude plan, which have no Files API: estimated from its pages, and
+ * counted in the conversation's inline bytes, which every request carries. Kept by reference,
+ * like pictures (imageBlock).
  */
 function inlinePdfBlock(
 	conv: Conversation,
@@ -334,14 +353,7 @@ function inlinePdfBlock(
 		return { problem: "it's too big to send along with everything else in this conversation" };
 	}
 	used.bytes += bytes;
-	return {
-		block: {
-			type: 'pdf',
-			source: { type: 'inline', mime: 'application/pdf', data: data.toString('base64') },
-			name
-		},
-		tokens
-	};
+	return { block: { type: 'pdf', source: kept(data, 'application/pdf'), name }, tokens };
 }
 
 async function pdfBlock(
@@ -353,9 +365,10 @@ async function pdfBlock(
 ): Promise<{ block: PdfBlock; tokens: number } | { problem: string }> {
 	const { provider } = conv;
 	if (!hasFileStore(provider)) return inlinePdfBlock(conv, path, name, room, used);
+	const data = readFileSync(path);
 	let fileId: string;
 	try {
-		fileId = await providerFileId(provider, readFileSync(path), name, 'application/pdf');
+		fileId = await providerFileId(provider, data, name, 'application/pdf');
 	} catch (err) {
 		return { problem: `it couldn't be uploaded (${shortApiError(err)})` };
 	}
@@ -370,10 +383,7 @@ async function pdfBlock(
 			problem: `it's about ${tokens.toLocaleString('en-US')} tokens, more than this conversation has room for (${Math.max(0, room).toLocaleString('en-US')})`
 		};
 	}
-	return {
-		block: { type: 'pdf', source: { type: 'uploaded', provider, fileId }, name },
-		tokens
-	};
+	return { block: { type: 'pdf', source: kept(data, 'application/pdf'), name }, tokens };
 }
 
 function attachmentLabel(senderName: string, attachment: MessageAttachment): string {
@@ -405,7 +415,7 @@ export async function prepareMessage(input: {
 }): Promise<PreparedMessage> {
 	const { conv, senderName } = input;
 	const dir = attachmentsDir(input.profileSlug);
-	const images = imageUse(input.earlier.map(readMessage));
+	const images = imageUse(input.earlier.map(readMessage), !hasFileStore(conv.provider));
 	let documentTokens = input.earlier
 		.flatMap((row) => parseAttachments(row.attachments))
 		.reduce((sum, a) => sum + (a.sentAs === 'document' ? (a.tokens ?? 0) : 0), 0);

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import { createRequire } from 'node:module';
@@ -263,6 +264,12 @@ function planChat() {
 	return { user, chat };
 }
 
+/** A picture or PDF kept in btw's media store, as a message refers to it. */
+function kept(data: Buffer, mime: string) {
+	const sha256 = createHash('sha256').update(data).digest('hex');
+	return { type: 'media', sha256, mime, bytes: data.length };
+}
+
 function rowsOf(conversationId: string) {
 	return committedRows(conversationId).map((row) => ({
 		kind: row.kind,
@@ -520,12 +527,13 @@ describe.skipIf(!claude)('chats on the Claude plan', { timeout: 60_000 }, () => 
 			type: 'image',
 			source: { type: 'base64', media_type: 'image/png', data: dot }
 		});
+		// Kept by reference: another provider gets its own copy if the chat switches.
 		expect(rowsOf(chat.id)[2].content).toEqual([
 			expect.objectContaining({
 				content: [
 					{ type: 'text', text: 'Viewing dot.png\n[exit code 0]' },
 					{ type: 'text', text: expect.stringContaining('Image: ') },
-					{ type: 'image', source: { type: 'inline', mime: 'image/png', data: dot } }
+					{ type: 'image', source: kept(Buffer.from(dot, 'base64'), 'image/png') }
 				]
 			})
 		]);
@@ -641,13 +649,9 @@ describe('attachments in chats on the Claude plan', () => {
 
 		expect(prepared.content).toEqual([
 			{ type: 'text', text: expect.stringContaining('Anna attached dot.png') },
-			{ type: 'image', source: { type: 'inline', mime: 'image/png', data: dot } },
+			{ type: 'image', source: kept(Buffer.from(dot, 'base64'), 'image/png') },
 			{ type: 'text', text: expect.stringContaining('Anna attached form.pdf') },
-			{
-				type: 'pdf',
-				source: { type: 'inline', mime: 'application/pdf', data: form.toString('base64') },
-				name: 'form.pdf'
-			},
+			{ type: 'pdf', source: kept(form, 'application/pdf'), name: 'form.pdf' },
 			{
 				type: 'text',
 				text: expect.stringContaining("couldn't tell how many pages it has")

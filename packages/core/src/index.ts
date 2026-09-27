@@ -79,6 +79,7 @@ export {
 	getConversation,
 	isSubagentConversation,
 	getConversationForUser,
+	heldFileProviders,
 	listConversations,
 	ModelSwitchError,
 	setEffort,

@@ -14,7 +14,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | Profiles           | Any user can create a profile. Any member can add or remove members, rename the profile, or delete it. Deleting moves the folder to `~/.btw-agent/trash/` instead of erasing it.                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Conversations      | Shared by every member of the profile. Messages go through a queue, and a message sent while the agent is working is fed into its next step (steering). Anyone can press Stop.                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Sender identity    | Every human message is sent to the model as `Name: text`. Attached files come first, each as a line saying who attached it and where it was saved, followed by the picture or PDF itself when the model gets one. Display names are unique across the gateway.                                                                                                                                                                                                                                                                                                                                       |
-| Attachments        | Any file, up to 100 MB and 10 per message, saved in the profile's `attachments` folder. The model gets pictures and PDFs through the provider's Files API, never as base64 unless an upload fails, and every other file as its path.                                                                                                                                                                                                                                                                                                                                                                 |
+| Attachments        | Any file, up to 100 MB and 10 per message, saved in the profile's `attachments` folder. btw keeps a copy of each picture and PDF the model gets and sends it by reference: through the provider's Files API (base64 only if an upload fails), whichever provider the chat moves to. Every other file goes as its path.                                                                                                                                                                                                                                                                               |
 | Providers          | Anthropic and OpenAI (API keys), and the Claude plan: a Pro or Max plan signed in to Claude Code on this computer, which btw runs (see [The Claude plan](#the-claude-plan)). Keys and model presets are global and managed by the admin with the CLI or the `/admin` page (Models & keys). A preset has a name (default `<model> (<provider>)`), a provider, a model, and an optional context-window override. One preset is the default (the oldest until an admin picks another): new chats start with it, and automations without a preset use it. See [Model providers](#model-providers).       |
 | Preset switching   | Allowed at any time, from the model chip in a chat's composer (or `btw agent run <id> --preset` for a subagent). The next model call uses the new model, and another provider gets the history translated. See [Switching models](#switching-models).                                                                                                                                                                                                                                                                                                                                                |
 | Reasoning          | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once, so the chat asks first.                                                                                                                                                                                                                                                                                                                                                                                                 |
@@ -168,7 +168,9 @@ turns (see [The Claude plan](#the-claude-plan)).
 
 `format.ts` defines what a conversation holds, whichever provider runs it: blocks (`text`,
 `image`, `pdf`, `reasoning`, `tool_call`, `tool_result`) in messages. A picture's or PDF's source
-is `inline` (base64, which every provider takes) or `uploaded` to one provider's Files API. Each
+is `media` (kept by btw, which `resolveFiles` turns into each provider's copy before a request),
+`inline` (base64, which every provider takes) or `uploaded` to one provider's Files API (rows
+from before btw kept its own copies). Each
 provider's module turns messages into its request, leaving out what it can't take:
 `toAnthropicMessages` in `anthropic.ts` (Claude Code on a Claude plan gets the same blocks, from
 `toAnthropicBlocks`) and `toResponsesInput` in `openai-chat.ts`. Nothing else in btw knows a
@@ -245,10 +247,11 @@ automations and subagents on an API key preset.
 --claudeai`), which opens Anthropic's page in a browser and keeps what it gets. The admin page
   shows the same steps but can't sign in itself: relaying Claude's sign-in through btw's web page
   would be btw handling it.
-- **Pictures and PDFs** go inline as base64, since there's no Files API; Claude Code passes them to
-  the model as they are, and `btw view` pictures come back in `run_command`'s MCP result as images.
-  They count against the conversation's inline limit (20 MB, which keeps requests under the API's
-  32 MB). A PDF's tokens can't be counted without the API, so they're estimated at 4,000 a page
+- **Pictures and PDFs** go inline as base64, since there's no Files API: btw's copies are read
+  into the request (`resolveFiles`). Claude Code passes them to the model as they are, and
+  `btw view` pictures come back in `run_command`'s MCP result as images. They count against the
+  conversation's inline limit (20 MB, which keeps requests under the API's 32 MB); a chat that
+  moved to the plan with more than that sends the rest as notes, oldest first inline. A PDF's tokens can't be counted without the API, so they're estimated at 4,000 a page
   (Anthropic's 1,500 to 3,000 for a page's text, plus the page as a picture) from the page count in
   its page tree, read from the file (compressed object streams too), and checked against the same
   25% of the context window and the API's page limit. A PDF whose pages can't be counted
@@ -287,11 +290,12 @@ has the chat open gets the change as a live `model` event (also in the snapshot)
     to the model that wrote it, and items without their reasoning lose their ids) and a Claude
     plan's replies on the API (their thinking was signed for another account). Anthropic accepts
     tool calls without thinking in the middle of a turn, so a switch can happen there.
-  - Pictures and PDFs another provider holds (an `uploaded` source) become a note: this model can't
-    open that copy, and the line before it (the attachment's label, or `Image: <path>` in a command
-    result) says where the file is, so `btw view` shows it again. Inline ones (the Claude plan's)
-    go as they are. Uploading them again would make the request depend on an upload that can
-    fail, which would change the prefix from one call to the next.
+  - Pictures and PDFs go along: btw keeps them and each provider gets its own copy (see
+    [Attachments](#attachments)). Only those from before btw kept its own, stored as another
+    provider's `file_id` (an `uploaded` source), become a note: this model can't open that copy,
+    and the line before it (the attachment's label, or `Image: <path>` in a command result) says
+    where the file is, so `btw view` shows it again. The switch dialog mentions them when the chat
+    has any (`heldFileProviders`).
 - **The Claude plan.** Claude Code keeps its own copy of the chat, so a chat that comes back to the
   plan after another model answered starts a new session (a random id: the chat's own is taken)
   with the chat so far as a transcript, as a notification's chat does. Switching between plan
@@ -417,8 +421,8 @@ kind of file, up to 100 MB each (the same as pictures in replies) and 10 per mes
   its own name (`name (2).ext` when another file has it), gets a media row so the chat shows it (see [Pictures and files](#pictures-and-files)), and the message's content gets, per file, a line saying who
   attached it and where it was saved, then the file itself when the model can have it:
   - **pictures** go through `prepareImage` (converted, at most 2000 px, upright) and become an
-    `image` block with a `file_id`;
-  - **PDFs** become a `document` block with a `file_id`, after a free `count_tokens` call that
+    `image` block referring to those bytes, kept in the media store;
+  - **PDFs** become a `pdf` block referring to the file, after a free `count_tokens` call that
     checks the model can read it and says what it costs;
   - **other files**, text included, are only named, and the agent opens them with commands.
 - **Limits, because history is never edited.** A file the API refuses would fail every later
@@ -427,18 +431,28 @@ kind of file, up to 100 MB each (the same as pictures in replies) and 10 per mes
   well under the API's 600 and 100 pages). A PDF over the rest of that budget, or one
   `count_tokens` rejects, is sent as its path with the reason in its line, and the chat shows the
   same note under the file.
-- **Files API.** Uploaded once per content and account: `provider_file` maps provider, a hash of
-  the API key (files live in its workspace) and the content's SHA-256 to the `file_id`. Requests
-  stay small whatever the history holds, and a reference is part of the cached prefix like any
-  other block. A cached id is checked (one metadata request) before it's reused, and the file
-  uploaded again if it's gone, since a message referring to a missing file would fail every later
-  request. The hourly prune deletes files no message refers to any more, leaving those used in
-  the last hour and those in another key's workspace alone. The Files API isn't eligible for zero
-  data retention, and a conversation whose files are gone (another workspace's key, deleted in the
-  Console) can't recover, since its history can't be rewritten.
+- **By reference.** A message keeps a picture or PDF as a `media` source: the SHA-256 of the
+  bytes the model gets (a converted picture's own), which the media store keeps while a message
+  refers to it. Before each model call, `resolveFiles` (`provider-files.ts`) gives the provider its
+  copy: the Files API's `file_id`, or the bytes inline for the Claude plan. So a chat that
+  switches providers takes its pictures along, and the first call on the new one uploads them.
+  The same rows always give the same request. An upload that fails at that point fails the call
+  (Continue tries again), never falling back to base64, which would change the prefix later.
+- **Files API.** Uploaded once per content and account, and first when the file is attached, so
+  a problem shows then: `provider_file` maps provider, a hash of the API key (files live in its
+  workspace) and the content's SHA-256 to the `file_id`. Requests stay small whatever the history
+  holds, and a reference is part of the cached prefix like any other block. When attached, a
+  cached id is checked (one metadata request) and the file uploaded again if it's gone; later
+  requests take the cached copy as it is, since checking every picture would cost a request
+  apiece. The hourly prune deletes files no message refers to any more (by id, or by what it's a
+  copy of), leaving those used in the last hour and those in another key's workspace alone. With
+  another workspace's key, a chat's pictures are uploaded again, at the cost of one cache miss.
+  The Files API isn't eligible for zero data retention. Pictures and PDFs from before btw kept
+  its own copies are stored with the provider's `file_id` and can't move to another provider or
+  workspace.
 - **Other providers.** `message.attachments` is the provider-neutral record (saved path, type,
-  what the model got). `content` holds btw's blocks (see [btw's format](#btws-format)), with the
-  provider's own file ids, and each provider's module turns them into its request. A provider brings a `FileStore`
+  what the model got). `content` holds btw's blocks (see [btw's format](#btws-format)), and each
+  provider's module turns them into its request. A provider brings a `FileStore`
   (`provider-files.ts`); one without a files API would send pictures inline. OpenAI's is its
   Files API: pictures are uploaded for `vision` and PDFs as `user_data`, and a PDF's cost is
   counted with `POST /v1/responses/input_tokens`, which also fails for a PDF it can't read.

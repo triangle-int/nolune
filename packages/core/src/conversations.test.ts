@@ -10,6 +10,7 @@ import {
 	foundText,
 	getConversation,
 	getConversationForUser,
+	heldFileProviders,
 	insertQueued,
 	lastCommittedRow,
 	listConversations,
@@ -490,6 +491,34 @@ describe('switching models', () => {
 			},
 			{ role: 'assistant', content: 'Two files.' }
 		]);
+	});
+
+	it("knows which providers hold files another can't open", () => {
+		const { chat } = claudeChat();
+		expect(heldFileProviders(chat.id)).toEqual(['anthropic']);
+		// Kept by btw, a picture goes to any provider.
+		const { user, profile } = makeFamily('Max');
+		const newer = createConversation({
+			profile,
+			presetId: makePreset('Opus', 'claude-opus-5-5').id,
+			userId: user.id
+		});
+		insertQueued({
+			conversationId: newer.id,
+			senderId: user.id,
+			senderName: 'Anna',
+			text: 'Look',
+			attachments: {
+				content: [
+					{ type: 'image', source: { type: 'media', sha256: 'ab', mime: 'image/png', bytes: 2 } }
+				],
+				files: [],
+				media: [],
+				uploadIds: []
+			}
+		});
+		commitQueuedRows(newer.id);
+		expect(heldFileProviders(newer.id)).toEqual([]);
 	});
 
 	it('sends Claude what OpenAI wrote as text and calls', () => {

@@ -7,12 +7,15 @@ import { replyBlocks } from './format.ts';
 import {
 	appendRow,
 	committedRows,
+	commitQueuedRows,
 	createConversation,
 	getConversation,
+	insertQueued,
 	requestMessages,
 	setPreset,
 	toDisplay
 } from './conversations.ts';
+import { storeBytes } from './media.ts';
 import { describeApiError } from './models.ts';
 import {
 	countDocumentTokens,
@@ -459,6 +462,67 @@ describe('a chat on an OpenAI model', () => {
 			provider: 'openai',
 			model: 'gpt-6-astra'
 		});
+	});
+
+	it("gives a picture sent while on Claude to OpenAI's Files API after a switch", async () => {
+		const { user, profile } = makeFamily();
+		const chat = createConversation({ profile, presetId: makePreset().id, userId: user.id });
+		// As prepareMessage keeps an attached picture: in the media store, by reference.
+		const picture = Buffer.from('a picture of a cat');
+		const { sha256, bytes } = storeBytes(picture);
+		insertQueued({
+			conversationId: chat.id,
+			senderId: user.id,
+			senderName: 'Anna',
+			text: 'Look',
+			provider: 'anthropic',
+			attachments: {
+				content: [
+					{ type: 'text', text: '[Anna attached cat.jpg, saved at /cat.jpg]' },
+					{ type: 'image', source: { type: 'media', sha256, mime: 'image/jpeg', bytes } },
+					{ type: 'text', text: 'Anna: Look' }
+				],
+				files: [],
+				media: [],
+				uploadIds: []
+			}
+		});
+		commitQueuedRows(chat.id);
+		appendRow({
+			conversationId: chat.id,
+			role: 'assistant',
+			kind: 'assistant',
+			content: JSON.stringify([{ type: 'text', text: 'A cat.' }]),
+			provider: 'anthropic',
+			model: 'claude-sonnet-5'
+		});
+		setPreset(chat.id, makePreset('GPT', 'gpt-6-astra', 'openai').id);
+		answer = (req) => {
+			if (req.path === '/v1/files') return { json: { id: 'file-cat', object: 'file' } };
+			if (req.path === '/v1/responses' && req.json?.stream) return streamed([said('Orange.')]);
+			return { status: 404, json: {} };
+		};
+
+		const ended = loopEnd(chat.id);
+		await sendMessage(chat.id, user, 'What color?');
+		await ended;
+
+		const uploads = seen.filter((r) => r.path === '/v1/files');
+		expect(uploads).toHaveLength(1);
+		expect(uploads[0].body).toMatch(/name="purpose"\r\n\r\nvision/);
+		expect(uploads[0].body).toContain('a picture of a cat');
+		expect(turns()[0].json!.input).toEqual([
+			{
+				role: 'user',
+				content: [
+					{ type: 'input_text', text: '[Anna attached cat.jpg, saved at /cat.jpg]' },
+					{ type: 'input_image', file_id: 'file-cat', detail: 'auto' },
+					{ type: 'input_text', text: 'Anna: Look' }
+				]
+			},
+			{ role: 'assistant', content: 'A cat.' },
+			{ role: 'user', content: [{ type: 'input_text', text: 'Anna: What color?' }] }
+		]);
 	});
 
 	it('answers a call left without a result, after a crash or a restart', () => {

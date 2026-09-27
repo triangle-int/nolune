@@ -219,6 +219,8 @@ export interface PlanTurn {
 	tools: Anthropic.Tool[];
 	/** What the model hasn't seen yet, sent as one message. */
 	input: Block[];
+	/** Pictures and PDFs kept by reference, with their bytes: Claude Code gets them inline. */
+	resolve: (blocks: Block[]) => Promise<Block[]>;
 	signal: AbortSignal;
 	/** Claude Code took the input: from here on it's in the session, even if the turn fails. */
 	onStarted: () => void;
@@ -459,7 +461,7 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 		try {
 			const result = await run;
 			a?.ours.set(id, result);
-			return result;
+			return (await turn.resolve([result]))[0] as ToolResultBlock;
 		} finally {
 			inFlight.delete(run);
 			a?.running.delete(id);
@@ -485,8 +487,9 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 
 	let q: Query;
 	try {
+		const input = toAnthropicBlocks(await turn.resolve(turn.input), 'claude-plan');
 		q = sdk.query({
-			prompt: oneMessage(toAnthropicBlocks(turn.input, 'claude-plan')),
+			prompt: oneMessage(input),
 			options: {
 				...baseOptions(turn.cwd),
 				...modelOptions(turn.model, turn.effort),

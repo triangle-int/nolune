@@ -7,6 +7,7 @@ import {
 	heldElsewhere,
 	heldElsewhereNote,
 	portableReply,
+	unresolved,
 	type Block,
 	type Message,
 	type ToolResultBlock
@@ -110,6 +111,7 @@ function inputPart(block: Block): InputPart | null {
 		return { type: 'input_text', text: heldElsewhereNote(block).text };
 	}
 	const { source } = block;
+	if (source.type === 'media') unresolved(block);
 	if (block.type === 'image') {
 		if (source.type === 'uploaded') {
 			return { type: 'input_image', file_id: source.fileId, detail: 'auto' };
