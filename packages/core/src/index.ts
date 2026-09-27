@@ -233,6 +233,13 @@ export {
 	type MemoryFile
 } from './memory.ts';
 export { recallFor, searchMemory, type MemoryHit } from './memory-search.ts';
+export {
+	embeddingProblem,
+	embeddingSource,
+	embeddingStatus,
+	parseEmbeddingSetting,
+	type EmbeddingSource
+} from './memory-embeddings.ts';
 export { learnFrom, type MemoryChange } from './memory-learning.ts';
 export { MAX_SOUL_CHARS, SoulError, readSoul, readSoulFile, writeSoul } from './soul.ts';
 export {

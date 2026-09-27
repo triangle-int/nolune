@@ -50,6 +50,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
     memories/<topic>.md       long-term memory: one note per topic
     memories/core.md          the pinned note, copied into every new chat's prompt
     memories/.facts.json      when each fact in memory was first seen
+    memories/.embeddings.json   each fact's embedding, for search by meaning, and their model
     memories/.suggestions.json  each member's new-chat chips, and the memory they were made from
     skills/<name>/SKILL.md
     attachments/              files people attached to messages
@@ -678,8 +679,34 @@ one per topic (`family.md`, `people/anna.md`). There is no memory tool: like aut
   five languages, are left out. A word counts by how rare it is in memory (like BM25's IDF), and
   one in more than 40% of a memory of 10 facts or more doesn't count at all. A word only in the
   fact's note name or heading counts half, so "Anna" finds what `people/anna` says. Recall keeps
-  facts scoring at least 30% of the best one. Paraphrases with no word in common aren't found:
-  that needs embeddings (see [Not done yet](#not-done-yet)).
+  facts scoring at least 30% of the best one.
+- **Search by meaning** (`packages/core/src/memory-embeddings.ts`): words miss questions that
+  share none with the fact that answers them ("where's the other key for the car?") and ones in
+  another language than the notes. So search and recall also compare embeddings, from any
+  OpenAI-compatible embeddings API (the OpenAI SDK, loaded on first use). btw sets it up itself:
+  with an OpenAI key, OpenAI's `text-embedding-3-small`; else with an OpenRouter key, the same
+  model through OpenRouter; else none, and words do it all. `btw config set embeddings` picks
+  another model (`openai/…`, `openrouter/…`), turns it `off` (every fact goes to that provider to
+  be embedded, whatever model the chats run on), or points it at a server on this computer, like
+  Ollama, LM Studio or oMLX (`<url> <model> [key]`), for anyone who wants it local. Each fact is
+  embedded with its note and heading (`people/anna › Allergies: peanuts`) and kept in a hidden
+  `.embeddings.json` with the model's name, so only new or changed facts are embedded again,
+  and a new model starts over. The gateway embeds in the background: every profile's facts when
+  it starts, what the note-taker added, and whatever a search finds missing (a fact is found by
+  words until then); a `btw` command in a terminal never waits for that. A message waits only
+  for its own embedding, at most 3 seconds (10 for `btw memory search`), and anything going wrong
+  leaves words to do it alone, logged once in 10 minutes. Automation runs recall by words only,
+  since they start at once.
+- **What counts as a match by meaning:** models differ in how similar anything looks, so there is
+  no fixed cutoff. A fact counts when its similarity stands out from the rest of memory: its
+  distance from the median over the median absolute deviation (×1.4826), at least 4.5 for recall
+  and 3.5 for search, which the agent reads with judgement. Measured on 40 facts with
+  EmbeddingGemma through a plain server: what a question was about stood out by 5.0 to 10.0
+  (also two facts at once, which a mean and standard deviation hide from each other), messages
+  about none of them ("thanks!", "convert this PDF") by 3.2 at most. It needs at least 10 facts
+  with embeddings. The two lists, words and meaning, are merged by reciprocal rank fusion
+  (constant 10). Still missed: what only follows from a fact, like "what should we cook?" and "Anna
+  is vegetarian" (3.2).
 - **Learning from chats** (`packages/core/src/memory-learning.ts`): the agent saves what it learns
   when it thinks of it, and facts said in passing got lost. So once a chat's loop has ended and
   nothing ran in it for 2 minutes (the gateway's scheduler starts the timers, and after a restart
@@ -1358,8 +1385,6 @@ Published to npm as `btw-agent` (not yet). `npm install -g btw-agent` gives the 
   takes them) rather than after the turn.
 - Other image providers (OpenRouter, fal, Higgsfield): a module each next to `openai.ts` and an entry
   in `PROVIDERS`, plus one in `API_KEYS` (config.ts) and a check request in `api-keys.ts`.
-- Memory search by meaning: embeddings of each fact when an OpenAI key is set (or a local model),
-  next to the word search, for questions that share no word with the fact that answers them.
 - Smart approval mode.
 - Refusal fallbacks (`fallbacks: "default"`) for models that support them. Refusals are shown in the UI today.
 - Push notifications (Web Push) for the bell. Today it only updates while a page is open.

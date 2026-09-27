@@ -1,0 +1,305 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import type OpenAI from 'openai';
+import { configuredApiKey, readConfig, type Config } from './config.ts';
+import { openaiBaseUrl } from './openai.ts';
+import { openrouterBaseUrl } from './openrouter.ts';
+import { profileMemoryDir } from './paths.ts';
+
+/*
+ * Embeddings of memory facts, for finding them by meaning (memory-search.ts), from any
+ * OpenAI-compatible embeddings API: by default OpenAI's or OpenRouter's, with the key btw already
+ * has, or a server on this computer (Ollama, LM Studio, oMLX) for anyone who wants them local.
+ * Each fact's vector is kept in a hidden file next to the notes and made again only when the fact
+ * or the model changes. Facts are embedded in the background; a message waits only for its own.
+ */
+
+export const DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-small';
+/** Hidden, like the fact dates: `btw memory` refuses names starting with a dot. */
+const FILE = '.embeddings.json';
+/** Facts per request: small enough for a server on a laptop. */
+const BATCH = 64;
+const BATCH_TIMEOUT_MS = 60_000;
+
+export type EmbeddingSetting = NonNullable<Config['embeddings']>;
+
+/** Where embeddings come from. */
+export interface EmbeddingSource {
+	/** An OpenAI-compatible API, like https://api.openai.com/v1. */
+	url: string;
+	model: string;
+	key: string | null;
+	/** For people: `openai/text-embedding-3-small`, or the model and the address. */
+	name: string;
+}
+
+function setting(): Config['embeddings'] {
+	try {
+		return readConfig().embeddings;
+	} catch {
+		return undefined;
+	}
+}
+
+function fromProvider(provider: 'openai' | 'openrouter', model: string): EmbeddingSource | null {
+	const found = configuredApiKey(provider);
+	if (!found) return null;
+	const url = provider === 'openai' ? openaiBaseUrl() : openrouterBaseUrl();
+	return { url, model, key: found.key, name: `${provider}/${model}` };
+}
+
+/**
+ * The configured source, or btw's own choice when none is: OpenAI's model with OpenAI's key, else
+ * the same model through OpenRouter. Null when it's off, or its key is missing.
+ */
+export function embeddingSource(configured = setting()): EmbeddingSource | null {
+	if (configured === 'off') return null;
+	if (configured && 'url' in configured) {
+		const url = configured.url.replace(/\/+$/, '');
+		const name = `${configured.model} at ${url}`;
+		return { url, model: configured.model, key: configured.key ?? null, name };
+	}
+	if (configured) return fromProvider(configured.provider, configured.model);
+	return (
+		fromProvider('openai', DEFAULT_EMBEDDING_MODEL) ??
+		fromProvider('openrouter', `openai/${DEFAULT_EMBEDDING_MODEL}`)
+	);
+}
+
+/** In words, for `btw config`: what memory search uses for meaning, or why nothing. */
+export function embeddingStatus(): string {
+	const configured = setting();
+	if (configured === 'off') return 'off (btw config set embeddings auto turns it on)';
+	const source = embeddingSource(configured);
+	if (source) return source.name;
+	if (configured && 'provider' in configured) {
+		return `${configured.provider}/${configured.model}, but there is no ${configured.provider} key`;
+	}
+	return 'off: no OpenAI or OpenRouter key (or set a server: btw config set embeddings <url> <model>)';
+}
+
+/**
+ * `btw config set embeddings`: `auto`, `off`, `<openai|openrouter>/<model>`, or the address of an
+ * OpenAI-compatible server with its model (and key, when it needs one). Unset means auto.
+ */
+export function parseEmbeddingSetting(words: string[]): EmbeddingSetting | undefined {
+	const [first = '', model, key] = words;
+	if (first === 'auto') return undefined;
+	if (first === 'off') return 'off';
+	if (/^https?:\/\//i.test(first)) {
+		if (!model)
+			throw new Error('give the model too: btw config set embeddings <url> <model> [key]');
+		return { url: first.replace(/\/+$/, ''), model, ...(key ? { key } : {}) };
+	}
+	const match = first.match(/^(openai|openrouter)\/(.+)$/);
+	if (!match) {
+		throw new Error(
+			'embeddings are auto, off, openai/<model>, openrouter/<model>, or <url> <model> [key] for a server like Ollama or LM Studio'
+		);
+	}
+	return { provider: match[1] as 'openai' | 'openrouter', model: match[2] };
+}
+
+// --- Asking for them ---
+
+type Sdk = typeof import('openai');
+/** Loaded on first use, like the chats' (openai-chat.ts): most `btw` commands never need it. */
+let sdk: Sdk | undefined;
+let cachedClient: { url: string; key: string; client: OpenAI } | undefined;
+
+async function client(source: EmbeddingSource): Promise<OpenAI> {
+	// A local server takes no key, but the SDK wants one.
+	const key = source.key ?? 'none';
+	if (!cachedClient || cachedClient.url !== source.url || cachedClient.key !== key) {
+		const { OpenAI: Client } = (sdk ??= await import('openai'));
+		const client = new Client({ apiKey: key, baseURL: source.url });
+		cachedClient = { url: source.url, key, client };
+	}
+	return cachedClient.client;
+}
+
+/** Unit vectors for `texts`, in order. */
+export async function embed(
+	source: EmbeddingSource,
+	texts: string[],
+	timeoutMs: number,
+	retries = 1
+): Promise<Float32Array[]> {
+	const api = await client(source);
+	const response = await api.embeddings.create(
+		{ model: source.model, input: texts, encoding_format: 'float' },
+		{ timeout: timeoutMs, maxRetries: retries }
+	);
+	const data = [...(response.data ?? [])].sort((a, b) => a.index - b.index);
+	if (data.length !== texts.length) {
+		throw new Error(`${source.name} returned ${data.length} embeddings for ${texts.length} texts`);
+	}
+	return data.map((item) => {
+		const vector = Float32Array.from(item.embedding as number[]);
+		let length = 0;
+		for (const x of vector) length += x * x;
+		length = Math.sqrt(length);
+		if (!vector.length || !length) throw new Error(`${source.name} returned an empty embedding`);
+		return vector.map((x) => x / length);
+	});
+}
+
+/** What's wrong with the configured source, asking it once; null when it works or there is none. */
+export async function embeddingProblem(): Promise<string | null> {
+	const source = embeddingSource();
+	if (!source) return null;
+	try {
+		await embed(source, ['test'], 20_000);
+		return null;
+	} catch (err) {
+		return describe(err);
+	}
+}
+
+/** Both are unit vectors. */
+export function similarity(a: Float32Array, b: Float32Array): number {
+	let sum = 0;
+	for (let i = 0; i < a.length && i < b.length; i++) sum += a[i] * b[i];
+	return sum;
+}
+
+// --- The vectors of a profile's facts ---
+
+interface Stored {
+	/** The source they came from: vectors of another model can't be compared. */
+	source: string;
+	vectors: Map<string, Float32Array>;
+}
+
+const sourceId = (source: EmbeddingSource) => `${source.url} ${source.model}`;
+const hash = (text: string) => createHash('sha256').update(text).digest('base64url').slice(0, 22);
+
+function file(slug: string): string {
+	return join(profileMemoryDir(slug), FILE);
+}
+
+/** What's saved, when it's from `source`; nothing when it can't be read. */
+function load(slug: string, source: EmbeddingSource): Stored {
+	const empty: Stored = { source: sourceId(source), vectors: new Map() };
+	try {
+		if (!existsSync(file(slug))) return empty;
+		const saved = JSON.parse(readFileSync(file(slug), 'utf8')) as {
+			version?: unknown;
+			source?: unknown;
+			vectors?: unknown;
+		};
+		if (saved.version !== 1 || saved.source !== empty.source || !Array.isArray(saved.vectors)) {
+			return empty;
+		}
+		for (const entry of saved.vectors as unknown[]) {
+			if (!Array.isArray(entry) || typeof entry[0] !== 'string' || typeof entry[1] !== 'string') {
+				continue;
+			}
+			const bytes = Buffer.from(entry[1], 'base64');
+			const vector = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+			empty.vectors.set(entry[0], Float32Array.from(vector));
+		}
+	} catch {
+		// Broken: made again.
+	}
+	return empty;
+}
+
+function save(slug: string, stored: Stored): void {
+	const dir = profileMemoryDir(slug);
+	const temp = join(dir, `.tmp-${randomUUID()}`);
+	try {
+		mkdirSync(dir, { recursive: true, mode: 0o700 });
+		const vectors = [...stored.vectors].map(([key, vector]) => [
+			key,
+			Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength).toString('base64')
+		]);
+		writeFileSync(temp, JSON.stringify({ version: 1, source: stored.source, vectors }), {
+			mode: 0o600
+		});
+		renameSync(temp, file(slug));
+	} catch (err) {
+		console.error(`[btw] ${slug} could not save memory embeddings:`, err);
+	} finally {
+		rmSync(temp, { force: true });
+	}
+}
+
+/** The saved vectors of `texts` that have one, and the texts that don't. */
+export function savedVectors(
+	slug: string,
+	source: EmbeddingSource,
+	texts: string[]
+): { vectors: Map<string, Float32Array>; missing: string[] } {
+	const stored = load(slug, source);
+	const vectors = new Map<string, Float32Array>();
+	const missing: string[] = [];
+	for (const text of texts) {
+		const vector = stored.vectors.get(hash(text));
+		if (vector) vectors.set(text, vector);
+		else missing.push(text);
+	}
+	return { vectors, missing };
+}
+
+const updates = new Map<string, { again: boolean; done: Promise<void> }>();
+
+/**
+ * Embeds the texts that have no vector yet and forgets the ones no longer in `texts`, which are
+ * all of the profile's facts. One at a time per profile; a call while one runs waits for it and
+ * then catches up.
+ */
+export function updateEmbeddings(slug: string, texts: () => string[]): Promise<void> {
+	const running = updates.get(slug);
+	if (running) {
+		running.again = true;
+		return running.done;
+	}
+	const state = { again: false, done: Promise.resolve() };
+	state.done = (async () => {
+		do {
+			state.again = false;
+			await update(slug, texts()).catch((err: unknown) => {
+				console.error(`[btw] ${slug} could not embed memory:`, describe(err));
+			});
+		} while (state.again);
+	})().finally(() => updates.delete(slug));
+	updates.set(slug, state);
+	return state.done;
+}
+
+async function update(slug: string, texts: string[]): Promise<void> {
+	const source = embeddingSource();
+	if (!source) return;
+	const stored = load(slug, source);
+	const wanted = new Map(texts.map((text) => [hash(text), text]));
+	const missing = [...wanted].filter(([key]) => !stored.vectors.has(key));
+	let changed = false;
+	for (const key of stored.vectors.keys()) {
+		if (wanted.has(key)) continue;
+		stored.vectors.delete(key);
+		changed = true;
+	}
+	for (let i = 0; i < missing.length; i += BATCH) {
+		const batch = missing.slice(i, i + BATCH);
+		const vectors = await embed(
+			source,
+			batch.map(([, text]) => text),
+			BATCH_TIMEOUT_MS
+		);
+		batch.forEach(([key], j) => stored.vectors.set(key, vectors[j]));
+		changed = true;
+		// Saved after each batch: a big memory is usable before the last one is done.
+		save(slug, stored);
+	}
+	if (changed && !missing.length) save(slug, stored);
+	if (missing.length) {
+		console.log(`[btw] ${slug} embedded ${missing.length} memory facts with ${source.name}`);
+	}
+}
+
+/** An API error in one line, without the stack. */
+export function describe(err: unknown): string {
+	return err instanceof Error ? err.message : String(err);
+}

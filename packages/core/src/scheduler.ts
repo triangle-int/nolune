@@ -11,12 +11,12 @@ import {
 import { pruneUploads } from './attachments.ts';
 import { pruneMedia } from './media.ts';
 import { startLearning } from './memory-learning.ts';
-import { recallFor } from './memory-search.ts';
+import { recallByWords, startEmbeddingMemory } from './memory-search.ts';
 import { pruneProviderFiles } from './provider-files.ts';
 import { createNotification, pruneNotifications } from './notifications.ts';
 import { profileDir } from './paths.ts';
 import { getDefaultPreset, getPreset } from './presets.ts';
-import { getProfile, noticeProfileChanges } from './profiles.ts';
+import { getProfile, listProfiles, noticeProfileChanges } from './profiles.ts';
 import { commandEnv, runCommand, type RunCommandResult } from './run-command.ts';
 import { kick, onLoopEnd } from './runner.ts';
 import { processSubagents, startSubagentHost } from './subagent-host.ts';
@@ -56,7 +56,8 @@ const holder = globalThis as unknown as { __btwScheduler?: boolean };
  * Gateway only. Every few seconds: fires triggers that are due and starts queued runs (including
  * the ones `btw wake` and `btw trigger run` queue from other processes), starts the subagents
  * that `btw agent` asks for, and notices profiles that `btw profile` changed from another process.
- * Chats that went quiet get looked over for memory (memory-learning.ts).
+ * Chats that went quiet get looked over for memory (memory-learning.ts), and memory facts get
+ * their embeddings (memory-search.ts).
  */
 export function startScheduler(): void {
 	if (holder.__btwScheduler) return;
@@ -64,6 +65,7 @@ export function startScheduler(): void {
 	onLoopEnd(finishAgentRun);
 	startSubagentHost();
 	startLearning();
+	startEmbeddingMemory(listProfiles().map((p) => p.slug));
 	recoverRuns();
 	prune();
 	tick();
@@ -199,10 +201,13 @@ function startAgentRun(run: TriggerRun): void {
 	kick(conv.id);
 }
 
-/** What memory has on an automation's prompt, like on a person's message; never stops the run. */
+/**
+ * What memory has on an automation's prompt, like on a person's message but by words only: the
+ * run starts now. Never stops the run.
+ */
 function recall(slug: string, text: string, known: string): string | null {
 	try {
-		return recallFor(slug, text, { known });
+		return recallByWords(slug, text, { known });
 	} catch (err) {
 		console.error(`[btw] ${slug} could not look in memory for a background run:`, err);
 		return null;

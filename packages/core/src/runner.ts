@@ -411,7 +411,7 @@ async function queueMessage(
 		text: trimmed,
 		provider: conv.provider,
 		attachments,
-		recall: recall(conv, trimmed, sender.name)
+		recall: await recall(conv, trimmed, sender.name)
 	});
 	// The first message stands in as the title until the model has named the chat. A message
 	// with only files is named after them.
@@ -428,13 +428,13 @@ async function queueMessage(
  * already has. Null when nothing matches, and when memory can't be read: that must never stop a
  * message.
  */
-function recall(conv: Conversation, text: string, sender: string): string | null {
+async function recall(conv: Conversation, text: string, sender: string): Promise<string | null> {
 	const slug = profileSlug(conv.profileId);
 	if (!slug || !text) return null;
 	try {
 		const rows = [...committedRows(conv.id), ...queuedRows(conv.id)];
 		const known = [conv.systemPrompt, ...rows.map((row) => messageText(readRow(row).blocks))];
-		return recallFor(slug, text, { sender, known: known.join('\n') });
+		return await recallFor(slug, text, { sender, known: known.join('\n') });
 	} catch (err) {
 		console.error(`[btw] ${conv.id.slice(0, 8)} could not look in memory:`, err);
 		return null;

@@ -81,11 +81,11 @@ describe('rankFacts', () => {
 });
 
 describe('searchMemory', () => {
-	it('searches every note, the pinned one too, with the line of each fact', () => {
+	it('searches every note, the pinned one too, with the line of each fact', async () => {
 		const { profile } = makeFamily();
 		addMemoryFact(profile.slug, 'core', 'Mia is allergic to nuts');
 		writeMemoryNote(profile.slug, 'home', '# Home\n\n## Internet\n\n- Wifi password: mango42\n');
-		expect(searchMemory(profile.slug, 'wifi')).toEqual([
+		expect(await searchMemory(profile.slug, 'wifi')).toEqual([
 			{
 				path: 'home.md',
 				line: 5,
@@ -94,41 +94,41 @@ describe('searchMemory', () => {
 				score: expect.any(Number)
 			}
 		]);
-		expect(texts(searchMemory(profile.slug, 'allergy'))).toEqual(['Mia is allergic to nuts']);
+		expect(texts(await searchMemory(profile.slug, 'allergy'))).toEqual(['Mia is allergic to nuts']);
 	});
 });
 
 describe('recallFor', () => {
-	it('lists the facts that match a message, by note', () => {
+	it('lists the facts that match a message, by note', async () => {
 		const { profile } = makeFamily();
 		writeMemoryNote(profile.slug, 'home', '# Home\n\n## Internet\n\n- Wifi password: mango42\n');
 		addMemoryFact(profile.slug, 'food', 'Pizza night is on Friday');
-		const recall = recallFor(profile.slug, "What's the wifi password?", { known: '' });
+		const recall = await recallFor(profile.slug, "What's the wifi password?", { known: '' });
 		expect(recall).toContain('<memory>');
 		expect(recall).toContain('- [home › Internet] Wifi password: mango42');
 		expect(recall).not.toContain('Pizza');
 	});
 
-	it('leaves out what the conversation already has, however it was written', () => {
+	it('leaves out what the conversation already has, however it was written', async () => {
 		const { profile } = makeFamily();
 		addMemoryFact(profile.slug, 'core', 'Mia is allergic to **nuts**');
 		addMemoryFact(profile.slug, 'kids', 'Mia goes to Riverside school');
 		const known = '<note name="core">\n# Core\n\n- Mia is allergic to **nuts**\n</note>';
-		const recall = recallFor(profile.slug, 'Can Mia eat this at school?', { known });
+		const recall = await recallFor(profile.slug, 'Can Mia eat this at school?', { known });
 		expect(recall).toContain('Mia goes to Riverside school');
 		expect(recall).not.toContain('allergic');
 		expect(
-			recallFor(profile.slug, 'Can Mia eat this at school?', {
+			await recallFor(profile.slug, 'Can Mia eat this at school?', {
 				known: `${known}\nMIA goes to  riverside School.`
 			})
 		).toBeNull();
 	});
 
-	it('is null without memory, words or matches', () => {
+	it('is null without memory, words or matches', async () => {
 		const { profile } = makeFamily();
-		expect(recallFor(profile.slug, 'wifi?', { known: '' })).toBeNull();
+		expect(await recallFor(profile.slug, 'wifi?', { known: '' })).toBeNull();
 		addMemoryFact(profile.slug, 'home', 'Wifi password: mango42');
-		expect(recallFor(profile.slug, '   ', { known: '' })).toBeNull();
-		expect(recallFor(profile.slug, 'thanks!', { known: '' })).toBeNull();
+		expect(await recallFor(profile.slug, '   ', { known: '' })).toBeNull();
+		expect(await recallFor(profile.slug, 'thanks!', { known: '' })).toBeNull();
 	});
 });

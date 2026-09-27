@@ -143,6 +143,25 @@ btw memory learning on
 Any member can change it, here or with the switch on the profile's Memory page. What's already in
 memory stays either way.
 
+## Memory search by meaning
+
+Memory search and the facts that come with each message also match by meaning, with embeddings of
+each fact: on its own, btw uses OpenAI's `text-embedding-3-small` with the OpenAI key, else the
+same model through OpenRouter's key. `btw config` shows what it uses (`embeddings`). It's shared by
+every profile, so it's an admin's to change:
+
+```sh
+btw config set embeddings off                                    # words only; facts stay here
+btw config set embeddings auto                                   # back to btw's own choice
+btw config set embeddings openrouter/qwen/qwen3-embedding-8b     # another model, with its key
+btw config set embeddings http://localhost:11434/v1 embeddinggemma   # a server on this computer
+```
+
+The last form takes any OpenAI-compatible server (Ollama's address is above, LM Studio's is
+usually `http://localhost:1234/v1`), a model it serves, and a key if it needs one. It asks the
+server once and says if it didn't answer. Every fact is embedded again with a new model, in the
+background; until then, and whenever it can't reach the server, search goes by words.
+
 ## The avatar
 
 Each profile has a small one-color mascot that stands for you in the web chat: next to your

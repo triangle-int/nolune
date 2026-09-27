@@ -121,8 +121,13 @@ Access). `btw setup` prints the exact path.
   Each skill's name and description go into every new chat, so turn off the ones a profile doesn't
   need on its **Skills** page (or `btw skill disable <name> --profile <slug>`).
 - **Memory.** btw keeps what it learns about the family (preferences, who's who, where things are)
-  in small notes per topic. Each message comes with the facts from memory that share words with
-  it, and btw searches for more when a request needs them (`btw memory search wifi`). The pinned
+  in small notes per topic. Each message comes with the facts from memory that match it, and btw
+  searches for more when a request needs them (`btw memory search wifi`). With an OpenAI or
+  OpenRouter key, it also finds facts by meaning ("where's the other key for the car?" finds the
+  spare key, a question in Russian finds notes in English): each fact is embedded once with that
+  provider's `text-embedding-3-small`. `btw config set embeddings off` turns that off, and
+  `btw config set embeddings http://localhost:11434/v1 <model>` uses a server on your computer
+  instead (Ollama, LM Studio, oMLX, anything OpenAI-compatible). The pinned
   `core` note (who's who, languages, allergies, anything you want it to always keep in mind) is in
   every chat from the start, so keep it short: at most 4,000 characters. Besides what btw saves
   as it goes, it looks over each chat once it has been quiet for a couple of minutes and saves

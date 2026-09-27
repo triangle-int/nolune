@@ -16,7 +16,7 @@ import {
 	readMemoryNotes,
 	replaceInMemory
 } from './memory.ts';
-import { searchMemory } from './memory-search.ts';
+import { embedMemory, searchMemory } from './memory-search.ts';
 import { describeApiError, quickReply } from './models.ts';
 import { getProfile } from './profiles.ts';
 import { isRunning, onLoopEnd, onRunningChange } from './runner.ts';
@@ -148,13 +148,13 @@ function latest(lines: string[], max: number): string[] {
  * The notes for the note-taker: core first, then the ones with facts about what was said, then
  * the most recently changed, whole while they fit, and the rest by name.
  */
-function memoryInput(slug: string, conversation: string): string {
+async function memoryInput(slug: string, conversation: string): Promise<string> {
 	const notes = readMemoryNotes(slug)
 		.map((note) => ({ ...note, text: note.text.trim() }))
 		.filter((note) => note.text);
 	if (!notes.length) return '<memory>\nThere are no notes yet.\n</memory>';
 	const relevance = new Map<string, number>();
-	for (const hit of searchMemory(slug, conversation, 50)) {
+	for (const hit of await searchMemory(slug, conversation, 50)) {
 		relevance.set(hit.path, Math.max(relevance.get(hit.path) ?? 0, hit.score));
 	}
 	const ordered = notes.sort(
@@ -227,7 +227,7 @@ export async function learnFrom(conversationId: string): Promise<MemoryChange[] 
 	});
 	const input = [
 		`Today is ${today}.`,
-		memoryInput(owner.slug, conversation),
+		await memoryInput(owner.slug, conversation),
 		earlier.length ? `<earlier>\n${earlier.join('\n\n')}\n</earlier>` : '',
 		`<conversation>\n${conversation}\n</conversation>`
 	]
@@ -265,6 +265,7 @@ export async function learnFrom(conversationId: string): Promise<MemoryChange[] 
 			console.log(`[btw] ${owner.slug} memory change skipped: ${err.message}`);
 		}
 	}
+	if (made.length) void embedMemory(owner.slug);
 	const outcome = !changes
 		? 'no usable reply'
 		: made.length

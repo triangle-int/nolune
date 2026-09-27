@@ -24,6 +24,15 @@ export interface Config {
 	 * `openai/gpt-image-2.5-flare`.
 	 */
 	imageModel?: string;
+	/**
+	 * Where memory search gets embeddings, to find facts by meaning (memory-embeddings.ts): off, a
+	 * provider's model with its key, or an OpenAI-compatible server (Ollama, LM Studio, oMLX).
+	 * Unset: OpenAI's key, else OpenRouter's.
+	 */
+	embeddings?:
+		| 'off'
+		| { provider: 'openai' | 'openrouter'; model: string }
+		| { url: string; model: string; key?: string };
 	/** Extra environment variables for commands the agent runs (e.g. FIRECRAWL_API_KEY). */
 	commandEnv?: Record<string, string>;
 	/** Where `btw start` listens. Defaults: 127.0.0.1:5780 (put a tunnel or proxy in front). */

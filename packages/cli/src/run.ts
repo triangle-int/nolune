@@ -22,7 +22,10 @@ import {
 	getDb,
 	getDefaultPreset,
 	getProfileBySlug,
+	embeddingProblem,
+	embeddingStatus,
 	imageGenerationStatus,
+	parseEmbeddingSetting,
 	initConfig,
 	installCliShim,
 	isApiKeyProvider,
@@ -85,6 +88,10 @@ Settings (${paths.home})
   btw config                                 show address, port and what's configured
   btw config set <host|port|origin> <value>  origin = the public URL people open
   btw config set image-model <provider/model>  for pictures, e.g. openai/gpt-image-2.5-flare
+  btw config set embeddings <auto|off|provider/model|url model [key]>
+                                             what memory search finds meaning with: auto uses the
+                                             OpenAI key, else OpenRouter's; a URL is any OpenAI-
+                                             compatible server, like Ollama or LM Studio
   btw config set claude-path <path>          the Claude Code that claude-plan chats run, and the
   btw config set codex-path <path>           Codex that chatgpt-plan chats run (found on the PATH
                                              and in their usual folders otherwise)
@@ -444,15 +451,37 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				);
 				const images = imageGenerationStatus();
 				io.log(`images     ${images.model}${images.problem ? ` (${images.problem})` : ''}`);
+				io.log(`embeddings ${embeddingStatus()}`);
 				io.log(`env        ${Object.keys(config.commandEnv ?? {}).join(', ') || '-'}`);
 				return;
 			}
 			if (action !== 'set') {
 				fail(
-					'usage: btw config [set <host|port|origin|image-model|claude-path|codex-path> <value>]'
+					'usage: btw config [set <host|port|origin|image-model|embeddings|claude-path|codex-path> <value>]'
 				);
 			}
-			const key = positional(rest, 0, 'host|port|origin|image-model|claude-path|codex-path');
+			const key = positional(
+				rest,
+				0,
+				'host|port|origin|image-model|embeddings|claude-path|codex-path'
+			);
+			if (key === 'embeddings') {
+				let setting: ReturnType<typeof parseEmbeddingSetting>;
+				try {
+					setting = parseEmbeddingSetting(rest.slice(1));
+				} catch (err) {
+					fail((err as Error).message);
+				}
+				updateConfig((c) => {
+					if (setting === undefined) delete c.embeddings;
+					else c.embeddings = setting;
+				});
+				const problem = await embeddingProblem();
+				io.log(
+					`Memory search by meaning: ${embeddingStatus()}.${problem ? ` It didn't answer: ${problem}` : ''}`
+				);
+				return;
+			}
 			const value = positional(rest, 1, 'value');
 			updateConfig((c) => {
 				if (key === 'port') {
@@ -467,7 +496,10 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 					c.imageModel = `${provider}/${model}`;
 				} else if (key === 'claude-path') c.claudePath = value;
 				else if (key === 'codex-path') c.codexPath = value;
-				else fail('you can set host, port, origin, image-model, claude-path or codex-path');
+				else
+					fail(
+						'you can set host, port, origin, image-model, embeddings, claude-path or codex-path'
+					);
 			});
 			if (key === 'claude-path') {
 				await requireClaudePlan(io);

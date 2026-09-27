@@ -88,7 +88,7 @@ export async function memoryCommand(io: Io, args: string[]): Promise<void> {
 		case 'search': {
 			need(rest, 1, 'search <words>...');
 			const query = rest.join(' ');
-			const hits = searchMemory(slug, query);
+			const hits = await searchMemory(slug, query);
 			if (!hits.length) {
 				io.log(
 					`Nothing in ${profile.name}'s memory matches "${query}". Try other words (or another language), or read a note with \`btw memory show <topic>\`.`
