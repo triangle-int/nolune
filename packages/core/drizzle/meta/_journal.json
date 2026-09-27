@@ -78,6 +78,13 @@
 			"when": 1790466752907,
 			"tag": "0010_soul",
 			"breakpoints": true
+		},
+		{
+			"idx": 11,
+			"version": "6",
+			"when": 1790480368374,
+			"tag": "0011_claude_plan",
+			"breakpoints": true
 		}
 	]
 }

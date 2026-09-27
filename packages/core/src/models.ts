@@ -1,5 +1,6 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import * as anthropic from './anthropic.ts';
+import * as claudePlan from './claude-plan.ts';
 import { replyBlocks, toolCalls, type ReplyBlock } from './content-blocks.ts';
 import type { Usage } from './conversations.ts';
 import * as openai from './openai-chat.ts';
@@ -9,13 +10,28 @@ import * as openai from './openai-chat.ts';
  * speaks its own API; this one picks the module for a conversation's provider and turns what it
  * returns into the same shape. The reply's `content` is still the provider's own, and is stored
  * and sent back exactly as it came (see content-blocks.ts).
+ *
+ * `claude-plan` is the exception: Claude Code runs its agent loop (claude-plan.ts), so the runner
+ * hands it whole turns rather than calling streamTurn.
  */
 
-export const PROVIDERS = ['anthropic', 'openai'] as const;
+export const PROVIDERS = ['anthropic', 'openai', 'claude-plan'] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
 export function isProvider(value: string): value is Provider {
 	return (PROVIDERS as readonly string[]).includes(value);
+}
+
+/** How the admin page and the CLI name each provider. */
+export const PROVIDER_LABELS: Record<Provider, string> = {
+	anthropic: 'Anthropic',
+	openai: 'OpenAI',
+	'claude-plan': 'Claude plan'
+};
+
+/** Providers whose chats run through Claude Code and a Claude plan rather than an API key. */
+export function runsOnClaudeCode(provider: Provider): provider is 'claude-plan' {
+	return provider === 'claude-plan';
 }
 
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -77,6 +93,9 @@ export async function streamTurn(opts: {
 	onEvent: (event: StreamEvent) => void;
 }): Promise<ModelReply> {
 	const { provider, cacheKey, ...request } = opts;
+	if (runsOnClaudeCode(provider)) {
+		throw new Error('Chats on the Claude plan run whole turns through claude-plan.ts');
+	}
 	if (provider === 'openai') {
 		const response = await openai.streamResponse({ ...request, cacheKey });
 		return fromContent(
@@ -110,6 +129,7 @@ export async function quickReply(opts: {
 	maxTokens: number;
 	timeoutMs: number;
 }): Promise<{ text: string | null; usage: Usage }> {
+	if (runsOnClaudeCode(opts.provider)) return claudePlan.quickReply(opts);
 	if (opts.provider === 'openai') {
 		const response = await openai.createResponse(opts);
 		const usage = openai.summarizeUsage(response.usage);
@@ -137,27 +157,45 @@ export function countDocumentTokens(
 	model: string,
 	fileId: string
 ): Promise<number> {
+	if (runsOnClaudeCode(provider)) {
+		return Promise.reject(new Error('Chats on the Claude plan get PDFs as files, not documents'));
+	}
 	return provider === 'openai'
 		? openai.countDocumentTokens(model, fileId)
 		: anthropic.countDocumentTokens(model, fileId);
 }
 
-/** Throws if the provider doesn't know the model. Null when its window isn't known. */
-export function fetchContextWindow(provider: Provider, model: string): Promise<number | null> {
+/**
+ * Throws if the provider doesn't know the model. Null when its window isn't known. For the
+ * Claude plan, it checks that Claude Code is here and signed in to one: it has no models API, and
+ * whether it takes the model shows at the chat's first reply.
+ */
+export async function fetchContextWindow(
+	provider: Provider,
+	model: string
+): Promise<number | null> {
+	if (runsOnClaudeCode(provider)) {
+		await claudePlan.checkClaudePlan();
+		return null;
+	}
 	return provider === 'openai'
 		? openai.fetchContextWindow(model)
 		: anthropic.fetchContextWindow(model);
 }
 
 export function describeApiError(err: unknown): string {
+	if (err instanceof claudePlan.ClaudePlanError) return err.message;
 	return openai.isOpenAIError(err) ? openai.describeApiError(err) : anthropic.describeApiError(err);
 }
 
 /** The API's own message, without the status and JSON around it: for notes shown to the model. */
 export function shortApiError(err: unknown): string {
+	if (err instanceof claudePlan.ClaudePlanError) return err.message;
 	return openai.isOpenAIError(err) ? openai.shortApiError(err) : anthropic.shortApiError(err);
 }
 
 export function isAbortError(err: unknown): boolean {
-	return anthropic.isAbortError(err) || openai.isAbortError(err);
+	return (
+		anthropic.isAbortError(err) || openai.isAbortError(err) || claudePlan.isPlanAbortError(err)
+	);
 }

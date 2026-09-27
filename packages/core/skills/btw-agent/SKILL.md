@@ -32,13 +32,15 @@ Other parts of the CLI have their own instructions: automations (`btw trigger`, 
 
 ## Models
 
-Chats run on model presets, on Claude (Anthropic) or on OpenAI's models. People pick one when
-they start a chat, and new chats start with the default.
+Chats run on model presets, on Claude (Anthropic) or on OpenAI's models with an API key, or on
+the owner's Claude plan (`claude-plan`, below). People pick one when they start a chat, and new
+chats start with the default.
 
 ```sh
 btw preset list                                 # name, provider/model, context window, id, default
 btw preset add claude-sonnet-5 --name "Sonnet"  # Anthropic checks the model id first
 btw preset add gpt-6-astra --provider openai --name "GPT"
+btw preset add claude-opus-5-5 --provider claude-plan --name "Opus (plan)"
 btw preset default Sonnet                       # new chats start with it
 btw preset rm Sonnet                            # chats that use it keep working
 ```
@@ -47,6 +49,20 @@ btw knows the context window of OpenAI's flagship models (1,050,000 tokens since
 its other models (mini, nano), give `--context-window` when you know it. A preset needs its
 provider's key. If `btw preset add` can't check the model, an admin can add it under Models &
 keys in the account menu.
+
+### The Claude plan
+
+A `claude-plan` preset runs chats on the Claude Pro or Max plan someone signed in to Claude Code
+with on this computer, instead of an API key: btw runs Claude Code, which uses the plan's limits.
+`btw claude-plan status` says which Claude Code btw runs and who it's signed in as. Nobody signs in
+through btw or you: the owner runs `btw claude-plan setup` in a terminal on this computer, which
+installs Claude Code if needed and starts its own sign-in (or runs `claude` there and uses
+`/login`). That command asks questions, so it doesn't work from your commands. Never ask for, look
+for or copy a Claude sign-in or its tokens.
+
+The plan's limits assume one person's ordinary use. When someone wants the plan as the default,
+say that automations and subagents started from its chats use it too, and suggest keeping busy
+automations on an API key preset (`btw trigger` takes a preset).
 
 ## API keys
 

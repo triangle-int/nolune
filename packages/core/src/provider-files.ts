@@ -21,7 +21,14 @@ export interface FileStore {
 	remove(fileId: string): Promise<void>;
 }
 
-const stores: Record<Provider, FileStore> = { anthropic: anthropicFiles, openai: openaiFiles };
+/** Chats on the Claude plan have none: Claude Code gets pictures inline and PDFs as paths. */
+const stores = { anthropic: anthropicFiles, openai: openaiFiles } satisfies Partial<
+	Record<Provider, FileStore>
+>;
+
+export function hasFileStore(provider: Provider): provider is keyof typeof stores {
+	return Object.hasOwn(stores, provider);
+}
 
 /** Uploads under way, so the same content sent twice at once is uploaded once. */
 const inFlight = new Map<string, Promise<string>>();
@@ -39,6 +46,7 @@ export async function providerFileId(
 	name: string,
 	mime: string
 ): Promise<string> {
+	if (!hasFileStore(provider)) throw new Error(`${provider} has no Files API`);
 	const store = stores[provider];
 	const account = store.account();
 	const sha256 = createHash('sha256').update(data).digest('hex');
