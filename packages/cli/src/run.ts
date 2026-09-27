@@ -1,11 +1,10 @@
 import { existsSync } from 'node:fs';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
 	API_KEYS,
 	ApiKeyError,
-	CLAUDE_INSTALL_COMMAND,
 	DEFAULT_IMAGE_MODEL,
 	DEFAULT_PORT,
 	MAX_MEDIA_BYTES,
@@ -14,13 +13,11 @@ import {
 	apiKeyStatuses,
 	checkApiKey,
 	claudeExecutable,
-	claudePlanStatus,
-	claudeSignInCommand,
+	codexExecutable,
 	configExists,
 	createSkill,
 	createUser,
 	deleteUser,
-	describeAccount,
 	effectiveContextWindow,
 	generatePassword,
 	getDb,
@@ -41,7 +38,7 @@ import {
 	readConfig,
 	removeApiKey,
 	removePreset,
-	runsOnClaudeCode,
+	isPlan,
 	saveApiKey,
 	scanSkills,
 	setAdmin,
@@ -58,6 +55,7 @@ import { AGENT_HELP, agentCommand } from './agent.ts';
 import { generateCommand, generateHelp } from './generate.ts';
 import { ask, askHidden } from './input.ts';
 import { fail, type Io } from './io.ts';
+import { planCommand, requireChatGptPlan, requireClaudePlan, setUpPlan } from './plans.ts';
 import { MEMORY_HELP, memoryCommand } from './memory.ts';
 import { PROFILE_HELP, profileCommand } from './profile.ts';
 import { SOUL_HELP, soulCommand } from './soul.ts';
@@ -75,11 +73,11 @@ import {
 const help = () => `btw - a family agent that runs on this computer
 
 Getting started
-  btw setup [--provider anthropic|openai|claude-plan]
+  btw setup [--provider anthropic|openai|openrouter|claude-plan|chatgpt-plan]
                                              interactive first-time setup (key, your account, model);
-                                             chats run on Claude unless you pick openai. claude-plan
-                                             runs them on your Claude Pro or Max plan through Claude
-                                             Code, which you sign in to yourself first (see below)
+                                             chats run on Claude unless you pick another: openrouter
+                                             runs any model OpenRouter serves with one key, and a
+                                             plan (see Plans below) is signed in to instead
   btw start                                  run the gateway in the foreground
   btw service install|uninstall|restart|status|logs [-f]
                                              run it in the background at login (macOS)
@@ -88,23 +86,30 @@ Settings (${paths.home})
   btw config                                 show address, port and what's configured
   btw config set <host|port|origin> <value>  origin = the public URL people open
   btw config set image-model <provider/model>  for pictures, e.g. openai/gpt-image-2.5-flare
-  btw config set claude-path <path>          the Claude Code that claude-plan chats run (found on
-                                             the PATH and in its usual folders otherwise)
-  btw key set <anthropic|openai> [key]       store an API key (prompts if omitted) after checking
+  btw config set claude-path <path>          the Claude Code that claude-plan chats run, and the
+  btw config set codex-path <path>           Codex that chatgpt-plan chats run (found on the PATH
+                                             and in their usual folders otherwise)
+  btw key set <anthropic|openai|openrouter> [key]
+                                             store an API key (prompts if omitted) after checking
                                              it; OpenAI's runs GPT chats and makes pictures. Admins
                                              can also do this on the web, under Models & keys
-  btw key rm <anthropic|openai>              remove a stored key (the environment's is used, if set)
+  btw key rm <anthropic|openai|openrouter>   remove a stored key (the environment's is used, if set)
   btw env set <NAME> <value>                 extra env var for agent commands (e.g. FIRECRAWL_API_KEY)
   btw env rm <NAME> | btw env list
 
-Claude plan (chats on your own Pro or Max plan instead of an API key)
-  Chats on a claude-plan preset run through Claude Code on this computer, signed in to your Claude
-  account; \`btw claude-plan setup\` installs it and signs it in if needed. btw never sees that
-  sign-in: Claude Code keeps it and uses the plan's limits. Those assume one person's ordinary use,
-  so keep busy automations and subagents on an API key preset.
-  btw claude-plan status                     which Claude Code btw runs, and who it's signed in as
-  btw claude-plan setup                      install Claude Code and sign in to your plan, where
-                                             needed (asks before each)
+Plans (chats on your own subscription instead of an API key)
+  claude-plan: a Claude Pro or Max plan, through Claude Code on this computer, signed in to your
+  Claude account. chatgpt-plan: a ChatGPT Plus, Pro or Business plan, through OpenAI's Codex on
+  this computer, signed in with ChatGPT. btw never sees either sign-in: the agent keeps it.
+  Plan limits assume one person's ordinary use: keep busy automations and subagents on an API key.
+  btw <plan> status                          which Claude Code or Codex btw runs, and who it's
+                                             signed in as
+  btw <plan> setup                           install it and sign in, where needed. Installing asks
+                                             first, in a terminal; claude-plan signs in there too,
+                                             chatgpt-plan with a link and a code for any device
+  btw chatgpt-plan logout                    sign Codex out; chats on chatgpt-plan presets stop
+                                             until someone signs in again
+  btw chatgpt-plan models                    the models the plan offers, for \`btw preset add\`
 
 Users (web sign-up is disabled; this is the only way to add people)
   btw user create <name> <email> [--password P] [--admin]
@@ -114,11 +119,15 @@ Users (web sign-up is disabled; this is the only way to add people)
   btw user list
 
 Model presets (shared by all profiles)
-  btw preset add <model> [--provider anthropic|openai|claude-plan] [--name N] [--context-window TOKENS]
+  btw preset add <model> [--provider anthropic|openai|openrouter|claude-plan|chatgpt-plan]
+                 [--name N] [--context-window TOKENS]
                                              the provider checks the model id first (anthropic
                                              unless given); OpenAI models other than the
-                                             flagships need --context-window. claude-plan checks
-                                             the Claude Code sign-in instead
+                                             flagships need --context-window. OpenRouter's ids
+                                             name their maker (anthropic/claude-sonnet-5), and the
+                                             model must be able to call tools. The plans check
+                                             their agent's sign-in instead, and chatgpt-plan the
+                                             models Codex offers
   btw preset edit <name|id> [--provider P] [--model M] [--name N] [--context-window TOKENS|auto]
                                              change what's given; a new model is checked like
                                              add's. Chats already on the preset keep what they had
@@ -150,50 +159,10 @@ ${AGENT_HELP}`;
 const SETUP: Record<Provider, { model: string; keys: string }> = {
 	anthropic: { model: 'claude-opus-5-5', keys: 'console.anthropic.com > API keys' },
 	openai: { model: 'gpt-6-astra', keys: 'platform.openai.com > API keys' },
-	'claude-plan': { model: 'claude-opus-5-5', keys: '' }
+	openrouter: { model: 'anthropic/claude-opus-5.5', keys: 'openrouter.ai > Settings > API Keys' },
+	'claude-plan': { model: 'claude-opus-5-5', keys: '' },
+	'chatgpt-plan': { model: 'gpt-6-astra', keys: '' }
 };
-
-async function confirm(io: Io, question: string): Promise<boolean> {
-	return /^y/i.test(await ask(io, `${question} (yes/no)`, 'yes'));
-}
-
-/** Runs a program on this terminal, for the person at it; returns its exit code. */
-function runOnTerminal(
-	command: string,
-	args: string[],
-	env: Record<string, string | undefined> = process.env
-): number {
-	return spawnSync(command, args, { stdio: 'inherit', env }).status ?? 1;
-}
-
-/**
- * Fails unless Claude Code is here and signed in to a plan; says who it's signed in as. With
- * `guide`, at a terminal, it first offers what's missing: Anthropic's installer, then Claude
- * Code's own sign-in, asking before each. btw never sees the sign-in: Claude Code keeps it.
- */
-async function requireClaudePlan(io: Io, guide = false): Promise<void> {
-	let status = await claudePlanStatus();
-	if (guide && io.stdinIsTTY && !status.installed) {
-		io.log("Chats on the Claude plan run through Claude Code, which isn't installed here.");
-		if (await confirm(io, `Install it with Anthropic's installer (${CLAUDE_INSTALL_COMMAND})?`)) {
-			if (runOnTerminal('bash', ['-c', CLAUDE_INSTALL_COMMAND]) !== 0) {
-				fail("Claude Code's installer failed. See https://code.claude.com/docs/en/setup");
-			}
-			status = await claudePlanStatus();
-		}
-	}
-	if (guide && io.stdinIsTTY && status.installed && status.account && status.problem) {
-		// Its first sentence: the rest says how to sign in, which is what comes next.
-		io.log(status.problem.split('. ')[0].replace(/\.?$/, '.'));
-		if (await confirm(io, 'Sign in to your Claude plan now? Claude Code opens its sign-in page')) {
-			const { command, args, env } = claudeSignInCommand(status.path ?? 'claude');
-			runOnTerminal(command, args, env);
-			status = await claudePlanStatus();
-		}
-	}
-	if (status.problem || !status.account) fail(status.problem ?? "Claude Code didn't answer.");
-	io.log(`Claude Code (${status.path}): ${describeAccount(status.account)}`);
-}
 
 function positional(args: string[], index: number, name: string): string {
 	const value = args[index];
@@ -273,15 +242,17 @@ async function setup(io: Io, args: string[]): Promise<void> {
 	});
 
 	const provider = values.provider ?? 'anthropic';
-	if (!isProvider(provider)) fail('--provider is anthropic, openai or claude-plan');
+	if (!isProvider(provider)) {
+		fail('--provider is anthropic, openai, openrouter, claude-plan or chatgpt-plan');
+	}
 
 	const { created } = initConfig();
 	getDb();
 	installCliShim();
 	io.log(created ? `Created ${paths.home}` : `Using ${paths.home}`);
 
-	if (runsOnClaudeCode(provider)) {
-		await requireClaudePlan(io, true);
+	if (isPlan(provider)) {
+		await setUpPlan(io, provider);
 	} else {
 		const { label, field } = API_KEYS[provider];
 		if (!readConfig()[field]) {
@@ -352,7 +323,9 @@ async function start(io: Io): Promise<void> {
 	io.log(
 		`btw gateway: ${process.env.ORIGIN} (listening on ${process.env.HOST}:${process.env.PORT})`
 	);
-	await import(pathToFileURL(paths.server).href);
+	// `pnpm dev` loads this file through Vite (src/hooks.server.ts), which can't follow a runtime
+	// path: the built server is loaded by Node, as is.
+	await import(/* @vite-ignore */ pathToFileURL(paths.server).href);
 }
 
 async function service(io: Io, action: string | undefined, args: string[]): Promise<void> {
@@ -471,15 +444,21 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				io.log(
 					`claude     ${claude ? `Claude Code at ${claude} (btw claude-plan status checks its sign-in)` : 'no Claude Code found (btw claude-plan setup installs it)'}`
 				);
+				const codex = codexExecutable();
+				io.log(
+					`codex      ${codex ? `Codex at ${codex} (btw chatgpt-plan status checks its sign-in)` : 'no Codex found (btw chatgpt-plan setup installs it)'}`
+				);
 				const images = imageGenerationStatus();
 				io.log(`images     ${images.model}${images.problem ? ` (${images.problem})` : ''}`);
 				io.log(`env        ${Object.keys(config.commandEnv ?? {}).join(', ') || '-'}`);
 				return;
 			}
 			if (action !== 'set') {
-				fail('usage: btw config [set <host|port|origin|image-model|claude-path> <value>]');
+				fail(
+					'usage: btw config [set <host|port|origin|image-model|claude-path|codex-path> <value>]'
+				);
 			}
-			const key = positional(rest, 0, 'host|port|origin|image-model|claude-path');
+			const key = positional(rest, 0, 'host|port|origin|image-model|claude-path|codex-path');
 			const value = positional(rest, 1, 'value');
 			updateConfig((c) => {
 				if (key === 'port') {
@@ -493,10 +472,15 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 					const { provider, model } = parseImageModel(value, current.provider);
 					c.imageModel = `${provider}/${model}`;
 				} else if (key === 'claude-path') c.claudePath = value;
-				else fail('you can set host, port, origin, image-model or claude-path');
+				else if (key === 'codex-path') c.codexPath = value;
+				else fail('you can set host, port, origin, image-model, claude-path or codex-path');
 			});
 			if (key === 'claude-path') {
 				await requireClaudePlan(io);
+				return;
+			}
+			if (key === 'codex-path') {
+				await requireChatGptPlan(io);
 				return;
 			}
 			if (key === 'image-model') {
@@ -528,14 +512,9 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 			return;
 		}
 
-		case 'claude-plan': {
-			if (action !== 'status' && action !== 'setup') fail('usage: btw claude-plan status|setup');
-			if (action === 'setup' && !io.stdinIsTTY) {
-				fail('`btw claude-plan setup` asks questions: run it in a terminal on this computer.');
-			}
-			await requireClaudePlan(io, action === 'setup');
-			return;
-		}
+		case 'claude-plan':
+		case 'chatgpt-plan':
+			return planCommand(io, group, action);
 
 		case 'env': {
 			requireInit();

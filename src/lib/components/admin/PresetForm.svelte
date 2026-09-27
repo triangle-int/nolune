@@ -17,6 +17,7 @@
 		/** Whether each API key provider has a key, and its last four characters. */
 		keys: { provider: string; source: string | null; hint: string | null }[];
 		claudeInstalled: boolean;
+		codexInstalled: boolean;
 		/** The preset being changed, with its own context window if it has one; a new one without. */
 		preset?: { id: string; name: string; provider: string; model: string; override: number | null };
 		/** Why the last save failed. */
@@ -30,6 +31,7 @@
 		providers,
 		keys,
 		claudeInstalled,
+		codexInstalled,
 		preset,
 		problem,
 		class: className,
@@ -58,8 +60,14 @@
 	);
 	const label = $derived(providers.find((p) => p.id === provider)?.label ?? provider);
 	const key = $derived(keys.find((k) => k.provider === provider));
-	/** Whether the provider can be used: a key, or Claude Code for the plan. */
-	const ready = $derived(provider === 'claude-plan' ? claudeInstalled : !!key?.source);
+	/** Whether the provider can be used: a key, or the plan's agent (Claude Code, Codex). */
+	const ready = $derived(
+		provider === 'claude-plan'
+			? claudeInstalled
+			: provider === 'chatgpt-plan'
+				? codexInstalled
+				: !!key?.source
+	);
 	/** A new provider or model is checked with the provider when it's saved. */
 	const checks = $derived(!start || provider !== start.provider || model !== start.model);
 
@@ -90,6 +98,11 @@
 				? { text: t.onPlan, warn: false }
 				: { text: t.noClaudeCode, warn: true };
 		}
+		if (provider === 'chatgpt-plan') {
+			return codexInstalled
+				? { text: t.onChatGptPlan, warn: false }
+				: { text: t.noCodex, warn: true };
+		}
 		return ready ? { text: t.onKey(label), warn: false } : { text: t.noKey(label), warn: true };
 	});
 
@@ -102,7 +115,11 @@
 	});
 
 	function sourceName(): string {
-		return provider === 'claude-plan' ? 'Claude Code' : label;
+		return provider === 'claude-plan'
+			? 'Claude Code'
+			: provider === 'chatgpt-plan'
+				? 'Codex'
+				: label;
 	}
 
 	/** What Auto (no override) gets with each provider. */
@@ -297,7 +314,11 @@
 			{:else if !checks}
 				{t.saving}
 			{:else}
-				{provider === 'claude-plan' ? t.checkingClaude : t.checkingModel}
+				{provider === 'claude-plan'
+					? t.checkingClaude
+					: provider === 'chatgpt-plan'
+						? t.checkingCodex
+						: t.checkingModel}
 			{/if}
 		</Button>
 		<Button type="button" variant="ghost" class="h-10" onclick={onclose}>

@@ -349,7 +349,11 @@ describe.skipIf(!claude)('chats on the Claude plan', { timeout: 60_000 }, () => 
 		await vi.waitFor(() => expect(getConversation(chat.id)?.title).toBe('Files here'), {
 			timeout: 20_000
 		});
-		expect(getConversation(chat.id)?.providerSession).toEqual({ id: chat.id, sentSeq: 1 });
+		expect(getConversation(chat.id)?.providerSession).toEqual({
+			id: chat.id,
+			sentSeq: 1,
+			provider: 'claude-plan'
+		});
 	});
 
 	it("resumes the chat's session with only the new messages", async () => {
@@ -374,7 +378,11 @@ describe.skipIf(!claude)('chats on the Claude plan', { timeout: 60_000 }, () => 
 			'Anna: Again'
 		]);
 		expect(JSON.stringify(second.json?.messages)).toContain('Hi Anna.');
-		expect(getConversation(chat.id)?.providerSession).toEqual({ id: chat.id, sentSeq: 3 });
+		expect(getConversation(chat.id)?.providerSession).toEqual({
+			id: chat.id,
+			sentSeq: 3,
+			provider: 'claude-plan'
+		});
 	});
 
 	it("starts over in a new session, with the chat so far, when Claude Code lost the chat's", async () => {

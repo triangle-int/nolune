@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { mkdirSync, rmSync } from 'node:fs';
-import { runTurn as runPlanTurn, sessionProblem } from './claude-plan.ts';
+import { isPlan, type Plan } from './plans.ts';
 import {
 	describeApiError,
 	isAbortError,
-	runsOnClaudeCode,
+	planSessionProblem,
+	readableMessages,
+	runPlanTurn,
 	streamTurn,
 	type Effort,
 	type ModelReply,
@@ -578,7 +580,7 @@ async function runToolCall(
 			}
 		});
 		st.toolOutput = null;
-		const attachments = await viewedImageBlocks(conv.provider, readViewedImages(viewDir), images);
+		const attachments = await viewedImageBlocks(conv, readViewedImages(viewDir), images);
 		return toolResult(call.id, result.content, result.isError, attachments);
 	} finally {
 		rmSync(viewDir, { recursive: true, force: true });
@@ -662,7 +664,9 @@ async function saveReply(
 
 	const { usage } = reply;
 	console.log(
-		`[btw] ${conversationId.slice(0, 8)} ${conv.model} in=${usage.input} cache_read=${usage.cacheRead} cache_write=${usage.cacheWrite} hit=${Math.floor(cacheHitRate(usage) * 100)}% out=${usage.output} stop=${reply.stopReason}`
+		usage
+			? `[btw] ${conversationId.slice(0, 8)} ${conv.model} in=${usage.input} cache_read=${usage.cacheRead} cache_write=${usage.cacheWrite} hit=${Math.floor(cacheHitRate(usage) * 100)}% out=${usage.output} stop=${reply.stopReason}`
+			: `[btw] ${conversationId.slice(0, 8)} ${conv.model} stop=${reply.stopReason}`
 	);
 	const assistantRow = appendRow({
 		conversationId,
@@ -703,37 +707,43 @@ function saveResults(conv: Conversation, results: ToolResultBlock[]): void {
 	emit(conv.id, { type: 'message', message: toDisplay(resultsRow) });
 }
 
-/** Rows a chat on the Claude plan sends as the model's input: messages, not command results. */
+/** Rows a chat on a plan sends as the model's input: messages, not command results. */
 function isPlanInput(row: MessageRow): boolean {
 	return row.role === 'user' && row.kind !== 'tool_results';
 }
 
 /**
- * Whether another model answered in the chat since its Claude Code session was last sent
- * anything: the chat switched away from the Claude plan and back. That session never saw those
- * replies, so the chat starts a new one.
+ * Whether another model answered in the chat since its plan session was last sent anything: the
+ * chat switched away from the plan and back. That session never saw those replies, so the chat
+ * starts a new one.
  */
-function missedReplies(session: { sentSeq: number }, rows: MessageRow[]): boolean {
+function missedReplies(session: { sentSeq: number }, rows: MessageRow[], plan: Plan): boolean {
 	return rows.some(
 		(row) =>
 			(row.seq ?? 0) > session.sentSeq &&
 			row.role === 'assistant' &&
 			row.provider !== null &&
-			row.provider !== 'claude-plan'
+			row.provider !== plan
 	);
 }
 
 /**
- * What a chat on the Claude plan sends Claude Code next, and the session it goes to. Its session
- * keeps the conversation, so only rows it hasn't been sent go. A chat Claude Code hasn't seen yet
+ * What a chat on a plan sends the plan's agent next, and the session it goes to. Its session
+ * keeps the conversation, so only rows it hasn't been sent go. A chat the agent hasn't seen yet
  * may already have replies (a notification opened as a chat, or replies from another model the
  * chat used before): those go along as a transcript, in a new session.
  */
-function planInput(conv: Conversation, rows: MessageRow[], newSessionId = conv.id) {
+function planInput(
+	conv: Conversation & { provider: Plan },
+	rows: MessageRow[],
+	newSessionId = conv.id
+) {
 	const sentSeq = rows.at(-1)?.seq ?? 0;
 	const content = (row: MessageRow) => readRow(row).blocks;
 	const kept = conv.providerSession;
-	const session = kept && !missedReplies(kept, rows) ? kept : null;
+	// The other plan's agent can't open it.
+	const ours = kept && (kept.provider ?? 'claude-plan') === conv.provider ? kept : null;
+	const session = ours && !missedReplies(ours, rows, conv.provider) ? ours : null;
 	// The chat's first session has its id.
 	if (kept && !session && newSessionId === conv.id) newSessionId = randomUUID();
 	let input: Block[];
@@ -757,7 +767,7 @@ function planInput(conv: Conversation, rows: MessageRow[], newSessionId = conv.i
 			});
 		}
 	}
-	// Nothing new: a turn that failed after Claude Code took its input, continued.
+	// Nothing new: a turn that failed after the agent took its input, continued.
 	if (!input.length) input = [{ type: 'text', text: '[Continue.]' }];
 	return {
 		sessionId: session?.id ?? newSessionId,
@@ -768,12 +778,12 @@ function planInput(conv: Conversation, rows: MessageRow[], newSessionId = conv.i
 }
 
 /**
- * A turn of a chat on the Claude plan, which Claude Code runs (claude-plan.ts). btw saves each
- * reply and runs each command as its own loop would; messages sent meanwhile wait for the next
- * turn. False when the loop should end: stopped, or failed with `st.error`.
+ * A turn of a chat on a plan, which the plan's agent runs (plans.ts). btw saves each reply and
+ * runs each command as its own loop would; messages sent meanwhile wait for the next turn. False
+ * when the loop should end: stopped, or failed with `st.error`.
  */
 async function planTurn(
-	conv: Conversation,
+	conv: Conversation & { provider: Plan },
 	rows: MessageRow[],
 	st: State,
 	abort: AbortController
@@ -786,13 +796,13 @@ async function planTurn(
 	}
 	const cwd = profileDir(slug);
 	mkdirSync(cwd, { recursive: true });
-	// Claude Code gets pictures and PDFs inline, so their bytes count too.
+	// The plan's agent gets pictures (and PDFs, on the Claude plan) inline, so their bytes count too.
 	const images = imageUse(rows.map(readRow), true);
 	let next = planInput(conv, rows);
 	for (let retried = false; ; retried = true) {
 		const { sessionId, resume, sentSeq, input } = next;
 		try {
-			await runPlanTurn({
+			await runPlanTurn(conv.provider, {
 				sessionId,
 				resume,
 				cwd,
@@ -804,11 +814,12 @@ async function planTurn(
 				resolve: async (blocks) =>
 					(await resolveFiles([{ role: 'user', blocks }], conv.provider))[0].blocks,
 				signal: abort.signal,
-				onStarted: () => setProviderSession(conversationId, { id: sessionId, sentSeq }),
+				onStarted: (id) =>
+					setProviderSession(conversationId, { id, sentSeq, provider: conv.provider }),
 				onEvent: (event) => onStreamEvent(conversationId, event),
 				onReply: (reply) =>
 					saveReply(conv, reply, abort.signal, () => foundText(committedRows(conversationId))),
-				// A call that throws still gets its result, or Claude Code would wait for one forever.
+				// A call that throws still gets its result, or the agent would wait for one forever.
 				runTool: (call) =>
 					runToolCall(conv, call, 'tool_use', abort.signal, st, images).catch((err: unknown) => {
 						st.toolOutput = null;
@@ -826,10 +837,10 @@ async function planTurn(
 				commitQueued(conversationId);
 				return false;
 			}
-			const problem = sessionProblem(err);
+			const problem = planSessionProblem(conv.provider, err);
 			if (problem && !retried) {
 				console.error(
-					`[btw] ${conversationId.slice(0, 8)} Claude Code session ${problem}, trying again`
+					`[btw] ${conversationId.slice(0, 8)} ${conv.provider} session ${problem}, trying again`
 				);
 				next =
 					problem === 'taken'
@@ -838,7 +849,7 @@ async function planTurn(
 				continue;
 			}
 			st.error = describeApiError(err);
-			console.error(`[btw] ${conversationId.slice(0, 8)} Claude Code turn failed:`, err);
+			console.error(`[btw] ${conversationId.slice(0, 8)} ${conv.provider} turn failed:`, err);
 			return false;
 		}
 	}
@@ -864,9 +875,9 @@ async function loop(conversationId: string): Promise<void> {
 
 			const abort = new AbortController();
 			st.abort = abort;
-			if (runsOnClaudeCode(conv.provider)) {
-				if (!(await planTurn(conv, rows, st, abort))) return;
-				// Claude Code ended its turn: only messages that came meanwhile start another.
+			if (isPlan(conv.provider)) {
+				if (!(await planTurn({ ...conv, provider: conv.provider }, rows, st, abort))) return;
+				// The agent ended its turn: only messages that came meanwhile start another.
 				if (!queuedRows(conversationId).length) return;
 				continue;
 			}
@@ -881,8 +892,12 @@ async function loop(conversationId: string): Promise<void> {
 					tools: toolsFor(conv),
 					cacheTtl: conv.cacheTtl,
 					cacheKey: conv.id,
-					// Pictures and PDFs kept by reference, as this provider gets them.
-					messages: await resolveFiles(messages, conv.provider),
+					// Pictures and PDFs kept by reference, as this provider gets them, where the model
+					// takes them.
+					messages: await resolveFiles(
+						await readableMessages(conv.provider, conv.model, messages),
+						conv.provider
+					),
 					signal: abort.signal,
 					onEvent: (event) => onStreamEvent(conversationId, event)
 				});

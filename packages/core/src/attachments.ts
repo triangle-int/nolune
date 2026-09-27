@@ -33,16 +33,24 @@ import {
 	storedType,
 	type PreparedMedia
 } from './media.ts';
-import { countDocumentTokens, shortApiError, type Provider } from './models.ts';
+import {
+	countDocumentTokens,
+	countsDocumentTokens,
+	modelInputs,
+	shortApiError,
+	type Provider
+} from './models.ts';
 import { profileDir } from './paths.ts';
 import { hasFileStore, providerFileId } from './provider-files.ts';
 
 /*
  * Files people attach to a message. Each is saved in the profile's `attachments` folder, where
  * the agent can work with it, and shown in the chat through a media row. The model gets pictures
- * and PDFs themselves, through the provider's Files API, and every other file as its name and
- * path. What the model got is written into the message's `content` (btw's format, with the
- * provider's file ids); `message.attachments` keeps a record of the files themselves.
+ * and PDFs themselves when it takes them, through the provider's Files API (the plans have none:
+ * pictures go inline, and PDFs inline on the Claude plan and as their path on the ChatGPT plan),
+ * and every other file as its name and path. What the model got is written into the message's
+ * `content` (btw's format, with the provider's file ids); `message.attachments` keeps a record of
+ * the files themselves.
  */
 
 export const MAX_ATTACHMENTS = 10;
@@ -50,8 +58,9 @@ export const MAX_ATTACHMENTS = 10;
 const DOCUMENT_SHARE = 0.25;
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 /**
- * Chats on the Claude plan can't count a PDF's tokens (that takes the API), so they estimate:
- * Anthropic puts a page's text at 1,500 to 3,000 tokens, and each page also goes as a picture.
+ * Chats on the Claude plan and OpenRouter can't count a PDF's tokens (that takes Anthropic's or
+ * OpenAI's API), so they estimate: Anthropic puts a page's text at 1,500 to 3,000 tokens, and
+ * each page also goes as a picture.
  */
 const TOKENS_PER_PDF_PAGE = 4_000;
 /** Pages the API takes in one request: 600, or 100 with a context window under 1M tokens. */
@@ -212,6 +221,23 @@ export function parseAttachments(json: string | null): MessageAttachment[] {
 // --- what the model gets ---
 
 type AttachmentBlock = TextBlock | ImageBlock | PdfBlock;
+/** The conversation's model, which decides what the files go as. */
+type ModelOf = { provider: Provider; model: string };
+
+/**
+ * Whether the model takes pictures or PDFs, or why not in plain words. A file it can't read
+ * would fail every later request, so it goes as its path when the answer is unsure too.
+ */
+async function modelTakes(conv: ModelOf, what: 'pictures' | 'pdfs'): Promise<string | null> {
+	try {
+		if ((await modelInputs(conv.provider, conv.model))[what]) return null;
+	} catch (err) {
+		return `btw couldn't check whether ${conv.model} takes ${what === 'pdfs' ? 'PDFs' : 'pictures'} (${shortApiError(err)})`;
+	}
+	return what === 'pdfs'
+		? `${conv.model} doesn't read PDFs itself`
+		: `${conv.model} can't see pictures`;
+}
 
 /** Keeps the bytes the model gets in the media store, for requests to send by reference. */
 function kept(data: Buffer, mime: string): Extract<Source, { type: 'media' }> {
@@ -224,16 +250,19 @@ function kept(data: Buffer, mime: string): Extract<Source, { type: 'media' }> {
  * reference, so each provider gets its own copy when a request is made (resolveFiles), also after
  * the chat switches to another. With a Files API it's uploaded now, so a problem shows here rather
  * than at every later request; if that fails, it goes inline as base64 when the conversation
- * still has room. Without one (the Claude plan) every request carries it inline, so it counts
- * against that room.
+ * still has room. Without one (the plans) every request carries it inline, so it counts against
+ * that room.
  */
 export async function imageBlock(
-	provider: Provider,
+	conv: ModelOf,
 	data: Buffer,
 	mediaType: ImageMediaType,
 	name: string,
 	used: ImageUse
 ): Promise<{ block: ImageBlock } | { problem: string }> {
+	const { provider } = conv;
+	const refused = await modelTakes(conv, 'pictures');
+	if (refused) return { problem: refused };
 	if (used.count >= MAX_CONVERSATION_IMAGES) {
 		return {
 			problem: `this conversation already holds ${MAX_CONVERSATION_IMAGES} pictures, as many as it can`
@@ -270,7 +299,7 @@ export async function imageBlock(
 
 /** The images `btw view` left, for the command's tool_result, each after a line naming it. */
 export async function viewedImageBlocks(
-	provider: Provider,
+	conv: ModelOf,
 	images: ViewedImage[],
 	used: ImageUse
 ): Promise<(TextBlock | ImageBlock)[]> {
@@ -279,7 +308,7 @@ export async function viewedImageBlocks(
 		const result =
 			'problem' in image
 				? { problem: image.problem }
-				: await imageBlock(provider, image.data, image.mediaType, image.name, used);
+				: await imageBlock(conv, image.data, image.mediaType, image.name, used);
 		if ('problem' in result) {
 			blocks.push({ type: 'text', text: `Not attached: ${image.name} (${result.problem}).` });
 		} else {
@@ -321,19 +350,12 @@ export function pdfPageCount(data: Buffer): number | null {
 	return counts.length ? Math.max(...counts) : null;
 }
 
-/**
- * A PDF for chats on the Claude plan, which have no Files API: estimated from its pages, and
- * counted in the conversation's inline bytes, which every request carries. Kept by reference,
- * like pictures (imageBlock).
- */
-function inlinePdfBlock(
+/** A PDF's tokens estimated from its pages, where they can't be counted (TOKENS_PER_PDF_PAGE). */
+function estimatePdf(
 	conv: Conversation,
-	path: string,
-	name: string,
-	room: number,
-	used: ImageUse
-): { block: PdfBlock; tokens: number } | { problem: string } {
-	const data = readFileSync(path);
+	data: Buffer,
+	room: number
+): { tokens: number } | { problem: string } {
 	const pages = pdfPageCount(data);
 	if (pages === null) {
 		return { problem: "btw couldn't tell how many pages it has (it may be encrypted)" };
@@ -348,12 +370,32 @@ function inlinePdfBlock(
 			problem: `at ${pages} pages it's about ${tokens.toLocaleString('en-US')} tokens, more than this conversation has room for (${Math.max(0, room).toLocaleString('en-US')})`
 		};
 	}
+	return { tokens };
+}
+
+/**
+ * A PDF for chats on the Claude plan, which have no Files API: estimated from its pages, and
+ * counted in the conversation's inline bytes, which every request carries. Kept by reference,
+ * like pictures (imageBlock).
+ */
+function inlinePdfBlock(
+	conv: Conversation,
+	data: Buffer,
+	name: string,
+	room: number,
+	used: ImageUse
+): { block: PdfBlock; tokens: number } | { problem: string } {
+	const estimate = estimatePdf(conv, data, room);
+	if ('problem' in estimate) return estimate;
 	const bytes = base64Length(data.length);
 	if (used.bytes + bytes > MAX_CONVERSATION_IMAGE_BYTES) {
 		return { problem: "it's too big to send along with everything else in this conversation" };
 	}
 	used.bytes += bytes;
-	return { block: { type: 'pdf', source: kept(data, 'application/pdf'), name }, tokens };
+	return {
+		block: { type: 'pdf', source: kept(data, 'application/pdf'), name },
+		tokens: estimate.tokens
+	};
 }
 
 async function pdfBlock(
@@ -364,24 +406,33 @@ async function pdfBlock(
 	used: ImageUse
 ): Promise<{ block: PdfBlock; tokens: number } | { problem: string }> {
 	const { provider } = conv;
-	if (!hasFileStore(provider)) return inlinePdfBlock(conv, path, name, room, used);
+	// Codex takes text and pictures only.
+	if (provider === 'chatgpt-plan') return { problem: "models on the ChatGPT plan don't take PDFs" };
+	const refused = await modelTakes(conv, 'pdfs');
+	if (refused) return { problem: refused };
 	const data = readFileSync(path);
+	if (!hasFileStore(provider)) return inlinePdfBlock(conv, data, name, room, used);
+	// Where the provider can't count it (OpenRouter), it's estimated before it's uploaded.
+	const estimate = countsDocumentTokens(provider) ? null : estimatePdf(conv, data, room);
+	if (estimate && 'problem' in estimate) return estimate;
 	let fileId: string;
 	try {
 		fileId = await providerFileId(provider, data, name, 'application/pdf');
 	} catch (err) {
 		return { problem: `it couldn't be uploaded (${shortApiError(err)})` };
 	}
-	let tokens: number;
-	try {
-		tokens = await countDocumentTokens(provider, conv.model, fileId);
-	} catch (err) {
-		return { problem: `the model can't read it (${shortApiError(err)})` };
-	}
-	if (tokens > room) {
-		return {
-			problem: `it's about ${tokens.toLocaleString('en-US')} tokens, more than this conversation has room for (${Math.max(0, room).toLocaleString('en-US')})`
-		};
+	let tokens = estimate?.tokens;
+	if (tokens === undefined) {
+		try {
+			tokens = await countDocumentTokens(provider, conv.model, fileId);
+		} catch (err) {
+			return { problem: `the model can't read it (${shortApiError(err)})` };
+		}
+		if (tokens > room) {
+			return {
+				problem: `it's about ${tokens.toLocaleString('en-US')} tokens, more than this conversation has room for (${Math.max(0, room).toLocaleString('en-US')})`
+			};
+		}
 	}
 	return { block: { type: 'pdf', source: kept(data, 'application/pdf'), name }, tokens };
 }
@@ -447,7 +498,7 @@ export async function prepareMessage(input: {
 			let result: { block: ImageBlock } | { problem: string };
 			try {
 				const image = await prepareImage(path);
-				result = await imageBlock(conv.provider, image.data, image.info.mediaType, up.name, images);
+				result = await imageBlock(conv, image.data, image.info.mediaType, up.name, images);
 			} catch (err) {
 				result = {
 					problem: `it couldn't be made into a picture the model can see (${(err as Error).message})`

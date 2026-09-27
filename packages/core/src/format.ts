@@ -3,8 +3,9 @@ import type { Provider } from './models.ts';
 /*
  * btw's own format for what a conversation holds, whichever provider its model runs on. Each
  * provider's module turns it into its own request (`toAnthropicMessages` in anthropic.ts, which
- * the Claude plan uses too, and `toResponsesInput` in openai-chat.ts), leaving out what that
- * provider can't take. Another provider is one more such function.
+ * the Claude plan uses too, `toResponsesInput` in openai-chat.ts and `toChatMessages` in
+ * openrouter.ts), leaving out what that provider can't take. Another provider is one more such
+ * function.
  *
  * What btw writes itself (people's messages, command results, notices, its own replies) is stored
  * in this format (`message.format` is 'btw'). A reply from a model is stored exactly as its
@@ -17,7 +18,7 @@ import type { Provider } from './models.ts';
  */
 
 /** Providers with a Files API, where pictures and PDFs can be kept. */
-export type FileProvider = 'anthropic' | 'openai';
+export type FileProvider = 'anthropic' | 'openai' | 'openrouter';
 
 /** Where a picture's or PDF's bytes are. */
 export type Source =
@@ -145,7 +146,9 @@ export function readMessage(row: StoredRow): Message {
 		};
 	}
 	const uploadedTo =
-		row.provider === 'anthropic' || row.provider === 'openai' ? row.provider : null;
+		row.provider === 'anthropic' || row.provider === 'openai' || row.provider === 'openrouter'
+			? row.provider
+			: null;
 	return {
 		role: 'user',
 		blocks: (Array.isArray(content) ? (content as Stored[]) : []).map((b) =>
@@ -208,7 +211,10 @@ function readSource(source: unknown, uploadedTo: FileProvider | null): Source | 
 	return null;
 }
 
-/** OpenAI sends a call's input as a JSON string. One that doesn't parse is passed on as it is. */
+/**
+ * OpenAI and OpenRouter send a call's input as a JSON string. One that doesn't parse is passed on
+ * as it is.
+ */
 export function parseToolArguments(args: unknown): unknown {
 	if (typeof args !== 'string') return args ?? {};
 	try {
@@ -225,10 +231,11 @@ function str(value: unknown): string {
 export type ReplyBlock = TextBlock | ReasoningBlock | ToolCallBlock;
 
 /**
- * A reply in either provider's shape as btw's blocks, in order: Anthropic's content blocks
- * (`text`, `thinking`, `tool_use`) or OpenAI's output items (`message`, `reasoning`,
- * `function_call`). The two use different type names, so no provider needs to be known. Anything
- * else is skipped.
+ * A reply in any provider's shape as btw's blocks, in order: Anthropic's content blocks (`text`,
+ * `thinking`, `tool_use`), OpenAI's output items (`message`, `reasoning`, `function_call`), or
+ * OpenRouter's pieces: reasoning details (`reasoning.text`, `reasoning.summary`,
+ * `reasoning.encrypted`) and tool calls (`function`) around a `text` block. They use different
+ * type names, so no provider needs to be known. Anything else is skipped.
  */
 export function replyBlocks(content: unknown): ReplyBlock[] {
 	if (!Array.isArray(content)) return [];
@@ -273,6 +280,23 @@ export function replyBlocks(content: unknown): ReplyBlock[] {
 					input: parseToolArguments(block.arguments)
 				});
 				break;
+			// OpenRouter's Chat Completions. Encrypted reasoning has nothing to show.
+			case 'reasoning.text':
+				blocks.push({ type: 'reasoning', text: str(block.text) });
+				break;
+			case 'reasoning.summary':
+				blocks.push({ type: 'reasoning', text: str(block.summary) });
+				break;
+			case 'function': {
+				const fn = (block.function ?? {}) as Stored;
+				blocks.push({
+					type: 'tool_call',
+					id: str(block.id),
+					name: str(fn.name),
+					input: parseToolArguments(fn.arguments)
+				});
+				break;
+			}
 		}
 	}
 	return blocks;

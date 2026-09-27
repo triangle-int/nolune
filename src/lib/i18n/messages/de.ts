@@ -660,13 +660,17 @@ export const de: Messages = {
 		purposes: {
 			anthropic: 'Für Chats und Automationen mit Claude-Modellen.',
 			openai:
-				'Für Chats und Automationen mit OpenAI-Modellen und zum Erstellen von Bildern auf der Seite „Bilder“ und wenn der Agent zeichnet.'
+				'Für Chats und Automationen mit OpenAI-Modellen und zum Erstellen von Bildern auf der Seite „Bilder“ und wenn der Agent zeichnet.',
+			openrouter:
+				'Für Chats und Automationen mit den Modellen, die OpenRouter anbietet (Claude, GPT, Gemini, DeepSeek und viele mehr), mit einem Schlüssel und dessen Guthaben.'
 		},
 		withoutIt: {
 			anthropic:
 				'Chats und Automationen mit Claude-Modellen funktionieren nicht mehr, bis ein neuer Schlüssel hinzugefügt wird.',
 			openai:
-				'Chats und Automationen mit OpenAI-Modellen funktionieren nicht mehr, und btw kann keine Bilder erstellen, bis ein neuer Schlüssel hinzugefügt wird.'
+				'Chats und Automationen mit OpenAI-Modellen funktionieren nicht mehr, und btw kann keine Bilder erstellen, bis ein neuer Schlüssel hinzugefügt wird.',
+			openrouter:
+				'Chats und Automationen mit OpenRouter-Modellen funktionieren nicht mehr, bis ein neuer Schlüssel hinzugefügt wird.'
 		},
 		savedInBtw: (hint: string | null) => `In btw gespeichert${hint ? `, endet auf ${hint}` : ''}`,
 		fromEnv: (variable: string, hint: string | null) =>
@@ -685,8 +689,26 @@ export const de: Messages = {
 		useEnvInstead: (variable: string) =>
 			`btw verwendet dann den Schlüssel aus der Umgebungsvariable ${variable}.`,
 		plan: 'Claude-Abo',
-		planHint:
-			'Chats mit einer Claude-Abo-Voreinstellung laufen über das Pro- oder Max-Abo, mit dem jemand auf diesem Computer bei Claude Code angemeldet ist, statt über einen API-Schlüssel. btw startet Claude Code und sieht die Anmeldung nie. Die Abo-Limits gehen von der normalen Nutzung durch eine Person aus, also lass viel beschäftigte Automationen und Subagenten auf einer Voreinstellung mit API-Schlüssel.',
+		plans: 'Abos',
+		plansHint:
+			'Chats mit einer Abo-Voreinstellung laufen über das eigene Abo von jemandem statt über einen API-Schlüssel, mit dem Agenten des Anbieters auf diesem Computer. btw startet ihn und sieht die Anmeldung nie. Die Abo-Limits gehen von der normalen Nutzung durch eine Person aus, also lass viel beschäftigte Automationen und Subagenten auf einer Voreinstellung mit API-Schlüssel.',
+		claudePlanAbout: 'Pro oder Max, über Claude Code.',
+		chatgptPlan: 'ChatGPT-Abo',
+		chatgptPlanAbout: 'Plus, Pro oder Business, über Codex von OpenAI.',
+		chatgptInstall:
+			'Führe in einem Terminal auf diesem Computer {setup} aus: Es installiert Codex mit npm (nach Rückfrage) und meldet es bei ChatGPT an. Oder installiere es selbst und melde dich dann hier an:',
+		chatgptSignIn: 'Mit ChatGPT anmelden',
+		chatgptSignInAgain: 'Erneut anmelden',
+		chatgptAsking: 'ChatGPT wird gefragt…',
+		signOut: 'Abmelden',
+		chatgptOpen: 'Öffne {link} auf einem beliebigen Gerät und melde dich bei ChatGPT an.',
+		chatgptCode: 'Gib diesen Code ein: {code}',
+		chatgptCodeHint:
+			'Der Code gilt 15 Minuten. Diese Seite aktualisiert sich, sobald er eingegeben ist.',
+		chatgptSignOutTitle: 'Von ChatGPT abmelden?',
+		chatgptSignOutBody:
+			'Chats mit ChatGPT-Abo-Voreinstellungen funktionieren erst wieder, wenn sich jemand erneut anmeldet.',
+		signedOut: 'Abgemeldet.',
 		notAt: 'Nicht unter {path}, wo es laut {command} sein sollte.',
 		notInstalled: 'Nicht auf diesem Computer installiert.',
 		checkSignIn: 'Anmeldung prüfen',
@@ -722,10 +744,15 @@ export const de: Messages = {
 			autoContext: {
 				anthropic: 'Auto verwendet das Fenster, das Anthropic für das Modell meldet.',
 				openai: 'OpenAI meldet es nicht: Auto kennt nur das der Flaggschiffe (1,05M seit GPT-5.4).',
-				'claude-plan': 'Claude Code meldet es nicht: Auto kennt nur seine Modelle mit 1M Kontext.'
+				openrouter:
+					'Auto verwendet das Fenster, das OpenRouter für das Modell und seinen Hauptanbieter angibt.',
+				'claude-plan': 'Claude Code meldet es nicht: Auto kennt nur seine Modelle mit 1M Kontext.',
+				'chatgpt-plan': 'Codex meldet es nicht, also lässt Auto es offen.'
 			},
 			onPlan: 'Läuft über das Pro- oder Max-Abo, mit dem Claude Code angemeldet ist.',
 			noClaudeCode: 'Claude Code ist noch nicht installiert: siehe „Claude-Abo“ oben.',
+			onChatGptPlan: 'Läuft über das ChatGPT-Abo, mit dem Codex angemeldet ist.',
+			noCodex: 'Codex ist noch nicht installiert: siehe „ChatGPT-Abo“ oben.',
 			onKey: (provider: string) => `Läuft über den ${provider}-API-Schlüssel.`,
 			noKey: (provider: string) =>
 				`Noch kein ${provider}-API-Schlüssel: Füge oben unter „API-Schlüssel“ einen hinzu.`,
@@ -734,6 +761,7 @@ export const de: Messages = {
 			couldNotList: (status: number) => `btw konnte die Modelle nicht abrufen (${status}).`,
 			unreachable: 'btw ist nicht erreichbar.',
 			checkingClaude: 'Claude Code wird geprüft…',
+			checkingCodex: 'Codex wird geprüft…',
 			checkingModel: 'Modell wird geprüft…',
 			saving: 'Wird gespeichert…',
 			pick: 'Modell wählen',

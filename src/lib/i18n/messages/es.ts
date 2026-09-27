@@ -680,13 +680,17 @@ export const es: Messages = {
 		purposes: {
 			anthropic: 'Hace funcionar los chats y las automatizaciones con modelos de Claude.',
 			openai:
-				'Hace funcionar los chats y las automatizaciones con modelos de OpenAI, y crea las imágenes de la página Imágenes y las que dibuja el agente.'
+				'Hace funcionar los chats y las automatizaciones con modelos de OpenAI, y crea las imágenes de la página Imágenes y las que dibuja el agente.',
+			openrouter:
+				'Hace funcionar los chats y las automatizaciones con los modelos que ofrece OpenRouter (Claude, GPT, Gemini, DeepSeek y muchos más), con una sola clave y sus créditos.'
 		},
 		withoutIt: {
 			anthropic:
 				'Los chats y las automatizaciones con modelos de Claude dejan de funcionar hasta que se añada una clave nueva.',
 			openai:
-				'Los chats y las automatizaciones con modelos de OpenAI dejan de funcionar, y btw no puede crear imágenes, hasta que se añada una clave nueva.'
+				'Los chats y las automatizaciones con modelos de OpenAI dejan de funcionar, y btw no puede crear imágenes, hasta que se añada una clave nueva.',
+			openrouter:
+				'Los chats y las automatizaciones con modelos de OpenRouter dejan de funcionar hasta que se añada una clave nueva.'
 		},
 		savedInBtw: (hint: string | null) => `Guardada en btw${hint ? `, termina en ${hint}` : ''}`,
 		fromEnv: (variable: string, hint: string | null) =>
@@ -705,8 +709,26 @@ export const es: Messages = {
 		useEnvInstead: (variable: string) =>
 			`btw usará en su lugar la clave de la variable de entorno ${variable}.`,
 		plan: 'Plan de Claude',
-		planHint:
-			'Los chats con un preajuste del plan de Claude funcionan con el plan Pro o Max con el que alguien inició sesión en Claude Code en este ordenador, en lugar de con una clave de API. btw ejecuta Claude Code y nunca ve el inicio de sesión. Los límites del plan suponen el uso normal de una persona, así que deja las automatizaciones intensivas y los subagentes en un preajuste con clave de API.',
+		plans: 'Planes',
+		plansHint:
+			'Los chats con un preajuste de plan funcionan con la suscripción propia de alguien en lugar de con una clave de API, a través del agente de quien ofrece el plan en este ordenador. btw lo ejecuta y nunca ve el inicio de sesión. Los límites de los planes suponen el uso normal de una persona, así que deja las automatizaciones intensivas y los subagentes en un preajuste con clave de API.',
+		claudePlanAbout: 'Pro o Max, a través de Claude Code.',
+		chatgptPlan: 'Plan de ChatGPT',
+		chatgptPlanAbout: 'Plus, Pro o Business, a través de Codex de OpenAI.',
+		chatgptInstall:
+			'En una terminal de este ordenador, ejecuta {setup}: instala Codex con npm, preguntando antes, e inicia sesión con ChatGPT. O instálalo tú y luego inicia sesión aquí:',
+		chatgptSignIn: 'Iniciar sesión con ChatGPT',
+		chatgptSignInAgain: 'Volver a iniciar sesión',
+		chatgptAsking: 'Preguntando a ChatGPT…',
+		signOut: 'Cerrar sesión',
+		chatgptOpen: 'Abre {link} en cualquier dispositivo e inicia sesión en ChatGPT.',
+		chatgptCode: 'Introduce este código: {code}',
+		chatgptCodeHint:
+			'El código sirve durante 15 minutos. Esta página se actualiza en cuanto se introduce.',
+		chatgptSignOutTitle: '¿Cerrar la sesión de ChatGPT?',
+		chatgptSignOutBody:
+			'Los chats con preajustes del plan de ChatGPT dejarán de funcionar hasta que alguien vuelva a iniciar sesión.',
+		signedOut: 'Sesión cerrada.',
 		notAt: 'No está en {path}, donde {command} dice que está.',
 		notInstalled: 'No está instalado en este ordenador.',
 		checkSignIn: 'Comprobar la sesión',
@@ -743,10 +765,15 @@ export const es: Messages = {
 				anthropic: 'Auto usa la ventana que Anthropic indica para el modelo.',
 				openai:
 					'OpenAI no la indica: Auto solo conoce la de sus modelos insignia (1,05M desde GPT-5.4).',
-				'claude-plan': 'Claude Code no la indica: Auto solo conoce sus modelos de 1M de contexto.'
+				openrouter:
+					'Auto usa la ventana que OpenRouter indica para el modelo y su proveedor principal.',
+				'claude-plan': 'Claude Code no la indica: Auto solo conoce sus modelos de 1M de contexto.',
+				'chatgpt-plan': 'Codex no la indica, así que Auto la deja como desconocida.'
 			},
 			onPlan: 'Funciona con el plan Pro o Max con el que inició sesión Claude Code.',
 			noClaudeCode: 'Claude Code aún no está instalado: consulta «Plan de Claude», arriba.',
+			onChatGptPlan: 'Funciona con el plan de ChatGPT con el que inició sesión Codex.',
+			noCodex: 'Codex aún no está instalado: consulta «Plan de ChatGPT», arriba.',
 			onKey: (provider: string) => `Funciona con la clave de API de ${provider}.`,
 			noKey: (provider: string) =>
 				`Todavía no hay clave de API de ${provider}: añade una en «Claves de API», arriba.`,
@@ -755,6 +782,7 @@ export const es: Messages = {
 			couldNotList: (status: number) => `btw no pudo obtener los modelos (${status}).`,
 			unreachable: 'No se pudo contactar con btw.',
 			checkingClaude: 'Comprobando Claude Code…',
+			checkingCodex: 'Comprobando Codex…',
 			checkingModel: 'Comprobando el modelo…',
 			saving: 'Guardando…',
 			pick: 'Elige un modelo',

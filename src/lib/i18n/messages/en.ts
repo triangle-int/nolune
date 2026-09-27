@@ -593,12 +593,16 @@ export const en = {
 		purposes: {
 			anthropic: 'Runs chats and automations on Claude models.',
 			openai:
-				'Runs chats and automations on OpenAI models, and makes pictures for the Images page and when the agent draws.'
+				'Runs chats and automations on OpenAI models, and makes pictures for the Images page and when the agent draws.',
+			openrouter:
+				'Runs chats and automations on the models OpenRouter serves (Claude, GPT, Gemini, DeepSeek and many more), with one key and its credits.'
 		},
 		withoutIt: {
 			anthropic: 'Chats and automations on Claude models stop working until a new key is added.',
 			openai:
-				"Chats and automations on OpenAI models stop working, and btw can't make pictures, until a new key is added."
+				"Chats and automations on OpenAI models stop working, and btw can't make pictures, until a new key is added.",
+			openrouter:
+				'Chats and automations on OpenRouter models stop working until a new key is added.'
 		},
 		savedInBtw: (hint: string | null) => `Saved in btw${hint ? ` ending in ${hint}` : ''}`,
 		fromEnv: (variable: string, hint: string | null) =>
@@ -617,8 +621,24 @@ export const en = {
 		useEnvInstead: (variable: string) =>
 			`btw will use the key in the ${variable} environment variable instead.`,
 		plan: 'Claude plan',
-		planHint:
-			"Chats on a Claude plan preset run on the Pro or Max plan someone signed in to Claude Code with on this computer, instead of an API key. btw runs Claude Code and never sees the sign-in. Plan limits assume one person's ordinary use, so keep busy automations and subagents on an API key preset.",
+		plans: 'Plans',
+		plansHint:
+			"Chats on a plan preset run on someone's own subscription instead of an API key, through the plan maker's own agent on this computer. btw runs it and never sees its sign-in. Plan limits assume one person's ordinary use, so keep busy automations and subagents on an API key preset.",
+		claudePlanAbout: 'Pro or Max, through Claude Code.',
+		chatgptPlan: 'ChatGPT plan',
+		chatgptPlanAbout: "Plus, Pro or Business, through OpenAI's Codex.",
+		chatgptInstall:
+			'In a terminal on this computer, run {setup}: it installs Codex with npm, asking first, and signs it in with ChatGPT. Or install it yourself, then sign in here:',
+		chatgptSignIn: 'Sign in with ChatGPT',
+		chatgptSignInAgain: 'Sign in again',
+		chatgptAsking: 'Asking ChatGPT…',
+		signOut: 'Sign out',
+		chatgptOpen: 'Open {link} on any device and sign in to ChatGPT.',
+		chatgptCode: 'Enter this code: {code}',
+		chatgptCodeHint: "The code works for 15 minutes. This page updates once it's entered.",
+		chatgptSignOutTitle: 'Sign out of ChatGPT?',
+		chatgptSignOutBody: 'Chats on ChatGPT plan presets stop working until someone signs in again.',
+		signedOut: 'Signed out.',
 		notAt: 'Not at {path}, where {command} says it is.',
 		notInstalled: 'Not installed on this computer.',
 		checkSignIn: 'Check sign-in',
@@ -656,10 +676,14 @@ export const en = {
 			autoContext: {
 				anthropic: 'Auto uses the window Anthropic reports for the model.',
 				openai: "OpenAI doesn't report it: Auto knows only its flagships' (1.05M since GPT-5.4).",
-				'claude-plan': "Claude Code doesn't report it: Auto knows only its 1M-context models'."
+				openrouter: 'Auto uses the window OpenRouter lists for the model and its main provider.',
+				'claude-plan': "Claude Code doesn't report it: Auto knows only its 1M-context models'.",
+				'chatgpt-plan': "Codex doesn't report it, so Auto leaves it unknown."
 			},
 			onPlan: 'Runs on the Pro or Max plan Claude Code is signed in to.',
 			noClaudeCode: "Claude Code isn't installed yet: see Claude plan, above.",
+			onChatGptPlan: 'Runs on the ChatGPT plan Codex is signed in to.',
+			noCodex: "Codex isn't installed yet: see ChatGPT plan, above.",
 			onKey: (provider: string) => `Runs on the ${provider} API key.`,
 			noKey: (provider: string) => `No ${provider} API key yet: add one under API keys, above.`,
 			asking: (source: string) => `Asking ${source} for its models…`,
@@ -667,6 +691,7 @@ export const en = {
 			couldNotList: (status: number) => `btw couldn't get the models (${status}).`,
 			unreachable: "btw couldn't be reached.",
 			checkingClaude: 'Checking Claude Code…',
+			checkingCodex: 'Checking Codex…',
 			checkingModel: 'Checking the model…',
 			saving: 'Saving…',
 			pick: 'Pick a model',

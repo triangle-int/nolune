@@ -1,17 +1,22 @@
 import { error, fail } from '@sveltejs/kit';
 import {
 	CLAUDE_INSTALL_COMMAND,
+	CODEX_INSTALL_COMMAND,
 	ApiKeyError,
+	PlanError,
 	PROVIDERS,
 	PROVIDER_LABELS,
 	addPreset,
 	apiKeyStatuses,
+	cancelChatGptSignIn,
 	checkApiKey,
 	claudePlanStatus,
-	describeAccount,
+	chatGptPlanStatus,
+	chatGptSignInState,
 	editPreset,
 	effectiveContextWindow,
 	findClaudeCode,
+	findCodex,
 	getDefaultPreset,
 	isApiKeyProvider,
 	listPresets,
@@ -19,22 +24,38 @@ import {
 	removeApiKey,
 	removePreset,
 	saveApiKey,
-	setDefaultPreset
+	setDefaultPreset,
+	signOutChatGpt,
+	startChatGptSignIn,
+	type Plan,
+	type PlanStatus
 } from '@btw/core';
 import { parseTokens } from '$lib/format';
 import { translations } from '$lib/i18n';
 import { requireAdmin } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
 
-export const load: PageServerLoad = ({ locals }) => {
+export const load: PageServerLoad = async ({ locals, depends }) => {
 	requireAdmin(locals);
+	// The page asks again while a ChatGPT sign-in waits for its code.
+	depends('btw:chatgpt-plan');
 	const defaultId = getDefaultPreset()?.id;
+	const codex = findCodex();
+	const signIn = chatGptSignInState();
 	return {
 		// Where each key comes from and its last four characters; never the keys themselves.
 		keys: apiKeyStatuses(),
 		providers: PROVIDERS.map((id) => ({ id, label: PROVIDER_LABELS[id] })),
 		// Where Claude Code is; whether it's signed in takes starting it, so that's a button.
 		claude: { ...findClaudeCode(), installCommand: CLAUDE_INSTALL_COMMAND },
+		// Where Codex is, who it's signed in as (asking takes starting it, which waits while a
+		// sign-in's code does), and a sign-in's code. Never the sign-in: Codex keeps it.
+		chatgpt: {
+			...codex,
+			...signIn,
+			installCommand: CODEX_INSTALL_COMMAND,
+			status: codex.installed && !signIn.pending ? await chatGptPlanStatus() : null
+		},
 		presets: listPresets().map((p) => ({
 			id: p.id,
 			name: p.name,
@@ -61,6 +82,16 @@ function presetFields(form: FormData) {
 		// A chip's count, or one typed like "272k".
 		contextWindow: cw ? parseTokens(cw) : null
 	};
+}
+
+/** A plan's status as a form result, for the row of the plan it's about. */
+function planResult(plan: Plan, status: PlanStatus, locale: App.Locals['locale']) {
+	if (status.problem || !status.signedIn) {
+		const { m } = translations(locale);
+		return fail(400, { plan, planError: status.problem ?? m.admin.claudeNoAnswer });
+	}
+	const { signedIn } = status;
+	return { plan, planMessage: `${signedIn[0].toUpperCase()}${signedIn.slice(1)}.` };
 }
 
 /** The provider a key form is about, or a 400. */
@@ -91,19 +122,40 @@ export const actions: Actions = {
 	},
 	checkPlan: async ({ locals }) => {
 		requireAdmin(locals);
-		const status = await claudePlanStatus();
-		if (status.problem || !status.account) {
-			const { m } = translations(locals.locale);
-			return fail(400, { planError: status.problem ?? m.admin.claudeNoAnswer });
-		}
-		const signedIn = describeAccount(status.account);
-		return { planMessage: `${signedIn[0].toUpperCase()}${signedIn.slice(1)}.` };
+		return planResult('claude-plan', await claudePlanStatus(), locals.locale);
 	},
 	removeKey: async ({ locals, request }) => {
 		requireAdmin(locals);
 		const { provider } = await keyForm(request);
 		removeApiKey(provider);
 		return { provider, keyMessage: translations(locals.locale).m.admin.removed };
+	},
+	chatgptSignIn: async ({ locals }) => {
+		requireAdmin(locals);
+		try {
+			// Waits for the code, not for it to be entered: that goes on in the background.
+			await startChatGptSignIn();
+		} catch (err) {
+			if (!(err instanceof PlanError)) throw err;
+			return fail(400, { plan: 'chatgpt-plan' as const, planError: err.message });
+		}
+	},
+	chatgptCancel: ({ locals }) => {
+		requireAdmin(locals);
+		cancelChatGptSignIn();
+	},
+	chatgptSignOut: async ({ locals }) => {
+		requireAdmin(locals);
+		try {
+			await signOutChatGpt();
+		} catch (err) {
+			if (!(err instanceof PlanError)) throw err;
+			return fail(400, { plan: 'chatgpt-plan' as const, planError: err.message });
+		}
+		return {
+			plan: 'chatgpt-plan' as const,
+			planMessage: translations(locals.locale).m.admin.signedOut
+		};
 	},
 	add: async ({ locals, request }) => {
 		requireAdmin(locals);
