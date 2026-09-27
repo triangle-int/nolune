@@ -52,7 +52,6 @@
 	const isPlan = $derived(choice === 'claude-plan' || choice === 'chatgpt-plan');
 
 	function pick(id: Choice) {
-		if (choice !== id) play('click');
 		choice = id;
 		problem = null;
 	}
@@ -331,10 +330,7 @@
 							type="button"
 							role="radio"
 							aria-checked={model === option.id}
-							onclick={() => {
-								if (model !== option.id) play('click');
-								model = option.id;
-							}}
+							onclick={() => (model = option.id)}
 							class={cn(
 								'rounded-full border px-4 py-2 text-sm transition-colors outline-none hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/30',
 								model === option.id &&

@@ -49,6 +49,8 @@
 
 	let sky = $state<SkyStage>('dark');
 	let skipped = $state(false);
+	/** Deep space behind the intro, dark whatever the theme; the page takes over at the welcome. */
+	let space = $state(true);
 	let origins = $state<{ x: number; y: number }[]>([]);
 	let skyCenter = $state<{ x: number; y: number } | null>(null);
 
@@ -81,31 +83,39 @@
 	let introRun = 0;
 
 	/**
-	 * A point of light draws the wordmark, its three dots type, then fly out as the eight avatar
-	 * colors and pool into an aurora behind the welcome. About five seconds; a click skips it.
+	 * Space, to a song: stars come out, one of them draws the wordmark, its three dots type, then
+	 * fly out as the eight avatar colors and orbit it like planets, pooling into a glow behind the
+	 * welcome as the song lifts. About 24 seconds; a click skips it.
 	 */
 	async function intro() {
 		const run = ++introRun;
 		const alive = () => run === introRun && phase === 'intro';
 		await tick();
 		if (!wordmarkBox || !letters || dots.length < 3) return;
+
+		// Timed to the song: it rises out of silence, goes quiet for the drawing, comes back for
+		// the planets, and lifts at 23.6 seconds, when the welcome comes up.
+		play('music');
+		sky = 'stars';
+		await wait(9000);
+		if (!alive()) return;
+
 		const box = wordmarkBox.getBoundingClientRect();
 		const unit = box.width / WIDTH;
 		const [first, second, third] = dots;
 		const spark = `${(innerWidth / 2 - box.left) / unit - DOTS[0].cx}px, ${(innerHeight / 2 - box.top) / unit - DOTS[0].cy}px`;
 		const start = `${-DOTS[0].cx + 40}px, 0px`;
-		const draw = 1900;
-		const sweep = 0.55;
+		const draw = 2800;
+		const sweep = 0.5;
 
-		// The intro's one sound: it swells under the drawing and typing, and hits on the burst.
-		play('shimmer');
+		// A star brightens and draws the letters.
 		first.animate(
 			[
 				{ transform: `translate(${spark}) scale(0)`, easing: 'cubic-bezier(.2,.8,.2,1)' },
 				{ transform: `translate(${spark}) scale(1.35)`, offset: 0.22, easing: 'ease-in-out' },
 				{
 					transform: `translate(${spark}) scale(1)`,
-					offset: 0.38,
+					offset: 0.36,
 					easing: 'cubic-bezier(.6,0,.4,1)'
 				},
 				{
@@ -126,9 +136,7 @@
 					{ opacity: 0.7, offset: 0.9 },
 					{ opacity: 0 }
 				],
-				{
-					duration: draw
-				}
+				{ duration: draw }
 			);
 		// The letters appear behind the light as it sweeps across them.
 		letters.animate(
@@ -143,14 +151,12 @@
 			dot.animate([{ opacity: 0 }, { opacity: 0 }], { duration: draw, fill: 'backwards' });
 		}
 		drawing = true;
-		await wait(draw * sweep);
-		if (!alive()) return;
-		await wait(draw * (1 - sweep));
+		await wait(draw);
 		if (!alive()) return;
 
 		// Typing.
-		const beat = 480;
-		const gap = 140;
+		const beat = 620;
+		const gap = 180;
 		dots.forEach((dot, k) => {
 			dot.animate(
 				[
@@ -165,9 +171,10 @@
 		await wait(2 * beat + 2 * gap);
 		if (!alive()) return;
 
-		// The dots break loose as eight colors.
+		// The dots break loose as eight colors, and circle the wordmark like planets.
 		origins = dots.map(centerOf);
-		skyCenter = centerOf(wordmarkBox);
+		// Around the letters: the dots are gone.
+		skyCenter = centerOf(letters);
 		sky = 'orbit';
 		for (const dot of dots) {
 			dot.animate([{ opacity: 1 }, { opacity: 0, transform: 'scale(1.8)' }], {
@@ -175,36 +182,40 @@
 				fill: 'forwards'
 			});
 		}
-		await wait(1500);
+		await wait(7000);
 		if (!alive()) return;
 
+		// They pool into a glow; the song goes quiet for a breath.
 		sky = 'aurora';
 		wordmarkBox.animate(
 			[{ opacity: 1 }, { opacity: 0, transform: 'translateY(-16px) scale(.97)' }],
-			{
-				duration: 450,
-				fill: 'forwards'
-			}
+			{ duration: 1400, easing: 'ease-in', fill: 'forwards' }
 		);
-		await wait(400);
+		await wait(2400);
 		if (!alive()) return;
-		// From here the welcome waits for "Let's go".
-		quiet(1.5);
+		// Space gives way to the page as the song lifts.
+		space = false;
+		await wait(800);
+		if (!alive()) return;
 		phase = 'welcome';
+		// From here the welcome waits for "Let's go"; the song rings on a moment, then fades.
+		await wait(2500);
+		quiet(4, 'music');
 	}
 
 	function skipIntro() {
 		if (phase !== 'intro') return;
 		introRun++;
-		quiet(0.6);
+		quiet(1.2);
 		skipped = true;
+		space = false;
 		sky = 'aurora';
 		phase = 'welcome';
 	}
 
 	function begin() {
 		wake();
-		play('click');
+		quiet(2.5, 'music');
 		phase = 'steps';
 	}
 
@@ -282,6 +293,7 @@
 
 <IntroSky
 	stage={sky}
+	{space}
 	{origins}
 	center={skyCenter}
 	still={skipped || reduced}
@@ -311,7 +323,10 @@
 		<Button
 			variant="ghost"
 			size="icon-sm"
-			class="text-muted-foreground"
+			class={cn(
+				'text-muted-foreground transition-colors duration-700',
+				space && 'text-white/50 hover:bg-white/10 hover:text-white dark:hover:bg-white/10'
+			)}
 			aria-label={prefs.sounds ? m.welcome.soundsOff : m.welcome.soundsOn}
 			title={prefs.sounds ? m.welcome.soundsOff : m.welcome.soundsOn}
 			onclick={() => prefs.set({ sounds: !prefs.sounds })}
@@ -334,7 +349,7 @@
 				></button>
 				<div
 					bind:this={wordmarkBox}
-					class="w-[min(22rem,70vw)] text-foreground"
+					class="w-[min(22rem,70vw)] text-white"
 					class:invisible={!drawing}
 				>
 					<Wordmark bind:letters bind:dots />
@@ -383,10 +398,7 @@
 									const value = submitter?.getAttribute('value');
 									if (submitter?.getAttribute('name') === 'avatar') {
 										cancel();
-										if (isAvatar(value) && value !== picked) {
-											play('click');
-											picked = value;
-										}
+										if (isAvatar(value)) picked = value;
 										return;
 									}
 									formData.set('avatar', picked);
@@ -473,8 +485,9 @@
 
 	{#if phase === 'intro'}
 		<p
-			class="pointer-events-none fixed inset-x-0 bottom-6 text-center text-xs text-muted-foreground"
-			in:fade={{ delay: 1200 }}
+			class="pointer-events-none fixed inset-x-0 bottom-6 text-center text-xs text-white/40"
+			in:fade={{ delay: 2000, duration: 1200 }}
+			out:fade={{ duration: 300 }}
 		>
 			{m.welcome.skipHint}
 		</p>

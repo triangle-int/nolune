@@ -1,10 +1,9 @@
 /*
  * The welcome's sounds. The rule: a sound only where the screen moves by itself (the intro, the
- * tint washing in, memories arriving), and a soft click when someone picks something. The intro
- * is one sound for the whole scene. When the
- * welcome starts waiting for someone, whatever is still ringing fades out (`quiet`).
+ * tint washing in, memories arriving), none for clicks. The intro is a song, fading out once the
+ * welcome starts waiting for someone; so does whatever else is still ringing then (`quiet`).
  *
- * Each cue is a file in src/lib/assets/sounds/welcome (`burst.mp3`), bundled with a hashed name
+ * Each cue is a file in src/lib/assets/sounds/welcome (`wash.mp3`), bundled with a hashed name
  * and fetched on first use; one without its file stays silent, so the welcome works before any
  * sounds exist.
  *
@@ -13,8 +12,8 @@
  * silent, and the first click wakes it.
  */
 
-/** The intro is one sound, the shimmer; every later moment has its own. */
-export const CUES = ['shimmer', 'click', 'confirm', 'wash', 'sparkle', 'chord', 'gather'] as const;
+/** The intro is a song, `music`; every later moment has its own sound. */
+export const CUES = ['music', 'confirm', 'wash', 'sparkle', 'chord', 'gather'] as const;
 export type Cue = (typeof CUES)[number];
 
 /** A file's name without its folder and extension: the cue it is. */
@@ -39,7 +38,10 @@ let out: GainNode | null = null;
 let enabled = true;
 const buffers = new Map<Cue, Promise<AudioBuffer | null>>();
 /** What's playing, so it can be faded when the welcome starts waiting. */
-const ringing = new Set<{ source: AudioBufferSourceNode; level: GainNode }>();
+const ringing = new Set<{ cue: Cue; source: AudioBufferSourceNode; level: GainNode }>();
+/** How often each cue was quieted (all of them under `undefined`), so one on its way stays quiet. */
+const hushes = new Map<Cue | undefined, number>();
+const hushed = (cue: Cue) => (hushes.get(undefined) ?? 0) + (hushes.get(cue) ?? 0);
 
 /** Sounds follow the Sounds setting; turning it off also quiets what's playing. */
 export function setSoundsOn(on: boolean): void {
@@ -88,19 +90,34 @@ export function wake(): void {
 	audio();
 }
 
+/** Once the browser lets the page make sound: now, or after the click that wakes it. */
+function running(c: AudioContext): Promise<void> {
+	if (c.state === 'running') return Promise.resolve();
+	return new Promise((ready) => {
+		const check = () => {
+			if (c.state !== 'running') return;
+			c.removeEventListener('statechange', check);
+			ready();
+		};
+		c.addEventListener('statechange', check);
+	});
+}
+
 /**
  * Plays a cue now. `semitones` pitches it (the sparkle cascade), `pan` places it left or right.
- * A cue whose file is still loading plays when it arrives: a short one only if it's still in
- * time, a long one (the shimmer, which swells into the burst) that much further in, to stay in
- * time with the screen.
+ * One that can't start yet (its file still loading, or the page not allowed sound until a click)
+ * plays when it can: a short one only if it's still in time, a long one (the song) that much
+ * further in, to stay in time with the screen.
  */
 export function play(cue: Cue, { semitones = 0, pan = 0, gain = 1 } = {}): void {
 	const a = audio();
 	if (!a) return;
-	const asked = a.ctx.currentTime;
-	load(cue).then((buffer) => {
-		const late = a.ctx.currentTime - asked;
-		if (!buffer || !enabled || (late > 0.25 && buffer.duration < 2)) return;
+	const asked = performance.now();
+	const hush = hushed(cue);
+	Promise.all([load(cue), running(a.ctx)]).then(([buffer]) => {
+		const late = (performance.now() - asked) / 1000;
+		if (!buffer || !enabled || hushed(cue) !== hush) return;
+		if (late >= buffer.duration || (late > 0.25 && buffer.duration < 2)) return;
 		const source = a.ctx.createBufferSource();
 		source.buffer = buffer;
 		source.playbackRate.value = 2 ** (semitones / 12);
@@ -109,7 +126,7 @@ export function play(cue: Cue, { semitones = 0, pan = 0, gain = 1 } = {}): void 
 		const panner = a.ctx.createStereoPanner();
 		panner.pan.value = Math.max(-1, Math.min(1, pan));
 		source.connect(level).connect(panner).connect(a.out);
-		const playing = { source, level };
+		const playing = { cue, source, level };
 		ringing.add(playing);
 		source.onended = () => ringing.delete(playing);
 		source.start(a.ctx.currentTime, late > 0.25 ? late * source.playbackRate.value : 0);
@@ -122,15 +139,20 @@ export function sparkle(i: number, n: number): void {
 	play('sparkle', { semitones: PENTATONIC[step], pan: Math.sin(i * 1.7) * 0.6, gain: 0.7 });
 }
 
-/** The welcome waits for someone, or is done: whatever is still ringing fades out. */
-export function quiet(fade = 1.5): void {
+/**
+ * The welcome waits for someone, or is done: whatever is still ringing fades out, or only `cue`.
+ */
+export function quiet(fade = 1.5, cue?: Cue): void {
+	hushes.set(cue, (hushes.get(cue) ?? 0) + 1);
 	if (!ctx) return;
 	const now = ctx.currentTime;
-	for (const { source, level } of ringing) {
+	for (const playing of ringing) {
+		if (cue && playing.cue !== cue) continue;
+		const { source, level } = playing;
 		level.gain.cancelScheduledValues(now);
 		level.gain.setValueAtTime(level.gain.value, now);
 		level.gain.linearRampToValueAtTime(0, now + fade);
 		source.stop(now + fade + 0.05);
+		ringing.delete(playing);
 	}
-	ringing.clear();
 }

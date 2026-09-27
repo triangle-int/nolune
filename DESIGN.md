@@ -1203,22 +1203,26 @@ on a colored circle.
 
 ## Welcome
 
-Creating a profile opens its welcome, `/p/<slug>/welcome`: a short intro, then one question per
+Creating a profile opens its welcome, `/p/<slug>/welcome`: an intro in space, then one question per
 screen, like Arc's first launch, and the profile's first chat. It sits outside the profile's
 sidebar layout (`+page@.svelte`). Each step saves as it's answered, so leaving halfway loses
 nothing, and opening the page again runs it again.
 
-- **The idea: everything is a dot.** The wordmark's three trailing dots type, then fly out as the
-  eight avatar colors, orbit and pool into an aurora behind the questions. One of those colors
+- **The idea: everything is a dot.** A star draws the wordmark, whose three trailing dots type,
+  then fly out as the eight avatar colors, orbit like planets and pool into an aurora behind the
+  questions. One of those colors
   becomes the assistant. Imported memories fly into the Memory page's dot grid, and the grid
   gathers into the avatar as the new-chat page opens.
-- **Intro** (`Wordmark.svelte`, `IntroSky.svelte` in `src/lib/components/welcome`). A point of
-  light at the middle of the screen sweeps across the letters, which appear behind it (the
-  logo's own path from `logo.svg`, revealed with a clip-path), and lands as the first dot. The
-  three dots bounce like a typing indicator and burst into eight orbs on a canvas, in the
-  `--avatar-*` colors of the page's theme, which circle the wordmark with trails and then drift
-  into soft blobs behind the welcome. About five seconds; a click or Esc skips it, and with
-  reduced motion it opens on the welcome.
+- **Intro** (`Wordmark.svelte`, `IntroSky.svelte` in `src/lib/components/welcome`). Space, after
+  Outer Wilds, timed to a song (`music`): dark whatever the theme, stars coming out over faint
+  nebulae and a galaxy band on a canvas, the camera drifting slowly into them, one shooting star.
+  At nine seconds a star at the middle of the screen brightens and sweeps across the letters,
+  which appear behind it (the logo's own path from `logo.svg`, revealed with a clip-path), and
+  lands as the first dot. The three dots bounce like a typing indicator and burst into eight
+  planets in the `--avatar-*` colors of the page's theme, each on its own faint orbit around the
+  letters, the inner ones faster. Then they melt into soft blobs, and as the song lifts (23.6 s)
+  space gives way to the page like a sunrise (a dark page keeps a few stars) and the welcome
+  comes up. A click or Esc skips it, and with reduced motion it opens on the welcome.
 - **A model, only when there is none** (`ModelStep.svelte`). Five cards: the Claude plan, the
   ChatGPT plan, and an Anthropic, OpenAI or OpenRouter key. A key is checked and saved as on Models
   & keys (a key already set skips pasting); a plan's sign-in is checked, and when its agent isn't
@@ -1252,19 +1256,20 @@ nothing, and opening the page again runs it again.
   note), landing at full strength and fading to its age. The count ticks up with them. Then the
   dots fly into the avatar, and the page goes to `/p/<slug>`; a view transition names the avatar
   on both pages (`btw-assistant`), so it glides into its place over the composer.
-- **Sounds** (`src/lib/welcome/sounds.ts`). Only where the screen moves by itself, plus a click
-  when someone picks something. The intro is one sound for the whole scene, `shimmer`: it swells
-  under the drawing and typing and hits as the dots burst into colors. Every later moment has its
-  own: `click` (a card, a model or an avatar picked), `confirm` (a key or plan check passes),
-  `wash` (the avatar's tint washing in), `sparkle` (each memory landing: one note, pitched up the
+- **Sounds** (`src/lib/welcome/sounds.ts`). Only where the screen moves by itself; clicks are
+  silent. The intro is a song, `music` (its first half minute): it rises out of silence with the
+  stars, and rings on a moment over the welcome before fading, sooner on "Let's go" or a skip.
+  Every later moment has its own: `confirm` (a key or plan check passes), `wash` (the avatar's tint washing in), `sparkle` (each memory landing: one note, pitched up the
   pentatonic scale as the grid fills, at most 40 per import), `chord` (the grid settling) and
   `gather` (the dots gathering into the avatar as the chat opens). When the welcome starts waiting
   for someone (the welcome screen, each step) or opens the chat, whatever is still ringing fades
-  out (`quiet`). Each cue is a file in `src/lib/assets/sounds/welcome` (`<cue>.mp3`), bundled
+  out (`quiet`), and a cue still loading then stays quiet. Each cue is a file in `src/lib/assets/sounds/welcome` (`<cue>.mp3`), bundled
   through `import.meta.glob` and played with Web Audio (where each came from is in `CREDITS.md`
-  next to them); one without its file is silent, and a
-  long one that loads late starts that far in, to stay in time. Browsers only play sound after a
-  click: creating the profile is one, and the welcome is a client-side navigation from there. The
+  next to them); one without its file is silent. A cue that can't start on time (still loading, or
+  the page not allowed sound yet) plays when it can: a short one only if it's still in time, the
+  song that far in, to stay in time with the screen. Browsers only play sound after a click:
+  creating the profile is one, and the welcome is a client-side navigation from there; opened
+  some other way, the song joins in at the first click. The
   Sounds setting (per device, in `btw-prefs`) and the speaker button on the welcome turn them
   off.
 

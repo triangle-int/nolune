@@ -17,7 +17,6 @@
 	import { copyText } from '$lib/clipboard';
 	import { getI18n } from '$lib/i18n';
 	import { cn } from '$lib/utils';
-	import { play } from '$lib/welcome/sounds';
 
 	interface Props {
 		prompt: string;
@@ -49,7 +48,6 @@
 
 	async function copy() {
 		await copyText(prompt);
-		play('click');
 		copied = true;
 		setTimeout(() => (copied = false), 2000);
 	}

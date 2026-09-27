@@ -5,8 +5,7 @@ after it; a cue without a file is silent.
 
 | File          | Plays for                                                    | Source                                                                                                 | License |
 | ------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ | ------- |
-| `shimmer.mp3` | the intro, the whole scene                                   | made by p5ina for btw                                                                                  |         |
-| `click.mp3`   | picking a card, a model or an avatar, and pressing buttons   | [Soft UI Button Click](https://freesound.org/people/Jummit/sounds/528561/) by Jummit on Freesound      | CC0     |
+| `music.mp3`   | the intro (the first 32 seconds, faded at the end)           | "Wistful Melodic Arc", made by p5ina for btw                                                           |         |
 | `confirm.mp3` | a key or plan check passing                                  | [Correct Choice](https://freesound.org/people/unadamlar/sounds/476178/) by unadamlar on Freesound      | CC0     |
 | `wash.mp3`    | the avatar's tint washing in                                 | [Magic Whoosh](https://freesound.org/people/DustyWind/sounds/715784/) by DustyWind on Freesound        | CC0     |
 | `sparkle.mp3` | each memory landing (pitched up the scale as the grid fills) | [ding2.wav](https://freesound.org/people/MashedTatoes2/sounds/515643/) by MashedTatoes2 on Freesound   | CC0     |
