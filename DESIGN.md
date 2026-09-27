@@ -689,9 +689,14 @@ one per topic (`family.md`, `people/anna.md`). There is no memory tool: like aut
   or an automation's message, so a web page, an email or a webhook can't write to memory. It gets
   the two messages before, for context, today's date, and the notes: core, then the ones with
   facts matching the conversation, then the most recently changed, whole up to 20,000 characters
-  and the rest by name. It answers with a JSON array of at most 10 changes (`add`, `replace`,
-  `forget`), usually `[]`, which go through the same functions as `btw memory`, so they are
-  dated and refused alike (a full core note, text that isn't there). One look at a time per
+  and the rest by name. It answers with a JSON array of at most 10 changes, usually `[]`:
+  `add` (with `under`, the heading the fact belongs under, started at the end of the note when
+  it has none, since appending to the end put a lake house under "Car") and `replace` (with
+  text, never empty). It can't remove anything: in a live test, a model deleted the old wifi
+  password without saving the new one, so a fact that stopped being true is replaced with what
+  is true now, and removing stays with people and the agent. The changes go through the same
+  functions as `btw memory`, so they are dated and refused alike (a full core note, text that
+  isn't there). One look at a time per
   profile, so two chats ending together don't save the same fact. A stretch is read once: a
   failed model call leaves it for next time, a reply without usable JSON doesn't. Hidden chats
   (background runs nobody continued, subagents) are skipped, and so is a stretch without a

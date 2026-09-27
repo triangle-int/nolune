@@ -13,7 +13,6 @@ import {
 	MAX_PINNED_CHARS,
 	MemoryError,
 	addMemoryFact,
-	forgetMemoryFact,
 	readMemoryNotes,
 	replaceInMemory
 } from './memory.ts';
@@ -25,9 +24,10 @@ import { isRunning, onLoopEnd, onRunningChange } from './runner.ts';
 /*
  * btw's note-taker. The agent saves what it learns with `btw memory` when it thinks of it, and it
  * doesn't always: facts mentioned in passing get lost. So once a chat has been quiet for a while,
- * its model looks over what was said since last time, next to the notes, and adds, corrects or
- * removes facts, through the same functions as `btw memory` (so they are dated like the agent's).
- * It reads what people wrote and btw's replies, never command output, so a web page or an email
+ * its model looks over what was said since last time, next to the notes, and adds or corrects
+ * facts, through the same functions as `btw memory` (so they are dated like the agent's). It never
+ * removes one: a model that deleted a fact without saving what replaced it lost it for good. It
+ * reads what people wrote and btw's replies, never command output, so a web page or an email
  * can't put things in memory. Each profile can turn it off on its Memory page.
  */
 
@@ -61,9 +61,9 @@ Only what a family member said or confirmed, or what btw found out and told them
 Most conversations have nothing new. Then reply with only: []
 
 Otherwise reply with only a JSON array of at most ${MAX_CHANGES} changes, without other text:
-- {"op": "add", "note": "<topic>", "fact": "<one fact>"} adds a fact to the end of a note; a new topic starts a new note.
-- {"op": "replace", "note": "<topic>", "old": "<text as it is in the note>", "new": "<new text>"} changes a fact that is no longer right. "old" must appear exactly once in the note.
-- {"op": "forget", "note": "<topic>", "text": "<text as it is in the note>"} removes the line with that text, for something a family member said is no longer true.
+- {"op": "add", "note": "<topic>", "under": "<heading>", "fact": "<one fact>"} adds a fact to a note, at the end of the part under that heading. In a note with headings, name the one the fact belongs under; a heading the note doesn't have yet is started at its end. Leave "under" out for a note without headings. A new topic starts a new note.
+- {"op": "replace", "note": "<topic>", "old": "<text as it is in the note>", "new": "<new text>"} changes a fact that is no longer right into what is true now. "old" must appear exactly once in the note.
+You can't remove anything: when a fact stopped being true, replace it with what is true now, like "Olga visited on October 12, 2026" or "Sold the blue car in September 2026".
 
 How to write them:
 - One fact each: short, true on its own, in the language the notes are in (or the one the family writes in, while there are none). Name people instead of writing "I" or "she", and write dates in full instead of "tomorrow".
@@ -72,9 +72,8 @@ How to write them:
 - Don't repeat what a note already says, even in other words: when a fact changed, replace it.`;
 
 export type MemoryChange =
-	| { op: 'add'; note: string; fact: string }
-	| { op: 'replace'; note: string; old: string; new: string }
-	| { op: 'forget'; note: string; text: string };
+	| { op: 'add'; note: string; fact: string; under?: string }
+	| { op: 'replace'; note: string; old: string; new: string };
 
 /** The changes in a reply, without whatever surrounds the JSON; null if it holds none. */
 export function parseChanges(raw: string): MemoryChange[] | null {
@@ -97,12 +96,11 @@ export function parseChanges(raw: string): MemoryChange[] | null {
 		const note = text(change.note);
 		if (!note) continue;
 		if (change.op === 'add' && text(change.fact)) {
-			changes.push({ op: 'add', note, fact: change.fact as string });
-		} else if (change.op === 'replace' && text(change.old) && typeof change.new === 'string') {
-			if (change.new.length > MAX_FACT_CHARS) continue;
-			changes.push({ op: 'replace', note, old: change.old as string, new: change.new });
-		} else if (change.op === 'forget' && text(change.text)) {
-			changes.push({ op: 'forget', note, text: change.text as string });
+			const under = text(change.under);
+			changes.push({ op: 'add', note, fact: change.fact as string, ...(under ? { under } : {}) });
+		} else if (change.op === 'replace' && text(change.old) && text(change.new)) {
+			// Never an empty `new`: that would remove the fact.
+			changes.push({ op: 'replace', note, old: change.old as string, new: change.new as string });
 		}
 		if (changes.length === MAX_CHANGES) break;
 	}
@@ -183,10 +181,10 @@ function memoryInput(slug: string, conversation: string): string {
 
 function applyChange(slug: string, change: MemoryChange): 'saved' | 'duplicate' {
 	if (change.op === 'add') {
-		return addMemoryFact(slug, change.note, change.fact).duplicate ? 'duplicate' : 'saved';
+		const { duplicate } = addMemoryFact(slug, change.note, change.fact, change.under);
+		return duplicate ? 'duplicate' : 'saved';
 	}
-	if (change.op === 'replace') replaceInMemory(slug, change.note, change.old, change.new);
-	else forgetMemoryFact(slug, change.note, change.text);
+	replaceInMemory(slug, change.note, change.old, change.new);
 	return 'saved';
 }
 

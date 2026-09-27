@@ -113,7 +113,7 @@ describe('learnFrom', () => {
 		expect(input).toContain('<conversation>\nAnna: Yes, that one.\n</conversation>');
 	});
 
-	it('corrects and forgets facts, and skips the changes that no longer fit', async () => {
+	it('corrects facts but never removes one, and skips the changes that no longer fit', async () => {
 		const { profile, conv } = chat('Rex is called Max now. And we changed the wifi.');
 		addMemoryFact(profile.slug, 'pets', 'The dog is called Rex');
 		addMemoryFact(profile.slug, 'home', 'Wifi password: mango42');
@@ -121,6 +121,7 @@ describe('learnFrom', () => {
 			JSON.stringify([
 				{ op: 'replace', note: 'pets', old: 'called Rex', new: 'called Max' },
 				{ op: 'forget', note: 'home', text: 'wifi password' },
+				{ op: 'replace', note: 'home', old: 'Wifi password: mango42', new: '' },
 				{ op: 'replace', note: 'pets', old: 'a cat', new: 'two cats' },
 				{ op: 'add', note: '../outside', fact: 'Nope' },
 				{ op: 'add', note: 'pets', fact: 'The dog is called Max' }
@@ -128,11 +129,10 @@ describe('learnFrom', () => {
 		);
 
 		expect(await learnFrom(conv.id)).toEqual([
-			{ op: 'replace', note: 'pets', old: 'called Rex', new: 'called Max' },
-			{ op: 'forget', note: 'home', text: 'wifi password' }
+			{ op: 'replace', note: 'pets', old: 'called Rex', new: 'called Max' }
 		]);
 		expect(readMemoryNote(profile.slug, 'pets').text).toBe('# Pets\n\n- The dog is called Max\n');
-		expect(readMemoryNote(profile.slug, 'home').text).not.toContain('mango42');
+		expect(readMemoryNote(profile.slug, 'home').text).toContain('mango42');
 	});
 
 	it('leaves chats alone when the profile turned it off, or no person wrote anything new', async () => {
@@ -194,11 +194,12 @@ describe('parseChanges', () => {
 	it('reads the changes around other text, and drops broken ones', () => {
 		expect(
 			parseChanges(
-				'Sure.\n```json\n[{"op":"add","note":"pets","fact":"Rex"},{"op":"add","note":"pets"},{"op":"move"},"x",{"op":"forget","note":"home","text":"wifi"}]\n```'
+				'Sure.\n```json\n[{"op":"add","note":"pets","fact":"Rex"},{"op":"add","note":"pets"},{"op":"move"},"x",{"op":"add","note":"home","under":"Places","fact":"Lake house"},{"op":"forget","note":"home","text":"wifi"},{"op":"replace","note":"home","old":"wifi","new":"Wifi: papaya77"}]\n```'
 			)
 		).toEqual([
 			{ op: 'add', note: 'pets', fact: 'Rex' },
-			{ op: 'forget', note: 'home', text: 'wifi' }
+			{ op: 'add', note: 'home', under: 'Places', fact: 'Lake house' },
+			{ op: 'replace', note: 'home', old: 'wifi', new: 'Wifi: papaya77' }
 		]);
 		expect(parseChanges('[]')).toEqual([]);
 		expect(parseChanges('Nothing new.')).toBeNull();

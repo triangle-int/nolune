@@ -73,3 +73,30 @@ describe('the core note', () => {
 		expect(readMemoryNote(profile.slug, 'core').text).toBe('- Mine\n');
 	});
 });
+
+describe('adding a fact', () => {
+	it('puts it under the heading it belongs to, starting one the note lacks', () => {
+		const { profile } = makeFamily();
+		writeMemoryNote(
+			profile.slug,
+			'home',
+			'# Home\n\n- We moved here in 2019\n\n## Internet\n\n- Wifi password: mango42\n\n## Car\n\n- Spare key in the hall\n'
+		);
+		addMemoryFact(profile.slug, 'home', 'Router is in the attic', 'internet');
+		addMemoryFact(profile.slug, 'home', 'Lake house near Tver', 'Places');
+		addMemoryFact(profile.slug, 'home', 'Car is blue');
+		addMemoryFact(profile.slug, 'home', 'We moved here in 2019', 'Home');
+		expect(readMemoryNote(profile.slug, 'home').text).toBe(
+			'# Home\n\n- We moved here in 2019\n\n## Internet\n\n- Wifi password: mango42\n- Router is in the attic\n\n## Car\n\n- Spare key in the hall\n\n## Places\n\n- Lake house near Tver\n- Car is blue\n'
+		);
+
+		addMemoryFact(profile.slug, 'people/leo', 'Swims on Thursdays', 'Sports');
+		addMemoryFact(profile.slug, 'people/mia', 'Plays piano', 'Mia');
+		addMemoryFact(profile.slug, 'pets', 'The dog is called Rex');
+		expect(readMemoryNote(profile.slug, 'people/leo').text).toBe(
+			'# Leo\n\n## Sports\n\n- Swims on Thursdays\n'
+		);
+		expect(readMemoryNote(profile.slug, 'people/mia').text).toBe('# Mia\n\n- Plays piano\n');
+		expect(readMemoryNote(profile.slug, 'pets').text).toBe('# Pets\n\n- The dog is called Rex\n');
+	});
+});

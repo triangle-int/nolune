@@ -364,11 +364,42 @@ export function readMemoryNote(slug: string, topic: string): { path: string; tex
 
 // --- Changes, for `btw memory` ---
 
-/** Adds one fact as a bullet at the end of a note, creating the note if needed. */
+/**
+ * `text` with a bullet at the end of the part under the heading `under`, which is started at the
+ * end when the note doesn't have it; without `under`, at the end of the note.
+ */
+function withFact(text: string, bullet: string, under: string | undefined): string {
+	const lines = text.trimEnd().split('\n');
+	const heading = under
+		?.replace(/^#+\s*/, '')
+		.replace(/\s+/g, ' ')
+		.trim();
+	if (!heading) return `${lines.join('\n')}\n${bullet}\n`;
+	const headingOf = (line: string) => line.trim().match(/^(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/);
+	const at = lines.findIndex(
+		(line) => headingOf(line)?.[2].toLowerCase() === heading.toLowerCase()
+	);
+	if (at === -1) return `${lines.join('\n')}\n\n## ${heading}\n\n${bullet}\n`;
+	// Up to the next heading of any level, as readFacts tells which heading a fact is under.
+	let end = lines.findIndex((line, i) => i > at && headingOf(line));
+	if (end === -1) end = lines.length;
+	// After the part's last line, so the blank line before the next heading stays.
+	let last = end - 1;
+	while (last > at && !lines[last].trim()) last--;
+	// A heading with nothing under it yet gets a blank line before its first fact.
+	lines.splice(last + 1, 0, ...(last === at ? ['', bullet] : [bullet]));
+	return `${lines.join('\n')}\n`;
+}
+
+/**
+ * Adds one fact as a bullet at the end of a note, or of the part under the heading `under`,
+ * creating the note if needed.
+ */
 export function addMemoryFact(
 	slug: string,
 	topic: string,
-	fact: string
+	fact: string,
+	under?: string
 ): { path: string; created: boolean; duplicate: boolean } {
 	const root = openMemory(slug);
 	const full = notePath(root, topic);
@@ -385,9 +416,12 @@ export function addMemoryFact(
 	if (parseFacts(before).some((known) => factKey(known) === key)) {
 		return { path, created: false, duplicate: true };
 	}
+	const title = `# ${titleOf(path)}`;
 	const text = before.trim()
-		? `${before.trimEnd()}\n- ${line}\n`
-		: `# ${titleOf(path)}\n\n- ${line}\n`;
+		? withFact(before, `- ${line}`, under)
+		: under
+			? withFact(title, `- ${line}`, under)
+			: `${title}\n\n- ${line}\n`;
 	saveNote(root, full, text);
 	return { path, created: !exists, duplicate: false };
 }
