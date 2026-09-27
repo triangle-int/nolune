@@ -731,6 +731,10 @@ export const de: Messages = {
 		arrival: {
 			thingsIKnow: (n: number) =>
 				p(n, { one: 'Sache, die ich über dich weiß', other: 'Dinge, die ich über dich weiß' })
+		},
+		fresh: {
+			title: 'Ein neuer Anfang.',
+			subtitle: 'Ich lerne dich kennen, während wir reden.'
 		}
 	},
 

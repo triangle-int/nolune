@@ -1242,7 +1242,7 @@ nothing, and opening the page again runs it again.
   line under a heading counts; without one, only dated lines and list items do, so the
   assistant's own sentences stay out. An answer that doesn't follow the format goes to the
   default preset with `quickReply`, told to only rewrite it and to treat it as data. "Start
-  fresh" skips to the chat.
+  fresh" skips to the fresh start.
 - **Where they go** (`importMemoryExport`, `memory-import.ts`). A profile is shared, so rules are
   pinned in `core.md` with the person's first name ("Jamie: keep answers short"), and what
   doesn't fit its 4,000 characters goes to their own note. Identity, career, preferences and
@@ -1259,14 +1259,21 @@ nothing, and opening the page again runs it again.
   the page goes to `/p/<slug>`: a view transition names the avatar on both pages
   (`btw-assistant`), so it glides into its place over the composer while the page gives way over
   two seconds (`html.btw-arrive`), landing on the song's last note.
+- **A fresh start** (`FreshStart.svelte`), for "Start fresh" or an import that added nothing: an
+  ending too, to the same last phrase. The avatar bounces in, the eight colors from the intro come
+  out around it as planets on faint orbits (behind it on the far side, in front on the near one),
+  "A fresh start." comes up on the second bar, and as the phrase turns they spiral into the
+  avatar, which glows with each, before the chat opens as after the memories.
 - **Sounds** (`src/lib/welcome/sounds.ts`). A song, and a sound only where the screen moves by
   itself; clicks are silent. The song (`music`) plays the intro, rising out of silence with the
   stars; once the welcome waits it plays on much quieter under the questions (`duck` to `UNDER`),
   going round for as long as they take. When the memories arrive it jumps to its last phrase at
-  full level (`LAST_PHRASE`, 179.8 s) and ends by itself over the new chat; with nothing to bring
-  over it fades as the chat opens. It streams through a media element in the Web Audio graph, so
-  three and a half minutes of music are never decoded at once. The two short sounds are `confirm`
-  (a key or plan check passes) and `wash` (the avatar's tint washing in). Each sound is a file in
+  full level (`lastPhrase`, 179.8 s in, with its bars in `PHRASE`) for both endings, and ends by
+  itself over the new chat. It streams through a media element in the Web Audio graph, so
+  three and a half minutes of music are never decoded at once. The short sounds are `confirm`
+  (a key or plan check passes), `wash` (the avatar's tint washing in) and `yap`: a small animal's
+  shout when an avatar is picked or the big one poked, sped up and pitched to each avatar's own
+  voice (`VOICES`, a scale from lowest to highest), a little different each time. Each sound is a file in
   `src/lib/assets/sounds/welcome` (`<name>.mp3`), bundled through `import.meta.glob` (where each
   came from is in `CREDITS.md` next to them); one without its file is silent. The screen waits
   for the song to start, up to a second and a half; one that can't start on time (still loading,

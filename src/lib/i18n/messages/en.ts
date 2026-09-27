@@ -659,6 +659,10 @@ export const en = {
 		arrival: {
 			thingsIKnow: (n: number) =>
 				p(n, { one: 'thing I know about you', other: 'things I know about you' })
+		},
+		fresh: {
+			title: 'A fresh start.',
+			subtitle: "I'll get to know you as we talk."
 		}
 	},
 

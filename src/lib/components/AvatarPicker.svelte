@@ -14,9 +14,11 @@
 		hero?: boolean;
 		/** The stage, for whoever wants to know where the pick is shown. */
 		stage?: HTMLElement;
+		/** Makes the big avatar pokeable: it squashes, and this is called (the welcome's yap). */
+		onpoke?: () => void;
 	}
 
-	let { avatar, hero = false, stage = $bindable() }: Props = $props();
+	let { avatar, hero = false, stage = $bindable(), onpoke }: Props = $props();
 
 	const { m } = getI18n();
 
@@ -33,6 +35,21 @@
 
 	/** What's under the pointer shows off its motion: a tile's avatar, or the big one. */
 	let hovered = $state<Avatar | 'stage' | null>(null);
+
+	function poke(event: MouseEvent & { currentTarget: HTMLElement }) {
+		if (!prefersReducedMotion.current) {
+			event.currentTarget.animate(
+				[
+					{ transform: 'scale(1)' },
+					{ transform: 'scale(1.14, 0.86)', offset: 0.3 },
+					{ transform: 'scale(0.94, 1.06)', offset: 0.65 },
+					{ transform: 'scale(1)' }
+				],
+				{ duration: 380, easing: 'ease-out' }
+			);
+		}
+		onpoke?.();
+	}
 
 	function hover(what: Avatar | 'stage') {
 		return {
@@ -80,11 +97,22 @@
 					easing: backOut
 				}}
 			>
-				<AssistantAvatar
-					{avatar}
-					mood={hovered === 'stage' ? 'working' : 'done'}
-					size={hero ? 112 : 72}
-				/>
+				{#if onpoke}
+					<!-- For the pointer only: the roster below is how it's picked. -->
+					<button type="button" tabindex="-1" class="block cursor-pointer" onclick={poke}>
+						<AssistantAvatar
+							{avatar}
+							mood={hovered === 'stage' ? 'working' : 'done'}
+							size={hero ? 112 : 72}
+						/>
+					</button>
+				{:else}
+					<AssistantAvatar
+						{avatar}
+						mood={hovered === 'stage' ? 'working' : 'done'}
+						size={hero ? 112 : 72}
+					/>
+				{/if}
 			</div>
 		{/key}
 		<span class="relative text-sm font-medium">{m.avatars[avatar]}</span>

@@ -21,6 +21,7 @@
 	import AvatarPicker from '$lib/components/AvatarPicker.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import IntroSky, { type SkyStage } from '$lib/components/welcome/IntroSky.svelte';
+	import FreshStart from '$lib/components/welcome/FreshStart.svelte';
 	import MemoryArrival from '$lib/components/welcome/MemoryArrival.svelte';
 	import MemoryStep from '$lib/components/welcome/MemoryStep.svelte';
 	import ModelStep from '$lib/components/welcome/ModelStep.svelte';
@@ -29,7 +30,7 @@
 	import { getPreferences } from '$lib/preferences.svelte';
 	import { avatarTint, tintStyle } from '$lib/tint';
 	import { cn } from '$lib/utils';
-	import { UNDER, duck, music, play, quiet, setSoundsOn, wake } from '$lib/welcome/sounds';
+	import { UNDER, duck, music, play, quiet, setSoundsOn, wake, yap } from '$lib/welcome/sounds';
 
 	let { data } = $props();
 	const { m } = getI18n();
@@ -43,7 +44,7 @@
 		'memory'
 	]);
 
-	let phase = $state<'intro' | 'welcome' | 'steps' | 'hello' | 'arrival'>('intro');
+	let phase = $state<'intro' | 'welcome' | 'steps' | 'hello' | 'arrival' | 'fresh'>('intro');
 	let step = $state(0);
 	let back = $state(false);
 
@@ -260,12 +261,12 @@
 	}
 
 	/**
-	 * On to the profile's first chat. After the memories arrive, the song plays its end over it and
-	 * the page gives way slowly; otherwise the song fades.
+	 * On to the profile's first chat. After the memories arrive, or the fresh start, the song plays
+	 * its end over it and the page gives way slowly; otherwise the song fades.
 	 */
 	async function finish() {
 		finishing = true;
-		if (phase !== 'arrival') quiet(3, 'music');
+		if (phase !== 'arrival' && phase !== 'fresh') quiet(3, 'music');
 		else if ('startViewTransition' in document && !reduced) {
 			document.documentElement.classList.add('btw-arrive');
 		}
@@ -319,7 +320,7 @@
 
 <div class="relative flex h-dvh flex-col bg-transparent">
 	<header class="relative z-20 flex h-14 shrink-0 items-center justify-end gap-2 px-4">
-		{#if phase === 'steps' || phase === 'hello' || phase === 'arrival'}
+		{#if phase !== 'intro' && phase !== 'welcome'}
 			<ol
 				class="absolute left-1/2 flex -translate-x-1/2 gap-1.5"
 				aria-label={m.welcome.progress(Math.min(step + 1, steps.length), steps.length)}
@@ -415,7 +416,10 @@
 									const value = submitter?.getAttribute('value');
 									if (submitter?.getAttribute('name') === 'avatar') {
 										cancel();
-										if (isAvatar(value)) picked = value;
+										if (isAvatar(value)) {
+											picked = value;
+											yap(value);
+										}
 										return;
 									}
 									formData.set('avatar', picked);
@@ -438,7 +442,12 @@
 										{m.welcome.avatar.subtitle(data.welcome.name)}
 									</p>
 								</div>
-								<AvatarPicker avatar={picked} hero bind:stage={stageEl} />
+								<AvatarPicker
+									avatar={picked}
+									hero
+									bind:stage={stageEl}
+									onpoke={() => yap(picked)}
+								/>
 								{#if avatarProblem}
 									<p class="text-center text-sm text-destructive" role="alert">{avatarProblem}</p>
 								{/if}
@@ -459,13 +468,13 @@
 								prompt={data.exportPrompt}
 								avatar={picked}
 								onimported={(result, lines) => {
-									if (!result.added) finish();
+									if (!result.added) phase = 'fresh';
 									else {
 										imported = { notes: result.notes, lines };
 										phase = 'arrival';
 									}
 								}}
-								onskip={finish}
+								onskip={() => (phase = 'fresh')}
 							/>
 						{/if}
 					</div>
@@ -486,6 +495,10 @@
 					>
 						{m.welcome.avatar.hello}
 					</p>
+				</div>
+			{:else if phase === 'fresh'}
+				<div in:fade={{ duration: reduced ? 0 : 500 }}>
+					<FreshStart avatar={picked} ondone={finish} />
 				</div>
 			{:else if phase === 'arrival' && imported}
 				<div class="w-full max-w-2xl">

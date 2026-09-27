@@ -10,7 +10,7 @@
 	import { factInk, factShade } from '$lib/components/memory/DotGrid.svelte';
 	import { getI18n } from '$lib/i18n';
 	import { memoryTopic } from '$lib/memory';
-	import { music } from '$lib/welcome/sounds';
+	import { PHRASE, lastPhrase } from '$lib/welcome/sounds';
 
 	interface Props {
 		avatar: Avatar;
@@ -29,14 +29,9 @@
 	 * Every dot lands at full strength, then fades to its fact's age, as the Memory page shades
 	 * it: what the other assistant learned years ago settles lighter than last week's.
 	 *
-	 * It all keeps time with the song's last phrase, which starts `LAST_PHRASE` seconds in; its
-	 * bars fall about every 2.6 seconds from there.
+	 * It all keeps time with the song's last phrase (`PHRASE`): the dots fly on its second bar,
+	 * gather into the avatar as it turns, and the chat opens on its last note.
 	 */
-	const LAST_PHRASE = 179.8;
-	/** When the dots fly (the second bar), gather into the avatar (the fifth, as the phrase turns), and the chat opens, landing on the last note. */
-	const FLY = 2.65;
-	const GATHER = 10.45;
-	const OPEN = 15.8;
 
 	/** Lines shown in the box before they fly; the rest leave from its bottom edge. */
 	const VISIBLE_LINES = 12;
@@ -136,7 +131,7 @@
 
 	async function run() {
 		// The song goes to its last phrase; everything from here keeps time with it.
-		await music(LAST_PHRASE, { loop: false });
+		await lastPhrase();
 		const start = performance.now();
 		const at = (seconds: number) => wait(start + seconds * 1000 - performance.now());
 
@@ -148,7 +143,7 @@
 			ondone();
 			return;
 		}
-		await at(FLY);
+		await at(PHRASE.second);
 
 		// Where each line is now, before the box gives way to the grid.
 		const sources = shownLines.map((_, i) => (lineEls[i] ? centerOf(lineEls[i]) : null));
@@ -184,7 +179,7 @@
 
 		phase = 'settled';
 		mood = 'done';
-		await at(GATHER);
+		await at(PHRASE.turn);
 
 		// Everything drifts into the avatar, which glows as it takes them in.
 		phase = 'gathering';
@@ -207,7 +202,7 @@
 			)
 		);
 		mood = 'done';
-		await at(OPEN);
+		await at(PHRASE.open);
 		ondone();
 	}
 

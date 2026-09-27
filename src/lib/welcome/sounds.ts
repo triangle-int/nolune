@@ -1,6 +1,7 @@
 /*
  * The welcome's sounds: a song, and a sound only where the screen moves by itself (a check
- * passing, the tint washing in); clicks are silent.
+ * passing, the tint washing in) or where an avatar is picked or poked, which yaps in its own
+ * voice; other clicks are silent.
  *
  * The song plays the intro, then stays on under the questions, much quieter (`duck`), for as long
  * as they take. When the memories arrive it jumps to its last phrase at full level, and ends by
@@ -16,14 +17,25 @@
  * silent, and the first click wakes it.
  */
 
+import { AVATARS, type Avatar } from '@btw/core/avatars';
+
 /** The short sounds, played from memory. */
-export const CUES = ['confirm', 'wash'] as const;
+export const CUES = ['confirm', 'wash', 'yap'] as const;
 export type Cue = (typeof CUES)[number];
 /** A short sound, or the song. */
 type Sound = Cue | 'music';
 
 /** How loud the song stays under the questions. */
 export const UNDER = 0.15;
+
+/** Where the song's last phrase starts, in seconds: the welcome ends to it. */
+export const LAST_PHRASE = 179.8;
+/**
+ * Moments in the last phrase, in seconds from its start. Its bars fall about every 2.6 seconds:
+ * the second, the turn (the fifth, where the phrase heads home), and when the chat starts opening,
+ * to be in place on the last note.
+ */
+export const PHRASE = { second: 2.65, turn: 10.45, open: 15.8 };
 
 /** A file's name without its folder and extension: the sound it is. */
 const nameOf = (path: string) => path.slice(path.lastIndexOf('/') + 1).replace(/\.[^.]+$/, '');
@@ -148,10 +160,11 @@ function ramp(level: GainNode, to: number, fade: number): void {
 }
 
 /**
- * Plays a short cue now. One that can't start yet (still loading, or the page not allowed sound
- * until a click) plays when it can, if it's still in time.
+ * Plays a short cue now, `rate` times as fast (and that much higher). One that can't start yet
+ * (still loading, or the page not allowed sound until a click) plays when it can, if it's still
+ * in time.
  */
-export function play(cue: Cue): void {
+export function play(cue: Cue, { rate = 1, gain = 1 } = {}): void {
 	const a = audio();
 	if (!a) return;
 	const asked = performance.now();
@@ -161,7 +174,9 @@ export function play(cue: Cue): void {
 		if (performance.now() - asked > 250) return;
 		const source = a.ctx.createBufferSource();
 		source.buffer = buffer;
+		source.playbackRate.value = rate;
 		const level = a.ctx.createGain();
+		level.gain.value = gain;
 		source.connect(level).connect(a.out);
 		const playing = { cue, source, level };
 		ringing.add(playing);
@@ -211,6 +226,23 @@ export function music(from = 0, { level = 1, loop = true } = {}): Promise<void> 
 		if (turn === songTurn) ramp(s.level, s.at, 0.25);
 	})();
 	return Promise.race([playing, wait(1500).then(() => void (since = performance.now()))]);
+}
+
+/** Each avatar's voice, in semitones from the yap's own (sped up): a scale from lowest to highest. */
+const VOICES = [-5, -3, -1, 0, 2, 4, 5, 7];
+
+/**
+ * An avatar yaps in its own voice, a little different each time, so clicking through them sounds
+ * like a roll call rather than one sound over and over.
+ */
+export function yap(avatar: Avatar): void {
+	const semitones = VOICES[AVATARS.indexOf(avatar) % VOICES.length] + (Math.random() - 0.5);
+	play('yap', { rate: 1.35 * 2 ** (semitones / 12), gain: 0.8 });
+}
+
+/** The song goes to its last phrase at full level, and ends by itself over whatever comes next. */
+export function lastPhrase(): Promise<void> {
+	return music(LAST_PHRASE, { loop: false });
 }
 
 /** The song goes on at `level` (`UNDER`, while the welcome waits), over `fade` seconds. */
