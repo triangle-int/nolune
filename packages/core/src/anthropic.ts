@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import Anthropic, { toFile } from '@anthropic-ai/sdk';
+import type Anthropic from '@anthropic-ai/sdk';
 import { apiKeyHelp, configuredApiKey } from './config.ts';
 import type { CacheTtl, Effort, StreamEvent } from './models.ts';
 
@@ -7,6 +7,26 @@ import type { CacheTtl, Effort, StreamEvent } from './models.ts';
  * Chats on Claude, through Anthropic's Messages API and its SDK, and the Files API for pictures
  * and PDFs. The rest of btw calls it through models.ts.
  */
+
+type Sdk = typeof import('@anthropic-ai/sdk');
+type ErrorClass =
+	'APIError' | 'APIUserAbortError' | 'AuthenticationError' | 'NotFoundError' | 'RateLimitError';
+
+let sdk: Sdk | undefined;
+
+/**
+ * The SDK is imported on first use. The CLI bundles all of core, and most `btw` commands never
+ * call Claude: importing it up front would make each of them slower.
+ */
+async function loadSdk(): Promise<Sdk> {
+	sdk ??= await import('@anthropic-ai/sdk');
+	return sdk;
+}
+
+/** Before the SDK is loaded no error can be one of its classes, so this doesn't load it. */
+function isSdkError<K extends ErrorClass>(err: unknown, name: K): err is InstanceType<Sdk[K]> {
+	return sdk !== undefined && err instanceof sdk[name];
+}
 
 let cached: { key: string | undefined; client: Anthropic } | undefined;
 
@@ -22,9 +42,10 @@ function apiKey(): string {
 	return found.key;
 }
 
-export function getClient(): Anthropic {
+export async function getClient(): Promise<Anthropic> {
 	const key = apiKey();
-	if (!cached || cached.key !== key) cached = { key, client: new Anthropic({ apiKey: key }) };
+	const { Anthropic: Client } = await loadSdk();
+	if (!cached || cached.key !== key) cached = { key, client: new Client({ apiKey: key }) };
 	return cached.client;
 }
 
@@ -50,7 +71,8 @@ export async function streamTurn(opts: {
 }): Promise<Anthropic.Message> {
 	const adaptive = supportsAdaptiveThinking(opts.model);
 	const cache = { type: 'ephemeral', ttl: opts.cacheTtl } as const;
-	const stream = getClient().messages.stream(
+	const client = await getClient();
+	const stream = client.messages.stream(
 		{
 			model: opts.model,
 			max_tokens: 64000,
@@ -93,14 +115,15 @@ export async function streamTurn(opts: {
 }
 
 /** One short exchange, not streamed, at low effort where the model takes one (see models.ts). */
-export function createMessage(opts: {
+export async function createMessage(opts: {
 	model: string;
 	system: string;
 	input: string;
 	maxTokens: number;
 	timeoutMs: number;
 }): Promise<Anthropic.Message> {
-	return getClient().messages.create(
+	const client = await getClient();
+	return client.messages.create(
 		{
 			model: opts.model,
 			max_tokens: opts.maxTokens,
@@ -131,25 +154,29 @@ export const anthropicFiles = {
 		return createHash('sha256').update(apiKey()).digest('hex').slice(0, 16);
 	},
 	async upload(data: Buffer, name: string, mime: string): Promise<string> {
+		const client = await getClient();
+		const { toFile } = await loadSdk();
 		const file = await toFile(data, filesApiName(name), { type: mime });
-		return (await getClient().files.upload({ file })).id;
+		return (await client.files.upload({ file })).id;
 	},
 	/** False once the file was deleted (in the Console, say); other failures throw. */
 	async exists(fileId: string): Promise<boolean> {
+		const client = await getClient();
 		try {
-			await getClient().files.retrieveMetadata(fileId);
+			await client.files.retrieveMetadata(fileId);
 			return true;
 		} catch (err) {
-			if (err instanceof Anthropic.NotFoundError) return false;
+			if (isSdkError(err, 'NotFoundError')) return false;
 			throw err;
 		}
 	},
 	/** Resolves when the file is gone, also when it already was. */
 	async remove(fileId: string): Promise<void> {
+		const client = await getClient();
 		try {
-			await getClient().files.delete(fileId);
+			await client.files.delete(fileId);
 		} catch (err) {
-			if (!(err instanceof Anthropic.NotFoundError)) throw err;
+			if (!isSdkError(err, 'NotFoundError')) throw err;
 		}
 	}
 };
@@ -159,7 +186,8 @@ export const anthropicFiles = {
  * the whole document, so it also throws for PDFs it can't use (encrypted, too many pages).
  */
 export async function countDocumentTokens(model: string, fileId: string): Promise<number> {
-	const count = await getClient().messages.countTokens({
+	const client = await getClient();
+	const count = await client.messages.countTokens({
 		model,
 		messages: [
 			{ role: 'user', content: [{ type: 'document', source: { type: 'file', file_id: fileId } }] }
@@ -169,25 +197,25 @@ export async function countDocumentTokens(model: string, fileId: string): Promis
 }
 
 export async function fetchContextWindow(model: string): Promise<number | null> {
-	const info = await getClient().models.retrieve(model);
+	const client = await getClient();
+	const info = await client.models.retrieve(model);
 	return info.max_input_tokens ?? null;
 }
 
 export function describeApiError(err: unknown): string {
 	if (err instanceof MissingApiKeyError) return err.message;
-	if (err instanceof Anthropic.AuthenticationError) {
+	if (isSdkError(err, 'AuthenticationError')) {
 		return `Anthropic didn't accept the API key. ${apiKeyHelp('anthropic')}`;
 	}
-	if (err instanceof Anthropic.RateLimitError)
-		return 'Rate limited by Anthropic. Try again shortly.';
-	if (err instanceof Anthropic.NotFoundError) return `Model not found: ${err.message}`;
-	if (err instanceof Anthropic.APIError) return `Anthropic API error ${err.status}: ${err.message}`;
+	if (isSdkError(err, 'RateLimitError')) return 'Rate limited by Anthropic. Try again shortly.';
+	if (isSdkError(err, 'NotFoundError')) return `Model not found: ${err.message}`;
+	if (isSdkError(err, 'APIError')) return `Anthropic API error ${err.status}: ${err.message}`;
 	return err instanceof Error ? err.message : String(err);
 }
 
 /** The API's own message, without the status and JSON around it: for notes shown to the model. */
 export function shortApiError(err: unknown): string {
-	if (err instanceof Anthropic.APIError) {
+	if (isSdkError(err, 'APIError')) {
 		const body = err.error as { error?: { message?: unknown } } | undefined;
 		if (typeof body?.error?.message === 'string') return body.error.message;
 	}
@@ -195,5 +223,5 @@ export function shortApiError(err: unknown): string {
 }
 
 export function isAbortError(err: unknown): boolean {
-	return err instanceof Anthropic.APIUserAbortError;
+	return isSdkError(err, 'APIUserAbortError');
 }
