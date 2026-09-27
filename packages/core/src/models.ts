@@ -1,10 +1,11 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import * as anthropic from './anthropic.ts';
 import * as claudePlan from './claude-plan.ts';
-import * as codex from './codex-chat.ts';
+import * as chatgptPlan from './chatgpt-plan.ts';
 import { replyBlocks, toolCalls, type ReplyBlock } from './content-blocks.ts';
 import type { Usage } from './conversations.ts';
 import * as openai from './openai-chat.ts';
+import { PlanError } from './plans.ts';
 
 /*
  * A model call as the rest of btw sees it, whichever provider runs it. Each provider's module
@@ -16,8 +17,8 @@ import * as openai from './openai-chat.ts';
  * hands it whole turns rather than calling streamTurn.
  */
 
-/** `codex` is OpenAI's models on a ChatGPT plan, signed in with ChatGPT (codex-chat.ts). */
-export const PROVIDERS = ['anthropic', 'openai', 'claude-plan', 'codex'] as const;
+/** `claude-plan` and `chatgpt-plan` run on someone's subscription instead of an API key (plans.ts). */
+export const PROVIDERS = ['anthropic', 'openai', 'claude-plan', 'chatgpt-plan'] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
 export function isProvider(value: string): value is Provider {
@@ -29,7 +30,7 @@ export const PROVIDER_LABELS: Record<Provider, string> = {
 	anthropic: 'Anthropic',
 	openai: 'OpenAI',
 	'claude-plan': 'Claude plan',
-	codex: 'ChatGPT plan'
+	'chatgpt-plan': 'ChatGPT plan'
 };
 
 /** Providers whose chats run through Claude Code and a Claude plan rather than an API key. */
@@ -99,8 +100,8 @@ export async function streamTurn(opts: {
 	if (runsOnClaudeCode(provider)) {
 		throw new Error('Chats on the Claude plan run whole turns through claude-plan.ts');
 	}
-	if (provider === 'openai' || provider === 'codex') {
-		const turn = provider === 'codex' ? codex.streamResponse : openai.streamResponse;
+	if (provider === 'openai' || provider === 'chatgpt-plan') {
+		const turn = provider === 'chatgpt-plan' ? chatgptPlan.streamResponse : openai.streamResponse;
 		const response = await turn({ ...request, cacheKey });
 		return fromContent(
 			response.output ?? [],
@@ -134,9 +135,9 @@ export async function quickReply(opts: {
 	timeoutMs: number;
 }): Promise<{ text: string | null; usage: Usage }> {
 	if (runsOnClaudeCode(opts.provider)) return claudePlan.quickReply(opts);
-	if (opts.provider === 'openai' || opts.provider === 'codex') {
-		const response = await (opts.provider === 'codex'
-			? codex.createResponse(opts)
+	if (opts.provider === 'openai' || opts.provider === 'chatgpt-plan') {
+		const response = await (opts.provider === 'chatgpt-plan'
+			? chatgptPlan.createResponse(opts)
 			: openai.createResponse(opts));
 		const usage = openai.summarizeUsage(response.usage);
 		if (openai.stopReason(response) !== 'end_turn') return { text: null, usage };
@@ -166,8 +167,8 @@ export function countDocumentTokens(
 	if (runsOnClaudeCode(provider)) {
 		return Promise.reject(new Error('Chats on the Claude plan get PDFs as files, not documents'));
 	}
-	if (provider === 'codex') {
-		return Promise.reject(new Error('Chats on a ChatGPT plan get PDFs as their path'));
+	if (provider === 'chatgpt-plan') {
+		return Promise.reject(new Error('Chats on the ChatGPT plan get PDFs as their path'));
 	}
 	return provider === 'openai'
 		? openai.countDocumentTokens(model, fileId)
@@ -187,26 +188,21 @@ export async function fetchContextWindow(
 		await claudePlan.checkClaudePlan();
 		return null;
 	}
-	if (provider === 'codex') return codex.fetchContextWindow(model);
+	if (provider === 'chatgpt-plan') return chatgptPlan.fetchContextWindow(model);
 	return provider === 'openai'
 		? openai.fetchContextWindow(model)
 		: anthropic.fetchContextWindow(model);
 }
 
-/**
- * For people. `provider` is the one the failed call went to: ChatGPT's backend fails with
- * OpenAI's SDK errors too, but a sign-in fixes them, not an API key.
- */
-export function describeApiError(err: unknown, provider?: Provider): string {
-	if (err instanceof claudePlan.ClaudePlanError) return err.message;
-	if (provider === 'codex') return codex.describeApiError(err);
+/** Plans say what went wrong in their own words (plans.ts). */
+export function describeApiError(err: unknown): string {
+	if (err instanceof PlanError) return err.message;
 	return openai.isOpenAIError(err) ? openai.describeApiError(err) : anthropic.describeApiError(err);
 }
 
 /** The API's own message, without the status and JSON around it: for notes shown to the model. */
-export function shortApiError(err: unknown, provider?: Provider): string {
-	if (err instanceof claudePlan.ClaudePlanError) return err.message;
-	if (provider === 'codex') return codex.shortApiError(err);
+export function shortApiError(err: unknown): string {
+	if (err instanceof PlanError) return err.message;
 	return openai.isOpenAIError(err) ? openai.shortApiError(err) : anthropic.shortApiError(err);
 }
 

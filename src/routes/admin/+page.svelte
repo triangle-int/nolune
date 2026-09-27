@@ -24,7 +24,7 @@
 		anthropic: 'claude-opus-5-5',
 		openai: 'gpt-6-astra',
 		'claude-plan': 'claude-opus-5-5',
-		codex: 'gpt-6-astra'
+		'chatgpt-plan': 'gpt-6-astra'
 	};
 	/** Whether the Claude Code sign-in is being checked. */
 	let checkingPlan = $state(false);
@@ -38,15 +38,23 @@
 	/** A ChatGPT sign-in being started, and one about to be signed out. */
 	let signingIn = $state(false);
 	let signingOut = $state(false);
-	const codex = $derived(data.codex);
-	const codexError = $derived(form?.codexError ?? codex.error);
+	const chatgpt = $derived(data.chatgpt);
+	/** What the last plan action said, for the row of the plan it was about. */
+	const claudeResult = $derived(form?.plan === 'claude-plan' ? form : null);
+	const chatgptResult = $derived(form?.plan === 'chatgpt-plan' ? form : null);
+	const chatgptError = $derived(chatgptResult?.planError ?? chatgpt.signInError);
 
 	// The code is entered on another page, often another device: ask until it has been.
 	$effect(() => {
-		if (!codex.pending) return;
-		const timer = setInterval(() => invalidate('btw:codex'), 3000);
+		if (!chatgpt.pending) return;
+		const timer = setInterval(() => invalidate('btw:chatgpt-plan'), 3000);
 		return () => clearInterval(timer);
 	});
+
+	/** "signed in as …" at the start of a line. */
+	function sentence(text: string): string {
+		return `${text[0].toUpperCase()}${text.slice(1)}`;
+	}
 
 	function sourceText(key: KeyStatus): string {
 		const end = key.hint ? ` ending in ${key.hint}` : '';
@@ -183,200 +191,198 @@
 				</ul>
 			</section>
 
-			<section class="space-y-3" aria-labelledby="plan-heading">
+			<section class="space-y-3" aria-labelledby="plans-heading">
 				<div class="space-y-1">
-					<h2 id="plan-heading" class="text-lg font-medium">Claude plan</h2>
+					<h2 id="plans-heading" class="text-lg font-medium">Plans</h2>
 					<p class="text-muted-foreground">
-						Chats on a Claude plan preset run on the Pro or Max plan someone signed in to Claude
-						Code with on this computer, instead of an API key. btw runs Claude Code and never sees
-						the sign-in. Plan limits assume one person's ordinary use, so keep busy automations and
-						subagents on an API key preset.
+						Chats on a plan preset run on someone's own subscription instead of an API key. Plan
+						limits assume one person's ordinary use, so keep busy automations and subagents on an
+						API key preset.
 					</p>
 				</div>
-				<div class="space-y-3 rounded-2xl border px-4 py-3 text-sm">
-					<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-						<span
-							class={cn(
-								'flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted max-sm:self-start',
-								data.claude.installed ? 'text-foreground' : 'text-muted-foreground'
-							)}
-						>
-							<TerminalIcon class="size-4" />
-						</span>
-						<div class="min-w-0 flex-1">
-							<div class="font-medium">Claude Code</div>
-							{#if data.claude.installed}
-								<div class="truncate font-mono text-muted-foreground">{data.claude.path}</div>
-							{:else if data.claude.path}
-								<div class="text-warning">
-									Not at <span class="font-mono">{data.claude.path}</span>, where
-									<code>btw config set claude-path</code> says it is.
-								</div>
-							{:else}
-								<div class="text-warning">Not installed on this computer.</div>
-							{/if}
-						</div>
-						<form
-							method="POST"
-							action="?/checkPlan"
-							class="max-sm:basis-full max-sm:pl-9"
-							use:enhance={() => {
-								checkingPlan = true;
-								return async ({ update }) => {
-									await update();
-									checkingPlan = false;
-								};
-							}}
-						>
-							<Button
-								type="submit"
-								variant="ghost"
-								size="sm"
-								class="text-muted-foreground"
-								disabled={checkingPlan}
+				<ul class="overflow-hidden rounded-2xl border">
+					<li class="space-y-3 border-b px-4 py-3 text-sm last:border-b-0">
+						<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+							<span
+								class={cn(
+									'flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted max-sm:self-start',
+									data.claude.installed ? 'text-foreground' : 'text-muted-foreground'
+								)}
 							>
-								{checkingPlan ? 'Checking…' : 'Check sign-in'}
-							</Button>
-						</form>
-					</div>
-					{#if form?.planError}
-						<p class="text-destructive sm:pl-12" role="alert">{form.planError}</p>
-					{:else if form?.planMessage}
-						<p class="text-muted-foreground sm:pl-12" role="status">{form.planMessage}</p>
-					{:else if !data.claude.installed}
-						<div class="space-y-2 text-muted-foreground sm:pl-12">
-							<p>
-								In a terminal on this computer, run <code>btw claude-plan setup</code>: it installs
-								Claude Code with Anthropic's installer and signs it in to your Claude account,
-								asking first. Or install it yourself, then run <code>claude</code> and sign in:
-							</p>
-							<div class="flex items-center gap-1 rounded-xl bg-muted py-1 pr-1 pl-3">
-								<code class="min-w-0 flex-1 truncate font-mono text-foreground"
-									>{data.claude.installCommand}</code
+								<TerminalIcon class="size-4" />
+							</span>
+							<div class="min-w-0 flex-1">
+								<div class="font-medium">Claude plan</div>
+								<div class="text-muted-foreground">
+									Pro or Max, through Claude Code on this computer. btw runs it and never sees its
+									sign-in.
+								</div>
+								{#if data.claude.installed}
+									<div class="truncate font-mono text-muted-foreground">{data.claude.path}</div>
+								{:else if data.claude.path}
+									<div class="text-warning">
+										Not at <span class="font-mono">{data.claude.path}</span>, where
+										<code>btw config set claude-path</code> says it is.
+									</div>
+								{:else}
+									<div class="text-warning">Claude Code isn't installed on this computer.</div>
+								{/if}
+							</div>
+							<form
+								method="POST"
+								action="?/checkPlan"
+								class="max-sm:basis-full max-sm:pl-9"
+								use:enhance={() => {
+									checkingPlan = true;
+									return async ({ update }) => {
+										await update();
+										checkingPlan = false;
+									};
+								}}
+							>
+								<Button
+									type="submit"
+									variant="ghost"
+									size="sm"
+									class="text-muted-foreground"
+									disabled={checkingPlan}
 								>
-								<CopyButton text={data.claude.installCommand} label="Copy the command" />
+									{checkingPlan ? 'Checking…' : 'Check sign-in'}
+								</Button>
+							</form>
+						</div>
+						{#if claudeResult?.planError}
+							<p class="text-destructive sm:pl-12" role="alert">{claudeResult.planError}</p>
+						{:else if claudeResult?.planMessage}
+							<p class="text-muted-foreground sm:pl-12" role="status">
+								{claudeResult.planMessage}
+							</p>
+						{:else if !data.claude.installed}
+							<div class="space-y-2 text-muted-foreground sm:pl-12">
+								<p>
+									In a terminal on this computer, run <code>btw claude-plan setup</code>: it
+									installs Claude Code with Anthropic's installer and signs it in to your Claude
+									account, asking first. Or install it yourself, then run <code>claude</code> and sign
+									in:
+								</p>
+								<div class="flex items-center gap-1 rounded-xl bg-muted py-1 pr-1 pl-3">
+									<code class="min-w-0 flex-1 truncate font-mono text-foreground"
+										>{data.claude.installCommand}</code
+									>
+									<CopyButton text={data.claude.installCommand} label="Copy the command" />
+								</div>
+							</div>
+						{:else}
+							<p class="text-muted-foreground sm:pl-12">
+								To sign in, run <code>btw claude-plan setup</code> in a terminal on this computer,
+								or run <code>claude</code> there and use <code>/login</code> with your Claude account.
+							</p>
+						{/if}
+					</li>
+
+					<li class="space-y-3 border-b px-4 py-3 text-sm last:border-b-0">
+						<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+							<span
+								class={cn(
+									'flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted max-sm:self-start',
+									chatgpt.signedIn ? 'text-foreground' : 'text-muted-foreground'
+								)}
+							>
+								<CircleUserRoundIcon class="size-4" />
+							</span>
+							<div class="min-w-0 flex-1">
+								<div class="font-medium">ChatGPT plan</div>
+								<div class="text-muted-foreground">
+									Plus, Pro or Business, through Codex's backend, the way OpenAI's Codex does. btw
+									keeps the sign-in.
+								</div>
+								{#if chatgpt.signedIn}
+									<div class="break-words text-muted-foreground">{sentence(chatgpt.signedIn)}</div>
+								{:else}
+									<div class="text-warning">Not signed in</div>
+								{/if}
+							</div>
+							<div class="flex gap-1 max-sm:basis-full max-sm:pl-9">
+								{#if chatgpt.pending}
+									<form method="POST" action="?/chatgptCancel" use:enhance>
+										<Button type="submit" variant="ghost" size="sm" class="text-muted-foreground">
+											Cancel
+										</Button>
+									</form>
+								{:else}
+									<form
+										method="POST"
+										action="?/chatgptSignIn"
+										use:enhance={() => {
+											signingIn = true;
+											return async ({ update }) => {
+												await update();
+												signingIn = false;
+											};
+										}}
+									>
+										<Button
+											type="submit"
+											variant={chatgpt.signedIn ? 'ghost' : 'default'}
+											size="sm"
+											disabled={signingIn}
+											class={cn(chatgpt.signedIn && 'text-muted-foreground')}
+										>
+											{signingIn
+												? 'Asking ChatGPT…'
+												: chatgpt.signedIn
+													? 'Sign in again'
+													: 'Sign in with ChatGPT'}
+										</Button>
+									</form>
+									{#if chatgpt.signedIn}
+										<Button
+											variant="ghost"
+											size="sm"
+											class="text-muted-foreground"
+											onclick={() => (signingOut = true)}
+										>
+											Sign out
+										</Button>
+									{/if}
+								{/if}
 							</div>
 						</div>
-					{:else}
-						<p class="text-muted-foreground sm:pl-12">
-							To sign in, run <code>btw claude-plan setup</code> in a terminal on this computer, or
-							run <code>claude</code> there and use <code>/login</code> with your Claude account.
-						</p>
-					{/if}
-				</div>
-			</section>
 
-			<section class="space-y-3" aria-labelledby="chatgpt-heading">
-				<div class="space-y-1">
-					<h2 id="chatgpt-heading" class="text-lg font-medium">ChatGPT plan</h2>
-					<p class="text-muted-foreground">
-						Chats on a ChatGPT plan preset run on a ChatGPT Plus, Pro or Business plan through
-						Codex, the way OpenAI's Codex app does, instead of an API key. They count against the
-						plan's Codex limits.
-					</p>
-				</div>
-				<div class="space-y-3 rounded-2xl border px-4 py-3 text-sm">
-					<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-						<span
-							class={cn(
-								'flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted max-sm:self-start',
-								codex.account ? 'text-foreground' : 'text-muted-foreground'
-							)}
-						>
-							<CircleUserRoundIcon class="size-4" />
-						</span>
-						<div class="min-w-0 flex-1">
-							<div class="font-medium">ChatGPT</div>
-							{#if codex.account}
-								<div class="truncate text-muted-foreground">
-									Signed in as {codex.account.email ?? 'a ChatGPT account'}{codex.account.plan
-										? ` · ${codex.account.plan} plan`
-										: ''}
-								</div>
-							{:else}
-								<div class="text-warning">Not signed in</div>
-							{/if}
-						</div>
-						<div class="flex gap-1 max-sm:basis-full max-sm:pl-9">
-							{#if codex.pending}
-								<form method="POST" action="?/codexCancel" use:enhance>
-									<Button type="submit" variant="ghost" size="sm" class="text-muted-foreground">
-										Cancel
-									</Button>
-								</form>
-							{:else}
-								<form
-									method="POST"
-									action="?/codexSignIn"
-									use:enhance={() => {
-										signingIn = true;
-										return async ({ update }) => {
-											await update();
-											signingIn = false;
-										};
-									}}
-								>
-									<Button
-										type="submit"
-										variant={codex.account ? 'ghost' : 'default'}
-										size="sm"
-										disabled={signingIn}
-										class={cn(codex.account && 'text-muted-foreground')}
+						{#if chatgpt.pending}
+							<ol class="list-inside list-decimal space-y-2 sm:pl-12" aria-live="polite">
+								<li>
+									Open
+									<a
+										href={chatgpt.pending.verificationUrl}
+										target="_blank"
+										rel="noreferrer"
+										class="underline"
+										>{new URL(chatgpt.pending.verificationUrl).host}{new URL(
+											chatgpt.pending.verificationUrl
+										).pathname}</a
 									>
-										{signingIn
-											? 'Asking ChatGPT…'
-											: codex.account
-												? 'Sign in again'
-												: 'Sign in with ChatGPT'}
-									</Button>
-								</form>
-								{#if codex.account}
-									<Button
-										variant="ghost"
-										size="sm"
-										class="text-muted-foreground"
-										onclick={() => (signingOut = true)}
+									on any device and sign in to ChatGPT.
+								</li>
+								<li>
+									Enter this code:
+									<span class="ml-1 font-mono text-lg font-medium tracking-widest select-all"
+										>{chatgpt.pending.userCode}</span
 									>
-										Sign out
-									</Button>
-								{/if}
-							{/if}
-						</div>
-					</div>
-
-					{#if codex.pending}
-						<ol class="list-inside list-decimal space-y-2 sm:pl-12" aria-live="polite">
-							<li>
-								Open
-								<a
-									href={codex.pending.verificationUrl}
-									target="_blank"
-									rel="noreferrer"
-									class="underline"
-									>{new URL(codex.pending.verificationUrl).host}{new URL(
-										codex.pending.verificationUrl
-									).pathname}</a
-								>
-								on any device and sign in to ChatGPT.
-							</li>
-							<li>
-								Enter this code:
-								<span class="ml-1 font-mono text-lg font-medium tracking-widest select-all"
-									>{codex.pending.userCode}</span
-								>
-							</li>
-						</ol>
-						<p class="text-muted-foreground sm:pl-12">
-							The code works for 15 minutes. This page updates once it's entered.
-						</p>
-					{/if}
-
-					{#if codexError && !codex.pending}
-						<p class="text-destructive sm:pl-12" role="alert">{codexError}</p>
-					{:else if form?.codexMessage}
-						<p class="text-muted-foreground sm:pl-12" role="status">{form.codexMessage}</p>
-					{/if}
-				</div>
+								</li>
+							</ol>
+							<p class="text-muted-foreground sm:pl-12">
+								The code works for 15 minutes. This page updates once it's entered.
+							</p>
+						{:else if chatgptError}
+							<p class="text-destructive sm:pl-12" role="alert">{chatgptError}</p>
+						{:else if chatgptResult?.planMessage}
+							<p class="text-muted-foreground sm:pl-12" role="status">
+								{chatgptResult.planMessage}
+							</p>
+						{/if}
+					</li>
+				</ul>
 			</section>
 
 			<section class="space-y-3" aria-labelledby="models-heading">
@@ -549,7 +555,7 @@
 		</AlertDialog.Header>
 		<form
 			method="POST"
-			action="?/codexSignOut"
+			action="?/chatgptSignOut"
 			use:enhance={() => {
 				return async ({ update }) => {
 					signingOut = false;

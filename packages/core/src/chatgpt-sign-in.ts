@@ -1,17 +1,18 @@
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { paths } from './paths.ts';
+import { PlanError, describePlanAccount, type PlanAccount, type PlanStatus } from './plans.ts';
 
 /*
- * Signing in with ChatGPT, for the `codex` provider: its chats run on a ChatGPT plan (Plus, Pro,
- * Business...) through OpenAI's Codex backend, as the Codex CLI does, instead of on API credit.
+ * Signing in with ChatGPT, for the ChatGPT plan (chatgpt-plan.ts): its chats run on a Plus, Pro or
+ * Business plan through OpenAI's Codex backend, as the Codex CLI does, instead of on API credit.
  *
  * The sign-in is the Codex CLI's device code flow (`codex login --device-auth`): btw asks for a
  * one-time code, someone signed in to ChatGPT enters it at auth.openai.com/codex/device, and btw
  * gets the account's tokens. Nothing redirects to this computer, so it works through a tunnel
  * and from a phone. The client id is Codex's: it's the one ChatGPT's backend serves Codex to.
  *
- * The tokens are kept in codex-auth.json next to config.json, readable only by this user, and
+ * The tokens are kept in chatgpt-auth.json next to config.json, readable only by this user, and
  * read on every request, like config.json. Before the access token runs out, btw trades the
  * refresh token for new ones. A refresh token works once, and the gateway and the CLI can both
  * refresh, so whoever finds the file changed under it uses what's there now.
@@ -19,9 +20,9 @@ import { paths } from './paths.ts';
 
 const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 
-/** BTW_CODEX_ISSUER points it elsewhere, for tests. */
+/** BTW_CHATGPT_ISSUER points it elsewhere, for tests. */
 function issuer(): string {
-	return (process.env.BTW_CODEX_ISSUER || 'https://auth.openai.com').replace(/\/+$/, '');
+	return (process.env.BTW_CHATGPT_ISSUER || 'https://auth.openai.com').replace(/\/+$/, '');
 }
 
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -32,14 +33,11 @@ const REFRESH_MARGIN_MS = 5 * 60_000;
 /** How often Codex refreshes a token that doesn't say when it runs out. */
 const REFRESH_EVERY_MS = 8 * 24 * 60 * 60_000;
 
-export const CODEX_SIGN_IN_HELP =
-	'An admin can sign in under Models & keys in btw, or with `btw codex login`.';
+export const CHATGPT_SIGN_IN_HELP =
+	'An admin can sign in under Models & keys in btw, or with `btw chatgpt-plan setup`.';
 
-/** A sign-in problem, in words for the person who can fix it. */
-export class CodexAuthError extends Error {}
-
-function notSignedIn(): CodexAuthError {
-	return new CodexAuthError(`Not signed in with ChatGPT. ${CODEX_SIGN_IN_HELP}`);
+function notSignedIn(): PlanError {
+	return new PlanError(`Not signed in with ChatGPT. ${CHATGPT_SIGN_IN_HELP}`);
 }
 
 // --- what the tokens say ---
@@ -96,7 +94,7 @@ interface StoredAuth {
 function readAuth(): StoredAuth | null {
 	let raw: string;
 	try {
-		raw = readFileSync(paths.codexAuth, 'utf8');
+		raw = readFileSync(paths.chatgptAuth, 'utf8');
 	} catch {
 		return null;
 	}
@@ -118,10 +116,10 @@ function readAuth(): StoredAuth | null {
 /** Written whole and renamed into place, so another process never reads half of it. */
 function writeAuth(auth: StoredAuth): void {
 	mkdirSync(paths.home, { recursive: true });
-	const temp = `${paths.codexAuth}.${process.pid}.tmp`;
+	const temp = `${paths.chatgptAuth}.${process.pid}.tmp`;
 	writeFileSync(temp, JSON.stringify(auth, null, '\t') + '\n', { mode: 0o600 });
 	chmodSync(temp, 0o600);
-	renameSync(temp, paths.codexAuth);
+	renameSync(temp, paths.chatgptAuth);
 }
 
 function fromTokens(
@@ -141,14 +139,13 @@ function fromTokens(
 	};
 }
 
-export interface CodexAccount {
-	email: string | null;
-	/** The ChatGPT plan, in ChatGPT's words: plus, pro, business... */
-	plan: string | null;
+/** "ChatGPT Plus" for `plus`, as the Claude plan says "Claude Max". */
+function planName(type: string | null): string | null {
+	return type ? `ChatGPT ${type[0].toUpperCase()}${type.slice(1)}` : null;
 }
 
 /** Who btw is signed in as, or null. */
-export function codexAccount(): CodexAccount | null {
+export function chatGptAccount(): PlanAccount | null {
 	const auth = readAuth();
 	if (!auth) return null;
 	const id = claimsOf(auth.idToken);
@@ -158,15 +155,16 @@ export function codexAccount(): CodexAccount | null {
 			text(id.email) ??
 			text(id['https://api.openai.com/profile']?.email) ??
 			text(access['https://api.openai.com/profile']?.email),
-		plan:
+		plan: planName(
 			text(id['https://api.openai.com/auth']?.chatgpt_plan_type) ??
-			text(access['https://api.openai.com/auth']?.chatgpt_plan_type)
+				text(access['https://api.openai.com/auth']?.chatgpt_plan_type)
+		)
 	};
 }
 
 // --- a request's credentials ---
 
-export interface CodexCredentials {
+export interface ChatGptCredentials {
 	accessToken: string;
 	/** Sent as ChatGPT-Account-Id, when the tokens name one. */
 	accountId: string | null;
@@ -184,7 +182,7 @@ let refreshing: Promise<StoredAuth> | undefined;
  * The signed-in account's token for a request, renewed first when it's about to run out, or
  * when it's `rejected`: the token the backend just turned down.
  */
-export async function codexCredentials(rejected?: string): Promise<CodexCredentials> {
+export async function chatGptCredentials(rejected?: string): Promise<ChatGptCredentials> {
 	let auth = readAuth();
 	if (!auth) throw notSignedIn();
 	const wasRejected = rejected !== undefined && auth.accessToken === rejected;
@@ -253,11 +251,10 @@ async function refresh(auth: StoredAuth): Promise<StoredAuth> {
 			signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
 		});
 	} catch (err) {
-		throw new CodexAuthError(
+		throw new PlanError(
 			`Couldn't reach ChatGPT to renew its sign-in (${networkError(err)}).`,
-			{
-				cause: err
-			}
+			null,
+			{ cause: err }
 		);
 	}
 	const tokens = res.ok ? await jsonOf(res) : null;
@@ -274,34 +271,34 @@ async function refresh(auth: StoredAuth): Promise<StoredAuth> {
 			ENDED.includes(code.toLowerCase()) ||
 			(res.status === 400 && code === 'invalid_grant')
 		) {
-			throw new CodexAuthError(
-				`The ChatGPT sign-in has expired or was signed out. ${CODEX_SIGN_IN_HELP}`
+			throw new PlanError(
+				`The ChatGPT sign-in has expired or was signed out. ${CHATGPT_SIGN_IN_HELP}`
 			);
 		}
-		throw new CodexAuthError(
+		throw new PlanError(
 			`ChatGPT couldn't renew its sign-in (${res.status}${message ? `: ${message}` : ''}). Try again in a moment.`
 		);
 	}
 	const next = fromTokens(tokens, auth);
-	if (!next) throw new CodexAuthError('ChatGPT renewed its sign-in without a token.');
+	if (!next) throw new PlanError('ChatGPT renewed its sign-in without a token.');
 	writeAuth(next);
 	return next;
 }
 
 // --- signing in and out ---
 
-export interface CodexSignIn {
+export interface ChatGptSignIn {
 	/** Where to enter the code, signed in to ChatGPT. */
 	verificationUrl: string;
 	userCode: string;
 	/** When the code stops working, in ms since the epoch. */
 	expiresAt: number;
 	/** Resolves once the code was entered and the tokens saved. Rejects when it expires or fails. */
-	done: Promise<CodexAccount>;
+	done: Promise<PlanAccount>;
 }
 
 /** The sign-in under way in this process, and why the last one didn't finish. */
-let pending: { signIn: CodexSignIn | null; abort: AbortController } | null = null;
+let pending: { signIn: ChatGptSignIn | null; abort: AbortController } | null = null;
 let lastError: string | null = null;
 
 async function postJson(url: string, body: object, signal: AbortSignal): Promise<Response> {
@@ -318,10 +315,10 @@ async function postJson(url: string, body: object, signal: AbortSignal): Promise
  * entered. Replaces a sign-in already under way. The tokens are saved when it's done, so the
  * next request uses the new account.
  */
-export async function startCodexSignIn(): Promise<CodexSignIn> {
-	cancelCodexSignIn();
+export async function startChatGptSignIn(): Promise<ChatGptSignIn> {
+	cancelChatGptSignIn();
 	lastError = null;
-	const attempt = { signIn: null as CodexSignIn | null, abort: new AbortController() };
+	const attempt = { signIn: null as ChatGptSignIn | null, abort: new AbortController() };
 	pending = attempt;
 	const { signal } = attempt.abort;
 
@@ -334,16 +331,16 @@ export async function startCodexSignIn(): Promise<CodexSignIn> {
 		);
 	} catch (err) {
 		if (pending === attempt) pending = null;
-		if (signal.aborted) throw new CodexAuthError('The sign-in was cancelled.');
-		throw new CodexAuthError(`Couldn't reach ChatGPT (${networkError(err)}).`, { cause: err });
+		if (signal.aborted) throw new PlanError('The sign-in was cancelled.');
+		throw new PlanError(`Couldn't reach ChatGPT (${networkError(err)}).`, null, { cause: err });
 	}
 	const body = res.ok ? await jsonOf(res) : {};
 	const deviceAuthId = text(body.device_auth_id);
 	const userCode = text(body.user_code) ?? text(body.usercode);
-	if (pending !== attempt) throw new CodexAuthError('The sign-in was cancelled.');
+	if (pending !== attempt) throw new PlanError('The sign-in was cancelled.');
 	if (!deviceAuthId || !userCode) {
 		pending = null;
-		throw new CodexAuthError(
+		throw new PlanError(
 			res.ok
 				? "ChatGPT's answer had no code in it."
 				: `ChatGPT couldn't start a sign-in (${res.status}). Try again in a moment.`
@@ -353,7 +350,7 @@ export async function startCodexSignIn(): Promise<CodexSignIn> {
 	const intervalMs = Math.max(1, Number(body.interval) || 5) * 1000;
 	const expiresAt = Date.now() + CODE_LIFETIME_MS;
 	const done = waitForCode({ deviceAuthId, userCode, intervalMs, expiresAt, signal });
-	const signIn: CodexSignIn = {
+	const signIn: ChatGptSignIn = {
 		verificationUrl: `${issuer()}/codex/device`,
 		userCode,
 		expiresAt,
@@ -381,16 +378,16 @@ async function waitForCode(opts: {
 	intervalMs: number;
 	expiresAt: number;
 	signal: AbortSignal;
-}): Promise<CodexAccount> {
+}): Promise<PlanAccount> {
 	const { signal } = opts;
 	for (;;) {
 		try {
 			await sleep(opts.intervalMs, undefined, { signal });
 		} catch {
-			throw new CodexAuthError('The sign-in was cancelled.');
+			throw new PlanError('The sign-in was cancelled.');
 		}
 		if (Date.now() >= opts.expiresAt) {
-			throw new CodexAuthError('The code expired before it was entered. Start the sign-in again.');
+			throw new PlanError('The code expired before it was entered. Start the sign-in again.');
 		}
 		let res: Response;
 		try {
@@ -400,19 +397,19 @@ async function waitForCode(opts: {
 				signal
 			);
 		} catch {
-			if (signal.aborted) throw new CodexAuthError('The sign-in was cancelled.');
+			if (signal.aborted) throw new PlanError('The sign-in was cancelled.');
 			// The network may come back before the code expires.
 			continue;
 		}
 		// Not entered yet.
 		if (res.status === 403 || res.status === 404) continue;
 		if (!res.ok) {
-			throw new CodexAuthError(`ChatGPT turned the sign-in down (${res.status}).`);
+			throw new PlanError(`ChatGPT turned the sign-in down (${res.status}).`);
 		}
 		const grant = await jsonOf(res);
 		const code = text(grant.authorization_code);
 		const verifier = text(grant.code_verifier);
-		if (!code || !verifier) throw new CodexAuthError("ChatGPT's answer had no sign-in in it.");
+		if (!code || !verifier) throw new PlanError("ChatGPT's answer had no sign-in in it.");
 		return exchangeCode(code, verifier, signal);
 	}
 }
@@ -421,7 +418,7 @@ async function exchangeCode(
 	code: string,
 	verifier: string,
 	signal: AbortSignal
-): Promise<CodexAccount> {
+): Promise<PlanAccount> {
 	let res: Response;
 	try {
 		res = await fetch(`${issuer()}/oauth/token`, {
@@ -437,29 +434,28 @@ async function exchangeCode(
 			signal: AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])
 		});
 	} catch (err) {
-		if (signal.aborted) throw new CodexAuthError('The sign-in was cancelled.');
-		throw new CodexAuthError(
+		if (signal.aborted) throw new PlanError('The sign-in was cancelled.');
+		throw new PlanError(
 			`Couldn't reach ChatGPT to finish signing in (${networkError(err)}).`,
-			{
-				cause: err
-			}
+			null,
+			{ cause: err }
 		);
 	}
 	if (!res.ok) {
 		const { message } = await oauthError(res);
-		throw new CodexAuthError(
+		throw new PlanError(
 			`ChatGPT couldn't finish the sign-in (${res.status}${message ? `: ${message}` : ''}).`
 		);
 	}
 	const auth = fromTokens(await jsonOf(res));
-	if (!auth) throw new CodexAuthError('ChatGPT finished the sign-in without a token.');
-	if (signal.aborted) throw new CodexAuthError('The sign-in was cancelled.');
+	if (!auth) throw new PlanError('ChatGPT finished the sign-in without a token.');
+	if (signal.aborted) throw new PlanError('The sign-in was cancelled.');
 	writeAuth(auth);
-	return codexAccount() ?? { email: null, plan: null };
+	return chatGptAccount() ?? { email: null, plan: null };
 }
 
 /** Stops waiting for the code of a sign-in under way. The code then goes unused. */
-export function cancelCodexSignIn(): void {
+export function cancelChatGptSignIn(): void {
 	pending?.abort.abort();
 	pending = null;
 }
@@ -468,11 +464,11 @@ export function cancelCodexSignIn(): void {
  * Forgets the sign-in. ChatGPT is asked to revoke it too, as Codex does on logout, but the
  * tokens are deleted here even when that fails.
  */
-export async function signOutCodex(): Promise<void> {
-	cancelCodexSignIn();
+export async function signOutChatGpt(): Promise<void> {
+	cancelChatGptSignIn();
 	lastError = null;
 	const auth = readAuth();
-	rmSync(paths.codexAuth, { force: true });
+	rmSync(paths.chatgptAuth, { force: true });
 	if (!auth) return;
 	try {
 		await fetch(`${issuer()}/oauth/revoke`, {
@@ -490,26 +486,32 @@ export async function signOutCodex(): Promise<void> {
 	}
 }
 
-export interface CodexStatus {
-	account: CodexAccount | null;
+export interface ChatGptPlanStatus extends PlanStatus {
+	account: PlanAccount | null;
 	/** A sign-in in this process that's waiting for its code. */
-	pending: Omit<CodexSignIn, 'done'> | null;
+	pending: Omit<ChatGptSignIn, 'done'> | null;
 	/** Why the last sign-in in this process didn't finish. */
-	error: string | null;
+	signInError: string | null;
 }
 
-/** For Models & keys and `btw config`. Never the tokens. */
-export function codexStatus(): CodexStatus {
+/**
+ * For Models & keys, `btw chatgpt-plan status` and `btw config`. Never the tokens. Unlike the
+ * Claude plan's, it asks nobody: the sign-in is btw's own.
+ */
+export function chatGptPlanStatus(): ChatGptPlanStatus {
 	const signIn = pending?.signIn;
+	const account = chatGptAccount();
 	return {
-		account: codexAccount(),
+		account,
+		signedIn: account && describePlanAccount(account),
+		problem: account ? null : notSignedIn().message,
+		signInError: lastError,
 		pending: signIn
 			? {
 					verificationUrl: signIn.verificationUrl,
 					userCode: signIn.userCode,
 					expiresAt: signIn.expiresAt
 				}
-			: null,
-		error: lastError
+			: null
 	};
 }

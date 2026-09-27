@@ -14,6 +14,7 @@ import { readConfig } from './config.ts';
 import { replyBlocks, toolCalls } from './content-blocks.ts';
 import type { Usage } from './conversations.ts';
 import type { Effort, ModelReply, StreamEvent, ToolCall } from './models.ts';
+import { PlanError, describePlanAccount, type PlanStatus } from './plans.ts';
 
 /*
  * Chats on the Claude plan: the Pro or Max subscription someone signed in to Claude Code with on
@@ -50,16 +51,6 @@ const TOOL_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 /** After Stop, how long Claude Code gets to end the turn before its process is closed. */
 const INTERRUPT_GRACE_MS = 5000;
 const STATUS_TIMEOUT_MS = 30_000;
-
-/** What went wrong, in words for the people in the chat. */
-export class ClaudePlanError extends Error {
-	/** Claude Code's own kind of error (`authentication_failed`, `rate_limit`...), when it said. */
-	readonly kind: string | null;
-	constructor(message: string, kind: string | null = null) {
-		super(message);
-		this.kind = kind;
-	}
-}
 
 class PlanAbortError extends Error {
 	constructor() {
@@ -123,11 +114,11 @@ function requireClaudeExecutable(): string {
 	const path = claudeExecutable();
 	if (path && isFile(path)) return path;
 	if (path) {
-		throw new ClaudePlanError(
+		throw new PlanError(
 			`There's no Claude Code at ${path}, where \`btw config set claude-path\` says it is. ${HOW_TO_INSTALL}`
 		);
 	}
-	throw new ClaudePlanError(
+	throw new PlanError(
 		`Claude Code isn't installed on this computer, or btw can't find it. Chats on the Claude plan run through it. ${HOW_TO_INSTALL}`
 	);
 }
@@ -175,26 +166,26 @@ function modelOptions(model: string, effort: Effort): Partial<Options> {
 }
 
 /** The SDK's errors from starting Claude Code, in words for the people using btw. */
-function startError(err: unknown): ClaudePlanError {
-	if (err instanceof ClaudePlanError) return err;
+function startError(err: unknown): PlanError {
+	if (err instanceof PlanError) return err;
 	const message = err instanceof Error ? err.message : String(err);
 	if (/not found|failed to launch|ENOENT|EACCES/i.test(message)) {
-		return new ClaudePlanError(
+		return new PlanError(
 			`Couldn't start Claude Code (${message.split('\n')[0]}). ${HOW_TO_INSTALL}`
 		);
 	}
-	return new ClaudePlanError(`Claude Code stopped: ${message.split('\n')[0]}`);
+	return new PlanError(`Claude Code stopped: ${message.split('\n')[0]}`);
 }
 
 /** Claude Code's own error text, with how to fix the common ones. */
-function turnError(text: string, kind: string | null): ClaudePlanError {
+function turnError(text: string, kind: string | null): PlanError {
 	if (kind === 'authentication_failed' || /\/login|not logged in|invalid api key/i.test(text)) {
-		return new ClaudePlanError(
+		return new PlanError(
 			`Claude Code isn't signed in to a Claude plan (${text}). ${HOW_TO_SIGN_IN}`,
 			kind
 		);
 	}
-	return new ClaudePlanError(text, kind);
+	return new PlanError(text, kind);
 }
 
 // --- a chat's turn ---
@@ -345,7 +336,7 @@ async function* oneMessage(content: Anthropic.ContentBlockParam[]): AsyncIterabl
  * One turn of a chat: Claude Code answers the new input, running commands through `runTool`,
  * until the model ends its turn. Each model call's reply is saved (`onReply`) before its commands
  * run, and their results (`onResults`) once they have all ended, the order btw's own loop keeps.
- * Throws a ClaudePlanError when the turn fails and a PlanAbortError when it was stopped.
+ * Throws a PlanError when the turn fails and a PlanAbortError when it was stopped.
  */
 export async function runTurn(turn: PlanTurn): Promise<void> {
 	const { sdk, z } = await load();
@@ -605,7 +596,7 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
  * start). Null for any other failure.
  */
 export function sessionProblem(err: unknown): 'missing' | 'taken' | null {
-	if (!(err instanceof ClaudePlanError)) return null;
+	if (!(err instanceof PlanError)) return null;
 	if (/no conversation found with session id/i.test(err.message)) return 'missing';
 	if (/session id .* is already in use/i.test(err.message)) return 'taken';
 	return null;
@@ -655,8 +646,7 @@ export async function quickReply(opts: {
 			}
 		}
 	} catch (err) {
-		if (abortController.signal.aborted)
-			throw new ClaudePlanError('Claude Code took too long to answer.');
+		if (abortController.signal.aborted) throw new PlanError('Claude Code took too long to answer.');
 		if (!failure) throw startError(err);
 	} finally {
 		clearTimeout(timer);
@@ -665,23 +655,24 @@ export async function quickReply(opts: {
 	return { text, usage };
 }
 
-export interface ClaudePlanStatus {
+export interface ClaudePlanStatus extends PlanStatus {
 	/** The Claude Code btw runs, if it found one (or was told where it is). */
 	path: string | null;
 	/** Whether that Claude Code is there. */
 	installed: boolean;
 	/** Who Claude Code is signed in as, as it says; null when it couldn't be asked. */
 	account: AccountInfo | null;
-	/** What stops chats on the plan from working, in plain words; null when nothing does. */
-	problem: string | null;
 }
 
 /** How Claude Code is signed in, e.g. "signed in as anna@example.com (Claude Max)". */
 export function describeAccount(account: AccountInfo): string {
-	const plan = account.subscriptionType;
-	if (account.email) return `signed in as ${account.email}${plan ? ` (${plan})` : ''}`;
-	if (plan) return `signed in to ${plan}`;
-	return account.tokenSource ? `signed in with a token (${account.tokenSource})` : 'signed in';
+	if (!account.email && !account.subscriptionType && account.tokenSource) {
+		return `signed in with a token (${account.tokenSource})`;
+	}
+	return describePlanAccount({
+		email: account.email ?? null,
+		plan: account.subscriptionType ?? null
+	});
 }
 
 /**
@@ -725,9 +716,10 @@ export async function claudePlanStatus(): Promise<ClaudePlanStatus> {
 			timer = setTimeout(() => reject(new Error('no answer')), STATUS_TIMEOUT_MS);
 		});
 		const account = await Promise.race([q.accountInfo(), timeout]);
-		return { path, installed, account, problem: accountProblem(account) };
+		const problem = accountProblem(account);
+		return { path, installed, account, signedIn: describeAccount(account), problem };
 	} catch (err) {
-		return { path, installed, account: null, problem: startError(err).message };
+		return { path, installed, account: null, signedIn: null, problem: startError(err).message };
 	} finally {
 		clearTimeout(timer);
 		release();
@@ -747,9 +739,9 @@ export function claudeSignInCommand(path: string): {
 	return { command: path, args: ['auth', 'login', '--claudeai'], env: claudeEnv() };
 }
 
-/** Throws a ClaudePlanError unless Claude Code is here and signed in to a plan. */
+/** Throws a PlanError unless Claude Code is here and signed in to a plan. */
 export async function checkClaudePlan(): Promise<ClaudePlanStatus> {
 	const status = await claudePlanStatus();
-	if (status.problem) throw new ClaudePlanError(status.problem);
+	if (status.problem) throw new PlanError(status.problem);
 	return status;
 }

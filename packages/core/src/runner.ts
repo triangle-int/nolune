@@ -399,10 +399,7 @@ function nameConversation(conv: Conversation, text: string, placeholder: string)
 			emit(conv.id, { type: 'title', title });
 		})
 		.catch((err) => {
-			console.error(
-				`[btw] ${conv.id.slice(0, 8)} could not name the chat:`,
-				describeApiError(err, conv.provider)
-			);
+			console.error(`[btw] ${conv.id.slice(0, 8)} could not name the chat:`, describeApiError(err));
 		});
 }
 
@@ -823,7 +820,7 @@ async function loop(conversationId: string): Promise<void> {
 					commitQueued(conversationId);
 					return;
 				}
-				st.error = describeApiError(err, conv.provider);
+				st.error = describeApiError(err);
 				console.error(`[btw] ${conversationId.slice(0, 8)} model call failed:`, err);
 				return;
 			}

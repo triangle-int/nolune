@@ -1,10 +1,9 @@
 import type { OpenAI } from 'openai';
 import {
-	CODEX_SIGN_IN_HELP,
-	CodexAuthError,
-	codexCredentials,
-	type CodexCredentials
-} from './codex-auth.ts';
+	CHATGPT_SIGN_IN_HELP,
+	chatGptCredentials,
+	type ChatGptCredentials
+} from './chatgpt-sign-in.ts';
 import {
 	isSdkError,
 	loadSdk,
@@ -15,12 +14,16 @@ import {
 	turnRequest,
 	type TurnOptions
 } from './openai-chat.ts';
+import { PlanError } from './plans.ts';
 
 /*
- * Chats on a ChatGPT plan: the `codex` provider. ChatGPT's Codex backend serves the same
- * Responses API as OpenAI's platform, so requests are built and read by openai-chat.ts; this
- * module signs them with the ChatGPT sign-in (codex-auth.ts) and sends them where Codex does.
- * The rest of btw calls it through models.ts.
+ * Chats on the ChatGPT plan: a Plus, Pro or Business plan someone signed in to with ChatGPT
+ * (chatgpt-sign-in.ts), used the way OpenAI's Codex uses it. Like the Claude plan (claude-plan.ts)
+ * it runs on a subscription instead of an API key, and what people see of the two is shared
+ * (plans.ts). Unlike it, btw holds the sign-in and runs its own agent loop: ChatGPT's Codex
+ * backend serves the same Responses API as OpenAI's platform, so requests are built and read by
+ * openai-chat.ts and this module only signs them and sends them where Codex does. The rest of
+ * btw calls it through models.ts. Its failures come out as PlanErrors, like the Claude plan's.
  *
  * What the backend does differently from OpenAI's API:
  * - every request streams, and none takes `max_output_tokens`;
@@ -29,16 +32,13 @@ import {
  * - use counts against the plan's Codex limits, which reset every few hours and weekly.
  */
 
-/** BTW_CODEX_BASE_URL points it elsewhere, for tests. */
+/** BTW_CHATGPT_BASE_URL points it elsewhere, for tests. */
 function baseUrl(): string {
-	return (process.env.BTW_CODEX_BASE_URL || 'https://chatgpt.com/backend-api/codex').replace(
+	return (process.env.BTW_CHATGPT_BASE_URL || 'https://chatgpt.com/backend-api/codex').replace(
 		/\/+$/,
 		''
 	);
 }
-
-/** A problem with what the backend said, in words for people. */
-class CodexError extends Error {}
 
 /** The catalog lists the models a Codex client of this version can use. */
 const CLIENT_VERSION = '0.157.1';
@@ -46,7 +46,7 @@ const REQUEST_TIMEOUT_MS = 60_000;
 
 let cached: { key: string; client: OpenAI } | undefined;
 
-async function clientFor(credentials: CodexCredentials): Promise<OpenAI> {
+async function clientFor(credentials: ChatGptCredentials): Promise<OpenAI> {
 	const baseURL = baseUrl();
 	const key = [baseURL, credentials.accountId, credentials.accessToken].join('\n');
 	if (cached?.key !== key) {
@@ -74,61 +74,65 @@ async function clientFor(credentials: CodexCredentials): Promise<OpenAI> {
 async function withClient<T>(
 	call: (client: OpenAI, accountId: string | null) => Promise<T>
 ): Promise<T> {
-	const credentials = await codexCredentials();
+	const credentials = await chatGptCredentials();
 	try {
 		return await call(await clientFor(credentials), credentials.accountId);
 	} catch (err) {
 		if (!isSdkError(err, 'AuthenticationError')) throw err;
-		const renewed = await codexCredentials(credentials.accessToken);
+		const renewed = await chatGptCredentials(credentials.accessToken);
 		return call(await clientFor(renewed), renewed.accountId);
 	}
 }
 
 /** One model call, streamed. See models.ts for what stays fixed between calls. */
-export async function streamResponse(opts: TurnOptions): Promise<OpenAI.Responses.Response> {
-	const stream = await withClient((client, accountId) =>
-		openTurn(`codex:${accountId}`, (summaries) =>
-			client.responses.create(turnRequest(opts, summaries), {
-				signal: opts.signal,
-				// As Codex sends it, next to prompt_cache_key.
-				headers: { 'session-id': opts.cacheKey }
-			})
-		)
-	);
-	return readStream(stream, opts.onEvent);
+export function streamResponse(opts: TurnOptions): Promise<OpenAI.Responses.Response> {
+	return failing(async () => {
+		const stream = await withClient((client, accountId) =>
+			openTurn(`chatgpt:${accountId}`, (summaries) =>
+				client.responses.create(turnRequest(opts, summaries), {
+					signal: opts.signal,
+					// As Codex sends it, next to prompt_cache_key.
+					headers: { 'session-id': opts.cacheKey }
+				})
+			)
+		);
+		return readStream(stream, opts.onEvent);
+	});
 }
 
 /**
  * One short exchange at low effort (see models.ts). Streamed, since the backend only streams,
  * and without `maxTokens`, which it doesn't take.
  */
-export async function createResponse(opts: {
+export function createResponse(opts: {
 	model: string;
 	system: string;
 	input: string;
 	timeoutMs: number;
 }): Promise<OpenAI.Responses.Response> {
-	const signal = AbortSignal.timeout(opts.timeoutMs);
-	const stream = await withClient((client) =>
-		client.responses.create(
-			{
-				model: opts.model,
-				instructions: opts.system,
-				input: toResponsesInput([{ role: 'user', content: opts.input }]),
-				store: false,
-				stream: true,
-				...(supportsReasoning(opts.model) ? { reasoning: { effort: 'low' as const } } : {})
-			},
-			{ signal }
-		)
-	);
-	return readStream(stream, () => {});
+	return failing(async () => {
+		const signal = AbortSignal.timeout(opts.timeoutMs);
+		const stream = await withClient((client) =>
+			client.responses.create(
+				{
+					model: opts.model,
+					instructions: opts.system,
+					input: toResponsesInput([{ role: 'user', content: opts.input }]),
+					store: false,
+					stream: true,
+					...(supportsReasoning(opts.model) ? { reasoning: { effort: 'low' as const } } : {})
+				},
+				{ signal }
+			)
+		);
+		return readStream(stream, () => {});
+	});
 }
 
 // --- models ---
 
 /** A model in Codex's catalog, as btw needs it. */
-export interface CodexModel {
+export interface ChatGptModel {
 	id: string;
 	name: string;
 	contextWindow: number | null;
@@ -137,12 +141,14 @@ export interface CodexModel {
 }
 
 /** The models the signed-in plan can use, as Codex's catalog lists them. */
-export async function listCodexModels(): Promise<CodexModel[]> {
-	const body = await withClient((client) =>
-		client.get<{ models?: unknown }>('/models', {
-			query: { client_version: CLIENT_VERSION },
-			timeout: REQUEST_TIMEOUT_MS
-		})
+export async function listChatGptModels(): Promise<ChatGptModel[]> {
+	const body = await failing(() =>
+		withClient((client) =>
+			client.get<{ models?: unknown }>('/models', {
+				query: { client_version: CLIENT_VERSION },
+				timeout: REQUEST_TIMEOUT_MS
+			})
+		)
 	);
 	const models = Array.isArray(body.models) ? (body.models as Record<string, unknown>[]) : [];
 	return models.flatMap((m) => {
@@ -161,12 +167,13 @@ export async function listCodexModels(): Promise<CodexModel[]> {
 
 /** Throws if the plan has no such model; its window otherwise, as the catalog gives it. */
 export async function fetchContextWindow(model: string): Promise<number | null> {
-	const models = await listCodexModels();
+	const models = await listChatGptModels();
 	const found = models.find((m) => m.id === model);
 	if (found) return found.contextWindow;
 	const offered = models.filter((m) => m.listed).map((m) => m.id);
-	throw new CodexError(
-		`ChatGPT has no model "${model}" for Codex${offered.length ? `. It has ${offered.join(', ')}` : ''}.`
+	throw new PlanError(
+		`ChatGPT has no model "${model}" for Codex${offered.length ? `. It has ${offered.join(', ')}` : ''}.`,
+		'not_found'
 	);
 }
 
@@ -182,10 +189,23 @@ function resetsIn(resetsAt: unknown): string {
 	return ` It resets in about ${Math.round(hours / 24)} days.`;
 }
 
-export function describeApiError(err: unknown): string {
-	if (err instanceof CodexAuthError || err instanceof CodexError) return err.message;
+/**
+ * Runs `work`, turning what fails into a PlanError in words for people, as the Claude plan does.
+ * A stop stays what it is, so the runner can tell it apart.
+ */
+async function failing<T>(work: () => Promise<T>): Promise<T> {
+	try {
+		return await work();
+	} catch (err) {
+		if (err instanceof PlanError || isSdkError(err, 'APIUserAbortError')) throw err;
+		const kind = isSdkError(err, 'APIError') ? (err.type ?? err.code ?? null) : null;
+		throw new PlanError(describe(err), kind, { cause: err });
+	}
+}
+
+function describe(err: unknown): string {
 	if (isSdkError(err, 'AuthenticationError')) {
-		return `ChatGPT didn't accept btw's sign-in. ${CODEX_SIGN_IN_HELP}`;
+		return `ChatGPT didn't accept btw's sign-in. ${CHATGPT_SIGN_IN_HELP}`;
 	}
 	if (isSdkError(err, 'RateLimitError')) {
 		const body = err.error as { type?: unknown; resets_at?: unknown } | undefined;
@@ -195,7 +215,7 @@ export function describeApiError(err: unknown): string {
 		if (body?.type === 'usage_not_included') return "This ChatGPT plan doesn't include Codex.";
 		return 'Rate limited by ChatGPT. Try again shortly.';
 	}
-	if (isSdkError(err, 'NotFoundError')) return `Model not found: ${shortApiError(err)}`;
+	if (isSdkError(err, 'NotFoundError')) return `Model not found: ${backendMessage(err)}`;
 	if (isSdkError(err, 'APIConnectionTimeoutError')) return "ChatGPT didn't answer in time.";
 	if (isSdkError(err, 'APIConnectionError')) {
 		// fetch says "fetch failed"; the reason (ECONNREFUSED, ENOTFOUND...) is in its cause.
@@ -205,13 +225,13 @@ export function describeApiError(err: unknown): string {
 		return `Couldn't reach ChatGPT (${why}).`;
 	}
 	if (isSdkError(err, 'APIError') && err.status) {
-		return `ChatGPT error ${err.status}: ${shortApiError(err)}`;
+		return `ChatGPT error ${err.status}: ${backendMessage(err)}`;
 	}
-	return `ChatGPT: ${shortApiError(err)}`;
+	return `ChatGPT: ${backendMessage(err)}`;
 }
 
-/** The backend's own message, without the status and JSON around it: for notes to the model. */
-export function shortApiError(err: unknown): string {
+/** The backend's own message, without the status and JSON around it. */
+function backendMessage(err: unknown): string {
 	if (isSdkError(err, 'APIError')) {
 		// OpenAI's `{error: {message}}`, or `{detail}` from the backend's own checks.
 		const body = err.error as { message?: unknown; detail?: unknown } | undefined;

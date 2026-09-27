@@ -32,51 +32,47 @@ Other parts of the CLI have their own instructions: automations (`btw trigger`, 
 
 ## Models
 
-Chats run on model presets, on Claude (Anthropic) or on OpenAI's models with an API key, on the
-owner's Claude plan (`claude-plan`, below), or on a ChatGPT plan (`codex`, below). People pick
-one when they start a chat, and new chats start with the default.
+Chats run on model presets, on Claude (Anthropic) or on OpenAI's models with an API key, or on a
+plan: someone's own Claude or ChatGPT subscription (`claude-plan`, `chatgpt-plan`, below). People
+pick one when they start a chat, and new chats start with the default.
 
 ```sh
 btw preset list                                 # name, provider/model, context window, id, default
 btw preset add claude-sonnet-5 --name "Sonnet"  # Anthropic checks the model id first
 btw preset add gpt-6-astra --provider openai --name "GPT"
 btw preset add claude-opus-5-5 --provider claude-plan --name "Opus (plan)"
-btw preset add gpt-6-astra --provider codex --name "GPT (ChatGPT plan)"
+btw preset add gpt-6-astra --provider chatgpt-plan --name "GPT (plan)"
 btw preset default Sonnet                       # new chats start with it
 btw preset rm Sonnet                            # chats that use it keep working
 ```
 
 btw knows the context window of OpenAI's flagship models (1,050,000 tokens since GPT-5.4). For
 its other models (mini, nano), give `--context-window` when you know it. A preset needs its
-provider's key, or for `codex` the ChatGPT sign-in. If `btw preset add` can't check the model, an
-admin can add it under Models & keys in the account menu.
+provider's key, or its plan's sign-in. If `btw preset add` can't check the model, an admin can add
+it under Models & keys in the account menu.
 
-### The Claude plan
+### Plans
 
-A `claude-plan` preset runs chats on the Claude Pro or Max plan someone signed in to Claude Code
-with on this computer, instead of an API key: btw runs Claude Code, which uses the plan's limits.
-`btw claude-plan status` says which Claude Code btw runs and who it's signed in as. Nobody signs in
-through btw or you: the owner runs `btw claude-plan setup` in a terminal on this computer, which
-installs Claude Code if needed and starts its own sign-in (or runs `claude` there and uses
-`/login`). That command asks questions, so it doesn't work from your commands. Never ask for, look
-for or copy a Claude sign-in or its tokens.
+Both plans work alike for you: `btw <plan> status` says who the plan is signed in as, and
+`btw <plan> setup` signs it in where needed. Plan limits assume one person's ordinary use. When
+someone wants a plan as the default, say that automations and subagents started from its chats
+use it too, and suggest keeping busy automations on an API key preset (`btw trigger` takes a
+preset). When a plan's limit is used up, chats on it stop until the time the error names.
 
-The plan's limits assume one person's ordinary use. When someone wants the plan as the default,
-say that automations and subagents started from its chats use it too, and suggest keeping busy
-automations on an API key preset (`btw trigger` takes a preset).
-
-### The ChatGPT plan
-
-The `codex` provider runs chats on the ChatGPT plan (Plus, Pro, Business) btw is signed in to,
-the way OpenAI's Codex does, instead of on API credit. It counts against the plan's Codex limits;
-when they're used up, chats on it stop until the time the error names. `btw codex status` says who
-btw is signed in as, and `btw codex models` lists the models the plan offers.
-
-Signing in needs someone to enter a one-time code on ChatGPT's site. Suggest Models & keys in the
-account menu, or run `btw codex login` in the background and pass on the link and code it prints:
-it waits up to 15 minutes for them to be entered. Don't run `btw codex logout` while presets use
-`codex`: chats on them stop answering. Models on a ChatGPT plan don't get PDFs, only their path,
-so open a PDF someone attached with a command.
+- **`claude-plan`** runs chats on the Claude Pro or Max plan someone signed in to Claude Code with
+  on this computer: btw runs Claude Code, which keeps the sign-in. `btw claude-plan status` also
+  says which Claude Code btw runs. Nobody signs in through btw or you: the owner runs
+  `btw claude-plan setup` in a terminal on this computer, which installs Claude Code if needed and
+  starts its own sign-in (or runs `claude` there and uses `/login`). That command asks questions,
+  so it doesn't work from your commands. Never ask for, look for or copy a Claude sign-in or its
+  tokens.
+- **`chatgpt-plan`** runs chats on a ChatGPT Plus, Pro or Business plan btw is signed in to, the
+  way OpenAI's Codex does. Signing in needs someone to enter a one-time code on ChatGPT's site:
+  suggest Models & keys in the account menu, or run `btw chatgpt-plan setup` in the background and
+  pass on the link and code it prints (it waits up to 15 minutes for them). `btw chatgpt-plan
+models` lists the models the plan offers. Don't run `btw chatgpt-plan logout` while presets use
+  it: chats on them stop answering. Its models don't get PDFs, only their path, so open a PDF
+  someone attached with a command.
 
 ## API keys
 

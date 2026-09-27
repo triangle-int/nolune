@@ -2,16 +2,15 @@ import { error, fail } from '@sveltejs/kit';
 import {
 	CLAUDE_INSTALL_COMMAND,
 	ApiKeyError,
-	CodexAuthError,
+	PlanError,
 	PROVIDERS,
 	PROVIDER_LABELS,
 	addPreset,
 	apiKeyStatuses,
-	cancelCodexSignIn,
+	cancelChatGptSignIn,
 	checkApiKey,
 	claudePlanStatus,
-	codexStatus,
-	describeAccount,
+	chatGptPlanStatus,
 	effectiveContextWindow,
 	findClaudeCode,
 	getDefaultPreset,
@@ -22,8 +21,10 @@ import {
 	removePreset,
 	saveApiKey,
 	setDefaultPreset,
-	signOutCodex,
-	startCodexSignIn
+	signOutChatGpt,
+	startChatGptSignIn,
+	type Plan,
+	type PlanStatus
 } from '@btw/core';
 import { requireAdmin } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
@@ -31,16 +32,16 @@ import type { Actions, PageServerLoad } from './$types';
 export const load: PageServerLoad = ({ locals, depends }) => {
 	requireAdmin(locals);
 	// The page asks again while a ChatGPT sign-in waits for its code.
-	depends('btw:codex');
+	depends('btw:chatgpt-plan');
 	const defaultId = getDefaultPreset()?.id;
 	return {
 		// Where each key comes from and its last four characters; never the keys themselves.
 		keys: apiKeyStatuses(),
-		// Who btw is signed in to ChatGPT as, and a sign-in's code; never the tokens.
-		codex: codexStatus(),
 		providers: PROVIDERS.map((id) => ({ id, label: PROVIDER_LABELS[id] })),
 		// Where Claude Code is; whether it's signed in takes starting it, so that's a button.
 		claude: { ...findClaudeCode(), installCommand: CLAUDE_INSTALL_COMMAND },
+		// Who btw is signed in to ChatGPT as, and a sign-in's code; never the tokens.
+		chatgpt: chatGptPlanStatus(),
 		presets: listPresets().map((p) => ({
 			id: p.id,
 			name: p.name,
@@ -52,6 +53,15 @@ export const load: PageServerLoad = ({ locals, depends }) => {
 		}))
 	};
 };
+
+/** A plan's status as a form result, for the row of the plan it's about. */
+function planResult(plan: Plan, status: PlanStatus) {
+	if (status.problem || !status.signedIn) {
+		return fail(400, { plan, planError: status.problem ?? "The plan didn't answer." });
+	}
+	const { signedIn } = status;
+	return { plan, planMessage: `${signedIn[0].toUpperCase()}${signedIn.slice(1)}.` };
+}
 
 /** The provider a key form is about, or a 400. */
 async function keyForm(request: Request) {
@@ -77,12 +87,7 @@ export const actions: Actions = {
 	},
 	checkPlan: async ({ locals }) => {
 		requireAdmin(locals);
-		const status = await claudePlanStatus();
-		if (status.problem || !status.account) {
-			return fail(400, { planError: status.problem ?? "Claude Code didn't answer." });
-		}
-		const signedIn = describeAccount(status.account);
-		return { planMessage: `${signedIn[0].toUpperCase()}${signedIn.slice(1)}.` };
+		return planResult('claude-plan', await claudePlanStatus());
 	},
 	removeKey: async ({ locals, request }) => {
 		requireAdmin(locals);
@@ -90,24 +95,24 @@ export const actions: Actions = {
 		removeApiKey(provider);
 		return { provider, keyMessage: 'Removed.' };
 	},
-	codexSignIn: async ({ locals }) => {
+	chatgptSignIn: async ({ locals }) => {
 		requireAdmin(locals);
 		try {
 			// Waits for the code, not for it to be entered: that goes on in the background.
-			await startCodexSignIn();
+			await startChatGptSignIn();
 		} catch (err) {
-			if (!(err instanceof CodexAuthError)) throw err;
-			return fail(400, { codexError: err.message });
+			if (!(err instanceof PlanError)) throw err;
+			return fail(400, { plan: 'chatgpt-plan' as const, planError: err.message });
 		}
 	},
-	codexCancel: ({ locals }) => {
+	chatgptCancel: ({ locals }) => {
 		requireAdmin(locals);
-		cancelCodexSignIn();
+		cancelChatGptSignIn();
 	},
-	codexSignOut: async ({ locals }) => {
+	chatgptSignOut: async ({ locals }) => {
 		requireAdmin(locals);
-		await signOutCodex();
-		return { codexMessage: 'Signed out.' };
+		await signOutChatGpt();
+		return { plan: 'chatgpt-plan' as const, planMessage: 'Signed out.' };
 	},
 	add: async ({ locals, request }) => {
 		requireAdmin(locals);

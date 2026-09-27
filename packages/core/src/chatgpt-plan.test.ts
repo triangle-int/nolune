@@ -5,18 +5,18 @@ import { Readable } from 'node:stream';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createUpload } from './attachments.ts';
 import {
-	CodexAuthError,
-	cancelCodexSignIn,
-	codexAccount,
-	codexCredentials,
-	codexStatus,
-	signOutCodex,
-	startCodexSignIn
-} from './codex-auth.ts';
-import { streamResponse } from './codex-chat.ts';
+	cancelChatGptSignIn,
+	chatGptAccount,
+	chatGptCredentials,
+	chatGptPlanStatus,
+	signOutChatGpt,
+	startChatGptSignIn
+} from './chatgpt-sign-in.ts';
+import { streamResponse } from './chatgpt-plan.ts';
 import { committedRows, createConversation, getConversation } from './conversations.ts';
 import { describeApiError } from './models.ts';
 import { paths } from './paths.ts';
+import { PlanError } from './plans.ts';
 import { addPreset } from './presets.ts';
 import { TOOLS } from './run-command.ts';
 import { onLoopEnd, sendMessage } from './runner.ts';
@@ -83,14 +83,14 @@ afterAll(() => {
 });
 
 beforeEach(() => {
-	vi.stubEnv('BTW_CODEX_ISSUER', `${base}/auth`);
-	vi.stubEnv('BTW_CODEX_BASE_URL', `${base}/codex`);
+	vi.stubEnv('BTW_CHATGPT_ISSUER', `${base}/auth`);
+	vi.stubEnv('BTW_CHATGPT_BASE_URL', `${base}/codex`);
 	seen.length = 0;
 	answer = () => ({ status: 404, json: { error: { message: 'Not found' } } });
 });
 
 afterEach(() => {
-	cancelCodexSignIn();
+	cancelChatGptSignIn();
 	vi.useRealTimers();
 	vi.unstubAllEnvs();
 });
@@ -121,7 +121,7 @@ function tokens(n: number, seconds = 3600) {
 function signedIn(n = 1, seconds = 3600): ReturnType<typeof tokens> {
 	const t = tokens(n, seconds);
 	writeFileSync(
-		paths.codexAuth,
+		paths.chatgptAuth,
 		JSON.stringify({
 			idToken: t.id_token,
 			accessToken: t.access_token,
@@ -134,7 +134,7 @@ function signedIn(n = 1, seconds = 3600): ReturnType<typeof tokens> {
 }
 
 function stored(): { accessToken: string; refreshToken: string } {
-	return JSON.parse(readFileSync(paths.codexAuth, 'utf8')) as {
+	return JSON.parse(readFileSync(paths.chatgptAuth, 'utf8')) as {
 		accessToken: string;
 		refreshToken: string;
 	};
@@ -227,22 +227,25 @@ describe('signing in with ChatGPT', () => {
 			return { status: 404, json: {} };
 		};
 
-		const signIn = await startCodexSignIn();
+		const signIn = await startChatGptSignIn();
 		expect(signIn).toMatchObject({
 			verificationUrl: `${base}/auth/codex/device`,
 			userCode: 'ABCD-1234'
 		});
-		expect(codexStatus()).toMatchObject({
+		expect(chatGptPlanStatus()).toMatchObject({
 			account: null,
-			pending: { userCode: 'ABCD-1234', verificationUrl: `${base}/auth/codex/device` },
-			error: null
+			signedIn: null,
+			pending: { userCode: 'ABCD-1234', verificationUrl: `${base}/auth/codex/device` }
 		});
 
-		expect(await signIn.done).toEqual({ email: 'anna@example.com', plan: 'plus' });
-		expect(codexStatus()).toEqual({
-			account: { email: 'anna@example.com', plan: 'plus' },
+		expect(await signIn.done).toEqual({ email: 'anna@example.com', plan: 'ChatGPT Plus' });
+		// Said as the Claude plan says it.
+		expect(chatGptPlanStatus()).toEqual({
+			account: { email: 'anna@example.com', plan: 'ChatGPT Plus' },
+			signedIn: 'signed in as anna@example.com (ChatGPT Plus)',
+			problem: null,
 			pending: null,
-			error: null
+			signInError: null
 		});
 
 		expect(seen[0].json).toEqual({ client_id: CLIENT_ID });
@@ -260,7 +263,7 @@ describe('signing in with ChatGPT', () => {
 			code_verifier: 'verifier-1'
 		});
 		expect(stored()).toMatchObject({ refreshToken: 'refresh-1', accountId: 'acct-1' });
-		expect(statSync(paths.codexAuth).mode & 0o777).toBe(0o600);
+		expect(statSync(paths.chatgptAuth).mode & 0o777).toBe(0o600);
 	});
 
 	it('stops waiting when the sign-in is cancelled or its code expires', async () => {
@@ -269,34 +272,38 @@ describe('signing in with ChatGPT', () => {
 				? { json: { device_auth_id: 'dev-1', user_code: 'ABCD-1234', interval: '1' } }
 				: { status: 403, json: {} };
 
-		const cancelled = await startCodexSignIn();
-		cancelCodexSignIn();
+		const cancelled = await startChatGptSignIn();
+		cancelChatGptSignIn();
 		await expect(cancelled.done).rejects.toThrow('The sign-in was cancelled.');
-		expect(codexStatus()).toMatchObject({ pending: null, error: null });
+		expect(chatGptPlanStatus()).toMatchObject({
+			pending: null,
+			problem: expect.stringMatching(/^Not signed in with ChatGPT\./),
+			signInError: null
+		});
 
-		const expiring = await startCodexSignIn();
+		const expiring = await startChatGptSignIn();
 		vi.useFakeTimers({ toFake: ['Date'] });
 		vi.setSystemTime(expiring.expiresAt);
 		await expect(expiring.done).rejects.toThrow('The code expired before it was entered.');
-		expect(codexStatus()).toMatchObject({
+		expect(chatGptPlanStatus()).toMatchObject({
 			account: null,
 			pending: null,
-			error: 'The code expired before it was entered. Start the sign-in again.'
+			signInError: 'The code expired before it was entered. Start the sign-in again.'
 		});
 	});
 
 	it('signs out, asking ChatGPT to revoke the sign-in', async () => {
 		signedIn();
 		answer = () => ({ json: {} });
-		await signOutCodex();
-		expect(codexAccount()).toBeNull();
+		await signOutChatGpt();
+		expect(chatGptAccount()).toBeNull();
 		expect(seen.map((r) => [r.path, r.json])).toEqual([
 			[
 				'/auth/oauth/revoke',
 				{ token: 'refresh-1', token_type_hint: 'refresh_token', client_id: CLIENT_ID }
 			]
 		]);
-		await expect(codexCredentials()).rejects.toThrow('Not signed in with ChatGPT.');
+		await expect(chatGptCredentials()).rejects.toThrow('Not signed in with ChatGPT.');
 	});
 });
 
@@ -306,7 +313,7 @@ describe("the sign-in's tokens", () => {
 		const next = tokens(2);
 		answer = (req) => (req.path === '/auth/oauth/token' ? { json: next } : { status: 404 });
 
-		const [a, b] = await Promise.all([codexCredentials(), codexCredentials()]);
+		const [a, b] = await Promise.all([chatGptCredentials(), chatGptCredentials()]);
 		expect(a).toEqual({ accessToken: next.access_token, accountId: 'acct-1' });
 		expect(b).toEqual(a);
 		expect(seen.map((r) => r.json)).toEqual([
@@ -315,7 +322,7 @@ describe("the sign-in's tokens", () => {
 		expect(stored()).toMatchObject({ accessToken: next.access_token, refreshToken: 'refresh-2' });
 
 		// Fresh now, so nothing is asked.
-		await codexCredentials();
+		await chatGptCredentials();
 		expect(seen).toHaveLength(1);
 	});
 
@@ -327,7 +334,7 @@ describe("the sign-in's tokens", () => {
 			theirs = signedIn(9);
 			return { status: 400, json: { error: { code: 'refresh_token_reused', message: 'Reused' } } };
 		};
-		expect(await codexCredentials()).toEqual({
+		expect(await chatGptCredentials()).toEqual({
 			accessToken: theirs!.access_token,
 			accountId: 'acct-1'
 		});
@@ -336,10 +343,10 @@ describe("the sign-in's tokens", () => {
 	it("keeps using a token that hasn't run out yet when ChatGPT can't renew it", async () => {
 		const { access_token } = signedIn(1, 60);
 		answer = () => ({ status: 503, json: { error: { message: 'Down for a moment' } } });
-		expect(await codexCredentials()).toEqual({ accessToken: access_token, accountId: 'acct-1' });
+		expect(await chatGptCredentials()).toEqual({ accessToken: access_token, accountId: 'acct-1' });
 
 		// Not the one the backend just turned down, though.
-		await expect(codexCredentials(access_token)).rejects.toThrow(
+		await expect(chatGptCredentials(access_token)).rejects.toThrow(
 			"ChatGPT couldn't renew its sign-in (503: Down for a moment). Try again in a moment."
 		);
 	});
@@ -347,18 +354,18 @@ describe("the sign-in's tokens", () => {
 	it('asks for a new sign-in once ChatGPT has ended this one', async () => {
 		signedIn(1, -60);
 		answer = () => ({ status: 401, json: { error: { code: 'refresh_token_expired' } } });
-		const err = await codexCredentials().catch((e: unknown) => e);
-		expect(err).toBeInstanceOf(CodexAuthError);
+		const err = await chatGptCredentials().catch((e: unknown) => e);
+		expect(err).toBeInstanceOf(PlanError);
 		expect((err as Error).message).toBe(
-			'The ChatGPT sign-in has expired or was signed out. An admin can sign in under Models & keys in btw, or with `btw codex login`.'
+			'The ChatGPT sign-in has expired or was signed out. An admin can sign in under Models & keys in btw, or with `btw chatgpt-plan setup`.'
 		);
 	});
 });
 
 describe('a chat on a ChatGPT plan', () => {
-	function codexChat() {
+	function planChat() {
 		const { user, profile } = makeFamily();
-		const preset = makePreset('ChatGPT', 'gpt-6-astra', 'codex');
+		const preset = makePreset('ChatGPT', 'gpt-6-astra', 'chatgpt-plan');
 		return {
 			user,
 			profile,
@@ -368,7 +375,7 @@ describe('a chat on a ChatGPT plan', () => {
 
 	it("runs on Codex's backend with the sign-in's token, and names the chat there too", async () => {
 		const { access_token } = signedIn();
-		const { user, chat } = codexChat();
+		const { user, chat } = planChat();
 		answer = (req) => {
 			if (req.path !== '/codex/responses') return { status: 404, json: {} };
 			return (req.json?.input as unknown[]).length === 1 && !req.json?.tools
@@ -409,7 +416,7 @@ describe('a chat on a ChatGPT plan', () => {
 
 	it('sends pictures inline and PDFs as their path, having no Files API', async () => {
 		signedIn();
-		const { user, profile, chat } = codexChat();
+		const { user, profile, chat } = planChat();
 		const photo = await createUpload({
 			profileId: profile.id,
 			userId: user.id,
@@ -443,7 +450,7 @@ describe('a chat on a ChatGPT plan', () => {
 			{
 				type: 'input_text',
 				text: expect.stringMatching(
-					/^\[Anna attached menu\.pdf, saved at .*It isn't shown here: models on a ChatGPT plan don't take PDFs\]$/
+					/^\[Anna attached menu\.pdf, saved at .*It isn't shown here: models on the ChatGPT plan don't take PDFs\]$/
 				)
 			},
 			{ type: 'input_text', text: 'Anna: What are these?' }
@@ -451,7 +458,7 @@ describe('a chat on a ChatGPT plan', () => {
 		const human = committedRows(chat.id).find((row) => row.kind === 'human')!;
 		expect(JSON.parse(human.attachments!)).toMatchObject([
 			{ sentAs: 'image' },
-			{ sentAs: 'path', note: "models on a ChatGPT plan don't take PDFs" }
+			{ sentAs: 'path', note: "models on the ChatGPT plan don't take PDFs" }
 		]);
 	});
 
@@ -487,13 +494,13 @@ describe('a chat on a ChatGPT plan', () => {
 					}
 				: { status: 404 };
 
-		const preset = await addPreset({ provider: 'codex', model: 'gpt-6-astra' });
+		const preset = await addPreset({ provider: 'chatgpt-plan', model: 'gpt-6-astra' });
 		expect(preset).toMatchObject({
-			name: 'gpt-6-astra (codex)',
-			provider: 'codex',
+			name: 'gpt-6-astra (chatgpt-plan)',
+			provider: 'chatgpt-plan',
 			modelContextWindow: 272000
 		});
-		await expect(addPreset({ provider: 'codex', model: 'gpt-9' })).rejects.toThrow(
+		await expect(addPreset({ provider: 'chatgpt-plan', model: 'gpt-9' })).rejects.toThrow(
 			'Could not verify model "gpt-9": ChatGPT has no model "gpt-9" for Codex. It has gpt-6-astra, gpt-5.5.'
 		);
 	});
@@ -507,7 +514,10 @@ describe('a chat on a ChatGPT plan', () => {
 			json: { error: { type: 'usage_limit_reached', resets_at: resetsAt, plan_type: 'plus' } }
 		});
 		const limited = await turn().catch((err: unknown) => err);
-		expect(describeApiError(limited, 'codex')).toBe(
+		// The same kind of error as the Claude plan's.
+		expect(limited).toBeInstanceOf(PlanError);
+		expect((limited as PlanError).kind).toBe('usage_limit_reached');
+		expect(describeApiError(limited)).toBe(
 			"The ChatGPT plan's Codex limit is used up for now. It resets in about 2 hours."
 		);
 
@@ -517,12 +527,12 @@ describe('a chat on a ChatGPT plan', () => {
 			json: { error: { type: 'usage_not_included' } }
 		});
 		const notIncluded = await turn().catch((err: unknown) => err);
-		expect(describeApiError(notIncluded, 'codex')).toBe("This ChatGPT plan doesn't include Codex.");
+		expect(describeApiError(notIncluded)).toBe("This ChatGPT plan doesn't include Codex.");
 
-		await signOutCodex();
+		await signOutChatGpt();
 		const missing = await turn().catch((err: unknown) => err);
-		expect(describeApiError(missing, 'codex')).toBe(
-			'Not signed in with ChatGPT. An admin can sign in under Models & keys in btw, or with `btw codex login`.'
+		expect(describeApiError(missing)).toBe(
+			'Not signed in with ChatGPT. An admin can sign in under Models & keys in btw, or with `btw chatgpt-plan setup`.'
 		);
 	});
 });

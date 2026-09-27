@@ -42,7 +42,7 @@ export function effectiveContextWindow(preset: Preset): number | null {
 
 /**
  * Checks the model exists with the provider and records its context window, when the provider
- * says (OpenAI doesn't: without an override, its presets have none; ChatGPT's Codex catalog does).
+ * says (OpenAI doesn't: without an override, its presets have none).
  */
 export async function addPreset(input: {
 	/** As typed (the CLI, the admin page): checked here. Anthropic when left out. */
@@ -67,9 +67,7 @@ export async function addPreset(input: {
 	try {
 		modelContextWindow = await fetchContextWindow(provider, model);
 	} catch (err) {
-		throw new Error(`Could not verify model "${model}": ${describeApiError(err, provider)}`, {
-			cause: err
-		});
+		throw new Error(`Could not verify model "${model}": ${describeApiError(err)}`, { cause: err });
 	}
 
 	const preset = {

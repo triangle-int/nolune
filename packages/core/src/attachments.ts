@@ -34,7 +34,7 @@ import { hasFileStore, providerFileId } from './provider-files.ts';
  * Files people attach to a message. Each is saved in the profile's `attachments` folder, where
  * the agent can work with it, and shown in the chat through a media row. The model gets pictures
  * and PDFs themselves, through the provider's Files API (inline on the Claude plan, which has
- * none; on a ChatGPT plan, pictures inline and PDFs as their path), and every other file as its
+ * none; on the ChatGPT plan, pictures inline and PDFs as their path), and every other file as its
  * name and path. What the model got is written into the message's `content` in the provider's
  * format; `message.attachments` keeps the provider-neutral record.
  */
@@ -211,7 +211,7 @@ type AttachmentBlock =
 
 /**
  * A picture as the provider's content block, counted in `used`: uploaded through its Files API,
- * or inline as base64 when that fails (or the provider has none, as on the Claude plan and a
+ * or inline as base64 when that fails (or the provider has none, as on the Claude plan and the
  * ChatGPT plan) and the conversation still has room for it.
  */
 export async function imageBlock(
@@ -234,11 +234,9 @@ export async function imageBlock(
 		} catch (err) {
 			const bytes = base64Length(data.length);
 			if (used.bytes + bytes > MAX_CONVERSATION_IMAGE_BYTES) {
-				return { problem: `it couldn't be uploaded (${shortApiError(err, provider)})` };
+				return { problem: `it couldn't be uploaded (${shortApiError(err)})` };
 			}
-			console.error(
-				`[btw] uploading ${name} failed, sending it inline: ${shortApiError(err, provider)}`
-			);
+			console.error(`[btw] uploading ${name} failed, sending it inline: ${shortApiError(err)}`);
 		}
 	}
 	const bytes = base64Length(data.length);
@@ -356,23 +354,24 @@ async function pdfBlock(
 	room: number,
 	used: ImageUse
 ): Promise<{ block: Anthropic.DocumentBlockParam; tokens: number } | { problem: string }> {
-	const { provider } = conv;
-	if (!hasFileStore(provider)) {
-		// ChatGPT's Codex backend takes no PDFs (Codex never sends one): the model opens its path.
-		if (provider === 'codex') return { problem: "models on a ChatGPT plan don't take PDFs" };
+	if (!hasFileStore(conv.provider)) {
+		// ChatGPT's Codex backend isn't known to take PDFs (Codex never sends one).
+		if (conv.provider === 'chatgpt-plan') {
+			return { problem: "models on the ChatGPT plan don't take PDFs" };
+		}
 		return inlinePdfBlock(conv, path, name, room, used);
 	}
 	let fileId: string;
 	try {
-		fileId = await providerFileId(provider, readFileSync(path), name, 'application/pdf');
+		fileId = await providerFileId(conv.provider, readFileSync(path), name, 'application/pdf');
 	} catch (err) {
-		return { problem: `it couldn't be uploaded (${shortApiError(err, provider)})` };
+		return { problem: `it couldn't be uploaded (${shortApiError(err)})` };
 	}
 	let tokens: number;
 	try {
-		tokens = await countDocumentTokens(provider, conv.model, fileId);
+		tokens = await countDocumentTokens(conv.provider, conv.model, fileId);
 	} catch (err) {
-		return { problem: `the model can't read it (${shortApiError(err, provider)})` };
+		return { problem: `the model can't read it (${shortApiError(err)})` };
 	}
 	if (tokens > room) {
 		return {

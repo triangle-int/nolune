@@ -139,36 +139,39 @@ export {
 	EFFORTS,
 	PROVIDERS,
 	PROVIDER_LABELS,
-	describeApiError,
 	isProvider,
 	runsOnClaudeCode,
 	type Effort,
 	type Provider
 } from './models.ts';
 export {
-	CODEX_SIGN_IN_HELP,
-	CodexAuthError,
-	cancelCodexSignIn,
-	codexAccount,
-	codexStatus,
-	signOutCodex,
-	startCodexSignIn,
-	type CodexAccount,
-	type CodexSignIn,
-	type CodexStatus
-} from './codex-auth.ts';
-export { listCodexModels, type CodexModel } from './codex-chat.ts';
+	PLANS,
+	PlanError,
+	describePlanAccount,
+	isPlan,
+	type Plan,
+	type PlanAccount,
+	type PlanStatus
+} from './plans.ts';
 export {
 	CLAUDE_INSTALL_COMMAND,
-	ClaudePlanError,
 	checkClaudePlan,
 	claudeSignInCommand,
 	findClaudeCode,
 	claudeExecutable,
 	claudePlanStatus,
-	describeAccount,
 	type ClaudePlanStatus
 } from './claude-plan.ts';
+export {
+	CHATGPT_SIGN_IN_HELP,
+	cancelChatGptSignIn,
+	chatGptPlanStatus,
+	signOutChatGpt,
+	startChatGptSignIn,
+	type ChatGptSignIn,
+	type ChatGptPlanStatus
+} from './chatgpt-sign-in.ts';
+export { listChatGptModels, type ChatGptModel } from './chatgpt-plan.ts';
 export {
 	createSkill,
 	isValidSkillName,
