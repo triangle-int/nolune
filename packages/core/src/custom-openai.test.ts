@@ -19,7 +19,8 @@ import {
 	listModels,
 	quickReply,
 	readableMessages,
-	streamTurn
+	streamTurn,
+	type Effort
 } from './models.ts';
 import { RUN_COMMAND_TOOL, runCommand } from './run-command.ts';
 import { onLoopEnd, sendMessage } from './runner.ts';
@@ -38,7 +39,7 @@ interface Seen {
 	key: string | undefined;
 	json: Record<string, unknown> | null;
 }
-type Answer = { status?: number; json?: unknown; chunks?: object[] };
+type Answer = { status?: number; json?: unknown; events?: object[] };
 
 let server: Server;
 let baseUrl = '';
@@ -66,10 +67,12 @@ beforeAll(async () => {
 				: request.path === '/v1/models'
 					? { json: { object: 'list', data: models } }
 					: answer(request);
-		if (reply.chunks) {
+		if (reply.events) {
 			res.writeHead(reply.status ?? 200, { 'content-type': 'text/event-stream' });
 			res.end(
-				reply.chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join('') + 'data: [DONE]\n\n'
+				reply.events
+					.map((e) => `event: ${(e as { type: string }).type}\ndata: ${JSON.stringify(e)}\n\n`)
+					.join('')
 			);
 		} else {
 			res.writeHead(reply.status ?? 200, { 'content-type': 'application/json' });
@@ -102,58 +105,73 @@ afterEach(() => {
 	vi.resetAllMocks();
 });
 
-function chunk(delta: object, finish: string | null = null) {
-	return {
-		id: 'chatcmpl-1',
-		object: 'chat.completion.chunk',
-		choices: [{ index: 0, delta, finish_reason: finish }]
-	};
+const usage = (input: number, output: number) => ({ input_tokens: input, output_tokens: output });
+
+/**
+ * A streamed response, item by item, as vLLM and LM Studio send one: a reasoning item's full
+ * text (`reasoning_text`, where OpenAI gives a summary), then the message or the calls.
+ */
+function streamed(output: Record<string, unknown>[], used = usage(900, 30)): Answer {
+	const events: object[] = [{ type: 'response.created', response: { status: 'in_progress' } }];
+	output.forEach((item, index) => {
+		events.push({ type: 'response.output_item.added', output_index: index, item });
+		if (item.type === 'reasoning') {
+			for (const part of item.content as { text: string }[]) {
+				events.push({
+					type: 'response.reasoning_text.delta',
+					output_index: index,
+					delta: part.text
+				});
+			}
+		} else if (item.type === 'message') {
+			for (const part of item.content as { text: string }[]) {
+				events.push({ type: 'response.output_text.delta', output_index: index, delta: part.text });
+			}
+		}
+		events.push({ type: 'response.output_item.done', output_index: index, item });
+	});
+	events.push({
+		type: 'response.completed',
+		response: { status: 'completed', output, usage: used }
+	});
+	return { events };
 }
 
-const usage = (prompt: number, completion: number) => ({
-	id: 'chatcmpl-1',
-	object: 'chat.completion.chunk',
-	choices: [],
-	usage: { prompt_tokens: prompt, completion_tokens: completion, total_tokens: prompt + completion }
-});
-
+const thought = {
+	id: 'rs_1',
+	type: 'reasoning',
+	summary: [],
+	content: [{ type: 'reasoning_text', text: 'Anna wants the files.' }]
+};
 const listArgs = JSON.stringify({
 	summary: 'Listing the files',
 	icon: 'folder-open',
 	command: 'ls'
 });
-
-/** As vLLM and LM Studio stream a model's thinking: `reasoning_content`, then the call. */
-const listing: Answer = {
-	chunks: [
-		chunk({ role: 'assistant', reasoning_content: 'Anna wants ' }),
-		chunk({ reasoning_content: 'the files.' }),
-		chunk({
-			tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'run_command' } }]
-		}),
-		chunk({ tool_calls: [{ index: 0, function: { arguments: listArgs } }] }),
-		chunk({}, 'tool_calls'),
-		usage(900, 30)
-	]
+const listCall = {
+	id: 'fc_1',
+	type: 'function_call',
+	status: 'completed',
+	call_id: 'call_1',
+	name: 'run_command',
+	arguments: listArgs
 };
-
-const saying = (text: string): Answer => ({
-	chunks: [chunk({ role: 'assistant', content: text }), chunk({}, 'stop'), usage(1000, 8)]
-});
+function said(text: string) {
+	return {
+		id: 'msg_1',
+		type: 'message',
+		role: 'assistant',
+		status: 'completed',
+		content: [{ type: 'output_text', text, annotations: [] }]
+	};
+}
 
 /** A thinking model's title, its thoughts left in the text as servers without a parser do. */
 const titled = (title: string): Answer => ({
 	json: {
-		id: 'chatcmpl-2',
-		object: 'chat.completion',
-		choices: [
-			{
-				index: 0,
-				message: { role: 'assistant', content: `<think>\nA short title.\n</think>\n\n${title}` },
-				finish_reason: 'stop'
-			}
-		],
-		usage: { prompt_tokens: 60, completion_tokens: 4 }
+		status: 'completed',
+		output: [said(`<think>\nA short title.\n</think>\n\n${title}`)],
+		usage: usage(60, 4)
 	}
 });
 
@@ -178,8 +196,23 @@ function customChat(model = 'qwen3:8b') {
 	};
 }
 
-const COMPLETIONS = '/v1/chat/completions';
-const turns = () => seen.filter((r) => r.path === COMPLETIONS && r.json?.stream);
+const RESPONSES = '/v1/responses';
+const turns = () => seen.filter((r) => r.path === RESPONSES && r.json?.stream);
+
+/** One call on the server's model, as the runner makes it. */
+const turn = (model: string, effort: Effort = 'medium') =>
+	streamTurn({
+		provider: 'custom-openai',
+		model,
+		effort,
+		system: 'Be brief.',
+		tools: [],
+		cacheTtl: '1h',
+		cacheKey: 'conv-1',
+		messages: [{ role: 'user', blocks: [{ type: 'text', text: 'Hi' }] }],
+		signal: new AbortController().signal,
+		onEvent: () => {}
+	});
 
 // --- tests ---
 
@@ -311,11 +344,11 @@ describe('the Custom OpenAI server', () => {
 });
 
 describe('a chat on a Custom OpenAI model', () => {
-	it('runs the agent loop over Chat Completions, sending only what such servers take', async () => {
+	it("runs the agent loop as OpenAI's does, leaving out what only OpenAI has", async () => {
 		const { user, chat } = customChat();
-		const replies = [listing, saying('One file: a.txt.')];
+		const replies = [streamed([thought, listCall]), streamed([said('One file: a.txt.')])];
 		answer = (req) => {
-			if (req.path !== COMPLETIONS) return { status: 404, json: {} };
+			if (req.path !== RESPONSES) return { status: 404, json: {} };
 			return req.json?.stream ? replies.shift()! : titled('Listing files');
 		};
 		vi.mocked(runCommand).mockResolvedValueOnce({
@@ -330,40 +363,34 @@ describe('a chat on a Custom OpenAI model', () => {
 
 		expect(turns()).toHaveLength(2);
 		const [first, second] = turns().map((r) => r.json!);
+		// No encrypted reasoning or prompt cache key: those are OpenAI's.
 		expect(first).toEqual({
 			model: 'qwen3:8b',
-			messages: [
-				{ role: 'system', content: chat.systemPrompt },
-				{ role: 'user', content: [{ type: 'text', text: 'Anna: Files?' }] }
-			],
+			instructions: chat.systemPrompt,
+			input: [{ role: 'user', content: [{ type: 'input_text', text: 'Anna: Files?' }] }],
 			tools: [
 				{
 					type: 'function',
-					function: {
-						name: 'run_command',
-						description: RUN_COMMAND_TOOL.description,
-						parameters: RUN_COMMAND_TOOL.input_schema
-					}
+					name: 'run_command',
+					description: RUN_COMMAND_TOOL.description,
+					parameters: RUN_COMMAND_TOOL.input_schema,
+					strict: false
 				}
 			],
+			store: false,
 			stream: true,
-			stream_options: { include_usage: true }
+			reasoning: { effort: 'medium', summary: 'auto' }
 		});
-		// Its reply goes back without its reasoning, which such servers don't take.
-		expect(second.messages).toEqual([
-			...(first.messages as unknown[]),
-			{
-				role: 'assistant',
-				content: null,
-				tool_calls: [
-					{ id: 'call_1', type: 'function', function: { name: 'run_command', arguments: listArgs } }
-				]
-			},
-			{ role: 'tool', tool_call_id: 'call_1', content: 'a.txt\n[exit code 0]' }
+		// Its reasoning has nothing encrypted to send back, so the call goes back without it.
+		expect(second.input).toEqual([
+			...(first.input as unknown[]),
+			listCall,
+			{ type: 'function_call_output', call_id: 'call_1', output: 'a.txt\n[exit code 0]' }
 		]);
 		expect(turns()[0].key).toBe('none');
 
 		const saved = committedRows(chat.id).filter((row) => row.kind === 'assistant');
+		expect(JSON.parse(saved[0].content)).toEqual([thought, listCall]);
 		expect(toDisplay(saved[0])).toMatchObject({
 			stopReason: 'tool_use',
 			usage: { input: 900, cacheRead: 0, cacheWrite: 0, output: 30 },
@@ -379,20 +406,46 @@ describe('a chat on a Custom OpenAI model', () => {
 
 		// Named by the same model, without the thoughts it left in the title.
 		await vi.waitFor(() => expect(getConversation(chat.id)?.title).toBe('Listing files'));
-		const naming = seen.find((r) => r.path === COMPLETIONS && !r.json?.stream)!.json;
+		const naming = seen.find((r) => r.path === RESPONSES && !r.json?.stream)!.json;
 		expect(naming).toEqual({
 			model: 'qwen3:8b',
-			messages: [
-				{ role: 'system', content: expect.any(String) },
-				{ role: 'user', content: '<message>\nFiles?\n</message>' }
-			],
-			max_tokens: 2048
+			instructions: expect.any(String),
+			input: '<message>\nFiles?\n</message>',
+			max_output_tokens: 2048,
+			store: false,
+			reasoning: { effort: 'low' }
 		});
+	});
+
+	it("sends OpenAI's levels above high as high, and no reasoning to a model that refuses it", async () => {
+		saveCustomOpenai(baseUrl, null);
+		answer = (req) =>
+			req.json?.reasoning && req.json.model === 'llama3.2'
+				? { status: 400, json: { error: { message: '"llama3.2" does not support thinking' } } }
+				: streamed([said('Hello.')]);
+
+		await turn('qwen3:8b', 'max');
+		expect(turns().at(-1)!.json!.reasoning).toEqual({ effort: 'high', summary: 'auto' });
+
+		const reply = await turn('llama3.2');
+		expect(reply.texts).toEqual(['Hello.']);
+		// Asked again without, and from then on without.
+		await turn('llama3.2');
+		expect(turns().map((r) => [r.json!.model, !!r.json!.reasoning])).toEqual([
+			['qwen3:8b', true],
+			['llama3.2', true],
+			['llama3.2', false],
+			['llama3.2', false]
+		]);
+		// Other errors aren't taken for a refusal.
+		answer = () => ({ status: 400, json: { error: { message: 'model "gemma" not found' } } });
+		const failed = await turn('gemma').catch((err: unknown) => err);
+		expect(describeApiError(failed)).toBe('Custom OpenAI error 400: model "gemma" not found');
 	});
 
 	it('gives the model the paths of pictures and PDFs', async () => {
 		const { user, profile, chat } = customChat();
-		answer = (req) => (req.json?.stream ? saying('A dot.') : titled('A dot'));
+		answer = (req) => (req.json?.stream ? streamed([said('A dot.')]) : titled('A dot'));
 		const png = Buffer.from(
 			'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
 			'base64'
@@ -408,15 +461,15 @@ describe('a chat on a Custom OpenAI model', () => {
 		await sendMessage(chat.id, user, 'What is it?', [picture.id]);
 		await ended;
 
-		const content = (turns()[0].json!.messages as { content: unknown }[])[1].content;
-		expect(content).toEqual([
+		const input = turns()[0].json!.input as { content: unknown }[];
+		expect(input[0].content).toEqual([
 			{
-				type: 'text',
+				type: 'input_text',
 				text: expect.stringMatching(
 					/^\[Anna attached dot\.png, saved at .+dot\.png\. It isn't shown here: btw gives models on a Custom OpenAI server only a picture's path\]$/
 				)
 			},
-			{ type: 'text', text: 'Anna: What is it?' }
+			{ type: 'input_text', text: 'Anna: What is it?' }
 		]);
 	});
 
@@ -447,19 +500,13 @@ describe('a chat on a Custom OpenAI model', () => {
 
 	it('says in words when the stream ends early', async () => {
 		saveCustomOpenai(baseUrl, null);
-		answer = () => ({ chunks: [chunk({ role: 'assistant', content: 'Hal' })] });
-		const failed = await streamTurn({
-			provider: 'custom-openai',
-			model: 'qwen3:8b',
-			effort: 'medium',
-			system: 'Be brief.',
-			tools: [],
-			cacheTtl: '1h',
-			cacheKey: 'conv-1',
-			messages: [{ role: 'user', blocks: [{ type: 'text', text: 'Hi' }] }],
-			signal: new AbortController().signal,
-			onEvent: () => {}
-		}).catch((err: unknown) => err);
-		expect(describeApiError(failed)).toBe('Custom OpenAI: the reply ended before it was complete.');
+		answer = () => ({
+			events: [
+				{ type: 'response.created', response: { status: 'in_progress' } },
+				{ type: 'response.output_text.delta', output_index: 0, delta: 'Hal' }
+			]
+		});
+		const failed = await turn('qwen3:8b').catch((err: unknown) => err);
+		expect(describeApiError(failed)).toBe('Custom OpenAI: The reply ended before it was complete.');
 	});
 });

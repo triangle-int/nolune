@@ -115,12 +115,12 @@ export async function streamTurn(opts: {
 		const reply = await openrouter.streamTurn({ ...request, cacheKey });
 		return fromContent(reply.content, reply.stopReason, reply.usage);
 	}
-	if (provider === 'custom-openai') {
-		const reply = await customOpenai.streamTurn(request);
-		return fromContent(reply.content, reply.stopReason, reply.usage);
-	}
-	if (provider === 'openai') {
-		const response = await openai.streamResponse({ ...request, cacheKey });
+	if (provider === 'openai' || provider === 'custom-openai') {
+		// A Custom OpenAI server's chats are OpenAI's, with its own client.
+		const response =
+			provider === 'openai'
+				? await openai.streamResponse({ ...request, cacheKey })
+				: await customOpenai.streamResponse({ ...request, cacheKey });
 		return fromContent(
 			response.output ?? [],
 			openai.stopReason(response),
@@ -155,12 +155,18 @@ export async function quickReply(opts: {
 	if (opts.provider === 'claude-plan') return claudePlan.quickReply(opts);
 	if (opts.provider === 'chatgpt-plan') return chatgptPlan.quickReply(opts);
 	if (opts.provider === 'openrouter') return openrouter.quickReply(opts);
-	if (opts.provider === 'custom-openai') return customOpenai.quickReply(opts);
-	if (opts.provider === 'openai') {
-		const response = await openai.createResponse(opts);
+	if (opts.provider === 'openai' || opts.provider === 'custom-openai') {
+		const response =
+			opts.provider === 'openai'
+				? await openai.createResponse(opts)
+				: await customOpenai.createResponse(opts);
 		const usage = openai.summarizeUsage(response.usage);
 		if (openai.stopReason(response) !== 'end_turn') return { text: null, usage };
-		return { text: textOf(response.output ?? []), usage };
+		const text = textOf(response.output ?? []);
+		return {
+			text: opts.provider === 'custom-openai' ? customOpenai.withoutThinking(text) : text,
+			usage
+		};
 	}
 	const reply = await anthropic.createMessage(opts);
 	const usage = summarizeAnthropicUsage(reply.usage);
@@ -279,8 +285,8 @@ export async function listModels(provider: Provider): Promise<ModelChoice[]> {
 /** Plans say what went wrong in their own words (plans.ts). */
 export function describeApiError(err: unknown): string {
 	if (err instanceof PlanError) return err.message;
-	// OpenRouter's and Custom OpenAI's errors are OpenAI's SDK's classes too, so they're asked
-	// first; Custom OpenAI's before OpenRouter's, whose stream reading it shares.
+	// Custom OpenAI's and OpenRouter's errors are OpenAI's SDK's classes too, so they're asked
+	// first.
 	if (customOpenai.isCustomOpenaiError(err)) return customOpenai.describeApiError(err);
 	if (openrouter.isOpenRouterError(err)) return openrouter.describeApiError(err);
 	return openai.isOpenAIError(err) ? openai.describeApiError(err) : anthropic.describeApiError(err);

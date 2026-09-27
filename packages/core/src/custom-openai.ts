@@ -1,31 +1,22 @@
-import type Anthropic from '@anthropic-ai/sdk';
 import type { OpenAI } from 'openai';
 import { readConfig, updateConfig } from './config.ts';
-import type { Usage } from './conversations.ts';
-import type { Message } from './format.ts';
-import type { CacheTtl, Effort, ModelChoice, StreamEvent } from './models.ts';
-import {
-	functionTool,
-	readStream,
-	StreamError,
-	summarizeUsage,
-	toChatMessages,
-	withoutUnreadable,
-	type Chunk,
-	type Reply
-} from './openrouter.ts';
+import { withoutUnreadable, type Message } from './format.ts';
+import type { ModelChoice } from './models.ts';
+import * as openai from './openai-chat.ts';
 
 /*
  * Custom OpenAI: any server that speaks OpenAI's API, at an address the admin gives, with a key
- * when it wants one: Ollama, LM Studio, oMLX, vLLM, llama.cpp's server, LiteLLM... It's a provider
- * of its own: presets run chats on its models, through Chat Completions like OpenRouter's (the
- * messages and the stream are openrouter.ts's), and memory search can take its embeddings
- * (memory-embeddings.ts). The rest of btw calls it through models.ts.
+ * when it wants one: Ollama, LM Studio, vLLM, LiteLLM... It's a provider of its own: presets run
+ * chats on its models, and memory search can take its embeddings (memory-embeddings.ts). The rest
+ * of btw calls it through models.ts.
  *
- * Such servers differ, so only what they all take is sent: no reasoning level, no cache marks, no
- * reasoning back. They can't say which of their models see pictures or read PDFs, so those go as
- * their paths, which the agent opens with commands; and they rarely say how large a model's window
- * is, so a preset's is set by hand or stays unknown.
+ * Chats are OpenAI's (openai-chat.ts): the Responses API through OpenAI's SDK, with a client
+ * pointed at the server. What differs: the requests leave out what only OpenAI has (encrypted
+ * reasoning, its prompt cache key, levels above `high`), and a model the server refuses reasoning
+ * settings for gets none. There's no Files API, and nothing says which of a server's models see
+ * pictures or read PDFs, so those go as their paths, which the agent opens with commands. Its
+ * models are what it lists, with a window only when the list gives one, so a preset's is set by
+ * hand or stays unknown.
  */
 
 export const CUSTOM_OPENAI_LABEL = 'Custom OpenAI';
@@ -206,7 +197,10 @@ async function getClient(): Promise<OpenAI> {
 	return cached.client;
 }
 
-/** Errors from calls to the server, which are OpenAI's SDK's classes like OpenRouter's. */
+/**
+ * Errors from calls to the server. They're OpenAI's SDK's classes, and the same code's, so
+ * models.ts tells them apart by this before asking openai-chat.ts.
+ */
 const ours = new WeakSet<object>();
 
 async function tagged<T>(call: () => Promise<T>): Promise<T> {
@@ -224,66 +218,29 @@ export function isCustomOpenaiError(err: unknown): boolean {
 	);
 }
 
-/** One model call, streamed (see models.ts). The effort and the cache TTL aren't sent. */
-export function streamTurn(opts: {
-	model: string;
-	effort: Effort;
-	system: string;
-	tools: Anthropic.Tool[];
-	cacheTtl: CacheTtl;
-	messages: Message[];
-	signal: AbortSignal;
-	onEvent: (event: StreamEvent) => void;
-}): Promise<Reply> {
-	return tagged(async () => {
-		const client = await getClient();
-		const body = {
-			model: opts.model,
-			messages: toChatMessages(opts.system, opts.messages, opts.model, null, 'custom-openai'),
-			tools: opts.tools.map(functionTool),
-			stream: true,
-			// Otherwise most servers leave the usage out of a stream.
-			stream_options: { include_usage: true }
-		};
-		const stream = await client.chat.completions.create(
-			body as unknown as OpenAI.Chat.ChatCompletionCreateParamsStreaming,
-			{ signal: opts.signal }
-		);
-		return readStream(stream as AsyncIterable<Chunk>, opts.onEvent, {
-			label: CUSTOM_OPENAI_LABEL,
-			keepReasoning: true
-		});
-	});
+const api: openai.ResponsesApi = {
+	provider: 'custom-openai',
+	client: getClient,
+	account: () => server().url
+};
+
+/** One model call, streamed, as OpenAI's (see models.ts). */
+export function streamResponse(
+	opts: Parameters<typeof openai.streamResponse>[0]
+): Promise<OpenAI.Responses.Response> {
+	return tagged(() => openai.streamResponse(opts, api));
 }
 
-/** One short exchange, not streamed (see models.ts). */
-export function quickReply(opts: {
-	model: string;
-	system: string;
-	input: string;
-	maxTokens: number;
-	timeoutMs: number;
-}): Promise<{ text: string | null; usage: Usage }> {
-	return tagged(async () => {
-		const client = await getClient();
-		const reply = await client.chat.completions.create(
-			{
-				model: opts.model,
-				messages: [
-					{ role: 'system', content: opts.system },
-					{ role: 'user', content: opts.input }
-				],
-				max_tokens: opts.maxTokens
-			},
-			{ timeout: opts.timeoutMs }
-		);
-		const choice = reply.choices?.[0];
-		const usage = summarizeUsage(reply.usage as Parameters<typeof summarizeUsage>[0]);
-		if (choice?.finish_reason !== 'stop') return { text: null, usage };
-		// A server without a reasoning parser leaves a thinking model's thoughts in the text.
-		const text = (choice.message.content ?? '').replace(/^\s*<think>[\s\S]*?<\/think>\s*/, '');
-		return { text, usage };
-	});
+/** One short exchange, not streamed, as OpenAI's (see models.ts). */
+export function createResponse(
+	opts: Parameters<typeof openai.createResponse>[0]
+): Promise<OpenAI.Responses.Response> {
+	return tagged(() => openai.createResponse(opts, api));
+}
+
+/** A server without a reasoning parser leaves a thinking model's thoughts in its text. */
+export function withoutThinking(text: string): string {
+	return text.replace(/^\s*<think>[\s\S]*?<\/think>\s*/, '');
 }
 
 /** Pictures and PDFs go as their paths: nothing says which of a server's models take them. */
@@ -306,10 +263,11 @@ interface ModelInfo {
 async function serverModels(): Promise<ModelInfo[]> {
 	return tagged(async () => {
 		const client = await getClient();
-		const list = await client.get<{ data?: ModelInfo[] }>('/models', {
-			timeout: REQUEST_TIMEOUT_MS
-		});
-		return (list.data ?? []).filter((m) => typeof m?.id === 'string');
+		const all: ModelInfo[] = [];
+		for await (const model of client.models.list({ timeout: REQUEST_TIMEOUT_MS })) {
+			if (typeof model?.id === 'string') all.push(model as ModelInfo);
+		}
+		return all;
 	});
 }
 
@@ -366,7 +324,7 @@ function address(): string {
 }
 
 export function describeApiError(err: unknown): string {
-	if (err instanceof CustomOpenaiError || err instanceof StreamError) return err.message;
+	if (err instanceof CustomOpenaiError) return err.message;
 	if (isSdkError(err, 'AuthenticationError')) {
 		return `The ${CUSTOM_OPENAI_LABEL} server at ${address()} didn't accept the key. An admin can change it under Models & keys in btw, or with \`btw key set custom-openai\`.`;
 	}

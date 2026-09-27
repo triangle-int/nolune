@@ -42,12 +42,12 @@ preset can run any model [OpenRouter](https://openrouter.ai/models) serves that 
 model's maker. Pictures and PDFs go only to models that take them; for the others, they're saved
 for the agent and named in the message, like any other file.
 
-**On your own server.** Custom OpenAI runs chats on any server that speaks OpenAI's API, like
-[Ollama](https://ollama.com) or [LM Studio](https://lmstudio.ai) on this computer: `btw key set
-custom-openai http://localhost:11434/v1` (with its key after the address, if it wants one), or
-under Models & keys, then `btw preset add qwen3:8b --provider custom-openai`. btw asks the server
-for its models to check it. The model must be able to call tools; pictures and PDFs reach it as
-their paths.
+**On your own server.** Custom OpenAI runs chats on any server that speaks OpenAI's Responses
+API, like [Ollama](https://ollama.com) (0.13.3 or later), [LM Studio](https://lmstudio.ai) (0.3.29
+or later) or vLLM on this computer: `btw key set custom-openai http://localhost:11434/v1` (with
+its key after the address, if it wants one), or under Models & keys, then
+`btw preset add qwen3:8b --provider custom-openai`. btw asks the server for its models to check
+it. The model must be able to call tools; pictures and PDFs reach it as their paths.
 
 **On your own plan instead of an API key.** Chats can run on a subscription someone in the family
 already has. Pick one with `btw setup --provider <plan>`, or later with `btw <plan> setup` and a

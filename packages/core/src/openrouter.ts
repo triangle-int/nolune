@@ -9,11 +9,9 @@ import {
 	placeholder,
 	portableReply,
 	unresolved,
+	withoutUnreadable,
 	type Block,
-	type ImageBlock,
 	type Message,
-	type PdfBlock,
-	type TextBlock,
 	type ToolResultBlock
 } from './format.ts';
 import type { CacheTtl, Effort, ModelChoice, StreamEvent } from './models.ts';
@@ -68,9 +66,6 @@ function isSdkError<K extends ErrorClass>(err: unknown, name: K): err is Instanc
 
 /** Something OpenRouter's side can't do, in words for people. */
 class OpenRouterError extends Error {}
-
-/** A reply that failed or ended early (readStream), in words for people, its provider named. */
-export class StreamError extends OpenRouterError {}
 
 class MissingApiKeyError extends OpenRouterError {
 	constructor() {
@@ -236,16 +231,13 @@ function nativeMessage(content: unknown[], withReasoning: boolean): ChatMessage 
  * they came, reasoning included, except from before the system prompt was built again: through
  * OpenRouter it may be Claude's thinking, which is bound to the prompt. Replies from another model
  * or provider (the conversation switched), and btw's own, go as their text and calls. `cache`:
- * Claude only caches what's marked. `provider`: whose replies these are; another server that
- * speaks Chat Completions (custom-openai.ts) gets its replies back without their reasoning, which
- * such servers don't take.
+ * Claude only caches what's marked.
  */
 export function toChatMessages(
 	system: string,
 	messages: Message[],
 	model: string,
-	cache: CacheControl | null = null,
-	provider: 'openrouter' | 'custom-openai' = 'openrouter'
+	cache: CacheControl | null = null
 ): ChatMessage[] {
 	const out: ChatMessage[] = [
 		{
@@ -259,9 +251,9 @@ export function toChatMessages(
 			let reply: ChatMessage | null;
 			if (
 				native &&
-				(native.provider === null || (native.provider === provider && native.model === model))
+				(native.provider === null || (native.provider === 'openrouter' && native.model === model))
 			) {
-				reply = nativeMessage(native.content, provider === 'openrouter' && !m.beforePromptChange);
+				reply = nativeMessage(native.content, !m.beforePromptChange);
 			} else {
 				const portable = portableReply(m.blocks);
 				reply = assistantMessage(
@@ -291,62 +283,17 @@ export function toChatMessages(
 	return out;
 }
 
-/** What a model reads instead of a picture or PDF it can't take. */
-function unreadableNote(block: ImageBlock | PdfBlock, model: string): TextBlock {
-	const what =
-		block.type === 'image'
-			? `Picture not shown: ${model} can't see pictures`
-			: `PDF not shown: ${model} doesn't read PDFs itself`;
-	return { type: 'text', text: `[${what}. The line before this says where its file is.]` };
-}
-
 /**
  * The messages with each picture and PDF `model` can't take as a note, before resolveFiles
  * uploads them: a chat that switched to a text-only model may hold them, and a request carrying
  * one would fail. Messages without any are returned as they are.
  */
-export async function readableMessages(messages: Message[], model: string): Promise<Message[]> {
+export function readableMessages(messages: Message[], model: string): Promise<Message[]> {
 	return withoutUnreadable(messages, model, () => modelInputs(model));
 }
 
-/**
- * The messages with each picture and PDF `model` can't take (`inputsOf`, asked only when there
- * are any) as a note. Messages without any are returned as they are.
- */
-export async function withoutUnreadable(
-	messages: Message[],
-	model: string,
-	inputsOf: () => Promise<{ pictures: boolean; pdfs: boolean }>
-): Promise<Message[]> {
-	const isFile = (b: Block) => b.type === 'image' || b.type === 'pdf';
-	const holdsFiles = messages.some((m) =>
-		m.blocks.some(
-			(b) =>
-				isFile(b) ||
-				(b.type === 'tool_result' && Array.isArray(b.content) && b.content.some(isFile))
-		)
-	);
-	if (!holdsFiles) return messages;
-	const inputs = await inputsOf();
-	if (inputs.pictures && inputs.pdfs) return messages;
-	return messages.map((m) => {
-		let changed = false;
-		const readable = <B extends Block>(b: B): B | TextBlock => {
-			if ((b.type !== 'image' || inputs.pictures) && (b.type !== 'pdf' || inputs.pdfs)) return b;
-			changed = true;
-			return unreadableNote(b as unknown as ImageBlock | PdfBlock, model);
-		};
-		const blocks = m.blocks.map((b): Block =>
-			b.type === 'tool_result' && Array.isArray(b.content)
-				? { ...b, content: b.content.map(readable) }
-				: readable(b)
-		);
-		return changed ? { ...m, blocks } : m;
-	});
-}
-
 /** A tool as btw saves it (Anthropic's format) as a function tool. */
-export function functionTool(tool: Anthropic.Tool) {
+function functionTool(tool: Anthropic.Tool) {
 	return {
 		type: 'function' as const,
 		function: { name: tool.name, description: tool.description, parameters: tool.input_schema }
@@ -364,8 +311,6 @@ interface ChunkDelta {
 	content?: string | null;
 	refusal?: string | null;
 	reasoning?: string | null;
-	/** How vLLM, LM Studio and DeepSeek's API name it. */
-	reasoning_content?: string | null;
 	reasoning_details?: ReasoningDetail[] | null;
 	tool_calls?:
 		| {
@@ -382,7 +327,7 @@ type ChatUsage = {
 	prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number } | null;
 } | null;
 
-export interface Chunk {
+interface Chunk {
 	choices?: { delta?: ChunkDelta | null; finish_reason?: string | null }[];
 	usage?: ChatUsage;
 }
@@ -400,22 +345,17 @@ const PIECED = new Set(['text', 'summary', 'data', 'signature']);
 
 /**
  * Reads the stream, telling `onEvent` about each block as it grows. Reasoning details and tool
- * calls arrive in pieces, keyed by their `index`, and are put together here. `label` names the
- * provider in its errors. `keepReasoning`: plain reasoning text, which OpenRouter sends beside its
- * details, is kept as a `reasoning.text` piece when there are no details, so a server that sends
- * only that still shows its thinking in the chat.
+ * calls arrive in pieces, keyed by their `index`, and are put together here.
  */
-export async function readStream(
+async function readStream(
 	stream: AsyncIterable<Chunk>,
-	onEvent: (event: StreamEvent) => void,
-	options: { label: string; keepReasoning?: boolean } = { label: 'OpenRouter' }
+	onEvent: (event: StreamEvent) => void
 ): Promise<Reply> {
 	const details = new Map<number, ReasoningDetail>();
 	let lastDetail = -1;
 	const calls = new Map<number, ToolCallItem>();
 	let text = '';
 	let refusal = '';
-	let reasoning = '';
 	let finish: string | null = null;
 	let usage: ChatUsage = null;
 
@@ -472,10 +412,8 @@ export async function readStream(
 				}
 			}
 			say('thinking', shown);
-		} else if (delta.reasoning || delta.reasoning_content) {
-			const piece = delta.reasoning || delta.reasoning_content || '';
-			reasoning += piece;
-			say('thinking', piece);
+		} else if (delta.reasoning) {
+			say('thinking', delta.reasoning);
 		}
 		if (delta.content) {
 			text += delta.content;
@@ -504,17 +442,12 @@ export async function readStream(
 			if (piece.function?.arguments) call.function.arguments += piece.function.arguments;
 		}
 	}
-	if (!finish) {
-		throw new StreamError(`${options.label}: the reply ended before it was complete.`);
-	}
-	if (finish === 'error') throw new StreamError(`${options.label}: the reply failed.`);
+	if (!finish) throw new OpenRouterError('OpenRouter: the reply ended before it was complete.');
+	if (finish === 'error') throw new OpenRouterError('OpenRouter: the reply failed.');
 
 	const said = [text, refusal].filter(Boolean).join('\n\n');
 	// In the order the model made them, which is the order they must go back in.
 	const content: unknown[] = [...details.entries()].sort(([a], [b]) => a - b).map(([, d]) => d);
-	if (options.keepReasoning && !details.size && reasoning) {
-		content.push({ type: 'reasoning.text', text: reasoning });
-	}
 	if (said) content.push({ type: 'text', text: said });
 	content.push(...calls.values());
 	return {

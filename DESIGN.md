@@ -218,26 +218,29 @@ turns (`runPlanTurn`; see [Plans](#plans)).
   listed itself. The list is kept for an hour for what the model can be sent (see
   [Attachments](#attachments)). Titles are asked for at `low` effort with 2,048 tokens.
 - **Custom OpenAI** (`custom-openai.ts`) runs chats on the models of a server the admin names
-  that speaks OpenAI's API: Ollama, LM Studio, oMLX, vLLM, llama.cpp's server, LiteLLM. Its
-  address and optional key are kept apart from the API keys (`customOpenaiUrl`,
-  `customOpenaiApiKey` in `config.json`, else `CUSTOM_OPENAI_BASE_URL` and
-  `CUSTOM_OPENAI_API_KEY`; the environment's key goes only to the environment's address, so a
-  server saved in btw never gets another's), and saving it asks the server for its models
-  (`GET /models`): a server
-  that turns the key down isn't saved, one that doesn't answer is, with a warning, since it may not
-  run yet. Chats go over Chat Completions with OpenRouter's code (`toChatMessages`, `readStream`),
-  sending only what every such server takes: the model, the messages, the tools, and
-  `stream_options.include_usage`, without a reasoning level, cache marks or a session id. Thinking
-  that streams as `reasoning` or `reasoning_content` (vLLM, LM Studio, DeepSeek's) is stored as a
-  `reasoning.text` piece, shown in the chat and never sent back; a short reply (a title, the
-  note-taker's) drops the `<think>…</think>` a server without a reasoning parser leaves in the
-  text. Such servers can't say which of
-  their models see pictures or read PDFs, so those go as their paths (`modelInputs` is false for
-  both), and a chat that switched to one gets notes for those it holds. Adding a preset checks
-  that the server lists the model, when it lists any, and takes its window when the list says one
-  (`max_model_len`, as vLLM does; `context_length`); otherwise it's unknown until the admin sets
-  it. Whether the model calls tools shows at its first reply. Its errors are tagged like
-  OpenRouter's and asked about first.
+  that speaks OpenAI's Responses API: Ollama (0.13.3 and later), LM Studio (0.3.29 and later),
+  vLLM, LiteLLM; not llama.cpp's server yet. Its address and optional key are kept apart from the
+  API keys (`customOpenaiUrl`, `customOpenaiApiKey` in `config.json`, else
+  `CUSTOM_OPENAI_BASE_URL` and `CUSTOM_OPENAI_API_KEY`; the environment's key goes only to the
+  environment's address, so a server saved in btw never gets another's), and saving it asks the
+  server for its models (`GET /models`): a server that turns the key down isn't saved, one that
+  doesn't answer is, with a warning, since it may not run yet. Its chats are OpenAI's: the same
+  code in `openai-chat.ts` (`streamResponse`, `createResponse`, `toResponsesInput`), given a
+  `ResponsesApi` whose client is OpenAI's SDK pointed at the server (a server that takes no key
+  gets `none`). What differs: requests leave out what only OpenAI has (encrypted reasoning, its
+  prompt cache key), levels above `high` go as `high`, and a model the server refuses reasoning
+  settings for (a 400 about reasoning or thinking) gets none from then on, learned like OpenAI's
+  refused summaries. A server that streams a model's reasoning in full (`reasoning_text`, as vLLM
+  and LM Studio do) shows it in the chat like OpenAI's summaries; it has nothing encrypted, so it
+  isn't sent back. A short reply (a title, the note-taker's) drops the `<think>…</think>` a
+  server without a reasoning parser leaves in the text. Nothing says which of a server's models
+  see pictures or read PDFs, and there's no Files API, so those go as their paths (`modelInputs`
+  is false for both), and a chat that switched to one gets notes for those it holds. Adding a
+  preset checks that the server lists the model, when it lists any, and takes its window when the
+  list says one (`max_model_len`, as vLLM does; `context_length`); otherwise it's unknown until
+  the admin sets it. Whether the model calls tools shows at its first reply. Its errors are
+  OpenAI's SDK's and the same code's, so `custom-openai.ts` tags them and `models.ts` asks it
+  first.
 - **Another provider** (Gemini) would be one more module next to these, with a
   function turning btw's format into its request (Gemini's thought signatures would ride in
   `native` like OpenAI's encrypted reasoning), a branch in each of `models.ts`'s functions, a
