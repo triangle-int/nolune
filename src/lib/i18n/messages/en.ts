@@ -579,7 +579,7 @@ export const en = {
 	/** A new profile's welcome. btw speaks for itself here: "I" is the assistant. */
 	welcome: {
 		title: "Let's make this place yours.",
-		subtitle: "A few quick questions, and I'll feel at home.",
+		subtitle: "A few quick questions, and you'll feel at home.",
 		go: "Let's go",
 		takesAMinute: 'Takes about a minute',
 		skipIntro: 'Skip the intro',

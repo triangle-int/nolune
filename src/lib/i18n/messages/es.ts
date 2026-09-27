@@ -666,7 +666,7 @@ export const es: Messages = {
 	/** La bienvenida de un perfil nuevo. Aquí habla btw: «yo» es el asistente. */
 	welcome: {
 		title: 'Hagamos de este lugar el tuyo.',
-		subtitle: 'Unas preguntas rápidas y me sentiré como en casa.',
+		subtitle: 'Unas preguntas rápidas y te sentirás como en casa.',
 		go: 'Vamos',
 		takesAMinute: 'Lleva cerca de un minuto',
 		skipIntro: 'Saltar la intro',

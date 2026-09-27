@@ -663,7 +663,7 @@ export const fr: Messages = {
 	/** L’accueil d’un nouveau profil. Ici btw parle en son nom : « je », c’est l’assistant. */
 	welcome: {
 		title: 'Faisons de cet endroit le vôtre.',
-		subtitle: 'Quelques questions rapides, et je me sentirai chez moi.',
+		subtitle: 'Quelques questions rapides, et vous vous sentirez chez vous.',
 		go: 'C’est parti',
 		takesAMinute: 'Environ une minute',
 		skipIntro: 'Passer l’intro',

@@ -646,7 +646,7 @@ export const de: Messages = {
 	/** Die Begrüßung eines neuen Profils. Hier spricht btw selbst: „ich“ ist der Assistent. */
 	welcome: {
 		title: 'Machen wir es dir hier gemütlich.',
-		subtitle: 'Ein paar kurze Fragen, dann fühle ich mich wie zu Hause.',
+		subtitle: 'Ein paar kurze Fragen, dann fühlst du dich wie zu Hause.',
 		go: "Los geht's",
 		takesAMinute: 'Dauert etwa eine Minute',
 		skipIntro: 'Intro überspringen',
