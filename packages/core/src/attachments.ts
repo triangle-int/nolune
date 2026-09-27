@@ -26,7 +26,13 @@ import {
 	storedType,
 	type PreparedMedia
 } from './media.ts';
-import { countDocumentTokens, modelInputs, shortApiError, type Provider } from './models.ts';
+import {
+	countDocumentTokens,
+	countsDocumentTokens,
+	modelInputs,
+	shortApiError,
+	type Provider
+} from './models.ts';
 import { profileDir } from './paths.ts';
 import { hasFileStore, providerFileId } from './provider-files.ts';
 
@@ -228,8 +234,8 @@ async function modelTakes(conv: ModelOf, what: 'pictures' | 'pdfs'): Promise<str
 
 /**
  * A picture as the provider's content block, counted in `used`: uploaded through its Files API,
- * or inline as base64 when that fails (or the provider has none, as on the Claude plan and
- * OpenRouter) and the conversation still has room for it.
+ * or inline as base64 when that fails (or the provider has none, as on the Claude plan) and the
+ * conversation still has room for it.
  */
 export async function imageBlock(
 	conv: ModelOf,
@@ -326,18 +332,12 @@ export function pdfPageCount(data: Buffer): number | null {
 	return counts.length ? Math.max(...counts) : null;
 }
 
-/**
- * A PDF inline, for chats on the Claude plan and OpenRouter, which have no Files API: estimated
- * from its pages, and counted in the conversation's inline bytes, which every request carries.
- */
-function inlinePdfBlock(
+/** A PDF's tokens estimated from its pages, where they can't be counted (TOKENS_PER_PDF_PAGE). */
+function estimatePdf(
 	conv: Conversation,
-	path: string,
-	name: string,
-	room: number,
-	used: ImageUse
-): { block: Anthropic.DocumentBlockParam; tokens: number } | { problem: string } {
-	const data = readFileSync(path);
+	data: Buffer,
+	room: number
+): { tokens: number } | { problem: string } {
 	const pages = pdfPageCount(data);
 	if (pages === null) {
 		return { problem: "btw couldn't tell how many pages it has (it may be encrypted)" };
@@ -352,6 +352,22 @@ function inlinePdfBlock(
 			problem: `at ${pages} pages it's about ${tokens.toLocaleString('en-US')} tokens, more than this conversation has room for (${Math.max(0, room).toLocaleString('en-US')})`
 		};
 	}
+	return { tokens };
+}
+
+/**
+ * A PDF inline, for chats on the Claude plan, which have no Files API: estimated from its pages,
+ * and counted in the conversation's inline bytes, which every request carries.
+ */
+function inlinePdfBlock(
+	conv: Conversation,
+	data: Buffer,
+	name: string,
+	room: number,
+	used: ImageUse
+): { block: Anthropic.DocumentBlockParam; tokens: number } | { problem: string } {
+	const estimate = estimatePdf(conv, data, room);
+	if ('problem' in estimate) return estimate;
 	const bytes = base64Length(data.length);
 	if (used.bytes + bytes > MAX_CONVERSATION_IMAGE_BYTES) {
 		return { problem: "it's too big to send along with everything else in this conversation" };
@@ -363,7 +379,7 @@ function inlinePdfBlock(
 			source: { type: 'base64', media_type: 'application/pdf', data: data.toString('base64') },
 			title: name
 		},
-		tokens
+		tokens: estimate.tokens
 	};
 }
 
@@ -376,23 +392,29 @@ async function pdfBlock(
 ): Promise<{ block: Anthropic.DocumentBlockParam; tokens: number } | { problem: string }> {
 	const refused = await modelTakes(conv, 'pdfs');
 	if (refused) return { problem: refused };
-	if (!hasFileStore(conv.provider)) return inlinePdfBlock(conv, path, name, room, used);
+	const data = readFileSync(path);
+	if (!hasFileStore(conv.provider)) return inlinePdfBlock(conv, data, name, room, used);
+	// Where the provider can't count it (OpenRouter), it's estimated before it's uploaded.
+	const estimate = countsDocumentTokens(conv.provider) ? null : estimatePdf(conv, data, room);
+	if (estimate && 'problem' in estimate) return estimate;
 	let fileId: string;
 	try {
-		fileId = await providerFileId(conv.provider, readFileSync(path), name, 'application/pdf');
+		fileId = await providerFileId(conv.provider, data, name, 'application/pdf');
 	} catch (err) {
 		return { problem: `it couldn't be uploaded (${shortApiError(err)})` };
 	}
-	let tokens: number;
-	try {
-		tokens = await countDocumentTokens(conv.provider, conv.model, fileId);
-	} catch (err) {
-		return { problem: `the model can't read it (${shortApiError(err)})` };
-	}
-	if (tokens > room) {
-		return {
-			problem: `it's about ${tokens.toLocaleString('en-US')} tokens, more than this conversation has room for (${Math.max(0, room).toLocaleString('en-US')})`
-		};
+	let tokens = estimate?.tokens;
+	if (tokens === undefined) {
+		try {
+			tokens = await countDocumentTokens(conv.provider, conv.model, fileId);
+		} catch (err) {
+			return { problem: `the model can't read it (${shortApiError(err)})` };
+		}
+		if (tokens > room) {
+			return {
+				problem: `it's about ${tokens.toLocaleString('en-US')} tokens, more than this conversation has room for (${Math.max(0, room).toLocaleString('en-US')})`
+			};
+		}
 	}
 	return {
 		block: { type: 'document', source: { type: 'file', file_id: fileId }, title: name },

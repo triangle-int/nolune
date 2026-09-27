@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { OpenAI } from 'openai';
 import { apiKeyHelp, configuredApiKey } from './config.ts';
@@ -14,10 +14,11 @@ import type { CacheTtl, Effort, StreamEvent } from './models.ts';
  * pieces the API returned: its `reasoning_details` as they came (Claude's signatures and
  * encrypted reasoning included, which must go back unchanged), its text as a `text` block, and
  * its `tool_calls`. btw's own blocks (Anthropic's format) become chat messages the same way on
- * every call, so the prefix stays byte-identical for the prompt cache. There's no Files API:
- * pictures and PDFs go inline, and only to models that take them (`modelInputs`).
+ * every call, so the prefix stays byte-identical for the prompt cache. Pictures and PDFs go
+ * through OpenRouter's Files API (in beta), and only to models that take them (`modelInputs`).
  */
 
+const UPLOAD_TIMEOUT_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 60_000;
 /** The model list is the same for everyone; it's asked for again after this long. */
 const MODELS_TTL_MS = 60 * 60_000;
@@ -44,7 +45,8 @@ type ErrorClass =
 	| 'APIUserAbortError'
 	| 'APIConnectionError'
 	| 'APIConnectionTimeoutError'
-	| 'AuthenticationError';
+	| 'AuthenticationError'
+	| 'NotFoundError';
 
 /** Whether `err` is one of the SDK's errors, which it can't be before the SDK was loaded. */
 function isSdkError<K extends ErrorClass>(err: unknown, name: K): err is InstanceType<Sdk[K]> {
@@ -109,7 +111,10 @@ type CacheControl = { type: 'ephemeral'; ttl: CacheTtl };
 type Part =
 	| { type: 'text'; text: string }
 	| { type: 'image_url'; image_url: { url: string } }
-	| { type: 'file'; file: { filename: string; file_data: string } };
+	| {
+			type: 'file';
+			file: { file_id: string; filename?: string } | { filename: string; file_data: string };
+	  };
 
 /** A piece of the model's reasoning, as OpenRouter returns it and wants it back. */
 type ReasoningDetail = { type: string; index?: number } & Record<string, unknown>;
@@ -135,11 +140,15 @@ function isToolCall(block: Block): block is ToolCallItem & Block {
 	return block.type === 'function' && typeof block.id === 'string';
 }
 
-/** A picture, PDF or text block of btw's (Anthropic's format) as a content part. */
+/**
+ * A picture, PDF or text block of btw's (Anthropic's format) as a content part. An uploaded
+ * picture or PDF goes as a `file` part with its id, which Chat Completions takes for both.
+ */
 function inputPart(block: Block): Part | null {
 	const source = block.source as Record<string, string> | undefined;
 	if (block.type === 'text') return { type: 'text', text: String(block.text) };
 	if (block.type === 'image' && source) {
+		if (source.type === 'file') return { type: 'file', file: { file_id: source.file_id } };
 		if (source.type === 'base64') {
 			return {
 				type: 'image_url',
@@ -148,8 +157,11 @@ function inputPart(block: Block): Part | null {
 		}
 		if (source.type === 'url') return { type: 'image_url', image_url: { url: source.url } };
 	}
-	if (block.type === 'document' && source?.type === 'base64') {
+	if (block.type === 'document' && source) {
 		const filename = typeof block.title === 'string' ? block.title : 'document.pdf';
+		if (source.type === 'file')
+			return { type: 'file', file: { file_id: source.file_id, filename } };
+		if (source.type !== 'base64') return null;
 		return {
 			type: 'file',
 			file: { filename, file_data: `data:${source.media_type};base64,${source.data}` }
@@ -484,7 +496,62 @@ export function summarizeUsage(usage: ChatUsage | undefined): Usage {
 	};
 }
 
-// --- models, errors ---
+// --- files, models, errors ---
+
+/** Files belong to the key's workspace. A hash, so the key itself isn't stored. */
+function accountOf(key: string): string {
+	return createHash('sha256').update(key).digest('hex').slice(0, 16);
+}
+
+/** Keeps names short and plain; the model never needs them, the Files API only stores them. */
+function uploadName(name: string): string {
+	// eslint-disable-next-line no-control-regex
+	const clean = name.replace(/[<>:"|?*\\/\x00-\x1f]/g, '_').trim();
+	return clean.slice(-200) || 'file';
+}
+
+/**
+ * OpenRouter's Files API, as provider-files.ts uses it (see FileStore there). It answers OpenAI's
+ * SDK in OpenAI's shape, missing files included, so this is openai-chat.ts's store on OpenRouter.
+ * It tells the file's type from its content; `purpose` is only there because the SDK wants one.
+ */
+export const openrouterFiles = {
+	account(): string {
+		return accountOf(apiKey());
+	},
+	upload(data: Buffer, name: string, mime: string): Promise<string> {
+		return tagged(async () => {
+			const client = await getClient();
+			const file = await (await loadSdk()).toFile(data, uploadName(name), { type: mime });
+			const purpose = 'user_data' as const;
+			return (await client.files.create({ file, purpose }, { timeout: UPLOAD_TIMEOUT_MS })).id;
+		});
+	},
+	/** False once the file was deleted; other failures throw. */
+	exists(fileId: string): Promise<boolean> {
+		return tagged(async () => {
+			const client = await getClient();
+			try {
+				await client.files.retrieve(fileId, { timeout: REQUEST_TIMEOUT_MS });
+				return true;
+			} catch (err) {
+				if (isSdkError(err, 'NotFoundError')) return false;
+				throw err;
+			}
+		});
+	},
+	/** Resolves when the file is gone, also when it already was. */
+	remove(fileId: string): Promise<void> {
+		return tagged(async () => {
+			const client = await getClient();
+			try {
+				await client.files.delete(fileId, { timeout: REQUEST_TIMEOUT_MS });
+			} catch (err) {
+				if (!isSdkError(err, 'NotFoundError')) throw err;
+			}
+		});
+	}
+};
 
 interface ModelInfo {
 	id: string;

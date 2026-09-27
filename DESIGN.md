@@ -128,8 +128,8 @@ A conversation runs on its preset's provider for its whole life. `models.ts` is 
 btw calls: it picks the provider's module (`anthropic.ts`, `openai-chat.ts`, `openrouter.ts`)
 for the model call, the chat's title, PDF token counts, model checks and what the model can be
 sent, and gets back the same shape from each (the reply's content, its stop reason in Anthropic's
-words, usage, tool calls and texts). Anthropic and OpenAI bring a `FileStore` for pictures and
-PDFs (see [Attachments](#attachments)); OpenRouter has none and sends them inline. The Claude
+words, usage, tool calls and texts). Each API provider brings a `FileStore` for pictures and
+PDFs (see [Attachments](#attachments)). The Claude
 plan (`claude-plan.ts`) is different: Claude Code runs the agent loop, so the runner hands it whole
 turns (see [The Claude plan](#the-claude-plan)).
 
@@ -184,10 +184,12 @@ turns (see [The Claude plan](#the-claude-plan)).
   Through OpenRouter a reasoning detail may be Claude's thinking, bound to the system prompt, so
   details from before a rebuilt prompt are left out like thinking (`requestMessages`). A reply
   that was only reasoning has nothing to send and is skipped.
-- **btw's blocks on OpenRouter.** Text becomes `text` parts, pictures `image_url` parts with a
-  data URL, PDFs `file` parts, command results `tool` messages. A tool message takes only text,
-  so the pictures `btw view` attached to a result follow, each after the line naming it, in the
-  user message after the results. `run_command` is sent as a function tool, as for OpenAI.
+- **btw's blocks on OpenRouter.** Text becomes `text` parts, command results `tool` messages. An
+  uploaded picture or PDF becomes a `file` part with its `file_id` (Chat Completions takes
+  pictures that way too); a picture that couldn't be uploaded goes as an `image_url` part with a
+  data URL. A tool message takes only text, so the pictures `btw view` attached to a result
+  follow, each after the line naming it, in the user message after the results. `run_command` is
+  sent as a function tool, as for OpenAI.
 - **Reasoning** on OpenRouter is `reasoning.effort`, with the same five levels, which OpenRouter
   maps for each model (a thinking budget for older Claude models, say) and ignores for models
   that don't reason. The chat shows `reasoning.text` and summaries as thinking; encrypted
@@ -419,8 +421,10 @@ kind of file, up to 100 MB each (the same as pictures in replies) and 10 per mes
   (`provider-files.ts`); one without a files API would send pictures inline. OpenAI's is its
   Files API: pictures are uploaded for `vision` and PDFs as `user_data`, and a PDF's cost is
   counted with `POST /v1/responses/input_tokens`, which also fails for a PDF it can't read.
-- **OpenRouter** has no Files API, so pictures and PDFs go inline, counted against the same 20 MB
-  as on the Claude plan, and a PDF's tokens are estimated from its pages the same way. Unlike
+- **OpenRouter's** is its Files API (in beta), which takes pictures and PDFs alike and keeps them
+  in the key's workspace without expiring. It answers OpenAI's SDK in OpenAI's shape, missing
+  files included, so its store is OpenAI's on OpenRouter's client. It can't count a PDF's tokens,
+  so they're estimated from its pages as on the Claude plan, before it's uploaded. Unlike
   Anthropic's and OpenAI's, many of its models are text only, and a picture sent to one would
   fail every later request. So `modelInputs` asks OpenRouter's model list first (`image` and
   `file` among its `input_modalities`): a picture goes only to a model that sees pictures, and a
@@ -862,8 +866,8 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   on an account with a problem (out of credit, a restricted OpenAI key that can't list models) is,
   with the provider's words. OpenRouter lists its models for anyone, so its key is checked with
   `GET /key` instead. Removing a saved key falls back to the environment's. Replacing a key warns
-  to keep the same workspace (Anthropic) or project (OpenAI): pictures and PDFs already sent live
-  in it (OpenRouter keeps none). `btw key set` does the same check, but saves anyway when the
+  to keep the same workspace (Anthropic, OpenRouter) or project (OpenAI): pictures and PDFs
+  already sent live in it. `btw key set` does the same check, but saves anyway when the
   provider can't be reached. The preset form picks the provider (Anthropic, OpenAI, OpenRouter or
   the Claude plan), and the provider checks the model id before the preset is saved.
 
@@ -950,7 +954,7 @@ to (issue #42).
 ```
 packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_command, background
                 commands, memory notes, btw view images, attachments, model calls (models.ts, with
-                anthropic.ts and openai-chat.ts, each with its Files API, and openrouter.ts;
+                anthropic.ts, openai-chat.ts and openrouter.ts, each with its Files API;
                 content-blocks.ts reads any one's replies), Claude plan turns through Claude Code
                 (claude-plan.ts), provider
                 file cache, runner, media, users/profiles/presets, API

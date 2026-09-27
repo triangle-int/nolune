@@ -17,7 +17,13 @@ import {
 } from './conversations.ts';
 import { viewImage } from './images.ts';
 import { describeApiError } from './models.ts';
-import { stopReason, streamTurn, summarizeUsage, toChatMessages } from './openrouter.ts';
+import {
+	openrouterFiles,
+	stopReason,
+	streamTurn,
+	summarizeUsage,
+	toChatMessages
+} from './openrouter.ts';
 import { addPreset } from './presets.ts';
 import { RUN_COMMAND_TOOL, TOOLS, runCommand } from './run-command.ts';
 import { onLoopEnd, sendMessage, subscribe, type LiveEvent } from './runner.ts';
@@ -34,6 +40,7 @@ interface Seen {
 	method: string;
 	path: string;
 	key: string | undefined;
+	body: string;
 	json: Record<string, unknown> | null;
 }
 type Answer = {
@@ -80,24 +87,55 @@ let baseUrl = '';
 const seen: Seen[] = [];
 let answer: (request: Seen) => Answer;
 
+/** The stand-in's Files API: the ids it handed out, and whether uploads fail. */
+const stored = new Set<string>();
+let uploadsFail = false;
+
+/** As OpenRouter answers OpenAI's SDK, in OpenAI's shape. */
+function filesApi(request: Seen): Answer {
+	const id = request.path.split('/')[4];
+	if (request.method === 'POST') {
+		if (uploadsFail)
+			return { status: 400, json: { error: { message: 'Invalid file type', code: 400 } } };
+		const fileId = `or_file_${stored.size + 1}`;
+		stored.add(fileId);
+		return { json: { _shape: 'openai', id: fileId, object: 'file', purpose: 'user_data' } };
+	}
+	if (!stored.has(id)) {
+		return { status: 404, json: { error: { message: `File not found: ${id}`, code: 404 } } };
+	}
+	if (request.method === 'DELETE') {
+		stored.delete(id);
+		return { json: { _shape: 'openai', id, object: 'file', deleted: true } };
+	}
+	return { json: { _shape: 'openai', id, object: 'file' } };
+}
+
 beforeAll(async () => {
 	server = createServer(async (req, res) => {
 		const chunks: Buffer[] = [];
 		for await (const chunk of req) chunks.push(chunk as Buffer);
+		const body = Buffer.concat(chunks).toString('utf8');
 		let json: Seen['json'] = null;
 		try {
-			json = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Seen['json'];
+			json = JSON.parse(body) as Seen['json'];
 		} catch {
-			// empty
+			// multipart, or empty
 		}
 		const request: Seen = {
 			method: req.method ?? 'GET',
 			path: req.url ?? '',
 			key: req.headers.authorization?.replace(/^Bearer /, ''),
+			body,
 			json
 		};
 		seen.push(request);
-		const reply = request.path === '/api/v1/models' ? { json: { data: MODELS } } : answer(request);
+		const reply =
+			request.path === '/api/v1/models'
+				? { json: { data: MODELS } }
+				: request.path.startsWith('/api/v1/files')
+					? filesApi(request)
+					: answer(request);
 		if (reply.chunks) {
 			res.writeHead(reply.status ?? 200, { 'content-type': 'text/event-stream', ...reply.headers });
 			// OpenRouter keeps the connection alive with comments while the model starts.
@@ -125,6 +163,8 @@ beforeEach(() => {
 	vi.stubEnv('OPENROUTER_BASE_URL', baseUrl);
 	vi.stubEnv('OPENROUTER_API_KEY', 'sk-or-v1-test-0000000001');
 	seen.length = 0;
+	stored.clear();
+	uploadsFail = false;
 	answer = () => ({ status: 404, json: { error: { message: 'Not Found', code: 404 } } });
 });
 
@@ -371,7 +411,7 @@ describe('a chat on an OpenRouter model', () => {
 		});
 	});
 
-	it('sends pictures and PDFs inline to a model that takes them', async () => {
+	it("uploads pictures and PDFs to OpenRouter's Files API for a model that takes them", async () => {
 		const { user, profile, chat } = openrouterChat();
 		const upload = (name: string, data: Buffer) =>
 			createUpload({ profileId: profile.id, userId: user.id, name, body: Readable.from([data]) });
@@ -390,23 +430,49 @@ describe('a chat on an OpenRouter model', () => {
 					type: 'text',
 					text: expect.stringMatching(/^\[Anna attached dot\.png, saved at [^\]]*\]$/)
 				},
-				{ type: 'image_url', image_url: { url: `data:image/png;base64,${DOT}` } },
+				// Chat Completions takes an uploaded picture as a file part too.
+				{ type: 'file', file: { file_id: 'or_file_1' } },
 				{ type: 'text', text: expect.stringMatching(/^\[Anna attached menu\.pdf, saved at /) },
-				{
-					type: 'file',
-					file: {
-						filename: 'menu.pdf',
-						file_data: `data:application/pdf;base64,${pdfWithPages(2).toString('base64')}`
-					}
-				},
+				{ type: 'file', file: { file_id: 'or_file_2', filename: 'menu.pdf' } },
 				{ type: 'text', text: 'Anna: What are these?' }
 			]
 		});
+		const uploads = seen.filter((r) => r.method === 'POST' && r.path === '/api/v1/files');
+		expect(uploads.map((r) => /filename="([^"]+)"/.exec(r.body)?.[1])).toEqual([
+			'dot.png',
+			'menu.pdf'
+		]);
+		expect(uploads[0].key).toBe('sk-or-v1-test-0000000001');
 		const human = committedRows(chat.id).find((row) => row.kind === 'human')!;
-		// No Files API to count a PDF with: it's estimated from its pages.
+		// OpenRouter can't count a PDF's tokens: they're estimated from its pages.
 		expect(JSON.parse(human.attachments!)).toMatchObject([
 			{ sentAs: 'image' },
 			{ sentAs: 'document', tokens: 8000 }
+		]);
+	});
+
+	it("sends a picture inline when it can't be uploaded, and a PDF as its path", async () => {
+		const { user, profile, chat } = openrouterChat();
+		const upload = (name: string, data: Buffer) =>
+			createUpload({ profileId: profile.id, userId: user.id, name, body: Readable.from([data]) });
+		const picture = await upload('dot.png', Buffer.from(DOT, 'base64'));
+		const pdf = await upload('menu.pdf', pdfWithPages(2));
+		uploadsFail = true;
+		answer = (req) => (req.json?.stream ? saying('A dot.') : titled('A dot'));
+
+		const ended = loopEnd(chat.id);
+		await sendMessage(chat.id, user, 'What are these?', [picture.id, pdf.id]);
+		await ended;
+
+		const parts = (turns()[0].json!.messages as { content: unknown[] }[])[1].content;
+		expect(parts[1]).toEqual({
+			type: 'image_url',
+			image_url: { url: `data:image/png;base64,${DOT}` }
+		});
+		const human = committedRows(chat.id).find((row) => row.kind === 'human')!;
+		expect(JSON.parse(human.attachments!)).toMatchObject([
+			{ sentAs: 'image' },
+			{ sentAs: 'path', note: "it couldn't be uploaded (Invalid file type)" }
 		]);
 	});
 
@@ -464,7 +530,7 @@ describe('a chat on an OpenRouter model', () => {
 			role: 'user',
 			content: [
 				{ type: 'text', text: expect.stringMatching(/^Image: /) },
-				{ type: 'image_url', image_url: { url: `data:image/png;base64,${DOT}` } }
+				{ type: 'file', file: { file_id: 'or_file_1' } }
 			]
 		});
 	});
@@ -478,6 +544,9 @@ describe('the transcript as chat messages', () => {
 					role: 'user',
 					content: [
 						{ type: 'text', text: '[Anna attached cat.jpg, saved at /tmp/cat.jpg]' },
+						{ type: 'image', source: { type: 'file', file_id: 'or_file_8' } },
+						{ type: 'document', source: { type: 'file', file_id: 'or_file_9' }, title: 'menu.pdf' },
+						// A picture that couldn't be uploaded.
 						{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: '/9j/' } },
 						{ type: 'text', text: 'Anna: Look' }
 					]
@@ -516,6 +585,8 @@ describe('the transcript as chat messages', () => {
 				role: 'user',
 				content: [
 					{ type: 'text', text: '[Anna attached cat.jpg, saved at /tmp/cat.jpg]' },
+					{ type: 'file', file: { file_id: 'or_file_8' } },
+					{ type: 'file', file: { file_id: 'or_file_9', filename: 'menu.pdf' } },
 					{ type: 'image_url', image_url: { url: 'data:image/jpeg;base64,/9j/' } },
 					{ type: 'text', text: 'Anna: Look' }
 				]
@@ -740,6 +811,28 @@ describe('calling OpenRouter', () => {
 
 		vi.stubEnv('OPENROUTER_API_KEY', '');
 		expect(describeApiError(await failure())).toContain('No OpenRouter API key.');
+	});
+});
+
+describe("OpenRouter's Files API", () => {
+	it('uploads with the key, and tells a deleted file from a failure', async () => {
+		const id = await openrouterFiles.upload(Buffer.from(DOT, 'base64'), 'a/b:c.png', 'image/png');
+		expect(id).toBe('or_file_1');
+		const upload = seen.find((r) => r.method === 'POST')!;
+		expect(upload.key).toBe('sk-or-v1-test-0000000001');
+		expect(upload.body).toContain('filename="a_b_c.png"');
+		expect(await openrouterFiles.exists(id)).toBe(true);
+		await openrouterFiles.remove(id);
+		expect(await openrouterFiles.exists(id)).toBe(false);
+		// Already gone: still resolves.
+		await expect(openrouterFiles.remove(id)).resolves.toBeUndefined();
+		expect(openrouterFiles.account()).toMatch(/^[0-9a-f]{16}$/);
+
+		uploadsFail = true;
+		const failed = await openrouterFiles
+			.upload(Buffer.from('x'), 'x.txt', 'text/plain')
+			.catch((err: unknown) => err);
+		expect(describeApiError(failed)).toBe('OpenRouter API error 400: Invalid file type');
 	});
 });
 

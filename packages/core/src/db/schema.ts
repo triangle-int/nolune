@@ -570,14 +570,14 @@ export const upload = sqliteTable(
 );
 
 /**
- * Files uploaded to a provider (Anthropic's or OpenAI's Files API), so requests refer to them by id instead
- * of carrying their bytes. One upload per content and account; the hourly prune deletes the
- * ones no message refers to any more.
+ * Files uploaded to a provider (Anthropic's, OpenAI's or OpenRouter's Files API), so requests
+ * refer to them by id instead of carrying their bytes. One upload per content and account; the
+ * hourly prune deletes the ones no message refers to any more.
  */
 export const providerFile = sqliteTable(
 	'provider_file',
 	{
-		provider: text('provider', { enum: ['anthropic', 'openai'] }).notNull(),
+		provider: text('provider', { enum: ['anthropic', 'openai', 'openrouter'] }).notNull(),
 		/** The account the file lives in (a hash of the API key): ids are only valid there. */
 		account: text('account').notNull(),
 		/** SHA-256 of the bytes that were uploaded. */

@@ -149,7 +149,7 @@
 										<a href={key.consoleUrl} target="_blank" rel="noreferrer" class="underline"
 											>{new URL(key.consoleUrl).host}</a
 										>.
-										{#if key.source && key.provider !== 'openrouter'}
+										{#if key.source}
 											Use a key from the same {key.provider === 'openai' ? 'project' : 'workspace'}:
 											pictures and PDFs already sent in chats live there, and those chats can't go
 											on without them.

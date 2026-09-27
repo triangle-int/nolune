@@ -156,6 +156,11 @@ function textOf(content: unknown[]): string {
 		.join('');
 }
 
+/** Whether the provider can say what an uploaded PDF costs; the others' are estimated. */
+export function countsDocumentTokens(provider: Provider): boolean {
+	return provider === 'anthropic' || provider === 'openai';
+}
+
 /**
  * What an uploaded PDF costs in every request of a conversation on this model. The provider
  * reads the whole document, so it also throws for PDFs it can't use (encrypted, too many pages).
@@ -168,8 +173,8 @@ export function countDocumentTokens(
 	if (runsOnClaudeCode(provider)) {
 		return Promise.reject(new Error('Chats on the Claude plan get PDFs as files, not documents'));
 	}
-	if (provider === 'openrouter') {
-		return Promise.reject(new Error('OpenRouter has no Files API: its PDFs go inline'));
+	if (!countsDocumentTokens(provider)) {
+		return Promise.reject(new Error(`${PROVIDER_LABELS[provider]} can't count a PDF's tokens`));
 	}
 	return provider === 'openai'
 		? openai.countDocumentTokens(model, fileId)
