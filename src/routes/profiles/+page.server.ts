@@ -25,6 +25,7 @@ export const actions: Actions = {
 			return fail(400, { message: translations(locals.locale).m.profiles.needsName });
 		}
 		const profile = createProfile(name, user.id);
-		redirect(303, `/p/${profile.slug}`);
+		// The welcome: an intro, the avatar, and memories from another assistant.
+		redirect(303, `/p/${profile.slug}/welcome`);
 	}
 };

@@ -216,6 +216,7 @@ export {
 	MemoryConflictError,
 	MemoryError,
 	addMemoryFact,
+	addMemoryFacts,
 	forgetMemoryFact,
 	forgetMemoryFile,
 	isPinnedNote,
@@ -231,6 +232,20 @@ export {
 	type MemoryFact,
 	type MemoryFile
 } from './memory.ts';
+export {
+	EXPORT_PROMPT,
+	EXPORT_SECTIONS,
+	countSections,
+	parseMemoryExport,
+	type ExportSection,
+	type ExportedFact
+} from './memory-export.ts';
+export {
+	MAX_EXPORT_CHARS,
+	importMemoryExport,
+	reformatMemoryExport,
+	type ImportedNote
+} from './memory-import.ts';
 export { MAX_SOUL_CHARS, SoulError, readSoul, readSoulFile, writeSoul } from './soul.ts';
 export {
 	currentSuggestions,

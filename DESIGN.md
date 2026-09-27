@@ -611,6 +611,8 @@ one per topic (`family.md`, `people/anna.md`). There is no memory tool: like aut
   files some other way are dated by their file's modification time, and whatever was in memory
   before dates were kept has none. A fact that moves to another file, or leaves one and comes
   back, keeps its date. Names starting with a dot are reserved, so `btw memory` can't touch it.
+- **Imported** from another assistant on a new profile's welcome, dated as that assistant
+  remembered them: see [Welcome](#welcome).
 - **Memory page** (`/p/<slug>/memory`): a grid of dots, one row per note and one dot per fact,
   oldest on the left. A dot's shade is its age: black today (with a halo), fading to light grey
   over about three months, and lightest when undated. Rows are ordered by the latest change, notes
@@ -1015,6 +1017,7 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   by a name the model was still thinking of.
 - `/` redirects to the last profile opened (`btw-profile` cookie) or the only one, else to
   `/profiles`.
+  Creating a profile there opens its [welcome](#welcome).
 - **Models & keys** (`/admin`, admins only) has the API keys and the model presets. A key is
   write-only: the page shows where the key in use comes from (btw's config or an environment
   variable) and its last four characters, never the key. A new one is checked with its provider
@@ -1132,6 +1135,70 @@ on a colored circle.
   prompt, the tool or the request, so caching is untouched. Only the `btw-agent` skill's description
   mentions avatars, so new chats know the command.
 
+## Welcome
+
+Creating a profile opens its welcome, `/p/<slug>/welcome`: a short intro, then one question per
+screen, like Arc's first launch, and the profile's first chat. It sits outside the profile's
+sidebar layout (`+page@.svelte`). Each step saves as it's answered, so leaving halfway loses
+nothing, and opening the page again runs it again.
+
+- **The idea: everything is a dot.** The wordmark's three trailing dots type, then fly out as the
+  eight avatar colors, orbit and pool into an aurora behind the questions. One of those colors
+  becomes the assistant. Imported memories fly into the Memory page's dot grid, and the grid
+  gathers into the avatar as the new-chat page opens.
+- **Intro** (`Wordmark.svelte`, `IntroSky.svelte` in `src/lib/components/welcome`). A point of
+  light at the middle of the screen sweeps across the letters, which appear behind it (the
+  logo's own path from `logo.svg`, revealed with a clip-path), and lands as the first dot. The
+  three dots bounce like a typing indicator and burst into eight orbs on a canvas, in the
+  `--avatar-*` colors of the page's theme, which circle the wordmark with trails and then drift
+  into soft blobs behind the welcome. About five seconds; a click or Esc skips it, and with
+  reduced motion it opens on the welcome.
+- **A model, only when there is none** (`ModelStep.svelte`). Four cards: the Claude plan, the
+  ChatGPT plan, an Anthropic key, an OpenAI key. A key is checked and saved as on Models & keys
+  (a key already set skips pasting); a plan's sign-in is checked, and when its agent isn't
+  installed or signed in the step says what's wrong and points to Models & keys, where the
+  sign-in lives. Then chips with the provider's first six models (or a typed id) make the first
+  preset, which becomes the default. Only admins can add one; anyone else is told to ask and
+  carries on.
+- **The avatar.** `AvatarPicker` in its big layout, starting on the avatar the slug picked. A
+  tile only previews; "This one" saves it. The page then takes on the avatar's tint, which grows
+  as a circle from the avatar (a view transition with a `clip-path` animation), while the avatar
+  bounces and says hello. The welcome's load returns no `profile`, so the root layout doesn't
+  tint it before then; the page renders the tint itself once it's chosen.
+- **Memories from another assistant** (`MemoryStep.svelte`). People copy a prompt (`EXPORT_PROMPT`
+  in `packages/core/src/memory-export.ts`) into ChatGPT, Claude or Gemini, which answers with a
+  code block of dated lines under five headings (Instructions, Identity, Career, Projects,
+  Preferences), and paste the answer. The same parser counts the sections under the box while
+  they paste, and runs again on the gateway before anything is saved. Inside a code block every
+  line under a heading counts; without one, only dated lines and list items do, so the
+  assistant's own sentences stay out. An answer that doesn't follow the format goes to the
+  default preset with `quickReply`, told to only rewrite it and to treat it as data. "Start
+  fresh" skips to the chat.
+- **Where they go** (`importMemoryExport`, `memory-import.ts`). A profile is shared, so rules are
+  pinned in `core.md` with the person's first name ("Jamie: keep answers short"), and what
+  doesn't fit its 4,000 characters goes to their own note. Identity, career, preferences and
+  anything under another heading go to `people/<name>.md`, a heading each; each project to
+  `projects/<name>.md`, named by the entry's first words ("Tidepool: …"), or to `projects.md`.
+  `addMemoryFacts` adds them under the heading, skips facts memory already has, and dates each
+  one as the export did in `.facts.json`; `[unknown]` ones get 0, like facts from before dates
+  were kept, so the Memory page shows them lightest.
+- **Memories arrive** (`MemoryArrival.svelte`). The saved facts show as lines, then each becomes a
+  dot that arcs from its line to its place in a grid laid out like the Memory page's (one row per
+  note), landing at full strength and fading to its age. The count ticks up with them. Then the
+  dots fly into the avatar, and the page goes to `/p/<slug>`; a view transition names the avatar
+  on both pages (`btw-assistant`), so it glides into its place over the composer.
+- **Sounds** (`src/lib/welcome/sounds.ts`). Only where the screen moves by itself (the spark, the
+  letters, the typing, the burst, the aurora, the tint washing in, each memory landing, the grid
+  settling, the gathering), plus a click when someone picks something; a step that waits stays
+  quiet, over a looped pad that fades out when the chat opens. Each cue is a file in
+  `src/lib/assets/sounds/welcome` (`pad`, `shimmer`, `trace`, `tick`, `burst`, `swell`, `click`,
+  `confirm`, `wash`, `sparkle`, `chord`, `gather`, as `.mp3`), bundled through `import.meta.glob`
+  and played with Web Audio; a cue without its file is silent. Sparkles are one note pitched up
+  the pentatonic scale as the grid fills, at most 40 per import. Browsers only play sound after
+  a click: creating the profile is one, and the welcome is a client-side navigation from there.
+  The Sounds setting (per device, in `btw-prefs`) and the speaker button on the welcome turn
+  them off.
+
 ## Running `btw` in the gateway
 
 The agent runs `btw` all the time (`btw view`, `btw memory show`, `btw agent watch`, …), and each
@@ -1171,7 +1238,8 @@ to (issue #42).
 
 ```
 packages/core   @btw/core. Schema + migrations, config, skills, prompt, run_command, background
-                commands, memory notes, new-chat suggestions, btw view images, attachments, model
+                commands, memory notes (and memory-export.ts, memory-import.ts: memories brought
+                over from another assistant), new-chat suggestions, btw view images, attachments, model
                 calls (models.ts, with anthropic.ts and openai-chat.ts, each with its Files API and
                 the function that turns btw's format, format.ts, into its request), plans (plans.ts:
                 the Claude plan's turns through Claude Code in claude-plan.ts, the ChatGPT plan's
@@ -1193,8 +1261,9 @@ packages/cli    btw: setup, start, service, config, key, claude-plan, chatgpt-pl
                 process of their own: they prompt at a terminal, run the gateway or manage its
                 service.
 src/            SvelteKit gateway (adapter-node). @btw/core is bundled into the server build.
-                UI components in src/lib/components (shadcn-svelte primitives in ui/), the
-                interface's languages in src/lib/i18n.
+                UI components in src/lib/components (shadcn-svelte primitives in ui/, a new
+                profile's welcome in welcome/, its sounds in src/lib/welcome), the interface's
+                languages in src/lib/i18n.
 scripts/        build-cli.mjs bundles the CLI and core into dist/cli.js with esbuild.
 ```
 

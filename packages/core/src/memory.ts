@@ -392,6 +392,76 @@ export function addMemoryFact(
 	return { path, created: !exists, duplicate: false };
 }
 
+/**
+ * Adds facts learned elsewhere (an import) to a note, under `## heading` when given, keeping the
+ * dates they were first seen there: a fact without one is dated like those from before dates
+ * were kept. Facts the note already has are skipped. A pinned note takes only what fits; the
+ * rest comes back in `left`.
+ */
+export function addMemoryFacts(
+	slug: string,
+	topic: string,
+	facts: { text: string; learnedAt: number | null }[],
+	heading?: string
+): { path: string; added: MemoryFact[]; left: MemoryFact[] } {
+	const root = openMemory(slug);
+	const full = notePath(root, topic);
+	const path = relPath(root, full);
+	if (existsSync(full) && !statSync(full).isFile()) refuse(`"${topic}" is a folder, not a note.`);
+	const before = existsSync(full) ? readFileSync(full, 'utf8') : '';
+	const known = new Set(parseFacts(before).map(factKey));
+	let lines = (before.trim() ? before.trimEnd() : `# ${titleOf(path)}`).split('\n');
+	const added: MemoryFact[] = [];
+	const left: MemoryFact[] = [];
+	for (const fact of facts) {
+		const line = fact.text
+			.replace(/\s+/g, ' ')
+			.trim()
+			.replace(/^[-*+]\s+/, '');
+		const key = factKey(parseFacts(`- ${line}`)[0] ?? line);
+		if (!line || known.has(key)) continue;
+		const next = withFact(lines, `- ${line}`, heading);
+		if (isPinnedNote(path) && next.join('\n').length + 1 > MAX_PINNED_CHARS) {
+			left.push({ text: line, learnedAt: fact.learnedAt });
+			continue;
+		}
+		lines = next;
+		known.add(key);
+		added.push({ text: line, learnedAt: fact.learnedAt });
+	}
+	if (!added.length) return { path, added, left };
+	const text = `${lines.join('\n')}\n`;
+	checkSize(text, path);
+	changing(
+		root,
+		() => writeAtomic(full, text),
+		(index, now) => {
+			noteFacts(index, path, text, now);
+			const dates = index.files.get(path);
+			for (const fact of added) {
+				const key = factKey(parseFacts(`- ${fact.text}`)[0] ?? fact.text);
+				// Only facts that are new to memory; one it already had elsewhere keeps its date.
+				if (dates?.get(key) === now) dates.set(key, fact.learnedAt ?? 0);
+			}
+		}
+	);
+	return { path, added, left };
+}
+
+/** The note's lines with a bullet added at the end of `## heading`, which is made if missing. */
+function withFact(lines: string[], bullet: string, heading?: string): string[] {
+	const out = [...lines];
+	if (!heading) return [...out, ...(out.at(-1)?.startsWith('- ') ? [] : ['']), bullet];
+	const start = out.findIndex((l) => l.trim().toLowerCase() === `## ${heading.toLowerCase()}`);
+	if (start === -1) return [...out, '', `## ${heading}`, '', bullet];
+	let end = out.findIndex((l, i) => i > start && /^#{1,2}\s/.test(l));
+	if (end === -1) end = out.length;
+	// After the section's last line, before the blank lines leading to the next heading.
+	while (end > start + 1 && !out[end - 1].trim()) end--;
+	out.splice(end, 0, ...(end === start + 1 ? [''] : []), bullet);
+	return out;
+}
+
 /** Replaces text that appears exactly once in a note. */
 export function replaceInMemory(
 	slug: string,

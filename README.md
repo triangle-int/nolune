@@ -112,6 +112,10 @@ Access). `btw setup` prints the exact path.
   ([Agent Skills](https://agentskills.io) format). The agent creates its own with `btw skill new`.
   Each skill's name and description go into every new chat, so turn off the ones a profile doesn't
   need on its **Skills** page (or `btw skill disable <name> --profile <slug>`).
+- **A new profile** starts with a short welcome: pick the assistant's avatar, and bring over what
+  ChatGPT, Claude or Gemini already knows about you (copy a prompt there, paste the answer
+  back). On a fresh install without a model, an admin picks one there too. Its sounds can be
+  turned off in Settings.
 - **Memory.** btw keeps what it learns about the family (preferences, who's who, where things are)
   in small notes per topic, and reads the ones it needs when a chat starts. The pinned `core` note
   (who's who, languages, allergies, anything you want it to always keep in mind) is in every chat

@@ -10,9 +10,13 @@
 	interface Props {
 		/** The avatar shown as picked. */
 		avatar: Avatar;
+		/** Big, for a new profile's welcome: the stage above a single row of the roster. */
+		hero?: boolean;
+		/** The stage, for whoever wants to know where the pick is shown. */
+		stage?: HTMLElement;
 	}
 
-	let { avatar }: Props = $props();
+	let { avatar, hero = false, stage = $bindable() }: Props = $props();
 
 	const { m } = getI18n();
 
@@ -45,10 +49,14 @@
 	as submit buttons for the form around it. Each tile takes its avatar's color, and hovering one
 	shows the avatar's working motion.
 -->
-<div class="grid gap-2 sm:grid-cols-[9.5rem_1fr]">
+<div class={cn('grid', hero ? 'gap-4' : 'gap-2 sm:grid-cols-[9.5rem_1fr]')}>
 	<div
+		bind:this={stage}
 		aria-hidden="true"
-		class="stage relative flex h-36 flex-col items-center justify-center gap-2 overflow-hidden rounded-3xl border sm:h-auto"
+		class={cn(
+			'stage relative flex flex-col items-center justify-center gap-2 overflow-hidden rounded-3xl border',
+			hero ? 'h-56 sm:h-64' : 'h-36 sm:h-auto'
+		)}
 		style:--stage-tone="var(--avatar-{avatar})"
 		{...hover('stage')}
 	>
@@ -72,13 +80,17 @@
 					easing: backOut
 				}}
 			>
-				<AssistantAvatar {avatar} mood={hovered === 'stage' ? 'working' : 'done'} size={72} />
+				<AssistantAvatar
+					{avatar}
+					mood={hovered === 'stage' ? 'working' : 'done'}
+					size={hero ? 112 : 72}
+				/>
 			</div>
 		{/key}
 		<span class="relative text-sm font-medium">{m.avatars[avatar]}</span>
 	</div>
 
-	<div class="grid grid-cols-4 gap-2">
+	<div class={cn('grid grid-cols-4 gap-2', hero && 'sm:grid-cols-8')}>
 		{#each AVATARS as name (name)}
 			{@const picked = name === avatar}
 			<button

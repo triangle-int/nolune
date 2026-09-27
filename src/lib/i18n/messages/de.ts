@@ -153,6 +153,9 @@ export const de: Messages = {
 		expandSteps: 'Schritte immer anzeigen',
 		expandStepsHint:
 			'Die Liste dessen, was btw getan hat, unter jeder Antwort aufgeklappt statt eingeklappt zeigen.',
+		sounds: 'Töne',
+		soundsHint:
+			'Leise Töne, wo sich btw von selbst bewegt, etwa bei der Begrüßung eines neuen Profils.',
 		logOut: 'Abmelden',
 		deviceOnly: 'Diese Einstellungen werden nur auf diesem Gerät gespeichert.'
 	},
@@ -638,6 +641,93 @@ export const de: Messages = {
 		namePlaceholder: 'z. B. Familie, Oma, Hausaufgaben',
 		name: 'Name des Profils',
 		needsName: 'Gib dem Profil einen Namen.'
+	},
+
+	/** Die Begrüßung eines neuen Profils. Hier spricht btw selbst: „ich“ ist der Assistent. */
+	welcome: {
+		title: 'Machen wir es dir hier gemütlich.',
+		subtitle: 'Ein paar kurze Fragen, dann fühle ich mich wie zu Hause.',
+		go: "Los geht's",
+		takesAMinute: 'Dauert etwa eine Minute',
+		skipIntro: 'Intro überspringen',
+		skipHint: 'Irgendwo klicken, um zu überspringen',
+		back: 'Zurück',
+		soundsOn: 'Töne einschalten',
+		soundsOff: 'Töne ausschalten',
+		progress: (n: number, total: number) => `Schritt ${n} von ${total}`,
+		model: {
+			title: 'Womit soll ich denken?',
+			subtitle:
+				'Wähle, was mich antreibt. Mehr kannst du später unter Modelle & Schlüssel hinzufügen.',
+			askAdmin:
+				'Zum Chatten brauche ich ein Modell. Bitte die Person, die btw eingerichtet hat, eines unter Modelle & Schlüssel hinzuzufügen; alles andere funktioniert schon.',
+			choices: {
+				'claude-plan': {
+					title: 'Claude-Abo',
+					about: 'Ein Pro- oder Max-Abo, über Claude Code auf diesem Computer'
+				},
+				'chatgpt-plan': {
+					title: 'ChatGPT-Abo',
+					about: 'Ein Plus-, Pro- oder Business-Abo, über Codex auf diesem Computer'
+				},
+				anthropic: {
+					title: 'Anthropic-API-Schlüssel',
+					about: 'Claude-Modelle, nach Verbrauch bezahlt'
+				},
+				openai: { title: 'OpenAI-API-Schlüssel', about: 'GPT-Modelle, nach Verbrauch bezahlt' }
+			},
+			checkingPlan: 'Anmeldung wird geprüft…',
+			pasteKey: (label: string) => `Füge deinen ${label}-Schlüssel ein`,
+			checkKey: 'Schlüssel prüfen',
+			keyWorks: 'Der Schlüssel funktioniert.',
+			finishOnAdmin: 'Melde dich unter {link} an und prüfe dann noch einmal.',
+			checkAgain: 'Noch einmal prüfen',
+			pickModel: 'Mit welchem Modell sollen neue Chats beginnen?',
+			asking: 'Frage nach den Modellen…',
+			modelId: 'Modell-ID'
+		},
+		avatar: {
+			title: 'Wer soll ich sein?',
+			subtitle: (profile: string) => `Wähle ein Gesicht für ${profile}.`,
+			thisOne: 'Dieses',
+			hello: 'Schön, dich kennenzulernen.'
+		},
+		memory: {
+			title: 'Kennen wir uns schon?',
+			subtitle:
+				'Wenn du ChatGPT, Claude oder Gemini nutzt, weiß es schon einiges über dich. Frag es mit diesem Prompt und füge die Antwort hier ein.',
+			copyPrompt: 'Prompt kopieren',
+			prompt: 'Der Prompt',
+			open: (name: string) => `${name} öffnen`,
+			haveIt: 'Hab ich',
+			startFresh: 'Neu anfangen',
+			pasteTitle: 'Hier einfügen',
+			pastePlaceholder: 'Die ganze Antwort, samt Codeblock',
+			sections: {
+				instructions: 'Anweisungen',
+				identity: 'Über dich',
+				career: 'Beruf',
+				projects: 'Projekte',
+				preferences: 'Vorlieben',
+				other: 'Sonstiges'
+			},
+			remember: (n: number) => p(n, { one: `${n} Sache merken`, other: `${n} Dinge merken` }),
+			rememberThis: 'Merken',
+			reading: 'Wird gelesen…',
+			saving: 'Wird gespeichert…',
+			empty: 'Füge ein, was der andere Assistent geantwortet hat.',
+			tooLong:
+				'Das ist zu lang für die Erinnerungen eines Menschen. Füge nur die Antwort auf den Prompt ein.',
+			notAnExport:
+				'Das sieht nicht nach der Antwort auf den Prompt aus. Füge die ganze Antwort samt Codeblock ein.',
+			couldNotRead: (problem: string) => `Konnte es nicht lesen. ${problem}`,
+			nothingFound:
+				'Darin habe ich nichts über dich gefunden. Füge die ganze Antwort samt Codeblock ein.'
+		},
+		arrival: {
+			thingsIKnow: (n: number) =>
+				p(n, { one: 'Sache, die ich über dich weiß', other: 'Dinge, die ich über dich weiß' })
+		}
 	},
 
 	login: {

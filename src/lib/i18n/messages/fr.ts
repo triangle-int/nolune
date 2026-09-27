@@ -165,6 +165,9 @@ export const fr: Messages = {
 		expandSteps: 'Toujours afficher les étapes',
 		expandStepsHint:
 			'Déplier sous chaque réponse la liste de ce que btw a fait, au lieu de la garder repliée.',
+		sounds: 'Sons',
+		soundsHint:
+			'Des sons discrets quand btw bouge tout seul, comme à l’accueil d’un nouveau profil.',
 		logOut: 'Se déconnecter',
 		deviceOnly: 'Ces paramètres ne sont enregistrés que sur cet appareil.'
 	},
@@ -655,6 +658,90 @@ export const fr: Messages = {
 		namePlaceholder: 'p. ex. Famille, Mamie, Devoirs',
 		name: 'Nom du profil',
 		needsName: 'Donnez un nom au profil.'
+	},
+
+	/** L’accueil d’un nouveau profil. Ici btw parle en son nom : « je », c’est l’assistant. */
+	welcome: {
+		title: 'Faisons de cet endroit le vôtre.',
+		subtitle: 'Quelques questions rapides, et je me sentirai chez moi.',
+		go: 'C’est parti',
+		takesAMinute: 'Environ une minute',
+		skipIntro: 'Passer l’intro',
+		skipHint: 'Cliquez n’importe où pour passer',
+		back: 'Retour',
+		soundsOn: 'Activer les sons',
+		soundsOff: 'Couper les sons',
+		progress: (n: number, total: number) => `Étape ${n} sur ${total}`,
+		model: {
+			title: 'Avec quoi dois-je réfléchir ?',
+			subtitle:
+				'Choisissez ce qui me fait tourner. Vous pourrez en ajouter d’autres dans Modèles et clés.',
+			askAdmin:
+				'Il me faut un modèle pour discuter. Demandez à la personne qui a installé btw d’en ajouter un dans Modèles et clés ; tout le reste fonctionne déjà.',
+			choices: {
+				'claude-plan': {
+					title: 'Abonnement Claude',
+					about: 'Un abonnement Pro ou Max, via Claude Code sur cet ordinateur'
+				},
+				'chatgpt-plan': {
+					title: 'Abonnement ChatGPT',
+					about: 'Un abonnement Plus, Pro ou Business, via Codex sur cet ordinateur'
+				},
+				anthropic: { title: 'Clé d’API Anthropic', about: 'Modèles Claude, payés à l’usage' },
+				openai: { title: 'Clé d’API OpenAI', about: 'Modèles GPT, payés à l’usage' }
+			},
+			checkingPlan: 'Vérification de la connexion…',
+			pasteKey: (label: string) => `Collez votre clé ${label}`,
+			checkKey: 'Vérifier la clé',
+			keyWorks: 'La clé fonctionne.',
+			finishOnAdmin: 'Connectez-vous dans {link}, puis vérifiez à nouveau.',
+			checkAgain: 'Vérifier à nouveau',
+			pickModel: 'Avec quel modèle les nouvelles discussions doivent-elles commencer ?',
+			asking: 'Récupération des modèles…',
+			modelId: 'Identifiant du modèle'
+		},
+		avatar: {
+			title: 'Qui dois-je être ?',
+			subtitle: (profile: string) => `Choisissez un visage pour ${profile}.`,
+			thisOne: 'Celui-ci',
+			hello: 'Faisons connaissance.'
+		},
+		memory: {
+			title: 'On se connaît déjà ?',
+			subtitle:
+				'Si vous utilisez ChatGPT, Claude ou Gemini, il sait déjà des choses sur vous. Posez-lui la question avec ce prompt, puis collez sa réponse ici.',
+			copyPrompt: 'Copier le prompt',
+			prompt: 'Le prompt',
+			open: (name: string) => `Ouvrir ${name}`,
+			haveIt: 'Je l’ai',
+			startFresh: 'Repartir de zéro',
+			pasteTitle: 'Collez-la ici',
+			pastePlaceholder: 'La réponse entière, bloc de code compris',
+			sections: {
+				instructions: 'Instructions',
+				identity: 'Identité',
+				career: 'Carrière',
+				projects: 'Projets',
+				preferences: 'Préférences',
+				other: 'Autre'
+			},
+			remember: (n: number) => p(n, { one: `Retenir ${n} chose`, other: `Retenir ${n} choses` }),
+			rememberThis: 'Retenir ceci',
+			reading: 'Lecture…',
+			saving: 'Enregistrement…',
+			empty: 'Collez ce que l’autre assistant a répondu.',
+			tooLong:
+				'C’est trop long pour les souvenirs d’une seule personne. Collez seulement la réponse au prompt.',
+			notAnExport:
+				'Cela ne ressemble pas à la réponse au prompt. Collez la réponse entière, avec son bloc de code.',
+			couldNotRead: (problem: string) => `Lecture impossible. ${problem}`,
+			nothingFound:
+				'Je n’ai rien trouvé sur vous là-dedans. Collez la réponse entière, avec son bloc de code.'
+		},
+		arrival: {
+			thingsIKnow: (n: number) =>
+				p(n, { one: 'chose que je sais de vous', other: 'choses que je sais de vous' })
+		}
 	},
 
 	login: {
