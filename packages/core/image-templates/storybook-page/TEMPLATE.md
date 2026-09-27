@@ -12,6 +12,7 @@ size: portrait
 settings:
   - id: style
     label: Style
+    custom: true
     options:
       - label: watercolor
         prompt: soft watercolor with loose washes and fine ink lines

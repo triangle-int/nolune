@@ -1,13 +1,50 @@
 import { randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { and, eq } from 'drizzle-orm';
+import { AVATARS, defaultAvatar, isAvatar, type Avatar } from './avatars.ts';
 import { getDb } from './db/index.ts';
 import { profile, profileMember, user } from './db/schema.ts';
 import { paths, profileDir, profileSkillsDir } from './paths.ts';
 import { findUser } from './users.ts';
 
 export type Profile = typeof profile.$inferSelect;
+
+const holder = globalThis as unknown as {
+	__btwProfileEvents?: EventEmitter;
+	__btwProfileLooks?: Map<string, string>;
+};
+const emitter = (holder.__btwProfileEvents ??= new EventEmitter().setMaxListeners(0));
+/** Each profile's name and avatar as last seen, to tell which changed. */
+const looks = (holder.__btwProfileLooks ??= new Map());
+
+/** Called with the profile's id when its name or avatar changes. */
+export function onProfileChanged(listener: (profileId: string) => void): () => void {
+	emitter.on('changed', listener);
+	return () => emitter.off('changed', listener);
+}
+
+/**
+ * Tells listeners about profiles whose name or avatar changed since the last look. The CLI changes
+ * them from other processes (the agent runs `btw profile avatar`), so the gateway also looks after
+ * every command and on its scheduler tick. A profile seen for the first time is only noted.
+ */
+export function noticeProfileChanges(): void {
+	const rows = getDb()
+		.select({ id: profile.id, name: profile.name, avatar: profile.avatar })
+		.from(profile)
+		.all();
+	const ids = new Set(rows.map((row) => row.id));
+	for (const id of looks.keys()) if (!ids.has(id)) looks.delete(id);
+	for (const row of rows) {
+		const look = `${row.avatar}\n${row.name}`;
+		if (looks.get(row.id) === look) continue;
+		const known = looks.has(row.id);
+		looks.set(row.id, look);
+		if (known) emitter.emit('changed', row.id);
+	}
+}
 
 function slugify(name: string): string {
 	const base =
@@ -33,10 +70,12 @@ function slugify(name: string): string {
 export function createProfile(name: string, creatorId: string): Profile {
 	const trimmed = name.trim();
 	if (!trimmed) throw new Error('Profile name is required');
+	const slug = slugify(trimmed);
 	const created: Profile = {
 		id: randomUUID(),
-		slug: slugify(trimmed),
+		slug,
 		name: trimmed,
+		avatar: defaultAvatar(slug),
 		disabledSkills: [],
 		createdBy: creatorId,
 		createdAt: new Date()
@@ -119,6 +158,17 @@ export function renameProfile(profileId: string, name: string): void {
 	const trimmed = name.trim();
 	if (!trimmed) throw new Error('Profile name is required');
 	getDb().update(profile).set({ name: trimmed }).where(eq(profile.id, profileId)).run();
+	noticeProfileChanges();
+}
+
+/** Any member can change the assistant's avatar. Only the web UI shows it, never the model. */
+export function setProfileAvatar(profileId: string, avatar: string): Avatar {
+	if (!isAvatar(avatar)) {
+		throw new Error(`No avatar called "${avatar}". Pick one of: ${AVATARS.join(', ')}.`);
+	}
+	getDb().update(profile).set({ avatar }).where(eq(profile.id, profileId)).run();
+	noticeProfileChanges();
+	return avatar;
 }
 
 /** Turns skills on or off for this profile's new chats. Chats already started keep their prompt. */

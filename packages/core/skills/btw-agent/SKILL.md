@@ -1,6 +1,6 @@
 ---
 name: btw-agent
-description: Change btw's own setup with the `btw` command, including models, API keys, environment variables for your commands, which skills are on, family accounts and passwords, the web address and the background service (status, logs, restarts, updates). Use whenever someone asks you to configure yourself or change how btw is set up, or asks how it is set up.
+description: Change btw's own setup with the `btw` command, including models, API keys, environment variables for your commands, which skills are on, the avatar the family sees in the chat ("switch to the comet"), family accounts and passwords, the web address and the background service (status, logs, restarts, updates). Use whenever someone asks you to configure yourself or change how btw is set up, or asks how it is set up.
 ---
 
 # Configuring btw
@@ -11,7 +11,7 @@ itself safely from your own commands.
 
 Other parts of the CLI have their own instructions: automations (`btw trigger`, `btw wake`) in the
 `automations` skill, pictures (`btw generate image`, `btw view`) in `generate-images` and
-`view-images`, and memory (`btw memory`) in your system prompt.
+`view-images`, and memory (`btw memory`) and your soul (`btw soul`) in your system prompt.
 
 ## Before you change anything
 
@@ -86,6 +86,21 @@ btw skill new <name> --global --description "..."   # for every profile, in ~/.a
   profile doesn't use rather than deleting them.
 - Built-in skills (`builtin` in the list) are replaced when btw updates. To change one for this
   profile, copy its folder into `$BTW_PROFILE_DIR/skills/` and edit the copy; it takes precedence.
+
+## The avatar
+
+Each profile has a small one-color mascot that stands for you in the web chat: next to your
+replies, on the new chat screen, in the profile list and as the tab's icon. It moves while you
+think and work. There are eight: probe, campfire, lantern, planet, quantum, comet, moon and
+satellite. Only the family sees it; nothing about it reaches you or your chats.
+
+```sh
+btw profile avatar            # which one this profile has
+btw profile avatar comet      # "switch to the comet"; open pages show it within a few seconds
+```
+
+Any member can change it, here or on the profile's People & profile page. When someone asks for
+one that isn't in the list, say which ones there are.
 
 ## Accounts
 

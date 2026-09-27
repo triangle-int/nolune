@@ -47,7 +47,8 @@ export const load: PageServerLoad = ({ locals, params }) => {
 			settings: t.settings.map((s) => {
 				if (s.type === 'select') {
 					const options = s.options.map((o) => ({ value: o.value, label: o.label }));
-					return { type: s.type, id: s.id, label: s.label, default: s.default, options };
+					const custom = s.custom !== null;
+					return { type: s.type, id: s.id, label: s.label, default: s.default, options, custom };
 				}
 				if (s.type === 'emoji') {
 					return { type: s.type, id: s.id, label: s.label, default: s.default, max: s.max };

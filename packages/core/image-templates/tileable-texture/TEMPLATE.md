@@ -12,6 +12,7 @@ size: square
 settings:
   - id: style
     label: Style
+    custom: true
     options:
       - label: photoreal
         prompt: a photorealistic albedo texture, crisp and detailed

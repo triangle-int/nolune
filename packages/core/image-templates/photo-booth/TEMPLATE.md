@@ -13,6 +13,7 @@ size: portrait
 settings:
   - id: theme
     label: Theme
+    custom: '{{theme}}-themed looks'
     options:
       - label: Oktoberfest
         prompt: tasteful Oktoberfest looks, with dirndls, lederhosen, braided hair and felt hats, and pretzels and beer steins as props

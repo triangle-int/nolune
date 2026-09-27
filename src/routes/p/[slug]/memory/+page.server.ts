@@ -1,5 +1,7 @@
 import { fail } from '@sveltejs/kit';
 import {
+	CORE_NOTE,
+	MAX_PINNED_CHARS,
 	MemoryConflictError,
 	MemoryError,
 	forgetMemoryFile,
@@ -11,7 +13,10 @@ import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = ({ locals, params }) => {
 	const { profile } = requireProfile(locals, params.slug);
-	return { files: listMemoryFiles(profile.slug) };
+	return {
+		files: listMemoryFiles(profile.slug),
+		core: { path: CORE_NOTE, maxChars: MAX_PINNED_CHARS }
+	};
 };
 
 function message(err: unknown): string {

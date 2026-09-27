@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { articleBefore } from './articles.ts';
 import { IMAGE_SHAPES, type ImageShape } from './image-generation.ts';
 import { paths } from './paths.ts';
 import { isValidSkillName, parseFrontmatter } from './skills.ts';
@@ -24,7 +25,18 @@ export interface TemplateOption {
 }
 
 export type TemplateSetting =
-	| { type: 'select'; id: string; label: string; options: TemplateOption[]; default: string }
+	| {
+			type: 'select';
+			id: string;
+			label: string;
+			options: TemplateOption[];
+			default: string;
+			/**
+			 * Whether the person can type their own choice instead, and what `{{setting}}` becomes
+			 * then: `{{setting}}` in it is what they typed ("Style: {{style}}."). Null when they can't.
+			 */
+			custom: string | null;
+	  }
 	| {
 			type: 'text';
 			id: string;
@@ -164,7 +176,12 @@ function parseSetting(raw: unknown): TemplateSetting {
 		if (values.size < options.length) throw new Error(`two options of "${label}" are the same`);
 		const wanted = text(s.default);
 		const first = options.find((o) => wanted && matches(o, wanted)) ?? options[0];
-		return { type: 'select', id, label, options, default: first.value };
+		const own = `{{${id}}}`;
+		const custom = s.custom === true ? own : s.custom ? text(s.custom) : null;
+		if (custom !== null && !custom.includes(own)) {
+			throw new Error(`"${label}" custom must say where the typed choice goes, with ${own}`);
+		}
+		return { type: 'select', id, label, options, default: first.value, custom };
 	}
 	return {
 		type: 'text',
@@ -186,6 +203,9 @@ export function splitEmoji(text: string): string[] | null {
 	}
 	return emoji;
 }
+
+/** How long a choice the person types can be. */
+const MAX_CUSTOM = 120;
 
 function matches(option: TemplateOption, input: string): boolean {
 	const v = input.trim().toLowerCase();
@@ -366,6 +386,15 @@ export function resolveImageTemplate(
 		const option = input
 			? setting.options.find((o) => matches(o, input))
 			: setting.options.find((o) => o.value === setting.default);
+		if (!option && input && setting.custom !== null) {
+			// Their own choice, on one line, where the template says typed choices go.
+			const own = input.replace(/\s+/g, ' ');
+			if (own.length > MAX_CUSTOM) {
+				throw new Error(`Keep "${setting.label}" under ${MAX_CUSTOM} characters.`);
+			}
+			const prompt = fillTemplate(setting.custom, { [setting.id]: own });
+			return { setting, value: own, display: own, prompt };
+		}
 		if (!option) {
 			const labels = setting.options.map((o) => o.label).join(', ');
 			throw new Error(`"${input}" isn't a choice for ${setting.label}. Choices: ${labels}.`);
@@ -407,6 +436,10 @@ export function fillTemplate(source: string, vars: Record<string, string>): stri
 		);
 	}
 	return text
+		.replace(
+			/(^|[^\w])([aA] )(?=\{\{\s*([\w-]+)\s*\}\})/g,
+			(_, before: string, a: string, key: string) => before + articleBefore(a, vars[key] ?? '')
+		)
 		.replace(PLACEHOLDER, (_, key: string) => vars[key] ?? '')
 		.split('\n')
 		.filter((line) => !line.includes(GONE) || line.replaceAll(GONE, '').trim())

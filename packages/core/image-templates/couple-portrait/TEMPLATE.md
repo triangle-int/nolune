@@ -13,6 +13,7 @@ size: portrait
 settings:
   - id: style
     label: Style
+    custom: true
     options:
       - label: a romantic film poster
         prompt: a romantic film poster with a dreamy sunset, a soft glow and elegant title lettering

@@ -1,3 +1,4 @@
+import type Anthropic from '@anthropic-ai/sdk';
 import { relations, sql } from 'drizzle-orm';
 import {
 	sqliteTable,
@@ -7,6 +8,7 @@ import {
 	primaryKey,
 	uniqueIndex
 } from 'drizzle-orm/sqlite-core';
+import { AVATARS } from '../avatars.ts';
 
 const now = sql`(cast(unixepoch('subsecond') * 1000 as integer))`;
 
@@ -105,6 +107,11 @@ export const profile = sqliteTable('profile', {
 	/** Folder name under ~/.btw-agent/profiles. Fixed at creation. */
 	slug: text('slug').notNull().unique(),
 	name: text('name').notNull(),
+	/**
+	 * The assistant's mascot in this profile. Profiles start with one picked from the slug
+	 * (defaultAvatar); the SQL default only lets the column be added to existing rows.
+	 */
+	avatar: text('avatar', { enum: AVATARS }).notNull().default('probe'),
 	/** Skill names left out of new chats' prompts. Skills are on unless listed, new ones included. */
 	disabledSkills: text('disabled_skills', { mode: 'json' })
 		.$type<string[]>()
@@ -216,19 +223,34 @@ export const conversation = sqliteTable(
 			.default('medium'),
 		/**
 		 * Frozen at creation so the prompt cache prefix never changes, except when the chat moves
-		 * to another folder or its folder's instructions or files change: then it is built again
-		 * at the start of the next turn.
+		 * to another folder, its folder's instructions or files change, or the profile's soul
+		 * changes: then it is built again at the start of the next turn.
 		 */
 		systemPrompt: text('system_prompt').notNull(),
 		folderId: text('folder_id').references(() => folder.id, { onDelete: 'set null' }),
 		/** The folder's part of `systemPrompt` ('' outside a folder), to tell when it's out of date. */
 		folderContext: text('folder_context').notNull().default(''),
+		/** The profile's soul as `systemPrompt` has it ('' without one), to tell when it's out of date. */
+		soul: text('soul').notNull().default(''),
 		/**
 		 * The last row before the system prompt was built again. Thinking in rows up to it belongs
 		 * to the old prompt, and the API refuses it under a new one, so requests leave it out.
 		 */
 		promptChangedAtSeq: integer('prompt_changed_at_seq'),
-		/** Background runs started by triggers stay out of the list until someone continues them. */
+		/**
+		 * The tool definitions its requests send, frozen at creation like `systemPrompt`: a thinking
+		 * block is bound to the tools it was made with, so a new version of btw that changes them
+		 * only reaches new chats. Null: chats from before this was saved (LEGACY_TOOLS).
+		 */
+		tools: text('tools', { mode: 'json' }).$type<Anthropic.Tool[]>(),
+		/** Prompt cache lifetime: an hour for chats people come back to, 5 minutes for subagents. */
+		cacheTtl: text('cache_ttl', { enum: ['5m', '1h'] })
+			.notNull()
+			.default('1h'),
+		/**
+		 * Background runs started by triggers, and subagents, stay out of the list. A background run
+		 * joins it once someone continues it.
+		 */
 		hidden: integer('hidden', { mode: 'boolean' }).notNull().default(false),
 		createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull(),
@@ -250,12 +272,24 @@ export const message = sqliteTable(
 		/** Position in the transcript. Null while the message is still queued. */
 		seq: integer('seq'),
 		role: text('role', { enum: ['user', 'assistant'] }).notNull(),
-		/** `trigger`: the first message of a background run, written by the gateway, not a person. */
-		kind: text('kind', { enum: ['human', 'trigger', 'tool_results', 'assistant'] }).notNull(),
+		/**
+		 * Written by the gateway, not a person: `trigger`, the first message of a background run;
+		 * `agent_message`, a subagent's task or a steer from the agent that started it;
+		 * `task_result`, what a background command printed, once it ended.
+		 */
+		kind: text('kind', {
+			enum: ['human', 'trigger', 'agent_message', 'task_result', 'tool_results', 'assistant']
+		}).notNull(),
 		senderId: text('sender_id').references(() => user.id, { onDelete: 'set null' }),
-		/** Sender's display name when the message was sent. Trigger rows: the trigger's name. */
+		/**
+		 * Sender's display name when the message was sent. Trigger rows: the trigger's name. Agent
+		 * messages: the subagent's id. Task results: the command's summary.
+		 */
 		senderName: text('sender_name'),
-		/** What the human typed (without the "Name: " prefix). Trigger rows: the trigger's prompt. */
+		/**
+		 * What the human typed (without the "Name: " prefix). Trigger rows: the trigger's prompt.
+		 * Agent messages: what the agent wrote. Task results: the command's output.
+		 */
 		text: text('text'),
 		/** Exact API content blocks as JSON. Replayed byte-for-byte; never rewritten. */
 		content: text('content').notNull(),
@@ -389,6 +423,64 @@ export const triggerRun = sqliteTable(
 		index('trigger_run_triggerId_idx').on(table.triggerId, table.createdAt),
 		index('trigger_run_status_idx').on(table.status),
 		index('trigger_run_conversationId_idx').on(table.conversationId)
+	]
+);
+
+/**
+ * A command the agent started with `run_in_background` that hasn't ended yet. The process lives in
+ * the gateway; the row is there so that after a restart the conversation is told it was cut off.
+ */
+export const backgroundCommand = sqliteTable(
+	'background_command',
+	{
+		/** The run_command call that started it. */
+		toolUseId: text('tool_use_id').primaryKey(),
+		conversationId: text('conversation_id')
+			.notNull()
+			.references(() => conversation.id, { onDelete: 'cascade' }),
+		summary: text('summary'),
+		command: text('command').notNull(),
+		startedAt: integer('started_at', { mode: 'timestamp_ms' }).default(now).notNull()
+	},
+	(table) => [index('background_command_conversationId_idx').on(table.conversationId)]
+);
+
+/**
+ * Another agent that a conversation's agent started with `btw agent run`: it works in a hidden
+ * conversation of its own, which starts empty but for its task, and the agent that started it
+ * waits for its last message with `btw agent watch`.
+ */
+export const subagent = sqliteTable(
+	'subagent',
+	{
+		id: text('id').primaryKey(),
+		/** The conversation whose agent started it. */
+		parentId: text('parent_id')
+			.notNull()
+			.references(() => conversation.id, { onDelete: 'cascade' }),
+		/** What that agent calls it (`agent-1`, or a name it chose); unique in the parent. */
+		name: text('name').notNull(),
+		/** Its own hidden conversation. */
+		conversationId: text('conversation_id')
+			.notNull()
+			.references(() => conversation.id, { onDelete: 'cascade' }),
+		/**
+		 * `pending`: it has messages the gateway hasn't started working on (a new task or a steer);
+		 * `running`: working, or waiting for its background commands; `done`: its last message is
+		 * its result; `stopping`: `btw agent stop` asked the gateway to stop it.
+		 */
+		status: text('status', {
+			enum: ['pending', 'running', 'done', 'failed', 'stopping', 'stopped']
+		}).notNull(),
+		/** Failed: what went wrong. Stopped: who stopped it. */
+		error: text('error'),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull(),
+		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).default(now).notNull()
+	},
+	(table) => [
+		uniqueIndex('subagent_parent_name_idx').on(table.parentId, table.name),
+		index('subagent_conversationId_idx').on(table.conversationId),
+		index('subagent_status_idx').on(table.status)
 	]
 );
 

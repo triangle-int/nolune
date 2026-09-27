@@ -11,6 +11,7 @@ size: square
 settings:
   - id: style
     label: Style
+    custom: true
     options:
       - label: classic
         prompt: classic medieval heraldry, with rich reds, blues and gold, fine engraved detail and flowing mantling

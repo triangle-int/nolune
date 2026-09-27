@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
 import Anthropic, { toFile } from '@anthropic-ai/sdk';
 import { apiKeyHelp, configuredApiKey } from './config.ts';
-import { RUN_COMMAND_TOOL } from './run-command.ts';
 
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type Effort = (typeof EFFORTS)[number];
 
-const CACHE_1H = { type: 'ephemeral', ttl: '1h' } as const;
+/** How long a cached prompt lives: an hour for chats people come back to, 5 minutes for subagents. */
+export type CacheTtl = '5m' | '1h';
 
 let cached: { key: string | undefined; client: Anthropic } | undefined;
 
@@ -39,26 +39,30 @@ export type StreamEvent =
 
 /**
  * One model call. The request shape must stay identical across calls in a conversation (only
- * `messages` grows), otherwise the prompt cache is lost.
+ * `messages` grows), otherwise the prompt cache is lost: `tools`, `system` and `cacheTtl` are the
+ * conversation's own, fixed when it was created.
  */
 export async function streamTurn(opts: {
 	model: string;
 	effort: Effort;
 	system: string;
+	tools: Anthropic.Tool[];
+	cacheTtl: CacheTtl;
 	messages: Anthropic.MessageParam[];
 	signal: AbortSignal;
 	onEvent: (event: StreamEvent) => void;
 }): Promise<Anthropic.Message> {
 	const adaptive = supportsAdaptiveThinking(opts.model);
+	const cache = { type: 'ephemeral', ttl: opts.cacheTtl } as const;
 	const stream = getClient().messages.stream(
 		{
 			model: opts.model,
 			max_tokens: 64000,
 			// Automatic breakpoint on the growing tail, plus an explicit one on the frozen system
-			// prompt. Both 1h: longer-TTL entries must come before shorter ones.
-			cache_control: CACHE_1H,
-			system: [{ type: 'text', text: opts.system, cache_control: CACHE_1H }],
-			tools: [RUN_COMMAND_TOOL],
+			// prompt. The same TTL on both: longer-TTL entries must come before shorter ones.
+			cache_control: cache,
+			system: [{ type: 'text', text: opts.system, cache_control: cache }],
+			tools: opts.tools,
 			...(adaptive
 				? {
 						// "summarized" also returns the short notes newer models write between tool calls.

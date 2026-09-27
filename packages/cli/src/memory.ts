@@ -1,9 +1,11 @@
 import { readFileSync } from 'node:fs';
 import {
+	MAX_PINNED_CHARS,
 	addMemoryFact,
 	forgetMemoryFact,
 	formatLocalTime,
 	getProfileBySlug,
+	isPinnedNote,
 	listMemoryFiles,
 	profileMemoryDir,
 	readMemoryNote,
@@ -22,13 +24,14 @@ export const MEMORY_HELP = `Memory (short notes per topic; the agent reads the o
   btw memory forget <topic> <text>           remove the one line that contains <text>
   btw memory write <topic> [text]            replace the whole note (the text, or stdin)
   btw memory rm <topic>
-  btw memory mv <topic> <new-topic>`;
+  btw memory mv <topic> <new-topic>
+  The note core is pinned: every new chat starts with it, so it holds at most ${MAX_PINNED_CHARS} characters.`;
 
 /**
  * `--profile` is picked out by hand: facts are free text and may start with a dash, which an
- * option parser would take for an option.
+ * option parser would take for an option. `btw soul` does the same.
  */
-function split(args: string[]): { profile: string | undefined; words: string[] } {
+export function splitProfile(args: string[]): { profile: string | undefined; words: string[] } {
 	let profile: string | undefined;
 	const words: string[] = [];
 	for (let i = 0; i < args.length; i++) {
@@ -44,7 +47,7 @@ function split(args: string[]): { profile: string | undefined; words: string[] }
 	return { profile, words };
 }
 
-function profileFor(flag: string | undefined): Profile {
+export function profileFor(flag: string | undefined): Profile {
 	const slug = flag || process.env.BTW_PROFILE;
 	if (!slug) throw new Error('which profile? Pass --profile <slug>. See `btw profile list`.');
 	const found = getProfileBySlug(slug);
@@ -61,7 +64,7 @@ function plural(n: number, one: string, many: string): string {
 }
 
 export function memoryCommand(args: string[]): void {
-	const { profile: flag, words } = split(args);
+	const { profile: flag, words } = splitProfile(args);
 	const [action = 'list', ...rest] = words;
 	if (action === 'help') {
 		console.log(MEMORY_HELP);
@@ -83,7 +86,7 @@ export function memoryCommand(args: string[]): void {
 			const width = Math.max(...files.map((f) => f.path.length));
 			for (const f of files) {
 				console.log(
-					`  ${f.path.padEnd(width)}  ${plural(f.facts.length, 'fact', 'facts').padEnd(9)}  changed ${formatLocalTime(new Date(f.updatedAt))}`
+					`  ${f.path.padEnd(width)}  ${plural(f.facts.length, 'fact', 'facts').padEnd(9)}  changed ${formatLocalTime(new Date(f.updatedAt))}${isPinnedNote(f.path) ? '  (pinned: in every new chat)' : ''}`
 				);
 			}
 			return;

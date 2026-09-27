@@ -11,5 +11,6 @@
 		me={data.user?.name ?? ''}
 		folders={data.folders}
 		folderId={data.conversations.find((c) => c.id === data.conversation.id)?.folderId ?? null}
+		avatar={data.profile.avatar}
 	/>
 {/key}

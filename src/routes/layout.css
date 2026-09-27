@@ -48,6 +48,17 @@
 	--bubble: #f4f4f4;
 	--composer: #ffffff;
 	--warning: #b45309;
+	/* Assistant avatars (src/lib/components/AssistantAvatar.svelte). The dark values are the concept
+	   sheet's; the light ones keep the hue, darkened to at least 3:1 on white, the sidebar and the
+	   message bubbles. src/lib/avatar-colors.ts reads both for favicons. */
+	--avatar-probe: #039a80;
+	--avatar-campfire: #d66a03;
+	--avatar-lantern: #ad7f00;
+	--avatar-planet: #8c74f7;
+	--avatar-quantum: #0b9b6d;
+	--avatar-comet: #3490c3;
+	--avatar-moon: #9a8363;
+	--avatar-satellite: #f44959;
 }
 
 .dark {
@@ -80,6 +91,15 @@
 	--bubble: #303030;
 	--composer: #303030;
 	--warning: #fbbf24;
+	/* At least 4.7:1 on the page, the sidebar, bubbles and menus. */
+	--avatar-probe: #70e0c4;
+	--avatar-campfire: #fe9042;
+	--avatar-lantern: #fee57f;
+	--avatar-planet: #a293fd;
+	--avatar-quantum: #85ebbd;
+	--avatar-comet: #8ed2fd;
+	--avatar-moon: #fcedd2;
+	--avatar-satellite: #fd767b;
 }
 
 @theme inline {

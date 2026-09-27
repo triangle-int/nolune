@@ -1,5 +1,5 @@
 import type { DisplayMedia, DisplayMessage, LiveBlock, Usage } from '@btw/core';
-import { partialToolInput } from './commands';
+import { firstLine, partialToolInput } from './commands';
 
 /**
  * Turns the stored rows into what the chat shows: people's messages, and btw's replies as a run
@@ -61,7 +61,30 @@ export interface Reply {
 export type Entry =
 	| { type: 'human'; key: string; message: Extract<DisplayMessage, { kind: 'human' }> }
 	| { type: 'trigger'; key: string; message: Extract<DisplayMessage, { kind: 'trigger' }> }
+	| {
+			type: 'agent_message';
+			key: string;
+			message: Extract<DisplayMessage, { kind: 'agent_message' }>;
+	  }
+	| { type: 'task_result'; key: string; message: Extract<DisplayMessage, { kind: 'task_result' }> }
 	| Reply;
+
+/** Messages that aren't btw's: each one ends the reply before it. */
+function messageEntry(message: DisplayMessage): Entry | null {
+	const key = `m${message.id}`;
+	switch (message.kind) {
+		case 'human':
+			return { type: 'human', key, message };
+		case 'trigger':
+			return { type: 'trigger', key, message };
+		case 'agent_message':
+			return { type: 'agent_message', key, message };
+		case 'task_result':
+			return { type: 'task_result', key, message };
+		default:
+			return null;
+	}
+}
 
 function addUsage(total: Usage | null, u: Usage | null): Usage | null {
 	if (!u) return total;
@@ -122,14 +145,11 @@ export function buildTranscript(
 	};
 
 	for (const message of messages) {
-		if (message.kind === 'human' || message.kind === 'trigger') {
+		const entry = messageEntry(message);
+		if (entry) {
 			reply = null;
 			anchor = String(message.id);
-			entries.push(
-				message.kind === 'human'
-					? { type: 'human', key: `m${message.id}`, message }
-					: { type: 'trigger', key: `m${message.id}`, message }
-			);
+			entries.push(entry);
 		} else if (message.kind === 'assistant') {
 			const r = openReply();
 			r.messageIds.push(message.id);
@@ -175,6 +195,23 @@ export function buildTranscript(
 	}
 
 	return entries;
+}
+
+/**
+ * What work in progress is doing, as its collapsed group says it: the summary of the command that
+ * is running, or Thinking. The live avatar shows the same on hover.
+ */
+export function activeStepLabel(
+	part: ActivityPart,
+	results: Record<string, ToolResult>,
+	technical: boolean
+): string {
+	const last = part.steps.at(-1);
+	if (last?.type === 'command' && !results[last.id]) {
+		if (technical && last.command) return `Running ${firstLine(last.command, 80)}`;
+		return last.summary ?? 'Running a command';
+	}
+	return 'Thinking';
 }
 
 /** The reply's visible text, for the copy button. */

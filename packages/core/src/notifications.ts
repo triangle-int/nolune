@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { and, desc, eq, isNull, lt } from 'drizzle-orm';
+import type { Avatar } from './avatars.ts';
 import { appendRow, createConversation, getConversation, setHidden } from './conversations.ts';
 import { getDb } from './db/index.ts';
 import {
@@ -22,7 +23,7 @@ export interface NotificationItem {
 	body: string;
 	level: Notification['level'];
 	createdAt: number;
-	profile: { slug: string; name: string };
+	profile: { slug: string; name: string; avatar: Avatar };
 	/** Set once someone continued it: the conversation to open. */
 	conversationId: string | null;
 }
@@ -108,7 +109,7 @@ export function listNotificationsForUser(
 			body: n.body,
 			level: n.level,
 			createdAt: n.createdAt.getTime(),
-			profile: { slug: p.slug, name: p.name },
+			profile: { slug: p.slug, name: p.name, avatar: p.avatar },
 			conversationId: hidden === false ? n.conversationId : null
 		})),
 		seenAt: seen?.seenAt.getTime() ?? 0

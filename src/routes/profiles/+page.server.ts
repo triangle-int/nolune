@@ -3,12 +3,14 @@ import { createProfile, listMembers, listProfilesForUser } from '@btw/core';
 import { requireUser } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
 
-export const load: PageServerLoad = ({ locals }) => {
+export const load: PageServerLoad = ({ locals, depends }) => {
+	depends('btw:profiles');
 	const user = requireUser(locals);
 	return {
 		profiles: listProfilesForUser(user.id).map((p) => ({
 			slug: p.slug,
 			name: p.name,
+			avatar: p.avatar,
 			members: listMembers(p.id).map((m) => m.name)
 		}))
 	};
