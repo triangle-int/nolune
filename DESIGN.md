@@ -170,8 +170,9 @@ kick(conversation):                     one loop per conversation at a time
   agent waiting on one isn't left waiting.
 - **Stop** in a chat also stops its background commands and its subagents (`stopConversation`), and
   nothing they would have handed over reaches the conversation. The chat lists what's still
-  working in the background, with a Stop button that works while the agent itself is idle.
-  Deleting a chat stops them first.
+  working in the background, with a Stop button that works while the agent itself is idle. A
+  `btw agent watch` running there is the same work as the subagent it waits for, so the list shows
+  only the subagent. Deleting a chat stops them first.
 
 ### Seeing images: `btw view`
 

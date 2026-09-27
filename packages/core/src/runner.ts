@@ -51,7 +51,7 @@ import {
 	runCommand,
 	type RunCommandResult
 } from './run-command.ts';
-import { SubagentError, activeSubagents } from './subagents.ts';
+import { SubagentError, activeSubagents, listSubagents } from './subagents.ts';
 import { TITLE_LIMIT, suggestTitle, typedTitle } from './titles.ts';
 import { cacheHitRate } from './usage.ts';
 
@@ -220,14 +220,30 @@ export function getSnapshot(conversationId: string): Snapshot {
 	};
 }
 
+/** The subagents a command waits for with `btw agent watch`, if it does. */
+function watchedSubagents(command: string): string[] {
+	return [...command.matchAll(/\bbtw\s+agent\s+watch\s+([a-z0-9][a-z0-9-]*)/gi)].map((m) =>
+		m[1].toLowerCase()
+	);
+}
+
 function backgroundItems(conversationId: string): BackgroundItem[] {
-	const commands = backgroundCommands(conversationId).map((c): BackgroundItem => ({
-		kind: 'command',
-		id: c.id,
-		summary: c.summary,
-		command: c.command,
-		startedAt: c.startedAt
-	}));
+	// A `btw agent watch` running in the background is the same work as the subagent it waits
+	// for, which is listed on its own. Any of the chat's subagents, not only working ones: a watch
+	// still takes a moment to notice that its subagent finished.
+	const names = new Set(listSubagents(conversationId).map((s) => s.name));
+	const commands = backgroundCommands(conversationId)
+		.filter((c) => {
+			const watched = watchedSubagents(c.command);
+			return !watched.length || !watched.every((name) => names.has(name));
+		})
+		.map((c): BackgroundItem => ({
+			kind: 'command',
+			id: c.id,
+			summary: c.summary,
+			command: c.command,
+			startedAt: c.startedAt
+		}));
 	const subagents = activeSubagents(conversationId).map((s): BackgroundItem => ({
 		kind: 'subagent',
 		id: s.id,
