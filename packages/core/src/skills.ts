@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { paths } from './paths.ts';
@@ -40,6 +40,15 @@ export function parseFrontmatter(text: string): Record<string, unknown> | null {
 	}
 }
 
+/** Follows symlinks; false for a broken one. */
+function isDirectory(path: string): boolean {
+	try {
+		return statSync(path).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
 function scanDir(
 	root: string,
 	scope: Skill['scope'],
@@ -55,8 +64,10 @@ function scanDir(
 		return;
 	}
 	for (const entry of entries) {
-		if (!entry.isDirectory() || SKIP_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
+		if (SKIP_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
 		const skillDir = join(dir, entry.name);
+		// Installers often symlink a skill folder in; a Dirent reports the link, not its target.
+		if (!entry.isDirectory() && !(entry.isSymbolicLink() && isDirectory(skillDir))) continue;
 		const location = join(skillDir, 'SKILL.md');
 		if (!existsSync(location)) {
 			if (depth + 1 < MAX_DEPTH) scanDir(root, scope, out, warnings, skillDir, depth + 1);

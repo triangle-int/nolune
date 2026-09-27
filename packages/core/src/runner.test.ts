@@ -2,17 +2,20 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { streamTurn } from './anthropic.ts';
 import { eq } from 'drizzle-orm';
+import { stopBackgroundCommands } from './background.ts';
 import { committedRows, createConversation, insertQueued } from './conversations.ts';
 import { getDb } from './db/index.ts';
 import { conversation } from './db/schema.ts';
 import { LEGACY_TOOLS, TOOLS, runCommand, type RunCommandResult } from './run-command.ts';
 import {
+	getSnapshot,
 	kick,
 	onLoopEnd,
 	onRunningChange,
 	recoverAfterRestart,
 	runningConversationIds
 } from './runner.ts';
+import { runSubagent, setSubagentStatus } from './subagents.ts';
 import { makeFamily, makePreset } from './test/fixtures.ts';
 
 vi.mock('./anthropic.ts', async (importOriginal) => ({
@@ -205,5 +208,53 @@ describe('background commands', () => {
 			'[Background command finished: Downloading the photos]\\n$ fetch-photos\\nsaved 120 photos'
 		);
 		expect(committedRows(chat.id).at(-1)?.kind).toBe('assistant');
+	});
+
+	it('lists a background `btw agent watch` as the subagent it waits for, not twice', async () => {
+		const background = (id: string, summary: string, command: string) => ({
+			type: 'tool_use',
+			id,
+			name: 'run_command',
+			input: { summary, command, run_in_background: true }
+		});
+		const chat = chatAsking(
+			modelReply(
+				[
+					background('w1', 'Waiting for the flight search', 'btw agent watch flights'),
+					background('w2', 'Waiting for a subagent nobody started', 'btw agent watch nobody'),
+					background('d1', 'Downloading the photos', 'fetch-photos')
+				],
+				'tool_use'
+			),
+			modelReply([{ type: 'text', text: "I'll tell you when they're done." }], 'end_turn')
+		);
+		const { subagent } = runSubagent({
+			parentId: chat.id,
+			name: 'flights',
+			prompt: 'Find flights.'
+		});
+		const finishers: ((result: RunCommandResult) => void)[] = [];
+		vi.mocked(runCommand).mockImplementation((_input, options) => {
+			options.onStart?.(4242);
+			return new Promise((resolve) => finishers.push(resolve));
+		});
+
+		await run(chat.id);
+		const listed = () =>
+			getSnapshot(chat.id).background.map((item) =>
+				item.kind === 'subagent' ? `subagent ${item.name}` : item.summary
+			);
+		expect(listed()).toEqual([
+			'Waiting for a subagent nobody started',
+			'Downloading the photos',
+			'subagent flights'
+		]);
+
+		// Done, while its watch hasn't noticed yet: nothing flashes back in its place.
+		setSubagentStatus(subagent.id, 'done');
+		expect(listed()).toEqual(['Waiting for a subagent nobody started', 'Downloading the photos']);
+
+		stopBackgroundCommands(chat.id, 'Anna');
+		for (const finish of finishers) finish({ content: '', isError: true, exitCode: null });
 	});
 });
