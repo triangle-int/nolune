@@ -116,6 +116,33 @@ describe('learnFrom', () => {
 		expect(listMemoryFiles(profile.slug).map((file) => file.path)).toEqual(['people/anna.md']);
 	});
 
+	it('saves a list sent as one fact a line at a time, without names the note has already', async () => {
+		const { profile, conv } = chat('Thanks for playing my game');
+		replies(
+			JSON.stringify([
+				{
+					op: 'add',
+					note: 'people/anna',
+					fact: "Who: Anna's the one who makes games\n- Also called: Anna\n- Favorite games, in order: Outer Wilds, Tunic, Animal Well"
+				}
+			])
+		);
+		expect(await learnFrom(conv.id)).toHaveLength(1);
+		expect(readMemoryNote(profile.slug, 'people/anna').text).toBe(
+			"# Anna\n\n- Who: Anna's the one who makes games\n- Favorite games, in order: Outer Wilds, Tunic, Animal Well\n"
+		);
+		// Each shows, and is undone, on its own.
+		const [look] = memoryLooks(conv.id);
+		expect(look.changes.map((c) => c.fact)).toEqual([
+			"Who: Anna's the one who makes games",
+			'Favorite games, in order: Outer Wilds, Tunic, Animal Well'
+		]);
+		undoMemoryChange(profile, look.changes[0].id, 'Anna');
+		expect(readMemoryNote(profile.slug, 'people/anna').text).toBe(
+			'# Anna\n\n- Favorite games, in order: Outer Wilds, Tunic, Animal Well\n'
+		);
+	});
+
 	it('reads each part of a chat once, with a little of what came before', async () => {
 		const { user, conv } = chat();
 		replies('[]', '[]');

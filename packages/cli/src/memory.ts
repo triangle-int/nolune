@@ -3,6 +3,7 @@ import {
 	MEMORY_CATEGORIES,
 	addMemoryFact,
 	categoryOf,
+	factLines,
 	forgetMemoryFact,
 	formatLocalTime,
 	isPinnedNote,
@@ -138,9 +139,20 @@ export async function memoryCommand(io: Io, args: string[]): Promise<void> {
 		case 'add': {
 			need(rest, 2, 'add <topic> <fact>');
 			const [topic, ...fact] = rest;
-			const result = addMemoryFact(slug, topic, fact.join(' '));
-			if (result.duplicate) io.log(`${result.path} already has that.`);
-			else io.log(`${result.created ? 'Started' : 'Saved to'} ${result.path}.`);
+			// A quoted list is a fact a line.
+			const lines = factLines(fact.join(' '));
+			const results = (lines.length ? lines : ['']).map((line) => addMemoryFact(slug, topic, line));
+			const { path } = results[0];
+			const saved = results.filter((r) => !r.duplicate).length;
+			const verb = results.some((r) => r.created) ? 'Started' : 'Saved to';
+			if (!saved) io.log(`${path} already has ${results.length === 1 ? 'that' : 'those'}.`);
+			else if (results.length === 1) io.log(`${verb} ${path}.`);
+			else {
+				const had = results.length - saved;
+				io.log(
+					`${verb} ${path}: ${plural(saved, 'fact', 'facts')}${had ? `, and ${had} it already had` : ''}.`
+				);
+			}
 			return;
 		}
 		case 'replace': {

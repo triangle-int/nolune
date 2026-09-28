@@ -375,8 +375,24 @@ export function readMemoryNote(slug: string, topic: string): { path: string; tex
 // --- Changes, for `nolune memory` ---
 
 /**
+ * The facts in `text`, one per line, without their bullets: a list given as one fact (by a model,
+ * or a command's quoted argument) would otherwise be joined into one line.
+ */
+export function factLines(text: string): string[] {
+	return text
+		.split(/\r?\n/)
+		.map((line) =>
+			line
+				.replace(/\s+/g, ' ')
+				.trim()
+				.replace(/^[-*+]\s+/, '')
+		)
+		.filter(Boolean);
+}
+
+/**
  * Adds one fact as a bullet at the end of a note, or of the part under the heading `under`,
- * creating the note if needed.
+ * creating the note if needed. A person's "Also called" that names no one new is a duplicate.
  */
 export function addMemoryFact(
 	slug: string,
@@ -397,12 +413,26 @@ export function addMemoryFact(
 	if (!categoryOf(path)) refuse(categoryProblem(path, exists));
 	const before = exists ? readFileSync(full, 'utf8') : '';
 	const key = factKey(parseFacts(`- ${line}`)[0] ?? line);
-	if (parseFacts(before).some((known) => factKey(known) === key)) {
+	if (
+		parseFacts(before).some((known) => factKey(known) === key) ||
+		namesNoOneNew(path, before, line)
+	) {
 		return { path, created: false, duplicate: true, line: `- ${line}` };
 	}
 	const lines = (before.trim() ? before.trimEnd() : `# ${titleOf(path)}`).split('\n');
 	saveNote(root, full, `${withFact(lines, `- ${line}`, under).join('\n')}\n`);
 	return { path, created: !exists, duplicate: false, line: `- ${line}` };
+}
+
+/** A person's "Also called" line whose names their note has already, its title or its others. */
+function namesNoOneNew(path: string, note: string, line: string): boolean {
+	if (categoryOf(path) !== 'people' || !isAliasLine(line)) return false;
+	const known = new Set(
+		[titleOf(path), titleIn(note), ...aliasesOf(note)].flatMap((name) =>
+			name ? [nameKey(name)] : []
+		)
+	);
+	return aliasesOf(line).every((name) => known.has(nameKey(name)));
 }
 
 /**

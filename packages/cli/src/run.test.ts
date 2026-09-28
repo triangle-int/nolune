@@ -114,13 +114,19 @@ describe('runCli', () => {
 		);
 		expect(list).toMatch(/people\/olga\.md +1 fact/);
 
+		expect(
+			await run(['memory', 'add', 'people/olga', "Who: Tester's grandmother\n- Lives in Tver"], {
+				env
+			})
+		).toMatchObject({ out: 'Saved to people/olga.md: 1 fact, and 1 it already had.\n' });
+
 		expect(await run(['memory', 'merge', 'people/grandma', 'people/olga'], { env })).toEqual({
 			code: 0,
 			out: "Merged people/grandma.md into people/olga.md: 1 part it didn't have.\n",
 			err: ''
 		});
 		expect(readMemoryNote('family', 'people/olga').text).toBe(
-			'# Olga\n\n- Lives in Tver\n- Loves roses\n- Also called: Grandma\n'
+			"# Olga\n\n- Lives in Tver\n- Who: Tester's grandmother\n- Loves roses\n- Also called: Grandma\n"
 		);
 	});
 

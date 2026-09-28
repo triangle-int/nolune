@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	MemoryError,
 	addMemoryFact,
+	factLines,
 	listMemoryFiles,
 	mergeMemoryNotes,
 	readMemoryNote,
@@ -57,6 +58,24 @@ describe('the categories', () => {
 		// Within people/, the title stays: it's their name, whatever the note is called.
 		renameMemoryNote(profile.slug, 'people/mia', 'people/mia-k');
 		expect(readMemoryNote(profile.slug, 'people/mia-k').text).toContain('# Mia\n');
+	});
+
+	it('take no "Also called" that names no one a person\'s note doesn\'t have already', () => {
+		const { profile } = makeFamily();
+		expect(addMemoryFact(profile.slug, 'people/olga', 'Also called: Olga')).toMatchObject({
+			duplicate: true
+		});
+		addMemoryFact(profile.slug, 'people/olga', 'Also called: grandma');
+		expect(addMemoryFact(profile.slug, 'people/olga', 'Also called: Grandma, OLGA')).toMatchObject({
+			duplicate: true
+		});
+		addMemoryFact(profile.slug, 'people/olga', 'Also called: бабушка, Olga');
+		expect(readMemoryNote(profile.slug, 'people/olga').text).toBe(
+			'# Olga\n\n- Also called: grandma\n- Also called: бабушка, Olga\n'
+		);
+		expect(factLines("Who: Anna's grandmother\n- Also called: grandma\n\n* Lives in Tver")).toEqual(
+			["Who: Anna's grandmother", 'Also called: grandma', 'Lives in Tver']
+		);
 	});
 
 	it("title a person's new note with their whole name", () => {

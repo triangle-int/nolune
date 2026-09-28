@@ -13,6 +13,7 @@ import {
 	MAX_PINNED_CHARS,
 	MemoryError,
 	addMemoryFact,
+	factLines,
 	readMemoryNotes,
 	replaceInMemory
 } from './memory.ts';
@@ -73,7 +74,7 @@ Otherwise reply with only a JSON array of at most ${MAX_CHANGES} changes, withou
 You can't remove anything: when a fact stopped being true, replace it with what is true now, like "Olga visited on October 12, 2026" or "Sold the blue car in September 2026".
 
 How to write them:
-- One fact each: short, true on its own, in the language the notes are in (or the one the family writes in, while there are none). Name people instead of writing "I" or "she", and write dates in full instead of "tomorrow".
+- One fact each, on one line (several facts are several adds): short, true on its own, in the language the notes are in (or the one the family writes in, while there are none). Name people instead of writing "I" or "she", and write dates in full instead of "tomorrow".
 - Put each fact in the category it belongs to (lowercase, without .md). What's about a person goes in their note in people/, even when someone else said it, and what someone says about themselves ("I", "my") in theirs; a person without one gets a new note, like people/olga. Notes outside the categories are from before them: don't add to them.
 - core goes into every conversation whole, and holds at most ${MAX_PINNED_CHARS} characters. Add to it only who is in the family and how to address them, the languages they use, allergies and health matters, and standing preferences, and only while it has room; everything else goes into other notes.
 - Don't repeat what a note already says, even in other words: when a fact changed, replace it.`;
@@ -186,15 +187,31 @@ async function memoryInput(slug: string, conversation: string): Promise<string> 
 	return `<memory>\n${shown.join('\n\n')}${rest}\n</memory>`;
 }
 
-/** Makes the change; what it left in the note, or null when the note already had the fact. */
-function applyChange(slug: string, change: MemoryChange): RecordedMemoryChange | null {
-	if (change.op === 'add') {
-		const added = addMemoryFact(slug, change.note, change.fact, change.under);
-		if (added.duplicate) return null;
-		return { op: 'add', note: added.path, line: added.line, createdNote: added.created };
+/**
+ * Makes the change: what it left in the note, empty when the note already had it. An add of
+ * several lines is a fact a line (models send a new person's Who and Also called together), so
+ * each shows and is undone on its own; one that's refused doesn't stop the others.
+ */
+function applyChange(slug: string, change: MemoryChange): RecordedMemoryChange[] {
+	if (change.op === 'replace') {
+		const replaced = replaceInMemory(slug, change.note, change.old, change.new);
+		return [{ op: 'replace', note: replaced.path, line: replaced.after, before: replaced.before }];
 	}
-	const replaced = replaceInMemory(slug, change.note, change.old, change.new);
-	return { op: 'replace', note: replaced.path, line: replaced.after, before: replaced.before };
+	const facts = factLines(change.fact);
+	const done: RecordedMemoryChange[] = [];
+	for (const [i, fact] of facts.entries()) {
+		try {
+			const added = addMemoryFact(slug, change.note, fact, change.under);
+			if (!added.duplicate) {
+				done.push({ op: 'add', note: added.path, line: added.line, createdNote: added.created });
+			}
+		} catch (err) {
+			// With nothing saved, it's refused like a one-line add.
+			if (!(err instanceof MemoryError) || (i === facts.length - 1 && !done.length)) throw err;
+			console.log(`[nolune] ${slug} memory fact skipped: ${err.message}`);
+		}
+	}
+	return done;
 }
 
 /**
@@ -270,9 +287,9 @@ export async function learnFrom(conversationId: string): Promise<MemoryChange[] 
 	for (const change of changes ?? []) {
 		try {
 			const done = applyChange(owner.slug, change);
-			if (!done) continue;
+			if (!done.length) continue;
 			made.push(change);
-			recorded.push(done);
+			recorded.push(...done);
 		} catch (err) {
 			// A fact that's no longer there, or a full core note: the rest still count.
 			if (!(err instanceof MemoryError)) throw err;

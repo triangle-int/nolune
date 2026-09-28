@@ -249,6 +249,7 @@ export {
 	MemoryError,
 	addMemoryFact,
 	addMemoryFacts,
+	factLines,
 	forgetMemoryFact,
 	forgetMemoryFile,
 	isPinnedNote,

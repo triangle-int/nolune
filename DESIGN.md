@@ -702,10 +702,12 @@ in fixed categories (`plans.md`, `people/anna.md`). There is no memory tool: lik
   saying where things go; `write` refuses to start one, and `mv` to rename into one. A note from
   before the categories stays readable and editable, listed as Unsorted, until someone moves it
   into one; the agent is told to sort one when it works with it.
-- **People.** A person's note is titled with their name and starts with who they are to the
-  family and what they are called: `- Who: Anna's grandmother`, `- Also called: grandma, бабушка`
-  (`Зовут:`, `auch genannt:` and the other languages' labels are read too). Search counts the
-  title and those names as the note's own words, so "бабушка" finds what `people/olga` says.
+- **People.** A person's note is titled with their name and, when it's known, says who they are
+  to the family and what else they are called: `- Who: Anna's grandmother`,
+  `- Also called: grandma, бабушка` (`Зовут:`, `auch genannt:` and the other languages' labels
+  are read too). Search counts the title and those names as the note's own words, so "бабушка"
+  finds what `people/olga` says. An "Also called" that names no one new (the note's own title,
+  as a model wrote for a new member) is taken as a fact the note has already.
 - **Members' notes** (`packages/core/src/memory-people.ts`, `profile_member.person_note`). Each
   member of the profile has their note, so nolune knows who "I" is in a message, what to look up for
   them, and where what they say about themselves goes. The agent's prompt and the note-taker's
@@ -805,7 +807,9 @@ in fixed categories (`plans.md`, `people/anna.md`). There is no memory tool: lik
   password without saving the new one, so a fact that stopped being true is replaced with what
   is true now, and removing stays with people and the agent. The changes go through the same
   functions as `nolune memory`, so they are dated and refused alike (a full core note, text that
-  isn't there). One look at a time per
+  isn't there). An `add` of several lines is a fact a line, each with its own Undo: a model sent
+  a new person's Who, Also called and favorite games as one, which was joined into one bullet.
+  `nolune memory add` splits a quoted list the same way. One look at a time per
   profile, so two chats ending together don't save the same fact. A stretch is read once: a
   failed model call leaves it for next time, a reply without usable JSON doesn't. Hidden chats
   (background runs nobody continued, subagents) are skipped, and so is a stretch without a

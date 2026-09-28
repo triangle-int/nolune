@@ -60,7 +60,7 @@ export function categoryGuide(): string {
 
 /** How a person's note starts, for the prompts. */
 export const PERSON_NOTE_GUIDE =
-	"A person's note is titled with their name and starts with who they are and what the family calls them, so nolune knows them by any of those names: `# Olga`, then `- Who: Anna's grandmother`, then `- Also called: grandma, бабушка` (keep the labels Who and Also called as they are).";
+	"A person's note is titled with their name (`# Olga`). When you know them, it also says who they are to the family and what else the family calls them, each a fact of its own, so nolune knows them by any of those names: `- Who: Anna's grandmother`, `- Also called: grandma, бабушка` (keep the labels Who and Also called as they are). Leave out what you don't know: no Who that says nothing, like \"family member\", and no Also called that only repeats their name.";
 
 /** A note's path without its extension: `people/anna.md` is `people/anna`. */
 function stem(path: string): string {
