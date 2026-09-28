@@ -15,7 +15,6 @@ import {
 	removeCustomProvider,
 	saveCustomProvider,
 	splitModel,
-	suggestProviderName,
 	type CustomApi
 } from './custom-providers.ts';
 import {
@@ -407,10 +406,6 @@ describe('custom providers', () => {
 			model: 'Qwen/Qwen3-32B'
 		});
 		expect(splitModel('qwen3:8b')).toEqual({ provider: '', model: 'qwen3:8b' });
-
-		expect(suggestProviderName('http://localhost:11434')).toBe('Local');
-		expect(suggestProviderName('http://127.0.0.1:1234/v1')).toBe('Local');
-		expect(suggestProviderName('http://gpu-box.lan:8000/v1')).toBe('gpu-box');
 	});
 
 	it('are checked by asking them for their models, with the key both ways', async () => {

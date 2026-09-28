@@ -48,7 +48,6 @@ export {
 	removeCustomProvider,
 	saveCustomProvider,
 	splitModel,
-	suggestProviderName,
 	type CustomApi,
 	type CustomProvider,
 	type CustomProviderStatus

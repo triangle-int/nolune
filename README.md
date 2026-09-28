@@ -22,22 +22,18 @@ a ChatGPT Plus, Pro or Business plan signed in to OpenAI's
 
 ```sh
 npm install -g nolune
-nolune setup                      # API key, your account, default model, public URL
-                               # (nolune setup --provider openai to start with GPT, openrouter
-                               #  for OpenRouter's models, custom --url <address> for your
-                               #  own server, or with a plan: --provider claude-plan or
-                               #  chatgpt-plan)
-nolune key set openai             # optional: GPT models for chats, and pictures (Images page)
-nolune service install            # run in the background, start at login
+nolune setup                   # your account and the public URL
+nolune key set openai          # optional: GPT models for chats, and pictures (Images page)
+nolune service install         # run in the background, start at login
 nolune user create Anna anna@example.com   # add family members (prints their password)
 ```
 
-Then open the address `nolune setup` printed and sign in. As the admin you can also add or replace
-API keys, sign in with ChatGPT, and add models on the web, under Models & keys in your account
-menu.
+Then open the address `nolune setup` printed, sign in and make a profile: its welcome asks for a
+model, on an API key or a plan. As the admin you can also add or replace API keys, sign in with
+ChatGPT, and add models on the web, under Models & keys in your account menu.
 
-**Through OpenRouter.** With `nolune key set openrouter` (or `nolune setup --provider openrouter`), a
-preset can run any model [OpenRouter](https://openrouter.ai/models) serves that can call tools:
+**Through OpenRouter.** With `nolune key set openrouter`, a preset can run any model
+[OpenRouter](https://openrouter.ai/models) serves that can call tools:
 `nolune preset add deepseek/deepseek-v4.1-flash --provider openrouter`. OpenRouter's ids name the
 model's maker. Pictures and PDFs go only to models that take them; for the others, they're saved
 for the agent and named in the message, like any other file.
@@ -53,8 +49,8 @@ or its chip in Add a model. nolune asks it for its models to check it. The model
 tools; pictures and PDFs reach it as their paths.
 
 **On your own plan instead of an API key.** Chats can run on a subscription someone in the family
-already has. Pick one with `nolune setup --provider <plan>`, or later with `nolune <plan> setup` and a
-preset on that provider (`nolune preset add claude-opus-5-5 --provider claude-plan`, or on Models &
+already has. Pick one in a new profile's welcome, or with `nolune <plan> setup` and a preset on
+that provider (`nolune preset add claude-opus-5-5 --provider claude-plan`, or on Models &
 keys). `nolune <plan> status` says who the plan is signed in as. Plan limits assume one person's
 ordinary use: keep busy automations and subagents on an API key preset. See
 [DESIGN.md](DESIGN.md#plans) for what works differently.

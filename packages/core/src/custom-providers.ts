@@ -127,17 +127,6 @@ export function anthropicUrl(url: string): string {
 	return normalizeProviderUrl(url).replace(/\/v1$/, '');
 }
 
-/** A name for a server at `url`, for `nolune setup`: Local on this computer, else its host. */
-export function suggestProviderName(url: string): string {
-	let host: string;
-	try {
-		host = new URL(normalizeProviderUrl(url)).hostname;
-	} catch {
-		return 'Local';
-	}
-	return /^(localhost|127\.|\[?::1\]?$)/.test(host) ? 'Local' : host.split('.')[0] || 'Server';
-}
-
 /** By id or name, as `nolune preset add --provider` and the forms give it. */
 export function findCustomProvider(idOrName: string): CustomProviderConfig | undefined {
 	const wanted = idOrName.trim().toLowerCase();

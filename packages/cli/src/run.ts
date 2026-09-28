@@ -49,7 +49,6 @@ import {
 	removeApiKey,
 	removeCustomProvider,
 	removePreset,
-	isPlan,
 	saveApiKey,
 	saveCustomProvider,
 	scanSkills,
@@ -58,19 +57,17 @@ import {
 	setPassword,
 	setSkillsEnabled,
 	splitModel,
-	suggestProviderName,
 	updateConfig,
 	viewImage,
 	ViewLimitError,
 	type ApiKeyProvider,
-	type CustomApi,
-	type Provider
+	type CustomApi
 } from '@nolune/core';
 import { AGENT_HELP, agentCommand } from './agent.ts';
 import { generateCommand, generateHelp } from './generate.ts';
 import { ask, askHidden } from './input.ts';
 import { fail, type Io } from './io.ts';
-import { planCommand, requireChatGptPlan, requireClaudePlan, setUpPlan } from './plans.ts';
+import { planCommand, requireChatGptPlan, requireClaudePlan } from './plans.ts';
 import { MEMORY_HELP, memoryCommand } from './memory.ts';
 import { PROFILE_HELP, profileCommand } from './profile.ts';
 import { SOUL_HELP, soulCommand } from './soul.ts';
@@ -88,15 +85,10 @@ import {
 const help = () => `nolune - a family agent that runs on this computer
 
 Getting started
-  nolune setup [--provider anthropic|openai|openrouter|custom|claude-plan|chatgpt-plan]
-          [--url ADDRESS] [--api openai|anthropic]
-                                             interactive first-time setup (key, your account, model);
-                                             chats run on Claude unless you pick another: openrouter
-                                             runs any model OpenRouter serves with one key, custom
-                                             the models of your own server at --url (see Custom
-                                             providers below), and a plan (see Plans below) is
-                                             signed in to instead
-  nolune start                                  run the gateway in the foreground
+  nolune setup                               interactive first-time setup (your account, public URL);
+                                             the model comes after: a new profile's welcome on the
+                                             web asks for one, or use key set and preset add below
+  nolune start                               run the gateway in the foreground
   nolune service install|uninstall|restart|status|logs [-f]
                                              run it in the background at login (macOS)
 
@@ -192,18 +184,6 @@ Inside agent commands (NOLUNE_PROFILE is set, so --profile can be left out)
                                              command's result (HEIC and big photos are converted)
 
 ${AGENT_HELP}`;
-
-/** What `nolune setup` suggests for each provider's first preset, and where its keys are made. */
-const SETUP: Record<Provider, { model: string; keys: string }> = {
-	anthropic: { model: 'claude-opus-5-5', keys: 'console.anthropic.com > API keys' },
-	openai: { model: 'gpt-6-astra', keys: 'platform.openai.com > API keys' },
-	openrouter: { model: 'anthropic/claude-opus-5.5', keys: 'openrouter.ai > Settings > API Keys' },
-	// The first model the server lists.
-	'custom-openai': { model: '', keys: '' },
-	'custom-anthropic': { model: '', keys: '' },
-	'claude-plan': { model: 'claude-opus-5-5', keys: '' },
-	'chatgpt-plan': { model: 'gpt-6-astra', keys: '' }
-};
 
 function positional(args: string[], index: number, name: string): string {
 	const value = args[index];
@@ -364,12 +344,9 @@ async function setup(io: Io, args: string[]): Promise<void> {
 	const { values } = parseArgs({
 		args,
 		options: {
-			provider: { type: 'string' },
-			key: { type: 'string' },
 			name: { type: 'string' },
 			email: { type: 'string' },
 			password: { type: 'string' },
-			model: { type: 'string' },
 			origin: { type: 'string' },
 			port: { type: 'string' },
 			url: { type: 'string' },
@@ -377,54 +354,10 @@ async function setup(io: Io, args: string[]): Promise<void> {
 		}
 	});
 
-	const api = values.api ?? 'openai';
-	if (api !== 'openai' && api !== 'anthropic') fail('--api is openai or anthropic');
-	// A custom provider: your own server, through the API it speaks.
-	const provider =
-		values.provider === 'custom' ? providerFor(api) : (values.provider ?? 'anthropic');
-	if (!isProvider(provider)) {
-		fail('--provider is anthropic, openai, openrouter, custom, claude-plan or chatgpt-plan');
-	}
-
 	const { created } = initConfig();
 	getDb();
 	installCliShim();
 	io.log(created ? `Created ${paths.home}` : `Using ${paths.home}`);
-
-	let suggested = SETUP[provider].model;
-	/** The custom provider the first preset runs on. */
-	let custom = '';
-	if (isPlan(provider)) {
-		await setUpPlan(io, provider);
-	} else if (isCustomProvider(provider)) {
-		const saved = listCustomProviders().find((c) => providerFor(c.api) === provider);
-		if (saved && !values.url) {
-			custom = saved.id;
-		} else {
-			const url =
-				values.url ??
-				(await ask(
-					io,
-					'Server address (Ollama: http://localhost:11434, LM Studio: http://localhost:1234)'
-				));
-			if (!url) fail('a server address is required (--url)');
-			const through = provider === 'custom-anthropic' ? 'anthropic' : 'openai';
-			let name = suggestProviderName(url);
-			// The same server through its other API is another custom provider.
-			const taken = findCustomProvider(name);
-			if (taken && taken.api !== through) name = `${name} (${through})`;
-			const stored = await storeCustomProvider(io, name, url, through, values.key ?? null);
-			custom = stored.id;
-			suggested = stored.models[0] ?? '';
-		}
-	} else {
-		const { label, field } = API_KEYS[provider];
-		if (!readConfig()[field]) {
-			const key = values.key ?? (await askHidden(io, `${label} API key (${SETUP[provider].keys})`));
-			if (!key) fail(`an ${label} API key is required`);
-			await storeApiKey(io, provider, key);
-		}
-	}
 
 	const admin = listUsers().find((u) => u.isAdmin);
 	if (admin) {
@@ -435,15 +368,6 @@ async function setup(io: Io, args: string[]): Promise<void> {
 		const password = values.password ?? generatePassword();
 		await createUser({ name, email, password, isAdmin: true });
 		io.log(`Created your account. Password: ${values.password ? '(as given)' : password}`);
-	}
-
-	if (listPresets().length === 0) {
-		const typed = values.model ?? (await ask(io, 'Model', suggested));
-		if (!typed) fail('which model? Pass --model <id>');
-		const preset = await addPreset(
-			custom ? presetTarget(custom, typed) : { provider, model: typed }
-		);
-		io.log(`Added model "${preset.name}".`);
 	}
 
 	const current = listenAddress();
@@ -465,6 +389,9 @@ Done. Next:
   nolune service install        run the gateway in the background (or \`nolune start\` to try it)
   nolune user create Anna anna@example.com    add family members
   open ${origin}
+
+Chats need a model: sign in and make a profile, and its welcome asks for one (a key or a plan,
+then the model). Or add one under Models & keys, or with \`nolune key set\` and \`nolune preset add\`.
 
 The gateway listens on http://${current.host}:${port}. To reach it from outside your home, point a
 tunnel at that address (Tailscale Funnel, Cloudflare Tunnel, or your own VPS) and set its URL with

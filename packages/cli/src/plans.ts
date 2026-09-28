@@ -15,9 +15,9 @@ import { ask } from './input.ts';
 import { fail, type Io } from './io.ts';
 
 /*
- * `nolune claude-plan` and `nolune chatgpt-plan`, and the plans' side of `nolune setup`. Each plan runs
- * its maker's agent (Claude Code, Codex), which keeps the sign-in: these check it, and offer to
- * install the agent and sign it in where needed.
+ * `nolune claude-plan` and `nolune chatgpt-plan`. Each plan runs its maker's agent (Claude Code,
+ * Codex), which keeps the sign-in: these check it, and offer to install the agent and sign it in
+ * where needed.
  */
 
 async function confirm(io: Io, question: string): Promise<boolean> {
@@ -110,10 +110,10 @@ export async function requireChatGptPlan(io: Io, guide = false): Promise<void> {
 }
 
 /**
- * `nolune <plan> setup` and `nolune setup --provider <plan>`: installs the plan's agent and signs it in
- * where needed, then says who it's signed in as.
+ * `nolune <plan> setup`: installs the plan's agent and signs it in where needed, then says who it's
+ * signed in as.
  */
-export function setUpPlan(io: Io, plan: Plan): Promise<void> {
+function setUpPlan(io: Io, plan: Plan): Promise<void> {
 	return plan === 'claude-plan' ? requireClaudePlan(io, true) : requireChatGptPlan(io, true);
 }
 
