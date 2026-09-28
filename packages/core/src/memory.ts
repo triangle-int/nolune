@@ -373,7 +373,7 @@ export function addMemoryFact(
 	topic: string,
 	fact: string,
 	under?: string
-): { path: string; created: boolean; duplicate: boolean } {
+): { path: string; created: boolean; duplicate: boolean; line: string } {
 	const root = openMemory(slug);
 	const full = notePath(root, topic);
 	const path = relPath(root, full);
@@ -387,11 +387,11 @@ export function addMemoryFact(
 	const before = exists ? readFileSync(full, 'utf8') : '';
 	const key = factKey(parseFacts(`- ${line}`)[0] ?? line);
 	if (parseFacts(before).some((known) => factKey(known) === key)) {
-		return { path, created: false, duplicate: true };
+		return { path, created: false, duplicate: true, line: `- ${line}` };
 	}
 	const lines = (before.trim() ? before.trimEnd() : `# ${titleOf(path)}`).split('\n');
 	saveNote(root, full, `${withFact(lines, `- ${line}`, under).join('\n')}\n`);
-	return { path, created: !exists, duplicate: false };
+	return { path, created: !exists, duplicate: false, line: `- ${line}` };
 }
 
 /**
@@ -474,12 +474,16 @@ function withFact(lines: string[], bullet: string, heading?: string): string[] {
 }
 
 /** Replaces text that appears exactly once in a note. */
+/**
+ * Replaces the one place `oldText` is in a note. Returns the whole lines it touched, as they were
+ * (`before`) and as they are now (`after`), for putting them back (revertMemoryLines).
+ */
 export function replaceInMemory(
 	slug: string,
 	topic: string,
 	oldText: string,
 	newText: string
-): { path: string } {
+): { path: string; before: string; after: string } {
 	const root = openMemory(slug);
 	const full = notePath(root, topic);
 	const path = relPath(root, full);
@@ -496,9 +500,54 @@ export function replaceInMemory(
 			`"${oldText}" is in ${path} ${hits.length} times (lines ${lines.join(', ')}). Include more of the text so it matches once.`
 		);
 	}
+	const at = hits[0];
 	// Sliced, not String.replace: `$&` and friends in the new text are meant literally.
-	saveNote(root, full, text.slice(0, hits[0]) + newText + text.slice(hits[0] + oldText.length));
-	return { path };
+	const changed = text.slice(0, at) + newText + text.slice(at + oldText.length);
+	saveNote(root, full, changed);
+	const start = text.lastIndexOf('\n', at - 1) + 1;
+	const next = text.indexOf('\n', at + oldText.length);
+	const end = next === -1 ? text.length : next;
+	return {
+		path,
+		before: text.slice(start, end),
+		after: changed.slice(start, end + newText.length - oldText.length)
+	};
+}
+
+/**
+ * Puts back what a change left in a note: the whole lines `current`, where they are once, become
+ * `restore`, or go when it's null. A note left without facts goes too when `dropEmpty`. Refuses
+ * when the lines aren't there once any more, since someone changed them since.
+ */
+export function revertMemoryLines(
+	slug: string,
+	topic: string,
+	current: string,
+	restore: string | null,
+	dropEmpty = false
+): { path: string; removedNote: boolean } {
+	const root = openMemory(slug);
+	const full = notePath(root, topic);
+	const path = relPath(root, full);
+	const lines = readNote(root, full, topic).split('\n');
+	const wanted = current.split('\n');
+	const starts: number[] = [];
+	for (let i = 0; i + wanted.length <= lines.length; i++) {
+		if (wanted.every((line, j) => lines[i + j] === line)) starts.push(i);
+	}
+	if (starts.length !== 1) refuse(`${path} changed since, so that can't be put back.`);
+	lines.splice(starts[0], wanted.length, ...(restore === null ? [] : restore.split('\n')));
+	const text = lines.join('\n');
+	if (dropEmpty && !parseFacts(text).length) {
+		changing(
+			root,
+			() => unlinkSync(full),
+			(index) => forgetFacts(index, path)
+		);
+		return { path, removedNote: true };
+	}
+	saveNote(root, full, text);
+	return { path, removedNote: false };
 }
 
 /** Removes the one line of a note that contains `match` (ignoring case). */

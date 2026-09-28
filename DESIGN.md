@@ -777,6 +777,17 @@ one per topic (`family.md`, `people/anna.md`). There is no memory tool: like aut
   person's message. Each profile can turn it off on its Memory page or with
   `btw memory learning off` (`profile.learn_from_chats`, on by default). It costs one short call
   to the chat's model per quiet spell, on a plan the plan's usage.
+  - **What it saved shows** (`packages/core/src/memory-changes.ts`), since people should see what
+    goes into memory without their asking. Each change is a `memory_change` row: the chat, the
+    last message it read, the note, and the whole lines the change left there (and, for a
+    replace, the lines before). The chat shows them after that message as a folded "Saved 3
+    memories" row, live (a `memory` event, and in the snapshot), each fact with its note and
+    Undo; the Memory page lists the last two weeks' at the top, with the chat each came from.
+    Undo puts back exactly those lines: an added fact goes (with the note it started, once
+    nothing is left in it), a replaced one reads as before and keeps its old date (the fact index
+    remembers facts that just left). When those lines aren't in the note once any more, someone
+    changed them since, and it says so instead. None of it goes to the model: the chat's
+    transcript, and its prompt cache, stay as they were.
 - **`btw memory`** (`packages/cli/src/memory.ts`, on top of `packages/core/src/memory.ts`): `list`,
   `search <words>...` (every note's facts that match, best first, as `path:line  fact  (heading)`),
   `show <topic>...`, `add <topic> <fact>` (one bullet; creates the note, skips a fact it already
@@ -806,7 +817,9 @@ one per topic (`family.md`, `people/anna.md`). There is no memory tool: like aut
   (with a halo), fading to light grey over about three months, and lightest when undated. Rows
   are ordered by the latest change, notes
   in a folder are grouped under its name, and past 12 rows the rest fold away. Pointing at (or
-  tapping) a dot shows the fact and when it was learned. Below the grid, every note is rendered as
+  tapping) a dot shows the fact and when it was learned. Below the grid, **Saved from chats** lists
+  what the note-taker saved in the last two weeks (four, then Show all), each with its note (which
+  scrolls to its card), the chat it came from, when, and Undo. Then every note is rendered as
   Markdown and can be edited or forgotten. The core note comes first, marked as pinned, even before
   it exists, so people can start it there; its editor counts characters against the limit. An edit
   is refused if the agent changed the note after it was opened; saving again then replaces the

@@ -578,7 +578,27 @@ export const ru: Messages = {
 		older: 'Старые',
 		newer: 'Новые',
 		nothingYet:
-			'btw пока ничего не запомнил. Каждый факт, который он узнаёт, становится здесь точкой.'
+			'btw пока ничего не запомнил. Каждый факт, который он узнаёт, становится здесь точкой.',
+		/** What btw saved from a chat by itself: in that chat, and at the top of this page. */
+		changes: {
+			saved: (n: number) => `Запомнил ${facts(n)}`,
+			added: 'Новое',
+			changed: 'Изменено',
+			before: (text: string) => `было: ${text}`,
+			openNote: (topic: string) => `Открыть «${topic}» в Памяти`,
+			undo: 'Отменить',
+			undone: 'Отменено',
+			undoneBy: (name: string) => `Отменено (${name})`,
+			changedSince:
+				'С тех пор это изменили, поэтому здесь не отменить. Поправьте заметку на странице «Память».',
+			alreadyUndone: 'Это уже отменили.',
+			recent: 'Запомнено из чатов',
+			recentHint: 'Что btw записал сам, когда чаты затихали, за последние две недели.',
+			fromChat: 'из чата {chat}',
+			deletedChat: 'из удалённого чата',
+			showAll: (n: number) => `Показать все (${n})`,
+			untitled: 'без названия'
+		}
 	},
 
 	automations: {

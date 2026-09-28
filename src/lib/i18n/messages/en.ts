@@ -430,7 +430,27 @@ export const en = {
 		showAllTopics: (n: number) => `Show all ${n} topics`,
 		older: 'Older',
 		newer: 'Newer',
-		nothingYet: 'Nothing remembered yet. Each thing btw learns becomes a dot here.'
+		nothingYet: 'Nothing remembered yet. Each thing btw learns becomes a dot here.',
+		/** What btw saved from a chat by itself: in that chat, and at the top of this page. */
+		changes: {
+			saved: (n: number) => `Saved ${p(n, { one: `${n} memory`, other: `${n} memories` })}`,
+			added: 'Added',
+			changed: 'Changed',
+			before: (text: string) => `was: ${text}`,
+			openNote: (topic: string) => `Open ${topic} in Memory`,
+			undo: 'Undo',
+			undone: 'Undone',
+			undoneBy: (name: string) => `Undone by ${name}`,
+			changedSince:
+				"It changed since, so it can't be undone here. Edit the note on the Memory page.",
+			alreadyUndone: 'It was already undone.',
+			recent: 'Saved from chats',
+			recentHint: 'What btw noted by itself after chats went quiet, in the last two weeks.',
+			fromChat: 'from {chat}',
+			deletedChat: 'from a deleted chat',
+			showAll: (n: number) => `Show all ${n}`,
+			untitled: 'a chat'
+		}
 	},
 
 	automations: {

@@ -4,6 +4,8 @@
 	import { Tween, prefersReducedMotion } from 'svelte/motion';
 	import { enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
+	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import type { SubmitFunction } from '@sveltejs/kit';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import EraserIcon from '@lucide/svelte/icons/eraser';
@@ -16,6 +18,7 @@
 	import Rich from '$lib/components/Rich.svelte';
 	import Markdown from '$lib/components/chat/Markdown.svelte';
 	import DotGrid, { orderTopics, type Topic } from '$lib/components/memory/DotGrid.svelte';
+	import MemoryChangeItem from '$lib/components/memory/MemoryChangeItem.svelte';
 	import { formatAgo } from '$lib/format';
 	import { getI18n } from '$lib/i18n';
 	import { memoryAnchor, memoryTopic } from '$lib/memory';
@@ -27,6 +30,11 @@
 	const { m } = i18n;
 
 	const WEEK = 7 * 24 * 60 * 60 * 1000;
+	/** Of what the note-taker saved lately, how many show before "Show all". */
+	const RECENT_SHOWN = 4;
+	const slug = $derived(page.params.slug ?? '');
+	let allRecent = $state(false);
+	const recent = $derived(allRecent ? data.recent : data.recent.slice(0, RECENT_SHOWN));
 
 	const topics: Topic[] = $derived(
 		data.files.map((file) => ({
@@ -167,6 +175,55 @@
 			</div>
 			<DotGrid {topics} bind:focus onpick={pick} />
 		</div>
+
+		{#if data.recent.length}
+			<section class="space-y-3" aria-labelledby="recent-heading">
+				<div class="space-y-0.5 px-1">
+					<h2 id="recent-heading" class="font-medium">{m.memory.changes.recent}</h2>
+					<p class="text-sm text-muted-foreground">{m.memory.changes.recentHint}</p>
+				</div>
+				<ul class="space-y-3 rounded-3xl border p-4 text-sm sm:p-5">
+					{#each recent as change (change.id)}
+						<MemoryChangeItem {change} {slug} onundone={invalidateAll}>
+							{#snippet note(topic)}
+								<button
+									type="button"
+									class="underline-offset-2 hover:text-foreground hover:underline"
+									onclick={() => pick(change.note)}>{topic}</button
+								>
+							{/snippet}
+							{#snippet after()}
+								<span>
+									{#if change.conversation}
+										<Rich text={m.memory.changes.fromChat}>
+											{#snippet chat()}<a
+													href={resolve('/p/[slug]/c/[id]', { slug, id: change.conversation!.id })}
+													class="underline-offset-2 hover:text-foreground hover:underline"
+													>{change.conversation!.title || m.memory.changes.untitled}</a
+												>{/snippet}
+										</Rich>
+									{:else}
+										{m.memory.changes.deletedChat}
+									{/if}
+								</span>
+								<span aria-hidden="true">·</span>
+								<span>{formatAgo(change.createdAt, i18n)}</span>
+							{/snippet}
+						</MemoryChangeItem>
+					{/each}
+				</ul>
+				{#if data.recent.length > RECENT_SHOWN}
+					<Button
+						variant="ghost"
+						size="sm"
+						class="text-muted-foreground"
+						onclick={() => (allRecent = !allRecent)}
+					>
+						{allRecent ? m.memory.showFewer : m.memory.changes.showAll(data.recent.length)}
+					</Button>
+				{/if}
+			</section>
+		{/if}
 
 		{#if form?.message && !form.path}
 			<p class="rounded-2xl bg-muted px-4 py-3 text-sm">{form.message}</p>

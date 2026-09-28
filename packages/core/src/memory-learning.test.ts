@@ -2,15 +2,23 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	appendRow,
 	commitQueuedRows,
+	committedRows,
 	createConversation,
+	deleteConversation,
 	getConversation,
 	insertQueued
 } from './conversations.ts';
-import { addMemoryFact, listMemoryFiles, readMemoryNote } from './memory.ts';
+import { addMemoryFact, listMemoryFiles, readMemoryNote, replaceInMemory } from './memory.ts';
+import {
+	MemoryUndoError,
+	memoryLooks,
+	recentMemoryChanges,
+	undoMemoryChange
+} from './memory-changes.ts';
 import { learnFrom, parseChanges, startLearning } from './memory-learning.ts';
 import { quickReply } from './models.ts';
 import { setLearnFromChats } from './profiles.ts';
-import { onLoopEnd, onRunningChange } from './runner.ts';
+import { getSnapshot, onLoopEnd, onRunningChange, subscribe, type LiveEvent } from './runner.ts';
 import { makeFamily, makePreset } from './test/fixtures.ts';
 
 vi.mock('./models.ts', async (importOriginal) => ({
@@ -161,6 +169,110 @@ describe('learnFrom', () => {
 		vi.spyOn(console, 'error').mockImplementation(() => {});
 		expect(await learnFrom(conv.id)).toBeNull();
 		expect(getConversation(conv.id)?.learnedSeq).toBeNull();
+	});
+});
+
+describe('what it saved', () => {
+	it('shows in the chat after the last message it read, and on the Memory page, with Undo', async () => {
+		const { profile, conv } = chat('Rex is called Max now, and Leo swims on Sundays.');
+		addMemoryFact(profile.slug, 'pets', 'The dog is called Rex');
+		const rex = listMemoryFiles(profile.slug)[0].facts[0].learnedAt;
+		replies(
+			JSON.stringify([
+				{ op: 'replace', note: 'pets', old: 'called Rex', new: 'called Max' },
+				{ op: 'add', note: 'people/leo', fact: 'Leo swims on Sundays' },
+				// Already there after the replace: not saved, so not shown.
+				{ op: 'add', note: 'pets', fact: 'The dog is called Max' }
+			])
+		);
+		const events: LiveEvent[] = [];
+		const off = subscribe(conv.id, (event) => events.push(event));
+		await learnFrom(conv.id);
+		off();
+
+		const change = { id: expect.any(Number), createdAt: expect.any(Number), undone: null };
+		const looks = memoryLooks(conv.id);
+		expect(looks).toEqual([
+			{
+				after: committedRows(conv.id).at(-1)!.id,
+				createdAt: expect.any(Number),
+				changes: [
+					{
+						...change,
+						op: 'replace',
+						note: 'pets.md',
+						fact: 'The dog is called Max',
+						before: 'The dog is called Rex'
+					},
+					{
+						...change,
+						op: 'add',
+						note: 'people/leo.md',
+						fact: 'Leo swims on Sundays',
+						before: null
+					}
+				]
+			}
+		]);
+		// Open chats get it live, and a chat opened later in its snapshot.
+		expect(events).toEqual([{ type: 'memory', memory: looks }]);
+		expect(getSnapshot(conv.id).memory).toEqual(looks);
+		expect(
+			recentMemoryChanges(profile.id, { since: new Date(0), limit: 10 }).map((c) => [
+				c.fact,
+				c.conversation
+			])
+		).toEqual([
+			['Leo swims on Sundays', { id: conv.id, title: '' }],
+			['The dog is called Max', { id: conv.id, title: '' }]
+		]);
+
+		// Undone: the fact reads as before, dated as before; the added one goes, with the note it
+		// started. Once only.
+		const [replaced, added] = looks[0].changes;
+		expect(undoMemoryChange(profile, replaced.id, 'Ben')).toEqual({ conversationId: conv.id });
+		expect(undoMemoryChange(profile, added.id, 'Ben')).toEqual({ conversationId: conv.id });
+		expect(readMemoryNote(profile.slug, 'pets').text).toBe('# Pets\n\n- The dog is called Rex\n');
+		expect(listMemoryFiles(profile.slug)).toEqual([
+			expect.objectContaining({
+				path: 'pets.md',
+				facts: [{ text: 'The dog is called Rex', learnedAt: rex }]
+			})
+		]);
+		expect(memoryLooks(conv.id)[0].changes.map((c) => c.undone)).toEqual([
+			{ at: expect.any(Number), by: 'Ben' },
+			{ at: expect.any(Number), by: 'Ben' }
+		]);
+		expect(() => undoMemoryChange(profile, added.id, 'Ben')).toThrow(
+			expect.objectContaining({ reason: 'undone' })
+		);
+	});
+
+	it("isn't undone once someone changed it since, nor from another profile", async () => {
+		const { profile, conv } = chat();
+		addMemoryFact(profile.slug, 'pets', 'We have a cat');
+		replies('[{"op": "add", "note": "pets", "fact": "The dog is called Rex"}]');
+		await learnFrom(conv.id);
+		const [change] = memoryLooks(conv.id)[0].changes;
+
+		const other = makeFamily('Eve').profile;
+		expect(() => undoMemoryChange(other, change.id, 'Eve')).toThrow(
+			expect.objectContaining({ reason: 'missing' })
+		);
+
+		replaceInMemory(profile.slug, 'pets', 'called Rex', 'called Rex Jr.');
+		expect(() => undoMemoryChange(profile, change.id, 'Ben')).toThrow(MemoryUndoError);
+		expect(() => undoMemoryChange(profile, change.id, 'Ben')).toThrow(
+			expect.objectContaining({ reason: 'changed' })
+		);
+		expect(readMemoryNote(profile.slug, 'pets').text).toContain('Rex Jr.');
+		expect(memoryLooks(conv.id)[0].changes[0].undone).toBeNull();
+
+		// The chat deleted, it's still on the Memory page, from a chat that's gone.
+		deleteConversation(conv.id);
+		expect(recentMemoryChanges(profile.id, { since: new Date(0), limit: 10 })).toEqual([
+			expect.objectContaining({ fact: 'The dog is called Rex', conversation: null })
+		]);
 	});
 });
 

@@ -498,7 +498,28 @@ export const de: Messages = {
 		showAllTopics: (n: number) => `Alle ${n} Themen anzeigen`,
 		older: 'Älter',
 		newer: 'Neuer',
-		nothingYet: 'Noch nichts gemerkt. Alles, was btw lernt, wird hier zu einem Punkt.'
+		nothingYet: 'Noch nichts gemerkt. Alles, was btw lernt, wird hier zu einem Punkt.',
+		/** What btw saved from a chat by itself: in that chat, and at the top of this page. */
+		changes: {
+			saved: (n: number) => `${memories(n)} gespeichert`,
+			added: 'Neu',
+			changed: 'Geändert',
+			before: (text: string) => `vorher: ${text}`,
+			openNote: (topic: string) => `${topic} im Gedächtnis öffnen`,
+			undo: 'Rückgängig',
+			undone: 'Rückgängig gemacht',
+			undoneBy: (name: string) => `Rückgängig gemacht von ${name}`,
+			changedSince:
+				'Das wurde inzwischen geändert und lässt sich hier nicht rückgängig machen. Bearbeite die Notiz auf der Gedächtnis-Seite.',
+			alreadyUndone: 'Das wurde schon rückgängig gemacht.',
+			recent: 'Aus Chats gespeichert',
+			recentHint:
+				'Was btw sich von selbst notiert hat, wenn Chats still wurden, in den letzten zwei Wochen.',
+			fromChat: 'aus {chat}',
+			deletedChat: 'aus einem gelöschten Chat',
+			showAll: (n: number) => `Alle ${n} zeigen`,
+			untitled: 'einem Chat'
+		}
 	},
 
 	automations: {

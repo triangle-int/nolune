@@ -513,7 +513,28 @@ export const fr: Messages = {
 		older: 'Plus ancien',
 		newer: 'Plus récent',
 		nothingYet:
-			'Rien de mémorisé pour l’instant. Chaque chose que btw apprend devient ici un point.'
+			'Rien de mémorisé pour l’instant. Chaque chose que btw apprend devient ici un point.',
+		/** What btw saved from a chat by itself: in that chat, and at the top of this page. */
+		changes: {
+			saved: (n: number) => `${memories(n)} enregistré${n === 1 ? '' : 's'}`,
+			added: 'Nouveau',
+			changed: 'Modifié',
+			before: (text: string) => `avant : ${text}`,
+			openNote: (topic: string) => `Ouvrir ${topic} dans Mémoire`,
+			undo: 'Annuler',
+			undone: 'Annulé',
+			undoneBy: (name: string) => `Annulé par ${name}`,
+			changedSince:
+				'Cela a changé depuis, donc impossible d’annuler ici. Modifiez la note sur la page Mémoire.',
+			alreadyUndone: 'C’est déjà annulé.',
+			recent: 'Enregistré depuis les discussions',
+			recentHint:
+				'Ce que btw a noté de lui-même quand les discussions se sont calmées, ces deux dernières semaines.',
+			fromChat: 'de {chat}',
+			deletedChat: 'd’une discussion supprimée',
+			showAll: (n: number) => `Tout afficher (${n})`,
+			untitled: 'une discussion'
+		}
 	},
 
 	automations: {

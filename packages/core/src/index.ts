@@ -152,6 +152,7 @@ export {
 	onLoopEnd,
 	onRunningChange,
 	recoverAfterRestart,
+	refreshMemoryLooks,
 	renameConversation,
 	runningConversationIds,
 	sendMessage,
@@ -234,6 +235,14 @@ export {
 	type Subagent
 } from './subagents.ts';
 export { stopConversation } from './subagent-host.ts';
+export {
+	MemoryUndoError,
+	recentMemoryChanges,
+	undoMemoryChange,
+	type DisplayMemoryChange,
+	type DisplayMemoryLook,
+	type RecentMemoryChange
+} from './memory-changes.ts';
 export {
 	CORE_NOTE,
 	MAX_PINNED_CHARS,

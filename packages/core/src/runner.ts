@@ -65,6 +65,7 @@ import { folderContextFor } from './folders.ts';
 import { readSoul } from './soul.ts';
 import { createViewDir, imageUse, readViewedImages, type ImageUse } from './images.ts';
 import { copyReplyMedia, listMedia, mediaByMessage, type PreparedMedia } from './media.ts';
+import { memoryLooks, type DisplayMemoryLook } from './memory-changes.ts';
 import { recallFor } from './memory-search.ts';
 import { profileDir } from './paths.ts';
 import { resolveFiles } from './provider-files.ts';
@@ -97,7 +98,9 @@ export type LiveEvent =
 	| { type: 'tool_output'; id: string; chunk: string }
 	| { type: 'title'; title: string }
 	| { type: 'model'; model: ChatModel }
-	| { type: 'background'; background: BackgroundItem[] };
+	| { type: 'background'; background: BackgroundItem[] }
+	/** What the note-taker saved from the chat (memory-changes.ts), all of it. */
+	| { type: 'memory'; memory: DisplayMemoryLook[] };
 
 /** The model and reasoning level a conversation's next model call uses. */
 export interface ChatModel {
@@ -146,6 +149,8 @@ export interface Snapshot {
 	live: (LiveBlock | null)[];
 	toolOutput: { id: string; text: string } | null;
 	background: BackgroundItem[];
+	/** What the note-taker saved from it. */
+	memory: DisplayMemoryLook[];
 }
 
 interface State {
@@ -261,7 +266,8 @@ export function getSnapshot(conversationId: string): Snapshot {
 		queued: queuedRows(conversationId).map((row) => toDisplay(row, media.get(row.id))),
 		live: st.live,
 		toolOutput: st.toolOutput,
-		background: backgroundItems(conversationId)
+		background: backgroundItems(conversationId),
+		memory: memoryLooks(conversationId)
 	};
 }
 
@@ -298,6 +304,11 @@ function backgroundItems(conversationId: string): BackgroundItem[] {
 		startedAt: s.updatedAt.getTime()
 	}));
 	return [...commands, ...subagents];
+}
+
+/** Tells the conversation's open chats what the note-taker saved from it, after a save or undo. */
+export function refreshMemoryLooks(conversationId: string): void {
+	emit(conversationId, { type: 'memory', memory: memoryLooks(conversationId) });
 }
 
 /** Tells the conversation's open chats that its background work changed. */

@@ -148,8 +148,9 @@ Access). `btw setup` prints the exact path.
   every chat from the start, so keep it short: at most 4,000 characters. Besides what btw saves
   as it goes, it looks over each chat once it has been quiet for a couple of minutes and saves
   what it missed, with one short request to the chat's model; turn that off on the Memory page
-  (**Learn from chats**) or with `btw memory learning off`. The Memory page shows every fact as a
-  dot, darker the newer it is, and lets you fix or delete a note. Files:
+  (**Learn from chats**) or with `btw memory learning off`. What it saves shows in the chat
+  ("Saved 3 memories") and at the top of the Memory page, each with Undo. The Memory page shows
+  every fact as a dot, darker the newer it is, and lets you fix or delete a note. Files:
   `~/.btw-agent/profiles/<profile>/memories`.
 - **Languages.** The web interface comes in English, Russian, German, Spanish and French. It
   follows the browser's language, or pick one in Settings (per device). Only menus, buttons and

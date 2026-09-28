@@ -519,7 +519,29 @@ export const es: Messages = {
 		showAllTopics: (n: number) => `Mostrar los ${n} temas`,
 		older: 'Más antiguo',
 		newer: 'Más reciente',
-		nothingYet: 'Todavía no recuerda nada. Cada cosa que btw aprende se convierte aquí en un punto.'
+		nothingYet:
+			'Todavía no recuerda nada. Cada cosa que btw aprende se convierte aquí en un punto.',
+		/** What btw saved from a chat by itself: in that chat, and at the top of this page. */
+		changes: {
+			saved: (n: number) => `Guardó ${memories(n)}`,
+			added: 'Nuevo',
+			changed: 'Cambiado',
+			before: (text: string) => `antes: ${text}`,
+			openNote: (topic: string) => `Abrir ${topic} en Memoria`,
+			undo: 'Deshacer',
+			undone: 'Deshecho',
+			undoneBy: (name: string) => `Deshecho por ${name}`,
+			changedSince:
+				'Cambió desde entonces, así que no se puede deshacer aquí. Edita la nota en la página Memoria.',
+			alreadyUndone: 'Ya se deshizo.',
+			recent: 'Guardado de los chats',
+			recentHint:
+				'Lo que btw anotó por su cuenta cuando los chats quedaron en silencio, en las últimas dos semanas.',
+			fromChat: 'de {chat}',
+			deletedChat: 'de un chat eliminado',
+			showAll: (n: number) => `Mostrar los ${n}`,
+			untitled: 'un chat'
+		}
 	},
 
 	automations: {

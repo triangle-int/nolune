@@ -4,10 +4,14 @@ import { describe, expect, it } from 'vitest';
 import {
 	MAX_PINNED_CHARS,
 	MemoryConflictError,
+	MemoryError,
 	addMemoryFact,
+	listMemoryFiles,
 	readMemoryNote,
 	readPinnedNote,
 	renameMemoryNote,
+	replaceInMemory,
+	revertMemoryLines,
 	writeMemoryFile,
 	writeMemoryNote
 } from './memory.ts';
@@ -98,5 +102,51 @@ describe('adding a fact', () => {
 		);
 		expect(readMemoryNote(profile.slug, 'people/mia').text).toBe('# Mia\n\n- Plays piano\n');
 		expect(readMemoryNote(profile.slug, 'pets').text).toBe('# Pets\n\n- The dog is called Rex\n');
+	});
+});
+
+describe('putting a change back', () => {
+	it('knows the whole lines a change touched, and puts them back as long as they are still there', () => {
+		const { profile } = makeFamily();
+		writeMemoryNote(profile.slug, 'pets', '# Pets\n\n- The dog is called Rex\n- The cat is Tom\n');
+		const rex = listMemoryFiles(profile.slug)[0].facts[0].learnedAt;
+
+		const replaced = replaceInMemory(profile.slug, 'pets', 'called Rex', 'called Max');
+		expect(replaced).toEqual({
+			path: 'pets.md',
+			before: '- The dog is called Rex',
+			after: '- The dog is called Max'
+		});
+		const added = addMemoryFact(profile.slug, 'pets', 'The fish is Nemo');
+		expect(added).toMatchObject({ duplicate: false, line: '- The fish is Nemo' });
+
+		// The replaced fact reads as before, and keeps the date it was first learned.
+		revertMemoryLines(profile.slug, 'pets', replaced.after, replaced.before);
+		revertMemoryLines(profile.slug, 'pets', added.line, null);
+		expect(readMemoryNote(profile.slug, 'pets').text).toBe(
+			'# Pets\n\n- The dog is called Rex\n- The cat is Tom\n'
+		);
+		expect(listMemoryFiles(profile.slug)[0].facts[0]).toEqual({
+			text: 'The dog is called Rex',
+			learnedAt: rex
+		});
+
+		// Changed since, or there twice: it can't tell what to put back.
+		expect(() => revertMemoryLines(profile.slug, 'pets', replaced.after, replaced.before)).toThrow(
+			MemoryError
+		);
+		writeMemoryNote(profile.slug, 'pets', '# Pets\n\n- Tom\n\n## Old\n\n- Tom\n');
+		expect(() => revertMemoryLines(profile.slug, 'pets', '- Tom', null)).toThrow('changed since');
+	});
+
+	it('takes away a note it started once nothing is left in it', () => {
+		const { profile } = makeFamily();
+		const added = addMemoryFact(profile.slug, 'people/leo', 'Leo swims on Sundays');
+		expect(added.created).toBe(true);
+		expect(revertMemoryLines(profile.slug, 'people/leo', added.line, null, true)).toEqual({
+			path: 'people/leo.md',
+			removedNote: true
+		});
+		expect(listMemoryFiles(profile.slug)).toEqual([]);
 	});
 });

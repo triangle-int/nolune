@@ -6,6 +6,7 @@ import {
 	MemoryError,
 	forgetMemoryFile,
 	listMemoryFiles,
+	recentMemoryChanges,
 	setLearnFromChats,
 	writeMemoryFile
 } from '@btw/core';
@@ -13,10 +14,17 @@ import { translations } from '$lib/i18n';
 import { requireProfile } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
 
+const RECENT_DAYS = 14;
+
 export const load: PageServerLoad = ({ locals, params }) => {
 	const { profile } = requireProfile(locals, params.slug);
 	return {
 		files: listMemoryFiles(profile.slug),
+		// What the note-taker saved lately, where it came from, with Undo.
+		recent: recentMemoryChanges(profile.id, {
+			since: new Date(Date.now() - RECENT_DAYS * 24 * 60 * 60 * 1000),
+			limit: 30
+		}),
 		core: { path: CORE_NOTE, maxChars: MAX_PINNED_CHARS },
 		learnFromChats: profile.learnFromChats
 	};

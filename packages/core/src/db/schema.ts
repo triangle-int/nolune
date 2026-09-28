@@ -645,3 +645,40 @@ export const providerFile = sqliteTable(
 		index('provider_file_fileId_idx').on(table.fileId)
 	]
 );
+
+/**
+ * What the note-taker (memory-learning.ts) changed in a profile's memory, and the chat it learned
+ * it from: shown in that chat after the last message it read, and on the Memory page, each with
+ * Undo. The agent's own saves show as its commands, so they aren't here.
+ */
+export const memoryChange = sqliteTable(
+	'memory_change',
+	{
+		id: integer('id').primaryKey({ autoIncrement: true }),
+		profileId: text('profile_id')
+			.notNull()
+			.references(() => profile.id, { onDelete: 'cascade' }),
+		conversationId: text('conversation_id').references(() => conversation.id, {
+			onDelete: 'set null'
+		}),
+		/** The last message it read: the change shows after it. */
+		afterMessageId: integer('after_message_id').notNull(),
+		op: text('op', { enum: ['add', 'replace'] }).notNull(),
+		/** The note's path in the memory folder, like `people/leo.md`. */
+		note: text('note').notNull(),
+		/** The lines the change left in the note, as they are there. */
+		line: text('line').notNull(),
+		/** A replace: the lines as they were before. */
+		before: text('before'),
+		/** An add that started the note: undoing it removes the note once nothing is left in it. */
+		createdNote: integer('created_note', { mode: 'boolean' }).default(false).notNull(),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull(),
+		undoneAt: integer('undone_at', { mode: 'timestamp_ms' }),
+		/** The name of who undid it. */
+		undoneBy: text('undone_by')
+	},
+	(table) => [
+		index('memory_change_conversationId_idx').on(table.conversationId),
+		index('memory_change_profileId_idx').on(table.profileId, table.createdAt)
+	]
+);

@@ -16,19 +16,21 @@ import {
 	readMemoryNotes,
 	replaceInMemory
 } from './memory.ts';
+import { recordMemoryChanges, type RecordedMemoryChange } from './memory-changes.ts';
 import { embedMemory, searchMemory } from './memory-search.ts';
 import { describeApiError, quickReply } from './models.ts';
 import { getProfile } from './profiles.ts';
-import { isRunning, onLoopEnd, onRunningChange } from './runner.ts';
+import { isRunning, onLoopEnd, onRunningChange, refreshMemoryLooks } from './runner.ts';
 
 /*
  * btw's note-taker. The agent saves what it learns with `btw memory` when it thinks of it, and it
  * doesn't always: facts mentioned in passing get lost. So once a chat has been quiet for a while,
  * its model looks over what was said since last time, next to the notes, and adds or corrects
- * facts, through the same functions as `btw memory` (so they are dated like the agent's). It never
- * removes one: a model that deleted a fact without saving what replaced it lost it for good. It
- * reads what people wrote and btw's replies, never command output, so a web page or an email
- * can't put things in memory. Each profile can turn it off on its Memory page.
+ * facts, through the same functions as `btw memory` (so they are dated like the agent's). The
+ * chat shows what it saved, with Undo (memory-changes.ts). It never removes a fact: a model that
+ * deleted one without saving what replaced it lost it for good. It reads what people wrote and
+ * btw's replies, never command output, so a web page or an email can't put things in memory.
+ * Each profile can turn it off on its Memory page.
  */
 
 /** A chat quiet for this long is done for now: one look covers a whole back-and-forth. */
@@ -179,13 +181,15 @@ async function memoryInput(slug: string, conversation: string): Promise<string> 
 	return `<memory>\n${shown.join('\n\n')}${rest}\n</memory>`;
 }
 
-function applyChange(slug: string, change: MemoryChange): 'saved' | 'duplicate' {
+/** Makes the change; what it left in the note, or null when the note already had the fact. */
+function applyChange(slug: string, change: MemoryChange): RecordedMemoryChange | null {
 	if (change.op === 'add') {
-		const { duplicate } = addMemoryFact(slug, change.note, change.fact, change.under);
-		return duplicate ? 'duplicate' : 'saved';
+		const added = addMemoryFact(slug, change.note, change.fact, change.under);
+		if (added.duplicate) return null;
+		return { op: 'add', note: added.path, line: added.line, createdNote: added.created };
 	}
-	replaceInMemory(slug, change.note, change.old, change.new);
-	return 'saved';
+	const replaced = replaceInMemory(slug, change.note, change.old, change.new);
+	return { op: 'replace', note: replaced.path, line: replaced.after, before: replaced.before };
 }
 
 /**
@@ -256,16 +260,26 @@ export async function learnFrom(conversationId: string): Promise<MemoryChange[] 
 	setLearnedSeq(conversationId, last);
 	const changes = reply.text === null ? null : parseChanges(reply.text);
 	const made: MemoryChange[] = [];
+	const recorded: RecordedMemoryChange[] = [];
 	for (const change of changes ?? []) {
 		try {
-			if (applyChange(owner.slug, change) === 'saved') made.push(change);
+			const done = applyChange(owner.slug, change);
+			if (!done) continue;
+			made.push(change);
+			recorded.push(done);
 		} catch (err) {
 			// A fact that's no longer there, or a full core note: the rest still count.
 			if (!(err instanceof MemoryError)) throw err;
 			console.log(`[btw] ${owner.slug} memory change skipped: ${err.message}`);
 		}
 	}
-	if (made.length) void embedMemory(owner.slug);
+	if (made.length) {
+		// The chat shows them after the last message read, with Undo.
+		const afterMessageId = rows.at(-1)!.id;
+		recordMemoryChanges({ profileId: owner.id, conversationId, afterMessageId, changes: recorded });
+		refreshMemoryLooks(conversationId);
+		void embedMemory(owner.slug);
+	}
 	const outcome = !changes
 		? 'no usable reply'
 		: made.length
