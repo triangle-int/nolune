@@ -14,9 +14,9 @@
 	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
 	import Volume2Icon from '@lucide/svelte/icons/volume-2';
 	import VolumeXIcon from '@lucide/svelte/icons/volume-x';
-	import { isAvatar, type Avatar } from '@btw/core/avatars';
-	import type { ExportedFact } from '@btw/core/memory-export';
-	import type { ImportedNote } from '@btw/core';
+	import { isAvatar, type Avatar } from '@nolune/core/avatars';
+	import type { ExportedFact } from '@nolune/core/memory-export';
+	import type { ImportedNote } from '@nolune/core';
 	import AssistantAvatar from '$lib/components/AssistantAvatar.svelte';
 	import AvatarPicker from '$lib/components/AvatarPicker.svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -248,9 +248,9 @@
 			await tick();
 		};
 		if (document.startViewTransition && !reduced) {
-			root.classList.add('btw-wash');
+			root.classList.add('nolune-wash');
 			await document.startViewTransition(apply).finished.catch(() => {});
-			root.classList.remove('btw-wash');
+			root.classList.remove('nolune-wash');
 		} else {
 			await apply();
 		}
@@ -268,7 +268,7 @@
 		finishing = true;
 		if (phase !== 'arrival' && phase !== 'fresh') quiet(3, 'music');
 		else if ('startViewTransition' in document && !reduced) {
-			document.documentElement.classList.add('btw-arrive');
+			document.documentElement.classList.add('nolune-arrive');
 		}
 		await goto(resolve('/p/[slug]', { slug: data.welcome.slug }), { replaceState: true });
 	}
@@ -281,7 +281,7 @@
 				done();
 				await navigation.complete;
 			});
-			transition.finished.finally(() => document.documentElement.classList.remove('btw-arrive'));
+			transition.finished.finally(() => document.documentElement.classList.remove('nolune-arrive'));
 		});
 	});
 
@@ -367,7 +367,7 @@
 				></button>
 				<div
 					bind:this={wordmarkBox}
-					class="w-[min(22rem,70vw)] text-white"
+					class="w-[min(33rem,70vw)] text-white"
 					class:invisible={!drawing}
 				>
 					<Wordmark bind:letters bind:dots />
@@ -522,36 +522,36 @@
 <style>
 	/* The chosen avatar's tint washes in as a circle growing from where it stands. */
 	:global {
-		html.btw-wash::view-transition-old(root) {
+		html.nolune-wash::view-transition-old(root) {
 			animation: none;
 		}
-		html.btw-wash::view-transition-new(root) {
-			animation: btw-wash 0.75s cubic-bezier(0.4, 0, 0.2, 1);
+		html.nolune-wash::view-transition-new(root) {
+			animation: nolune-wash 0.75s cubic-bezier(0.4, 0, 0.2, 1);
 		}
 		/* Into the chat after the memories: slowly, the avatar gliding to its place. */
-		html.btw-arrive::view-transition-old(root) {
-			animation: btw-leave 1.2s ease-in both;
+		html.nolune-arrive::view-transition-old(root) {
+			animation: nolune-leave 1.2s ease-in both;
 		}
-		html.btw-arrive::view-transition-new(root) {
-			animation: btw-enter 1.4s ease-out 0.7s both;
+		html.nolune-arrive::view-transition-new(root) {
+			animation: nolune-enter 1.4s ease-out 0.7s both;
 		}
-		html.btw-arrive::view-transition-group(btw-assistant),
-		html.btw-arrive::view-transition-old(btw-assistant),
-		html.btw-arrive::view-transition-new(btw-assistant) {
+		html.nolune-arrive::view-transition-group(nolune-assistant),
+		html.nolune-arrive::view-transition-old(nolune-assistant),
+		html.nolune-arrive::view-transition-new(nolune-assistant) {
 			animation-duration: 2s;
 			animation-timing-function: cubic-bezier(0.45, 0, 0.2, 1);
 		}
-		@keyframes btw-leave {
+		@keyframes nolune-leave {
 			to {
 				opacity: 0;
 			}
 		}
-		@keyframes btw-enter {
+		@keyframes nolune-enter {
 			from {
 				opacity: 0;
 			}
 		}
-		@keyframes btw-wash {
+		@keyframes nolune-wash {
 			from {
 				clip-path: circle(0 at var(--wash-x) var(--wash-y));
 			}

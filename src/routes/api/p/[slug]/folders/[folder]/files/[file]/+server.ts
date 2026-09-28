@@ -1,5 +1,5 @@
 import { error } from '@sveltejs/kit';
-import { getFolder, getFolderFile, mediaFile } from '@btw/core';
+import { getFolder, getFolderFile, mediaFile } from '@nolune/core';
 import { requireProfile } from '$lib/server/access';
 import { storedFileResponse } from '$lib/server/files';
 import type { RequestHandler } from './$types';

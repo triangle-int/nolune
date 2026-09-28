@@ -1,13 +1,13 @@
-import { listConversations, listFolders, listProfilesForUser } from '@btw/core';
+import { listConversations, listFolders, listProfilesForUser } from '@nolune/core';
 import { translations } from '$lib/i18n';
 import { requireProfile } from '$lib/server/access';
 import { LAST_PROFILE_COOKIE } from '$lib/server/last-profile';
 import type { LayoutServerLoad } from './$types';
 
 export const load: LayoutServerLoad = ({ locals, params, depends, cookies }) => {
-	depends('btw:conversations');
+	depends('nolune:conversations');
 	// Pushed when someone renames the profile or changes its avatar.
-	depends('btw:profiles');
+	depends('nolune:profiles');
 	const { user, profile } = requireProfile(locals, params.slug);
 	const { m } = translations(locals.locale);
 	// Opening the app later lands here again.

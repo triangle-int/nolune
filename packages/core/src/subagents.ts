@@ -23,10 +23,10 @@ import { getPreset } from './presets.ts';
 import { getProfile } from './profiles.ts';
 
 /**
- * Subagents: agents a conversation's agent starts with `btw agent run` to work on a task in a
+ * Subagents: agents a conversation's agent starts with `nolune agent run` to work on a task in a
  * hidden conversation of their own, which starts empty but for the task and caches its prompt for
  * 5 minutes. The CLI only writes rows (a subagent, and a queued message in its conversation); the
- * gateway picks them up and runs them (subagent-host.ts), like `btw wake`.
+ * gateway picks them up and runs them (subagent-host.ts), like `nolune wake`.
  */
 
 export type Subagent = typeof subagent.$inferSelect;
@@ -65,7 +65,7 @@ function requireSubagent(parentId: string, name: string): Subagent {
 	const found = findSubagent(parentId, name);
 	if (!found) {
 		throw new SubagentError(
-			`this conversation has no subagent "${name}". \`btw agent list\` shows its subagents.`
+			`this conversation has no subagent "${name}". \`nolune agent list\` shows its subagents.`
 		);
 	}
 	return found;
@@ -129,20 +129,20 @@ export function appendSubagentLog(s: Pick<Subagent, 'parentId' | 'name'>, text: 
 		mkdirSync(dirname(path), { recursive: true });
 		appendFileSync(path, text);
 	} catch (err) {
-		console.error(`[btw] could not write the log of subagent ${s.name}:`, err);
+		console.error(`[nolune] could not write the log of subagent ${s.name}:`, err);
 	}
 }
 
 function taskMessage(name: string, prompt: string): string {
-	return `[Task from the btw agent that started you · you are subagent "${name}"]
+	return `[Task from the nolune agent that started you · you are subagent "${name}"]
 
 ${prompt}
 
-You are a subagent. Another btw agent started you from one of the family's conversations and is waiting for your result. You have none of that conversation, only this message and what you find on the computer. Nobody can answer questions while you work, so work it out yourself; the agent that started you may send you more messages. Don't do anything destructive or irreversible that the task doesn't clearly ask for; say what you would do in your last message instead. Your last message goes back to that agent as your result: give it what it needs to carry on (what you found or did, paths, links, numbers, what didn't work), without retelling your steps.`;
+You are a subagent. Another nolune agent started you from one of the family's conversations and is waiting for your result. You have none of that conversation, only this message and what you find on the computer. Nobody can answer questions while you work, so work it out yourself; the agent that started you may send you more messages. Don't do anything destructive or irreversible that the task doesn't clearly ask for; say what you would do in your last message instead. Your last message goes back to that agent as your result: give it what it needs to carry on (what you found or did, paths, links, numbers, what didn't work), without retelling your steps.`;
 }
 
 function moreWorkMessage(prompt: string): string {
-	return `[New task from the btw agent that started you]
+	return `[New task from the nolune agent that started you]
 
 ${prompt}
 
@@ -150,7 +150,7 @@ Your last message goes back to it as your result again.`;
 }
 
 function steerMessage(text: string): string {
-	return `[Message from the btw agent that started you, while you work]
+	return `[Message from the nolune agent that started you, while you work]
 
 ${text}`;
 }
@@ -180,7 +180,7 @@ function firstLine(text: string, max = 60): string {
 }
 
 /**
- * `btw agent run [name]`: starts a subagent with `prompt` as its task, or gives one that finished
+ * `nolune agent run [name]`: starts a subagent with `prompt` as its task, or gives one that finished
  * more work in the same conversation (it keeps what it learned). Returns at once; the gateway
  * starts it within seconds. It runs on the chat's model and reasoning level unless `presetId` or
  * `effort` say otherwise; more work for one that finished may switch either, like in a chat.
@@ -189,9 +189,9 @@ export function runSubagent(input: {
 	parentId: string;
 	name?: string;
 	prompt: string;
-	/** A model preset instead of the chat's model (`btw agent run --preset`). */
+	/** A model preset instead of the chat's model (`nolune agent run --preset`). */
 	presetId?: string;
-	/** A reasoning level instead of the chat's (`btw agent run --effort`). */
+	/** A reasoning level instead of the chat's (`nolune agent run --effort`). */
 	effort?: Effort;
 }): { subagent: Subagent; conversation: Conversation; created: boolean } {
 	const prompt = input.prompt.trim();
@@ -202,7 +202,7 @@ export function runSubagent(input: {
 	const preset = input.presetId ? getPreset(input.presetId) : undefined;
 	if (input.presetId && !preset) {
 		throw new SubagentError(
-			'there is no such model preset. `btw preset list` shows the ones this computer has.'
+			'there is no such model preset. `nolune preset list` shows the ones this computer has.'
 		);
 	}
 	const name = input.name?.trim().toLowerCase();
@@ -220,7 +220,7 @@ export function runSubagent(input: {
 		if (existing) {
 			if (isActive(existing)) {
 				throw new SubagentError(
-					`${existing.name} is still working. Steer it with \`btw agent steer ${existing.name} --prompt "..."\`, or wait for its result with \`btw agent watch ${existing.name}\`.`
+					`${existing.name} is still working. Steer it with \`nolune agent steer ${existing.name} --prompt "..."\`, or wait for its result with \`nolune agent watch ${existing.name}\`.`
 				);
 			}
 			const conv = getConversation(existing.conversationId);
@@ -254,7 +254,7 @@ export function runSubagent(input: {
 		const active = activeSubagents(parent.id).length;
 		if (active >= MAX_ACTIVE_SUBAGENTS) {
 			throw new SubagentError(
-				`this conversation already has ${active} subagents working, the most it can have at once. Wait for one to finish (\`btw agent list\`).`
+				`this conversation already has ${active} subagents working, the most it can have at once. Wait for one to finish (\`nolune agent list\`).`
 			);
 		}
 		const chosen = name ?? nextName(parent.id);
@@ -294,7 +294,7 @@ export function runSubagent(input: {
 }
 
 /**
- * `btw agent steer`: adds a message to a working subagent's conversation. It reads it at its
+ * `nolune agent steer`: adds a message to a working subagent's conversation. It reads it at its
  * next step, or starts again if it was waiting for its background commands.
  */
 export function steerSubagent(input: { parentId: string; name: string; text: string }): Subagent {
@@ -306,7 +306,7 @@ export function steerSubagent(input: { parentId: string; name: string; text: str
 			throw new SubagentError(
 				found.status === 'stopping'
 					? `${found.name} is being stopped.`
-					: `${found.name} isn't working (${found.status}). Give it more work with \`btw agent run ${found.name} --prompt "..."\`.`
+					: `${found.name} isn't working (${found.status}). Give it more work with \`nolune agent run ${found.name} --prompt "..."\`.`
 			);
 		}
 		insertQueuedNotice({
@@ -322,7 +322,7 @@ export function steerSubagent(input: { parentId: string; name: string; text: str
 	}, LOCKED);
 }
 
-/** `btw agent stop`: the gateway stops it within seconds. */
+/** `nolune agent stop`: the gateway stops it within seconds. */
 export function requestSubagentStop(input: { parentId: string; name: string }): Subagent {
 	return getDb().transaction(() => {
 		const found = requireSubagent(input.parentId, input.name);
@@ -364,7 +364,7 @@ export function lastSubagentMessage(s: Pick<Subagent, 'conversationId'>): string
 }
 
 /**
- * What `btw agent watch` prints once the subagent's current work has ended, or null while it
+ * What `nolune agent watch` prints once the subagent's current work has ended, or null while it
  * still works. Its last message is its result.
  */
 export function subagentResult(s: Subagent): { ok: boolean; text: string } | null {

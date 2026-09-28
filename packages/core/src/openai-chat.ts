@@ -17,12 +17,12 @@ import { openaiBaseUrl } from './openai.ts';
 
 /*
  * Chats on OpenAI's models, through the Responses API and OpenAI's SDK, and its Files API for
- * pictures and PDFs. The rest of btw calls it through models.ts.
+ * pictures and PDFs. The rest of nolune calls it through models.ts.
  *
  * Requests are stateless (`store: false`): like Anthropic's, every call sends the whole
  * transcript, so nothing depends on OpenAI keeping a conversation. A reply is stored as the
  * output items the API returned, its reasoning included in encrypted form, and sent back as it
- * came. btw's own blocks (people's messages, command results; format.ts) are turned into input
+ * came. nolune's own blocks (people's messages, command results; format.ts) are turned into input
  * items here, the same way on every call, so the request prefix stays byte-identical and OpenAI's
  * automatic prompt cache keeps serving it.
  */
@@ -38,7 +38,7 @@ type Sdk = typeof import('openai');
 
 /**
  * The SDK, loaded on first use. The bundled CLI carries all of core, and loading the SDK when
- * it starts would slow down every `btw` command the agent runs, which almost never call OpenAI.
+ * it starts would slow down every `nolune` command the agent runs, which almost never call OpenAI.
  */
 let sdk: Sdk | undefined;
 
@@ -96,7 +96,7 @@ async function getClient(): Promise<OpenAI> {
 	return cached.client;
 }
 
-// --- btw's format as OpenAI takes it ---
+// --- nolune's format as OpenAI takes it ---
 
 type Stored = { type?: unknown } & Record<string, unknown>;
 
@@ -134,7 +134,7 @@ function nativeItems(content: unknown[]): InputItem[] {
 	const items: InputItem[] = [];
 	for (const b of content as Stored[]) {
 		if (b.type === 'text' && typeof b.text === 'string' && b.text) {
-			// A reply btw wrote itself, from before btw's own format.
+			// A reply nolune wrote itself, from before nolune's own format.
 			items.push({ role: 'assistant', content: b.text });
 		} else if (b.type === 'tool_use') {
 			// A row that didn't record who wrote it (tests).
@@ -156,7 +156,7 @@ function nativeItems(content: unknown[]): InputItem[] {
 /**
  * A conversation's messages as the Responses API's `input` for `model`. Replies it wrote go back
  * as they came, except reasoning without its encrypted content, which can't be read back without
- * `store`. Replies from another model or provider (the conversation switched), and btw's own, go
+ * `store`. Replies from another model or provider (the conversation switched), and nolune's own, go
  * as their text and calls: reasoning goes back only to the model that wrote it.
  */
 export function toResponsesInput(messages: Message[], model: string): InputItem[] {
@@ -209,7 +209,7 @@ export function toResponsesInput(messages: Message[], model: string): InputItem[
 	return input;
 }
 
-/** A tool as btw saves it (Anthropic's format) as a function tool. Not strict: `cwd` is optional. */
+/** A tool as nolune saves it (Anthropic's format) as a function tool. Not strict: `cwd` is optional. */
 function functionTool(tool: Anthropic.Tool): OpenAI.Responses.FunctionTool {
 	return {
 		type: 'function',
@@ -352,7 +352,7 @@ export async function createResponse(opts: {
 	);
 }
 
-/** In Anthropic's words, as btw stores it: see ModelReply in models.ts. */
+/** In Anthropic's words, as nolune stores it: see ModelReply in models.ts. */
 export function stopReason(response: {
 	status?: string;
 	output?: readonly unknown[];
@@ -372,7 +372,7 @@ export function stopReason(response: {
 	return refused ? 'refusal' : 'end_turn';
 }
 
-/** OpenAI counts cached tokens inside `input_tokens`; btw counts them apart, as Anthropic does. */
+/** OpenAI counts cached tokens inside `input_tokens`; nolune counts them apart, as Anthropic does. */
 export function summarizeUsage(
 	usage:
 		| {
@@ -456,7 +456,7 @@ function gptVersion(model: string): { major: number; minor: number; suffix: stri
 }
 
 /**
- * The model's context window when btw knows it: OpenAI's models API doesn't say. Flagships
+ * The model's context window when nolune knows it: OpenAI's models API doesn't say. Flagships
  * since GPT-5.4 (gpt-5.4, gpt-5.5-pro, gpt-5.6-terra, gpt-6-astra, and their dated snapshots)
  * have 1,050,000 tokens. Other models (mini, nano, codex, older ones) may have much less, and a
  * window set too large would let a conversation grow past what the model takes, for good, so
@@ -472,7 +472,7 @@ export function knownContextWindow(model: string): number | null {
 	return flagship ? FLAGSHIP_CONTEXT_WINDOW : null;
 }
 
-/** Checks that the model exists, and says how large its window is when btw knows it. */
+/** Checks that the model exists, and says how large its window is when nolune knows it. */
 export async function fetchContextWindow(model: string): Promise<number | null> {
 	const client = await getClient();
 	await client.models.retrieve(model, { timeout: REQUEST_TIMEOUT_MS });

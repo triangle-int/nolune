@@ -25,24 +25,24 @@ import {
 	type Trigger,
 	type TriggerWhat,
 	type TriggerWhen
-} from '@btw/core';
+} from '@nolune/core';
 import type { Io } from './io.ts';
 import { profileFor } from './profile.ts';
 
 export const TRIGGER_HELP = `Automations (results show up as notifications in the web UI)
-  btw trigger add <name> WHEN WHAT [--summary S] [--icon I] [--preset NAME] [--effort LEVEL]
-                  [--profile SLUG]
+  nolune trigger add <name> WHEN WHAT [--summary S] [--icon I] [--preset NAME] [--effort LEVEL]
+                     [--profile SLUG]
       WHEN: --cron "<min hour day month weekday>" (local time) | --at "YYYY-MM-DD HH:MM"
             | --in 30m|2h|1d | --webhook
       WHAT: --prompt "<what the agent should do>" | --script "<shell command, no model>"
       --summary: one plain sentence the family sees on the Automations page
       --icon: a Lucide icon name for it, like umbrella
-  btw trigger list [--profile SLUG]
-  btw trigger show|run|pause|resume|rm <name|id>
-  btw trigger edit <name|id> [--name N] [--summary S] [--icon I] [WHEN] [WHAT] [--preset NAME]
-                   [--effort LEVEL]
-  btw wake <message> [--title T] [--profile SLUG]
-      start a background agent run now; trigger scripts call this (\`btw wake -\` reads stdin)`;
+  nolune trigger list [--profile SLUG]
+  nolune trigger show|run|pause|resume|rm <name|id>
+  nolune trigger edit <name|id> [--name N] [--summary S] [--icon I] [WHEN] [WHAT] [--preset NAME]
+                      [--effort LEVEL]
+  nolune wake <message> [--title T] [--profile SLUG]
+      start a background agent run now; trigger scripts call this (\`nolune wake -\` reads stdin)`;
 
 const OPTIONS = {
 	cron: { type: 'string' },
@@ -67,7 +67,7 @@ function parse(args: string[]) {
 }
 
 function optionalProfile(io: Io, flag: string | undefined): Profile | undefined {
-	return flag || io.env.BTW_PROFILE ? profileFor(io, flag) : undefined;
+	return flag || io.env.NOLUNE_PROFILE ? profileFor(io, flag) : undefined;
 }
 
 function whenFrom(values: Values): TriggerWhen | undefined {
@@ -124,7 +124,7 @@ function describeWhat(t: Trigger): string {
 export function triggerCommand(io: Io, action: string | undefined, args: string[]): void {
 	const { values, positionals } = parse(args);
 	const ref = () => {
-		if (!positionals[0]) throw new Error('missing <name|id>. See `btw trigger list`.');
+		if (!positionals[0]) throw new Error('missing <name|id>. See `nolune trigger list`.');
 		return findTrigger(positionals[0], optionalProfile(io, values.profile)?.id);
 	};
 
@@ -136,13 +136,13 @@ export function triggerCommand(io: Io, action: string | undefined, args: string[
 
 		case 'add': {
 			const name = positionals[0];
-			if (!name) throw new Error('missing <name>. See `btw help`.');
+			if (!name) throw new Error('missing <name>. See `nolune help`.');
 			const when = whenFrom(values);
 			if (!when) throw new Error('say when: --cron, --at, --in or --webhook');
 			const what = whatFrom(values);
 			if (!what) throw new Error('say what: --prompt or --script');
 			const profile = profileFor(io, values.profile);
-			const preset = resolvePreset(values.preset, io.env.BTW_CONVERSATION_ID);
+			const preset = resolvePreset(values.preset, io.env.NOLUNE_CONVERSATION_ID);
 			const t = createTrigger({
 				profileId: profile.id,
 				name,
@@ -239,7 +239,7 @@ export function triggerCommand(io: Io, action: string | undefined, args: string[
 		}
 
 		default:
-			throw new Error('usage: btw trigger help|add|list|show|run|pause|resume|rm|edit');
+			throw new Error('usage: nolune trigger help|add|list|show|run|pause|resume|rm|edit');
 	}
 }
 
@@ -249,11 +249,12 @@ export async function wakeCommand(io: Io, args: string[]): Promise<void> {
 	const given = positionals.join(' ').trim();
 	// From a terminal, nothing was piped in: `-` is then an empty message.
 	const text = given === '-' ? (io.stdinIsTTY ? '' : await io.readStdin()).trim() : given;
-	if (!text) throw new Error('usage: btw wake <what happened and what to do> (or - to read stdin)');
-	const t = io.env.BTW_TRIGGER_ID ? getTrigger(io.env.BTW_TRIGGER_ID) : undefined;
+	if (!text)
+		throw new Error('usage: nolune wake <what happened and what to do> (or - to read stdin)');
+	const t = io.env.NOLUNE_TRIGGER_ID ? getTrigger(io.env.NOLUNE_TRIGGER_ID) : undefined;
 	const profileId = t?.profileId ?? profileFor(io, values.profile).id;
 	const preset =
-		values.preset || !t ? resolvePreset(values.preset, io.env.BTW_CONVERSATION_ID) : undefined;
+		values.preset || !t ? resolvePreset(values.preset, io.env.NOLUNE_CONVERSATION_ID) : undefined;
 	const run = queueWake({
 		profileId,
 		triggerId: t?.id,
@@ -262,5 +263,5 @@ export async function wakeCommand(io: Io, args: string[]): Promise<void> {
 		presetId: preset?.id,
 		effort: effortFrom(values)
 	});
-	io.log(`Woke btw ("${run.title}"). Its reply shows up as a notification.`);
+	io.log(`Woke nolune ("${run.title}"). Its reply shows up as a notification.`);
 }

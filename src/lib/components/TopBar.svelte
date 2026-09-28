@@ -11,7 +11,7 @@
 
 <header class="flex h-14 shrink-0 items-center gap-1.5 px-3 sm:px-4">
 	<a href={resolve('/profiles')} class="rounded-lg px-2 py-1 text-xl font-semibold tracking-tight">
-		btw
+		nolune
 	</a>
 	<div class="flex-1"></div>
 	{#if notifications}

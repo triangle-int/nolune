@@ -154,16 +154,16 @@ interface State {
 const LIVE_OUTPUT_LIMIT = 100_000;
 
 const holder = globalThis as unknown as {
-	__btwRunner?: Map<string, State>;
-	__btwLoopEnd?: Set<LoopEndListener>;
-	__btwCommandEnd?: Set<() => void>;
-	__btwRunningChange?: Set<RunningChangeListener>;
+	__noluneRunner?: Map<string, State>;
+	__noluneLoopEnd?: Set<LoopEndListener>;
+	__noluneCommandEnd?: Set<() => void>;
+	__noluneRunningChange?: Set<RunningChangeListener>;
 };
-const states = (holder.__btwRunner ??= new Map());
+const states = (holder.__noluneRunner ??= new Map());
 
 /** Called whenever a conversation's agent loop stops, with the error if a model call failed. */
 export type LoopEndListener = (conversationId: string, error: string | null) => void;
-const loopEndListeners = (holder.__btwLoopEnd ??= new Set());
+const loopEndListeners = (holder.__noluneLoopEnd ??= new Set());
 
 export function onLoopEnd(listener: LoopEndListener): () => void {
 	loopEndListeners.add(listener);
@@ -172,9 +172,9 @@ export function onLoopEnd(listener: LoopEndListener): () => void {
 
 /**
  * Called after every command the agent ran (not in the background), so what it asked for with
- * `btw agent` happens right away rather than at the scheduler's next tick.
+ * `nolune agent` happens right away rather than at the scheduler's next tick.
  */
-const commandEndListeners = (holder.__btwCommandEnd ??= new Set());
+const commandEndListeners = (holder.__noluneCommandEnd ??= new Set());
 
 export function onCommandEnd(listener: () => void): () => void {
 	commandEndListeners.add(listener);
@@ -186,14 +186,14 @@ function commandEnded(): void {
 		try {
 			listener();
 		} catch (err) {
-			console.error('[btw] command-end listener failed:', err);
+			console.error('[nolune] command-end listener failed:', err);
 		}
 	}
 }
 
 /** Called whenever any conversation's agent loop starts or stops. */
 export type RunningChangeListener = (conversationId: string, running: boolean) => void;
-const runningChangeListeners = (holder.__btwRunningChange ??= new Set());
+const runningChangeListeners = (holder.__noluneRunningChange ??= new Set());
 
 export function onRunningChange(listener: RunningChangeListener): () => void {
 	runningChangeListeners.add(listener);
@@ -205,7 +205,7 @@ function runningChanged(conversationId: string, running: boolean): void {
 		try {
 			listener(conversationId, running);
 		} catch (err) {
-			console.error(`[btw] running listener failed for ${conversationId}:`, err);
+			console.error(`[nolune] running listener failed for ${conversationId}:`, err);
 		}
 	}
 }
@@ -258,15 +258,15 @@ export function getSnapshot(conversationId: string): Snapshot {
 	};
 }
 
-/** The subagents a command waits for with `btw agent watch`, if it does. */
+/** The subagents a command waits for with `nolune agent watch`, if it does. */
 function watchedSubagents(command: string): string[] {
-	return [...command.matchAll(/\bbtw\s+agent\s+watch\s+([a-z0-9][a-z0-9-]*)/gi)].map((m) =>
+	return [...command.matchAll(/\bnolune\s+agent\s+watch\s+([a-z0-9][a-z0-9-]*)/gi)].map((m) =>
 		m[1].toLowerCase()
 	);
 }
 
 function backgroundItems(conversationId: string): BackgroundItem[] {
-	// A `btw agent watch` running in the background is the same work as the subagent it waits
+	// A `nolune agent watch` running in the background is the same work as the subagent it waits
 	// for, which is listed on its own. Any of the chat's subagents, not only working ones: a watch
 	// still takes a moment to notice that its subagent finished.
 	const names = new Set(listSubagents(conversationId).map((s) => s.name));
@@ -420,13 +420,16 @@ function nameConversation(conv: Conversation, text: string, placeholder: string)
 	suggestTitle(conv.provider, conv.model, text)
 		.then(({ title, usage }) => {
 			console.log(
-				`[btw] ${conv.id.slice(0, 8)} title ${conv.model} in=${usage.input} out=${usage.output}${title ? '' : ' (none)'}`
+				`[nolune] ${conv.id.slice(0, 8)} title ${conv.model} in=${usage.input} out=${usage.output}${title ? '' : ' (none)'}`
 			);
 			if (!title || !replaceTitle(conv.id, placeholder, title)) return;
 			emit(conv.id, { type: 'title', title });
 		})
 		.catch((err) => {
-			console.error(`[btw] ${conv.id.slice(0, 8)} could not name the chat:`, describeApiError(err));
+			console.error(
+				`[nolune] ${conv.id.slice(0, 8)} could not name the chat:`,
+				describeApiError(err)
+			);
 		});
 }
 
@@ -471,7 +474,7 @@ export function stop(conversationId: string, byName: string): void {
 /** Runs the agent if the transcript ends with something it hasn't answered yet. */
 export function kick(conversationId: string): void {
 	loop(conversationId).catch((err) => {
-		console.error(`[btw] runner crashed for ${conversationId}:`, err);
+		console.error(`[nolune] runner crashed for ${conversationId}:`, err);
 	});
 }
 
@@ -502,7 +505,7 @@ function toolResult(
 	id: string,
 	text: string,
 	isError: boolean,
-	/** Images from `btw view`, with their labels. They follow the command's output. */
+	/** Images from `nolune view`, with their labels. They follow the command's output. */
 	attachments: (TextBlock | ImageBlock)[] = []
 ): ToolResultBlock {
 	const content = attachments.length ? [{ type: 'text' as const, text }, ...attachments] : text;
@@ -536,13 +539,13 @@ async function runToolCall(
 	const dir = profileDir(slug);
 	mkdirSync(dir, { recursive: true });
 	const env = {
-		BTW_PROFILE: slug,
-		BTW_PROFILE_DIR: dir,
-		BTW_CONVERSATION_ID: conv.id
+		NOLUNE_PROFILE: slug,
+		NOLUNE_PROFILE_DIR: dir,
+		NOLUNE_CONVERSATION_ID: conv.id
 	};
 
 	if (input.background) {
-		// No BTW_VIEW_DIR: nothing collects the pictures of a command nobody waits for.
+		// No NOLUNE_VIEW_DIR: nothing collects the pictures of a command nobody waits for.
 		const outcome = await startBackgroundCommand({
 			conversationId: conv.id,
 			toolUseId: call.id,
@@ -563,12 +566,12 @@ async function runToolCall(
 	}
 
 	st.toolOutput = { id: call.id, text: '' };
-	// `btw view` in this command leaves images here, to be attached to its result.
+	// `nolune view` in this command leaves images here, to be attached to its result.
 	const viewDir = createViewDir(images);
 	try {
 		const result = await runCommand(input, {
 			defaultCwd: dir,
-			env: commandEnv({ ...env, BTW_VIEW_DIR: viewDir }),
+			env: commandEnv({ ...env, NOLUNE_VIEW_DIR: viewDir }),
 			signal,
 			abortReason: () => stoppedText(st),
 			onOutput: (chunk) => {
@@ -584,7 +587,7 @@ async function runToolCall(
 		return toolResult(call.id, result.content, result.isError, attachments);
 	} finally {
 		rmSync(viewDir, { recursive: true, force: true });
-		// The command may have changed the profile (`btw profile avatar`): show it right away.
+		// The command may have changed the profile (`nolune profile avatar`): show it right away.
 		noticeProfileChanges();
 		commandEnded();
 	}
@@ -639,7 +642,7 @@ export function withCurrentContext(conv: Conversation, rows: MessageRow[]): Conv
 	const what = [context !== conv.folderContext && 'folder', soul.text !== conv.soul && 'soul']
 		.filter(Boolean)
 		.join(' and ');
-	console.log(`[btw] ${conv.id.slice(0, 8)} ${what} changed, system prompt built again`);
+	console.log(`[nolune] ${conv.id.slice(0, 8)} ${what} changed, system prompt built again`);
 	return rebuildSystemPrompt(conv, owner, context, soul, lastReply?.seq ?? null);
 }
 
@@ -665,8 +668,8 @@ async function saveReply(
 	const { usage } = reply;
 	console.log(
 		usage
-			? `[btw] ${conversationId.slice(0, 8)} ${conv.model} in=${usage.input} cache_read=${usage.cacheRead} cache_write=${usage.cacheWrite} hit=${Math.floor(cacheHitRate(usage) * 100)}% out=${usage.output} stop=${reply.stopReason}`
-			: `[btw] ${conversationId.slice(0, 8)} ${conv.model} stop=${reply.stopReason}`
+			? `[nolune] ${conversationId.slice(0, 8)} ${conv.model} in=${usage.input} cache_read=${usage.cacheRead} cache_write=${usage.cacheWrite} hit=${Math.floor(cacheHitRate(usage) * 100)}% out=${usage.output} stop=${reply.stopReason}`
+			: `[nolune] ${conversationId.slice(0, 8)} ${conv.model} stop=${reply.stopReason}`
 	);
 	const assistantRow = appendRow({
 		conversationId,
@@ -693,7 +696,7 @@ async function saveReply(
 }
 
 /**
- * One row with the result of every call of the reply before it, in order. Their `btw view`
+ * One row with the result of every call of the reply before it, in order. Their `nolune view`
  * pictures were prepared for the conversation's provider.
  */
 function saveResults(conv: Conversation, results: ToolResultBlock[]): void {
@@ -778,7 +781,7 @@ function planInput(
 }
 
 /**
- * A turn of a chat on a plan, which the plan's agent runs (plans.ts). btw saves each reply and
+ * A turn of a chat on a plan, which the plan's agent runs (plans.ts). nolune saves each reply and
  * runs each command as its own loop would; messages sent meanwhile wait for the next turn. False
  * when the loop should end: stopped, or failed with `st.error`.
  */
@@ -823,7 +826,7 @@ async function planTurn(
 				runTool: (call) =>
 					runToolCall(conv, call, 'tool_use', abort.signal, st, images).catch((err: unknown) => {
 						st.toolOutput = null;
-						console.error(`[btw] ${conversationId.slice(0, 8)} command failed:`, err);
+						console.error(`[nolune] ${conversationId.slice(0, 8)} command failed:`, err);
 						const reason = err instanceof Error ? err.message : String(err);
 						return toolResult(call.id, `Not finished: ${reason}`, true);
 					}),
@@ -833,14 +836,14 @@ async function planTurn(
 		} catch (err) {
 			clearLive(conversationId);
 			if (abort.signal.aborted || isAbortError(err)) {
-				// Waiting messages join the transcript unanswered, as after a stop in btw's own loop.
+				// Waiting messages join the transcript unanswered, as after a stop in nolune's own loop.
 				commitQueued(conversationId);
 				return false;
 			}
 			const problem = planSessionProblem(conv.provider, err);
 			if (problem && !retried) {
 				console.error(
-					`[btw] ${conversationId.slice(0, 8)} ${conv.provider} session ${problem}, trying again`
+					`[nolune] ${conversationId.slice(0, 8)} ${conv.provider} session ${problem}, trying again`
 				);
 				next =
 					problem === 'taken'
@@ -849,7 +852,7 @@ async function planTurn(
 				continue;
 			}
 			st.error = describeApiError(err);
-			console.error(`[btw] ${conversationId.slice(0, 8)} ${conv.provider} turn failed:`, err);
+			console.error(`[nolune] ${conversationId.slice(0, 8)} ${conv.provider} turn failed:`, err);
 			return false;
 		}
 	}
@@ -909,7 +912,7 @@ async function loop(conversationId: string): Promise<void> {
 					return;
 				}
 				st.error = describeApiError(err);
-				console.error(`[btw] ${conversationId.slice(0, 8)} model call failed:`, err);
+				console.error(`[nolune] ${conversationId.slice(0, 8)} model call failed:`, err);
 				return;
 			}
 
@@ -933,7 +936,7 @@ async function loop(conversationId: string): Promise<void> {
 					images
 				).catch((err: unknown) => {
 					st.toolOutput = null;
-					console.error(`[btw] ${conversationId.slice(0, 8)} command failed:`, err);
+					console.error(`[nolune] ${conversationId.slice(0, 8)} command failed:`, err);
 					const reason = err instanceof Error ? err.message : String(err);
 					return toolResult(call.id, `Not finished: ${reason}`, true);
 				});
@@ -956,7 +959,7 @@ async function loop(conversationId: string): Promise<void> {
 			try {
 				listener(conversationId, st.error);
 			} catch (err) {
-				console.error(`[btw] loop-end listener failed for ${conversationId}:`, err);
+				console.error(`[nolune] loop-end listener failed for ${conversationId}:`, err);
 			}
 		}
 	}

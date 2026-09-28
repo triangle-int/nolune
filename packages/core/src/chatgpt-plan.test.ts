@@ -43,7 +43,7 @@ vi.mock('./run-command.ts', async (importOriginal) => ({
 
 /*
  * Chats run the real Codex, the one the @openai/codex package brings for this platform, against
- * a stand-in for OpenAI's Responses API, set up as Codex's model provider in btw's Codex home.
+ * a stand-in for OpenAI's Responses API, set up as Codex's model provider in nolune's Codex home.
  * Nothing reaches OpenAI and no account is used. Signing in with ChatGPT can't be done without
  * OpenAI, so those tests run a stand-in for Codex's app server instead.
  */
@@ -175,8 +175,8 @@ stream_max_retries = 0
 }
 
 beforeEach(() => {
-	// btw keeps Codex in a home of its own, whatever the environment says.
-	vi.stubEnv('CODEX_HOME', join(tmpdir(), 'not-btws-codex-home'));
+	// nolune keeps Codex in a home of its own, whatever the environment says.
+	vi.stubEnv('CODEX_HOME', join(tmpdir(), 'not-nolunes-codex-home'));
 	vi.stubEnv('STANDIN_KEY', 'standin-key');
 	initConfig();
 	updateConfig((c) => {
@@ -211,7 +211,7 @@ function thought(text: string): Item {
 	return { id: `rs_${++ids}`, type: 'reasoning', summary: [{ type: 'summary_text', text }] };
 }
 
-/** A script for Codex's harness that runs btw's run_command, as models on Codex call tools. */
+/** A script for Codex's harness that runs nolune's run_command, as models on Codex call tools. */
 function runs(command: string): Item {
 	return {
 		id: `ctc_${++ids}`,
@@ -219,7 +219,7 @@ function runs(command: string): Item {
 		status: 'completed',
 		call_id: `call_${ids}`,
 		name: 'exec',
-		input: `const r = await tools.btw__run_command(${JSON.stringify({ summary: 'Listing the files', icon: 'folder-open', command })});\ntext(r);`
+		input: `const r = await tools.nolune__run_command(${JSON.stringify({ summary: 'Listing the files', icon: 'folder-open', command })});\ntext(r);`
 	};
 }
 
@@ -265,7 +265,7 @@ function planChat() {
 	return { user, profile, chat };
 }
 
-/** A picture kept in btw's media store, as a message refers to it. */
+/** A picture kept in nolune's media store, as a message refers to it. */
 function kept(data: Buffer, mime: string) {
 	const sha256 = createHash('sha256').update(data).digest('hex');
 	return { type: 'media', sha256, mime, bytes: data.length };
@@ -282,7 +282,7 @@ const DOT =
 	'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 
 describe.skipIf(!codex)('chats on the ChatGPT plan', { timeout: 60_000 }, () => {
-	it('runs a turn through Codex, and saves it as btw does', async () => {
+	it('runs a turn through Codex, and saves it as nolune does', async () => {
 		const { user, chat } = planChat();
 		scripted([thought('Listing them.'), runs('ls')], [said('One file: a.txt.')]);
 		vi.mocked(runCommand).mockResolvedValueOnce({
@@ -345,15 +345,15 @@ describe.skipIf(!codex)('chats on the ChatGPT plan', { timeout: 60_000 }, () => 
 		});
 
 		const [first, second] = chatCalls();
-		// Codex's own model provider and key, from the Codex home btw keeps it in.
+		// Codex's own model provider and key, from the Codex home nolune keeps it in.
 		expect(first.headers.authorization).toBe('Bearer standin-key');
-		expect(first.headers.originator).toBe('btw');
+		expect(first.headers.originator).toBe('nolune');
 		expect(first.json?.model).toBe('gpt-6-astra');
 		expect(first.json?.reasoning).toMatchObject({ effort: 'medium', summary: 'auto' });
-		// btw's prompt, and btw's tool inside Codex's harness; none of Codex's that act on their own.
+		// nolune's prompt, and nolune's tool inside Codex's harness; none of Codex's that act on their own.
 		expect(texts(first, 'developer')).toContain(chat.systemPrompt);
 		const tools = JSON.stringify(first.json);
-		expect(tools).toContain('btw__run_command');
+		expect(tools).toContain('nolune__run_command');
 		for (const tool of ['shell', 'apply_patch', 'web_search', 'view_image', 'spawn_agent']) {
 			expect(tools).not.toContain(`"name":"${tool}"`);
 			expect(tools).not.toContain(`### \`${tool}\``);
@@ -368,7 +368,7 @@ describe.skipIf(!codex)('chats on the ChatGPT plan', { timeout: 60_000 }, () => 
 		const session = getConversation(chat.id)?.providerSession;
 		expect(session).toEqual({ id: expect.any(String), sentSeq: 1, provider: 'chatgpt-plan' });
 		expect(session?.id).not.toBe(chat.id);
-		expect(existsSync(join(tmpdir(), 'not-btws-codex-home'))).toBe(false);
+		expect(existsSync(join(tmpdir(), 'not-nolunes-codex-home'))).toBe(false);
 	});
 
 	it("resumes the chat's thread with only the new messages", async () => {
@@ -528,14 +528,14 @@ describe.skipIf(!codex)('chats on the ChatGPT plan', { timeout: 60_000 }, () => 
 		});
 	});
 
-	it('shows the model the pictures a command opened with `btw view`', async () => {
+	it('shows the model the pictures a command opened with `nolune view`', async () => {
 		const { user, chat } = planChat();
-		scripted([runs('btw view dot.png')], [said('A dot.')]);
+		scripted([runs('nolune view dot.png')], [said('A dot.')]);
 		vi.mocked(runCommand).mockImplementationOnce(async (_input, opts) => {
-			// What `btw view dot.png` does inside the command.
-			const path = join(mkdtempSync(join(tmpdir(), 'btw-dot-')), 'dot.png');
+			// What `nolune view dot.png` does inside the command.
+			const path = join(mkdtempSync(join(tmpdir(), 'nolune-dot-')), 'dot.png');
 			writeFileSync(path, Buffer.from(DOT, 'base64'));
-			await viewImage(path, opts.env.BTW_VIEW_DIR ?? '');
+			await viewImage(path, opts.env.NOLUNE_VIEW_DIR ?? '');
 			return { content: 'Viewing dot.png\n[exit code 0]', isError: false, exitCode: 0 };
 		});
 		const ended = loopEnd(chat.id);
@@ -601,7 +601,7 @@ describe.skipIf(!codex)('chats on the ChatGPT plan', { timeout: 60_000 }, () => 
 
 	it("says so when a preset is added while Codex isn't signed in with ChatGPT", async () => {
 		await expect(addPreset({ provider: 'chatgpt-plan', model: 'gpt-6-astra' })).rejects.toThrow(
-			/Codex isn't signed in with ChatGPT.*btw chatgpt-plan setup/
+			/Codex isn't signed in with ChatGPT.*nolune chatgpt-plan setup/
 		);
 		const status = await chatGptPlanStatus();
 		expect(status).toMatchObject({ path: codex, installed: true, account: null, signedIn: null });
@@ -639,7 +639,7 @@ describe('signing in with ChatGPT through Codex', { timeout: 20_000 }, () => {
 				params: { type: 'chatgptDeviceCode' }
 			})
 		);
-		// Codex runs with btw's settings: its own tools off.
+		// Codex runs with nolune's settings: its own tools off.
 		const [start] = codexRequests() as unknown as { args: string[] }[];
 		expect(start.args[0]).toBe('app-server');
 		expect(start.args).toContain('features.shell_tool=false');
@@ -731,7 +731,7 @@ describe('the ChatGPT plan without Codex', () => {
 		updateConfig((c) => {
 			c.codexPath = undefined;
 		});
-		const empty = mkdtempSync(join(tmpdir(), 'btw-no-codex-'));
+		const empty = mkdtempSync(join(tmpdir(), 'nolune-no-codex-'));
 		vi.stubEnv('PATH', empty);
 		vi.stubEnv('HOME', empty);
 
@@ -739,13 +739,13 @@ describe('the ChatGPT plan without Codex', () => {
 		expect(status).toMatchObject({ path: null, installed: false, account: null });
 		expect(status.problem).toMatch(/^Codex isn't installed on this computer/);
 		expect(status.problem).toContain('npm install -g @openai/codex');
-		expect(status.problem).toContain('btw chatgpt-plan setup');
+		expect(status.problem).toContain('nolune chatgpt-plan setup');
 		await expect(addPreset({ provider: 'chatgpt-plan', model: 'gpt-6-astra' })).rejects.toThrow(
 			/Codex isn't installed/
 		);
 	});
 
-	it('says where btw was told it is', async () => {
+	it('says where nolune was told it is', async () => {
 		const missing = join(tmpdir(), 'no-such-codex');
 		updateConfig((c) => {
 			c.codexPath = missing;

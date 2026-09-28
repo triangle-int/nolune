@@ -9,9 +9,9 @@ import * as openrouter from './openrouter.ts';
 import { PlanError, isPlan, isPlanStopped, type Plan, type PlanTurn } from './plans.ts';
 
 /*
- * A model call as the rest of btw sees it, whichever provider runs it. Each provider's module
+ * A model call as the rest of nolune sees it, whichever provider runs it. Each provider's module
  * speaks its own API; this one picks the module for a conversation's provider and turns what it
- * returns into the same shape. Requests are built from btw's own format (format.ts) by each
+ * returns into the same shape. Requests are built from nolune's own format (format.ts) by each
  * provider's module. The reply's `content` is still the provider's own, and is stored and sent
  * back exactly as it came.
  *
@@ -98,7 +98,7 @@ export async function streamTurn(opts: {
 	tools: Anthropic.Tool[];
 	cacheTtl: CacheTtl;
 	cacheKey: string;
-	/** The conversation in btw's format; each provider's module turns it into its request. */
+	/** The conversation in nolune's format; each provider's module turns it into its request. */
 	messages: Message[];
 	signal: AbortSignal;
 	onEvent: (event: StreamEvent) => void;

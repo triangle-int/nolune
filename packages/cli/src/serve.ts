@@ -1,14 +1,14 @@
 import { chmodSync, mkdirSync, rmSync } from 'node:fs';
 import { connect, createServer, type Server, type Socket } from 'node:net';
 import { dirname, isAbsolute } from 'node:path';
-import { paths } from '@btw/core';
+import { paths } from '@nolune/core';
 import { createIo, type Io } from './io.ts';
 import { LOCAL_ONLY, PROTOCOL, receive, send, type ClientMessage } from './protocol.ts';
 import { runCli } from './run.ts';
 
 /*
- * The gateway's side of protocol.ts: it runs `btw` commands for the CLI, on the btw it already
- * has loaded, so a command costs the client only Node's startup rather than loading all of btw.
+ * The gateway's side of protocol.ts: it runs `nolune` commands for the CLI, on the nolune it already
+ * has loaded, so a command costs the client only Node's startup rather than loading all of nolune.
  * Commands see the client's arguments, environment, folder and stdin through their io, never the
  * gateway's own (see io.ts).
  */
@@ -73,7 +73,7 @@ function handle(socket: Socket, run: Run): void {
 		});
 		run(message.argv, io)
 			.catch((err: unknown) => {
-				console.error('[btw] a CLI command failed in the gateway:', err);
+				console.error('[nolune] a CLI command failed in the gateway:', err);
 				return 1;
 			})
 			.then((code) => {
@@ -83,7 +83,7 @@ function handle(socket: Socket, run: Run): void {
 	});
 }
 
-/** Whether something already answers on the socket: another gateway on the same btw home. */
+/** Whether something already answers on the socket: another gateway on the same nolune home. */
 function answers(socketPath: string): Promise<boolean> {
 	return new Promise((resolve) => {
 		const probe = connect(socketPath);
@@ -96,13 +96,13 @@ function answers(socketPath: string): Promise<boolean> {
 }
 
 /**
- * Serves `btw` commands on the socket, calling `run()` for the code to run each with (the latest,
+ * Serves `nolune` commands on the socket, calling `run()` for the code to run each with (the latest,
  * after `pnpm dev` reloads it). Resolves with the server, or null when another gateway already
- * serves this btw home or the socket can't be made; the CLI then runs commands itself.
+ * serves this nolune home or the socket can't be made; the CLI then runs commands itself.
  */
 export async function serveCommands(socketPath: string, run: () => Run): Promise<Server | null> {
 	if (await answers(socketPath)) {
-		console.log(`[btw] another gateway already runs btw commands on ${socketPath}`);
+		console.log(`[nolune] another gateway already runs nolune commands on ${socketPath}`);
 		return null;
 	}
 	const server = createServer((socket) => handle(socket, run()));
@@ -123,30 +123,30 @@ export async function serveCommands(socketPath: string, run: () => Run): Promise
 		chmodSync(socketPath, 0o600);
 	} catch (err) {
 		console.error(
-			`[btw] couldn't run btw commands on ${socketPath}; the CLI runs them itself:`,
+			`[nolune] couldn't run nolune commands on ${socketPath}; the CLI runs them itself:`,
 			err
 		);
 		server.close();
 		return null;
 	}
-	server.on('error', (err) => console.error('[btw] the btw command socket failed:', err));
+	server.on('error', (err) => console.error('[nolune] the nolune command socket failed:', err));
 	// It never keeps its process running by itself: the gateway exits once its HTTP server closes.
 	server.unref();
 	return server;
 }
 
-const holder = globalThis as unknown as { __btwCommands?: { run: Run } };
+const holder = globalThis as unknown as { __noluneCommands?: { run: Run } };
 
 /**
  * The gateway's own command socket (paths.cliSocket), once per process. When `pnpm dev` reloads
  * this module, the running server keeps going with the new code.
  */
 export function serveGatewayCommands(): void {
-	if (holder.__btwCommands) {
-		holder.__btwCommands.run = runCli;
+	if (holder.__noluneCommands) {
+		holder.__noluneCommands.run = runCli;
 		return;
 	}
-	const state = (holder.__btwCommands = { run: runCli });
+	const state = (holder.__noluneCommands = { run: runCli });
 	void serveCommands(paths.cliSocket, () => state.run).then((server) => {
 		if (!server) return;
 		const connections = new Set<Socket>();
@@ -155,7 +155,7 @@ export function serveGatewayCommands(): void {
 			socket.on('close', () => connections.delete(socket));
 		});
 		// adapter-node's graceful shutdown, once the HTTP server has closed: commands still running
-		// (a `btw agent watch` waits for as long as its subagent works) are stopped, so they don't
+		// (a `nolune agent watch` waits for as long as its subagent works) are stopped, so they don't
 		// keep the gateway alive, and their clients say the gateway stopped.
 		process.once('sveltekit:shutdown', () => {
 			server.close();

@@ -20,7 +20,7 @@ import {
 	webhookUrl,
 	type RunStatus,
 	type Trigger
-} from '@btw/core';
+} from '@nolune/core';
 import { translations, type I18n, type Messages } from '$lib/i18n';
 import { requireProfile } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';

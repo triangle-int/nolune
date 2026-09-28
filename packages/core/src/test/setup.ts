@@ -4,20 +4,20 @@ import { join } from 'node:path';
 import { afterAll, beforeEach } from 'vitest';
 
 /**
- * Runs before every test file (`test.setupFiles` in vite.config.ts). Each file gets its own btw
+ * Runs before every test file (`test.setupFiles` in vite.config.ts). Each file gets its own nolune
  * home in a temp folder, emptied before every test, so a test starts with no database and no
- * profile folders, and nothing touches ~/.btw-agent. paths.ts reads BTW_HOME when it's first
+ * profile folders, and nothing touches ~/.nolune. paths.ts reads NOLUNE_HOME when it's first
  * imported, which is after this.
  */
-const home = mkdtempSync(join(tmpdir(), 'btw-test-'));
-process.env.BTW_HOME = home;
-process.env.BTW_GLOBAL_SKILLS = join(home, 'global-skills');
+const home = mkdtempSync(join(tmpdir(), 'nolune-test-'));
+process.env.NOLUNE_HOME = home;
+process.env.NOLUNE_GLOBAL_SKILLS = join(home, 'global-skills');
 
 /** getDb() opens the database again, migrating a fresh file, on its next call. */
 function closeDb(): void {
-	const holder = globalThis as unknown as { __btwDb?: { $client: { close(): void } } };
-	holder.__btwDb?.$client.close();
-	delete holder.__btwDb;
+	const holder = globalThis as unknown as { __noluneDb?: { $client: { close(): void } } };
+	holder.__noluneDb?.$client.close();
+	delete holder.__noluneDb;
 }
 
 beforeEach(() => {

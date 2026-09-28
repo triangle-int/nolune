@@ -280,7 +280,7 @@ describe('runs', () => {
 			action: 'agent',
 			prompt: 'Mail from school'
 		});
-		expect(queueWake({ profileId: profile.id, text: 'hi' }).title).toBe('btw');
+		expect(queueWake({ profileId: profile.id, text: 'hi' }).title).toBe('nolune');
 		expect(() => queueWake({ profileId: profile.id, text: ' ' })).toThrow(
 			'Say what the agent should do.'
 		);
@@ -378,6 +378,6 @@ describe('parseRunAt', () => {
 });
 
 it('puts webhook URLs under the public origin', () => {
-	writeConfig({ authSecret: 'secret', origin: 'https://btw.example.com/' });
-	expect(webhookUrl('abc')).toBe('https://btw.example.com/api/hooks/abc');
+	writeConfig({ authSecret: 'secret', origin: 'https://nolune.example.com/' });
+	expect(webhookUrl('abc')).toBe('https://nolune.example.com/api/hooks/abc');
 });

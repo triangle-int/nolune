@@ -11,24 +11,24 @@ import {
 	renameMemoryNote,
 	replaceInMemory,
 	writeMemoryNote
-} from '@btw/core';
+} from '@nolune/core';
 import type { Io } from './io.ts';
 import { profileFor } from './profile.ts';
 
 export const MEMORY_HELP = `Memory (short notes per topic; the agent reads the ones it needs)
-  btw memory [list] [--profile SLUG]         the notes and how many facts each holds
-  btw memory show <topic>...                 print notes (a topic is family, people/anna, …)
-  btw memory add <topic> <fact>              add one fact; the note is created if needed
-  btw memory replace <topic> <old> <new>     change text that appears once in the note
-  btw memory forget <topic> <text>           remove the one line that contains <text>
-  btw memory write <topic> [text]            replace the whole note (the text, or stdin)
-  btw memory rm <topic>
-  btw memory mv <topic> <new-topic>
+  nolune memory [list] [--profile SLUG]      the notes and how many facts each holds
+  nolune memory show <topic>...              print notes (a topic is family, people/anna, …)
+  nolune memory add <topic> <fact>           add one fact; the note is created if needed
+  nolune memory replace <topic> <old> <new>  change text that appears once in the note
+  nolune memory forget <topic> <text>        remove the one line that contains <text>
+  nolune memory write <topic> [text]         replace the whole note (the text, or stdin)
+  nolune memory rm <topic>
+  nolune memory mv <topic> <new-topic>
   The note core is pinned: every new chat starts with it, so it holds at most ${MAX_PINNED_CHARS} characters.`;
 
 /**
  * `--profile` is picked out by hand: facts are free text and may start with a dash, which an
- * option parser would take for an option. `btw soul` does the same.
+ * option parser would take for an option. `nolune soul` does the same.
  */
 export function splitProfile(args: string[]): { profile: string | undefined; words: string[] } {
 	let profile: string | undefined;
@@ -47,7 +47,7 @@ export function splitProfile(args: string[]): { profile: string | undefined; wor
 }
 
 function need(words: string[], count: number, usage: string): void {
-	if (words.length < count) throw new Error(`usage: btw memory ${usage}`);
+	if (words.length < count) throw new Error(`usage: nolune memory ${usage}`);
 }
 
 function plural(n: number, one: string, many: string): string {
@@ -68,7 +68,9 @@ export async function memoryCommand(io: Io, args: string[]): Promise<void> {
 		case 'list': {
 			const files = listMemoryFiles(slug);
 			if (!files.length) {
-				io.log(`No notes yet for ${profile.name}. Start one with: btw memory add <topic> "<fact>"`);
+				io.log(
+					`No notes yet for ${profile.name}. Start one with: nolune memory add <topic> "<fact>"`
+				);
 				return;
 			}
 			io.log(`Notes for ${profile.name} (${profileMemoryDir(slug)}):`);
@@ -114,7 +116,9 @@ export async function memoryCommand(io: Io, args: string[]): Promise<void> {
 			need(rest, 1, 'write <topic> [text]   (without text, the note is read from stdin)');
 			const [topic, ...text] = rest;
 			if (!text.length && io.stdinIsTTY) {
-				throw new Error('give the note as text, or pipe it in: btw memory write <topic> < note.md');
+				throw new Error(
+					'give the note as text, or pipe it in: nolune memory write <topic> < note.md'
+				);
 			}
 			const { path, created } = writeMemoryNote(
 				slug,
@@ -136,6 +140,6 @@ export async function memoryCommand(io: Io, args: string[]): Promise<void> {
 			return;
 		}
 		default:
-			throw new Error(`unknown memory command "${action}". See \`btw memory help\`.`);
+			throw new Error(`unknown memory command "${action}". See \`nolune memory help\`.`);
 	}
 }

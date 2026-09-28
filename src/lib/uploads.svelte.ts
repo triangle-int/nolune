@@ -2,7 +2,7 @@ import { SvelteMap } from 'svelte/reactivity';
 import { errorMessage } from './http';
 import type { Messages } from './i18n';
 
-/** The server's limits (MAX_ATTACHMENTS and MAX_MEDIA_BYTES in @btw/core), checked early. */
+/** The server's limits (MAX_ATTACHMENTS and MAX_MEDIA_BYTES in @nolune/core), checked early. */
 export const MAX_FILES = 10;
 export const MAX_FILE_BYTES = 100 * 1024 * 1024;
 

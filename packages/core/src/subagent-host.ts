@@ -22,14 +22,14 @@ import {
 } from './subagents.ts';
 
 /**
- * Gateway only: runs the subagents `btw agent run` asks for (subagents.ts). A pending subagent has
+ * Gateway only: runs the subagents `nolune agent run` asks for (subagents.ts). A pending subagent has
  * messages it hasn't started on; the gateway starts its conversation through the normal runner,
- * writes its log as it works, and when its loop ends records how, which `btw agent watch` waits for.
+ * writes its log as it works, and when its loop ends records how, which `nolune agent watch` waits for.
  */
 
-const holder = globalThis as unknown as { __btwSubagentHost?: { logging: Set<string> } };
+const holder = globalThis as unknown as { __noluneSubagentHost?: { logging: Set<string> } };
 
-/** Starts pending subagents and stops the ones `btw agent stop` asked to. Called every tick. */
+/** Starts pending subagents and stops the ones `nolune agent stop` asked to. Called every tick. */
 export function processSubagents(): void {
 	for (const s of subagentsWithStatus('pending')) {
 		setSubagentStatus(s.id, 'running');
@@ -39,9 +39,9 @@ export function processSubagents(): void {
 		refreshBackground(s.parentId);
 	}
 	for (const s of subagentsWithStatus('stopping')) {
-		stopBackgroundCommands(s.conversationId, 'btw');
+		stopBackgroundCommands(s.conversationId, 'nolune');
 		// A running one is marked stopped when its loop ends.
-		if (isRunning(s.conversationId)) stop(s.conversationId, 'btw');
+		if (isRunning(s.conversationId)) stop(s.conversationId, 'nolune');
 		else markStopped(s);
 	}
 }
@@ -161,7 +161,7 @@ export function logEntry(name: string, message: DisplayMessage): string {
 
 /** Appends every row the subagent's conversation commits to its log, once per gateway start. */
 function writeLog(s: Subagent): void {
-	const state = (holder.__btwSubagentHost ??= { logging: new Set() });
+	const state = (holder.__noluneSubagentHost ??= { logging: new Set() });
 	if (state.logging.has(s.conversationId)) return;
 	state.logging.add(s.conversationId);
 	subscribe(s.conversationId, (event) => {

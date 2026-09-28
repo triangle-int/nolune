@@ -1,9 +1,9 @@
-import { isMember, onNotificationsChanged, onProfileChanged } from '@btw/core';
+import { isMember, onNotificationsChanged, onProfileChanged } from '@nolune/core';
 import { requireUser } from '$lib/server/access';
 import type { RequestHandler } from './$types';
 
 /**
- * Server-sent events for what other people and btw change under a signed-in page: a ping when a
+ * Server-sent events for what other people and nolune change under a signed-in page: a ping when a
  * profile the user belongs to gets a notification (`notifications`), or is renamed or given another
  * avatar (`profiles`). The page reloads the data that depends on it. One stream for both, as each
  * open tab also keeps its chat's stream and browsers allow few connections per site.

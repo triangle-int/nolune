@@ -5,7 +5,7 @@
 	import { resolve } from '$app/paths';
 	import type { SubmitFunction } from '@sveltejs/kit';
 	import { Select as SelectPrimitive } from 'bits-ui';
-	import { articleBefore } from '@btw/core/articles';
+	import { articleBefore } from '@nolune/core/articles';
 	import CameraIcon from '@lucide/svelte/icons/camera';
 	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';

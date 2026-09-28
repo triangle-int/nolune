@@ -348,7 +348,7 @@ describe('switching models', () => {
 		source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' }
 	};
 	const note =
-		"[Picture not shown: it went to the model this chat used before, and this model can't open that copy. The line before this says where its file is; `btw view` shows it again.]";
+		"[Picture not shown: it went to the model this chat used before, and this model can't open that copy. The line before this says where its file is; `nolune view` shows it again.]";
 
 	/** A reply the chat's current model wrote. */
 	function answer(chat: Conversation, content: unknown[]) {
@@ -386,7 +386,7 @@ describe('switching models', () => {
 		});
 		commitQueuedRows(chat.id);
 		answer(chat, [thinking, { type: 'text', text: 'Looking.' }, listCall]);
-		// As results were stored before btw's own format.
+		// As results were stored before nolune's own format.
 		appendRow({
 			conversationId: chat.id,
 			role: 'user',
@@ -496,7 +496,7 @@ describe('switching models', () => {
 	it("knows which providers hold files another can't open", () => {
 		const { chat } = claudeChat();
 		expect(heldFileProviders(chat.id)).toEqual(['anthropic']);
-		// Kept by btw, a picture goes to any provider.
+		// Kept by nolune, a picture goes to any provider.
 		const { user, profile } = makeFamily('Max');
 		const newer = createConversation({
 			profile,

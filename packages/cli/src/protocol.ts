@@ -1,7 +1,7 @@
 import type { Socket } from 'node:net';
 
 /*
- * How `btw` hands a command to the gateway, where all of btw is already loaded, over a Unix
+ * How `nolune` hands a command to the gateway, where all of nolune is already loaded, over a Unix
  * socket only this user can open (paths.cliSocket). Messages are JSON, one per line. The client
  * sends `run`; the gateway streams the command's output back and ends with `exit`, or answers
  * `decline`, and the client then runs the command itself. Stdin goes over only when the command
@@ -67,7 +67,7 @@ export function receive<T>(socket: Socket, onMessage: (message: T) => void): voi
 				onMessage(message as T);
 			} catch (err) {
 				// Thrown from a socket's event handler, it would end the whole process (the gateway).
-				console.error('[btw] a malformed message on the btw command socket:', err);
+				console.error('[nolune] a malformed message on the nolune command socket:', err);
 				socket.destroy();
 				return;
 			}

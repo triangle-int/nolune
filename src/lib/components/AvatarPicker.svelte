@@ -2,7 +2,7 @@
 	import { backOut } from 'svelte/easing';
 	import { prefersReducedMotion } from 'svelte/motion';
 	import { scale } from 'svelte/transition';
-	import { AVATARS, type Avatar } from '@btw/core/avatars';
+	import { AVATARS, type Avatar } from '@nolune/core/avatars';
 	import AssistantAvatar from './AssistantAvatar.svelte';
 	import { getI18n } from '$lib/i18n';
 	import { cn } from '$lib/utils';

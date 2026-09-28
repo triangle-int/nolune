@@ -37,7 +37,7 @@ import { paths } from './paths.ts';
 /**
  * Pictures and files in the agent's replies. When a reply is saved, every picture
  * (`![alt](src)`) and file link (`[label](src)`) it contains is copied byte for byte into
- * `~/.btw-agent/media/<sha256>`, so the chat keeps showing it after the original moves or
+ * `~/.nolune/media/<sha256>`, so the chat keeps showing it after the original moves or
  * disappears. The web UI only ever loads these copies, through ids checked against the
  * conversation.
  */
@@ -212,7 +212,7 @@ function collectMedia(value: unknown, hashes: Set<string>): void {
 }
 
 /**
- * The stored files messages send by reference: pictures and PDFs in btw's format (format.ts),
+ * The stored files messages send by reference: pictures and PDFs in nolune's format (format.ts),
  * which each provider gets a copy of when a request is made.
  */
 export function referencedMedia(): Set<string> {
@@ -251,7 +251,7 @@ function findLocal(href: string, baseDir: string): string | null {
 	return candidates.find((file) => existsSync(file)) ?? null;
 }
 
-/** btw's own secrets never leave through a chat, whatever a reply links to. */
+/** nolune's own secrets never leave through a chat, whatever a reply links to. */
 function isPrivate(realFile: string): boolean {
 	const db = paths.db;
 	return [paths.config, db, `${db}-wal`, `${db}-shm`, `${db}-journal`].some((file) => {
@@ -283,7 +283,7 @@ function describeError(err: unknown, remote: boolean): string {
 	const message = err instanceof Error ? err.message : String(err);
 	if (remote) return `Couldn't download it (${e?.code ?? message})`;
 	if (e?.code === 'EACCES' || e?.code === 'EPERM') {
-		return 'btw is not allowed to read this file (on a Mac, check Full Disk Access)';
+		return 'nolune is not allowed to read this file (on a Mac, check Full Disk Access)';
 	}
 	return message;
 }
@@ -403,7 +403,7 @@ async function download(href: string, signal: AbortSignal): Promise<IncomingMess
 					headers: {
 						accept: 'image/*,*/*;q=0.5',
 						'accept-encoding': 'identity',
-						'user-agent': 'btw-agent'
+						'user-agent': 'nolune'
 					},
 					lookup: publicLookup,
 					// A fresh connection, never one another request left open.
@@ -438,7 +438,7 @@ async function convertToJpeg(sha256: string, mime: string): Promise<string | nul
 		});
 		return (await store(createReadStream(output))).sha256;
 	} catch (err) {
-		console.error(`[btw] couldn't convert a ${mime} picture to JPEG:`, err);
+		console.error(`[nolune] couldn't convert a ${mime} picture to JPEG:`, err);
 		return null;
 	} finally {
 		rmSync(input, { force: true });
@@ -477,7 +477,7 @@ async function copyOne(href: string, baseDir: string, signal: AbortSignal): Prom
 			if (info.isDirectory()) return problem('unsupported', 'This is a folder, not a file');
 			if (!info.isFile()) return problem('unsupported', 'This is not a regular file');
 			if (isPrivate(real)) {
-				return problem('blocked', "btw's own settings and database are never shared");
+				return problem('blocked', "nolune's own settings and database are never shared");
 			}
 			if (info.size > MAX_MEDIA_BYTES) return tooLarge();
 			stored = await store(createReadStream(real), signal);
@@ -498,7 +498,7 @@ async function copyOne(href: string, baseDir: string, signal: AbortSignal): Prom
 		if (err instanceof LocalAddressError) {
 			return problem(
 				'blocked',
-				"btw doesn't download pictures from this computer or the local network"
+				"nolune doesn't download pictures from this computer or the local network"
 			);
 		}
 		return problem('failed', describeError(err, remote));
@@ -555,7 +555,7 @@ export async function copyReplyMedia(
 	try {
 		refs = [...new Set(texts.flatMap((text) => mediaRefs(text)))];
 	} catch (err) {
-		console.error('[btw] reading the links in a reply failed:', err);
+		console.error('[nolune] reading the links in a reply failed:', err);
 		return [];
 	}
 	const wasFound = linkFinder(earlierText);
@@ -575,7 +575,7 @@ export async function copyReplyMedia(
 					href,
 					name,
 					'blocked',
-					'Web pictures are shown only when btw found the link on a page or in a message'
+					'Web pictures are shown only when nolune found the link on a page or in a message'
 				);
 			}
 			return copyOne(href, baseDir, signal);

@@ -60,7 +60,7 @@ describe('the core note', () => {
 		expect(buildSystemPrompt(profile)).toContain('the rest was cut off here');
 	});
 
-	it('can be started on the Memory page, unless btw started it first', () => {
+	it('can be started on the Memory page, unless nolune started it first', () => {
 		const { profile } = makeFamily();
 		writeMemoryFile(profile.slug, 'core.md', '- We speak Russian at home\n', 0);
 		expect(readMemoryNote(profile.slug, 'core').text).toBe('- We speak Russian at home\n');

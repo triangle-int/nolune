@@ -46,7 +46,7 @@ describe('renaming a chat', () => {
 		expect(getConversation(older.id)?.title).toBe('Trip plans');
 	});
 
-	it("keeps the new name when btw's own title for the chat arrives later", () => {
+	it("keeps the new name when nolune's own title for the chat arrives later", () => {
 		const { user, profile } = makeFamily();
 		const chat = createConversation({ profile, presetId: makePreset().id, userId: user.id });
 		// The first message stands in as the title while the model thinks of one.

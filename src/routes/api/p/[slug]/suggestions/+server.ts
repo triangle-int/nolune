@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import { refreshSuggestions } from '@btw/core';
+import { refreshSuggestions } from '@nolune/core';
 import { translations } from '$lib/i18n';
 import { requireProfile } from '$lib/server/access';
 import { withIcons } from '$lib/server/suggestions';

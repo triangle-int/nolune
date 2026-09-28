@@ -29,12 +29,12 @@ export async function createFolder(slug: string, name: string): Promise<FolderIt
 	const created = (await post(`/api/p/${encodeURIComponent(slug)}/folders`, {
 		name
 	})) as FolderItem;
-	await invalidate('btw:conversations');
+	await invalidate('nolune:conversations');
 	return created;
 }
 
 /** Moves a chat into a folder, or out of any with `null`. */
 export async function moveChat(conversationId: string, folderId: string | null): Promise<void> {
 	await post(`/api/c/${conversationId}/folder`, { folderId });
-	await invalidate('btw:conversations');
+	await invalidate('nolune:conversations');
 }

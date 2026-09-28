@@ -4,7 +4,7 @@
 </script>
 
 <script lang="ts">
-	import { GLYPHS, eyePath, type Avatar, type Shape } from '@btw/core/avatars';
+	import { GLYPHS, eyePath, type Avatar, type Shape } from '@nolune/core/avatars';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { cn } from '$lib/utils';
 

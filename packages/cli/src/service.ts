@@ -3,10 +3,10 @@ import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { cliCommand, paths } from '@btw/core';
+import { cliCommand, paths } from '@nolune/core';
 
 /** macOS LaunchAgent: runs as the logged-in user, so commands get their home folder and files. */
-const LABEL = 'dev.btw-agent.gateway';
+const LABEL = 'dev.nolune.gateway';
 const plistPath = join(homedir(), 'Library', 'LaunchAgents', `${LABEL}.plist`);
 export const logFile = join(paths.logs, 'gateway.log');
 
@@ -17,7 +17,7 @@ function target(): string {
 function requireMac(): void {
 	if (process.platform !== 'darwin') {
 		throw new Error(
-			'`btw service` manages a macOS LaunchAgent. On other systems run `btw start` under your own process manager (e.g. a systemd user unit).'
+			'`nolune service` manages a macOS LaunchAgent. On other systems run `nolune start` under your own process manager (e.g. a systemd user unit).'
 		);
 	}
 }
@@ -46,7 +46,7 @@ ${args}
 	</array>
 	<key>EnvironmentVariables</key>
 	<dict>
-		<key>BTW_HOME</key>
+		<key>NOLUNE_HOME</key>
 		<string>${escapeXml(paths.home)}</string>
 	</dict>
 	<key>WorkingDirectory</key>
@@ -91,7 +91,7 @@ export function restartService(): void {
 	requireMac();
 	const result = launchctl('kickstart', '-k', target());
 	if (result.status !== 0) {
-		throw new Error('The service is not loaded. Run `btw service install` first.');
+		throw new Error('The service is not loaded. Run `nolune service install` first.');
 	}
 }
 

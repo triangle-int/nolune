@@ -9,8 +9,10 @@
 			Number(attrs.match(new RegExp(`${name}="([\\d.]+)"`))?.[1] ?? 1);
 		return { cx: value('cx'), cy: value('cy'), r: value('r'), opacity: value('fill-opacity') };
 	});
-	/** The logo's width in its own units. */
-	export const WIDTH = 1393;
+	/** The logo's width and height in its own units, from its viewBox. */
+	export const [WIDTH, HEIGHT] = (
+		logo.match(/viewBox="0 0 ([\d.]+) ([\d.]+)"/)?.slice(1) ?? []
+	).map(Number);
 </script>
 
 <script lang="ts">
@@ -28,14 +30,19 @@
 	const id = $props.id();
 </script>
 
-<div class={cn('relative aspect-[1393/343]', className)} role="img" aria-label="btw">
+<div
+	class={cn('relative', className)}
+	style:aspect-ratio="{WIDTH} / {HEIGHT}"
+	role="img"
+	aria-label="nolune"
+>
 	<div bind:this={letters} class="absolute inset-0">
-		<svg viewBox="0 0 1393 343" class="size-full" fill="currentColor" aria-hidden="true">
+		<svg viewBox="0 0 {WIDTH} {HEIGHT}" class="size-full" fill="currentColor" aria-hidden="true">
 			<path d={LETTERS} />
 		</svg>
 	</div>
 	<svg
-		viewBox="0 0 1393 343"
+		viewBox="0 0 {WIDTH} {HEIGHT}"
 		class="absolute inset-0 size-full overflow-visible"
 		fill="currentColor"
 		aria-hidden="true"

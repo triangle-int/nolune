@@ -1,7 +1,7 @@
 import { Readable } from 'node:stream';
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import { error, json } from '@sveltejs/kit';
-import { MAX_MEDIA_BYTES, TooLargeError, createUpload } from '@btw/core';
+import { MAX_MEDIA_BYTES, TooLargeError, createUpload } from '@nolune/core';
 import { translations } from '$lib/i18n';
 import { requireProfile } from '$lib/server/access';
 import type { RequestHandler } from './$types';

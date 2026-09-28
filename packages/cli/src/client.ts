@@ -9,7 +9,7 @@ import {
 } from './protocol.ts';
 
 /*
- * The CLI's side of protocol.ts. It imports nothing of btw's, so asking the gateway costs only
+ * The CLI's side of protocol.ts. It imports nothing of nolune's, so asking the gateway costs only
  * Node's own startup.
  */
 
@@ -63,7 +63,7 @@ export function runInGateway(
 		});
 		socket.on('close', () => {
 			if (!connected || result !== undefined) return;
-			opts.stdio.stderr('btw: the gateway stopped before the command finished.\n');
+			opts.stdio.stderr('nolune: the gateway stopped before the command finished.\n');
 			finish(1);
 		});
 		receive<GatewayMessage>(socket, (message) => {

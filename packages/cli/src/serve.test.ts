@@ -4,7 +4,7 @@ import { connect, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createProfile, initConfig, readMemoryNote } from '@btw/core';
+import { createProfile, initConfig, readMemoryNote } from '@nolune/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeUser } from '../../core/src/test/fixtures.ts';
 import { runInGateway, type Stdio } from './client.ts';
@@ -14,7 +14,7 @@ import { runCli } from './run.ts';
 import { serveCommands } from './serve.ts';
 
 /*
- * The gateway running `btw` commands for the CLI over its socket: what goes through, what stays
+ * The gateway running `nolune` commands for the CLI over its socket: what goes through, what stays
  * local, and what happens when either side goes away.
  */
 
@@ -32,7 +32,7 @@ afterEach(async () => {
 
 /** A socket path in a fresh folder, short enough for a Unix socket. */
 function socketPath(): string {
-	return join(mkdtempSync(join(tmpdir(), 'btw-sock-')), 'run', 'cli.sock');
+	return join(mkdtempSync(join(tmpdir(), 'nolune-sock-')), 'run', 'cli.sock');
 }
 
 async function serve(path: string, run: (argv: string[], io: Io) => Promise<number> = runCli) {
@@ -61,7 +61,7 @@ describe('the command socket', () => {
 		const s = stdio();
 
 		const code = await ask(path, ['memory', 'add', 'family', 'Anna is 7'], s, {
-			BTW_PROFILE: 'family'
+			NOLUNE_PROFILE: 'family'
 		});
 
 		expect(code).toBe(0);
@@ -74,14 +74,14 @@ describe('the command socket', () => {
 		await serve(path);
 		const s = stdio();
 		expect(await ask(path, ['frobnicate'], s)).toBe(1);
-		expect(s.err()).toBe('btw: unknown command "frobnicate". See `btw help`.\n');
+		expect(s.err()).toBe('nolune: unknown command "frobnicate". See `nolune help`.\n');
 	});
 
 	it('sends stdin only to a command that reads it', async () => {
 		createProfile('Family', makeUser('Anna').id);
 		const path = socketPath();
 		await serve(path);
-		const env = { BTW_PROFILE: 'family' };
+		const env = { NOLUNE_PROFILE: 'family' };
 
 		const writing = stdio('- Loves drawing\n');
 		expect(await ask(path, ['memory', 'write', 'people/anna'], writing, env)).toBe(0);
@@ -199,7 +199,7 @@ describe('the command socket', () => {
 
 		expect(await ask(path, ['memory', 'add', 'family', 'x'], s)).toBe(1);
 		expect(s.out()).toBe('half');
-		expect(s.err()).toBe('btw: the gateway stopped before the command finished.\n');
+		expect(s.err()).toBe('nolune: the gateway stopped before the command finished.\n');
 	});
 
 	it('lets only this user connect, and never takes over from a gateway that serves already', async () => {
@@ -212,7 +212,7 @@ describe('the command socket', () => {
 		expect(await serveCommands(path, () => runCli)).toBeNull();
 		const s = stdio();
 		expect(await ask(path, ['help'], s)).toBe(0);
-		expect(s.out()).toMatch(/^btw - a family agent/);
+		expect(s.out()).toMatch(/^nolune - a family agent/);
 	});
 
 	it("doesn't keep its process running: the gateway exits once its HTTP server closes", async () => {
@@ -227,7 +227,7 @@ describe('the command socket', () => {
 					['--no-warnings', '--input-type=module', '-e', script],
 					{
 						timeout: 20_000,
-						env: { ...process.env, BTW_HOME: mkdtempSync(join(tmpdir(), 'btw-home-')) }
+						env: { ...process.env, NOLUNE_HOME: mkdtempSync(join(tmpdir(), 'nolune-home-')) }
 					},
 					(_err, stdout) => resolve({ code: child.exitCode, stdout })
 				);

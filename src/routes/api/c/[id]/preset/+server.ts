@@ -1,5 +1,5 @@
 import { error, json } from '@sveltejs/kit';
-import { ModelSwitchError, changeModel } from '@btw/core';
+import { ModelSwitchError, changeModel } from '@nolune/core';
 import { requireConversation } from '$lib/server/access';
 import type { RequestHandler } from './$types';
 

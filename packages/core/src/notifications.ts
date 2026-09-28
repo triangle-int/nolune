@@ -28,8 +28,8 @@ export interface NotificationItem {
 	conversationId: string | null;
 }
 
-const holder = globalThis as unknown as { __btwNotifications?: EventEmitter };
-const emitter = (holder.__btwNotifications ??= new EventEmitter().setMaxListeners(0));
+const holder = globalThis as unknown as { __noluneNotifications?: EventEmitter };
+const emitter = (holder.__noluneNotifications ??= new EventEmitter().setMaxListeners(0));
 
 /** Called with the profile id whenever that profile's notifications change. */
 export function onNotificationsChanged(listener: (profileId: string) => void): () => void {
@@ -192,7 +192,7 @@ export function continueNotification(
 			}
 		]
 	});
-	// btw's own reply, in its format: any model reads it.
+	// nolune's own reply, in its format: any model reads it.
 	appendRow({
 		conversationId: conv.id,
 		role: 'assistant',

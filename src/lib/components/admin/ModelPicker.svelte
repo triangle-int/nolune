@@ -1,6 +1,6 @@
 <script lang="ts">
 	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
-	import type { ModelChoice } from '@btw/core';
+	import type { ModelChoice } from '@nolune/core';
 	import * as Command from '$lib/components/ui/command';
 	import * as Popover from '$lib/components/ui/popover';
 	import Rich from '$lib/components/Rich.svelte';

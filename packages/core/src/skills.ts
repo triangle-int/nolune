@@ -92,7 +92,7 @@ function scanDir(
 
 /**
  * Profile skills override global ones with the same name, and both override the skills that ship
- * with btw. Sorted by name for a stable prompt.
+ * with nolune. Sorted by name for a stable prompt.
  */
 export function scanSkills(profileSkillsDir: string): { skills: Skill[]; warnings: string[] } {
 	const warnings: string[] = [];

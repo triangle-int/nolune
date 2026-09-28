@@ -5,7 +5,7 @@ import { createInterface } from 'node:readline';
  * A connection to `codex app-server`: the JSON-RPC interface OpenAI's Codex serves its own rich
  * clients (its IDE extension) on, one JSON message per line over the process's stdin and stdout
  * (developers.openai.com/codex/app-server). chatgpt-plan.ts says what to ask; this only carries
- * requests, notifications and Codex's own requests to btw.
+ * requests, notifications and Codex's own requests to nolune.
  */
 
 /** An error Codex answered a request with. */
@@ -97,8 +97,8 @@ export class AppServer {
 		try {
 			await Promise.race([
 				server.request('initialize', {
-					clientInfo: { name: opts.clientName, title: 'btw', version: opts.clientVersion },
-					// Dynamic tools (btw's own) are still experimental in Codex.
+					clientInfo: { name: opts.clientName, title: 'nolune', version: opts.clientVersion },
+					// Dynamic tools (nolune's own) are still experimental in Codex.
 					capabilities: { experimentalApi: true }
 				}),
 				new Promise<never>((_, reject) => {
@@ -193,7 +193,7 @@ export class AppServer {
 		}
 		const answer = this.opts.onRequest
 			? this.opts.onRequest(method, params)
-			: Promise.reject(new AppServerError(`btw doesn't answer ${method}`, -32601));
+			: Promise.reject(new AppServerError(`nolune doesn't answer ${method}`, -32601));
 		answer.then(
 			(result) => this.send({ id, result }),
 			(err: unknown) =>

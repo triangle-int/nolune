@@ -1,16 +1,16 @@
-import { initConfig, startChatGptSignIn } from '@btw/core';
+import { initConfig, startChatGptSignIn } from '@nolune/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { codexRequests, useFakeCodex } from '../../core/src/test/fake-codex.ts';
 import { runCli } from './run.ts';
 import { testIo } from './test/io.ts';
 
 /*
- * `btw chatgpt-plan setup` with a stand-in for Codex's app server. Run by the gateway, the command
+ * `nolune chatgpt-plan setup` with a stand-in for Codex's app server. Run by the gateway, the command
  * is stopped through its signal when the client hangs up (Ctrl-C), and the sign-in with it.
  */
 
-vi.mock('@btw/core', async (importOriginal) => {
-	const core = await importOriginal<typeof import('@btw/core')>();
+vi.mock('@nolune/core', async (importOriginal) => {
+	const core = await importOriginal<typeof import('@nolune/core')>();
 	return { ...core, startChatGptSignIn: vi.fn(core.startChatGptSignIn) };
 });
 
@@ -23,7 +23,7 @@ afterEach(() => {
 	vi.clearAllMocks();
 });
 
-describe('btw chatgpt-plan setup', { timeout: 20_000 }, () => {
+describe('nolune chatgpt-plan setup', { timeout: 20_000 }, () => {
 	it('cancels the sign-in when stopped while Codex starts', async () => {
 		const abort = new AbortController();
 		const start = vi.mocked(startChatGptSignIn);
@@ -37,7 +37,7 @@ describe('btw chatgpt-plan setup', { timeout: 20_000 }, () => {
 
 		expect(await runCli(['chatgpt-plan', 'setup'], io)).toBe(1);
 		expect(out()).toBe("Codex isn't signed in with ChatGPT.\n");
-		expect(err()).toBe('btw: The sign-in was cancelled.\n');
+		expect(err()).toBe('nolune: The sign-in was cancelled.\n');
 		// The code Codex asked for goes unused.
 		expect(codexRequests().map((r) => r.method)).toContain('account/login/cancel');
 	});
@@ -46,7 +46,7 @@ describe('btw chatgpt-plan setup', { timeout: 20_000 }, () => {
 		const { io, err } = testIo({ stdin: '', signal: AbortSignal.abort() });
 
 		expect(await runCli(['chatgpt-plan', 'setup'], io)).toBe(1);
-		expect(err()).toBe('btw: This operation was aborted\n');
+		expect(err()).toBe('nolune: This operation was aborted\n');
 		expect(startChatGptSignIn).not.toHaveBeenCalled();
 	});
 });

@@ -1,8 +1,8 @@
 import { error, redirect, type Handle, type ServerInit } from '@sveltejs/kit';
 import { building } from '$app/environment';
 import { svelteKitHandler } from 'better-auth/svelte-kit';
-import { serveGatewayCommands } from '@btw/cli/serve';
-import { installCliShim, recoverAfterRestart, startScheduler } from '@btw/core';
+import { serveGatewayCommands } from '@nolune/cli/serve';
+import { installCliShim, recoverAfterRestart, startScheduler } from '@nolune/core';
 import { matchLocale, translations } from '$lib/i18n';
 import { PREFERENCES_COOKIE, parsePreferences } from '$lib/preferences.svelte';
 import { getAuth } from '$lib/server/auth';
@@ -11,7 +11,7 @@ export const init: ServerInit = () => {
 	installCliShim();
 	recoverAfterRestart();
 	startScheduler();
-	// The agent's `btw` commands run here, on the btw already loaded (packages/cli/src/serve.ts).
+	// The agent's `nolune` commands run here, on the nolune already loaded (packages/cli/src/serve.ts).
 	serveGatewayCommands();
 };
 
@@ -19,7 +19,7 @@ export const init: ServerInit = () => {
 const PUBLIC_PATHS = ['/login', '/api/auth/', '/api/hooks/'];
 
 /**
- * `btw start` raises adapter-node's body limit so attachments can be uploaded. Every other route
+ * `nolune start` raises adapter-node's body limit so attachments can be uploaded. Every other route
  * keeps a small one, including the public ones that read a body before checking anything.
  */
 const UPLOAD_PATH = /^\/api\/p\/[^/]+\/uploads$/;
@@ -57,7 +57,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 	return svelteKitHandler({
 		event,
 		resolve: (event) =>
-			resolve(event, { transformPageChunk: ({ html }) => html.replace('%btw.lang%', locale) }),
+			resolve(event, { transformPageChunk: ({ html }) => html.replace('%nolune.lang%', locale) }),
 		auth,
 		building
 	});
