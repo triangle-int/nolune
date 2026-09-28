@@ -129,6 +129,8 @@
 	type ModelChange = { presetId: string } | { effort: ChatModel['effort'] };
 	/** A change waiting for the person to accept that the chat's cache starts over. */
 	let confirming = $state<ModelChange | null>(null);
+	/** The model menu, closed while a change is asked about so it doesn't show one not yet made. */
+	let modelMenuOpen = $state(false);
 	const switchingTo = $derived.by(() => {
 		const change = confirming;
 		return change && 'presetId' in change
@@ -418,8 +420,10 @@
 				? change.presetId === model.presetId || change.presetId === 'current'
 				: change.effort === model.effort;
 		if (same) return;
-		if (chat.messages.some((m) => m.kind === 'assistant')) confirming = change;
-		else applyChange(change);
+		if (chat.messages.some((m) => m.kind === 'assistant')) {
+			confirming = change;
+			modelMenuOpen = false;
+		} else applyChange(change);
 	}
 
 	async function applyChange(change: ModelChange) {
@@ -848,6 +852,8 @@
 						presetId={(listed && model.presetId) || 'current'}
 						onPresetChange={(presetId) => requestChange({ presetId })}
 						{defaultPresetId}
+						{avatar}
+						bind:open={modelMenuOpen}
 					/>
 				{/snippet}
 			</Composer>

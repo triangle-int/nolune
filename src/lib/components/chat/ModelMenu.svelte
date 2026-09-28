@@ -7,7 +7,9 @@
 
 <script lang="ts">
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
+	import type { Avatar } from '@btw/core/avatars';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+	import EffortSlider from './EffortSlider.svelte';
 	import { getI18n } from '$lib/i18n';
 	import { getPreferences } from '$lib/preferences.svelte';
 
@@ -21,6 +23,10 @@
 		onPresetChange: (id: string) => void;
 		/** Marked in the list so people can find their way back to it. */
 		defaultPresetId?: string;
+		/** The profile's assistant, which flies the reasoning slider. */
+		avatar: Avatar;
+		/** Whether the menu is open; closed by the chat when a change needs asking about first. */
+		open?: boolean;
 	}
 
 	let {
@@ -30,7 +36,9 @@
 		presets,
 		presetId,
 		onPresetChange,
-		defaultPresetId
+		defaultPresetId,
+		avatar,
+		open = $bindable(false)
 	}: Props = $props();
 
 	const prefs = getPreferences();
@@ -40,7 +48,7 @@
 	const preset = $derived(presets.find((p) => p.id === presetId));
 </script>
 
-<DropdownMenu.Root>
+<DropdownMenu.Root bind:open>
 	<DropdownMenu.Trigger
 		class="flex h-9 max-w-64 min-w-0 items-center gap-1 rounded-full px-3 text-sm text-muted-foreground hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground sm:max-w-sm"
 	>
@@ -72,17 +80,6 @@
 		<DropdownMenu.Label class="text-xs font-normal text-muted-foreground"
 			>{m.model.reasoning}</DropdownMenu.Label
 		>
-		<DropdownMenu.RadioGroup value={effort} onValueChange={onEffortChange}>
-			{#each efforts as level (level)}
-				<DropdownMenu.RadioItem value={level} class="items-start">
-					<span class="flex flex-col">
-						<span>{effortInfo[level]?.label ?? level}</span>
-						<span class="text-xs font-normal text-muted-foreground">
-							{effortInfo[level]?.hint ?? ''}
-						</span>
-					</span>
-				</DropdownMenu.RadioItem>
-			{/each}
-		</DropdownMenu.RadioGroup>
+		<EffortSlider {efforts} value={effort} onchange={onEffortChange} {avatar} />
 	</DropdownMenu.Content>
 </DropdownMenu.Root>

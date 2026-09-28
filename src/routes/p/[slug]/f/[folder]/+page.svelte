@@ -157,6 +157,7 @@
 					efforts={data.efforts}
 					folders={data.folders}
 					folderId={data.folder.id}
+					avatar={data.profile.avatar}
 					placeholder={m.folders.newChatIn(data.folder.name)}
 					autofocus
 				/>
