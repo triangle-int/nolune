@@ -54,6 +54,7 @@
 		efforts={data.efforts}
 		folders={data.folders}
 		folderId={data.folderId}
+		avatar={data.profile.avatar}
 		autofocus
 		class="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-4"
 	>

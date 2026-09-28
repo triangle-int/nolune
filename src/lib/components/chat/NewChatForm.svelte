@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount, untrack, type Snippet } from 'svelte';
 	import { enhance } from '$app/forms';
+	import type { Avatar } from '@nolune/core/avatars';
 	import type { FolderItem } from '$lib/folders';
 	import { getI18n } from '$lib/i18n';
 	import { Attachments } from '$lib/uploads.svelte';
@@ -17,6 +18,8 @@
 		folders: FolderItem[];
 		/** The folder the chat starts in, until someone picks another. */
 		folderId: string | null;
+		/** The profile's assistant, for the reasoning slider. */
+		avatar: Avatar;
 		placeholder?: string;
 		autofocus?: boolean;
 		class?: string;
@@ -38,6 +41,7 @@
 		efforts,
 		folders,
 		folderId: initialFolderId,
+		avatar,
 		placeholder = m.chat.placeholder,
 		autofocus = false,
 		class: className,
@@ -133,6 +137,7 @@
 					{presetId}
 					{defaultPresetId}
 					onPresetChange={(id) => (presetId = id)}
+					{avatar}
 				/>
 				<FolderMenu {folders} {folderId} {slug} onchange={(id) => (folderId = id)} />
 			{/snippet}

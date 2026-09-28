@@ -1053,6 +1053,22 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   at the default preset, reasoning at the level last used on this device. In an existing chat both
   can change (see [Switching models](#switching-models)). The folder chip next to it starts the
   chat in a folder.
+- **The reasoning slider** in the chip's menu (`EffortSlider.svelte`) is a trip away from a dying
+  star, after Outer Wilds, in a window of the welcome's space whatever the theme (it takes the
+  dark theme's avatar colors). The profile's avatar, in a ring, is the thumb; the track runs out
+  of the star at the left, and the further the avatar flies, the higher the level. The star goes
+  through its life with the levels: a calm star, warmer, orange, a swelling red giant, and at the
+  top a supernova (a flash, a pulsing core, shock waves and debris after the avatar, which
+  shakes). The stars stream past faster at each level, to warp streaks at the top, the avatar
+  trails longer and moves more (its `thinking` and `working` moods), and the fill glows in the
+  star's color. A drag follows the pointer, leans the avatar into fast moves and springs onto the
+  nearest level when let go; that is when the level is taken. A hidden range input carries the
+  keyboard (arrows, Home, End; the menu would otherwise move focus to its items on up and down)
+  and screen readers, and its steps are taken once they settle for 600 ms, or on Enter, or as the
+  menu closes, so going up several levels in a chat that asks first asks once. The chat closes
+  the menu while it asks, so the slider never shows a level that isn't set. The level's name
+  rolls in the window, its hint fades in under it, and with reduced motion only the stage
+  changes.
 - **Suggestions** under the new-chat composer (`packages/core/src/suggestions.ts`) come from the
   profile's memory, and each member gets their own. Until it has any, they are four general ones
   (a reminder, a weather check, finding a file, free disk space). After that, the default preset is
