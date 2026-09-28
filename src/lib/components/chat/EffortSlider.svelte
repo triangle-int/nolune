@@ -46,7 +46,6 @@
 		[60, 48]
 	];
 	const BOB = [2.8, 2.4, 1.8, 1.2, 0.7];
-	const AVATAR_GLOW = [0, 1, 2, 4, 7];
 	const DISC_GLOW = [0, 4, 8, 12, 18];
 	/** The star lights the thumb from behind once it's big enough. */
 	const RIM = [0, 0, 4, 7, 10];
@@ -148,6 +147,13 @@
 	const onRun = (share: number) => `calc(${FIRST_STOP}px + ${share} * ${RUN})`;
 	/** The fill runs from the track's start to the thumb. */
 	const fillWidth = $derived(`calc(${FIRST_STOP - TRACK_START}px + ${along} * ${RUN})`);
+	/**
+	 * The thumb moves by transform, in the window's width (`cqw`), so a drag only moves its layer
+	 * and repaints nothing.
+	 */
+	const thumbShift = $derived(
+		`translateX(calc(${FIRST_STOP}px + ${along} * (100cqw - ${FIRST_STOP + LAST_INSET}px)))`
+	);
 
 	const sunShadow = $derived(
 		`0 0 ${star.glow[0]}px ${star.glow[1]}px var(--star), ` +
@@ -224,6 +230,18 @@
 	let bounds: { left: number; width: number; scale: number } | null = null;
 	let lastMove: { at: number; time: number } | null = null;
 	let straighten: ReturnType<typeof setTimeout> | undefined;
+	/** The latest pointer position, applied once per frame however often the pointer reports. */
+	let pointerX: number | null = null;
+	let frame = 0;
+
+	function onpointermove(event: PointerEvent) {
+		if (held === null) return;
+		pointerX = event.clientX;
+		frame ||= requestAnimationFrame(() => {
+			frame = 0;
+			if (pointerX !== null) hold(pointerX);
+		});
+	}
 
 	function hold(clientX: number) {
 		if (!bounds) return;
@@ -256,6 +274,12 @@
 
 	function release() {
 		if (held === null) return;
+		if (frame) {
+			cancelAnimationFrame(frame);
+			frame = 0;
+			if (pointerX !== null) hold(pointerX);
+		}
+		pointerX = null;
 		const next = Math.round(held);
 		held = null;
 		tilt = 0;
@@ -297,6 +321,7 @@
 		// Keyboard steps still settling are taken as the menu closes.
 		commit();
 		clearTimeout(straighten);
+		cancelAnimationFrame(frame);
 	});
 
 	const reduced = $derived(prefersReducedMotion.current);
@@ -312,9 +337,7 @@
 		style:--fill={star.fill}
 		style:--tone="var(--avatar-{avatar})"
 		{onpointerdown}
-		onpointermove={(event) => {
-			if (held !== null) hold(event.clientX);
-		}}
+		{onpointermove}
 		onpointerup={release}
 		onpointercancel={release}
 		onlostpointercapture={release}
@@ -338,11 +361,11 @@
 
 		<span
 			class="nebula"
-			style="left: 110px; top: -50px; width: 180px; height: 120px; background: #2a3a8a"
+			style="left: 90px; top: -70px; width: 220px; height: 160px; --glow: rgb(42 58 138 / 0.45)"
 		></span>
 		<span
 			class="nebula"
-			style="left: 150px; top: 80px; width: 160px; height: 110px; background: #5a2a7a; opacity: 0.3"
+			style="left: 130px; top: 60px; width: 200px; height: 150px; --glow: rgb(90 42 122 / 0.32)"
 		></span>
 		{#each LAYERS as layer, i (i)}
 			<div class="layer" class:shown={i === stage} aria-hidden="true">
@@ -364,8 +387,8 @@
 
 		<span
 			class="halo"
-			style:width="{star.halo}px"
-			style:height="{star.halo}px"
+			style:width="{star.halo * 1.3}px"
+			style:height="{star.halo * 1.3}px"
 			style:opacity={HALO_ALPHA[stage]}
 			aria-hidden="true"
 		></span>
@@ -418,16 +441,12 @@
 			aria-hidden="true"
 		></span>
 
-		<div class="thumb" style:left={onRun(along)} aria-hidden="true">
+		<div class="thumb" style:transform={thumbShift} aria-hidden="true">
 			<span class="trail" style:top="-10px" style:width="{TRAILS[stage][0]}px"></span>
 			<span class="trail" style:top="8px" style:width="{TRAILS[stage][1]}px"></span>
 			<span class="disc" style:box-shadow={discShadow}></span>
 			<div class="tilt" style:transform="rotate({tilt}deg)">
-				<div
-					class="bob"
-					style:animation-duration="{BOB[stage]}s"
-					style:filter="drop-shadow(0 0 {AVATAR_GLOW[stage]}px var(--tone))"
-				>
+				<div class="bob" style:animation-duration="{BOB[stage]}s">
 					<div class:shake={supernova}>
 						<div bind:this={lander} class="lander">
 							<AssistantAvatar {avatar} {mood} size={22} />
@@ -478,8 +497,12 @@
 		isolation: isolate;
 		/* The welcome's deep space. */
 		background: #04060e;
+		/* For the thumb's position in cqw. */
+		container-type: inline-size;
 		cursor: pointer;
-		touch-action: pan-y;
+		/* All of a touch is the slider's: a drag that starts a little off level isn't taken over by
+		   scrolling (which cancels it mid-drag). */
+		touch-action: none;
 		user-select: none;
 		-webkit-user-select: none;
 		-webkit-tap-highlight-color: transparent;
@@ -505,11 +528,11 @@
 		box-shadow: inset 0 0 0 2px var(--avatar-comet);
 	}
 
+	/* Soft glows are radial gradients and masks rather than blur filters, which are costly to
+	   repaint, above all in Safari. */
 	.nebula {
 		position: absolute;
-		border-radius: 50%;
-		filter: blur(26px);
-		opacity: 0.4;
+		background: radial-gradient(closest-side, var(--glow), transparent);
 		pointer-events: none;
 	}
 	.layer {
@@ -549,7 +572,8 @@
 	.halo {
 		z-index: 1;
 		background-color: var(--star);
-		filter: blur(28px);
+		-webkit-mask-image: radial-gradient(closest-side, #000, rgb(0 0 0 / 0.45) 45%, transparent);
+		mask-image: radial-gradient(closest-side, #000, rgb(0 0 0 / 0.45) 45%, transparent);
 		translate: -50% -50%;
 		transition:
 			width 0.8s cubic-bezier(0.34, 1.3, 0.64, 1),
@@ -634,14 +658,9 @@
 	}
 	.shine {
 		position: absolute;
-		inset: 0;
-		background: linear-gradient(
-			100deg,
-			transparent 30%,
-			rgb(255 255 255 / 0.55) 50%,
-			transparent 70%
-		);
-		background-size: 250% 100%;
+		inset: 0 auto 0 0;
+		width: 40px;
+		background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.55), transparent);
 		animation: shine 2.4s ease-in-out infinite;
 	}
 	.pip {
@@ -665,20 +684,21 @@
 	/* The thumb: the avatar in a ring, with trails behind it. */
 	.thumb {
 		position: absolute;
+		left: 0;
 		top: 82px;
 		z-index: 5;
 		width: 0;
 		height: 0;
 		color: var(--tone);
-		transition: left 0.6s cubic-bezier(0.34, 1.35, 0.64, 1);
+		will-change: transform;
+		transition: transform 0.6s cubic-bezier(0.34, 1.35, 0.64, 1);
 	}
+	/* While held, the thumb and fill follow the pointer exactly; they spring only when let go. */
 	.held .thumb {
-		transition-duration: 0.09s;
-		transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+		transition: none;
 	}
 	.held .fill {
-		transition-duration: 0.09s, 0.4s, 0.4s;
-		transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1), ease, ease;
+		transition-property: background-color, box-shadow;
 	}
 	.trail {
 		position: absolute;
@@ -714,7 +734,6 @@
 	}
 	.bob {
 		animation: bob 2.4s ease-in-out infinite;
-		transition: filter 0.5s ease;
 	}
 	.shake {
 		animation: shake 0.14s steps(2) infinite;
@@ -788,11 +807,11 @@
 	}
 	@keyframes shine {
 		0% {
-			background-position: 100% 0;
+			transform: translateX(-40px);
 		}
 		55%,
 		100% {
-			background-position: 0% 0;
+			transform: translateX(100cqw);
 		}
 	}
 	@keyframes bob {
