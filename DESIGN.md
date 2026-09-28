@@ -281,9 +281,9 @@ two agents speak differently (below); what they share is in `plans.ts` and the r
   anything and say where it is (`path`, `installed`), who it's signed in as (`signedIn`: "signed
   in as anna@example.com (Claude Max)", or "(ChatGPT Plus)", from `describePlanAccount`) and what
   stops chats on it (`problem`). Adding a preset checks the same, since nothing is billed.
-- **The same commands and page.** `nolune <plan> status` and `nolune <plan> setup` (or
-  `nolune setup --provider <plan>`) for both (`packages/cli/src/plans.ts`), printing the same line,
-  and `nolune config set claude-path|codex-path` for an agent nolune doesn't find. `chatgpt-plan` adds
+- **The same commands and page.** `nolune <plan> status` and `nolune <plan> setup` for both
+  (`packages/cli/src/plans.ts`), printing the same line, and `nolune config set
+claude-path|codex-path` for an agent nolune doesn't find. `chatgpt-plan` adds
   `logout` and `models`, which Codex has. Models & keys has one Plans list with a row for each.
 - **Finding the agent.** The configured path, else the PATH and its installers' folders, since
   the gateway may run without a login shell's PATH (as a LaunchAgent). Without one, every one of
@@ -339,8 +339,8 @@ automations and subagents on an API key preset.
   (`Claude Max`...) or a `claude setup-token` token passes; an API key, another provider or no
   sign-in ("Claude API") doesn't. Whether it takes the model only shows at the chat's first reply.
 - **Onboarding.** Without Claude Code, every one of those says so and how to install it; nolune never
-  falls back to the SDK's own copy. At a terminal, `nolune setup --provider claude-plan` and
-  `nolune claude-plan setup` offer what's missing, asking before each: Anthropic's installer
+  falls back to the SDK's own copy. At a terminal, `nolune claude-plan setup` offers what's
+  missing, asking before each: Anthropic's installer
   (`curl -fsSL https://claude.ai/install.sh | bash`, which puts it in `~/.local/bin`, where nolune
   looks even when the PATH doesn't), then Claude Code's own sign-in (`claude auth login
 --claudeai`), which opens Anthropic's page in a browser and keeps what it gets. The admin page
@@ -420,8 +420,7 @@ view` pictures as data URLs. Deltas (`item/agentMessage/delta`, reasoning summar
 - **Errors.** A failed turn's error (`codexErrorInfo`: `unauthorized`, `usageLimitExceeded`,
   `contextWindowExceeded`...) is shown in Codex's words, with how to sign in when that's the
   problem. Codex retries what can be retried itself.
-- **Onboarding.** At a terminal, `nolune setup --provider chatgpt-plan` and `nolune chatgpt-plan setup`
-  offer npm's installer (`npm install -g @openai/codex`), asking first, then sign in. The admin
+- **Onboarding.** At a terminal, `nolune chatgpt-plan setup` offers npm's installer (`npm install -g @openai/codex`), asking first, then sign in. The admin
   page shows the install command, and signs in itself, since the code is entered on OpenAI's
   page, never on nolune's.
 - **Its own copy.** Codex keeps each chat's thread under `~/.nolune/codex/sessions`, which
@@ -1388,8 +1387,8 @@ Published to npm as `nolune` (not yet). `npm install -g nolune` gives the `nolun
   `node_modules`, which is why the CLI ships as JavaScript.
   Claude Code itself isn't shipped (see [The Claude plan](#the-claude-plan)); the Agent SDK and
   zod, which core loads on first use, are in chunks of their own.
-- `nolune setup` is the first-run wizard: config, API key (or, with `--provider <plan>`, the plan's
-  agent and its sign-in), admin account, default preset, public URL.
+- `nolune setup` is the first-run wizard: config, admin account, public URL. It adds no key or
+  model: a new profile's welcome asks the admin for them when there's no preset.
 - `nolune start` reads host, port and origin from `config.json` (default `127.0.0.1:5780`), sets
   `HOST` / `PORT` / `ORIGIN` for adapter-node and imports `build/index.js`.
 - `nolune service install` writes a LaunchAgent (`~/Library/LaunchAgents/dev.nolune.gateway.plist`)
