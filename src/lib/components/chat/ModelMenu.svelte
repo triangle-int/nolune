@@ -7,7 +7,7 @@
 
 <script lang="ts">
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
-	import type { Avatar } from '@btw/core/avatars';
+	import type { Avatar } from '@nolune/core/avatars';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import EffortSlider from './EffortSlider.svelte';
 	import { getI18n } from '$lib/i18n';

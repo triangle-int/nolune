@@ -1,6 +1,6 @@
 <!--
 	The reasoning level as a trip away from a dying star, after Outer Wilds. The profile's avatar is
-	the thumb, and the further out it flies, the harder btw thinks: the star warms, swells into a red
+	the thumb, and the further out it flies, the harder nolune thinks: the star warms, swells into a red
 	giant and, at the top level, goes supernova, while the stars stream past faster and the fill
 	glows in the star's color. The window is space whatever the theme. See DESIGN.md, "Web UI".
 -->
@@ -97,7 +97,7 @@
 	import { onDestroy, untrack } from 'svelte';
 	import { prefersReducedMotion } from 'svelte/motion';
 	import { fade, fly } from 'svelte/transition';
-	import type { Avatar } from '@btw/core/avatars';
+	import type { Avatar } from '@nolune/core/avatars';
 	import AssistantAvatar, { type Mood } from '$lib/components/AssistantAvatar.svelte';
 	import { FIRST_STOP, LAST_INSET, TRACK_START, levelAt, stageOf } from '$lib/effort';
 	import { getI18n } from '$lib/i18n';

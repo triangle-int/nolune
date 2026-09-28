@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount, untrack, type Snippet } from 'svelte';
 	import { enhance } from '$app/forms';
-	import type { Avatar } from '@btw/core/avatars';
+	import type { Avatar } from '@nolune/core/avatars';
 	import type { FolderItem } from '$lib/folders';
 	import { getI18n } from '$lib/i18n';
 	import { Attachments } from '$lib/uploads.svelte';
