@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import PlusIcon from '@lucide/svelte/icons/plus';
-	import type { CustomApi } from '@btw/core';
+	import type { CustomApi } from '@nolune/core';
 	import { Button } from '$lib/components/ui/button';
 	import * as ToggleGroup from '$lib/components/ui/toggle-group';
 	import CustomProviderFields from './CustomProviderFields.svelte';

@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import { dismissAllNotifications } from '@btw/core';
+import { dismissAllNotifications } from '@nolune/core';
 import { requireUser } from '$lib/server/access';
 import type { RequestHandler } from './$types';
 

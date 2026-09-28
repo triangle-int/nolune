@@ -3,7 +3,7 @@ import { getRequestEvent } from '$app/server';
 import { betterAuth } from 'better-auth/minimal';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { sveltekitCookies } from 'better-auth/svelte-kit';
-import { MIN_PASSWORD_LENGTH, getDb, readConfig, schema } from '@btw/core';
+import { MIN_PASSWORD_LENGTH, getDb, readConfig, schema } from '@nolune/core';
 
 function createAuth() {
 	return betterAuth({
@@ -12,7 +12,7 @@ function createAuth() {
 		database: drizzleAdapter(getDb(), { provider: 'sqlite', schema }),
 		emailAndPassword: {
 			enabled: true,
-			// Accounts are created only with `btw user create`.
+			// Accounts are created only with `nolune user create`.
 			disableSignUp: true,
 			minPasswordLength: MIN_PASSWORD_LENGTH
 		},

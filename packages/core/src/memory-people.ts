@@ -23,7 +23,7 @@ import { addMember, isMember, type Profile } from './profiles.ts';
 import { findUser } from './users.ts';
 
 /*
- * Which note in memory is about which member of the profile, so btw knows who "I" is in a
+ * Which note in memory is about which member of the profile, so nolune knows who "I" is in a
  * message, what to look up for them, and where to write what they tell it about themselves.
  * Memory has notes about people who aren't members too (grandparents, the nanny), and one may be
  * about someone before they join: then whoever adds them is asked whether it is them, with a look

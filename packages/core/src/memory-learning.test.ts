@@ -43,7 +43,7 @@ function replies(...texts: (string | null)[]) {
 	for (const text of texts) vi.mocked(quickReply).mockResolvedValueOnce({ text, usage });
 }
 
-/** A chat where Anna told btw something, and btw ran a command before it answered. */
+/** A chat where Anna told nolune something, and nolune ran a command before it answered. */
 function chat(text = 'We got a dog! His name is Rex.') {
 	const { user, profile } = makeFamily();
 	const conv = createConversation({ profile, presetId: makePreset().id, userId: user.id });
@@ -80,7 +80,7 @@ function say(conversationId: string, user: { id: string; name: string }, text: s
 }
 
 describe('learnFrom', () => {
-	it("saves what the model finds, from people's messages and btw's replies only", async () => {
+	it("saves what the model finds, from people's messages and nolune's replies only", async () => {
 		const { profile, conv } = chat();
 		addMemoryFact(profile.slug, 'core', 'Anna and Ben are the parents');
 		replies('Here you go:\n[{"op": "add", "note": "pets", "fact": "The dog is called Rex"}]');
@@ -98,7 +98,7 @@ describe('learnFrom', () => {
 			'<note name="core">\n# Core\n\n- Anna and Ben are the parents\n</note>'
 		);
 		expect(input).toContain(
-			'<conversation>\nAnna: We got a dog! His name is Rex.\n\nbtw: Congratulations! Let me check the vet list.\n\nbtw: Dr. Keller at Elm Street takes dogs.\n</conversation>'
+			'<conversation>\nAnna: We got a dog! His name is Rex.\n\nnolune: Congratulations! Let me check the vet list.\n\nnolune: Dr. Keller at Elm Street takes dogs.\n</conversation>'
 		);
 		expect(input).not.toContain('SAVE THIS');
 		expect(input).not.toContain('cat vets.txt');
@@ -128,7 +128,7 @@ describe('learnFrom', () => {
 		expect(quickReply).toHaveBeenCalledTimes(2);
 		const { input } = vi.mocked(quickReply).mock.calls[1][0];
 		expect(input).toContain(
-			'<earlier>\nbtw: Congratulations! Let me check the vet list.\n\nbtw: Dr. Keller at Elm Street takes dogs.\n</earlier>'
+			'<earlier>\nnolune: Congratulations! Let me check the vet list.\n\nnolune: Dr. Keller at Elm Street takes dogs.\n</earlier>'
 		);
 		expect(input).toContain('<conversation>\nAnna: Yes, that one.\n</conversation>');
 	});
@@ -292,7 +292,7 @@ describe('startLearning', () => {
 	it('looks over a chat once it has been quiet for two minutes', async () => {
 		vi.useFakeTimers();
 		// Started once per process, like the scheduler; this test starts it again.
-		delete (globalThis as { __btwLearning?: boolean }).__btwLearning;
+		delete (globalThis as { __noluneLearning?: boolean }).__noluneLearning;
 		const { conv } = chat();
 		replies('[]');
 		startLearning();
@@ -301,7 +301,7 @@ describe('startLearning', () => {
 
 		loopEnded(conv.id, null);
 		await vi.advanceTimersByTimeAsync(90_000);
-		// Someone wrote again before it went quiet, and btw answered.
+		// Someone wrote again before it went quiet, and nolune answered.
 		runningChanged(conv.id, true);
 		await vi.advanceTimersByTimeAsync(60_000);
 		loopEnded(conv.id, null);

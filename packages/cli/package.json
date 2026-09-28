@@ -1,10 +1,10 @@
 {
-	"name": "@btw/cli",
+	"name": "@nolune/cli",
 	"private": true,
 	"version": "0.0.1",
 	"type": "module",
 	"bin": {
-		"btw": "./src/index.ts"
+		"nolune": "./src/index.ts"
 	},
 	"exports": {
 		"./serve": "./src/serve.ts"
@@ -13,6 +13,6 @@
 		"check": "tsc -p ."
 	},
 	"dependencies": {
-		"@btw/core": "workspace:*"
+		"@nolune/core": "workspace:*"
 	}
 }

@@ -1,19 +1,25 @@
 import { parseArgs } from 'node:util';
-import { AVATARS, getProfileBySlug, listProfiles, setProfileAvatar, type Profile } from '@btw/core';
+import {
+	AVATARS,
+	getProfileBySlug,
+	listProfiles,
+	setProfileAvatar,
+	type Profile
+} from '@nolune/core';
 import type { Io } from './io.ts';
 
 export const PROFILE_HELP = `Profiles and skills
-  btw profile list                           slug, name and avatar of every profile
-  btw profile avatar [<name>] [--profile SLUG]
+  nolune profile list                        slug, name and avatar of every profile
+  nolune profile avatar [<name>] [--profile SLUG]
                                              show or change the assistant's avatar in the web chat:
                                              ${AVATARS.join(', ')}`;
 
-/** The profile `--profile` names, else the one the agent's command runs in (BTW_PROFILE). */
+/** The profile `--profile` names, else the one the agent's command runs in (NOLUNE_PROFILE). */
 export function profileFor(io: Io, flag: string | undefined): Profile {
-	const slug = flag || io.env.BTW_PROFILE;
-	if (!slug) throw new Error('which profile? Pass --profile <slug>. See `btw profile list`.');
+	const slug = flag || io.env.NOLUNE_PROFILE;
+	if (!slug) throw new Error('which profile? Pass --profile <slug>. See `nolune profile list`.');
 	const found = getProfileBySlug(slug);
-	if (!found) throw new Error(`no profile with slug "${slug}". See \`btw profile list\`.`);
+	if (!found) throw new Error(`no profile with slug "${slug}". See \`nolune profile list\`.`);
 	return found;
 }
 
@@ -22,7 +28,7 @@ export function profileCommand(io: Io, action: string | undefined, args: string[
 		for (const p of listProfiles()) io.log(`${p.slug}\t${p.name}\t${p.avatar}`);
 		return;
 	}
-	if (action !== 'avatar') throw new Error('usage: btw profile list|avatar');
+	if (action !== 'avatar') throw new Error('usage: nolune profile list|avatar');
 
 	const { values, positionals } = parseArgs({
 		args,

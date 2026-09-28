@@ -101,7 +101,7 @@ describe('noticeProfileChanges', () => {
 			renameProfile(family.id, 'The Family');
 			expect(changed).toEqual([family.id, family.id]);
 
-			// What `btw profile avatar` does from the CLI: the row changes, nothing is emitted here.
+			// What `nolune profile avatar` does from the CLI: the row changes, nothing is emitted here.
 			getDb().update(profile).set({ avatar: 'planet' }).where(eq(profile.id, family.id)).run();
 			noticeProfileChanges();
 			noticeProfileChanges();

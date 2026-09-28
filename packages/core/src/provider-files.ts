@@ -103,7 +103,7 @@ type MediaSource = Extract<Source, { type: 'media' }>;
 const UPLOADS_AT_ONCE = 4;
 
 /**
- * The provider's copy of a file btw keeps, uploading it the first time. A known copy is taken as
+ * The provider's copy of a file nolune keeps, uploading it the first time. A known copy is taken as
  * it is, unlike in providerFileId: every request carries every picture, and checking each one
  * would cost a request apiece.
  */
@@ -159,12 +159,12 @@ function overLimitNote(block: FileBlock): TextBlock {
 	const what = block.type === 'image' ? 'Picture' : 'PDF';
 	return {
 		type: 'text',
-		text: `[${what} not shown: this chat already holds as many pictures and PDFs as this model takes. The line before this says where its file is${block.type === 'image' ? '; `btw view` shows it again' : ''}.]`
+		text: `[${what} not shown: this chat already holds as many pictures and PDFs as this model takes. The line before this says where its file is${block.type === 'image' ? '; `nolune view` shows it again' : ''}.]`
 	};
 }
 
 /**
- * The messages with each picture and PDF btw keeps by reference (`media` sources) as `provider`
+ * The messages with each picture and PDF nolune keeps by reference (`media` sources) as `provider`
  * gets it: its Files API's copy, uploaded the first time a request on it needs one, or inline
  * where it has none (the Claude plan), oldest first up to the conversation's inline limit, the
  * rest as a note. The same rows give the same request every time: a copy is reused for as long as
@@ -231,14 +231,14 @@ function collectFileIds(value: unknown, ids: Set<string>): void {
 		for (const item of value) collectFileIds(item, ids);
 	} else if (value && typeof value === 'object') {
 		const record = value as Record<string, unknown>;
-		// btw's format, and Anthropic's (rows from before it)
+		// nolune's format, and Anthropic's (rows from before it)
 		if (record.type === 'uploaded' && typeof record.fileId === 'string') ids.add(record.fileId);
 		if (record.type === 'file' && typeof record.file_id === 'string') ids.add(record.file_id);
 		for (const child of Object.values(record)) collectFileIds(child, ids);
 	}
 }
 
-/** Every file id a stored message refers to, in btw's format or a provider's. */
+/** Every file id a stored message refers to, in nolune's format or a provider's. */
 function referencedFileIds(): Set<string> {
 	const ids = new Set<string>();
 	const rows = getDb()
@@ -284,7 +284,7 @@ export async function pruneProviderFiles(): Promise<void> {
 			if (store.account() !== row.account) continue;
 			await store.remove(row.fileId);
 		} catch (err) {
-			console.error(`[btw] couldn't delete ${row.provider} file ${row.fileId}:`, err);
+			console.error(`[nolune] couldn't delete ${row.provider} file ${row.fileId}:`, err);
 			continue;
 		}
 		getDb().delete(providerFile).where(where).run();

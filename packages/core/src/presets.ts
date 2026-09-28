@@ -21,7 +21,7 @@ export function getDefaultPreset(): Preset | undefined {
 	return presets.find((p) => p.isDefault) ?? presets[0];
 }
 
-/** By id, or by name as `btw preset list` shows it. */
+/** By id, or by name as `nolune preset list` shows it. */
 function findPreset(idOrName: string): Preset {
 	const preset = getDb()
 		.select()

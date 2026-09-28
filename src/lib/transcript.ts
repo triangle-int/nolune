@@ -1,9 +1,15 @@
-import type { DisplayMedia, DisplayMemoryLook, DisplayMessage, LiveBlock, Usage } from '@btw/core';
+import type {
+	DisplayMedia,
+	DisplayMemoryLook,
+	DisplayMessage,
+	LiveBlock,
+	Usage
+} from '@nolune/core';
 import { firstLine, partialToolInput } from './commands';
 import type { Messages } from './i18n';
 
 /**
- * Turns the stored rows into what the chat shows: people's messages, and btw's replies as a run
+ * Turns the stored rows into what the chat shows: people's messages, and nolune's replies as a run
  * of text parts and "activity" parts. An activity part is every thinking and command block
  * between two pieces of text, folded into one collapsible group. What the note-taker saved goes
  * after the last message it read.
@@ -74,7 +80,7 @@ export type Entry =
 	| { type: 'memory'; key: string; look: DisplayMemoryLook }
 	| Reply;
 
-/** Messages that aren't btw's: each one ends the reply before it. */
+/** Messages that aren't nolune's: each one ends the reply before it. */
 function messageEntry(message: DisplayMessage): Entry | null {
 	const key = `m${message.id}`;
 	switch (message.kind) {

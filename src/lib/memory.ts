@@ -1,4 +1,4 @@
-import { categoryOf, titleIn } from '@btw/core/memory-categories';
+import { categoryOf, titleIn } from '@nolune/core/memory-categories';
 import type { Messages } from '$lib/i18n';
 
 /** A note's name as a topic: `people/anna-smith.md` is "Anna smith". */

@@ -6,7 +6,7 @@ import type {
 	LiveBlock,
 	LiveEvent,
 	Snapshot
-} from '@btw/core';
+} from '@nolune/core';
 
 type ServerEvent = LiveEvent | { type: 'snapshot'; snapshot: Snapshot };
 type ToolResult = { output: string; isError: boolean };

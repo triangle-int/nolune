@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { DisplayMemoryChange } from '@btw/core';
+	import type { DisplayMemoryChange } from '@nolune/core';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import type { Snippet } from 'svelte';

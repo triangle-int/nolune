@@ -19,11 +19,11 @@ function open() {
 
 export type DB = ReturnType<typeof open>;
 
-const holder = globalThis as unknown as { __btwDb?: DB };
+const holder = globalThis as unknown as { __noluneDb?: DB };
 
 export function getDb(): DB {
-	holder.__btwDb ??= open();
-	return holder.__btwDb;
+	holder.__noluneDb ??= open();
+	return holder.__noluneDb;
 }
 
 export { schema };

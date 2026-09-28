@@ -1,8 +1,8 @@
 {
 	"version": "6",
 	"dialect": "sqlite",
-	"id": "13e7acce-f4f7-4c82-8368-9c44271e0d10",
-	"prevId": "b742c691-4546-4b20-9a2d-fca8b6043612",
+	"id": "66d0b90a-38a8-4759-a935-2309f576b8a0",
+	"prevId": "13e7acce-f4f7-4c82-8368-9c44271e0d10",
 	"tables": {
 		"account": {
 			"name": "account",
@@ -1391,6 +1391,13 @@
 					"notNull": true,
 					"autoincrement": false,
 					"default": "(cast(unixepoch('subsecond') * 1000 as integer))"
+				},
+				"person_note": {
+					"name": "person_note",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
 				}
 			},
 			"indexes": {

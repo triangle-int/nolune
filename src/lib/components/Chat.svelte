@@ -4,9 +4,9 @@
 	import { invalidate } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import type { ChatModel, DisplayAttachment, Usage } from '@btw/core';
-	import type { Avatar } from '@btw/core/avatars';
-	import { cacheHitRate, cacheMissTokens, cacheTtlMs, promptTokens } from '@btw/core/usage';
+	import type { ChatModel, DisplayAttachment, Usage } from '@nolune/core';
+	import type { Avatar } from '@nolune/core/avatars';
+	import { cacheHitRate, cacheMissTokens, cacheTtlMs, promptTokens } from '@nolune/core/usage';
 	import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
 	import BotIcon from '@lucide/svelte/icons/bot';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
@@ -144,12 +144,12 @@
 			m.common.newChat
 	);
 
-	// btw names a chat shortly after its first message; the sidebar lists the title too.
+	// nolune names a chat shortly after its first message; the sidebar lists the title too.
 	let listedTitle = untrack(() => conversation.title);
 	$effect(() => {
 		if (!chat.title || chat.title === listedTitle) return;
 		listedTitle = chat.title;
-		invalidate('btw:conversations');
+		invalidate('nolune:conversations');
 	});
 
 	const entries = $derived(buildTranscript(chat.messages, chat.live, chat.running, chat.memory));
@@ -228,10 +228,10 @@
 			chat.messages[chat.messages.length - 1].kind !== 'assistant'
 	);
 
-	/** The newest entry when it's a reply: its avatar shows what btw is doing. Older ones hold still. */
+	/** The newest entry when it's a reply: its avatar shows what nolune is doing. Older ones hold still. */
 	const liveReply = $derived(newest?.type === 'reply' ? newest : null);
 
-	/** The step btw is on while it runs, in the words its group of steps uses. */
+	/** The step nolune is on while it runs, in the words its group of steps uses. */
 	const step = $derived.by(() => {
 		const tail = chat.running ? liveReply?.parts.at(-1) : undefined;
 		if (!tail || tail.type === 'text') {
@@ -250,7 +250,7 @@
 		};
 	});
 
-	/** True for a moment after btw finishes a turn, for the avatar's happy squash. */
+	/** True for a moment after nolune finishes a turn, for the avatar's happy squash. */
 	let finished = $state(false);
 	let wasRunning = false;
 	$effect(() => {
@@ -393,7 +393,7 @@
 			text = '';
 			attachments.clear();
 			continued = true;
-			invalidate('btw:conversations');
+			invalidate('nolune:conversations');
 		}
 		sending = false;
 		textarea?.focus();
@@ -701,7 +701,7 @@
 					<div class="rounded-2xl border px-4 py-3 text-sm">
 						<div class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
 							<BotIcon class="size-3.5" />
-							{m.chat.fromBtw(entry.message.title)}
+							{m.chat.fromNolune(entry.message.title)}
 						</div>
 						<div class="mt-1.5 leading-relaxed whitespace-pre-wrap">{entry.message.text}</div>
 					</div>

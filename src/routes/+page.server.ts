@@ -1,5 +1,5 @@
 import { redirect } from '@sveltejs/kit';
-import { listProfilesForUser } from '@btw/core';
+import { listProfilesForUser } from '@nolune/core';
 import { requireUser } from '$lib/server/access';
 import { LAST_PROFILE_COOKIE } from '$lib/server/last-profile';
 import type { PageServerLoad } from './$types';

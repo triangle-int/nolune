@@ -10,7 +10,7 @@ import {
 	readMemoryNote,
 	readSoulFile,
 	runSubagent
-} from '@btw/core';
+} from '@nolune/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setSubagentStatus } from '../../core/src/subagents.ts';
 import { makeFamily, makePreset, makeUser } from '../../core/src/test/fixtures.ts';
@@ -18,7 +18,7 @@ import { runCli } from './run.ts';
 import { testIo } from './test/io.ts';
 
 /*
- * `btw` as a function: everything a command reads and writes besides its arguments and btw's
+ * `nolune` as a function: everything a command reads and writes besides its arguments and nolune's
  * files goes through the io it's given, never the process's own, so it can run on someone
  * else's behalf inside another process.
  */
@@ -30,7 +30,7 @@ const DOT = Buffer.from(
 );
 
 beforeEach(() => {
-	// As after `btw setup`: commands that need it refuse to run without a config.
+	// As after `nolune setup`: commands that need it refuse to run without a config.
 	initConfig();
 });
 
@@ -48,10 +48,10 @@ describe('runCli', () => {
 	it("uses the environment it's given, not the process's", async () => {
 		createProfile('Family', makeUser('Anna').id);
 		createProfile('Work', makeUser('Max').id);
-		vi.stubEnv('BTW_PROFILE', 'work');
+		vi.stubEnv('NOLUNE_PROFILE', 'work');
 
 		const added = await run(['memory', 'add', 'home', 'Anna is 7'], {
-			env: { BTW_PROFILE: 'family' }
+			env: { NOLUNE_PROFILE: 'family' }
 		});
 
 		expect(added).toEqual({ code: 0, out: 'Started home.md.\n', err: '' });
@@ -62,7 +62,7 @@ describe('runCli', () => {
 
 	it("reads what's piped in from its stdin, and refuses a terminal with nothing piped in", async () => {
 		createProfile('Family', makeUser('Anna').id);
-		const env = { BTW_PROFILE: 'family' };
+		const env = { NOLUNE_PROFILE: 'family' };
 
 		expect(
 			await run(['memory', 'write', 'people/anna'], { env, stdin: '- Loves drawing\n' })
@@ -76,13 +76,13 @@ describe('runCli', () => {
 		expect(await run(['memory', 'write', 'people/max'], { env })).toEqual({
 			code: 1,
 			out: '',
-			err: 'btw: give the note as text, or pipe it in: btw memory write <topic> < note.md\n'
+			err: 'nolune: give the note as text, or pipe it in: nolune memory write <topic> < note.md\n'
 		});
 	});
 
 	it('searches memory, with where each fact is', async () => {
 		createProfile('Family', makeUser('Anna').id);
-		const env = { BTW_PROFILE: 'family' };
+		const env = { NOLUNE_PROFILE: 'family' };
 		await run(['memory', 'write', 'home'], {
 			env,
 			stdin: '# Home\n\n## Internet\n\n- Wifi password: mango42\n- Router in the hall\n'
@@ -100,7 +100,7 @@ describe('runCli', () => {
 
 	it('lists whose notes are whose, and merges two about one person', async () => {
 		createProfile('Family', makeUser('Anna').id);
-		const env = { BTW_PROFILE: 'family' };
+		const env = { NOLUNE_PROFILE: 'family' };
 		await run(['memory', 'add', 'people/grandma', 'Loves roses'], { env });
 		await run(['memory', 'add', 'people/olga', 'Lives in Tver'], { env });
 		expect(await run(['memory', 'add', 'family', 'Olga is 70'], { env })).toMatchObject({
@@ -125,13 +125,13 @@ describe('runCli', () => {
 	});
 
 	it('resolves relative paths from its folder', async () => {
-		const cwd = mkdtempSync(join(tmpdir(), 'btw-cwd-'));
+		const cwd = mkdtempSync(join(tmpdir(), 'nolune-cwd-'));
 		writeFileSync(join(cwd, 'dot.png'), DOT);
-		const view = mkdtempSync(join(tmpdir(), 'btw-view-'));
+		const view = mkdtempSync(join(tmpdir(), 'nolune-view-'));
 		writeFileSync(join(view, 'limits.json'), JSON.stringify({ count: 5 }));
 
 		// The picture keeps the name as typed; the gateway reads it from the manifest.
-		expect(await run(['view', 'dot.png'], { cwd, env: { BTW_VIEW_DIR: view } })).toEqual({
+		expect(await run(['view', 'dot.png'], { cwd, env: { NOLUNE_VIEW_DIR: view } })).toEqual({
 			code: 0,
 			out: 'Attached dot.png (1×1 PNG).\n',
 			err: ''
@@ -154,14 +154,14 @@ describe('runCli', () => {
 		expect(await run(['frobnicate'])).toEqual({
 			code: 1,
 			out: '',
-			err: 'btw: unknown command "frobnicate". See `btw help`.\n'
+			err: 'nolune: unknown command "frobnicate". See `nolune help`.\n'
 		});
 		expect(await run(['view', 'dot.png'])).toMatchObject({
 			code: 1,
-			err: "btw: `btw view` only works in the agent's commands: it shows images to the agent.\n"
+			err: "nolune: `nolune view` only works in the agent's commands: it shows images to the agent.\n"
 		});
 		const missing = await run(['view', 'nope.png'], {
-			env: { BTW_VIEW_DIR: mkdtempSync(join(tmpdir(), 'btw-view-')) }
+			env: { NOLUNE_VIEW_DIR: mkdtempSync(join(tmpdir(), 'nolune-view-')) }
 		});
 		expect(missing.code).toBe(1);
 
@@ -172,11 +172,11 @@ describe('runCli', () => {
 	it('prints the help without arguments', async () => {
 		const help = await run([]);
 		expect(help.code).toBe(0);
-		expect(help.out).toMatch(/^btw - a family agent that runs on this computer\n/);
+		expect(help.out).toMatch(/^nolune - a family agent that runs on this computer\n/);
 	});
 });
 
-describe('btw preset edit', () => {
+describe('nolune preset edit', () => {
 	it("changes what it's given, and says chats on it keep theirs", async () => {
 		makePreset('Sonnet');
 		expect(
@@ -194,7 +194,7 @@ describe('btw preset edit', () => {
 	});
 });
 
-describe('btw provider', () => {
+describe('nolune provider', () => {
 	it('checks a custom provider for its models, and presets and memory search can use it', async () => {
 		// A server that wants a key, like a vLLM started with --api-key.
 		const server = createServer((req, res) => {
@@ -241,7 +241,7 @@ describe('btw provider', () => {
 			const meaning = await run(['config', 'set', 'embeddings', 'custom-openai/embeddings/nomic']);
 			expect(meaning.out).toBe('Memory search by meaning: Embeddings/nomic.\n');
 			const address = await run(['config', 'set', 'embeddings', url]);
-			expect(address.err).toContain('btw provider add <name> <url>');
+			expect(address.err).toContain('nolune provider add <name> <url>');
 
 			expect((await run(['provider', 'rm', 'gpu-box'])).out).toBe(
 				'Removed GPU box. Chats on "qwen3:8b (GPU box)" stop working until they\'re moved to another model.\n'
@@ -266,12 +266,12 @@ describe('btw provider', () => {
 	});
 });
 
-describe('btw agent watch', () => {
+describe('nolune agent watch', () => {
 	function subagentOf() {
 		const { user, profile } = makeFamily();
 		const chat = createConversation({ profile, presetId: makePreset().id, userId: user.id });
 		const { subagent } = runSubagent({ parentId: chat.id, prompt: 'Find flights.' });
-		return { env: { BTW_CONVERSATION_ID: chat.id }, subagent };
+		return { env: { NOLUNE_CONVERSATION_ID: chat.id }, subagent };
 	}
 
 	it("fails with the subagent's last word when it failed", async () => {

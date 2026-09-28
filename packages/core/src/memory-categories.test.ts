@@ -45,7 +45,7 @@ describe('the categories', () => {
 		writeMemoryNote(profile.slug, 'home', '- Wifi: mango42\n');
 		writeFileSync(join(profileMemoryDir(profile.slug), 'family.md'), '# Family\n\n- Mia is 7\n');
 		expect(() => addMemoryFact(profile.slug, 'family', 'Leo is 5')).toThrow(
-			'To keep adding to it, move it into one first: `btw memory mv family <category>`.'
+			'To keep adding to it, move it into one first: `nolune memory mv family <category>`.'
 		);
 		writeMemoryNote(profile.slug, 'family', '# Family\n\n- Mia is 8\n');
 		expect(readMemoryNote(profile.slug, 'family').text).toBe('# Family\n\n- Mia is 8\n');

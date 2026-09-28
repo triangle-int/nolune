@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import type { PersonNote } from '@btw/core';
+	import type { PersonNote } from '@nolune/core';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { getI18n } from '$lib/i18n';

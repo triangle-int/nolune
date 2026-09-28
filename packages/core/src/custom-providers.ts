@@ -11,9 +11,9 @@ import * as openai from './openai-chat.ts';
  * server, LiteLLM...), each added under Models & keys as a provider of its own: a name ("Ollama",
  * "GPU box"), the API it speaks (OpenAI's or Anthropic's), an address, and a key when it wants
  * one. Chats on one run on OpenAI's code (openai-chat.ts, the Responses API) or Anthropic's
- * (anthropic.ts, the Messages API), with that SDK pointed at it: in btw's words, the
+ * (anthropic.ts, the Messages API), with that SDK pointed at it: in nolune's words, the
  * `custom-openai` or `custom-anthropic` provider. A server that speaks both can be added once for
- * each. Memory search can take an OpenAI one's embeddings (memory-embeddings.ts). The rest of btw
+ * each. Memory search can take an OpenAI one's embeddings (memory-embeddings.ts). The rest of nolune
  * calls them through models.ts.
  *
  * Each gets an id from its name when it's added (`gpu-box`), which never changes, so its name
@@ -34,7 +34,7 @@ export const CUSTOM_APIS: CustomApi[] = ['openai', 'anthropic'];
 /** Whose API it is, for people. */
 const API_NAMES: Record<CustomApi, string> = { openai: "OpenAI's", anthropic: "Anthropic's" };
 
-/** btw's providers for chats on custom providers, one for each API. */
+/** nolune's providers for chats on custom providers, one for each API. */
 export const CUSTOM_PROVIDERS = ['custom-openai', 'custom-anthropic'] as const;
 export type CustomProvider = (typeof CUSTOM_PROVIDERS)[number];
 
@@ -66,7 +66,7 @@ export interface CustomProviderConfig {
 	key?: string;
 }
 
-/** What `btw preset add --provider` and embeddings take besides a custom provider's id. */
+/** What `nolune preset add --provider` and embeddings take besides a custom provider's id. */
 const RESERVED = [
 	'anthropic',
 	'openai',
@@ -127,7 +127,7 @@ export function anthropicUrl(url: string): string {
 	return normalizeProviderUrl(url).replace(/\/v1$/, '');
 }
 
-/** A name for a server at `url`, for `btw setup`: Local on this computer, else its host. */
+/** A name for a server at `url`, for `nolune setup`: Local on this computer, else its host. */
 export function suggestProviderName(url: string): string {
 	let host: string;
 	try {
@@ -138,7 +138,7 @@ export function suggestProviderName(url: string): string {
 	return /^(localhost|127\.|\[?::1\]?$)/.test(host) ? 'Local' : host.split('.')[0] || 'Server';
 }
 
-/** By id or name, as `btw preset add --provider` and the forms give it. */
+/** By id or name, as `nolune preset add --provider` and the forms give it. */
 export function findCustomProvider(idOrName: string): CustomProviderConfig | undefined {
 	const wanted = idOrName.trim().toLowerCase();
 	const all = saved();
@@ -155,7 +155,7 @@ export interface CustomProviderStatus {
 	hint: string | null;
 }
 
-/** For Models & keys and `btw provider list`: never a key. */
+/** For Models & keys and `nolune provider list`: never a key. */
 export function listCustomProviders(): CustomProviderStatus[] {
 	return saved().map((p) => ({
 		id: p.id,
@@ -249,7 +249,7 @@ function providerOf(model: string): CustomProviderConfig {
 	const names = saved().map((p) => p.name);
 	const hint = names.length
 		? `Custom providers: ${names.join(', ')}.`
-		: 'An admin can add one under Models & keys in btw, or with `btw provider add`.';
+		: 'An admin can add one under Models & keys in nolune, or with `nolune provider add`.';
 	throw new CustomProviderError(
 		id
 			? `No custom provider "${id}". ${hint}`
@@ -563,7 +563,7 @@ export function describeApiError(err: unknown): string {
 	const provider = err !== null && typeof err === 'object' ? ours.get(err) : undefined;
 	const at = provider ? `${provider.name} at ${provider.url}` : null;
 	if (isSdkError(err, 'AuthenticationError')) {
-		return `${at ?? 'The custom provider'} didn't accept the key. An admin can change it under Models & keys in btw.`;
+		return `${at ?? 'The custom provider'} didn't accept the key. An admin can change it under Models & keys in nolune.`;
 	}
 	if (isSdkError(err, 'APIConnectionTimeoutError')) {
 		return `${at ?? 'The custom provider'} didn't answer in time.`;

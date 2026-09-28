@@ -1,9 +1,9 @@
-import { getConversation, isMember, onRunningChange, runningConversationIds } from '@btw/core';
+import { getConversation, isMember, onRunningChange, runningConversationIds } from '@nolune/core';
 import { requireProfile } from '$lib/server/access';
 import type { RequestHandler } from './$types';
 
 /**
- * Server-sent events: the ids of the profile's chats btw is working in, on connect and again
+ * Server-sent events: the ids of the profile's chats nolune is working in, on connect and again
  * whenever one of them starts or stops.
  */
 export const GET: RequestHandler = ({ params, locals, request }) => {

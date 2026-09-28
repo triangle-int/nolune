@@ -97,28 +97,35 @@
 			"idx": 13,
 			"version": "6",
 			"when": 1790490975553,
-			"tag": "0013_btw_format",
+			"tag": "0013_nolune_format",
 			"breakpoints": true
 		},
 		{
 			"idx": 14,
 			"version": "6",
-			"when": 1790504664433,
-			"tag": "0014_learn_from_chats",
+			"when": 1790588159889,
+			"tag": "0014_nolune_rename",
 			"breakpoints": true
 		},
 		{
 			"idx": 15,
 			"version": "6",
-			"when": 1790568312163,
-			"tag": "0015_memory_changes",
+			"when": 1790588160889,
+			"tag": "0015_learn_from_chats",
 			"breakpoints": true
 		},
 		{
 			"idx": 16,
 			"version": "6",
-			"when": 1790591540366,
-			"tag": "0016_member_person_note",
+			"when": 1790588161889,
+			"tag": "0016_memory_changes",
+			"breakpoints": true
+		},
+		{
+			"idx": 17,
+			"version": "6",
+			"when": 1790588162889,
+			"tag": "0017_member_person_note",
 			"breakpoints": true
 		}
 	]

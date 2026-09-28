@@ -11,7 +11,7 @@ import {
 	recentMemoryChanges,
 	setLearnFromChats,
 	writeMemoryFile
-} from '@btw/core';
+} from '@nolune/core';
 import { translations } from '$lib/i18n';
 import { requireProfile } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';

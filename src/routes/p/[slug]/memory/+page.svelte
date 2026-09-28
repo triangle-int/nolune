@@ -7,7 +7,7 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import type { SubmitFunction } from '@sveltejs/kit';
-	import { MEMORY_CATEGORIES, categoryOf } from '@btw/core/memory-categories';
+	import { MEMORY_CATEGORIES, categoryOf } from '@nolune/core/memory-categories';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import EraserIcon from '@lucide/svelte/icons/eraser';
 	import FolderInputIcon from '@lucide/svelte/icons/folder-input';
@@ -149,7 +149,7 @@
 		return async ({ result, update }) => {
 			saving = false;
 			if (result.type === 'success') editing = null;
-			// btw changed the note meanwhile: load its version, so saving again replaces it knowingly.
+			// nolune changed the note meanwhile: load its version, so saving again replaces it knowingly.
 			if (result.type === 'failure' && result.status === 409) await invalidateAll();
 			await update({ reset: false });
 		};

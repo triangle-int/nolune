@@ -51,7 +51,7 @@ type Answer = {
 	chunks?: object[];
 };
 
-/** What the stand-in lists at /models: the fields btw reads. */
+/** What the stand-in lists at /models: the fields nolune reads. */
 const MODELS = [
 	{
 		id: 'anthropic/claude-opus-5.5',
@@ -541,10 +541,10 @@ describe('a chat on an OpenRouter model', () => {
 		const replies = [listing, saying('A dot.')];
 		answer = (req) => (req.json?.stream ? replies.shift()! : titled('A dot'));
 		vi.mocked(runCommand).mockImplementationOnce(async (_input, opts) => {
-			// What `btw view dot.png` does inside the command.
-			const path = join(mkdtempSync(join(tmpdir(), 'btw-dot-')), 'dot.png');
+			// What `nolune view dot.png` does inside the command.
+			const path = join(mkdtempSync(join(tmpdir(), 'nolune-dot-')), 'dot.png');
 			writeFileSync(path, Buffer.from(DOT, 'base64'));
-			await viewImage(path, opts.env.BTW_VIEW_DIR ?? '');
+			await viewImage(path, opts.env.NOLUNE_VIEW_DIR ?? '');
 			return { content: 'Viewing dot.png\n[exit code 0]', isError: false, exitCode: 0 };
 		});
 
@@ -582,10 +582,10 @@ describe('the transcript as chat messages', () => {
 		native: { provider, model, content }
 	});
 
-	it("turns btw's own blocks into messages, and puts OpenRouter's replies back together", () => {
+	it("turns nolune's own blocks into messages, and puts OpenRouter's replies back together", () => {
 		expect(
 			toChatMessages(
-				'You are btw.',
+				'You are nolune.',
 				[
 					{
 						role: 'user',
@@ -605,7 +605,7 @@ describe('the transcript as chat messages', () => {
 							{ type: 'text', text: 'Anna: Look' }
 						]
 					},
-					// A notification someone continued in a chat: btw wrote this reply itself.
+					// A notification someone continued in a chat: nolune wrote this reply itself.
 					{ role: 'assistant', blocks: [{ type: 'text', text: 'The parcel arrived.' }] },
 					reply([thought, listCall]),
 					{
@@ -631,7 +631,7 @@ describe('the transcript as chat messages', () => {
 				MODEL
 			)
 		).toEqual([
-			{ role: 'system', content: 'You are btw.' },
+			{ role: 'system', content: 'You are nolune.' },
 			{
 				role: 'user',
 				content: [
@@ -665,7 +665,7 @@ describe('the transcript as chat messages', () => {
 	it('sends reasoning back only to the model that wrote it, and not from before a new prompt', () => {
 		const said = { type: 'text', text: 'Listing.' };
 		const messages = toChatMessages(
-			'You are btw.',
+			'You are nolune.',
 			[
 				// Written before the system prompt was built again: Claude's thinking is bound to it.
 				{ ...reply([thought, said]), beforePromptChange: true },
@@ -768,7 +768,7 @@ describe('the transcript as chat messages', () => {
 		]);
 	});
 
-	it('says why a reply ended, in the words btw stores', () => {
+	it('says why a reply ended, in the words nolune stores', () => {
 		expect(stopReason('stop', false)).toBe('end_turn');
 		expect(stopReason('tool_calls', true)).toBe('tool_use');
 		expect(stopReason('length', true)).toBe('max_tokens');
@@ -793,7 +793,7 @@ describe('calling OpenRouter', () => {
 		streamTurn({
 			model,
 			effort: 'high',
-			system: 'You are btw.',
+			system: 'You are nolune.',
 			tools: TOOLS,
 			cacheTtl: '5m',
 			messages: [{ role: 'user', blocks: [{ type: 'text', text: 'Anna: Hi' }] }],
@@ -811,13 +811,13 @@ describe('calling OpenRouter', () => {
 		expect((claude.messages as unknown[])[0]).toEqual({
 			role: 'system',
 			content: [
-				{ type: 'text', text: 'You are btw.', cache_control: { type: 'ephemeral', ttl: '5m' } }
+				{ type: 'text', text: 'You are nolune.', cache_control: { type: 'ephemeral', ttl: '5m' } }
 			]
 		});
 		expect(deepseek).not.toHaveProperty('cache_control');
 		expect((deepseek.messages as unknown[])[0]).toEqual({
 			role: 'system',
-			content: 'You are btw.'
+			content: 'You are nolune.'
 		});
 		expect(deepseek).toMatchObject({ session_id: 'chat-1', reasoning: { effort: 'high' } });
 	});
@@ -975,7 +975,7 @@ describe("OpenRouter's models", () => {
 		).toMatchObject({ modelContextWindow: 1_000_000 });
 
 		await expect(addPreset({ provider: 'openrouter', model: 'acme/story-teller' })).rejects.toThrow(
-			"acme/story-teller can't call tools on OpenRouter, and btw needs them to run commands."
+			"acme/story-teller can't call tools on OpenRouter, and nolune needs them to run commands."
 		);
 		await expect(addPreset({ provider: 'openrouter', model: 'claude-opus-5-5' })).rejects.toThrow(
 			'Could not verify model "claude-opus-5-5": Model not found: OpenRouter has no model "claude-opus-5-5".'

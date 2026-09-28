@@ -45,7 +45,7 @@ describe('the soul', () => {
 		const { user, profile } = makeFamily();
 		const chat = createConversation({ profile, presetId: makePreset().id, userId: user.id });
 		expect(chat.systemPrompt).toContain("This profile hasn't given you a soul yet");
-		expect(chat.systemPrompt).toContain('btw soul write');
+		expect(chat.systemPrompt).toContain('nolune soul write');
 		expect(chat.soul).toBe('');
 	});
 

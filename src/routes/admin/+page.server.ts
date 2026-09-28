@@ -48,7 +48,7 @@ import {
 	type EmbeddingSetting,
 	type Plan,
 	type PlanStatus
-} from '@btw/core';
+} from '@nolune/core';
 import { parseTokens } from '$lib/format';
 import { translations } from '$lib/i18n';
 import { requireAdmin } from '$lib/server/access';
@@ -57,7 +57,7 @@ import type { Actions, PageServerLoad } from './$types';
 export const load: PageServerLoad = async ({ locals, depends }) => {
 	requireAdmin(locals);
 	// The page asks again while a ChatGPT sign-in waits for its code.
-	depends('btw:chatgpt-plan');
+	depends('nolune:chatgpt-plan');
 	const defaultId = getDefaultPreset()?.id;
 	const codex = findCodex();
 	const signIn = chatGptSignInState();

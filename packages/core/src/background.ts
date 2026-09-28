@@ -24,8 +24,8 @@ export interface BackgroundCommand {
 	stoppedBy: string | null;
 }
 
-const holder = globalThis as unknown as { __btwBackground?: Map<string, BackgroundCommand> };
-const running = (holder.__btwBackground ??= new Map());
+const holder = globalThis as unknown as { __noluneBackground?: Map<string, BackgroundCommand> };
+const running = (holder.__noluneBackground ??= new Map());
 
 export function backgroundCommands(conversationId: string): BackgroundCommand[] {
 	return [...running.values()].filter((c) => c.conversationId === conversationId);
@@ -95,7 +95,7 @@ export function startBackgroundCommand(opts: {
 			opts.onEnd(command, result);
 		})
 		.catch((err: unknown) => {
-			console.error(`[btw] background command ${command.id} could not finish:`, err);
+			console.error(`[nolune] background command ${command.id} could not finish:`, err);
 		});
 	return Promise.resolve({ started: command });
 }

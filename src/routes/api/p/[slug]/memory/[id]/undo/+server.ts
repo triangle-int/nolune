@@ -1,5 +1,5 @@
 import { error, json } from '@sveltejs/kit';
-import { MemoryUndoError, refreshMemoryLooks, undoMemoryChange } from '@btw/core';
+import { MemoryUndoError, refreshMemoryLooks, undoMemoryChange } from '@nolune/core';
 import { requireProfile } from '$lib/server/access';
 import type { RequestHandler } from './$types';
 

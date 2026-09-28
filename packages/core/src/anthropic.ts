@@ -17,7 +17,7 @@ import type { CacheTtl, Effort, ModelChoice, Provider, StreamEvent } from './mod
 
 /*
  * Chats on Claude, through Anthropic's Messages API and its SDK, and the Files API for pictures
- * and PDFs. The rest of btw calls it through models.ts. A custom provider
+ * and PDFs. The rest of nolune calls it through models.ts. A custom provider
  * (custom-providers.ts) can speak the same API, so its chats go through the same code with its
  * own client (a `MessagesApi`), leaving out what only Anthropic has.
  */
@@ -29,7 +29,7 @@ type ErrorClass =
 let sdk: Sdk | undefined;
 
 /**
- * The SDK is imported on first use. The CLI bundles all of core, and most `btw` commands never
+ * The SDK is imported on first use. The CLI bundles all of core, and most `nolune` commands never
  * call Claude: importing it up front would make each of them slower.
  */
 async function loadSdk(): Promise<Sdk> {
@@ -84,7 +84,7 @@ const ANTHROPIC: MessagesApi = {
 /** What a server's reply may run to: its window is usually smaller than Claude's. */
 const SERVER_MAX_TOKENS = 32_000;
 
-// --- btw's format as Claude takes it ---
+// --- nolune's format as Claude takes it ---
 
 /**
  * A conversation's messages as the Messages API takes them, on `provider`. Replies Claude wrote
@@ -122,7 +122,7 @@ export function toAnthropicMessages(
 
 /**
  * The blocks of a person's or command's message in Anthropic's shape, for Claude or for Claude
- * Code on a Claude plan (`provider`). Blocks of rows from before btw's own format go as they were
+ * Code on a Claude plan (`provider`). Blocks of rows from before nolune's own format go as they were
  * stored. A picture or PDF another provider holds becomes a note.
  */
 export function toAnthropicBlocks(
@@ -162,7 +162,7 @@ function toAnthropicBlock(block: Block, provider: Provider): Anthropic.ContentBl
 				return part ? [part] : [];
 			});
 			if (!changed) return was!;
-			// A result from before btw's format keeps everything else it had.
+			// A result from before nolune's format keeps everything else it had.
 			if (was) return { ...(was as Anthropic.ToolResultBlockParam), content };
 			return {
 				type: 'tool_result',

@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { resolve } from '$app/paths';
-	import type { MemberNote, PersonNote } from '@btw/core';
-	import { isAvatar, type Avatar } from '@btw/core/avatars';
+	import type { MemberNote, PersonNote } from '@nolune/core';
+	import { isAvatar, type Avatar } from '@nolune/core/avatars';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';

@@ -1,11 +1,11 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { createProfile, listMembers, listProfilesForUser } from '@btw/core';
+import { createProfile, listMembers, listProfilesForUser } from '@nolune/core';
 import { translations } from '$lib/i18n';
 import { requireUser } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = ({ locals, depends }) => {
-	depends('btw:profiles');
+	depends('nolune:profiles');
 	const user = requireUser(locals);
 	return {
 		profiles: listProfilesForUser(user.id).map((p) => ({

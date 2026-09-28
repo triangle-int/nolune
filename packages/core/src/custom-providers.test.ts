@@ -479,7 +479,7 @@ describe('custom providers', () => {
 	it('say what went wrong in words: no such provider, the key, or one that is down', async () => {
 		const missing = await quick('custom-openai', 'local/qwen3:8b').catch((err: unknown) => err);
 		expect(describeApiError(missing)).toBe(
-			'No custom provider "local". An admin can add one under Models & keys in btw, or with `btw provider add`.'
+			'No custom provider "local". An admin can add one under Models & keys in nolune, or with `nolune provider add`.'
 		);
 		const unnamed = await quick('custom-openai', 'qwen3:8b').catch((err: unknown) => err);
 		expect(describeApiError(unnamed)).toContain("doesn't say which custom provider it's on");
@@ -494,7 +494,7 @@ describe('custom providers', () => {
 			const refused = await quick(provider, model).catch((err: unknown) => err);
 			const name = provider === 'custom-openai' ? 'Local' : 'oMLX';
 			expect(describeApiError(refused)).toBe(
-				`${name} at ${root} didn't accept the key. An admin can change it under Models & keys in btw.`
+				`${name} at ${root} didn't accept the key. An admin can change it under Models & keys in nolune.`
 			);
 		}
 
@@ -644,7 +644,7 @@ describe("a chat on a custom provider of OpenAI's API", () => {
 			{
 				type: 'input_text',
 				text: expect.stringMatching(
-					/^\[Anna attached dot\.png, saved at .+dot\.png\. It isn't shown here: btw gives models of custom providers only a picture's path\]$/
+					/^\[Anna attached dot\.png, saved at .+dot\.png\. It isn't shown here: nolune gives models of custom providers only a picture's path\]$/
 				)
 			},
 			{ type: 'input_text', text: 'Anna: What is it?' }

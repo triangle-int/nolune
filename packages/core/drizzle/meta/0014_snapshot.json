@@ -1,8 +1,8 @@
 {
+	"id": "5838ce04-45ac-4260-9d91-9838beabb61b",
+	"prevId": "de62b11a-a1a3-4c59-8b79-984193f46acd",
 	"version": "6",
 	"dialect": "sqlite",
-	"id": "b742c691-4546-4b20-9a2d-fca8b6043612",
-	"prevId": "de62b11a-a1a3-4c59-8b79-984193f46acd",
 	"tables": {
 		"account": {
 			"name": "account",
@@ -111,11 +111,11 @@
 				"account_user_id_user_id_fk": {
 					"name": "account_user_id_user_id_fk",
 					"tableFrom": "account",
-					"tableTo": "user",
 					"columnsFrom": ["user_id"],
+					"tableTo": "user",
 					"columnsTo": ["id"],
-					"onDelete": "cascade",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "cascade"
 				}
 			},
 			"compositePrimaryKeys": {},
@@ -173,11 +173,11 @@
 				"background_command_conversation_id_conversation_id_fk": {
 					"name": "background_command_conversation_id_conversation_id_fk",
 					"tableFrom": "background_command",
-					"tableTo": "conversation",
 					"columnsFrom": ["conversation_id"],
+					"tableTo": "conversation",
 					"columnsTo": ["id"],
-					"onDelete": "cascade",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "cascade"
 				}
 			},
 			"compositePrimaryKeys": {},
@@ -319,13 +319,6 @@
 					"autoincrement": false,
 					"default": false
 				},
-				"learned_seq": {
-					"name": "learned_seq",
-					"type": "integer",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
 				"created_by": {
 					"name": "created_by",
 					"type": "text",
@@ -366,38 +359,38 @@
 				"conversation_profile_id_profile_id_fk": {
 					"name": "conversation_profile_id_profile_id_fk",
 					"tableFrom": "conversation",
-					"tableTo": "profile",
 					"columnsFrom": ["profile_id"],
+					"tableTo": "profile",
 					"columnsTo": ["id"],
-					"onDelete": "cascade",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "cascade"
 				},
 				"conversation_preset_id_model_preset_id_fk": {
 					"name": "conversation_preset_id_model_preset_id_fk",
 					"tableFrom": "conversation",
-					"tableTo": "model_preset",
 					"columnsFrom": ["preset_id"],
+					"tableTo": "model_preset",
 					"columnsTo": ["id"],
-					"onDelete": "set null",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "set null"
 				},
 				"conversation_folder_id_folder_id_fk": {
 					"name": "conversation_folder_id_folder_id_fk",
 					"tableFrom": "conversation",
-					"tableTo": "folder",
 					"columnsFrom": ["folder_id"],
+					"tableTo": "folder",
 					"columnsTo": ["id"],
-					"onDelete": "set null",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "set null"
 				},
 				"conversation_created_by_user_id_fk": {
 					"name": "conversation_created_by_user_id_fk",
 					"tableFrom": "conversation",
-					"tableTo": "user",
 					"columnsFrom": ["created_by"],
+					"tableTo": "user",
 					"columnsTo": ["id"],
-					"onDelete": "set null",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "set null"
 				}
 			},
 			"compositePrimaryKeys": {},
@@ -470,20 +463,20 @@
 				"folder_profile_id_profile_id_fk": {
 					"name": "folder_profile_id_profile_id_fk",
 					"tableFrom": "folder",
-					"tableTo": "profile",
 					"columnsFrom": ["profile_id"],
+					"tableTo": "profile",
 					"columnsTo": ["id"],
-					"onDelete": "cascade",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "cascade"
 				},
 				"folder_created_by_user_id_fk": {
 					"name": "folder_created_by_user_id_fk",
 					"tableFrom": "folder",
-					"tableTo": "user",
 					"columnsFrom": ["created_by"],
+					"tableTo": "user",
 					"columnsTo": ["id"],
-					"onDelete": "set null",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "set null"
 				}
 			},
 			"compositePrimaryKeys": {},
@@ -590,20 +583,20 @@
 				"folder_file_folder_id_folder_id_fk": {
 					"name": "folder_file_folder_id_folder_id_fk",
 					"tableFrom": "folder_file",
-					"tableTo": "folder",
 					"columnsFrom": ["folder_id"],
+					"tableTo": "folder",
 					"columnsTo": ["id"],
-					"onDelete": "cascade",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "cascade"
 				},
 				"folder_file_created_by_user_id_fk": {
 					"name": "folder_file_created_by_user_id_fk",
 					"tableFrom": "folder_file",
-					"tableTo": "user",
 					"columnsFrom": ["created_by"],
+					"tableTo": "user",
 					"columnsTo": ["id"],
-					"onDelete": "set null",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "set null"
 				}
 			},
 			"compositePrimaryKeys": {},
@@ -729,20 +722,20 @@
 				"media_conversation_id_conversation_id_fk": {
 					"name": "media_conversation_id_conversation_id_fk",
 					"tableFrom": "media",
-					"tableTo": "conversation",
 					"columnsFrom": ["conversation_id"],
+					"tableTo": "conversation",
 					"columnsTo": ["id"],
-					"onDelete": "cascade",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "cascade"
 				},
 				"media_message_id_message_id_fk": {
 					"name": "media_message_id_message_id_fk",
 					"tableFrom": "media",
-					"tableTo": "message",
 					"columnsFrom": ["message_id"],
+					"tableTo": "message",
 					"columnsTo": ["id"],
-					"onDelete": "cascade",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "cascade"
 				}
 			},
 			"compositePrimaryKeys": {},
@@ -877,20 +870,20 @@
 				"message_conversation_id_conversation_id_fk": {
 					"name": "message_conversation_id_conversation_id_fk",
 					"tableFrom": "message",
-					"tableTo": "conversation",
 					"columnsFrom": ["conversation_id"],
+					"tableTo": "conversation",
 					"columnsTo": ["id"],
-					"onDelete": "cascade",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "cascade"
 				},
 				"message_sender_id_user_id_fk": {
 					"name": "message_sender_id_user_id_fk",
 					"tableFrom": "message",
-					"tableTo": "user",
 					"columnsFrom": ["sender_id"],
+					"tableTo": "user",
 					"columnsTo": ["id"],
-					"onDelete": "set null",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "set null"
 				}
 			},
 			"compositePrimaryKeys": {},
@@ -1044,29 +1037,29 @@
 				"notification_profile_id_profile_id_fk": {
 					"name": "notification_profile_id_profile_id_fk",
 					"tableFrom": "notification",
-					"tableTo": "profile",
 					"columnsFrom": ["profile_id"],
+					"tableTo": "profile",
 					"columnsTo": ["id"],
-					"onDelete": "cascade",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "cascade"
 				},
 				"notification_trigger_id_trigger_id_fk": {
 					"name": "notification_trigger_id_trigger_id_fk",
 					"tableFrom": "notification",
-					"tableTo": "trigger",
 					"columnsFrom": ["trigger_id"],
+					"tableTo": "trigger",
 					"columnsTo": ["id"],
-					"onDelete": "set null",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "set null"
 				},
 				"notification_conversation_id_conversation_id_fk": {
 					"name": "notification_conversation_id_conversation_id_fk",
 					"tableFrom": "notification",
-					"tableTo": "conversation",
 					"columnsFrom": ["conversation_id"],
+					"tableTo": "conversation",
 					"columnsTo": ["id"],
-					"onDelete": "set null",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "set null"
 				}
 			},
 			"compositePrimaryKeys": {},
@@ -1096,20 +1089,20 @@
 				"notification_dismissal_notification_id_notification_id_fk": {
 					"name": "notification_dismissal_notification_id_notification_id_fk",
 					"tableFrom": "notification_dismissal",
-					"tableTo": "notification",
 					"columnsFrom": ["notification_id"],
+					"tableTo": "notification",
 					"columnsTo": ["id"],
-					"onDelete": "cascade",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "cascade"
 				},
 				"notification_dismissal_user_id_user_id_fk": {
 					"name": "notification_dismissal_user_id_user_id_fk",
 					"tableFrom": "notification_dismissal",
-					"tableTo": "user",
 					"columnsFrom": ["user_id"],
+					"tableTo": "user",
 					"columnsTo": ["id"],
-					"onDelete": "cascade",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "cascade"
 				}
 			},
 			"compositePrimaryKeys": {
@@ -1144,11 +1137,11 @@
 				"notification_seen_user_id_user_id_fk": {
 					"name": "notification_seen_user_id_user_id_fk",
 					"tableFrom": "notification_seen",
-					"tableTo": "user",
 					"columnsFrom": ["user_id"],
+					"tableTo": "user",
 					"columnsTo": ["id"],
-					"onDelete": "cascade",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "cascade"
 				}
 			},
 			"compositePrimaryKeys": {},
@@ -1195,14 +1188,6 @@
 					"autoincrement": false,
 					"default": "'[]'"
 				},
-				"learn_from_chats": {
-					"name": "learn_from_chats",
-					"type": "integer",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false,
-					"default": true
-				},
 				"created_by": {
 					"name": "created_by",
 					"type": "text",
@@ -1230,11 +1215,11 @@
 				"profile_created_by_user_id_fk": {
 					"name": "profile_created_by_user_id_fk",
 					"tableFrom": "profile",
-					"tableTo": "user",
 					"columnsFrom": ["created_by"],
+					"tableTo": "user",
 					"columnsTo": ["id"],
-					"onDelete": "set null",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "set null"
 				}
 			},
 			"compositePrimaryKeys": {},
@@ -1278,20 +1263,20 @@
 				"profile_member_profile_id_profile_id_fk": {
 					"name": "profile_member_profile_id_profile_id_fk",
 					"tableFrom": "profile_member",
-					"tableTo": "profile",
 					"columnsFrom": ["profile_id"],
+					"tableTo": "profile",
 					"columnsTo": ["id"],
-					"onDelete": "cascade",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "cascade"
 				},
 				"profile_member_user_id_user_id_fk": {
 					"name": "profile_member_user_id_user_id_fk",
 					"tableFrom": "profile_member",
-					"tableTo": "user",
 					"columnsFrom": ["user_id"],
+					"tableTo": "user",
 					"columnsTo": ["id"],
-					"onDelete": "cascade",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "cascade"
 				}
 			},
 			"compositePrimaryKeys": {
@@ -1437,11 +1422,11 @@
 				"session_user_id_user_id_fk": {
 					"name": "session_user_id_user_id_fk",
 					"tableFrom": "session",
-					"tableTo": "user",
 					"columnsFrom": ["user_id"],
+					"tableTo": "user",
 					"columnsTo": ["id"],
-					"onDelete": "cascade",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "cascade"
 				}
 			},
 			"compositePrimaryKeys": {},
@@ -1531,20 +1516,20 @@
 				"subagent_parent_id_conversation_id_fk": {
 					"name": "subagent_parent_id_conversation_id_fk",
 					"tableFrom": "subagent",
-					"tableTo": "conversation",
 					"columnsFrom": ["parent_id"],
+					"tableTo": "conversation",
 					"columnsTo": ["id"],
-					"onDelete": "cascade",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "cascade"
 				},
 				"subagent_conversation_id_conversation_id_fk": {
 					"name": "subagent_conversation_id_conversation_id_fk",
 					"tableFrom": "subagent",
-					"tableTo": "conversation",
 					"columnsFrom": ["conversation_id"],
+					"tableTo": "conversation",
 					"columnsTo": ["id"],
-					"onDelete": "cascade",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "cascade"
 				}
 			},
 			"compositePrimaryKeys": {},
@@ -1712,29 +1697,29 @@
 				"trigger_profile_id_profile_id_fk": {
 					"name": "trigger_profile_id_profile_id_fk",
 					"tableFrom": "trigger",
-					"tableTo": "profile",
 					"columnsFrom": ["profile_id"],
+					"tableTo": "profile",
 					"columnsTo": ["id"],
-					"onDelete": "cascade",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "cascade"
 				},
 				"trigger_preset_id_model_preset_id_fk": {
 					"name": "trigger_preset_id_model_preset_id_fk",
 					"tableFrom": "trigger",
-					"tableTo": "model_preset",
 					"columnsFrom": ["preset_id"],
+					"tableTo": "model_preset",
 					"columnsTo": ["id"],
-					"onDelete": "set null",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "set null"
 				},
 				"trigger_created_by_user_id_fk": {
 					"name": "trigger_created_by_user_id_fk",
 					"tableFrom": "trigger",
-					"tableTo": "user",
 					"columnsFrom": ["created_by"],
+					"tableTo": "user",
 					"columnsTo": ["id"],
-					"onDelete": "set null",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "set null"
 				}
 			},
 			"compositePrimaryKeys": {},
@@ -1880,38 +1865,38 @@
 				"trigger_run_profile_id_profile_id_fk": {
 					"name": "trigger_run_profile_id_profile_id_fk",
 					"tableFrom": "trigger_run",
-					"tableTo": "profile",
 					"columnsFrom": ["profile_id"],
+					"tableTo": "profile",
 					"columnsTo": ["id"],
-					"onDelete": "cascade",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "cascade"
 				},
 				"trigger_run_trigger_id_trigger_id_fk": {
 					"name": "trigger_run_trigger_id_trigger_id_fk",
 					"tableFrom": "trigger_run",
-					"tableTo": "trigger",
 					"columnsFrom": ["trigger_id"],
+					"tableTo": "trigger",
 					"columnsTo": ["id"],
-					"onDelete": "set null",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "set null"
 				},
 				"trigger_run_preset_id_model_preset_id_fk": {
 					"name": "trigger_run_preset_id_model_preset_id_fk",
 					"tableFrom": "trigger_run",
-					"tableTo": "model_preset",
 					"columnsFrom": ["preset_id"],
+					"tableTo": "model_preset",
 					"columnsTo": ["id"],
-					"onDelete": "set null",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "set null"
 				},
 				"trigger_run_conversation_id_conversation_id_fk": {
 					"name": "trigger_run_conversation_id_conversation_id_fk",
 					"tableFrom": "trigger_run",
-					"tableTo": "conversation",
 					"columnsFrom": ["conversation_id"],
+					"tableTo": "conversation",
 					"columnsTo": ["id"],
-					"onDelete": "set null",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "set null"
 				}
 			},
 			"compositePrimaryKeys": {},
@@ -1990,20 +1975,20 @@
 				"upload_profile_id_profile_id_fk": {
 					"name": "upload_profile_id_profile_id_fk",
 					"tableFrom": "upload",
-					"tableTo": "profile",
 					"columnsFrom": ["profile_id"],
+					"tableTo": "profile",
 					"columnsTo": ["id"],
-					"onDelete": "cascade",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "cascade"
 				},
 				"upload_user_id_user_id_fk": {
 					"name": "upload_user_id_user_id_fk",
 					"tableFrom": "upload",
-					"tableTo": "user",
 					"columnsFrom": ["user_id"],
+					"tableTo": "user",
 					"columnsTo": ["id"],
-					"onDelete": "cascade",
-					"onUpdate": "no action"
+					"onUpdate": "no action",
+					"onDelete": "cascade"
 				}
 			},
 			"compositePrimaryKeys": {},
@@ -2150,9 +2135,9 @@
 	"views": {},
 	"enums": {},
 	"_meta": {
+		"columns": {},
 		"schemas": {},
-		"tables": {},
-		"columns": {}
+		"tables": {}
 	},
 	"internal": {
 		"indexes": {}

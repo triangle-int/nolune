@@ -288,7 +288,7 @@
 											: m.automations.instructions}
 									{:else}
 										<Rich text={m.automations.script}>
-											{#snippet command()}<code>btw wake</code>{/snippet}
+											{#snippet command()}<code>nolune wake</code>{/snippet}
 										</Rich>
 									{/if}
 								</span>

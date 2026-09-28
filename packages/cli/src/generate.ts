@@ -12,15 +12,15 @@ import {
 	parseImageSize,
 	type ImageBackground,
 	type ImageFormat
-} from '@btw/core';
+} from '@nolune/core';
 import type { Io } from './io.ts';
 
 /** Read when shown: the gateway runs for days, and the image model can change meanwhile. */
 export function generateHelp(): string {
-	return `Pictures (model ${configuredImageModel()}; change it with \`btw config set image-model\`)
-  btw generate image <PROMPT | -> [--image FILE]... [--size square|portrait|landscape|auto|WxH]
-                     [--quality Q] [--background auto|transparent|opaque] [--format png|jpeg|webp]
-                     [--count N] [--model PROVIDER/MODEL] [--out DIR|FILE] [--dry-run]
+	return `Pictures (model ${configuredImageModel()}; change it with \`nolune config set image-model\`)
+  nolune generate image <PROMPT | -> [--image FILE]... [--size square|portrait|landscape|auto|WxH]
+                        [--quality Q] [--background auto|transparent|opaque] [--format png|jpeg|webp]
+                        [--count N] [--model PROVIDER/MODEL] [--out DIR|FILE] [--dry-run]
       make pictures from a prompt, or change the --image ones; \`-\` reads the prompt from stdin`;
 }
 
@@ -82,7 +82,7 @@ function outputPaths(io: Io, out: string | undefined, count: number, base: strin
 		dir = resolve(io.cwd, expandHome(out));
 	} else {
 		// In the agent's commands: the profile's images folder, so the family finds them later.
-		const profileDir = io.env.BTW_PROFILE_DIR;
+		const profileDir = io.env.NOLUNE_PROFILE_DIR;
 		dir = profileDir && isAbsolute(profileDir) ? join(profileDir, 'images') : io.cwd;
 	}
 	const files = Array.from({ length: count }, (_, i) =>
@@ -101,7 +101,7 @@ async function image(io: Io, args: string[]): Promise<void> {
 	const { values, positionals } = parseArgs({ args, allowPositionals: true, options: OPTIONS });
 	let prompt = positionals.join(' ').trim();
 	if (prompt === '-') prompt = (await io.readStdin()).trim();
-	if (!prompt) throw new Error('say what to make: btw generate image "<prompt>"');
+	if (!prompt) throw new Error('say what to make: nolune generate image "<prompt>"');
 	const inputs = (values.image ?? []).map((path) => resolve(io.cwd, expandHome(path)));
 	const count = values.count === undefined ? 1 : Number(values.count);
 	if (!Number.isInteger(count) || count < 1 || count > MAX_IMAGE_COUNT) {
@@ -169,5 +169,5 @@ export async function generateCommand(
 	args: string[]
 ): Promise<void> {
 	if (action === 'image') return image(io, args);
-	throw new Error('usage: btw generate image <prompt> [options]. See `btw help`.');
+	throw new Error('usage: nolune generate image <prompt> [options]. See `nolune help`.');
 }

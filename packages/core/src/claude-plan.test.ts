@@ -183,7 +183,7 @@ beforeAll(async () => {
 	});
 	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
 	baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-	configDir = mkdtempSync(join(tmpdir(), 'btw-claude-config-'));
+	configDir = mkdtempSync(join(tmpdir(), 'nolune-claude-config-'));
 });
 
 afterAll(() => {
@@ -200,7 +200,7 @@ beforeEach(() => {
 	vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', TOKEN);
 	vi.stubEnv('CLAUDE_CONFIG_DIR', configDir);
 	vi.stubEnv('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', '1');
-	// An API key in btw's environment must not take the plan's place.
+	// An API key in nolune's environment must not take the plan's place.
 	vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-api03-must-not-be-used');
 	initConfig();
 	updateConfig((c) => {
@@ -218,7 +218,7 @@ afterEach(() => {
 const listFiles: Block = {
 	type: 'tool_use',
 	id: 'toolu_1',
-	name: 'mcp__btw__run_command',
+	name: 'mcp__nolune__run_command',
 	input: { summary: 'Listing the files', icon: 'folder-open', command: 'ls' }
 };
 
@@ -265,7 +265,7 @@ function planChat() {
 	return { user, chat };
 }
 
-/** A picture or PDF kept in btw's media store, as a message refers to it. */
+/** A picture or PDF kept in nolune's media store, as a message refers to it. */
 function kept(data: Buffer, mime: string) {
 	const sha256 = createHash('sha256').update(data).digest('hex');
 	return { type: 'media', sha256, mime, bytes: data.length };
@@ -279,7 +279,7 @@ function rowsOf(conversationId: string) {
 }
 
 describe.skipIf(!claude)('chats on the Claude plan', { timeout: 60_000 }, () => {
-	it('runs a turn through Claude Code, signed in with the plan, and saves it as btw does', async () => {
+	it('runs a turn through Claude Code, signed in with the plan, and saves it as nolune does', async () => {
 		const { user, chat } = planChat();
 		scripted(
 			{ stop: 'tool_use', content: [{ type: 'text', text: 'Looking.' }, listFiles] },
@@ -329,16 +329,16 @@ describe.skipIf(!claude)('chats on the Claude plan', { timeout: 60_000 }, () => 
 		expect(vi.mocked(runCommand).mock.calls[0][0]).toMatchObject({ command: 'ls' });
 
 		const [first, second] = chatCalls();
-		// The plan's sign-in, never the API key in btw's environment.
+		// The plan's sign-in, never the API key in nolune's environment.
 		expect(first.headers.authorization).toBe(`Bearer ${TOKEN}`);
 		expect(first.headers['x-api-key']).toBeUndefined();
 		expect(first.json?.model).toBe('claude-opus-5-5');
-		// btw's own prompt and its one tool, nothing of Claude Code's.
+		// nolune's own prompt and its one tool, nothing of Claude Code's.
 		const system = (first.json?.system ?? []).map((b) => b.text).join('\n');
 		expect(system).toContain(chat.systemPrompt);
 		expect(first.json?.tools).toEqual([
 			expect.objectContaining({
-				name: 'mcp__btw__run_command',
+				name: 'mcp__nolune__run_command',
 				description: RUN_COMMAND_TOOL.description
 			})
 		]);
@@ -508,7 +508,7 @@ describe.skipIf(!claude)('chats on the Claude plan', { timeout: 60_000 }, () => 
 		);
 	});
 
-	it('shows the model the pictures a command opened with `btw view`', async () => {
+	it('shows the model the pictures a command opened with `nolune view`', async () => {
 		const { user, chat } = planChat();
 		scripted(
 			{ stop: 'tool_use', content: [listFiles] },
@@ -517,10 +517,10 @@ describe.skipIf(!claude)('chats on the Claude plan', { timeout: 60_000 }, () => 
 		const dot =
 			'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 		vi.mocked(runCommand).mockImplementationOnce(async (_input, opts) => {
-			// What `btw view dot.png` does inside the command.
-			const path = join(mkdtempSync(join(tmpdir(), 'btw-dot-')), 'dot.png');
+			// What `nolune view dot.png` does inside the command.
+			const path = join(mkdtempSync(join(tmpdir(), 'nolune-dot-')), 'dot.png');
 			writeFileSync(path, Buffer.from(dot, 'base64'));
-			await viewImage(path, opts.env.BTW_VIEW_DIR ?? '');
+			await viewImage(path, opts.env.NOLUNE_VIEW_DIR ?? '');
 			return { content: 'Viewing dot.png\n[exit code 0]', isError: false, exitCode: 0 };
 		});
 		const ended = loopEnd(chat.id);
@@ -707,7 +707,7 @@ describe('chats on the Claude plan without Claude Code', () => {
 		updateConfig((c) => {
 			c.claudePath = undefined;
 		});
-		const empty = mkdtempSync(join(tmpdir(), 'btw-no-claude-'));
+		const empty = mkdtempSync(join(tmpdir(), 'nolune-no-claude-'));
 		vi.stubEnv('PATH', empty);
 		vi.stubEnv('HOME', empty);
 
@@ -715,13 +715,13 @@ describe('chats on the Claude plan without Claude Code', () => {
 		expect(status).toMatchObject({ path: null, installed: false, account: null });
 		expect(status.problem).toMatch(/^Claude Code isn't installed on this computer/);
 		expect(status.problem).toContain('curl -fsSL https://claude.ai/install.sh | bash');
-		expect(status.problem).toContain('btw claude-plan setup');
+		expect(status.problem).toContain('nolune claude-plan setup');
 		await expect(addPreset({ provider: 'claude-plan', model: 'claude-opus-5-5' })).rejects.toThrow(
 			/Claude Code isn't installed/
 		);
 	});
 
-	it('say where btw was told it is', async () => {
+	it('say where nolune was told it is', async () => {
 		const missing = join(tmpdir(), 'no-such-claude');
 		updateConfig((c) => {
 			c.claudePath = missing;

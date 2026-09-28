@@ -1,4 +1,4 @@
-import { createProfile, defaultAvatar, getProfile } from '@btw/core';
+import { createProfile, defaultAvatar, getProfile } from '@nolune/core';
 import { describe, expect, it } from 'vitest';
 import { makeUser } from '../../core/src/test/fixtures.ts';
 import { profileCommand } from './profile.ts';
@@ -10,16 +10,16 @@ function run(env: Record<string, string>, action: string, ...args: string[]): st
 	return out().trimEnd();
 }
 
-describe('btw profile avatar', () => {
-	it("shows the profile's avatar, from --profile or the agent's BTW_PROFILE", () => {
+describe('nolune profile avatar', () => {
+	it("shows the profile's avatar, from --profile or the agent's NOLUNE_PROFILE", () => {
 		createProfile('Family', makeUser('Anna').id);
 		expect(run({}, 'avatar', '--profile', 'family')).toBe(defaultAvatar('family'));
-		expect(run({ BTW_PROFILE: 'family' }, 'avatar')).toBe(defaultAvatar('family'));
+		expect(run({ NOLUNE_PROFILE: 'family' }, 'avatar')).toBe(defaultAvatar('family'));
 	});
 
 	it('changes it', () => {
 		const family = createProfile('Family', makeUser('Anna').id);
-		const env = { BTW_PROFILE: 'family' };
+		const env = { NOLUNE_PROFILE: 'family' };
 		expect(run(env, 'avatar', 'Comet')).toBe(
 			"Family's avatar is now the comet. Open pages show it in a few seconds."
 		);
@@ -43,7 +43,7 @@ describe('btw profile avatar', () => {
 	});
 });
 
-describe('btw profile list', () => {
+describe('nolune profile list', () => {
 	it('shows each profile with its avatar', () => {
 		const anna = makeUser('Anna');
 		createProfile('Family', anna.id);

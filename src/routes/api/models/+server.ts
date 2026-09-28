@@ -1,5 +1,5 @@
 import { error, json } from '@sveltejs/kit';
-import { describeApiError, isProvider, listModels } from '@btw/core';
+import { describeApiError, isProvider, listModels } from '@nolune/core';
 import { requireAdmin } from '$lib/server/access';
 import type { RequestHandler } from './$types';
 

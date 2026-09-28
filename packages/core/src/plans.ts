@@ -6,9 +6,9 @@ import type { Effort, ModelReply, StreamEvent, ToolCall } from './models.ts';
  * Chats on someone's subscription plan instead of an API key: the Claude plan (claude-plan.ts,
  * through Claude Code) and the ChatGPT plan (chatgpt-plan.ts, through Codex). Both run the maker's
  * own agent, installed on this computer and signed in there: it keeps the sign-in, the
- * conversation and the agent loop, and asks btw to run each command. So both take the same whole
+ * conversation and the agent loop, and asks nolune to run each command. So both take the same whole
  * turn from the runner (PlanTurn), and what people see of them is shared: one kind of error, one
- * way of saying who a plan is signed in as, and one status for Models & keys, `btw <plan> status`
+ * way of saying who a plan is signed in as, and one status for Models & keys, `nolune <plan> status`
  * and adding a preset.
  *
  * This module imports neither plan, so both can build on it.
@@ -74,7 +74,7 @@ export interface PlanTurn {
 
 /**
  * Why a turn failed on the chat's session rather than anything else: `missing` (the agent no
- * longer has it, say its files were deleted) or `taken` (it exists, though btw never saw it start).
+ * longer has it, say its files were deleted) or `taken` (it exists, though nolune never saw it start).
  */
 export type SessionProblem = 'missing' | 'taken';
 
@@ -93,7 +93,7 @@ export function describePlanAccount(account: PlanAccount): string {
 }
 
 export interface PlanStatus {
-	/** The agent btw runs (`claude`, `codex`), if it found one or was told where it is. */
+	/** The agent nolune runs (`claude`, `codex`), if it found one or was told where it is. */
 	path: string | null;
 	/** Whether that agent is there. */
 	installed: boolean;

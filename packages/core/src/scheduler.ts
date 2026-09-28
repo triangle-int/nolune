@@ -50,18 +50,18 @@ const SCRIPT_TIMEOUT_SECONDS = 600;
 const SCRIPT_OUTPUT_CHARS = 4_000;
 export const MAX_PAYLOAD_BYTES = 64 * 1024;
 
-const holder = globalThis as unknown as { __btwScheduler?: boolean };
+const holder = globalThis as unknown as { __noluneScheduler?: boolean };
 
 /**
  * Gateway only. Every few seconds: fires triggers that are due and starts queued runs (including
- * the ones `btw wake` and `btw trigger run` queue from other processes), starts the subagents
- * that `btw agent` asks for, and notices profiles that `btw profile` changed from another process.
+ * the ones `nolune wake` and `nolune trigger run` queue from other processes), starts the subagents
+ * that `nolune agent` asks for, and notices profiles that `nolune profile` changed from another process.
  * Chats that went quiet get looked over for memory (memory-learning.ts), and memory facts get
  * their embeddings (memory-search.ts).
  */
 export function startScheduler(): void {
-	if (holder.__btwScheduler) return;
-	holder.__btwScheduler = true;
+	if (holder.__noluneScheduler) return;
+	holder.__noluneScheduler = true;
 	onLoopEnd(finishAgentRun);
 	startSubagentHost();
 	startLearning();
@@ -80,7 +80,7 @@ function tick(): void {
 		processSubagents();
 		noticeProfileChanges();
 	} catch (err) {
-		console.error('[btw] scheduler tick failed:', err);
+		console.error('[nolune] scheduler tick failed:', err);
 	}
 }
 
@@ -90,18 +90,21 @@ function fireDueTriggers(now: Date): void {
 			markFired(t, now);
 		} catch (err) {
 			// Otherwise it would be due again on every tick.
-			console.error(`[btw] trigger "${t.name}" could not be scheduled and was paused:`, err);
+			console.error(`[nolune] trigger "${t.name}" could not be scheduled and was paused:`, err);
 			setTriggerEnabled(t.id, false);
 			continue;
 		}
 		if (hasActiveRun(t.id, t.action)) {
-			console.log(`[btw] trigger "${t.name}": the previous run is still going, skipped`);
+			console.log(`[nolune] trigger "${t.name}": the previous run is still going, skipped`);
 			continue;
 		}
 		try {
 			queueRun(t, t.kind === 'once' ? 'once' : 'cron');
 		} catch (err) {
-			console.error(`[btw] trigger "${t.name}" skipped:`, err instanceof Error ? err.message : err);
+			console.error(
+				`[nolune] trigger "${t.name}" skipped:`,
+				err instanceof Error ? err.message : err
+			);
 		}
 	}
 }
@@ -123,7 +126,7 @@ export function processQueue(): void {
 				startScriptRun(run);
 			}
 		} catch (err) {
-			console.error(`[btw] run "${run.title}" could not start:`, err);
+			console.error(`[nolune] run "${run.title}" could not start:`, err);
 			failRun(run, `Could not start: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
@@ -197,7 +200,7 @@ function startAgentRun(run: TriggerRun): void {
 		]
 	});
 	updateRun(run.id, { status: 'running', conversationId: conv.id });
-	console.log(`[btw] background run "${run.title}" started in ${conv.id.slice(0, 8)}`);
+	console.log(`[nolune] background run "${run.title}" started in ${conv.id.slice(0, 8)}`);
 	kick(conv.id);
 }
 
@@ -209,7 +212,7 @@ function recall(slug: string, text: string, known: string): string | null {
 	try {
 		return recallByWords(slug, text, { known });
 	} catch (err) {
-		console.error(`[btw] ${slug} could not look in memory for a background run:`, err);
+		console.error(`[nolune] ${slug} could not look in memory for a background run:`, err);
 		return null;
 	}
 }
@@ -266,10 +269,10 @@ function startScriptRun(run: TriggerRun): void {
 		{
 			defaultCwd: dir,
 			env: commandEnv({
-				BTW_PROFILE: profile.slug,
-				BTW_PROFILE_DIR: dir,
-				BTW_TRIGGER_ID: t.id,
-				...(run.payload ? { BTW_PAYLOAD: run.payload } : {})
+				NOLUNE_PROFILE: profile.slug,
+				NOLUNE_PROFILE_DIR: dir,
+				NOLUNE_TRIGGER_ID: t.id,
+				...(run.payload ? { NOLUNE_PAYLOAD: run.payload } : {})
 			}),
 			signal: new AbortController().signal,
 			abortReason: () => 'Stopped.'
@@ -327,9 +330,9 @@ function prune(): void {
 		pruneUploads();
 		pruneMedia();
 	} catch (err) {
-		console.error('[btw] pruning old runs failed:', err);
+		console.error('[nolune] pruning old runs failed:', err);
 	}
 	pruneProviderFiles().catch((err) => {
-		console.error('[btw] pruning uploaded files failed:', err);
+		console.error('[nolune] pruning uploaded files failed:', err);
 	});
 }

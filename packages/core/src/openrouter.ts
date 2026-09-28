@@ -19,12 +19,12 @@ import type { CacheTtl, Effort, ModelChoice, StreamEvent } from './models.ts';
 /*
  * Chats on the models OpenRouter serves (Anthropic's, OpenAI's, Google's, DeepSeek's...), through
  * its Chat Completions API. OpenAI's SDK speaks it: pointed at OpenRouter, it brings the same
- * retries and server-sent events as for OpenAI. The rest of btw calls it through models.ts.
+ * retries and server-sent events as for OpenAI. The rest of nolune calls it through models.ts.
  *
  * Every call sends the whole transcript, as with the other providers. A reply is stored as the
  * pieces the API returned: its `reasoning_details` as they came (Claude's signatures and
  * encrypted reasoning included, which must go back unchanged), its text as a `text` block, and
- * its `tool_calls`. btw's own blocks (Anthropic's format) become chat messages the same way on
+ * its `tool_calls`. nolune's own blocks (Anthropic's format) become chat messages the same way on
  * every call, so the prefix stays byte-identical for the prompt cache. Pictures and PDFs go
  * through OpenRouter's Files API (in beta), and only to models that take them (`modelInputs`).
  */
@@ -42,7 +42,7 @@ export function openrouterBaseUrl(): string {
 type Sdk = typeof import('openai');
 
 /**
- * OpenAI's SDK, loaded on first use: the bundled CLI carries all of core, and most `btw`
+ * OpenAI's SDK, loaded on first use: the bundled CLI carries all of core, and most `nolune`
  * commands never call a model (see openai-chat.ts).
  */
 let sdk: Sdk | undefined;
@@ -107,14 +107,14 @@ async function getClient(): Promise<OpenAI> {
 	const baseURL = openrouterBaseUrl();
 	const { OpenAI: Client } = await loadSdk();
 	if (!cached || cached.key !== key || cached.baseURL !== baseURL) {
-		// X-Title names btw on the account's activity page.
-		const client = new Client({ apiKey: key, baseURL, defaultHeaders: { 'X-Title': 'btw' } });
+		// X-Title names nolune on the account's activity page.
+		const client = new Client({ apiKey: key, baseURL, defaultHeaders: { 'X-Title': 'nolune' } });
 		cached = { key, baseURL, client };
 	}
 	return cached.client;
 }
 
-// --- btw's format as OpenRouter takes it ---
+// --- nolune's format as OpenRouter takes it ---
 
 type Stored = { type?: unknown } & Record<string, unknown>;
 type CacheControl = { type: 'ephemeral'; ttl: CacheTtl };
@@ -174,7 +174,7 @@ function inputPart(block: Block): Part | null {
 }
 
 /**
- * A command's result as a tool message's text, and the pictures and PDFs in it (`btw view`), each
+ * A command's result as a tool message's text, and the pictures and PDFs in it (`nolune view`), each
  * after the line naming it: a tool message takes only text, so they follow in a user message.
  */
 function toolResult(content: ToolResultBlock['content']): { text: string; files: Part[] } {
@@ -230,7 +230,7 @@ function nativeMessage(content: unknown[], withReasoning: boolean): ChatMessage 
  * A conversation's messages as Chat Completions messages for `model`. Replies it wrote go back as
  * they came, reasoning included, except from before the system prompt was built again: through
  * OpenRouter it may be Claude's thinking, which is bound to the prompt. Replies from another model
- * or provider (the conversation switched), and btw's own, go as their text and calls. `cache`:
+ * or provider (the conversation switched), and nolune's own, go as their text and calls. `cache`:
  * Claude only caches what's marked.
  */
 export function toChatMessages(
@@ -292,7 +292,7 @@ export function readableMessages(messages: Message[], model: string): Promise<Me
 	return withoutUnreadable(messages, model, () => modelInputs(model));
 }
 
-/** A tool as btw saves it (Anthropic's format) as a function tool. */
+/** A tool as nolune saves it (Anthropic's format) as a function tool. */
 function functionTool(tool: Anthropic.Tool) {
 	return {
 		type: 'function' as const,
@@ -335,7 +335,7 @@ interface Chunk {
 export interface Reply {
 	/** What's stored: reasoning details, then text, then tool calls. */
 	content: unknown[];
-	/** In Anthropic's words, as btw stores it: see ModelReply in models.ts. */
+	/** In Anthropic's words, as nolune stores it: see ModelReply in models.ts. */
 	stopReason: string;
 	usage: Usage;
 }
@@ -457,7 +457,7 @@ async function readStream(
 	};
 }
 
-/** In Anthropic's words, as btw stores it: see ModelReply in models.ts. */
+/** In Anthropic's words, as nolune stores it: see ModelReply in models.ts. */
 export function stopReason(finish: string | null, calls: boolean, refused = false): string {
 	if (finish === 'length') return 'max_tokens';
 	if (finish === 'content_filter' || refused) return 'refusal';
@@ -475,7 +475,7 @@ export function streamTurn(opts: {
 	tools: Anthropic.Tool[];
 	cacheTtl: CacheTtl;
 	cacheKey: string;
-	/** In btw's format, with pictures and PDFs as OpenRouter gets them (resolveFiles). */
+	/** In nolune's format, with pictures and PDFs as OpenRouter gets them (resolveFiles). */
 	messages: Message[];
 	signal: AbortSignal;
 	onEvent: (event: StreamEvent) => void;
@@ -533,7 +533,7 @@ export function quickReply(opts: {
 	});
 }
 
-/** Like OpenAI, OpenRouter counts cached tokens inside `prompt_tokens`; btw counts them apart. */
+/** Like OpenAI, OpenRouter counts cached tokens inside `prompt_tokens`; nolune counts them apart. */
 export function summarizeUsage(usage: ChatUsage | undefined): Usage {
 	const cacheRead = usage?.prompt_tokens_details?.cached_tokens ?? 0;
 	const cacheWrite = usage?.prompt_tokens_details?.cache_write_tokens ?? 0;
@@ -650,7 +650,7 @@ export async function modelInputs(model: string): Promise<{ pictures: boolean; p
 }
 
 /**
- * Checks that OpenRouter has the model and that it can call tools, which btw needs to run
+ * Checks that OpenRouter has the model and that it can call tools, which nolune needs to run
  * commands, and says how large its window is: the smaller of the model's and its main
  * provider's, since a window set too large would let a conversation outgrow the model for good.
  */
@@ -663,7 +663,7 @@ export async function fetchContextWindow(model: string): Promise<number | null> 
 	}
 	if (!callsTools(info)) {
 		throw new OpenRouterError(
-			`${model} can't call tools on OpenRouter, and btw needs them to run commands.`
+			`${model} can't call tools on OpenRouter, and nolune needs them to run commands.`
 		);
 	}
 	return windowOf(info);

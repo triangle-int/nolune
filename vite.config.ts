@@ -22,6 +22,13 @@ export default defineConfig({
 			}
 		})
 	],
+	server: {
+		watch: {
+			// Claude Code worktrees live in .claude/worktrees. A `svelte-kit sync` in one rewrites its
+			// tsconfig.json, which Vite treats as a tsconfig change and full-reloads every open tab.
+			ignored: ['**/.claude/**']
+		}
+	},
 	test: {
 		include: ['src/**/*.test.ts', 'packages/*/src/**/*.test.ts'],
 		environment: 'node',

@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { goto, invalidate } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import type { NotificationItem } from '@btw/core';
-	import { mediaAsText } from '@btw/core/media-refs';
+	import type { NotificationItem } from '@nolune/core';
+	import { mediaAsText } from '@nolune/core/media-refs';
 	import BellIcon from '@lucide/svelte/icons/bell';
 	import XIcon from '@lucide/svelte/icons/x';
 	import * as Popover from '$lib/components/ui/popover';
@@ -41,7 +41,7 @@
 	async function markSeen() {
 		if (unseen === 0) return;
 		await post('seen');
-		await invalidate('btw:notifications');
+		await invalidate('nolune:notifications');
 	}
 
 	function onOpenChange(value: boolean) {
@@ -56,13 +56,13 @@
 	async function dismiss(id: string) {
 		busy = id;
 		await post(`${id}/dismiss`);
-		await invalidate('btw:notifications');
+		await invalidate('nolune:notifications');
 		busy = null;
 	}
 
 	async function clearAll() {
 		await post('clear');
-		await invalidate('btw:notifications');
+		await invalidate('nolune:notifications');
 	}
 
 	async function continueInChat(item: NotificationItem) {
@@ -73,7 +73,7 @@
 			const target = (await res.json()) as { slug: string; conversationId: string };
 			open = false;
 			await goto(resolve('/p/[slug]/c/[id]', { slug: target.slug, id: target.conversationId }));
-			await Promise.all([invalidate('btw:conversations'), invalidate('btw:notifications')]);
+			await Promise.all([invalidate('nolune:conversations'), invalidate('nolune:notifications')]);
 		}
 		busy = null;
 	}

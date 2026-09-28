@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { MEMORY_CATEGORIES, categoryOf, noteName } from '@btw/core/memory-categories';
+	import { MEMORY_CATEGORIES, categoryOf, noteName } from '@nolune/core/memory-categories';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Input } from '$lib/components/ui/input';

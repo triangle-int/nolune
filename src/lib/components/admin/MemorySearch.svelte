@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import SearchIcon from '@lucide/svelte/icons/search';
-	import type { ApiKeyStatus, EmbeddingState } from '@btw/core';
+	import type { ApiKeyStatus, EmbeddingState } from '@nolune/core';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as ToggleGroup from '$lib/components/ui/toggle-group';

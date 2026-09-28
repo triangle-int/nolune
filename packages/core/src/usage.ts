@@ -1,4 +1,4 @@
-// Prompt cache arithmetic. No runtime imports, so the web client can use it too (`@btw/core/usage`).
+// Prompt cache arithmetic. No runtime imports, so the web client can use it too (`@nolune/core/usage`).
 import type { Usage } from './conversations.ts';
 
 /** Shortfalls smaller than the minimum cacheable prefix aren't worth flagging. */

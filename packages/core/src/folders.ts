@@ -128,7 +128,7 @@ export function setFolderInstructions(id: string, text: string): void {
 		.run();
 }
 
-/** Its chats move back to the profile's list, and its files to ~/.btw-agent/trash. */
+/** Its chats move back to the profile's list, and its files to ~/.nolune/trash. */
 export function deleteFolder(
 	profile: Pick<Profile, 'slug'>,
 	found: Folder
@@ -297,7 +297,7 @@ ${instructions}`);
 			.map((f) => `- \`${f.path}\` (${describeType(f.mime)}, ${describeSize(f.bytes)})`)
 			.join('\n');
 		parts.push(`## Files in this folder
-They are saved in \`${dir}\`. Read the ones that matter for a request before answering it: open documents with commands and look at pictures with \`btw view\`.
+They are saved in \`${dir}\`. Read the ones that matter for a request before answering it: open documents with commands and look at pictures with \`nolune view\`.
 
 ${list}`);
 	} else if (!instructions) {

@@ -22,7 +22,7 @@ import {
 	saveApiKey,
 	setDefaultPreset,
 	setProfileAvatar
-} from '@btw/core';
+} from '@nolune/core';
 import { translations } from '$lib/i18n';
 import { requireAdmin, requireProfile } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
@@ -148,7 +148,7 @@ export const actions: Actions = {
 		const note = membersWithNotes(profile).find((member) => member.id === user.id)?.note;
 		const result = importMemoryExport(profile.slug, user.name, facts, note ?? undefined);
 		console.log(
-			`[btw] ${profile.slug} imported ${result.added} memories for ${user.name} (${result.skipped} already known)`
+			`[nolune] ${profile.slug} imported ${result.added} memories for ${user.name} (${result.skipped} already known)`
 		);
 		return { imported: result };
 	}

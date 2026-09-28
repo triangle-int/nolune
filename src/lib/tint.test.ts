@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { AVATARS } from '@btw/core/avatars';
+import { AVATARS } from '@nolune/core/avatars';
 import { describe, expect, it } from 'vitest';
 import { parseAvatarColors } from './avatars';
 import { avatarTint, tintStyle } from './tint';

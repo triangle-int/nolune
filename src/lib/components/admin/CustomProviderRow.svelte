@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import ServerIcon from '@lucide/svelte/icons/server';
-	import type { CustomProviderStatus } from '@btw/core';
+	import type { CustomProviderStatus } from '@nolune/core';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { Button } from '$lib/components/ui/button';
 	import CustomProviderFields from './CustomProviderFields.svelte';

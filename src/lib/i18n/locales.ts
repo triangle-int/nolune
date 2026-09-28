@@ -20,7 +20,7 @@ export function isLocale(value: unknown): value is Locale {
 
 /**
  * The language to use for an `Accept-Language` header: the one the browser prefers most among
- * those btw has, by the language alone (`ru-RU` is Russian). English when there's none.
+ * those nolune has, by the language alone (`ru-RU` is Russian). English when there's none.
  */
 export function matchLocale(header: string | null | undefined): Locale {
 	const wanted = (header ?? '')

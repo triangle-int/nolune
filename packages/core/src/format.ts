@@ -1,18 +1,18 @@
 import type { Provider } from './models.ts';
 
 /*
- * btw's own format for what a conversation holds, whichever provider its model runs on. Each
+ * nolune's own format for what a conversation holds, whichever provider its model runs on. Each
  * provider's module turns it into its own request (`toAnthropicMessages` in anthropic.ts, which
  * the Claude plan uses too, `toResponsesInput` in openai-chat.ts and `toChatMessages` in
  * openrouter.ts), leaving out what that provider can't take. Another provider is one more such
  * function.
  *
- * What btw writes itself (people's messages, command results, notices, its own replies) is stored
- * in this format (`message.format` is 'btw'). A reply from a model is stored exactly as its
+ * What nolune writes itself (people's messages, command results, notices, its own replies) is stored
+ * in this format (`message.format` is 'nolune'). A reply from a model is stored exactly as its
  * provider returned it, and read into this format with that original kept (`native`): only the
  * model that wrote it can read its reasoning back, and only unchanged.
  *
- * Rows from before this format are in Anthropic's shape: btw's own blocks then were Anthropic's
+ * Rows from before this format are in Anthropic's shape: nolune's own blocks then were Anthropic's
  * content blocks. They are read the same way, and each block keeps what was stored (`storedAs`),
  * which Claude gets back byte for byte, so conversations from then keep their cache and thinking.
  */
@@ -23,7 +23,7 @@ export type FileProvider = 'anthropic' | 'openai' | 'openrouter';
 /** Where a picture's or PDF's bytes are. */
 export type Source =
 	/**
-	 * Kept by btw, in its media store (`media/<sha256>`). Each provider gets its own copy when a
+	 * Kept by nolune, in its media store (`media/<sha256>`). Each provider gets its own copy when a
 	 * request is made (resolveFiles in provider-files.ts): an upload to its Files API, or inline.
 	 * `bytes` counts against the conversation's inline limit where they go inline.
 	 */
@@ -66,7 +66,7 @@ export interface ToolCallBlock {
 	input: unknown;
 }
 
-/** What a tool call printed, or that and the pictures it opened (`btw view`). */
+/** What a tool call printed, or that and the pictures it opened (`nolune view`). */
 export interface ToolResultBlock {
 	type: 'tool_result';
 	callId: string;
@@ -75,7 +75,7 @@ export interface ToolResultBlock {
 }
 
 /**
- * A block btw doesn't know, in Anthropic's shape: from a row from before this format, or a result
+ * A block nolune doesn't know, in Anthropic's shape: from a row from before this format, or a result
  * Claude Code wrote itself. It goes only to Claude, as it is.
  */
 export interface OtherBlock {
@@ -112,8 +112,8 @@ export interface Message {
 export interface StoredRow {
 	role: 'user' | 'assistant';
 	content: string;
-	/** 'btw': in this format. Null: a reply as its provider returned it, or a row from before. */
-	format: 'btw' | null;
+	/** 'nolune': in this format. Null: a reply as its provider returned it, or a row from before. */
+	format: 'nolune' | null;
 	/** The provider that wrote a reply, or whose Files API a row's pictures and PDFs went to. */
 	provider: Provider | null;
 	model: string | null;
@@ -136,7 +136,7 @@ export function storedAs(block: Block): unknown {
 
 export function readMessage(row: StoredRow): Message {
 	const content = JSON.parse(row.content) as unknown;
-	if (row.format === 'btw') return { role: row.role, blocks: content as Block[] };
+	if (row.format === 'nolune') return { role: row.role, blocks: content as Block[] };
 	if (row.role === 'assistant') {
 		const native = Array.isArray(content) ? content : [];
 		return {
@@ -158,7 +158,7 @@ export function readMessage(row: StoredRow): Message {
 }
 
 /**
- * One of Anthropic's content blocks in a message (as btw's own rows were stored before this
+ * One of Anthropic's content blocks in a message (as nolune's own rows were stored before this
  * format, and as Claude Code hands over results), remembering what it was.
  */
 export function fromAnthropic(block: unknown, uploadedTo: FileProvider | null): Block {
@@ -231,7 +231,7 @@ function str(value: unknown): string {
 export type ReplyBlock = TextBlock | ReasoningBlock | ToolCallBlock;
 
 /**
- * A reply in any provider's shape as btw's blocks, in order: Anthropic's content blocks (`text`,
+ * A reply in any provider's shape as nolune's blocks, in order: Anthropic's content blocks (`text`,
  * `thinking`, `tool_use`), OpenAI's output items (`message`, `reasoning`, `function_call`), or
  * OpenRouter's pieces: reasoning details (`reasoning.text`, `reasoning.summary`,
  * `reasoning.encrypted`) and tool calls (`function`) around a `text` block. They use different
@@ -242,7 +242,7 @@ export function replyBlocks(content: unknown): ReplyBlock[] {
 	const blocks: ReplyBlock[] = [];
 	for (const block of content as Stored[]) {
 		switch (block?.type) {
-			// Anthropic, and btw's own replies from before this format
+			// Anthropic, and nolune's own replies from before this format
 			case 'text':
 				blocks.push({ type: 'text', text: str(block.text) });
 				break;
@@ -341,7 +341,7 @@ export function heldElsewhereNote(block: ImageBlock | PdfBlock): TextBlock {
 	const what = block.type === 'image' ? 'Picture' : 'PDF';
 	return {
 		type: 'text',
-		text: `[${what} not shown: it went to the model this chat used before, and this model can't open that copy. The line before this says where its file is${block.type === 'image' ? '; `btw view` shows it again' : ''}.]`
+		text: `[${what} not shown: it went to the model this chat used before, and this model can't open that copy. The line before this says where its file is${block.type === 'image' ? '; `nolune view` shows it again' : ''}.]`
 	};
 }
 

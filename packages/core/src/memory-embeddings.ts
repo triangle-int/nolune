@@ -10,7 +10,7 @@ import { profileMemoryDir } from './paths.ts';
 
 /*
  * Embeddings of memory facts, for finding them by meaning (memory-search.ts), from any
- * OpenAI-compatible embeddings API: by default OpenAI's or OpenRouter's, with the key btw already
+ * OpenAI-compatible embeddings API: by default OpenAI's or OpenRouter's, with the key nolune already
  * has, or a custom provider that speaks OpenAI's API (custom-providers.ts), like Ollama, LM Studio
  * or oMLX on this computer, for anyone who wants them local.
  * Each fact's vector is kept in a hidden file next to the notes and made again only when the fact
@@ -23,7 +23,7 @@ export const DEFAULT_EMBEDDING_MODELS = {
 	openai: DEFAULT_EMBEDDING_MODEL,
 	openrouter: `openai/${DEFAULT_EMBEDDING_MODEL}`
 } as const;
-/** Hidden, like the fact dates: `btw memory` refuses names starting with a dot. */
+/** Hidden, like the fact dates: `nolune memory` refuses names starting with a dot. */
 const FILE = '.embeddings.json';
 /** Facts per request: small enough for a server on a laptop. */
 const BATCH = 64;
@@ -67,7 +67,7 @@ function fromProvider(provider: EmbeddingProvider, model: string): EmbeddingSour
 }
 
 /**
- * The configured source, or btw's own choice when none is: OpenAI's model with OpenAI's key, else
+ * The configured source, or nolune's own choice when none is: OpenAI's model with OpenAI's key, else
  * the same model through OpenRouter. Null when it's off, or its key or custom provider is missing.
  */
 export function embeddingSource(configured = setting()): EmbeddingSource | null {
@@ -105,26 +105,26 @@ export function saveEmbeddingSetting(value: EmbeddingSetting | undefined): void 
 	});
 }
 
-/** In words, for `btw config`: what memory search uses for meaning, or why nothing. */
+/** In words, for `nolune config`: what memory search uses for meaning, or why nothing. */
 export function embeddingStatus(): string {
 	const configured = setting();
-	if (configured === 'off') return 'off (btw config set embeddings auto turns it on)';
+	if (configured === 'off') return 'off (nolune config set embeddings auto turns it on)';
 	const source = embeddingSource(configured);
 	if (source) return source.name;
 	if (configured?.provider === 'custom-openai') {
 		const { provider: id } = splitModel(configured.model);
-		return `${configured.provider}/${configured.model}, but there is no custom provider "${id}" that speaks OpenAI's API (btw provider list)`;
+		return `${configured.provider}/${configured.model}, but there is no custom provider "${id}" that speaks OpenAI's API (nolune provider list)`;
 	}
 	if (configured) {
 		return `${configured.provider}/${configured.model}, but there is no ${configured.provider} key`;
 	}
-	return "off: no OpenAI or OpenRouter key (or a custom provider's model: btw config set embeddings custom-openai/<provider>/<model>)";
+	return "off: no OpenAI or OpenRouter key (or a custom provider's model: nolune config set embeddings custom-openai/<provider>/<model>)";
 }
 
 /**
- * `btw config set embeddings`: `auto`, `off`, or `<provider>/<model>`, where the provider is
+ * `nolune config set embeddings`: `auto`, `off`, or `<provider>/<model>`, where the provider is
  * openai, openrouter or custom-openai, whose model is `<id>/<model>` on a custom provider
- * `btw provider add` saved that speaks OpenAI's API. Unset means auto.
+ * `nolune provider add` saved that speaks OpenAI's API. Unset means auto.
  */
 export function parseEmbeddingSetting(value: string): EmbeddingSetting | undefined {
 	const word = value.trim();
@@ -132,7 +132,7 @@ export function parseEmbeddingSetting(value: string): EmbeddingSetting | undefin
 	if (word === 'off') return 'off';
 	if (/^https?:\/\//i.test(word)) {
 		throw new Error(
-			'add it with btw provider add <name> <url>; then btw config set embeddings custom-openai/<provider>/<model>'
+			'add it with nolune provider add <name> <url>; then nolune config set embeddings custom-openai/<provider>/<model>'
 		);
 	}
 	const slash = word.indexOf('/');
@@ -147,11 +147,11 @@ export function parseEmbeddingSetting(value: string): EmbeddingSetting | undefin
 		const on = splitModel(model);
 		if (!on.provider || !on.model) {
 			throw new Error(
-				'give the custom provider too: custom-openai/<provider>/<model> (btw provider list)'
+				'give the custom provider too: custom-openai/<provider>/<model> (nolune provider list)'
 			);
 		}
 		const custom = findCustomProvider(on.provider);
-		if (!custom) throw new Error(`no custom provider "${on.provider}" (btw provider list)`);
+		if (!custom) throw new Error(`no custom provider "${on.provider}" (nolune provider list)`);
 		if (custom.api !== 'openai') {
 			throw new Error(`${custom.name} speaks Anthropic's API, which has no embeddings`);
 		}
@@ -163,7 +163,7 @@ export function parseEmbeddingSetting(value: string): EmbeddingSetting | undefin
 // --- Asking for them ---
 
 type Sdk = typeof import('openai');
-/** Loaded on first use, like the chats' (openai-chat.ts): most `btw` commands never need it. */
+/** Loaded on first use, like the chats' (openai-chat.ts): most `nolune` commands never need it. */
 let sdk: Sdk | undefined;
 let cachedClient: { url: string; key: string; client: OpenAI } | undefined;
 
@@ -279,7 +279,7 @@ function save(slug: string, stored: Stored): void {
 		});
 		renameSync(temp, file(slug));
 	} catch (err) {
-		console.error(`[btw] ${slug} could not save memory embeddings:`, err);
+		console.error(`[nolune] ${slug} could not save memory embeddings:`, err);
 	} finally {
 		rmSync(temp, { force: true });
 	}
@@ -320,7 +320,7 @@ export function updateEmbeddings(slug: string, texts: () => string[]): Promise<v
 		do {
 			state.again = false;
 			await update(slug, texts()).catch((err: unknown) => {
-				console.error(`[btw] ${slug} could not embed memory:`, describe(err));
+				console.error(`[nolune] ${slug} could not embed memory:`, describe(err));
 			});
 		} while (state.again);
 	})().finally(() => updates.delete(slug));
@@ -354,7 +354,7 @@ async function update(slug: string, texts: string[]): Promise<void> {
 	}
 	if (changed && !missing.length) save(slug, stored);
 	if (missing.length) {
-		console.log(`[btw] ${slug} embedded ${missing.length} memory facts with ${source.name}`);
+		console.log(`[nolune] ${slug} embedded ${missing.length} memory facts with ${source.name}`);
 	}
 }
 

@@ -3,9 +3,9 @@
 	import type { Attachment } from 'svelte/attachments';
 	import { cubicOut } from 'svelte/easing';
 	import { Tween, prefersReducedMotion } from 'svelte/motion';
-	import type { Avatar } from '@btw/core/avatars';
-	import type { ExportedFact } from '@btw/core/memory-export';
-	import type { ImportedNote } from '@btw/core';
+	import type { Avatar } from '@nolune/core/avatars';
+	import type { ExportedFact } from '@nolune/core/memory-export';
+	import type { ImportedNote } from '@nolune/core';
 	import AssistantAvatar, { type Mood } from '$lib/components/AssistantAvatar.svelte';
 	import { factInk, factShade } from '$lib/components/memory/DotGrid.svelte';
 	import { getI18n } from '$lib/i18n';
@@ -212,7 +212,7 @@
 </script>
 
 <div class="flex w-full flex-col items-center gap-8">
-	<div bind:this={avatarEl} class="relative" style:view-transition-name="btw-assistant">
+	<div bind:this={avatarEl} class="relative" style:view-transition-name="nolune-assistant">
 		<span
 			class="glow pointer-events-none absolute inset-0 -z-10 rounded-full blur-xl"
 			style:background-color="var(--avatar-{avatar})"

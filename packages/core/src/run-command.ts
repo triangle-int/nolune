@@ -80,7 +80,7 @@ export const RUN_COMMAND_TOOL: Anthropic.Tool = {
 			run_in_background: {
 				type: 'boolean',
 				description:
-					'Start the command and return at once, for long jobs you don\'t need to wait on, like a big download or `btw agent watch`. Keep working or end your turn: when the command ends, its output arrives as a message that starts with "[Background command finished".'
+					'Start the command and return at once, for long jobs you don\'t need to wait on, like a big download or `nolune agent watch`. Keep working or end your turn: when the command ends, its output arrives as a message that starts with "[Background command finished".'
 			}
 		},
 		required: ['summary', 'icon', 'command'],
@@ -148,7 +148,7 @@ const SECRET_ENV = [
 	// A Claude plan token from `claude setup-token`, for Claude Code only (claude-plan.ts).
 	'CLAUDE_CODE_OAUTH_TOKEN',
 	'BETTER_AUTH_SECRET',
-	'BTW_AUTH_SECRET',
+	'NOLUNE_AUTH_SECRET',
 	'DATABASE_URL'
 ];
 
@@ -167,7 +167,7 @@ export function commandEnv(extra: Record<string, string>): NodeJS.ProcessEnv {
 		...env,
 		...configured,
 		PATH: `${paths.bin}:${env.PATH ?? '/usr/bin:/bin:/usr/sbin:/sbin'}`,
-		BTW_HOME: paths.home,
+		NOLUNE_HOME: paths.home,
 		TERM: 'dumb',
 		NO_COLOR: '1',
 		PAGER: 'cat',

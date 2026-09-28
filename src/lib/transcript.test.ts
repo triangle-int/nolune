@@ -1,4 +1,4 @@
-import type { DisplayMemoryLook, DisplayMessage } from '@btw/core';
+import type { DisplayMemoryLook, DisplayMessage } from '@nolune/core';
 import { describe, expect, it } from 'vitest';
 import { buildTranscript } from './transcript';
 
@@ -60,7 +60,7 @@ describe('what the note-taker saved', () => {
 	});
 
 	it("doesn't split a reply's key with the one after it", () => {
-		// A look between two of btw's rows (it read the chat while a background command ran on).
+		// A look between two of nolune's rows (it read the chat while a background command ran on).
 		const entries = buildTranscript([human(1, 'Hi'), said(2, 'One'), said(4, 'Two')], [], false, [
 			look(2)
 		]);

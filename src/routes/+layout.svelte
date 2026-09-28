@@ -4,7 +4,7 @@
 	import { invalidate } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ModeWatcher, mode } from 'mode-watcher';
-	import { isAvatar } from '@btw/core/avatars';
+	import { isAvatar } from '@nolune/core/avatars';
 	import favicon from '$lib/assets/favicon.svg';
 	import { avatarFavicon } from '$lib/avatars';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -26,7 +26,7 @@
 		const source = new EventSource('/api/events');
 		source.onmessage = (event) => {
 			const { type } = JSON.parse(event.data) as { type: 'notifications' | 'profiles' };
-			invalidate(`btw:${type}`);
+			invalidate(`nolune:${type}`);
 		};
 		return () => source.close();
 	});
@@ -68,7 +68,7 @@
 		<!-- eslint-disable-next-line svelte/no-at-html-tags -->
 		{@html tintStyle(tint)}
 	{/if}
-	<title>btw</title>
+	<title>nolune</title>
 </svelte:head>
 
 <ModeWatcher />

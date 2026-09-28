@@ -56,7 +56,7 @@ beforeEach(() => {
 	vi.clearAllMocks();
 });
 
-/** A picture kept in the media store, as btw's format refers to it. */
+/** A picture kept in the media store, as nolune's format refers to it. */
 function keptPicture(data: Buffer = photo): ImageBlock {
 	const { sha256, bytes } = storeBytes(data);
 	return { type: 'image', source: { type: 'media', sha256, mime: 'image/jpeg', bytes } };

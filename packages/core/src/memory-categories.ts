@@ -2,7 +2,7 @@
  * The categories memory keeps things in, so every fact has one place to go and the Memory page
  * reads the same in every family: notes of their own (core, home, health...), and folders with a
  * note each (one per person, one per project). Facts are only added to these; a note from before
- * them stays readable and editable until it's moved into one (`btw memory mv`). Pure logic:
+ * them stays readable and editable until it's moved into one (`nolune memory mv`). Pure logic:
  * memory.ts refuses the rest.
  */
 
@@ -60,7 +60,7 @@ export function categoryGuide(): string {
 
 /** How a person's note starts, for the prompts. */
 export const PERSON_NOTE_GUIDE =
-	"A person's note is titled with their name and starts with who they are and what the family calls them, so btw knows them by any of those names: `# Olga`, then `- Who: Anna's grandmother`, then `- Also called: grandma, бабушка` (keep the labels Who and Also called as they are).";
+	"A person's note is titled with their name and starts with who they are and what the family calls them, so nolune knows them by any of those names: `# Olga`, then `- Who: Anna's grandmother`, then `- Also called: grandma, бабушка` (keep the labels Who and Also called as they are).";
 
 /** A note's path without its extension: `people/anna.md` is `people/anna`. */
 function stem(path: string): string {
@@ -83,7 +83,7 @@ export function categoryProblem(path: string, exists: boolean): string {
 	const topic = stem(path);
 	const notes = NOTES.join(', ');
 	const move = exists
-		? ` To keep adding to it, move it into one first: \`btw memory mv ${topic} <category>\`.`
+		? ` To keep adding to it, move it into one first: \`nolune memory mv ${topic} <category>\`.`
 		: '';
 	return `"${topic}" isn't one of memory's categories: ${notes}, or a note of its own in people/ or projects/ (like people/anna). Put each fact where it fits: what's about a person in their people/ note, dates in plans.${move}`;
 }
@@ -103,10 +103,10 @@ export function noteName(name: string): string {
 	);
 }
 
-/** How a person's note says who they are to the family, in any of btw's languages. */
+/** How a person's note says who they are to the family, in any of nolune's languages. */
 const WHO = /^(?:who|кто|wer|qui[eé]n|qui)\s*:\s*(.+)$/i;
 
-/** How a person's note names what the family calls them, in any of btw's languages. */
+/** How a person's note names what the family calls them, in any of nolune's languages. */
 const ALSO_CALLED =
 	/^(?:also called|aka|a\.k\.a\.|зовут|также|auch genannt|genannt|también llamad[oa]|apodo|aussi appelée?|surnom)\s*:\s*(.+)$/i;
 

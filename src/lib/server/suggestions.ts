@@ -1,5 +1,5 @@
 import type { IconNode } from 'lucide';
-import type { Suggestion } from '@btw/core';
+import type { Suggestion } from '@nolune/core';
 import type { Messages } from '$lib/i18n';
 import { lucideIcon } from './icons';
 

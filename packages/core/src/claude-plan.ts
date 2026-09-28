@@ -32,21 +32,21 @@ import {
 
 /*
  * Chats on the Claude plan: the Pro or Max subscription someone signed in to Claude Code with on
- * this computer. btw never sees that login. It runs the Claude Code that's installed here,
+ * this computer. nolune never sees that login. It runs the Claude Code that's installed here,
  * unmodified, through the Claude Agent SDK, and Claude Code signs in and bills the plan itself.
  *
  * Unlike the API providers, Claude Code runs the agent loop: it keeps the conversation (a session
- * under ~/.claude/projects, resumed on every turn), calls the model and asks btw to run each
- * command through an MCP tool that has the conversation's own `run_command` definition. btw
+ * under ~/.claude/projects, resumed on every turn), calls the model and asks nolune to run each
+ * command through an MCP tool that has the conversation's own `run_command` definition. nolune
  * turns what it streams into the same rows and live events as its own loop, so the chat looks the
  * same. Claude Code's built-in tools, settings, CLAUDE.md files, skills and MCP servers are all
- * left out: the model gets btw's system prompt and btw's tool, nothing else.
+ * left out: the model gets nolune's system prompt and nolune's tool, nothing else.
  */
 
 type Sdk = typeof import('@anthropic-ai/claude-agent-sdk');
 type Zod = typeof import('zod');
 
-/** Loaded on first use, like OpenAI's SDK: most `btw` commands never run a chat. */
+/** Loaded on first use, like OpenAI's SDK: most `nolune` commands never run a chat. */
 let loaded: { sdk: Sdk; z: Zod['z'] } | undefined;
 
 async function load(): Promise<{ sdk: Sdk; z: Zod['z'] }> {
@@ -57,8 +57,8 @@ async function load(): Promise<{ sdk: Sdk; z: Zod['z'] }> {
 	return loaded;
 }
 
-/** The MCP server btw's tools are on, which makes their names `mcp__btw__<name>` in Claude Code. */
-const SERVER = 'btw';
+/** The MCP server nolune's tools are on, which makes their names `mcp__nolune__<name>` in Claude Code. */
+const SERVER = 'nolune';
 const TOOL_PREFIX = `mcp__${SERVER}__`;
 /** Commands have their own timeouts (at most 30 minutes); this only stops Claude Code's default. */
 const TOOL_TIMEOUT_MS = 2 * 60 * 60 * 1000;
@@ -67,12 +67,12 @@ const INTERRUPT_GRACE_MS = 5000;
 const STATUS_TIMEOUT_MS = 30_000;
 
 const HOW_TO_SIGN_IN =
-	'Run `claude` in a terminal on the computer btw runs on and sign in with your Claude account (/login), or run `btw claude-plan setup` there.';
+	'Run `claude` in a terminal on the computer nolune runs on and sign in with your Claude account (/login), or run `nolune claude-plan setup` there.';
 
 /** Anthropic's installer for macOS and Linux (code.claude.com/docs/en/setup). */
 export const CLAUDE_INSTALL_COMMAND = 'curl -fsSL https://claude.ai/install.sh | bash';
 
-const HOW_TO_INSTALL = `Install it on the computer btw runs on with \`${CLAUDE_INSTALL_COMMAND}\` (or \`brew install --cask claude-code\`) and sign in with your Claude account, or run \`btw claude-plan setup\` there, which does both. If it's installed somewhere btw doesn't look, set its path with \`btw config set claude-path <path>\`.`;
+const HOW_TO_INSTALL = `Install it on the computer nolune runs on with \`${CLAUDE_INSTALL_COMMAND}\` (or \`brew install --cask claude-code\`) and sign in with your Claude account, or run \`nolune claude-plan setup\` there, which does both. If it's installed somewhere nolune doesn't look, set its path with \`nolune config set claude-path <path>\`.`;
 
 // --- finding and starting Claude Code ---
 
@@ -107,7 +107,7 @@ export function claudeExecutable(): string | null {
 	return candidates.find(isFile) ?? null;
 }
 
-/** The `claude` btw would run, and whether it's there (a configured path may not be). */
+/** The `claude` nolune would run, and whether it's there (a configured path may not be). */
 export function findClaudeCode(): { path: string | null; installed: boolean } {
 	const path = claudeExecutable();
 	return { path, installed: !!path && isFile(path) };
@@ -119,22 +119,22 @@ function requireClaudeExecutable(): string {
 	if (path && isFile(path)) return path;
 	if (path) {
 		throw new PlanError(
-			`There's no Claude Code at ${path}, where \`btw config set claude-path\` says it is. ${HOW_TO_INSTALL}`
+			`There's no Claude Code at ${path}, where \`nolune config set claude-path\` says it is. ${HOW_TO_INSTALL}`
 		);
 	}
 	throw new PlanError(
-		`Claude Code isn't installed on this computer, or btw can't find it. Chats on the Claude plan run through it. ${HOW_TO_INSTALL}`
+		`Claude Code isn't installed on this computer, or nolune can't find it. Chats on the Claude plan run through it. ${HOW_TO_INSTALL}`
 	);
 }
 
 /**
- * btw's environment, without the API credentials Claude Code would otherwise use (and bill)
+ * nolune's environment, without the API credentials Claude Code would otherwise use (and bill)
  * instead of the plan.
  */
 export function claudeEnv(): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = {
 		...process.env,
-		CLAUDE_AGENT_SDK_CLIENT_APP: 'btw-agent'
+		CLAUDE_AGENT_SDK_CLIENT_APP: 'nolune'
 	};
 	delete env.ANTHROPIC_API_KEY;
 	delete env.ANTHROPIC_AUTH_TOKEN;
@@ -143,7 +143,7 @@ export function claudeEnv(): Record<string, string | undefined> {
 	return env;
 }
 
-/** What every query shares: btw's own prompt and tools only, nothing from Claude Code's settings. */
+/** What every query shares: nolune's own prompt and tools only, nothing from Claude Code's settings. */
 function baseOptions(cwd: string): Options {
 	return {
 		cwd,
@@ -169,7 +169,7 @@ function modelOptions(model: string, effort: Effort): Partial<Options> {
 	return { model, effort, thinking: { type: 'adaptive', display: 'summarized' } };
 }
 
-/** The SDK's errors from starting Claude Code, in words for the people using btw. */
+/** The SDK's errors from starting Claude Code, in words for the people using nolune. */
 function startError(err: unknown): PlanError {
 	if (err instanceof PlanError) return err;
 	const message = err instanceof Error ? err.message : String(err);
@@ -226,9 +226,9 @@ interface OpenReply {
 /** The reply that was saved last, whose calls are waiting for results. */
 interface Answering {
 	calls: ToolCall[];
-	/** btw's own results: what it ran, and what it said about it. */
+	/** nolune's own results: what it ran, and what it said about it. */
 	ours: Map<string, ToolResultBlock>;
-	/** What Claude Code recorded for calls btw never got (invalid input, a stop). */
+	/** What Claude Code recorded for calls nolune never got (invalid input, a stop). */
 	theirs: Map<string, ToolResultBlock>;
 	/** Calls whose command is running now. */
 	running: Set<string>;
@@ -250,7 +250,7 @@ function usageOf(u: UsageFields | null | undefined): Usage {
 	};
 }
 
-/** A block as btw stores it: `run_command` rather than Claude Code's name for it. */
+/** A block as nolune stores it: `run_command` rather than Claude Code's name for it. */
 function storedBlock(block: Anthropic.ContentBlock): Anthropic.ContentBlock {
 	if (block.type === 'tool_use' && block.name.startsWith(TOOL_PREFIX)) {
 		return { ...block, name: block.name.slice(TOOL_PREFIX.length) };
@@ -285,7 +285,7 @@ interface Failure {
 	kind: string | null;
 }
 
-/** The tool's input schema as the zod shape the SDK takes. btw's tools use plain fields only. */
+/** The tool's input schema as the zod shape the SDK takes. nolune's tools use plain fields only. */
 function zodShape(z: Zod['z'], schema: Anthropic.Tool['input_schema']): Record<string, ZodType> {
 	const required = new Set(schema.required ?? []);
 	const shape: Record<string, ZodType> = {};
@@ -315,7 +315,7 @@ async function* oneMessage(content: Anthropic.ContentBlockParam[]): AsyncIterabl
 /**
  * One turn of a chat: Claude Code answers the new input, running commands through `runTool`,
  * until the model ends its turn. Each model call's reply is saved (`onReply`) before its commands
- * run, and their results (`onResults`) once they have all ended, the order btw's own loop keeps.
+ * run, and their results (`onResults`) once they have all ended, the order nolune's own loop keeps.
  * Throws a PlanError when the turn fails and a PlanStopped when it was stopped.
  */
 export async function runTurn(turn: PlanTurn): Promise<void> {
@@ -326,9 +326,9 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 	let answering: Answering | null = null;
 	/** Per call: resolves once the reply that has it is saved, so its command can run. */
 	const saved = new Map<string, Deferred>();
-	/** Calls Claude Code asked btw to run whose reply isn't saved yet. */
+	/** Calls Claude Code asked nolune to run whose reply isn't saved yet. */
 	const waiting = new Set<string>();
-	/** Calls run one after another, as btw runs them. */
+	/** Calls run one after another, as nolune runs them. */
 	let queue: Promise<unknown> = Promise.resolve();
 	const inFlight = new Set<Promise<unknown>>();
 	// Set by the message handler below, which TypeScript's narrowing doesn't follow.
@@ -405,7 +405,7 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 		}
 	};
 
-	/** Claude Code asks btw to run a call. */
+	/** Claude Code asks nolune to run a call. */
 	const handle = async (id: string, name: string, input: unknown) => {
 		waiting.add(id);
 		saveIfWaitedOn(open);
@@ -467,7 +467,7 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 		throw startError(err);
 	}
 
-	// Stop: Claude Code ends the turn itself (btw's commands are stopped by the same signal), and
+	// Stop: Claude Code ends the turn itself (nolune's commands are stopped by the same signal), and
 	// is closed if it doesn't.
 	let closeTimer: NodeJS.Timeout | undefined;
 	const onAbort = () => {
@@ -559,7 +559,7 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 		turn.signal.removeEventListener('abort', onAbort);
 		clearTimeout(closeTimer);
 		q.close();
-		// A reply cut off mid-stream is dropped, as btw's own loop drops it. Commands still running
+		// A reply cut off mid-stream is dropped, as nolune's own loop drops it. Commands still running
 		// finish (a stop ends them), and the calls that got nothing are answered.
 		open = null;
 		for (const d of saved.values()) d.reject(new Error('the turn ended'));
@@ -573,8 +573,8 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 }
 
 /**
- * A turn that failed because the chat's session isn't what btw thought: `missing` (Claude Code
- * no longer has it, say its files were deleted) or `taken` (it exists, though btw never saw it
+ * A turn that failed because the chat's session isn't what nolune thought: `missing` (Claude Code
+ * no longer has it, say its files were deleted) or `taken` (it exists, though nolune never saw it
  * start). Null for any other failure.
  */
 export function sessionProblem(err: unknown): SessionProblem | null {
@@ -745,7 +745,7 @@ export async function listModels(): Promise<ModelChoice[]> {
 
 /**
  * How to sign Claude Code in to a Claude plan from a terminal: its own sign-in, which opens
- * Anthropic's page in a browser. btw only starts it; Claude Code keeps what it gets.
+ * Anthropic's page in a browser. nolune only starts it; Claude Code keeps what it gets.
  */
 export function claudeSignInCommand(path: string): {
 	command: string;

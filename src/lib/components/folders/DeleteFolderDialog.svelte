@@ -40,7 +40,7 @@
 					// Stay where you are unless the open page was the folder's.
 					if (page.params.folder === id) {
 						await goto(resolve('/p/[slug]', { slug }), { invalidateAll: true });
-					} else await invalidate('btw:conversations');
+					} else await invalidate('nolune:conversations');
 				};
 			}}
 		>

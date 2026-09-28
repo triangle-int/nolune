@@ -1,17 +1,17 @@
 ---
 name: view-images
-description: Look at pictures yourself with `btw view`, which attaches them to a command's result. Photos, screenshots, scans, PDF pages, video frames, web pages or the screen. Use whenever what something looks like matters, e.g. reading a receipt or a letter, checking or finding a photo, or seeing what is on the screen.
+description: Look at pictures yourself with `nolune view`, which attaches them to a command's result. Photos, screenshots, scans, PDF pages, video frames, web pages or the screen. Use whenever what something looks like matters, e.g. reading a receipt or a letter, checking or finding a photo, or seeing what is on the screen.
 ---
 
 # Seeing images
 
-`btw view <file>...` attaches pictures to the result of the command that runs it, so you see them
+`nolune view <file>...` attaches pictures to the result of the command that runs it, so you see them
 in your next step. It prints a line for each one (`Attached receipt.heic (1500×2000 JPEG,
 converted from HEIC).`) and exits with 1, saying why, if a file couldn't be attached.
 
 ```sh
-btw view ~/Desktop/receipt.heic
-btw view scan-1.png scan-2.png     # up to 10 per command
+nolune view ~/Desktop/receipt.heic
+nolune view scan-1.png scan-2.png  # up to 10 per command
 ```
 
 - JPEG, PNG, GIF and WebP are sent as they are. HEIC, TIFF and other formats are converted, big
@@ -20,7 +20,7 @@ btw view scan-1.png scan-2.png     # up to 10 per command
   `![what it shows](path)`.
 - Every picture stays in this conversation and is part of each later step; a conversation holds at
   most 100, counting pictures people attached. Look at what the task needs, and at small copies
-  when that's enough. When `btw view` says the conversation is full, say what you need in words or
+  when that's enough. When `nolune view` says the conversation is full, say what you need in words or
   suggest a new chat.
 - When only the text matters, reading it (`pdftotext doc.pdf -`) is cheaper than looking. If that
   prints nothing, the PDF is a scan: look at its pages.
@@ -35,7 +35,7 @@ resolution and look at that:
 
 ```sh
 # 800 px high and 1200 wide, starting 1400 px from the top and 300 from the left
-sips -c 800 1200 --cropOffset 1400 300 scan.png --out /tmp/crop.png && btw view /tmp/crop.png
+sips -c 800 1200 --cropOffset 1400 300 scan.png --out /tmp/crop.png && nolune view /tmp/crop.png
 magick scan.png -crop 1200x800+300+1400 +repage /tmp/crop.png   # ImageMagick (`convert` in v6)
 ```
 
@@ -46,7 +46,7 @@ names in one picture; more photos make `sheet-0.jpg`, `sheet-1.jpg` and so on:
 
 ```sh
 rm -f /tmp/sheet*.jpg && magick montage -label '%f' ~/Pictures/Trip/*.jpg -auto-orient \
-  -thumbnail 360x360 -tile 5x5 -geometry +4+4 /tmp/sheet.jpg && btw view /tmp/sheet*.jpg
+  -thumbnail 360x360 -tile 5x5 -geometry +4+4 /tmp/sheet.jpg && nolune view /tmp/sheet*.jpg
 # `montage` instead of `magick montage` in ImageMagick 6
 ```
 
@@ -61,11 +61,11 @@ done
 ## The screen
 
 ```sh
-screencapture -x /tmp/screen.png && btw view /tmp/screen.png
+screencapture -x /tmp/screen.png && nolune view /tmp/screen.png
 ```
 
-If it shows only the desktop background and menu bar, btw isn't allowed to record the screen. The
-person has to add btw's `node` (the path is in `cat "$BTW_HOME/bin/btw"`) in System Settings >
+If it shows only the desktop background and menu bar, nolune isn't allowed to record the screen. The
+person has to add nolune's `node` (the path is in `cat "$NOLUNE_HOME/bin/nolune"`) in System Settings >
 Privacy & Security > Screen Recording (Screen & System Audio Recording on newer macOS). A locked or
 sleeping Mac shows nothing useful.
 
@@ -73,10 +73,10 @@ sleeping Mac shows nothing useful.
 
 ```sh
 # The first page of a PDF (also a thumbnail of most documents and videos): writes /tmp/ql/doc.pdf.png
-mkdir -p /tmp/ql && qlmanage -t -s 2000 -o /tmp/ql doc.pdf >/dev/null && btw view /tmp/ql/doc.pdf.png
+mkdir -p /tmp/ql && qlmanage -t -s 2000 -o /tmp/ql doc.pdf >/dev/null && nolune view /tmp/ql/doc.pdf.png
 
 # Any page, with poppler: page 3 into /tmp/page3.png
-pdftoppm -png -r 150 -f 3 -singlefile doc.pdf /tmp/page3 && btw view /tmp/page3.png
+pdftoppm -png -r 150 -f 3 -singlefile doc.pdf /tmp/page3 && nolune view /tmp/page3.png
 
 # A video, with ffmpeg: the frame at 0:30, or nine frames 10 s apart in one picture
 ffmpeg -loglevel error -y -ss 30 -i clip.mov -frames:v 1 /tmp/frame.jpg

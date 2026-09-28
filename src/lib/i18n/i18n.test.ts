@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseCron } from '@btw/core/schedule';
+import { parseCron } from '@nolune/core/schedule';
 import { LOCALES, matchLocale, translations, type Locale, type Messages } from '.';
 
 describe('matchLocale', () => {

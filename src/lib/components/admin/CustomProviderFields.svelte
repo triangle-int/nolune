@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { CustomProviderStatus } from '@btw/core';
+	import type { CustomProviderStatus } from '@nolune/core';
 	import type { Snippet } from 'svelte';
 	import { Input } from '$lib/components/ui/input';
 	import { getI18n } from '$lib/i18n';

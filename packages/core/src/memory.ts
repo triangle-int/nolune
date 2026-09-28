@@ -35,7 +35,7 @@ import { profileDir, profileMemoryDir } from './paths.ts';
 
 /*
  * A profile's long-term memory: short Markdown notes, one per topic, in its `memories` folder.
- * The agent reads and changes them with `btw memory` (plain file commands work too); the family
+ * The agent reads and changes them with `nolune memory` (plain file commands work too); the family
  * sees them on the Memory page. `core.md` is pinned: every new chat starts with it in its prompt,
  * while the others are read when needed. Nothing here depends on the model provider.
  */
@@ -185,7 +185,7 @@ function writeAtomic(full: string, text: string): void {
 
 function readNote(root: string, full: string, topic: string): string {
 	if (!existsSync(full) || !statSync(full).isFile()) {
-		refuse(`There is no note "${topic}". \`btw memory\` lists them.`);
+		refuse(`There is no note "${topic}". \`nolune memory\` lists them.`);
 	}
 	return readFileSync(full, 'utf8');
 }
@@ -254,7 +254,7 @@ function loadFacts(
 		}
 		return { index, changed };
 	} catch (err) {
-		console.error('[btw] could not read memory fact dates:', err);
+		console.error('[nolune] could not read memory fact dates:', err);
 		return null;
 	}
 }
@@ -263,7 +263,7 @@ function saveFacts(root: string, index: FactIndex): void {
 	try {
 		writeAtomic(join(root, FACTS_FILE), serializeFactIndex(index));
 	} catch (err) {
-		console.error('[btw] could not save memory fact dates:', err);
+		console.error('[nolune] could not save memory fact dates:', err);
 	}
 }
 
@@ -304,7 +304,7 @@ function lineNumbers(text: string, match: (line: string) => boolean): number[] {
 export interface MemoryFact {
 	/** Plain text. */
 	text: string;
-	/** When btw first saw it, in ms. Null: before dates were kept. */
+	/** When nolune first saw it, in ms. Null: before dates were kept. */
 	learnedAt: number | null;
 }
 
@@ -372,7 +372,7 @@ export function readMemoryNote(slug: string, topic: string): { path: string; tex
 	return { path: relPath(root, full), text: readNote(root, full, topic) };
 }
 
-// --- Changes, for `btw memory` ---
+// --- Changes, for `nolune memory` ---
 
 /**
  * Adds one fact as a bullet at the end of a note, or of the part under the heading `under`,
@@ -504,7 +504,7 @@ export function replaceInMemory(
 	const hits: number[] = [];
 	for (let at = text.indexOf(oldText); at !== -1; at = text.indexOf(oldText, at + 1)) hits.push(at);
 	if (hits.length === 0) {
-		refuse(`"${oldText}" isn't in ${path}. See it with \`btw memory show ${topic}\`.`);
+		refuse(`"${oldText}" isn't in ${path}. See it with \`nolune memory show ${topic}\`.`);
 	}
 	if (hits.length > 1) {
 		const lines = hits.map((at) => text.slice(0, at).split('\n').length);
@@ -580,7 +580,7 @@ export function forgetMemoryFact(
 		(line) => !/^\s*#/.test(line) && line.toLowerCase().includes(needle)
 	);
 	if (hits.length === 0) {
-		refuse(`Nothing in ${path} contains "${match}". See it with \`btw memory show ${topic}\`.`);
+		refuse(`Nothing in ${path} contains "${match}". See it with \`nolune memory show ${topic}\`.`);
 	}
 	if (hits.length > 1) {
 		refuse(
@@ -600,7 +600,7 @@ export function writeMemoryNote(
 ): { path: string; created: boolean } {
 	const root = openMemory(slug);
 	const full = notePath(root, topic);
-	if (!text.trim()) refuse('The note is empty. To delete it, use `btw memory rm`.');
+	if (!text.trim()) refuse('The note is empty. To delete it, use `nolune memory rm`.');
 	if (existsSync(full) && !statSync(full).isFile()) refuse(`"${topic}" is a folder, not a note.`);
 	const created = !existsSync(full);
 	// A note from before the categories can be rewritten; a new one goes into one.
@@ -813,8 +813,8 @@ export function writeMemoryFile(slug: string, path: string, text: string, basedO
 	} else if (statSync(full).mtimeMs !== basedOn) {
 		throw new MemoryConflictError(
 			basedOn
-				? `btw changed ${path} while you were editing it.`
-				: `btw started ${path} while you were writing it.`
+				? `nolune changed ${path} while you were editing it.`
+				: `nolune started ${path} while you were writing it.`
 		);
 	}
 	saveNote(root, full, text);

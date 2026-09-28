@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import type { DisplayMemoryLook } from '@btw/core';
+	import type { DisplayMemoryLook } from '@nolune/core';
 	import BrainIcon from '@lucide/svelte/icons/brain';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import * as Collapsible from '$lib/components/ui/collapsible';
@@ -10,7 +10,7 @@
 	import { cn } from '$lib/utils';
 
 	/**
-	 * What btw saved to memory by itself once the chat went quiet, after the last message it read:
+	 * What nolune saved to memory by itself once the chat went quiet, after the last message it read:
 	 * a folded line, and each change with its note and Undo. Undoing shows here live.
 	 */
 	let { look, slug }: { look: DisplayMemoryLook; slug: string } = $props();

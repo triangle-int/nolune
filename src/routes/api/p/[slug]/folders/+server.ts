@@ -1,5 +1,5 @@
 import { error, json } from '@sveltejs/kit';
-import { FolderError, createFolder } from '@btw/core';
+import { FolderError, createFolder } from '@nolune/core';
 import { requireProfile } from '$lib/server/access';
 import type { RequestHandler } from './$types';
 

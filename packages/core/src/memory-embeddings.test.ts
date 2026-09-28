@@ -260,7 +260,7 @@ describe('embeddingSource', () => {
 		expect(embeddingState().mode).toBe('auto');
 	});
 
-	it('reads what `btw config set embeddings` is given', () => {
+	it('reads what `nolune config set embeddings` is given', () => {
 		expect(parseEmbeddingSetting('auto')).toBeUndefined();
 		expect(parseEmbeddingSetting('openrouter/qwen/qwen3-embedding-8b')).toEqual({
 			provider: 'openrouter',
@@ -280,7 +280,7 @@ describe('embeddingSource', () => {
 			'no custom provider "studio"'
 		);
 		expect(() => parseEmbeddingSetting('custom-openai/omlx/nomic')).toThrow('no embeddings');
-		expect(() => parseEmbeddingSetting('http://localhost:1234/v1')).toThrow('btw provider add');
+		expect(() => parseEmbeddingSetting('http://localhost:1234/v1')).toThrow('nolune provider add');
 		expect(() => parseEmbeddingSetting('voyage/voyage-3')).toThrow('openai/<model>');
 		expect(() => parseEmbeddingSetting('openai/')).toThrow('openai/<model>');
 	});
