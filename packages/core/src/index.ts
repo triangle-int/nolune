@@ -255,6 +255,7 @@ export {
 	isPinnedNote,
 	listMemoryFiles,
 	listMemoryNotes,
+	mergeMemoryNotes,
 	readMemoryNote,
 	readPinnedNote,
 	removeMemoryNote,
@@ -265,6 +266,24 @@ export {
 	type MemoryFact,
 	type MemoryFile
 } from './memory.ts';
+export {
+	MEMORY_CATEGORIES,
+	categoryOf,
+	noteName,
+	type MemoryCategory
+} from './memory-categories.ts';
+export {
+	addMemberWithNote,
+	linkPersonNote,
+	listPersonNotes,
+	membersWithNotes,
+	mergeProfileNotes,
+	moveProfileNote,
+	personNoteCandidates,
+	type AddedMember,
+	type MemberNote,
+	type PersonNote
+} from './memory-people.ts';
 export { recallFor, searchMemory, startEmbeddingMemory, type MemoryHit } from './memory-search.ts';
 export {
 	DEFAULT_EMBEDDING_MODELS,

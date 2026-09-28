@@ -477,7 +477,7 @@ export const fr: Messages = {
 	memory: {
 		title: 'Mémoire',
 		intro: (profile: string) =>
-			`Ce dont btw se souvient pour ${profile}, partagé par tous ses membres. Chaque discussion commence avec la note épinglée Core ; btw lit les autres quand une discussion en a besoin et enregistre ce qu’il apprend en chemin. Pour ajouter quelque chose, dites-le-lui simplement dans une discussion, par exemple « Retiens qu’Anna est allergique aux fruits à coque ».`,
+			`Ce dont btw se souvient pour ${profile}, partagé par tous ses membres. Chaque discussion commence avec la note épinglée L’essentiel ; btw lit les autres quand une discussion en a besoin et enregistre ce qu’il apprend en chemin. Pour ajouter quelque chose, dites-le-lui simplement dans une discussion, par exemple « Retiens qu’Anna est allergique aux fruits à coque ».`,
 		total: (count: number, topics: number) =>
 			`${count === 1 ? 'souvenir' : 'souvenirs'} dans ${p(topics, { one: `${topics} sujet`, other: `${topics} sujets` })}`,
 		newThisWeek: (n: number) =>
@@ -514,6 +514,41 @@ export const fr: Messages = {
 		newer: 'Plus récent',
 		nothingYet:
 			'Rien de mémorisé pour l’instant. Chaque chose que btw apprend devient ici un point.',
+		categories: {
+			core: 'L’essentiel',
+			people: 'Personnes',
+			home: 'Maison',
+			health: 'Santé',
+			plans: 'Agenda',
+			routines: 'Habitudes',
+			pets: 'Animaux',
+			places: 'Lieux',
+			projects: 'Projets',
+			other: 'Autre',
+			unsorted: 'Sans catégorie'
+		},
+		unsortedHint:
+			'D’avant que la mémoire ait des catégories : btw la lit, mais n’y ajoute rien. Déplacez-la dans une catégorie pour qu’elle continue de s’enrichir.',
+		memberNote: (name: string) => `membre : ${name}`,
+		move: {
+			button: (topic: string) => `Déplacer ${topic}`,
+			title: (topic: string) => `Déplacer « ${topic} »`,
+			body: 'Choisissez où elle va. Si cette note existe déjà, les deux n’en font plus qu’une.',
+			to: 'Déplacer vers',
+			choose: 'Choisir où',
+			categories: 'Catégories',
+			newPerson: 'Quelqu’un de nouveau…',
+			newProject: 'Un nouveau projet…',
+			personName: 'Son nom',
+			projectName: 'Nom du projet',
+			moveHint: (target: string) => `Elle devient ${target}.`,
+			mergeHint: (from: string, into: string) =>
+				`Ce que dit « ${from} » est ajouté à « ${into} », sans répétitions, et « ${from} » disparaît. Utile pour deux notes sur la même personne.`,
+			move: 'Déplacer',
+			merge: 'Fusionner',
+			moved: (from: string, to: string) => `${from} déplacée vers ${to}.`,
+			merged: (from: string, into: string) => `${from} fusionnée avec ${into}.`
+		},
 		/** What btw saved from a chat by itself: in that chat, and at the top of this page. */
 		changes: {
 			saved: (n: number) => `${memories(n)} enregistré${n === 1 ? '' : 's'}`,
@@ -659,7 +694,29 @@ export const fr: Messages = {
 		soulSaved: 'Âme enregistrée.',
 		soulRemoved: 'Âme supprimée.',
 		added: (name: string) => `${name} a été ajouté.`,
-		removed: 'Retiré.'
+		removed: 'Retiré.',
+		memberNote: (note: string) => `Note : ${note}`,
+		noteStarts: (note: string) => `Note : ${note}, créée dès qu’il y a quelque chose à noter`,
+		mayHaveNote: 'btw a peut-être déjà une note sur cette personne',
+		chooseNote: 'Choisir la note',
+		changeNote: 'Changer de note',
+		linked: (name: string, note: string) => `La note de ${name} est maintenant ${note}.`,
+		chooser: {
+			addTitle: (name: string) => `btw connaît-il déjà ${name} ?`,
+			linkTitle: (name: string) => `Quelle note parle de ${name} ?`,
+			body: (name: string) =>
+				`La mémoire a des notes qui pourraient parler de ${name}. Choisissez la sienne : btw saura que ce qu’elle dit concerne cette personne et y ajoutera ce qu’elle raconte d’elle-même.`,
+			linkBody: (name: string) =>
+				`Choisissez la note sur ${name} : btw y ajoutera ce que cette personne raconte d’elle-même.`,
+			current: 'actuelle',
+			alsoCalled: (names: string) => `Autres noms : ${names}`,
+			more: (n: number) => `et ${n} de plus`,
+			newNote: 'Quelqu’un d’autre : commencer une nouvelle note',
+			privacy: (name: string) =>
+				`${name} pourra lire toute la mémoire de ce profil, y compris cette note. Vérifiez qu’elle ne contient rien à garder secret pour cette personne, comme une surprise.`,
+			add: (name: string) => `Ajouter ${name}`,
+			link: 'Associer'
+		}
 	},
 
 	avatars: {

@@ -66,6 +66,7 @@ import { readSoul } from './soul.ts';
 import { createViewDir, imageUse, readViewedImages, type ImageUse } from './images.ts';
 import { copyReplyMedia, listMedia, mediaByMessage, type PreparedMedia } from './media.ts';
 import { memoryLooks, type DisplayMemoryLook } from './memory-changes.ts';
+import { memberWords } from './memory-people.ts';
 import { recallFor } from './memory-search.ts';
 import { profileDir } from './paths.ts';
 import { resolveFiles } from './provider-files.ts';
@@ -422,7 +423,7 @@ async function queueMessage(
 		text: trimmed,
 		provider: conv.provider,
 		attachments,
-		recall: await recall(conv, trimmed, sender.name)
+		recall: await recall(conv, trimmed, sender)
 	});
 	// The first message stands in as the title until the model has named the chat. A message
 	// with only files is named after them.
@@ -439,13 +440,19 @@ async function queueMessage(
  * already has. Null when nothing matches, and when memory can't be read: that must never stop a
  * message.
  */
-async function recall(conv: Conversation, text: string, sender: string): Promise<string | null> {
+async function recall(
+	conv: Conversation,
+	text: string,
+	sender: { id: string; name: string }
+): Promise<string | null> {
 	const slug = profileSlug(conv.profileId);
 	if (!slug || !text) return null;
 	try {
 		const rows = [...committedRows(conv.id), ...queuedRows(conv.id)];
 		const known = [conv.systemPrompt, ...rows.map((row) => messageText(readRow(row).blocks))];
-		return await recallFor(slug, text, { sender, known: known.join('\n') });
+		// What's about who's asking comes first, by any name their note calls them.
+		const words = memberWords({ id: conv.profileId, slug }, sender.id, sender.name);
+		return await recallFor(slug, text, { sender: words, known: known.join('\n') });
 	} catch (err) {
 		console.error(`[btw] ${conv.id.slice(0, 8)} could not look in memory:`, err);
 		return null;

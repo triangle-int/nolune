@@ -140,11 +140,16 @@ export function listMembers(profileId: string) {
 		.all();
 }
 
-export function addMember(profileId: string, nameOrEmail: string): void {
+/** `personNote`: their note in memory, when known (addMemberWithNote). */
+export function addMember(
+	profileId: string,
+	nameOrEmail: string,
+	personNote: string | null = null
+): void {
 	const found = findUser(nameOrEmail.trim());
 	if (!found) throw new Error(`No user "${nameOrEmail}"`);
 	if (isMember(profileId, found.id)) throw new Error(`${found.name} is already a member`);
-	getDb().insert(profileMember).values({ profileId, userId: found.id }).run();
+	getDb().insert(profileMember).values({ profileId, userId: found.id, personNote }).run();
 }
 
 export function removeMember(profileId: string, userId: string): void {

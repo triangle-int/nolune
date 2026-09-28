@@ -7,8 +7,10 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import type { SubmitFunction } from '@sveltejs/kit';
+	import { MEMORY_CATEGORIES, categoryOf } from '@btw/core/memory-categories';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import EraserIcon from '@lucide/svelte/icons/eraser';
+	import FolderInputIcon from '@lucide/svelte/icons/folder-input';
 	import PinIcon from '@lucide/svelte/icons/pin';
 	import { Button } from '$lib/components/ui/button';
 	import { Switch } from '$lib/components/ui/switch';
@@ -19,9 +21,10 @@
 	import Markdown from '$lib/components/chat/Markdown.svelte';
 	import DotGrid, { orderTopics, type Topic } from '$lib/components/memory/DotGrid.svelte';
 	import MemoryChangeItem from '$lib/components/memory/MemoryChangeItem.svelte';
+	import MoveNoteDialog from '$lib/components/memory/MoveNoteDialog.svelte';
 	import { formatAgo } from '$lib/format';
 	import { getI18n } from '$lib/i18n';
-	import { memoryAnchor, memoryTopic } from '$lib/memory';
+	import { memoryAnchor, memoryTitle } from '$lib/memory';
 	import { cn } from '$lib/utils';
 
 	let { data, form } = $props();
@@ -36,14 +39,31 @@
 	let allRecent = $state(false);
 	const recent = $derived(allRecent ? data.recent : data.recent.slice(0, RECENT_SHOWN));
 
+	const whose = $derived(new Map(data.members.map((member) => [member.note, member.name])));
+	/**
+	 * By category: a note each, then a folder's notes under its name. Notes from before the
+	 * categories come last, as unsorted.
+	 */
 	const topics: Topic[] = $derived(
-		data.files.map((file) => ({
-			path: file.path,
-			title: memoryTopic(file.path),
-			group: file.path.includes('/') ? memoryTopic(file.path.split('/')[0]) : null,
-			updatedAt: file.updatedAt,
-			facts: file.facts
-		}))
+		data.files.map((file) => {
+			const category = categoryOf(file.path);
+			const folder = !!category && file.path.includes('/');
+			return {
+				path: file.path,
+				title: memoryTitle(m, file.path, file.text),
+				group: !category
+					? m.memory.categories.unsorted
+					: folder
+						? m.memory.categories[category]
+						: null,
+				rank: category
+					? MEMORY_CATEGORIES.indexOf(category) + (folder ? 0.5 : 0)
+					: MEMORY_CATEGORIES.length,
+				member: whose.get(file.path) ?? null,
+				updatedAt: file.updatedAt,
+				facts: file.facts
+			};
+		})
 	);
 	/**
 	 * The notes below follow the grid's order, after the pinned core note. Core is there even
@@ -58,8 +78,10 @@
 				? {
 						topic: {
 							path: data.core.path,
-							title: memoryTopic(data.core.path),
+							title: memoryTitle(m, data.core.path),
 							group: null,
+							rank: 0,
+							member: null,
 							updatedAt: 0,
 							facts: []
 						},
@@ -89,6 +111,8 @@
 	let draft = $state('');
 	let saving = $state(false);
 	let forgetting = $state<string | null>(null);
+	let moving = $state<string | null>(null);
+	const titles = $derived(topics.map(({ path, title }) => ({ path, title })));
 
 	function pick(path: string) {
 		document.getElementById(memoryAnchor(path))?.scrollIntoView({
@@ -252,6 +276,7 @@
 						<p class="truncate text-xs text-muted-foreground">
 							{[
 								file.path,
+								topic.member && m.memory.memberNote(topic.member),
 								pinned && m.memory.pinned,
 								!missing && m.memory.memories(topic.facts.length),
 								!missing && m.memory.updated(formatAgo(file.updatedAt, i18n))
@@ -259,6 +284,9 @@
 								.filter(Boolean)
 								.join(' · ')}
 						</p>
+						{#if !categoryOf(file.path)}
+							<p class="mt-1 text-xs text-warning">{m.memory.unsortedHint}</p>
+						{/if}
 					</div>
 					{#if editing !== file.path}
 						<Button
@@ -273,6 +301,18 @@
 						>
 							<PencilIcon />
 						</Button>
+						{#if !pinned}
+							<Button
+								variant="ghost"
+								size="icon-sm"
+								class="-mt-1 text-muted-foreground"
+								aria-label={m.memory.move.button(topic.title)}
+								title={m.memory.move.button(topic.title)}
+								onclick={() => (moving = file.path)}
+							>
+								<FolderInputIcon />
+							</Button>
+						{/if}
 						{#if !missing}
 							<Button
 								variant="ghost"
@@ -343,11 +383,15 @@
 	</div>
 </div>
 
+<MoveNoteDialog bind:path={moving} notes={titles} />
+
 <AlertDialog.Root open={forgetting !== null} onOpenChange={(open) => !open && (forgetting = null)}>
 	<AlertDialog.Content>
 		<AlertDialog.Header>
 			<AlertDialog.Title
-				>{m.memory.forgetTitle(forgetting ? memoryTopic(forgetting) : '')}</AlertDialog.Title
+				>{m.memory.forgetTitle(
+					titles.find((note) => note.path === forgetting)?.title ?? forgetting ?? ''
+				)}</AlertDialog.Title
 			>
 			<AlertDialog.Description>
 				<Rich text={m.memory.forgetBody} profile={data.profile.name}>

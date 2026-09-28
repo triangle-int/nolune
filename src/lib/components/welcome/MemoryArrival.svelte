@@ -9,7 +9,7 @@
 	import AssistantAvatar, { type Mood } from '$lib/components/AssistantAvatar.svelte';
 	import { factInk, factShade } from '$lib/components/memory/DotGrid.svelte';
 	import { getI18n } from '$lib/i18n';
-	import { memoryTopic } from '$lib/memory';
+	import { memoryTitle } from '$lib/memory';
 	import { PHRASE, lastPhrase } from '$lib/welcome/sounds';
 
 	interface Props {
@@ -46,7 +46,7 @@
 	const rows = $derived.by(() => {
 		let offset = 0;
 		return notes.map((note) => {
-			const row = { path: note.path, title: memoryTopic(note.path), facts: note.facts, offset };
+			const row = { path: note.path, title: memoryTitle(m, note.path), facts: note.facts, offset };
 			offset += note.facts.length;
 			return row;
 		});

@@ -431,6 +431,44 @@ export const en = {
 		older: 'Older',
 		newer: 'Newer',
 		nothingYet: 'Nothing remembered yet. Each thing btw learns becomes a dot here.',
+		/** Where memory keeps things: the same in every profile. */
+		categories: {
+			core: 'Core',
+			people: 'People',
+			home: 'Home',
+			health: 'Health',
+			plans: 'Plans',
+			routines: 'Routines',
+			pets: 'Pets',
+			places: 'Places',
+			projects: 'Projects',
+			other: 'Other',
+			/** Notes from before there were categories. */
+			unsorted: 'Unsorted'
+		},
+		unsortedHint:
+			'From before memory had categories: btw reads it, but adds nothing to it. Move it into a category to keep it growing.',
+		/** On a person's note that is about a member of the profile. */
+		memberNote: (name: string) => `member: ${name}`,
+		move: {
+			button: (topic: string) => `Move ${topic}`,
+			title: (topic: string) => `Move "${topic}"`,
+			body: 'Choose where it belongs. If that note is there already, the two become one.',
+			to: 'Move to',
+			choose: 'Choose where',
+			categories: 'Categories',
+			newPerson: 'Someone new…',
+			newProject: 'A new project…',
+			personName: 'Their name',
+			projectName: 'Project name',
+			moveHint: (target: string) => `It becomes ${target}.`,
+			mergeHint: (from: string, into: string) =>
+				`What ${from} says is added to ${into}, without repeats, and ${from} is gone. Use this for two notes about the same person.`,
+			move: 'Move',
+			merge: 'Merge',
+			moved: (from: string, to: string) => `Moved ${from} to ${to}.`,
+			merged: (from: string, into: string) => `Merged ${from} into ${into}.`
+		},
 		/** What btw saved from a chat by itself: in that chat, and at the top of this page. */
 		changes: {
 			saved: (n: number) => `Saved ${p(n, { one: `${n} memory`, other: `${n} memories` })}`,
@@ -574,7 +612,31 @@ export const en = {
 		soulSaved: 'Saved the soul.',
 		soulRemoved: 'Removed the soul.',
 		added: (name: string) => `Added ${name}.`,
-		removed: 'Removed.'
+		removed: 'Removed.',
+		/** Under a member: their note in memory. */
+		memberNote: (note: string) => `Note: ${note}`,
+		noteStarts: (note: string) => `Note: ${note}, started when there's something to write`,
+		mayHaveNote: 'btw may have a note about them already',
+		chooseNote: 'Choose note',
+		changeNote: 'Change note',
+		linked: (name: string, note: string) => `${name}'s note is ${note} now.`,
+		/** Which note in memory is about a member. */
+		chooser: {
+			addTitle: (name: string) => `Does btw know ${name} already?`,
+			linkTitle: (name: string) => `Which note is about ${name}?`,
+			body: (name: string) =>
+				`Memory has notes that may be about ${name}. Choose theirs, so btw knows what it says is about them and adds what they tell it about themselves.`,
+			linkBody: (name: string) =>
+				`Choose the note about ${name}: btw adds to it what they tell it about themselves.`,
+			current: 'now',
+			alsoCalled: (names: string) => `Also called: ${names}`,
+			more: (n: number) => `and ${n} more`,
+			newNote: 'Someone else: start a new note',
+			privacy: (name: string) =>
+				`${name} will be able to read everything in this profile's memory, this note too. Check that it holds nothing meant to be kept from them, like a surprise.`,
+			add: (name: string) => `Add ${name}`,
+			link: 'Link'
+		}
 	},
 
 	/** The assistant avatars' names, as the profile page shows them. */

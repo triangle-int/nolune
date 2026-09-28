@@ -106,10 +106,10 @@ function family() {
 	);
 	writeMemoryNote(
 		profile.slug,
-		'food',
-		'# Food\n\n- Pizza night is on Friday\n- Pancakes on Sunday\n- No mushrooms for Mia\n'
+		'routines',
+		'# Routines\n\n- Pizza night is on Friday\n- Pancakes on Sunday\n- No mushrooms for Mia\n'
 	);
-	writeMemoryNote(profile.slug, 'money', '# Money\n\n- Rent is due on the 1st\n- Taxes in April\n');
+	writeMemoryNote(profile.slug, 'plans', '# Plans\n\n- Rent is due on the 1st\n- Taxes in April\n');
 	return profile;
 }
 

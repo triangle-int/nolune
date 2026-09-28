@@ -6,6 +6,8 @@ import {
 	MemoryError,
 	forgetMemoryFile,
 	listMemoryFiles,
+	membersWithNotes,
+	mergeProfileNotes,
 	recentMemoryChanges,
 	setLearnFromChats,
 	writeMemoryFile
@@ -26,6 +28,10 @@ export const load: PageServerLoad = ({ locals, params }) => {
 			limit: 30
 		}),
 		core: { path: CORE_NOTE, maxChars: MAX_PINNED_CHARS },
+		// Whose notes are whose: members' come first under People.
+		members: membersWithNotes(profile).flatMap((m) =>
+			m.note ? [{ name: m.name, note: m.note }] : []
+		),
 		learnFromChats: profile.learnFromChats
 	};
 };
@@ -62,6 +68,25 @@ export const actions: Actions = {
 		setLearnFromChats(profile.id, (await request.formData()).get('on') === 'on');
 		// The switch shows the change; no message needed.
 		return {};
+	},
+	move: async ({ locals, params, request }) => {
+		const { profile } = requireProfile(locals, params.slug);
+		const { m } = translations(locals.locale);
+		const form = await request.formData();
+		const from = form.get('from')?.toString() ?? '';
+		const to = form.get('to')?.toString() ?? '';
+		try {
+			// Into a note that's there already, it's a merge.
+			const merged = mergeProfileNotes(profile, from, to);
+			return {
+				message: (merged.merged ? m.memory.move.merged : m.memory.move.moved)(
+					merged.from,
+					merged.into
+				)
+			};
+		} catch (err) {
+			return fail(400, { message: message(err) });
+		}
 	},
 	forget: async ({ locals, params, request }) => {
 		const { profile } = requireProfile(locals, params.slug);

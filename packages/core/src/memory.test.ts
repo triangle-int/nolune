@@ -23,10 +23,10 @@ describe('the core note', () => {
 	it('is copied whole into the prompt, and left out of the list of notes', () => {
 		const { profile } = makeFamily();
 		addMemoryFact(profile.slug, 'core', 'Mia is allergic to nuts');
-		addMemoryFact(profile.slug, 'food', 'Pizza on Fridays');
+		addMemoryFact(profile.slug, 'routines', 'Pizza on Fridays');
 		const prompt = buildSystemPrompt(profile);
 		expect(prompt).toContain('<note name="core">\n# Core\n\n- Mia is allergic to nuts\n</note>');
-		expect(prompt).toContain('Other notes when this conversation started: food.');
+		expect(prompt).toContain('Other notes when this conversation started: routines.');
 		expect(prompt).not.toContain('Pizza on Fridays');
 	});
 
@@ -45,9 +45,9 @@ describe('the core note', () => {
 		expect(() => addMemoryFact(profile.slug, 'core', 'x'.repeat(MAX_PINNED_CHARS))).toThrow(
 			'a pinned note'
 		);
-		writeMemoryNote(profile.slug, 'family', long);
-		expect(() => renameMemoryNote(profile.slug, 'family', 'core')).toThrow('a pinned note');
-		expect(readMemoryNote(profile.slug, 'family').text).toBe(`${long}\n`);
+		writeMemoryNote(profile.slug, 'home', long);
+		expect(() => renameMemoryNote(profile.slug, 'home', 'core')).toThrow('a pinned note');
+		expect(readMemoryNote(profile.slug, 'home').text).toBe(`${long}\n`);
 	});
 
 	it('is cut at a line in the prompt when it grew too long in an editor', () => {

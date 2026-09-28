@@ -484,7 +484,7 @@ export const es: Messages = {
 	memory: {
 		title: 'Memoria',
 		intro: (profile: string) =>
-			`Lo que btw recuerda para ${profile}, compartido por todos en él. Cada chat empieza con la nota fijada Core; btw lee las demás cuando un chat las necesita y guarda lo que aprende por el camino. Para añadir algo, díselo en un chat, por ejemplo: «Recuerda que Anna es alérgica a los frutos secos».`,
+			`Lo que btw recuerda para ${profile}, compartido por todos en él. Cada chat empieza con la nota fijada Lo esencial; btw lee las demás cuando un chat las necesita y guarda lo que aprende por el camino. Para añadir algo, díselo en un chat, por ejemplo: «Recuerda que Anna es alérgica a los frutos secos».`,
 		total: (count: number, topics: number) =>
 			`${count === 1 ? 'recuerdo' : 'recuerdos'} en ${p(topics, { one: `${topics} tema`, other: `${topics} temas` })}`,
 		newThisWeek: (n: number) =>
@@ -521,6 +521,41 @@ export const es: Messages = {
 		newer: 'Más reciente',
 		nothingYet:
 			'Todavía no recuerda nada. Cada cosa que btw aprende se convierte aquí en un punto.',
+		categories: {
+			core: 'Lo esencial',
+			people: 'Personas',
+			home: 'Casa',
+			health: 'Salud',
+			plans: 'Planes',
+			routines: 'Rutinas',
+			pets: 'Mascotas',
+			places: 'Lugares',
+			projects: 'Proyectos',
+			other: 'Otros',
+			unsorted: 'Sin categoría'
+		},
+		unsortedHint:
+			'De antes de que la memoria tuviera categorías: btw la lee, pero no le añade nada. Muévela a una categoría para que siga creciendo.',
+		memberNote: (name: string) => `miembro: ${name}`,
+		move: {
+			button: (topic: string) => `Mover ${topic}`,
+			title: (topic: string) => `Mover «${topic}»`,
+			body: 'Elige dónde va. Si esa nota ya existe, las dos se convierten en una.',
+			to: 'Mover a',
+			choose: 'Elige dónde',
+			categories: 'Categorías',
+			newPerson: 'Alguien nuevo…',
+			newProject: 'Un proyecto nuevo…',
+			personName: 'Su nombre',
+			projectName: 'Nombre del proyecto',
+			moveHint: (target: string) => `Pasará a ser ${target}.`,
+			mergeHint: (from: string, into: string) =>
+				`Lo que dice «${from}» se añade a «${into}», sin repeticiones, y «${from}» desaparece. Sirve para dos notas sobre la misma persona.`,
+			move: 'Mover',
+			merge: 'Unir',
+			moved: (from: string, to: string) => `${from} movida a ${to}.`,
+			merged: (from: string, into: string) => `${from} unida a ${into}.`
+		},
 		/** What btw saved from a chat by itself: in that chat, and at the top of this page. */
 		changes: {
 			saved: (n: number) => `Guardó ${memories(n)}`,
@@ -663,7 +698,29 @@ export const es: Messages = {
 		soulSaved: 'Alma guardada.',
 		soulRemoved: 'Alma eliminada.',
 		added: (name: string) => `${name} añadido.`,
-		removed: 'Quitado.'
+		removed: 'Quitado.',
+		memberNote: (note: string) => `Nota: ${note}`,
+		noteStarts: (note: string) => `Nota: ${note}, se crea cuando haya algo que apuntar`,
+		mayHaveNote: 'Puede que btw ya tenga una nota sobre esta persona',
+		chooseNote: 'Elegir nota',
+		changeNote: 'Cambiar nota',
+		linked: (name: string, note: string) => `La nota de ${name} ahora es ${note}.`,
+		chooser: {
+			addTitle: (name: string) => `¿btw ya conoce a ${name}?`,
+			linkTitle: (name: string) => `¿Qué nota es sobre ${name}?`,
+			body: (name: string) =>
+				`La memoria tiene notas que podrían ser sobre ${name}. Elige la suya, para que btw sepa que lo que dice es sobre esta persona y añada ahí lo que cuente de sí misma.`,
+			linkBody: (name: string) =>
+				`Elige la nota sobre ${name}: btw añadirá ahí lo que esta persona cuente de sí misma.`,
+			current: 'ahora',
+			alsoCalled: (names: string) => `Otros nombres: ${names}`,
+			more: (n: number) => `y ${n} más`,
+			newNote: 'Es otra persona: empezar una nota nueva',
+			privacy: (name: string) =>
+				`${name} podrá leer toda la memoria de este perfil, también esta nota. Comprueba que no tenga nada que deba quedar en secreto para esta persona, como una sorpresa.`,
+			add: (name: string) => `Añadir a ${name}`,
+			link: 'Vincular'
+		}
 	},
 
 	avatars: {

@@ -50,13 +50,13 @@ describe('runCli', () => {
 		createProfile('Work', makeUser('Max').id);
 		vi.stubEnv('BTW_PROFILE', 'work');
 
-		const added = await run(['memory', 'add', 'family', 'Anna is 7'], {
+		const added = await run(['memory', 'add', 'home', 'Anna is 7'], {
 			env: { BTW_PROFILE: 'family' }
 		});
 
-		expect(added).toEqual({ code: 0, out: 'Started family.md.\n', err: '' });
-		expect(readMemoryNote('family', 'family').text).toContain('Anna is 7');
-		expect(() => readMemoryNote('work', 'family')).toThrow();
+		expect(added).toEqual({ code: 0, out: 'Started home.md.\n', err: '' });
+		expect(readMemoryNote('family', 'home').text).toContain('Anna is 7');
+		expect(() => readMemoryNote('work', 'home')).toThrow();
 		vi.unstubAllEnvs();
 	});
 
@@ -95,6 +95,32 @@ describe('runCli', () => {
 		});
 		expect((await run(['memory', 'search', 'dentist'], { env })).out).toContain(
 			'Nothing in Family\'s memory matches "dentist"'
+		);
+	});
+
+	it('lists whose notes are whose, and merges two about one person', async () => {
+		createProfile('Family', makeUser('Anna').id);
+		const env = { BTW_PROFILE: 'family' };
+		await run(['memory', 'add', 'people/grandma', 'Loves roses'], { env });
+		await run(['memory', 'add', 'people/olga', 'Lives in Tver'], { env });
+		expect(await run(['memory', 'add', 'family', 'Olga is 70'], { env })).toMatchObject({
+			code: 1,
+			err: expect.stringContaining('"family" isn\'t one of memory\'s categories')
+		});
+
+		const list = (await run(['memory'], { env })).out;
+		expect(list).toContain(
+			"Anna's note people/anna.md is started when there is something to write."
+		);
+		expect(list).toMatch(/people\/olga\.md +1 fact/);
+
+		expect(await run(['memory', 'merge', 'people/grandma', 'people/olga'], { env })).toEqual({
+			code: 0,
+			out: "Merged people/grandma.md into people/olga.md: 1 part it didn't have.\n",
+			err: ''
+		});
+		expect(readMemoryNote('family', 'people/olga').text).toBe(
+			'# Olga\n\n- Lives in Tver\n- Loves roses\n- Also called: Grandma\n'
 		);
 	});
 

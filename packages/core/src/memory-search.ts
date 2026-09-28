@@ -1,4 +1,5 @@
 import { readFacts } from './memory-facts.ts';
+import { aliasesOf, categoryOf, titleIn } from './memory-categories.ts';
 import {
 	describe,
 	embed,
@@ -30,7 +31,8 @@ export interface MemoryHit {
 	score: number;
 }
 
-type Fact = Omit<MemoryHit, 'score'>;
+/** `about`: what else its note's name stands for, like the names a person's note calls them. */
+type Fact = Omit<MemoryHit, 'score'> & { about?: string };
 
 /**
  * Words that say nothing about what a message is about, in the languages the web interface
@@ -121,7 +123,7 @@ export function rankFacts(
 	const boosts = termsOf(options.boost ?? '');
 	const docs = facts.map((fact) => ({
 		body: wordsOf(fact.text),
-		context: wordsOf(`${noteWords(fact.path)} ${fact.heading ?? ''}`)
+		context: wordsOf(`${noteWords(fact.path)} ${fact.about ?? ''} ${fact.heading ?? ''}`)
 	}));
 	const score = (list: Term[]) => {
 		const scores = facts.map(() => 0);
@@ -140,7 +142,13 @@ export function rankFacts(
 	const scores = score(terms);
 	const lift = boosts.length ? score(boosts) : null;
 	const hits = facts
-		.map((fact, i) => ({ ...fact, score: scores[i] && scores[i] + (lift?.[i] ?? 0) }))
+		.map((fact, i) => ({
+			path: fact.path,
+			line: fact.line,
+			heading: fact.heading,
+			text: fact.text,
+			score: scores[i] && scores[i] + (lift?.[i] ?? 0)
+		}))
 		.filter((hit) => hit.score > 0)
 		.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path) || a.line - b.line);
 	const least = (hits[0]?.score ?? 0) * (options.cutoff ?? 0);
@@ -148,9 +156,14 @@ export function rankFacts(
 }
 
 function memoryFacts(slug: string): Fact[] {
-	return readMemoryNotes(slug).flatMap((note) =>
-		readFacts(note.text).map((fact) => ({ path: note.path, ...fact }))
-	);
+	return readMemoryNotes(slug).flatMap((note) => {
+		// "Grandma" finds what people/olga says.
+		const about =
+			categoryOf(note.path) === 'people'
+				? [titleIn(note.text), ...aliasesOf(note.text)].filter(Boolean).join(' ')
+				: '';
+		return readFacts(note.text).map((fact) => ({ path: note.path, ...fact, about }));
+	});
 }
 
 // --- By meaning ---

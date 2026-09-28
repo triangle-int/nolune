@@ -10,6 +10,7 @@
 		"./articles": "./src/articles.ts",
 		"./avatars": "./src/avatars.ts",
 		"./memory-export": "./src/memory-export.ts",
+		"./memory-categories": "./src/memory-categories.ts",
 		"./schedule": "./src/schedule.ts",
 		"./paths": "./src/paths.ts"
 	},

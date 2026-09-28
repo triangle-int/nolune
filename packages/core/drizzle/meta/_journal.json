@@ -113,6 +113,13 @@
 			"when": 1790568312163,
 			"tag": "0015_memory_changes",
 			"breakpoints": true
+		},
+		{
+			"idx": 16,
+			"version": "6",
+			"when": 1790591540366,
+			"tag": "0016_member_person_note",
+			"breakpoints": true
 		}
 	]
 }

@@ -102,7 +102,7 @@ describe('recallFor', () => {
 	it('lists the facts that match a message, by note', async () => {
 		const { profile } = makeFamily();
 		writeMemoryNote(profile.slug, 'home', '# Home\n\n## Internet\n\n- Wifi password: mango42\n');
-		addMemoryFact(profile.slug, 'food', 'Pizza night is on Friday');
+		addMemoryFact(profile.slug, 'routines', 'Pizza night is on Friday');
 		const recall = await recallFor(profile.slug, "What's the wifi password?", { known: '' });
 		expect(recall).toContain('<memory>');
 		expect(recall).toContain('- [home › Internet] Wifi password: mango42');
@@ -112,7 +112,7 @@ describe('recallFor', () => {
 	it('leaves out what the conversation already has, however it was written', async () => {
 		const { profile } = makeFamily();
 		addMemoryFact(profile.slug, 'core', 'Mia is allergic to **nuts**');
-		addMemoryFact(profile.slug, 'kids', 'Mia goes to Riverside school');
+		addMemoryFact(profile.slug, 'people/mia', 'Mia goes to Riverside school');
 		const known = '<note name="core">\n# Core\n\n- Mia is allergic to **nuts**\n</note>';
 		const recall = await recallFor(profile.slug, 'Can Mia eat this at school?', { known });
 		expect(recall).toContain('Mia goes to Riverside school');

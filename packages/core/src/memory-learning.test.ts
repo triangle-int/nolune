@@ -102,6 +102,18 @@ describe('learnFrom', () => {
 		);
 		expect(input).not.toContain('SAVE THIS');
 		expect(input).not.toContain('cat vets.txt');
+		expect(input).toContain('<people>\n- Anna: people/anna (nothing in it yet)\n</people>');
+	});
+
+	it('only saves into the categories', async () => {
+		const { profile, conv } = chat();
+		replies(
+			'[{"op": "add", "note": "family", "fact": "The dog is called Rex"}, {"op": "add", "note": "people/anna", "fact": "Has a dog called Rex"}]'
+		);
+		expect(await learnFrom(conv.id)).toEqual([
+			{ op: 'add', note: 'people/anna', fact: 'Has a dog called Rex' }
+		]);
+		expect(listMemoryFiles(profile.slug).map((file) => file.path)).toEqual(['people/anna.md']);
 	});
 
 	it('reads each part of a chat once, with a little of what came before', async () => {

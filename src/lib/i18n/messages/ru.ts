@@ -542,7 +542,7 @@ export const ru: Messages = {
 	memory: {
 		title: 'Память',
 		intro: (profile: string) =>
-			`Что btw помнит для профиля ${profile}. Это видят все его участники. Каждый чат начинается с закреплённой заметки Core; остальные btw читает, когда они нужны в чате, и по ходу дела записывает то, что узнаёт. Чтобы добавить что-то, просто скажите ему в чате, например: «Запомни, что у Анны аллергия на орехи».`,
+			`Что btw помнит для профиля ${profile}. Это видят все его участники. Каждый чат начинается с закреплённой заметки «Главное»; остальные btw читает, когда они нужны в чате, и по ходу дела записывает то, что узнаёт. Чтобы добавить что-то, просто скажите ему в чате, например: «Запомни, что у Анны аллергия на орехи».`,
 		total: (memories: number, topics: number) =>
 			`${p(memories, { one: 'факт', few: 'факта', many: 'фактов', other: 'факта' })} ${p(topics, { one: `в ${topics} теме`, other: `в ${topics} темах` })}`,
 		newThisWeek: (n: number) =>
@@ -579,6 +579,41 @@ export const ru: Messages = {
 		newer: 'Новые',
 		nothingYet:
 			'btw пока ничего не запомнил. Каждый факт, который он узнаёт, становится здесь точкой.',
+		categories: {
+			core: 'Главное',
+			people: 'Люди',
+			home: 'Дом',
+			health: 'Здоровье',
+			plans: 'Планы',
+			routines: 'Распорядок',
+			pets: 'Питомцы',
+			places: 'Места',
+			projects: 'Проекты',
+			other: 'Другое',
+			unsorted: 'Без категории'
+		},
+		unsortedHint:
+			'Эта заметка появилась, когда у памяти ещё не было категорий: btw её читает, но ничего в неё не дописывает. Перенесите её в категорию, чтобы она пополнялась.',
+		memberNote: (name: string) => `участник: ${name}`,
+		move: {
+			button: (topic: string) => `Перенести: ${topic}`,
+			title: (topic: string) => `Перенести «${topic}»`,
+			body: 'Выберите, куда она относится. Если такая заметка уже есть, они станут одной.',
+			to: 'Куда перенести',
+			choose: 'Выберите куда',
+			categories: 'Категории',
+			newPerson: 'Новый человек…',
+			newProject: 'Новый проект…',
+			personName: 'Имя',
+			projectName: 'Название проекта',
+			moveHint: (target: string) => `Заметка станет ${target}.`,
+			mergeHint: (from: string, into: string) =>
+				`Всё из «${from}» добавится в «${into}» без повторов, а «${from}» исчезнет. Так объединяют две заметки об одном человеке.`,
+			move: 'Перенести',
+			merge: 'Объединить',
+			moved: (from: string, to: string) => `${from} перенесена в ${to}.`,
+			merged: (from: string, into: string) => `${from} объединена с ${into}.`
+		},
 		/** What btw saved from a chat by itself: in that chat, and at the top of this page. */
 		changes: {
 			saved: (n: number) => `Запомнил ${facts(n)}`,
@@ -719,7 +754,29 @@ export const ru: Messages = {
 		soulSaved: 'Душа сохранена.',
 		soulRemoved: 'Душа удалена.',
 		added: (name: string) => `Добавили: ${name}.`,
-		removed: 'Удалено из профиля.'
+		removed: 'Удалено из профиля.',
+		memberNote: (note: string) => `Заметка: ${note}`,
+		noteStarts: (note: string) => `Заметка: ${note}, появится, когда будет что записать`,
+		mayHaveNote: 'Возможно, у btw уже есть заметка об этом человеке',
+		chooseNote: 'Выбрать заметку',
+		changeNote: 'Сменить заметку',
+		linked: (name: string, note: string) => `Готово: ${name} → ${note}.`,
+		chooser: {
+			addTitle: (name: string) => `btw уже знает человека по имени ${name}?`,
+			linkTitle: (name: string) => `Какая заметка о человеке по имени ${name}?`,
+			body: (name: string) =>
+				`В памяти есть заметки, которые могут быть о человеке по имени ${name}. Выберите нужную: тогда btw будет знать, что написанное там — про этого участника, и будет дописывать туда то, что участник расскажет о себе.`,
+			linkBody: (name: string) =>
+				`Выберите заметку о человеке по имени ${name}: btw будет дописывать туда то, что участник расскажет о себе.`,
+			current: 'сейчас',
+			alsoCalled: (names: string) => `Зовут также: ${names}`,
+			more: (n: number) => `и ещё ${n}`,
+			newNote: 'Это другой человек: начать новую заметку',
+			privacy: (name: string) =>
+				`${name} сможет читать всю память профиля, и эту заметку тоже. Проверьте, что в ней нет ничего, что стоит держать в секрете от этого человека, например сюрприза.`,
+			add: (name: string) => `Добавить: ${name}`,
+			link: 'Привязать'
+		}
 	},
 
 	avatars: {

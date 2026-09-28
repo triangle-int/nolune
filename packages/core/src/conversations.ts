@@ -310,7 +310,7 @@ export function setPreset(id: string, presetId: string): Conversation {
  */
 export function rebuildSystemPrompt(
 	conv: Conversation,
-	profile: Pick<Profile, 'slug' | 'disabledSkills'>,
+	profile: Pick<Profile, 'id' | 'slug' | 'disabledSkills'>,
 	folderContext: string,
 	soul: { text: string; cut: boolean },
 	lastSeq: number | null

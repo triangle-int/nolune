@@ -1,14 +1,18 @@
 import {
 	MAX_PINNED_CHARS,
+	MEMORY_CATEGORIES,
 	addMemoryFact,
+	categoryOf,
 	forgetMemoryFact,
 	formatLocalTime,
 	isPinnedNote,
 	listMemoryFiles,
+	membersWithNotes,
+	mergeProfileNotes,
+	moveProfileNote,
 	profileMemoryDir,
 	readMemoryNote,
 	removeMemoryNote,
-	renameMemoryNote,
 	replaceInMemory,
 	searchMemory,
 	setLearnFromChats,
@@ -17,18 +21,21 @@ import {
 import type { Io } from './io.ts';
 import { profileFor } from './profile.ts';
 
-export const MEMORY_HELP = `Memory (short notes per topic; the agent reads the ones it needs)
-  btw memory [list] [--profile SLUG]         the notes and how many facts each holds
+export const MEMORY_HELP = `Memory (short notes in fixed categories; the agent reads the ones it needs)
+  btw memory [list] [--profile SLUG]         the notes, how many facts each holds, and whose they are
   btw memory search <words>...               find facts in every note, best match first
-  btw memory show <topic>...                 print notes (a topic is family, people/anna, …)
+  btw memory show <topic>...                 print notes (a topic is home, people/anna, …)
   btw memory add <topic> <fact>              add one fact; the note is created if needed
   btw memory replace <topic> <old> <new>     change text that appears once in the note
   btw memory forget <topic> <text>           remove the one line that contains <text>
   btw memory write <topic> [text]            replace the whole note (the text, or stdin)
   btw memory rm <topic>
   btw memory mv <topic> <new-topic>
+  btw memory merge <topic> <into-topic>      put one note into another about the same thing
   btw memory learning [on|off]               whether btw also saves what it learns by itself,
                                              looking over each chat once it goes quiet
+  Categories: ${MEMORY_CATEGORIES.map((c) => (c === 'people' || c === 'projects' ? `${c}/<name>` : c)).join(', ')}.
+  Facts go only into these; a note from before them can be read and rewritten until it's moved.
   The note core is pinned: every new chat starts with it, so it holds at most ${MAX_PINNED_CHARS} characters.`;
 
 /**
@@ -76,11 +83,28 @@ export async function memoryCommand(io: Io, args: string[]): Promise<void> {
 				io.log(`No notes yet for ${profile.name}. Start one with: btw memory add <topic> "<fact>"`);
 				return;
 			}
+			const members = membersWithNotes(profile);
+			const whose = new Map(members.flatMap((m) => (m.note ? [[m.note, m.name] as const] : [])));
 			io.log(`Notes for ${profile.name} (${profileMemoryDir(slug)}):`);
 			const width = Math.max(...files.map((f) => f.path.length));
 			for (const f of files) {
+				const about = isPinnedNote(f.path)
+					? '  (pinned: in every new chat)'
+					: whose.has(f.path)
+						? `  (${whose.get(f.path)}'s note)`
+						: categoryOf(f.path)
+							? ''
+							: '  (from before the categories: move it into one)';
 				io.log(
-					`  ${f.path.padEnd(width)}  ${plural(f.facts.length, 'fact', 'facts').padEnd(9)}  changed ${formatLocalTime(new Date(f.updatedAt))}${isPinnedNote(f.path) ? '  (pinned: in every new chat)' : ''}`
+					`  ${f.path.padEnd(width)}  ${plural(f.facts.length, 'fact', 'facts').padEnd(9)}  changed ${formatLocalTime(new Date(f.updatedAt))}${about}`
+				);
+			}
+			const waiting = members.filter((m) => !m.note || !files.some((f) => f.path === m.note));
+			for (const m of waiting) {
+				io.log(
+					m.note
+						? `  ${m.name}'s note ${m.note} is started when there is something to write.`
+						: `  Which note is ${m.name}'s isn't known yet: maybe ${m.candidates.map((c) => c.path).join(', ')}. Link it in the profile's settings.`
 				);
 			}
 			return;
@@ -151,8 +175,18 @@ export async function memoryCommand(io: Io, args: string[]): Promise<void> {
 		}
 		case 'mv': {
 			need(rest, 2, 'mv <topic> <new topic>');
-			const moved = renameMemoryNote(slug, rest[0], rest[1]);
+			const moved = moveProfileNote(profile, rest[0], rest[1]);
 			io.log(`Renamed ${moved.from} to ${moved.to}.`);
+			return;
+		}
+		case 'merge': {
+			need(rest, 2, 'merge <topic> <into topic>');
+			const merged = mergeProfileNotes(profile, rest[0], rest[1]);
+			io.log(
+				merged.merged
+					? `Merged ${merged.from} into ${merged.into}: ${plural(merged.added, 'part', 'parts')} it didn't have.`
+					: `There was no ${merged.into} yet, so ${merged.from} was renamed to it.`
+			);
 			return;
 		}
 		case 'learning': {

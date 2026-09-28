@@ -464,7 +464,7 @@ export const de: Messages = {
 	memory: {
 		title: 'Gedächtnis',
 		intro: (profile: string) =>
-			`Was sich btw für ${profile} merkt, sichtbar für alle darin. Jeder Chat beginnt mit der angehefteten Notiz „Core“; die anderen liest btw, wenn ein Chat sie braucht, und speichert unterwegs, was es lernt. Um etwas hinzuzufügen, sag es ihm einfach in einem Chat, etwa „Merk dir, dass Anna allergisch gegen Nüsse ist“.`,
+			`Was sich btw für ${profile} merkt, sichtbar für alle darin. Jeder Chat beginnt mit der angehefteten Notiz „Das Wichtigste“; die anderen liest btw, wenn ein Chat sie braucht, und speichert unterwegs, was es lernt. Um etwas hinzuzufügen, sag es ihm einfach in einem Chat, etwa „Merk dir, dass Anna allergisch gegen Nüsse ist“.`,
 		total: (count: number, topics: number) =>
 			`${count === 1 ? 'Erinnerung' : 'Erinnerungen'} in ${p(topics, { one: `${topics} Thema`, other: `${topics} Themen` })}`,
 		newThisWeek: (n: number) => `${n} neu diese Woche`,
@@ -499,6 +499,41 @@ export const de: Messages = {
 		older: 'Älter',
 		newer: 'Neuer',
 		nothingYet: 'Noch nichts gemerkt. Alles, was btw lernt, wird hier zu einem Punkt.',
+		categories: {
+			core: 'Das Wichtigste',
+			people: 'Menschen',
+			home: 'Zuhause',
+			health: 'Gesundheit',
+			plans: 'Pläne',
+			routines: 'Routinen',
+			pets: 'Haustiere',
+			places: 'Orte',
+			projects: 'Projekte',
+			other: 'Sonstiges',
+			unsorted: 'Ohne Kategorie'
+		},
+		unsortedHint:
+			'Aus der Zeit, bevor das Gedächtnis Kategorien hatte: btw liest sie, fügt aber nichts hinzu. Verschiebe sie in eine Kategorie, damit sie weiterwächst.',
+		memberNote: (name: string) => `Mitglied: ${name}`,
+		move: {
+			button: (topic: string) => `${topic} verschieben`,
+			title: (topic: string) => `„${topic}“ verschieben`,
+			body: 'Wähle, wohin sie gehört. Gibt es diese Notiz schon, werden beide zu einer.',
+			to: 'Verschieben nach',
+			choose: 'Wohin?',
+			categories: 'Kategorien',
+			newPerson: 'Jemand Neues…',
+			newProject: 'Ein neues Projekt…',
+			personName: 'Name',
+			projectName: 'Projektname',
+			moveHint: (target: string) => `Sie wird zu ${target}.`,
+			mergeHint: (from: string, into: string) =>
+				`Was in „${from}“ steht, kommt ohne Wiederholungen zu „${into}“, und „${from}“ verschwindet. So werden zwei Notizen über dieselbe Person eins.`,
+			move: 'Verschieben',
+			merge: 'Zusammenführen',
+			moved: (from: string, to: string) => `${from} nach ${to} verschoben.`,
+			merged: (from: string, into: string) => `${from} mit ${into} zusammengeführt.`
+		},
 		/** What btw saved from a chat by itself: in that chat, and at the top of this page. */
 		changes: {
 			saved: (n: number) => `${memories(n)} gespeichert`,
@@ -642,7 +677,29 @@ export const de: Messages = {
 		soulSaved: 'Seele gespeichert.',
 		soulRemoved: 'Seele entfernt.',
 		added: (name: string) => `${name} hinzugefügt.`,
-		removed: 'Entfernt.'
+		removed: 'Entfernt.',
+		memberNote: (note: string) => `Notiz: ${note}`,
+		noteStarts: (note: string) => `Notiz: ${note}, entsteht, sobald es etwas zu notieren gibt`,
+		mayHaveNote: 'btw hat vielleicht schon eine Notiz über diese Person',
+		chooseNote: 'Notiz wählen',
+		changeNote: 'Notiz ändern',
+		linked: (name: string, note: string) => `Die Notiz von ${name} ist jetzt ${note}.`,
+		chooser: {
+			addTitle: (name: string) => `Kennt btw ${name} schon?`,
+			linkTitle: (name: string) => `Welche Notiz ist über ${name}?`,
+			body: (name: string) =>
+				`Im Gedächtnis gibt es Notizen, die über ${name} sein könnten. Wähle die richtige, damit btw weiß, dass es darin um diese Person geht, und dort ergänzt, was sie über sich erzählt.`,
+			linkBody: (name: string) =>
+				`Wähle die Notiz über ${name}: btw ergänzt dort, was diese Person über sich erzählt.`,
+			current: 'jetzt',
+			alsoCalled: (names: string) => `Auch genannt: ${names}`,
+			more: (n: number) => `und ${n} weitere`,
+			newNote: 'Jemand anderes: neue Notiz beginnen',
+			privacy: (name: string) =>
+				`${name} kann dann das ganze Gedächtnis dieses Profils lesen, auch diese Notiz. Prüfe, dass nichts darin steht, was vor dieser Person geheim bleiben soll, etwa eine Überraschung.`,
+			add: (name: string) => `${name} hinzufügen`,
+			link: 'Verknüpfen'
+		}
 	},
 
 	avatars: {

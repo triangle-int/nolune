@@ -1,4 +1,5 @@
 import { CORE_NOTE, addMemoryFacts, type MemoryFact } from './memory.ts';
+import { noteName } from './memory-categories.ts';
 import {
 	EXPORT_PROMPT,
 	parseMemoryExport,
@@ -15,7 +16,7 @@ import type { Preset } from './presets.ts';
  * their name on them:
  *
  *   Instructions  core.md, as "Anna: keep answers short" (what doesn't fit: Anna's note)
- *   Identity, Career, Preferences, other headings  people/anna.md, a heading each
+ *   Identity, Career, Preferences, other headings  their note (people/anna.md), a heading each
  *   Projects  projects/<name>.md, one per project; unnamed ones in projects.md
  *
  * Each fact keeps the date the export gave it, so the Memory page shades it by its real age.
@@ -31,19 +32,6 @@ const HEADINGS: Record<Exclude<ExportSection, 'instructions' | 'projects'>, stri
 	other: 'Other'
 };
 
-/** A person's or project's name as a note name: `Anna Smith` is `anna-smith`. */
-export function noteName(name: string): string {
-	return (
-		name
-			.normalize('NFKD')
-			.replace(/\p{M}/gu, '')
-			.toLowerCase()
-			.replace(/[^\p{L}\p{N}]+/gu, '-')
-			.replace(/^-+|-+$/g, '')
-			.slice(0, 40) || 'someone'
-	);
-}
-
 function learnedAt(fact: ExportedFact): number | null {
 	return fact.date ? Date.parse(`${fact.date}T00:00:00Z`) : null;
 }
@@ -54,14 +42,18 @@ export interface ImportedNote {
 	facts: MemoryFact[];
 }
 
-/** Writes the facts into the profile's memory. Facts memory already has are skipped. */
+/**
+ * Writes the facts into the profile's memory. Facts memory already has are skipped. `personNote`:
+ * the person's note (membersWithNotes), or one named after them.
+ */
 export function importMemoryExport(
 	slug: string,
 	person: string,
-	facts: ExportedFact[]
+	facts: ExportedFact[],
+	personNote?: string
 ): { notes: ImportedNote[]; added: number; skipped: number } {
 	const firstName = person.trim().split(/\s+/)[0] || person.trim() || 'Someone';
-	const personNote = `people/${noteName(firstName)}`;
+	personNote ??= `people/${noteName(firstName)}`;
 	const notes = new Map<string, MemoryFact[]>();
 	const add = (topic: string, list: (ExportedFact | MemoryFact)[], heading?: string) => {
 		if (!list.length) return [];

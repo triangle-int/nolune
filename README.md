@@ -137,7 +137,10 @@ Access). `btw setup` prints the exact path.
   back). On a fresh install without a model, an admin picks one there too. Its sounds can be
   turned off in Settings.
 - **Memory.** btw keeps what it learns about the family (preferences, who's who, where things are)
-  in small notes per topic. Each message comes with the facts from memory that match it, and btw
+  in small notes, in the same categories in every profile: core, people (a note per person, in
+  the family or not), home, health, plans, routines, pets, places, projects and other. Each member
+  has their note under people, so btw knows who "I" is; when you add someone memory may know
+  already (grandma, before she got an account), you're asked which note is theirs. Each message comes with the facts from memory that match it, and btw
   searches for more when a request needs them (`btw memory search wifi`). With an OpenAI or
   OpenRouter key, it also finds facts by meaning ("where's the other key for the car?" finds the
   spare key, a question in Russian finds notes in English): each fact is embedded once with that
@@ -150,7 +153,8 @@ Access). `btw setup` prints the exact path.
   what it missed, with one short request to the chat's model; turn that off on the Memory page
   (**Learn from chats**) or with `btw memory learning off`. What it saves shows in the chat
   ("Saved 3 memories") and at the top of the Memory page, each with Undo. The Memory page shows
-  every fact as a dot, darker the newer it is, and lets you fix or delete a note. Files:
+  every fact as a dot, darker the newer it is, and lets you fix, move, merge or delete a note
+  (`btw memory merge people/grandma people/olga` when two are about one person). Files:
   `~/.btw-agent/profiles/<profile>/memories`.
 - **Languages.** The web interface comes in English, Russian, German, Spanish and French. It
   follows the browser's language, or pick one in Settings (per device). Only menus, buttons and

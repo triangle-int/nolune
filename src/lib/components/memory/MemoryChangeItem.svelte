@@ -6,7 +6,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { errorMessage } from '$lib/http';
 	import { getI18n } from '$lib/i18n';
-	import { memoryTopic } from '$lib/memory';
+	import { memoryTitle } from '$lib/memory';
 	import { cn } from '$lib/utils';
 
 	/**
@@ -77,7 +77,7 @@
 			<p class="text-xs break-words text-muted-foreground">{t.before(change.before)}</p>
 		{/if}
 		<p class="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
-			{@render note(memoryTopic(change.note))}
+			{@render note(memoryTitle(m, change.note))}
 			{#if after}<span aria-hidden="true">·</span>{@render after()}{/if}
 		</p>
 		{#if problem}

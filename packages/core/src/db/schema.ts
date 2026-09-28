@@ -135,7 +135,12 @@ export const profileMember = sqliteTable(
 		userId: text('user_id')
 			.notNull()
 			.references(() => user.id, { onDelete: 'cascade' }),
-		addedAt: integer('added_at', { mode: 'timestamp_ms' }).default(now).notNull()
+		addedAt: integer('added_at', { mode: 'timestamp_ms' }).default(now).notNull(),
+		/**
+		 * Their note in the profile's memory, like `people/anna.md` (memory-people.ts), which may not
+		 * be there yet. Null until it's known which note is about them.
+		 */
+		personNote: text('person_note')
 	},
 	(table) => [
 		primaryKey({ columns: [table.profileId, table.userId] }),
