@@ -1,4 +1,4 @@
-import type { Avatar } from '@btw/core/avatars';
+import type { Avatar } from '@nolune/core/avatars';
 import css from '../routes/layout.css?raw';
 import { parseAvatarColors } from './avatars';
 

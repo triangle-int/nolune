@@ -1,5 +1,5 @@
 <script lang="ts" module>
-	import type { MemoryFact } from '@btw/core';
+	import type { MemoryFact } from '@nolune/core';
 
 	export interface Topic {
 		/** The note, relative to the memory folder. */

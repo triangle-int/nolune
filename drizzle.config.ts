@@ -7,7 +7,7 @@ export default defineConfig({
 	out: './packages/core/drizzle',
 	dialect: 'sqlite',
 	dbCredentials: {
-		url: join(process.env.BTW_HOME || join(homedir(), '.btw-agent'), 'btw.db')
+		url: join(process.env.NOLUNE_HOME || join(homedir(), '.nolune'), 'nolune.db')
 	},
 	verbose: true,
 	strict: true

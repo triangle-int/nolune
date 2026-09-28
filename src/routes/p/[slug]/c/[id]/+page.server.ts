@@ -10,7 +10,7 @@ import {
 	renameConversation,
 	stopConversation,
 	subagentByConversation
-} from '@btw/core';
+} from '@nolune/core';
 import { translations } from '$lib/i18n';
 import { requireConversation } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';

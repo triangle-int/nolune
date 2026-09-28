@@ -17,9 +17,9 @@ import type { Block, Message } from './format.ts';
 
 /*
  * Pictures for the model: `prepareImage` makes any picture file fit what the API accepts, for
- * `btw view` and for pictures people attach. `btw view` is how the agent looks at images without
- * a second tool: the gateway gives every run_command call its own folder (BTW_VIEW_DIR),
- * `btw view` prepares images and leaves them there, and after the command exits the gateway
+ * `nolune view` and for pictures people attach. `nolune view` is how the agent looks at images without
+ * a second tool: the gateway gives every run_command call its own folder (NOLUNE_VIEW_DIR),
+ * `nolune view` prepares images and leaves them there, and after the command exits the gateway
  * attaches them to that call's tool_result.
  */
 
@@ -298,7 +298,9 @@ export async function prepareImage(
 		return { data, info, change: null };
 	}
 	if (original.toString('latin1', 0, 5) === '%PDF-') {
-		throw new Error("it's a PDF. btw view shows images: turn the pages you need into images first");
+		throw new Error(
+			"it's a PDF. nolune view shows images: turn the pages you need into images first"
+		);
 	}
 	const tool = await findConverter();
 	if (!tool) {
@@ -307,7 +309,7 @@ export async function prepareImage(
 		);
 	}
 
-	const work = mkdtempSync(join(tmpdir(), 'btw-convert-'));
+	const work = mkdtempSync(join(tmpdir(), 'nolune-convert-'));
 	try {
 		// Screenshots and drawings stay lossless unless that's too big; photos become JPEG.
 		const formats: ('png' | 'jpeg')[] =
@@ -342,7 +344,7 @@ export async function prepareImage(
 	}
 }
 
-// --- handing images from `btw view` to the gateway ---
+// --- handing images from `nolune view` to the gateway ---
 
 const LIMITS_FILE = 'limits.json';
 const MANIFEST_FILE = 'manifest.jsonl';
@@ -362,7 +364,7 @@ interface ViewLimits {
 interface ViewEntry {
 	/** File name inside the view folder. */
 	file: string;
-	/** The path as it was given to `btw view`. */
+	/** The path as it was given to `nolune view`. */
 	name: string;
 }
 
@@ -394,7 +396,7 @@ export function imageUse(messages: Message[], inline = false): ImageUse {
 
 /** Gateway, before a command runs: its view folder, with what the conversation has room for. */
 export function createViewDir(used: ImageUse): string {
-	const dir = mkdtempSync(join(tmpdir(), 'btw-view-'));
+	const dir = mkdtempSync(join(tmpdir(), 'nolune-view-'));
 	const limits: ViewLimits = { count: MAX_CONVERSATION_IMAGES - used.count };
 	writeFileSync(join(dir, LIMITS_FILE), JSON.stringify(limits));
 	return dir;
@@ -423,7 +425,7 @@ export class ViewLimitError extends Error {}
 const CONVERSATION_FULL = `this conversation already holds ${MAX_CONVERSATION_IMAGES} images, as many as it can (each step sends all of them again). Say what you need to in words, or suggest a new conversation for more images`;
 
 /**
- * `btw view`, for one file: prepares it and leaves it for the gateway. Returns a line to print.
+ * `nolune view`, for one file: prepares it and leaves it for the gateway. Returns a line to print.
  * A relative `path` starts at `cwd`, the command's folder; the image keeps the name as given.
  */
 export async function viewImage(path: string, dir: string, cwd = process.cwd()): Promise<string> {
@@ -448,12 +450,12 @@ export async function viewImage(path: string, dir: string, cwd = process.cwd()):
 	return `Attached ${path} (${details.join(', ')}).`;
 }
 
-/** An image `btw view` left for the gateway, or why it can't be attached. */
+/** An image `nolune view` left for the gateway, or why it can't be attached. */
 export type ViewedImage =
 	{ name: string; data: Buffer; mediaType: ImageMediaType } | { name: string; problem: string };
 
 /**
- * Gateway, after the command exited: the images `btw view` left, in order. Checks them again,
+ * Gateway, after the command exited: the images `nolune view` left, in order. Checks them again,
  * since anything can write into the folder; the provider's code attaches them.
  */
 export function readViewedImages(dir: string): ViewedImage[] {

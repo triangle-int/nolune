@@ -1,4 +1,4 @@
-import { getSnapshot, subscribe, type LiveEvent } from '@btw/core';
+import { getSnapshot, subscribe, type LiveEvent } from '@nolune/core';
 import { requireConversation } from '$lib/server/access';
 import type { RequestHandler } from './$types';
 

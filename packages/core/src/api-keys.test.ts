@@ -10,7 +10,7 @@ import { paths } from './paths.ts';
 const ANSWERS: Record<string, [number, object]> = {
 	'sk-ant-good-0000000000001234': [200, { data: [] }],
 	'sk-openai-good-000000005678': [200, { data: [] }],
-	'sk-or-v1-good-00000000abcd': [200, { data: { label: 'btw', limit: null, usage: 0 } }],
+	'sk-or-v1-good-00000000abcd': [200, { data: { label: 'nolune', limit: null, usage: 0 } }],
 	'sk-restricted-0000000000000': [403, { error: { message: 'Missing scopes: api.model.read' } }],
 	'sk-broke-000000000000000000': [429, { error: { message: 'You exceeded your current quota' } }],
 	'sk-down-0000000000000000000': [503, { error: { message: 'Overloaded' } }]
@@ -42,7 +42,7 @@ afterAll(() => {
 });
 
 beforeEach(() => {
-	// The test setup empties the btw home before each test: a fresh config.json without keys.
+	// The test setup empties the nolune home before each test: a fresh config.json without keys.
 	initConfig();
 	vi.stubEnv('ANTHROPIC_API_KEY', '');
 	vi.stubEnv('OPENAI_API_KEY', '');

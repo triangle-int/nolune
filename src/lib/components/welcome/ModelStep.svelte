@@ -6,7 +6,7 @@
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import MessageCircleIcon from '@lucide/svelte/icons/message-circle';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
-	import type { ApiKeyProvider, ModelChoice } from '@btw/core';
+	import type { ApiKeyProvider, ModelChoice } from '@nolune/core';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import CopyButton from '$lib/components/chat/CopyButton.svelte';

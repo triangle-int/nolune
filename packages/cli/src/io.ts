@@ -3,7 +3,7 @@ import { format } from 'node:util';
 /*
  * What a command reads and writes besides its arguments: its output, environment, working folder
  * and stdin. Commands take it instead of reaching for `process`, so the same code can run in a
- * process of its own, as `btw` does today, or inside another one on someone else's behalf (the
+ * process of its own, as `nolune` does today, or inside another one on someone else's behalf (the
  * gateway, for the agent's commands: see issue #42), where `process` is the gateway's.
  */
 export interface Io {
@@ -13,7 +13,7 @@ export interface Io {
 	/** Like console.log and console.error, on this command's output. */
 	log(...args: unknown[]): void;
 	error(...args: unknown[]): void;
-	/** The command's environment: BTW_PROFILE, BTW_CONVERSATION_ID, BTW_VIEW_DIR, … */
+	/** The command's environment: NOLUNE_PROFILE, NOLUNE_CONVERSATION_ID, NOLUNE_VIEW_DIR, … */
 	env: Readonly<Record<string, string | undefined>>;
 	/** Where relative paths start. */
 	cwd: string;
@@ -35,7 +35,7 @@ export function createIo(host: IoHost): Io {
 	};
 }
 
-/** This process's own streams, environment and folder: `btw` run from a shell or a command. */
+/** This process's own streams, environment and folder: `nolune` run from a shell or a command. */
 export function processIo(): Io {
 	return createIo({
 		stdout: (text) => process.stdout.write(text),

@@ -3,10 +3,10 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const home = process.env.BTW_HOME || join(homedir(), '.btw-agent');
+const home = process.env.NOLUNE_HOME || join(homedir(), '.nolune');
 
 /**
- * Root of the btw-agent package: the repo checkout, or the installed npm package. Found by walking
+ * Root of the nolune package: the repo checkout, or the installed npm package. Found by walking
  * up from this file, which works from source, from the SvelteKit build and from the bundled CLI.
  */
 function findPackageRoot(): string {
@@ -15,13 +15,13 @@ function findPackageRoot(): string {
 		const manifest = join(dir, 'package.json');
 		if (existsSync(manifest)) {
 			try {
-				if (JSON.parse(readFileSync(manifest, 'utf8')).name === 'btw-agent') return dir;
+				if (JSON.parse(readFileSync(manifest, 'utf8')).name === 'nolune') return dir;
 			} catch {
 				// not ours; keep walking
 			}
 		}
 		const parent = dirname(dir);
-		if (parent === dir) throw new Error('Could not find the btw-agent package root');
+		if (parent === dir) throw new Error('Could not find the nolune package root');
 		dir = parent;
 	}
 }
@@ -36,24 +36,24 @@ export const paths = {
 	 * ChatGPT sign-in, which only Codex reads, and the chats' threads.
 	 */
 	codexHome: join(home, 'codex'),
-	db: join(home, 'btw.db'),
+	db: join(home, 'nolune.db'),
 	bin: join(home, 'bin'),
 	logs: join(home, 'logs'),
 	profiles: join(home, 'profiles'),
 	trash: join(home, 'trash'),
 	/** Copies of the pictures and files shown in chats, named by their SHA-256. */
 	media: join(home, 'media'),
-	globalSkills: process.env.BTW_GLOBAL_SKILLS || join(homedir(), '.agents', 'skills'),
-	/** Skills that ship with btw, such as `automations`. */
+	globalSkills: process.env.NOLUNE_GLOBAL_SKILLS || join(homedir(), '.agents', 'skills'),
+	/** Skills that ship with nolune, such as `automations`. */
 	builtinSkills: join(packageRoot, 'packages', 'core', 'skills'),
 	/** Image templates for every profile; each profile can add its own (profileImageTemplatesDir). */
 	globalImageTemplates: join(home, 'image-templates'),
 	builtinImageTemplates: join(packageRoot, 'packages', 'core', 'image-templates'),
 	migrations: join(packageRoot, 'packages', 'core', 'drizzle'),
-	/** adapter-node output; `btw start` runs it. */
+	/** adapter-node output; `nolune start` runs it. */
 	server: join(packageRoot, 'build', 'index.js'),
 	/**
-	 * Where the gateway runs `btw` commands for the CLI, so they don't load all of btw each time.
+	 * Where the gateway runs `nolune` commands for the CLI, so they don't load all of nolune each time.
 	 * Its folder is private: only this user can connect.
 	 */
 	cliSocket: join(home, 'run', 'cli.sock')
@@ -81,7 +81,7 @@ export function profileImageTemplatesDir(slug: string): string {
 	return join(paths.profiles, slug, 'image-templates');
 }
 
-/** Who btw is for this profile's family; it opens every chat's system prompt. */
+/** Who nolune is for this profile's family; it opens every chat's system prompt. */
 export function profileSoulFile(slug: string): string {
 	return join(paths.profiles, slug, 'soul.md');
 }

@@ -8,7 +8,7 @@
 	import type { Attachment } from 'svelte/attachments';
 	import { fly } from 'svelte/transition';
 	import { prefersReducedMotion } from 'svelte/motion';
-	import { AVATARS, type Avatar } from '@btw/core/avatars';
+	import { AVATARS, type Avatar } from '@nolune/core/avatars';
 	import AssistantAvatar, { type Mood } from '$lib/components/AssistantAvatar.svelte';
 	import { getI18n } from '$lib/i18n';
 	import { PHRASE, lastPhrase } from '$lib/welcome/sounds';
@@ -123,7 +123,7 @@
 
 <div class="flex flex-col items-center gap-10">
 	<div class="relative py-12">
-		<div class="bounce relative z-10" style:view-transition-name="btw-assistant">
+		<div class="bounce relative z-10" style:view-transition-name="nolune-assistant">
 			<span
 				class="glow pointer-events-none absolute inset-0 -z-10 rounded-full blur-xl"
 				style:background-color="var(--avatar-{avatar})"

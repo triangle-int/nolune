@@ -1,22 +1,22 @@
 ---
 name: generate-images
-description: Make or change pictures with `btw generate image`, from a description, a detailed prompt or photos (restyle, edit, combine, turn into stickers, a storybook page, a postcard...). Use whenever someone asks to make, draw, design, generate or edit a picture, including the prompts the Images page's templates send.
+description: Make or change pictures with `nolune generate image`, from a description, a detailed prompt or photos (restyle, edit, combine, turn into stickers, a storybook page, a postcard...). Use whenever someone asks to make, draw, design, generate or edit a picture, including the prompts the Images page's templates send.
 ---
 
 # Making pictures
 
-`btw generate image` sends a prompt, and any pictures you give it, to an image model and saves
+`nolune generate image` sends a prompt, and any pictures you give it, to an image model and saves
 what it makes. It prints one line per picture:
 
 ```
-Saved /Users/anna/.btw-agent/profiles/family/images/2026-09-26-143512-make-a-watercolor-storybook.png (1024×1536, PNG, 1.8 MB)
+Saved /Users/anna/.nolune/profiles/family/images/2026-09-26-143512-make-a-watercolor-storybook.png (1024×1536, PNG, 1.8 MB)
 ```
 
 Pictures go to the profile's `images/` folder unless you pass `--out`. It usually takes 20 to 90
 seconds, so always run it with `timeout_seconds` set to 300.
 
 To show the result, put it in your reply as a picture, with the exact path it printed:
-`![Aisha riding a dragon to school](/Users/anna/.btw-agent/profiles/family/images/2026-09-26-143512-make-a-watercolor-storybook.png)`.
+`![Aisha riding a dragon to school](/Users/anna/.nolune/profiles/family/images/2026-09-26-143512-make-a-watercolor-storybook.png)`.
 Don't paste the command or the prompt unless someone asks.
 
 ## Prompts from the Images page
@@ -25,7 +25,7 @@ The Images page has templates (Storybook page, Sticker pack, Trip postcard...). 
 chat with a finished prompt, and the photo attached when the template uses one:
 
 ```
-[Anna attached IMG_0142.jpg, saved at /Users/anna/.btw-agent/profiles/family/attachments/IMG_0142.jpg]
+[Anna attached IMG_0142.jpg, saved at /Users/anna/.nolune/profiles/family/attachments/IMG_0142.jpg]
 (the photo)
 Anna: Make a watercolor storybook page where the kid in the attached picture rides a dragon to school.
 
@@ -48,8 +48,8 @@ saved at. Set the flags the prompt asks for in words:
   background") is `--background transparent`.
 
 ```sh
-btw generate image - --size portrait \
-  --image /Users/anna/.btw-agent/profiles/family/attachments/IMG_0142.jpg <<'PROMPT'
+nolune generate image - --size portrait \
+  --image /Users/anna/.nolune/profiles/family/attachments/IMG_0142.jpg <<'PROMPT'
 Make a watercolor storybook page where the kid in the attached picture rides a dragon to school.
 
 A full-page children's picture-book illustration of the adventure.
@@ -71,7 +71,7 @@ speak with the family:
 - Say what to leave out ("no text", "no watermark", "plain background").
 
 ```sh
-btw generate image "A cozy watercolor of a ginger cat asleep on a sunny windowsill, soft morning light, pastel colors, no text" --size landscape
+nolune generate image "A cozy watercolor of a ginger cat asleep on a sunny windowsill, soft morning light, pastel colors, no text" --size landscape
 ```
 
 ## Changing a picture
@@ -79,8 +79,8 @@ btw generate image "A cozy watercolor of a ginger cat asleep on a sunny windowsi
 Pass the pictures with `--image` (up to 16) and say what to change and what to keep the same:
 
 ```sh
-btw generate image --image photo.jpg "Replace the grey sky with a warm sunset. Keep the people, their faces and the house exactly as they are."
-btw generate image --image room.jpg --image sofa.png "Put the sofa from the second picture in the room from the first."
+nolune generate image --image photo.jpg "Replace the grey sky with a warm sunset. Keep the people, their faces and the house exactly as they are."
+nolune generate image --image room.jpg --image sofa.png "Put the sofa from the second picture in the room from the first."
 ```
 
 For follow-ups ("make it bluer", "bigger headline"), run it again with the last result as the
@@ -95,7 +95,7 @@ prompt again with the change worked in.
   unless the person wants a draft (`low`) or a print (`high` or more).
 - `--background transparent` for stickers, logos, icons and sprites (PNG or WebP).
 - `--format png|jpeg|webp`, `--count 1-4`, `--out <folder or file>`.
-- `--model <provider/model>` to use another model than the configured one (`btw config`).
+- `--model <provider/model>` to use another model than the configured one (`nolune config`).
 - `--dry-run` prints the prompt and settings without making anything.
 
 ## Things to know
@@ -103,13 +103,13 @@ prompt again with the change worked in.
 - Every picture costs money. Make one unless the person asks for more, and don't retry more than
   once without asking.
 - If you need to check a result (text spelled right, the right number of things), look at it
-  with `btw view <path>` before showing it; otherwise just show it.
+  with `nolune view <path>` before showing it; otherwise just show it.
 - The image model gets the pictures you pass with `--image` itself, so your prompt doesn't need to
   describe what's in them, only what to make of them.
-- **No API key**: tell the person that an admin can add an OpenAI key under Models & keys in btw
-  (or with `btw key set openai` on this computer).
+- **No API key**: tell the person that an admin can add an OpenAI key under Models & keys in nolune
+  (or with `nolune key set openai` on this computer).
 - **Refused by the safety system**: say so plainly. Don't reword the prompt to get around it.
 - **Photos of people**: the model keeps faces close, but not perfectly. Say so if it matters.
 
-This skill ships with btw and is replaced on updates. To adapt it for this profile, copy the folder
+This skill ships with nolune and is replaced on updates. To adapt it for this profile, copy the folder
 into the profile's skills folder and edit the copy; it takes precedence.

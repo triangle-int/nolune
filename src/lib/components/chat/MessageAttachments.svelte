@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import type { DisplayAttachment } from '@btw/core';
+	import type { DisplayAttachment } from '@nolune/core';
 	import DownloadIcon from '@lucide/svelte/icons/download';
 	import FileIcon from '@lucide/svelte/icons/file';
 	import { formatBytes } from '$lib/format';

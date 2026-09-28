@@ -40,31 +40,31 @@ import {
 
 /*
  * Chats on the ChatGPT plan: the Plus, Pro, Business... plan someone signed in to Codex with.
- * Like the Claude plan (claude-plan.ts), btw never holds that sign-in. It runs OpenAI's Codex
+ * Like the Claude plan (claude-plan.ts), nolune never holds that sign-in. It runs OpenAI's Codex
  * that's installed here, unmodified, through the app server Codex serves its own IDE extension on
  * (codex-app-server.ts), and Codex signs in with ChatGPT, keeps the sign-in fresh and bills the
- * plan itself. Codex keeps its home apart from ~/.codex, in btw's (paths.codexHome), so its
- * settings, sign-in and history are btw's alone.
+ * plan itself. Codex keeps its home apart from ~/.codex, in nolune's (paths.codexHome), so its
+ * settings, sign-in and history are nolune's alone.
  *
  * Codex runs the agent loop: it keeps the conversation (a thread in that home, resumed on every
- * turn), calls the model and asks btw to run each command through a dynamic tool with the
- * conversation's own `run_command` definition. btw turns what it streams into the same rows and
+ * turn), calls the model and asks nolune to run each command through a dynamic tool with the
+ * conversation's own `run_command` definition. nolune turns what it streams into the same rows and
  * live events as its own loop, so the chat looks the same. Codex's own tools that act on the
  * computer or the web (shell, patches, pictures, search, apps, plugins, skills, sub-agents) are
- * turned off and AGENTS.md files aren't read: the model gets btw's system prompt and btw's tools,
+ * turned off and AGENTS.md files aren't read: the model gets nolune's system prompt and nolune's tools,
  * inside Codex's harness, which calls them from short scripts (`exec`).
  */
 
 /** OpenAI's installer for Codex (developers.openai.com/codex/cli). */
 export const CODEX_INSTALL_COMMAND = 'npm install -g @openai/codex';
 
-const HOW_TO_INSTALL = `Install it on the computer btw runs on with \`${CODEX_INSTALL_COMMAND}\` (or \`brew install --cask codex\`), then sign in with ChatGPT under Models & keys on the admin page, or run \`btw chatgpt-plan setup\` there, which does both. If it's installed somewhere btw doesn't look, set its path with \`btw config set codex-path <path>\`.`;
+const HOW_TO_INSTALL = `Install it on the computer nolune runs on with \`${CODEX_INSTALL_COMMAND}\` (or \`brew install --cask codex\`), then sign in with ChatGPT under Models & keys on the admin page, or run \`nolune chatgpt-plan setup\` there, which does both. If it's installed somewhere nolune doesn't look, set its path with \`nolune config set codex-path <path>\`.`;
 
 export const CHATGPT_SIGN_IN_HELP =
-	'Sign in with ChatGPT under Models & keys on the admin page, or run `btw chatgpt-plan setup` on the computer btw runs on.';
+	'Sign in with ChatGPT under Models & keys on the admin page, or run `nolune chatgpt-plan setup` on the computer nolune runs on.';
 
-/** The namespace btw's tools are in, which makes them `btw__run_command` in Codex's scripts. */
-const NAMESPACE = 'btw';
+/** The namespace nolune's tools are in, which makes them `nolune__run_command` in Codex's scripts. */
+const NAMESPACE = 'nolune';
 /** After Stop, how long Codex gets to end the turn before it's closed. */
 const INTERRUPT_GRACE_MS = 5000;
 const STATUS_TIMEOUT_MS = 30_000;
@@ -72,7 +72,7 @@ const STATUS_TIMEOUT_MS = 30_000;
 const SIGN_IN_TIMEOUT_MS = 15 * 60 * 1000;
 
 /**
- * Codex's settings for btw's chats, given on its command line so they win over any config.toml:
+ * Codex's settings for nolune's chats, given on its command line so they win over any config.toml:
  * its own tools off, and nothing read from the profile's folder.
  */
 const SETTINGS = [
@@ -108,7 +108,7 @@ function isFile(path: string): boolean {
 /**
  * The `codex` to run: config's `codexPath`, else the first on the PATH or in the folders its
  * installers use. The gateway may run without the PATH of a login shell (as a LaunchAgent), so
- * those are looked in too, and so is the folder of the Node that runs btw, where npm puts
+ * those are looked in too, and so is the folder of the Node that runs nolune, where npm puts
  * global commands. Null when there's none.
  */
 export function codexExecutable(): string | null {
@@ -130,7 +130,7 @@ export function codexExecutable(): string | null {
 	return candidates.find(isFile) ?? null;
 }
 
-/** The `codex` btw would run, and whether it's there (a configured path may not be). */
+/** The `codex` nolune would run, and whether it's there (a configured path may not be). */
 export function findCodex(): { path: string | null; installed: boolean } {
 	const path = codexExecutable();
 	return { path, installed: !!path && isFile(path) };
@@ -142,17 +142,17 @@ function requireCodex(): string {
 	if (path && isFile(path)) return path;
 	if (path) {
 		throw new PlanError(
-			`There's no Codex at ${path}, where \`btw config set codex-path\` says it is. ${HOW_TO_INSTALL}`
+			`There's no Codex at ${path}, where \`nolune config set codex-path\` says it is. ${HOW_TO_INSTALL}`
 		);
 	}
 	throw new PlanError(
-		`Codex isn't installed on this computer, or btw can't find it. Chats on the ChatGPT plan run through it. ${HOW_TO_INSTALL}`
+		`Codex isn't installed on this computer, or nolune can't find it. Chats on the ChatGPT plan run through it. ${HOW_TO_INSTALL}`
 	);
 }
 
 /**
- * btw's environment with Codex's home, without the API keys Codex would otherwise use (and
- * bill) instead of the plan. npm's `codex` is a Node script: the Node that runs btw runs it when
+ * nolune's environment with Codex's home, without the API keys Codex would otherwise use (and
+ * bill) instead of the plan. npm's `codex` is a Node script: the Node that runs nolune runs it when
  * the PATH has none.
  */
 function codexEnv(): Record<string, string | undefined> {
@@ -165,8 +165,8 @@ function codexEnv(): Record<string, string | undefined> {
 
 let version: string | undefined;
 
-/** btw's version, which Codex adds to what it tells OpenAI about its client. */
-function btwVersion(): string {
+/** nolune's version, which Codex adds to what it tells OpenAI about its client. */
+function noluneVersion(): string {
 	try {
 		version ??= String(JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version);
 	} catch {
@@ -177,13 +177,13 @@ function btwVersion(): string {
 
 /**
  * Codex sets up its home as it starts (its state database), which two starting at once can trip
- * over: btw starts them one at a time, until each has said hello.
+ * over: nolune starts them one at a time, until each has said hello.
  */
 let starting: Promise<unknown> = Promise.resolve();
 /** Before starting Codex again when it ended while starting. */
 const RESTART_AFTER_MS = 500;
 
-/** Starts Codex's app server with btw's settings. */
+/** Starts Codex's app server with nolune's settings. */
 async function openCodex(handlers: AppServerHandlers = {}): Promise<AppServer> {
 	const command = requireCodex();
 	mkdirSync(paths.codexHome, { recursive: true });
@@ -192,12 +192,12 @@ async function openCodex(handlers: AppServerHandlers = {}): Promise<AppServer> {
 			command,
 			args: ['app-server', ...SETTINGS.flatMap((setting) => ['-c', setting])],
 			env: codexEnv(),
-			clientName: 'btw',
-			clientVersion: btwVersion(),
+			clientName: 'nolune',
+			clientVersion: noluneVersion(),
 			...handlers
 		});
 	const opened = starting.then(start).catch(async (err: unknown) => {
-		// It ended without saying hello: another Codex (`btw` in a terminal, say) may have been
+		// It ended without saying hello: another Codex (`nolune` in a terminal, say) may have been
 		// setting up the same home. Once more.
 		if (!(err instanceof AppServerExited) || err.code) throw err;
 		await new Promise((resolve) => setTimeout(resolve, RESTART_AFTER_MS));
@@ -211,7 +211,7 @@ async function openCodex(handlers: AppServerHandlers = {}): Promise<AppServer> {
 	}
 }
 
-/** What went wrong starting or talking to Codex, in words for the people using btw. */
+/** What went wrong starting or talking to Codex, in words for the people using nolune. */
 function startError(err: unknown): PlanError {
 	if (err instanceof PlanError) return err;
 	if (err instanceof AppServerExited && err.code) {
@@ -245,7 +245,7 @@ interface TokenUsage {
 	outputTokens: number;
 }
 
-/** One model call's use, in btw's terms: Codex counts cached input in its input, like OpenAI. */
+/** One model call's use, in nolune's terms: Codex counts cached input in its input, like OpenAI. */
 function usageOf(u: TokenUsage): Usage {
 	const cacheRead = u.cachedInputTokens ?? 0;
 	const cacheWrite = u.cacheWriteInputTokens ?? 0;
@@ -282,7 +282,7 @@ function codexImage(block: ImageBlock | PdfBlock): { url: string } | TextBlock {
 }
 
 /**
- * Codex's input items for btw's blocks, with pictures and PDFs resolved (`turn.resolve`). It
+ * Codex's input items for nolune's blocks, with pictures and PDFs resolved (`turn.resolve`). It
  * takes text and pictures.
  */
 function toCodexInput(blocks: Block[]): Record<string, unknown>[] {
@@ -320,14 +320,14 @@ function toToolResponse(result: ToolResultBlock) {
 	return { contentItems, success: !result.isError };
 }
 
-/** How Codex's tools see btw's: in btw's namespace, with the same schemas. */
+/** How Codex's tools see nolune's: in nolune's namespace, with the same schemas. */
 function dynamicTools(tools: Anthropic.Tool[]) {
 	if (!tools.length) return [];
 	return [
 		{
 			type: 'namespace',
 			name: NAMESPACE,
-			description: "btw's tools.",
+			description: "nolune's tools.",
 			tools: tools.map((t) => ({
 				type: 'function',
 				name: t.name,
@@ -402,7 +402,7 @@ function follow(on: (method: string, params: Record<string, unknown>) => void): 
 /**
  * One turn of a chat: Codex answers the new input, running commands through `runTool`, until
  * the model ends its turn. Each reply is saved (`onReply`) before its command runs, and its result
- * (`onResults`) once it has ended, the order btw's own loop keeps. Codex asks for one command at
+ * (`onResults`) once it has ended, the order nolune's own loop keeps. Codex asks for one command at
  * a time here, even when a script of its asks for several at once: each gets a reply of its own.
  * Throws a PlanError when the turn fails and a PlanStopped when it was stopped.
  */
@@ -413,14 +413,14 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 	let open: OutputItem[] = [];
 	/**
 	 * What the last model call used. Codex says so once the commands the call asked for have
-	 * finished, after btw saved the reply that asked for them, so only the reply that ends the
+	 * finished, after nolune saved the reply that asked for them, so only the reply that ends the
 	 * turn has it.
 	 */
 	let usage: Usage | null = null;
 	/** Live blocks, by the id of Codex's item. */
 	const live = new Map<string, number>();
 	let nextBlock = 0;
-	/** Commands run one after another, as btw runs them. */
+	/** Commands run one after another, as nolune runs them. */
 	let queue: Promise<unknown> = Promise.resolve();
 
 	const block = (id: string, type: 'text' | 'thinking' | 'tool') => {
@@ -507,12 +507,12 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 		await turn.onReply(reply);
 	};
 
-	/** Codex asks btw to run one of its tools. */
+	/** Codex asks nolune to run one of its tools. */
 	const handleCall = (params: Record<string, unknown>) => {
 		const name = String(params.tool);
 		if (params.namespace !== NAMESPACE || !turn.tools.some((t) => t.name === name)) {
 			return Promise.resolve({
-				contentItems: [{ type: 'inputText', text: `btw has no tool ${name}.` }],
+				contentItems: [{ type: 'inputText', text: `nolune has no tool ${name}.` }],
 				success: false
 			});
 		}
@@ -548,7 +548,7 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 		onNotification: following.onNotification,
 		onRequest: async (method, params) => {
 			if (method === 'item/tool/call') return handleCall(params);
-			throw new AppServerError(`btw doesn't answer ${method}`, -32601);
+			throw new AppServerError(`nolune doesn't answer ${method}`, -32601);
 		}
 	});
 
@@ -572,7 +572,7 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 			approvalPolicy: 'never',
 			sandbox: 'read-only',
 			baseInstructions: turn.system,
-			serviceName: 'btw'
+			serviceName: 'nolune'
 		};
 		let thread: { thread: { id: string } };
 		if (turn.resume) {
@@ -603,7 +603,7 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 			input: toCodexInput(await turn.resolve(turn.input)),
 			effort: await effortFor(codex, turn.model, turn.effort),
 			summary: 'auto',
-			// No computer of Codex's own to work on: btw's tools are the model's only way to act.
+			// No computer of Codex's own to work on: nolune's tools are the model's only way to act.
 			environments: []
 		});
 		turnId = started.turn.id;
@@ -631,13 +631,13 @@ export async function runTurn(turn: PlanTurn): Promise<void> {
 	if (thrown) throw startError(thrown);
 	if (ended?.status === 'failed') throw turnError(ended.error);
 	if (ended?.status === 'interrupted') throw new PlanError('Codex stopped the turn.');
-	// The reply that ends the turn. One cut off by a stop or a failure is dropped, as btw's own
+	// The reply that ends the turn. One cut off by a stop or a failure is dropped, as nolune's own
 	// loop drops it.
 	if (open.length) await saveReply([]);
 }
 
 /**
- * A turn that failed because the chat's thread isn't what btw thought: `missing` when Codex no
+ * A turn that failed because the chat's thread isn't what nolune thought: `missing` when Codex no
  * longer has it (say its files were deleted). Codex picks its threads' ids, so none is ever
  * `taken`. Null for any other failure.
  */
@@ -647,7 +647,7 @@ export function sessionProblem(err: unknown): SessionProblem | null {
 
 // --- short exchanges ---
 
-/** One short exchange without btw's tools or a saved thread, for chores like naming a chat. */
+/** One short exchange without nolune's tools or a saved thread, for chores like naming a chat. */
 export async function quickReply(opts: {
 	model: string;
 	system: string;
@@ -673,7 +673,7 @@ export async function quickReply(opts: {
 				approvalPolicy: 'never',
 				sandbox: 'read-only',
 				baseInstructions: opts.system,
-				serviceName: 'btw',
+				serviceName: 'nolune',
 				ephemeral: true
 			});
 			await codex.request('turn/start', {
@@ -708,7 +708,7 @@ export async function quickReply(opts: {
 
 // --- models ---
 
-/** A model Codex offers on the plan, as btw needs it. */
+/** A model Codex offers on the plan, as nolune needs it. */
 export interface ChatGptModel {
 	id: string;
 	name: string;
@@ -854,7 +854,7 @@ export interface ChatGptSignIn {
 	/** Where to enter the code, signed in to ChatGPT. */
 	verificationUrl: string;
 	userCode: string;
-	/** When btw stops waiting for the code, in ms since the epoch. */
+	/** When nolune stops waiting for the code, in ms since the epoch. */
 	expiresAt: number;
 	/**
 	 * Resolves once the code was entered and Codex saved the sign-in; rejects when it doesn't.
@@ -877,7 +877,7 @@ let lastError: string | null = null;
 /**
  * Starts signing in with ChatGPT through Codex: Codex asks OpenAI for a one-time code and waits,
  * in the background, for it to be entered on any device. Replaces a sign-in already under way.
- * Codex saves the sign-in in its home; btw never sees it.
+ * Codex saves the sign-in in its home; nolune never sees it.
  */
 export async function startChatGptSignIn(): Promise<ChatGptSignIn> {
 	cancelChatGptSignIn();
@@ -993,7 +993,7 @@ export interface ChatGptPlanStatus extends PlanStatus {
 }
 
 /**
- * Starts Codex and asks who it's signed in as. Nothing is billed. For Models & keys, `btw
+ * Starts Codex and asks who it's signed in as. Nothing is billed. For Models & keys, `nolune
  * chatgpt-plan status` and adding a preset.
  */
 export async function chatGptPlanStatus(): Promise<ChatGptPlanStatus> {

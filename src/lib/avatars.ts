@@ -1,4 +1,4 @@
-import { AVATARS, avatarSvg, type Avatar } from '@btw/core/avatars';
+import { AVATARS, avatarSvg, type Avatar } from '@nolune/core/avatars';
 import css from '../routes/layout.css?raw';
 
 export type AvatarColors = Record<Avatar, { light: string; dark: string }>;

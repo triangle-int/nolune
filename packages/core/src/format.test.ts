@@ -3,7 +3,7 @@ import { toAnthropicBlocks, toAnthropicMessages } from './anthropic.ts';
 import { readMessage, type Block, type StoredRow } from './format.ts';
 import { toResponsesInput } from './openai-chat.ts';
 
-/** A row as stored: in btw's format, or as rows were stored before it (Anthropic's shape). */
+/** A row as stored: in nolune's format, or as rows were stored before it (Anthropic's shape). */
 function row(content: unknown[], options: Partial<Omit<StoredRow, 'content'>> = {}): StoredRow {
 	return {
 		role: 'user',
@@ -28,8 +28,8 @@ const menu = {
 
 const searchResult = { type: 'search_result', source: 'x', title: 'y', content: [] };
 
-describe("rows from before btw's own format", () => {
-	// Every shape btw wrote, and a few it didn't, as they are in chats people have.
+describe("rows from before nolune's own format", () => {
+	// Every shape nolune wrote, and a few it didn't, as they are in chats people have.
 	const stored = [
 		{ type: 'text', text: '[Anna attached photo.jpg, saved at /photo.jpg]' },
 		photo,
@@ -105,16 +105,16 @@ describe("rows from before btw's own format", () => {
 });
 
 describe('results Claude Code wrote itself', () => {
-	it('keep what btw has no block for, for Claude', () => {
+	it('keep what nolune has no block for, for Claude', () => {
 		const unknown = { type: 'tool_reference', tool_name: 'run_command' };
 		const result = {
 			type: 'tool_result',
 			tool_use_id: 't1',
 			content: [{ type: 'text', text: 'Denied.' }, unknown]
 		};
-		// Stored in btw's format, then read back.
+		// Stored in nolune's format, then read back.
 		const saved = JSON.stringify(readMessage(row([result])).blocks);
-		const blocks = readMessage(row(JSON.parse(saved), { format: 'btw' })).blocks;
+		const blocks = readMessage(row(JSON.parse(saved), { format: 'nolune' })).blocks;
 		expect(toAnthropicBlocks(blocks)).toEqual([result]);
 		expect(toResponsesInput([{ role: 'user', blocks }], 'gpt-6-astra')).toEqual([
 			{
@@ -126,7 +126,7 @@ describe('results Claude Code wrote itself', () => {
 	});
 });
 
-describe("btw's own format", () => {
+describe("nolune's own format", () => {
 	const blocks: Block[] = [
 		{ type: 'text', text: '[Anna attached photo.jpg, saved at /photo.jpg]' },
 		{ type: 'image', source: { type: 'uploaded', provider: 'anthropic', fileId: 'file_photo' } },
@@ -150,8 +150,8 @@ describe("btw's own format", () => {
 		}
 	];
 
-	it('gives Claude what btw sent it before it had its own format', () => {
-		const message = readMessage(row(blocks, { format: 'btw' }));
+	it('gives Claude what nolune sent it before it had its own format', () => {
+		const message = readMessage(row(blocks, { format: 'nolune' }));
 		expect(JSON.stringify(toAnthropicBlocks(message.blocks))).toBe(
 			JSON.stringify([
 				{ type: 'text', text: '[Anna attached photo.jpg, saved at /photo.jpg]' },
@@ -171,12 +171,12 @@ describe("btw's own format", () => {
 	});
 
 	it('gives OpenAI the same as the rows from before it', () => {
-		const btw = readMessage(row(blocks, { format: 'btw', provider: 'openai' }));
+		const nolune = readMessage(row(blocks, { format: 'nolune', provider: 'openai' }));
 		const before = readMessage(
-			row(JSON.parse(JSON.stringify(toAnthropicBlocks(btw.blocks))), { provider: 'anthropic' })
+			row(JSON.parse(JSON.stringify(toAnthropicBlocks(nolune.blocks))), { provider: 'anthropic' })
 		);
 		// Files OpenAI holds, in both.
-		const own = (message: typeof btw): typeof btw => ({
+		const own = (message: typeof nolune): typeof nolune => ({
 			...message,
 			blocks: message.blocks.map((b) =>
 				(b.type === 'image' || b.type === 'pdf') && b.source.type === 'uploaded'
@@ -184,10 +184,10 @@ describe("btw's own format", () => {
 					: b
 			)
 		});
-		expect(toResponsesInput([own(btw)], 'gpt-6-astra')).toEqual(
+		expect(toResponsesInput([own(nolune)], 'gpt-6-astra')).toEqual(
 			toResponsesInput([own(before)], 'gpt-6-astra')
 		);
-		expect(toResponsesInput([own(btw)], 'gpt-6-astra')).toEqual([
+		expect(toResponsesInput([own(nolune)], 'gpt-6-astra')).toEqual([
 			{
 				role: 'user',
 				content: [
@@ -227,7 +227,7 @@ describe('replies', () => {
 		{ type: 'tool_use', id: 'toolu_1', name: 'run_command', input: { command: 'ls' } }
 	];
 
-	it('keep what their provider returned, and read as btw blocks', () => {
+	it('keep what their provider returned, and read as nolune blocks', () => {
 		const reply = readMessage(
 			row(claude, { role: 'assistant', provider: 'anthropic', model: 'claude-sonnet-5' })
 		);
@@ -243,9 +243,9 @@ describe('replies', () => {
 		expect(toAnthropicMessages([reply])).toEqual([{ role: 'assistant', content: claude }]);
 	});
 
-	it('that btw wrote itself go to any model as their text', () => {
+	it('that nolune wrote itself go to any model as their text', () => {
 		const reply = readMessage(
-			row([{ type: 'text', text: 'Rain at 4pm.' }], { role: 'assistant', format: 'btw' })
+			row([{ type: 'text', text: 'Rain at 4pm.' }], { role: 'assistant', format: 'nolune' })
 		);
 		expect(reply.native).toBeUndefined();
 		expect(toAnthropicMessages([reply])).toEqual([

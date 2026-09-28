@@ -4,7 +4,7 @@
 	import SmilePlusIcon from '@lucide/svelte/icons/smile-plus';
 	import { mode } from 'mode-watcher';
 	import type { I18n as PickerLabels } from 'emoji-picker-element/shared';
-	// Served by btw itself, so the picker works without reaching a CDN. It's fetched the first
+	// Served by nolune itself, so the picker works without reaching a CDN. It's fetched the first
 	// time the picker opens and kept in the browser's IndexedDB after that.
 	import deData from 'emoji-picker-element-data/de/cldr/data.json?url';
 	import enData from 'emoji-picker-element-data/en/emojibase/data.json?url';
@@ -77,7 +77,7 @@
 		};
 	}
 
-	// Follows btw's own light or dark setting, not only the system's.
+	// Follows nolune's own light or dark setting, not only the system's.
 	$effect(() => {
 		if (picker) picker.className = mode.current === 'dark' ? 'dark' : 'light';
 	});
@@ -133,7 +133,7 @@
 </span>
 
 <style>
-	/* The picker's own variables, set from btw's colors so it matches both themes. */
+	/* The picker's own variables, set from nolune's colors so it matches both themes. */
 	.emoji-picker :global(emoji-picker) {
 		display: block;
 		width: 100%;

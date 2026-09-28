@@ -569,7 +569,7 @@ describe('a chat on an OpenAI model', () => {
 });
 
 describe('the transcript as input items', () => {
-	it("turns btw's own blocks into input items, and keeps OpenAI's own as they came", () => {
+	it("turns nolune's own blocks into input items, and keeps OpenAI's own as they came", () => {
 		const unreadable = [{ id: 'rs_2', type: 'reasoning', summary: [] }, listCall];
 		expect(
 			toResponsesInput(
@@ -585,7 +585,7 @@ describe('the transcript as input items', () => {
 							{ type: 'text', text: 'Anna: Look' }
 						]
 					},
-					// A notification someone continued in a chat: btw wrote this reply itself.
+					// A notification someone continued in a chat: nolune wrote this reply itself.
 					{ role: 'assistant', blocks: [{ type: 'text', text: 'The parcel arrived.' }] },
 					// Reasoning without its encrypted content can't be sent back without `store`.
 					{
@@ -658,7 +658,7 @@ describe('the transcript as input items', () => {
 		]);
 	});
 
-	it('says why a reply ended, in the words btw stores', () => {
+	it('says why a reply ended, in the words nolune stores', () => {
 		expect(stopReason({ status: 'completed', output: [said('Hi.')] })).toBe('end_turn');
 		expect(stopReason({ status: 'completed', output: [thought, listCall] })).toBe('tool_use');
 		expect(
@@ -692,7 +692,7 @@ describe('calling OpenAI', () => {
 		streamResponse({
 			model,
 			effort: 'high',
-			system: 'You are btw.',
+			system: 'You are nolune.',
 			tools: TOOLS,
 			messages: [{ role: 'user', blocks: [{ type: 'text', text: 'Anna: Hi' }] }],
 			cacheKey: 'chat-1',

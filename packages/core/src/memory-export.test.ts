@@ -117,7 +117,7 @@ describe('projectName', () => {
 	it.each([
 		['Tidepool: a Godot farming game', 'Tidepool'],
 		['Lumen - a Rust ECS', 'Lumen'],
-		['**Btw agent** (a family assistant)', 'Btw agent'],
+		['**Nolune agent** (a family assistant)', 'Nolune agent'],
 		['Built a small Rust ECS for my games', null],
 		['A very long descriptor that goes on and on and on for ages: done', null]
 	])('%s is %s', (text, name) => {

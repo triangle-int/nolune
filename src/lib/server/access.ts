@@ -1,5 +1,5 @@
 import { error } from '@sveltejs/kit';
-import { getConversationForUser, getProfileForUser } from '@btw/core';
+import { getConversationForUser, getProfileForUser } from '@nolune/core';
 import { translations } from '$lib/i18n';
 import type { AuthUser } from './auth';
 

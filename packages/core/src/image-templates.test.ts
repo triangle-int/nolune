@@ -174,7 +174,7 @@ describe('templateMessage', () => {
 });
 
 describe('scanImageTemplates', () => {
-	const dir = mkdtempSync(join(tmpdir(), 'btw-templates-'));
+	const dir = mkdtempSync(join(tmpdir(), 'nolune-templates-'));
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 	function write(id: string, frontmatter: string): void {
@@ -227,7 +227,7 @@ describe('scanImageTemplates', () => {
 		});
 	});
 
-	it("skips a template whose setting takes a name btw fills in, or whose choices can't be told apart", () => {
+	it("skips a template whose setting takes a name nolune fills in, or whose choices can't be told apart", () => {
 		write('aspect', 'settings:\n  - id: aspect\n    label: Aspect');
 		write('words', 'settings:\n  - id: remix\n    type: emoji\n    default: pink');
 		write(

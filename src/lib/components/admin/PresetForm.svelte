@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
-	import type { ModelChoice } from '@btw/core';
+	import type { ModelChoice } from '@nolune/core';
 	import { untrack } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Collapsible from '$lib/components/ui/collapsible';

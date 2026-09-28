@@ -1,5 +1,5 @@
 import { error, json } from '@sveltejs/kit';
-import { dismissNotification } from '@btw/core';
+import { dismissNotification } from '@nolune/core';
 import { requireUser } from '$lib/server/access';
 import type { RequestHandler } from './$types';
 

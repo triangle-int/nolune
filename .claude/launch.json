@@ -2,7 +2,7 @@
 	"version": "0.0.1",
 	"configurations": [
 		{
-			"name": "btw-dev",
+			"name": "nolune-dev",
 			"runtimeExecutable": "pnpm",
 			"runtimeArgs": ["dev", "--port", "5173", "--strictPort"],
 			"port": 5173

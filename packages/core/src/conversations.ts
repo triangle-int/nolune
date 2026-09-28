@@ -457,7 +457,7 @@ export function insertQueued(input: {
 					attachments?.content ??
 						([{ type: 'text', text: `${input.senderName}: ${input.text}` }] satisfies Block[])
 				),
-				format: 'btw',
+				format: 'nolune',
 				attachments: attachments ? JSON.stringify(attachments.files) : null,
 				provider: input.provider ?? null,
 				createdAt: new Date()
@@ -504,7 +504,7 @@ export function insertQueuedNotice(input: {
 			senderName: input.title,
 			text: input.text,
 			content: JSON.stringify([{ type: 'text', text: input.content }] satisfies Block[]),
-			format: 'btw',
+			format: 'nolune',
 			createdAt: new Date()
 		})
 		.returning()
@@ -548,7 +548,7 @@ export function appendRow(
 		media?: PreparedMedia[];
 	} & (
 		| {
-				/** btw's own content, stored in btw's format. */
+				/** nolune's own content, stored in nolune's format. */
 				blocks: Block[];
 		  }
 		| {
@@ -568,7 +568,7 @@ export function appendRow(
 				senderName: input.senderName ?? null,
 				text: input.text ?? null,
 				...('blocks' in input
-					? { content: JSON.stringify(input.blocks), format: 'btw' as const }
+					? { content: JSON.stringify(input.blocks), format: 'nolune' as const }
 					: { content: input.content }),
 				provider: input.provider ?? null,
 				model: input.model ?? null,
@@ -594,14 +594,14 @@ export function appendRow(
 	});
 }
 
-/** A row in btw's format (format.ts), whichever way it was stored. */
+/** A row in nolune's format (format.ts), whichever way it was stored. */
 export function readRow(row: MessageRow): Message {
 	return readMessage(row);
 }
 
 /**
  * The providers holding pictures and PDFs of the conversation that no other provider can open:
- * those sent before btw kept its own copies, as a Files API id. Newer ones go to any provider.
+ * those sent before nolune kept its own copies, as a Files API id. Newer ones go to any provider.
  */
 export function heldFileProviders(conversationId: string): FileProvider[] {
 	const held = new Set<FileProvider>();
@@ -626,7 +626,7 @@ export function rowCalls(row: MessageRow): ToolCallBlock[] {
 }
 
 /**
- * The transcript for a model call, in btw's format: every row, with its replies marked when
+ * The transcript for a model call, in nolune's format: every row, with its replies marked when
  * they're from before the system prompt was last built again (`promptChangedAtSeq`), and every
  * tool call answered once (pairToolResults). Each provider's module turns it into its request
  * (format.ts), and does it the same way on every call, so the prefix stays byte-identical.

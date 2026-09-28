@@ -104,7 +104,7 @@ export const accountRelations = relations(account, ({ one }) => ({
 
 export const profile = sqliteTable('profile', {
 	id: text('id').primaryKey(),
-	/** Folder name under ~/.btw-agent/profiles. Fixed at creation. */
+	/** Folder name under ~/.nolune/profiles. Fixed at creation. */
 	slug: text('slug').notNull().unique(),
 	name: text('name').notNull(),
 	/**
@@ -168,7 +168,7 @@ export const folder = sqliteTable(
 		/** Its files are saved in `profiles/<profile>/folders/<slug>`. Fixed at creation. */
 		slug: text('slug').notNull(),
 		name: text('name').notNull(),
-		/** What btw should know or do in every chat of the folder, in the family's words. */
+		/** What nolune should know or do in every chat of the folder, in the family's words. */
 		instructions: text('instructions').notNull().default(''),
 		createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull()
@@ -190,7 +190,7 @@ export const folderFile = sqliteTable(
 		name: text('name').notNull(),
 		/** The copy the agent works with. */
 		path: text('path').notNull(),
-		/** The original: `~/.btw-agent/media/<sha256>`. */
+		/** The original: `~/.nolune/media/<sha256>`. */
 		sha256: text('sha256').notNull(),
 		/** Sniffed from the content. */
 		mime: text('mime').notNull(),
@@ -246,7 +246,7 @@ export const conversation = sqliteTable(
 		promptChangedAtSeq: integer('prompt_changed_at_seq'),
 		/**
 		 * The tool definitions its requests send, frozen at creation like `systemPrompt`: a thinking
-		 * block is bound to the tools it was made with, so a new version of btw that changes them
+		 * block is bound to the tools it was made with, so a new version of nolune that changes them
 		 * only reaches new chats. Null: chats from before this was saved (LEGACY_TOOLS).
 		 */
 		tools: text('tools', { mode: 'json' }).$type<Anthropic.Tool[]>(),
@@ -313,13 +313,13 @@ export const message = sqliteTable(
 		 */
 		text: text('text'),
 		/**
-		 * JSON. btw's own rows in btw's format (`format` 'btw'), replies exactly as their provider
-		 * returned them, and rows from before btw's format in Anthropic's (format.ts). Never
+		 * JSON. nolune's own rows in nolune's format (`format` 'nolune'), replies exactly as their provider
+		 * returned them, and rows from before nolune's format in Anthropic's (format.ts). Never
 		 * rewritten: what a model got before goes to it again byte for byte.
 		 */
 		content: text('content').notNull(),
-		/** 'btw': `content` is in btw's own format. Null: a reply as it came, or a row from before. */
-		format: text('format', { enum: ['btw'] }),
+		/** 'nolune': `content` is in nolune's own format. Null: a reply as it came, or a row from before. */
+		format: text('format', { enum: ['nolune'] }),
 		/**
 		 * The provider `content` was made for: the one whose model wrote a reply, or whose Files API a
 		 * message's or command result's pictures and PDFs went to. A conversation can switch models,
@@ -367,7 +367,7 @@ export const media = sqliteTable(
 		error: text('error'),
 		/** File name for downloads. */
 		name: text('name').notNull(),
-		/** The original, byte for byte: `~/.btw-agent/media/<sha256>`. */
+		/** The original, byte for byte: `~/.nolune/media/<sha256>`. */
 		sha256: text('sha256'),
 		mime: text('mime'),
 		bytes: integer('bytes'),
@@ -430,7 +430,7 @@ export const triggerRun = sqliteTable(
 		profileId: text('profile_id')
 			.notNull()
 			.references(() => profile.id, { onDelete: 'cascade' }),
-		/** Null for `btw wake` outside a trigger, or after the trigger was deleted. */
+		/** Null for `nolune wake` outside a trigger, or after the trigger was deleted. */
 		triggerId: text('trigger_id').references(() => trigger.id, { onDelete: 'set null' }),
 		/** The trigger's name at the time; titles the notification and the conversation. */
 		title: text('title').notNull(),
@@ -439,7 +439,7 @@ export const triggerRun = sqliteTable(
 		status: text('status', {
 			enum: ['pending', 'running', 'ok', 'notified', 'silent', 'stopped', 'failed']
 		}).notNull(),
-		/** Agent runs: what the agent is asked to do (the trigger's prompt or the `btw wake` text). */
+		/** Agent runs: what the agent is asked to do (the trigger's prompt or the `nolune wake` text). */
 		prompt: text('prompt'),
 		/** The webhook request body, for runs started by a webhook. */
 		payload: text('payload'),
@@ -484,9 +484,9 @@ export const backgroundCommand = sqliteTable(
 );
 
 /**
- * Another agent that a conversation's agent started with `btw agent run`: it works in a hidden
+ * Another agent that a conversation's agent started with `nolune agent run`: it works in a hidden
  * conversation of its own, which starts empty but for its task, and the agent that started it
- * waits for its last message with `btw agent watch`.
+ * waits for its last message with `nolune agent watch`.
  */
 export const subagent = sqliteTable(
 	'subagent',
@@ -505,7 +505,7 @@ export const subagent = sqliteTable(
 		/**
 		 * `pending`: it has messages the gateway hasn't started working on (a new task or a steer);
 		 * `running`: working, or waiting for its background commands; `done`: its last message is
-		 * its result; `stopping`: `btw agent stop` asked the gateway to stop it.
+		 * its result; `stopping`: `nolune agent stop` asked the gateway to stop it.
 		 */
 		status: text('status', {
 			enum: ['pending', 'running', 'done', 'failed', 'stopping', 'stopped']

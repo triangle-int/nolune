@@ -23,7 +23,7 @@
 		}}
 	>
 		<div class="space-y-2 text-center">
-			<div class="text-4xl font-semibold tracking-tight">btw</div>
+			<div class="text-4xl font-semibold tracking-tight">nolune</div>
 			<h1 class="text-2xl font-medium">{m.login.welcome}</h1>
 			<p class="text-sm text-muted-foreground">{m.login.hint}</p>
 		</div>
@@ -56,7 +56,7 @@
 		</Button>
 		<p class="text-center text-xs text-muted-foreground">
 			<Rich text={m.login.forgot}>
-				{#snippet command()}<code class="rounded bg-muted px-1">btw user passwd</code>{/snippet}
+				{#snippet command()}<code class="rounded bg-muted px-1">nolune user passwd</code>{/snippet}
 			</Rich>
 		</p>
 	</form>

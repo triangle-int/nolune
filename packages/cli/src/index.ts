@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-import { paths } from '@btw/core/paths';
+import { paths } from '@nolune/core/paths';
 import { runInGateway } from './client.ts';
 
 /*
- * `btw`. The agent runs it constantly, so it first asks the gateway to run the command, where
- * btw is already loaded; only when the gateway doesn't does this process load btw and run it.
+ * `nolune`. The agent runs it constantly, so it first asks the gateway to run the command, where
+ * nolune is already loaded; only when the gateway doesn't does this process load nolune and run it.
  * A person at a terminal always gets a process of their own: a command may ask them something.
  */
 

@@ -10,8 +10,8 @@ import { isValidSkillName, parseFrontmatter } from './skills.ts';
  * is a folder with a TEMPLATE.md: YAML frontmatter for its card, its sentence and its settings,
  * then the prompt, where `{{setting}}` is replaced by what was picked. Applying a template sends
  * one message to a new chat: the finished prompt, with the pictures attached. The agent passes it
- * to `btw generate image`, which knows nothing about templates. Like skills, templates come from
- * btw itself, from ~/.btw-agent/image-templates (every profile) and from the profile's own
+ * to `nolune generate image`, which knows nothing about templates. Like skills, templates come from
+ * nolune itself, from ~/.nolune/image-templates (every profile) and from the profile's own
  * image-templates folder, and a template overrides one with the same id from a source before it.
  */
 

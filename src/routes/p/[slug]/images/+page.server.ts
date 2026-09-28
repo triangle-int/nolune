@@ -15,7 +15,7 @@ import {
 	sendMessage,
 	templateMessage,
 	type ImageShape
-} from '@btw/core';
+} from '@nolune/core';
 import { translations } from '$lib/i18n';
 import { requireProfile } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
@@ -77,7 +77,7 @@ function message(err: unknown): string {
 
 export const actions: Actions = {
 	/**
-	 * Starts a new chat that asks btw for a picture: with the prompt a template builds from its
+	 * Starts a new chat that asks nolune for a picture: with the prompt a template builds from its
 	 * settings, or from a description. Pictures were uploaded already (like files in the chat
 	 * composer) and are attached to the message by their upload ids.
 	 */
