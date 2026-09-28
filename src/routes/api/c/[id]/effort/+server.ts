@@ -1,5 +1,5 @@
 import { error, json } from '@sveltejs/kit';
-import { EFFORTS, changeEffort, type Effort } from '@btw/core';
+import { EFFORTS, changeEffort, type Effort } from '@nolune/core';
 import { translations } from '$lib/i18n';
 import { requireConversation } from '$lib/server/access';
 import type { RequestHandler } from './$types';

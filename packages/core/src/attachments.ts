@@ -49,7 +49,7 @@ import { hasFileStore, providerFileId } from './provider-files.ts';
  * and PDFs themselves when it takes them, through the provider's Files API (the plans have none:
  * pictures go inline, and PDFs inline on the Claude plan and as their path on the ChatGPT plan),
  * and every other file as its name and path. What the model got is written into the message's
- * `content` (btw's format, with the provider's file ids); `message.attachments` keeps a record of
+ * `content` (nolune's format, with the provider's file ids); `message.attachments` keeps a record of
  * the files themselves.
  */
 
@@ -232,7 +232,7 @@ async function modelTakes(conv: ModelOf, what: 'pictures' | 'pdfs'): Promise<str
 	try {
 		if ((await modelInputs(conv.provider, conv.model))[what]) return null;
 	} catch (err) {
-		return `btw couldn't check whether ${conv.model} takes ${what === 'pdfs' ? 'PDFs' : 'pictures'} (${shortApiError(err)})`;
+		return `nolune couldn't check whether ${conv.model} takes ${what === 'pdfs' ? 'PDFs' : 'pictures'} (${shortApiError(err)})`;
 	}
 	return what === 'pdfs'
 		? `${conv.model} doesn't read PDFs itself`
@@ -246,7 +246,7 @@ function kept(data: Buffer, mime: string): Extract<Source, { type: 'media' }> {
 }
 
 /**
- * A picture for the model, counted in `used`. It's kept in btw's media store and sent by
+ * A picture for the model, counted in `used`. It's kept in nolune's media store and sent by
  * reference, so each provider gets its own copy when a request is made (resolveFiles), also after
  * the chat switches to another. With a Files API it's uploaded now, so a problem shows here rather
  * than at every later request; if that fails, it goes inline as base64 when the conversation
@@ -278,7 +278,7 @@ export async function imageBlock(
 			if (used.bytes + bytes > MAX_CONVERSATION_IMAGE_BYTES) {
 				return { problem: `it couldn't be uploaded (${shortApiError(err)})` };
 			}
-			console.error(`[btw] uploading ${name} failed, sending it inline: ${shortApiError(err)}`);
+			console.error(`[nolune] uploading ${name} failed, sending it inline: ${shortApiError(err)}`);
 		}
 	}
 	const bytes = base64Length(data.length);
@@ -297,7 +297,7 @@ export async function imageBlock(
 	};
 }
 
-/** The images `btw view` left, for the command's tool_result, each after a line naming it. */
+/** The images `nolune view` left, for the command's tool_result, each after a line naming it. */
 export async function viewedImageBlocks(
 	conv: ModelOf,
 	images: ViewedImage[],
@@ -358,7 +358,7 @@ function estimatePdf(
 ): { tokens: number } | { problem: string } {
 	const pages = pdfPageCount(data);
 	if (pages === null) {
-		return { problem: "btw couldn't tell how many pages it has (it may be encrypted)" };
+		return { problem: "nolune couldn't tell how many pages it has (it may be encrypted)" };
 	}
 	const maxPages = maxPdfPages(conv.contextWindow ?? DEFAULT_CONTEXT_WINDOW);
 	if (pages > maxPages) {

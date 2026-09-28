@@ -40,7 +40,8 @@
 	<div class="flex flex-1 items-center justify-center p-6">
 		<p class="max-w-md text-center text-muted-foreground">
 			<Rich text={m.newChat.noModels}>
-				{#snippet command()}<code class="rounded bg-muted px-1">btw preset add &lt;model&gt;</code
+				{#snippet command()}<code class="rounded bg-muted px-1"
+						>nolune preset add &lt;model&gt;</code
 					>{/snippet}
 			</Rich>
 		</p>
@@ -61,7 +62,7 @@
 			<!-- Phones: greeting in the middle, composer at the bottom. Desktop: both centered. -->
 			<div class="flex-1"></div>
 			<!-- Named, so it glides here from a new profile's welcome. -->
-			<div class="mx-auto mb-5" style:view-transition-name="btw-assistant">
+			<div class="mx-auto mb-5" style:view-transition-name="nolune-assistant">
 				<AssistantAvatar avatar={data.profile.avatar} mood="idle" size={64} class="block" />
 			</div>
 			<h1 class="mb-8 text-center text-[28px] leading-tight font-normal tracking-tight">

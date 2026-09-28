@@ -52,7 +52,7 @@
 	}: Props = $props();
 
 	/** The reasoning picked last time on this device. The model always starts at the default. */
-	const STORAGE_KEY = 'btw-new-chat';
+	const STORAGE_KEY = 'nolune-new-chat';
 
 	let text = $state('');
 	const attachments = new Attachments(() => slug, m);

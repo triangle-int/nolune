@@ -7,7 +7,7 @@ import { ru } from './messages/ru';
 import type { Locale } from './locales';
 
 /*
- * The interface's words in each language. Only the interface: what people write, btw's replies,
+ * The interface's words in each language. Only the interface: what people write, nolune's replies,
  * chat titles and everything that reaches the model stay as they are, whatever the language.
  *
  * Messages are plain strings, functions for the ones with values in them ("Worked for 12s"),

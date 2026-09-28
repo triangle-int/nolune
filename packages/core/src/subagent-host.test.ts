@@ -164,7 +164,7 @@ describe('the subagent host', () => {
 		});
 	});
 
-	it('stops a pending subagent that `btw agent stop` asked to stop without starting it', () => {
+	it('stops a pending subagent that `nolune agent stop` asked to stop without starting it', () => {
 		const s = startSubagent();
 		stopConversation(s.parentId, 'Anna');
 		expect(findSubagent(s.parentId, s.name)?.status).toBe('stopped');

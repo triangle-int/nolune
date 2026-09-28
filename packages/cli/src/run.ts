@@ -50,7 +50,7 @@ import {
 	ViewLimitError,
 	type ApiKeyProvider,
 	type Provider
-} from '@btw/core';
+} from '@nolune/core';
 import { AGENT_HELP, agentCommand } from './agent.ts';
 import { generateCommand, generateHelp } from './generate.ts';
 import { ask, askHidden } from './input.ts';
@@ -70,57 +70,58 @@ import {
 } from './service.ts';
 
 /** Built when shown, like generateHelp(): the gateway serves it for as long as it runs. */
-const help = () => `btw - a family agent that runs on this computer
+const help = () => `nolune - a family agent that runs on this computer
 
 Getting started
-  btw setup [--provider anthropic|openai|openrouter|claude-plan|chatgpt-plan]
+  nolune setup [--provider anthropic|openai|openrouter|claude-plan|chatgpt-plan]
                                              interactive first-time setup (key, your account, model);
                                              chats run on Claude unless you pick another: openrouter
                                              runs any model OpenRouter serves with one key, and a
                                              plan (see Plans below) is signed in to instead
-  btw start                                  run the gateway in the foreground
-  btw service install|uninstall|restart|status|logs [-f]
+  nolune start                               run the gateway in the foreground
+  nolune service install|uninstall|restart|status|logs [-f]
                                              run it in the background at login (macOS)
 
 Settings (${paths.home})
-  btw config                                 show address, port and what's configured
-  btw config set <host|port|origin> <value>  origin = the public URL people open
-  btw config set image-model <provider/model>  for pictures, e.g. openai/gpt-image-2.5-flare
-  btw config set claude-path <path>          the Claude Code that claude-plan chats run, and the
-  btw config set codex-path <path>           Codex that chatgpt-plan chats run (found on the PATH
+  nolune config                              show address, port and what's configured
+  nolune config set <host|port|origin> <value>  origin = the public URL people open
+  nolune config set image-model <provider/model>  for pictures, e.g. openai/gpt-image-2.5-flare
+  nolune config set claude-path <path>       the Claude Code that claude-plan chats run, and the
+  nolune config set codex-path <path>        Codex that chatgpt-plan chats run (found on the PATH
                                              and in their usual folders otherwise)
-  btw key set <anthropic|openai|openrouter> [key]
+  nolune key set <anthropic|openai|openrouter> [key]
                                              store an API key (prompts if omitted) after checking
                                              it; OpenAI's runs GPT chats and makes pictures. Admins
                                              can also do this on the web, under Models & keys
-  btw key rm <anthropic|openai|openrouter>   remove a stored key (the environment's is used, if set)
-  btw env set <NAME> <value>                 extra env var for agent commands (e.g. FIRECRAWL_API_KEY)
-  btw env rm <NAME> | btw env list
+  nolune key rm <anthropic|openai|openrouter>
+                                             remove a stored key (the environment's is used, if set)
+  nolune env set <NAME> <value>              extra env var for agent commands (e.g. FIRECRAWL_API_KEY)
+  nolune env rm <NAME> | nolune env list
 
 Plans (chats on your own subscription instead of an API key)
   claude-plan: a Claude Pro or Max plan, through Claude Code on this computer, signed in to your
   Claude account. chatgpt-plan: a ChatGPT Plus, Pro or Business plan, through OpenAI's Codex on
-  this computer, signed in with ChatGPT. btw never sees either sign-in: the agent keeps it.
+  this computer, signed in with ChatGPT. nolune never sees either sign-in: the agent keeps it.
   Plan limits assume one person's ordinary use: keep busy automations and subagents on an API key.
-  btw <plan> status                          which Claude Code or Codex btw runs, and who it's
+  nolune <plan> status                       which Claude Code or Codex nolune runs, and who it's
                                              signed in as
-  btw <plan> setup                           install it and sign in, where needed. Installing asks
+  nolune <plan> setup                        install it and sign in, where needed. Installing asks
                                              first, in a terminal; claude-plan signs in there too,
                                              chatgpt-plan with a link and a code for any device
-  btw chatgpt-plan logout                    sign Codex out; chats on chatgpt-plan presets stop
+  nolune chatgpt-plan logout                 sign Codex out; chats on chatgpt-plan presets stop
                                              until someone signs in again
-  btw chatgpt-plan models                    the models the plan offers, for \`btw preset add\`
+  nolune chatgpt-plan models                 the models the plan offers, for \`nolune preset add\`
 
 Users (web sign-up is disabled; this is the only way to add people)
-  btw user create <name> <email> [--password P] [--admin]
-  btw user passwd <name|email> [--password P]
-  btw user admin <name|email> [--off]
-  btw user rm <name|email>
-  btw user list
+  nolune user create <name> <email> [--password P] [--admin]
+  nolune user passwd <name|email> [--password P]
+  nolune user admin <name|email> [--off]
+  nolune user rm <name|email>
+  nolune user list
 
 Model presets (shared by all profiles)
-  btw preset add <model> [--provider anthropic|openai|openrouter|claude-plan|chatgpt-plan]
-                 [--name N] [--context-window TOKENS]
+  nolune preset add <model> [--provider anthropic|openai|openrouter|claude-plan|chatgpt-plan]
+                    [--name N] [--context-window TOKENS]
                                              the provider checks the model id first (anthropic
                                              unless given); OpenAI models other than the
                                              flagships need --context-window. OpenRouter's ids
@@ -128,18 +129,18 @@ Model presets (shared by all profiles)
                                              model must be able to call tools. The plans check
                                              their agent's sign-in instead, and chatgpt-plan the
                                              models Codex offers
-  btw preset edit <name|id> [--provider P] [--model M] [--name N] [--context-window TOKENS|auto]
+  nolune preset edit <name|id> [--provider P] [--model M] [--name N] [--context-window TOKENS|auto]
                                              change what's given; a new model is checked like
                                              add's. Chats already on the preset keep what they had
-  btw preset rm <name|id>
-  btw preset default <name|id>               the model new chats start with
-  btw preset list
+  nolune preset rm <name|id>
+  nolune preset default <name|id>            the model new chats start with
+  nolune preset list
 
 ${PROFILE_HELP}
-  btw skill new <name> [--description D] [--profile SLUG | --global]
-  btw skill list [--profile SLUG]
-  btw skill enable <name>... [--profile SLUG]
-  btw skill disable <name>... [--profile SLUG]  leave out of the profile's new chats
+  nolune skill new <name> [--description D] [--profile SLUG | --global]
+  nolune skill list [--profile SLUG]
+  nolune skill enable <name>... [--profile SLUG]
+  nolune skill disable <name>... [--profile SLUG]  leave out of the profile's new chats
 
 ${TRIGGER_HELP}
 
@@ -149,13 +150,13 @@ ${SOUL_HELP}
 
 ${generateHelp()}
 
-Inside agent commands (BTW_PROFILE is set, so --profile can be left out)
-  btw view <image>...                        show images to the agent: they're attached to the
+Inside agent commands (NOLUNE_PROFILE is set, so --profile can be left out)
+  nolune view <image>...                     show images to the agent: they're attached to the
                                              command's result (HEIC and big photos are converted)
 
 ${AGENT_HELP}`;
 
-/** What `btw setup` suggests for each provider's first preset, and where its keys are made. */
+/** What `nolune setup` suggests for each provider's first preset, and where its keys are made. */
 const SETUP: Record<Provider, { model: string; keys: string }> = {
 	anthropic: { model: 'claude-opus-5-5', keys: 'console.anthropic.com > API keys' },
 	openai: { model: 'gpt-6-astra', keys: 'platform.openai.com > API keys' },
@@ -166,7 +167,7 @@ const SETUP: Record<Provider, { model: string; keys: string }> = {
 
 function positional(args: string[], index: number, name: string): string {
 	const value = args[index];
-	if (!value) fail(`missing <${name}>. See \`btw help\`.`);
+	if (!value) fail(`missing <${name}>. See \`nolune help\`.`);
 	return value;
 }
 
@@ -194,13 +195,13 @@ async function storeApiKey(io: Io, provider: ApiKeyProvider, pasted: string): Pr
 }
 
 function requireInit(): void {
-	if (!configExists()) fail('not set up yet. Run `btw setup` first.');
+	if (!configExists()) fail('not set up yet. Run `nolune setup` first.');
 }
 
 function resolveProfileSlug(io: Io, flag: string | undefined): string {
-	const slug = flag || io.env.BTW_PROFILE;
+	const slug = flag || io.env.NOLUNE_PROFILE;
 	if (!slug) fail('which profile? Pass --profile <slug> (or --global for a global skill).');
-	if (!getProfileBySlug(slug)) fail(`no profile with slug "${slug}". See \`btw profile list\`.`);
+	if (!getProfileBySlug(slug)) fail(`no profile with slug "${slug}". See \`nolune profile list\`.`);
 	return slug;
 }
 
@@ -295,13 +296,13 @@ async function setup(io: Io, args: string[]): Promise<void> {
 
 	io.log(`
 Done. Next:
-  btw service install        run the gateway in the background (or \`btw start\` to try it)
-  btw user create Anna anna@example.com    add family members
+  nolune service install     run the gateway in the background (or \`nolune start\` to try it)
+  nolune user create Anna anna@example.com    add family members
   open ${origin}
 
 The gateway listens on http://${current.host}:${port}. To reach it from outside your home, point a
 tunnel at that address (Tailscale Funnel, Cloudflare Tunnel, or your own VPS) and set its URL with
-\`btw config set origin https://...\`.
+\`nolune config set origin https://...\`.
 
 ${fullDiskAccessHint()}`);
 }
@@ -321,7 +322,7 @@ async function start(io: Io): Promise<void> {
 	// except the upload one keeps a 1 MB limit (src/hooks.server.ts).
 	process.env.BODY_SIZE_LIMIT ??= String(MAX_MEDIA_BYTES + 1024 * 1024);
 	io.log(
-		`btw gateway: ${process.env.ORIGIN} (listening on ${process.env.HOST}:${process.env.PORT})`
+		`nolune gateway: ${process.env.ORIGIN} (listening on ${process.env.HOST}:${process.env.PORT})`
 	);
 	// `pnpm dev` loads this file through Vite (src/hooks.server.ts), which can't follow a runtime
 	// path: the built server is loaded by Node, as is.
@@ -343,7 +344,7 @@ async function service(io: Io, action: string | undefined, args: string[]): Prom
 			io.log(`Installed ${plist}
 The gateway starts now and at every login: ${origin}
 Logs: ${logFile}
-It runs with ${process.execPath}; run \`btw service install\` again after switching Node versions.
+It runs with ${process.execPath}; run \`nolune service install\` again after switching Node versions.
 
 ${fullDiskAccessHint()}`);
 			return;
@@ -358,13 +359,13 @@ ${fullDiskAccessHint()}`);
 			return;
 		case 'status': {
 			const status = serviceStatus();
-			if (!status.installed) io.log('Not installed. Run `btw service install`.');
-			else if (!status.loaded) io.log('Installed but not loaded. Run `btw service install`.');
+			if (!status.installed) io.log('Not installed. Run `nolune service install`.');
+			else if (!status.loaded) io.log('Installed but not loaded. Run `nolune service install`.');
 			else
 				io.log(
 					status.pid
 						? `Running (pid ${status.pid}).`
-						: 'Loaded, not running. See `btw service logs`.'
+						: 'Loaded, not running. See `nolune service logs`.'
 				);
 			return;
 		}
@@ -375,20 +376,20 @@ ${fullDiskAccessHint()}`);
 			return;
 		}
 		default:
-			fail('usage: btw service install|uninstall|restart|status|logs [-f]');
+			fail('usage: nolune service install|uninstall|restart|status|logs [-f]');
 	}
 }
 
 /**
- * Runs `btw` with these arguments and returns its exit code. Everything it reads and writes
- * besides its arguments and btw's own files goes through `io`. An error ends it with its message
+ * Runs `nolune` with these arguments and returns its exit code. Everything it reads and writes
+ * besides its arguments and nolune's own files goes through `io`. An error ends it with its message
  * and exit code 1.
  */
 export async function runCli(argv: string[], io: Io): Promise<number> {
 	try {
 		return (await command(io, argv)) ?? 0;
 	} catch (err) {
-		io.error(`btw: ${err instanceof Error ? err.message : String(err)}`);
+		io.error(`nolune: ${err instanceof Error ? err.message : String(err)}`);
 		return 1;
 	}
 }
@@ -414,7 +415,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 			return service(io, action, rest);
 
 		case 'init': {
-			// Non-interactive part of `btw setup`, kept for scripts.
+			// Non-interactive part of `nolune setup`, kept for scripts.
 			const { created } = initConfig();
 			getDb();
 			const shim = installCliShim();
@@ -437,16 +438,16 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 						key.source === 'config' ? 'key set' : key.source === 'env' ? `key from ${key.env}` : '';
 					const shown = where
 						? `${where}${key.hint ? ` (…${key.hint})` : ''}`
-						: `no key (btw key set ${key.provider})`;
+						: `no key (nolune key set ${key.provider})`;
 					io.log(`${key.provider.padEnd(10)} ${shown}`);
 				}
 				const claude = claudeExecutable();
 				io.log(
-					`claude     ${claude ? `Claude Code at ${claude} (btw claude-plan status checks its sign-in)` : 'no Claude Code found (btw claude-plan setup installs it)'}`
+					`claude     ${claude ? `Claude Code at ${claude} (nolune claude-plan status checks its sign-in)` : 'no Claude Code found (nolune claude-plan setup installs it)'}`
 				);
 				const codex = codexExecutable();
 				io.log(
-					`codex      ${codex ? `Codex at ${codex} (btw chatgpt-plan status checks its sign-in)` : 'no Codex found (btw chatgpt-plan setup installs it)'}`
+					`codex      ${codex ? `Codex at ${codex} (nolune chatgpt-plan status checks its sign-in)` : 'no Codex found (nolune chatgpt-plan setup installs it)'}`
 				);
 				const images = imageGenerationStatus();
 				io.log(`images     ${images.model}${images.problem ? ` (${images.problem})` : ''}`);
@@ -455,7 +456,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 			}
 			if (action !== 'set') {
 				fail(
-					'usage: btw config [set <host|port|origin|image-model|claude-path|codex-path> <value>]'
+					'usage: nolune config [set <host|port|origin|image-model|claude-path|codex-path> <value>]'
 				);
 			}
 			const key = positional(rest, 0, 'host|port|origin|image-model|claude-path|codex-path');
@@ -488,7 +489,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				io.log(`Pictures are now made with ${model}.${problem ? ` ${problem}` : ''}`);
 				return;
 			}
-			io.log(`Set ${key}. Run \`btw service restart\` if the service is running.`);
+			io.log(`Set ${key}. Run \`nolune service restart\` if the service is running.`);
 			return;
 		}
 
@@ -497,12 +498,12 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 			const provider = rest[0] ?? '';
 			const names = Object.keys(API_KEYS).join('|');
 			if ((action !== 'set' && action !== 'rm') || !isApiKeyProvider(provider)) {
-				fail(`usage: btw key set <${names}> [key] | btw key rm <${names}>`);
+				fail(`usage: nolune key set <${names}> [key] | nolune key rm <${names}>`);
 			}
 			const { label, env } = API_KEYS[provider];
 			if (action === 'rm') {
 				removeApiKey(provider);
-				const fallback = io.env[env] ? ` btw uses ${env} from the environment now.` : '';
+				const fallback = io.env[env] ? ` nolune uses ${env} from the environment now.` : '';
 				io.log(`Removed the ${label} API key.${fallback}`);
 				return;
 			}
@@ -534,7 +535,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 					if (c.commandEnv) delete c.commandEnv[name];
 				});
 				io.log(`Removed ${name}.`);
-			} else fail('usage: btw env set|rm|list');
+			} else fail('usage: nolune env set|rm|list');
 			return;
 		}
 
@@ -574,7 +575,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				for (const u of listUsers()) {
 					io.log(`${u.name}\t${u.email}${u.isAdmin ? '\tadmin' : ''}`);
 				}
-			} else fail('usage: btw user create|passwd|admin|rm|list');
+			} else fail('usage: nolune user create|passwd|admin|rm|list');
 			return;
 		}
 
@@ -626,7 +627,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 						`${p.name}\t${p.provider}/${p.model}\tcontext ${formatTokens(effectiveContextWindow(p))}${override}\t${p.id}${isDefault}`
 					);
 				}
-			} else fail('usage: btw preset add|edit|rm|default|list');
+			} else fail('usage: nolune preset add|edit|rm|default|list');
 			return;
 		}
 
@@ -652,11 +653,11 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				io.log(`Created ${location}`);
 				if (slug && getProfileBySlug(slug)?.disabledSkills.includes(name)) {
 					io.log(
-						`"${name}" is turned off in this profile, so new chats won't list it. Turn it on with \`btw skill enable ${name}\`.`
+						`"${name}" is turned off in this profile, so new chats won't list it. Turn it on with \`nolune skill enable ${name}\`.`
 					);
 				}
 			} else if (action === 'list') {
-				const slug = values.profile || io.env.BTW_PROFILE;
+				const slug = values.profile || io.env.NOLUNE_PROFILE;
 				const profile = slug ? getProfileBySlug(slug) : undefined;
 				const { skills, warnings } = listProfileSkills(
 					slug ? profileSkillsDir(slug) : '/nonexistent',
@@ -680,15 +681,16 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 			} else if (action === 'enable' || action === 'disable') {
 				if (values.global) fail('skills are turned on and off per profile. Pass --profile <slug>.');
 				const profile = getProfileBySlug(resolveProfileSlug(io, values.profile))!;
-				if (!positionals.length) fail('missing <name>. See `btw help`.');
+				if (!positionals.length) fail('missing <name>. See `nolune help`.');
 				const known = new Set(scanSkills(profileSkillsDir(profile.slug)).skills.map((s) => s.name));
 				const unknown = positionals.filter((name) => !known.has(name));
-				if (unknown.length) fail(`no skill named ${unknown.join(', ')}. See \`btw skill list\`.`);
+				if (unknown.length)
+					fail(`no skill named ${unknown.join(', ')}. See \`nolune skill list\`.`);
 				setSkillsEnabled(profile.id, positionals, action === 'enable');
 				io.log(
 					`${positionals.join(', ')}: ${action === 'enable' ? 'on' : 'off'} for new chats in ${profile.name}.`
 				);
-			} else fail('usage: btw skill new|list|enable|disable');
+			} else fail('usage: nolune skill new|list|enable|disable');
 			return;
 		}
 
@@ -716,11 +718,11 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 			return generateCommand(io, action, rest);
 
 		case 'view': {
-			const dir = io.env.BTW_VIEW_DIR;
+			const dir = io.env.NOLUNE_VIEW_DIR;
 			if (!dir)
-				fail("`btw view` only works in the agent's commands: it shows images to the agent.");
+				fail("`nolune view` only works in the agent's commands: it shows images to the agent.");
 			const files = argv.slice(1);
-			if (!files.length) fail('usage: btw view <image>...');
+			if (!files.length) fail('usage: nolune view <image>...');
 			let failed = false;
 			for (const [i, file] of files.entries()) {
 				try {
@@ -728,10 +730,10 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				} catch (err) {
 					failed = true;
 					const message = err instanceof Error ? err.message : String(err);
-					io.error(`btw: can't show ${file}: ${message.replace(/\.+$/, '')}.`);
+					io.error(`nolune: can't show ${file}: ${message.replace(/\.+$/, '')}.`);
 					if (err instanceof ViewLimitError) {
 						const rest = files.slice(i + 1);
-						if (rest.length) io.error(`btw: not shown either: ${rest.join(' ')}`);
+						if (rest.length) io.error(`nolune: not shown either: ${rest.join(' ')}`);
 						break;
 					}
 				}
@@ -740,6 +742,6 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 		}
 
 		default:
-			fail(`unknown command "${group}". See \`btw help\`.`);
+			fail(`unknown command "${group}". See \`nolune help\`.`);
 	}
 }

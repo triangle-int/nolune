@@ -3,14 +3,14 @@
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import CopyIcon from '@lucide/svelte/icons/copy';
-	import type { Avatar } from '@btw/core/avatars';
+	import type { Avatar } from '@nolune/core/avatars';
 	import {
 		EXPORT_SECTIONS,
 		countSections,
 		parseMemoryExport,
 		type ExportedFact
-	} from '@btw/core/memory-export';
-	import type { ImportedNote } from '@btw/core';
+	} from '@nolune/core/memory-export';
+	import type { ImportedNote } from '@nolune/core';
 	import AssistantAvatar from '$lib/components/AssistantAvatar.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Textarea } from '$lib/components/ui/textarea';

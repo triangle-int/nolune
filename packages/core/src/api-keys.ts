@@ -3,7 +3,7 @@ import { openaiBaseUrl } from './openai.ts';
 import { openrouterBaseUrl } from './openrouter.ts';
 
 /*
- * API keys as the admin page and `btw key` handle them. A key never goes back out: the status
+ * API keys as the admin page and `nolune key` handle them. A key never goes back out: the status
  * says where the key in use comes from and shows its last four characters. Saving checks the key
  * with its provider first, and since every request reads config.json, it applies at once.
  */
@@ -11,7 +11,7 @@ import { openrouterBaseUrl } from './openrouter.ts';
 export interface ApiKeyStatus {
 	provider: ApiKeyProvider;
 	label: string;
-	/** What btw uses it for. */
+	/** What nolune uses it for. */
 	purpose: string;
 	/** What stops working without it. */
 	withoutIt: string;
@@ -36,7 +36,7 @@ const ABOUT: Record<ApiKeyProvider, Pick<ApiKeyStatus, 'purpose' | 'withoutIt' |
 		purpose:
 			'Runs chats and automations on OpenAI models, and makes pictures for the Images page and when the agent draws.',
 		withoutIt:
-			"Chats and automations on OpenAI models stop working, and btw can't make pictures, until a new key is added.",
+			"Chats and automations on OpenAI models stop working, and nolune can't make pictures, until a new key is added.",
 		consoleUrl: 'https://platform.openai.com/api-keys'
 	},
 	openrouter: {

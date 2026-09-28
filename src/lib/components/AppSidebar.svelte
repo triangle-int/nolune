@@ -26,7 +26,7 @@
 	import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
 	import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
-	import type { Avatar } from '@btw/core/avatars';
+	import type { Avatar } from '@nolune/core/avatars';
 	import * as Sidebar from '$lib/components/ui/sidebar';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Command from '$lib/components/ui/command';
@@ -145,7 +145,7 @@
 		}
 		return rows;
 	}
-	/** Chats btw is working in right now, in this profile. */
+	/** Chats nolune is working in right now, in this profile. */
 	let running = $state<string[]>([]);
 
 	// EventSource reconnects by itself; each (re)connect starts with the whole list.
@@ -224,7 +224,7 @@
 					onpointerdown={(event) => drag.press(event, conversation)}
 					ontouchstart={(event) => drag.touch(event, conversation)}
 				>
-					<!-- Shimmers like the "Thinking" label while btw works in the chat. -->
+					<!-- Shimmers like the "Thinking" label while nolune works in the chat. -->
 					<span class={cn(working && 'thinking-shimmer')}>
 						<TypedText text={conversation.title} />
 						{#if working}<span class="sr-only">{m.sidebar.working}</span>{/if}
@@ -648,7 +648,7 @@
 					if (result.type !== 'redirect') return;
 					// Stay where you are unless the open chat was the one deleted.
 					if (page.params.id === id) await goto(newChatHref, { invalidateAll: true });
-					else await invalidate('btw:conversations');
+					else await invalidate('nolune:conversations');
 				};
 			}}
 		>

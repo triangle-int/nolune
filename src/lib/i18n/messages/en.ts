@@ -1,4 +1,4 @@
-import { describeSchedule } from '@btw/core/schedule';
+import { describeSchedule } from '@nolune/core/schedule';
 import { plural } from '../plural';
 
 const p = plural('en');
@@ -66,21 +66,21 @@ export const en = {
 
 	settings: {
 		title: 'Settings',
-		description: 'How btw looks on this device.',
+		description: 'How nolune looks on this device.',
 		theme: 'Theme',
 		system: 'System',
 		light: 'Light',
 		dark: 'Dark',
 		language: 'Language',
 		languageAuto: 'Same as the browser',
-		languageHint: 'For menus and buttons. btw answers in the language you write in.',
+		languageHint: 'For menus and buttons. nolune answers in the language you write in.',
 		technical: 'Show technical details',
-		technicalHint: 'Show the exact commands btw runs, token usage and prompt caching.',
+		technicalHint: 'Show the exact commands nolune runs, token usage and prompt caching.',
 		expandSteps: 'Always show steps',
 		expandStepsHint:
-			'Open the list of what btw did under each reply, instead of keeping it folded.',
+			'Open the list of what nolune did under each reply, instead of keeping it folded.',
 		sounds: 'Sounds',
-		soundsHint: 'Soft sounds where btw moves on its own, like the welcome of a new profile.',
+		soundsHint: 'Soft sounds where nolune moves on its own, like the welcome of a new profile.',
 		logOut: 'Log out',
 		deviceOnly: 'These settings are saved on this device only.'
 	},
@@ -135,33 +135,34 @@ export const en = {
 		dismiss: 'Dismiss',
 		openChat: 'Open chat',
 		continueInChat: 'Continue in chat',
-		empty: 'Nothing yet. Ask btw for a reminder or a daily check, and what it finds shows up here.'
+		empty:
+			'Nothing yet. Ask nolune for a reminder or a daily check, and what it finds shows up here.'
 	},
 
 	chat: {
 		options: 'Chat options',
-		placeholder: 'Ask btw',
-		placeholderRunning: 'Add something while btw works…',
-		disclaimer: 'btw can make mistakes, and it can change files on this computer.',
+		placeholder: 'Ask nolune',
+		placeholderRunning: 'Add something while nolune works…',
+		disclaimer: 'nolune can make mistakes, and it can change files on this computer.',
 		reconnecting: 'Reconnecting…',
 		empty: 'Ask for something to get started.',
-		readsAfterStep: 'btw reads this after its current step',
-		working: 'btw is working',
+		readsAfterStep: 'nolune reads this after its current step',
+		working: 'nolune is working',
 		thinking: 'Thinking',
 		writing: 'Writing',
 		cutOff: 'The reply was cut off because it got too long.',
-		refused: 'btw declined to continue this request.',
+		refused: 'nolune declined to continue this request.',
 		automation: (title: string) => `Automation · ${title}`,
-		fromBtw: (to: string) => `From btw, to ${to}`,
+		fromNolune: (to: string) => `From nolune, to ${to}`,
 		finishedInBackground: (title: string) => `Finished in the background · ${title}`,
 		inBackground: 'Working in the background',
 		aCommand: 'A command',
 		subagent: (name: string) => `Subagent ${name}`,
 		stopping: 'stopping',
-		errorTitle: 'Something went wrong while btw was answering.',
-		unanswered: "btw hasn't answered this yet.",
+		errorTitle: 'Something went wrong while nolune was answering.',
+		unanswered: "nolune hasn't answered this yet.",
 		scrollToBottom: 'Scroll to the newest message',
-		subagentBanner: 'Subagent {name}: btw started it from {parent}, and it reports back there.',
+		subagentBanner: 'Subagent {name}: nolune started it from {parent}, and it reports back there.',
 		subagentOnly: (name: string) => `Only the agent that started ${name} writes here.`,
 		subagentRetry: 'Only the agent that started it runs a subagent.',
 		hiddenBanner: 'A background run from an automation. Send a message to keep it in your chats.',
@@ -178,7 +179,7 @@ export const en = {
 		anotherModel: 'another model',
 		effortTitle: (level: string) => `Change reasoning to ${level}?`,
 		switchCache: (model: boolean, missTokens: string | null) =>
-			`btw keeps this chat in a cache, so each reply only pays for what's new. ${model ? 'Another model' : 'Another reasoning level'} can't use it: the next reply reads the whole chat again, which takes longer and costs more${missTokens ? ` (a prompt cache miss of about ${missTokens} tokens)` : ''}.`,
+			`nolune keeps this chat in a cache, so each reply only pays for what's new. ${model ? 'Another model' : 'Another reasoning level'} can't use it: the next reply reads the whole chat again, which takes longer and costs more${missTokens ? ` (a prompt cache miss of about ${missTokens} tokens)` : ''}.`,
 		switchFiles:
 			"Some pictures and PDFs in this chat don't carry over to another provider: the new model gets where their files are, and can look at them again.",
 		switch: 'Switch',
@@ -225,7 +226,7 @@ export const en = {
 		statusStopped: 'stopped',
 		statusNotRun: 'not run',
 		command: 'Command',
-		theCommand: 'The command btw ran',
+		theCommand: 'The command nolune ran',
 		inFolder: (cwd: string) => `in ${cwd}`,
 		noOutputYet: 'No output yet…',
 		noOutput: '(no output)'
@@ -257,7 +258,7 @@ export const en = {
 			'No models are set up yet. An admin can add one on the Models page or with {command}.',
 		couldNotStart: 'Could not start the chat.',
 		/**
-		 * The general chips a profile has until btw makes some from its memory (core's
+		 * The general chips a profile has until nolune makes some from its memory (core's
 		 * DEFAULT_SUGGESTIONS, by id): the start of a message for the person to finish.
 		 */
 		suggestions: {
@@ -297,12 +298,12 @@ export const en = {
 		couldNotRename: 'Could not rename the folder.',
 		deleteTitle: 'Delete folder?',
 		deleteBody:
-			'{name} is deleted for everyone in the profile. Its chats move back to your chat list, without its instructions and files. The files are moved to ~/.btw-agent/trash.',
+			'{name} is deleted for everyone in the profile. Its chats move back to your chat list, without its instructions and files. The files are moved to ~/.nolune/trash.',
 		// The folder's page
 		options: 'Folder options',
 		newChatIn: (name: string) => `New chat in ${name}`,
 		instructions: 'Instructions',
-		instructionsHint: 'What btw should know or do in every chat here.',
+		instructionsHint: 'What nolune should know or do in every chat here.',
 		instructionsPlaceholder:
 			"We're planning two weeks in Japan in April with the kids (7 and 10). Keep plans relaxed and the budget under ¥600,000.",
 		changesTechnical:
@@ -311,7 +312,7 @@ export const en = {
 		files: 'Files',
 		addFiles: 'Add files',
 		filesHint:
-			"Pictures, documents, anything. btw gets where they're saved and opens them when they matter.",
+			"Pictures, documents, anything. nolune gets where they're saved and opens them when they matter.",
 		noFiles: 'No files yet',
 		savedIn: (dir: string) => `Saved in ${dir}`,
 		couldNotAdd: 'Could not add the files.',
@@ -324,7 +325,7 @@ export const en = {
 	attachments: {
 		open: (name: string) => `Open ${name}`,
 		download: 'Download',
-		onlyPath: (note: string) => `btw got only where it's saved: ${note}`
+		onlyPath: (note: string) => `nolune got only where it's saved: ${note}`
 	},
 
 	markdown: {
@@ -339,13 +340,13 @@ export const en = {
 		shape: 'Shape',
 		groups: 'Template groups',
 		noTemplates: 'No templates yet.',
-		cantMakeYet: "btw can't make pictures yet.",
+		cantMakeYet: "nolune can't make pictures yet.",
 		needsKeyAdmin: 'It needs an {provider} API key. {link}.',
 		addKeyLink: 'Add it under Models & keys',
 		needsKey: (provider: string) => `It needs an ${provider} API key. Ask an admin to add one.`,
-		adminSetsUp: 'An admin sets this up on the computer btw runs on.',
+		adminSetsUp: 'An admin sets this up on the computer nolune runs on.',
 		describe: 'Describe an image',
-		describeHint: 'btw makes the picture in a new chat, where you can ask for changes.',
+		describeHint: 'nolune makes the picture in a new chat, where you can ask for changes.',
 		onlyPictures: 'Only pictures can be used here.',
 		atMostPictures: (n: number) => `At most ${n} pictures.`,
 		/** `label` is the template's, like "Photo of the birthday kid". */
@@ -393,7 +394,7 @@ export const en = {
 	memory: {
 		title: 'Memory',
 		intro: (profile: string) =>
-			`What btw remembers for ${profile}, shared by everyone in it. Every chat starts with the pinned Core note; btw reads the others when a chat needs them and saves what it learns along the way. To add something, just tell it in a chat, like "Remember that Anna is allergic to nuts".`,
+			`What nolune remembers for ${profile}, shared by everyone in it. Every chat starts with the pinned Core note; nolune reads the others when a chat needs them and saves what it learns along the way. To add something, just tell it in a chat, like "Remember that Anna is allergic to nuts".`,
 		/** After the number of memories, in large type. */
 		total: (memories: number, topics: number) =>
 			`${memories === 1 ? 'memory' : 'memories'} in ${p(topics, { one: `${topics} topic`, other: `${topics} topics` })}`,
@@ -407,16 +408,16 @@ export const en = {
 		corePlaceholder:
 			'For example:\n- Anna and Ben are the parents, Mia is 7\n- We speak Russian at home\n- Mia is allergic to nuts',
 		coreEmpty:
-			"Nothing yet. Put here what btw should keep in mind in every chat: who's in the family, the languages you speak, allergies. btw adds to it too.",
+			"Nothing yet. Put here what nolune should keep in mind in every chat: who's in the family, the languages you speak, allergies. nolune adds to it too.",
 		forgetTitle: (topic: string) => `Forget "${topic}"?`,
 		forgetBody:
-			'btw forgets everything in {path} for everyone in {profile}. Chats that already read it keep what they read.',
+			'nolune forgets everything in {path} for everyone in {profile}. Chats that already read it keep what they read.',
 		forgetButton: 'Forget',
 		empty: 'The note is empty. To delete it, use Forget.',
 		conflict: (problem: string) =>
-			`${problem} Save again to keep your version, or cancel to see btw's.`,
+			`${problem} Save again to keep your version, or cancel to see nolune's.`,
 		saved: 'Saved. New chats will see the change.',
-		forgot: (path: string) => `btw forgot everything in ${path}.`,
+		forgot: (path: string) => `nolune forgot everything in ${path}.`,
 		// The grid of dots
 		learned: (ago: string) => `learned ${ago}`,
 		learnedAWhileAgo: 'learned a while ago',
@@ -427,13 +428,13 @@ export const en = {
 		showAllTopics: (n: number) => `Show all ${n} topics`,
 		older: 'Older',
 		newer: 'Newer',
-		nothingYet: 'Nothing remembered yet. Each thing btw learns becomes a dot here.'
+		nothingYet: 'Nothing remembered yet. Each thing nolune learns becomes a dot here.'
 	},
 
 	automations: {
 		title: 'Automations',
 		intro:
-			'Things btw does on its own: reminders, regular checks and replies to other apps. What it finds shows up under the bell. To add or change one, just ask btw in a chat.',
+			'Things nolune does on its own: reminders, regular checks and replies to other apps. What it finds shows up under the bell. To add or change one, just ask nolune in a chat.',
 		today: 'Today',
 		previousMonth: 'Previous month',
 		nextMonth: 'Next month',
@@ -450,10 +451,10 @@ export const en = {
 		resume: 'Resume',
 		description: 'Description',
 		descriptionPlaceholder: 'What it does, in one sentence',
-		instructions: 'Instructions for btw',
+		instructions: 'Instructions for nolune',
 		instructionsTechnical: (model: string, effort: string) =>
-			`Instructions for btw (${model}, reasoning ${effort})`,
-		script: 'Script: runs without the model and calls {command} when btw is needed',
+			`Instructions for nolune (${model}, reasoning ${effort})`,
+		script: 'Script: runs without the model and calls {command} when nolune is needed',
 		webhook: 'Webhook URL. Keep it secret: anyone with it can start a run. POST JSON to it.',
 		confirmDelete: (name: string) => `Delete "${name}"?`,
 		recentRuns: (n: number) => `Recent runs (${n})`,
@@ -477,7 +478,7 @@ export const en = {
 		scriptRun: (status: string) => `script ${status}`,
 		view: 'view',
 		output: 'output',
-		empty: 'No automations yet. Ask btw in a chat, for example:',
+		empty: 'No automations yet. Ask nolune in a chat, for example:',
 		examples: [
 			'"Every weekday at 7:30, check the weather and tell us if we need umbrellas."',
 			'"Remind Anna tomorrow at 17:00 to pick up the parcel."',
@@ -505,18 +506,18 @@ export const en = {
 	skills: {
 		title: 'Skills',
 		intro:
-			"Skills are instructions btw follows for specific tasks. It sees the name and description of every skill that's on, and reads the rest when a task calls for it. Turning off skills this profile doesn't need keeps btw focused. Changes apply to new chats.",
+			"Skills are instructions nolune follows for specific tasks. It sees the name and description of every skill that's on, and reads the rest when a task calls for it. Turning off skills this profile doesn't need keeps nolune focused. Changes apply to new chats.",
 		summary: (on: number, total: number, tokens: string) =>
 			`${on} of ${total} on · about ${tokens} tokens at the start of every new chat`,
 		madeFor: (profile: string) => `Made for ${profile}`,
 		shared: 'Shared by all profiles',
-		builtIn: 'Built into btw',
+		builtIn: 'Built into nolune',
 		allOff: 'Turn all off',
 		allOn: 'Turn all on',
 		tokens: (n: string) => `~${n} tokens`,
 		use: (name: string) => `Use ${name}`,
 		empty:
-			'No skills yet. When btw works out how to do something, it can save that as a skill for next time.',
+			'No skills yet. When nolune works out how to do something, it can save that as a skill for next time.',
 		gone: 'That skill no longer exists.'
 	},
 
@@ -524,29 +525,29 @@ export const en = {
 		title: 'People & profile',
 		name: 'Name',
 		profileName: 'Profile name',
-		folder: (slug: string) => `Folder: ~/.btw-agent/profiles/${slug} (doesn't change)`,
+		folder: (slug: string) => `Folder: ~/.nolune/profiles/${slug} (doesn't change)`,
 		avatar: 'Avatar',
 		avatarHint:
-			"How btw looks in this profile's chats. Everyone here sees the same one, and btw can change it when asked.",
+			"How nolune looks in this profile's chats. Everyone here sees the same one, and nolune can change it when asked.",
 		soul: 'Soul',
 		soulHint: (profile: string) =>
-			`Who btw is for ${profile}: its character, what it cares about, how it talks. Every chat starts with it, and btw changes it too when you ask it to be different.`,
+			`Who nolune is for ${profile}: its character, what it cares about, how it talks. Every chat starts with it, and nolune changes it too when you ask it to be different.`,
 		soulPlaceholder:
 			"You're warm and a little playful, and you keep answers short. With the kids you explain things simply and never talk down to them. When you don't know something, you say so.",
 		changesTechnical:
 			'Chats get changes at their next message, which re-reads the conversation once (a prompt cache miss).',
 		changes: 'Chats get changes at their next message.',
 		members: 'Members',
-		membersHint: 'Everyone here sees and writes in the same chats, and can ask btw for anything.',
+		membersHint:
+			'Everyone here sees and writes in the same chats, and can ask nolune for anything.',
 		personToAdd: 'Person to add',
 		chooseSomeone: 'Choose someone to add',
 		everyoneIsMember: 'Everyone is already a member.',
 		deleteTitle: 'Delete profile',
-		deleteHint: 'Deletes all its chats for everyone. The folder is moved to ~/.btw-agent/trash.',
+		deleteHint: 'Deletes all its chats for everyone. The folder is moved to ~/.nolune/trash.',
 		deleteButton: 'Delete this profile',
 		deleteConfirm: (name: string) => `Delete "${name}"?`,
-		deleteBody:
-			'All its chats are deleted for everyone. The folder is moved to ~/.btw-agent/trash.',
+		deleteBody: 'All its chats are deleted for everyone. The folder is moved to ~/.nolune/trash.',
 		renamed: 'Renamed.',
 		soulSaved: 'Saved the soul.',
 		soulRemoved: 'Removed the soul.',
@@ -576,7 +577,7 @@ export const en = {
 		needsName: 'Give the profile a name.'
 	},
 
-	/** A new profile's welcome. btw speaks for itself here: "I" is the assistant. */
+	/** A new profile's welcome. nolune speaks for itself here: "I" is the assistant. */
 	welcome: {
 		title: "Let's make this place yours.",
 		subtitle: "A few quick questions, and you'll feel at home.",
@@ -592,7 +593,7 @@ export const en = {
 			title: 'How should I think?',
 			subtitle: 'Pick what powers me. You can add more under Models & keys later.',
 			askAdmin:
-				'I need a model before I can chat. Ask whoever set up btw to add one under Models & keys; everything else works in the meantime.',
+				'I need a model before I can chat. Ask whoever set up nolune to add one under Models & keys; everything else works in the meantime.',
 			choices: {
 				'claude-plan': {
 					title: 'Claude plan',
@@ -672,7 +673,7 @@ export const en = {
 		email: 'Email address',
 		password: 'Password',
 		signingIn: 'Signing in…',
-		forgot: 'Forgot your password? Ask whoever set up btw to run {command}.',
+		forgot: 'Forgot your password? Ask whoever set up nolune to run {command}.',
 		tooManyAttempts: 'Too many attempts. Wait a minute and try again.',
 		wrongPassword: 'Wrong email or password.'
 	},
@@ -681,7 +682,7 @@ export const en = {
 		title: 'Models & keys',
 		keys: 'API keys',
 		keysHint:
-			"Shared by every profile and kept in btw's config file on this computer. A new key is checked with its provider before it's saved, and used right away.",
+			"Shared by every profile and kept in nolune's config file on this computer. A new key is checked with its provider before it's saved, and used right away.",
 		purposes: {
 			anthropic: 'Runs chats and automations on Claude models.',
 			openai:
@@ -692,11 +693,11 @@ export const en = {
 		withoutIt: {
 			anthropic: 'Chats and automations on Claude models stop working until a new key is added.',
 			openai:
-				"Chats and automations on OpenAI models stop working, and btw can't make pictures, until a new key is added.",
+				"Chats and automations on OpenAI models stop working, and nolune can't make pictures, until a new key is added.",
 			openrouter:
 				'Chats and automations on OpenRouter models stop working until a new key is added.'
 		},
-		savedInBtw: (hint: string | null) => `Saved in btw${hint ? ` ending in ${hint}` : ''}`,
+		savedInNolune: (hint: string | null) => `Saved in nolune${hint ? ` ending in ${hint}` : ''}`,
 		fromEnv: (variable: string, hint: string | null) =>
 			`From the ${variable} environment variable${hint ? ` ending in ${hint}` : ''}`,
 		notSet: 'Not set',
@@ -711,11 +712,11 @@ export const en = {
 			"Use a key from the same workspace: pictures and PDFs already sent in chats live there, and those chats can't go on without them.",
 		removeKeyTitle: (provider: string) => `Remove the ${provider} key?`,
 		useEnvInstead: (variable: string) =>
-			`btw will use the key in the ${variable} environment variable instead.`,
+			`nolune will use the key in the ${variable} environment variable instead.`,
 		plan: 'Claude plan',
 		plans: 'Plans',
 		plansHint:
-			"Chats on a plan preset run on someone's own subscription instead of an API key, through the plan maker's own agent on this computer. btw runs it and never sees its sign-in. Plan limits assume one person's ordinary use, so keep busy automations and subagents on an API key preset.",
+			"Chats on a plan preset run on someone's own subscription instead of an API key, through the plan maker's own agent on this computer. nolune runs it and never sees its sign-in. Plan limits assume one person's ordinary use, so keep busy automations and subagents on an API key preset.",
 		claudePlanAbout: 'Pro or Max, through Claude Code.',
 		chatgptPlan: 'ChatGPT plan',
 		chatgptPlanAbout: "Plus, Pro or Business, through OpenAI's Codex.",
@@ -780,8 +781,8 @@ export const en = {
 			noKey: (provider: string) => `No ${provider} API key yet: add one under API keys, above.`,
 			asking: (source: string) => `Asking ${source} for its models…`,
 			listProblem: (problem: string) => `${problem} You can still type an id.`,
-			couldNotList: (status: number) => `btw couldn't get the models (${status}).`,
-			unreachable: "btw couldn't be reached.",
+			couldNotList: (status: number) => `nolune couldn't get the models (${status}).`,
+			unreachable: "nolune couldn't be reached.",
 			checkingClaude: 'Checking Claude Code…',
 			checkingCodex: 'Checking Codex…',
 			checkingModel: 'Checking the model…',

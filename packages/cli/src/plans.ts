@@ -10,12 +10,12 @@ import {
 	signOutChatGpt,
 	startChatGptSignIn,
 	type Plan
-} from '@btw/core';
+} from '@nolune/core';
 import { ask } from './input.ts';
 import { fail, type Io } from './io.ts';
 
 /*
- * `btw claude-plan` and `btw chatgpt-plan`, and the plans' side of `btw setup`. Each plan runs
+ * `nolune claude-plan` and `nolune chatgpt-plan`, and the plans' side of `nolune setup`. Each plan runs
  * its maker's agent (Claude Code, Codex), which keeps the sign-in: these check it, and offer to
  * install the agent and sign it in where needed.
  */
@@ -36,7 +36,7 @@ function runOnTerminal(
 /**
  * Fails unless Claude Code is here and signed in to a plan; says who it's signed in as. With
  * `guide`, at a terminal, it first offers what's missing: Anthropic's installer, then Claude
- * Code's own sign-in, asking before each. btw never sees the sign-in: Claude Code keeps it.
+ * Code's own sign-in, asking before each. nolune never sees the sign-in: Claude Code keeps it.
  */
 export async function requireClaudePlan(io: Io, guide = false): Promise<void> {
 	let status = await claudePlanStatus();
@@ -87,7 +87,7 @@ The code works for 15 minutes. Enter it only if you started this sign-in. Waitin
 /**
  * Fails unless Codex is here and signed in with ChatGPT; says who it's signed in as. With
  * `guide`, it first does what's missing: at a terminal, it offers OpenAI's installer, asking
- * first; then it signs in with ChatGPT. btw never sees the sign-in: Codex keeps it.
+ * first; then it signs in with ChatGPT. nolune never sees the sign-in: Codex keeps it.
  */
 export async function requireChatGptPlan(io: Io, guide = false): Promise<void> {
 	let status = await chatGptPlanStatus();
@@ -110,14 +110,14 @@ export async function requireChatGptPlan(io: Io, guide = false): Promise<void> {
 }
 
 /**
- * `btw <plan> setup` and `btw setup --provider <plan>`: installs the plan's agent and signs it in
+ * `nolune <plan> setup` and `nolune setup --provider <plan>`: installs the plan's agent and signs it in
  * where needed, then says who it's signed in as.
  */
 export function setUpPlan(io: Io, plan: Plan): Promise<void> {
 	return plan === 'claude-plan' ? requireClaudePlan(io, true) : requireChatGptPlan(io, true);
 }
 
-/** `btw claude-plan …` and `btw chatgpt-plan …`. */
+/** `nolune claude-plan …` and `nolune chatgpt-plan …`. */
 export async function planCommand(io: Io, plan: Plan, action: string | undefined): Promise<void> {
 	switch (action) {
 		case 'status':
@@ -125,7 +125,7 @@ export async function planCommand(io: Io, plan: Plan, action: string | undefined
 		case 'setup':
 			// Claude Code signs in on the terminal; Codex's sign-in is a link and a code, anywhere.
 			if (plan === 'claude-plan' && !io.stdinIsTTY) {
-				fail('`btw claude-plan setup` asks questions: run it in a terminal on this computer.');
+				fail('`nolune claude-plan setup` asks questions: run it in a terminal on this computer.');
 			}
 			return setUpPlan(io, plan);
 	}
@@ -146,7 +146,7 @@ export async function planCommand(io: Io, plan: Plan, action: string | undefined
 			}
 			return;
 		}
-		fail('usage: btw chatgpt-plan status|setup|logout|models');
+		fail('usage: nolune chatgpt-plan status|setup|logout|models');
 	}
-	fail('usage: btw claude-plan status|setup');
+	fail('usage: nolune claude-plan status|setup');
 }

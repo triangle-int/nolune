@@ -107,7 +107,7 @@
 		return async ({ result, update }) => {
 			saving = false;
 			if (result.type === 'success') editing = null;
-			// btw changed the note meanwhile: load its version, so saving again replaces it knowingly.
+			// nolune changed the note meanwhile: load its version, so saving again replaces it knowingly.
 			if (result.type === 'failure' && result.status === 409) await invalidateAll();
 			await update({ reset: false });
 		};

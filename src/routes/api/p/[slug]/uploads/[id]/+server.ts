@@ -1,5 +1,5 @@
 import { error } from '@sveltejs/kit';
-import { deleteUpload } from '@btw/core';
+import { deleteUpload } from '@nolune/core';
 import { requireProfile } from '$lib/server/access';
 import type { RequestHandler } from './$types';
 

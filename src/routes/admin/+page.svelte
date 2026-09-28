@@ -46,7 +46,7 @@
 	// The code is entered on another page, often another device: ask until it has been.
 	$effect(() => {
 		if (!chatgpt.pending) return;
-		const timer = setInterval(() => invalidate('btw:chatgpt-plan'), 3000);
+		const timer = setInterval(() => invalidate('nolune:chatgpt-plan'), 3000);
 		return () => clearInterval(timer);
 	});
 
@@ -61,7 +61,7 @@
 	}
 
 	function sourceText(key: KeyStatus): string {
-		if (key.source === 'config') return m.admin.savedInBtw(key.hint);
+		if (key.source === 'config') return m.admin.savedInNolune(key.hint);
 		if (key.source === 'env') return m.admin.fromEnv(key.env, key.hint);
 		return m.admin.notSet;
 	}
@@ -222,7 +222,7 @@
 									<div class="text-warning">
 										<Rich text={m.admin.notAt}>
 											{#snippet path()}<span class="font-mono">{data.claude.path}</span>{/snippet}
-											{#snippet command()}<code>btw config set claude-path</code>{/snippet}
+											{#snippet command()}<code>nolune config set claude-path</code>{/snippet}
 										</Rich>
 									</div>
 								{:else}
@@ -262,7 +262,7 @@
 							<div class="space-y-2 text-muted-foreground sm:pl-12">
 								<p>
 									<Rich text={m.admin.install}>
-										{#snippet setup()}<code>btw claude-plan setup</code>{/snippet}
+										{#snippet setup()}<code>nolune claude-plan setup</code>{/snippet}
 										{#snippet claude()}<code>claude</code>{/snippet}
 									</Rich>
 								</p>
@@ -276,7 +276,7 @@
 						{:else}
 							<p class="text-muted-foreground sm:pl-12">
 								<Rich text={m.admin.signIn}>
-									{#snippet setup()}<code>btw claude-plan setup</code>{/snippet}
+									{#snippet setup()}<code>nolune claude-plan setup</code>{/snippet}
 									{#snippet claude()}<code>claude</code>{/snippet}
 									{#snippet login()}<code>/login</code>{/snippet}
 								</Rich>
@@ -308,7 +308,7 @@
 									<div class="text-warning">
 										<Rich text={m.admin.notAt}>
 											{#snippet path()}<span class="font-mono">{chatgpt.path}</span>{/snippet}
-											{#snippet command()}<code>btw config set codex-path</code>{/snippet}
+											{#snippet command()}<code>nolune config set codex-path</code>{/snippet}
 										</Rich>
 									</div>
 								{:else}
@@ -397,7 +397,7 @@
 							<div class="space-y-2 text-muted-foreground sm:pl-12">
 								<p>
 									<Rich text={m.admin.chatgptInstall}>
-										{#snippet setup()}<code>btw chatgpt-plan setup</code>{/snippet}
+										{#snippet setup()}<code>nolune chatgpt-plan setup</code>{/snippet}
 									</Rich>
 								</p>
 								<div class="flex items-center gap-1 rounded-xl bg-muted py-1 pr-1 pl-3">

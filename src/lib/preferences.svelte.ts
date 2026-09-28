@@ -2,19 +2,19 @@ import { getContext, setContext } from 'svelte';
 import { isLocale, type Locale } from '$lib/i18n/locales';
 
 /** Per-device display settings, kept in a cookie so the server renders them too. */
-export const PREFERENCES_COOKIE = 'btw-prefs';
+export const PREFERENCES_COOKIE = 'nolune-prefs';
 
 /** A language for the interface, or `auto` for the one the browser asks for. */
 export type LanguagePreference = Locale | 'auto';
 
 export interface PreferenceValues {
-	/** Show the commands btw runs, token usage and prompt-cache details. */
+	/** Show the commands nolune runs, token usage and prompt-cache details. */
 	technical: boolean;
 	/** Open the list of steps under each reply without clicking. */
 	expandSteps: boolean;
 	/** Soft sounds where the screen moves by itself, like a new profile's welcome. */
 	sounds: boolean;
-	/** The interface's language. Chats aren't translated: btw answers in the language people write. */
+	/** The interface's language. Chats aren't translated: nolune answers in the language people write. */
 	language: LanguagePreference;
 }
 

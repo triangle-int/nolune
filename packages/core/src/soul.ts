@@ -5,10 +5,10 @@ import { cutAtLine } from './memory.ts';
 import { profileSoulFile } from './paths.ts';
 
 /*
- * A profile's soul: who btw is for its family (character, values, tone, boundaries), in
+ * A profile's soul: who nolune is for its family (character, values, tone, boundaries), in
  * `soul.md` in the profile folder. It opens the system prompt of every chat, which is built again
- * when it changes. The family edits it in the profile's settings, and btw changes it itself with
- * `btw soul`.
+ * when it changes. The family edits it in the profile's settings, and nolune changes it itself with
+ * `nolune soul`.
  */
 
 /** It is in every prompt, so it stays a page, not a manual. */
@@ -43,7 +43,7 @@ export function writeSoul(slug: string, text: string): string {
 	const clean = text.replace(/\r\n?/g, '\n').trim();
 	if (clean.length > MAX_SOUL_CHARS) {
 		throw new SoulError(
-			`The soul would be ${clean.length} characters; it can have at most ${MAX_SOUL_CHARS}, because it goes into every chat. Keep who btw is and how it behaves; facts about the family belong in memory.`
+			`The soul would be ${clean.length} characters; it can have at most ${MAX_SOUL_CHARS}, because it goes into every chat. Keep who nolune is and how it behaves; facts about the family belong in memory.`
 		);
 	}
 	const file = profileSoulFile(slug);

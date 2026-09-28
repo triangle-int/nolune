@@ -10,7 +10,7 @@ A trigger runs you in the background, in a new conversation that starts with an
 everyone in the profile, who can open it to continue the conversation with you. When there is
 nothing worth telling them, that run replies only `NO_NOTIFICATION` and stays silent.
 
-Triggers are managed with `btw trigger` (`btw trigger help` lists every option). `--profile` can
+Triggers are managed with `nolune trigger` (`nolune trigger help` lists every option). `--profile` can
 be left out; it defaults to this profile.
 
 ## When (pick one)
@@ -30,8 +30,8 @@ be left out; it defaults to this profile.
   worth reporting.
 - `--script "<command>"` runs a shell command on the schedule without you, which costs nothing.
   Use it for frequent checks (new email, a price, a web page changing). The script calls
-  `btw wake "<what happened and what to do>"` only when you are needed; that starts a run of this
-  trigger with the message as its prompt (`btw wake -` reads the message from stdin).
+  `nolune wake "<what happened and what to do>"` only when you are needed; that starts a run of this
+  trigger with the message as its prompt (`nolune wake -` reads the message from stdin).
 
 ## How it looks to the family
 
@@ -48,15 +48,15 @@ hidden behind Edit, so always give:
 ## Examples
 
 ```sh
-btw trigger add "Umbrella check" --cron "30 7 * * 1-5" --icon umbrella \
+nolune trigger add "Umbrella check" --cron "30 7 * * 1-5" --icon umbrella \
   --summary "Tells the family each weekday morning whether they need umbrellas." \
   --prompt "Check today's weather for Berlin. If it will rain, tell the family to take umbrellas. Otherwise there is nothing to report."
 
-btw trigger add "Parcel" --at "2026-09-26 17:00" --icon package \
+nolune trigger add "Parcel" --at "2026-09-26 17:00" --icon package \
   --summary "Reminds Anna to pick up the parcel." \
   --prompt "Remind Anna to pick up the parcel at the post office."
 
-btw trigger add "School mail" --cron "*/10 * * * *" --icon mail \
+nolune trigger add "School mail" --cron "*/10 * * * *" --icon mail \
   --summary "Watches the inbox and tells you when the school writes." \
   --script "./automations/school-mail.sh"
 ```
@@ -67,17 +67,17 @@ For a script trigger:
    state it needs (like the ids it has already seen) in files next to it, so it only wakes you for
    new things.
 2. Run it by hand once and check it works before adding the trigger.
-3. Scripts run in the profile folder with no keyboard input, with `BTW_PROFILE`,
-   `BTW_TRIGGER_ID` and, for webhooks, `BTW_PAYLOAD` set, and time out after 10 minutes. Exit
+3. Scripts run in the profile folder with no keyboard input, with `NOLUNE_PROFILE`,
+   `NOLUNE_TRIGGER_ID` and, for webhooks, `NOLUNE_PAYLOAD` set, and time out after 10 minutes. Exit
    non-zero only when the check itself failed: the family gets one notification when a script
    starts failing.
 
 ## Managing
 
-- `btw trigger list`, and `btw trigger show <name>` for details, recent runs and the last script
+- `nolune trigger list`, and `nolune trigger show <name>` for details, recent runs and the last script
   output.
-- `btw trigger run|pause|resume|rm <name>`.
-- `btw trigger edit <name> --prompt ... | --script ... | --cron ... | --at ... | --name ... |
+- `nolune trigger run|pause|resume|rm <name>`.
+- `nolune trigger edit <name> --prompt ... | --script ... | --cron ... | --at ... | --name ... |
 --summary ... | --icon ...`. Triggers made before summaries existed have none; add one when
   you touch them.
 - Runs use this conversation's model unless `--preset` is given, with reasoning `medium` unless
@@ -87,5 +87,5 @@ For a script trigger:
 When you are done, tell the person what you set up in plain words ("every weekday at 7:30 I'll
 check the weather and tell you if you need umbrellas"), not the cron expression.
 
-This skill ships with btw and is replaced on updates. To adapt it for this profile, copy the folder
+This skill ships with nolune and is replaced on updates. To adapt it for this profile, copy the folder
 into the profile's skills folder and edit the copy; it takes precedence.

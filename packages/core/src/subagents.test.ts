@@ -24,7 +24,7 @@ import {
 } from './subagents.ts';
 import { makeFamily, makePreset } from './test/fixtures.ts';
 
-/** A chat where Anna already talked with btw. */
+/** A chat where Anna already talked with nolune. */
 function parentChat() {
 	const { user, profile } = makeFamily();
 	const chat = createConversation({
@@ -54,7 +54,7 @@ function reply(conversationId: string, text: string) {
 	});
 }
 
-describe('btw agent run', () => {
+describe('nolune agent run', () => {
 	it('starts a hidden conversation with only the task, a 5-minute cache and the chat’s model', () => {
 		const { chat, profile } = parentChat();
 		const { subagent, created } = runSubagent({ parentId: chat.id, prompt: 'Find flights.' });
@@ -72,7 +72,7 @@ describe('btw agent run', () => {
 			profileId: profile.id
 		});
 		// Built for it, not copied: nothing of the parent's conversation comes along.
-		expect(conv.systemPrompt).toContain('You are btw');
+		expect(conv.systemPrompt).toContain('You are nolune');
 		const [task] = queuedRows(conv.id);
 		expect(task).toMatchObject({
 			kind: 'agent_message',
@@ -162,7 +162,7 @@ describe('btw agent run', () => {
 	it('refuses an unknown preset or reasoning level', () => {
 		const { chat } = parentChat();
 		expect(() => runSubagent({ parentId: chat.id, prompt: 'x', presetId: 'nope' })).toThrow(
-			/btw preset list/
+			/nolune preset list/
 		);
 		expect(() =>
 			runSubagent({ parentId: chat.id, prompt: 'x', effort: 'extreme' as never })
@@ -203,7 +203,7 @@ describe('steering and stopping', () => {
 		const { subagent } = runSubagent({ parentId: chat.id, prompt: 'x' });
 		setSubagentStatus(subagent.id, 'done');
 		expect(() => steerSubagent({ parentId: chat.id, name: 'agent-1', text: 'y' })).toThrow(
-			/btw agent run agent-1/
+			/nolune agent run agent-1/
 		);
 		expect(() => steerSubagent({ parentId: chat.id, name: 'nobody', text: 'y' })).toThrow(
 			/no subagent "nobody"/

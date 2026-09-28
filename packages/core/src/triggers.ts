@@ -23,7 +23,7 @@ export type TriggerWhat =
 export const SILENT_REPLY = 'NO_NOTIFICATION';
 
 const RUNS_KEPT_PER_TRIGGER = 100;
-/** Runs one trigger (or one profile's `btw wake` calls) may have waiting; stops runaway scripts. */
+/** Runs one trigger (or one profile's `nolune wake` calls) may have waiting; stops runaway scripts. */
 export const MAX_PENDING_RUNS = 10;
 
 // --- time ---
@@ -271,7 +271,7 @@ export function listTriggers(profileId?: string): Trigger[] {
 		.all();
 }
 
-/** By id, unique id prefix (as `btw trigger list` shows it) or name. */
+/** By id, unique id prefix (as `nolune trigger list` shows it) or name. */
 export function findTrigger(ref: string, profileId?: string): Trigger {
 	const candidates = listTriggers(profileId);
 	const needle = ref.trim().toLowerCase();
@@ -285,7 +285,7 @@ export function findTrigger(ref: string, profileId?: string): Trigger {
 	];
 	if (matches.length === 1) return matches[0];
 	if (matches.length > 1) throw new Error(`"${ref}" matches more than one trigger; use its id.`);
-	throw new Error(`No trigger "${ref}". See \`btw trigger list\`.`);
+	throw new Error(`No trigger "${ref}". See \`nolune trigger list\`.`);
 }
 
 export function webhookUrl(token: string): string {
@@ -304,7 +304,7 @@ export function resolvePreset(ref?: string, conversationId?: string): Preset | u
 		const presets = listPresets();
 		const needle = ref.toLowerCase();
 		const found = presets.find((p) => p.id === ref || p.name.toLowerCase() === needle);
-		if (!found) throw new Error(`No model preset "${ref}". See \`btw preset list\`.`);
+		if (!found) throw new Error(`No model preset "${ref}". See \`nolune preset list\`.`);
 		return found;
 	}
 	const fromConversation = conversationId ? getConversation(conversationId)?.presetId : null;
@@ -333,7 +333,7 @@ export function markFired(t: Trigger, now: Date): void {
 // --- runs ---
 
 /**
- * Refuses a run while too many are waiting: the trigger's own, or for a `btw wake` outside a
+ * Refuses a run while too many are waiting: the trigger's own, or for a `nolune wake` outside a
  * trigger, the profile's other such wakes. A busy trigger doesn't block the profile's wakes.
  */
 function checkPending(profileId: string, triggerId: string | null): void {
@@ -373,7 +373,7 @@ export function queueRun(t: Trigger, source: RunSource, payload?: string | null)
 	});
 }
 
-/** `btw wake`: queues a background agent run, usually from a trigger's script. */
+/** `nolune wake`: queues a background agent run, usually from a trigger's script. */
 export function queueWake(input: {
 	profileId: string;
 	text: string;
@@ -388,7 +388,7 @@ export function queueWake(input: {
 	return insertRun({
 		profileId: t?.profileId ?? input.profileId,
 		triggerId: t?.id ?? null,
-		title: input.title?.trim() || t?.name || 'btw',
+		title: input.title?.trim() || t?.name || 'nolune',
 		action: 'agent',
 		source: 'wake',
 		prompt: input.text.trim(),

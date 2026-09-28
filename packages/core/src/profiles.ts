@@ -12,12 +12,12 @@ import { findUser } from './users.ts';
 export type Profile = typeof profile.$inferSelect;
 
 const holder = globalThis as unknown as {
-	__btwProfileEvents?: EventEmitter;
-	__btwProfileLooks?: Map<string, string>;
+	__noluneProfileEvents?: EventEmitter;
+	__noluneProfileLooks?: Map<string, string>;
 };
-const emitter = (holder.__btwProfileEvents ??= new EventEmitter().setMaxListeners(0));
+const emitter = (holder.__noluneProfileEvents ??= new EventEmitter().setMaxListeners(0));
 /** Each profile's name and avatar as last seen, to tell which changed. */
-const looks = (holder.__btwProfileLooks ??= new Map());
+const looks = (holder.__noluneProfileLooks ??= new Map());
 
 /** Called with the profile's id when its name or avatar changes. */
 export function onProfileChanged(listener: (profileId: string) => void): () => void {
@@ -27,7 +27,7 @@ export function onProfileChanged(listener: (profileId: string) => void): () => v
 
 /**
  * Tells listeners about profiles whose name or avatar changed since the last look. The CLI changes
- * them from other processes (the agent runs `btw profile avatar`), so the gateway also looks after
+ * them from other processes (the agent runs `nolune profile avatar`), so the gateway also looks after
  * every command and on its scheduler tick. A profile seen for the first time is only noted.
  */
 export function noticeProfileChanges(): void {
@@ -188,7 +188,7 @@ export function setSkillsEnabled(profileId: string, names: string[], enabled: bo
 	});
 }
 
-/** Deletes the profile and its conversations; the folder is moved to ~/.btw-agent/trash. */
+/** Deletes the profile and its conversations; the folder is moved to ~/.nolune/trash. */
 export function deleteProfile(profileId: string): { trashedTo: string | null } {
 	const found = getDb().select().from(profile).where(eq(profile.id, profileId)).get();
 	if (!found) throw new Error('No such profile');

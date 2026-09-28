@@ -21,7 +21,7 @@ import {
 	saveApiKey,
 	setDefaultPreset,
 	setProfileAvatar
-} from '@btw/core';
+} from '@nolune/core';
 import { translations } from '$lib/i18n';
 import { requireAdmin, requireProfile } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
@@ -145,7 +145,7 @@ export const actions: Actions = {
 		}
 		const result = importMemoryExport(profile.slug, user.name, facts);
 		console.log(
-			`[btw] ${profile.slug} imported ${result.added} memories for ${user.name} (${result.skipped} already known)`
+			`[nolune] ${profile.slug} imported ${result.added} memories for ${user.name} (${result.skipped} already known)`
 		);
 		return { imported: result };
 	}

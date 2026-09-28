@@ -1,6 +1,6 @@
 import { browser } from '$app/environment';
-import type { DisplayMedia } from '@btw/core';
-import { isMediaHref } from '@btw/core/media-refs';
+import type { DisplayMedia } from '@nolune/core';
+import { isMediaHref } from '@nolune/core/media-refs';
 import DOMPurify from 'dompurify';
 import { Copy, Download, File, FileX, Image, ImageOff, type IconNode } from 'lucide';
 import { Marked } from 'marked';
@@ -113,7 +113,7 @@ const marked = new Marked({
 <div class="flex h-9 items-center justify-between pr-2 pl-4 text-xs text-muted-foreground"><span>${code || m.markdown.text}</span><button type="button" data-copy class="flex items-center gap-1.5 rounded-lg px-2 py-1 hover:bg-accent hover:text-foreground">${COPY_ICON}<span>${escapeHtml(m.common.copy)}</span></button></div>
 <pre class="overflow-x-auto px-4 pb-4"><code>${escapeHtml(text)}</code></pre></div>`;
 		},
-		// Pictures show btw's copy of the file (see @btw/core media.ts), never the link itself.
+		// Pictures show nolune's copy of the file (see @nolune/core media.ts), never the link itself.
 		image({ href, text, tokens }) {
 			const alt = tokens ? this.parser.parseInline(tokens, this.parser.textRenderer) : text;
 			const lang = words();
@@ -176,7 +176,7 @@ export function renderMarkdown(
 				node.setAttribute('target', '_blank');
 				node.setAttribute('rel', 'noopener noreferrer');
 			}
-			// Pictures only ever come from btw's own copies (see SANITIZE).
+			// Pictures only ever come from nolune's own copies (see SANITIZE).
 			if (node.tagName === 'IMG' && !node.getAttribute('src')?.startsWith('/api/c/')) {
 				node.removeAttribute('src');
 			}

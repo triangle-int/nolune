@@ -5,7 +5,7 @@ import { inspectImage, prepareImage, stripJpegMetadata, type ImageMediaType } fr
 import { OPENAI_MAX_INPUT_IMAGES, OPENAI_QUALITIES, generateWithOpenAI } from './openai.ts';
 
 /*
- * `btw generate image`: making pictures with an image model. The agent runs it like any other
+ * `nolune generate image`: making pictures with an image model. The agent runs it like any other
  * command, so the gateway has no code for it. Each provider is a module with the same shape
  * (openai.ts today); openrouter, fal or higgsfield would each add one and an entry in PROVIDERS.
  */
@@ -149,7 +149,7 @@ export interface ImageGenerationStatus {
 	missingKey: ApiKeyProvider | null;
 }
 
-/** Whether `btw generate image` can work, for the Images page and `btw config`. */
+/** Whether `nolune generate image` can work, for the Images page and `nolune config`. */
 export function imageGenerationStatus(): ImageGenerationStatus {
 	const model = configuredImageModel();
 	let provider: ProviderModule;
@@ -181,7 +181,7 @@ const MAX_INPUT_BYTES = 25 * 1024 * 1024;
 
 /**
  * Reads an input image. PNG, JPEG and WebP go as they are, JPEGs without their EXIF (it carries
- * GPS positions); other formats, sideways photos and huge files are converted like `btw view`'s.
+ * GPS positions); other formats, sideways photos and huge files are converted like `nolune view`'s.
  */
 async function readInputImage(
 	path: string,

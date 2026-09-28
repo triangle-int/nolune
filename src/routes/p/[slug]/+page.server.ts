@@ -11,7 +11,7 @@ import {
 	listPresets,
 	sendMessage,
 	type Effort
-} from '@btw/core';
+} from '@nolune/core';
 import { translations } from '$lib/i18n';
 import { requireProfile } from '$lib/server/access';
 import { withIcons } from '$lib/server/suggestions';

@@ -1,5 +1,5 @@
 import { error } from '@sveltejs/kit';
-import { getMedia, mediaFile } from '@btw/core';
+import { getMedia, mediaFile } from '@nolune/core';
 import { requireConversation } from '$lib/server/access';
 import { storedFileResponse } from '$lib/server/files';
 import type { RequestHandler } from './$types';

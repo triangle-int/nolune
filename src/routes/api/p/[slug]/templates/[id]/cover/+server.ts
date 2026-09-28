@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { error } from '@sveltejs/kit';
-import { inspectImage, profileImageTemplatesDir, scanImageTemplates } from '@btw/core';
+import { inspectImage, profileImageTemplatesDir, scanImageTemplates } from '@nolune/core';
 import { requireProfile } from '$lib/server/access';
 import type { RequestHandler } from './$types';
 

@@ -1,5 +1,5 @@
 import { error, json } from '@sveltejs/kit';
-import { FolderError, moveConversation } from '@btw/core';
+import { FolderError, moveConversation } from '@nolune/core';
 import { requireConversation } from '$lib/server/access';
 import type { RequestHandler } from './$types';
 

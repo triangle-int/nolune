@@ -8,7 +8,7 @@
 
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { AVATARS } from '@btw/core/avatars';
+	import { AVATARS } from '@nolune/core/avatars';
 	import { cn } from '$lib/utils';
 
 	interface Props {

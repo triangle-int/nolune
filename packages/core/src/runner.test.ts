@@ -296,7 +296,7 @@ describe('background commands', () => {
 		expect(committedRows(chat.id).at(-1)?.kind).toBe('assistant');
 	});
 
-	it('lists a background `btw agent watch` as the subagent it waits for, not twice', async () => {
+	it('lists a background `nolune agent watch` as the subagent it waits for, not twice', async () => {
 		const background = (id: string, summary: string, command: string) => ({
 			type: 'tool_use',
 			id,
@@ -306,8 +306,8 @@ describe('background commands', () => {
 		const chat = chatAsking(
 			modelReply(
 				[
-					background('w1', 'Waiting for the flight search', 'btw agent watch flights'),
-					background('w2', 'Waiting for a subagent nobody started', 'btw agent watch nobody'),
+					background('w1', 'Waiting for the flight search', 'nolune agent watch flights'),
+					background('w2', 'Waiting for a subagent nobody started', 'nolune agent watch nobody'),
 					background('d1', 'Downloading the photos', 'fetch-photos')
 				],
 				'tool_use'

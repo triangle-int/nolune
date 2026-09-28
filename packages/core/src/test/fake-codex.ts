@@ -6,12 +6,12 @@ import { paths } from '../paths.ts';
 
 /*
  * A stand-in for Codex's app server, for its ChatGPT sign-in, which can't be done without OpenAI.
- * For the tests of btw's side of the sign-in, in core and in the CLI.
+ * For the tests of nolune's side of the sign-in, in core and in the CLI.
  */
 
 /**
  * Speaks enough of Codex's app server for the sign-in: its account lives in `account.json` in
- * the Codex home btw gives it, the code counts as entered once `entered` is there, and every
+ * the Codex home nolune gives it, the code counts as entered once `entered` is there, and every
  * request is written to `requests.jsonl`.
  */
 const FAKE_CODEX = `#!/usr/bin/env node
@@ -66,9 +66,9 @@ process.stdin.on('data', (chunk) => {
 process.stdin.on('end', () => process.exit(0));
 `;
 
-/** Has btw run the stand-in, signed in with `account` when there's one. */
+/** Has nolune run the stand-in, signed in with `account` when there's one. */
 export function useFakeCodex(account: object | null = null): void {
-	const dir = mkdtempSync(join(tmpdir(), 'btw-fake-codex-'));
+	const dir = mkdtempSync(join(tmpdir(), 'nolune-fake-codex-'));
 	const path = join(dir, 'codex');
 	writeFileSync(path, FAKE_CODEX);
 	chmodSync(path, 0o755);
